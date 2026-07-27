@@ -29,7 +29,8 @@ jobs:
       with:
         node-version: 24
         cache: npm
-    - run: npm ci
+    - run: npm install --ignore-scripts
+    - run: npm audit --audit-level=high
     - run: npm run docs:build
     - uses: actions/configure-pages@v5
     - uses: actions/upload-pages-artifact@v4
