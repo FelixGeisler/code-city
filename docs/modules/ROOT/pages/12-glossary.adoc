@@ -1,0 +1,21 @@
+= 12. Glossary
+
+[cols="1,3"]
+|===
+|Term |Meaning
+
+|City model
+|Versioned data shared by viewer and exporters
+
+|District
+|Visual representation of a directory or package
+
+|Building
+|Visual representation of a source file
+
+|Repository snapshot
+|Read-only normalized analyzer input
+
+|Print profile
+|Physical and material constraints for one printer
+|===

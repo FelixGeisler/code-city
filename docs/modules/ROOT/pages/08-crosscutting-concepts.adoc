@@ -1,0 +1,18 @@
+= 8. Cross-cutting Concepts
+
+== Metric mapping
+
+Directory = district; file = building; SLOC = footprint; complexity = height.
+
+== Determinism
+
+Sort inputs, use stable path IDs, and persist normalization parameters.
+
+== Privacy
+
+Do not embed source text. Support exclusions and path redaction.
+
+== Print safety
+
+Profiles constrain physical size, gaps, wall width, base thickness, and tool
+count before mesh generation.

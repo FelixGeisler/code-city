@@ -1,0 +1,21 @@
+= 11. Risks and Technical Debt
+
+[cols="1,2"]
+|===
+|Risk |Response
+
+|Metrics imply false precision
+|Expose formulas and raw values
+
+|Large repositories exhaust resources
+|Apply file, time, memory, and archive limits
+
+|Meshes slice differently across tools
+|Validate and smoke-test representative exports
+
+|Remote inputs enable SSRF or traversal
+|Allowlist hosted providers and validate archives
+
+|Language coverage is incomplete
+|Report unavailable metrics explicitly
+|===

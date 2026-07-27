@@ -1,0 +1,10 @@
+= Code City Architecture
+
+Code City converts a repository into one versioned city model.
+The browser viewer and print exporter consume that same model.
+
+This documentation follows arc42 and records only decisions that constrain the
+implementation.
+
+Start with xref:01-introduction-and-goals.adoc[goals] and
+xref:04-solution-strategy.adoc[solution strategy].

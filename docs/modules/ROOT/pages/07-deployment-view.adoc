@@ -1,0 +1,18 @@
+= 7. Deployment View
+
+[cols="1,2"]
+|===
+|Mode |Deployment
+
+|Offline
+|Self-contained CLI plus bundled browser assets
+
+|Hosted
+|Static web UI, bounded analysis API, isolated workers
+
+|Enterprise
+|CLI or container on a self-hosted build agent
+
+|Documentation
+|Antora site deployed by GitHub Actions to GitHub Pages
+|===

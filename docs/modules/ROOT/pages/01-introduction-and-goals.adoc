@@ -1,0 +1,19 @@
+= 1. Introduction and Goals
+
+== Purpose
+
+Turn a software repository into an explorable 3D city and a printable model.
+
+== MVP
+
+* Analyze local JavaScript and TypeScript repositories.
+* Explore the result in a browser.
+* Export STL and five-part 3MF.
+* Accept public GitHub repositories without breaking offline use.
+
+== Quality goals
+
+. Explainable metrics
+. Deterministic output
+. Private offline operation
+. Printer-safe geometry

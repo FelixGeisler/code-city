@@ -1,0 +1,8 @@
+= 2. Constraints
+
+* The analyzer does not execute repository code.
+* Local analysis and viewing work without network access.
+* JavaScript and TypeScript are the first language family.
+* Browser and print output use one `city-model.json`.
+* STL is the fallback; multi-part 3MF is the primary print format.
+* The Prusa XL profile emits at most five tool groups.

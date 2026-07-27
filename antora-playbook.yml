@@ -1,0 +1,17 @@
+site:
+  title: Code City
+  url: https://felixgeisler.github.io/code-city
+  start_page: code-city::index.adoc
+content:
+  sources:
+  - url: .
+    branches: HEAD
+    start_path: docs
+ui:
+  bundle:
+    url: https://gitlab.com/antora/antora-ui-default/-/jobs/artifacts/HEAD/raw/build/ui-bundle.zip?job=bundle-stable
+    snapshot: true
+urls:
+  html_extension_style: indexify
+output:
+  dir: ./build/site

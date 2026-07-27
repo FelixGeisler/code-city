@@ -1,0 +1,16 @@
+= 6. Runtime View
+
+== Local
+
+`codecity open .` reads a checkout, builds the city model, and serves the viewer
+on `127.0.0.1`.
+
+== Public GitHub
+
+The hosted service downloads a bounded public snapshot, analyzes it in an
+isolated worker, and returns derived artifacts.
+
+== Print
+
+`codecity export .` applies a printer profile, validates the mesh, and writes
+STL or 3MF.

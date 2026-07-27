@@ -1,0 +1,21 @@
+= 10. Quality Requirements
+
+[cols="1,2"]
+|===
+|Quality |Acceptance
+
+|Determinism
+|Same revision and config produce the same model
+
+|Privacy
+|Local analysis succeeds with networking disabled
+
+|Explainability
+|Every visual dimension links to a documented metric
+
+|Printability
+|Exports pass mesh checks and printer-profile bounds
+
+|Performance
+|Large cities use instanced rendering and bounded analysis
+|===

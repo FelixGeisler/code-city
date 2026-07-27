@@ -1,0 +1,8 @@
+= 4. Solution Strategy
+
+. Normalize every source into a read-only repository snapshot.
+. Extract language facts through analyzer plugins.
+. Produce a deterministic hierarchical layout.
+. Persist the result as a versioned city model.
+. Render that model in Three.js.
+. Convert the same coordinates through a printer-aware print planner.

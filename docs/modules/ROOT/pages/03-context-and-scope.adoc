@@ -1,0 +1,21 @@
+= 3. Context and Scope
+
+[cols="1,2"]
+|===
+|Neighbor |Interface
+
+|Local filesystem
+|Read-only repository snapshot
+
+|GitHub
+|Public repository URL and archive
+
+|Generic Git / Azure DevOps Server
+|Installed Git client and existing credentials
+
+|Browser
+|Versioned city model
+
+|Slicer
+|STL or multi-part 3MF
+|===

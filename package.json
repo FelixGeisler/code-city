@@ -1,0 +1,14 @@
+{
+  "name": "code-city",
+  "private": true,
+  "scripts": {
+    "docs:build": "antora antora-playbook.yml"
+  },
+  "devDependencies": {
+    "@antora/cli": "3.1.15",
+    "@antora/site-generator": "3.1.15"
+  },
+  "overrides": {
+    "js-yaml": "4.3.0"
+  }
+}

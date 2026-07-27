@@ -1,0 +1,27 @@
+= 5. Building Block View
+
+[cols="1,2"]
+|===
+|Block |Responsibility
+
+|Repository source
+|Materialize local, GitHub, or generic Git snapshots
+
+|Analyzer
+|Produce source facts and dependencies
+
+|Layout
+|Place districts and buildings deterministically
+
+|City model
+|Versioned contract between all blocks
+
+|Viewer
+|Render and inspect the city
+
+|Print planner
+|Validate scale, geometry, and material groups
+
+|Exporters
+|Write STL and 3MF
+|===

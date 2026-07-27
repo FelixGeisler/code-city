@@ -47,7 +47,16 @@ produce a deterministic city model, display it in an interactive Three.js
 viewer, and export a printer-safe model. Public GitHub ingestion and additional
 language analyzers follow on the same core pipeline.
 
-See [the project plan](docs/PLAN.md) for milestones and proposed issues.
+Architecture documentation uses Antora and the concise arc42 structure. Once
+GitHub Pages is enabled, it is published at
+<https://felixgeisler.github.io/code-city/>.
+
+Build it locally with:
+
+```powershell
+npm ci
+npm run docs:build
+```
 
 ## Status
 
