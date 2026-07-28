@@ -4,6 +4,7 @@ import type {
   CityDistrict,
   CityModel,
 } from "../../../packages/core/src/model.js";
+import { routeEndpointKey } from "./dependency-route-layout.js";
 
 export const DEPENDENCY_ROUTES_PER_DIRECTION = 20;
 
@@ -69,22 +70,10 @@ interface IndexedBuilding {
   readonly districtId: string;
   readonly name: string;
   readonly path: string;
-  readonly position: {
-    readonly x: number;
-    readonly z: number;
-  };
 }
 
 interface IndexedDistrict {
   readonly id: string;
-  readonly position: {
-    readonly x: number;
-    readonly z: number;
-  };
-  readonly size: {
-    readonly x: number;
-    readonly z: number;
-  };
 }
 
 interface DependencyExplorerData {
@@ -126,12 +115,8 @@ export interface ExternalRouteEndpoint {
 
 export interface DistrictBoundaryRouteEndpoint {
   readonly kind: "district-boundary";
-  readonly gatewayId: string;
+  readonly gatewayKey: string;
   readonly districtId: string;
-  readonly position: {
-    readonly x: number;
-    readonly z: number;
-  };
   readonly hiddenCounterpart: InternalDependencyCounterpart;
 }
 
@@ -238,8 +223,9 @@ export function toggleDependencyRouteDirection(
 
 /**
  * Resolves a selected route to renderable endpoints. When isolation hides an
- * internal counterpart, its building endpoint is replaced by a point on the
- * visible district boundary; no hidden building position leaves this helper.
+ * internal counterpart, its building endpoint is replaced by a stable gateway
+ * key for the visible district boundary; no hidden building position leaves
+ * this helper.
  */
 export function projectDependencyRoute(
   index: DependencyExplorerIndex,
@@ -297,12 +283,7 @@ export function projectDependencyRoute(
         `Unknown isolated district "${isolatedDistrictId}".`,
       );
     }
-    counterpartEndpoint = boundaryEndpoint(
-      district,
-      selected,
-      counterpart,
-      route,
-    );
+    counterpartEndpoint = boundaryEndpoint(district, counterpart);
   }
 
   return Object.freeze({
@@ -342,14 +323,6 @@ function indexDistricts(
       district.id,
       Object.freeze({
         id: district.id,
-        position: Object.freeze({
-          x: district.position.x,
-          z: district.position.z,
-        }),
-        size: Object.freeze({
-          x: district.size.x,
-          z: district.size.z,
-        }),
       }),
     );
   }
@@ -378,10 +351,6 @@ function indexBuildings(
         districtId: building.districtId,
         name: building.name,
         path: normalizePath(building.path),
-        position: Object.freeze({
-          x: building.position.x,
-          z: building.position.z,
-        }),
       }),
     );
   }
@@ -597,68 +566,14 @@ function externalEndpoint(target: string): ExternalRouteEndpoint {
 
 function boundaryEndpoint(
   district: IndexedDistrict,
-  selected: IndexedBuilding,
   hidden: IndexedBuilding,
-  route: SelectedDependencyRoute,
 ): DistrictBoundaryRouteEndpoint {
-  const position = projectToBoundary(
-    district,
-    selected.position,
-    hidden.position,
-  );
-  if (route.counterpart.kind !== "building") {
-    throw new TypeError("Only internal routes can use a district boundary.");
-  }
   return Object.freeze({
     kind: "district-boundary",
-    gatewayId:
-      `boundary:${district.id}:${route.direction}:` +
-      route.dependencyId,
+    gatewayKey: routeEndpointKey("building", hidden.id),
     districtId: district.id,
-    position: Object.freeze(position),
-    hiddenCounterpart: route.counterpart,
+    hiddenCounterpart: buildingCounterpart(hidden),
   });
-}
-
-function projectToBoundary(
-  district: IndexedDistrict,
-  from: IndexedBuilding["position"],
-  toward: IndexedBuilding["position"],
-): { readonly x: number; readonly z: number } {
-  const halfX = district.size.x / 2;
-  const halfZ = district.size.z / 2;
-  const minimumX = district.position.x - halfX;
-  const maximumX = district.position.x + halfX;
-  const minimumZ = district.position.z - halfZ;
-  const maximumZ = district.position.z + halfZ;
-  if (
-    from.x < minimumX ||
-    from.x > maximumX ||
-    from.z < minimumZ ||
-    from.z > maximumZ
-  ) {
-    throw new RangeError(
-      "Selected building must lie inside the isolated district.",
-    );
-  }
-
-  const deltaX = toward.x - from.x;
-  const deltaZ = toward.z - from.z;
-  const scales: number[] = [];
-  if (deltaX > 0) scales.push((maximumX - from.x) / deltaX);
-  if (deltaX < 0) scales.push((minimumX - from.x) / deltaX);
-  if (deltaZ > 0) scales.push((maximumZ - from.z) / deltaZ);
-  if (deltaZ < 0) scales.push((minimumZ - from.z) / deltaZ);
-  const scale = Math.min(
-    ...scales.filter((candidate) => candidate >= 0),
-  );
-  if (!Number.isFinite(scale)) {
-    return { x: maximumX, z: from.z };
-  }
-  return {
-    x: clamp(from.x + deltaX * scale, minimumX, maximumX),
-    z: clamp(from.z + deltaZ * scale, minimumZ, maximumZ),
-  };
 }
 
 function assertFinitePosition(
@@ -676,8 +591,4 @@ function normalizePath(path: string): string {
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.min(maximum, Math.max(minimum, value));
 }

@@ -38,6 +38,28 @@ describe("viewer model validation", () => {
     expect(validateCityModel(model)).toBe(model);
   });
 
+  it.each(["", " \t "])(
+    "rejects an empty external dependency target",
+    (externalTarget) => {
+      const source = DEMO_MODEL.modules[0]!;
+      expect(() =>
+        validateCityModel({
+          ...DEMO_MODEL,
+          dependencies: [
+            {
+              id: "dependency:empty-external",
+              repositoryId: source.repositoryId,
+              sourceId: source.id,
+              externalTarget,
+              kind: "package-reference",
+              weight: 1,
+            },
+          ],
+        }),
+      ).toThrow(/dependencies\[0\]\.externalTarget must not be empty/u);
+    },
+  );
+
   it("accepts a deterministic empty-city result", () => {
     const {
       base: _base,

@@ -9,6 +9,11 @@ export interface RouteBox {
   readonly size: RoutePoint;
 }
 
+export interface RouteEndpointGeometry {
+  readonly contact: RoutePoint;
+  readonly anchor: RoutePoint;
+}
+
 export interface RouteRectangle {
   readonly centerX: number;
   readonly centerZ: number;
@@ -16,30 +21,51 @@ export interface RouteRectangle {
   readonly sizeZ: number;
 }
 
-const ROOF_CLEARANCE = 0.18;
 const GATEWAY_EDGE_INSET = 0.08;
 
-export function roofRoutePoint(box: RouteBox): RoutePoint {
+export function buildingRouteEndpoint(
+  box: RouteBox,
+): RouteEndpointGeometry {
   assertPoint(box.position, "Route box position");
   assertPoint(box.size, "Route box size");
   if (box.size.x < 0 || box.size.y < 0 || box.size.z < 0) {
     throw new RangeError("Route box size must be non-negative.");
   }
-  return {
+  const roof = Object.freeze({
     x: box.position.x,
-    y: box.position.y + box.size.y * 0.5 + ROOF_CLEARANCE,
+    y: box.position.y + box.size.y * 0.5,
     z: box.position.z,
-  };
+  });
+  return Object.freeze({ contact: roof, anchor: roof });
+}
+
+export function routeEndpointKey(
+  kind: "building" | "district" | "external",
+  stableId: string,
+): string {
+  if (stableId.trim() === "") {
+    throw new TypeError("Route endpoint stable id must not be empty.");
+  }
+  return `${kind}\u0000${stableId}`;
 }
 
 export function keyedBoundaryGateway(
   rectangle: RouteRectangle,
   key: string,
-  y: number,
-): RoutePoint {
+  surfaceY: number,
+  anchorY: number,
+): RouteEndpointGeometry {
   assertRectangle(rectangle);
-  if (!Number.isFinite(y)) {
-    throw new RangeError("Gateway height must be finite.");
+  if (key.trim() === "") {
+    throw new TypeError("Gateway key must not be empty.");
+  }
+  if (!Number.isFinite(surfaceY) || !Number.isFinite(anchorY)) {
+    throw new RangeError("Gateway heights must be finite.");
+  }
+  if (anchorY < surfaceY) {
+    throw new RangeError(
+      "Gateway anchor must not be below its surface contact.",
+    );
   }
 
   const hash = stableHash(key);
@@ -51,32 +77,30 @@ export function keyedBoundaryGateway(
   const halfX = rectangle.sizeX * 0.5;
   const halfZ = rectangle.sizeZ * 0.5;
 
+  let x: number;
+  let z: number;
   switch (side) {
     case 0:
-      return {
-        x: rectangle.centerX - halfX + rectangle.sizeX * fraction,
-        y,
-        z: rectangle.centerZ - halfZ,
-      };
+      x = rectangle.centerX - halfX + rectangle.sizeX * fraction;
+      z = rectangle.centerZ - halfZ;
+      break;
     case 1:
-      return {
-        x: rectangle.centerX + halfX,
-        y,
-        z: rectangle.centerZ - halfZ + rectangle.sizeZ * fraction,
-      };
+      x = rectangle.centerX + halfX;
+      z = rectangle.centerZ - halfZ + rectangle.sizeZ * fraction;
+      break;
     case 2:
-      return {
-        x: rectangle.centerX + halfX - rectangle.sizeX * fraction,
-        y,
-        z: rectangle.centerZ + halfZ,
-      };
+      x = rectangle.centerX + halfX - rectangle.sizeX * fraction;
+      z = rectangle.centerZ + halfZ;
+      break;
     default:
-      return {
-        x: rectangle.centerX - halfX,
-        y,
-        z: rectangle.centerZ + halfZ - rectangle.sizeZ * fraction,
-      };
+      x = rectangle.centerX - halfX;
+      z = rectangle.centerZ + halfZ - rectangle.sizeZ * fraction;
+      break;
   }
+  return Object.freeze({
+    contact: Object.freeze({ x, y: surfaceY, z }),
+    anchor: Object.freeze({ x, y: anchorY, z }),
+  });
 }
 
 function assertRectangle(rectangle: RouteRectangle): void {

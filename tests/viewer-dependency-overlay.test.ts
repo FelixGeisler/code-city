@@ -9,6 +9,10 @@ import {
   dependencyWeightCue,
   type DependencyOverlayRoute,
 } from "../apps/viewer/src/dependency-overlay.js";
+import type {
+  RouteEndpointGeometry,
+  RoutePoint,
+} from "../apps/viewer/src/dependency-route-layout.js";
 
 describe("dependency overlay curve geometry", () => {
   it("raises a shallow curve and points its arrow at the provider", () => {
@@ -21,19 +25,20 @@ describe("dependency overlay curve geometry", () => {
     const curve = dependencyCurveForRoute(route);
 
     expect(curve.points).toHaveLength(13);
-    expect(curve.points[0]).toEqual(route.consumer);
-    expect(curve.points.at(-1)).toEqual(route.provider);
+    expect(curve.points[0]).toEqual(route.consumer.anchor);
+    expect(curve.points.at(-1)).toEqual(route.provider.anchor);
     expect(curve.points[6]?.y).toBeCloseTo(
-      Math.max(route.consumer.y, route.provider.y) + curve.lift,
+      Math.max(route.consumer.anchor.y, route.provider.anchor.y) +
+        curve.lift,
       12,
     );
     expect(curve.lift).toBeGreaterThanOrEqual(0.5);
     expect(curve.lift).toBeLessThanOrEqual(4);
 
     const towardProvider = new THREE.Vector3(
-      route.provider.x - curve.arrowPosition.x,
-      route.provider.y - curve.arrowPosition.y,
-      route.provider.z - curve.arrowPosition.z,
+      route.provider.anchor.x - curve.arrowPosition.x,
+      route.provider.anchor.y - curve.arrowPosition.y,
+      route.provider.anchor.z - curve.arrowPosition.z,
     ).normalize();
     const arrowDirection = new THREE.Vector3(
       curve.arrowDirection.x,
@@ -71,7 +76,9 @@ describe("dependency overlay curve geometry", () => {
     const second = dependencyCurveForRoute(route);
 
     expect(second).toEqual(first);
-    expect(first.points.some(({ x }) => x > route.consumer.x)).toBe(true);
+    expect(
+      first.points.some(({ x }) => x > route.consumer.anchor.x),
+    ).toBe(true);
     for (const point of [
       ...first.points,
       first.arrowPosition,
@@ -82,9 +89,9 @@ describe("dependency overlay curve geometry", () => {
       expect(Number.isFinite(point.z)).toBe(true);
     }
     const towardProvider = new THREE.Vector3(
-      route.provider.x - first.arrowPosition.x,
-      route.provider.y - first.arrowPosition.y,
-      route.provider.z - first.arrowPosition.z,
+      route.provider.anchor.x - first.arrowPosition.x,
+      route.provider.anchor.y - first.arrowPosition.y,
+      route.provider.anchor.z - first.arrowPosition.z,
     ).normalize();
     const arrowDirection = new THREE.Vector3(
       first.arrowDirection.x,
@@ -122,13 +129,18 @@ describe("DependencyRouteOverlay lifecycle", () => {
       dependencyRoute({
         id: "external-outgoing",
         externalProvider: true,
-        gatewayAt: "target",
+        provider: groundedEndpoint(
+          { x: 10, y: 0, z: 0 },
+          { x: 10, y: 2, z: 0 },
+        ),
       }),
       dependencyRoute({
         id: "hidden-incoming",
         direction: "incoming",
-        consumer: { x: -5, y: 1, z: 1 },
-        gatewayAt: "source",
+        consumer: groundedEndpoint(
+          { x: -5, y: 0, z: 1 },
+          { x: -5, y: 1, z: 1 },
+        ),
       }),
     ] as const;
 
@@ -160,27 +172,68 @@ describe("DependencyRouteOverlay lifecycle", () => {
     expect(overlay.object.parent).toBeNull();
   });
 
-  it("places an amber gateway at either projected endpoint", () => {
+  it("places an amber pylon between a surface contact and route anchor", () => {
     const scene = new THREE.Scene();
     const overlay = new DependencyRouteOverlay(scene);
     const route = dependencyRoute({
-      consumer: { x: -3, y: 2, z: 1 },
+      consumer: groundedEndpoint(
+        { x: -3, y: 0, z: 1 },
+        { x: -3, y: 2, z: 1 },
+      ),
       provider: { x: 9, y: 4, z: 5 },
-      gatewayAt: "source",
     });
 
     overlay.replace([route]);
     expect(instancePosition(gatewayMesh(overlay))).toEqual(
-      new THREE.Vector3(-3, 2, 1),
+      new THREE.Vector3(-3, 1, 1),
     );
+    expect(instanceScaleY(gatewayMesh(overlay), 0)).toBe(2);
     expect(
       (gatewayMesh(overlay).material as THREE.MeshBasicMaterial).color.getHexString(),
     ).toBe(DEPENDENCY_OVERLAY_COLORS.gateway.slice(1));
 
-    overlay.replace([{ ...route, gatewayAt: "target" }]);
+    overlay.replace([
+      dependencyRoute({
+        consumer: { x: -3, y: 2, z: 1 },
+        provider: groundedEndpoint(
+          { x: 9, y: 1, z: 5 },
+          { x: 9, y: 4, z: 5 },
+        ),
+      }),
+    ]);
     expect(instancePosition(gatewayMesh(overlay))).toEqual(
-      new THREE.Vector3(9, 4, 5),
+      new THREE.Vector3(9, 2.5, 5),
     );
+    expect(instanceScaleY(gatewayMesh(overlay), 0)).toBe(3);
+  });
+
+  it("grounds both route ends and deduplicates shared pylons", () => {
+    const scene = new THREE.Scene();
+    const overlay = new DependencyRouteOverlay(scene);
+    const shared = groundedEndpoint(
+      { x: 0, y: 0.5, z: 0 },
+      { x: 0, y: 5, z: 0 },
+    );
+    overlay.replace([
+      dependencyRoute({
+        id: "a",
+        consumer: shared,
+        provider: groundedEndpoint(
+          { x: 10, y: 1, z: 0 },
+          { x: 10, y: 4, z: 0 },
+        ),
+      }),
+      dependencyRoute({
+        id: "b",
+        consumer: shared,
+        provider: { x: 20, y: 3, z: 0 },
+      }),
+    ]);
+
+    expect(overlay.gatewayCount).toBe(2);
+    expect(gatewayMesh(overlay).count).toBe(2);
+    expect(overlay.object.children).toHaveLength(3);
+    overlay.dispose();
   });
 
   it("colors arrowheads through their instance colors", () => {
@@ -276,7 +329,10 @@ describe("DependencyRouteOverlay lifecycle", () => {
     overlay.replace([
       dependencyRoute({
         externalProvider: true,
-        gatewayAt: "target",
+        provider: groundedEndpoint(
+          { x: 10, y: 0, z: 0 },
+          { x: 10, y: 1, z: 0 },
+        ),
       }),
     ]);
     let geometryDisposals = 0;
@@ -310,18 +366,27 @@ describe("DependencyRouteOverlay lifecycle", () => {
     expect(() => overlay.replace([dependencyRoute()])).toThrow(/disposed/u);
   });
 
-  it("rejects ambiguous external gateways and duplicate route ids", () => {
+  it("rejects invalid endpoint geometry and duplicate route ids", () => {
     const scene = new THREE.Scene();
     const overlay = new DependencyRouteOverlay(scene);
     overlay.replace([dependencyRoute()]);
-    const externalWithoutTargetGateway = dependencyRoute({
-      externalProvider: true,
-      gatewayAt: null,
+    const nonVertical = dependencyRoute({
+      provider: {
+        contact: { x: 9, y: 0, z: 0 },
+        anchor: { x: 10, y: 1, z: 0 },
+      },
+    });
+    const inverted = dependencyRoute({
+      provider: {
+        contact: { x: 10, y: 2, z: 0 },
+        anchor: { x: 10, y: 1, z: 0 },
+      },
     });
 
     expect(() =>
-      dependencyCurveForRoute(externalWithoutTargetGateway),
-    ).toThrow(/target gateway/u);
+      dependencyCurveForRoute(nonVertical),
+    ).toThrow(/vertical/u);
+    expect(() => dependencyCurveForRoute(inverted)).toThrow(/below/u);
     expect(() =>
       overlay.replace([dependencyRoute(), dependencyRoute()]),
     ).toThrow(/duplicate/iu);
@@ -331,19 +396,46 @@ describe("DependencyRouteOverlay lifecycle", () => {
   });
 });
 
+type RouteOverrides = Omit<
+  Partial<DependencyOverlayRoute>,
+  "consumer" | "provider"
+> & {
+  readonly consumer?: RoutePoint | RouteEndpointGeometry;
+  readonly provider?: RoutePoint | RouteEndpointGeometry;
+};
+
 function dependencyRoute(
-  overrides: Partial<DependencyOverlayRoute> = {},
+  overrides: RouteOverrides = {},
 ): DependencyOverlayRoute {
+  const {
+    consumer = { x: 0, y: 1, z: 0 },
+    provider = { x: 10, y: 1, z: 0 },
+    ...rest
+  } = overrides;
   return {
     id: "route-a",
-    consumer: { x: 0, y: 1, z: 0 },
-    provider: { x: 10, y: 1, z: 0 },
+    consumer: routeEndpoint(consumer),
+    provider: routeEndpoint(provider),
     direction: "outgoing",
     weight: 1,
     externalProvider: false,
-    gatewayAt: null,
-    ...overrides,
+    ...rest,
   };
+}
+
+function routeEndpoint(
+  value: RoutePoint | RouteEndpointGeometry,
+): RouteEndpointGeometry {
+  return "contact" in value
+    ? value
+    : { contact: value, anchor: value };
+}
+
+function groundedEndpoint(
+  contact: RoutePoint,
+  anchor: RoutePoint,
+): RouteEndpointGeometry {
+  return { contact, anchor };
 }
 
 function gatewayMesh(
@@ -396,4 +488,17 @@ function instanceScale(mesh: THREE.InstancedMesh, index: number): number {
   mesh.getMatrixAt(index, matrix);
   matrix.decompose(position, quaternion, scale);
   return scale.x;
+}
+
+function instanceScaleY(
+  mesh: THREE.InstancedMesh,
+  index: number,
+): number {
+  const matrix = new THREE.Matrix4();
+  const position = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+  mesh.getMatrixAt(index, matrix);
+  matrix.decompose(position, quaternion, scale);
+  return scale.y;
 }

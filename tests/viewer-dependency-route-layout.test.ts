@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildingRouteEndpoint,
   keyedBoundaryGateway,
-  roofRoutePoint,
+  routeEndpointKey,
 } from "../apps/viewer/src/dependency-route-layout.js";
 
 const rectangle = {
@@ -13,26 +14,51 @@ const rectangle = {
 };
 
 describe("dependency route layout", () => {
-  it("places a route point just above a building roof", () => {
+  it("uses the exact building roof as contact and anchor", () => {
     expect(
-      roofRoutePoint({
+      buildingRouteEndpoint({
         position: { x: 4, y: 6, z: -2 },
         size: { x: 3, y: 8, z: 5 },
       }),
-    ).toEqual({ x: 4, y: 10.18, z: -2 });
+    ).toEqual({
+      contact: { x: 4, y: 10, z: -2 },
+      anchor: { x: 4, y: 10, z: -2 },
+    });
   });
 
-  it("places external gateways deterministically on an outer edge", () => {
-    const first = keyedBoundaryGateway(rectangle, "@angular/core", 1.5);
+  it("grounds deterministic boundary gateways on an outer edge", () => {
+    const first = keyedBoundaryGateway(
+      rectangle,
+      "@angular/core",
+      1.5,
+      4.5,
+    );
     const repeated = keyedBoundaryGateway(
       rectangle,
       "@angular/core",
       1.5,
+      4.5,
     );
 
     expect(repeated).toEqual(first);
-    expect(isOnBoundary(first)).toBe(true);
-    expect(first.y).toBe(1.5);
+    expect(isOnBoundary(first.contact)).toBe(true);
+    expect(first.contact.y).toBe(1.5);
+    expect(first.anchor.y).toBe(4.5);
+    expect(first.anchor.x).toBe(first.contact.x);
+    expect(first.anchor.z).toBe(first.contact.z);
+  });
+
+  it("creates documented NUL-separated endpoint keys", () => {
+    expect(routeEndpointKey("building", "building-a")).toBe(
+      "building\u0000building-a",
+    );
+    expect(routeEndpointKey("district", "district-a")).toBe(
+      "district\u0000district-a",
+    );
+    expect(routeEndpointKey("external", "@scope/package")).toBe(
+      "external\u0000@scope/package",
+    );
+    expect(() => routeEndpointKey("building", " ")).toThrow(TypeError);
   });
 
   it("rejects invalid geometry", () => {
@@ -41,13 +67,23 @@ describe("dependency route layout", () => {
         { ...rectangle, sizeX: 0 },
         "invalid",
         1,
+        2,
       ),
     ).toThrow(RangeError);
     expect(() =>
-      roofRoutePoint({
+      buildingRouteEndpoint({
         position: { x: 0, y: 0, z: 0 },
         size: { x: 1, y: -1, z: 1 },
       }),
+    ).toThrow(RangeError);
+    expect(() =>
+      keyedBoundaryGateway(rectangle, "valid", 2, 1),
+    ).toThrow(/below/u);
+    expect(() =>
+      keyedBoundaryGateway(rectangle, " ", 1, 2),
+    ).toThrow(TypeError);
+    expect(() =>
+      keyedBoundaryGateway(rectangle, "valid", 1, Number.NaN),
     ).toThrow(RangeError);
   });
 });

@@ -1,13 +1,12 @@
 import * as THREE from "three";
 
-export type DependencyOverlayDirection = "incoming" | "outgoing";
-export type DependencyGatewayEndpoint = "source" | "target" | null;
+import type {
+  RouteEndpointGeometry,
+  RoutePoint,
+} from "./dependency-route-layout.js";
 
-export interface DependencyOverlayPoint {
-  readonly x: number;
-  readonly y: number;
-  readonly z: number;
-}
+export type DependencyOverlayDirection = "incoming" | "outgoing";
+export type DependencyOverlayPoint = RoutePoint;
 
 /**
  * A viewer-ready dependency. Endpoint resolution, route limiting, and
@@ -16,12 +15,11 @@ export interface DependencyOverlayPoint {
  */
 export interface DependencyOverlayRoute {
   readonly id: string;
-  readonly consumer: DependencyOverlayPoint;
-  readonly provider: DependencyOverlayPoint;
+  readonly consumer: RouteEndpointGeometry;
+  readonly provider: RouteEndpointGeometry;
   readonly direction: DependencyOverlayDirection;
   readonly weight: number;
   readonly externalProvider: boolean;
-  readonly gatewayAt: DependencyGatewayEndpoint;
   /** Overrides the selected-file direction palette for overview bundles. */
   readonly color?: string;
   /** Makes a selected bundle stronger without creating another draw object. */
@@ -96,8 +94,8 @@ export function dependencyCurveForRoute(
 ): DependencyCurve {
   validateRoute(route);
 
-  const start = route.consumer;
-  const end = route.provider;
+  const start = route.consumer.anchor;
+  const end = route.provider.anchor;
   const deltaX = end.x - start.x;
   const deltaZ = end.z - start.z;
   const horizontalDistance = Math.hypot(deltaX, deltaZ);
@@ -203,9 +201,7 @@ export class DependencyRouteOverlay {
       cue: dependencyWeightCue(route.weight),
     }));
 
-    const gatewayVisuals = visuals.filter(
-      ({ route }) => route.gatewayAt !== null,
-    );
+    const gatewayVisuals = groundedRouteEndpoints(visuals);
     const replacement: THREE.Object3D[] = [];
     try {
       replacement.push(
@@ -213,7 +209,7 @@ export class DependencyRouteOverlay {
         createArrowheads(visuals),
       );
       if (gatewayVisuals.length > 0) {
-        replacement.push(createGatewayMarkers(gatewayVisuals));
+        replacement.push(createGatewayPylons(gatewayVisuals));
       }
     } catch (error) {
       replacement.forEach(disposeOverlayObject);
@@ -390,10 +386,10 @@ function createArrowheads(
   return arrows;
 }
 
-function createGatewayMarkers(
-  visuals: readonly RouteVisual[],
+function createGatewayPylons(
+  endpoints: readonly RouteEndpointGeometry[],
 ): THREE.InstancedMesh {
-  const geometry = new THREE.OctahedronGeometry(0.42, 0);
+  const geometry = new THREE.CylinderGeometry(0.14, 0.18, 1, 8);
   const material = new THREE.MeshBasicMaterial({
     color: DEPENDENCY_OVERLAY_COLORS.gateway,
     transparent: true,
@@ -405,26 +401,21 @@ function createGatewayMarkers(
   const gateways = new THREE.InstancedMesh(
     geometry,
     material,
-    visuals.length,
+    endpoints.length,
   );
   gateways.name = "code-city:dependency-route-gateways";
   gateways.renderOrder = 4;
   const transform = new THREE.Object3D();
 
-  visuals.forEach((visual, index) => {
-    const point =
-      visual.route.gatewayAt === "source"
-        ? visual.route.consumer
-        : visual.route.provider;
-    const routeDistance = horizontalDistance(visual.route);
-    const scale = clamp(
-      0.7 + routeDistance * 0.006,
-      0.7,
-      1.25,
+  endpoints.forEach(({ contact, anchor }, index) => {
+    const height = anchor.y - contact.y;
+    transform.position.set(
+      contact.x,
+      contact.y + height * 0.5,
+      contact.z,
     );
-    transform.position.set(point.x, point.y, point.z);
     transform.quaternion.identity();
-    transform.scale.setScalar(scale);
+    transform.scale.set(1, height, 1);
     transform.updateMatrix();
     gateways.setMatrixAt(index, transform.matrix);
   });
@@ -432,6 +423,39 @@ function createGatewayMarkers(
   gateways.computeBoundingSphere();
   disableRaycasting(gateways);
   return gateways;
+}
+
+function groundedRouteEndpoints(
+  visuals: readonly RouteVisual[],
+): readonly RouteEndpointGeometry[] {
+  const unique = new Map<string, RouteEndpointGeometry>();
+  for (const { route } of visuals) {
+    for (const endpoint of [route.consumer, route.provider]) {
+      if (endpoint.anchor.y === endpoint.contact.y) {
+        continue;
+      }
+      const key = endpointGeometryKey(endpoint);
+      if (!unique.has(key)) {
+        unique.set(key, endpoint);
+      }
+    }
+  }
+  return [...unique.values()];
+}
+
+function endpointGeometryKey(endpoint: RouteEndpointGeometry): string {
+  return [
+    endpoint.contact.x,
+    endpoint.contact.y,
+    endpoint.contact.z,
+    endpoint.anchor.y,
+  ]
+    .map(numberKey)
+    .join("\u0000");
+}
+
+function numberKey(value: number): string {
+  return Object.is(value, -0) ? "0" : String(value);
 }
 
 function quadraticPoint(
@@ -488,8 +512,8 @@ function normalizedQuadraticTangent(
 
 function horizontalDistance(route: DependencyOverlayRoute): number {
   return Math.hypot(
-    route.provider.x - route.consumer.x,
-    route.provider.z - route.consumer.z,
+    route.provider.anchor.x - route.consumer.anchor.x,
+    route.provider.anchor.z - route.consumer.anchor.z,
   );
 }
 
@@ -497,8 +521,8 @@ function validateRoute(route: DependencyOverlayRoute): void {
   if (typeof route.id !== "string" || route.id.trim() === "") {
     throw new TypeError("Dependency overlay route id must not be empty.");
   }
-  validatePoint(route.consumer, "consumer");
-  validatePoint(route.provider, "provider");
+  validateEndpoint(route.consumer, "consumer");
+  validateEndpoint(route.provider, "provider");
   if (route.direction !== "incoming" && route.direction !== "outgoing") {
     throw new TypeError("Dependency overlay route direction is invalid.");
   }
@@ -506,18 +530,6 @@ function validateRoute(route: DependencyOverlayRoute): void {
   if (typeof route.externalProvider !== "boolean") {
     throw new TypeError(
       "Dependency overlay externalProvider must be a boolean.",
-    );
-  }
-  if (
-    route.gatewayAt !== null &&
-    route.gatewayAt !== "source" &&
-    route.gatewayAt !== "target"
-  ) {
-    throw new TypeError("Dependency overlay gateway endpoint is invalid.");
-  }
-  if (route.externalProvider && route.gatewayAt !== "target") {
-    throw new TypeError(
-      "An external dependency provider requires a target gateway.",
     );
   }
   if (
@@ -534,6 +546,27 @@ function validateRoute(route: DependencyOverlayRoute): void {
   ) {
     throw new TypeError(
       "Dependency overlay emphasized flag must be a boolean.",
+    );
+  }
+}
+
+function validateEndpoint(
+  endpoint: RouteEndpointGeometry,
+  label: string,
+): void {
+  validatePoint(endpoint.contact, `${label} contact`);
+  validatePoint(endpoint.anchor, `${label} anchor`);
+  if (
+    endpoint.contact.x !== endpoint.anchor.x ||
+    endpoint.contact.z !== endpoint.anchor.z
+  ) {
+    throw new RangeError(
+      `Dependency overlay ${label} contact and anchor must be vertical.`,
+    );
+  }
+  if (endpoint.anchor.y < endpoint.contact.y) {
+    throw new RangeError(
+      `Dependency overlay ${label} anchor must not be below its contact.`,
     );
   }
 }
