@@ -2,7 +2,8 @@
 
 == Metric mapping
 
-Directory = district; source file = building.
+Repository = borough; build module = district; source file = building. A
+solution is a filter over modules, not a duplicated physical hierarchy.
 
 `SLOC` counts lines containing a non-comment syntax token. An executable unit is
 a method, constructor, accessor, local function, lambda, or top-level block.
@@ -10,7 +11,8 @@ Nested units are measured separately.
 
 `CC(unit) = 1 + decisions`. Count `if`; `for`, `foreach`, `for...in`,
 `for...of`, `while`, and `do`; `catch`; `?:`; each non-default switch arm; and
-each `&&`, `||`, or `??`. C# also counts `when` guards and `and`/`or` patterns.
+each `&&`, `||`, or `??`. TypeScript also counts `&&=`, `||=`, and `??=`; C#
+counts `??=`, `when` guards, and `and`/`or` patterns.
 Do not count `else`, `default`, `return`, `throw`, `await`, or optional chaining.
 
 [source,text]
@@ -22,13 +24,17 @@ footprint_area = 16 + 180 * sloc_n
 height = 4 + 36 * cc_n
 ----
 
-The inspector exposes raw per-unit CC, file totals, caps, and clamping. Building
-color uses the worst unit: 0-5, 6-10, 11-20, or above 20.
+The inspector exposes the metric method, raw per-unit CC, SLOC, decision load,
+and maximum CC. Building color uses the worst unit: 0-5, 6-10, 11-20, or above
+20.
 
 == Dependency routes
 
-`A -> B` means source file A statically depends on a declaration supplied by B.
-Repeated references collapse into one weighted edge; self-edges are omitted.
+All arrows point from consumer to provider. TypeScript imports connect building
+to building or an external gateway. Project references connect module to module.
+Package references connect module to a matching module in the supplied roots or
+an external NuGet gateway. Repeated references collapse into one weighted edge;
+self-edges are omitted.
 
 * Overview: bundle edges by visible district and connect district gateways.
 * Selection: expand incoming and outgoing routes between parcel boundaries.
@@ -47,7 +53,26 @@ Sort inputs, use stable path IDs, and persist formulas and normalization caps.
 
 Do not embed source text. Support exclusions and path redaction.
 
-== Print safety
+== Physical identity
 
-Profiles constrain physical size, gaps, wall width, base thickness, and tool
-count before mesh generation.
+The model may carry an explicit title, version, and relative SVG/PNG logo
+reference. Layout reserves a front-edge identity panel; the viewer previews it,
+and the print plan preserves its content and channel assignment.
+
+Text and logo mesh generation, including minimum-detail checks, belongs to the
+exporter slice. A multi-repository city has one main panel and may later label
+individual boroughs. Local paths are never inferred as printed identity.
+
+== Print planning
+
+The city model retains semantic groups without a hardware limit. A printer
+profile declares build volume, geometry limits, output formats, configured
+print channels, their assignment mechanism, and an overflow policy.
+
+The print planner maps semantic groups onto one or more channels. If groups
+outnumber channels, it deterministically merges them, produces monochrome
+output, or fails, as selected by the profile. Exporters consume this print plan
+and contain no printer-specific tool count.
+
+The Prusa XL one-, two-, and five-tool configurations are profiles of the same
+model.

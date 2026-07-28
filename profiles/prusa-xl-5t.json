@@ -1,0 +1,44 @@
+{
+  "id": "prusa-xl-5t",
+  "name": "Prusa XL (five enabled tools)",
+  "printChannels": [
+    {
+      "id": "tool-1",
+      "label": "Tool 1",
+      "mechanism": "toolchanger"
+    },
+    {
+      "id": "tool-2",
+      "label": "Tool 2",
+      "mechanism": "toolchanger"
+    },
+    {
+      "id": "tool-3",
+      "label": "Tool 3",
+      "mechanism": "toolchanger"
+    },
+    {
+      "id": "tool-4",
+      "label": "Tool 4",
+      "mechanism": "toolchanger"
+    },
+    {
+      "id": "tool-5",
+      "label": "Tool 5",
+      "mechanism": "toolchanger"
+    }
+  ],
+  "supportedFormats": ["3mf", "stl"],
+  "buildVolume": {
+    "x": 360,
+    "y": 360,
+    "z": 360
+  },
+  "geometryLimits": {
+    "minimumWallThickness": 0.45,
+    "minimumGap": 0.4,
+    "minimumFeatureSize": 0.8,
+    "minimumBaseThickness": 0.8
+  },
+  "overflowPolicy": "merge"
+}

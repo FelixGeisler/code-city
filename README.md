@@ -22,30 +22,40 @@ Azure DevOps Server, and local checkouts that can be analyzed fully offline.
 
 The browser and print outputs are generated from the same versioned
 `city-model.json`, so the physical model corresponds to the city visible on
-screen.
+screen. Printer profiles map semantic groups onto any positive number of
+configured tools or material inputs; five is not a core limit. A printable
+identity panel carries the city name, version, and optional SVG/PNG logo
+reference.
 
-## Planned usage
+## Current development slice
 
 ```powershell
-# Local or offline repository
-codecity open .
+# Analyze one or more local roots without Git or network access
+npm run cli -- analyze C:\Code\RepoA C:\Code\RepoB `
+  --output build\city-model.json `
+  --title "Product City" `
+  --version "1.0.0"
 
-# Public GitHub repository
-codecity open https://github.com/owner/repository
+# Run the browser viewer
+npm run viewer:dev
 
-# Generic Git or Azure DevOps Server repository
-codecity open https://devops.example/collection/project/_git/repository
-
-# Printable export
-codecity export . --format 3mf --profile prusa-xl-5t
+# Produce a capability-checked print plan
+npm run cli -- plan `
+  --model build\city-model.json `
+  --profile profiles\prusa-xl-5t.json `
+  --format 3mf `
+  --output build\print-plan.json
 ```
 
-## Initial scope
+The viewer also accepts a `city-model.json` through its **Open model** button.
+The first C# implementation is explicitly labelled lexical; Roslyn replaces it
+without changing the model contract.
 
-The first vertical slice will analyze a local repository containing .NET/C#,
-TypeScript, or both; produce a deterministic city model; display it in an
-interactive Three.js viewer; and export a printer-safe model. Public GitHub
-ingestion and additional language analyzers follow on the same core pipeline.
+## Planned product flow
+
+`codecity open` will accept local roots, public GitHub repositories, and generic
+Git remotes such as Azure DevOps Server. STL and 3MF mesh exporters follow the
+implemented print planner.
 
 Architecture documentation uses Antora and the concise arc42 structure. Once
 GitHub Pages is enabled, it is published at
@@ -55,10 +65,12 @@ Build it locally with:
 
 ```powershell
 npm ci
+npm test
+npm run build
 npm run docs:build
 ```
 
 ## Status
 
-Planning and project setup. The open-source license will be chosen before the
-first public release.
+First executable vertical slice. The open-source license will be chosen before
+the first public release.

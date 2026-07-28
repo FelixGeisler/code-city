@@ -23,7 +23,10 @@
 |Keep offline and remote paths identical after materialization
 
 |Multi-part 3MF
-|Preserve aligned, assignable tool volumes
+|Preserve aligned parts and their semantic material roles
+
+|Capability-driven printer profiles
+|Support arbitrary printer configurations without tool-count assumptions
 
 |Antora with arc42
 |Keep architecture concise, structured, and publishable

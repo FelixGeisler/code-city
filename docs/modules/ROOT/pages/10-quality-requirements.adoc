@@ -14,8 +14,8 @@
 |Every visual dimension links to a documented metric
 
 |Printability
-|Exports pass mesh checks and printer-profile bounds
+|Exports and identity details pass mesh and printer-profile bounds
 
 |Performance
-|Large cities use instanced rendering and bounded analysis
+|Viewer input is bounded; instancing is required before raising the limits
 |===

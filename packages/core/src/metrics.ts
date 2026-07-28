@@ -1,0 +1,91 @@
+import type { RiskBand, SourceMetrics, Vector3 } from "./model.js";
+
+export const METRIC_NORMALIZATION_CAPS = Object.freeze({
+  sloc: 1_000,
+  decisionLoad: 100,
+});
+
+export interface BuildingGeometry {
+  readonly footprintArea: number;
+  readonly normalizedSloc: number;
+  readonly normalizedDecisionLoad: number;
+  readonly slocClamped: boolean;
+  readonly decisionLoadClamped: boolean;
+  readonly size: Vector3;
+}
+
+function count(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new RangeError(`${name} must be a non-negative safe integer.`);
+  }
+  return value;
+}
+
+export function validateSourceMetrics(metrics: SourceMetrics): void {
+  count(metrics.sloc, "sloc");
+  count(metrics.decisionLoad, "decisionLoad");
+  count(metrics.maximumComplexity, "maximumComplexity");
+  count(metrics.executableUnitCount, "executableUnitCount");
+}
+
+export function classifyRisk(maximumComplexity: number): RiskBand {
+  count(maximumComplexity, "maximumComplexity");
+  if (maximumComplexity <= 5) return "low";
+  if (maximumComplexity <= 10) return "moderate";
+  if (maximumComplexity <= 20) return "high";
+  return "very-high";
+}
+
+export function normalizeLogarithmically(value: number, cap: number): number {
+  count(value, "value");
+  if (!Number.isFinite(cap) || cap <= 0) {
+    throw new RangeError("cap must be a positive finite number.");
+  }
+  return Math.min(1, Math.log1p(value) / Math.log1p(cap));
+}
+
+export function buildingFootprintArea(sloc: number): number {
+  return 16 + 180 * normalizeLogarithmically(sloc, METRIC_NORMALIZATION_CAPS.sloc);
+}
+
+export function buildingHeight(decisionLoad: number): number {
+  return (
+    4 +
+    36 *
+      normalizeLogarithmically(
+        decisionLoad,
+        METRIC_NORMALIZATION_CAPS.decisionLoad,
+      )
+  );
+}
+
+export function calculateBuildingGeometry(
+  metrics: Pick<SourceMetrics, "sloc" | "decisionLoad">,
+): BuildingGeometry {
+  const normalizedSloc = normalizeLogarithmically(
+    metrics.sloc,
+    METRIC_NORMALIZATION_CAPS.sloc,
+  );
+  const normalizedDecisionLoad = normalizeLogarithmically(
+    metrics.decisionLoad,
+    METRIC_NORMALIZATION_CAPS.decisionLoad,
+  );
+  const footprintArea = 16 + 180 * normalizedSloc;
+  const side = Math.sqrt(footprintArea);
+  return {
+    footprintArea,
+    normalizedSloc,
+    normalizedDecisionLoad,
+    slocClamped: metrics.sloc > METRIC_NORMALIZATION_CAPS.sloc,
+    decisionLoadClamped:
+      metrics.decisionLoad > METRIC_NORMALIZATION_CAPS.decisionLoad,
+    size: {
+      x: side,
+      y: 4 + 36 * normalizedDecisionLoad,
+      z: side,
+    },
+  };
+}
+
+export const riskBandForComplexity = classifyRisk;
+export const buildingGeometry = calculateBuildingGeometry;

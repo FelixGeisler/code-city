@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Explore a Code City model in the browser."
+    />
+    <title>Code City Viewer</title>
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar">
+        <a class="brand" href="./" aria-label="Reset to the Code City demo">
+          <span class="brand-mark" aria-hidden="true">
+            <i></i><i></i><i></i>
+          </span>
+          <span>
+            <strong>Code City</strong>
+            <small>Model viewer</small>
+          </span>
+        </a>
+
+        <div class="actions">
+          <label class="button button-primary" for="model-file">
+            Open model
+            <input
+              id="model-file"
+              type="file"
+              accept=".json,application/json"
+            />
+          </label>
+          <button id="demo-button" class="button" type="button">Demo</button>
+        </div>
+      </header>
+
+      <main id="viewport">
+        <div id="scene" aria-label="Interactive 3D code city"></div>
+
+        <div class="scene-meta">
+          <img id="model-logo" alt="" hidden />
+          <span id="model-logo-placeholder" aria-hidden="true" hidden>CC</span>
+          <div>
+            <p id="model-name">Built-in demo</p>
+            <p id="status" role="status" aria-live="polite">Loading…</p>
+          </div>
+        </div>
+
+        <aside id="inspector" class="panel inspector" aria-live="polite">
+          <div class="panel-heading">
+            <span>Building</span>
+            <button
+              id="clear-selection"
+              class="icon-button"
+              type="button"
+              aria-label="Clear building selection"
+              title="Clear selection"
+              hidden
+            >
+              ×
+            </button>
+          </div>
+          <div id="inspector-empty" class="empty-state">
+            Select a building to inspect it.
+          </div>
+          <div id="inspector-content" hidden>
+            <h1 id="building-name"></h1>
+            <dl>
+              <div>
+                <dt>Repository</dt>
+                <dd id="building-repository"></dd>
+              </div>
+              <div>
+                <dt>Module</dt>
+                <dd id="building-module"></dd>
+              </div>
+              <div class="wide">
+                <dt>Path</dt>
+                <dd id="building-path" class="path-value"></dd>
+              </div>
+              <div>
+                <dt>Language</dt>
+                <dd id="building-language"></dd>
+              </div>
+              <div>
+                <dt>SLOC</dt>
+                <dd id="building-sloc"></dd>
+              </div>
+              <div>
+                <dt>Decision load</dt>
+                <dd id="building-load"></dd>
+              </div>
+              <div>
+                <dt>Maximum CC</dt>
+                <dd id="building-cc"></dd>
+              </div>
+              <div class="wide">
+                <dt>Metric method</dt>
+                <dd id="building-metric-method"></dd>
+              </div>
+              <div class="wide">
+                <dt>Executable units</dt>
+                <dd id="building-units"></dd>
+              </div>
+            </dl>
+          </div>
+        </aside>
+
+        <section class="panel legend-panel" aria-label="Semantic groups">
+          <div class="panel-heading">
+            <span>Groups</span>
+          </div>
+          <div id="legend" class="legend"></div>
+        </section>
+
+        <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+
+        <div id="error-banner" class="error-banner" role="alert" hidden>
+          <div>
+            <strong>Model could not be loaded</strong>
+            <span id="error-message"></span>
+          </div>
+          <button
+            id="dismiss-error"
+            class="icon-button"
+            type="button"
+            aria-label="Dismiss error"
+          >
+            ×
+          </button>
+        </div>
+
+        <p class="controls-hint">
+          Drag to orbit · Scroll to zoom · Right-drag to pan
+        </p>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

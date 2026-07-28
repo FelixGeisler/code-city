@@ -8,7 +8,7 @@
 |Materialize local, GitHub, or generic Git snapshots
 
 |Analyzer
-|Run Roslyn and TypeScript plugins; emit shared source facts
+|Emit shared source facts; use TypeScript now and replace lexical C# with Roslyn
 
 |Layout
 |Place districts and buildings deterministically
@@ -20,8 +20,8 @@
 |Render and inspect the city
 
 |Print planner
-|Validate scale, geometry, and material groups
+|Validate geometry and map semantic groups to printer capabilities
 
 |Exporters
-|Write STL and 3MF
+|Write STL and 3MF from a validated print plan
 |===

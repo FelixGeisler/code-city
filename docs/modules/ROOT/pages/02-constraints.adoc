@@ -5,4 +5,5 @@
 * .NET/C# and TypeScript are the first analyzer targets.
 * Browser and print output use one `city-model.json`.
 * STL is the fallback; multi-part 3MF is the primary print format.
-* The Prusa XL profile emits at most five tool groups.
+* Printer profiles declare configured print channels; no global channel limit
+  exists.

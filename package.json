@@ -1,14 +1,34 @@
 {
   "name": "code-city",
   "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
-    "docs:build": "antora antora-playbook.yml"
+    "build": "npm run typecheck && npm run compile && npm run viewer:build",
+    "cli": "node build/app/apps/cli/src/main.js",
+    "compile": "tsc --project tsconfig.build.json",
+    "docs:build": "antora antora-playbook.yml",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "precli": "npm run compile --silent",
+    "viewer:build": "vite build --config apps/viewer/vite.config.ts",
+    "viewer:dev": "vite --config apps/viewer/vite.config.ts"
   },
   "devDependencies": {
     "@antora/cli": "3.1.15",
-    "@antora/site-generator": "3.1.15"
+    "@antora/site-generator": "3.1.15",
+    "@types/node": "^26.1.2",
+    "@types/three": "^0.185.1",
+    "typescript": "^5.9.3",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
   },
   "overrides": {
     "js-yaml": "4.3.0"
+  },
+  "dependencies": {
+    "three": "^0.185.1"
   }
 }
