@@ -4,6 +4,7 @@ import type {
   SemanticGroup,
   Vector3,
 } from "./model.js";
+import { isDisplayColor } from "./color.js";
 import { normalizeCityIdentity } from "./identity.js";
 
 export type PrintFormat = "stl" | "3mf";
@@ -34,6 +35,7 @@ export interface PrinterProfile {
   readonly name: string;
   readonly printChannels: readonly PrintChannel[];
   readonly supportedFormats: readonly PrintFormat[];
+  /** X width, Y height, and Z depth, matching the CityModel axis contract. */
   readonly buildVolume: Vector3;
   readonly geometryLimits: PrinterGeometryLimits;
   readonly overflowPolicy: OverflowPolicy;
@@ -41,13 +43,14 @@ export interface PrinterProfile {
 
 export interface PrintGeometryMeasurements {
   readonly wallThickness: number;
-  readonly gap: number;
+  readonly gap: number | null;
   readonly minimumFeatureSize: number;
   readonly baseThickness: number;
 }
 
 export interface PrintPlanRequest {
   readonly format: PrintFormat;
+  readonly scale?: number;
   readonly semanticGroups: readonly SemanticGroup[];
   readonly bounds: Vector3;
   readonly geometry: PrintGeometryMeasurements;
@@ -74,7 +77,7 @@ export interface PrintPlan {
   readonly profileId: string;
   readonly format: PrintFormat;
   readonly bounds: Vector3;
-  readonly scale: 1;
+  readonly scale: number;
   readonly assignments: readonly SemanticGroupAssignment[];
   readonly channels: readonly PrintChannelPlan[];
   readonly identity?: CityIdentity;
@@ -143,6 +146,11 @@ export function validatePrinterProfile(
     }
     if (!MECHANISMS.has(channel.mechanism)) {
       issues.push(`Unsupported channel mechanism '${String(channel.mechanism)}'.`);
+    }
+    if (channel.color !== undefined && !isDisplayColor(channel.color)) {
+      issues.push(
+        `Print channel '${channel.id}' color must be a #RRGGBB or #RRGGBBAA color.`,
+      );
     }
   }
   if (profile.supportedFormats.length === 0) {
@@ -230,6 +238,9 @@ function validateRequest(
       `Format '${request.format}' is not supported by profile '${profile.id}'.`,
     );
   }
+  if (request.scale !== undefined && !finitePositive(request.scale)) {
+    issues.push("Print scale must be a positive finite number.");
+  }
   for (const axis of ["x", "y", "z"] as const) {
     const value = request.bounds[axis];
     if (!finiteNonNegative(value)) {
@@ -262,9 +273,12 @@ function validateRequest(
     ],
   ] as const;
   for (const [label, actual, minimum] of geometryChecks) {
+    if (actual === null) {
+      continue;
+    }
     if (!finitePositive(actual)) {
       issues.push(`Print ${label} must be positive.`);
-    } else if (actual < minimum) {
+    } else if (actual + GEOMETRY_EPSILON < minimum) {
       issues.push(`Print ${label} (${actual}) is below profile minimum (${minimum}).`);
     }
   }
@@ -439,6 +453,32 @@ function assignGroups(
     });
 }
 
+/**
+ * Resolves semantic groups to the profile's available channels without
+ * pretending that unmeasured model geometry is already print-safe.
+ */
+export function assignSemanticGroups(
+  profile: PrinterProfile,
+  semanticGroups: readonly SemanticGroup[],
+): readonly SemanticGroupAssignment[] {
+  const issues = [
+    ...validatePrinterProfile(profile),
+    ...validateSemanticGroups(semanticGroups),
+  ];
+  if (
+    profile.overflowPolicy === "error" &&
+    semanticGroups.length > profile.printChannels.length
+  ) {
+    issues.push(
+      `${semanticGroups.length} semantic groups exceed ${profile.printChannels.length} print channels.`,
+    );
+  }
+  if (issues.length > 0) {
+    throw new PrintPlanValidationError([...new Set(issues)]);
+  }
+  return assignGroups(profile, semanticGroups);
+}
+
 export function planPrint(
   profile: PrinterProfile,
   request: PrintPlanRequest,
@@ -472,7 +512,7 @@ export function planPrint(
     profileId: profile.id,
     format: request.format,
     bounds: { ...request.bounds },
-    scale: 1,
+    scale: request.scale ?? 1,
     assignments,
     channels: profile.printChannels
       .map((channel) => ({

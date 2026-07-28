@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assignSemanticGroups,
   DEFAULT_FDM_GEOMETRY_LIMITS,
   DEFAULT_SEMANTIC_GROUPS,
   PrintPlanValidationError,
@@ -20,6 +21,22 @@ const geometry = {
 };
 
 describe("capability-driven printer profiles", () => {
+  it("assigns semantic groups without requiring invented geometry measurements", () => {
+    const profile = createPrusaXLProfile([1, 2]);
+    const assignments = assignSemanticGroups(
+      profile,
+      [...DEFAULT_SEMANTIC_GROUPS].reverse(),
+    );
+
+    expect(assignments).toHaveLength(DEFAULT_SEMANTIC_GROUPS.length);
+    expect(assignments.map(({ semanticGroupId }) => semanticGroupId)).toEqual(
+      [...DEFAULT_SEMANTIC_GROUPS].map(({ id }) => id).sort(),
+    );
+    expect(new Set(assignments.map(({ channelId }) => channelId))).toEqual(
+      new Set(["tool-1", "tool-2"]),
+    );
+  });
+
   it.each([
     [[1], ["tool-1"]],
     [[1, 5], ["tool-1", "tool-5"]],
@@ -74,6 +91,21 @@ describe("capability-driven printer profiles", () => {
       "At least one print channel is required.",
     );
   });
+
+  it("rejects print-channel colors that 3MF cannot preserve", () => {
+    const profile: PrinterProfile = {
+      ...createSingleChannelProfile(),
+      printChannels: [
+        {
+          ...createSingleChannelProfile().printChannels[0]!,
+          color: "red",
+        },
+      ],
+    };
+    expect(validatePrinterProfile(profile)).toContain(
+      "Print channel 'channel-1' color must be a #RRGGBB or #RRGGBBAA color.",
+    );
+  });
 });
 
 describe("deterministic print planning", () => {
@@ -115,10 +147,12 @@ describe("deterministic print planning", () => {
   it("emits only channel groups that are used", () => {
     const plan = planPrint(createPrusaXLProfile([1, 2, 3, 4, 5]), {
       format: "3mf",
+      scale: 3,
       semanticGroups: DEFAULT_SEMANTIC_GROUPS.slice(0, 2),
       bounds: { x: 100, y: 50, z: 100 },
-      geometry,
+      geometry: { ...geometry, gap: null },
     });
+    expect(plan.scale).toBe(3);
     expect(plan.channels.map(({ channel }) => channel.id)).toEqual([
       "tool-1",
       "tool-2",

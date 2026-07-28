@@ -6,9 +6,10 @@ import { pathToFileURL } from "node:url";
 
 import { analyzeLocalRepositories } from "../../../packages/analyzer/src/index.js";
 import {
-  CITY_MODEL_SCHEMA_VERSION,
+  assignSemanticGroups,
   planPrint,
   PrintPlanValidationError,
+  validateCityModel,
   validatePrinterProfile,
 } from "../../../packages/core/src/index.js";
 import type {
@@ -16,13 +17,20 @@ import type {
   PrinterProfile,
   PrintFormat,
 } from "../../../packages/core/src/index.js";
+import {
+  buildPrintableCity,
+  printablePlanGeometry,
+  serializeThreeMf,
+} from "../../../packages/exporter/src/index.js";
 
 const HELP = `Code City
 
 Usage:
   codecity analyze <root...> --output <city-model.json> [options]
   codecity plan --model <city-model.json> --profile <profile.json> \\
-    --format <stl|3mf> --output <print-plan.json>
+    --format <stl|3mf> --output <print-plan.json> [--scale <factor>]
+  codecity export --model <city-model.json> --profile <profile.json> \\
+    --format 3mf --output <model.3mf> [--scale <factor>]
 
 Analyze options:
   --title <text>       Printed city/repository title
@@ -102,6 +110,16 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(absolutePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+async function writeBinary(
+  filePath: string,
+  value: Uint8Array,
+): Promise<string> {
+  const absolutePath = path.resolve(filePath);
+  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+  await fs.writeFile(absolutePath, value);
+  return absolutePath;
+}
+
 async function readJson(filePath: string, description: string): Promise<unknown> {
   let text: string;
   try {
@@ -123,32 +141,7 @@ function object(value: unknown): value is Record<string, unknown> {
 }
 
 function parseCityModel(value: unknown): CityModel {
-  const bounds = object(value) ? value["bounds"] : undefined;
-  if (
-    !object(value) ||
-    value["schemaVersion"] !== CITY_MODEL_SCHEMA_VERSION ||
-    !Array.isArray(value["repositories"]) ||
-    !Array.isArray(value["modules"]) ||
-    !Array.isArray(value["buildings"]) ||
-    !Array.isArray(value["semanticGroups"]) ||
-    !value["semanticGroups"].every(
-      (group) =>
-        object(group) &&
-        typeof group["id"] === "string" &&
-        typeof group["label"] === "string" &&
-        typeof group["color"] === "string" &&
-        typeof group["priority"] === "number",
-    ) ||
-    !object(bounds) ||
-    typeof bounds["x"] !== "number" ||
-    typeof bounds["y"] !== "number" ||
-    typeof bounds["z"] !== "number"
-  ) {
-    throw new Error(
-      `Model must be a Code City ${CITY_MODEL_SCHEMA_VERSION} city model.`,
-    );
-  }
-  return value as unknown as CityModel;
+  return validateCityModel(value);
 }
 
 function parsePrinterProfile(value: unknown): PrinterProfile {
@@ -228,7 +221,7 @@ async function analyzeCommand(args: readonly string[], io: CliIo): Promise<void>
 async function planCommand(args: readonly string[], io: CliIo): Promise<void> {
   const parsed = parseArguments(
     args,
-    new Set(["model", "profile", "format", "output"]),
+    new Set(["model", "profile", "format", "output", "scale"]),
   );
   if (parsed.positionals.length > 0) {
     throw new Error(
@@ -243,29 +236,92 @@ async function planCommand(args: readonly string[], io: CliIo): Promise<void> {
     throw new Error("--format must be either 'stl' or '3mf'.");
   }
   const format: PrintFormat = formatValue;
+  const scale = positiveScale(parsed.options.get("scale"));
   const model = parseCityModel(await readJson(modelPath, "city model"));
   const profile = parsePrinterProfile(
     await readJson(profilePath, "printer profile"),
   );
-  const limits = profile.geometryLimits;
+  const assignments = assignSemanticGroups(profile, model.semanticGroups);
+  const printable = buildPrintableCity(model, assignments, { profile, scale });
+  const planGeometry = printablePlanGeometry(printable);
   const plan = planPrint(profile, {
     format,
+    scale,
     semanticGroups: model.semanticGroups,
-    bounds: model.bounds,
+    bounds: planGeometry.bounds,
     geometry: {
-      wallThickness: limits.minimumWallThickness,
-      gap: limits.minimumGap,
-      minimumFeatureSize: limits.minimumFeatureSize,
-      baseThickness: limits.minimumBaseThickness,
+      wallThickness: printable.measurements.wallThickness,
+      gap: printable.measurements.minimumGap,
+      minimumFeatureSize: printable.measurements.minimumFeatureSize,
+      baseThickness: printable.measurements.baseThickness,
     },
     ...(model.identity === undefined ? {} : { identity: model.identity }),
-    ...(model.identityPanel === undefined
+    ...(planGeometry.identityPanel === undefined
       ? {}
-      : { identityPanel: model.identityPanel }),
+      : { identityPanel: planGeometry.identityPanel }),
   });
   await writeJson(output, plan);
   io.stdout(
     `Planned ${format.toUpperCase()} output across ${plan.channels.length} print channel(s).\nWrote ${path.resolve(output)}\n`,
+  );
+}
+
+function positiveScale(value: string | undefined): number {
+  const scale = value === undefined ? 1 : Number(value);
+  if (!Number.isFinite(scale) || scale <= 0) {
+    throw new Error("--scale must be a positive finite number.");
+  }
+  return scale;
+}
+
+async function exportCommand(args: readonly string[], io: CliIo): Promise<void> {
+  const parsed = parseArguments(
+    args,
+    new Set(["model", "profile", "format", "output", "scale"]),
+  );
+  if (parsed.positionals.length > 0) {
+    throw new Error(
+      `Unexpected export argument '${parsed.positionals[0]}'. Use named options.`,
+    );
+  }
+  const modelPath = requiredOption(parsed.options, "model");
+  const profilePath = requiredOption(parsed.options, "profile");
+  const format = requiredOption(parsed.options, "format");
+  const output = requiredOption(parsed.options, "output");
+  const scale = positiveScale(parsed.options.get("scale"));
+  if (format !== "3mf") {
+    throw new Error(
+      "The export command currently supports only '3mf'; STL remains planned in issue #12.",
+    );
+  }
+  if (path.extname(output).toLowerCase() !== ".3mf") {
+    throw new Error("3MF output must use the '.3mf' file extension.");
+  }
+
+  const model = parseCityModel(await readJson(modelPath, "city model"));
+  const profile = parsePrinterProfile(
+    await readJson(profilePath, "printer profile"),
+  );
+  if (!profile.supportedFormats.includes("3mf")) {
+    throw new Error(
+      `Format '3mf' is not supported by profile '${profile.id}'.`,
+    );
+  }
+  const printable = buildPrintableCity(
+    model,
+    assignSemanticGroups(profile, model.semanticGroups),
+    {
+      profile,
+      scale,
+    },
+  );
+  const absoluteOutput = await writeBinary(
+    output,
+    serializeThreeMf(printable),
+  );
+  const bounds = printable.bounds.size;
+  io.stdout(
+    `Exported 3MF with ${printable.parts.length} aligned part(s) at ${bounds.x} × ${bounds.y} × ${bounds.z} mm.\nWrote ${absoluteOutput}\n`,
   );
 }
 
@@ -293,6 +349,8 @@ export async function runCli(
       await analyzeCommand(args.slice(1), io);
     } else if (command === "plan") {
       await planCommand(args.slice(1), io);
+    } else if (command === "export") {
+      await exportCommand(args.slice(1), io);
     } else {
       throw new Error(`Unknown command '${command}'.`);
     }

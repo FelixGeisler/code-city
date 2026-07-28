@@ -62,41 +62,57 @@ it("analyzes local roots and creates a printer-independent print plan", async ()
       io,
     ),
   ).toBe(0);
-  expect(
-    await runCli(
-      [
-        "plan",
-        "--model",
-        modelPath,
-        "--profile",
-        profilePath,
-        "--format",
-        "stl",
-        "--output",
-        planPath,
-      ],
-      io,
-    ),
-  ).toBe(0);
+  const planExitCode = await runCli(
+    [
+      "plan",
+      "--model",
+      modelPath,
+      "--profile",
+      profilePath,
+      "--format",
+      "stl",
+      "--scale",
+      "2",
+      "--output",
+      planPath,
+    ],
+    io,
+  );
+  expect(planExitCode, stderr.join("")).toBe(0);
 
   const model = JSON.parse(await fs.readFile(modelPath, "utf8")) as {
     identity: { title: string; version: string };
   };
   const plan = JSON.parse(await fs.readFile(planPath, "utf8")) as {
     format: string;
+    scale: number;
     channels: unknown[];
     identity: { title: string; version: string };
+    identityPanel: {
+      channelId: string;
+      reliefDepth: number;
+      position: { z: number };
+      size: { z: number };
+    };
   };
   expect(model.identity).toMatchObject({
     title: "Sample City",
     version: "1.2.3",
   });
   expect(plan.format).toBe("stl");
+  expect(plan.scale).toBe(2);
   expect(plan.channels).toHaveLength(1);
   expect(plan.identity).toEqual({
     title: "Sample City",
     version: "1.2.3",
   });
+  expect(plan.identityPanel.channelId).toBe("channel-1");
+  expect(plan.identityPanel.reliefDepth).toBeGreaterThanOrEqual(0.8);
+  expect(
+    plan.identityPanel.position.z -
+      plan.identityPanel.size.z / 2 -
+      plan.identityPanel.reliefDepth,
+  ).toBeCloseTo(0, 10);
   expect(stderr).toEqual([]);
   expect(stdout.join("")).toContain("Analyzed 1 root");
   expect(stdout.join("")).toContain("Planned STL output");
@@ -173,4 +189,103 @@ it("persists analyzer warnings and prints them on stderr", async () => {
   expect(model.analysis.warnings[0]).toContain("missing projects");
   expect(messages.join("")).toContain("Warning:");
   expect(messages.join("")).toContain("missing projects");
+});
+
+it("exports the canonical Demo as a real five-part 3MF", async () => {
+  const directory = await temporaryDirectory();
+  const outputPath = path.join(directory, "code-city-demo.3mf");
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+
+  expect(
+    await runCli(
+      [
+        "export",
+        "--model",
+        path.resolve("examples/demo-city.json"),
+        "--profile",
+        path.resolve("profiles/prusa-xl-5t.json"),
+        "--format",
+        "3mf",
+        "--scale",
+        "3",
+        "--output",
+        outputPath,
+      ],
+      {
+        stdout: (message) => stdout.push(message),
+        stderr: (message) => stderr.push(message),
+      },
+    ),
+  ).toBe(0);
+
+  const archive = await fs.readFile(outputPath);
+  expect(archive.subarray(0, 2).toString("ascii")).toBe("PK");
+  expect(archive.length).toBeGreaterThan(1_000);
+  expect(stderr).toEqual([]);
+  expect(stdout.join("")).toContain("5 aligned part(s)");
+  expect(stdout.join("")).toContain("93 × 48 × 33 mm");
+});
+
+it("rejects unsupported export formats and invalid scale values", async () => {
+  const directory = await temporaryDirectory();
+  const messages: string[] = [];
+  const common = [
+    "--model",
+    path.resolve("examples/demo-city.json"),
+    "--profile",
+    path.resolve("profiles/prusa-xl-5t.json"),
+    "--output",
+    path.join(directory, "demo.3mf"),
+  ];
+
+  expect(
+    await runCli(["export", ...common, "--format", "stl"], {
+      stdout: () => undefined,
+      stderr: (message) => messages.push(message),
+    }),
+  ).toBe(1);
+  expect(
+    await runCli(
+      ["export", ...common, "--format", "3mf", "--scale", "0"],
+      {
+        stdout: () => undefined,
+        stderr: (message) => messages.push(message),
+      },
+    ),
+  ).toBe(1);
+  expect(messages.join("")).toContain("currently supports only '3mf'");
+  expect(messages.join("")).toContain("--scale must be a positive");
+});
+
+it("rejects structurally incomplete export models before geometry work", async () => {
+  const directory = await temporaryDirectory();
+  const model = JSON.parse(
+    await fs.readFile(path.resolve("examples/demo-city.json"), "utf8"),
+  ) as Record<string, unknown>;
+  delete model["districts"];
+  const modelPath = path.join(directory, "incomplete.json");
+  await fs.writeFile(modelPath, JSON.stringify(model), "utf8");
+  const messages: string[] = [];
+
+  expect(
+    await runCli(
+      [
+        "export",
+        "--model",
+        modelPath,
+        "--profile",
+        path.resolve("profiles/prusa-xl-5t.json"),
+        "--format",
+        "3mf",
+        "--output",
+        path.join(directory, "demo.3mf"),
+      ],
+      {
+        stdout: () => undefined,
+        stderr: (message) => messages.push(message),
+      },
+    ),
+  ).toBe(1);
+  expect(messages.join("")).toContain("districts must be an array");
 });
