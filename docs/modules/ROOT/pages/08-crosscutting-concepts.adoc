@@ -52,6 +52,10 @@ Sort inputs, use stable path IDs, and persist formulas and normalization caps.
 == Privacy
 
 Do not embed source text. Support exclusions and path redaction.
+Default discovery skips exact `.git`, `.angular`, `node_modules`, `bin`, `obj`,
+`dist`, `build`, and `coverage` directory segments plus generated C# suffixes.
+Deterministic user exclusions and compiler-owned source-boundary discovery,
+independent of `.git`, remain follow-up work.
 
 == Physical identity
 

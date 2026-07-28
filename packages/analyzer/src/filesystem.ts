@@ -3,6 +3,7 @@ import path from "node:path";
 
 const EXCLUDED_DIRECTORIES = new Set([
   ".git",
+  ".angular",
   "node_modules",
   "bin",
   "obj",
@@ -11,7 +12,7 @@ const EXCLUDED_DIRECTORIES = new Set([
   "coverage",
 ]);
 
-const GENERATED_CSHARP = /\.(?:g|generated|designer)\.cs$/i;
+const GENERATED_CSHARP = /\.(?:g(?:\.i)?|generated|designer)\.cs$/i;
 
 export function portablePath(value: string): string {
   const normalized = value.replaceAll("\\", "/");
