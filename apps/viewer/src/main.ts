@@ -6,6 +6,7 @@ import type {
   CityModel,
   CityModule,
   CityRepository,
+  DependencyKind,
 } from "../../../packages/core/src/model.js";
 import { presentExecutableUnits } from "./building-inspector.js";
 import { cityBaseForModel } from "./city-surface.js";
@@ -21,6 +22,22 @@ import {
   type SelectedDependencyRoute,
   toggleDependencyRouteDirection,
 } from "./dependency-explorer.js";
+import {
+  createDistrictDependencyExplorerIndex,
+  type DistrictDependencyBundle,
+  type DistrictDependencyEndpoint,
+  type DistrictDependencyFilters,
+  resetDistrictDependencyFilters,
+  summarizeDistrictDependencies,
+  toggleDistrictDependencyKind,
+} from "./district-dependency-explorer.js";
+import {
+  districtBoundaryAnchor,
+  type DistrictDependencyFootprint,
+  districtRouteEndpoints,
+  keyedBaseGateway,
+  keyedIsolationGateway,
+} from "./district-dependency-layout.js";
 import {
   type DependencyOverlayRoute,
   DependencyRouteOverlay,
@@ -125,6 +142,49 @@ const isolateDistrictButton =
   element<HTMLButtonElement>("isolate-district");
 const showWholeCityButton =
   element<HTMLButtonElement>("show-whole-city");
+const districtRoutesToggle =
+  element<HTMLButtonElement>("district-routes-toggle");
+const districtRouteTypeScriptFilter = element<HTMLButtonElement>(
+  "district-route-filter-typescript",
+);
+const districtRouteTypeScriptCount = element<HTMLElement>(
+  "district-route-filter-typescript-count",
+);
+const districtRouteProjectFilter = element<HTMLButtonElement>(
+  "district-route-filter-project",
+);
+const districtRouteProjectCount = element<HTMLElement>(
+  "district-route-filter-project-count",
+);
+const districtRoutePackageFilter = element<HTMLButtonElement>(
+  "district-route-filter-package",
+);
+const districtRoutePackageCount = element<HTMLElement>(
+  "district-route-filter-package-count",
+);
+const districtRoutesStatus =
+  element<HTMLParagraphElement>("district-routes-status");
+const districtRoutesList =
+  element<HTMLUListElement>("district-routes-list");
+const districtRouteDetails =
+  element<HTMLElement>("district-route-details");
+const districtRouteDetailTitle =
+  element<HTMLHeadingElement>("district-route-detail-title");
+const districtRouteDetailSummary = element<HTMLParagraphElement>(
+  "district-route-detail-summary",
+);
+const districtRouteDetailKinds = element<HTMLParagraphElement>(
+  "district-route-detail-kinds",
+);
+const districtRouteContributors = element<HTMLUListElement>(
+  "district-route-contributors",
+);
+const districtRouteIsolateConsumer = element<HTMLButtonElement>(
+  "district-route-isolate-consumer",
+);
+const districtRouteIsolateProvider = element<HTMLButtonElement>(
+  "district-route-isolate-provider",
+);
 
 const inspectorFields = {
   name: element<HTMLHeadingElement>("building-name"),
@@ -162,6 +222,10 @@ class CityScene {
   private readonly raycaster = new THREE.Raycaster();
   private readonly city = new THREE.Group();
   private readonly dependencyOverlay = new DependencyRouteOverlay(this.scene);
+  private readonly districtDependencyOverlay = new DependencyRouteOverlay(
+    this.scene,
+    "code-city:district-dependency-routes",
+  );
   private readonly buildingMeshes = new Map<
     string,
     THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>
@@ -434,6 +498,12 @@ class CityScene {
     this.dependencyOverlay.replace(routes);
   }
 
+  public replaceDistrictDependencyRoutes(
+    routes: readonly DependencyOverlayRoute[],
+  ): void {
+    this.districtDependencyOverlay.replace(routes);
+  }
+
   public selectBuilding(id: string, focus = false): boolean {
     const context = this.buildingContexts.get(id);
     if (!context) {
@@ -509,6 +579,7 @@ class CityScene {
   private clear(): void {
     this.hover(null);
     this.dependencyOverlay.clear();
+    this.districtDependencyOverlay.clear();
     this.isolatedDistrictId = null;
     this.cameraTransition = null;
     this.select(null);
@@ -786,6 +857,18 @@ let activeDistrictsById = new Map(
 let dependencyExplorerIndex = createDependencyExplorerIndex(DEMO_MODEL);
 let dependencyRouteState: DependencyRouteToggleState =
   resetDependencyRouteState();
+let districtDependencyExplorerIndex =
+  createDistrictDependencyExplorerIndex(DEMO_MODEL);
+let districtDependencyFilters: DistrictDependencyFilters =
+  resetDistrictDependencyFilters();
+let districtDependencyRoutesVisible = false;
+let selectedDistrictDependencyBundleId: string | null = null;
+let visibleDistrictDependencyBundlesById = new Map<
+  string,
+  DistrictDependencyBundle
+>();
+let districtDependencyFootprintsById =
+  createDistrictDependencyFootprints(DEMO_MODEL);
 let repositoryExplorerIndex = createRepositoryExplorerIndex(DEMO_MODEL);
 let explorerState = resetExplorerState();
 const cityScene = new CityScene(sceneHost, synchronizeExplorerState);
@@ -822,6 +905,28 @@ dependencyIncomingToggle.addEventListener("click", () => {
 });
 dependencyOutgoingToggle.addEventListener("click", () => {
   toggleDependencyDirection("outgoing");
+});
+districtRoutesToggle.addEventListener("click", () => {
+  districtDependencyRoutesVisible = !districtDependencyRoutesVisible;
+  renderDistrictDependencyExplorer();
+});
+districtRouteTypeScriptFilter.addEventListener("click", () => {
+  toggleDistrictDependencyFilter("typescript-import");
+});
+districtRouteProjectFilter.addEventListener("click", () => {
+  toggleDistrictDependencyFilter("project-reference");
+});
+districtRoutePackageFilter.addEventListener("click", () => {
+  toggleDistrictDependencyFilter("package-reference");
+});
+districtRoutesList.addEventListener("keydown", (event) => {
+  navigateDistrictDependencyRoutes(event);
+});
+districtRouteIsolateConsumer.addEventListener("click", () => {
+  isolateDistrictDependencyEndpoint("consumer");
+});
+districtRouteIsolateProvider.addEventListener("click", () => {
+  isolateDistrictDependencyEndpoint("provider");
 });
 
 buildingSearch.addEventListener("input", renderBuildingSearch);
@@ -971,6 +1076,10 @@ function applyModel(model: CityModel, source: ModelSource): void {
   );
   const nextDependencyExplorerIndex =
     createDependencyExplorerIndex(model);
+  const nextDistrictDependencyExplorerIndex =
+    createDistrictDependencyExplorerIndex(model);
+  const nextDistrictDependencyFootprints =
+    createDistrictDependencyFootprints(model);
   const nextRepositoryExplorerIndex =
     createRepositoryExplorerIndex(model);
 
@@ -979,6 +1088,14 @@ function applyModel(model: CityModel, source: ModelSource): void {
   activeDistrictsById = districtsById;
   dependencyExplorerIndex = nextDependencyExplorerIndex;
   dependencyRouteState = resetDependencyRouteState();
+  districtDependencyExplorerIndex =
+    nextDistrictDependencyExplorerIndex;
+  districtDependencyFilters = resetDistrictDependencyFilters();
+  districtDependencyRoutesVisible = false;
+  selectedDistrictDependencyBundleId = null;
+  visibleDistrictDependencyBundlesById = new Map();
+  districtDependencyFootprintsById =
+    nextDistrictDependencyFootprints;
   repositoryExplorerIndex = nextRepositoryExplorerIndex;
   explorerState = resetExplorerState();
   buildingSearch.value = "";
@@ -1121,6 +1238,358 @@ function synchronizeExplorerState(state: ExplorerState): void {
     }
   }
   renderDependencyExplorer();
+  renderDistrictDependencyExplorer();
+}
+
+function toggleDistrictDependencyFilter(kind: DependencyKind): void {
+  districtDependencyFilters = toggleDistrictDependencyKind(
+    districtDependencyFilters,
+    kind,
+  );
+  renderDistrictDependencyExplorer();
+}
+
+function renderDistrictDependencyExplorer(): void {
+  const focusedBundleId =
+    document.activeElement instanceof HTMLButtonElement
+      ? document.activeElement.dataset["bundleId"] ?? null
+      : null;
+  const summary = summarizeDistrictDependencies(
+    districtDependencyExplorerIndex,
+    districtDependencyFilters,
+    explorerState.isolatedDistrictId,
+  );
+  const availableKinds = new Map(
+    summary.availableKinds.map((kind) => [kind.kind, kind]),
+  );
+
+  updateDistrictDependencyFilter(
+    districtRouteTypeScriptFilter,
+    districtRouteTypeScriptCount,
+    "typescript-import",
+    districtDependencyFilters.typescriptImport,
+    availableKinds.get("typescript-import"),
+  );
+  updateDistrictDependencyFilter(
+    districtRouteProjectFilter,
+    districtRouteProjectCount,
+    "project-reference",
+    districtDependencyFilters.projectReference,
+    availableKinds.get("project-reference"),
+  );
+  updateDistrictDependencyFilter(
+    districtRoutePackageFilter,
+    districtRoutePackageCount,
+    "package-reference",
+    districtDependencyFilters.packageReference,
+    availableKinds.get("package-reference"),
+  );
+
+  districtRoutesToggle.disabled =
+    districtDependencyExplorerIndex.bundleCount === 0;
+  districtRoutesToggle.setAttribute(
+    "aria-expanded",
+    String(districtDependencyRoutesVisible),
+  );
+  districtRoutesToggle.textContent =
+    districtDependencyRoutesVisible ? "Hide" : "Show";
+  districtRoutesList.replaceChildren();
+  visibleDistrictDependencyBundlesById = new Map(
+    summary.bundles.map((bundle) => [bundle.id, bundle]),
+  );
+
+  if (
+    selectedDistrictDependencyBundleId !== null &&
+    !visibleDistrictDependencyBundlesById.has(
+      selectedDistrictDependencyBundleId,
+    )
+  ) {
+    selectedDistrictDependencyBundleId = null;
+  }
+
+  if (!districtDependencyRoutesVisible) {
+    districtRoutesList.hidden = true;
+    districtRouteDetails.hidden = true;
+    districtRoutesStatus.textContent =
+      districtDependencyExplorerIndex.bundleCount === 0
+        ? "No cross-district dependency routes recorded."
+        : `Routes hidden · ${routeCountLabel(summary.totalBundleCount)} with current filters.`;
+    cityScene.replaceDistrictDependencyRoutes([]);
+    return;
+  }
+
+  const hasEnabledKind =
+    districtDependencyFilters.typescriptImport ||
+    districtDependencyFilters.projectReference ||
+    districtDependencyFilters.packageReference;
+  districtRoutesList.hidden = summary.bundles.length === 0;
+  if (!hasEnabledKind) {
+    districtRoutesStatus.textContent = "No route kinds selected.";
+  } else if (summary.totalBundleCount === 0) {
+    districtRoutesStatus.textContent =
+      explorerState.isolatedDistrictId === null
+        ? "No routes match the selected kinds."
+        : "No matching routes touch this district.";
+  } else {
+    districtRoutesStatus.textContent =
+      `Showing ${summary.visibleBundleCount.toLocaleString()} of ` +
+      `${routeCountLabel(summary.totalBundleCount)} · ` +
+      `${summary.visibleReferenceWeight.toLocaleString()} of ` +
+      `${referenceCountLabel(summary.totalReferenceWeight)}` +
+      (summary.hiddenBundleCount > 0
+        ? ` · ${summary.hiddenBundleCount.toLocaleString()} bundles hidden by limit`
+        : "");
+  }
+
+  const overlayRoutes: DependencyOverlayRoute[] = [];
+  for (const bundle of summary.bundles) {
+    overlayRoutes.push(districtDependencyOverlayRoute(bundle));
+    districtRoutesList.append(districtDependencyListItem(bundle));
+  }
+  cityScene.replaceDistrictDependencyRoutes(overlayRoutes);
+
+  const selected =
+    selectedDistrictDependencyBundleId === null
+      ? null
+      : visibleDistrictDependencyBundlesById.get(
+          selectedDistrictDependencyBundleId,
+        ) ?? null;
+  renderDistrictDependencyDetails(selected);
+
+  if (focusedBundleId !== null) {
+    districtRouteButton(focusedBundleId)?.focus({
+      preventScroll: true,
+    });
+  }
+}
+
+function updateDistrictDependencyFilter(
+  button: HTMLButtonElement,
+  count: HTMLElement,
+  kind: DependencyKind,
+  pressed: boolean,
+  availability:
+    | {
+        readonly edgeCount: number;
+        readonly weight: number;
+      }
+    | undefined,
+): void {
+  const edgeCount = availability?.edgeCount ?? 0;
+  const weight = availability?.weight ?? 0;
+  button.disabled = edgeCount === 0;
+  button.setAttribute("aria-pressed", String(pressed));
+  button.setAttribute(
+    "aria-label",
+    `${districtDependencyKindLabel(kind)} routes, ` +
+      `${edgeCountLabel(edgeCount)}, ${referenceCountLabel(weight)}`,
+  );
+  button.title =
+    `${edgeCountLabel(edgeCount)} · ${referenceCountLabel(weight)}`;
+  count.textContent =
+    `${weight.toLocaleString()} ${weight === 1 ? "ref" : "refs"}`;
+}
+
+function districtDependencyListItem(
+  bundle: DistrictDependencyBundle,
+): HTMLLIElement {
+  const item = document.createElement("li");
+  item.className = "district-route-item";
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "district-route-button";
+  button.dataset["bundleId"] = bundle.id;
+  const external = bundle.target.kind === "external";
+  if (external) {
+    button.dataset["external"] = "true";
+  }
+  if (bundle.id === selectedDistrictDependencyBundleId) {
+    button.setAttribute("aria-current", "true");
+  }
+  button.setAttribute(
+    "aria-label",
+    `${districtDependencyEndpointLabel(bundle.source)} to ` +
+      `${districtDependencyEndpointLabel(bundle.target)}, ` +
+      `${edgeCountLabel(bundle.edgeCount)}, ` +
+      referenceCountLabel(bundle.weight),
+  );
+  button.addEventListener("click", () => {
+    selectedDistrictDependencyBundleId = bundle.id;
+    renderDistrictDependencyExplorer();
+  });
+
+  const name = document.createElement("span");
+  name.className = "district-route-name";
+  name.textContent =
+    `${districtDependencyEndpointLabel(bundle.source)} → ` +
+    districtDependencyEndpointLabel(bundle.target);
+  name.title = name.textContent;
+
+  const weight = document.createElement("span");
+  weight.className = "district-route-weight";
+  weight.textContent = referenceCountLabel(bundle.weight);
+
+  const kind = document.createElement("span");
+  kind.className = "district-route-kind";
+  const dominantKind = dominantDistrictDependencyKind(bundle);
+  kind.dataset["kind"] = districtDependencyKindToken(dominantKind);
+  if (external) {
+    kind.dataset["external"] = "true";
+  }
+  kind.textContent = bundle.kinds
+    .map(
+      (summary) =>
+        `${districtDependencyKindLabel(summary.kind)} ` +
+        `${summary.weight.toLocaleString()}`,
+    )
+    .join(" · ");
+
+  button.append(name, weight, kind);
+  item.append(button);
+  return item;
+}
+
+function renderDistrictDependencyDetails(
+  bundle: DistrictDependencyBundle | null,
+): void {
+  districtRouteDetails.hidden =
+    !districtDependencyRoutesVisible || bundle === null;
+  districtRouteContributors.replaceChildren();
+  if (bundle === null) {
+    districtRouteDetailTitle.textContent = "Route details";
+    districtRouteDetailSummary.textContent = "";
+    districtRouteDetailKinds.textContent = "";
+    districtRouteIsolateConsumer.disabled = true;
+    districtRouteIsolateProvider.disabled = true;
+    return;
+  }
+
+  districtRouteDetailTitle.textContent =
+    `${districtDependencyEndpointLabel(bundle.source)} → ` +
+    districtDependencyEndpointLabel(bundle.target);
+  districtRouteDetailSummary.textContent =
+    `${edgeCountLabel(bundle.edgeCount)} · ` +
+    referenceCountLabel(bundle.weight);
+  districtRouteDetailKinds.textContent = bundle.kinds
+    .map(
+      (summary) =>
+        `${districtDependencyKindLabel(summary.kind)}: ` +
+        `${edgeCountLabel(summary.edgeCount)}, ` +
+        referenceCountLabel(summary.weight),
+    )
+    .join(" · ");
+
+  for (const contributor of bundle.contributors) {
+    const item = document.createElement("li");
+    item.textContent =
+      `${contributor.sourceLabel} → ${contributor.targetLabel} · ` +
+      referenceCountLabel(contributor.weight);
+    item.title =
+      `${contributor.sourcePath} → ${contributor.targetPath} · ` +
+      districtDependencyKindLabel(contributor.kind);
+    districtRouteContributors.append(item);
+  }
+
+  updateDistrictEndpointAction(
+    districtRouteIsolateConsumer,
+    bundle.source,
+    "consumer",
+  );
+  updateDistrictEndpointAction(
+    districtRouteIsolateProvider,
+    bundle.target,
+    "provider",
+  );
+}
+
+function updateDistrictEndpointAction(
+  button: HTMLButtonElement,
+  endpoint: DistrictDependencyEndpoint,
+  role: "consumer" | "provider",
+): void {
+  const districtId = districtDependencyEndpointDistrictId(endpoint);
+  button.disabled =
+    districtId === null ||
+    districtId === explorerState.isolatedDistrictId;
+  button.textContent =
+    districtId === null
+      ? "External provider"
+      : `Isolate ${role}`;
+}
+
+function isolateDistrictDependencyEndpoint(
+  role: "consumer" | "provider",
+): void {
+  if (selectedDistrictDependencyBundleId === null) {
+    return;
+  }
+  const bundle = visibleDistrictDependencyBundlesById.get(
+    selectedDistrictDependencyBundleId,
+  );
+  if (!bundle) {
+    return;
+  }
+  const endpoint = role === "consumer" ? bundle.source : bundle.target;
+  const districtId = districtDependencyEndpointDistrictId(endpoint);
+  if (districtId === null) {
+    return;
+  }
+  if (explorerState.selectedBuildingId !== null) {
+    cityScene.resetSelection();
+  }
+  cityScene.isolateDistrict(districtId);
+}
+
+function navigateDistrictDependencyRoutes(event: KeyboardEvent): void {
+  const buttons = districtRouteButtons();
+  if (buttons.length === 0) {
+    return;
+  }
+  const current = buttons.indexOf(
+    document.activeElement as HTMLButtonElement,
+  );
+  let next: HTMLButtonElement | undefined;
+  switch (event.key) {
+    case "ArrowDown":
+      next =
+        current < 0
+          ? buttons[0]
+          : buttons[(current + 1) % buttons.length];
+      break;
+    case "ArrowUp":
+      next =
+        current < 0
+          ? buttons.at(-1)
+          : buttons[(current - 1 + buttons.length) % buttons.length];
+      break;
+    case "Home":
+      next = buttons[0];
+      break;
+    case "End":
+      next = buttons.at(-1);
+      break;
+  }
+  if (next) {
+    event.preventDefault();
+    next.focus();
+  }
+}
+
+function districtRouteButtons(): HTMLButtonElement[] {
+  return [
+    ...districtRoutesList.querySelectorAll<HTMLButtonElement>(
+      ".district-route-button",
+    ),
+  ];
+}
+
+function districtRouteButton(
+  bundleId: string,
+): HTMLButtonElement | undefined {
+  return districtRouteButtons().find(
+    (button) => button.dataset["bundleId"] === bundleId,
+  );
 }
 
 function toggleDependencyDirection(
@@ -1391,6 +1860,273 @@ function dependencyEndpointPoint(
       );
     }
   }
+}
+
+function districtDependencyOverlayRoute(
+  bundle: DistrictDependencyBundle,
+): DependencyOverlayRoute {
+  const geometry = districtDependencyRouteGeometry(bundle);
+  const sourceBoundary = bundle.source.kind === "district-boundary";
+  const targetBoundary =
+    bundle.target.kind === "district-boundary";
+  const externalProvider = bundle.target.kind === "external";
+  return {
+    id: bundle.id,
+    consumer: geometry.consumer,
+    provider: geometry.provider,
+    direction: "outgoing",
+    weight: bundle.weight,
+    externalProvider,
+    gatewayAt: sourceBoundary
+      ? "source"
+      : targetBoundary || externalProvider
+        ? "target"
+        : null,
+    color: districtDependencyRouteColor(bundle),
+    emphasized: bundle.id === selectedDistrictDependencyBundleId,
+  };
+}
+
+function districtDependencyRouteGeometry(
+  bundle: DistrictDependencyBundle,
+): {
+  readonly consumer: RoutePoint;
+  readonly provider: RoutePoint;
+} {
+  if (
+    bundle.source.kind === "district" &&
+    bundle.target.kind === "district"
+  ) {
+    return districtRouteEndpoints(
+      requiredDistrictDependencyFootprint(bundle.source.districtId),
+      requiredDistrictDependencyFootprint(bundle.target.districtId),
+    );
+  }
+
+  if (
+    bundle.source.kind === "district" &&
+    bundle.target.kind === "external"
+  ) {
+    const consumerDistrict = requiredDistrictDependencyFootprint(
+      bundle.source.districtId,
+    );
+    if (explorerState.isolatedDistrictId !== null) {
+      const provider = keyedIsolationGateway(
+        consumerDistrict,
+        `external:${bundle.target.target}`,
+      );
+      return {
+        consumer: districtDependencyCenterPoint(
+          consumerDistrict,
+          provider.y,
+        ),
+        provider,
+      };
+    }
+    const base = cityBaseForModel(activeModel);
+    if (!base) {
+      throw new Error("District dependency routes require a city footprint.");
+    }
+    const baseRectangle = {
+      centerX: base.position.x,
+      centerZ: base.position.z,
+      sizeX: base.size.x,
+      sizeZ: base.size.z,
+    };
+    const skylineAnchor = districtBoundaryAnchor(
+      consumerDistrict,
+      {
+        x: baseRectangle.centerX,
+        z: baseRectangle.centerZ,
+      },
+    );
+    const provider = keyedBaseGateway(
+      baseRectangle,
+      bundle.id,
+      skylineAnchor.y,
+    );
+    return {
+      consumer: districtBoundaryAnchor(consumerDistrict, provider),
+      provider,
+    };
+  }
+
+  if (
+    bundle.source.kind === "district" &&
+    bundle.target.kind === "district-boundary"
+  ) {
+    const visibleDistrict = requiredDistrictDependencyFootprint(
+      bundle.source.districtId,
+    );
+    const provider = keyedIsolationGateway(
+      visibleDistrict,
+      bundle.target.hiddenDistrictId,
+    );
+    return {
+      consumer: districtDependencyCenterPoint(
+        visibleDistrict,
+        provider.y,
+      ),
+      provider,
+    };
+  }
+
+  if (
+    bundle.source.kind === "district-boundary" &&
+    bundle.target.kind === "district"
+  ) {
+    const visibleDistrict = requiredDistrictDependencyFootprint(
+      bundle.target.districtId,
+    );
+    const consumer = keyedIsolationGateway(
+      visibleDistrict,
+      bundle.source.hiddenDistrictId,
+    );
+    return {
+      consumer,
+      provider: districtDependencyCenterPoint(
+        visibleDistrict,
+        consumer.y,
+      ),
+    };
+  }
+
+  throw new Error(
+    `Unsupported district dependency route geometry for "${bundle.id}".`,
+  );
+}
+
+function districtDependencyCenterPoint(
+  district: DistrictDependencyFootprint,
+  y: number,
+): RoutePoint {
+  return {
+    x: district.centerX,
+    y,
+    z: district.centerZ,
+  };
+}
+
+function requiredDistrictDependencyFootprint(
+  districtId: string,
+): DistrictDependencyFootprint {
+  const district = districtDependencyFootprintsById.get(districtId);
+  if (!district) {
+    throw new Error(
+      `Unknown district dependency footprint "${districtId}".`,
+    );
+  }
+  return district;
+}
+
+function createDistrictDependencyFootprints(
+  model: CityModel,
+): ReadonlyMap<string, DistrictDependencyFootprint> {
+  const footprints = new Map<string, DistrictDependencyFootprint>();
+  for (const district of model.districts) {
+    const buildingSkyline = model.buildings
+      .filter((building) => building.districtId === district.id)
+      .reduce(
+        (maximum, building) =>
+          Math.max(
+            maximum,
+            building.position.y + building.size.y * 0.5,
+          ),
+        district.position.y + district.size.y * 0.5,
+      );
+    footprints.set(district.id, {
+      centerX: district.position.x,
+      centerZ: district.position.z,
+      sizeX: district.size.x,
+      sizeZ: district.size.z,
+      skylineY: buildingSkyline,
+    });
+  }
+  return footprints;
+}
+
+function districtDependencyRouteColor(
+  bundle: DistrictDependencyBundle,
+): string {
+  if (bundle.target.kind === "external") {
+    return "#f59e0b";
+  }
+  switch (dominantDistrictDependencyKind(bundle)) {
+    case "typescript-import":
+      return "#38bdf8";
+    case "project-reference":
+      return "#a78bfa";
+    case "package-reference":
+      return "#4ade80";
+  }
+}
+
+function dominantDistrictDependencyKind(
+  bundle: DistrictDependencyBundle,
+): DependencyKind {
+  const first = bundle.kinds[0];
+  if (!first) {
+    throw new Error(
+      `District dependency bundle "${bundle.id}" has no kinds.`,
+    );
+  }
+  return bundle.kinds.reduce((dominant, current) =>
+    current.weight > dominant.weight ? current : dominant,
+  ).kind;
+}
+
+function districtDependencyEndpointLabel(
+  endpoint: DistrictDependencyEndpoint,
+): string {
+  switch (endpoint.kind) {
+    case "district":
+      return endpoint.name;
+    case "district-boundary":
+      return endpoint.hiddenDistrictName;
+    case "external":
+      return endpoint.target;
+  }
+}
+
+function districtDependencyEndpointDistrictId(
+  endpoint: DistrictDependencyEndpoint,
+): string | null {
+  switch (endpoint.kind) {
+    case "district":
+      return endpoint.districtId;
+    case "district-boundary":
+      return endpoint.hiddenDistrictId;
+    case "external":
+      return null;
+  }
+}
+
+function districtDependencyKindLabel(kind: DependencyKind): string {
+  switch (kind) {
+    case "typescript-import":
+      return "TypeScript";
+    case "project-reference":
+      return "Project";
+    case "package-reference":
+      return "Package";
+  }
+}
+
+function districtDependencyKindToken(
+  kind: DependencyKind,
+): "typescript" | "project" | "package" {
+  switch (kind) {
+    case "typescript-import":
+      return "typescript";
+    case "project-reference":
+      return "project";
+    case "package-reference":
+      return "package";
+  }
+}
+
+function edgeCountLabel(count: number): string {
+  return `${count.toLocaleString()} ${count === 1 ? "edge" : "edges"}`;
 }
 
 function dependencyRouteScope(): {

@@ -43,11 +43,13 @@ self-edges are omitted.
 * External: terminate at a city-edge NuGet, npm, assembly, or unresolved gateway.
 * Print: optionally recess bundled district routes into the base.
 
-The current viewer exposes incoming and outgoing building-level TypeScript
-routes for the selected building; routes are hidden by default. Outgoing routes
-are cyan, incoming routes violet, and gateways amber. Isolation projects hidden
-endpoints to the visible district edge. Module overview bundling and printable
-roads remain planned; the city remains one continuous base.
+The viewer provides a hidden-by-default district overview with bundled routes
+filtered by TypeScript imports, project references, or packages. Selecting a
+bundle shows its weight and top contributors. It renders the strongest 24
+bundles deterministically and reports omitted bundles and references. Building
+selection expands incoming and outgoing TypeScript routes; isolation projects
+hidden endpoints to the visible boundary. Module/package print roads remain
+planned.
 
 == Repository exploration
 

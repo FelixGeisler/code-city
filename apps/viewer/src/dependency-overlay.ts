@@ -22,6 +22,10 @@ export interface DependencyOverlayRoute {
   readonly weight: number;
   readonly externalProvider: boolean;
   readonly gatewayAt: DependencyGatewayEndpoint;
+  /** Overrides the selected-file direction palette for overview bundles. */
+  readonly color?: string;
+  /** Makes a selected bundle stronger without creating another draw object. */
+  readonly emphasized?: boolean;
 }
 
 export interface DependencyWeightCue {
@@ -52,6 +56,9 @@ const COINCIDENT_EPSILON_SQUARED = 1e-12;
 const MINIMUM_ARROW_SIZE = 0.45;
 const MAXIMUM_ARROW_SIZE = 1.25;
 const ARROW_SIZE_PER_HORIZONTAL_UNIT = 0.015;
+const EMPHASIZED_LINE_INTENSITY = 1.18;
+const EMPHASIZED_ARROW_SCALE = 1.28;
+const MAXIMUM_EMPHASIZED_ARROW_SCALE = 1.92;
 const UP = new THREE.Vector3(0, 1, 0);
 
 /**
@@ -153,8 +160,14 @@ export class DependencyRouteOverlay {
   private currentRouteCount = 0;
   private currentGatewayCount = 0;
 
-  public constructor(private readonly scene: THREE.Scene) {
-    this.object.name = "code-city:dependency-routes";
+  public constructor(
+    private readonly scene: THREE.Scene,
+    name = "code-city:dependency-routes",
+  ) {
+    if (name.trim() === "") {
+      throw new TypeError("Dependency route overlay name must not be empty.");
+    }
+    this.object.name = name;
     this.scene.add(this.object);
   }
 
@@ -258,8 +271,13 @@ function createRouteLines(visuals: readonly RouteVisual[]): THREE.LineSegments {
 
   for (const visual of visuals) {
     const color = new THREE.Color(
-      dependencyRouteColor(visual.route.direction),
-    ).multiplyScalar(visual.cue.lineIntensity);
+      overlayRouteColor(visual.route),
+    ).multiplyScalar(
+      visual.cue.lineIntensity *
+        (visual.route.emphasized === true
+          ? EMPHASIZED_LINE_INTENSITY
+          : 1),
+    );
     for (let index = 1; index < visual.curve.points.length; index += 1) {
       const previous = visual.curve.points[index - 1]!;
       const current = visual.curve.points[index]!;
@@ -333,12 +351,19 @@ function createArrowheads(
   visuals.forEach((visual, index) => {
     const { arrowPosition, arrowDirection } = visual.curve;
     const routeDistance = horizontalDistance(visual.route);
-    const scale =
+    const baseScale =
       clamp(
         routeDistance * ARROW_SIZE_PER_HORIZONTAL_UNIT,
         MINIMUM_ARROW_SIZE,
         MAXIMUM_ARROW_SIZE,
       ) * visual.cue.arrowScale;
+    const scale =
+      visual.route.emphasized === true
+        ? Math.min(
+            MAXIMUM_EMPHASIZED_ARROW_SCALE,
+            baseScale * EMPHASIZED_ARROW_SCALE,
+          )
+        : baseScale;
     transform.position.set(
       arrowPosition.x,
       arrowPosition.y,
@@ -353,7 +378,7 @@ function createArrowheads(
     transform.scale.setScalar(scale);
     transform.updateMatrix();
     arrows.setMatrixAt(index, transform.matrix);
-    color.set(dependencyRouteColor(visual.route.direction));
+    color.set(overlayRouteColor(visual.route));
     arrows.setColorAt(index, color);
   });
   arrows.instanceMatrix.needsUpdate = true;
@@ -495,6 +520,26 @@ function validateRoute(route: DependencyOverlayRoute): void {
       "An external dependency provider requires a target gateway.",
     );
   }
+  if (
+    route.color !== undefined &&
+    (typeof route.color !== "string" || route.color.trim() === "")
+  ) {
+    throw new TypeError(
+      "Dependency overlay route color must not be empty.",
+    );
+  }
+  if (
+    route.emphasized !== undefined &&
+    typeof route.emphasized !== "boolean"
+  ) {
+    throw new TypeError(
+      "Dependency overlay emphasized flag must be a boolean.",
+    );
+  }
+}
+
+function overlayRouteColor(route: DependencyOverlayRoute): string {
+  return route.color ?? dependencyRouteColor(route.direction);
 }
 
 function validatePoint(point: DependencyOverlayPoint, label: string): void {

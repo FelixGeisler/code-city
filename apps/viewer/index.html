@@ -114,6 +114,140 @@
           </div>
         </section>
 
+        <section
+          id="district-routes-panel"
+          class="panel district-routes-panel"
+          aria-labelledby="district-routes-title"
+        >
+          <div class="panel-heading">
+            <h2 id="district-routes-title">District routes</h2>
+            <button
+              id="district-routes-toggle"
+              class="district-routes-toggle"
+              type="button"
+              aria-expanded="false"
+              aria-controls="district-routes-list"
+            >
+              Show
+            </button>
+          </div>
+          <div class="district-routes-body">
+            <div
+              class="district-route-filters"
+              role="group"
+              aria-label="District route kinds"
+            >
+              <button
+                id="district-route-filter-typescript"
+                class="district-route-filter"
+                data-kind="typescript"
+                type="button"
+                aria-pressed="true"
+                aria-controls="district-routes-list"
+              >
+                <span>TypeScript</span>
+                <span
+                  id="district-route-filter-typescript-count"
+                  class="district-route-count"
+                >
+                  0
+                </span>
+              </button>
+              <button
+                id="district-route-filter-project"
+                class="district-route-filter"
+                data-kind="project"
+                type="button"
+                aria-pressed="true"
+                aria-controls="district-routes-list"
+              >
+                <span>Project</span>
+                <span
+                  id="district-route-filter-project-count"
+                  class="district-route-count"
+                >
+                  0
+                </span>
+              </button>
+              <button
+                id="district-route-filter-package"
+                class="district-route-filter"
+                data-kind="package"
+                type="button"
+                aria-pressed="true"
+                aria-controls="district-routes-list"
+              >
+                <span>Package</span>
+                <span
+                  id="district-route-filter-package-count"
+                  class="district-route-count"
+                >
+                  0
+                </span>
+              </button>
+            </div>
+            <p
+              id="district-routes-status"
+              class="district-routes-status"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              Routes hidden.
+            </p>
+            <ul
+              id="district-routes-list"
+              class="district-routes-list"
+              tabindex="0"
+              aria-label="Bundled district routes"
+              hidden
+            ></ul>
+            <section
+              id="district-route-details"
+              class="district-route-details"
+              aria-labelledby="district-route-detail-title"
+              hidden
+            >
+              <h3 id="district-route-detail-title">Route details</h3>
+              <p
+                id="district-route-detail-summary"
+                class="district-route-detail-summary"
+              ></p>
+              <p
+                id="district-route-detail-kinds"
+                class="district-route-detail-kinds"
+              ></p>
+              <h4>Top contributors</h4>
+              <ul
+                id="district-route-contributors"
+                class="district-route-contributors"
+                tabindex="0"
+                aria-label="Top route contributors"
+              ></ul>
+              <div
+                class="district-route-isolation-actions"
+                role="group"
+                aria-label="Isolate a route endpoint"
+              >
+                <button
+                  id="district-route-isolate-consumer"
+                  class="button button-compact"
+                  type="button"
+                >
+                  Isolate consumer
+                </button>
+                <button
+                  id="district-route-isolate-provider"
+                  class="button button-compact"
+                  type="button"
+                >
+                  Isolate provider
+                </button>
+              </div>
+            </section>
+          </div>
+        </section>
+
         <aside
           id="inspector"
           class="panel inspector"
