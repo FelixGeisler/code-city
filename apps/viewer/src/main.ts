@@ -9,6 +9,28 @@ import type {
 } from "../../../packages/core/src/model.js";
 import { presentExecutableUnits } from "./building-inspector.js";
 import { cityBaseForModel } from "./city-surface.js";
+import {
+  createDependencyExplorerIndex,
+  dependencyRoutesForBuilding,
+  type DependencyRouteDirection,
+  type DependencyRouteEndpoint,
+  type DependencyRouteProjection,
+  type DependencyRouteToggleState,
+  projectDependencyRoute,
+  resetDependencyRouteState,
+  type SelectedDependencyRoute,
+  toggleDependencyRouteDirection,
+} from "./dependency-explorer.js";
+import {
+  type DependencyOverlayRoute,
+  DependencyRouteOverlay,
+} from "./dependency-overlay.js";
+import {
+  keyedBoundaryGateway,
+  roofRoutePoint,
+  type RoutePoint,
+  type RouteRectangle,
+} from "./dependency-route-layout.js";
 import { DEMO_MODEL } from "./demo-model.js";
 import {
   AutomaticModelLoadGate,
@@ -79,6 +101,22 @@ const selectionStatus = element<HTMLParagraphElement>("selection-status");
 const errorBanner = element<HTMLDivElement>("error-banner");
 const errorMessage = element<HTMLSpanElement>("error-message");
 const dismissErrorButton = element<HTMLButtonElement>("dismiss-error");
+const dependencyIncomingToggle = element<HTMLButtonElement>(
+  "dependency-incoming-toggle",
+);
+const dependencyIncomingCount = element<HTMLElement>(
+  "dependency-incoming-count",
+);
+const dependencyOutgoingToggle = element<HTMLButtonElement>(
+  "dependency-outgoing-toggle",
+);
+const dependencyOutgoingCount = element<HTMLElement>(
+  "dependency-outgoing-count",
+);
+const dependencyStatus =
+  element<HTMLParagraphElement>("dependency-status");
+const dependencyEmpty = element<HTMLParagraphElement>("dependency-empty");
+const dependencyList = element<HTMLUListElement>("dependency-list");
 const findPanel = element<HTMLElement>("find-panel");
 const buildingSearch = element<HTMLInputElement>("building-search");
 const searchStatus = element<HTMLParagraphElement>("search-status");
@@ -123,6 +161,7 @@ class CityScene {
   );
   private readonly raycaster = new THREE.Raycaster();
   private readonly city = new THREE.Group();
+  private readonly dependencyOverlay = new DependencyRouteOverlay(this.scene);
   private readonly buildingMeshes = new Map<
     string,
     THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>
@@ -389,6 +428,12 @@ class CityScene {
     this.select(null);
   }
 
+  public replaceDependencyRoutes(
+    routes: readonly DependencyOverlayRoute[],
+  ): void {
+    this.dependencyOverlay.replace(routes);
+  }
+
   public selectBuilding(id: string, focus = false): boolean {
     const context = this.buildingContexts.get(id);
     if (!context) {
@@ -398,7 +443,7 @@ class CityScene {
       this.isolatedDistrictId !== null &&
       this.isolatedDistrictId !== context.building.districtId
     ) {
-      this.isolateDistrict(context.building.districtId, false);
+      this.applyDistrictIsolation(context.building.districtId, false);
     }
     this.select(id);
     if (focus) {
@@ -408,6 +453,14 @@ class CityScene {
   }
 
   public isolateDistrict(id: string, focus = true): boolean {
+    if (!this.applyDistrictIsolation(id, focus)) {
+      return false;
+    }
+    this.emitState();
+    return true;
+  }
+
+  private applyDistrictIsolation(id: string, focus: boolean): boolean {
     const selectedGroup = this.districtGroups.get(id);
     if (!selectedGroup) {
       return false;
@@ -420,7 +473,6 @@ class CityScene {
     if (focus) {
       this.frameObject(selectedGroup, true);
     }
-    this.emitState();
     return true;
   }
 
@@ -456,6 +508,7 @@ class CityScene {
 
   private clear(): void {
     this.hover(null);
+    this.dependencyOverlay.clear();
     this.isolatedDistrictId = null;
     this.cameraTransition = null;
     this.select(null);
@@ -724,6 +777,15 @@ class CityScene {
 }
 
 let activeModel: CityModel = DEMO_MODEL;
+let activeBuildingsById = new Map(
+  DEMO_MODEL.buildings.map((building) => [building.id, building]),
+);
+let activeDistrictsById = new Map(
+  DEMO_MODEL.districts.map((district) => [district.id, district]),
+);
+let dependencyExplorerIndex = createDependencyExplorerIndex(DEMO_MODEL);
+let dependencyRouteState: DependencyRouteToggleState =
+  resetDependencyRouteState();
 let repositoryExplorerIndex = createRepositoryExplorerIndex(DEMO_MODEL);
 let explorerState = resetExplorerState();
 const cityScene = new CityScene(sceneHost, synchronizeExplorerState);
@@ -753,6 +815,13 @@ demoButton.addEventListener("click", () => {
 
 clearSelectionButton.addEventListener("click", () => {
   clearBuildingSelection();
+});
+
+dependencyIncomingToggle.addEventListener("click", () => {
+  toggleDependencyDirection("incoming");
+});
+dependencyOutgoingToggle.addEventListener("click", () => {
+  toggleDependencyDirection("outgoing");
 });
 
 buildingSearch.addEventListener("input", renderBuildingSearch);
@@ -894,8 +963,23 @@ async function loadModelFromQuery(): Promise<void> {
 }
 
 function applyModel(model: CityModel, source: ModelSource): void {
+  const buildingsById = new Map(
+    model.buildings.map((building) => [building.id, building]),
+  );
+  const districtsById = new Map(
+    model.districts.map((district) => [district.id, district]),
+  );
+  const nextDependencyExplorerIndex =
+    createDependencyExplorerIndex(model);
+  const nextRepositoryExplorerIndex =
+    createRepositoryExplorerIndex(model);
+
   activeModel = model;
-  repositoryExplorerIndex = createRepositoryExplorerIndex(model);
+  activeBuildingsById = buildingsById;
+  activeDistrictsById = districtsById;
+  dependencyExplorerIndex = nextDependencyExplorerIndex;
+  dependencyRouteState = resetDependencyRouteState();
+  repositoryExplorerIndex = nextRepositoryExplorerIndex;
   explorerState = resetExplorerState();
   buildingSearch.value = "";
   synchronizeExplorerState(explorerState);
@@ -1012,7 +1096,14 @@ function clearBuildingSelection(): void {
 }
 
 function synchronizeExplorerState(state: ExplorerState): void {
+  const previousSelectedBuildingId = explorerState.selectedBuildingId;
   explorerState = state;
+  if (
+    previousSelectedBuildingId !== null &&
+    state.selectedBuildingId === null
+  ) {
+    dependencyRouteState = resetDependencyRouteState();
+  }
   const selected = state.selectedBuildingId
     ? activeModel.buildings.find(
         ({ id }) => id === state.selectedBuildingId,
@@ -1029,6 +1120,324 @@ function synchronizeExplorerState(state: ExplorerState): void {
       button.removeAttribute("aria-current");
     }
   }
+  renderDependencyExplorer();
+}
+
+function toggleDependencyDirection(
+  direction: DependencyRouteDirection,
+): void {
+  const selectedBuildingId = explorerState.selectedBuildingId;
+  if (selectedBuildingId === null) {
+    return;
+  }
+  const summary = dependencyRoutesForBuilding(
+    dependencyExplorerIndex,
+    selectedBuildingId,
+  );
+  if (!summary || summary[direction].totalCount === 0) {
+    return;
+  }
+  dependencyRouteState = toggleDependencyRouteDirection(
+    dependencyRouteState,
+    direction,
+  );
+  renderDependencyExplorer();
+}
+
+function renderDependencyExplorer(): void {
+  dependencyList.replaceChildren();
+  const selectedBuildingId = explorerState.selectedBuildingId;
+  const summary =
+    selectedBuildingId === null
+      ? null
+      : dependencyRoutesForBuilding(
+          dependencyExplorerIndex,
+          selectedBuildingId,
+        );
+  const incomingCount = summary?.incoming.totalCount ?? 0;
+  const outgoingCount = summary?.outgoing.totalCount ?? 0;
+  const hasRoutes = incomingCount + outgoingCount > 0;
+
+  updateDependencyToggle(
+    dependencyIncomingToggle,
+    dependencyIncomingCount,
+    incomingCount,
+    dependencyRouteState.incoming,
+  );
+  updateDependencyToggle(
+    dependencyOutgoingToggle,
+    dependencyOutgoingCount,
+    outgoingCount,
+    dependencyRouteState.outgoing,
+  );
+  dependencyEmpty.hidden = hasRoutes || selectedBuildingId === null;
+
+  if (selectedBuildingId === null || !summary || !hasRoutes) {
+    dependencyList.hidden = true;
+    dependencyStatus.textContent =
+      selectedBuildingId === null
+        ? "Select a building to inspect its dependencies."
+        : "No file-level dependency routes recorded.";
+    cityScene.replaceDependencyRoutes([]);
+    return;
+  }
+
+  const visibleRoutes = [
+    ...(dependencyRouteState.incoming ? summary.incoming.routes : []),
+    ...(dependencyRouteState.outgoing ? summary.outgoing.routes : []),
+  ];
+  const activeSummaries = [
+    ...(dependencyRouteState.incoming ? [summary.incoming] : []),
+    ...(dependencyRouteState.outgoing ? [summary.outgoing] : []),
+  ];
+  dependencyList.hidden = visibleRoutes.length === 0;
+
+  if (activeSummaries.length === 0) {
+    dependencyStatus.textContent =
+      `Routes hidden · ${incomingCount.toLocaleString()} incoming · ` +
+      `${outgoingCount.toLocaleString()} outgoing`;
+    cityScene.replaceDependencyRoutes([]);
+    return;
+  }
+
+  const hiddenCount = activeSummaries.reduce(
+    (total, direction) => total + direction.hiddenCount,
+    0,
+  );
+  const visibleWeight = activeSummaries.reduce(
+    (total, direction) => total + direction.visibleWeight,
+    0,
+  );
+  const hiddenWeight = activeSummaries.reduce(
+    (total, direction) => total + direction.hiddenWeight,
+    0,
+  );
+  dependencyStatus.textContent =
+    visibleRoutes.length === 0
+      ? "No routes in the selected direction."
+      : `Showing ${routeCountLabel(visibleRoutes.length)} · ` +
+        `${referenceCountLabel(visibleWeight)}` +
+        (hiddenCount > 0
+          ? ` · ${hiddenCount.toLocaleString()} hidden (${referenceCountLabel(hiddenWeight)})`
+          : "");
+
+  const overlayRoutes: DependencyOverlayRoute[] = [];
+  for (const route of visibleRoutes) {
+    const projection = projectDependencyRoute(
+      dependencyExplorerIndex,
+      selectedBuildingId,
+      route,
+      explorerState.isolatedDistrictId,
+    );
+    overlayRoutes.push(dependencyOverlayRoute(route, projection));
+    dependencyList.append(dependencyListItem(route, projection));
+  }
+  cityScene.replaceDependencyRoutes(overlayRoutes);
+}
+
+function updateDependencyToggle(
+  button: HTMLButtonElement,
+  count: HTMLElement,
+  totalCount: number,
+  pressed: boolean,
+): void {
+  button.disabled = totalCount === 0;
+  button.setAttribute("aria-pressed", String(pressed));
+  count.textContent = totalCount.toLocaleString();
+}
+
+function dependencyListItem(
+  route: SelectedDependencyRoute,
+  projection: DependencyRouteProjection,
+): HTMLLIElement {
+  const item = document.createElement("li");
+  item.className = "dependency-item";
+
+  const isExternal = route.counterpart.kind === "external";
+  const row = isExternal
+    ? document.createElement("div")
+    : document.createElement("button");
+  row.className = "dependency-result-button";
+  row.dataset["direction"] = route.direction;
+  if (isExternal) {
+    row.dataset["external"] = "true";
+  } else if (
+    row instanceof HTMLButtonElement &&
+    route.counterpart.kind === "building"
+  ) {
+    const counterpartBuildingId = route.counterpart.buildingId;
+    row.type = "button";
+    row.addEventListener("click", () => {
+      selectBuildingFromExplorer(counterpartBuildingId);
+      inspectorContent.focus({ preventScroll: true });
+    });
+  }
+
+  const direction = document.createElement("span");
+  direction.className = "dependency-result-direction";
+  direction.textContent =
+    route.direction === "incoming" ? "Incoming" : "Outgoing";
+
+  const content = document.createElement("span");
+  content.className = "dependency-result-content";
+  const name = document.createElement("span");
+  name.className = "dependency-result-name";
+  name.textContent =
+    route.counterpart.kind === "building"
+      ? route.counterpart.name
+      : route.counterpart.target;
+  const path = document.createElement("span");
+  path.className = "dependency-result-path";
+  path.textContent =
+    route.counterpart.kind === "building"
+      ? route.counterpart.path
+      : "External provider";
+  if (!isExternal) {
+    row.title = path.textContent;
+  }
+
+  const role =
+    route.direction === "incoming" ? "Consumer" : "Provider";
+  const meta = document.createElement("span");
+  meta.className = "dependency-result-meta";
+  meta.textContent =
+    `${isExternal ? "External provider" : role} · ` +
+    referenceCountLabel(route.weight) +
+    hiddenBoundaryLabel(projection);
+
+  if (!isExternal) {
+    row.setAttribute(
+      "aria-label",
+      `${name.textContent}, ${role.toLowerCase()}, ` +
+        referenceCountLabel(route.weight),
+    );
+  }
+  content.append(name, path, meta);
+  row.append(direction, content);
+  item.append(row);
+  return item;
+}
+
+function hiddenBoundaryLabel(
+  projection: DependencyRouteProjection,
+): string {
+  const boundary =
+    projection.source.kind === "district-boundary"
+      ? projection.source
+      : projection.target.kind === "district-boundary"
+        ? projection.target
+        : null;
+  if (!boundary) {
+    return "";
+  }
+  const hiddenDistrict = activeDistrictsById.get(
+    boundary.hiddenCounterpart.districtId,
+  );
+  return ` · Outside isolated district${hiddenDistrict ? `: ${hiddenDistrict.name}` : ""}`;
+}
+
+function dependencyOverlayRoute(
+  route: SelectedDependencyRoute,
+  projection: DependencyRouteProjection,
+): DependencyOverlayRoute {
+  return {
+    id: `${route.dependencyId}:${route.direction}`,
+    consumer: dependencyEndpointPoint(projection.source),
+    provider: dependencyEndpointPoint(projection.target),
+    direction: route.direction,
+    weight: route.weight,
+    externalProvider: route.counterpart.kind === "external",
+    gatewayAt:
+      projection.source.kind === "district-boundary"
+        ? "source"
+        : projection.target.kind === "building"
+          ? null
+          : "target",
+  };
+}
+
+function dependencyEndpointPoint(
+  endpoint: DependencyRouteEndpoint,
+): RoutePoint {
+  switch (endpoint.kind) {
+    case "building": {
+      const building = activeBuildingsById.get(endpoint.buildingId);
+      if (!building) {
+        throw new Error(
+          `Dependency route references unknown building "${endpoint.buildingId}".`,
+        );
+      }
+      return roofRoutePoint(building);
+    }
+    case "district-boundary": {
+      const district = activeDistrictsById.get(endpoint.districtId);
+      if (!district) {
+        throw new Error(
+          `Dependency route references unknown district "${endpoint.districtId}".`,
+        );
+      }
+      return {
+        x: endpoint.position.x,
+        y: district.position.y + district.size.y * 0.5 + 0.22,
+        z: endpoint.position.z,
+      };
+    }
+    case "external": {
+      const scope = dependencyRouteScope();
+      return keyedBoundaryGateway(
+        scope.rectangle,
+        endpoint.target,
+        scope.y,
+      );
+    }
+  }
+}
+
+function dependencyRouteScope(): {
+  readonly rectangle: RouteRectangle;
+  readonly y: number;
+} {
+  if (explorerState.isolatedDistrictId !== null) {
+    const district = activeDistrictsById.get(
+      explorerState.isolatedDistrictId,
+    );
+    if (!district) {
+      throw new Error(
+        `Unknown isolated district "${explorerState.isolatedDistrictId}".`,
+      );
+    }
+    return {
+      rectangle: {
+        centerX: district.position.x,
+        centerZ: district.position.z,
+        sizeX: district.size.x,
+        sizeZ: district.size.z,
+      },
+      y: district.position.y + district.size.y * 0.5 + 0.22,
+    };
+  }
+
+  const base = cityBaseForModel(activeModel);
+  if (!base) {
+    throw new Error("Dependency routes require a city footprint.");
+  }
+  return {
+    rectangle: {
+      centerX: base.position.x,
+      centerZ: base.position.z,
+      sizeX: base.size.x,
+      sizeZ: base.size.z,
+    },
+    y: base.position.y + base.size.y * 0.5 + 0.22,
+  };
+}
+
+function routeCountLabel(count: number): string {
+  return `${count.toLocaleString()} ${count === 1 ? "route" : "routes"}`;
+}
+
+function referenceCountLabel(count: number): string {
+  return `${count.toLocaleString()} ${count === 1 ? "reference" : "references"}`;
 }
 
 function applyLogo(model: CityModel, source: ModelSource): void {

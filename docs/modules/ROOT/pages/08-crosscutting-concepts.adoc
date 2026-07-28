@@ -38,14 +38,16 @@ an external NuGet gateway. Repeated references collapse into one weighted edge;
 self-edges are omitted.
 
 * Overview: bundle edges by visible district and connect district gateways.
-* Selection: expand incoming and outgoing routes between parcel boundaries.
-* Direction: a chevron points to B, the provider.
+* Selection: expand incoming and outgoing routes above building roofs.
+* Direction: an arrowhead points to B, the provider.
 * External: terminate at a city-edge NuGet, npm, assembly, or unresolved gateway.
 * Print: optionally recess bundled district routes into the base.
 
-Routes are filtered and hidden by default. Each semantic city has one continuous
-base. Districts are raised parcels; configured gaps expose the base as roads,
-not one street per dependency.
+The current viewer exposes incoming and outgoing building-level TypeScript
+routes for the selected building; routes are hidden by default. Outgoing routes
+are cyan, incoming routes violet, and gateways amber. Isolation projects hidden
+endpoints to the visible district edge. Module overview bundling and printable
+roads remain planned; the city remains one continuous base.
 
 == Repository exploration
 
