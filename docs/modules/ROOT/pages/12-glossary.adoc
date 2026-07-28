@@ -27,4 +27,13 @@
 
 |Identity panel
 |Printable name, version, and optional logo area on the city base
+
+|Route anchor
+|Elevated dependency endpoint joined to an explicit surface contact
+
+|External node
+|Fixed black box for a dependency target outside the analyzed source
+
+|Print legend
+|Companion mapping from short physical codes to repository-relative names
 |===
