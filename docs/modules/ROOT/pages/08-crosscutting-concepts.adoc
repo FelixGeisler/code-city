@@ -42,6 +42,7 @@ centers use -Z. `skylineY` is the maximum top Y of the district base and its
 visible buildings. The anchor keeps X/Z and uses `skylineY + 0.35`. An
 isolation contact uses key `kind + NUL + stable endpoint ID`: `building` plus
 building ID, `district` plus district ID, or `external` plus normalized target.
+The overflow endpoint uses key `"external-overflow" + NUL + "v1"`.
 Hash UTF-16 code units in order, starting at `0x811c9dc5`; for each unit use
 `hash = imul(hash xor unit, 0x01000193) unsigned`. `hash mod 4` selects `-Z`,
 `+X`, `+Z`, or `-X`;
