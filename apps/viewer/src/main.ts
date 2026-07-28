@@ -31,6 +31,7 @@ import {
   DEFAULT_FOG_DENSITY,
   fogDensityForCameraDistance,
 } from "./scene-environment.js";
+import { groundGridLayout } from "./scene-grid.js";
 import { cameraDistanceForBounds } from "./scene-navigation.js";
 import "./styles.css";
 
@@ -588,19 +589,19 @@ class CityScene {
       disposeObject(this.grid);
     }
 
-    const size = bounds.getSize(new THREE.Vector3());
-    const gridSize = Math.max(
-      40,
-      Math.ceil((Math.max(size.x, size.z) * 1.8) / 10) * 10,
-    );
-    const divisions = Math.min(100, Math.max(20, Math.round(gridSize / 2)));
+    const layout = groundGridLayout({
+      minX: bounds.min.x,
+      maxX: bounds.max.x,
+      minZ: bounds.min.z,
+      maxZ: bounds.max.z,
+    });
     this.grid = new THREE.GridHelper(
-      gridSize,
-      divisions,
-      "#274867",
+      layout.size,
+      layout.divisions,
+      "#14283c",
       "#14283c",
     );
-    this.grid.position.y = gridY;
+    this.grid.position.set(layout.centerX, gridY, layout.centerZ);
     this.scene.add(this.grid);
   }
 
