@@ -48,6 +48,8 @@ gaps between districts, not one street per dependency.
 == Determinism
 
 Sort inputs, use stable path IDs, and persist formulas and normalization caps.
+Pack actual district and repository footprints into deterministic shelves;
+configured gaps remain visible streets.
 
 == Privacy
 
