@@ -31,25 +31,78 @@ and maximum CC. Building color uses the worst unit: 0-5, 6-10, 11-20, or above
 
 == Dependency routes
 
-All arrows point from consumer to provider. TypeScript imports connect building
-to building or an external gateway. Project references connect module to module.
-Package references connect module to a matching module in the supplied roots or
-an external NuGet gateway. Repeated references collapse into one weighted edge;
-self-edges are omitted.
+`A -> B` means consumer A depends on provider B. TypeScript imports connect
+buildings; project and package references connect modules. Repeated references
+collapse into one weighted edge and self-edges are omitted.
 
-* Overview: bundle edges by visible district and connect district gateways.
-* Selection: expand incoming and outgoing routes above building roofs.
-* Direction: an arrowhead points to B, the provider.
-* External: terminate at a city-edge NuGet, npm, assembly, or unresolved gateway.
-* Print: optionally recess bundled district routes into the base.
+Every rendered endpoint has a surface contact and a route anchor. A building
+uses its roof center for both. A district contact is the intersection of its X/Z
+rectangle with the center-to-counterpart ray, on the district top; coincident
+centers use -Z. `skylineY` is the maximum top Y of the district base and its
+visible buildings. The anchor keeps X/Z and uses `skylineY + 0.35`. An
+isolation contact uses key `kind + NUL + stable endpoint ID`: `building` plus
+building ID, `district` plus district ID, or `external` plus normalized target.
+The overflow endpoint uses key `"external-overflow" + NUL + "v1"`.
+Hash UTF-16 code units in order, starting at `0x811c9dc5`; for each unit use
+`hash = imul(hash xor unit, 0x01000193) unsigned`. `hash mod 4` selects `-Z`,
+`+X`, `+Z`, or `-X`;
+`0.08 + hash(key + NUL + "position") / 0xffffffff * 0.84` maps along that edge
+on the visible district top. Its anchor also uses `skylineY + 0.35`. An external
+node uses its roof center for both. A vertical gateway joins each distinct
+contact/anchor pair. Browser curves join anchors; no marker may float.
+Arrowheads always point to the provider.
 
-The viewer provides a hidden-by-default district overview with bundled routes
-filtered by TypeScript imports, project references, or packages. Selecting a
-bundle shows its weight and top contributors. It renders the strongest 24
-bundles deterministically and reports omitted bundles and references. Building
-selection expands incoming and outgoing TypeScript routes; isolation projects
-hidden endpoints to the visible boundary. Module/package print roads remain
-planned.
+The hidden-by-default overview bundles edges by visible district. Selection
+expands incoming and outgoing file routes. Both views rank by weight with stable
+identity tie-breaking and report omissions. The overview shows at most 24
+bundles; selection shows at most 20 routes per direction. Isolation projects
+hidden endpoints to grounded boundary gateways.
+
+== External dependencies
+
+Normalize targets with Unicode NFC and surrounding-whitespace removal; remaining
+characters, including case, stay significant. Aggregate reference weight by
+normalized target. Show at most 12 nodes. With more than 12 targets, show the
+strongest 11 by descending weight, then normalized target in ordinal UTF-16
+code-unit order, plus an overflow node; report its target count and weight. The
+overflow node has internal kind `external-overflow` and display label `Others`.
+It cannot collide with a real target named `Others`.
+
+An external node is a fixed `4 x 3 x 2` city-unit box in X/Y/Z, uses semantic
+role `external` and color `#111827`, and has no SLOC or complexity. Place nodes
+by normalized target in ordinal UTF-16 order, with `external-overflow` last, on
+a connected rear apron:
+
+[source,text]
+----
+margin = gap = 1
+apron_width = max(base_width, box_width + 2 * margin)
+apron_min_x = base_center_x - apron_width / 2
+columns = max(1, floor((apron_width - 2 * margin + gap)
+                       / (box_width + gap)))
+column = index mod columns
+row = floor(index / columns)
+x = apron_min_x + margin + box_width / 2 + column * (box_width + gap)
+z = old_base_max_z + margin + box_depth / 2 + row * (box_depth + gap)
+----
+
+Rows fill in order. The base widens symmetrically only when `apron_width`
+requires it, then extends through the last row plus the rear margin. Each box
+sits on the new base top. The +Z apron stays separate from the -Z identity
+panel. Viewer and exporter share these exact coordinates.
+
+== Scene labels
+
+The scene owns at most two reusable camera-facing labels: transient hover and
+persistent selection. If both reference one entity, render one label. A building
+label shows its full filename; its selection details show the full normalized
+repository-relative path. District labels show the full district name. External
+labels show the full target, while overflow details list its count and weight.
+
+Labels never intercept raycasting or affect scene bounds. Reload and clear reuse
+or dispose the two textures; no building, district, or external node owns a
+texture. Pointer, keyboard, search, and dependency-list selection use the same
+details content.
 
 == Repository exploration
 
@@ -81,8 +134,18 @@ channel assignment.
 
 The first exporter supports the Demo's fixed title, version, and printable
 Code City icon. Arbitrary fonts and logos remain separate work. A
-multi-repository city has one main panel and may later label individual
-boroughs. Local paths are never inferred as printed identity.
+multi-repository city has one main panel. Local paths are never inferred as
+printed identity.
+
+Printed building labels use `000` through `ZZZ`. Sort ordinally by repository
+ID, district ID, normalized path, and building ID; encode the zero-based index
+as three-character uppercase base 36. This covers the 25,000-building model
+limit. `auto` adds same-channel raised roof glyphs only when they fit; `off`
+omits physical labels. Districts use fitting uppercase text or `D` plus the
+three-character index from the equivalent repository ID, path, and district ID
+sort. A deterministic companion JSON legend records code, repository ID and
+name, district ID and name, building name, repository-relative path, and printed
+status/reason. Absolute paths, source text, and legend data never enter 3MF.
 
 == Print planning
 
@@ -96,6 +159,15 @@ The print planner maps semantic groups onto one or more channels. If groups
 outnumber channels, it deterministically merges them, produces monochrome
 output, or fails, as selected by the profile. Exporters measure transformed
 geometry against profile limits and contain no printer-specific tool count.
+
+Printable dependencies are optional and aggregate district/module relations;
+file edges are never printed. V1 uses base-connected raised traces in available
+street lanes, capped like the overview. Trace height equals the profile minimum
+feature size. Width is the minimum wall thickness times
+`min(3, max(1, 1 + floor(log2(max(weight, 1)))))`; a same-height arrowhead marks
+the provider. Unroutable or capped bundles are omitted with reported count and
+weight. Traces do not provide structural connectivity for the base. Detachable
+connectors are calibration artifacts, not default city geometry.
 
 Printer layouts may later derive multiple plate bases without changing the
 semantic city coordinates.

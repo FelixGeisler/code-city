@@ -17,7 +17,16 @@
 |Use Roslyn and the TypeScript compiler API behind one fact schema
 
 |Dependency overlay
-|Keep streets structural; show directed, bundled routes on demand
+|Use surface-connected endpoints; show directed, bundled routes on demand
+
+|Shared dependency grammar v1
+|Share aggregation and placement; use browser arcs and printable raised traces
+
+|External dependency nodes
+|Use fixed black boxes without code metrics; cap excess targets as `Others`
+
+|Bounded labels
+|Show full browser details, but print stable short codes with a private legend
 
 |Local directory as canonical input
 |Keep offline and remote paths identical after materialization
@@ -31,3 +40,15 @@
 |Antora with arc42
 |Keep architecture concise, structured, and publishable
 |===
+
+== Dependency and label grammar v1
+
+The semantic edge is independent of presentation. Browser routes use elevated
+curves joined to explicit surface contacts. Print routes use profile-safe raised
+traces on the connected base. Both consume the same deterministic aggregation,
+external-node placement, direction, capping, and omission report.
+
+External boxes are infrastructure, not source buildings: fixed geometry, fixed
+semantic color, reference counts only. Screen labels are pooled and bounded.
+Print uses same-channel codes and a separate repository-relative legend. No
+dependency geometry is allowed to make an otherwise disconnected base printable.
