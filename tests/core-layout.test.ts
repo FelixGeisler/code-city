@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_LAYOUT_OPTIONS,
   layoutCity,
   type CityLayoutInput,
+  type CityDistrict,
 } from "../packages/core/src/index.js";
 
 const input: CityLayoutInput = {
@@ -70,6 +72,23 @@ const input: CityLayoutInput = {
     logo: { relativePath: "assets/logo.svg", format: "svg" },
   },
 };
+
+function hasHorizontalGap(
+  left: CityDistrict,
+  right: CityDistrict,
+  gap: number,
+): boolean {
+  return (
+    left.position.x + left.size.x / 2 + gap <=
+      right.position.x - right.size.x / 2 ||
+    right.position.x + right.size.x / 2 + gap <=
+      left.position.x - left.size.x / 2 ||
+    left.position.z + left.size.z / 2 + gap <=
+      right.position.z - right.size.z / 2 ||
+    right.position.z + right.size.z / 2 + gap <=
+      left.position.z - left.size.z / 2
+  );
+}
 
 describe("deterministic city layout", () => {
   it("is independent of repository, module, and building input order", () => {
@@ -160,6 +179,161 @@ describe("deterministic city layout", () => {
     expect(result.districts).toHaveLength(1);
     expect(result.buildings).toHaveLength(0);
     expect(result.bounds.y).toBe(1);
+  });
+
+  it("packs heterogeneous districts by their actual footprints", () => {
+    const moduleSizes = [64, 36, 16, 9, 4, 1];
+    const modules = moduleSizes.map((buildingCount, index) => ({
+      id: `module-${buildingCount}`,
+      repositoryId: "repo",
+      kind: "dotnet-project" as const,
+      name: `Module ${buildingCount}`,
+      path: `src/${String(index + 1).padStart(2, "0")}`,
+      solutionIds: [],
+    }));
+    const buildings = modules.flatMap((module, moduleIndex) =>
+      Array.from({ length: moduleSizes[moduleIndex]! }, (_, buildingIndex) => ({
+        repositoryId: "repo",
+        moduleId: module.id,
+        name: `${buildingIndex}.cs`,
+        path: `${module.path}/${String(buildingIndex).padStart(2, "0")}.cs`,
+        language: "csharp" as const,
+        metrics: {
+          sloc: 0,
+          decisionLoad: 0,
+          maximumComplexity: 0,
+          executableUnitCount: 0,
+        },
+      })),
+    );
+    const result = layoutCity({
+      repositories: [{ id: "repo", name: "Repository" }],
+      modules: [...modules].reverse(),
+      buildings: [...buildings].reverse(),
+    });
+    const largestWidth = Math.max(
+      ...result.districts.map((district) => district.size.x),
+    );
+    const largestDepth = Math.max(
+      ...result.districts.map((district) => district.size.z),
+    );
+    const legacyColumns = Math.ceil(Math.sqrt(modules.length));
+    const legacyRows = Math.ceil(modules.length / legacyColumns);
+    const legacyWidth =
+      legacyColumns * largestWidth +
+      (legacyColumns - 1) * DEFAULT_LAYOUT_OPTIONS.districtGap;
+    const legacyDepth =
+      legacyRows * largestDepth +
+      (legacyRows - 1) * DEFAULT_LAYOUT_OPTIONS.districtGap;
+    const occupiedArea = result.districts.reduce(
+      (sum, district) => sum + district.size.x * district.size.z,
+      0,
+    );
+
+    expect(result.districts.map(({ moduleId }) => moduleId)).toEqual(
+      modules.map(({ id }) => id),
+    );
+    expect(result.bounds.x).toBeLessThan(legacyWidth);
+    expect(result.bounds.z).toBeLessThan(legacyDepth);
+    expect(occupiedArea / (result.bounds.x * result.bounds.z)).toBeGreaterThan(
+      0.6,
+    );
+    for (let left = 0; left < result.districts.length; left += 1) {
+      for (
+        let right = left + 1;
+        right < result.districts.length;
+        right += 1
+      ) {
+        const first = result.districts[left]!;
+        const second = result.districts[right]!;
+        expect(
+          hasHorizontalGap(
+            first,
+            second,
+            DEFAULT_LAYOUT_OPTIONS.districtGap,
+          ),
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("packs heterogeneous repository blocks by their actual footprints", () => {
+    const repositorySizes = [16, 4, 1];
+    const repositories = repositorySizes.map((buildingCount, index) => ({
+      id: `repo-${index}`,
+      name: `Repository ${buildingCount}`,
+    }));
+    const modules = repositories.map((repository, index) => ({
+      id: `module-${index}`,
+      repositoryId: repository.id,
+      kind: "dotnet-project" as const,
+      name: `Module ${index}`,
+      path: ".",
+      solutionIds: [],
+    }));
+    const buildings = modules.flatMap((module, moduleIndex) =>
+      Array.from(
+        { length: repositorySizes[moduleIndex]! },
+        (_, buildingIndex) => ({
+          repositoryId: module.repositoryId,
+          moduleId: module.id,
+          name: `${buildingIndex}.cs`,
+          path: `${buildingIndex}.cs`,
+          language: "csharp" as const,
+          metrics: {
+            sloc: 0,
+            decisionLoad: 0,
+            maximumComplexity: 0,
+            executableUnitCount: 0,
+          },
+        }),
+      ),
+    );
+    const repositoryInput: CityLayoutInput = {
+      repositories,
+      modules,
+      buildings,
+    };
+    const result = layoutCity(repositoryInput);
+    const largestWidth = Math.max(
+      ...result.districts.map((district) => district.size.x),
+    );
+    const largestDepth = Math.max(
+      ...result.districts.map((district) => district.size.z),
+    );
+    const legacyColumns = Math.ceil(Math.sqrt(repositories.length));
+    const legacyRows = Math.ceil(repositories.length / legacyColumns);
+    const legacyWidth =
+      legacyColumns * largestWidth +
+      (legacyColumns - 1) * DEFAULT_LAYOUT_OPTIONS.repositoryGap;
+    const legacyDepth =
+      legacyRows * largestDepth +
+      (legacyRows - 1) * DEFAULT_LAYOUT_OPTIONS.repositoryGap;
+
+    expect(result.bounds.x).toBeLessThan(legacyWidth);
+    expect(result.bounds.z).toBeLessThan(legacyDepth);
+    expect(
+      layoutCity({
+        repositories: [...repositories].reverse(),
+        modules: [...modules].reverse(),
+        buildings: [...buildings].reverse(),
+      }),
+    ).toEqual(result);
+    for (let left = 0; left < result.districts.length; left += 1) {
+      for (
+        let right = left + 1;
+        right < result.districts.length;
+        right += 1
+      ) {
+        expect(
+          hasHorizontalGap(
+            result.districts[left]!,
+            result.districts[right]!,
+            DEFAULT_LAYOUT_OPTIONS.repositoryGap,
+          ),
+        ).toBe(true);
+      }
+    }
   });
 
   it("rejects inconsistent and duplicate source facts", () => {

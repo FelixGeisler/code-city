@@ -18,6 +18,7 @@ import type {
   Vector3,
 } from "./model.js";
 import { normalizePath, stableId } from "./path.js";
+import { packRectangles } from "./rectangle-packing.js";
 import { semanticGroupForRisk } from "./semantics.js";
 
 export interface UnpositionedBuilding {
@@ -270,19 +271,29 @@ function packDistricts(
   if (districts.length === 0) {
     return { repositoryId, districts: [], width: 0, depth: 0 };
   }
-  const columns = Math.ceil(Math.sqrt(districts.length));
-  const rows = Math.ceil(districts.length / columns);
-  const cellWidth = Math.max(...districts.map((district) => district.width));
-  const cellDepth = Math.max(...districts.map((district) => district.depth));
+  const packing = packRectangles(
+    districts.map((local) => ({
+      id: local.district.id,
+      width: local.width,
+      depth: local.depth,
+    })),
+    gap,
+  );
+  const placements = new Map(
+    packing.rectangles.map((rectangle) => [rectangle.id, rectangle]),
+  );
   return {
     repositoryId,
-    districts: districts.map((local, index) => ({
-      local,
-      x: (index % columns) * (cellWidth + gap),
-      z: Math.floor(index / columns) * (cellDepth + gap),
-    })),
-    width: columns * cellWidth + (columns - 1) * gap,
-    depth: rows * cellDepth + (rows - 1) * gap,
+    districts: districts.map((local) => {
+      const placement = placements.get(local.district.id)!;
+      return {
+        local,
+        x: placement.x,
+        z: placement.z,
+      };
+    }),
+    width: packing.width,
+    depth: packing.depth,
   };
 }
 
@@ -347,24 +358,22 @@ export function layoutCity(
     })
     .filter((block) => block.districts.length > 0);
 
-  const repositoryColumns =
-    blocks.length === 0 ? 0 : Math.ceil(Math.sqrt(blocks.length));
-  const repositoryCellWidth =
-    blocks.length === 0 ? 0 : Math.max(...blocks.map((block) => block.width));
-  const repositoryCellDepth =
-    blocks.length === 0 ? 0 : Math.max(...blocks.map((block) => block.depth));
-  const cityWidth =
-    blocks.length === 0
-      ? 0
-      : repositoryColumns * repositoryCellWidth +
-        (repositoryColumns - 1) * options.repositoryGap;
-  const repositoryRows =
-    blocks.length === 0 ? 0 : Math.ceil(blocks.length / repositoryColumns);
-  const cityDepth =
-    blocks.length === 0
-      ? 0
-      : repositoryRows * repositoryCellDepth +
-        (repositoryRows - 1) * options.repositoryGap;
+  const repositoryPacking = packRectangles(
+    blocks.map((block) => ({
+      id: block.repositoryId,
+      width: block.width,
+      depth: block.depth,
+    })),
+    options.repositoryGap,
+  );
+  const repositoryPlacements = new Map(
+    repositoryPacking.rectangles.map((rectangle) => [
+      rectangle.id,
+      rectangle,
+    ]),
+  );
+  const cityWidth = repositoryPacking.width;
+  const cityDepth = repositoryPacking.depth;
 
   const identity =
     input.identity === undefined ? undefined : normalizeCityIdentity(input.identity);
@@ -383,15 +392,13 @@ export function layoutCity(
   const buildings: CityBuilding[] = [];
   let maximumHeight = 0;
 
-  blocks.forEach((block, repositoryIndex) => {
+  blocks.forEach((block) => {
+    const repositoryPlacement = repositoryPlacements.get(
+      block.repositoryId,
+    )!;
     const repositoryX =
-      xInset +
-      (repositoryIndex % repositoryColumns) *
-        (repositoryCellWidth + options.repositoryGap);
-    const repositoryZ =
-      zInset +
-      Math.floor(repositoryIndex / repositoryColumns) *
-        (repositoryCellDepth + options.repositoryGap);
+      xInset + repositoryPlacement.x;
+    const repositoryZ = zInset + repositoryPlacement.z;
     for (const positioned of block.districts) {
       const originX = repositoryX + positioned.x;
       const originZ = repositoryZ + positioned.z;
