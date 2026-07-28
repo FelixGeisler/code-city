@@ -1,0 +1,312 @@
+import * as THREE from "three";
+import { describe, expect, it } from "vitest";
+
+import {
+  DEPENDENCY_OVERLAY_COLORS,
+  DependencyRouteOverlay,
+  dependencyCurveForRoute,
+  dependencyRouteColor,
+  dependencyWeightCue,
+  type DependencyOverlayRoute,
+} from "../apps/viewer/src/dependency-overlay.js";
+
+describe("dependency overlay curve geometry", () => {
+  it("raises a shallow curve and points its arrow at the provider", () => {
+    const route = dependencyRoute({
+      consumer: { x: 0, y: 2, z: 0 },
+      provider: { x: 10, y: 3, z: 0 },
+      direction: "outgoing",
+    });
+
+    const curve = dependencyCurveForRoute(route);
+
+    expect(curve.points).toHaveLength(13);
+    expect(curve.points[0]).toEqual(route.consumer);
+    expect(curve.points.at(-1)).toEqual(route.provider);
+    expect(curve.points[6]?.y).toBeCloseTo(
+      Math.max(route.consumer.y, route.provider.y) + curve.lift,
+      12,
+    );
+    expect(curve.lift).toBeGreaterThanOrEqual(0.5);
+    expect(curve.lift).toBeLessThanOrEqual(4);
+
+    const towardProvider = new THREE.Vector3(
+      route.provider.x - curve.arrowPosition.x,
+      route.provider.y - curve.arrowPosition.y,
+      route.provider.z - curve.arrowPosition.z,
+    ).normalize();
+    const arrowDirection = new THREE.Vector3(
+      curve.arrowDirection.x,
+      curve.arrowDirection.y,
+      curve.arrowDirection.z,
+    );
+    expect(arrowDirection.length()).toBeCloseTo(1, 12);
+    expect(arrowDirection.dot(towardProvider)).toBeGreaterThan(0.99);
+  });
+
+  it("keeps semantic direction in the palette, not the arrow orientation", () => {
+    const incoming = dependencyRoute({
+      direction: "incoming",
+      consumer: { x: 8, y: 1, z: -2 },
+      provider: { x: 0, y: 1, z: -2 },
+    });
+    const curve = dependencyCurveForRoute(incoming);
+
+    expect(dependencyRouteColor("incoming")).toBe(
+      DEPENDENCY_OVERLAY_COLORS.incoming,
+    );
+    expect(dependencyRouteColor("outgoing")).toBe(
+      DEPENDENCY_OVERLAY_COLORS.outgoing,
+    );
+    expect(curve.arrowDirection.x).toBeLessThan(0);
+  });
+
+  it("creates finite deterministic geometry for coincident endpoints", () => {
+    const route = dependencyRoute({
+      consumer: { x: 2, y: 3, z: 4 },
+      provider: { x: 2, y: 3, z: 4 },
+    });
+
+    const first = dependencyCurveForRoute(route);
+    const second = dependencyCurveForRoute(route);
+
+    expect(second).toEqual(first);
+    expect(first.points.some(({ x }) => x > route.consumer.x)).toBe(true);
+    for (const point of [
+      ...first.points,
+      first.arrowPosition,
+      first.arrowDirection,
+    ]) {
+      expect(Number.isFinite(point.x)).toBe(true);
+      expect(Number.isFinite(point.y)).toBe(true);
+      expect(Number.isFinite(point.z)).toBe(true);
+    }
+    const towardProvider = new THREE.Vector3(
+      route.provider.x - first.arrowPosition.x,
+      route.provider.y - first.arrowPosition.y,
+      route.provider.z - first.arrowPosition.z,
+    ).normalize();
+    const arrowDirection = new THREE.Vector3(
+      first.arrowDirection.x,
+      first.arrowDirection.y,
+      first.arrowDirection.z,
+    );
+    expect(arrowDirection.dot(towardProvider)).toBeGreaterThan(0.99);
+  });
+
+  it("maps weight logarithmically into bounded monotonic cues", () => {
+    const light = dependencyWeightCue(1);
+    const medium = dependencyWeightCue(7);
+    const saturated = dependencyWeightCue(63);
+    const enormous = dependencyWeightCue(Number.MAX_VALUE);
+
+    expect(medium.normalized).toBeGreaterThan(light.normalized);
+    expect(medium.lineIntensity).toBeGreaterThan(light.lineIntensity);
+    expect(medium.arrowScale).toBeGreaterThan(light.arrowScale);
+    expect(saturated).toEqual({
+      normalized: 1,
+      lineIntensity: 1,
+      arrowScale: 1.2,
+    });
+    expect(enormous).toEqual(saturated);
+    expect(() => dependencyWeightCue(0)).toThrow(RangeError);
+    expect(() => dependencyWeightCue(Number.NaN)).toThrow(RangeError);
+  });
+});
+
+describe("DependencyRouteOverlay lifecycle", () => {
+  it("uses at most three non-raycast scene-level draw objects", () => {
+    const scene = new THREE.Scene();
+    const overlay = new DependencyRouteOverlay(scene);
+    const routes = [
+      dependencyRoute({
+        id: "external-outgoing",
+        externalProvider: true,
+        gatewayAt: "target",
+      }),
+      dependencyRoute({
+        id: "hidden-incoming",
+        direction: "incoming",
+        consumer: { x: -5, y: 1, z: 1 },
+        gatewayAt: "source",
+      }),
+    ] as const;
+
+    overlay.replace(routes);
+
+    expect(overlay.object.parent).toBe(scene);
+    expect(overlay.routeCount).toBe(2);
+    expect(overlay.gatewayCount).toBe(2);
+    expect(overlay.object.children).toHaveLength(3);
+    for (const child of overlay.object.children) {
+      const renderable = child as THREE.LineSegments | THREE.Mesh;
+      const materials = Array.isArray(renderable.material)
+        ? renderable.material
+        : [renderable.material];
+      expect(materials.every(({ depthWrite }) => depthWrite === false)).toBe(
+        true,
+      );
+    }
+
+    const raycaster = new THREE.Raycaster(
+      new THREE.Vector3(0, 20, 0),
+      new THREE.Vector3(0, -1, 0),
+    );
+    expect(
+      raycaster.intersectObjects(overlay.object.children, true),
+    ).toEqual([]);
+
+    overlay.dispose();
+    expect(overlay.object.parent).toBeNull();
+  });
+
+  it("places an amber gateway at either projected endpoint", () => {
+    const scene = new THREE.Scene();
+    const overlay = new DependencyRouteOverlay(scene);
+    const route = dependencyRoute({
+      consumer: { x: -3, y: 2, z: 1 },
+      provider: { x: 9, y: 4, z: 5 },
+      gatewayAt: "source",
+    });
+
+    overlay.replace([route]);
+    expect(instancePosition(gatewayMesh(overlay))).toEqual(
+      new THREE.Vector3(-3, 2, 1),
+    );
+    expect(
+      (gatewayMesh(overlay).material as THREE.MeshBasicMaterial).color.getHexString(),
+    ).toBe(DEPENDENCY_OVERLAY_COLORS.gateway.slice(1));
+
+    overlay.replace([{ ...route, gatewayAt: "target" }]);
+    expect(instancePosition(gatewayMesh(overlay))).toEqual(
+      new THREE.Vector3(9, 4, 5),
+    );
+  });
+
+  it("colors arrowheads through their instance colors", () => {
+    const scene = new THREE.Scene();
+    const overlay = new DependencyRouteOverlay(scene);
+    overlay.replace([
+      dependencyRoute({
+        direction: "incoming",
+      }),
+    ]);
+
+    const arrows = arrowMesh(overlay);
+    const color = new THREE.Color();
+    arrows.getColorAt(0, color);
+
+    expect(color.getHexString()).toBe(
+      new THREE.Color(DEPENDENCY_OVERLAY_COLORS.incoming).getHexString(),
+    );
+    expect(
+      (arrows.material as THREE.MeshBasicMaterial).vertexColors,
+    ).toBe(false);
+    overlay.dispose();
+  });
+
+  it("disposes replaced geometry and supports idempotent clear/dispose", () => {
+    const scene = new THREE.Scene();
+    const overlay = new DependencyRouteOverlay(scene);
+    overlay.replace([
+      dependencyRoute({
+        externalProvider: true,
+        gatewayAt: "target",
+      }),
+    ]);
+    let geometryDisposals = 0;
+    let instanceDisposals = 0;
+    for (const child of overlay.object.children) {
+      const renderable = child as THREE.LineSegments | THREE.Mesh;
+      renderable.geometry.addEventListener("dispose", () => {
+        geometryDisposals += 1;
+      });
+      if (child instanceof THREE.InstancedMesh) {
+        child.addEventListener("dispose", () => {
+          instanceDisposals += 1;
+        });
+      }
+    }
+
+    overlay.replace([dependencyRoute()]);
+
+    expect(geometryDisposals).toBe(3);
+    expect(instanceDisposals).toBe(2);
+    expect(overlay.object.children).toHaveLength(2);
+    expect(overlay.routeCount).toBe(1);
+    expect(overlay.gatewayCount).toBe(0);
+
+    overlay.clear();
+    overlay.clear();
+    expect(overlay.object.children).toHaveLength(0);
+    expect(overlay.routeCount).toBe(0);
+    overlay.dispose();
+    overlay.dispose();
+    expect(() => overlay.replace([dependencyRoute()])).toThrow(/disposed/u);
+  });
+
+  it("rejects ambiguous external gateways and duplicate route ids", () => {
+    const scene = new THREE.Scene();
+    const overlay = new DependencyRouteOverlay(scene);
+    overlay.replace([dependencyRoute()]);
+    const externalWithoutTargetGateway = dependencyRoute({
+      externalProvider: true,
+      gatewayAt: null,
+    });
+
+    expect(() =>
+      dependencyCurveForRoute(externalWithoutTargetGateway),
+    ).toThrow(/target gateway/u);
+    expect(() =>
+      overlay.replace([dependencyRoute(), dependencyRoute()]),
+    ).toThrow(/duplicate/iu);
+    expect(overlay.routeCount).toBe(1);
+    expect(overlay.object.children).toHaveLength(2);
+    overlay.dispose();
+  });
+});
+
+function dependencyRoute(
+  overrides: Partial<DependencyOverlayRoute> = {},
+): DependencyOverlayRoute {
+  return {
+    id: "route-a",
+    consumer: { x: 0, y: 1, z: 0 },
+    provider: { x: 10, y: 1, z: 0 },
+    direction: "outgoing",
+    weight: 1,
+    externalProvider: false,
+    gatewayAt: null,
+    ...overrides,
+  };
+}
+
+function gatewayMesh(
+  overlay: DependencyRouteOverlay,
+): THREE.InstancedMesh {
+  const mesh = overlay.object.getObjectByName(
+    "code-city:dependency-route-gateways",
+  );
+  if (!(mesh instanceof THREE.InstancedMesh)) {
+    throw new Error("Expected an instanced gateway mesh.");
+  }
+  return mesh;
+}
+
+function arrowMesh(
+  overlay: DependencyRouteOverlay,
+): THREE.InstancedMesh {
+  const mesh = overlay.object.getObjectByName(
+    "code-city:dependency-route-arrows",
+  );
+  if (!(mesh instanceof THREE.InstancedMesh)) {
+    throw new Error("Expected an instanced arrow mesh.");
+  }
+  return mesh;
+}
+
+function instancePosition(mesh: THREE.InstancedMesh): THREE.Vector3 {
+  const matrix = new THREE.Matrix4();
+  mesh.getMatrixAt(0, matrix);
+  return new THREE.Vector3().setFromMatrixPosition(matrix);
+}

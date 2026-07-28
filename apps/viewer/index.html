@@ -178,6 +178,82 @@
             </dl>
 
             <section
+              id="dependency-section"
+              class="dependencies-section"
+              aria-labelledby="dependency-title"
+            >
+              <div class="dependencies-heading">
+                <h3 id="dependency-title">Dependencies</h3>
+              </div>
+              <p
+                id="dependency-direction-help"
+                class="dependency-direction-help"
+              >
+                <code>A → B</code> means consumer A depends on provider B.
+              </p>
+              <div
+                class="dependency-toggles"
+                role="group"
+                aria-label="Visible dependency routes"
+                aria-describedby="dependency-direction-help"
+              >
+                <button
+                  id="dependency-incoming-toggle"
+                  class="dependency-toggle"
+                  data-direction="incoming"
+                  type="button"
+                  aria-pressed="false"
+                  aria-controls="dependency-list"
+                  disabled
+                >
+                  <span>Incoming</span>
+                  <span
+                    id="dependency-incoming-count"
+                    class="dependency-toggle-count"
+                  >
+                    0
+                  </span>
+                </button>
+                <button
+                  id="dependency-outgoing-toggle"
+                  class="dependency-toggle"
+                  data-direction="outgoing"
+                  type="button"
+                  aria-pressed="false"
+                  aria-controls="dependency-list"
+                  disabled
+                >
+                  <span>Outgoing</span>
+                  <span
+                    id="dependency-outgoing-count"
+                    class="dependency-toggle-count"
+                  >
+                    0
+                  </span>
+                </button>
+              </div>
+              <p
+                id="dependency-status"
+                class="dependency-status"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              >
+                Routes hidden.
+              </p>
+              <p id="dependency-empty" class="dependency-empty">
+                No file-level dependencies recorded for this building.
+              </p>
+              <ul
+                id="dependency-list"
+                class="dependency-list"
+                aria-label="Selected building dependencies"
+                tabindex="0"
+                hidden
+              ></ul>
+            </section>
+
+            <section
               class="units-section"
               aria-labelledby="executable-units-title"
             >

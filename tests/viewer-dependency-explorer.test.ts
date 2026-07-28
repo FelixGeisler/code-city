@@ -1,0 +1,621 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  createDependencyExplorerIndex,
+  DEPENDENCY_ROUTES_PER_DIRECTION,
+  dependencyRoutesForBuilding,
+  INITIAL_DEPENDENCY_ROUTE_STATE,
+  projectDependencyRoute,
+  resetDependencyRouteState,
+  toggleDependencyRouteDirection,
+} from "../apps/viewer/src/dependency-explorer.js";
+import type {
+  CityBuilding,
+  CityDependency,
+  CityDistrict,
+  CityModel,
+} from "../packages/core/src/model.js";
+
+describe("dependency explorer index", () => {
+  it("indexes only file-level TypeScript imports with consumer direction", () => {
+    const model = fixtureModel({
+      dependencies: [
+        internalDependency("a-to-b", "building-a", "building-b", 2),
+        internalDependency("c-to-a", "building-c", "building-a", 3),
+        externalDependency("a-to-rxjs", "building-a", "rxjs", 4),
+        {
+          id: "module-reference",
+          repositoryId: "repository",
+          sourceId: "module-a",
+          targetId: "module-b",
+          kind: "project-reference",
+          weight: 99,
+        },
+      ],
+    });
+    const index = createDependencyExplorerIndex(model);
+
+    const summary = dependencyRoutesForBuilding(index, "building-a");
+
+    expect(index.dependencyCount).toBe(3);
+    expect(summary?.outgoing).toMatchObject({
+      totalCount: 2,
+      visibleCount: 2,
+      hiddenCount: 0,
+      totalWeight: 6,
+    });
+    expect(
+      summary?.outgoing.routes.map((route) => [
+        route.dependencyId,
+        route.direction,
+        route.counterpart,
+      ]),
+    ).toEqual([
+      [
+        "a-to-rxjs",
+        "outgoing",
+        { kind: "external", target: "rxjs" },
+      ],
+      [
+        "a-to-b",
+        "outgoing",
+        {
+          kind: "building",
+          buildingId: "building-b",
+          districtId: "district-a",
+          name: "Beta.ts",
+          path: "src/Beta.ts",
+        },
+      ],
+    ]);
+    expect(summary?.incoming.routes).toEqual([
+      expect.objectContaining({
+        dependencyId: "c-to-a",
+        direction: "incoming",
+        sourceBuildingId: "building-c",
+        targetBuildingId: "building-a",
+        counterpart: expect.objectContaining({
+          buildingId: "building-c",
+        }),
+      }),
+    ]);
+  });
+
+  it("returns empty directions for a known disconnected building", () => {
+    const index = createDependencyExplorerIndex(fixtureModel());
+
+    expect(dependencyRoutesForBuilding(index, "building-a")).toEqual({
+      buildingId: "building-a",
+      incoming: {
+        direction: "incoming",
+        totalCount: 0,
+        visibleCount: 0,
+        hiddenCount: 0,
+        totalWeight: 0,
+        visibleWeight: 0,
+        hiddenWeight: 0,
+        routes: [],
+      },
+      outgoing: {
+        direction: "outgoing",
+        totalCount: 0,
+        visibleCount: 0,
+        hiddenCount: 0,
+        totalWeight: 0,
+        visibleWeight: 0,
+        hiddenWeight: 0,
+        routes: [],
+      },
+    });
+    expect(
+      dependencyRoutesForBuilding(index, "missing-building"),
+    ).toBeNull();
+  });
+
+  it("ranks by weight, counterpart path/name, and stable identity", () => {
+    const model = fixtureModel({
+      buildings: [
+        fixtureBuilding(),
+        fixtureBuilding({
+          id: "z-id",
+          name: "Same.ts",
+          path: "src/A.ts",
+        }),
+        fixtureBuilding({
+          id: "a-id",
+          name: "Same.ts",
+          path: "src/A.ts",
+        }),
+        fixtureBuilding({
+          id: "path-first",
+          name: "Zulu.ts",
+          path: "src/0.ts",
+        }),
+        fixtureBuilding({
+          id: "heavy",
+          name: "Heavy.ts",
+          path: "src/Z.ts",
+        }),
+      ],
+      dependencies: [
+        internalDependency("to-z", "building-a", "z-id", 2),
+        internalDependency("to-a", "building-a", "a-id", 2),
+        internalDependency("to-path", "building-a", "path-first", 2),
+        internalDependency("to-heavy", "building-a", "heavy", 9),
+      ],
+    });
+    const index = createDependencyExplorerIndex(model);
+
+    expect(
+      dependencyRoutesForBuilding(
+        index,
+        "building-a",
+      )?.outgoing.routes.map(({ dependencyId }) => dependencyId),
+    ).toEqual(["to-heavy", "to-path", "to-a", "to-z"]);
+  });
+
+  it("caps each direction and reports exact counts and weights", () => {
+    const routeCount = DEPENDENCY_ROUTES_PER_DIRECTION + 5;
+    const targets = Array.from({ length: routeCount }, (_, offset) => {
+      const index = routeCount - offset - 1;
+      const suffix = index.toString().padStart(2, "0");
+      return fixtureBuilding({
+        id: `target-${suffix}`,
+        name: `Target${suffix}.ts`,
+        path: `src/Target${suffix}.ts`,
+      });
+    });
+    const dependencies = targets.flatMap((target, index) => [
+      internalDependency(
+        `outgoing-${target.id}`,
+        "building-a",
+        target.id,
+        index + 1,
+      ),
+      internalDependency(
+        `incoming-${target.id}`,
+        target.id,
+        "building-a",
+        index + 1,
+      ),
+    ]);
+    const forward = createDependencyExplorerIndex(
+      fixtureModel({
+        buildings: [fixtureBuilding(), ...targets],
+        dependencies,
+      }),
+    );
+    const reversed = createDependencyExplorerIndex(
+      fixtureModel({
+        buildings: [fixtureBuilding(), ...targets.toReversed()],
+        dependencies: dependencies.toReversed(),
+      }),
+    );
+
+    const result = dependencyRoutesForBuilding(
+      forward,
+      "building-a",
+    )!.outgoing;
+    const reversedResult = dependencyRoutesForBuilding(
+      reversed,
+      "building-a",
+    )!.outgoing;
+    const incomingResult = dependencyRoutesForBuilding(
+      forward,
+      "building-a",
+    )!.incoming;
+
+    expect(result).toMatchObject({
+      totalCount: routeCount,
+      visibleCount: DEPENDENCY_ROUTES_PER_DIRECTION,
+      hiddenCount: 5,
+      totalWeight: 325,
+      visibleWeight: 310,
+      hiddenWeight: 15,
+    });
+    expect(result.routes.map(({ weight }) => weight)).toEqual(
+      Array.from(
+        { length: DEPENDENCY_ROUTES_PER_DIRECTION },
+        (_, index) => routeCount - index,
+      ),
+    );
+    expect(reversedResult).toEqual(result);
+    expect(incomingResult).toMatchObject({
+      totalCount: routeCount,
+      visibleCount: DEPENDENCY_ROUTES_PER_DIRECTION,
+      hiddenCount: 5,
+      totalWeight: 325,
+      visibleWeight: 310,
+      hiddenWeight: 15,
+    });
+    expect(incomingResult.routes.map(({ weight }) => weight)).toEqual(
+      result.routes.map(({ weight }) => weight),
+    );
+  });
+
+  it("is an immutable snapshot of model presentation data", () => {
+    const model = fixtureModel({
+      dependencies: [
+        internalDependency("a-to-b", "building-a", "building-b", 2),
+      ],
+    });
+    const index = createDependencyExplorerIndex(model);
+
+    (model.buildings as CityBuilding[]).splice(
+      1,
+      1,
+      fixtureBuilding({
+        id: "replacement",
+        name: "Replacement.ts",
+        path: "src/Replacement.ts",
+      }),
+    );
+    (model.dependencies as CityDependency[]).splice(0);
+
+    const summary = dependencyRoutesForBuilding(index, "building-a");
+    expect(Object.isFrozen(index)).toBe(true);
+    expect(Object.isFrozen(summary?.outgoing.routes)).toBe(true);
+    expect(summary?.outgoing.routes[0]?.counterpart).toEqual({
+      kind: "building",
+      buildingId: "building-b",
+      districtId: "district-a",
+      name: "Beta.ts",
+      path: "src/Beta.ts",
+    });
+  });
+
+  it("rejects malformed TypeScript endpoints instead of leaking them", () => {
+    expect(() =>
+      createDependencyExplorerIndex(
+        fixtureModel({
+          dependencies: [
+            internalDependency(
+              "missing-target",
+              "building-a",
+              "missing",
+              1,
+            ),
+          ],
+        }),
+      ),
+    ).toThrow(/unknown target/u);
+    expect(() =>
+      createDependencyExplorerIndex(
+        fixtureModel({
+          dependencies: [
+            {
+              ...externalDependency(
+                "ambiguous",
+                "building-a",
+                "rxjs",
+                1,
+              ),
+              targetId: "building-b",
+            },
+          ],
+        }),
+      ),
+    ).toThrow(/exactly one target/u);
+    expect(() =>
+      createDependencyExplorerIndex(
+        fixtureModel({
+          dependencies: [
+            externalDependency(
+              "blank-external",
+              "building-a",
+              "   ",
+              1,
+            ),
+          ],
+        }),
+      ),
+    ).toThrow(/empty external target/u);
+  });
+});
+
+describe("dependency route state", () => {
+  it("starts hidden, toggles independently, and resets", () => {
+    const incoming = toggleDependencyRouteDirection(
+      INITIAL_DEPENDENCY_ROUTE_STATE,
+      "incoming",
+    );
+    const both = toggleDependencyRouteDirection(incoming, "outgoing");
+    const outgoingOnly = toggleDependencyRouteDirection(both, "incoming");
+
+    expect(INITIAL_DEPENDENCY_ROUTE_STATE).toEqual({
+      incoming: false,
+      outgoing: false,
+    });
+    expect(incoming).toEqual({ incoming: true, outgoing: false });
+    expect(both).toEqual({ incoming: true, outgoing: true });
+    expect(outgoingOnly).toEqual({ incoming: false, outgoing: true });
+    expect(resetDependencyRouteState()).toBe(
+      INITIAL_DEPENDENCY_ROUTE_STATE,
+    );
+  });
+});
+
+describe("dependency route isolation projection", () => {
+  it("keeps internal endpoints visible without cross-district isolation", () => {
+    const index = routeProjectionIndex();
+    const route = dependencyRoutesForBuilding(
+      index,
+      "building-a",
+    )!.outgoing.routes.find(
+      ({ dependencyId }) => dependencyId === "a-to-b",
+    )!;
+
+    expect(
+      projectDependencyRoute(index, "building-a", route, null),
+    ).toEqual({
+      dependencyId: "a-to-b",
+      direction: "outgoing",
+      source: { kind: "building", buildingId: "building-a" },
+      target: { kind: "building", buildingId: "building-b" },
+    });
+  });
+
+  it("projects an outgoing hidden provider to the district boundary", () => {
+    const index = routeProjectionIndex();
+    const route = dependencyRoutesForBuilding(
+      index,
+      "building-a",
+    )!.outgoing.routes.find(
+      ({ dependencyId }) => dependencyId === "a-to-c",
+    )!;
+
+    const projection = projectDependencyRoute(
+      index,
+      "building-a",
+      route,
+      "district-a",
+    );
+
+    expect(projection.source).toEqual({
+      kind: "building",
+      buildingId: "building-a",
+    });
+    expect(projection.target).toEqual({
+      kind: "district-boundary",
+      gatewayId: "boundary:district-a:outgoing:a-to-c",
+      districtId: "district-a",
+      position: { x: 5, z: 2.5 },
+      hiddenCounterpart: {
+        kind: "building",
+        buildingId: "building-c",
+        districtId: "district-b",
+        name: "Gamma.ts",
+        path: "src/Gamma.ts",
+      },
+    });
+    expect(projection.target).not.toHaveProperty("buildingId");
+  });
+
+  it("projects an incoming hidden consumer as the route source", () => {
+    const index = routeProjectionIndex();
+    const route = dependencyRoutesForBuilding(
+      index,
+      "building-a",
+    )!.incoming.routes.find(
+      ({ dependencyId }) => dependencyId === "c-to-a",
+    )!;
+
+    const projection = projectDependencyRoute(
+      index,
+      "building-a",
+      route,
+      "district-a",
+    );
+
+    expect(projection.source).toMatchObject({
+      kind: "district-boundary",
+      position: { x: 5, z: 2.5 },
+      hiddenCounterpart: {
+        buildingId: "building-c",
+      },
+    });
+    expect(projection.target).toEqual({
+      kind: "building",
+      buildingId: "building-a",
+    });
+  });
+
+  it("does not replace same-district or external endpoints", () => {
+    const index = routeProjectionIndex();
+    const routes = dependencyRoutesForBuilding(
+      index,
+      "building-a",
+    )!.outgoing.routes;
+    const internal = routes.find(
+      ({ dependencyId }) => dependencyId === "a-to-b",
+    )!;
+    const external = routes.find(
+      ({ dependencyId }) => dependencyId === "a-to-rxjs",
+    )!;
+
+    expect(
+      projectDependencyRoute(
+        index,
+        "building-a",
+        internal,
+        "district-a",
+      ).target,
+    ).toEqual({ kind: "building", buildingId: "building-b" });
+    expect(
+      projectDependencyRoute(
+        index,
+        "building-a",
+        external,
+        "district-a",
+      ).target,
+    ).toEqual({ kind: "external", target: "rxjs" });
+  });
+
+  it("rejects a projection whose selected building is outside isolation", () => {
+    const index = routeProjectionIndex();
+    const route = dependencyRoutesForBuilding(
+      index,
+      "building-a",
+    )!.outgoing.routes.find(
+      ({ dependencyId }) => dependencyId === "a-to-c",
+    )!;
+
+    expect(() =>
+      projectDependencyRoute(
+        index,
+        "building-a",
+        route,
+        "district-b",
+      ),
+    ).toThrow(/selected building must belong/u);
+  });
+});
+
+function routeProjectionIndex() {
+  return createDependencyExplorerIndex(
+    fixtureModel({
+      dependencies: [
+        internalDependency("a-to-b", "building-a", "building-b", 1),
+        internalDependency("a-to-c", "building-a", "building-c", 3),
+        internalDependency("c-to-a", "building-c", "building-a", 2),
+        externalDependency("a-to-rxjs", "building-a", "rxjs", 4),
+      ],
+    }),
+  );
+}
+
+function fixtureModel(
+  overrides: {
+    readonly buildings?: readonly CityBuilding[];
+    readonly dependencies?: readonly CityDependency[];
+    readonly districts?: readonly CityDistrict[];
+  } = {},
+): CityModel {
+  return {
+    schemaVersion: "1.0",
+    generator: { name: "code-city", version: "test" },
+    repositories: [{ id: "repository", name: "Repository" }],
+    solutions: [],
+    modules: [
+      module("module-a", "Module A"),
+      module("module-b", "Module B"),
+    ],
+    semanticGroups: [],
+    districts: overrides.districts ?? [
+      district("district-a", "module-a", 0, 0, 10, 8),
+      district("district-b", "module-b", 20, 10, 10, 8),
+    ],
+    buildings: overrides.buildings ?? [
+      fixtureBuilding(),
+      fixtureBuilding({
+        id: "building-b",
+        name: "Beta.ts",
+        path: String.raw`src\Beta.ts`,
+        position: { x: 2, y: 2, z: 1 },
+      }),
+      fixtureBuilding({
+        id: "building-c",
+        districtId: "district-b",
+        moduleId: "module-b",
+        name: "Gamma.ts",
+        path: "src/Gamma.ts",
+        position: { x: 20, y: 2, z: 10 },
+      }),
+    ],
+    dependencies: overrides.dependencies ?? [],
+    bounds: { x: 30, y: 5, z: 20 },
+  };
+}
+
+function module(id: string, name: string) {
+  return {
+    id,
+    repositoryId: "repository",
+    kind: "angular-project" as const,
+    name,
+    path: name,
+    solutionIds: [],
+  };
+}
+
+function district(
+  id: string,
+  moduleId: string,
+  x: number,
+  z: number,
+  width: number,
+  depth: number,
+): CityDistrict {
+  return {
+    id,
+    repositoryId: "repository",
+    moduleId,
+    name: id,
+    path: id,
+    position: { x, y: 0.5, z },
+    size: { x: width, y: 1, z: depth },
+  };
+}
+
+function fixtureBuilding(
+  overrides: {
+    readonly id?: string;
+    readonly districtId?: string;
+    readonly moduleId?: string;
+    readonly name?: string;
+    readonly path?: string;
+    readonly position?: { readonly x: number; readonly y: number; readonly z: number };
+  } = {},
+): CityBuilding {
+  return {
+    id: overrides.id ?? "building-a",
+    repositoryId: "repository",
+    moduleId: overrides.moduleId ?? "module-a",
+    districtId: overrides.districtId ?? "district-a",
+    name: overrides.name ?? "Alpha.ts",
+    path: overrides.path ?? "src/Alpha.ts",
+    language: "typescript",
+    metrics: {
+      sloc: 1,
+      decisionLoad: 1,
+      maximumComplexity: 1,
+      executableUnitCount: 1,
+    },
+    risk: "low",
+    semanticGroupId: "low-risk",
+    position: overrides.position ?? { x: 0, y: 2, z: 0 },
+    size: { x: 1, y: 3, z: 1 },
+  };
+}
+
+function internalDependency(
+  id: string,
+  sourceId: string,
+  targetId: string,
+  weight: number,
+): CityDependency {
+  return {
+    id,
+    repositoryId: "repository",
+    sourceId,
+    targetId,
+    kind: "typescript-import",
+    weight,
+  };
+}
+
+function externalDependency(
+  id: string,
+  sourceId: string,
+  externalTarget: string,
+  weight: number,
+): CityDependency {
+  return {
+    id,
+    repositoryId: "repository",
+    sourceId,
+    externalTarget,
+    kind: "typescript-import",
+    weight,
+  };
+}
