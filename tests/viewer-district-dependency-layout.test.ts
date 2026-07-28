@@ -20,6 +20,7 @@ const consumer = {
   centerZ: 0,
   sizeX: 10,
   sizeZ: 8,
+  surfaceY: 1,
   skylineY: 12,
 };
 
@@ -28,19 +29,17 @@ describe("district dependency layout", () => {
     expect(
       districtBoundaryAnchor(consumer, { x: 20, z: 0 }),
     ).toEqual({
-      x: 5,
-      y: 12.35,
-      z: 0,
+      contact: { x: 5, y: 1, z: 0 },
+      anchor: { x: 5, y: 12.35, z: 0 },
     });
 
     const diagonal = districtBoundaryAnchor(consumer, {
       x: -20,
       z: 20,
     });
-    expect(diagonal.x).toBe(-4);
-    expect(diagonal.z).toBe(4);
-    expect(diagonal.y).toBe(12.35);
-    expect(isOnBoundary(diagonal, consumer)).toBe(true);
+    expect(diagonal.contact).toEqual({ x: -4, y: 1, z: 4 });
+    expect(diagonal.anchor).toEqual({ x: -4, y: 12.35, z: 4 });
+    expect(isOnBoundary(diagonal.contact, consumer)).toBe(true);
   });
 
   it("uses each district skyline for directed bundle endpoints", () => {
@@ -49,29 +48,48 @@ describe("district dependency layout", () => {
       centerZ: 0,
       sizeX: 6,
       sizeZ: 12,
+      surfaceY: 1.5,
       skylineY: 4,
     };
 
     expect(districtRouteEndpoints(consumer, provider)).toEqual({
-      consumer: { x: 5, y: 12.35, z: 0 },
-      provider: { x: 17, y: 4.35, z: 0 },
+      consumer: {
+        contact: { x: 5, y: 1, z: 0 },
+        anchor: { x: 5, y: 12.35, z: 0 },
+      },
+      provider: {
+        contact: { x: 17, y: 1.5, z: 0 },
+        anchor: { x: 17, y: 4.35, z: 0 },
+      },
     });
   });
 
-  it("places external gateways deterministically on the city base", () => {
-    const first = keyedBaseGateway(base, "package:@angular/core", 1.2);
+  it("grounds external gateways deterministically on the city base", () => {
+    const first = keyedBaseGateway(
+      base,
+      "package:@angular/core",
+      0.5,
+      4.2,
+    );
     const repeated = keyedBaseGateway(
       base,
       "package:@angular/core",
-      1.2,
+      0.5,
+      4.2,
     );
-    const other = keyedBaseGateway(base, "package:rxjs", 1.2);
+    const other = keyedBaseGateway(
+      base,
+      "package:rxjs",
+      0.5,
+      4.2,
+    );
 
     expect(repeated).toEqual(first);
     expect(other).not.toEqual(first);
-    expect(first.y).toBe(1.2);
-    expect(isOnBoundary(first, base)).toBe(true);
-    expect(isOnBoundary(other, base)).toBe(true);
+    expect(first.contact.y).toBe(0.5);
+    expect(first.anchor.y).toBe(4.2);
+    expect(isOnBoundary(first.contact, base)).toBe(true);
+    expect(isOnBoundary(other.contact, base)).toBe(true);
   });
 
   it("projects isolation routes using only visible geometry and a key", () => {
@@ -82,8 +100,11 @@ describe("district dependency layout", () => {
     );
 
     expect(repeated).toEqual(first);
-    expect(first.y).toBe(12.35);
-    expect(isOnBoundary(first, consumer)).toBe(true);
+    expect(first.contact.y).toBe(1);
+    expect(first.anchor.y).toBe(12.35);
+    expect(first.anchor.x).toBe(first.contact.x);
+    expect(first.anchor.z).toBe(first.contact.z);
+    expect(isOnBoundary(first.contact, consumer)).toBe(true);
   });
 
   it("uses a finite deterministic fallback for coincident centers", () => {
@@ -93,9 +114,8 @@ describe("district dependency layout", () => {
         z: consumer.centerZ,
       }),
     ).toEqual({
-      x: 0,
-      y: 12.35,
-      z: -4,
+      contact: { x: 0, y: 1, z: -4 },
+      anchor: { x: 0, y: 12.35, z: -4 },
     });
   });
 
@@ -123,14 +143,21 @@ describe("district dependency layout", () => {
         { ...base, sizeZ: -1 },
         "external",
         1,
+        2,
       ),
     ).toThrow(RangeError);
     expect(() =>
-      keyedBaseGateway(base, " ", 1),
+      keyedBaseGateway(base, " ", 1, 2),
     ).toThrow(TypeError);
     expect(() =>
-      keyedBaseGateway(base, "external", Number.NaN),
+      keyedBaseGateway(base, "external", 1, Number.NaN),
     ).toThrow(RangeError);
+    expect(() =>
+      keyedIsolationGateway(
+        { ...consumer, skylineY: 0 },
+        "hidden",
+      ),
+    ).toThrow(/below/iu);
   });
 });
 

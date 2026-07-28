@@ -43,9 +43,10 @@ import {
   DependencyRouteOverlay,
 } from "./dependency-overlay.js";
 import {
+  buildingRouteEndpoint,
   keyedBoundaryGateway,
-  roofRoutePoint,
-  type RoutePoint,
+  routeEndpointKey,
+  type RouteEndpointGeometry,
   type RouteRectangle,
 } from "./dependency-route-layout.js";
 import { DEMO_MODEL } from "./demo-model.js";
@@ -1811,23 +1812,17 @@ function dependencyOverlayRoute(
 ): DependencyOverlayRoute {
   return {
     id: `${route.dependencyId}:${route.direction}`,
-    consumer: dependencyEndpointPoint(projection.source),
-    provider: dependencyEndpointPoint(projection.target),
+    consumer: dependencyEndpointGeometry(projection.source),
+    provider: dependencyEndpointGeometry(projection.target),
     direction: route.direction,
     weight: route.weight,
     externalProvider: route.counterpart.kind === "external",
-    gatewayAt:
-      projection.source.kind === "district-boundary"
-        ? "source"
-        : projection.target.kind === "building"
-          ? null
-          : "target",
   };
 }
 
-function dependencyEndpointPoint(
+function dependencyEndpointGeometry(
   endpoint: DependencyRouteEndpoint,
-): RoutePoint {
+): RouteEndpointGeometry {
   switch (endpoint.kind) {
     case "building": {
       const building = activeBuildingsById.get(endpoint.buildingId);
@@ -1836,27 +1831,24 @@ function dependencyEndpointPoint(
           `Dependency route references unknown building "${endpoint.buildingId}".`,
         );
       }
-      return roofRoutePoint(building);
+      return buildingRouteEndpoint(building);
     }
     case "district-boundary": {
-      const district = activeDistrictsById.get(endpoint.districtId);
-      if (!district) {
-        throw new Error(
-          `Dependency route references unknown district "${endpoint.districtId}".`,
-        );
-      }
-      return {
-        x: endpoint.position.x,
-        y: district.position.y + district.size.y * 0.5 + 0.22,
-        z: endpoint.position.z,
-      };
+      return keyedIsolationGateway(
+        requiredDistrictDependencyFootprint(endpoint.districtId),
+        endpoint.gatewayKey,
+      );
     }
     case "external": {
       const scope = dependencyRouteScope();
       return keyedBoundaryGateway(
         scope.rectangle,
-        endpoint.target,
-        scope.y,
+        routeEndpointKey(
+          "external",
+          normalizeExternalTarget(endpoint.target),
+        ),
+        scope.surfaceY,
+        scope.anchorY,
       );
     }
   }
@@ -1866,9 +1858,6 @@ function districtDependencyOverlayRoute(
   bundle: DistrictDependencyBundle,
 ): DependencyOverlayRoute {
   const geometry = districtDependencyRouteGeometry(bundle);
-  const sourceBoundary = bundle.source.kind === "district-boundary";
-  const targetBoundary =
-    bundle.target.kind === "district-boundary";
   const externalProvider = bundle.target.kind === "external";
   return {
     id: bundle.id,
@@ -1877,11 +1866,6 @@ function districtDependencyOverlayRoute(
     direction: "outgoing",
     weight: bundle.weight,
     externalProvider,
-    gatewayAt: sourceBoundary
-      ? "source"
-      : targetBoundary || externalProvider
-        ? "target"
-        : null,
     color: districtDependencyRouteColor(bundle),
     emphasized: bundle.id === selectedDistrictDependencyBundleId,
   };
@@ -1890,8 +1874,8 @@ function districtDependencyOverlayRoute(
 function districtDependencyRouteGeometry(
   bundle: DistrictDependencyBundle,
 ): {
-  readonly consumer: RoutePoint;
-  readonly provider: RoutePoint;
+  readonly consumer: RouteEndpointGeometry;
+  readonly provider: RouteEndpointGeometry;
 } {
   if (
     bundle.source.kind === "district" &&
@@ -1913,12 +1897,18 @@ function districtDependencyRouteGeometry(
     if (explorerState.isolatedDistrictId !== null) {
       const provider = keyedIsolationGateway(
         consumerDistrict,
-        `external:${bundle.target.target}`,
+        routeEndpointKey(
+          "external",
+          normalizeExternalTarget(bundle.target.target),
+        ),
       );
       return {
-        consumer: districtDependencyCenterPoint(
+        consumer: keyedIsolationGateway(
           consumerDistrict,
-          provider.y,
+          routeEndpointKey(
+            "district",
+            bundle.source.districtId,
+          ),
         ),
         provider,
       };
@@ -1933,20 +1923,20 @@ function districtDependencyRouteGeometry(
       sizeX: base.size.x,
       sizeZ: base.size.z,
     };
-    const skylineAnchor = districtBoundaryAnchor(
-      consumerDistrict,
-      {
-        x: baseRectangle.centerX,
-        z: baseRectangle.centerZ,
-      },
-    );
     const provider = keyedBaseGateway(
       baseRectangle,
-      bundle.id,
-      skylineAnchor.y,
+      routeEndpointKey(
+        "external",
+        normalizeExternalTarget(bundle.target.target),
+      ),
+      base.position.y + base.size.y * 0.5,
+      consumerDistrict.skylineY + 0.35,
     );
     return {
-      consumer: districtBoundaryAnchor(consumerDistrict, provider),
+      consumer: districtBoundaryAnchor(
+        consumerDistrict,
+        provider.anchor,
+      ),
       provider,
     };
   }
@@ -1960,12 +1950,18 @@ function districtDependencyRouteGeometry(
     );
     const provider = keyedIsolationGateway(
       visibleDistrict,
-      bundle.target.hiddenDistrictId,
+      routeEndpointKey(
+        "district",
+        bundle.target.hiddenDistrictId,
+      ),
     );
     return {
-      consumer: districtDependencyCenterPoint(
+      consumer: keyedIsolationGateway(
         visibleDistrict,
-        provider.y,
+        routeEndpointKey(
+          "district",
+          bundle.source.districtId,
+        ),
       ),
       provider,
     };
@@ -1980,13 +1976,19 @@ function districtDependencyRouteGeometry(
     );
     const consumer = keyedIsolationGateway(
       visibleDistrict,
-      bundle.source.hiddenDistrictId,
+      routeEndpointKey(
+        "district",
+        bundle.source.hiddenDistrictId,
+      ),
     );
     return {
       consumer,
-      provider: districtDependencyCenterPoint(
+      provider: keyedIsolationGateway(
         visibleDistrict,
-        consumer.y,
+        routeEndpointKey(
+          "district",
+          bundle.target.districtId,
+        ),
       ),
     };
   }
@@ -1994,17 +1996,6 @@ function districtDependencyRouteGeometry(
   throw new Error(
     `Unsupported district dependency route geometry for "${bundle.id}".`,
   );
-}
-
-function districtDependencyCenterPoint(
-  district: DistrictDependencyFootprint,
-  y: number,
-): RoutePoint {
-  return {
-    x: district.centerX,
-    y,
-    z: district.centerZ,
-  };
 }
 
 function requiredDistrictDependencyFootprint(
@@ -2039,6 +2030,7 @@ function createDistrictDependencyFootprints(
       centerZ: district.position.z,
       sizeX: district.size.x,
       sizeZ: district.size.z,
+      surfaceY: district.position.y + district.size.y * 0.5,
       skylineY: buildingSkyline,
     });
   }
@@ -2131,10 +2123,11 @@ function edgeCountLabel(count: number): string {
 
 function dependencyRouteScope(): {
   readonly rectangle: RouteRectangle;
-  readonly y: number;
+  readonly surfaceY: number;
+  readonly anchorY: number;
 } {
   if (explorerState.isolatedDistrictId !== null) {
-    const district = activeDistrictsById.get(
+    const district = districtDependencyFootprintsById.get(
       explorerState.isolatedDistrictId,
     );
     if (!district) {
@@ -2144,12 +2137,13 @@ function dependencyRouteScope(): {
     }
     return {
       rectangle: {
-        centerX: district.position.x,
-        centerZ: district.position.z,
-        sizeX: district.size.x,
-        sizeZ: district.size.z,
+        centerX: district.centerX,
+        centerZ: district.centerZ,
+        sizeX: district.sizeX,
+        sizeZ: district.sizeZ,
       },
-      y: district.position.y + district.size.y * 0.5 + 0.22,
+      surfaceY: district.surfaceY,
+      anchorY: district.skylineY + 0.35,
     };
   }
 
@@ -2157,6 +2151,7 @@ function dependencyRouteScope(): {
   if (!base) {
     throw new Error("Dependency routes require a city footprint.");
   }
+  const surfaceY = base.position.y + base.size.y * 0.5;
   return {
     rectangle: {
       centerX: base.position.x,
@@ -2164,8 +2159,23 @@ function dependencyRouteScope(): {
       sizeX: base.size.x,
       sizeZ: base.size.z,
     },
-    y: base.position.y + base.size.y * 0.5 + 0.22,
+    surfaceY,
+    anchorY:
+      Math.max(
+        surfaceY,
+        ...[...districtDependencyFootprintsById.values()].map(
+          ({ skylineY }) => skylineY,
+        ),
+      ) + 0.35,
   };
+}
+
+function normalizeExternalTarget(target: string): string {
+  const normalized = target.trim().normalize("NFC");
+  if (normalized === "") {
+    throw new TypeError("External dependency target must not be empty.");
+  }
+  return normalized;
 }
 
 function routeCountLabel(count: number): string {

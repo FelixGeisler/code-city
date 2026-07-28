@@ -237,7 +237,10 @@ export function validateCityModel(value: unknown): CityModel {
       dependencyNodeIds,
       `${prefix}.targetId`,
     );
-    optionalString(dependency.externalTarget, `${prefix}.externalTarget`);
+    optionalNonEmptyString(
+      dependency.externalTarget,
+      `${prefix}.externalTarget`,
+    );
     optionalString(dependency.version, `${prefix}.version`);
     positiveNumber(dependency.weight, `${prefix}.weight`);
 

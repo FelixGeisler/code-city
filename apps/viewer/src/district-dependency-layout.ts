@@ -1,3 +1,8 @@
+import {
+  keyedBoundaryGateway,
+  type RouteEndpointGeometry,
+} from "./dependency-route-layout.js";
+
 export interface DistrictDependencyPoint {
   readonly x: number;
   readonly y: number;
@@ -18,17 +23,18 @@ export interface DistrictDependencyRectangle {
 
 export interface DistrictDependencyFootprint
   extends DistrictDependencyRectangle {
+  /** Top of the visible district parcel, in scene coordinates. */
+  readonly surfaceY: number;
   /** Highest visible point in this district, in scene coordinates. */
   readonly skylineY: number;
 }
 
 export interface DistrictDependencyEndpoints {
-  readonly consumer: DistrictDependencyPoint;
-  readonly provider: DistrictDependencyPoint;
+  readonly consumer: RouteEndpointGeometry;
+  readonly provider: RouteEndpointGeometry;
 }
 
 const SKYLINE_CLEARANCE = 0.35;
-const GATEWAY_EDGE_INSET = 0.08;
 
 /**
  * Places an endpoint on the district edge facing another point and above the
@@ -38,7 +44,7 @@ const GATEWAY_EDGE_INSET = 0.08;
 export function districtBoundaryAnchor(
   district: DistrictDependencyFootprint,
   toward: DistrictDependencyTarget,
-): DistrictDependencyPoint {
+): RouteEndpointGeometry {
   assertFootprint(district, "District");
   assertTarget(toward, "District route target");
 
@@ -68,11 +74,16 @@ export function districtBoundaryAnchor(
     deltaZ === 0 ? Number.POSITIVE_INFINITY : halfZ / Math.abs(deltaZ),
   );
 
-  return {
-    x: district.centerX + deltaX * scale,
-    y: district.skylineY + SKYLINE_CLEARANCE,
-    z: district.centerZ + deltaZ * scale,
-  };
+  const x = district.centerX + deltaX * scale;
+  const z = district.centerZ + deltaZ * scale;
+  return Object.freeze({
+    contact: Object.freeze({ x, y: district.surfaceY, z }),
+    anchor: Object.freeze({
+      x,
+      y: district.skylineY + SKYLINE_CLEARANCE,
+      z,
+    }),
+  });
 }
 
 /**
@@ -104,12 +115,17 @@ export function districtRouteEndpoints(
 export function keyedBaseGateway(
   base: DistrictDependencyRectangle,
   externalKey: string,
-  y: number,
-): DistrictDependencyPoint {
+  surfaceY: number,
+  anchorY: number,
+): RouteEndpointGeometry {
   assertRectangle(base, "City base");
   assertKey(externalKey);
-  assertFinite(y, "Gateway height");
-  return keyedBoundaryPoint(base, externalKey, y);
+  return keyedBoundaryGateway(
+    base,
+    externalKey,
+    surfaceY,
+    anchorY,
+  );
 }
 
 /**
@@ -120,56 +136,15 @@ export function keyedBaseGateway(
 export function keyedIsolationGateway(
   visibleDistrict: DistrictDependencyFootprint,
   hiddenDistrictKey: string,
-): DistrictDependencyPoint {
+): RouteEndpointGeometry {
   assertFootprint(visibleDistrict, "Visible district");
   assertKey(hiddenDistrictKey);
-  return keyedBoundaryPoint(
+  return keyedBoundaryGateway(
     visibleDistrict,
     hiddenDistrictKey,
+    visibleDistrict.surfaceY,
     visibleDistrict.skylineY + SKYLINE_CLEARANCE,
   );
-}
-
-function keyedBoundaryPoint(
-  rectangle: DistrictDependencyRectangle,
-  key: string,
-  y: number,
-): DistrictDependencyPoint {
-  const hash = stableHash(key);
-  const side = hash % 4;
-  const fraction =
-    GATEWAY_EDGE_INSET +
-    hashFraction(`${key}\u0000position`) *
-      (1 - GATEWAY_EDGE_INSET * 2);
-  const halfX = rectangle.sizeX * 0.5;
-  const halfZ = rectangle.sizeZ * 0.5;
-
-  switch (side) {
-    case 0:
-      return {
-        x: rectangle.centerX - halfX + rectangle.sizeX * fraction,
-        y,
-        z: rectangle.centerZ - halfZ,
-      };
-    case 1:
-      return {
-        x: rectangle.centerX + halfX,
-        y,
-        z: rectangle.centerZ - halfZ + rectangle.sizeZ * fraction,
-      };
-    case 2:
-      return {
-        x: rectangle.centerX + halfX - rectangle.sizeX * fraction,
-        y,
-        z: rectangle.centerZ + halfZ,
-      };
-    default:
-      return {
-        x: rectangle.centerX - halfX,
-        y,
-        z: rectangle.centerZ + halfZ - rectangle.sizeZ * fraction,
-      };
-  }
 }
 
 function assertFootprint(
@@ -177,7 +152,13 @@ function assertFootprint(
   label: string,
 ): void {
   assertRectangle(district, label);
+  assertFinite(district.surfaceY, `${label} surface`);
   assertFinite(district.skylineY, `${label} skyline`);
+  if (district.skylineY < district.surfaceY) {
+    throw new RangeError(
+      `${label} skyline must not be below its surface.`,
+    );
+  }
   assertFinite(
     district.skylineY + SKYLINE_CLEARANCE,
     `${label} route height`,
@@ -228,17 +209,4 @@ function assertFinite(value: number, label: string): void {
   if (!Number.isFinite(value)) {
     throw new RangeError(`${label} must be finite.`);
   }
-}
-
-function hashFraction(value: string): number {
-  return stableHash(value) / 0xffff_ffff;
-}
-
-function stableHash(value: string): number {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return hash >>> 0;
 }
