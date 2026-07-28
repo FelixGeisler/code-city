@@ -41,23 +41,32 @@ npm run cli -- analyze C:\Code\RepoA C:\Code\RepoB `
 # Run the browser viewer
 npm run viewer:dev
 
-# Produce a capability-checked print plan
-npm run cli -- plan `
-  --model build\city-model.json `
+# Export the connected five-part Demo for a Prusa XL
+npm run print:demo
+
+# Export another model through the same printer-general path
+npm run cli -- export `
+  --model examples\demo-city.json `
   --profile profiles\prusa-xl-5t.json `
   --format 3mf `
-  --output build\print-plan.json
+  --scale 3 `
+  --output build\print\code-city-demo.3mf
 ```
 
 The viewer also accepts a `city-model.json` through its **Open model** button.
 The first C# implementation is explicitly labelled lexical; Roslyn replaces it
 without changing the model contract.
 
+The Demo export is 93 x 48 x 33 mm and imports into PrusaSlicer as one object
+with five aligned, independently assignable tool parts. This first exporter
+does not yet cover STL, FLOW-sized tiling, arbitrary fonts or logos, or
+slicer-specific settings.
+
 ## Planned product flow
 
 `codecity open` will accept local roots, public GitHub repositories, and generic
-Git remotes such as Azure DevOps Server. STL and 3MF mesh exporters follow the
-implemented print planner.
+Git remotes such as Azure DevOps Server. STL and oversized multi-plate exports
+remain planned.
 
 Architecture documentation uses Antora and the concise arc42 structure. Once
 GitHub Pages is enabled, it is published at

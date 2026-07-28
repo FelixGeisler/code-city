@@ -58,6 +58,7 @@ export interface ExecutableUnitMetric {
 export interface SemanticGroup {
   readonly id: string;
   readonly label: string;
+  /** Stable #RRGGBB or #RRGGBBAA display color. */
   readonly color: string;
   readonly priority: number;
   readonly mergeInto?: string;

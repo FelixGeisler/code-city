@@ -1,0 +1,575 @@
+import type { PrinterProfile } from "../../core/src/print.js";
+import type {
+  PrintBounds,
+  PrintMesh,
+  PrintableCity,
+  PrintPoint,
+  PrintPrimitive,
+  PrintTriangle,
+} from "./geometry.js";
+
+const GEOMETRY_EPSILON = 1e-7;
+
+export class PrintGeometryValidationError extends Error {
+  public readonly issues: readonly string[];
+
+  public constructor(issues: readonly string[]) {
+    super(`Invalid printable geometry: ${issues.join(" ")}`);
+    this.name = "PrintGeometryValidationError";
+    this.issues = [...issues];
+  }
+}
+
+function compare(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function close(left: number, right: number): boolean {
+  const scale = Math.max(1, Math.abs(left), Math.abs(right));
+  return Math.abs(left - right) <= GEOMETRY_EPSILON * scale;
+}
+
+function subtract(left: PrintPoint, right: PrintPoint): PrintPoint {
+  return {
+    x: left.x - right.x,
+    y: left.y - right.y,
+    z: left.z - right.z,
+  };
+}
+
+function cross(left: PrintPoint, right: PrintPoint): PrintPoint {
+  return {
+    x: left.y * right.z - left.z * right.y,
+    y: left.z * right.x - left.x * right.z,
+    z: left.x * right.y - left.y * right.x,
+  };
+}
+
+function dot(left: PrintPoint, right: PrintPoint): number {
+  return left.x * right.x + left.y * right.y + left.z * right.z;
+}
+
+function length(vector: PrintPoint): number {
+  return Math.hypot(vector.x, vector.y, vector.z);
+}
+
+function triangleVertices(
+  mesh: PrintMesh,
+  triangle: PrintTriangle,
+): readonly [PrintPoint, PrintPoint, PrintPoint] | undefined {
+  const a = mesh.vertices[triangle.a];
+  const b = mesh.vertices[triangle.b];
+  const c = mesh.vertices[triangle.c];
+  return a && b && c ? [a, b, c] : undefined;
+}
+
+export function triangleArea(
+  mesh: PrintMesh,
+  triangle: PrintTriangle,
+): number {
+  const vertices = triangleVertices(mesh, triangle);
+  if (!vertices) return Number.NaN;
+  const [a, b, c] = vertices;
+  return length(cross(subtract(b, a), subtract(c, a))) / 2;
+}
+
+export function signedMeshVolume(mesh: PrintMesh): number {
+  let volume = 0;
+  for (const triangle of mesh.triangles) {
+    const vertices = triangleVertices(mesh, triangle);
+    if (!vertices) return Number.NaN;
+    const [a, b, c] = vertices;
+    volume += dot(a, cross(b, c)) / 6;
+  }
+  return volume;
+}
+
+export function measureMeshBounds(mesh: PrintMesh): PrintBounds | undefined {
+  if (mesh.vertices.length === 0) return undefined;
+  const minimum = {
+    x: Number.POSITIVE_INFINITY,
+    y: Number.POSITIVE_INFINITY,
+    z: Number.POSITIVE_INFINITY,
+  };
+  const maximum = {
+    x: Number.NEGATIVE_INFINITY,
+    y: Number.NEGATIVE_INFINITY,
+    z: Number.NEGATIVE_INFINITY,
+  };
+  for (const vertex of mesh.vertices) {
+    minimum.x = Math.min(minimum.x, vertex.x);
+    minimum.y = Math.min(minimum.y, vertex.y);
+    minimum.z = Math.min(minimum.z, vertex.z);
+    maximum.x = Math.max(maximum.x, vertex.x);
+    maximum.y = Math.max(maximum.y, vertex.y);
+    maximum.z = Math.max(maximum.z, vertex.z);
+  }
+  return {
+    minimum,
+    maximum,
+    size: {
+      x: maximum.x - minimum.x,
+      y: maximum.y - minimum.y,
+      z: maximum.z - minimum.z,
+    },
+  };
+}
+
+function sameBounds(left: PrintBounds, right: PrintBounds): boolean {
+  return (["x", "y", "z"] as const).every(
+    (axis) =>
+      close(left.minimum[axis], right.minimum[axis]) &&
+      close(left.maximum[axis], right.maximum[axis]) &&
+      close(left.size[axis], right.size[axis]),
+  );
+}
+
+function meshIssues(
+  mesh: PrintMesh,
+  path: string,
+  expectedBounds?: PrintBounds,
+): readonly string[] {
+  const issues: string[] = [];
+  if (mesh.vertices.length === 0) {
+    issues.push(`${path} must contain vertices.`);
+  }
+  if (mesh.triangles.length === 0) {
+    issues.push(`${path} must contain triangles.`);
+  }
+  mesh.vertices.forEach((vertex, index) => {
+    for (const axis of ["x", "y", "z"] as const) {
+      if (!Number.isFinite(vertex[axis])) {
+        issues.push(`${path}.vertices[${index}].${axis} must be finite.`);
+      }
+    }
+  });
+
+  const edgeCounts = new Map<string, number>();
+  mesh.triangles.forEach((triangle, index) => {
+    const indices = [triangle.a, triangle.b, triangle.c];
+    if (
+      !indices.every(
+        (value) =>
+          Number.isSafeInteger(value) &&
+          value >= 0 &&
+          value < mesh.vertices.length,
+      )
+    ) {
+      issues.push(`${path}.triangles[${index}] has an invalid vertex index.`);
+      return;
+    }
+    if (new Set(indices).size !== 3) {
+      issues.push(`${path}.triangles[${index}] repeats a vertex.`);
+      return;
+    }
+    const area = triangleArea(mesh, triangle);
+    if (!Number.isFinite(area) || area <= GEOMETRY_EPSILON) {
+      issues.push(`${path}.triangles[${index}] has no positive area.`);
+    }
+    for (const [left, right] of [
+      [triangle.a, triangle.b],
+      [triangle.b, triangle.c],
+      [triangle.c, triangle.a],
+    ] as const) {
+      const key =
+        left < right ? `${left}:${right}` : `${right}:${left}`;
+      edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
+    }
+  });
+  const openEdges = [...edgeCounts.values()].filter((count) => count !== 2);
+  if (openEdges.length > 0) {
+    issues.push(
+      `${path} is not watertight; ${openEdges.length} edge(s) do not have exactly two faces.`,
+    );
+  }
+  const volume = signedMeshVolume(mesh);
+  if (!Number.isFinite(volume) || volume <= GEOMETRY_EPSILON) {
+    issues.push(`${path} must have positive outward volume.`);
+  }
+  const measured = measureMeshBounds(mesh);
+  if (
+    expectedBounds !== undefined &&
+    (measured === undefined || !sameBounds(measured, expectedBounds))
+  ) {
+    issues.push(`${path} bounds do not match its vertices.`);
+  }
+  return issues;
+}
+
+function outwardPrimitiveIssues(
+  item: PrintPrimitive,
+  path: string,
+): readonly string[] {
+  const issues: string[] = [];
+  const center = {
+    x: (item.bounds.minimum.x + item.bounds.maximum.x) / 2,
+    y: (item.bounds.minimum.y + item.bounds.maximum.y) / 2,
+    z: (item.bounds.minimum.z + item.bounds.maximum.z) / 2,
+  };
+  item.mesh.triangles.forEach((triangle, index) => {
+    const vertices = triangleVertices(item.mesh, triangle);
+    if (!vertices) return;
+    const [a, b, c] = vertices;
+    const normal = cross(subtract(b, a), subtract(c, a));
+    const centroid = {
+      x: (a.x + b.x + c.x) / 3,
+      y: (a.y + b.y + c.y) / 3,
+      z: (a.z + b.z + c.z) / 3,
+    };
+    if (dot(normal, subtract(centroid, center)) <= GEOMETRY_EPSILON) {
+      issues.push(`${path}.triangles[${index}] is not wound outward.`);
+    }
+  });
+  return issues;
+}
+
+function positiveOverlap(left: PrintBounds, right: PrintBounds): boolean {
+  return (["x", "y", "z"] as const).every(
+    (axis) =>
+      Math.min(left.maximum[axis], right.maximum[axis]) -
+        Math.max(left.minimum[axis], right.minimum[axis]) >
+      GEOMETRY_EPSILON,
+  );
+}
+
+function positiveFaceContact(left: PrintBounds, right: PrintBounds): boolean {
+  for (const axis of ["x", "y", "z"] as const) {
+    const touches =
+      close(left.maximum[axis], right.minimum[axis]) ||
+      close(right.maximum[axis], left.minimum[axis]);
+    if (!touches) continue;
+    const otherAxes = (["x", "y", "z"] as const).filter(
+      (candidate) => candidate !== axis,
+    );
+    if (
+      otherAxes.every(
+        (other) =>
+          Math.min(left.maximum[other], right.maximum[other]) -
+            Math.max(left.minimum[other], right.minimum[other]) >
+          GEOMETRY_EPSILON,
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function primitiveTopologyIssues(
+  primitives: readonly PrintPrimitive[],
+): readonly string[] {
+  const issues: string[] = [];
+  const graph = primitives.map(() => new Set<number>());
+  for (let leftIndex = 0; leftIndex < primitives.length; leftIndex += 1) {
+    const left = primitives[leftIndex]!;
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < primitives.length;
+      rightIndex += 1
+    ) {
+      const right = primitives[rightIndex]!;
+      if (positiveOverlap(left.bounds, right.bounds)) {
+        issues.push(
+          `Primitives '${left.id}' and '${right.id}' overlap with positive volume.`,
+        );
+      }
+      if (positiveFaceContact(left.bounds, right.bounds)) {
+        graph[leftIndex]!.add(rightIndex);
+        graph[rightIndex]!.add(leftIndex);
+      }
+    }
+  }
+  const baseIndices = primitives
+    .map((item, index) => (item.kind === "base" ? index : -1))
+    .filter((index) => index >= 0);
+  if (baseIndices.length !== 1) {
+    issues.push("Printable city must contain exactly one shared-base primitive.");
+    return issues;
+  }
+  const reached = new Set<number>(baseIndices);
+  const queue = [...baseIndices];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const adjacent of graph[current]!) {
+      if (reached.has(adjacent)) continue;
+      reached.add(adjacent);
+      queue.push(adjacent);
+    }
+  }
+  primitives.forEach((item, index) => {
+    if (!reached.has(index)) {
+      issues.push(
+        `Primitive '${item.id}' has no positive-area face connection to the shared base.`,
+      );
+    }
+  });
+  return issues;
+}
+
+function measuredPrimitiveBounds(
+  primitives: readonly PrintPrimitive[],
+): PrintBounds | undefined {
+  if (primitives.length === 0) return undefined;
+  const minimum = {
+    x: Math.min(...primitives.map((item) => item.bounds.minimum.x)),
+    y: Math.min(...primitives.map((item) => item.bounds.minimum.y)),
+    z: Math.min(...primitives.map((item) => item.bounds.minimum.z)),
+  };
+  const maximum = {
+    x: Math.max(...primitives.map((item) => item.bounds.maximum.x)),
+    y: Math.max(...primitives.map((item) => item.bounds.maximum.y)),
+    z: Math.max(...primitives.map((item) => item.bounds.maximum.z)),
+  };
+  return {
+    minimum,
+    maximum,
+    size: {
+      x: maximum.x - minimum.x,
+      y: maximum.y - minimum.y,
+      z: maximum.z - minimum.z,
+    },
+  };
+}
+
+function minimumPrimitiveFeature(
+  primitives: readonly PrintPrimitive[],
+): number {
+  return Math.min(
+    ...primitives.flatMap((item) => [
+      item.bounds.size.x,
+      item.bounds.size.y,
+      item.bounds.size.z,
+    ]),
+  );
+}
+
+function intervalGap(
+  leftMinimum: number,
+  leftMaximum: number,
+  rightMinimum: number,
+  rightMaximum: number,
+): number {
+  return Math.max(
+    0,
+    Math.max(leftMinimum, rightMinimum) -
+      Math.min(leftMaximum, rightMaximum),
+  );
+}
+
+function minimumHorizontalGap(
+  primitives: readonly PrintPrimitive[],
+): number | null {
+  let minimum = Number.POSITIVE_INFINITY;
+  for (let leftIndex = 0; leftIndex < primitives.length; leftIndex += 1) {
+    const left = primitives[leftIndex]!;
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < primitives.length;
+      rightIndex += 1
+    ) {
+      const right = primitives[rightIndex]!;
+      const verticalOverlap =
+        Math.min(left.bounds.maximum.z, right.bounds.maximum.z) -
+        Math.max(left.bounds.minimum.z, right.bounds.minimum.z);
+      if (verticalOverlap <= GEOMETRY_EPSILON) continue;
+      const gap = Math.hypot(
+        intervalGap(
+          left.bounds.minimum.x,
+          left.bounds.maximum.x,
+          right.bounds.minimum.x,
+          right.bounds.maximum.x,
+        ),
+        intervalGap(
+          left.bounds.minimum.y,
+          left.bounds.maximum.y,
+          right.bounds.minimum.y,
+          right.bounds.maximum.y,
+        ),
+      );
+      if (gap > GEOMETRY_EPSILON) minimum = Math.min(minimum, gap);
+    }
+  }
+  return Number.isFinite(minimum) ? minimum : null;
+}
+
+export function validatePrintableCity(
+  city: PrintableCity,
+  profile: PrinterProfile,
+): readonly string[] {
+  const issues: string[] = [];
+  if (!Number.isFinite(city.scale) || city.scale <= 0) {
+    issues.push("Print scale must be a positive finite number.");
+  }
+  if (city.profileId !== profile.id) {
+    issues.push(
+      `Printable city profile '${city.profileId}' does not match '${profile.id}'.`,
+    );
+  }
+  if (city.parts.length === 0) {
+    issues.push("Printable city must contain at least one channel part.");
+  }
+  const knownChannels = new Set(
+    profile.printChannels.map(({ id }) => id),
+  );
+  const partIds = new Set<string>();
+  const partChannels = new Set<string>();
+  const primitiveIds = new Set<string>();
+  const primitives: PrintPrimitive[] = [];
+
+  city.parts.forEach((part, partIndex) => {
+    const path = `parts[${partIndex}]`;
+    if (partIds.has(part.id)) {
+      issues.push(`Duplicate print part id '${part.id}'.`);
+    }
+    partIds.add(part.id);
+    if (partChannels.has(part.channelId)) {
+      issues.push(`Duplicate print part channel '${part.channelId}'.`);
+    }
+    partChannels.add(part.channelId);
+    if (!knownChannels.has(part.channelId)) {
+      issues.push(`${path} references unknown channel '${part.channelId}'.`);
+    }
+    if (part.primitives.length === 0) {
+      issues.push(`${path} must contain at least one primitive.`);
+    }
+    const expectedVertexCount = part.primitives.reduce(
+      (sum, item) => sum + item.mesh.vertices.length,
+      0,
+    );
+    const expectedTriangleCount = part.primitives.reduce(
+      (sum, item) => sum + item.mesh.triangles.length,
+      0,
+    );
+    if (
+      part.mesh.vertices.length !== expectedVertexCount ||
+      part.mesh.triangles.length !== expectedTriangleCount
+    ) {
+      issues.push(`${path}.mesh does not concatenate its primitive meshes.`);
+    }
+    issues.push(...meshIssues(part.mesh, `${path}.mesh`));
+    const actualSemanticGroups = [
+      ...new Set(
+        part.primitives.map(({ semanticGroupId }) => semanticGroupId),
+      ),
+    ].sort(compare);
+    if (
+      actualSemanticGroups.length !== part.semanticGroupIds.length ||
+      actualSemanticGroups.some(
+        (id, index) => id !== part.semanticGroupIds[index],
+      )
+    ) {
+      issues.push(`${path}.semanticGroupIds do not match its primitives.`);
+    }
+    part.primitives.forEach((item, primitiveIndex) => {
+      const primitivePath = `${path}.primitives[${primitiveIndex}]`;
+      primitives.push(item);
+      if (primitiveIds.has(item.id)) {
+        issues.push(`Duplicate print primitive id '${item.id}'.`);
+      }
+      primitiveIds.add(item.id);
+      if (item.channelId !== part.channelId) {
+        issues.push(
+          `${primitivePath} channel '${item.channelId}' does not match its part.`,
+        );
+      }
+      issues.push(
+        ...meshIssues(item.mesh, `${primitivePath}.mesh`, item.bounds),
+        ...outwardPrimitiveIssues(item, primitivePath),
+      );
+    });
+  });
+
+  issues.push(...primitiveTopologyIssues(primitives));
+  const measuredBounds = measuredPrimitiveBounds(primitives);
+  if (
+    measuredBounds === undefined ||
+    !sameBounds(measuredBounds, city.bounds)
+  ) {
+    issues.push("Printable city bounds do not match its primitive geometry.");
+  }
+  const printBuildVolume = {
+    x: profile.buildVolume.x,
+    y: profile.buildVolume.z,
+    z: profile.buildVolume.y,
+  };
+  for (const axis of ["x", "y", "z"] as const) {
+    if (city.bounds.minimum[axis] < -GEOMETRY_EPSILON) {
+      issues.push(
+        `Printable city minimum ${axis.toUpperCase()} must be non-negative.`,
+      );
+    }
+    if (
+      city.bounds.size[axis] >
+      printBuildVolume[axis] + GEOMETRY_EPSILON
+    ) {
+      issues.push(
+        `Printable city ${axis.toUpperCase()} size (${city.bounds.size[axis]}) exceeds build volume (${printBuildVolume[axis]}).`,
+      );
+    }
+  }
+  const base = primitives.find(({ kind }) => kind === "base");
+  const measuredBaseThickness = base?.bounds.size.z ?? Number.NaN;
+  if (
+    !close(
+      city.measurements.baseThickness,
+      measuredBaseThickness,
+    )
+  ) {
+    issues.push("Measured base thickness does not match base geometry.");
+  }
+  if (
+    city.measurements.baseThickness + GEOMETRY_EPSILON <
+    profile.geometryLimits.minimumBaseThickness
+  ) {
+    issues.push(
+      `Base thickness (${city.measurements.baseThickness}) is below profile minimum (${profile.geometryLimits.minimumBaseThickness}).`,
+    );
+  }
+  const measuredFeature = minimumPrimitiveFeature(primitives);
+  if (
+    !close(city.measurements.wallThickness, measuredFeature)
+  ) {
+    issues.push("Measured wall thickness does not match geometry.");
+  }
+  if (
+    city.measurements.wallThickness + GEOMETRY_EPSILON <
+    profile.geometryLimits.minimumWallThickness
+  ) {
+    issues.push(
+      `Wall thickness (${city.measurements.wallThickness}) is below profile minimum (${profile.geometryLimits.minimumWallThickness}).`,
+    );
+  }
+  if (
+    !close(city.measurements.minimumFeatureSize, measuredFeature)
+  ) {
+    issues.push("Measured minimum feature size does not match geometry.");
+  }
+  if (
+    city.measurements.minimumFeatureSize + GEOMETRY_EPSILON <
+    profile.geometryLimits.minimumFeatureSize
+  ) {
+    issues.push(
+      `Minimum feature size (${city.measurements.minimumFeatureSize}) is below profile minimum (${profile.geometryLimits.minimumFeatureSize}).`,
+    );
+  }
+  const measuredGap = minimumHorizontalGap(primitives);
+  const reportedGap = city.measurements.minimumGap;
+  if (
+    (measuredGap === null) !== (reportedGap === null) ||
+    (measuredGap !== null &&
+      reportedGap !== null &&
+      !close(measuredGap, reportedGap))
+  ) {
+    issues.push("Measured minimum gap does not match geometry.");
+  }
+  if (
+    measuredGap !== null &&
+    measuredGap + GEOMETRY_EPSILON <
+      profile.geometryLimits.minimumGap
+  ) {
+    issues.push(
+      `Minimum gap (${measuredGap}) is below profile minimum (${profile.geometryLimits.minimumGap}).`,
+    );
+  }
+  return [...new Set(issues)];
+}

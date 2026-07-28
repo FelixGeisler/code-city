@@ -1,0 +1,417 @@
+import { describe, expect, it } from "vitest";
+
+import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
+import {
+  buildPrintableCity,
+  cuboidMesh,
+  printablePlanGeometry,
+  type PrintBounds,
+  type PrintSemanticAssignment,
+  type PrintableCity,
+} from "../packages/exporter/src/geometry.js";
+import {
+  PrintGeometryValidationError,
+  signedMeshVolume,
+  validatePrintableCity,
+} from "../packages/exporter/src/validate.js";
+import {
+  DEFAULT_FDM_GEOMETRY_LIMITS,
+  createPrusaXLProfile,
+  createSingleChannelProfile,
+  type PrinterProfile,
+} from "../packages/core/src/index.js";
+
+function assignments(
+  channelIds: readonly string[] = [
+    "tool-1",
+    "tool-2",
+    "tool-3",
+    "tool-4",
+    "tool-5",
+  ],
+): readonly PrintSemanticAssignment[] {
+  return DEMO_MODEL.semanticGroups.map((group, index) => ({
+    semanticGroupId: group.id,
+    channelId: channelIds[Math.min(index, channelIds.length - 1)]!,
+  }));
+}
+
+function demoCity(): PrintableCity {
+  return buildPrintableCity(
+    DEMO_MODEL,
+    assignments(),
+    {
+      scale: 3,
+      profile: createPrusaXLProfile([1, 2, 3, 4, 5]),
+    },
+  );
+}
+
+function sevenChannelProfile(): PrinterProfile {
+  return {
+    id: "generic-seven",
+    name: "Generic seven-channel printer",
+    printChannels: Array.from({ length: 7 }, (_, index) => ({
+      id: `channel-${index + 1}`,
+      label: `Channel ${index + 1}`,
+      mechanism: "filament-switcher" as const,
+      color: `#${(index + 1).toString(16).padStart(6, "0")}`,
+    })),
+    supportedFormats: ["3mf"],
+    buildVolume: { x: 300, y: 300, z: 300 },
+    geometryLimits: DEFAULT_FDM_GEOMETRY_LIMITS,
+    overflowPolicy: "merge",
+  };
+}
+
+describe("print-space cuboids", () => {
+  it("uses eight vertices and twelve outward triangles", () => {
+    const box: PrintBounds = {
+      minimum: { x: 10, y: 20, z: 30 },
+      maximum: { x: 12, y: 23, z: 34 },
+      size: { x: 2, y: 3, z: 4 },
+    };
+    const mesh = cuboidMesh(box);
+
+    expect(mesh.vertices).toHaveLength(8);
+    expect(mesh.triangles).toHaveLength(12);
+    expect(signedMeshVolume(mesh)).toBeCloseTo(24, 10);
+    const edgeCounts = new Map<string, number>();
+    for (const triangle of mesh.triangles) {
+      for (const [left, right] of [
+        [triangle.a, triangle.b],
+        [triangle.b, triangle.c],
+        [triangle.c, triangle.a],
+      ] as const) {
+        const key =
+          left < right ? `${left}:${right}` : `${right}:${left}`;
+        edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
+      }
+    }
+    expect(new Set(edgeCounts.values())).toEqual(new Set([2]));
+  });
+});
+
+describe("Demo printable geometry", () => {
+  it("normalizes Y-up city geometry into a connected Z-up print", () => {
+    const city = demoCity();
+
+    expect(city.application).toEqual({
+      name: "Code City",
+      version: "0.1.0-demo",
+    });
+    expect(city.title).toBe("Code City");
+    expect(city.version).toBe("Demo 0.1");
+    expect(city.scale).toBe(3);
+    expect(city.unit).toBe("millimeter");
+    expect(city.bounds.minimum).toEqual({ x: 0, y: 0, z: 0 });
+    expect(city.bounds.size).toEqual({ x: 93, y: 48, z: 33 });
+    expect(city.measurements.baseThickness).toBe(1.5);
+    expect(city.measurements.wallThickness).toBeCloseTo(0.8, 10);
+    expect(city.measurements.minimumFeatureSize).toBeCloseTo(0.8, 10);
+    expect(city.measurements.minimumGap).toBeCloseTo(0.8, 10);
+    expect(city.parts.map(({ channelId }) => channelId)).toEqual([
+      "tool-1",
+      "tool-2",
+      "tool-3",
+      "tool-4",
+      "tool-5",
+    ]);
+
+    const primitives = city.parts.flatMap(({ primitives }) => primitives);
+    const base = primitives.find(({ kind }) => kind === "base")!;
+    const districts = primitives.filter(({ kind }) => kind === "district");
+    const main = primitives.find(({ id }) => id === "building:main")!;
+    const panel = primitives.find(
+      ({ kind }) => kind === "identity-panel",
+    )!;
+
+    expect(base.bounds.size).toEqual({ x: 93, y: 48, z: 1.5 });
+    expect(districts).toHaveLength(2);
+    expect(
+      districts.every(
+        (district) =>
+          district.semanticGroupId === "base" &&
+          district.bounds.minimum.z === base.bounds.maximum.z,
+      ),
+    ).toBe(true);
+    expect(panel.bounds.minimum.z).toBe(base.bounds.maximum.z);
+    const planned = printablePlanGeometry(city);
+    expect(planned.bounds).toEqual({ x: 93, y: 33, z: 48 });
+    expect(planned.identityPanel).toMatchObject({
+      id: panel.id,
+      semanticGroupId: "identity",
+      size: {
+        x: panel.bounds.size.x,
+        y: panel.bounds.size.z,
+        z: panel.bounds.size.y,
+      },
+      reliefDepth: 0.8,
+    });
+    expect(
+      planned.identityPanel!.position.z -
+        planned.identityPanel!.size.z / 2 -
+        planned.identityPanel!.reliefDepth,
+    ).toBeCloseTo(0, 10);
+    expect(main.bounds.maximum.z).toBe(33);
+    expect(main.bounds.minimum.y).toBeCloseTo(12.6, 10);
+    expect(
+      primitives.every(
+        ({ mesh }) =>
+          mesh.vertices.length === 8 && mesh.triangles.length === 12,
+      ),
+    ).toBe(true);
+    expect(
+      validatePrintableCity(
+        city,
+        createPrusaXLProfile([1, 2, 3, 4, 5]),
+      ),
+    ).toEqual([]);
+  });
+
+  it("adds minimum-detail block text and a skyline to the plaque", () => {
+    const city = demoCity();
+    const identityPart = city.parts.find(
+      ({ channelId }) => channelId === "tool-2",
+    )!;
+    const relief = identityPart.primitives.filter(
+      ({ kind }) => kind === "identity-relief",
+    );
+
+    expect(
+      relief.filter(({ id }) => id.startsWith("identity-relief:skyline:")),
+    ).toHaveLength(3);
+    expect(
+      relief.some(({ id }) => id.startsWith("identity-relief:title:")),
+    ).toBe(true);
+    expect(
+      relief.some(({ id }) => id.startsWith("identity-relief:version:")),
+    ).toBe(true);
+    expect(
+      relief.every(
+        ({ bounds }) =>
+          bounds.size.x >= 0.8 - 1e-9 &&
+          bounds.size.y >= 0.8 - 1e-9 &&
+          bounds.size.z >= 0.8 - 1e-9,
+      ),
+    ).toBe(true);
+  });
+
+  it("is byte-input deterministic and independent of assignment order", () => {
+    const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
+    const forward = buildPrintableCity(DEMO_MODEL, assignments(), {
+      scale: 3,
+      profile,
+    });
+    const reverse = buildPrintableCity(
+      DEMO_MODEL,
+      [...assignments()].reverse(),
+      { scale: 3, profile },
+    );
+
+    expect(reverse).toEqual(forward);
+  });
+
+  it("supports one, two, five, and more than five used channels", () => {
+    const one = createSingleChannelProfile({
+      buildVolume: { x: 300, y: 300, z: 300 },
+    });
+    const oneAssignments = DEMO_MODEL.semanticGroups.map(({ id }) => ({
+      semanticGroupId: id,
+      channelId: "channel-1",
+    }));
+    expect(
+      buildPrintableCity(DEMO_MODEL, oneAssignments, {
+        scale: 3,
+        profile: one,
+      }).parts,
+    ).toHaveLength(1);
+
+    const two = createPrusaXLProfile([1, 2]);
+    expect(
+      buildPrintableCity(DEMO_MODEL, assignments(["tool-1", "tool-2"]), {
+        scale: 3,
+        profile: two,
+      }).parts,
+    ).toHaveLength(2);
+    expect(demoCity().parts).toHaveLength(5);
+
+    const extraGroups = DEMO_MODEL.buildings.map((_, index) => ({
+      id: `building-group-${index + 1}`,
+      label: `Building ${index + 1}`,
+      color: "#123456",
+      priority: 10 - index,
+    }));
+    const sevenGroupModel = {
+      ...DEMO_MODEL,
+      semanticGroups: [
+        DEMO_MODEL.semanticGroups[0]!,
+        DEMO_MODEL.semanticGroups[1]!,
+        ...extraGroups,
+      ],
+      buildings: DEMO_MODEL.buildings.map((building, index) => ({
+        ...building,
+        semanticGroupId: extraGroups[index]!.id,
+      })),
+    };
+    const profile = sevenChannelProfile();
+    const sevenAssignments =
+      sevenGroupModel.semanticGroups.map((group, index) => ({
+        semanticGroupId: group.id,
+        channelId: profile.printChannels[index]!.id,
+      }));
+    expect(
+      buildPrintableCity(sevenGroupModel, sevenAssignments, {
+        scale: 3,
+        profile,
+      }).parts,
+    ).toHaveLength(7);
+  });
+
+  it("rejects unsafe scale, build volume, overlap, and assignments", () => {
+    const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
+    expect(() =>
+      buildPrintableCity(DEMO_MODEL, assignments(), {
+        scale: 0,
+        profile,
+      }),
+    ).toThrow(/scale must be a positive/u);
+    expect(() =>
+      buildPrintableCity(DEMO_MODEL, assignments().slice(0, 4), {
+        scale: 3,
+        profile,
+      }),
+    ).toThrow(/Missing print assignment/u);
+
+    const exactBuildVolume: PrinterProfile = {
+      ...profile,
+      id: "exact-build-volume",
+      buildVolume: { x: 93, y: 33, z: 48 },
+    };
+    expect(() =>
+      buildPrintableCity(DEMO_MODEL, assignments(), {
+        scale: 3,
+        profile: exactBuildVolume,
+      }),
+    ).not.toThrow();
+
+    const tooShallow: PrinterProfile = {
+      ...exactBuildVolume,
+      id: "too-shallow",
+      buildVolume: { ...exactBuildVolume.buildVolume, z: 47 },
+    };
+    expect(() =>
+      buildPrintableCity(DEMO_MODEL, assignments(), {
+        scale: 3,
+        profile: tooShallow,
+      }),
+    ).toThrow(/Y size \(48\) exceeds build volume \(47\)/u);
+
+    const tooShort: PrinterProfile = {
+      ...exactBuildVolume,
+      id: "too-short",
+      buildVolume: { ...exactBuildVolume.buildVolume, y: 32 },
+    };
+    expect(() =>
+      buildPrintableCity(DEMO_MODEL, assignments(), {
+        scale: 3,
+        profile: tooShort,
+      }),
+    ).toThrow(/Z size \(33\) exceeds build volume \(32\)/u);
+
+    const overlapModel = {
+      ...DEMO_MODEL,
+      buildings: DEMO_MODEL.buildings.map((building, index) =>
+        index === 1
+          ? {
+              ...building,
+              position: { ...DEMO_MODEL.buildings[0]!.position },
+            }
+          : building,
+      ),
+    };
+    expect(() =>
+      buildPrintableCity(overlapModel, assignments(), {
+        scale: 3,
+        profile,
+      }),
+    ).toThrow(/overlap with positive volume/u);
+
+    expect(() =>
+      buildPrintableCity(DEMO_MODEL, assignments(), {
+        scale: 3,
+        profile: {
+          ...profile,
+          geometryLimits: {
+            ...profile.geometryLimits,
+            minimumWallThickness: 1,
+          },
+        },
+      }),
+    ).toThrow(/Wall thickness .* below profile minimum/u);
+    expect(() =>
+      buildPrintableCity(DEMO_MODEL, assignments(), {
+        scale: 3,
+        profile: {
+          ...profile,
+          geometryLimits: {
+            ...profile.geometryLimits,
+            minimumGap: 1,
+          },
+        },
+      }),
+    ).toThrow(/Minimum gap .* below profile minimum/u);
+  });
+
+  it("rejects unsupported plaque characters instead of changing identity", () => {
+    expect(() =>
+      buildPrintableCity(
+        {
+          ...DEMO_MODEL,
+          identity: {
+            ...DEMO_MODEL.identity!,
+            title: "CØDE CITY",
+          },
+        },
+        assignments(),
+        {
+          scale: 3,
+          profile: createPrusaXLProfile([1, 2, 3, 4, 5]),
+        },
+      ),
+    ).toThrow(/unsupported character 'Ø'/u);
+  });
+
+  it("reports broken winding and disconnected primitives", () => {
+    const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
+    const city = demoCity();
+    const mutable = structuredClone(city);
+    const firstPrimitive = mutable.parts[0]!.primitives[0]!;
+    const firstTriangle = firstPrimitive.mesh.triangles[0]!;
+    const mutableTriangles = firstPrimitive.mesh
+      .triangles as Array<{ a: number; b: number; c: number }>;
+    mutableTriangles[0] = {
+      a: firstTriangle.a,
+      b: firstTriangle.c,
+      c: firstTriangle.b,
+    };
+
+    expect(validatePrintableCity(mutable, profile).join(" ")).toMatch(
+      /not wound outward/u,
+    );
+
+    const disconnected = structuredClone(city);
+    const building = disconnected.parts
+      .flatMap(({ primitives }) => primitives)
+      .find(({ kind }) => kind === "building")!;
+    const mutableBounds = building.bounds as {
+      minimum: { z: number };
+      maximum: { z: number };
+    };
+    mutableBounds.minimum.z += 1;
+    mutableBounds.maximum.z += 1;
+    expect(validatePrintableCity(disconnected, profile).join(" ")).toMatch(
+      /no positive-area face connection/u,
+    );
+  });
+});

@@ -201,6 +201,31 @@ describe("viewer model validation", () => {
     );
   });
 
+  it.each(["red", "#123", "#12345", "#123456789"])(
+    "rejects non-portable semantic color %s",
+    (color) => {
+      expect(() =>
+        validateCityModel({
+          ...DEMO_MODEL,
+          semanticGroups: DEMO_MODEL.semanticGroups.map((group, index) =>
+            index === 0 ? { ...group, color } : group,
+          ),
+        }),
+      ).toThrow(/#RRGGBB or #RRGGBBAA/u);
+    },
+  );
+
+  it("accepts an eight-digit semantic color", () => {
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        semanticGroups: DEMO_MODEL.semanticGroups.map((group, index) =>
+          index === 0 ? { ...group, color: "#11223380" } : group,
+        ),
+      }),
+    ).not.toThrow();
+  });
+
   it("rejects top-level collections beyond viewer safety limits", () => {
     const model = {
       ...DEMO_MODEL,

@@ -12,5 +12,18 @@ isolated worker, and returns derived artifacts.
 
 == Print
 
-`codecity export .` applies a printer profile, validates the mesh, and writes
-STL or 3MF.
+`npm run print:demo` writes a 93 x 48 x 33 mm 3MF. PrusaSlicer imports it as
+one object with five aligned tool parts.
+
+[source,powershell]
+----
+npm run cli -- export `
+  --model examples\demo-city.json `
+  --profile profiles\prusa-xl-5t.json `
+  --format 3mf `
+  --scale 3 `
+  --output build\print\code-city-demo.3mf
+----
+
+STL, FLOW-sized tiling, arbitrary fonts and logos, and slicer settings remain
+separate work.
