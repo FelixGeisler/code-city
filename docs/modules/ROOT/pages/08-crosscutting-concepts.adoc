@@ -2,11 +2,46 @@
 
 == Metric mapping
 
-Directory = district; file = building; SLOC = footprint; complexity = height.
+Directory = district; source file = building.
+
+`SLOC` counts lines containing a non-comment syntax token. An executable unit is
+a method, constructor, accessor, local function, lambda, or top-level block.
+Nested units are measured separately.
+
+`CC(unit) = 1 + decisions`. Count `if`; `for`, `foreach`, `for...in`,
+`for...of`, `while`, and `do`; `catch`; `?:`; each non-default switch arm; and
+each `&&`, `||`, or `??`. C# also counts `when` guards and `and`/`or` patterns.
+Do not count `else`, `default`, `return`, `throw`, `await`, or optional chaining.
+
+[source,text]
+----
+decision_load = sum(CC(unit) - 1)
+sloc_n = clamp(ln(1 + SLOC) / ln(1001), 0, 1)
+cc_n   = clamp(ln(1 + decision_load) / ln(101), 0, 1)
+footprint_area = 16 + 180 * sloc_n
+height = 4 + 36 * cc_n
+----
+
+The inspector exposes raw per-unit CC, file totals, caps, and clamping. Building
+color uses the worst unit: 0-5, 6-10, 11-20, or above 20.
+
+== Dependency routes
+
+`A -> B` means source file A statically depends on a declaration supplied by B.
+Repeated references collapse into one weighted edge; self-edges are omitted.
+
+* Overview: bundle edges by visible district and connect district gateways.
+* Selection: expand incoming and outgoing routes between parcel boundaries.
+* Direction: a chevron points to B, the provider.
+* External: terminate at a city-edge NuGet, npm, assembly, or unresolved gateway.
+* Print: optionally recess bundled district routes into the base.
+
+Routes are filtered and hidden by default. Physical streets remain structural
+gaps between districts, not one street per dependency.
 
 == Determinism
 
-Sort inputs, use stable path IDs, and persist normalization parameters.
+Sort inputs, use stable path IDs, and persist formulas and normalization caps.
 
 == Privacy
 

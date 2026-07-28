@@ -17,7 +17,7 @@ Azure DevOps Server, and local checkouts that can be analyzed fully offline.
 | Source file | Building |
 | Lines of code | Building footprint |
 | Code complexity | Building height |
-| Dependencies | Roads |
+| Dependencies | Directed, weighted routes |
 | Churn or maintenance risk | Color or material |
 
 The browser and print outputs are generated from the same versioned
@@ -42,10 +42,10 @@ codecity export . --format 3mf --profile prusa-xl-5t
 
 ## Initial scope
 
-The first vertical slice will analyze a local TypeScript/JavaScript repository,
-produce a deterministic city model, display it in an interactive Three.js
-viewer, and export a printer-safe model. Public GitHub ingestion and additional
-language analyzers follow on the same core pipeline.
+The first vertical slice will analyze a local repository containing .NET/C#,
+TypeScript, or both; produce a deterministic city model; display it in an
+interactive Three.js viewer; and export a printer-safe model. Public GitHub
+ingestion and additional language analyzers follow on the same core pipeline.
 
 Architecture documentation uses Antora and the concise arc42 structure. Once
 GitHub Pages is enabled, it is published at

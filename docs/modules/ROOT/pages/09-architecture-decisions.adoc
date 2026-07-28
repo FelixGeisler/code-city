@@ -13,6 +13,12 @@
 |Static analysis only
 |Make untrusted repositories safe by default
 
+|Native language front ends
+|Use Roslyn and the TypeScript compiler API behind one fact schema
+
+|Dependency overlay
+|Keep streets structural; show directed, bundled routes on demand
+
 |Local directory as canonical input
 |Keep offline and remote paths identical after materialization
 

@@ -8,7 +8,7 @@
 |Materialize local, GitHub, or generic Git snapshots
 
 |Analyzer
-|Produce source facts and dependencies
+|Run Roslyn and TypeScript plugins; emit shared source facts
 
 |Layout
 |Place districts and buildings deterministically
