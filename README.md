@@ -1,5 +1,7 @@
 # Code City
 
+<img src="apps/viewer/src/code-city-icon.svg" width="64" height="64" alt="Code City icon">
+
 Code City turns a software repository into:
 
 - an interactive 3D city that can be explored in a web browser; and

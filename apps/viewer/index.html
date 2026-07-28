@@ -7,15 +7,21 @@
       name="description"
       content="Explore a Code City model in the browser."
     />
+    <link rel="icon" type="image/svg+xml" href="./src/code-city-icon.svg" />
     <title>Code City Viewer</title>
   </head>
   <body>
     <div id="app">
       <header class="topbar">
         <a class="brand" href="./" aria-label="Reset to the Code City demo">
-          <span class="brand-mark" aria-hidden="true">
-            <i></i><i></i><i></i>
-          </span>
+          <img
+            class="brand-mark"
+            src="./src/code-city-icon.svg"
+            width="34"
+            height="34"
+            alt=""
+            aria-hidden="true"
+          />
           <span>
             <strong>Code City</strong>
             <small>Model viewer</small>
@@ -47,9 +53,14 @@
           </div>
         </div>
 
-        <aside id="inspector" class="panel inspector" aria-live="polite">
+        <div class="viewer-rail">
+        <aside
+          id="inspector"
+          class="panel inspector"
+          aria-labelledby="inspector-title"
+        >
           <div class="panel-heading">
-            <span>Building</span>
+            <h2 id="inspector-title">Building</h2>
             <button
               id="clear-selection"
               class="icon-button"
@@ -64,9 +75,14 @@
           <div id="inspector-empty" class="empty-state">
             Select a building to inspect it.
           </div>
-          <div id="inspector-content" hidden>
-            <h1 id="building-name"></h1>
-            <dl>
+          <div
+            id="inspector-content"
+            tabindex="0"
+            aria-label="Selected building details"
+            hidden
+          >
+            <h3 id="building-name"></h3>
+            <dl class="building-details">
               <div>
                 <dt>Repository</dt>
                 <dd id="building-repository"></dd>
@@ -79,40 +95,84 @@
                 <dt>Path</dt>
                 <dd id="building-path" class="path-value"></dd>
               </div>
-              <div>
+              <div class="metric">
                 <dt>Language</dt>
                 <dd id="building-language"></dd>
               </div>
-              <div>
+              <div class="metric">
                 <dt>SLOC</dt>
                 <dd id="building-sloc"></dd>
               </div>
-              <div>
+              <div class="metric">
                 <dt>Decision load</dt>
                 <dd id="building-load"></dd>
               </div>
-              <div>
-                <dt>Maximum CC</dt>
+              <div class="metric">
+                <dt>Max complexity</dt>
                 <dd id="building-cc"></dd>
               </div>
               <div class="wide">
                 <dt>Metric method</dt>
                 <dd id="building-metric-method"></dd>
               </div>
-              <div class="wide">
-                <dt>Executable units</dt>
-                <dd id="building-units"></dd>
-              </div>
             </dl>
+
+            <section
+              class="units-section"
+              aria-labelledby="executable-units-title"
+            >
+              <div class="units-heading">
+                <h3 id="executable-units-title">Executable units</h3>
+                <span id="building-unit-count" class="unit-count">0</span>
+              </div>
+              <p id="building-units-empty" class="units-empty">
+                Not recorded
+              </p>
+              <details id="building-units-details" hidden>
+                <summary id="building-units-summary"></summary>
+                <div class="unit-table-wrap">
+                  <table class="unit-table">
+                    <caption
+                      id="building-units-caption"
+                      class="visually-hidden"
+                    ></caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">Unit</th>
+                        <th scope="col">Complexity</th>
+                        <th scope="col">Line</th>
+                      </tr>
+                    </thead>
+                    <tbody id="building-units"></tbody>
+                  </table>
+                </div>
+              </details>
+            </section>
           </div>
         </aside>
 
-        <section class="panel legend-panel" aria-label="Semantic groups">
+        <section
+          class="panel legend-panel"
+          aria-labelledby="legend-title"
+        >
           <div class="panel-heading">
-            <span>Groups</span>
+            <h2 id="legend-title">Groups</h2>
           </div>
-          <div id="legend" class="legend"></div>
+          <ul
+            id="legend"
+            class="legend"
+            tabindex="0"
+            aria-label="Semantic groups"
+          ></ul>
         </section>
+        </div>
+
+        <p
+          id="selection-status"
+          class="visually-hidden"
+          role="status"
+          aria-live="polite"
+        ></p>
 
         <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
 

@@ -57,9 +57,9 @@ describe("documented metric mapping", () => {
   });
 
   it("uses the documented logarithmic formulas and caps", () => {
-    expect(buildingFootprintArea(0)).toBe(16);
-    expect(buildingFootprintArea(1_000)).toBeCloseTo(196, 12);
-    expect(buildingFootprintArea(10_000)).toBeCloseTo(196, 12);
+    expect(buildingFootprintArea(0)).toBe(9);
+    expect(buildingFootprintArea(1_000)).toBeCloseTo(324, 12);
+    expect(buildingFootprintArea(10_000)).toBeCloseTo(324, 12);
     expect(buildingHeight(0)).toBe(4);
     expect(buildingHeight(100)).toBeCloseTo(40, 12);
     expect(buildingHeight(1_000)).toBeCloseTo(40, 12);
@@ -68,10 +68,29 @@ describe("documented metric mapping", () => {
       sloc: 1_001,
       decisionLoad: 101,
     });
-    expect(geometry.size.x * geometry.size.z).toBeCloseTo(196, 12);
+    expect(geometry.size.x * geometry.size.z).toBeCloseTo(324, 12);
     expect(geometry.size.y).toBeCloseTo(40, 12);
     expect(geometry.slocClamped).toBe(true);
     expect(geometry.decisionLoadClamped).toBe(true);
+  });
+
+  it("keeps small files printable while separating large footprints", () => {
+    const tiny = calculateBuildingGeometry({
+      sloc: 1,
+      decisionLoad: 0,
+    });
+    const typical = calculateBuildingGeometry({
+      sloc: 16,
+      decisionLoad: 0,
+    });
+    const large = calculateBuildingGeometry({
+      sloc: 793,
+      decisionLoad: 0,
+    });
+
+    expect(tiny.size.x).toBeGreaterThan(3);
+    expect(typical.size.x).toBeGreaterThan(tiny.size.x);
+    expect(large.size.x / tiny.size.x).toBeGreaterThan(4);
   });
 
   it("rejects invalid counts", () => {

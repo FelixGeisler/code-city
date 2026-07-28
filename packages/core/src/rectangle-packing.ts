@@ -30,6 +30,7 @@ interface PackingBounds {
 }
 
 const EXACT_BREAKPOINT_LIMIT = 256;
+const CORNER_PACKING_LIMIT = 64;
 
 function compare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -104,6 +105,19 @@ function packAtWidth(
   };
 }
 
+function isSeparated(
+  left: PackedRectangle,
+  right: PackedRectangle,
+  gap: number,
+): boolean {
+  return (
+    left.x + left.width + gap <= right.x ||
+    right.x + right.width + gap <= left.x ||
+    left.z + left.depth + gap <= right.z ||
+    right.z + right.depth + gap <= left.z
+  );
+}
+
 function isBetter(
   candidate: PackingBounds,
   current: PackingBounds,
@@ -127,6 +141,92 @@ function isBetter(
     }
   }
   return false;
+}
+
+function hasEqualScore(
+  left: PackingBounds,
+  right: PackingBounds,
+): boolean {
+  return !isBetter(left, right) && !isBetter(right, left);
+}
+
+/**
+ * Places each rectangle at a corner formed by the origin or an already placed
+ * edge. Unlike shelves, this can reuse the L-shaped spaces beside and behind
+ * rectangles of different depths.
+ */
+function packAtCorners(
+  ordered: readonly PackingRectangle[],
+  gap: number,
+): RectanglePacking {
+  const placed: PackedRectangle[] = [];
+  let width = 0;
+  let depth = 0;
+
+  for (const rectangle of ordered) {
+    const candidateXs = [
+      ...new Set([
+        0,
+        ...placed.map(
+          (candidate) => candidate.x + candidate.width + gap,
+        ),
+      ]),
+    ].sort((left, right) => left - right);
+    const candidateZs = [
+      ...new Set([
+        0,
+        ...placed.map(
+          (candidate) => candidate.z + candidate.depth + gap,
+        ),
+      ]),
+    ].sort((left, right) => left - right);
+
+    let best:
+      | {
+          readonly rectangle: PackedRectangle;
+          readonly bounds: PackingBounds;
+        }
+      | undefined;
+    for (const x of candidateXs) {
+      for (const z of candidateZs) {
+        const candidate = { ...rectangle, x, z };
+        if (
+          !placed.every((existing) =>
+            isSeparated(candidate, existing, gap),
+          )
+        ) {
+          continue;
+        }
+        const bounds = {
+          width: Math.max(width, x + rectangle.width),
+          depth: Math.max(depth, z + rectangle.depth),
+        };
+        if (
+          best === undefined ||
+          isBetter(bounds, best.bounds) ||
+          (hasEqualScore(bounds, best.bounds) &&
+            (z < best.rectangle.z ||
+              (z === best.rectangle.z && x < best.rectangle.x)))
+        ) {
+          best = { rectangle: candidate, bounds };
+        }
+      }
+    }
+
+    // Placing above every existing rectangle is always a valid candidate.
+    if (best === undefined) {
+      throw new Error("Unable to find a finite rectangle placement.");
+    }
+    placed.push(best.rectangle);
+    width = best.bounds.width;
+    depth = best.bounds.depth;
+  }
+
+  return {
+    rectangles: placed.sort((left, right) => compare(left.id, right.id)),
+    width,
+    depth,
+  };
 }
 
 function attainableWidths(
@@ -169,9 +269,11 @@ function boundedWidths(
 }
 
 /**
- * Deterministically packs non-rotated rectangles into next-fit shelves. It
- * minimizes longest side, then area and imbalance. Up to 256 rectangles use all
- * attainable widths; larger inputs use bounded prefix and suffix breakpoints.
+ * Deterministically packs non-rotated rectangles while minimizing longest
+ * side, then area and imbalance. Small inputs compare corner-filling passes
+ * with a next-fit shelf baseline. Larger inputs retain bounded-cost shelves.
+ * Up to 256 rectangles use all attainable shelf widths; larger inputs use
+ * bounded prefix and suffix breakpoints.
  */
 export function packRectangles(
   rectangles: readonly PackingRectangle[],
@@ -231,5 +333,20 @@ export function packRectangles(
       bestTargetWidth = candidateWidth;
     }
   }
-  return packAtWidth(ordered, gap, bestTargetWidth);
+  let result = packAtWidth(ordered, gap, bestTargetWidth);
+  if (ordered.length <= CORNER_PACKING_LIMIT) {
+    const widthOrdered = [...validated].sort(
+      (left, right) =>
+        right.width - left.width ||
+        right.depth - left.depth ||
+        compare(left.id, right.id),
+    );
+    for (const cornerOrder of [ordered, widthOrdered]) {
+      const candidate = packAtCorners(cornerOrder, gap);
+      if (isBetter(candidate, result)) {
+        result = candidate;
+      }
+    }
+  }
+  return result;
 }
