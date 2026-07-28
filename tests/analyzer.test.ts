@@ -196,6 +196,11 @@ EndProject
     );
     await fixtureFile(
       hub,
+      "App/Ignored.g.i.cs",
+      `class GeneratedIntermediate { void Bad() { if (true) {} } }`,
+    );
+    await fixtureFile(
+      hub,
       "angular.json",
       JSON.stringify({
         version: 1,
@@ -215,8 +220,41 @@ EndProject
       `export function helper() { return true; }`,
     );
     await fixtureFile(hub, "loose.js", `export const loose = true;`);
-    await fixtureFile(hub, "node_modules/ignored.ts", `if (true) {}`);
-    await fixtureFile(hub, "dist/ignored.js", `if (true) {}`);
+    await fixtureFile(hub, ".git/ignored-git.ts", `if (true) {}`);
+    await fixtureFile(
+      hub,
+      ".angular/cache/vite/deps/chart__js.js",
+      `if (true) {}`,
+    );
+    await fixtureFile(
+      hub,
+      ".AnGuLaR/cache/ignored-angular-case.ts",
+      `if (true) {}`,
+    );
+    await fixtureFile(
+      hub,
+      "node_modules/ignored-node-modules.ts",
+      `if (true) {}`,
+    );
+    await fixtureFile(hub, "bin/ignored-bin.cs", `if (true) {}`);
+    await fixtureFile(hub, "obj/ignored-obj.cs", `if (true) {}`);
+    await fixtureFile(hub, "dist/ignored-dist.js", `if (true) {}`);
+    await fixtureFile(hub, "build/ignored-build.ts", `if (true) {}`);
+    await fixtureFile(
+      hub,
+      "coverage/ignored-coverage.js",
+      `if (true) {}`,
+    );
+    await fixtureFile(
+      hub,
+      "src/building/LegitimateBuilding.ts",
+      `export const building = true;`,
+    );
+    await fixtureFile(
+      hub,
+      "DTO/TestResults/LegitimateResult.cs",
+      `public sealed class LegitimateResult {}`,
+    );
 
     await fixtureFile(
       client,
@@ -260,8 +298,32 @@ EndProject
     expect(first.buildings.some(({ name }) => name === "Ignored.g.cs")).toBe(
       false,
     );
+    const buildingNames = new Set(
+      first.buildings.map(({ name }) => name),
+    );
+    for (const excludedName of [
+      "Ignored.g.i.cs",
+      "ignored-git.ts",
+      "chart__js.js",
+      "ignored-angular-case.ts",
+      "ignored-node-modules.ts",
+      "ignored-bin.cs",
+      "ignored-obj.cs",
+      "ignored-dist.js",
+      "ignored-build.ts",
+      "ignored-coverage.js",
+    ]) {
+      expect(buildingNames.has(excludedName), excludedName).toBe(false);
+    }
     expect(first.buildings.map(({ name }) => name)).toEqual(
-      expect.arrayContaining(["Program.cs", "main.ts", "helper.ts", "loose.js"]),
+      expect.arrayContaining([
+        "Program.cs",
+        "main.ts",
+        "helper.ts",
+        "loose.js",
+        "LegitimateBuilding.ts",
+        "LegitimateResult.cs",
+      ]),
     );
     expect(first.buildings.find(({ name }) => name === "Program.cs")).toEqual(
       expect.objectContaining({
