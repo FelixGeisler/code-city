@@ -131,6 +131,11 @@ button,
 .search-input:focus-visible,
 .search-result button:focus-visible,
 .search-result-button:focus-visible,
+.district-routes-toggle:focus-visible,
+.district-route-filter:focus-visible,
+.district-route-button:focus-visible,
+.district-routes-list:focus-visible,
+.district-route-contributors:focus-visible,
 .dependency-toggle:focus-visible,
 .dependency-result-button:focus-visible,
 .dependency-list:focus-visible {
@@ -421,6 +426,268 @@ button,
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 7px;
   padding-top: 3px;
+  border-top: 1px solid rgba(148, 188, 226, 0.12);
+}
+
+.district-routes-panel {
+  width: 100%;
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+
+.district-routes-toggle {
+  min-height: 25px;
+  padding: 0 8px;
+  border: 1px solid rgba(148, 188, 226, 0.22);
+  border-radius: 6px;
+  color: #cfe0ee;
+  background: rgba(14, 31, 49, 0.66);
+  font: inherit;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.district-routes-toggle:not(:disabled):hover {
+  border-color: rgba(121, 196, 255, 0.48);
+  color: #f4faff;
+}
+
+.district-routes-toggle[aria-expanded="true"] {
+  border-color: rgba(121, 196, 255, 0.58);
+  color: #f4faff;
+  background: rgba(54, 163, 255, 0.16);
+}
+
+.district-routes-toggle:disabled,
+.district-route-filter:disabled {
+  cursor: default;
+  opacity: 0.38;
+}
+
+.district-routes-body {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px 12px;
+}
+
+.district-route-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.district-route-filter {
+  min-width: 0;
+  min-height: 33px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  padding: 0 7px;
+  border: 1px solid rgba(148, 188, 226, 0.18);
+  border-radius: 7px;
+  color: var(--muted);
+  background: rgba(14, 31, 49, 0.52);
+  font: inherit;
+  font-size: 9px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.district-route-filter:not(:disabled):hover {
+  border-color: rgba(121, 196, 255, 0.4);
+}
+
+.district-route-filter[aria-pressed="false"] {
+  opacity: 0.52;
+}
+
+.district-route-filter[data-kind="typescript"][aria-pressed="true"] {
+  border-color: rgba(56, 189, 248, 0.48);
+  color: #7dd3fc;
+  background: rgba(56, 189, 248, 0.1);
+}
+
+.district-route-filter[data-kind="project"][aria-pressed="true"] {
+  border-color: rgba(167, 139, 250, 0.48);
+  color: #c4b5fd;
+  background: rgba(167, 139, 250, 0.1);
+}
+
+.district-route-filter[data-kind="package"][aria-pressed="true"] {
+  border-color: rgba(74, 222, 128, 0.44);
+  color: #86efac;
+  background: rgba(74, 222, 128, 0.09);
+}
+
+.district-route-count {
+  min-width: 18px;
+  padding: 1px 5px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  color: inherit;
+  background: rgba(5, 15, 27, 0.44);
+  line-height: 1.35;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.9;
+}
+
+.district-routes-status {
+  min-height: 15px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.district-routes-list {
+  max-height: 154px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid rgba(148, 188, 226, 0.13);
+  border-radius: 8px;
+  background: rgba(6, 17, 30, 0.36);
+  scrollbar-gutter: stable;
+  list-style: none;
+}
+
+.district-route-item + .district-route-item,
+.district-routes-list > li + li {
+  border-top: 1px solid rgba(148, 188, 226, 0.1);
+}
+
+.district-route-button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 9px;
+  padding: 8px 9px;
+  border: 0;
+  color: #eaf4fd;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.district-route-button:hover,
+.district-route-button[aria-current="true"],
+.district-route-button[aria-selected="true"] {
+  background: rgba(121, 196, 255, 0.08);
+}
+
+.district-route-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.district-route-weight {
+  color: #d5e7f5;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.district-route-kind {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.district-route-kind[data-kind="typescript"] {
+  color: #7dd3fc;
+}
+
+.district-route-kind[data-kind="project"] {
+  color: #c4b5fd;
+}
+
+.district-route-kind[data-kind="package"] {
+  color: #86efac;
+}
+
+.district-route-button[data-external="true"] .district-route-name,
+.district-route-button[data-external="true"] .district-route-kind,
+.district-route-kind[data-external="true"] {
+  color: #fbbf24;
+}
+
+.district-route-details {
+  max-height: 230px;
+  padding: 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid rgba(148, 188, 226, 0.14);
+  border-radius: 8px;
+  background: rgba(17, 35, 55, 0.58);
+  scrollbar-gutter: stable;
+}
+
+.district-route-details h3,
+.district-route-details h4 {
+  margin: 0;
+  color: #dcecff;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.district-route-details h3 {
+  font-size: 12px;
+}
+
+.district-route-details h4 {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.district-route-detail-summary,
+.district-route-detail-kinds {
+  margin: 5px 0 0;
+  color: #cbddeb;
+  font-size: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.district-route-detail-kinds {
+  color: var(--muted);
+}
+
+.district-route-contributors {
+  max-height: 82px;
+  margin: 6px 0 0;
+  padding: 0 0 0 17px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  color: #cbddeb;
+  font-size: 9px;
+  line-height: 1.45;
+  scrollbar-gutter: stable;
+}
+
+.district-route-contributors li {
+  overflow-wrap: anywhere;
+}
+
+.district-route-isolation-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 10px;
+  padding-top: 9px;
   border-top: 1px solid rgba(148, 188, 226, 0.12);
 }
 
@@ -1028,6 +1295,18 @@ button,
     max-height: 160px;
   }
 
+  .district-routes-body {
+    padding: 9px 10px 10px;
+  }
+
+  .district-routes-list {
+    max-height: 120px;
+  }
+
+  .district-route-details {
+    max-height: 190px;
+  }
+
   .dependency-result-button {
     grid-template-columns: 58px minmax(0, 1fr);
     padding: 8px;
@@ -1072,6 +1351,13 @@ button,
 
   .button {
     padding: 0 9px;
+  }
+
+  .district-route-filter {
+    display: grid;
+    justify-items: center;
+    gap: 2px;
+    padding: 4px;
   }
 }
 

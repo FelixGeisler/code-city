@@ -205,6 +205,71 @@ describe("DependencyRouteOverlay lifecycle", () => {
     overlay.dispose();
   });
 
+  it("supports a named overview layer with explicit colors and emphasis", () => {
+    const scene = new THREE.Scene();
+    const overlay = new DependencyRouteOverlay(
+      scene,
+      "code-city:district-dependency-routes",
+    );
+    const color = "#22c55e";
+    overlay.replace([
+      dependencyRoute({
+        id: "normal",
+        color,
+      }),
+      dependencyRoute({
+        id: "selected",
+        color,
+        emphasized: true,
+        consumer: { x: 0, y: 1, z: 2 },
+        provider: { x: 10, y: 1, z: 2 },
+      }),
+    ]);
+
+    expect(overlay.object.name).toBe(
+      "code-city:district-dependency-routes",
+    );
+    expect(overlay.object.children).toHaveLength(2);
+
+    const arrows = arrowMesh(overlay);
+    const normalColor = new THREE.Color();
+    const selectedColor = new THREE.Color();
+    arrows.getColorAt(0, normalColor);
+    arrows.getColorAt(1, selectedColor);
+    expect(normalColor.getHexString()).toBe(
+      new THREE.Color(color).getHexString(),
+    );
+    expect(selectedColor.getHexString()).toBe(normalColor.getHexString());
+    expect(instanceScale(arrows, 1)).toBeGreaterThan(
+      instanceScale(arrows, 0),
+    );
+
+    const lines = routeLines(overlay);
+    const colors = lines.geometry.getAttribute("color");
+    const expected = new THREE.Color(color).multiplyScalar(
+      dependencyWeightCue(1).lineIntensity,
+    );
+    expect(colors.getX(0)).toBeCloseTo(expected.r, 6);
+    expect(colors.getY(0)).toBeCloseTo(expected.g, 6);
+    expect(colors.getZ(0)).toBeCloseTo(expected.b, 6);
+
+    overlay.replace([
+      dependencyRoute({
+        id: "bounded-emphasis",
+        color,
+        emphasized: true,
+        provider: { x: 1_000_000, y: 1, z: 0 },
+        weight: Number.MAX_VALUE,
+      }),
+    ]);
+    expect(instanceScale(arrowMesh(overlay), 0)).toBeCloseTo(1.92, 6);
+
+    overlay.dispose();
+    expect(
+      () => new DependencyRouteOverlay(scene, "   "),
+    ).toThrow(/name/u);
+  });
+
   it("disposes replaced geometry and supports idempotent clear/dispose", () => {
     const scene = new THREE.Scene();
     const overlay = new DependencyRouteOverlay(scene);
@@ -305,8 +370,30 @@ function arrowMesh(
   return mesh;
 }
 
+function routeLines(
+  overlay: DependencyRouteOverlay,
+): THREE.LineSegments {
+  const lines = overlay.object.getObjectByName(
+    "code-city:dependency-route-lines",
+  );
+  if (!(lines instanceof THREE.LineSegments)) {
+    throw new Error("Expected dependency route lines.");
+  }
+  return lines;
+}
+
 function instancePosition(mesh: THREE.InstancedMesh): THREE.Vector3 {
   const matrix = new THREE.Matrix4();
   mesh.getMatrixAt(0, matrix);
   return new THREE.Vector3().setFromMatrixPosition(matrix);
+}
+
+function instanceScale(mesh: THREE.InstancedMesh, index: number): number {
+  const matrix = new THREE.Matrix4();
+  const position = new THREE.Vector3();
+  const quaternion = new THREE.Quaternion();
+  const scale = new THREE.Vector3();
+  mesh.getMatrixAt(index, matrix);
+  matrix.decompose(position, quaternion, scale);
+  return scale.x;
 }
