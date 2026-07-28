@@ -104,6 +104,17 @@ export interface CityIdentityPanel {
   readonly reliefDepth: number;
 }
 
+/**
+ * One connected lower layer beneath the district parcels. Its exposed surface
+ * in configured district and repository gaps forms the physical roads.
+ */
+export interface CityBase {
+  readonly id: string;
+  readonly semanticGroupId: "base";
+  readonly position: Vector3;
+  readonly size: Vector3;
+}
+
 export interface CityDistrict {
   readonly id: string;
   readonly repositoryId: string;
@@ -169,6 +180,11 @@ export interface CityModel {
   };
   readonly identity?: CityIdentity;
   readonly identityPanel?: CityIdentityPanel;
+  /**
+   * Optional for compatibility with schema-1.0 models created before the
+   * shared-base extension.
+   */
+  readonly base?: CityBase;
   readonly districts: readonly CityDistrict[];
   readonly buildings: readonly CityBuilding[];
   readonly dependencies: readonly CityDependency[];

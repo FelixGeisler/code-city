@@ -39,8 +39,12 @@ describe("viewer model validation", () => {
   });
 
   it("accepts a deterministic empty-city result", () => {
+    const {
+      base: _base,
+      ...demoWithoutBase
+    } = DEMO_MODEL;
     const model = {
-      ...DEMO_MODEL,
+      ...demoWithoutBase,
       districts: [],
       buildings: [],
       dependencies: [],
@@ -48,6 +52,134 @@ describe("viewer model validation", () => {
     };
 
     expect(validateCityModel(model)).toBe(model);
+  });
+
+  it("accepts legacy schema-1.0 models without explicit base geometry", () => {
+    const {
+      base: _base,
+      ...legacyModel
+    } = DEMO_MODEL;
+
+    expect(validateCityModel(legacyModel)).toBe(legacyModel);
+  });
+
+  it("validates shared-base semantics and geometry", () => {
+    expect(validateCityModel(DEMO_MODEL)).toBe(DEMO_MODEL);
+    const base = DEMO_MODEL.base!;
+    const panel = DEMO_MODEL.identityPanel!;
+    expect(panel.size.x).toBeLessThan(base.size.x);
+    expect(panel.position.x).toBe(base.position.x);
+    expect(
+      Math.min(
+        base.position.y + base.size.y / 2,
+        panel.position.y + panel.size.y / 2,
+      ) -
+        Math.max(
+          base.position.y - base.size.y / 2,
+          panel.position.y - panel.size.y / 2,
+        ),
+    ).toBeGreaterThan(0);
+    expect(
+      panel.position.z - panel.size.z / 2 - panel.reliefDepth,
+    ).toBeGreaterThanOrEqual(base.position.z - base.size.z / 2);
+
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        base: {
+          ...DEMO_MODEL.base!,
+          semanticGroupId: "identity",
+        },
+      }),
+    ).toThrow(/base\.semanticGroupId must be "base"/u);
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        semanticGroups: DEMO_MODEL.semanticGroups.filter(
+          ({ id }) => id !== "base",
+        ),
+      }),
+    ).toThrow(/base\.semanticGroupId references unknown id "base"/u);
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        base: {
+          ...DEMO_MODEL.base!,
+          size: { ...DEMO_MODEL.base!.size, y: 0 },
+        },
+      }),
+    ).toThrow(/base\.size components must be greater than zero/u);
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        base: {
+          ...base,
+          size: { ...base.size, x: base.size.x - 1 },
+        },
+      }),
+    ).toThrow(/base\.size\.x\/z must equal bounds\.x\/z/u);
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        base: {
+          ...base,
+          position: { ...base.position, x: base.position.x + 100 },
+        },
+      }),
+    ).toThrow(/base must horizontally cover districts\[0\]/u);
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        base: {
+          ...base,
+          position: { ...base.position, y: base.position.y + 2 },
+        },
+      }),
+    ).toThrow(/base must overlap districts\[0\] from below/u);
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        identityPanel: {
+          ...panel,
+          position: { ...panel.position, x: panel.position.x + 100 },
+        },
+      }),
+    ).toThrow(/base must horizontally cover identityPanel and its relief/u);
+  });
+
+  it("requires buildings to sit inside and directly on their districts", () => {
+    const firstBuilding = DEMO_MODEL.buildings[0]!;
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        buildings: DEMO_MODEL.buildings.map((building, index) =>
+          index === 0
+            ? {
+                ...building,
+                position: { ...building.position, x: 0 },
+              }
+            : building,
+        ),
+      }),
+    ).toThrow(
+      /buildings\[0\] must be horizontally contained by its referenced district/u,
+    );
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        buildings: DEMO_MODEL.buildings.map((building, index) =>
+          index === 0
+            ? {
+                ...building,
+                position: {
+                  ...firstBuilding.position,
+                  y: firstBuilding.position.y + 1,
+                },
+              }
+            : building,
+        ),
+      }),
+    ).toThrow(/buildings\[0\] must rest on its referenced district/u);
   });
 
   it.each([

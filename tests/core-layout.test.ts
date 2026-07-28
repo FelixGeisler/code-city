@@ -104,6 +104,19 @@ describe("deterministic city layout", () => {
 
   it("creates centered Y-up districts/buildings and stable normalized output", () => {
     const result = layoutCity(input);
+    expect(result.base).toMatchObject({
+      semanticGroupId: "base",
+      position: {
+        x: result.bounds.x / 2,
+        y: DEFAULT_LAYOUT_OPTIONS.cityBaseHeight / 2,
+        z: result.bounds.z / 2,
+      },
+      size: {
+        x: result.bounds.x,
+        y: DEFAULT_LAYOUT_OPTIONS.cityBaseHeight,
+        z: result.bounds.z,
+      },
+    });
     expect(result.districts).toHaveLength(3);
     expect(result.buildings).toHaveLength(2);
     expect(result.districts.map(({ moduleId }) => moduleId)).toEqual([
@@ -114,9 +127,21 @@ describe("deterministic city layout", () => {
     expect(result.buildings[0]?.path).toBe("src/app/main.ts");
     expect(result.buildings[0]?.semanticGroupId).toBe("risk-low");
     expect(result.buildings[1]?.risk).toBe("moderate");
+    const baseTop =
+      result.base!.position.y + result.base!.size.y / 2;
+    const frontageDepth =
+      DEFAULT_LAYOUT_OPTIONS.identityReliefDepth +
+      DEFAULT_LAYOUT_OPTIONS.identityPanelDepth +
+      DEFAULT_LAYOUT_OPTIONS.identityPanelGap;
     for (const district of result.districts) {
       expect(district.position.y).toBe(district.size.y / 2);
-      expect(district.position.z - district.size.z / 2).toBeGreaterThanOrEqual(5);
+      expect(
+        district.position.z - district.size.z / 2,
+      ).toBeGreaterThanOrEqual(frontageDepth - 1e-12);
+      expect(district.position.y - district.size.y / 2).toBeLessThan(baseTop);
+      expect(district.position.y + district.size.y / 2).toBeGreaterThan(
+        baseTop,
+      );
     }
     for (const building of result.buildings) {
       expect(building.position.y).toBe(1 + building.size.y / 2);
@@ -129,13 +154,32 @@ describe("deterministic city layout", () => {
     expect(result.identityPanel).toMatchObject({
       edge: "front",
       semanticGroupId: "identity",
-      position: { y: 5, z: 1.6 },
-      size: { y: 10, z: 2 },
+      position: {
+        x: result.bounds.x / 2,
+        y: DEFAULT_LAYOUT_OPTIONS.identityPanelHeight / 2,
+        z:
+          DEFAULT_LAYOUT_OPTIONS.identityReliefDepth +
+          DEFAULT_LAYOUT_OPTIONS.identityPanelDepth / 2,
+      },
+      size: {
+        x: DEFAULT_LAYOUT_OPTIONS.identityPanelWidth,
+        y: DEFAULT_LAYOUT_OPTIONS.identityPanelHeight,
+        z: DEFAULT_LAYOUT_OPTIONS.identityPanelDepth,
+      },
       relief: "embossed",
-      reliefDepth: 0.6,
+      reliefDepth: DEFAULT_LAYOUT_OPTIONS.identityReliefDepth,
     });
-    expect(result.identityPanel?.size.x).toBe(result.bounds.x);
-    expect(result.bounds.y).toBeGreaterThanOrEqual(10);
+    expect(result.identityPanel!.size.x).toBeLessThanOrEqual(result.bounds.x);
+    expect(
+      result.base!.position.z - result.base!.size.z / 2,
+    ).toBeCloseTo(0, 12);
+    expect(
+      result.identityPanel!.position.y -
+        result.identityPanel!.size.y / 2,
+    ).toBeLessThan(result.base!.position.y + result.base!.size.y / 2);
+    expect(result.bounds.y).toBeGreaterThanOrEqual(
+      DEFAULT_LAYOUT_OPTIONS.identityPanelHeight,
+    );
     expect(
       result.identityPanel!.position.z -
         result.identityPanel!.size.z / 2 -
@@ -151,6 +195,7 @@ describe("deterministic city layout", () => {
     const result = layoutCity(inputWithoutIdentity);
     expect(result.identity).toBeUndefined();
     expect(result.identityPanel).toBeUndefined();
+    expect(result.base).toBeDefined();
     expect(
       Math.min(
         ...result.districts.map(
@@ -178,7 +223,72 @@ describe("deterministic city layout", () => {
 
     expect(result.districts).toHaveLength(1);
     expect(result.buildings).toHaveLength(0);
+    expect(result.base?.size.y).toBe(DEFAULT_LAYOUT_OPTIONS.cityBaseHeight);
     expect(result.bounds.y).toBe(1);
+  });
+
+  it("supports identity-only and fully empty cities", () => {
+    const identityOnly = layoutCity({
+      repositories: [],
+      modules: [],
+      buildings: [],
+      identity: { title: "Code City" },
+    });
+    expect(identityOnly.base).toMatchObject({
+      semanticGroupId: "base",
+      size: {
+        x: DEFAULT_LAYOUT_OPTIONS.identityPanelWidth,
+        y: DEFAULT_LAYOUT_OPTIONS.cityBaseHeight,
+      },
+    });
+    expect(identityOnly.base?.size.z).toBe(identityOnly.bounds.z);
+
+    const empty = layoutCity({
+      repositories: [],
+      modules: [],
+      buildings: [],
+    });
+    expect(empty.base).toBeUndefined();
+    expect(empty.bounds).toEqual({ x: 0, y: 0, z: 0 });
+  });
+
+  it("validates and applies a custom shared-base height", () => {
+    const result = layoutCity(
+      {
+        repositories: [{ id: "repo", name: "Repository" }],
+        modules: [
+          {
+            id: "module",
+            repositoryId: "repo",
+            kind: "unassigned",
+            name: "Module",
+            path: ".",
+            solutionIds: [],
+          },
+        ],
+        buildings: [],
+      },
+      { cityBaseHeight: 0.25 },
+    );
+    expect(result.base?.size.y).toBe(0.25);
+
+    expect(() => layoutCity(input, { cityBaseHeight: 0 })).toThrow(
+      /cityBaseHeight/u,
+    );
+    expect(() => layoutCity(input, { cityBaseHeight: 1 })).toThrow(
+      /less than districtBaseHeight/u,
+    );
+    expect(() =>
+      layoutCity(
+        {
+          repositories: [],
+          modules: [],
+          buildings: [],
+          identity: { title: "Code City" },
+        },
+        { identityPanelHeight: DEFAULT_LAYOUT_OPTIONS.cityBaseHeight },
+      ),
+    ).toThrow(/identityPanelHeight must be greater than cityBaseHeight/u);
   });
 
   it("packs heterogeneous districts by their actual footprints", () => {
@@ -235,6 +345,13 @@ describe("deterministic city layout", () => {
     );
     expect(result.bounds.x).toBeLessThan(legacyWidth);
     expect(result.bounds.z).toBeLessThan(legacyDepth);
+    expect(result.base?.size).toMatchObject({
+      x: result.bounds.x,
+      z: result.bounds.z,
+    });
+    expect(occupiedArea).toBeLessThan(
+      result.base!.size.x * result.base!.size.z,
+    );
     expect(occupiedArea / (result.bounds.x * result.bounds.z)).toBeGreaterThan(
       0.6,
     );

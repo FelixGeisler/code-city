@@ -46,6 +46,12 @@ export const DEMO_MODEL: CityModel = {
   ],
   semanticGroups: [
     {
+      id: "base",
+      label: "Base",
+      color: "#6B7280",
+      priority: 100,
+    },
+    {
       id: "identity",
       label: "Identity",
       color: "#78d6c6",
@@ -78,10 +84,16 @@ export const DEMO_MODEL: CityModel = {
     id: "identity-panel:demo",
     edge: "front",
     semanticGroupId: "identity",
-    position: { x: 0, y: 1.5, z: -7 },
+    position: { x: -0.5, y: 1.5, z: -7.4 },
     size: { x: 8, y: 2.5, z: 0.8 },
     relief: "embossed",
     reliefDepth: 0.16,
+  },
+  base: {
+    id: "base:demo",
+    semanticGroupId: "base",
+    position: { x: -0.5, y: 0.25, z: 0 },
+    size: { x: 31, y: 0.5, z: 16 },
   },
   districts: [
     {
@@ -218,5 +230,5 @@ export const DEMO_MODEL: CityModel = {
       weight: 1,
     },
   ],
-  bounds: { x: 30, y: 12, z: 16 },
+  bounds: { x: 31, y: 12, z: 16 },
 };

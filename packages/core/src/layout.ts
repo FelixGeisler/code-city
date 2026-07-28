@@ -5,6 +5,7 @@ import {
   validateSourceMetrics,
 } from "./metrics.js";
 import type {
+  CityBase,
   CityBuilding,
   CityDistrict,
   CityIdentity,
@@ -45,18 +46,20 @@ export interface LayoutOptions {
   readonly districtPadding: number;
   readonly districtGap: number;
   readonly repositoryGap: number;
+  readonly cityBaseHeight: number;
   readonly districtBaseHeight: number;
   readonly minimumDistrictSize: number;
   readonly identityPanelHeight: number;
   readonly identityPanelDepth: number;
   readonly identityPanelGap: number;
   readonly identityReliefDepth: number;
-  readonly minimumIdentityPanelWidth: number;
+  readonly identityPanelWidth: number;
 }
 
 export interface CityLayoutResult {
   readonly identity?: CityIdentity;
   readonly identityPanel?: CityIdentityPanel;
+  readonly base?: CityBase;
   readonly districts: readonly CityDistrict[];
   readonly buildings: readonly CityBuilding[];
   readonly bounds: Vector3;
@@ -67,13 +70,14 @@ export const DEFAULT_LAYOUT_OPTIONS: Readonly<LayoutOptions> = Object.freeze({
   districtPadding: 4,
   districtGap: 8,
   repositoryGap: 16,
+  cityBaseHeight: 0.5,
   districtBaseHeight: 1,
   minimumDistrictSize: 12,
-  identityPanelHeight: 10,
-  identityPanelDepth: 2,
-  identityPanelGap: 3,
-  identityReliefDepth: 0.6,
-  minimumIdentityPanelWidth: 40,
+  identityPanelHeight: 6,
+  identityPanelDepth: 1.2,
+  identityPanelGap: 2,
+  identityReliefDepth: 0.4,
+  identityPanelWidth: 40,
 });
 
 interface LocalBuilding {
@@ -124,15 +128,26 @@ function normalizeOptions(options: Partial<LayoutOptions>): LayoutOptions {
   positive(merged.districtPadding, "districtPadding", true);
   positive(merged.districtGap, "districtGap", true);
   positive(merged.repositoryGap, "repositoryGap", true);
+  positive(merged.cityBaseHeight, "cityBaseHeight");
   positive(merged.districtBaseHeight, "districtBaseHeight");
   positive(merged.minimumDistrictSize, "minimumDistrictSize");
   positive(merged.identityPanelHeight, "identityPanelHeight");
   positive(merged.identityPanelDepth, "identityPanelDepth");
   positive(merged.identityPanelGap, "identityPanelGap", true);
   positive(merged.identityReliefDepth, "identityReliefDepth");
-  positive(merged.minimumIdentityPanelWidth, "minimumIdentityPanelWidth");
+  positive(merged.identityPanelWidth, "identityPanelWidth");
   if (merged.identityReliefDepth > merged.identityPanelDepth) {
     throw new RangeError("identityReliefDepth must not exceed identityPanelDepth.");
+  }
+  if (merged.cityBaseHeight >= merged.districtBaseHeight) {
+    throw new RangeError(
+      "cityBaseHeight must be less than districtBaseHeight.",
+    );
+  }
+  if (merged.identityPanelHeight <= merged.cityBaseHeight) {
+    throw new RangeError(
+      "identityPanelHeight must be greater than cityBaseHeight.",
+    );
   }
   return merged;
 }
@@ -378,10 +393,10 @@ export function layoutCity(
   const identity =
     input.identity === undefined ? undefined : normalizeCityIdentity(input.identity);
   const panelWidth =
-    identity === undefined
-      ? 0
-      : Math.max(cityWidth, options.minimumIdentityPanelWidth);
-  const xInset = identity === undefined ? 0 : (panelWidth - cityWidth) / 2;
+    identity === undefined ? 0 : options.identityPanelWidth;
+  const baseWidth =
+    identity === undefined ? cityWidth : Math.max(cityWidth, panelWidth);
+  const xInset = (baseWidth - cityWidth) / 2;
   const zInset =
     identity === undefined
       ? 0
@@ -437,7 +452,7 @@ export function layoutCity(
           edge: "front",
           semanticGroupId: "identity",
           position: {
-            x: panelWidth / 2,
+            x: baseWidth / 2,
             y: options.identityPanelHeight / 2,
             z:
               options.identityReliefDepth +
@@ -451,15 +466,41 @@ export function layoutCity(
           relief: "embossed",
           reliefDepth: options.identityReliefDepth,
         };
+  const baseDepth = zInset + cityDepth;
+  const base: CityBase | undefined =
+    baseWidth > 0 && baseDepth > 0
+      ? {
+          id: stableId(
+            "base",
+            ...orderedRepositories.map(({ id }) => id),
+          ),
+          semanticGroupId: "base",
+          position: {
+            x: baseWidth / 2,
+            y: options.cityBaseHeight / 2,
+            z: baseDepth / 2,
+          },
+          size: {
+            x: baseWidth,
+            y: options.cityBaseHeight,
+            z: baseDepth,
+          },
+        }
+      : undefined;
 
   return {
     ...(identity === undefined ? {} : { identity }),
     ...(identityPanel === undefined ? {} : { identityPanel }),
+    ...(base === undefined ? {} : { base }),
     districts,
     buildings,
     bounds: {
-      x: identity === undefined ? cityWidth : panelWidth,
-      y: Math.max(maximumHeight, identityPanel?.size.y ?? 0),
+      x: baseWidth,
+      y: Math.max(
+        maximumHeight,
+        identityPanel?.size.y ?? 0,
+        base?.size.y ?? 0,
+      ),
       z: zInset + cityDepth,
     },
   };

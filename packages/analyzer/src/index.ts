@@ -51,6 +51,7 @@ export async function analyzeLocalRepositories(
     ...(layout.identityPanel === undefined
       ? {}
       : { identityPanel: layout.identityPanel }),
+    ...(layout.base === undefined ? {} : { base: layout.base }),
     districts: layout.districts,
     buildings: layout.buildings,
     dependencies: facts.dependencies,
