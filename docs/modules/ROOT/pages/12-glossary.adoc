@@ -17,5 +17,14 @@
 |Read-only normalized analyzer input
 
 |Print profile
-|Physical and material constraints for one printer
+|Geometry, format, and configured channel capabilities for one printer
+
+|Print channel
+|One independently assignable tool or material input
+
+|Semantic group
+|Printer-independent role such as base, route, or complexity band
+
+|Identity panel
+|Printable name, version, and optional logo area on the city base
 |===

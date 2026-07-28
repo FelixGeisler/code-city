@@ -6,9 +6,10 @@ Turn a software repository into an explorable 3D city and a printable model.
 
 == MVP
 
-* Analyze local repositories containing .NET/C#, TypeScript, or both.
+* Analyze one or more local roots containing .NET/C#, TypeScript, or both.
 * Explore the result in a browser.
-* Export STL and five-part 3MF.
+* Export STL and profile-aware multi-part 3MF.
+* Print an identity panel with name, version, and optional logo.
 * Accept public GitHub repositories without breaking offline use.
 
 == Quality goals
