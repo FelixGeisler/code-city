@@ -54,6 +54,66 @@
         </div>
 
         <div class="viewer-rail">
+        <section
+          id="find-panel"
+          class="panel find-panel"
+          aria-labelledby="find-title"
+        >
+          <div class="panel-heading">
+            <h2 id="find-title">Find</h2>
+          </div>
+          <div class="find-panel-body">
+            <label class="search-label" for="building-search">
+              Building name or path
+            </label>
+            <input
+              id="building-search"
+              class="search-input"
+              type="search"
+              placeholder="Search buildings"
+              autocomplete="off"
+              spellcheck="false"
+              aria-controls="search-results"
+              aria-describedby="search-status"
+            />
+            <p
+              id="search-status"
+              class="search-status"
+              role="status"
+              aria-live="polite"
+            >
+              Type to find a building.
+            </p>
+            <ul
+              id="search-results"
+              class="search-results"
+              aria-label="Building search results"
+            ></ul>
+            <div
+              class="isolation-actions"
+              role="group"
+              aria-label="City isolation"
+            >
+              <button
+                id="isolate-district"
+                class="button button-compact"
+                type="button"
+                disabled
+              >
+                Isolate district
+              </button>
+              <button
+                id="show-whole-city"
+                class="button button-compact"
+                type="button"
+                disabled
+              >
+                Show whole city
+              </button>
+            </div>
+          </div>
+        </section>
+
         <aside
           id="inspector"
           class="panel inspector"

@@ -127,7 +127,10 @@ button,
 
 .button:focus-visible,
 .icon-button:focus-visible,
-.brand:focus-visible {
+.brand:focus-visible,
+.search-input:focus-visible,
+.search-result button:focus-visible,
+.search-result-button:focus-visible {
   outline: 2px solid var(--accent-strong);
   outline-offset: 2px;
 }
@@ -142,6 +145,21 @@ button,
 .button-primary:hover {
   border-color: #a5d8ff;
   background: linear-gradient(180deg, #9bd3ff, #53b0fa);
+}
+
+.button:disabled {
+  border-color: rgba(148, 188, 226, 0.1);
+  color: rgba(145, 168, 188, 0.55);
+  background: rgba(22, 43, 65, 0.36);
+  cursor: not-allowed;
+  transform: none;
+}
+
+.button-compact {
+  min-height: 32px;
+  padding: 0 10px;
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 #model-file {
@@ -234,7 +252,11 @@ button,
   display: flex;
   flex-direction: column;
   gap: 12px;
-  pointer-events: none;
+  padding-right: 4px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+  scrollbar-gutter: stable;
 }
 
 .panel {
@@ -266,12 +288,145 @@ button,
   font: inherit;
 }
 
-.inspector {
+.find-panel {
   width: 100%;
   min-height: 0;
-  max-height: 100%;
+  max-height: min(300px, 48%);
   display: grid;
   flex: 0 1 auto;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.find-panel.has-results {
+  min-height: 238px;
+  flex-shrink: 0;
+}
+
+.find-panel-body {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  gap: 7px;
+  padding: 11px 12px 12px;
+}
+
+.search-label {
+  color: #c8d9e8;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.search-input {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 11px;
+  border: 1px solid rgba(148, 188, 226, 0.24);
+  border-radius: 8px;
+  color: #f3f9ff;
+  background: rgba(5, 15, 27, 0.7);
+  outline: 0;
+}
+
+.search-input::placeholder {
+  color: rgba(145, 168, 188, 0.76);
+}
+
+.search-input:hover {
+  border-color: rgba(121, 196, 255, 0.42);
+}
+
+.search-input:focus-visible {
+  border-color: var(--accent-strong);
+  outline-offset: 1px;
+}
+
+.search-status {
+  min-height: 15px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.search-results {
+  min-height: 0;
+  max-height: 132px;
+  margin: 0;
+  padding: 0 3px 0 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  list-style: none;
+}
+
+.search-results:empty {
+  display: none;
+}
+
+.search-result + .search-result {
+  border-top: 1px solid rgba(148, 188, 226, 0.1);
+}
+
+.search-result button,
+.search-result-button {
+  width: 100%;
+  display: grid;
+  gap: 2px;
+  padding: 8px 9px;
+  border: 0;
+  border-radius: 6px;
+  color: #eaf4fd;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.search-result button:hover,
+.search-result-button:hover,
+.search-result button[aria-current="true"],
+.search-result-button[aria-current="true"],
+.search-result button[aria-selected="true"],
+.search-result-button[aria-selected="true"] {
+  color: #fff;
+  background: rgba(54, 163, 255, 0.12);
+}
+
+.search-result-name {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-result-path,
+.search-result-meta {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.isolation-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  padding-top: 3px;
+  border-top: 1px solid rgba(148, 188, 226, 0.12);
+}
+
+.inspector {
+  width: 100%;
+  min-height: 120px;
+  max-height: 100%;
+  display: grid;
+  flex: 1 0 120px;
   grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
 }
@@ -654,8 +809,30 @@ button,
     bottom: 12px;
     left: 12px;
     width: auto;
-    height: min(60vh, 480px);
+    height: min(72vh, 560px);
     gap: 8px;
+    padding-right: 3px;
+  }
+
+  .find-panel {
+    max-height: min(250px, 56%);
+  }
+
+  .find-panel.has-results {
+    min-height: 220px;
+  }
+
+  .inspector {
+    min-height: 150px;
+    flex-basis: 150px;
+  }
+
+  .find-panel-body {
+    padding: 9px 10px 10px;
+  }
+
+  .search-results {
+    max-height: 86px;
   }
 
   .legend {

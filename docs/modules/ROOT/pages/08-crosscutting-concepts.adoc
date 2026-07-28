@@ -47,6 +47,13 @@ Routes are filtered and hidden by default. Each semantic city has one continuous
 base. Districts are raised parcels; configured gaps expose the base as roads,
 not one street per dependency.
 
+== Repository exploration
+
+Search matches normalized repository-relative building paths in the loaded
+model; it never reads source text or uses the network. Camera focus does not
+mutate the model. District isolation is a reversible visibility filter and
+keeps the shared base and identity context visible.
+
 == Determinism
 
 Sort inputs, use stable path IDs, and persist formulas and normalization caps.

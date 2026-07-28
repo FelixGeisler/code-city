@@ -18,9 +18,20 @@ import {
 } from "./model-source.js";
 import { validateCityModel } from "./model-validation.js";
 import {
+  clearExplorerSelection,
+  createRepositoryExplorerIndex,
+  type ExplorerState,
+  isolateSelectedDistrict as isolateExplorerDistrict,
+  resetExplorerState,
+  searchRepositoryBuildings,
+  selectExplorerBuilding,
+  showAllDistricts,
+} from "./repository-explorer.js";
+import {
   DEFAULT_FOG_DENSITY,
   fogDensityForCameraDistance,
 } from "./scene-environment.js";
+import { cameraDistanceForBounds } from "./scene-navigation.js";
 import "./styles.css";
 
 interface BuildingContext {
@@ -32,6 +43,15 @@ interface BuildingContext {
 interface PointerPosition {
   readonly x: number;
   readonly y: number;
+}
+
+interface CameraTransition {
+  readonly startedAt: number;
+  readonly durationMs: number;
+  readonly fromPosition: THREE.Vector3;
+  readonly fromTarget: THREE.Vector3;
+  readonly toPosition: THREE.Vector3;
+  readonly toTarget: THREE.Vector3;
 }
 
 interface ModelSource {
@@ -58,6 +78,14 @@ const selectionStatus = element<HTMLParagraphElement>("selection-status");
 const errorBanner = element<HTMLDivElement>("error-banner");
 const errorMessage = element<HTMLSpanElement>("error-message");
 const dismissErrorButton = element<HTMLButtonElement>("dismiss-error");
+const findPanel = element<HTMLElement>("find-panel");
+const buildingSearch = element<HTMLInputElement>("building-search");
+const searchStatus = element<HTMLParagraphElement>("search-status");
+const searchResults = element<HTMLUListElement>("search-results");
+const isolateDistrictButton =
+  element<HTMLButtonElement>("isolate-district");
+const showWholeCityButton =
+  element<HTMLButtonElement>("show-whole-city");
 
 const inspectorFields = {
   name: element<HTMLHeadingElement>("building-name"),
@@ -99,13 +127,21 @@ class CityScene {
     THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>
   >();
   private readonly buildingContexts = new Map<string, BuildingContext>();
+  private readonly districtGroups = new Map<string, THREE.Group>();
   private readonly resizeObserver: ResizeObserver;
   private grid: THREE.GridHelper | null = null;
   private hoveredId: string | null = null;
   private selectedId: string | null = null;
+  private isolatedDistrictId: string | null = null;
+  private cameraTransition: CameraTransition | null = null;
+  private fullCityMaxDistance = 20;
+  private fullCityFar = 100;
   private pointerStart: PointerPosition | null = null;
 
-  public constructor(private readonly host: HTMLDivElement) {
+  public constructor(
+    private readonly host: HTMLDivElement,
+    private readonly onStateChange: (state: ExplorerState) => void,
+  ) {
     this.scene.background = new THREE.Color("#07111f");
     this.scene.fog = this.fog;
     this.scene.add(this.city);
@@ -137,6 +173,9 @@ class CityScene {
     this.controls.screenSpacePanning = false;
     this.controls.minDistance = 2;
     this.controls.maxPolarAngle = Math.PI * 0.495;
+    this.controls.addEventListener("start", () => {
+      this.cameraTransition = null;
+    });
 
     this.renderer.domElement.addEventListener(
       "pointerdown",
@@ -205,6 +244,11 @@ class CityScene {
     }
 
     for (const district of model.districts) {
+      const districtGroup = new THREE.Group();
+      districtGroup.userData["districtId"] = district.id;
+      this.city.add(districtGroup);
+      this.districtGroups.set(district.id, districtGroup);
+
       const geometry = new THREE.BoxGeometry(
         district.size.x,
         district.size.y,
@@ -222,7 +266,7 @@ class CityScene {
         district.position.z,
       );
       base.receiveShadow = true;
-      this.city.add(base);
+      districtGroup.add(base);
 
       const outline = new THREE.LineSegments(
         new THREE.EdgesGeometry(geometry),
@@ -233,7 +277,7 @@ class CityScene {
         }),
       );
       outline.position.copy(base.position);
-      this.city.add(outline);
+      districtGroup.add(outline);
     }
 
     for (const building of model.buildings) {
@@ -265,7 +309,13 @@ class CityScene {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.userData["buildingId"] = building.id;
-      this.city.add(mesh);
+      const districtGroup = this.districtGroups.get(building.districtId);
+      if (!districtGroup) {
+        throw new Error(
+          `Building "${building.id}" references an unknown district`,
+        );
+      }
+      districtGroup.add(mesh);
       this.buildingMeshes.set(building.id, mesh);
       this.buildingContexts.set(building.id, {
         building,
@@ -338,7 +388,52 @@ class CityScene {
     this.select(null);
   }
 
+  public selectBuilding(id: string, focus = false): boolean {
+    const context = this.buildingContexts.get(id);
+    if (!context) {
+      return false;
+    }
+    if (
+      this.isolatedDistrictId !== null &&
+      this.isolatedDistrictId !== context.building.districtId
+    ) {
+      this.isolateDistrict(context.building.districtId, false);
+    }
+    this.select(id);
+    if (focus) {
+      this.focusBuilding(id);
+    }
+    return true;
+  }
+
+  public isolateDistrict(id: string, focus = true): boolean {
+    const selectedGroup = this.districtGroups.get(id);
+    if (!selectedGroup) {
+      return false;
+    }
+    this.hover(null);
+    for (const [districtId, group] of this.districtGroups) {
+      group.visible = districtId === id;
+    }
+    this.isolatedDistrictId = id;
+    if (focus) {
+      this.frameObject(selectedGroup, true);
+    }
+    this.emitState();
+    return true;
+  }
+
+  public showWholeCity(): void {
+    for (const group of this.districtGroups.values()) {
+      group.visible = true;
+    }
+    this.isolatedDistrictId = null;
+    this.frameObject(this.city, true);
+    this.emitState();
+  }
+
   private readonly render = (): void => {
+    this.updateCameraTransition();
     this.controls.update();
     this.updateFog();
     this.renderer.render(this.scene, this.camera);
@@ -360,9 +455,12 @@ class CityScene {
 
   private clear(): void {
     this.hover(null);
+    this.isolatedDistrictId = null;
+    this.cameraTransition = null;
     this.select(null);
     this.buildingMeshes.clear();
     this.buildingContexts.clear();
+    this.districtGroups.clear();
 
     for (const child of [...this.city.children]) {
       this.city.remove(child);
@@ -382,22 +480,106 @@ class CityScene {
   }
 
   private frame(): void {
-    const bounds = this.bounds();
+    this.frameBounds(this.bounds(), false, true);
+  }
+
+  private frameObject(object: THREE.Object3D, animate: boolean): void {
+    const bounds = new THREE.Box3().setFromObject(object);
+    if (!bounds.isEmpty()) {
+      this.frameBounds(bounds, animate);
+    }
+  }
+
+  private focusBuilding(id: string): void {
+    const mesh = this.buildingMeshes.get(id);
+    if (mesh) {
+      this.frameObject(mesh, true);
+    }
+  }
+
+  private frameBounds(
+    bounds: THREE.Box3,
+    animate: boolean,
+    setFullCityRange = false,
+  ): void {
     const center = bounds.getCenter(new THREE.Vector3());
     const size = bounds.getSize(new THREE.Vector3());
     const maximumDimension = Math.max(size.x, size.y, size.z, 1);
-    const halfFov = THREE.MathUtils.degToRad(this.camera.fov * 0.5);
-    const distance = (maximumDimension * 0.72) / Math.tan(halfFov);
-    const direction = new THREE.Vector3(1, 0.78, -1).normalize();
-
-    this.camera.position.copy(center).addScaledVector(direction, distance);
+    const distance = cameraDistanceForBounds(
+      size,
+      this.camera.fov,
+      this.camera.aspect,
+    );
+    const direction = this.camera.position
+      .clone()
+      .sub(this.controls.target);
+    if (direction.lengthSq() < 1e-8) {
+      direction.set(1, 0.78, -1);
+    }
+    direction.normalize();
+    const position = center
+      .clone()
+      .addScaledVector(direction, distance);
     this.camera.near = Math.max(distance / 1_000, 0.01);
-    this.camera.far = Math.max(distance * 20, maximumDimension * 20);
+    const requiredFar = Math.max(
+      distance * 20,
+      maximumDimension * 20,
+    );
+    if (setFullCityRange) {
+      this.fullCityMaxDistance = Math.max(distance * 5, 20);
+      this.fullCityFar = requiredFar;
+    }
+    this.camera.far = Math.max(requiredFar, this.fullCityFar);
     this.camera.updateProjectionMatrix();
-    this.controls.target.copy(center);
-    this.controls.maxDistance = Math.max(distance * 5, 20);
-    this.controls.update();
-    this.updateFog();
+    this.controls.maxDistance = this.fullCityMaxDistance;
+    if (
+      !animate ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      this.cameraTransition = null;
+      this.camera.position.copy(position);
+      this.controls.target.copy(center);
+      this.controls.update();
+      this.updateFog();
+      return;
+    }
+    this.cameraTransition = {
+      startedAt: performance.now(),
+      durationMs: 520,
+      fromPosition: this.camera.position.clone(),
+      fromTarget: this.controls.target.clone(),
+      toPosition: position,
+      toTarget: center,
+    };
+  }
+
+  private updateCameraTransition(): void {
+    const transition = this.cameraTransition;
+    if (!transition) {
+      return;
+    }
+    const progress = Math.min(
+      1,
+      Math.max(
+        0,
+        (performance.now() - transition.startedAt) /
+          transition.durationMs,
+      ),
+    );
+    const eased = progress * progress * (3 - 2 * progress);
+    this.camera.position.lerpVectors(
+      transition.fromPosition,
+      transition.toPosition,
+      eased,
+    );
+    this.controls.target.lerpVectors(
+      transition.fromTarget,
+      transition.toTarget,
+      eased,
+    );
+    if (progress === 1) {
+      this.cameraTransition = null;
+    }
   }
 
   private replaceGrid(bounds: THREE.Box3, gridY: number): void {
@@ -484,7 +666,9 @@ class CityScene {
     );
     this.raycaster.setFromCamera(pointer, this.camera);
     const hit = this.raycaster.intersectObjects(
-      [...this.buildingMeshes.values()],
+      [...this.buildingMeshes.values()].filter(
+        (mesh) => mesh.parent?.visible !== false,
+      ),
       false,
     )[0];
     const id = hit?.object.userData["buildingId"];
@@ -510,7 +694,16 @@ class CityScene {
     this.selectedId = id;
     this.updateHighlight(previous);
     this.updateHighlight(id);
-    showInspector(id ? this.buildingContexts.get(id) ?? null : null);
+    const context = id ? this.buildingContexts.get(id) ?? null : null;
+    showInspector(context);
+    this.emitState();
+  }
+
+  private emitState(): void {
+    this.onStateChange({
+      selectedBuildingId: this.selectedId,
+      isolatedDistrictId: this.isolatedDistrictId,
+    });
   }
 
   private updateHighlight(id: string | null): void {
@@ -529,7 +722,10 @@ class CityScene {
   }
 }
 
-const cityScene = new CityScene(sceneHost);
+let activeModel: CityModel = DEMO_MODEL;
+let repositoryExplorerIndex = createRepositoryExplorerIndex(DEMO_MODEL);
+let explorerState = resetExplorerState();
+const cityScene = new CityScene(sceneHost, synchronizeExplorerState);
 const automaticModelLoadGate = new AutomaticModelLoadGate();
 
 fileInput.addEventListener("change", async () => {
@@ -555,14 +751,100 @@ demoButton.addEventListener("click", () => {
 });
 
 clearSelectionButton.addEventListener("click", () => {
-  cityScene.resetSelection();
+  clearBuildingSelection();
+});
+
+buildingSearch.addEventListener("input", renderBuildingSearch);
+buildingSearch.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && buildingSearch.value !== "") {
+    event.preventDefault();
+    event.stopPropagation();
+    buildingSearch.value = "";
+    renderBuildingSearch();
+    return;
+  }
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    const buttons = searchResultButtons();
+    const button =
+      event.key === "ArrowDown" ? buttons[0] : buttons.at(-1);
+    if (button) {
+      event.preventDefault();
+      button.focus();
+    }
+  }
+});
+
+searchResults.addEventListener("keydown", (event) => {
+  const buttons = searchResultButtons();
+  if (buttons.length === 0) {
+    return;
+  }
+  if (
+    (event.key === "Enter" || event.key === " ") &&
+    document.activeElement instanceof HTMLButtonElement &&
+    document.activeElement.classList.contains("search-result-button")
+  ) {
+    event.preventDefault();
+    document.activeElement.click();
+    return;
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    buildingSearch.focus();
+    return;
+  }
+  const current = buttons.indexOf(
+    document.activeElement as HTMLButtonElement,
+  );
+  let next: HTMLButtonElement | undefined;
+  switch (event.key) {
+    case "ArrowDown":
+      next =
+        current < 0
+          ? buttons[0]
+          : buttons[(current + 1) % buttons.length];
+      break;
+    case "ArrowUp":
+      next =
+        current < 0
+          ? buttons.at(-1)
+          : buttons[(current - 1 + buttons.length) % buttons.length];
+      break;
+    case "Home":
+      next = buttons[0];
+      break;
+    case "End":
+      next = buttons.at(-1);
+      break;
+  }
+  if (next) {
+    event.preventDefault();
+    next.focus();
+  }
+});
+
+isolateDistrictButton.addEventListener("click", () => {
+  const next = isolateExplorerDistrict(explorerState, activeModel);
+  if (
+    next !== explorerState &&
+    next.isolatedDistrictId !== null
+  ) {
+    cityScene.isolateDistrict(next.isolatedDistrictId);
+  }
+});
+
+showWholeCityButton.addEventListener("click", () => {
+  if (showAllDistricts(explorerState) !== explorerState) {
+    cityScene.showWholeCity();
+  }
 });
 
 dismissErrorButton.addEventListener("click", hideError);
 
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
-    cityScene.resetSelection();
+    clearBuildingSelection();
     hideError();
   }
 });
@@ -611,6 +893,12 @@ async function loadModelFromQuery(): Promise<void> {
 }
 
 function applyModel(model: CityModel, source: ModelSource): void {
+  activeModel = model;
+  repositoryExplorerIndex = createRepositoryExplorerIndex(model);
+  explorerState = resetExplorerState();
+  buildingSearch.value = "";
+  synchronizeExplorerState(explorerState);
+  renderBuildingSearch();
   cityScene.load(model);
   const title =
     model.identity?.title ??
@@ -629,6 +917,117 @@ function applyModel(model: CityModel, source: ModelSource): void {
   );
   renderLegend(model);
   hideError();
+}
+
+function renderBuildingSearch(): void {
+  searchResults.replaceChildren();
+  findPanel.classList.remove("has-results");
+  buildingSearch.disabled = activeModel.buildings.length === 0;
+  if (activeModel.buildings.length === 0) {
+    searchStatus.textContent = "This model has no buildings.";
+    return;
+  }
+
+  const search = searchRepositoryBuildings(
+    repositoryExplorerIndex,
+    buildingSearch.value,
+  );
+  if (search.state === "empty-query") {
+    searchStatus.textContent = "Type to find a building.";
+    return;
+  }
+  if (search.state === "no-matches") {
+    searchStatus.textContent = `No buildings match “${search.query}”.`;
+    return;
+  }
+
+  const visibleCount = search.results.length;
+  const totalCount = search.totalCount;
+  findPanel.classList.add("has-results");
+  searchStatus.textContent =
+    `${totalCount.toLocaleString()} ${totalCount === 1 ? "building" : "buildings"} found` +
+    (visibleCount < totalCount
+      ? ` · showing ${visibleCount.toLocaleString()}`
+      : "");
+
+  for (const result of search.results) {
+    const item = document.createElement("li");
+    item.className = "search-result";
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "search-result-button";
+    button.dataset["buildingId"] = result.buildingId;
+    button.title = result.path;
+    if (result.buildingId === explorerState.selectedBuildingId) {
+      button.setAttribute("aria-current", "true");
+    }
+    button.addEventListener("click", () => {
+      selectBuildingFromExplorer(result.buildingId);
+    });
+
+    const name = document.createElement("span");
+    name.className = "search-result-name";
+    name.textContent = result.name;
+
+    const path = document.createElement("span");
+    path.className = "search-result-path";
+    path.textContent = result.path;
+
+    const metadata = document.createElement("span");
+    metadata.className = "search-result-meta";
+    metadata.textContent =
+      `${result.moduleName} · Max CC ${result.maximumComplexity.toLocaleString()}`;
+
+    button.append(name, path, metadata);
+    item.append(button);
+    searchResults.append(item);
+  }
+}
+
+function searchResultButtons(): HTMLButtonElement[] {
+  return [
+    ...searchResults.querySelectorAll<HTMLButtonElement>(
+      ".search-result-button",
+    ),
+  ];
+}
+
+function selectBuildingFromExplorer(buildingId: string): void {
+  const next = selectExplorerBuilding(
+    explorerState,
+    activeModel,
+    buildingId,
+  );
+  if (next.selectedBuildingId === buildingId) {
+    cityScene.selectBuilding(buildingId, true);
+  }
+}
+
+function clearBuildingSelection(): void {
+  if (clearExplorerSelection(explorerState) !== explorerState) {
+    cityScene.resetSelection();
+  }
+}
+
+function synchronizeExplorerState(state: ExplorerState): void {
+  explorerState = state;
+  const selected = state.selectedBuildingId
+    ? activeModel.buildings.find(
+        ({ id }) => id === state.selectedBuildingId,
+      )
+    : undefined;
+  isolateDistrictButton.disabled =
+    !selected ||
+    state.isolatedDistrictId === selected.districtId;
+  showWholeCityButton.disabled = state.isolatedDistrictId === null;
+  for (const button of searchResultButtons()) {
+    if (button.dataset["buildingId"] === state.selectedBuildingId) {
+      button.setAttribute("aria-current", "true");
+    } else {
+      button.removeAttribute("aria-current");
+    }
+  }
 }
 
 function applyLogo(model: CityModel, source: ModelSource): void {
