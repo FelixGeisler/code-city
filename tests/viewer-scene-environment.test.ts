@@ -23,6 +23,23 @@ describe("viewer scene environment", () => {
     );
   });
 
+  it("adapts while the camera zooms away from a large city", () => {
+    const initialDistance = 2_815.94;
+    const densities = [1, 2, 5].map((zoom) => {
+      const distance = initialDistance * zoom;
+      const density = fogDensityForCameraDistance(distance);
+      const transmittance = Math.exp(-((density * distance) ** 2));
+
+      expect(transmittance).toBeCloseTo(
+        MINIMUM_TARGET_TRANSMITTANCE,
+        12,
+      );
+      return density;
+    });
+
+    expect(densities[2]).toBeLessThan(densities[0]!);
+  });
+
   it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
     "falls back safely for an invalid distance %s",
     (distance) => {

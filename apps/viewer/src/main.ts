@@ -297,8 +297,15 @@ class CityScene {
 
   private readonly render = (): void => {
     this.controls.update();
+    this.updateFog();
     this.renderer.render(this.scene, this.camera);
   };
+
+  private updateFog(): void {
+    this.fog.density = fogDensityForCameraDistance(
+      this.camera.position.distanceTo(this.controls.target),
+    );
+  }
 
   private resize(): void {
     const width = Math.max(1, this.host.clientWidth);
@@ -343,11 +350,11 @@ class CityScene {
     this.camera.position.copy(center).addScaledVector(direction, distance);
     this.camera.near = Math.max(distance / 1_000, 0.01);
     this.camera.far = Math.max(distance * 20, maximumDimension * 20);
-    this.fog.density = fogDensityForCameraDistance(distance);
     this.camera.updateProjectionMatrix();
     this.controls.target.copy(center);
     this.controls.maxDistance = Math.max(distance * 5, 20);
     this.controls.update();
+    this.updateFog();
   }
 
   private replaceGrid(bounds: THREE.Box3): void {
