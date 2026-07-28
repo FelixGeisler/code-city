@@ -203,32 +203,33 @@ function createLocalDistrict(
     buildingIds.add(item.id);
   }
 
-  const columns = sized.length === 0 ? 1 : Math.ceil(Math.sqrt(sized.length));
-  const rows = sized.length === 0 ? 1 : Math.ceil(sized.length / columns);
-  const cellWidth = Math.max(
-    options.minimumDistrictSize - options.districtPadding * 2,
-    ...sized.map((item) => item.size.x),
+  const buildingPacking = packRectangles(
+    sized.map((item) => ({
+      id: item.id,
+      width: item.size.x,
+      depth: item.size.z,
+    })),
+    options.buildingGap,
   );
-  const cellDepth = Math.max(
-    options.minimumDistrictSize - options.districtPadding * 2,
-    ...sized.map((item) => item.size.z),
+  const buildingPlacements = new Map(
+    buildingPacking.rectangles.map((rectangle) => [
+      rectangle.id,
+      rectangle,
+    ]),
   );
   const width = Math.max(
     options.minimumDistrictSize,
-    options.districtPadding * 2 +
-      columns * cellWidth +
-      (columns - 1) * options.buildingGap,
+    options.districtPadding * 2 + buildingPacking.width,
   );
   const depth = Math.max(
     options.minimumDistrictSize,
-    options.districtPadding * 2 +
-      rows * cellDepth +
-      (rows - 1) * options.buildingGap,
+    options.districtPadding * 2 + buildingPacking.depth,
   );
+  const buildingInsetX = (width - buildingPacking.width) / 2;
+  const buildingInsetZ = (depth - buildingPacking.depth) / 2;
   const districtId = stableId("district", module.repositoryId, module.id);
-  const buildings = sized.map((item, index): LocalBuilding => {
-    const column = index % columns;
-    const row = Math.floor(index / columns);
+  const buildings = sized.map((item): LocalBuilding => {
+    const placement = buildingPlacements.get(item.id)!;
     return {
       building: {
         id: item.id,
@@ -249,15 +250,9 @@ function createLocalDistrict(
         size: item.size,
       },
       position: {
-        x:
-          options.districtPadding +
-          column * (cellWidth + options.buildingGap) +
-          cellWidth / 2,
+        x: buildingInsetX + placement.x + item.size.x / 2,
         y: options.districtBaseHeight + item.size.y / 2,
-        z:
-          options.districtPadding +
-          row * (cellDepth + options.buildingGap) +
-          cellDepth / 2,
+        z: buildingInsetZ + placement.z + item.size.z / 2,
       },
     };
   });

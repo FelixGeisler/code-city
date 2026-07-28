@@ -74,8 +74,8 @@ const input: CityLayoutInput = {
 };
 
 function hasHorizontalGap(
-  left: CityDistrict,
-  right: CityDistrict,
+  left: Pick<CityDistrict, "position" | "size">,
+  right: Pick<CityDistrict, "position" | "size">,
   gap: number,
 ): boolean {
   return (
@@ -289,6 +289,87 @@ describe("deterministic city layout", () => {
         { identityPanelHeight: DEFAULT_LAYOUT_OPTIONS.cityBaseHeight },
       ),
     ).toThrow(/identityPanelHeight must be greater than cityBaseHeight/u);
+  });
+
+  it("packs expressive variable building footprints without uniform cells", () => {
+    const slocs = [1, 16, 63, 793];
+    const result = layoutCity({
+      repositories: [{ id: "repo", name: "Repository" }],
+      modules: [
+        {
+          id: "module",
+          repositoryId: "repo",
+          kind: "dotnet-project",
+          name: "Module",
+          path: ".",
+          solutionIds: [],
+        },
+      ],
+      buildings: slocs.map((sloc, index) => ({
+        repositoryId: "repo",
+        moduleId: "module",
+        name: `${index}.cs`,
+        path: `${index}.cs`,
+        language: "csharp" as const,
+        metrics: {
+          sloc,
+          decisionLoad: 0,
+          maximumComplexity: 1,
+          executableUnitCount: 1,
+        },
+      })),
+    });
+    const district = result.districts[0]!;
+    const sides = result.buildings
+      .map(({ size }) => size.x)
+      .sort((left, right) => left - right);
+    const largestSide = sides.at(-1)!;
+    const uniformGridSide =
+      DEFAULT_LAYOUT_OPTIONS.districtPadding * 2 +
+      2 * largestSide +
+      DEFAULT_LAYOUT_OPTIONS.buildingGap;
+
+    expect(sides.at(-1)! / sides[0]!).toBeGreaterThan(4);
+    expect(district.size.x * district.size.z).toBeLessThan(
+      uniformGridSide * uniformGridSide,
+    );
+    for (const building of result.buildings) {
+      expect(
+        building.position.x - building.size.x / 2,
+      ).toBeGreaterThanOrEqual(
+        district.position.x - district.size.x / 2,
+      );
+      expect(
+        building.position.x + building.size.x / 2,
+      ).toBeLessThanOrEqual(
+        district.position.x + district.size.x / 2,
+      );
+      expect(
+        building.position.z - building.size.z / 2,
+      ).toBeGreaterThanOrEqual(
+        district.position.z - district.size.z / 2,
+      );
+      expect(
+        building.position.z + building.size.z / 2,
+      ).toBeLessThanOrEqual(
+        district.position.z + district.size.z / 2,
+      );
+    }
+    for (let left = 0; left < result.buildings.length; left += 1) {
+      for (
+        let right = left + 1;
+        right < result.buildings.length;
+        right += 1
+      ) {
+        expect(
+          hasHorizontalGap(
+            result.buildings[left]!,
+            result.buildings[right]!,
+            DEFAULT_LAYOUT_OPTIONS.buildingGap,
+          ),
+        ).toBe(true);
+      }
+    }
   });
 
   it("packs heterogeneous districts by their actual footprints", () => {

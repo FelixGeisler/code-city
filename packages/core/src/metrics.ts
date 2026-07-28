@@ -5,6 +5,12 @@ export const METRIC_NORMALIZATION_CAPS = Object.freeze({
   decisionLoad: 100,
 });
 
+export const BUILDING_FOOTPRINT_SCALE = Object.freeze({
+  minimumSide: 3,
+  sideRange: 15,
+  distributionExponent: 1.5,
+});
+
 export interface BuildingGeometry {
   readonly footprintArea: number;
   readonly normalizedSloc: number;
@@ -45,7 +51,15 @@ export function normalizeLogarithmically(value: number, cap: number): number {
 }
 
 export function buildingFootprintArea(sloc: number): number {
-  return 16 + 180 * normalizeLogarithmically(sloc, METRIC_NORMALIZATION_CAPS.sloc);
+  const normalizedSloc = normalizeLogarithmically(
+    sloc,
+    METRIC_NORMALIZATION_CAPS.sloc,
+  );
+  const side =
+    BUILDING_FOOTPRINT_SCALE.minimumSide +
+    BUILDING_FOOTPRINT_SCALE.sideRange *
+      normalizedSloc ** BUILDING_FOOTPRINT_SCALE.distributionExponent;
+  return side * side;
 }
 
 export function buildingHeight(decisionLoad: number): number {
@@ -70,7 +84,7 @@ export function calculateBuildingGeometry(
     metrics.decisionLoad,
     METRIC_NORMALIZATION_CAPS.decisionLoad,
   );
-  const footprintArea = 16 + 180 * normalizedSloc;
+  const footprintArea = buildingFootprintArea(metrics.sloc);
   const side = Math.sqrt(footprintArea);
   return {
     footprintArea,

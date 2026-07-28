@@ -20,7 +20,8 @@ Do not count `else`, `default`, `return`, `throw`, `await`, or optional chaining
 decision_load = sum(CC(unit) - 1)
 sloc_n = clamp(ln(1 + SLOC) / ln(1001), 0, 1)
 cc_n   = clamp(ln(1 + decision_load) / ln(101), 0, 1)
-footprint_area = 16 + 180 * sloc_n
+footprint_side = 3 + 15 * sloc_n^1.5
+footprint_area = footprint_side^2
 height = 4 + 36 * cc_n
 ----
 
@@ -49,8 +50,8 @@ not one street per dependency.
 == Determinism
 
 Sort inputs, use stable path IDs, and persist formulas and normalization caps.
-Pack actual district and repository footprints into deterministic shelves;
-configured gaps remain visible streets.
+Pack up to 64 variable footprints with deterministic corner filling; larger
+sets use bounded shelves. Configured gaps remain visible streets.
 
 == Privacy
 

@@ -89,32 +89,8 @@ button,
 .brand-mark {
   width: 34px;
   height: 34px;
-  display: flex;
-  align-items: flex-end;
-  gap: 3px;
-  padding: 7px;
-  border: 1px solid rgba(121, 196, 255, 0.34);
-  border-radius: 9px;
-  background: rgba(54, 163, 255, 0.1);
-}
-
-.brand-mark i {
-  width: 5px;
-  border-radius: 1px 1px 0 0;
-  background: var(--accent-strong);
-  box-shadow: 0 0 10px rgba(54, 163, 255, 0.55);
-}
-
-.brand-mark i:nth-child(1) {
-  height: 9px;
-}
-
-.brand-mark i:nth-child(2) {
-  height: 18px;
-}
-
-.brand-mark i:nth-child(3) {
-  height: 13px;
+  display: block;
+  flex: 0 0 auto;
 }
 
 .actions {
@@ -248,14 +224,27 @@ button,
   letter-spacing: 0.04em;
 }
 
-.panel {
+.viewer-rail {
   position: absolute;
   z-index: 4;
+  top: 18px;
+  right: 20px;
+  bottom: 38px;
+  width: min(390px, calc(100% - 40px));
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  pointer-events: none;
+}
+
+.panel {
+  position: relative;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
   box-shadow: 0 18px 55px rgba(0, 0, 0, 0.28);
   backdrop-filter: blur(18px);
+  pointer-events: auto;
 }
 
 .panel-heading {
@@ -272,10 +261,19 @@ button,
   text-transform: uppercase;
 }
 
+.panel-heading h2 {
+  margin: 0;
+  font: inherit;
+}
+
 .inspector {
-  top: 18px;
-  right: 20px;
-  width: min(340px, calc(100% - 40px));
+  width: 100%;
+  min-height: 0;
+  max-height: 100%;
+  display: grid;
+  flex: 0 1 auto;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .empty-state {
@@ -286,7 +284,16 @@ button,
 }
 
 #inspector-content {
+  min-height: 0;
   padding: 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+#inspector-content:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: -3px;
 }
 
 #building-name {
@@ -296,22 +303,29 @@ button,
   line-height: 1.35;
 }
 
-dl {
+.building-details {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px 16px;
   margin: 0;
 }
 
-dl div {
+.building-details div {
   min-width: 0;
 }
 
-dl .wide {
+.building-details .wide {
   grid-column: 1 / -1;
 }
 
-dt {
+.building-details .metric {
+  padding: 8px 9px;
+  border: 1px solid rgba(148, 188, 226, 0.13);
+  border-radius: 8px;
+  background: rgba(121, 196, 255, 0.035);
+}
+
+.building-details dt {
   margin-bottom: 3px;
   color: var(--muted);
   font-size: 10px;
@@ -320,7 +334,7 @@ dt {
   text-transform: uppercase;
 }
 
-dd {
+.building-details dd {
   margin: 0;
   overflow-wrap: anywhere;
   color: #eef7ff;
@@ -328,23 +342,161 @@ dd {
   line-height: 1.4;
 }
 
+.building-details .metric dd {
+  font-size: 14px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
 .path-value {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 11px;
 }
 
+.units-section {
+  margin-top: 17px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.units-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 9px;
+}
+
+.units-heading h3 {
+  margin: 0;
+  color: #dcecff;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.unit-count {
+  min-width: 24px;
+  padding: 2px 7px;
+  border: 1px solid rgba(121, 196, 255, 0.26);
+  border-radius: 999px;
+  color: var(--accent-strong);
+  background: rgba(54, 163, 255, 0.09);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.4;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.units-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+#building-units-details {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(6, 17, 30, 0.42);
+}
+
+#building-units-details summary {
+  padding: 9px 10px;
+  color: #d7e7f5;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.35;
+  cursor: pointer;
+}
+
+#building-units-details summary:hover {
+  background: rgba(121, 196, 255, 0.06);
+}
+
+#building-units-details summary:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: -3px;
+}
+
+.unit-table-wrap {
+  border-top: 1px solid var(--line);
+}
+
+.unit-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  color: #e8f3fc;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.unit-table thead th {
+  padding: 6px 7px;
+  color: var(--muted);
+  background: rgba(20, 39, 59, 0.62);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.unit-table th:nth-child(2),
+.unit-table td:nth-child(2) {
+  width: 76px;
+}
+
+.unit-table th:nth-child(3),
+.unit-table td:nth-child(3) {
+  width: 58px;
+}
+
+.unit-table tbody th,
+.unit-table tbody td {
+  padding: 7px;
+  border-top: 1px solid rgba(148, 188, 226, 0.11);
+  vertical-align: top;
+}
+
+.unit-table tbody tr:nth-child(even) {
+  background: rgba(121, 196, 255, 0.025);
+}
+
+.unit-name {
+  overflow-wrap: anywhere;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-weight: 500;
+  text-align: left;
+}
+
+.unit-number {
+  color: #c9deee;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 .legend-panel {
-  right: 20px;
-  bottom: 38px;
-  width: min(230px, calc(100% - 40px));
+  width: 100%;
+  flex: 0 0 auto;
+  margin-top: auto;
 }
 
 .legend {
   max-height: 154px;
   display: grid;
   gap: 8px;
+  margin: 0;
   padding: 11px 13px 13px;
   overflow-y: auto;
+  list-style: none;
+}
+
+.legend:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: -3px;
 }
 
 .legend-item {
@@ -445,6 +597,19 @@ dd {
   pointer-events: none;
 }
 
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  clip-path: inset(50%) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
 [hidden] {
   display: none !important;
 }
@@ -483,25 +648,28 @@ dd {
     max-width: calc(100vw - 24px);
   }
 
-  .inspector {
+  .viewer-rail {
     top: auto;
     right: 12px;
     bottom: 12px;
     left: 12px;
     width: auto;
-    max-height: min(48vh, 330px);
-    overflow-y: auto;
-  }
-
-  .legend-panel {
-    top: 65px;
-    right: 12px;
-    bottom: auto;
-    width: 150px;
+    height: min(60vh, 480px);
+    gap: 8px;
   }
 
   .legend {
-    max-height: 112px;
+    max-height: none;
+    display: flex;
+    gap: 12px;
+    padding: 9px 12px 11px;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .legend-item {
+    flex: 0 0 auto;
+    white-space: nowrap;
   }
 
   .controls-hint {

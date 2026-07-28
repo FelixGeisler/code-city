@@ -7,6 +7,7 @@ import type {
   CityModule,
   CityRepository,
 } from "../../../packages/core/src/model.js";
+import { presentExecutableUnits } from "./building-inspector.js";
 import { cityBaseForModel } from "./city-surface.js";
 import { DEMO_MODEL } from "./demo-model.js";
 import {
@@ -52,7 +53,8 @@ const inspectorEmpty = element<HTMLDivElement>("inspector-empty");
 const inspectorContent = element<HTMLDivElement>("inspector-content");
 const clearSelectionButton =
   element<HTMLButtonElement>("clear-selection");
-const legend = element<HTMLDivElement>("legend");
+const legend = element<HTMLUListElement>("legend");
+const selectionStatus = element<HTMLParagraphElement>("selection-status");
 const errorBanner = element<HTMLDivElement>("error-banner");
 const errorMessage = element<HTMLSpanElement>("error-message");
 const dismissErrorButton = element<HTMLButtonElement>("dismiss-error");
@@ -67,7 +69,12 @@ const inspectorFields = {
   load: element<HTMLElement>("building-load"),
   cc: element<HTMLElement>("building-cc"),
   metricMethod: element<HTMLElement>("building-metric-method"),
-  units: element<HTMLElement>("building-units"),
+  unitCount: element<HTMLElement>("building-unit-count"),
+  unitsEmpty: element<HTMLParagraphElement>("building-units-empty"),
+  unitsDetails: element<HTMLDetailsElement>("building-units-details"),
+  unitsSummary: element<HTMLElement>("building-units-summary"),
+  unitsCaption: element<HTMLTableCaptionElement>("building-units-caption"),
+  units: element<HTMLTableSectionElement>("building-units"),
 };
 
 class CityScene {
@@ -677,12 +684,13 @@ function renderLegend(model: CityModel): void {
   const groups = sortLegendGroups(model.semanticGroups);
 
   for (const group of groups) {
-    const item = document.createElement("div");
+    const item = document.createElement("li");
     item.className = "legend-item";
 
     const swatch = document.createElement("span");
     swatch.className = "legend-swatch";
     swatch.style.backgroundColor = group.color;
+    swatch.setAttribute("aria-hidden", "true");
 
     const label = document.createElement("span");
     label.textContent = group.label;
@@ -696,10 +704,12 @@ function showInspector(context: BuildingContext | null): void {
   inspectorContent.hidden = context === null;
   clearSelectionButton.hidden = context === null;
   if (!context) {
+    selectionStatus.textContent = "Building selection cleared.";
     return;
   }
 
   const { building, repository, module } = context;
+  inspectorContent.scrollTop = 0;
   inspectorFields.name.textContent = building.name;
   inspectorFields.repository.textContent = repository.name;
   inspectorFields.module.textContent = module.name;
@@ -712,13 +722,56 @@ function showInspector(context: BuildingContext | null): void {
     building.metrics.maximumComplexity.toLocaleString();
   inspectorFields.metricMethod.textContent =
     building.metricMethod ?? "Not recorded";
-  inspectorFields.units.textContent =
-    building.units
-      ?.map(
-        (unit) =>
-          `${unit.name} (CC ${unit.complexity.toLocaleString()}, line ${unit.line.toLocaleString()})`,
-      )
-      .join(" · ") ?? "Not recorded";
+  renderExecutableUnits(building);
+  selectionStatus.textContent =
+    `Selected ${building.name}. Maximum cyclomatic complexity ` +
+    `${building.metrics.maximumComplexity.toLocaleString()}.`;
+}
+
+function renderExecutableUnits(building: CityBuilding): void {
+  const presentation = presentExecutableUnits(building.units);
+  inspectorFields.units.replaceChildren();
+  inspectorFields.unitsDetails.open = false;
+  inspectorFields.unitsDetails.hidden = presentation === null;
+  inspectorFields.unitsEmpty.hidden = presentation !== null;
+  inspectorFields.unitCount.hidden = presentation === null;
+
+  if (!presentation) {
+    inspectorFields.unitCount.textContent = "";
+    inspectorFields.unitsSummary.textContent = "";
+    inspectorFields.unitsCaption.textContent = "";
+    return;
+  }
+
+  const count = presentation.count.toLocaleString();
+  const unitLabel = presentation.count === 1 ? "unit" : "units";
+  const maximumComplexity =
+    presentation.maximumComplexity.toLocaleString();
+  inspectorFields.unitsDetails.open = presentation.count <= 10;
+  inspectorFields.unitCount.textContent = count;
+  inspectorFields.unitsSummary.textContent =
+    `${count} ${unitLabel} · highest complexity ${maximumComplexity}`;
+  inspectorFields.unitsCaption.textContent =
+    `Executable units for ${building.name}`;
+
+  for (const unit of presentation.rows) {
+    const row = document.createElement("tr");
+    const name = document.createElement("th");
+    name.className = "unit-name";
+    name.scope = "row";
+    name.textContent = unit.name;
+
+    const complexity = document.createElement("td");
+    complexity.className = "unit-number";
+    complexity.textContent = unit.complexity.toLocaleString();
+
+    const line = document.createElement("td");
+    line.className = "unit-number";
+    line.textContent = unit.line.toLocaleString();
+
+    row.append(name, complexity, line);
+    inspectorFields.units.append(row);
+  }
 }
 
 function languageLabel(language: CityBuilding["language"]): string {

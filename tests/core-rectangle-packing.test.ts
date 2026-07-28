@@ -38,9 +38,10 @@ describe("deterministic rectangle packing", () => {
       0,
     );
 
-    expect(result.width).toBeLessThan(400);
-    expect(result.depth).toBeLessThan(400);
-    expect(districtArea / (result.width * result.depth)).toBeGreaterThan(0.6);
+    expect(result.width).toBeLessThan(360);
+    expect(result.depth).toBeLessThan(360);
+    expect(result.width * result.depth).toBeLessThan(125_000);
+    expect(districtArea / (result.width * result.depth)).toBeGreaterThan(0.8);
     expect(Math.min(...result.rectangles.map(({ x }) => x))).toBe(0);
     expect(Math.min(...result.rectangles.map(({ z }) => z))).toBe(0);
     expect(
@@ -72,6 +73,14 @@ describe("deterministic rectangle packing", () => {
         ).toBe(true);
       }
     }
+    for (const source of FLOW_LIKE_DISTRICTS) {
+      expect(
+        result.rectangles.find(({ id }) => id === source.id),
+      ).toMatchObject({
+        width: source.width,
+        depth: source.depth,
+      });
+    }
   });
 
   it("is independent of input order", () => {
@@ -88,7 +97,7 @@ describe("deterministic rectangle packing", () => {
     );
   });
 
-  it("evaluates attainable shelf breakpoints", () => {
+  it("fills corners around attainable shelf breakpoints", () => {
     const result = packRectangles(
       [
         { id: "wide", width: 454, depth: 139 },
@@ -99,7 +108,62 @@ describe("deterministic rectangle packing", () => {
     );
 
     expect(result.width).toBe(556);
-    expect(result.depth).toBe(575);
+    expect(result.depth).toBe(433);
+  });
+
+  it("fills L-shaped corners that next-fit shelves leave empty", () => {
+    const gap = 1;
+    const result = packRectangles(
+      [
+        { id: "tall", width: 10, depth: 20 },
+        { id: "short", width: 10, depth: 10 },
+        { id: "filler", width: 10, depth: 9 },
+      ],
+      gap,
+    );
+
+    expect(result).toEqual({
+      rectangles: [
+        {
+          id: "filler",
+          width: 10,
+          depth: 9,
+          x: 11,
+          z: 11,
+        },
+        {
+          id: "short",
+          width: 10,
+          depth: 10,
+          x: 11,
+          z: 0,
+        },
+        {
+          id: "tall",
+          width: 10,
+          depth: 20,
+          x: 0,
+          z: 0,
+        },
+      ],
+      width: 21,
+      depth: 20,
+    });
+    for (let left = 0; left < result.rectangles.length; left += 1) {
+      for (
+        let right = left + 1;
+        right < result.rectangles.length;
+        right += 1
+      ) {
+        expect(
+          hasRequiredSeparation(
+            result.rectangles[left]!,
+            result.rectangles[right]!,
+            gap,
+          ),
+        ).toBe(true);
+      }
+    }
   });
 
   it("preserves the requested gap for decimal coordinates", () => {
