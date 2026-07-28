@@ -15,6 +15,10 @@ import {
   sortLegendGroups,
 } from "./model-source.js";
 import { validateCityModel } from "./model-validation.js";
+import {
+  DEFAULT_FOG_DENSITY,
+  fogDensityForCameraDistance,
+} from "./scene-environment.js";
 import "./styles.css";
 
 interface BuildingContext {
@@ -67,6 +71,10 @@ const inspectorFields = {
 
 class CityScene {
   private readonly scene = new THREE.Scene();
+  private readonly fog = new THREE.FogExp2(
+    "#07111f",
+    DEFAULT_FOG_DENSITY,
+  );
   private readonly camera = new THREE.PerspectiveCamera(45, 1, 0.1, 5_000);
   private readonly renderer = new THREE.WebGLRenderer({
     antialias: true,
@@ -91,7 +99,7 @@ class CityScene {
 
   public constructor(private readonly host: HTMLDivElement) {
     this.scene.background = new THREE.Color("#07111f");
-    this.scene.fog = new THREE.FogExp2("#07111f", 0.0022);
+    this.scene.fog = this.fog;
     this.scene.add(this.city);
 
     const hemisphere = new THREE.HemisphereLight("#b9ddff", "#162033", 2.1);
@@ -289,8 +297,15 @@ class CityScene {
 
   private readonly render = (): void => {
     this.controls.update();
+    this.updateFog();
     this.renderer.render(this.scene, this.camera);
   };
+
+  private updateFog(): void {
+    this.fog.density = fogDensityForCameraDistance(
+      this.camera.position.distanceTo(this.controls.target),
+    );
+  }
 
   private resize(): void {
     const width = Math.max(1, this.host.clientWidth);
@@ -339,6 +354,7 @@ class CityScene {
     this.controls.target.copy(center);
     this.controls.maxDistance = Math.max(distance * 5, 20);
     this.controls.update();
+    this.updateFog();
   }
 
   private replaceGrid(bounds: THREE.Box3): void {
