@@ -365,6 +365,19 @@ EndProject
       version: "test",
       logo: { relativePath: "assets/flow.svg", format: "svg" },
     });
+    expect(first.base).toMatchObject({
+      semanticGroupId: "base",
+      position: {
+        x: first.bounds.x / 2,
+        y: 0.25,
+        z: first.bounds.z / 2,
+      },
+      size: {
+        x: first.bounds.x,
+        y: 0.5,
+        z: first.bounds.z,
+      },
+    });
   });
 
   it("keeps detailed metric methodology in facts without leaking roots", async () => {

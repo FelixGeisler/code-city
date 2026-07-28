@@ -7,6 +7,7 @@ import type {
   CityModule,
   CityRepository,
 } from "../../../packages/core/src/model.js";
+import { cityBaseForModel } from "./city-surface.js";
 import { DEMO_MODEL } from "./demo-model.js";
 import {
   AutomaticModelLoadGate,
@@ -160,6 +161,41 @@ class CityScene {
     const groups = new Map(
       model.semanticGroups.map((item) => [item.id, item]),
     );
+    const base = cityBaseForModel(model);
+    let gridY = 0;
+    if (base !== undefined) {
+      const geometry = new THREE.BoxGeometry(
+        base.size.x,
+        base.size.y,
+        base.size.z,
+      );
+      const material = new THREE.MeshStandardMaterial({
+        color: groups.get(base.semanticGroupId)?.color ?? "#4b5563",
+        roughness: 0.95,
+        metalness: 0,
+      });
+      const foundation = new THREE.Mesh(geometry, material);
+      foundation.position.set(
+        base.position.x,
+        base.position.y,
+        base.position.z,
+      );
+      foundation.receiveShadow = true;
+      foundation.userData["semanticGroupId"] = base.semanticGroupId;
+      this.city.add(foundation);
+
+      const outline = new THREE.LineSegments(
+        new THREE.EdgesGeometry(geometry),
+        new THREE.LineBasicMaterial({
+          color: "#9aa6b5",
+          transparent: true,
+          opacity: 0.52,
+        }),
+      );
+      outline.position.copy(foundation.position);
+      this.city.add(outline);
+      gridY = base.position.y - base.size.y / 2 - 0.01;
+    }
 
     for (const district of model.districts) {
       const geometry = new THREE.BoxGeometry(
@@ -235,7 +271,7 @@ class CityScene {
       this.addIdentityPanel(model);
     }
 
-    this.replaceGrid(this.bounds());
+    this.replaceGrid(this.bounds(), gridY);
     this.frame();
   }
 
@@ -357,7 +393,7 @@ class CityScene {
     this.updateFog();
   }
 
-  private replaceGrid(bounds: THREE.Box3): void {
+  private replaceGrid(bounds: THREE.Box3, gridY: number): void {
     if (this.grid) {
       this.scene.remove(this.grid);
       disposeObject(this.grid);
@@ -375,7 +411,7 @@ class CityScene {
       "#274867",
       "#14283c",
     );
-    this.grid.position.y = 0;
+    this.grid.position.y = gridY;
     this.scene.add(this.grid);
   }
 

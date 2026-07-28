@@ -156,7 +156,8 @@ export function validateCityModel(value: unknown): CityModel {
 
   validateAnalysis(model.analysis);
   validateIdentity(model.identity, repositoryIds);
-  validateIdentityPanel(model.identityPanel, groupIds);
+  const identityPanel = validateIdentityPanel(model.identityPanel, groupIds);
+  const base = validateCityBase(model.base, groupIds);
 
   districts.forEach((district, index) => {
     const prefix = `districts[${index}]`;
@@ -251,6 +252,15 @@ export function validateCityModel(value: unknown): CityModel {
   const bounds = vector(model.bounds, "bounds", false);
   if (bounds.x < 0 || bounds.y < 0 || bounds.z < 0) {
     fail("bounds components must be non-negative");
+  }
+  if (base !== undefined) {
+    validateSharedGeometry(
+      base,
+      identityPanel,
+      districts,
+      buildings,
+      bounds,
+    );
   }
   return model as unknown as CityModel;
 }
@@ -377,9 +387,9 @@ function validateLogo(value: unknown, path: string): void {
 function validateIdentityPanel(
   value: unknown,
   groupIds: Set<string>,
-): void {
+): JsonObject | undefined {
   if (value === undefined) {
-    return;
+    return undefined;
   }
   const panel = objectAt(value, "identityPanel");
   nonEmptyString(panel.id, "identityPanel.id");
@@ -396,6 +406,141 @@ function validateIdentityPanel(
     fail('identityPanel.relief must be "embossed"');
   }
   positiveNumber(panel.reliefDepth, "identityPanel.reliefDepth");
+  return panel;
+}
+
+function validateCityBase(
+  value: unknown,
+  groupIds: Set<string>,
+): JsonObject | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const base = objectAt(value, "base");
+  nonEmptyString(base.id, "base.id");
+  if (base.semanticGroupId !== "base") {
+    fail('base.semanticGroupId must be "base"');
+  }
+  reference(base.semanticGroupId, groupIds, "base.semanticGroupId");
+  vector(base.position, "base.position", false);
+  vector(base.size, "base.size", true);
+  return base;
+}
+
+interface GeometryBox {
+  readonly minimumX: number;
+  readonly maximumX: number;
+  readonly minimumY: number;
+  readonly maximumY: number;
+  readonly minimumZ: number;
+  readonly maximumZ: number;
+}
+
+const GEOMETRY_EPSILON = 1e-9;
+
+function validateSharedGeometry(
+  base: JsonObject,
+  identityPanel: JsonObject | undefined,
+  districts: readonly JsonObject[],
+  buildings: readonly JsonObject[],
+  bounds: Vector3,
+): void {
+  const baseSize = vector(base.size, "base.size", true);
+  if (
+    !nearlyEqual(baseSize.x, bounds.x) ||
+    !nearlyEqual(baseSize.z, bounds.z)
+  ) {
+    fail("base.size.x/z must equal bounds.x/z");
+  }
+
+  const baseBox = geometryBox(base, "base");
+  const districtBoxes = new Map<string, GeometryBox>();
+  districts.forEach((district, index) => {
+    const path = `districts[${index}]`;
+    const box = geometryBox(district, path);
+    districtBoxes.set(nonEmptyString(district.id, `${path}.id`), box);
+    validateBaseSupport(baseBox, box, path);
+  });
+
+  if (identityPanel !== undefined) {
+    const reliefDepth = positiveNumber(
+      identityPanel.reliefDepth,
+      "identityPanel.reliefDepth",
+    );
+    const panelBox = geometryBox(
+      identityPanel,
+      "identityPanel",
+      reliefDepth,
+    );
+    validateBaseSupport(baseBox, panelBox, "identityPanel and its relief");
+  }
+
+  buildings.forEach((building, index) => {
+    const path = `buildings[${index}]`;
+    const districtId = nonEmptyString(
+      building.districtId,
+      `${path}.districtId`,
+    );
+    const districtBox = districtBoxes.get(districtId)!;
+    const buildingBox = geometryBox(building, path);
+    if (!coversHorizontally(districtBox, buildingBox)) {
+      fail(`${path} must be horizontally contained by its referenced district`);
+    }
+    if (!nearlyEqual(buildingBox.minimumY, districtBox.maximumY)) {
+      fail(`${path} must rest on its referenced district`);
+    }
+  });
+}
+
+function validateBaseSupport(
+  base: GeometryBox,
+  supported: GeometryBox,
+  path: string,
+): void {
+  if (!coversHorizontally(base, supported)) {
+    fail(`base must horizontally cover ${path}`);
+  }
+  if (
+    base.minimumY > supported.minimumY + GEOMETRY_EPSILON ||
+    base.maximumY <= supported.minimumY + GEOMETRY_EPSILON ||
+    base.maximumY >= supported.maximumY - GEOMETRY_EPSILON
+  ) {
+    fail(`base must overlap ${path} from below and leave it raised`);
+  }
+}
+
+function geometryBox(
+  value: JsonObject,
+  path: string,
+  frontReliefDepth = 0,
+): GeometryBox {
+  const position = vector(value.position, `${path}.position`, false);
+  const size = vector(value.size, `${path}.size`, true);
+  return {
+    minimumX: position.x - size.x / 2,
+    maximumX: position.x + size.x / 2,
+    minimumY: position.y - size.y / 2,
+    maximumY: position.y + size.y / 2,
+    minimumZ: position.z - size.z / 2 - frontReliefDepth,
+    maximumZ: position.z + size.z / 2,
+  };
+}
+
+function coversHorizontally(
+  outer: GeometryBox,
+  inner: GeometryBox,
+): boolean {
+  return (
+    outer.minimumX <= inner.minimumX + GEOMETRY_EPSILON &&
+    outer.maximumX >= inner.maximumX - GEOMETRY_EPSILON &&
+    outer.minimumZ <= inner.minimumZ + GEOMETRY_EPSILON &&
+    outer.maximumZ >= inner.maximumZ - GEOMETRY_EPSILON
+  );
+}
+
+function nearlyEqual(left: number, right: number): boolean {
+  const scale = Math.max(1, Math.abs(left), Math.abs(right));
+  return Math.abs(left - right) <= GEOMETRY_EPSILON * scale;
 }
 
 function objectAt(value: unknown, path: string): JsonObject {

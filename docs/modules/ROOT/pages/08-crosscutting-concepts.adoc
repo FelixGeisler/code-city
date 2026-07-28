@@ -42,8 +42,9 @@ self-edges are omitted.
 * External: terminate at a city-edge NuGet, npm, assembly, or unresolved gateway.
 * Print: optionally recess bundled district routes into the base.
 
-Routes are filtered and hidden by default. Physical streets remain structural
-gaps between districts, not one street per dependency.
+Routes are filtered and hidden by default. Each semantic city has one continuous
+base. Districts are raised parcels; configured gaps expose the base as roads,
+not one street per dependency.
 
 == Determinism
 
@@ -62,8 +63,9 @@ independent of `.git`, remain follow-up work.
 == Physical identity
 
 The model may carry an explicit title, version, and relative SVG/PNG logo
-reference. Layout reserves a front-edge identity panel; the viewer previews it,
-and the print plan preserves its content and channel assignment.
+reference. Layout reserves a compact plaque joined to the center of the front
+edge; the viewer previews it, and the print plan preserves its content and
+channel assignment.
 
 Text and logo mesh generation, including minimum-detail checks, belongs to the
 exporter slice. A multi-repository city has one main panel and may later label
@@ -79,6 +81,9 @@ The print planner maps semantic groups onto one or more channels. If groups
 outnumber channels, it deterministically merges them, produces monochrome
 output, or fails, as selected by the profile. Exporters consume this print plan
 and contain no printer-specific tool count.
+
+Printer layouts may later derive multiple plate bases without changing the
+semantic city coordinates.
 
 The Prusa XL one-, two-, and five-tool configurations are profiles of the same
 model.
