@@ -51,14 +51,33 @@ npm run cli -- export `
 Routes default to `off`; select `--routes auto` to print capped,
 district-aggregated dependencies.
 
-In the viewer, **Export print file** uses the same pipeline in a cancellable
-module worker. Select 3MF or STL and a bundled or local JSON profile. Preflight
-reports dimensions, triangles, parts, channels, and warnings. No input is sent
-over the network.
+Use `--fit error` for one direct 3MF or STL. `--fit scale` reduces the model no
+further than the profile-safe feature scale and still requires one plate.
+`--fit tile` preserves the requested scale and assigns complete districts to
+at most `--max-plates` (default `99`). Scale and tile exports are deterministic
+ZIP bundles:
+
+[source,powershell]
+----
+npm run cli -- export `
+  --model examples\demo-city.json `
+  --profile profiles\generic-multi-channel.json `
+  --format 3mf `
+  --scale 3 `
+  --fit tile `
+  --output build\print\code-city-demo.zip
+----
+
+The ZIP contains `manifest.json` and numbered `plate-01` artifacts. The
+manifest reports applied scale, bounds, warnings, unplaced objects, and omitted
+cross-plate routes with both endpoint IDs and plate numbers.
+
+In the viewer, **Print plates** prepares and previews the same geometry; export
+runs in a cancellable module worker. Select 3MF or STL and a bundled or local
+JSON profile. Preflight reports plate count, filenames, dimensions,
+utilization, applied scale, warnings, omissions, and unplaced objects. No input
+is sent over the network.
 
 **Prepare calibration** uses the selected profile without repository content
 and downloads the deterministic calibration plate in the selected format plus
 its manifest.
-
-Oversized exports report their measured bounds. Automatic fitting and tiling,
-arbitrary fonts and logos, and slicer settings remain separate work.

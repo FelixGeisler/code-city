@@ -6,6 +6,7 @@ import {
   assignSemanticGroups,
   createPrusaXLProfile,
   createSingleChannelProfile,
+  validateCityModel,
   type PrinterProfile,
 } from "../packages/core/src/index.js";
 import {
@@ -60,7 +61,169 @@ function overflowDemo(weight: number) {
   };
 }
 
+function plateMarkerRouteModel() {
+  return validateCityModel({
+    schemaVersion: "1.0",
+    generator: { name: "code-city", version: "test" },
+    repositories: [{ id: "repository:marker", name: "Marker Route" }],
+    solutions: [{
+      id: "solution:marker",
+      repositoryId: "repository:marker",
+      name: "Marker Route",
+      path: ".",
+      moduleIds: ["module:left", "module:right"],
+    }],
+    modules: [
+      {
+        id: "module:left",
+        repositoryId: "repository:marker",
+        kind: "npm-package",
+        name: "Left",
+        path: "left",
+        solutionIds: ["solution:marker"],
+        packageId: "left",
+      },
+      {
+        id: "module:right",
+        repositoryId: "repository:marker",
+        kind: "npm-package",
+        name: "Right",
+        path: "right",
+        solutionIds: ["solution:marker"],
+        packageId: "right",
+      },
+    ],
+    semanticGroups: DEMO_MODEL.semanticGroups,
+    base: {
+      id: "base:marker",
+      semanticGroupId: "base",
+      position: { x: 50, y: 0.5, z: 15 },
+      size: { x: 100, y: 1, z: 30 },
+    },
+    districts: [
+      {
+        id: "district:left",
+        repositoryId: "repository:marker",
+        moduleId: "module:left",
+        name: "Left",
+        path: "left",
+        position: { x: 20, y: 1, z: 15 },
+        size: { x: 10, y: 2, z: 10 },
+      },
+      {
+        id: "district:right",
+        repositoryId: "repository:marker",
+        moduleId: "module:right",
+        name: "Right",
+        path: "right",
+        position: { x: 80, y: 1, z: 15 },
+        size: { x: 10, y: 2, z: 10 },
+      },
+    ],
+    buildings: [],
+    dependencies: [{
+      id: "dependency:left-right",
+      repositoryId: "repository:marker",
+      sourceId: "module:left",
+      targetId: "module:right",
+      resolution: "internal",
+      kind: "project-reference",
+      weight: 1,
+    }],
+    bounds: { x: 100, y: 2, z: 30 },
+  });
+}
+
 describe("print dependency integration", () => {
+  it("accounts for every member of a printed aggregate beyond the five-item UI sample", () => {
+    const repeated = Array.from({ length: 7 }, (_, index) => ({
+      ...DEMO_MODEL.dependencies.find(
+        ({ id }) => id === "dependency:main-model",
+      )!,
+      id: `dependency:main-model:${index}`,
+    }));
+    const model = validateCityModel({
+      ...DEMO_MODEL,
+      dependencies: [
+        ...DEMO_MODEL.dependencies.filter(
+          ({ id }) => id !== "dependency:main-model",
+        ),
+        ...repeated,
+      ],
+    });
+    const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
+    const artifacts = buildPrintableCityArtifacts(
+      model,
+      assignSemanticGroups(profile, model.semanticGroups),
+      {
+        profile,
+        scale: 3,
+        labelPolicy: "off",
+        routePolicy: "auto",
+      },
+    );
+
+    expect(
+      artifacts.routeOutcomes.filter(({ dependencyId }) =>
+        dependencyId.startsWith("dependency:main-model:"),
+      ),
+    ).toEqual(
+      repeated.map(({ id }) => ({
+        dependencyId: id,
+        status: "printed",
+      })),
+    );
+  });
+
+  it("routes around every raised plate-number cell instead of colliding with the marker", () => {
+    const model = plateMarkerRouteModel();
+    const profile = createSingleChannelProfile();
+    const artifacts = buildPrintableCityArtifacts(
+      model,
+      assignSemanticGroups(profile, model.semanticGroups),
+      {
+        profile,
+        scale: 1,
+        labelPolicy: "off",
+        routePolicy: "auto",
+        plateNumber: {
+          id: "plate-01-number",
+          label: "08",
+          bounds: {
+            minimum: { x: 46, y: 1, z: 12.5 },
+            maximum: { x: 54, y: 1.8, z: 17.5 },
+          },
+        },
+      },
+    );
+    const primitives = artifacts.city.parts.flatMap(
+      ({ primitives: items }) => items,
+    );
+    const marker = primitives.filter(({ kind }) => kind === "plate-number");
+    const routes = primitives.filter(
+      ({ semanticGroupId }) => semanticGroupId === "routes",
+    );
+    const positiveOverlap = (
+      left: (typeof primitives)[number]["bounds"],
+      right: (typeof primitives)[number]["bounds"],
+    ) =>
+      left.minimum.x < right.maximum.x &&
+      right.minimum.x < left.maximum.x &&
+      left.minimum.y < right.maximum.y &&
+      right.minimum.y < left.maximum.y &&
+      left.minimum.z < right.maximum.z &&
+      right.minimum.z < left.maximum.z;
+
+    expect(marker.length).toBeGreaterThan(0);
+    expect(artifacts.routes.printedCount).toBe(1);
+    expect(
+      routes.every(({ bounds: route }) =>
+        marker.every(({ bounds: cell }) => !positiveOverlap(route, cell)),
+      ),
+    ).toBe(true);
+    expect(validatePrintableCity(artifacts.city, profile)).toEqual([]);
+  });
+
   it("prints the Demo on one extended base with fixed external boxes and grounded aggregate routes", () => {
     const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
     const modelBefore = structuredClone(DEMO_MODEL);
@@ -127,6 +290,12 @@ describe("print dependency integration", () => {
     expect(
       artifacts.routes.printedWeight + artifacts.routes.omittedWeight,
     ).toBe(artifacts.routes.totalWeight);
+    expect(artifacts.routeOutcomes).toHaveLength(
+      DEMO_MODEL.dependencies.length,
+    );
+    expect(
+      artifacts.routeOutcomes.every(({ status }) => status === "printed"),
+    ).toBe(true);
     expect(validatePrintableCity(artifacts.city, profile)).toEqual([]);
     expect(DEMO_MODEL).toEqual(modelBefore);
   });
@@ -221,6 +390,15 @@ describe("print dependency integration", () => {
       printedWeight: 0,
       omittedWeight: 0,
     });
+    expect(artifacts.routeOutcomes).toEqual(
+      [...model.dependencies]
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map(({ id }) => ({
+          dependencyId: id,
+          status: "omitted",
+          reason: "policy",
+        })),
+    );
     expect(model).toEqual(before);
   });
 

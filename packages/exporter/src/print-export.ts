@@ -7,6 +7,7 @@ import {
   validateCityModel,
   type CityModel,
   type PrintFormat,
+  type PrintFitPolicy,
   type PrintLabelPolicy,
   type PrinterProfile,
   type PrintRoutePolicy,
@@ -28,6 +29,9 @@ export interface PrintExportOptions {
   readonly labelPolicy: PrintLabelPolicy;
   readonly routePolicy: PrintRoutePolicy;
   readonly includeLegend: boolean;
+  /** Oversize handling. The single-artifact generator supports `error` only. */
+  readonly fitPolicy?: PrintFitPolicy;
+  readonly maximumPlateCount?: number;
 }
 
 export type PrintExportPhase =
@@ -135,6 +139,30 @@ function validateOptions(options: PrintExportOptions): void {
   }
   if (typeof options.includeLegend !== "boolean") {
     issues.push("Legend selection must be a boolean.");
+  }
+  if (
+    options.fitPolicy !== undefined &&
+    options.fitPolicy !== "error" &&
+    options.fitPolicy !== "scale" &&
+    options.fitPolicy !== "tile"
+  ) {
+    issues.push("Print fit policy must be 'error', 'scale', or 'tile'.");
+  }
+  if (
+    options.maximumPlateCount !== undefined &&
+    (!Number.isSafeInteger(options.maximumPlateCount) ||
+      options.maximumPlateCount < 1 ||
+      options.maximumPlateCount > 99)
+  ) {
+    issues.push("Maximum plate count must be an integer from 1 to 99.");
+  }
+  if (
+    options.fitPolicy !== undefined &&
+    options.fitPolicy !== "error"
+  ) {
+    issues.push(
+      "Single-artifact export only supports fit policy 'error'; use the print-plate bundle exporter for scale or tile.",
+    );
   }
   if (issues.length > 0) {
     throw new PrintPlanValidationError(issues);

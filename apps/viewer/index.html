@@ -66,6 +66,39 @@
           </div>
         </div>
 
+        <div
+          id="print-plate-toolbar"
+          class="print-plate-toolbar"
+          data-preview-mode="city"
+          aria-label="Canvas layout"
+          hidden
+        >
+          <div class="print-plate-mode" role="group" aria-label="Canvas layout">
+            <button
+              id="print-preview-city"
+              type="button"
+              aria-pressed="true"
+            >
+              City layout
+            </button>
+            <button
+              id="print-preview-plates"
+              type="button"
+              aria-pressed="false"
+              disabled
+            >
+              Print plates
+            </button>
+          </div>
+          <select
+            id="print-preview-plate"
+            aria-label="Print plate"
+            disabled
+            hidden
+          ></select>
+          <span id="print-preview-status">City layout</span>
+        </div>
+
         <aside
           id="viewer-workspace"
           class="viewer-workspace"
@@ -815,6 +848,31 @@
               </label>
             </div>
 
+            <div class="print-export-grid">
+              <label class="print-export-field" for="print-fit">
+                <span>Fit policy</span>
+                <select id="print-fit">
+                  <option value="error">Keep scale or fail</option>
+                  <option value="scale">Scale to one plate</option>
+                  <option value="tile">Split complete districts</option>
+                </select>
+              </label>
+
+              <label class="print-export-field" for="print-max-plates">
+                <span>Maximum plates</span>
+                <input
+                  id="print-max-plates"
+                  type="number"
+                  min="1"
+                  max="99"
+                  step="1"
+                  value="12"
+                  inputmode="numeric"
+                  required
+                />
+              </label>
+            </div>
+
             <label class="print-export-check">
               <input id="print-routes" type="checkbox" />
               <span>Print aggregated dependencies</span>
@@ -826,8 +884,8 @@
           </fieldset>
 
           <p class="print-export-help">
-            Exports one print file at the requested scale. Oversized cities
-            fail; they are not silently fitted or tiled.
+            Error preserves the requested scale. Scale fits one plate. Tile
+            keeps complete districts together and downloads a ZIP.
             Calibration uses only the selected printer profile and never
             includes repository content.
           </p>

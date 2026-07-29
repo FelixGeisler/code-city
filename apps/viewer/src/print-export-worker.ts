@@ -1,11 +1,14 @@
 import {
-  preparePrintExport,
-  serializePreparedPrintExport,
   type PrintExportArtifact,
 } from "../../../packages/exporter/src/print-export.js";
 import {
   generateCalibrationPrintExport,
 } from "../../../packages/exporter/src/calibration.js";
+import {
+  preparePrintPlateBundle,
+  serializePreparedPrintPlateBundle,
+  serializePreparedSinglePrintPlateExport,
+} from "../../../packages/exporter/src/print-plates.js";
 import {
   isPrintExportWorkerRequest,
   serializePrintExportError,
@@ -119,34 +122,100 @@ export function runPrintExportRequest(
       return;
     }
 
-    const prepared = preparePrintExport(
+    const fitPolicy = request.options.fitPolicy ?? "error";
+    const prepared = preparePrintPlateBundle(
       {
         format: request.format,
         model: request.model,
         profile: request.profile,
-        options: request.options,
+        options: {
+          scale: request.options.scale,
+          fitPolicy,
+          labelPolicy: request.options.labelPolicy,
+          routePolicy: request.options.routePolicy,
+          includeLegend: request.options.includeLegend,
+          ...(request.options.maximumPlateCount === undefined
+            ? {}
+            : {
+                maximumPlateCount:
+                  request.options.maximumPlateCount,
+              }),
+        },
       },
-      (progress) => {
+      (value) => {
         emit({
           type: "progress",
           jobId: request.jobId,
-          ...progress,
+          phase: value.phase,
+          completed: value.completed,
+          message: value.message,
         });
       },
     );
+    if (fitPolicy !== "error") {
+      emit({
+        type: "bundle-preflight",
+        jobId: request.jobId,
+        preflight: prepared.preflight,
+        preview: prepared.preview,
+      });
+      const result = serializePreparedPrintPlateBundle(
+        prepared,
+        (value) => {
+          emit({
+            type: "progress",
+            jobId: request.jobId,
+            phase: value.phase,
+            completed: value.completed,
+            message: value.message,
+          });
+        },
+      );
+      const bundleBytes = transferableBuffer(result.bytes);
+      const manifestBytes = transferableBuffer(result.manifestBytes);
+      const legendBytes =
+        result.legendBytes === undefined
+          ? undefined
+          : transferableBuffer(result.legendBytes);
+      emit(
+        {
+          type: "bundle-result",
+          jobId: request.jobId,
+          artifact: {
+            format: "zip",
+            mimeType: "application/zip",
+            fileExtension: ".zip",
+            bytes: bundleBytes,
+          },
+          manifestBytes,
+          ...(legendBytes === undefined ? {} : { legendBytes }),
+        },
+        legendBytes === undefined
+          ? [bundleBytes, manifestBytes]
+          : [bundleBytes, manifestBytes, legendBytes],
+      );
+      return;
+    }
+
     emit({
       type: "preflight",
       jobId: request.jobId,
       preflight: prepared.preflight,
+      preview: prepared.preview,
     });
 
-    const result = serializePreparedPrintExport(prepared, (progress) => {
-      emit({
-        type: "progress",
-        jobId: request.jobId,
-        ...progress,
-      });
-    });
+    const result = serializePreparedSinglePrintPlateExport(
+      prepared,
+      (progress) => {
+        emit({
+          type: "progress",
+          jobId: request.jobId,
+          phase: progress.phase,
+          completed: progress.completed,
+          message: progress.message,
+        });
+      },
+    );
     const artifact = transferableArtifact(result.artifact);
     const legendBytes =
       result.legendBytes === undefined
@@ -155,7 +224,6 @@ export function runPrintExportRequest(
     const response: PrintExportWorkerResponse = {
       type: "result",
       jobId: request.jobId,
-      preflight: result.preflight,
       artifact,
       ...(legendBytes === undefined ? {} : { legendBytes }),
     };

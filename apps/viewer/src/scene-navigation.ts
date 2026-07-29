@@ -4,8 +4,37 @@ export interface BoundsSize {
   readonly z: number;
 }
 
+export type ScenePresentationMode = "city" | "print";
+
+export function semanticPickingEnabled(
+  mode: ScenePresentationMode,
+): boolean {
+  return mode === "city";
+}
+
 const MINIMUM_RADIUS = 0.5;
 const DEFAULT_PADDING = 1.18;
+const MINIMUM_MAXIMUM_DISTANCE = 20;
+const FRAME_DISTANCE_MULTIPLIER = 5;
+
+export function cameraMaximumDistanceForFrame(
+  semanticCityMaximumDistance: number,
+  frameDistance: number,
+): number {
+  if (
+    !Number.isFinite(semanticCityMaximumDistance) ||
+    semanticCityMaximumDistance <= 0 ||
+    !Number.isFinite(frameDistance) ||
+    frameDistance <= 0
+  ) {
+    throw new RangeError("Camera distances must be finite and positive.");
+  }
+  return Math.max(
+    semanticCityMaximumDistance,
+    frameDistance * FRAME_DISTANCE_MULTIPLIER,
+    MINIMUM_MAXIMUM_DISTANCE,
+  );
+}
 
 export function cameraDistanceForBounds(
   size: BoundsSize,

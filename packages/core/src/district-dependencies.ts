@@ -92,6 +92,12 @@ export interface DistrictDependencyBundle {
   readonly edgeCount: number;
   readonly weight: number;
   readonly kinds: readonly DistrictDependencyKindSummary[];
+  /**
+   * Complete, stable aggregate membership for non-visual consumers such as
+   * print-route outcome accounting. `contributors` remains the bounded UI
+   * explanation sample.
+   */
+  readonly dependencyIds: readonly string[];
   readonly contributors: readonly DistrictDependencyContributor[];
 }
 
@@ -714,6 +720,11 @@ function summarizeBundle(
       .sort(compareContributors)
       .slice(0, DISTRICT_DEPENDENCY_CONTRIBUTORS_LIMIT),
   );
+  const dependencyIds = Object.freeze(
+    edges
+      .map(({ dependencyId }) => dependencyId)
+      .sort(compareText),
+  );
   return Object.freeze({
     id: bundle.id,
     source: districtEndpoint(
@@ -736,6 +747,7 @@ function summarizeBundle(
     edgeCount: edges.length,
     weight: sumEdgeWeights(edges),
     kinds,
+    dependencyIds,
     contributors,
   });
 }

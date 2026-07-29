@@ -1,4 +1,5 @@
 import type {
+  PrintPlateBundleResultResponse,
   PrintExportTransferArtifact,
 } from "./print-export-protocol.js";
 
@@ -17,9 +18,17 @@ export interface PrintCalibrationFileNames {
   readonly manifest: string;
 }
 
+export interface PrintBundleFileNames {
+  readonly artifact: string;
+}
+
 export interface PrintExportDownloadInput {
   readonly artifact: PrintExportTransferArtifact;
   readonly legendBytes?: ArrayBuffer;
+}
+
+export interface PrintBundleDownloadInput {
+  readonly artifact: PrintPlateBundleResultResponse["artifact"];
 }
 
 export interface PrintExportDownload {
@@ -43,6 +52,10 @@ export interface PrintCalibrationDownloads {
   readonly manifest: PrintExportDownload;
 }
 
+export interface PrintBundleDownloads {
+  readonly artifact: PrintExportDownload;
+}
+
 export type PrintDownloadPublication =
   | {
       readonly ok: true;
@@ -57,6 +70,16 @@ export type PrintCalibrationDownloadPublication =
   | {
       readonly ok: true;
       readonly downloads: PrintCalibrationDownloads;
+    }
+  | {
+      readonly ok: false;
+      readonly message: string;
+    };
+
+export type PrintBundleDownloadPublication =
+  | {
+      readonly ok: true;
+      readonly downloads: PrintBundleDownloads;
     }
   | {
       readonly ok: false;
@@ -120,6 +143,20 @@ export function printCalibrationFileNames(
   return {
     artifact: `${stem}.calibration${fileExtension}`,
     manifest: `${stem}.calibration.json`,
+  };
+}
+
+export function printBundleFileNames(
+  name: PrintExportName,
+): PrintBundleFileNames {
+  const parts = [name.title, name.version]
+    .filter(
+      (part): part is string =>
+        typeof part === "string" && part.trim().length > 0,
+    )
+    .join("-");
+  return {
+    artifact: `${sanitizePrintFileStem(parts)}-print-bundle.zip`,
   };
 }
 
@@ -231,6 +268,36 @@ export class PrintDownloadManager {
     }
   }
 
+  public replaceBundle(
+    name: PrintExportName,
+    input: PrintBundleDownloadInput,
+  ): PrintBundleDownloads {
+    this.clear();
+    const names = printBundleFileNames(name);
+    const created: string[] = [];
+    try {
+      const blob = new Blob([input.artifact.bytes], {
+        type: input.artifact.mimeType,
+      });
+      const url = this.objectUrls.createObjectURL(blob);
+      created.push(url);
+      this.activeUrls = created;
+      return {
+        artifact: {
+          fileName: names.artifact,
+          url,
+          blob,
+        },
+      };
+    } catch (error) {
+      for (const url of created) {
+        this.objectUrls.revokeObjectURL(url);
+      }
+      this.activeUrls = [];
+      throw error;
+    }
+  }
+
   public clear(): void {
     for (const url of this.activeUrls) {
       this.objectUrls.revokeObjectURL(url);
@@ -280,6 +347,26 @@ export function tryPublishCalibrationDownloads(
       ok: false,
       message:
         `Local calibration downloads could not be prepared: ${detail}`,
+    };
+  }
+}
+
+export function tryPublishPrintBundleDownload(
+  manager: PrintDownloadManager,
+  name: PrintExportName,
+  input: PrintBundleDownloadInput,
+): PrintBundleDownloadPublication {
+  try {
+    return {
+      ok: true,
+      downloads: manager.replaceBundle(name, input),
+    };
+  } catch (error) {
+    const detail =
+      error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      message: `Local downloads could not be prepared: ${detail}`,
     };
   }
 }

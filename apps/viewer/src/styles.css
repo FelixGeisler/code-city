@@ -208,6 +208,80 @@ button,
   pointer-events: none;
 }
 
+.print-plate-toolbar {
+  position: absolute;
+  z-index: 3;
+  top: 82px;
+  left: 20px;
+  max-width: min(620px, calc(100% - 480px));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 4px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(10, 23, 39, 0.88);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(14px);
+}
+
+.print-plate-mode {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.print-plate-mode button,
+.print-plate-toolbar select {
+  min-height: 36px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.print-plate-mode button {
+  cursor: pointer;
+}
+
+.print-plate-mode button[aria-pressed="true"] {
+  border-color: rgba(121, 196, 255, 0.22);
+  color: #f5fbff;
+  background: rgba(54, 163, 255, 0.17);
+}
+
+.print-plate-mode button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.print-plate-toolbar select {
+  border-color: var(--line);
+  color: #dcecff;
+  background: #0d1d30;
+}
+
+.print-plate-mode button:focus-visible,
+.print-plate-toolbar select:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 1px;
+}
+
+#print-preview-status {
+  min-width: 0;
+  overflow: hidden;
+  padding-right: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .scene-meta p {
   margin: 0;
 }
@@ -1695,6 +1769,36 @@ button,
   .scene-meta {
     top: 12px;
     left: 12px;
+  }
+
+  .print-plate-toolbar {
+    top: 68px;
+    right: 12px;
+    left: 12px;
+    width: calc(100% - 24px);
+    max-width: none;
+    flex-wrap: wrap;
+  }
+
+  .print-plate-mode {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .print-plate-mode button {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .print-plate-toolbar select {
+    flex: 1 1 120px;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  #print-preview-status {
+    flex: 1 1 100%;
+    max-width: 100%;
   }
 
   #model-name {

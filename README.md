@@ -73,12 +73,12 @@ npm run cli -- export `
   --output build\print\code-city-demo.stl
 ```
 
-The viewer accepts a `city-model.json` through **Open model**. **Export print file**
-selects a generic, Prusa XL, or local custom printer profile, shows exact
-preflight dimensions and channel assignments, then downloads 3MF or STL and an
-optional private legend. Generation runs locally in a cancellable worker; no
-model or profile is uploaded. **Prepare calibration** downloads a profile-only
-test plate in the selected format and an exact measurement manifest.
+The viewer accepts a `city-model.json` through **Open model**. **Print plates**
+selects a generic, Prusa XL, or local custom printer profile, previews the exact
+exporter layout, and downloads direct 3MF/STL or a deterministic multi-plate ZIP.
+Generation runs locally in a cancellable worker; no model or profile is uploaded.
+**Prepare calibration** downloads a profile-only test plate and measurement
+manifest.
 
 C# is analyzed by the bundled, syntax-only Roslyn helper. TypeScript and
 JavaScript use the pinned compiler API. Neither analyzer restores, builds, runs
@@ -98,19 +98,16 @@ commit, removes the repository, and enters the same bounded snapshot pipeline.
 For Azure Pipelines, prefer `checkout: self` with `persistCredentials: false`
 and analyze `$(Build.SourcesDirectory)` locally.
 
-The Demo imports into PrusaSlicer as one object with five aligned tool parts;
-the command reports its profile-derived size. `--routes auto` prints capped,
-aggregated district dependencies; routes default to `off`. The private JSON
-legend maps printed codes to repository-relative paths; use `--labels off` or
-`--legend off` as needed. Oversized exports fail with measured bounds; automatic
-fitting and tiling, arbitrary fonts or logos, and slicer settings remain
-planned.
+The Demo imports into PrusaSlicer with aligned tool parts. `--routes auto`
+prints capped, aggregated district dependencies; routes default to `off`. The
+private JSON legend maps printed codes to repository-relative paths. Oversized
+cities use profile-safe `--fit scale` or complete-district `--fit tile`;
+arbitrary fonts, custom logos, and slicer settings remain separate.
 
-## Planned product flow
+## Local product flow
 
 `codecity open` accepts one or more local roots and serves only on
-`127.0.0.1`; it prints the URL without launching a browser. Oversized
-multi-plate exports remain planned.
+`127.0.0.1`; it prints the URL without launching a browser.
 
 Architecture documentation uses Antora and the concise arc42 structure. It is
 published at

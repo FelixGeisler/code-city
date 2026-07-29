@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { cameraDistanceForBounds } from "../apps/viewer/src/scene-navigation.js";
+import {
+  cameraDistanceForBounds,
+  cameraMaximumDistanceForFrame,
+  semanticPickingEnabled,
+} from "../apps/viewer/src/scene-navigation.js";
 
 describe("cameraDistanceForBounds", () => {
   it("uses horizontal field of view when a viewport is narrow", () => {
@@ -55,5 +59,26 @@ describe("cameraDistanceForBounds", () => {
     expect(() =>
       cameraDistanceForBounds({ x: 1, y: 1, z: 1 }, 45, 1, 0.9),
     ).toThrow(RangeError);
+  });
+});
+
+describe("cameraMaximumDistanceForFrame", () => {
+  it("expands for a large print frame and restores the semantic range", () => {
+    expect(cameraMaximumDistanceForFrame(40, 30)).toBe(150);
+    expect(cameraMaximumDistanceForFrame(40, 4)).toBe(40);
+  });
+
+  it("rejects invalid distances", () => {
+    expect(() => cameraMaximumDistanceForFrame(0, 4)).toThrow(RangeError);
+    expect(() =>
+      cameraMaximumDistanceForFrame(40, Number.NaN),
+    ).toThrow(RangeError);
+  });
+});
+
+describe("semanticPickingEnabled", () => {
+  it("only exposes semantic city picking in city presentation mode", () => {
+    expect(semanticPickingEnabled("city")).toBe(true);
+    expect(semanticPickingEnabled("print")).toBe(false);
   });
 });

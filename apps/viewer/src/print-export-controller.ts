@@ -1,9 +1,11 @@
 import {
   isPrintExportWorkerResponse,
+  normalizePrintExportPreviewSource,
   serializePrintExportError,
   type PrintCalibrationGenerateRequest,
   type PrintExportFailure,
   type PrintExportGenerateRequest,
+  type PrintPlateBundleResultResponse,
   type PrintExportProgressResponse,
   type PrintExportTransferArtifact,
   type PrintExportWorkerRequest,
@@ -11,11 +13,14 @@ import {
 } from "./print-export-protocol.js";
 import type {
   PrintExportOptions,
-  PrintExportPreflight,
 } from "../../../packages/exporter/src/print-export.js";
 import type {
   CalibrationPrintExportPreflight,
 } from "../../../packages/exporter/src/calibration.js";
+import type {
+  PrintPlateBundlePreflight,
+} from "../../../packages/exporter/src/print-plates.js";
+import type { PrintLayoutPreviewPlan } from "./print-plate-preview.js";
 
 export interface PrintExportWorkerLike {
   onmessage:
@@ -55,13 +60,17 @@ export interface PrintExportBusyState {
   readonly status: "busy";
   readonly jobId: number;
   readonly progress?: Omit<PrintExportProgressResponse, "type" | "jobId">;
-  readonly preflight?: PrintExportPreflight;
+  readonly preflight?: PrintPlateBundlePreflight;
+  readonly preview?: PrintLayoutPreviewPlan;
+  readonly bundlePreflight?: PrintPlateBundlePreflight;
+  readonly bundlePreview?: PrintLayoutPreviewPlan;
 }
 
 export interface PrintExportReadyState {
   readonly status: "ready";
   readonly jobId: number;
-  readonly preflight: PrintExportPreflight;
+  readonly preflight: PrintPlateBundlePreflight;
+  readonly preview: PrintLayoutPreviewPlan;
   readonly artifact: PrintExportTransferArtifact;
   readonly legendBytes?: ArrayBuffer;
 }
@@ -74,17 +83,31 @@ export interface PrintCalibrationReadyState {
   readonly manifestBytes: ArrayBuffer;
 }
 
+export interface PrintPlateBundleReadyState {
+  readonly status: "bundle-ready";
+  readonly jobId: number;
+  readonly preflight: PrintPlateBundlePreflight;
+  readonly preview: PrintLayoutPreviewPlan;
+  readonly artifact: PrintPlateBundleResultResponse["artifact"];
+  readonly manifestBytes: ArrayBuffer;
+  readonly legendBytes?: ArrayBuffer;
+}
+
 export interface PrintExportFailedState {
   readonly status: "failed";
   readonly jobId: number;
   readonly error: PrintExportFailure;
-  readonly preflight?: PrintExportPreflight;
+  readonly preflight?: PrintPlateBundlePreflight;
+  readonly preview?: PrintLayoutPreviewPlan;
+  readonly bundlePreflight?: PrintPlateBundlePreflight;
+  readonly bundlePreview?: PrintLayoutPreviewPlan;
 }
 
 export type PrintExportControllerState =
   | PrintExportIdleState
   | PrintExportBusyState
   | PrintExportReadyState
+  | PrintPlateBundleReadyState
   | PrintCalibrationReadyState
   | PrintExportFailedState;
 
@@ -101,9 +124,23 @@ export interface PrintExportControllerCallbacks {
 interface ActiveWorker {
   readonly jobId: number;
   readonly kind: "city" | "calibration";
+  readonly output: "single" | "bundle" | "calibration";
   readonly format: "3mf" | "stl";
+  readonly requestFingerprint?: PrintExportRequestFingerprint;
   readonly worker: PrintExportWorkerLike;
   watchdogHandle?: unknown;
+}
+
+interface PrintExportRequestFingerprint {
+  readonly format: "3mf" | "stl";
+  readonly fitPolicy: "error" | "scale" | "tile";
+  readonly scale: number;
+  readonly maximumPlateCount?: number;
+  readonly routePolicy: PrintExportOptions["routePolicy"];
+  readonly labelPolicy: PrintExportOptions["labelPolicy"];
+  readonly includeLegend: boolean;
+  readonly profileId?: string;
+  readonly profileName?: string;
 }
 
 const IDLE_STATE: PrintExportIdleState = Object.freeze({ status: "idle" });
@@ -115,6 +152,64 @@ function protocolFailure(message: string): PrintExportFailure {
     message,
     issues: [],
   };
+}
+
+function sameScale(left: number, right: number): boolean {
+  const scale = Math.max(1, Math.abs(left), Math.abs(right));
+  return Math.abs(left - right) <= 1e-7 * scale;
+}
+
+function profileField(
+  profile: unknown,
+  field: "id" | "name",
+): string | undefined {
+  if (typeof profile !== "object" || profile === null) return undefined;
+  const value = (profile as Record<string, unknown>)[field];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function requestFingerprint(
+  request: PrintExportStartRequest,
+): PrintExportRequestFingerprint {
+  const profileId = profileField(request.profile, "id");
+  const profileName = profileField(request.profile, "name");
+  return Object.freeze({
+    format: request.format,
+    fitPolicy: request.options.fitPolicy ?? "error",
+    scale: request.options.scale,
+    ...(request.options.maximumPlateCount === undefined
+      ? {}
+      : { maximumPlateCount: request.options.maximumPlateCount }),
+    routePolicy: request.options.routePolicy,
+    labelPolicy: request.options.labelPolicy,
+    includeLegend: request.options.includeLegend,
+    ...(profileId === undefined ? {} : { profileId }),
+    ...(profileName === undefined ? {} : { profileName }),
+  });
+}
+
+function preflightMatchesRequest(
+  preflight: PrintPlateBundlePreflight,
+  fingerprint: PrintExportRequestFingerprint,
+): boolean {
+  const labelsDisabled =
+    fingerprint.labelPolicy === "off" &&
+    (preflight.labels.printedBuildings !== 0 ||
+      preflight.labels.printedDistricts !== 0);
+  return (
+    preflight.format === fingerprint.format &&
+    preflight.fitPolicy === fingerprint.fitPolicy &&
+    sameScale(preflight.requestedScale, fingerprint.scale) &&
+    preflight.routes.policy === fingerprint.routePolicy &&
+    preflight.legendIncluded === fingerprint.includeLegend &&
+    !labelsDisabled &&
+    (fingerprint.maximumPlateCount === undefined ||
+      preflight.plateCount <= fingerprint.maximumPlateCount) &&
+    (fingerprint.profileId === undefined ||
+      preflight.profileId === fingerprint.profileId) &&
+    (fingerprint.profileName === undefined ||
+      preflight.profileName === fingerprint.profileName)
+  );
 }
 
 export class PrintExportController {
@@ -160,9 +255,14 @@ export class PrintExportController {
   }
 
   public start(request: PrintExportStartRequest): number {
+    const fingerprint = requestFingerprint(request);
     return this.startWorker(
       "city",
+      fingerprint.fitPolicy === "error"
+        ? "single"
+        : "bundle",
       request.format,
+      fingerprint,
       (jobId): PrintExportGenerateRequest => ({
         type: "generate",
         jobId,
@@ -177,7 +277,9 @@ export class PrintExportController {
   public startCalibration(request: PrintCalibrationStartRequest): number {
     return this.startWorker(
       "calibration",
+      "calibration",
       request.format,
+      undefined,
       (jobId): PrintCalibrationGenerateRequest => ({
         type: "calibrate",
         jobId,
@@ -189,7 +291,9 @@ export class PrintExportController {
 
   private startWorker(
     kind: ActiveWorker["kind"],
+    output: ActiveWorker["output"],
     format: ActiveWorker["format"],
+    fingerprint: PrintExportRequestFingerprint | undefined,
     createRequest: (jobId: number) => PrintExportWorkerRequest,
   ): number {
     if (this.disposed) {
@@ -211,7 +315,16 @@ export class PrintExportController {
       return jobId;
     }
 
-    this.active = { jobId, kind, format, worker };
+    this.active = {
+      jobId,
+      kind,
+      output,
+      format,
+      worker,
+      ...(fingerprint === undefined
+        ? {}
+        : { requestFingerprint: fingerprint }),
+    };
     worker.onmessage = (event) => {
       this.receive(worker, jobId, event.data);
     };
@@ -280,7 +393,12 @@ export class PrintExportController {
       return;
     }
     if (value.jobId !== jobId) return;
-    const { kind, format } = this.active!;
+    const {
+      kind,
+      output,
+      format,
+      requestFingerprint: fingerprint,
+    } = this.active!;
 
     switch (value.type) {
       case "progress": {
@@ -296,11 +414,21 @@ export class PrintExportController {
           ...(state?.preflight === undefined
             ? {}
             : { preflight: state.preflight }),
+          ...(state?.preview === undefined
+            ? {}
+            : { preview: state.preview }),
+          ...(state?.bundlePreflight === undefined
+            ? {}
+            : { bundlePreflight: state.bundlePreflight }),
+          ...(state?.bundlePreview === undefined
+            ? {}
+            : { bundlePreview: state.bundlePreview }),
         });
         break;
       }
       case "preflight": {
-        if (kind !== "city") {
+        const state = this.busyState(jobId);
+        if (kind !== "city" || output !== "single") {
           this.fail(
             worker,
             jobId,
@@ -310,21 +438,74 @@ export class PrintExportController {
           );
           break;
         }
-        if (value.preflight.format !== format) {
+        const preview = normalizePrintExportPreviewSource(value.preview);
+        if (
+          fingerprint === undefined ||
+          !preflightMatchesRequest(value.preflight, fingerprint) ||
+          preview === undefined ||
+          fingerprint.fitPolicy !== "error" ||
+          preview.requestedPolicy !== fingerprint.fitPolicy ||
+          !sameScale(preview.requestedScale, fingerprint.scale) ||
+          state?.preflight !== undefined ||
+          state?.bundlePreflight !== undefined
+        ) {
           this.fail(
             worker,
             jobId,
             protocolFailure(
-              "The print worker returned preflight for another format.",
+              "The print worker returned preflight for another export request.",
             ),
           );
           break;
         }
-        const state = this.busyState(jobId);
         this.updateState({
           status: "busy",
           jobId,
           preflight: value.preflight,
+          preview,
+          ...(state?.progress === undefined
+            ? {}
+            : { progress: state.progress }),
+        });
+        break;
+      }
+      case "bundle-preflight": {
+        const state = this.busyState(jobId);
+        if (kind !== "city" || output !== "bundle") {
+          this.fail(
+            worker,
+            jobId,
+            protocolFailure(
+              "The calibration worker returned a city bundle preflight.",
+            ),
+          );
+          break;
+        }
+        const preview = normalizePrintExportPreviewSource(value.preview);
+        if (
+          fingerprint === undefined ||
+          !preflightMatchesRequest(value.preflight, fingerprint) ||
+          preview === undefined ||
+          fingerprint.fitPolicy === "error" ||
+          preview.requestedPolicy !== fingerprint.fitPolicy ||
+          !sameScale(preview.requestedScale, fingerprint.scale) ||
+          state?.preflight !== undefined ||
+          state?.bundlePreflight !== undefined
+        ) {
+          this.fail(
+            worker,
+            jobId,
+            protocolFailure(
+              "The print worker returned a bundle for another export request.",
+            ),
+          );
+          break;
+        }
+        this.updateState({
+          status: "busy",
+          jobId,
+          bundlePreflight: value.preflight,
+          bundlePreview: preview,
           ...(state?.progress === undefined
             ? {}
             : { progress: state.progress }),
@@ -332,7 +513,7 @@ export class PrintExportController {
         break;
       }
       case "result":
-        if (kind !== "city") {
+        if (kind !== "city" || output !== "single") {
           this.fail(
             worker,
             jobId,
@@ -342,12 +523,20 @@ export class PrintExportController {
           );
           break;
         }
-        if (value.artifact.format !== format) {
+        const singleState = this.busyState(jobId);
+        if (
+          singleState?.preflight === undefined ||
+          singleState.preview === undefined ||
+          singleState.preflight.format !== format ||
+          value.artifact.format !== format ||
+          (value.legendBytes !== undefined) !==
+            singleState.preflight.legendIncluded
+        ) {
           this.fail(
             worker,
             jobId,
             protocolFailure(
-              "The print worker returned an unexpected artifact format.",
+              "The print worker returned an export without matching preflight.",
             ),
           );
           break;
@@ -356,15 +545,57 @@ export class PrintExportController {
         this.updateState({
           status: "ready",
           jobId,
-          preflight: value.preflight,
+          preflight: singleState.preflight,
+          preview: singleState.preview,
           artifact: value.artifact,
           ...(value.legendBytes === undefined
             ? {}
             : { legendBytes: value.legendBytes }),
         });
         break;
+      case "bundle-result":
+        if (kind !== "city" || output !== "bundle") {
+          this.fail(
+            worker,
+            jobId,
+            protocolFailure(
+              "The calibration worker returned a city bundle export.",
+            ),
+          );
+          break;
+        }
+        const bundleState = this.busyState(jobId);
+        if (
+          bundleState?.bundlePreflight === undefined ||
+          bundleState.bundlePreview === undefined ||
+          bundleState.bundlePreflight.format !== format ||
+          (value.legendBytes !== undefined) !==
+            bundleState.bundlePreflight.legendIncluded
+        ) {
+          this.fail(
+            worker,
+            jobId,
+            protocolFailure(
+              "The print worker returned a bundle without matching preflight.",
+            ),
+          );
+          break;
+        }
+        this.finishWorker(worker, jobId);
+        this.updateState({
+          status: "bundle-ready",
+          jobId,
+          preflight: bundleState.bundlePreflight,
+          preview: bundleState.bundlePreview,
+          artifact: value.artifact,
+          manifestBytes: value.manifestBytes,
+          ...(value.legendBytes === undefined
+            ? {}
+            : { legendBytes: value.legendBytes }),
+        });
+        break;
       case "calibration-result":
-        if (kind !== "calibration") {
+        if (kind !== "calibration" || output !== "calibration") {
           this.fail(
             worker,
             jobId,
@@ -403,6 +634,15 @@ export class PrintExportController {
           ...(state?.preflight === undefined
             ? {}
             : { preflight: state.preflight }),
+          ...(state?.preview === undefined
+            ? {}
+            : { preview: state.preview }),
+          ...(state?.bundlePreflight === undefined
+            ? {}
+            : { bundlePreflight: state.bundlePreflight }),
+          ...(state?.bundlePreview === undefined
+            ? {}
+            : { bundlePreview: state.bundlePreview }),
         });
         break;
       }
@@ -431,6 +671,15 @@ export class PrintExportController {
       ...(state?.preflight === undefined
         ? {}
         : { preflight: state.preflight }),
+      ...(state?.preview === undefined
+        ? {}
+        : { preview: state.preview }),
+      ...(state?.bundlePreflight === undefined
+        ? {}
+        : { bundlePreflight: state.bundlePreflight }),
+      ...(state?.bundlePreview === undefined
+        ? {}
+        : { bundlePreview: state.bundlePreview }),
     });
   }
 

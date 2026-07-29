@@ -86,40 +86,41 @@ it("analyzes local roots and creates a printer-independent print plan", async ()
     identity: { title: string; version: string };
   };
   const plan = JSON.parse(await fs.readFile(planPath, "utf8")) as {
+    schemaVersion: string;
     format: string;
-    scale: number;
-    routePolicy: string;
-    channels: unknown[];
-    identity: { title: string; version: string };
-    identityPanel: {
-      channelId: string;
-      reliefDepth: number;
-      position: { z: number };
-      size: { z: number };
+    layout: {
+      fitPolicy: string;
+      requestedScale: number;
+      appliedScale: number;
+      plates: {
+        reservations: { kind: string }[];
+      }[];
     };
+    routes: { policy: string };
+    plates: { fileName: string; channels: string[] }[];
   };
   expect(model.identity).toMatchObject({
     title: "Sample City",
     version: "1.2.3",
   });
+  expect(plan.schemaVersion).toBe("1.0");
   expect(plan.format).toBe("stl");
-  expect(plan.scale).toBe(2);
-  expect(plan.routePolicy).toBe("auto");
-  expect(plan.channels).toHaveLength(1);
-  expect(plan.identity).toEqual({
-    title: "Sample City",
-    version: "1.2.3",
-  });
-  expect(plan.identityPanel.channelId).toBe("channel-1");
-  expect(plan.identityPanel.reliefDepth).toBeGreaterThanOrEqual(0.8);
+  expect(plan.layout.fitPolicy).toBe("error");
+  expect(plan.layout.requestedScale).toBe(2);
+  expect(plan.layout.appliedScale).toBe(2);
+  expect(plan.routes.policy).toBe("auto");
+  expect(plan.plates).toEqual([
+    expect.objectContaining({
+      fileName: "plate-01.stl",
+      channels: ["channel-1"],
+    }),
+  ]);
   expect(
-    plan.identityPanel.position.z -
-      plan.identityPanel.size.z / 2 -
-      plan.identityPanel.reliefDepth,
-  ).toBeCloseTo(0, 10);
+    plan.layout.plates[0]!.reservations.map(({ kind }) => kind),
+  ).toEqual(expect.arrayContaining(["identity", "plate-number"]));
   expect(stderr).toEqual([]);
   expect(stdout.join("")).toContain("Analyzed 1 root");
-  expect(stdout.join("")).toContain("Planned STL output");
+  expect(stdout.join("")).toContain("Planned 1 STL print plate");
   expect(stdout.join("")).toContain(
     "Routes: 0 of 0 aggregated bundle(s) printed",
   );
@@ -322,8 +323,9 @@ it("exports the canonical Demo as a real five-part 3MF", async () => {
   expect(stderr.join("")).toContain(
     "Warning: 2 semantic groups were merged",
   );
-  expect(stdout.join("")).toContain("5 aligned part(s)");
-  expect(stdout.join("")).toContain(" mm.");
+  expect(stdout.join("")).toContain("Exported 1 3MF print plate");
+  expect(stdout.join("")).toContain("Plate 1:");
+  expect(stdout.join("")).toContain(" mm");
   expect(stdout.join("")).toContain(legendPath);
   expect(stdout.join("")).toContain("5 building and 2 district");
   expect(stdout.join("")).toMatch(
@@ -372,7 +374,7 @@ it("supports explicit label and companion-legend controls", async () => {
   expect(stderr.join("")).toContain(
     "Warning: 2 semantic groups were merged",
   );
-  expect(stdout.join("")).toContain("93 × 48 × 33 mm");
+  expect(stdout.join("")).toMatch(/Plate 1: .* mm/u);
   expect(stdout.join("")).toContain("Legend output disabled");
   expect(stdout.join("")).toContain("0 building and 0 district");
   expect(stdout.join("")).toContain("Routes: disabled.");
