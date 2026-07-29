@@ -1,10 +1,12 @@
+import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
+import type { JobRecord } from "../apps/server/src/job-queue.js";
 import {
   startCodeCityServer,
   type CodeCityServerHandle,
@@ -46,11 +48,89 @@ async function fixture(): Promise<{
   return { dataDirectory, viewerRoot };
 }
 
+function cityModelFixture(): {
+  readonly schemaVersion: "1.0";
+  readonly generator: { readonly name: string; readonly version: string };
+  readonly repositories: readonly [];
+  readonly solutions: readonly [];
+  readonly modules: readonly [];
+  readonly semanticGroups: readonly [];
+  readonly districts: readonly [];
+  readonly buildings: readonly [];
+  readonly dependencies: readonly [];
+  readonly bounds: { readonly x: 0; readonly y: 0; readonly z: 0 };
+} {
+  return {
+    schemaVersion: "1.0",
+    generator: { name: "code-city", version: "test" },
+    repositories: [],
+    solutions: [],
+    modules: [],
+    semanticGroups: [],
+    districts: [],
+    buildings: [],
+    dependencies: [],
+    bounds: { x: 0, y: 0, z: 0 },
+  };
+}
+
+async function waitForJob(
+  server: CodeCityServerHandle,
+  id: string,
+  predicate: (record: JobRecord) => boolean,
+): Promise<JobRecord> {
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    const record = server.jobs.get(id);
+    if (record && predicate(record)) return record;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for job ${id}.`);
+}
+
+async function publishCompletedCityModel(
+  server: CodeCityServerHandle,
+  model = cityModelFixture(),
+): Promise<JobRecord> {
+  const queued = await server.jobs.enqueue(
+    "analysis",
+    async ({ id }) => {
+      await server.artifacts.publishCityModel(id, model);
+      return {
+        kind: "city-model",
+        artifactToken: id,
+        artifactUrl: `/api/v1/artifacts/${id}/city-model.json`,
+      };
+    },
+    {
+      rollback: async ({ id }) => {
+        await server.artifacts.cleanupCityModelArtifact(id);
+      },
+    },
+  );
+  const terminal = await waitForJob(
+    server,
+    queued.id,
+    ({ state }) =>
+      state === "completed" ||
+      state === "failed" ||
+      state === "cancelled",
+  );
+  expect(terminal.state).toBe("completed");
+  expect(terminal.result).toEqual({
+    kind: "city-model",
+    artifactToken: queued.id,
+    artifactUrl: `/api/v1/artifacts/${queued.id}/city-model.json`,
+  });
+  return terminal;
+}
+
 function request(
   url: URL,
   options: {
     readonly method?: string;
     readonly host?: string;
+    readonly signal?: AbortSignal;
   } = {},
 ): Promise<ResponseSnapshot> {
   const hostname =
@@ -68,6 +148,7 @@ function request(
         headers:
           options.host === undefined ? undefined : { Host: options.host },
         agent: false,
+        signal: options.signal,
       },
       (incoming) => {
         const chunks: Buffer[] = [];
@@ -171,6 +252,299 @@ it("exposes persisted job state and supports cancellation", async () => {
       }
     ).job.state,
   ).toBe("cancelled");
+});
+
+it("serves immutable city-model job artifacts from fixed UUID paths", async () => {
+  const roots = await fixture();
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...roots,
+  });
+  servers.push(server);
+  const model = cityModelFixture();
+  const completed = await publishCompletedCityModel(server, model);
+  const artifactUrl = new URL(
+    completed.result!.artifactUrl,
+    server.url,
+  );
+
+  const loaded = await request(artifactUrl);
+  expect(loaded.status).toBe(200);
+  expect(loaded.headers["content-type"]).toBe(
+    "application/json; charset=utf-8",
+  );
+  expect(loaded.headers["cache-control"]).toBe("no-store");
+  expect(JSON.parse(loaded.body)).toEqual(model);
+
+  const head = await request(artifactUrl, { method: "HEAD" });
+  expect(head.status).toBe(200);
+  expect(head.body).toBe("");
+  expect(head.headers["content-length"]).toBe(
+    loaded.headers["content-length"],
+  );
+
+  const missing = await request(
+    new URL(
+      "/api/v1/artifacts/00000000-0000-4000-8000-000000000000/city-model.json",
+      server.url,
+    ),
+  );
+  expect(missing.status).toBe(404);
+  expect(JSON.parse(missing.body)).toMatchObject({
+    error: { code: "artifact-not-found" },
+  });
+
+  const method = await request(artifactUrl, { method: "DELETE" });
+  expect(method.status).toBe(405);
+  expect(method.headers.allow).toBe("GET, HEAD");
+
+  await server.close();
+  const restarted = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...roots,
+  });
+  servers.push(restarted);
+  const retained = await request(
+    new URL(completed.result!.artifactUrl, restarted.url),
+  );
+  expect(retained.status).toBe(200);
+  expect(JSON.parse(retained.body)).toEqual(model);
+});
+
+it("does not expose or retain artifacts without a completed owning job", async () => {
+  const roots = await fixture();
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...roots,
+  });
+  servers.push(server);
+  const orphanToken = randomUUID();
+  await server.artifacts.publishCityModel(
+    orphanToken,
+    cityModelFixture(),
+  );
+  const artifactUrl = new URL(
+    `/api/v1/artifacts/${orphanToken}/city-model.json`,
+    server.url,
+  );
+
+  expect((await request(artifactUrl)).status).toBe(404);
+  expect((await request(artifactUrl, { method: "HEAD" })).status).toBe(
+    404,
+  );
+
+  await server.close();
+  const restarted = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...roots,
+  });
+  servers.push(restarted);
+  expect(
+    await restarted.artifacts.statCityModel(orphanToken),
+  ).toBeUndefined();
+});
+
+it("refuses startup when a completed job references a missing artifact", async () => {
+  const roots = await fixture();
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...roots,
+  });
+  servers.push(server);
+  const completed = await publishCompletedCityModel(server);
+  await server.artifacts.cleanupCityModelArtifact(completed.id);
+  await server.close();
+
+  await expect(
+    startCodeCityServer({
+      host: "127.0.0.1",
+      port: 0,
+      ...roots,
+    }),
+  ).rejects.toThrow(/artifact/iu);
+});
+
+it("holds the artifact response gate until a disconnected read settles", async () => {
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...(await fixture()),
+  });
+  servers.push(server);
+  const completed = await publishCompletedCityModel(server);
+  const artifactUrl = new URL(completed.result!.artifactUrl, server.url);
+  const originalRead = server.artifacts.readCityModel.bind(
+    server.artifacts,
+  );
+  let announceRead!: () => void;
+  let announceReadFinished!: () => void;
+  let releaseRead!: () => void;
+  const readStarted = new Promise<void>((resolve) => {
+    announceRead = resolve;
+  });
+  const readFinished = new Promise<void>((resolve) => {
+    announceReadFinished = resolve;
+  });
+  const readReleased = new Promise<void>((resolve) => {
+    releaseRead = resolve;
+  });
+  vi.spyOn(server.artifacts, "readCityModel").mockImplementation(
+    async (token) => {
+      announceRead();
+      await readReleased;
+      try {
+        return await originalRead(token);
+      } finally {
+        announceReadFinished();
+      }
+    },
+  );
+
+  const controller = new AbortController();
+  const first = request(artifactUrl, {
+    signal: controller.signal,
+  }).catch(() => undefined);
+  await readStarted;
+  try {
+    const concurrent = await request(artifactUrl);
+    expect(concurrent.status).toBe(503);
+    expect(concurrent.headers["retry-after"]).toBe("1");
+    expect(JSON.parse(concurrent.body)).toMatchObject({
+      error: { code: "artifact-busy" },
+    });
+    controller.abort();
+    await first;
+    const afterDisconnect = await request(artifactUrl);
+    expect(afterDisconnect.status).toBe(503);
+    expect(afterDisconnect.headers["retry-after"]).toBe("1");
+  } finally {
+    controller.abort();
+    releaseRead();
+  }
+  await readFinished;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect((await request(artifactUrl)).status).toBe(200);
+});
+
+it("does not report server closure until an artifact read settles", async () => {
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...(await fixture()),
+  });
+  servers.push(server);
+  const completed = await publishCompletedCityModel(server);
+  const artifactUrl = new URL(completed.result!.artifactUrl, server.url);
+  const originalRead = server.artifacts.readCityModel.bind(
+    server.artifacts,
+  );
+  let announceRead!: () => void;
+  let announceReadFinished!: () => void;
+  let releaseRead!: () => void;
+  const readStarted = new Promise<void>((resolve) => {
+    announceRead = resolve;
+  });
+  const readFinished = new Promise<void>((resolve) => {
+    announceReadFinished = resolve;
+  });
+  const readReleased = new Promise<void>((resolve) => {
+    releaseRead = resolve;
+  });
+  vi.spyOn(server.artifacts, "readCityModel").mockImplementation(
+    async (token) => {
+      announceRead();
+      await readReleased;
+      try {
+        return await originalRead(token);
+      } finally {
+        announceReadFinished();
+      }
+    },
+  );
+
+  const inFlightRequest = request(artifactUrl).catch(() => undefined);
+  await readStarted;
+  let closeSettled = false;
+  const closing = server.close().then(() => {
+    closeSettled = true;
+  });
+  try {
+    await inFlightRequest;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(closeSettled).toBe(false);
+  } finally {
+    releaseRead();
+  }
+
+  await readFinished;
+  await closing;
+  await server.closed;
+  expect(closeSettled).toBe(true);
+});
+
+it("does not report server closure until an artifact HEAD settles", async () => {
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...(await fixture()),
+  });
+  servers.push(server);
+  const completed = await publishCompletedCityModel(server);
+  const artifactUrl = new URL(completed.result!.artifactUrl, server.url);
+  const originalStat = server.artifacts.statCityModel.bind(
+    server.artifacts,
+  );
+  let announceStat!: () => void;
+  let announceStatFinished!: () => void;
+  let releaseStat!: () => void;
+  const statStarted = new Promise<void>((resolve) => {
+    announceStat = resolve;
+  });
+  const statFinished = new Promise<void>((resolve) => {
+    announceStatFinished = resolve;
+  });
+  const statReleased = new Promise<void>((resolve) => {
+    releaseStat = resolve;
+  });
+  vi.spyOn(server.artifacts, "statCityModel").mockImplementation(
+    async (token) => {
+      announceStat();
+      await statReleased;
+      try {
+        return await originalStat(token);
+      } finally {
+        announceStatFinished();
+      }
+    },
+  );
+
+  const inFlightRequest = request(artifactUrl, {
+    method: "HEAD",
+  }).catch(() => undefined);
+  await statStarted;
+  let closeSettled = false;
+  const closing = server.close().then(() => {
+    closeSettled = true;
+  });
+  try {
+    await inFlightRequest;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(closeSettled).toBe(false);
+  } finally {
+    releaseStat();
+  }
+
+  await statFinished;
+  await closing;
+  await server.closed;
+  expect(closeSettled).toBe(true);
 });
 
 it("rejects malformed hosts, encoded targets, and unsupported API methods", async () => {
