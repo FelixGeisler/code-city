@@ -62,8 +62,9 @@ preflight dimensions and channel assignments, then downloads the 3MF and
 optional private legend. Generation runs locally in a cancellable worker; no
 model or profile is uploaded.
 
-The first C# implementation is explicitly labelled lexical; Roslyn replaces it
-without changing the model contract.
+C# is analyzed by the bundled, syntax-only Roslyn helper. TypeScript and
+JavaScript use the pinned compiler API. Neither analyzer restores, builds, runs
+plugins, or executes repository content.
 
 The Demo imports into PrusaSlicer as one object with five aligned tool parts;
 the command reports its profile-derived size. `--routes auto` prints capped,
@@ -85,13 +86,14 @@ published at
 
 ## Development
 
-The supported local toolchain is **Node.js 24.x** with **npm 11.6.2**. The
-repository records both constraints in `package.json`; use the committed
-`package-lock.json` through `npm ci`.
+The supported local toolchain is **Node.js 24.x**, **npm 11.6.2**, and the
+**.NET SDK 10.0.302** used to build the trusted Roslyn helper. The repository
+pins these versions; use the committed `package-lock.json` through `npm ci`.
 
 ```powershell
 node --version # must be v24.x
 npm --version  # must be 11.6.2
+dotnet --version # must be 10.0.302
 npm ci
 npm run verify
 ```

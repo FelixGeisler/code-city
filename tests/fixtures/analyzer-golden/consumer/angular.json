@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "projects": {
+    "golden-web": {
+      "projectType": "application",
+      "root": "web"
+    }
+  }
+}

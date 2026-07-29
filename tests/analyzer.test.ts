@@ -352,7 +352,7 @@ EndProject
     );
     expect(first.buildings.find(({ name }) => name === "Program.cs")).toEqual(
       expect.objectContaining({
-        metricMethod: "csharp-lexical-v1",
+        metricMethod: "csharp-roslyn-v1",
         metricNormalization: {
           sloc: {
             state: "available",
@@ -428,7 +428,7 @@ EndProject
 
     expect(
       facts.sources.find(({ name }) => name === "Program.cs")?.metricMethod,
-    ).toBe("csharp-lexical-v1");
+    ).toBe("csharp-roslyn-v1");
     expect(
       facts.sources.find(({ name }) => name === "main.ts")?.metricMethod,
     ).toBe("typescript-compiler-api-v1");

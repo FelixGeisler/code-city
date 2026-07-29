@@ -18,6 +18,10 @@
     "typecheck": "tsc --noEmit",
     "verify": "npm run typecheck && npm test && npm run build && npm run docs:build",
     "precli": "npm run compile --silent",
+    "precompile": "npm run roslyn:build --silent",
+    "preroslyn:build": "dotnet restore tools/roslyn-helper/CodeCity.RoslynHelper.csproj --configfile tools/roslyn-helper/NuGet.Config --nologo --verbosity quiet",
+    "pretest": "npm run roslyn:build --silent",
+    "roslyn:build": "dotnet build tools/roslyn-helper/CodeCity.RoslynHelper.csproj --configuration Release --no-restore --nologo --verbosity quiet",
     "viewer:build": "vite build --config apps/viewer/vite.config.ts",
     "viewer:dev": "vite --config apps/viewer/vite.config.ts"
   },

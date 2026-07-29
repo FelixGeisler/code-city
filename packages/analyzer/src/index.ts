@@ -21,6 +21,7 @@ export * from "./csharp-lexical.js";
 export * from "./discovery.js";
 export * from "./filesystem.js";
 export * from "./local-snapshot.js";
+export * from "./roslyn-host.js";
 export * from "./snapshot.js";
 export * from "./typescript-metrics.js";
 export * from "./types.js";

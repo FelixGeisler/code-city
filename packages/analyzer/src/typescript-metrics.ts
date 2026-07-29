@@ -13,6 +13,7 @@ export interface TypeScriptMetricsResult {
   readonly executableUnitCount: number;
   readonly units: readonly ExecutableUnitMetric[];
   readonly imports: readonly StaticImportFact[];
+  readonly hasSyntaxErrors: boolean;
 }
 
 function unitName(node: ts.FunctionLikeDeclaration, source: ts.SourceFile): string {
@@ -218,6 +219,12 @@ export function analyzeTypeScriptSource(
     scriptKind,
   );
   const units = collectUnits(source);
+  const parseDiagnostics =
+    (
+      source as ts.SourceFile & {
+        readonly parseDiagnostics?: readonly ts.Diagnostic[];
+      }
+    ).parseDiagnostics ?? [];
   const decisionLoad = units.reduce(
     (total, unit) => total + unit.complexity - 1,
     0,
@@ -230,5 +237,6 @@ export function analyzeTypeScriptSource(
     executableUnitCount: units.length,
     units,
     imports: collectStaticImports(source),
+    hasSyntaxErrors: parseDiagnostics.length > 0,
   };
 }

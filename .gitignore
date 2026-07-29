@@ -1,3 +1,5 @@
 build/
 node_modules/
 .npm-cache/
+tools/roslyn-helper/bin/
+tools/roslyn-helper/obj/

@@ -13,14 +13,20 @@ import type {
 } from "../../core/src/model.js";
 import { normalizeCityIdentity } from "../../core/src/identity.js";
 import { classifyRisk } from "../../core/src/metrics.js";
+import { CITY_MODEL_LIMITS } from "../../core/src/model-validation.js";
 import { normalizePath, stableId } from "../../core/src/path.js";
 import { semanticGroupForRisk } from "../../core/src/semantics.js";
-import { analyzeCSharpLexically } from "./csharp-lexical.js";
 import {
   compareStable,
   isSourceFile,
 } from "./filesystem.js";
 import { materializeLocalRepositorySnapshots } from "./local-snapshot.js";
+import {
+  analyzeCSharpWithRoslyn,
+  resolveBundledRoslynLaunch,
+  ROSLYN_HOST_LIMITS,
+  type RoslynFileFact,
+} from "./roslyn-host.js";
 import {
   safeRelativeInputPath,
   safeRepositoryRelativePath,
@@ -81,6 +87,8 @@ interface PendingSource {
 
 interface AnalysisGuard {
   check(): void;
+  remainingMs(): number;
+  readonly signal?: AbortSignal;
 }
 
 const VIRTUAL_WORKSPACE_ROOT = "/code-city";
@@ -158,6 +166,7 @@ function createAnalysisGuard(options: LocalAnalysisOptions): AnalysisGuard {
   const deadline =
     Date.now() + (options.timeoutMs ?? DEFAULT_SNAPSHOT_LIMITS.timeoutMs);
   return {
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
     check(): void {
       if (options.signal?.aborted) {
         throw new SnapshotDeadlineError(
@@ -170,7 +179,20 @@ function createAnalysisGuard(options: LocalAnalysisOptions): AnalysisGuard {
         );
       }
     },
+    remainingMs(): number {
+      this.check();
+      return Math.max(1, deadline - Date.now());
+    },
   };
+}
+
+function boundedWarnings(warnings: readonly string[]): readonly string[] {
+  const ordered = [...new Set(warnings)].sort(compareStable);
+  if (ordered.length <= CITY_MODEL_LIMITS.warnings) return ordered;
+  return [
+    ...ordered.slice(0, CITY_MODEL_LIMITS.warnings - 1),
+    "Additional analyzer warnings were omitted.",
+  ];
 }
 
 function decodeXml(value: string): string {
@@ -184,6 +206,118 @@ function decodeXml(value: string): string {
 
 function withoutXmlComments(xml: string): string {
   return xml.replace(/<!--[\s\S]*?-->/gu, "");
+}
+
+function xmlTagEnd(xml: string, start: number): number {
+  let quote: "'" | '"' | undefined;
+  for (let index = start; index < xml.length; index += 1) {
+    const character = xml[index];
+    if (quote) {
+      if (character === quote) quote = undefined;
+    } else if (character === "'" || character === '"') {
+      quote = character;
+    } else if (character === ">") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function validXmlAttributes(value: string): boolean {
+  const names = new Set<string>();
+  let cursor = 0;
+  while (cursor < value.length) {
+    while (/\s/u.test(value[cursor] ?? "")) cursor += 1;
+    if (cursor >= value.length) return true;
+    const nameMatch = /^[A-Za-z_][A-Za-z0-9_.:-]*/u.exec(
+      value.slice(cursor),
+    );
+    if (!nameMatch || names.has(nameMatch[0])) return false;
+    names.add(nameMatch[0]);
+    cursor += nameMatch[0].length;
+    while (/\s/u.test(value[cursor] ?? "")) cursor += 1;
+    if (value[cursor] !== "=") return false;
+    cursor += 1;
+    while (/\s/u.test(value[cursor] ?? "")) cursor += 1;
+    const quote = value[cursor];
+    if (quote !== "'" && quote !== '"') return false;
+    cursor += 1;
+    const end = value.indexOf(quote, cursor);
+    if (end < 0 || value.slice(cursor, end).includes("<")) return false;
+    cursor = end + 1;
+  }
+  return true;
+}
+
+/**
+ * Conservative XML structure check for static project metadata. It performs no
+ * entity expansion, schema evaluation, imports, or filesystem access.
+ */
+function wellFormedXmlDocument(xml: string, expectedRoot: string): boolean {
+  const text = xml.replace(/^\uFEFF/u, "");
+  const stack: string[] = [];
+  let rootSeen = false;
+  let rootClosed = false;
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    const opening = text.indexOf("<", cursor);
+    if (opening < 0) {
+      return stack.length === 0 && text.slice(cursor).trim() === "" && rootSeen;
+    }
+    if (
+      stack.length === 0 &&
+      (rootClosed || !rootSeen) &&
+      text.slice(cursor, opening).trim() !== ""
+    ) {
+      return false;
+    }
+    if (text.startsWith("<!--", opening)) {
+      const end = text.indexOf("-->", opening + 4);
+      if (end < 0) return false;
+      cursor = end + 3;
+      continue;
+    }
+    if (text.startsWith("<?", opening)) {
+      const end = text.indexOf("?>", opening + 2);
+      if (end < 0 || rootClosed) return false;
+      cursor = end + 2;
+      continue;
+    }
+    if (text.startsWith("<![CDATA[", opening)) {
+      const end = text.indexOf("]]>", opening + 9);
+      if (end < 0 || stack.length === 0) return false;
+      cursor = end + 3;
+      continue;
+    }
+    if (text.startsWith("<!", opening)) return false;
+
+    const end = xmlTagEnd(text, opening + 1);
+    if (end < 0) return false;
+    let tag = text.slice(opening + 1, end).trim();
+    const closing = tag.startsWith("/");
+    if (closing) tag = tag.slice(1).trim();
+    const selfClosing = !closing && tag.endsWith("/");
+    if (selfClosing) tag = tag.slice(0, -1).trim();
+    const match = /^([A-Za-z_][A-Za-z0-9_.:-]*)([\s\S]*)$/u.exec(tag);
+    if (!match || match[2]!.includes("<")) return false;
+    const name = match[1]!;
+
+    if (closing) {
+      if (match[2]!.trim() !== "" || stack.pop() !== name) return false;
+      if (stack.length === 0) rootClosed = true;
+    } else {
+      if (!validXmlAttributes(match[2]!)) return false;
+      if (stack.length === 0) {
+        if (rootSeen || rootClosed || name !== expectedRoot) return false;
+        rootSeen = true;
+      }
+      if (!selfClosing) stack.push(name);
+      else if (stack.length === 0) rootClosed = true;
+    }
+    cursor = end + 1;
+  }
+  return rootSeen && rootClosed && stack.length === 0;
 }
 
 function firstElement(xml: string, element: string): string | undefined {
@@ -288,20 +422,29 @@ function createRepositories(
 
 async function discoverDotnetModules(
   context: RootContext,
+  warnings: string[],
   guard: AnalysisGuard,
 ): Promise<readonly InternalModule[]> {
   const projectFiles = context.files.filter(
     (file) =>
       path.posix.extname(file).toLocaleLowerCase("en-US") === ".csproj",
   );
-  return Promise.all(
-    projectFiles.map(async (projectFile) => {
-      guard.check();
-      const xml = withoutXmlComments(snapshotText(context, projectFile));
-      const relativeProject = virtualRelative(
-        context.virtualRoot,
-        projectFile,
+  const modules: InternalModule[] = [];
+  for (const projectFile of projectFiles) {
+    guard.check();
+    const rawXml = snapshotText(context, projectFile);
+    const relativeProject = safeRepositoryRelativePath(
+      virtualRelative(context.virtualRoot, projectFile),
+    );
+    if (!wellFormedXmlDocument(rawXml, "Project")) {
+      warnings.push(
+        sanitizeWarningText(
+          `${relativeProject}: malformed .csproj file skipped`,
+        ),
       );
+      continue;
+    }
+    const xml = withoutXmlComments(rawXml);
       const frameworks = targetFrameworks(xml);
       const moduleName = sanitizeDisplayText(
         firstElement(xml, "AssemblyName") ??
@@ -327,20 +470,20 @@ async function discoverDotnetModules(
         repositoryId: context.repository.id,
         kind: "dotnet-project",
         name: moduleName,
-        path: safeRepositoryRelativePath(relativeProject),
+        path: relativeProject,
         solutionIds: [],
         ...(frameworks.length === 0 ? {} : { targetFrameworks: frameworks }),
         ...(packageId === undefined ? {} : { packageId }),
       };
-      return {
+      modules.push({
         module,
         rootPath: path.posix.dirname(projectFile),
         projectFile,
         projectReferences: parseProjectReferences(xml),
         packageReferences: parsePackageReferences(xml),
-      };
-    }),
-  );
+      });
+  }
+  return modules;
 }
 
 function parseJsonFile(
@@ -449,32 +592,54 @@ async function discoverAngularModules(
 function solutionProjectPaths(
   solutionText: string,
   solutionDirectory: string,
+  extension: ".sln" | ".slnx",
 ): readonly string[] {
-  const paths: string[] = [];
-  const expression =
-    /^\s*Project\("[^"]+"\)\s*=\s*"[^"]*",\s*"([^"]+\.csproj)"\s*,/gimu;
-  for (const match of solutionText.matchAll(expression)) {
-    const relative = match[1];
-    if (relative) {
-      try {
-        paths.push(
-          virtualPath(
-            solutionDirectory,
-            safeRelativeInputPath(decodeXml(relative)),
-          ),
-        );
-      } catch {
-        // Unsafe source references are treated as unresolved data and are
-        // never used to construct virtual or host paths.
+  const references: string[] = [];
+  if (extension === ".sln") {
+    const expression =
+      /^\s*Project\("[^"]+"\)\s*=\s*"[^"]*",\s*"([^"]+\.csproj)"\s*,/gimu;
+    for (const match of solutionText.matchAll(expression)) {
+      if (match[1]) references.push(decodeXml(match[1]));
+    }
+  } else {
+    const xml = withoutXmlComments(solutionText);
+    for (const match of xml.matchAll(/<Project\b[^>]*>/giu)) {
+      const projectPath = attribute(match[0], "Path");
+      if (
+        projectPath &&
+        path.posix
+          .extname(projectPath.replaceAll("\\", "/"))
+          .toLocaleLowerCase("en-US") === ".csproj"
+      ) {
+        references.push(projectPath);
       }
     }
   }
-  return paths.sort(compareStable);
+
+  const projectPaths = new Set<string>();
+  for (const reference of references) {
+    try {
+      projectPaths.add(
+        virtualPath(
+          solutionDirectory,
+          safeRelativeInputPath(reference),
+        ),
+      );
+    } catch {
+      // Unsafe source references are data only and never become host paths.
+    }
+  }
+  return [...projectPaths].sort(compareStable);
+}
+
+function validSlnxDocument(text: string): boolean {
+  return wellFormedXmlDocument(text, "Solution");
 }
 
 async function discoverSolutions(
   contexts: readonly RootContext[],
   modules: readonly InternalModule[],
+  warnings: string[],
   guard: AnalysisGuard,
 ): Promise<{
   readonly solutions: readonly CitySolution[];
@@ -496,10 +661,17 @@ async function discoverSolutions(
 
   for (const context of contexts) {
     for (const solutionFile of context.files.filter(
-      (file) =>
-        path.posix.extname(file).toLocaleLowerCase("en-US") === ".sln",
+      (file) => {
+        const extension = path.posix
+          .extname(file)
+          .toLocaleLowerCase("en-US");
+        return extension === ".sln" || extension === ".slnx";
+      },
     )) {
       guard.check();
+      const extension = path.posix
+        .extname(solutionFile)
+        .toLocaleLowerCase("en-US") as ".sln" | ".slnx";
       const relativePath = safeRepositoryRelativePath(
         virtualRelative(context.virtualRoot, solutionFile),
       );
@@ -509,9 +681,21 @@ async function discoverSolutions(
         relativePath,
       );
       const text = snapshotText(context, solutionFile);
+      if (extension === ".slnx" && !validSlnxDocument(text)) {
+        warnings.push(
+          sanitizeWarningText(
+            `${relativePath}: malformed .slnx file skipped`,
+          ),
+        );
+        continue;
+      }
       const moduleIds = [
         ...new Set(
-          solutionProjectPaths(text, path.posix.dirname(solutionFile))
+          solutionProjectPaths(
+            text,
+            path.posix.dirname(solutionFile),
+            extension,
+          )
             .map((projectPath) =>
               byProjectPath.get(virtualKey(projectPath)),
             )
@@ -629,15 +813,85 @@ function explicitIdentity(
   });
 }
 
+interface DeferredCSharpSource {
+  readonly id: string;
+  readonly context: RootContext;
+  readonly selected: InternalModule;
+  readonly sourcePath: string;
+  readonly relativePath: string;
+  readonly sourceText: string;
+}
+
+function pendingSource(
+  context: RootContext,
+  selected: InternalModule,
+  sourcePath: string,
+  relativePath: string,
+  language: SourceLanguage,
+  metrics: SourceMetrics,
+  metricMethod: SourceFileFact["metricMethod"],
+  units: SourceFileFact["units"],
+  imports: readonly StaticImportFact[],
+): PendingSource {
+  const directory = safeRepositoryRelativePath(path.posix.dirname(relativePath));
+  const districtId = stableId(
+    "district",
+    context.repository.id,
+    selected.module.id,
+  );
+  const risk = classifyRisk(metrics.maximumComplexity);
+  return {
+    virtualPath: sourcePath,
+    repositoryRoot: context.virtualRoot,
+    fact: {
+      id: stableId(
+        "building",
+        context.repository.id,
+        selected.module.id,
+        relativePath,
+      ),
+      repositoryId: context.repository.id,
+      moduleId: selected.module.id,
+      districtId,
+      districtName:
+        directory === "."
+          ? selected.module.name
+          : sanitizeDisplayText(
+              path.posix.basename(directory),
+              "Unnamed district",
+            ),
+      districtPath: directory,
+      name: sanitizeDisplayText(
+        path.posix.basename(relativePath),
+        "Unnamed source",
+      ),
+      path: relativePath,
+      language,
+      metrics,
+      metricMethod,
+      units: units.map((unit) => ({
+        ...unit,
+        name: sanitizeDisplayText(unit.name, "Unnamed unit"),
+      })),
+      risk,
+      semanticGroupId: semanticGroupForRisk(risk),
+      imports,
+    },
+    imports,
+  };
+}
+
 async function analyzeSources(
   contexts: readonly RootContext[],
   modules: InternalModule[],
+  warnings: string[],
   guard: AnalysisGuard,
 ): Promise<{
   readonly sources: readonly PendingSource[];
   readonly unassignedModules: readonly InternalModule[];
 }> {
   const pendingSources: PendingSource[] = [];
+  const csharpSources: DeferredCSharpSource[] = [];
   const unassignedByRepository = new Map<string, InternalModule>();
 
   for (const context of contexts) {
@@ -678,78 +932,105 @@ async function analyzeSources(
       const relativePath = safeRepositoryRelativePath(
         virtualRelative(context.virtualRoot, sourcePath),
       );
-      const directory = safeRepositoryRelativePath(
-        path.posix.dirname(relativePath),
-      );
-      const districtId = stableId(
-        "district",
-        context.repository.id,
-        selected.module.id,
-      );
       const sourceText = snapshotText(context, sourcePath);
-      const analysis =
-        language === "csharp"
-          ? analyzeCSharpLexically(sourceText)
-          : analyzeTypeScriptSource(sourcePath, sourceText);
-      const metrics: SourceMetrics = {
-        sloc: analysis.sloc,
-        decisionLoad: analysis.decisionLoad,
-        maximumComplexity: analysis.maximumComplexity,
-        executableUnitCount: analysis.executableUnitCount,
-      };
-      const risk = classifyRisk(metrics.maximumComplexity);
-      const imports =
-        language === "csharp"
-          ? []
-          : sanitizedImports(
-              (analysis as ReturnType<typeof analyzeTypeScriptSource>)
-                .imports,
-            );
-      const fact: SourceFileFact = {
-        id: stableId(
-          "building",
-          context.repository.id,
-          selected.module.id,
+      if (language === "csharp") {
+        csharpSources.push({
+          id: `source-${String(csharpSources.length + 1).padStart(6, "0")}.cs`,
+          context,
+          selected,
+          sourcePath,
           relativePath,
+          sourceText,
+        });
+        continue;
+      }
+
+      const analysis = analyzeTypeScriptSource(sourcePath, sourceText);
+      if (analysis.hasSyntaxErrors) {
+        warnings.push(
+          sanitizeWarningText(
+            `${relativePath}: TypeScript/JavaScript syntax errors; source skipped`,
+          ),
+        );
+        continue;
+      }
+      const imports = sanitizedImports(analysis.imports);
+      pendingSources.push(
+        pendingSource(
+          context,
+          selected,
+          sourcePath,
+          relativePath,
+          language,
+          {
+            sloc: analysis.sloc,
+            decisionLoad: analysis.decisionLoad,
+            maximumComplexity: analysis.maximumComplexity,
+            executableUnitCount: analysis.executableUnitCount,
+          },
+          "typescript-compiler-api-v1",
+          analysis.units,
+          imports,
         ),
-        repositoryId: context.repository.id,
-        moduleId: selected.module.id,
-        districtId,
-        districtName:
-          directory === "."
-            ? selected.module.name
-            : sanitizeDisplayText(
-                path.posix.basename(directory),
-                "Unnamed district",
-              ),
-        districtPath: directory,
-        name: sanitizeDisplayText(
-          path.posix.basename(relativePath),
-          "Unnamed source",
-        ),
-        path: relativePath,
-        language,
-        metrics,
-        metricMethod:
-          language === "csharp"
-            ? "csharp-lexical-v1"
-            : "typescript-compiler-api-v1",
-        units: analysis.units.map((unit) => ({
-          ...unit,
-          name: sanitizeDisplayText(unit.name, "Unnamed unit"),
-        })),
-        risk,
-        semanticGroupId: semanticGroupForRisk(risk),
-        imports,
-      };
-      pendingSources.push({
-        virtualPath: sourcePath,
-        repositoryRoot: context.virtualRoot,
-        fact,
-        imports,
-      });
+      );
     }
   }
+
+  if (csharpSources.length > 0) {
+    guard.check();
+    const launch = await resolveBundledRoslynLaunch();
+    guard.check();
+    const outcomes = await analyzeCSharpWithRoslyn(
+      csharpSources.map(({ id, sourceText }) => ({ id, source: sourceText })),
+      launch,
+      {
+        timeoutMs: Math.min(
+          guard.remainingMs(),
+          ROSLYN_HOST_LIMITS.timeoutMs,
+        ),
+        ...(guard.signal === undefined ? {} : { signal: guard.signal }),
+      },
+    );
+    const byId = new Map(csharpSources.map((source) => [source.id, source]));
+    for (const outcome of outcomes) {
+      guard.check();
+      const source = byId.get(outcome.id);
+      if (!source) {
+        throw new Error("Roslyn helper returned an unknown source identifier.");
+      }
+      if (outcome.status === "skipped") {
+        warnings.push(
+          sanitizeWarningText(
+            `${source.relativePath}: C# source exceeded the Roslyn unit limit and was skipped`,
+          ),
+        );
+        continue;
+      }
+      if (outcome.warnings.includes("syntax-errors-present")) {
+        warnings.push(
+          sanitizeWarningText(
+            `${source.relativePath}: C# syntax errors; source skipped`,
+          ),
+        );
+        continue;
+      }
+      const result: RoslynFileFact = outcome;
+      pendingSources.push(
+        pendingSource(
+          source.context,
+          source.selected,
+          source.sourcePath,
+          source.relativePath,
+          "csharp",
+          result.metrics,
+          result.metricMethod,
+          result.units,
+          [],
+        ),
+      );
+    }
+  }
+
   return {
     sources: pendingSources.sort((left, right) =>
       compareStable(left.fact.id, right.fact.id),
@@ -1162,7 +1443,7 @@ export async function analyzeRepositorySnapshotFacts(
   const discoveredModules = (
     await Promise.all(
       contexts.map(async (context) => [
-        ...(await discoverDotnetModules(context, guard)),
+        ...(await discoverDotnetModules(context, warnings, guard)),
         ...(await discoverAngularModules(context, warnings, guard)),
       ]),
     )
@@ -1170,6 +1451,7 @@ export async function analyzeRepositorySnapshotFacts(
   const { solutions, solutionIdsByModule } = await discoverSolutions(
     contexts,
     discoveredModules,
+    warnings,
     guard,
   );
   for (const candidate of discoveredModules) {
@@ -1180,6 +1462,7 @@ export async function analyzeRepositorySnapshotFacts(
   const sourceResult = await analyzeSources(
     contexts,
     discoveredModules,
+    warnings,
     guard,
   );
   const allModules = [
@@ -1202,6 +1485,6 @@ export async function analyzeRepositorySnapshotFacts(
     modules: allModules.map((candidate) => candidate.module),
     sources: sourceResult.sources.map((source) => source.fact),
     dependencies,
-    warnings: warnings.sort(compareStable),
+    warnings: boundedWarnings(warnings),
   };
 }
