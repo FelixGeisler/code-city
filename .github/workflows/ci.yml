@@ -27,3 +27,16 @@ jobs:
         dotnet-version: 10.0.302
     - run: npm ci
     - run: npm run verify
+
+  viewer-performance:
+    timeout-minutes: 8
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions/setup-node@v6
+      with:
+        node-version: 24
+        cache: npm
+    - run: npm ci
+    - run: npx playwright install --with-deps chromium
+    - run: npm run test:viewer-performance

@@ -1,0 +1,237 @@
+import * as THREE from "three";
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  LEGACY_BUILDING_LIMIT,
+  planViewerBuildingBatches,
+  ViewerBuildingCapabilityError,
+  ViewerBuildingLayer,
+  type ViewerBuildingDefinition,
+} from "../apps/viewer/src/viewer-building-layer.js";
+
+function building(
+  id: string,
+  x: number,
+  districtId = "district-a",
+  color = "#36a3ff",
+  roughness = 0.58,
+): ViewerBuildingDefinition {
+  return {
+    id,
+    districtId,
+    position: { x, y: 2, z: 0 },
+    size: { x: 2, y: 4, z: 2 },
+    color,
+    style: { roughness, metalness: 0.08 },
+  };
+}
+
+describe("viewer building layer", () => {
+  it("plans deterministic non-color material batches", () => {
+    const definitions = [
+      building("z", 6, "district-b", "#ff0000", 0.8),
+      building("b", 4, "district-a", "#00ff00"),
+      building("a", 2, "district-a", "#0000ff"),
+    ];
+
+    const forward = planViewerBuildingBatches(definitions);
+    const reverse = planViewerBuildingBatches(definitions.toReversed());
+
+    expect(reverse).toEqual(forward);
+    expect(forward).toHaveLength(2);
+    expect(forward.flatMap(({ buildingIds }) => buildingIds)).toEqual([
+      "a",
+      "b",
+      "z",
+    ]);
+    expect(forward[0]?.buildingIds).toEqual(["a", "b"]);
+  });
+
+  it("keeps losslessly distinct material semantics in separate batches", () => {
+    const batches = planViewerBuildingBatches([
+      building("a", 2, "district-a", "#ff0000", 0.5800001),
+      building("b", 4, "district-a", "#00ff00", 0.5800002),
+      building("negative-zero", 6, "district-a", "#0000ff", -0),
+      building("positive-zero", 8, "district-a", "#ffffff", 0),
+    ]);
+
+    expect(batches).toHaveLength(3);
+    expect(
+      batches.map(({ buildingIds }) => buildingIds),
+    ).toContainEqual(["a"]);
+    expect(
+      batches.map(({ buildingIds }) => buildingIds),
+    ).toContainEqual(["b"]);
+    expect(
+      batches.map(({ buildingIds }) => buildingIds),
+    ).toContainEqual(["negative-zero", "positive-zero"]);
+  });
+
+  it("shares one box geometry and keeps stable instance mappings", () => {
+    const layer = new ViewerBuildingLayer([
+      building("c", 6),
+      building("a", 2),
+      building("b", 4),
+    ]);
+
+    expect(layer.mode).toBe("instanced");
+    expect(layer.batchCount).toBe(1);
+    expect(layer.visibleBuildingCount).toBe(3);
+    const batch = layer.batchObjects[0]!;
+    expect(layer.highlightObjects.every(({ geometry }) => geometry === batch.geometry))
+      .toBe(true);
+    expect([0, 1, 2].map((index) => layer.instanceBuildingId(batch, index)))
+      .toEqual(["a", "b", "c"]);
+
+    const matrix = new THREE.Matrix4();
+    batch.getMatrixAt(0, matrix);
+    expect(new THREE.Vector3().setFromMatrixPosition(matrix)).toEqual(
+      new THREE.Vector3(2, 2, 0),
+    );
+    expect(layer.matrix("a")?.equals(matrix)).toBe(true);
+  });
+
+  it("compacts isolated instances and restores canonical ordering", () => {
+    const layer = new ViewerBuildingLayer([
+      building("d", 8, "district-b"),
+      building("b", 4, "district-b"),
+      building("c", 6, "district-a"),
+      building("a", 2, "district-a"),
+    ]);
+    const batch = layer.batchObjects[0]!;
+
+    layer.setIsolatedDistrict("district-b");
+    expect(layer.visibleBuildingCount).toBe(2);
+    expect([0, 1].map((index) => layer.instanceBuildingId(batch, index)))
+      .toEqual(["b", "d"]);
+    expect(layer.districtBounds("district-b")?.max.x).toBe(9);
+
+    layer.setIsolatedDistrict(null);
+    expect(layer.visibleBuildingCount).toBe(4);
+    expect(
+      [0, 1, 2, 3].map((index) =>
+        layer.instanceBuildingId(batch, index),
+      ),
+    ).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("uses two reusable non-raycast highlights and hides scoped-out slots", () => {
+    const layer = new ViewerBuildingLayer([
+      building("a", 2, "district-a"),
+      building("b", 4, "district-b"),
+    ]);
+    const [hovered, selected] = layer.highlightObjects;
+
+    layer.setHighlight("hovered", "a");
+    layer.setHighlight("selected", "b");
+    expect(hovered?.visible).toBe(true);
+    expect(selected?.visible).toBe(true);
+    expect(
+      new THREE.Raycaster(
+        new THREE.Vector3(2, 20, 0),
+        new THREE.Vector3(0, -1, 0),
+      ).intersectObjects(layer.object.children, true),
+    ).toEqual([]);
+
+    layer.setIsolatedDistrict("district-a");
+    expect(hovered?.visible).toBe(true);
+    expect(selected?.visible).toBe(false);
+    layer.setHighlight("hovered", null);
+    expect(hovered?.visible).toBe(false);
+  });
+
+  it("supports bounded legacy meshes and rejects oversized fallback models", () => {
+    const fallback = new ViewerBuildingLayer(
+      [building("b", 4), building("a", 2)],
+      { instancingSupported: false },
+    );
+    expect(fallback.mode).toBe("legacy");
+    expect(fallback.batchCount).toBe(0);
+    expect(fallback.visibleBuildingCount).toBe(2);
+    fallback.setIsolatedDistrict("missing");
+    expect(fallback.visibleBuildingCount).toBe(0);
+
+    const oversized = Array.from(
+      { length: LEGACY_BUILDING_LIMIT + 1 },
+      (_, index) => building(`building-${index}`, index * 2),
+    );
+    expect(
+      () =>
+        new ViewerBuildingLayer(oversized, {
+          instancingSupported: false,
+        }),
+    ).toThrow(ViewerBuildingCapabilityError);
+  });
+
+  it("picks exact nearest boxes and benchmarks the deterministic BVH", () => {
+    const layer = new ViewerBuildingLayer([
+      building("far", 8),
+      building("near", 3),
+    ]);
+
+    expect(
+      layer.pick({
+        origin: { x: 0, y: 2, z: 0 },
+        direction: { x: 1, y: 0, z: 0 },
+      }).hit?.id,
+    ).toBe("near");
+    const benchmark = layer.benchmarkPicks(10);
+    expect(benchmark.count).toBe(10);
+    expect(benchmark.maximumAabbTests).toBeLessThanOrEqual(512);
+    expect(benchmark.p95Milliseconds).toBeGreaterThanOrEqual(0);
+  });
+
+  it("updates per-instance colors and disposes owned GPU resources once", () => {
+    const layer = new ViewerBuildingLayer([building("a", 2)]);
+    const batch = layer.batchObjects[0]!;
+    const geometryDispose = vi.fn();
+    const materialDispose = vi.fn();
+    const instanceDispose = vi.fn();
+    batch.geometry.addEventListener("dispose", geometryDispose);
+    batch.material.addEventListener("dispose", materialDispose);
+    batch.addEventListener("dispose", instanceDispose);
+
+    expect(layer.setColor("a", "#ff00ff")).toBe(true);
+    expect(layer.setColor("missing", "#ff00ff")).toBe(false);
+    const color = new THREE.Color();
+    batch.getColorAt(0, color);
+    expect(color.getHexString()).toBe("ff00ff");
+
+    layer.dispose();
+    layer.dispose();
+    expect(geometryDispose).toHaveBeenCalledTimes(1);
+    expect(materialDispose).toHaveBeenCalledTimes(1);
+    expect(instanceDispose).toHaveBeenCalledTimes(1);
+    expect(() => layer.setIsolatedDistrict(null)).toThrow(/disposed/u);
+  });
+
+  it("validates duplicate identifiers, dimensions, styles, and benchmark counts", () => {
+    expect(
+      () =>
+        new ViewerBuildingLayer([
+          building("same", 0),
+          building("same", 2),
+        ]),
+    ).toThrow(/Duplicate/u);
+    expect(
+      () =>
+        new ViewerBuildingLayer([
+          {
+            ...building("bad-size", 0),
+            size: { x: 0, y: 1, z: 1 },
+          },
+        ]),
+    ).toThrow(/positive/u);
+    expect(
+      () =>
+        new ViewerBuildingLayer([
+          {
+            ...building("bad-style", 0),
+            style: { roughness: 2, metalness: 0 },
+          },
+        ]),
+    ).toThrow(/between zero and one/u);
+    const layer = new ViewerBuildingLayer([building("valid", 0)]);
+    expect(() => layer.benchmarkPicks(0)).toThrow(/positive/u);
+  });
+});

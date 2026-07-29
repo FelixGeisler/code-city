@@ -1,3 +1,5 @@
+import * as THREE from "three";
+
 export interface BoundsSize {
   readonly x: number;
   readonly y: number;
@@ -16,6 +18,25 @@ const MINIMUM_RADIUS = 0.5;
 const DEFAULT_PADDING = 1.18;
 const MINIMUM_MAXIMUM_DISTANCE = 20;
 const FRAME_DISTANCE_MULTIPLIER = 5;
+
+export function focusedDistrictBounds(
+  districtId: string,
+  district: THREE.Object3D,
+  buildingBoundsForDistrict: (
+    districtId: string,
+  ) => THREE.Box3 | undefined,
+  externalObjects: Iterable<THREE.Object3D>,
+): THREE.Box3 {
+  const bounds = new THREE.Box3().setFromObject(district);
+  const buildingBounds = buildingBoundsForDistrict(districtId);
+  if (buildingBounds) {
+    bounds.union(buildingBounds);
+  }
+  for (const object of externalObjects) {
+    bounds.expandByObject(object);
+  }
+  return bounds;
+}
 
 export function cameraMaximumDistanceForFrame(
   semanticCityMaximumDistance: number,

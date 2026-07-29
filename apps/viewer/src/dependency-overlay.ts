@@ -26,6 +26,10 @@ export interface DependencyOverlayRoute {
   readonly emphasized?: boolean;
 }
 
+export interface DependencyRouteOverlayOptions {
+  readonly instancingSupported?: boolean;
+}
+
 export interface DependencyWeightCue {
   readonly normalized: number;
   readonly lineIntensity: number;
@@ -154,6 +158,7 @@ export function dependencyCurveForRoute(
  */
 export class DependencyRouteOverlay {
   public readonly object = new THREE.Group();
+  private readonly instancingSupported: boolean;
   private disposed = false;
   private currentRouteCount = 0;
   private currentGatewayCount = 0;
@@ -161,10 +166,12 @@ export class DependencyRouteOverlay {
   public constructor(
     private readonly scene: THREE.Scene,
     name = "code-city:dependency-routes",
+    options: DependencyRouteOverlayOptions = {},
   ) {
     if (name.trim() === "") {
       throw new TypeError("Dependency route overlay name must not be empty.");
     }
+    this.instancingSupported = options.instancingSupported ?? true;
     this.object.name = name;
     this.scene.add(this.object);
   }
@@ -206,10 +213,15 @@ export class DependencyRouteOverlay {
     try {
       replacement.push(
         createRouteLines(visuals),
-        createArrowheads(visuals),
+        createArrowheads(visuals, this.instancingSupported),
       );
       if (gatewayVisuals.length > 0) {
-        replacement.push(createGatewayPylons(gatewayVisuals));
+        replacement.push(
+          createGatewayPylons(
+            gatewayVisuals,
+            this.instancingSupported,
+          ),
+        );
       }
     } catch (error) {
       replacement.forEach(disposeOverlayObject);
@@ -323,7 +335,12 @@ function createRouteLines(visuals: readonly RouteVisual[]): THREE.LineSegments {
 
 function createArrowheads(
   visuals: readonly RouteVisual[],
-): THREE.InstancedMesh {
+  instancingSupported: boolean,
+): THREE.Object3D {
+  if (!instancingSupported) {
+    return createLegacyArrowheads(visuals);
+  }
+
   const geometry = new THREE.ConeGeometry(0.25, 1, 6);
   const material = new THREE.MeshBasicMaterial({
     color: "#ffffff",
@@ -341,38 +358,10 @@ function createArrowheads(
   arrows.name = "code-city:dependency-route-arrows";
   arrows.renderOrder = 4;
   const transform = new THREE.Object3D();
-  const direction = new THREE.Vector3();
   const color = new THREE.Color();
 
   visuals.forEach((visual, index) => {
-    const { arrowPosition, arrowDirection } = visual.curve;
-    const routeDistance = horizontalDistance(visual.route);
-    const baseScale =
-      clamp(
-        routeDistance * ARROW_SIZE_PER_HORIZONTAL_UNIT,
-        MINIMUM_ARROW_SIZE,
-        MAXIMUM_ARROW_SIZE,
-      ) * visual.cue.arrowScale;
-    const scale =
-      visual.route.emphasized === true
-        ? Math.min(
-            MAXIMUM_EMPHASIZED_ARROW_SCALE,
-            baseScale * EMPHASIZED_ARROW_SCALE,
-          )
-        : baseScale;
-    transform.position.set(
-      arrowPosition.x,
-      arrowPosition.y,
-      arrowPosition.z,
-    );
-    direction.set(
-      arrowDirection.x,
-      arrowDirection.y,
-      arrowDirection.z,
-    );
-    transform.quaternion.setFromUnitVectors(UP, direction);
-    transform.scale.setScalar(scale);
-    transform.updateMatrix();
+    applyArrowTransform(transform, visual);
     arrows.setMatrixAt(index, transform.matrix);
     color.set(overlayRouteColor(visual.route));
     arrows.setColorAt(index, color);
@@ -388,7 +377,12 @@ function createArrowheads(
 
 function createGatewayPylons(
   endpoints: readonly RouteEndpointGeometry[],
-): THREE.InstancedMesh {
+  instancingSupported: boolean,
+): THREE.Object3D {
+  if (!instancingSupported) {
+    return createLegacyGatewayPylons(endpoints);
+  }
+
   const geometry = new THREE.CylinderGeometry(0.14, 0.18, 1, 8);
   const material = new THREE.MeshBasicMaterial({
     color: DEPENDENCY_OVERLAY_COLORS.gateway,
@@ -408,21 +402,118 @@ function createGatewayPylons(
   const transform = new THREE.Object3D();
 
   endpoints.forEach(({ contact, anchor }, index) => {
-    const height = anchor.y - contact.y;
-    transform.position.set(
-      contact.x,
-      contact.y + height * 0.5,
-      contact.z,
-    );
-    transform.quaternion.identity();
-    transform.scale.set(1, height, 1);
-    transform.updateMatrix();
+    applyGatewayTransform(transform, { contact, anchor });
     gateways.setMatrixAt(index, transform.matrix);
   });
   gateways.instanceMatrix.needsUpdate = true;
   gateways.computeBoundingSphere();
   disableRaycasting(gateways);
   return gateways;
+}
+
+function createLegacyArrowheads(
+  visuals: readonly RouteVisual[],
+): THREE.Group {
+  const group = new THREE.Group();
+  group.name = "code-city:dependency-route-arrows";
+  group.renderOrder = 4;
+  for (const visual of visuals) {
+    const arrow = new THREE.Mesh(
+      new THREE.ConeGeometry(0.25, 1, 6),
+      new THREE.MeshBasicMaterial({
+        color: overlayRouteColor(visual.route),
+        transparent: true,
+        opacity: 0.98,
+        depthTest: true,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    );
+    arrow.name = `code-city:dependency-route-arrow:${visual.route.id}`;
+    arrow.renderOrder = 4;
+    applyArrowTransform(arrow, visual);
+    disableRaycasting(arrow);
+    group.add(arrow);
+  }
+  return group;
+}
+
+function createLegacyGatewayPylons(
+  endpoints: readonly RouteEndpointGeometry[],
+): THREE.Group {
+  const group = new THREE.Group();
+  group.name = "code-city:dependency-route-gateways";
+  group.renderOrder = 4;
+  endpoints.forEach((endpoint, index) => {
+    const gateway = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.14, 0.18, 1, 8),
+      new THREE.MeshBasicMaterial({
+        color: DEPENDENCY_OVERLAY_COLORS.gateway,
+        transparent: true,
+        opacity: 0.98,
+        depthTest: true,
+        depthWrite: false,
+        toneMapped: false,
+      }),
+    );
+    gateway.name = `code-city:dependency-route-gateway:${index}`;
+    gateway.renderOrder = 4;
+    applyGatewayTransform(gateway, endpoint);
+    disableRaycasting(gateway);
+    group.add(gateway);
+  });
+  return group;
+}
+
+function applyArrowTransform(
+  object: THREE.Object3D,
+  visual: RouteVisual,
+): void {
+  const { arrowPosition, arrowDirection } = visual.curve;
+  const routeDistance = horizontalDistance(visual.route);
+  const baseScale =
+    clamp(
+      routeDistance * ARROW_SIZE_PER_HORIZONTAL_UNIT,
+      MINIMUM_ARROW_SIZE,
+      MAXIMUM_ARROW_SIZE,
+    ) * visual.cue.arrowScale;
+  const scale =
+    visual.route.emphasized === true
+      ? Math.min(
+          MAXIMUM_EMPHASIZED_ARROW_SCALE,
+          baseScale * EMPHASIZED_ARROW_SCALE,
+        )
+      : baseScale;
+  object.position.set(
+    arrowPosition.x,
+    arrowPosition.y,
+    arrowPosition.z,
+  );
+  object.quaternion.setFromUnitVectors(
+    UP,
+    new THREE.Vector3(
+      arrowDirection.x,
+      arrowDirection.y,
+      arrowDirection.z,
+    ),
+  );
+  object.scale.setScalar(scale);
+  object.updateMatrix();
+}
+
+function applyGatewayTransform(
+  object: THREE.Object3D,
+  { contact, anchor }: RouteEndpointGeometry,
+): void {
+  const height = anchor.y - contact.y;
+  object.position.set(
+    contact.x,
+    contact.y + height * 0.5,
+    contact.z,
+  );
+  object.quaternion.identity();
+  object.scale.set(1, height, 1);
+  object.updateMatrix();
 }
 
 function groundedRouteEndpoints(
