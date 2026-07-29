@@ -5,6 +5,10 @@ import {
 } from "./model.js";
 import { isDisplayColor } from "./color.js";
 import { normalizeAssetRelativePath } from "./identity.js";
+import {
+  DEFAULT_METRIC_MAPPING,
+  normalizeLogarithmically,
+} from "./metrics.js";
 import { normalizeRepositoryRelativePath } from "./path.js";
 
 type JsonObject = Record<string, unknown>;
@@ -14,6 +18,12 @@ const RISKS = new Set(["low", "moderate", "high", "very-high"]);
 const METRIC_METHODS = new Set([
   "typescript-compiler-api-v1",
   "csharp-lexical-v1",
+  "csharp-roslyn-v1",
+]);
+const METRIC_NORMALIZATION_STATES = new Set([
+  "available",
+  "clamped",
+  "unavailable",
 ]);
 const MODULE_KINDS = new Set([
   "dotnet-project",
@@ -25,6 +35,11 @@ const DEPENDENCY_KINDS = new Set([
   "typescript-import",
   "project-reference",
   "package-reference",
+]);
+const DEPENDENCY_RESOLUTIONS = new Set([
+  "internal",
+  "external",
+  "unresolved",
 ]);
 
 export const CITY_MODEL_LIMITS = Object.freeze({
@@ -198,6 +213,7 @@ export function validateCityModel(value: unknown): CityModel {
     optionalReference(group.mergeInto, groupIds, `${prefix}.mergeInto`);
   });
 
+  validateMetricMapping(model.metricMapping);
   validateAnalysis(model.analysis);
   validateIdentity(model.identity, repositoryIds);
   const identityPanel = validateIdentityPanel(model.identityPanel, groupIds);
@@ -277,6 +293,11 @@ export function validateCityModel(value: unknown): CityModel {
       metrics,
       prefix,
     );
+    validateBuildingMetricNormalization(
+      building.metricNormalization,
+      metrics,
+      prefix,
+    );
   });
 
   dependencies.forEach((dependency, index) => {
@@ -324,6 +345,24 @@ export function validateCityModel(value: unknown): CityModel {
         `${prefix} must define exactly one of targetId or externalTarget`,
       );
     }
+    const resolution =
+      dependency.resolution === undefined
+        ? hasInternal
+          ? "internal"
+          : "external"
+        : enumValue(
+            dependency.resolution,
+            DEPENDENCY_RESOLUTIONS,
+            `${prefix}.resolution`,
+          );
+    if (resolution === "internal" && !hasInternal) {
+      fail(`${prefix}.resolution "internal" requires targetId`);
+    }
+    if (resolution !== "internal" && !hasExternal) {
+      fail(
+        `${prefix}.resolution "${resolution}" requires externalTarget`,
+      );
+    }
   });
 
   const bounds = vector(model.bounds, "bounds", false);
@@ -356,6 +395,102 @@ function validateAnalysis(value: unknown): void {
   analysis.warnings.forEach((warning, index) =>
     nonEmptyString(warning, `analysis.warnings[${index}]`),
   );
+}
+
+function validateMetricMapping(value: unknown): void {
+  if (value === undefined) return;
+  const mapping = objectAt(value, "metricMapping");
+  const formulas = objectAt(
+    mapping.formulas,
+    "metricMapping.formulas",
+  );
+  for (const [name, expected] of Object.entries(
+    DEFAULT_METRIC_MAPPING.formulas,
+  )) {
+    if (formulas[name] !== expected) {
+      fail(
+        `metricMapping.formulas.${name} must be "${expected}"`,
+      );
+    }
+  }
+
+  const caps = objectAt(
+    mapping.normalizationCaps,
+    "metricMapping.normalizationCaps",
+  );
+  for (const [name, expected] of Object.entries(
+    DEFAULT_METRIC_MAPPING.normalizationCaps,
+  )) {
+    if (caps[name] !== expected) {
+      fail(
+        `metricMapping.normalizationCaps.${name} must be ${expected}`,
+      );
+    }
+  }
+}
+
+function validateBuildingMetricNormalization(
+  value: unknown,
+  metrics: JsonObject,
+  prefix: string,
+): void {
+  if (value === undefined) return;
+  const normalization = objectAt(
+    value,
+    `${prefix}.metricNormalization`,
+  );
+  validateNormalizedMetric(
+    normalization.sloc,
+    metrics.sloc as number,
+    DEFAULT_METRIC_MAPPING.normalizationCaps.sloc,
+    `${prefix}.metricNormalization.sloc`,
+  );
+  validateNormalizedMetric(
+    normalization.decisionLoad,
+    metrics.decisionLoad as number,
+    DEFAULT_METRIC_MAPPING.normalizationCaps.decisionLoad,
+    `${prefix}.metricNormalization.decisionLoad`,
+  );
+}
+
+function validateNormalizedMetric(
+  value: unknown,
+  rawValue: number,
+  cap: number,
+  path: string,
+): void {
+  const normalized = objectAt(value, path);
+  const state = enumValue(
+    normalized.state,
+    METRIC_NORMALIZATION_STATES,
+    `${path}.state`,
+  );
+  if (state === "unavailable") {
+    if (normalized.normalizedValue !== undefined) {
+      fail(`${path}.normalizedValue must be omitted when unavailable`);
+    }
+    return;
+  }
+
+  const normalizedValue = finiteNumber(
+    normalized.normalizedValue,
+    `${path}.normalizedValue`,
+  );
+  if (normalizedValue < 0 || normalizedValue > 1) {
+    fail(`${path}.normalizedValue must be between 0 and 1`);
+  }
+  const expectedState = rawValue > cap ? "clamped" : "available";
+  if (state !== expectedState) {
+    fail(
+      `${path}.state must be "${expectedState}" for raw value ${rawValue}`,
+    );
+  }
+  const expectedValue = normalizeLogarithmically(rawValue, cap);
+  if (Math.abs(normalizedValue - expectedValue) > 1e-12) {
+    fail(
+      `${path}.normalizedValue must match ${DEFAULT_METRIC_MAPPING.formulas.normalization}`,
+    );
+  }
 }
 
 function validateBuildingMetricDetails(

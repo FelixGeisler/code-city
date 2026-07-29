@@ -5,6 +5,8 @@ import {
   buildingHeight,
   calculateBuildingGeometry,
   classifyRisk,
+  DEFAULT_METRIC_MAPPING,
+  metricNormalizationForGeometry,
   normalizeCityIdentity,
   normalizePath,
   stableId,
@@ -57,6 +59,18 @@ describe("documented metric mapping", () => {
   });
 
   it("uses the documented logarithmic formulas and caps", () => {
+    expect(DEFAULT_METRIC_MAPPING).toEqual({
+      formulas: {
+        normalization: "log1p-cap-v1",
+        footprint: "sloc-footprint-side-v1",
+        height: "decision-load-height-v1",
+        risk: "maximum-complexity-bands-v1",
+      },
+      normalizationCaps: {
+        sloc: 1_000,
+        decisionLoad: 100,
+      },
+    });
     expect(buildingFootprintArea(0)).toBe(9);
     expect(buildingFootprintArea(1_000)).toBeCloseTo(324, 12);
     expect(buildingFootprintArea(10_000)).toBeCloseTo(324, 12);
@@ -72,6 +86,16 @@ describe("documented metric mapping", () => {
     expect(geometry.size.y).toBeCloseTo(40, 12);
     expect(geometry.slocClamped).toBe(true);
     expect(geometry.decisionLoadClamped).toBe(true);
+    expect(metricNormalizationForGeometry(geometry)).toEqual({
+      sloc: {
+        state: "clamped",
+        normalizedValue: 1,
+      },
+      decisionLoad: {
+        state: "clamped",
+        normalizedValue: 1,
+      },
+    });
   });
 
   it("keeps small files printable while separating large footprints", () => {

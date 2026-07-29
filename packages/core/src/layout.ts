@@ -2,6 +2,7 @@ import { normalizeCityIdentity } from "./identity.js";
 import {
   calculateBuildingGeometry,
   classifyRisk,
+  metricNormalizationForGeometry,
   validateSourceMetrics,
 } from "./metrics.js";
 import type {
@@ -183,6 +184,7 @@ function createLocalDistrict(
     return {
       fact,
       path,
+      geometry,
       size: geometry.size,
       risk,
       id: stableId(
@@ -240,6 +242,7 @@ function createLocalDistrict(
         path: item.path,
         language: item.fact.language,
         metrics: item.fact.metrics,
+        metricNormalization: metricNormalizationForGeometry(item.geometry),
         ...(item.fact.metricMethod === undefined
           ? {}
           : { metricMethod: item.fact.metricMethod }),

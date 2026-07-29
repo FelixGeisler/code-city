@@ -669,6 +669,8 @@ function dependencyKey(dependency: CityDependency): string {
     dependency.sourceId,
     dependency.targetId ?? "",
     dependency.externalTarget ?? "",
+    dependency.resolution ??
+      (dependency.targetId === undefined ? "external" : "internal"),
     dependency.version ?? "",
   ].join("\u0000");
 }
@@ -740,6 +742,7 @@ function buildDependencies(
           repositoryId: candidate.module.repositoryId,
           sourceId: candidate.module.id,
           targetId: target.id,
+          resolution: "internal",
           kind: "project-reference",
           weight: 1,
         });
@@ -759,6 +762,7 @@ function buildDependencies(
           repositoryId: candidate.module.repositoryId,
           sourceId: candidate.module.id,
           externalTarget: externalReference,
+          resolution: "unresolved",
           kind: "project-reference",
           weight: 1,
         });
@@ -782,6 +786,7 @@ function buildDependencies(
         ...(target
           ? { targetId: target.id }
           : { externalTarget: reference.packageId }),
+        resolution: target ? "internal" : "external",
         kind: "package-reference",
         ...(reference.version === undefined
           ? {}
@@ -833,18 +838,28 @@ function buildDependencies(
           )
         : undefined;
       if (target?.id === source.fact.id) continue;
+      const resolution =
+        target !== undefined
+          ? "internal"
+          : imported.specifier.startsWith(".")
+            ? "unresolved"
+            : "external";
+      const dependencyTarget =
+        target?.id ?? packageGateway(imported.specifier);
       dependencies.push({
         id: stableId(
           "dependency",
           "typescript-import",
           source.fact.id,
-          target?.id ?? packageGateway(imported.specifier),
+          resolution,
+          dependencyTarget,
         ),
         repositoryId: source.fact.repositoryId,
         sourceId: source.fact.id,
         ...(target
           ? { targetId: target.id }
-          : { externalTarget: packageGateway(imported.specifier) }),
+          : { externalTarget: dependencyTarget }),
+        resolution,
         kind: "typescript-import",
         weight: imported.count,
       });

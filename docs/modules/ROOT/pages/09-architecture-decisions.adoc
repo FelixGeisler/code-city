@@ -41,6 +41,15 @@
 |Keep architecture concise, structured, and publishable
 |===
 
+== CityModel 1.0 compatibility
+
+Readers accept additive optional fields in schema `1.0` and reject unknown
+incompatible versions. Legacy dependencies infer `internal` from `targetId`
+and `external` from `externalTarget`; explicit `unresolved` edges retain their
+`externalTarget`. Dependencies point from consumer to provider. Formula IDs,
+normalization caps, normalized values, and clamped or unavailable states remain
+part of the model.
+
 == Dependency and label grammar v1
 
 The semantic edge is independent of presentation. Browser routes use elevated
