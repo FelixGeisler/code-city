@@ -104,6 +104,7 @@ function archiveOutputPath(
 interface WorkspaceHarness {
   readonly workspace: GenericGitTemporaryWorkspace;
   readonly dispose: ReturnType<typeof vi.fn>;
+  readonly disposed: Promise<void>;
   readonly measureBytes: ReturnType<typeof vi.fn>;
 }
 
@@ -119,8 +120,13 @@ async function workspaceHarness(
   await fs.mkdir(repositoryDirectory, { recursive: true });
   await fs.mkdir(templateDirectory, { recursive: true });
   const measureBytes = vi.fn(async () => measuredBytes);
+  let markDisposed!: () => void;
+  const disposed = new Promise<void>((resolve) => {
+    markDisposed = resolve;
+  });
   const dispose = vi.fn(async () => {
     await fs.rm(root, { recursive: true, force: true });
+    markDisposed();
   });
   return {
     workspace: {
@@ -131,6 +137,7 @@ async function workspaceHarness(
       dispose,
     },
     dispose,
+    disposed,
     measureBytes,
   };
 }
@@ -1318,15 +1325,16 @@ describe("generic Git resource bounds and cleanup", () => {
     { timeout: 1_000 },
     async () => {
       const workspace = await workspaceHarness();
+      let provideWorkspace!: (
+        workspace: GenericGitTemporaryWorkspace,
+      ) => void;
+      const pendingWorkspace =
+        new Promise<GenericGitTemporaryWorkspace>((resolve) => {
+          provideWorkspace = resolve;
+        });
       const createTemporaryWorkspace: NonNullable<
         GenericGitSnapshotDependencies["createTemporaryWorkspace"]
-      > = async () =>
-        new Promise((resolve) => {
-          globalThis.setTimeout(
-            () => resolve(workspace.workspace),
-            40,
-          );
-        });
+      > = vi.fn(async () => pendingWorkspace);
 
       await expect(
         snapshotGenericGitRepository(
@@ -1341,9 +1349,9 @@ describe("generic Git resource bounds and cleanup", () => {
           },
         ),
       ).rejects.toThrow(/deadline|time/iu);
-      await new Promise((resolve) =>
-        globalThis.setTimeout(resolve, 70),
-      );
+      expect(createTemporaryWorkspace).toHaveBeenCalledOnce();
+      provideWorkspace(workspace.workspace);
+      await workspace.disposed;
       expect(workspace.dispose).toHaveBeenCalledOnce();
       await expect(
         fs.access(workspace.workspace.root),
