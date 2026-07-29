@@ -2,10 +2,11 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 import {
   analyzeCSharpWithRoslyn,
+  resolveBundledRoslynLaunch,
   ROSLYN_PROTOCOL_VERSION,
   type RoslynHelperLaunch,
 } from "../packages/analyzer/src/roslyn-host.js";
@@ -95,6 +96,65 @@ it("cancels the helper through AbortSignal", async () => {
     ).rejects.toThrow("cancelled");
   } finally {
     clearTimeout(cancellation);
+  }
+});
+
+it("honors cancellation that races AbortSignal listener registration", async () => {
+  const controller = new AbortController();
+  const signal = controller.signal;
+  const addEventListener = signal.addEventListener.bind(signal);
+  vi.spyOn(signal, "addEventListener").mockImplementation(
+    (type, listener, options) => {
+      if (type === "abort") controller.abort();
+      addEventListener(type, listener, options);
+    },
+  );
+
+  await expect(
+    analyzeCSharpWithRoslyn(
+      [{ id: "source-000001.cs", source: "class A {}" }],
+      nodeHelper(
+        "process.stdin.resume();setTimeout(()=>process.exit(0),10000);",
+      ),
+      { signal, timeoutMs: 100 },
+    ),
+  ).rejects.toThrow("cancelled");
+});
+
+it("ignores relative DOTNET_ROOT and PATH launch candidates", async () => {
+  const directory = await temporaryDirectory();
+  const previousCwd = process.cwd();
+  const previousDotnetRoot = process.env["DOTNET_ROOT"];
+  const previousPath = process.env["PATH"];
+  const executableName =
+    process.platform === "win32" ? "dotnet.exe" : "dotnet";
+  for (const relativeDirectory of ["runtime", "bin"]) {
+    const candidateDirectory = path.join(directory, relativeDirectory);
+    await fs.mkdir(candidateDirectory, { recursive: true });
+    const candidate = path.join(candidateDirectory, executableName);
+    await fs.writeFile(candidate, "repository-controlled fake dotnet", "utf8");
+    if (process.platform !== "win32") await fs.chmod(candidate, 0o755);
+  }
+
+  try {
+    process.chdir(directory);
+    process.env["DOTNET_ROOT"] = "runtime";
+    process.env["PATH"] = "bin";
+    await expect(resolveBundledRoslynLaunch()).rejects.toThrow(
+      "pinned .NET runtime",
+    );
+  } finally {
+    process.chdir(previousCwd);
+    if (previousDotnetRoot === undefined) {
+      delete process.env["DOTNET_ROOT"];
+    } else {
+      process.env["DOTNET_ROOT"] = previousDotnetRoot;
+    }
+    if (previousPath === undefined) {
+      delete process.env["PATH"];
+    } else {
+      process.env["PATH"] = previousPath;
+    }
   }
 });
 

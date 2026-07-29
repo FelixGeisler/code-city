@@ -75,4 +75,42 @@ Project("{FAKE}") = "App", "src/App/App.csproj", "{APP}"
     ]);
     expect(JSON.stringify(facts)).not.toContain("C:\\private");
   });
+
+  it("treats tag-shaped CDATA as text in csproj and slnx files", async () => {
+    const facts = await analyzeRepositorySnapshotFacts([
+      repositorySnapshot({
+        "CDATA.slnx": `<Solution>
+  <![CDATA[
+    <Project Path="Hidden/Hidden.csproj" />
+  ]]>
+</Solution>`,
+        "App/App.csproj": `<Project>
+  <![CDATA[
+    <AssemblyName>Hidden.Module</AssemblyName>
+    <PackageId>Hidden.Package</PackageId>
+    <ProjectReference Include="../Hidden/Hidden.csproj" />
+    <PackageReference Include="Hidden.Dependency" Version="9.9.9" />
+  ]]>
+</Project>`,
+        "App/App.cs": "public sealed class App {}",
+      }),
+    ]);
+
+    expect(
+      facts.modules.filter(({ kind }) => kind === "dotnet-project"),
+    ).toEqual([
+      expect.objectContaining({
+        name: "App",
+        packageId: "App",
+        path: "App/App.csproj",
+      }),
+    ]);
+    expect(
+      facts.solutions.find(({ path }) => path === "CDATA.slnx")?.moduleIds,
+    ).toEqual([]);
+    expect(facts.dependencies).toEqual([]);
+    expect(JSON.stringify(facts)).not.toContain("Hidden.Module");
+    expect(JSON.stringify(facts)).not.toContain("Hidden.Package");
+    expect(JSON.stringify(facts)).not.toContain("Hidden.Dependency");
+  });
 });

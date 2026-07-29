@@ -204,8 +204,10 @@ function decodeXml(value: string): string {
     .replaceAll("&amp;", "&");
 }
 
-function withoutXmlComments(xml: string): string {
-  return xml.replace(/<!--[\s\S]*?-->/gu, "");
+function withoutXmlMetadataText(xml: string): string {
+  return xml
+    .replace(/<!--[\s\S]*?-->/gu, "")
+    .replace(/<!\[CDATA\[[\s\S]*?\]\]>/gu, "");
 }
 
 function xmlTagEnd(xml: string, start: number): number {
@@ -444,44 +446,44 @@ async function discoverDotnetModules(
       );
       continue;
     }
-    const xml = withoutXmlComments(rawXml);
-      const frameworks = targetFrameworks(xml);
-      const moduleName = sanitizeDisplayText(
-        firstElement(xml, "AssemblyName") ??
-          path.posix.basename(
-            projectFile,
-            path.posix.extname(projectFile),
-          ),
-        "Unnamed project",
-      );
-      // NuGet defaults PackageId to AssemblyName/project name. Retaining the
-      // effective id lets separately supplied roots reconnect package bridges.
-      const packageId = sanitizeExternalReference(
-        firstElement(xml, "PackageId") ?? moduleName,
-        moduleName,
-      );
-      const module: CityModule = {
-        id: stableId(
-          "module",
-          context.repository.id,
-          "dotnet-project",
-          relativeProject,
+    const xml = withoutXmlMetadataText(rawXml);
+    const frameworks = targetFrameworks(xml);
+    const moduleName = sanitizeDisplayText(
+      firstElement(xml, "AssemblyName") ??
+        path.posix.basename(
+          projectFile,
+          path.posix.extname(projectFile),
         ),
-        repositoryId: context.repository.id,
-        kind: "dotnet-project",
-        name: moduleName,
-        path: relativeProject,
-        solutionIds: [],
-        ...(frameworks.length === 0 ? {} : { targetFrameworks: frameworks }),
-        ...(packageId === undefined ? {} : { packageId }),
-      };
-      modules.push({
-        module,
-        rootPath: path.posix.dirname(projectFile),
-        projectFile,
-        projectReferences: parseProjectReferences(xml),
-        packageReferences: parsePackageReferences(xml),
-      });
+      "Unnamed project",
+    );
+    // NuGet defaults PackageId to AssemblyName/project name. Retaining the
+    // effective id lets separately supplied roots reconnect package bridges.
+    const packageId = sanitizeExternalReference(
+      firstElement(xml, "PackageId") ?? moduleName,
+      moduleName,
+    );
+    const module: CityModule = {
+      id: stableId(
+        "module",
+        context.repository.id,
+        "dotnet-project",
+        relativeProject,
+      ),
+      repositoryId: context.repository.id,
+      kind: "dotnet-project",
+      name: moduleName,
+      path: relativeProject,
+      solutionIds: [],
+      ...(frameworks.length === 0 ? {} : { targetFrameworks: frameworks }),
+      ...(packageId === undefined ? {} : { packageId }),
+    };
+    modules.push({
+      module,
+      rootPath: path.posix.dirname(projectFile),
+      projectFile,
+      projectReferences: parseProjectReferences(xml),
+      packageReferences: parsePackageReferences(xml),
+    });
   }
   return modules;
 }
@@ -602,7 +604,7 @@ function solutionProjectPaths(
       if (match[1]) references.push(decodeXml(match[1]));
     }
   } else {
-    const xml = withoutXmlComments(solutionText);
+    const xml = withoutXmlMetadataText(solutionText);
     for (const match of xml.matchAll(/<Project\b[^>]*>/giu)) {
       const projectPath = attribute(match[0], "Path");
       if (
