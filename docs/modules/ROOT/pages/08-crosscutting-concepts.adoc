@@ -148,6 +148,21 @@ archives at 64 MiB, individual ZIP entries at 256 MiB, expanded archive data at
 default analysis deadline. Ignored content is never inflated. Archives and
 source bytes are not persisted or cached.
 
+The generic Git adapter accepts validated HTTPS, `ssh://`, and scp-style
+remotes without embedded passwords, query data, fragments, or leading options.
+The installed Git client and the user's credential helper, SSH agent/config,
+and certificate configuration are trusted local dependencies. Code City
+disables prompts, tracing, redirects, unsafe protocols, hooks, filesystem
+monitors, maintenance, submodules, and LFS behavior for the operation.
+
+Only an advertised branch, tag, or default `HEAD` is shallow-fetched into a
+private bare repository. The advertised object is rechecked before a local
+`git archive`; no checkout or remote archive command occurs. Process duration
+and output, temporary object storage, archive bytes, and the shared snapshot
+limits are bounded. Errors omit Git diagnostics, remotes, refs, credentials,
+and temporary paths. The bare repository is removed before source analysis;
+no remote or derived-model cache remains.
+
 The bundled Roslyn helper parses syntax only, receives opaque source IDs over a
 versioned bounded protocol, and runs once per analysis. It never loads a
 solution, project, MSBuild, NuGet, generators, or repository analyzers.
