@@ -23,6 +23,12 @@ export interface JobError {
   readonly message: string;
 }
 
+export interface JobResult {
+  readonly kind: "city-model";
+  readonly artifactToken: string;
+  readonly artifactUrl: string;
+}
+
 export interface JobRecord {
   readonly id: string;
   readonly kind: string;
@@ -31,14 +37,26 @@ export interface JobRecord {
   readonly updatedAt: string;
   readonly progress?: JobProgress;
   readonly error?: JobError;
+  readonly result?: JobResult;
 }
 
 export interface JobTaskContext {
+  readonly id: string;
   readonly signal: AbortSignal;
   report(progress: JobProgress): Promise<void>;
 }
 
-export type JobTask = (context: JobTaskContext) => Promise<void>;
+export type JobTask = (
+  context: JobTaskContext,
+) => Promise<JobResult | undefined | void>;
+
+export type JobFinalizer = (record: JobRecord) => Promise<void>;
+export type JobRollback = (record: JobRecord) => Promise<void>;
+
+export interface JobEnqueueOptions {
+  readonly finalize?: JobFinalizer;
+  readonly rollback?: JobRollback;
+}
 
 export interface PersistentJobQueueOptions {
   readonly dataDirectory: string;
@@ -50,6 +68,24 @@ interface PendingJob {
   readonly id: string;
   readonly task: JobTask;
   readonly controller: AbortController;
+  readonly finalize?: JobFinalizer;
+  readonly rollback?: JobRollback;
+  readonly settlement: Promise<JobRecord>;
+  readonly resolveSettlement: (record: JobRecord) => void;
+  settlementOperation?: Promise<JobRecord>;
+  rollbackOperation?: Promise<boolean>;
+  settling: boolean;
+}
+
+interface JobRecordChange {
+  readonly progress?: JobProgress;
+  readonly error?: JobError;
+  readonly result?: JobResult;
+}
+
+interface JobTerminalIntent {
+  readonly state: "completed" | "failed" | "cancelled";
+  readonly change: JobRecordChange;
 }
 
 const MAXIMUM_JOB_RECORDS = 10_000;
@@ -58,9 +94,26 @@ const JOB_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const JOB_KIND_PATTERN = /^[a-z][a-z0-9-]{0,63}$/u;
 const MAXIMUM_PHASE_CHARACTERS = 160;
+const FINALIZATION_FAILURE_MESSAGE = "The job cleanup did not complete.";
+const TERMINAL_PERSISTENCE_FAILURE_MESSAGE =
+  "The job terminal state could not be persisted.";
+const JOB_PROGRESS_KEYS = ["current", "phase", "total"] as const;
+const CITY_MODEL_ARTIFACT_KEYS = [
+  "artifactToken",
+  "artifactUrl",
+  "kind",
+] as const;
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function isTerminal(record: JobRecord): boolean {
+  return (
+    record.state === "completed" ||
+    record.state === "failed" ||
+    record.state === "cancelled"
+  );
 }
 
 function validIsoDate(value: unknown): value is string {
@@ -71,36 +124,46 @@ function validIsoDate(value: unknown): value is string {
   );
 }
 
-function validProgress(value: unknown): value is JobProgress {
-  if (
-    typeof value !== "object" ||
-    value === null
-  ) {
-    return false;
-  }
-  const candidate = value as Record<string, unknown>;
-  const phase = candidate["phase"];
-  if (
-    typeof phase !== "string" ||
-    phase.length === 0 ||
-    phase.length > MAXIMUM_PHASE_CHARACTERS
-  ) {
-    return false;
-  }
-  for (const key of ["current", "total"] as const) {
-    const count = candidate[key];
+function readProgress(value: unknown): JobProgress | undefined {
+  try {
+    if (typeof value !== "object" || value === null) return undefined;
+    const candidate = value as Record<string, unknown>;
+    const keys = Object.keys(candidate).sort(compareText);
+    const phase = candidate["phase"];
+    const current = candidate["current"];
+    const total = candidate["total"];
+    const expectedKeys = [
+      ...(current === undefined ? [] : ["current"]),
+      "phase",
+      ...(total === undefined ? [] : ["total"]),
+    ];
     if (
-      count !== undefined &&
-      (!Number.isSafeInteger(count) || (count as number) < 0)
+      keys.length !== expectedKeys.length ||
+      !keys.every((key, index) => key === expectedKeys[index]) ||
+      !keys.every((key) =>
+        JOB_PROGRESS_KEYS.some((allowed) => allowed === key),
+      ) ||
+      typeof phase !== "string" ||
+      phase.length === 0 ||
+      phase.length > MAXIMUM_PHASE_CHARACTERS ||
+      (current !== undefined &&
+        (!Number.isSafeInteger(current) || (current as number) < 0)) ||
+      (total !== undefined &&
+        (!Number.isSafeInteger(total) || (total as number) < 0)) ||
+      (current !== undefined &&
+        total !== undefined &&
+        (current as number) > (total as number))
     ) {
-      return false;
+      return undefined;
     }
+    return Object.freeze({
+      phase,
+      ...(current === undefined ? {} : { current: current as number }),
+      ...(total === undefined ? {} : { total: total as number }),
+    });
+  } catch {
+    return undefined;
   }
-  return (
-    candidate["current"] === undefined ||
-    candidate["total"] === undefined ||
-    (candidate["current"] as number) <= (candidate["total"] as number)
-  );
 }
 
 function validError(value: unknown): value is JobError {
@@ -118,6 +181,38 @@ function validError(value: unknown): value is JobError {
   );
 }
 
+function readResult(
+  value: unknown,
+  expectedToken: string,
+): JobResult | undefined {
+  try {
+    if (typeof value !== "object" || value === null) return undefined;
+    const candidate = value as Record<string, unknown>;
+    const keys = Object.keys(candidate).sort(compareText);
+    const kind = candidate["kind"];
+    const token = candidate["artifactToken"];
+    const url = candidate["artifactUrl"];
+    if (
+      keys.length !== CITY_MODEL_ARTIFACT_KEYS.length ||
+      !keys.every((key, index) => key === CITY_MODEL_ARTIFACT_KEYS[index]) ||
+      kind !== "city-model" ||
+      typeof token !== "string" ||
+      !JOB_ID_PATTERN.test(token) ||
+      token !== expectedToken ||
+      url !== `/api/v1/artifacts/${token}/city-model.json`
+    ) {
+      return undefined;
+    }
+    return Object.freeze({
+      kind,
+      artifactToken: token,
+      artifactUrl: url,
+    });
+  } catch {
+    return undefined;
+  }
+}
+
 function parseJobRecord(value: unknown): JobRecord {
   if (typeof value !== "object" || value === null) {
     throw new Error("Invalid persisted job record.");
@@ -130,6 +225,13 @@ function parseJobRecord(value: unknown): JobRecord {
   const updatedAt = candidate["updatedAt"];
   const progress = candidate["progress"];
   const error = candidate["error"];
+  const result = candidate["result"];
+  const parsedResult =
+    result === undefined || typeof id !== "string"
+      ? undefined
+      : readResult(result, id);
+  const parsedProgress =
+    progress === undefined ? undefined : readProgress(progress);
   if (
     typeof id !== "string" ||
     !JOB_ID_PATTERN.test(id) ||
@@ -142,42 +244,100 @@ function parseJobRecord(value: unknown): JobRecord {
   ) {
     throw new Error("Invalid persisted job record.");
   }
-  if (
-    progress !== undefined &&
-    !validProgress(progress)
-  ) {
+  if (progress !== undefined && parsedProgress === undefined) {
     throw new Error("Invalid persisted job progress.");
   }
   if (error !== undefined && !validError(error)) {
     throw new Error("Invalid persisted job error.");
   }
+  if (result !== undefined && parsedResult === undefined) {
+    throw new Error("Invalid persisted job result.");
+  }
   const parsedState = state as JobState;
+  if (result !== undefined && parsedState !== "completed") {
+    throw new Error("Invalid persisted job result state.");
+  }
   return Object.freeze({
     id,
     kind,
     state: parsedState,
     createdAt,
     updatedAt,
-    ...(progress === undefined
+    ...(parsedProgress === undefined
       ? {}
-      : { progress: Object.freeze({ ...progress }) }),
+      : { progress: parsedProgress }),
     ...(error === undefined
       ? {}
       : { error: Object.freeze({ ...error }) }),
+    ...(parsedResult === undefined
+      ? {}
+      : { result: parsedResult }),
   });
 }
 
 function normalizeProgress(progress: JobProgress): JobProgress {
-  if (!validProgress(progress)) {
+  const normalized = readProgress(progress);
+  if (!normalized) {
     throw new Error("Job progress is invalid.");
   }
-  return Object.freeze({ ...progress });
+  return normalized;
+}
+
+function normalizeResult(
+  result: JobResult,
+  expectedToken: string,
+): JobResult {
+  const normalized = readResult(result, expectedToken);
+  if (!normalized) {
+    throw new Error("Job result is invalid.");
+  }
+  return normalized;
+}
+
+function transitionedRecord(
+  current: JobRecord,
+  state: JobState,
+  updatedAt: string,
+  change: JobRecordChange,
+): JobRecord {
+  const { result: _discardedResult, ...base } = current;
+  return Object.freeze({
+    ...base,
+    state,
+    updatedAt,
+    ...(change.progress === undefined
+      ? current.progress === undefined
+        ? {}
+        : { progress: current.progress }
+      : { progress: change.progress }),
+    ...(change.error === undefined
+      ? {}
+      : { error: Object.freeze({ ...change.error }) }),
+    ...(state !== "completed" || change.result === undefined
+      ? {}
+      : { result: Object.freeze({ ...change.result }) }),
+  });
 }
 
 function safeMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  const normalized = message.replace(/[\u0000-\u001F\u007F]+/gu, " ").trim();
-  return (normalized || "The job failed.").slice(0, 1_024);
+  try {
+    const message = error instanceof Error ? error.message : String(error);
+    const normalized = message
+      .replace(/[\u0000-\u001F\u007F]+/gu, " ")
+      .trim();
+    return (normalized || "The job failed.").slice(0, 1_024);
+  } catch {
+    return "The job failed.";
+  }
+}
+
+function activeCancellationIntent(): JobTerminalIntent {
+  return {
+    state: "cancelled",
+    change: {
+      error: { code: "cancelled", message: "The job was cancelled." },
+    },
+  };
 }
 
 async function ensurePrivateDirectory(directory: string): Promise<string> {
@@ -197,11 +357,10 @@ export class PersistentJobQueue {
   readonly #records = new Map<string, JobRecord>();
   readonly #pending: PendingJob[] = [];
   readonly #active = new Map<string, PendingJob>();
+  readonly #live = new Map<string, PendingJob>();
   readonly #enqueues = new Set<Promise<JobRecord>>();
-  readonly #cancellations = new Set<
-    Promise<JobRecord | undefined>
-  >();
   readonly #runs = new Set<Promise<void>>();
+  readonly #transitions = new Map<string, Promise<JobRecord>>();
   readonly #writes = new Map<string, Promise<void>>();
   #disposed = false;
   #closePromise: Promise<void> | undefined;
@@ -254,11 +413,15 @@ export class PersistentJobQueue {
     return this.#records.get(id);
   }
 
-  public enqueue(kind: string, task: JobTask): Promise<JobRecord> {
+  public enqueue(
+    kind: string,
+    task: JobTask,
+    options: JobEnqueueOptions = {},
+  ): Promise<JobRecord> {
     if (this.#disposed) {
       return Promise.reject(new Error("Job queue is closed."));
     }
-    const operation = this.enqueueJob(kind, task);
+    const operation = this.enqueueJob(kind, task, options);
     this.#enqueues.add(operation);
     void operation.then(
       () => this.#enqueues.delete(operation),
@@ -270,7 +433,10 @@ export class PersistentJobQueue {
   private async enqueueJob(
     kind: string,
     task: JobTask,
+    options: JobEnqueueOptions,
   ): Promise<JobRecord> {
+    const finalize = options.finalize;
+    const rollback = options.rollback;
     if (!JOB_KIND_PATTERN.test(kind)) {
       throw new Error(
         "Job kind must start with a letter and contain at most 64 lowercase letters, digits, or hyphens.",
@@ -278,6 +444,15 @@ export class PersistentJobQueue {
     }
     if (this.#records.size >= MAXIMUM_JOB_RECORDS) {
       throw new Error("Job record limit reached.");
+    }
+    if (
+      finalize !== undefined &&
+      typeof finalize !== "function"
+    ) {
+      throw new Error("Job finalizer must be a function.");
+    }
+    if (rollback !== undefined && typeof rollback !== "function") {
+      throw new Error("Job rollback must be a function.");
     }
     const timestamp = this.#now().toISOString();
     const record: JobRecord = Object.freeze({
@@ -289,60 +464,58 @@ export class PersistentJobQueue {
     });
     await this.persist(record);
     this.#records.set(record.id, record);
-    this.#pending.push({
+    let resolveSettlement: ((record: JobRecord) => void) | undefined;
+    const settlement = new Promise<JobRecord>((resolve) => {
+      resolveSettlement = resolve;
+    });
+    const job: PendingJob = {
       id: record.id,
       task,
       controller: new AbortController(),
-    });
+      settlement,
+      resolveSettlement: (terminal) => resolveSettlement!(terminal),
+      settling: false,
+      ...(finalize === undefined
+        ? {}
+        : { finalize }),
+      ...(rollback === undefined
+        ? {}
+        : { rollback }),
+    };
+    this.#live.set(record.id, job);
+    this.#pending.push(job);
     this.pump();
     return record;
   }
 
   public cancel(id: string): Promise<JobRecord | undefined> {
-    if (this.#disposed) {
-      return Promise.resolve(this.#records.get(id));
-    }
-    return this.trackCancellation(id);
+    return this.cancelJob(id);
   }
 
-  private trackCancellation(
-    id: string,
-  ): Promise<JobRecord | undefined> {
-    const operation = this.cancelJob(id);
-    this.#cancellations.add(operation);
-    void operation.then(
-      () => this.#cancellations.delete(operation),
-      () => this.#cancellations.delete(operation),
-    );
-    return operation;
-  }
-
-  private async cancelJob(
+  private cancelJob(
     id: string,
   ): Promise<JobRecord | undefined> {
     const record = this.#records.get(id);
-    if (!record) return undefined;
-    if (
-      record.state === "completed" ||
-      record.state === "failed" ||
-      record.state === "cancelled"
-    ) {
-      return record;
-    }
+    if (!record) return Promise.resolve(undefined);
+    if (isTerminal(record)) return Promise.resolve(record);
+    const job = this.#live.get(id);
+    if (!job) return Promise.resolve(record);
     const queuedIndex = this.#pending.findIndex((job) => job.id === id);
     if (queuedIndex >= 0) {
-      this.#pending.splice(queuedIndex, 1)[0]?.controller.abort();
-      return this.transition(id, "cancelled", {
-        error: {
-          code: "cancelled",
-          message: "The job was cancelled before it started.",
+      this.#pending.splice(queuedIndex, 1);
+      job.controller.abort();
+      return this.beginSettlement(job, {
+        state: "cancelled",
+        change: {
+          error: {
+            code: "cancelled",
+            message: "The job was cancelled before it started.",
+          },
         },
       });
     }
-    this.#active.get(id)?.controller.abort();
-    return this.transition(id, "cancelled", {
-      error: { code: "cancelled", message: "The job was cancelled." },
-    });
+    if (!job.settling) job.controller.abort();
+    return job.settlement;
   }
 
   public close(): Promise<void> {
@@ -354,11 +527,8 @@ export class PersistentJobQueue {
 
   private async closeJobs(): Promise<void> {
     await Promise.allSettled([...this.#enqueues]);
-    await Promise.allSettled([...this.#cancellations]);
-    const jobs = [...this.#pending, ...this.#active.values()];
-    for (const job of jobs) job.controller.abort();
     await Promise.allSettled(
-      jobs.map(({ id }) => this.trackCancellation(id)),
+      [...this.#live.keys()].map((id) => this.cancelJob(id)),
     );
     await Promise.allSettled([...this.#runs]);
     await Promise.allSettled([...this.#writes.values()]);
@@ -387,12 +557,19 @@ export class PersistentJobQueue {
         !entry.isSymbolicLink()
       ) {
         const destination = candidate.slice(0, -".bak".length);
+        let destinationExists = true;
         try {
           await fs.lstat(destination);
-          await fs.rm(candidate, { force: true });
         } catch (error) {
           if (!hasErrorCode(error, "ENOENT")) throw error;
+          destinationExists = false;
+        }
+        if (destinationExists) {
+          await fs.rm(candidate, { force: true });
+          await this.syncJobsDirectory();
+        } else {
           await fs.rename(candidate, destination);
+          await this.syncJobsDirectory();
         }
       }
     }
@@ -429,8 +606,9 @@ export class PersistentJobQueue {
       }
       let recovered = record;
       if (record.state === "queued" || record.state === "running") {
+        const { result: _discardedResult, ...recoverable } = record;
         recovered = Object.freeze({
-          ...record,
+          ...recoverable,
           state: "failed",
           updatedAt: this.#now().toISOString(),
           error: Object.freeze({
@@ -462,70 +640,219 @@ export class PersistentJobQueue {
   }
 
   private async run(job: PendingJob): Promise<void> {
+    let intent: JobTerminalIntent;
     try {
       await this.transition(job.id, "running");
-      if (job.controller.signal.aborted) return;
-      await job.task({
-        signal: job.controller.signal,
-        report: async (progress) => {
-          if (job.controller.signal.aborted) return;
-          await this.transition(job.id, "running", {
-            progress: normalizeProgress(progress),
-          });
-        },
-      });
-      if (!job.controller.signal.aborted) {
-        await this.transition(job.id, "completed");
-      }
-    } catch (error) {
-      if (!job.controller.signal.aborted) {
-        try {
-          await this.transition(job.id, "failed", {
-            error: { code: "failed", message: safeMessage(error) },
-          });
-        } catch {
-          // A persistence failure must not become an unhandled rejection.
+      if (job.controller.signal.aborted) {
+        intent = activeCancellationIntent();
+      } else {
+        const result = await job.task({
+          id: job.id,
+          signal: job.controller.signal,
+          report: async (progress) => {
+            if (job.controller.signal.aborted || job.settling) return;
+            const normalized = normalizeProgress(progress);
+            if (job.controller.signal.aborted || job.settling) return;
+            await this.transition(job.id, "running", {
+              progress: normalized,
+            });
+          },
+        });
+        if (job.controller.signal.aborted) {
+          intent = activeCancellationIntent();
+        } else {
+          const normalized =
+            result === undefined
+              ? undefined
+              : normalizeResult(result, job.id);
+          intent = job.controller.signal.aborted
+            ? activeCancellationIntent()
+            : {
+                state: "completed",
+                change:
+                  normalized === undefined ? {} : { result: normalized },
+              };
         }
       }
+    } catch (error) {
+      intent = job.controller.signal.aborted
+        ? activeCancellationIntent()
+        : {
+            state: "failed",
+            change: {
+              error: { code: "failed", message: safeMessage(error) },
+            },
+          };
+    }
+    try {
+      await this.beginSettlement(job, intent);
     } finally {
       this.#active.delete(job.id);
       this.pump();
     }
   }
 
-  private async transition(
+  private transition(
     id: string,
-    state: JobState,
-    change: {
-      readonly progress?: JobProgress;
-      readonly error?: JobError;
-    } = {},
+    state: "running",
+    change: JobRecordChange = {},
+  ): Promise<JobRecord> {
+    const previous = this.#transitions.get(id);
+    const operation = (previous ?? Promise.resolve(undefined))
+      .catch(() => undefined)
+      .then(() => this.applyTransition(id, state, change));
+    this.#transitions.set(id, operation);
+    void operation.then(
+      () => {
+        if (this.#transitions.get(id) === operation) {
+          this.#transitions.delete(id);
+        }
+      },
+      () => {
+        if (this.#transitions.get(id) === operation) {
+          this.#transitions.delete(id);
+        }
+      },
+    );
+    return operation;
+  }
+
+  private async applyTransition(
+    id: string,
+    state: "running",
+    change: JobRecordChange,
   ): Promise<JobRecord> {
     const current = this.#records.get(id);
     if (!current) throw new Error(`Unknown job '${id}'.`);
-    if (
-      current.state === "completed" ||
-      current.state === "failed" ||
-      current.state === "cancelled"
-    ) {
-      return current;
-    }
-    const record: JobRecord = Object.freeze({
-      ...current,
+    if (isTerminal(current)) return current;
+    const record = transitionedRecord(
+      current,
       state,
-      updatedAt: this.#now().toISOString(),
-      ...(change.progress === undefined
-        ? current.progress === undefined
-          ? {}
-          : { progress: current.progress }
-        : { progress: Object.freeze({ ...change.progress }) }),
-      ...(change.error === undefined
-        ? {}
-        : { error: Object.freeze({ ...change.error }) }),
-    });
+      this.#now().toISOString(),
+      change,
+    );
     await this.persist(record);
     this.#records.set(id, record);
     return record;
+  }
+
+  private beginSettlement(
+    job: PendingJob,
+    intent: JobTerminalIntent,
+  ): Promise<JobRecord> {
+    if (!job.settlementOperation) {
+      job.settling = true;
+      const operation = this.settleJob(job, intent);
+      job.settlementOperation = operation;
+      void operation.then(
+        (record) => this.finishSettlement(job, record),
+        () => {
+          const current = this.#records.get(job.id);
+          if (!current) return;
+          const fallback = transitionedRecord(
+            current,
+            "failed",
+            this.#now().toISOString(),
+            {
+              error: {
+                code: "failed",
+                message:
+                  "The job ended before its terminal state was persisted.",
+              },
+            },
+          );
+          this.#records.set(job.id, fallback);
+          this.finishSettlement(job, fallback);
+        },
+      );
+    }
+    return job.settlement;
+  }
+
+  private async settleJob(
+    job: PendingJob,
+    intent: JobTerminalIntent,
+  ): Promise<JobRecord> {
+    await this.#transitions.get(job.id)?.catch(() => undefined);
+    const current = this.#records.get(job.id);
+    if (!current) throw new Error(`Unknown job '${job.id}'.`);
+    if (isTerminal(current)) return current;
+    const prospective = transitionedRecord(
+      current,
+      intent.state,
+      this.#now().toISOString(),
+      intent.change,
+    );
+    let terminal = prospective;
+    let finalizationFailed = false;
+    if (job.finalize) {
+      try {
+        await job.finalize(prospective);
+      } catch {
+        finalizationFailed = true;
+        await this.compensate(job, prospective);
+      }
+    }
+    if (finalizationFailed) {
+      terminal = transitionedRecord(
+        current,
+        "failed",
+        this.#now().toISOString(),
+        {
+          error: {
+            code: "failed",
+            message: FINALIZATION_FAILURE_MESSAGE,
+          },
+        },
+      );
+      await this.persist(terminal).catch(() => undefined);
+      this.#records.set(job.id, terminal);
+      return terminal;
+    }
+    try {
+      await this.persist(terminal);
+    } catch {
+      const compensated = await this.compensate(job, prospective);
+      terminal = transitionedRecord(
+        current,
+        "failed",
+        this.#now().toISOString(),
+        {
+          error: {
+            code: "failed",
+            message: compensated
+              ? TERMINAL_PERSISTENCE_FAILURE_MESSAGE
+              : FINALIZATION_FAILURE_MESSAGE,
+          },
+        },
+      );
+      await this.persist(terminal).catch(() => undefined);
+    }
+    this.#records.set(job.id, terminal);
+    return terminal;
+  }
+
+  private compensate(
+    job: PendingJob,
+    record: JobRecord,
+  ): Promise<boolean> {
+    if (!job.rollbackOperation) {
+      job.rollbackOperation =
+        job.rollback === undefined
+          ? Promise.resolve(true)
+          : Promise.resolve()
+              .then(() => job.rollback!(record))
+              .then(
+                () => true,
+                () => false,
+              );
+    }
+    return job.rollbackOperation;
+  }
+
+  private finishSettlement(job: PendingJob, record: JobRecord): void {
+    this.#live.delete(job.id);
+    job.resolveSettlement(record);
   }
 
   private async persist(record: JobRecord): Promise<void> {
@@ -554,15 +881,30 @@ export class PersistentJobQueue {
     if (Buffer.byteLength(bytes, "utf8") > MAXIMUM_JOB_FILE_BYTES) {
       throw new Error("Job record exceeds the persistence limit.");
     }
+    let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
     try {
-      await fs.writeFile(temporary, bytes, { encoding: "utf8", mode: 0o600 });
+      handle = await fs.open(temporary, "wx", 0o600);
+      try {
+        await handle.writeFile(bytes, { encoding: "utf8" });
+        await handle.sync();
+      } finally {
+        await handle.close();
+        handle = undefined;
+      }
+      let useReplacement = false;
       try {
         await fs.rename(temporary, destination);
       } catch (error) {
         if (!hasAnyErrorCode(error, ["EEXIST", "EPERM", "EACCES"])) {
           throw error;
         }
+        useReplacement = true;
+      }
+      if (!useReplacement) {
+        await this.syncJobsDirectory();
+      } else {
         await fs.rm(backup, { force: true });
+        await this.syncJobsDirectory();
         let movedExisting = false;
         try {
           await fs.rename(destination, backup);
@@ -570,18 +912,52 @@ export class PersistentJobQueue {
         } catch (moveError) {
           if (!hasErrorCode(moveError, "ENOENT")) throw moveError;
         }
+        if (movedExisting) {
+          try {
+            await this.syncJobsDirectory();
+          } catch (syncError) {
+            await this.restoreBackup(backup, destination);
+            throw syncError;
+          }
+        }
         try {
           await fs.rename(temporary, destination);
+          await this.syncJobsDirectory();
         } catch (replacementError) {
           if (movedExisting) {
-            await fs.rename(backup, destination).catch(() => undefined);
+            await this.restoreBackup(backup, destination);
           }
           throw replacementError;
         }
-        await fs.rm(backup, { force: true });
+        await fs
+          .rm(backup, { force: true })
+          .then(() => this.syncJobsDirectory())
+          .catch(() => undefined);
       }
     } finally {
+      if (handle) await handle.close().catch(() => undefined);
       await fs.rm(temporary, { force: true }).catch(() => undefined);
+    }
+  }
+
+  private async restoreBackup(
+    backup: string,
+    destination: string,
+  ): Promise<void> {
+    await fs
+      .rename(backup, destination)
+      .then(() => this.syncJobsDirectory())
+      .catch(() => undefined);
+  }
+
+  private async syncJobsDirectory(): Promise<void> {
+    // Node cannot portably open and fsync directory handles on Windows.
+    if (process.platform === "win32") return;
+    const handle = await fs.open(this.#jobsDirectory, "r");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
     }
   }
 }
