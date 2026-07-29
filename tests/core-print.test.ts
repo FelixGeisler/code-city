@@ -109,7 +109,7 @@ describe("capability-driven printer profiles", () => {
 });
 
 describe("deterministic print planning", () => {
-  it("maps seven semantic roles onto five XL tools using merge hints", () => {
+  it("maps eight semantic roles onto five XL tools using merge hints", () => {
     const plan = planPrint(createPrusaXLProfile([1, 2, 3, 4, 5]), {
       format: "3mf",
       semanticGroups: [...DEFAULT_SEMANTIC_GROUPS].reverse(),
@@ -118,6 +118,11 @@ describe("deterministic print planning", () => {
     });
     expect(plan.assignments).toEqual([
       { semanticGroupId: "base", channelId: "tool-1" },
+      {
+        semanticGroupId: "external",
+        channelId: "tool-1",
+        mergedIntoSemanticGroupId: "base",
+      },
       { semanticGroupId: "identity", channelId: "tool-2" },
       {
         semanticGroupId: "risk-high",

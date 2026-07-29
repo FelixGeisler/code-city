@@ -43,6 +43,13 @@ export const DEFAULT_SEMANTIC_GROUPS = Object.freeze([
     mergeInto: "risk-moderate",
   },
   {
+    id: "external",
+    label: "External dependencies",
+    color: "#111827",
+    priority: 55,
+    mergeInto: "base",
+  },
+  {
     id: "routes",
     label: "Dependency routes",
     color: "#2563EB",

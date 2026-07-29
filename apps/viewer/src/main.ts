@@ -1,7 +1,16 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
+import {
+  EXTERNAL_DEPENDENCY_COLOR,
+  layoutExternalDependencies,
+  resolveExternalDependencyNode,
+  selectExternalDependencies,
+  type ExternalDependencyLayout,
+  type ExternalDependencyLayoutNode,
+} from "../../../packages/core/src/external-dependencies.js";
 import type {
+  CityBase,
   CityBuilding,
   CityModel,
   CityModule,
@@ -35,7 +44,6 @@ import {
   districtBoundaryAnchor,
   type DistrictDependencyFootprint,
   districtRouteEndpoints,
-  keyedBaseGateway,
   keyedIsolationGateway,
 } from "./district-dependency-layout.js";
 import {
@@ -44,12 +52,11 @@ import {
 } from "./dependency-overlay.js";
 import {
   buildingRouteEndpoint,
-  keyedBoundaryGateway,
   routeEndpointKey,
   type RouteEndpointGeometry,
-  type RouteRectangle,
 } from "./dependency-route-layout.js";
 import { DEMO_MODEL } from "./demo-model.js";
+import { presentExternalDependency } from "./external-dependency-inspector.js";
 import {
   AutomaticModelLoadGate,
   assetRootFromResponseUrl,
@@ -58,7 +65,6 @@ import {
 } from "./model-source.js";
 import { validateCityModel } from "./model-validation.js";
 import {
-  clearExplorerSelection,
   createRepositoryExplorerIndex,
   type ExplorerState,
   isolateSelectedDistrict as isolateExplorerDistrict,
@@ -80,6 +86,8 @@ interface BuildingContext {
   readonly repository: CityRepository;
   readonly module: CityModule;
 }
+
+type ExternalSceneNode = ExternalDependencyLayoutNode;
 
 interface PointerPosition {
   readonly x: number;
@@ -112,9 +120,14 @@ const modelLogoPlaceholder = element<HTMLSpanElement>(
 const tooltip = element<HTMLDivElement>("tooltip");
 const inspectorEmpty = element<HTMLDivElement>("inspector-empty");
 const inspectorContent = element<HTMLDivElement>("inspector-content");
+const externalInspectorContent = element<HTMLDivElement>(
+  "external-inspector-content",
+);
 const clearSelectionButton =
   element<HTMLButtonElement>("clear-selection");
 const legend = element<HTMLUListElement>("legend");
+const externalZone = element<HTMLElement>("external-zone");
+const externalList = element<HTMLUListElement>("external-list");
 const selectionStatus = element<HTMLParagraphElement>("selection-status");
 const errorBanner = element<HTMLDivElement>("error-banner");
 const errorMessage = element<HTMLSpanElement>("error-message");
@@ -205,6 +218,18 @@ const inspectorFields = {
   units: element<HTMLTableSectionElement>("building-units"),
 };
 
+const externalInspectorFields = {
+  name: element<HTMLHeadingElement>("external-name"),
+  target: element<HTMLElement>("external-target"),
+  weight: element<HTMLElement>("external-weight"),
+  edgeCount: element<HTMLElement>("external-edge-count"),
+  targetCount: element<HTMLElement>("external-target-count"),
+  kinds: element<HTMLElement>("external-kinds"),
+  consumerCount: element<HTMLElement>("external-consumer-count"),
+  consumers: element<HTMLUListElement>("external-consumers"),
+  omitted: element<HTMLParagraphElement>("external-consumers-omitted"),
+};
+
 class CityScene {
   private readonly scene = new THREE.Scene();
   private readonly fog = new THREE.FogExp2(
@@ -231,6 +256,11 @@ class CityScene {
     string,
     THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>
   >();
+  private readonly externalMeshes = new Map<
+    string,
+    THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>
+  >();
+  private readonly externalNodes = new Map<string, ExternalSceneNode>();
   private readonly buildingContexts = new Map<string, BuildingContext>();
   private readonly districtGroups = new Map<string, THREE.Group>();
   private readonly resizeObserver: ResizeObserver;
@@ -246,6 +276,9 @@ class CityScene {
   public constructor(
     private readonly host: HTMLDivElement,
     private readonly onStateChange: (state: ExplorerState) => void,
+    private readonly onExternalSelectionChange: (
+      id: string | null,
+    ) => void,
   ) {
     this.scene.background = new THREE.Color("#07111f");
     this.scene.fog = this.fog;
@@ -302,7 +335,11 @@ class CityScene {
     this.renderer.setAnimationLoop(this.render);
   }
 
-  public load(model: CityModel): void {
+  public load(
+    model: CityModel,
+    effectiveBase: CityBase | undefined,
+    externalNodes: readonly ExternalSceneNode[],
+  ): void {
     this.clear();
 
     const repositories = new Map(
@@ -312,7 +349,7 @@ class CityScene {
     const groups = new Map(
       model.semanticGroups.map((item) => [item.id, item]),
     );
-    const base = cityBaseForModel(model);
+    const base = effectiveBase ?? cityBaseForModel(model);
     let gridY = 0;
     if (base !== undefined) {
       const geometry = new THREE.BoxGeometry(
@@ -414,6 +451,7 @@ class CityScene {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.userData["buildingId"] = building.id;
+      mesh.userData["sceneEntityKey"] = buildingEntityKey(building.id);
       const districtGroup = this.districtGroups.get(building.districtId);
       if (!districtGroup) {
         throw new Error(
@@ -427,6 +465,43 @@ class CityScene {
         repository,
         module,
       });
+    }
+
+    for (const node of externalNodes) {
+      const geometry = new THREE.BoxGeometry(
+        node.size.x,
+        node.size.y,
+        node.size.z,
+      );
+      const material = new THREE.MeshStandardMaterial({
+        color: EXTERNAL_DEPENDENCY_COLOR,
+        roughness: 0.72,
+        metalness: 0.12,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set(
+        node.position.x,
+        node.position.y,
+        node.position.z,
+      );
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      mesh.userData["externalNodeId"] = node.id;
+      mesh.userData["sceneEntityKey"] = externalEntityKey(node.id);
+      this.city.add(mesh);
+      this.externalMeshes.set(node.id, mesh);
+      this.externalNodes.set(node.id, node);
+
+      const outline = new THREE.LineSegments(
+        new THREE.EdgesGeometry(geometry),
+        new THREE.LineBasicMaterial({
+          color: "#8da2bb",
+          transparent: true,
+          opacity: 0.46,
+        }),
+      );
+      outline.position.copy(mesh.position);
+      this.city.add(outline);
     }
 
     if (model.identityPanel) {
@@ -516,9 +591,21 @@ class CityScene {
     ) {
       this.applyDistrictIsolation(context.building.districtId, false);
     }
-    this.select(id);
+    this.select(buildingEntityKey(id));
     if (focus) {
       this.focusBuilding(id);
+    }
+    return true;
+  }
+
+  public selectExternalNode(id: string, focus = false): boolean {
+    const mesh = this.externalMeshes.get(id);
+    if (!mesh) {
+      return false;
+    }
+    this.select(externalEntityKey(id));
+    if (focus) {
+      this.frameObject(mesh, true);
     }
     return true;
   }
@@ -542,7 +629,7 @@ class CityScene {
     }
     this.isolatedDistrictId = id;
     if (focus) {
-      this.frameObject(selectedGroup, true);
+      this.frameIsolatedDistrict(selectedGroup, true);
     }
     return true;
   }
@@ -586,6 +673,8 @@ class CityScene {
     this.select(null);
     this.buildingMeshes.clear();
     this.buildingContexts.clear();
+    this.externalMeshes.clear();
+    this.externalNodes.clear();
     this.districtGroups.clear();
 
     for (const child of [...this.city.children]) {
@@ -611,6 +700,19 @@ class CityScene {
 
   private frameObject(object: THREE.Object3D, animate: boolean): void {
     const bounds = new THREE.Box3().setFromObject(object);
+    if (!bounds.isEmpty()) {
+      this.frameBounds(bounds, animate);
+    }
+  }
+
+  private frameIsolatedDistrict(
+    district: THREE.Object3D,
+    animate: boolean,
+  ): void {
+    const bounds = new THREE.Box3().setFromObject(district);
+    for (const mesh of this.externalMeshes.values()) {
+      bounds.expandByObject(mesh);
+    }
     if (!bounds.isEmpty()) {
       this.frameBounds(bounds, animate);
     }
@@ -735,20 +837,32 @@ class CityScene {
   };
 
   private readonly onPointerMove = (event: PointerEvent): void => {
-    const id = this.pick(event);
-    this.hover(id);
+    const entityKey = this.pick(event);
+    this.hover(entityKey);
 
-    if (!id) {
+    if (!entityKey) {
       tooltip.hidden = true;
       return;
     }
 
-    const context = this.buildingContexts.get(id);
-    if (!context) {
+    const buildingId = entityId(entityKey, "building");
+    const context =
+      buildingId === null
+        ? null
+        : this.buildingContexts.get(buildingId) ?? null;
+    const externalId = entityId(entityKey, "external");
+    const external =
+      externalId === null
+        ? null
+        : this.externalNodes.get(externalId) ?? null;
+    if (!context && !external) {
+      tooltip.hidden = true;
       return;
     }
 
-    tooltip.textContent = `${context.building.name} · CC ${context.building.metrics.maximumComplexity.toLocaleString()}`;
+    tooltip.textContent = context
+      ? `${context.building.name} · CC ${context.building.metrics.maximumComplexity.toLocaleString()}`
+      : `${external!.label} · ${referenceCountLabel(external!.weight)}`;
     tooltip.hidden = false;
     const bounds = this.host.getBoundingClientRect();
     const left = Math.min(
@@ -781,7 +895,10 @@ class CityScene {
   };
 
   private pick(event: PointerEvent): string | null {
-    if (this.buildingMeshes.size === 0) {
+    if (
+      this.buildingMeshes.size === 0 &&
+      this.externalMeshes.size === 0
+    ) {
       return null;
     }
 
@@ -792,13 +909,16 @@ class CityScene {
     );
     this.raycaster.setFromCamera(pointer, this.camera);
     const hit = this.raycaster.intersectObjects(
-      [...this.buildingMeshes.values()].filter(
-        (mesh) => mesh.parent?.visible !== false,
-      ),
+      [
+        ...[...this.buildingMeshes.values()].filter(
+          (mesh) => mesh.parent?.visible !== false,
+        ),
+        ...this.externalMeshes.values(),
+      ],
       false,
     )[0];
-    const id = hit?.object.userData["buildingId"];
-    return typeof id === "string" ? id : null;
+    const entityKey = hit?.object.userData["sceneEntityKey"];
+    return typeof entityKey === "string" ? entityKey : null;
   }
 
   private hover(id: string | null): void {
@@ -820,14 +940,36 @@ class CityScene {
     this.selectedId = id;
     this.updateHighlight(previous);
     this.updateHighlight(id);
-    const context = id ? this.buildingContexts.get(id) ?? null : null;
-    showInspector(context);
+    const buildingId =
+      id === null ? null : entityId(id, "building");
+    const context =
+      buildingId === null
+        ? null
+        : this.buildingContexts.get(buildingId) ?? null;
+    const externalId =
+      id === null ? null : entityId(id, "external");
+    const external =
+      externalId === null
+        ? null
+        : this.externalNodes.get(externalId) ?? null;
+    if (context) {
+      showInspector(context);
+    } else if (external) {
+      showExternalInspector(external);
+    } else {
+      showInspector(null);
+    }
+    this.onExternalSelectionChange(external?.id ?? null);
     this.emitState();
   }
 
   private emitState(): void {
+    const selectedBuildingId =
+      this.selectedId === null
+        ? null
+        : entityId(this.selectedId, "building");
     this.onStateChange({
-      selectedBuildingId: this.selectedId,
+      selectedBuildingId,
       isolatedDistrictId: this.isolatedDistrictId,
     });
   }
@@ -836,7 +978,14 @@ class CityScene {
     if (!id) {
       return;
     }
-    const mesh = this.buildingMeshes.get(id);
+    const buildingId = entityId(id, "building");
+    const externalId = entityId(id, "external");
+    const mesh =
+      buildingId !== null
+        ? this.buildingMeshes.get(buildingId)
+        : externalId !== null
+          ? this.externalMeshes.get(externalId)
+          : undefined;
     if (!mesh) {
       return;
     }
@@ -846,6 +995,22 @@ class CityScene {
     mesh.material.emissiveIntensity =
       selected && hovered ? 0.62 : selected ? 0.45 : hovered ? 0.26 : 0;
   }
+}
+
+function buildingEntityKey(id: string): string {
+  return `building\u0000${id}`;
+}
+
+function externalEntityKey(id: string): string {
+  return `external\u0000${id}`;
+}
+
+function entityId(
+  key: string,
+  kind: "building" | "external",
+): string | null {
+  const prefix = `${kind}\u0000`;
+  return key.startsWith(prefix) ? key.slice(prefix.length) : null;
 }
 
 let activeModel: CityModel = DEMO_MODEL;
@@ -872,7 +1037,18 @@ let districtDependencyFootprintsById =
   createDistrictDependencyFootprints(DEMO_MODEL);
 let repositoryExplorerIndex = createRepositoryExplorerIndex(DEMO_MODEL);
 let explorerState = resetExplorerState();
-const cityScene = new CityScene(sceneHost, synchronizeExplorerState);
+let activeExternalLayout = createExternalDependencyLayout(DEMO_MODEL);
+let activeExternalNodes: readonly ExternalSceneNode[] =
+  activeExternalLayout.nodes;
+let selectedExternalNodeId: string | null = null;
+const cityScene = new CityScene(
+  sceneHost,
+  synchronizeExplorerState,
+  (id) => {
+    selectedExternalNodeId = id;
+    renderExternalNodeList();
+  },
+);
 const automaticModelLoadGate = new AutomaticModelLoadGate();
 
 fileInput.addEventListener("change", async () => {
@@ -922,6 +1098,9 @@ districtRoutePackageFilter.addEventListener("click", () => {
 });
 districtRoutesList.addEventListener("keydown", (event) => {
   navigateDistrictDependencyRoutes(event);
+});
+externalList.addEventListener("keydown", (event) => {
+  navigateExternalNodes(event);
 });
 districtRouteIsolateConsumer.addEventListener("click", () => {
   isolateDistrictDependencyEndpoint("consumer");
@@ -1083,6 +1262,7 @@ function applyModel(model: CityModel, source: ModelSource): void {
     createDistrictDependencyFootprints(model);
   const nextRepositoryExplorerIndex =
     createRepositoryExplorerIndex(model);
+  const nextExternalLayout = createExternalDependencyLayout(model);
 
   activeModel = model;
   activeBuildingsById = buildingsById;
@@ -1099,10 +1279,14 @@ function applyModel(model: CityModel, source: ModelSource): void {
     nextDistrictDependencyFootprints;
   repositoryExplorerIndex = nextRepositoryExplorerIndex;
   explorerState = resetExplorerState();
+  activeExternalLayout = nextExternalLayout;
+  activeExternalNodes = nextExternalLayout.nodes;
+  selectedExternalNodeId = null;
   buildingSearch.value = "";
   synchronizeExplorerState(explorerState);
   renderBuildingSearch();
-  cityScene.load(model);
+  cityScene.load(model, nextExternalLayout.base, nextExternalLayout.nodes);
+  renderExternalNodeList();
   const title =
     model.identity?.title ??
     (model.repositories.length === 1
@@ -1120,6 +1304,87 @@ function applyModel(model: CityModel, source: ModelSource): void {
   );
   renderLegend(model);
   hideError();
+}
+
+function createExternalDependencyLayout(
+  model: CityModel,
+): ExternalDependencyLayout {
+  return layoutExternalDependencies(
+    selectExternalDependencies(model.dependencies),
+    cityBaseForModel(model),
+  );
+}
+
+function renderExternalNodeList(): void {
+  externalList.replaceChildren();
+  externalZone.hidden = activeExternalNodes.length === 0;
+  for (const node of activeExternalNodes) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset["externalNodeId"] = node.id;
+    button.title =
+      node.kind === "external"
+        ? node.normalizedTarget ?? node.label
+        : `${node.label}: ${node.targetCount.toLocaleString()} targets`;
+    button.setAttribute(
+      "aria-label",
+      `${button.title}, ${referenceCountLabel(node.weight)}`,
+    );
+    if (node.id === selectedExternalNodeId) {
+      button.setAttribute("aria-current", "true");
+    }
+    button.addEventListener("click", () => {
+      if (cityScene.selectExternalNode(node.id)) {
+        externalInspectorContent.focus({ preventScroll: true });
+      }
+    });
+
+    const label = document.createElement("span");
+    label.textContent = node.label;
+    const weight = document.createElement("span");
+    weight.textContent = node.weight.toLocaleString();
+    button.append(label, weight);
+    item.append(button);
+    externalList.append(item);
+  }
+}
+
+function navigateExternalNodes(event: KeyboardEvent): void {
+  const buttons = [
+    ...externalList.querySelectorAll<HTMLButtonElement>("button"),
+  ];
+  if (buttons.length === 0) {
+    return;
+  }
+  const current = buttons.indexOf(
+    document.activeElement as HTMLButtonElement,
+  );
+  let next: HTMLButtonElement | undefined;
+  switch (event.key) {
+    case "ArrowDown":
+      next =
+        current < 0
+          ? buttons[0]
+          : buttons[(current + 1) % buttons.length];
+      break;
+    case "ArrowUp":
+      next =
+        current < 0
+          ? buttons.at(-1)
+          : buttons[(current - 1 + buttons.length) % buttons.length];
+      break;
+    case "Home":
+      next = buttons[0];
+      break;
+    case "End":
+      next = buttons.at(-1);
+      break;
+  }
+  if (next) {
+    event.preventDefault();
+    next.focus();
+  }
 }
 
 function renderBuildingSearch(): void {
@@ -1208,14 +1473,20 @@ function selectBuildingFromExplorer(buildingId: string): void {
 }
 
 function clearBuildingSelection(): void {
-  if (clearExplorerSelection(explorerState) !== explorerState) {
-    cityScene.resetSelection();
-  }
+  cityScene.resetSelection();
 }
 
 function synchronizeExplorerState(state: ExplorerState): void {
   const previousSelectedBuildingId = explorerState.selectedBuildingId;
   explorerState = state;
+  if (selectedExternalNodeId !== null) {
+    const selectedExternal = activeExternalNodes.find(
+      ({ id }) => id === selectedExternalNodeId,
+    );
+    if (selectedExternal) {
+      showExternalInspector(selectedExternal);
+    }
+  }
   if (
     previousSelectedBuildingId !== null &&
     state.selectedBuildingId === null
@@ -1724,19 +1995,24 @@ function dependencyListItem(
   item.className = "dependency-item";
 
   const isExternal = route.counterpart.kind === "external";
-  const row = isExternal
-    ? document.createElement("div")
-    : document.createElement("button");
+  const row = document.createElement("button");
+  row.type = "button";
   row.className = "dependency-result-button";
   row.dataset["direction"] = route.direction;
   if (isExternal) {
     row.dataset["external"] = "true";
-  } else if (
-    row instanceof HTMLButtonElement &&
-    route.counterpart.kind === "building"
-  ) {
+    const target = route.counterpart.target;
+    row.addEventListener("click", () => {
+      const node = resolveExternalDependencyNode(
+        activeExternalLayout,
+        target,
+      );
+      if (node && cityScene.selectExternalNode(node.id)) {
+        externalInspectorContent.focus({ preventScroll: true });
+      }
+    });
+  } else if (route.counterpart.kind === "building") {
     const counterpartBuildingId = route.counterpart.buildingId;
-    row.type = "button";
     row.addEventListener("click", () => {
       selectBuildingFromExplorer(counterpartBuildingId);
       inspectorContent.focus({ preventScroll: true });
@@ -1775,13 +2051,12 @@ function dependencyListItem(
     referenceCountLabel(route.weight) +
     hiddenBoundaryLabel(projection);
 
-  if (!isExternal) {
-    row.setAttribute(
-      "aria-label",
-      `${name.textContent}, ${role.toLowerCase()}, ` +
-        referenceCountLabel(route.weight),
-    );
-  }
+  row.setAttribute(
+    "aria-label",
+    `${name.textContent}, ${
+      isExternal ? "external provider" : role.toLowerCase()
+    }, ${referenceCountLabel(route.weight)}`,
+  );
   content.append(name, path, meta);
   row.append(direction, content);
   item.append(row);
@@ -1840,16 +2115,7 @@ function dependencyEndpointGeometry(
       );
     }
     case "external": {
-      const scope = dependencyRouteScope();
-      return keyedBoundaryGateway(
-        scope.rectangle,
-        routeEndpointKey(
-          "external",
-          normalizeExternalTarget(endpoint.target),
-        ),
-        scope.surfaceY,
-        scope.anchorY,
-      );
+      return externalDependencyEndpoint(endpoint.target);
     }
   }
 }
@@ -1894,44 +2160,7 @@ function districtDependencyRouteGeometry(
     const consumerDistrict = requiredDistrictDependencyFootprint(
       bundle.source.districtId,
     );
-    if (explorerState.isolatedDistrictId !== null) {
-      const provider = keyedIsolationGateway(
-        consumerDistrict,
-        routeEndpointKey(
-          "external",
-          normalizeExternalTarget(bundle.target.target),
-        ),
-      );
-      return {
-        consumer: keyedIsolationGateway(
-          consumerDistrict,
-          routeEndpointKey(
-            "district",
-            bundle.source.districtId,
-          ),
-        ),
-        provider,
-      };
-    }
-    const base = cityBaseForModel(activeModel);
-    if (!base) {
-      throw new Error("District dependency routes require a city footprint.");
-    }
-    const baseRectangle = {
-      centerX: base.position.x,
-      centerZ: base.position.z,
-      sizeX: base.size.x,
-      sizeZ: base.size.z,
-    };
-    const provider = keyedBaseGateway(
-      baseRectangle,
-      routeEndpointKey(
-        "external",
-        normalizeExternalTarget(bundle.target.target),
-      ),
-      base.position.y + base.size.y * 0.5,
-      consumerDistrict.skylineY + 0.35,
-    );
+    const provider = externalDependencyEndpoint(bundle.target.target);
     return {
       consumer: districtBoundaryAnchor(
         consumerDistrict,
@@ -1996,6 +2225,29 @@ function districtDependencyRouteGeometry(
   throw new Error(
     `Unsupported district dependency route geometry for "${bundle.id}".`,
   );
+}
+
+function externalDependencyEndpoint(
+  target: string,
+): RouteEndpointGeometry {
+  const node = resolveExternalDependencyNode(
+    activeExternalLayout,
+    target,
+  );
+  if (!node) {
+    throw new Error(
+      `External dependency route references unknown target "${target}".`,
+    );
+  }
+  const roof = {
+    x: node.position.x,
+    y: node.position.y + node.size.y * 0.5,
+    z: node.position.z,
+  };
+  return {
+    contact: roof,
+    anchor: { ...roof },
+  };
 }
 
 function requiredDistrictDependencyFootprint(
@@ -2121,63 +2373,6 @@ function edgeCountLabel(count: number): string {
   return `${count.toLocaleString()} ${count === 1 ? "edge" : "edges"}`;
 }
 
-function dependencyRouteScope(): {
-  readonly rectangle: RouteRectangle;
-  readonly surfaceY: number;
-  readonly anchorY: number;
-} {
-  if (explorerState.isolatedDistrictId !== null) {
-    const district = districtDependencyFootprintsById.get(
-      explorerState.isolatedDistrictId,
-    );
-    if (!district) {
-      throw new Error(
-        `Unknown isolated district "${explorerState.isolatedDistrictId}".`,
-      );
-    }
-    return {
-      rectangle: {
-        centerX: district.centerX,
-        centerZ: district.centerZ,
-        sizeX: district.sizeX,
-        sizeZ: district.sizeZ,
-      },
-      surfaceY: district.surfaceY,
-      anchorY: district.skylineY + 0.35,
-    };
-  }
-
-  const base = cityBaseForModel(activeModel);
-  if (!base) {
-    throw new Error("Dependency routes require a city footprint.");
-  }
-  const surfaceY = base.position.y + base.size.y * 0.5;
-  return {
-    rectangle: {
-      centerX: base.position.x,
-      centerZ: base.position.z,
-      sizeX: base.size.x,
-      sizeZ: base.size.z,
-    },
-    surfaceY,
-    anchorY:
-      Math.max(
-        surfaceY,
-        ...[...districtDependencyFootprintsById.values()].map(
-          ({ skylineY }) => skylineY,
-        ),
-      ) + 0.35,
-  };
-}
-
-function normalizeExternalTarget(target: string): string {
-  const normalized = target.trim().normalize("NFC");
-  if (normalized === "") {
-    throw new TypeError("External dependency target must not be empty.");
-  }
-  return normalized;
-}
-
 function routeCountLabel(count: number): string {
   return `${count.toLocaleString()} ${count === 1 ? "route" : "routes"}`;
 }
@@ -2236,7 +2431,20 @@ function initials(title: string): string {
 
 function renderLegend(model: CityModel): void {
   legend.replaceChildren();
-  const groups = sortLegendGroups(model.semanticGroups);
+  const semanticGroups = [...model.semanticGroups];
+  if (
+    activeExternalNodes.length > 0 &&
+    !semanticGroups.some(({ id }) => id === "external")
+  ) {
+    semanticGroups.push({
+      id: "external",
+      label: "External dependencies",
+      color: EXTERNAL_DEPENDENCY_COLOR,
+      priority: 55,
+      mergeInto: "base",
+    });
+  }
+  const groups = sortLegendGroups(semanticGroups);
 
   for (const group of groups) {
     const item = document.createElement("li");
@@ -2257,6 +2465,7 @@ function renderLegend(model: CityModel): void {
 function showInspector(context: BuildingContext | null): void {
   inspectorEmpty.hidden = context !== null;
   inspectorContent.hidden = context === null;
+  externalInspectorContent.hidden = true;
   clearSelectionButton.hidden = context === null;
   if (!context) {
     selectionStatus.textContent = "Building selection cleared.";
@@ -2281,6 +2490,93 @@ function showInspector(context: BuildingContext | null): void {
   selectionStatus.textContent =
     `Selected ${building.name}. Maximum cyclomatic complexity ` +
     `${building.metrics.maximumComplexity.toLocaleString()}.`;
+}
+
+function showExternalInspector(node: ExternalSceneNode): void {
+  const presentation = presentExternalDependency(
+    node,
+    externalConsumerIdentity,
+  );
+
+  inspectorEmpty.hidden = true;
+  inspectorContent.hidden = true;
+  externalInspectorContent.hidden = false;
+  clearSelectionButton.hidden = false;
+  externalInspectorContent.scrollTop = 0;
+  externalInspectorFields.name.textContent = presentation.label;
+  externalInspectorFields.target.textContent =
+    presentation.kind === "external"
+      ? presentation.label
+      : `${presentation.targetCount.toLocaleString()} aggregated targets`;
+  externalInspectorFields.weight.textContent =
+    presentation.totalWeight.toLocaleString();
+  externalInspectorFields.edgeCount.textContent =
+    presentation.edgeCount.toLocaleString();
+  externalInspectorFields.targetCount.textContent =
+    presentation.targetCount.toLocaleString();
+  externalInspectorFields.kinds.textContent = presentation.kindTotals
+    .map(
+      ({ kind, edgeCount, weight }) =>
+        `${districtDependencyKindLabel(kind)}: ` +
+        `${edgeCountLabel(edgeCount)}, ${referenceCountLabel(weight)}`,
+    )
+    .join(" · ");
+  externalInspectorFields.consumerCount.textContent =
+    (
+      presentation.consumers.length +
+      presentation.hiddenConsumerCount
+    ).toLocaleString();
+  externalInspectorFields.consumers.replaceChildren();
+  for (const consumer of presentation.consumers) {
+    const item = document.createElement("li");
+    const label = document.createElement("span");
+    label.textContent = consumer.label;
+    const weight = document.createElement("span");
+    weight.textContent = referenceCountLabel(consumer.weight);
+    const path = document.createElement("span");
+    path.className = "external-consumer-path";
+    path.textContent = consumer.path;
+    item.append(label, weight, path);
+    externalInspectorFields.consumers.append(item);
+  }
+  externalInspectorFields.omitted.hidden =
+    presentation.hiddenConsumerCount === 0;
+  externalInspectorFields.omitted.textContent =
+    presentation.hiddenConsumerCount === 0
+      ? ""
+      : `${presentation.hiddenConsumerCount.toLocaleString()} more consumers · ` +
+        referenceCountLabel(presentation.hiddenConsumerWeight);
+  selectionStatus.textContent =
+    `Selected external dependency ${presentation.label}. ` +
+    `${referenceCountLabel(presentation.totalWeight)}.`;
+}
+
+function externalConsumerIdentity(
+  sourceId: string,
+): { readonly label: string; readonly path: string } | null | undefined {
+  const isolatedDistrictId = explorerState.isolatedDistrictId;
+  const building = activeBuildingsById.get(sourceId);
+  if (building) {
+    return isolatedDistrictId !== null &&
+      building.districtId !== isolatedDistrictId
+      ? null
+      : { label: building.name, path: building.path };
+  }
+
+  const module = activeModel.modules.find(({ id }) => id === sourceId);
+  if (!module) {
+    return isolatedDistrictId === null ? undefined : null;
+  }
+  if (
+    isolatedDistrictId !== null &&
+    !activeModel.districts.some(
+      ({ id, moduleId }) =>
+        id === isolatedDistrictId && moduleId === module.id,
+    )
+  ) {
+    return null;
+  }
+  return { label: module.name, path: module.path };
 }
 
 function renderExecutableUnits(building: CityBuilding): void {

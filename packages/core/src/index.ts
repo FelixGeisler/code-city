@@ -1,4 +1,5 @@
 export * from "./color.js";
+export * from "./external-dependencies.js";
 export * from "./identity.js";
 export * from "./layout.js";
 export * from "./metrics.js";

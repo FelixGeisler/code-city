@@ -6,6 +6,9 @@ import type {
   CityModule,
   DependencyKind,
 } from "../../../packages/core/src/model.js";
+import {
+  normalizeExternalDependencyTarget,
+} from "../../../packages/core/src/external-dependencies.js";
 
 export const DISTRICT_DEPENDENCY_BUNDLES_LIMIT = 24;
 export const DISTRICT_DEPENDENCY_CONTRIBUTORS_LIMIT = 5;
@@ -488,12 +491,9 @@ function indexDependency(
     }
     target = Object.freeze({ kind: "district", node: targetNode });
   } else {
-    const externalTarget = dependency.externalTarget;
-    if (externalTarget === undefined || externalTarget.trim() === "") {
-      throw new TypeError(
-        `Dependency "${dependency.id}" has an empty external target.`,
-      );
-    }
+    const externalTarget = normalizeExternalDependencyTarget(
+      dependency.externalTarget!,
+    );
     target = Object.freeze({
       kind: "external",
       target: externalTarget,

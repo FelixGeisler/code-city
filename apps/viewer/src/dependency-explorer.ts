@@ -4,6 +4,9 @@ import type {
   CityDistrict,
   CityModel,
 } from "../../../packages/core/src/model.js";
+import {
+  normalizeExternalDependencyTarget,
+} from "../../../packages/core/src/external-dependencies.js";
 import { routeEndpointKey } from "./dependency-route-layout.js";
 
 export const DEPENDENCY_ROUTES_PER_DIRECTION = 20;
@@ -416,12 +419,9 @@ function indexTypeScriptDependency(
     return;
   }
 
-  const externalTarget = dependency.externalTarget;
-  if (externalTarget === undefined || externalTarget.trim() === "") {
-    throw new TypeError(
-      `TypeScript dependency "${dependency.id}" has an empty external target.`,
-    );
-  }
+  const externalTarget = normalizeExternalDependencyTarget(
+    dependency.externalTarget!,
+  );
   const route: ExternalSelectedDependencyRoute = Object.freeze({
     dependencyId: dependency.id,
     kind: "typescript-import",
