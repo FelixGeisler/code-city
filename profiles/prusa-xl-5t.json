@@ -38,7 +38,19 @@
     "minimumWallThickness": 0.45,
     "minimumGap": 0.4,
     "minimumFeatureSize": 0.8,
-    "minimumBaseThickness": 0.8
+    "minimumBaseThickness": 0.8,
+    "nozzleDiameter": 0.4,
+    "lineWidth": 0.45,
+    "buildMargins": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    },
+    "minimumRaisedFeatureHeight": 0.8,
+    "minimumRecessedFeatureDepth": 0.8,
+    "minimumLabelStrokeWidth": 0.45,
+    "minimumRouteWidth": 0.8,
+    "maximumModelHeight": 360
   },
   "overflowPolicy": "merge"
 }

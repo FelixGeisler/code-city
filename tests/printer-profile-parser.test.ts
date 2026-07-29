@@ -9,6 +9,7 @@ import {
   parsePrinterProfileJson,
   PrinterProfileParseError,
 } from "../packages/core/src/printer-profiles.js";
+import { resolvePrinterGeometryLimits } from "../packages/core/src/print.js";
 
 function validProfile(): {
   id: string;
@@ -69,12 +70,22 @@ function parseIssues(value: unknown): readonly string[] {
   throw new Error("Expected printer profile parsing to fail.");
 }
 
+function normalizedProfile(source: ReturnType<typeof validProfile>) {
+  return {
+    ...source,
+    geometryLimits: resolvePrinterGeometryLimits(
+      source.geometryLimits,
+      source.buildVolume,
+    ),
+  };
+}
+
 describe("strict printer-profile parser", () => {
-  it("returns an exact detached clone of valid profile data", () => {
+  it("normalizes and detaches legacy profile data", () => {
     const source = validProfile();
     const parsed = parsePrinterProfile(source);
 
-    expect(parsed).toEqual(source);
+    expect(parsed).toEqual(normalizedProfile(source));
     expect(parsed).not.toBe(source);
     expect(parsed.printChannels).not.toBe(source.printChannels);
     expect(parsed.printChannels[0]).not.toBe(source.printChannels[0]);
@@ -90,6 +101,28 @@ describe("strict printer-profile parser", () => {
     expect(parsed.supportedFormats).toEqual(["3mf"]);
     expect(parsed.buildVolume.x).toBe(220);
     expect(parsed.geometryLimits.minimumGap).toBe(0.4);
+  });
+
+  it("preserves explicit geometry semantics while filling no fields implicitly", () => {
+    const source = {
+      ...validProfile(),
+      geometryLimits: {
+        ...validProfile().geometryLimits,
+        nozzleDiameter: 0.4,
+        lineWidth: 0.5,
+        buildMargins: { x: 2, y: 3, z: 4 },
+        minimumRaisedFeatureHeight: 0.6,
+        minimumRecessedFeatureDepth: 0.7,
+        minimumLabelStrokeWidth: 0.5,
+        minimumRouteWidth: 0.9,
+        maximumModelHeight: 200,
+        minimumWallThickness: 0.5,
+      },
+    };
+
+    expect(parsePrinterProfile(source).geometryLimits).toEqual(
+      source.geometryLimits,
+    );
   });
 
   it("rejects unsupported keys at every supported object level", () => {
@@ -219,13 +252,24 @@ describe("strict printer-profile parser", () => {
   });
 
   it("keeps checked-in presets identical to browser profile factories", async () => {
-    const [genericText, prusaText] = await Promise.all([
+    const [genericText, multiText, prusaText] = await Promise.all([
       fs.readFile("profiles/generic-single-channel.json", "utf8"),
+      fs.readFile("profiles/generic-multi-channel.json", "utf8"),
       fs.readFile("profiles/prusa-xl-5t.json", "utf8"),
     ]);
 
     expect(parsePrinterProfileJson(genericText)).toEqual(
       createSingleChannelProfile(),
+    );
+    const multi = parsePrinterProfileJson(multiText);
+    expect(multi.id).toBe("generic-multi-channel");
+    expect(multi.printChannels.map(({ id }) => id)).toEqual([
+      "channel-1",
+      "channel-2",
+      "channel-3",
+    ]);
+    expect(multi.geometryLimits).toEqual(
+      createSingleChannelProfile().geometryLimits,
     );
     expect(parsePrinterProfileJson(prusaText)).toEqual(
       createPrusaXLProfile([1, 2, 3, 4, 5]),
@@ -235,7 +279,7 @@ describe("strict printer-profile parser", () => {
   it("parses JSON with the same validation and rejects invalid JSON", () => {
     expect(
       parsePrinterProfileJson(JSON.stringify(validProfile())),
-    ).toEqual(validProfile());
+    ).toEqual(normalizedProfile(validProfile()));
 
     expect(() => parsePrinterProfileJson("{")).toThrow(
       PrinterProfileParseError,

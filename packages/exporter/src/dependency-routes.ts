@@ -57,7 +57,12 @@ export interface PlanPrintableDependencyRoutesRequest {
   readonly baseBounds: PrintBounds;
   readonly geometryLimits: Pick<
     PrinterGeometryLimits,
-    "minimumFeatureSize" | "minimumGap" | "minimumWallThickness"
+    | "minimumFeatureSize"
+    | "minimumGap"
+    | "minimumWallThickness"
+    | "lineWidth"
+    | "minimumRaisedFeatureHeight"
+    | "minimumRouteWidth"
   >;
   readonly channelId: string;
   /**
@@ -157,18 +162,32 @@ export function planPrintableDependencyRoutes(
   validateRequest(request);
   const maximumRoutes =
     request.maximumRoutes ?? PRINT_DEPENDENCY_ROUTE_LIMIT;
-  const featureSize = Math.max(
+  const legacyFeatureSize = Math.max(
     request.geometryLimits.minimumFeatureSize,
     request.geometryLimits.minimumWallThickness,
   );
+  const routeWidth = Math.max(
+    legacyFeatureSize,
+    request.geometryLimits.minimumRouteWidth ??
+      Math.max(
+        request.geometryLimits.minimumFeatureSize,
+        request.geometryLimits.lineWidth ??
+          request.geometryLimits.minimumWallThickness,
+      ),
+  );
+  const routeHeight = Math.max(
+    legacyFeatureSize,
+    request.geometryLimits.minimumRaisedFeatureHeight ??
+      request.geometryLimits.minimumFeatureSize,
+  );
   const minimumGap = request.geometryLimits.minimumGap;
-  const arrowLength = featureSize * ARROW_STEP_COUNT;
-  const maximumWidth = featureSize * 3;
+  const arrowLength = routeWidth * ARROW_STEP_COUNT;
+  const maximumWidth = routeWidth * 3;
   const maximumHalfWidth = maximumWidth / 2;
   const clearance = maximumHalfWidth + minimumGap;
   // Leave one full printable feature between a possible gateway bend and the
   // stepped arrow. Otherwise trimming the bend can create a sub-minimum sliver.
-  const escapeDistance = arrowLength + clearance + featureSize;
+  const escapeDistance = arrowLength + clearance + routeWidth;
   const baseFootprint = footprint(request.baseBounds);
   const routingBounds = inset(baseFootprint, maximumHalfWidth);
   const endpoints = new Map(
@@ -212,7 +231,7 @@ export function planPrintableDependencyRoutes(
       fixedObstacles,
       acceptedFootprints,
       routingBounds,
-      featureSize,
+      routeWidth,
       minimumGap,
       maximumHalfWidth,
       escapeDistance,
@@ -223,8 +242,8 @@ export function planPrintableDependencyRoutes(
     }
     const rectangles = routeRectangles(
       path,
-      widthClass * featureSize,
-      featureSize,
+      widthClass * routeWidth,
+      routeWidth,
       arrowLength,
     );
     if (
@@ -236,7 +255,7 @@ export function planPrintableDependencyRoutes(
         fixedObstacles,
         acceptedFootprints,
         baseFootprint,
-        featureSize,
+        routeWidth,
         minimumGap,
       )
     ) {
@@ -252,7 +271,7 @@ export function planPrintableDependencyRoutes(
         index,
         request.channelId,
         request.baseBounds.maximum.z,
-        featureSize,
+        routeHeight,
       ),
     );
     primitives.push(...routePrimitives);
@@ -309,6 +328,21 @@ function validateRequest(
     ["minimum gap", request.geometryLimits.minimumGap],
   ] as const) {
     if (!Number.isFinite(value) || value <= 0) {
+      throw new RangeError(`Dependency route ${name} must be positive.`);
+    }
+  }
+  for (const [name, value] of [
+    ["line width", request.geometryLimits.lineWidth],
+    [
+      "minimum raised feature height",
+      request.geometryLimits.minimumRaisedFeatureHeight,
+    ],
+    ["minimum route width", request.geometryLimits.minimumRouteWidth],
+  ] as const) {
+    if (
+      value !== undefined &&
+      (!Number.isFinite(value) || value <= 0)
+    ) {
       throw new RangeError(`Dependency route ${name} must be positive.`);
     }
   }

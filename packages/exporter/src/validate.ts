@@ -1,4 +1,7 @@
-import type { PrinterProfile } from "../../core/src/print.js";
+import {
+  resolvePrinterGeometryLimits,
+  type PrinterProfile,
+} from "../../core/src/print.js";
 import type {
   PrintBounds,
   PrintMesh,
@@ -533,6 +536,13 @@ export function validatePrintableCity(
     y: profile.buildVolume.z,
     z: profile.buildVolume.y,
   };
+  const geometryLimits = resolvePrinterGeometryLimits(profile);
+  // CityModel X/Y/Z (width/height/depth) maps to print X/Z/Y.
+  const printBuildMargins = {
+    x: geometryLimits.buildMargins.x,
+    y: geometryLimits.buildMargins.z,
+    z: geometryLimits.buildMargins.y,
+  };
   for (const axis of ["x", "y", "z"] as const) {
     if (city.bounds.minimum[axis] < -GEOMETRY_EPSILON) {
       issues.push(
@@ -547,6 +557,24 @@ export function validatePrintableCity(
         `Printable city ${axis.toUpperCase()} size (${city.bounds.size[axis]}) exceeds build volume (${printBuildVolume[axis]}).`,
       );
     }
+    const margin = printBuildMargins[axis];
+    const usableSpan = printBuildVolume[axis] - margin * 2;
+    if (
+      margin > GEOMETRY_EPSILON &&
+      city.bounds.size[axis] > usableSpan + GEOMETRY_EPSILON
+    ) {
+      issues.push(
+        `Printable city ${axis.toUpperCase()} size (${city.bounds.size[axis]}) exceeds the usable build span (${usableSpan}) after margins.`,
+      );
+    }
+  }
+  if (
+    city.bounds.size.z >
+    geometryLimits.maximumModelHeight + GEOMETRY_EPSILON
+  ) {
+    issues.push(
+      `Printable city model height (${city.bounds.size.z}) exceeds profile maximum (${geometryLimits.maximumModelHeight}).`,
+    );
   }
   const base = primitives.find(({ kind }) => kind === "base");
   const measuredBaseThickness = base?.bounds.size.z ?? Number.NaN;
@@ -560,10 +588,10 @@ export function validatePrintableCity(
   }
   if (
     city.measurements.baseThickness + GEOMETRY_EPSILON <
-    profile.geometryLimits.minimumBaseThickness
+    geometryLimits.minimumBaseThickness
   ) {
     issues.push(
-      `Base thickness (${city.measurements.baseThickness}) is below profile minimum (${profile.geometryLimits.minimumBaseThickness}).`,
+      `Base thickness (${city.measurements.baseThickness}) is below profile minimum (${geometryLimits.minimumBaseThickness}).`,
     );
   }
   const measuredFeature = minimumPrimitiveFeature(primitives);
@@ -574,10 +602,10 @@ export function validatePrintableCity(
   }
   if (
     city.measurements.wallThickness + GEOMETRY_EPSILON <
-    profile.geometryLimits.minimumWallThickness
+    geometryLimits.minimumWallThickness
   ) {
     issues.push(
-      `Wall thickness (${city.measurements.wallThickness}) is below profile minimum (${profile.geometryLimits.minimumWallThickness}).`,
+      `Wall thickness (${city.measurements.wallThickness}) is below profile minimum (${geometryLimits.minimumWallThickness}).`,
     );
   }
   if (
@@ -587,10 +615,10 @@ export function validatePrintableCity(
   }
   if (
     city.measurements.minimumFeatureSize + GEOMETRY_EPSILON <
-    profile.geometryLimits.minimumFeatureSize
+    geometryLimits.minimumFeatureSize
   ) {
     issues.push(
-      `Minimum feature size (${city.measurements.minimumFeatureSize}) is below profile minimum (${profile.geometryLimits.minimumFeatureSize}).`,
+      `Minimum feature size (${city.measurements.minimumFeatureSize}) is below profile minimum (${geometryLimits.minimumFeatureSize}).`,
     );
   }
   const measuredGap = minimumHorizontalGap(primitives);
@@ -606,10 +634,10 @@ export function validatePrintableCity(
   if (
     measuredGap !== null &&
     measuredGap + GEOMETRY_EPSILON <
-      profile.geometryLimits.minimumGap
+      geometryLimits.minimumGap
   ) {
     issues.push(
-      `Minimum gap (${measuredGap}) is below profile minimum (${profile.geometryLimits.minimumGap}).`,
+      `Minimum gap (${measuredGap}) is below profile minimum (${geometryLimits.minimumGap}).`,
     );
   }
   return [...new Set(issues)];

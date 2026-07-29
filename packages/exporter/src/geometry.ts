@@ -25,7 +25,10 @@ import {
   selectExternalDependencies,
 } from "../../core/src/external-dependencies.js";
 import { normalizeRepositoryRelativePath } from "../../core/src/path.js";
-import type { PrinterProfile } from "../../core/src/print.js";
+import {
+  resolvePrinterGeometryLimits,
+  type PrinterProfile,
+} from "../../core/src/print.js";
 import type { PrintRoutePolicy } from "../../core/src/print-routes.js";
 
 import {
@@ -557,11 +560,23 @@ interface GridCell {
 }
 
 function labelFeatureSize(profile: PrinterProfile): number {
+  const limits = resolvePrinterGeometryLimits(profile);
   return Math.max(
     MINIMUM_DEMO_RELIEF_FEATURE,
-    profile.geometryLimits.minimumFeatureSize,
-    profile.geometryLimits.minimumWallThickness,
-    profile.geometryLimits.minimumGap,
+    limits.minimumFeatureSize,
+    limits.minimumWallThickness,
+    limits.minimumGap,
+    limits.minimumLabelStrokeWidth,
+  );
+}
+
+function labelRaisedHeight(
+  profile: PrinterProfile,
+  featureSize: number,
+): number {
+  return Math.max(
+    featureSize,
+    resolvePrinterGeometryLimits(profile).minimumRaisedFeatureHeight,
   );
 }
 
@@ -625,6 +640,7 @@ function connectedGridComponents(
 function glyphComponentMesh(
   component: readonly GridCell[],
   featureSize: number,
+  raisedHeight: number,
   roofZ: number,
   placement: RoofTextPlacement,
 ): PrintMesh {
@@ -643,7 +659,7 @@ function glyphComponentMesh(
     vertices.push({
       x: placement.x + x * featureSize,
       y: placement.y + y * featureSize,
-      z: roofZ + z * featureSize,
+      z: roofZ + z * raisedHeight,
     });
     return index;
   };
@@ -717,8 +733,10 @@ export function raisedPrintableTextMesh(
   featureSize: number,
   origin: PrintPoint,
   orientation: RoofTextOrientation = "horizontal",
+  raisedHeight: number = featureSize,
 ): PrintMesh {
   finitePositive(featureSize, "Printable text feature size");
+  finitePositive(raisedHeight, "Printable text raised height");
   validatePrintableText(text);
   const footprint = textFootprint(text, featureSize, orientation);
   const placement: RoofTextPlacement = {
@@ -748,6 +766,7 @@ export function raisedPrintableTextMesh(
       glyphComponentMesh(
         component,
         featureSize,
+        raisedHeight,
         origin.z,
         placement,
       ),
@@ -762,6 +781,7 @@ function roofTextPrimitive(
   channelId: string,
   text: string,
   featureSize: number,
+  raisedHeight: number,
   roofZ: number,
   placement: RoofTextPlacement,
 ): PrintPrimitive {
@@ -780,6 +800,7 @@ function roofTextPrimitive(
           z: roofZ,
         },
         placement.orientation,
+        raisedHeight,
       ),
     ],
   );
@@ -893,8 +914,9 @@ function buildingLabel(
     return { status: { status: "skipped", reason: "policy-off" } };
   }
   const featureSize = labelFeatureSize(profile);
+  const raisedHeight = labelRaisedHeight(profile, featureSize);
   if (
-    roof.maximum.z + featureSize >
+    roof.maximum.z + raisedHeight >
     profile.buildVolume.y + EPSILON
   ) {
     return {
@@ -914,6 +936,7 @@ function buildingLabel(
       channelId,
       code,
       featureSize,
+      raisedHeight,
       roof.maximum.z,
       placement,
     ),
@@ -933,8 +956,9 @@ function districtLabel(
     return { status: { status: "skipped", reason: "policy-off" } };
   }
   const featureSize = labelFeatureSize(profile);
+  const raisedHeight = labelRaisedHeight(profile, featureSize);
   if (
-    roof.maximum.z + featureSize >
+    roof.maximum.z + raisedHeight >
     profile.buildVolume.y + EPSILON
   ) {
     return {
@@ -978,6 +1002,7 @@ function districtLabel(
         channelId,
         candidate.text,
         featureSize,
+        raisedHeight,
         roof.maximum.z,
         placement,
       ),
@@ -1067,6 +1092,7 @@ function plaqueLayout(
   featureSize: number,
   title: string,
   version: string,
+  minimumReliefDepth: number,
 ): PlaqueLayout {
   const panel = model.identityPanel!;
   const margin = featureSize * 2;
@@ -1096,6 +1122,7 @@ function plaqueLayout(
   const reliefDepth = Math.max(
     panel.reliefDepth * transform.scale,
     featureSize,
+    minimumReliefDepth,
   );
   const centerX =
     (panel.position.x - transform.origin.x) * transform.scale;
@@ -1221,9 +1248,15 @@ function identityPrimitives(
   if (!panel) return [];
   const semanticGroupId = panel.semanticGroupId;
   const channelId = requiredChannel(semanticChannels, semanticGroupId);
+  const limits = resolvePrinterGeometryLimits(profile);
   const featureSize = Math.max(
     MINIMUM_DEMO_RELIEF_FEATURE,
-    profile.geometryLimits.minimumFeatureSize,
+    limits.minimumFeatureSize,
+    limits.minimumLabelStrokeWidth,
+  );
+  const minimumReliefDepth = Math.max(
+    featureSize,
+    limits.minimumRaisedFeatureHeight,
   );
   const printableTitle = title.normalize("NFC").toUpperCase();
   const printableVersion = (version ?? "").normalize("NFC").toUpperCase();
@@ -1236,6 +1269,7 @@ function identityPrimitives(
     featureSize,
     printableTitle,
     printableVersion,
+    minimumReliefDepth,
   );
   const body = primitive(
     panel.id,

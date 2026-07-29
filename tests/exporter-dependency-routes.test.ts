@@ -144,6 +144,50 @@ describe("printable dependency routes", () => {
     expect(arrows.at(-1)?.bounds.maximum.x).toBe(105);
   });
 
+  it("applies explicit route-width and raised-height limits", () => {
+    const routeWidth = 1.6;
+    const raisedHeight = 1.4;
+    const planned = planPrintableDependencyRoutes(
+      request({
+        bundles: [{
+          id: "limited",
+          sourceEndpointId: "private-consumer",
+          targetEndpointId: "private-provider",
+          weight: 1,
+        }],
+        geometryLimits: {
+          ...geometryLimits,
+          minimumRouteWidth: routeWidth,
+          minimumRaisedFeatureHeight: raisedHeight,
+        },
+      }),
+    );
+
+    expect(planned.report.printedRouteCount).toBe(1);
+    expect(
+      planned.primitives.every(({ bounds }) =>
+        Math.abs(bounds.size.z - raisedHeight) < 1e-7
+      ),
+    ).toBe(true);
+    const trace = planned.primitives.find(({ id }) =>
+      id.includes(":trace:")
+    )!;
+    expect(Math.min(trace.bounds.size.x, trace.bounds.size.y)).toBeCloseTo(
+      routeWidth,
+      10,
+    );
+    const arrows = planned.primitives.filter(({ id }) =>
+      id.includes(":arrow:")
+    );
+    expect(arrows).toHaveLength(3);
+    arrows.forEach(({ bounds }, index) => {
+      expect(bounds.size.y).toBeCloseTo(
+        routeWidth * (3 - index),
+        10,
+      );
+    });
+  });
+
   it("detours around obstacles without positive-volume crossings", () => {
     const obstacle = rectangle(50, 20, 70, 40);
     const planned = planPrintableDependencyRoutes(

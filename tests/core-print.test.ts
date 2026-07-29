@@ -10,6 +10,7 @@ import {
   layoutCity,
   parsePrintRoutePolicy,
   planPrint,
+  resolvePrinterGeometryLimits,
   validatePrinterProfile,
   type PrinterProfile,
 } from "../packages/core/src/index.js";
@@ -22,6 +23,107 @@ const geometry = {
 };
 
 describe("capability-driven printer profiles", () => {
+  it("resolves legacy geometry assumptions without changing their behavior", () => {
+    const profile: PrinterProfile = {
+      ...createSingleChannelProfile(),
+      geometryLimits: {
+        minimumWallThickness: 0.5,
+        minimumGap: 0.4,
+        minimumFeatureSize: 0.7,
+        minimumBaseThickness: 0.8,
+      },
+    };
+
+    expect(resolvePrinterGeometryLimits(profile)).toEqual({
+      minimumWallThickness: 0.5,
+      minimumGap: 0.4,
+      minimumFeatureSize: 0.7,
+      minimumBaseThickness: 0.8,
+      nozzleDiameter: 0.5,
+      lineWidth: 0.5,
+      buildMargins: { x: 0, y: 0, z: 0 },
+      minimumRaisedFeatureHeight: 0.7,
+      minimumRecessedFeatureDepth: 0.7,
+      minimumLabelStrokeWidth: 0.5,
+      minimumRouteWidth: 0.7,
+      maximumModelHeight: 250,
+    });
+  });
+
+  it("derives maximum height from the usable span when only margins are added", () => {
+    const profile: PrinterProfile = {
+      ...createSingleChannelProfile(),
+      geometryLimits: {
+        minimumWallThickness: 0.45,
+        minimumGap: 0.4,
+        minimumFeatureSize: 0.8,
+        minimumBaseThickness: 0.8,
+        buildMargins: { x: 2, y: 5, z: 3 },
+      },
+    };
+
+    expect(resolvePrinterGeometryLimits(profile).maximumModelHeight).toBe(
+      240,
+    );
+    expect(validatePrinterProfile(profile)).toEqual([]);
+  });
+
+  it("reports actionable contradictions between geometry assumptions", () => {
+    const base = createSingleChannelProfile();
+    const issues = validatePrinterProfile({
+      ...base,
+      geometryLimits: {
+        ...base.geometryLimits,
+        nozzleDiameter: 0.4,
+        lineWidth: 0.5,
+        minimumWallThickness: 0.45,
+        minimumLabelStrokeWidth: 0.4,
+        minimumRouteWidth: 0.4,
+        buildMargins: { x: 110, y: 0, z: 0 },
+        maximumModelHeight: 1,
+      },
+    });
+
+    expect(issues).toContain(
+      "Geometry limit 'minimumWallThickness' (0.45) must be at least 'lineWidth' (0.5).",
+    );
+    expect(issues).toContain(
+      "Geometry limit 'minimumLabelStrokeWidth' (0.4) must be at least 'lineWidth' (0.5).",
+    );
+    expect(issues).toContain(
+      "Geometry limit 'minimumRouteWidth' (0.4) must be at least 'lineWidth' (0.5).",
+    );
+    expect(issues).toContain(
+      "Geometry limit 'buildMargins.x' (110) leaves no usable X build span within 220.",
+    );
+    expect(issues).toContain(
+      "Geometry limits 'minimumBaseThickness' plus 'minimumRaisedFeatureHeight' (1.6) exceed 'maximumModelHeight' (1).",
+    );
+  });
+
+  it("rejects non-finite ranges and height beyond the margin-reduced volume", () => {
+    const base = createSingleChannelProfile();
+    const issues = validatePrinterProfile({
+      ...base,
+      geometryLimits: {
+        ...base.geometryLimits,
+        nozzleDiameter: Number.NaN,
+        buildMargins: { x: 0, y: 5, z: Number.POSITIVE_INFINITY },
+        maximumModelHeight: 250,
+      },
+    });
+
+    expect(issues).toContain(
+      "Geometry limit 'nozzleDiameter' must be positive.",
+    );
+    expect(issues).toContain(
+      "Geometry limit 'buildMargins.z' must be non-negative.",
+    );
+    expect(issues).toContain(
+      "Geometry limit 'maximumModelHeight' (250) exceeds the usable Y build span (240) after margins.",
+    );
+  });
+
   it("assigns semantic groups without requiring invented geometry measurements", () => {
     const profile = createPrusaXLProfile([1, 2]);
     const assignments = assignSemanticGroups(

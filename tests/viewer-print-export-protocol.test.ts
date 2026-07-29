@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isPrintCalibrationGenerateRequest,
   isPrintExportGenerateRequest,
   isPrintExportWorkerResponse,
   serializePrintExportError,
   type PrintExportGenerateRequest,
 } from "../apps/viewer/src/print-export-protocol.js";
+import { createSingleChannelProfile } from "../packages/core/src/index.js";
+import { generateCalibrationExport } from "../packages/exporter/src/calibration.js";
 import type { ThreeMfExportPreflight } from "../packages/exporter/src/three-mf-export.js";
 
 function samplePreflight(): ThreeMfExportPreflight {
@@ -75,6 +78,31 @@ describe("viewer print export protocol", () => {
         jobId: 1,
         profile: {},
         options: request.options,
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts only profile-only calibration requests", () => {
+    const request = {
+      type: "calibrate",
+      jobId: 8,
+      profile: createSingleChannelProfile(),
+    } as const;
+
+    expect(isPrintCalibrationGenerateRequest(request)).toBe(true);
+    expect(
+      isPrintCalibrationGenerateRequest({ ...request, jobId: 0 }),
+    ).toBe(false);
+    expect(
+      isPrintCalibrationGenerateRequest({
+        type: "calibrate",
+        jobId: 8,
+      }),
+    ).toBe(false);
+    expect(
+      isPrintCalibrationGenerateRequest({
+        ...request,
+        type: "generate",
       }),
     ).toBe(false);
   });
@@ -164,5 +192,175 @@ describe("viewer print export protocol", () => {
       message: "worker vanished",
       issues: [],
     });
+  });
+
+  it("validates complete, internally consistent calibration results", () => {
+    const preflight = generateCalibrationExport(
+      createSingleChannelProfile(),
+    ).preflight;
+    const response = {
+      type: "calibration-result",
+      jobId: 2,
+      preflight,
+      threeMfBytes: new ArrayBuffer(8),
+      manifestBytes: new ArrayBuffer(8),
+    } as const;
+
+    expect(isPrintExportWorkerResponse(response)).toBe(true);
+    expect(
+      preflight.measurements.some(
+        ({ reference }) => reference === "rail-defined-groove",
+      ),
+    ).toBe(true);
+    expect(preflight.manifest.couponCount).toBeGreaterThan(0);
+    expect(
+      preflight.measurements.find(
+        ({ id }) => id === "build-margin-y",
+      )?.axis,
+    ).toEqual({
+      coordinateSpace: "city",
+      cityAxis: "y",
+      printAxis: "z",
+      meaning: "height",
+    });
+    expect(
+      isPrintExportWorkerResponse({
+        ...response,
+        preflight: {
+          ...preflight,
+          measurements: preflight.measurements.map((measurement) => {
+            if (measurement.id !== "build-margin-x") return measurement;
+            const { axis: _axis, ...withoutOptionalAxis } = measurement;
+            return withoutOptionalAxis;
+          }),
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isPrintExportWorkerResponse({
+        ...response,
+        preflight: {
+          ...preflight,
+          triangleCount: 0,
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isPrintExportWorkerResponse({
+        ...response,
+        preflight: {
+          ...preflight,
+          measurements: preflight.measurements.map((measurement, index) =>
+            index === 1
+              ? { ...measurement, id: preflight.measurements[0]!.id }
+              : measurement,
+          ),
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isPrintExportWorkerResponse({
+        ...response,
+        preflight: {
+          ...preflight,
+          manifest: {
+            ...preflight.manifest,
+            measurementCount:
+              preflight.manifest.measurementCount - 1,
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isPrintExportWorkerResponse({
+        ...response,
+        preflight: {
+          ...preflight,
+          manifest: {
+            ...preflight.manifest,
+            channelMarkerCount: preflight.channelCount + 1,
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isPrintExportWorkerResponse({
+        ...response,
+        preflight: {
+          ...preflight,
+          manifest: {
+            ...preflight.manifest,
+            couponCount: 0,
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isPrintExportWorkerResponse({
+        ...response,
+        preflight: {
+          ...preflight,
+          manifest: {
+            ...preflight.manifest,
+            couponCount: preflight.manifest.couponCount + 1,
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isPrintExportWorkerResponse({
+        ...response,
+        preflight: {
+          ...preflight,
+          measurements: preflight.measurements.map((measurement) =>
+            measurement.id === "nozzle-diameter"
+              ? { ...measurement, couponId: 42 }
+              : measurement,
+          ),
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isPrintExportWorkerResponse({
+        ...response,
+        preflight: {
+          ...preflight,
+          measurements: preflight.measurements.map((measurement) =>
+            measurement.id === "build-margin-y"
+              ? {
+                  ...measurement,
+                  axis: {
+                    coordinateSpace: "city",
+                    cityAxis: "y",
+                    printAxis: "y",
+                    meaning: "height",
+                  },
+                }
+              : measurement,
+          ),
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isPrintExportWorkerResponse({
+        ...response,
+        preflight: {
+          ...preflight,
+          measurements: preflight.measurements.map((measurement) =>
+            measurement.id === "minimum-gap"
+              ? {
+                  ...measurement,
+                  axis: {
+                    coordinateSpace: "city",
+                    cityAxis: "x",
+                    printAxis: "x",
+                    meaning: "width",
+                  },
+                }
+              : measurement,
+          ),
+        },
+      }),
+    ).toBe(false);
   });
 });

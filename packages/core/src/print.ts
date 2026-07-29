@@ -30,6 +30,37 @@ export interface PrinterGeometryLimits {
   readonly minimumGap: number;
   readonly minimumFeatureSize: number;
   readonly minimumBaseThickness: number;
+  /** Physical nozzle opening in millimeters. Defaults to the legacy wall minimum. */
+  readonly nozzleDiameter?: number;
+  /** Planned extrusion line width in millimeters. Defaults to the legacy wall minimum. */
+  readonly lineWidth?: number;
+  /**
+   * Clearance from each build-volume face in CityModel axes. X is width,
+   * Y is height, and Z is depth.
+   */
+  readonly buildMargins?: Vector3;
+  readonly minimumRaisedFeatureHeight?: number;
+  readonly minimumRecessedFeatureDepth?: number;
+  readonly minimumLabelStrokeWidth?: number;
+  readonly minimumRouteWidth?: number;
+  /** Maximum model height in the CityModel Y axis. */
+  readonly maximumModelHeight?: number;
+}
+
+/** Complete geometry assumptions used after resolving a legacy-compatible input. */
+export interface ResolvedPrinterGeometryLimits {
+  readonly minimumWallThickness: number;
+  readonly minimumGap: number;
+  readonly minimumFeatureSize: number;
+  readonly minimumBaseThickness: number;
+  readonly nozzleDiameter: number;
+  readonly lineWidth: number;
+  readonly buildMargins: Vector3;
+  readonly minimumRaisedFeatureHeight: number;
+  readonly minimumRecessedFeatureDepth: number;
+  readonly minimumLabelStrokeWidth: number;
+  readonly minimumRouteWidth: number;
+  readonly maximumModelHeight: number;
 }
 
 export interface PrinterProfile {
@@ -124,6 +155,68 @@ function finiteNonNegative(value: number): boolean {
 
 const GEOMETRY_EPSILON = 1e-9;
 
+/**
+ * Expands the original four geometry limits into the complete print contract.
+ * The defaults deliberately keep legacy profiles usable: they add no build
+ * margin, keep the former build-volume height, and derive feature assumptions
+ * from the existing wall and generic-feature minima.
+ */
+export function resolvePrinterGeometryLimits(
+  profile: PrinterProfile,
+): ResolvedPrinterGeometryLimits;
+export function resolvePrinterGeometryLimits(
+  limits: PrinterGeometryLimits,
+  buildVolume: Vector3,
+): ResolvedPrinterGeometryLimits;
+export function resolvePrinterGeometryLimits(
+  profileOrLimits: PrinterProfile | PrinterGeometryLimits,
+  explicitBuildVolume?: Vector3,
+): ResolvedPrinterGeometryLimits {
+  const isProfile =
+    explicitBuildVolume === undefined &&
+    "geometryLimits" in profileOrLimits &&
+    "buildVolume" in profileOrLimits;
+  const limits: PrinterGeometryLimits = isProfile
+    ? (profileOrLimits as PrinterProfile).geometryLimits
+    : (profileOrLimits as PrinterGeometryLimits);
+  const buildVolume = isProfile
+    ? (profileOrLimits as PrinterProfile).buildVolume
+    : explicitBuildVolume;
+  if (buildVolume === undefined) {
+    throw new TypeError(
+      "Resolving geometry limits requires a printer profile or build volume.",
+    );
+  }
+  const lineWidth = limits.lineWidth ?? limits.minimumWallThickness;
+  const buildMargins = {
+    x: limits.buildMargins?.x ?? 0,
+    y: limits.buildMargins?.y ?? 0,
+    z: limits.buildMargins?.z ?? 0,
+  };
+  return {
+    minimumWallThickness: limits.minimumWallThickness,
+    minimumGap: limits.minimumGap,
+    minimumFeatureSize: limits.minimumFeatureSize,
+    minimumBaseThickness: limits.minimumBaseThickness,
+    nozzleDiameter:
+      limits.nozzleDiameter ?? limits.minimumWallThickness,
+    lineWidth,
+    buildMargins,
+    minimumRaisedFeatureHeight:
+      limits.minimumRaisedFeatureHeight ?? limits.minimumFeatureSize,
+    minimumRecessedFeatureDepth:
+      limits.minimumRecessedFeatureDepth ?? limits.minimumFeatureSize,
+    minimumLabelStrokeWidth:
+      limits.minimumLabelStrokeWidth ?? limits.minimumWallThickness,
+    minimumRouteWidth:
+      limits.minimumRouteWidth ??
+      Math.max(limits.minimumFeatureSize, lineWidth),
+    maximumModelHeight:
+      limits.maximumModelHeight ??
+      buildVolume.y - buildMargins.y * 2,
+  };
+}
+
 export function validatePrinterProfile(
   profile: PrinterProfile,
 ): readonly string[] {
@@ -177,16 +270,109 @@ export function validatePrinterProfile(
       issues.push(`Build volume ${axis.toUpperCase()} must be positive.`);
     }
   }
+  const resolvedLimits = resolvePrinterGeometryLimits(
+    profile,
+  );
   const geometryLimits = [
-    ["minimumWallThickness", profile.geometryLimits.minimumWallThickness],
-    ["minimumGap", profile.geometryLimits.minimumGap],
-    ["minimumFeatureSize", profile.geometryLimits.minimumFeatureSize],
-    ["minimumBaseThickness", profile.geometryLimits.minimumBaseThickness],
+    ["minimumWallThickness", resolvedLimits.minimumWallThickness],
+    ["minimumGap", resolvedLimits.minimumGap],
+    ["minimumFeatureSize", resolvedLimits.minimumFeatureSize],
+    ["minimumBaseThickness", resolvedLimits.minimumBaseThickness],
+    ["nozzleDiameter", resolvedLimits.nozzleDiameter],
+    ["lineWidth", resolvedLimits.lineWidth],
+    [
+      "minimumRaisedFeatureHeight",
+      resolvedLimits.minimumRaisedFeatureHeight,
+    ],
+    [
+      "minimumRecessedFeatureDepth",
+      resolvedLimits.minimumRecessedFeatureDepth,
+    ],
+    [
+      "minimumLabelStrokeWidth",
+      resolvedLimits.minimumLabelStrokeWidth,
+    ],
+    ["minimumRouteWidth", resolvedLimits.minimumRouteWidth],
+    ["maximumModelHeight", resolvedLimits.maximumModelHeight],
   ] as const;
   for (const [field, value] of geometryLimits) {
     if (!finitePositive(value)) {
       issues.push(`Geometry limit '${field}' must be positive.`);
     }
+  }
+  for (const axis of ["x", "y", "z"] as const) {
+    const margin = resolvedLimits.buildMargins[axis];
+    if (!finiteNonNegative(margin)) {
+      issues.push(
+        `Geometry limit 'buildMargins.${axis}' must be non-negative.`,
+      );
+      continue;
+    }
+    const buildBound = profile.buildVolume[axis];
+    if (
+      finitePositive(buildBound) &&
+      margin * 2 >= buildBound - GEOMETRY_EPSILON
+    ) {
+      issues.push(
+        `Geometry limit 'buildMargins.${axis}' (${margin}) leaves no usable ${axis.toUpperCase()} build span within ${buildBound}.`,
+      );
+    }
+  }
+  if (
+    finitePositive(resolvedLimits.nozzleDiameter) &&
+    finitePositive(resolvedLimits.lineWidth) &&
+    (resolvedLimits.lineWidth + GEOMETRY_EPSILON <
+      resolvedLimits.nozzleDiameter ||
+      resolvedLimits.lineWidth >
+        resolvedLimits.nozzleDiameter * 2 + GEOMETRY_EPSILON)
+  ) {
+    issues.push(
+      `Geometry limit 'lineWidth' (${resolvedLimits.lineWidth}) must be between 'nozzleDiameter' (${resolvedLimits.nozzleDiameter}) and twice that diameter (${resolvedLimits.nozzleDiameter * 2}).`,
+    );
+  }
+  for (const [field, value] of [
+    ["minimumWallThickness", resolvedLimits.minimumWallThickness],
+    [
+      "minimumLabelStrokeWidth",
+      resolvedLimits.minimumLabelStrokeWidth,
+    ],
+    ["minimumRouteWidth", resolvedLimits.minimumRouteWidth],
+  ] as const) {
+    if (
+      finitePositive(value) &&
+      finitePositive(resolvedLimits.lineWidth) &&
+      value + GEOMETRY_EPSILON < resolvedLimits.lineWidth
+    ) {
+      issues.push(
+        `Geometry limit '${field}' (${value}) must be at least 'lineWidth' (${resolvedLimits.lineWidth}).`,
+      );
+    }
+  }
+  const usableModelHeight =
+    profile.buildVolume.y - resolvedLimits.buildMargins.y * 2;
+  if (
+    finitePositive(resolvedLimits.maximumModelHeight) &&
+    Number.isFinite(usableModelHeight) &&
+    resolvedLimits.maximumModelHeight >
+      usableModelHeight + GEOMETRY_EPSILON
+  ) {
+    issues.push(
+      `Geometry limit 'maximumModelHeight' (${resolvedLimits.maximumModelHeight}) exceeds the usable Y build span (${usableModelHeight}) after margins.`,
+    );
+  }
+  const minimumRaisedModelHeight =
+    resolvedLimits.minimumBaseThickness +
+    resolvedLimits.minimumRaisedFeatureHeight;
+  if (
+    finitePositive(resolvedLimits.minimumBaseThickness) &&
+    finitePositive(resolvedLimits.minimumRaisedFeatureHeight) &&
+    finitePositive(resolvedLimits.maximumModelHeight) &&
+    minimumRaisedModelHeight >
+      resolvedLimits.maximumModelHeight + GEOMETRY_EPSILON
+  ) {
+    issues.push(
+      `Geometry limits 'minimumBaseThickness' plus 'minimumRaisedFeatureHeight' (${minimumRaisedModelHeight}) exceed 'maximumModelHeight' (${resolvedLimits.maximumModelHeight}).`,
+    );
   }
   if (!POLICIES.has(profile.overflowPolicy)) {
     issues.push(`Unsupported overflow policy '${String(profile.overflowPolicy)}'.`);

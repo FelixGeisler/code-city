@@ -19,6 +19,8 @@ and a private JSON legend. PrusaSlicer imports it as one object with five
 aligned tool parts; the command reports its profile-derived size.
 `npm run print:connector-comparison` writes the profile-derived connector test
 and its measurement instructions.
+`npm run print:calibration` writes a deterministic Prusa XL calibration 3MF
+and its exact measurement manifest.
 
 [source,powershell]
 ----
@@ -40,6 +42,9 @@ In the viewer, **Export 3MF** uses the same pipeline in a cancellable module
 worker. It accepts bundled or local JSON profiles, reports preflight dimensions,
 parts, channels, and warnings, then creates local Blob downloads. No input is
 sent over the network.
+
+**Prepare calibration** uses the selected profile without repository content
+and downloads the same deterministic calibration 3MF and manifest.
 
 Oversized exports report their measured bounds. Automatic fitting and tiling,
 STL, arbitrary fonts and logos, and slicer settings remain separate work.

@@ -6,7 +6,10 @@ import type {
   PrinterGeometryLimits,
   PrinterProfile,
 } from "./print.js";
-import { validatePrinterProfile } from "./print.js";
+import {
+  resolvePrinterGeometryLimits,
+  validatePrinterProfile,
+} from "./print.js";
 import type { Vector3 } from "./model.js";
 
 export const DEFAULT_FDM_GEOMETRY_LIMITS: Readonly<PrinterGeometryLimits> =
@@ -15,6 +18,13 @@ export const DEFAULT_FDM_GEOMETRY_LIMITS: Readonly<PrinterGeometryLimits> =
     minimumGap: 0.4,
     minimumFeatureSize: 0.8,
     minimumBaseThickness: 0.8,
+    nozzleDiameter: 0.4,
+    lineWidth: 0.45,
+    buildMargins: Object.freeze({ x: 0, y: 0, z: 0 }),
+    minimumRaisedFeatureHeight: 0.8,
+    minimumRecessedFeatureDepth: 0.8,
+    minimumLabelStrokeWidth: 0.45,
+    minimumRouteWidth: 0.8,
   });
 
 export interface PrusaXLProfileOptions {
@@ -53,6 +63,7 @@ export function createPrusaXLProfile(
   if (new Set(tools).size !== tools.length) {
     throw new TypeError("Enabled Prusa XL tool ids must be unique.");
   }
+  const buildVolume = { x: 360, y: 360, z: 360 };
   return {
     id: `prusa-xl-${tools.map((tool) => `t${tool}`).join("-")}`,
     name: `Prusa XL (${tools.length} enabled ${tools.length === 1 ? "tool" : "tools"})`,
@@ -64,9 +75,11 @@ export function createPrusaXLProfile(
       }),
     ),
     supportedFormats: options.supportedFormats ?? ["3mf", "stl"],
-    buildVolume: { x: 360, y: 360, z: 360 },
-    geometryLimits:
+    buildVolume,
+    geometryLimits: resolvePrinterGeometryLimits(
       options.geometryLimits ?? DEFAULT_FDM_GEOMETRY_LIMITS,
+      buildVolume,
+    ),
     overflowPolicy: options.overflowPolicy ?? "merge",
   };
 }
@@ -86,6 +99,7 @@ export interface SingleChannelProfileOptions {
 export function createSingleChannelProfile(
   options: SingleChannelProfileOptions = {},
 ): PrinterProfile {
+  const buildVolume = options.buildVolume ?? { x: 220, y: 250, z: 220 };
   return {
     id: options.id ?? "generic-single-channel",
     name: options.name ?? "Generic single-channel printer",
@@ -97,9 +111,11 @@ export function createSingleChannelProfile(
       },
     ],
     supportedFormats: options.supportedFormats ?? ["stl", "3mf"],
-    buildVolume: options.buildVolume ?? { x: 220, y: 250, z: 220 },
-    geometryLimits:
+    buildVolume,
+    geometryLimits: resolvePrinterGeometryLimits(
       options.geometryLimits ?? DEFAULT_FDM_GEOMETRY_LIMITS,
+      buildVolume,
+    ),
     overflowPolicy: options.overflowPolicy ?? "monochrome",
   };
 }
@@ -131,6 +147,14 @@ const GEOMETRY_LIMIT_KEYS = Object.freeze([
   "minimumGap",
   "minimumFeatureSize",
   "minimumBaseThickness",
+  "nozzleDiameter",
+  "lineWidth",
+  "buildMargins",
+  "minimumRaisedFeatureHeight",
+  "minimumRecessedFeatureDepth",
+  "minimumLabelStrokeWidth",
+  "minimumRouteWidth",
+  "maximumModelHeight",
 ] as const);
 
 export class PrinterProfileParseError extends TypeError {
@@ -160,7 +184,11 @@ export function parsePrinterProfile(value: unknown): PrinterProfile {
   const printChannels = readChannels(source, issues);
   const supportedFormats = readFormats(source, issues);
   const buildVolume = readVector(source, "buildVolume", issues);
-  const geometryLimits = readGeometryLimits(source, issues);
+  const geometryLimits = readGeometryLimits(
+    source,
+    buildVolume,
+    issues,
+  );
   const overflowPolicy = readString(
     source,
     "overflowPolicy",
@@ -297,29 +325,32 @@ function readVector(
 
 function readGeometryLimits(
   source: JsonObject,
+  buildVolume: Vector3,
   issues: string[],
 ): PrinterGeometryLimits {
   const path = "profile.geometryLimits";
   if (!hasOwn(source, "geometryLimits")) {
     issues.push(`${path} is required.`);
-    return {
-      minimumWallThickness: 0,
-      minimumGap: 0,
-      minimumFeatureSize: 0,
-      minimumBaseThickness: 0,
-    };
+    return resolvePrinterGeometryLimits(
+      emptyGeometryLimits(),
+      buildVolume,
+    );
   }
   const value = readObject(source["geometryLimits"], path, issues);
   if (!value) {
-    return {
-      minimumWallThickness: 0,
-      minimumGap: 0,
-      minimumFeatureSize: 0,
-      minimumBaseThickness: 0,
-    };
+    return resolvePrinterGeometryLimits(
+      emptyGeometryLimits(),
+      buildVolume,
+    );
   }
   rejectUnsupportedKeys(value, GEOMETRY_LIMIT_KEYS, path, issues);
-  return {
+  const buildMargins = readOptionalVector(
+    value,
+    "buildMargins",
+    path,
+    issues,
+  );
+  const limits: PrinterGeometryLimits = {
     minimumWallThickness: readNumber(
       value,
       "minimumWallThickness",
@@ -339,7 +370,84 @@ function readGeometryLimits(
       path,
       issues,
     ),
+    ...optionalNumberProperty(value, "nozzleDiameter", path, issues),
+    ...optionalNumberProperty(value, "lineWidth", path, issues),
+    ...(buildMargins === undefined ? {} : { buildMargins }),
+    ...optionalNumberProperty(
+      value,
+      "minimumRaisedFeatureHeight",
+      path,
+      issues,
+    ),
+    ...optionalNumberProperty(
+      value,
+      "minimumRecessedFeatureDepth",
+      path,
+      issues,
+    ),
+    ...optionalNumberProperty(
+      value,
+      "minimumLabelStrokeWidth",
+      path,
+      issues,
+    ),
+    ...optionalNumberProperty(
+      value,
+      "minimumRouteWidth",
+      path,
+      issues,
+    ),
+    ...optionalNumberProperty(
+      value,
+      "maximumModelHeight",
+      path,
+      issues,
+    ),
   };
+  return resolvePrinterGeometryLimits(limits, buildVolume);
+}
+
+function emptyGeometryLimits(): PrinterGeometryLimits {
+  return {
+    minimumWallThickness: 0,
+    minimumGap: 0,
+    minimumFeatureSize: 0,
+    minimumBaseThickness: 0,
+  };
+}
+
+function readOptionalVector(
+  source: JsonObject,
+  key: string,
+  parentPath: string,
+  issues: string[],
+): Vector3 | undefined {
+  if (!hasOwn(source, key)) return undefined;
+  const path = propertyPath(parentPath, key);
+  const value = readObject(source[key], path, issues);
+  if (!value) return undefined;
+  rejectUnsupportedKeys(value, VECTOR_KEYS, path, issues);
+  return {
+    x: readNumber(value, "x", path, issues),
+    y: readNumber(value, "y", path, issues),
+    z: readNumber(value, "z", path, issues),
+  };
+}
+
+function optionalNumberProperty(
+  source: JsonObject,
+  key: string,
+  parentPath: string,
+  issues: string[],
+): Record<string, number> {
+  if (!hasOwn(source, key)) return {};
+  const path = propertyPath(parentPath, key);
+  const value = source[key];
+  if (typeof value !== "number") {
+    issues.push(`${path} must be a number when supplied.`);
+    return {};
+  }
+  return { [key]: value };
 }
 
 function readObject(

@@ -3,9 +3,12 @@ import {
   serializePreparedThreeMfExport,
 } from "../../../packages/exporter/src/three-mf-export.js";
 import {
-  isPrintExportGenerateRequest,
+  generateCalibrationExport,
+} from "../../../packages/exporter/src/calibration.js";
+import {
+  isPrintExportWorkerRequest,
   serializePrintExportError,
-  type PrintExportGenerateRequest,
+  type PrintExportWorkerRequest,
   type PrintExportWorkerResponse,
 } from "./print-export-protocol.js";
 
@@ -45,10 +48,41 @@ function transferableBuffer(bytes: Uint8Array): ArrayBuffer {
 }
 
 export function runPrintExportRequest(
-  request: PrintExportGenerateRequest,
+  request: PrintExportWorkerRequest,
   emit: PrintExportWorkerEmitter,
 ): void {
   try {
+    if (request.type === "calibrate") {
+      emit({
+        type: "progress",
+        jobId: request.jobId,
+        phase: "validating",
+        completed: 0,
+        message: "Validating calibration profile",
+      });
+      const result = generateCalibrationExport(request.profile);
+      const threeMfBytes = transferableBuffer(result.threeMfBytes);
+      const manifestBytes = transferableBuffer(result.manifestBytes);
+      emit({
+        type: "progress",
+        jobId: request.jobId,
+        phase: "complete",
+        completed: 1,
+        message: "Calibration files are ready",
+      });
+      emit(
+        {
+          type: "calibration-result",
+          jobId: request.jobId,
+          preflight: result.preflight,
+          threeMfBytes,
+          manifestBytes,
+        },
+        [threeMfBytes, manifestBytes],
+      );
+      return;
+    }
+
     const prepared = prepareThreeMfExport(
       {
         model: request.model,
@@ -123,7 +157,7 @@ export function installPrintExportWorker(
   scope: PrintExportWorkerScope,
 ): () => void {
   const listener = (event: { readonly data: unknown }): void => {
-    if (!isPrintExportGenerateRequest(event.data)) return;
+    if (!isPrintExportWorkerRequest(event.data)) return;
     runPrintExportRequest(event.data, (response, transfer = []) => {
       scope.postMessage(response, transfer);
     });

@@ -6,6 +6,7 @@ import {
 } from "../../../packages/core/src/printer-profiles.js";
 import type { PrinterProfile } from "../../../packages/core/src/print.js";
 import type { ThreeMfExportPreflight } from "../../../packages/exporter/src/three-mf-export.js";
+import type { CalibrationPreflight } from "../../../packages/exporter/src/calibration.js";
 
 import {
   PrintExportController,
@@ -13,6 +14,7 @@ import {
 } from "./print-export-controller.js";
 import {
   PrintDownloadManager,
+  tryPublishCalibrationDownloads,
   tryPublishPrintDownloads,
 } from "./print-download.js";
 import type { ViewerLoadGateway } from "./model-source.js";
@@ -131,6 +133,8 @@ export function installPrintExportDialog(
   );
   const submitButton =
     requiredElement<HTMLButtonElement>("print-export-submit");
+  const calibrationButton =
+    requiredElement<HTMLButtonElement>("print-calibration-submit");
   const cancelButton =
     requiredElement<HTMLButtonElement>("print-export-cancel");
   const progressWrap =
@@ -150,6 +154,12 @@ export function installPrintExportDialog(
     requiredElement<HTMLElement>("print-export-dimensions");
   const partsElement =
     requiredElement<HTMLElement>("print-export-parts");
+  const trianglesWrap =
+    requiredElement<HTMLElement>("print-export-triangles-wrap");
+  const trianglesElement =
+    requiredElement<HTMLElement>("print-export-triangles");
+  const channelsTitle =
+    requiredElement<HTMLElement>("print-export-channels-title");
   const channelsList =
     requiredElement<HTMLUListElement>("print-export-channels");
   const warningWrap =
@@ -163,6 +173,13 @@ export function installPrintExportDialog(
   const legendDownload = requiredElement<HTMLAnchorElement>(
     "print-export-legend-download",
   );
+  const calibrationDownload = requiredElement<HTMLAnchorElement>(
+    "print-calibration-download",
+  );
+  const calibrationManifestDownload =
+    requiredElement<HTMLAnchorElement>(
+      "print-calibration-manifest-download",
+    );
 
   const downloads = new PrintDownloadManager();
   const customProfileReads = new LatestPrintProfileRead();
@@ -216,6 +233,12 @@ export function installPrintExportDialog(
     legendDownload.removeAttribute("href");
     legendDownload.removeAttribute("download");
     legendDownload.hidden = true;
+    calibrationDownload.removeAttribute("href");
+    calibrationDownload.removeAttribute("download");
+    calibrationDownload.hidden = true;
+    calibrationManifestDownload.removeAttribute("href");
+    calibrationManifestDownload.removeAttribute("download");
+    calibrationManifestDownload.hidden = true;
   }
 
   function clearResultPanels(): void {
@@ -237,6 +260,9 @@ export function installPrintExportDialog(
   }
 
   function renderPreflight(preflight: ThreeMfExportPreflight): void {
+    trianglesWrap.hidden = true;
+    trianglesElement.textContent = "";
+    channelsTitle.textContent = "Used channels";
     dimensionsElement.textContent =
       `${millimeters(preflight.dimensions.x)} × ` +
       `${millimeters(preflight.dimensions.y)} × ` +
@@ -264,6 +290,46 @@ export function installPrintExportDialog(
       }),
     );
     warningWrap.hidden = preflight.warnings.length === 0;
+    preflightSection.hidden = false;
+  }
+
+  function renderCalibrationPreflight(
+    preflight: CalibrationPreflight,
+  ): void {
+    dimensionsElement.textContent =
+      `${millimeters(preflight.dimensions.x)} \u00d7 ` +
+      `${millimeters(preflight.dimensions.y)} \u00d7 ` +
+      `${millimeters(preflight.dimensions.z)} mm`;
+    partsElement.textContent =
+      `${preflight.partCount.toLocaleString()} ` +
+      `${preflight.partCount === 1 ? "part" : "parts"} across ` +
+      `${preflight.channelCount.toLocaleString()} ` +
+      `${preflight.channelCount === 1 ? "channel" : "channels"}`;
+    trianglesElement.textContent =
+      preflight.triangleCount.toLocaleString();
+    trianglesWrap.hidden = false;
+    channelsTitle.textContent = "Calibration manifest";
+    const measurements = document.createElement("li");
+    measurements.textContent =
+      `${preflight.manifest.measurementCount.toLocaleString()} ` +
+      `${preflight.manifest.measurementCount === 1
+        ? "profile measurement"
+        : "profile measurements"}`;
+    const coupons = document.createElement("li");
+    coupons.textContent =
+      `${preflight.manifest.couponCount.toLocaleString()} ` +
+      `${preflight.manifest.couponCount === 1
+        ? "printable coupon"
+        : "printable coupons"}`;
+    const markers = document.createElement("li");
+    markers.textContent =
+      `${preflight.manifest.channelMarkerCount.toLocaleString()} ` +
+      `${preflight.manifest.channelMarkerCount === 1
+        ? "channel marker"
+        : "channel markers"}`;
+    channelsList.replaceChildren(measurements, coupons, markers);
+    warningsList.replaceChildren();
+    warningWrap.hidden = true;
     preflightSection.hidden = false;
   }
 
@@ -305,13 +371,46 @@ export function installPrintExportDialog(
     downloadsWrap.hidden = false;
   }
 
+  function renderCalibrationReady(
+    state: Extract<
+      PrintExportControllerState,
+      { readonly status: "calibration-ready" }
+    >,
+  ): void {
+    const publication = tryPublishCalibrationDownloads(
+      downloads,
+      state.preflight.profileId,
+      {
+        threeMfBytes: state.threeMfBytes,
+        manifestBytes: state.manifestBytes,
+      },
+    );
+    if (!publication.ok) {
+      clearDownloads();
+      renderErrors([publication.message]);
+      return;
+    }
+    calibrationDownload.href = publication.downloads.threeMf.url;
+    calibrationDownload.download =
+      publication.downloads.threeMf.fileName;
+    calibrationDownload.hidden = false;
+    calibrationManifestDownload.href =
+      publication.downloads.manifest.url;
+    calibrationManifestDownload.download =
+      publication.downloads.manifest.fileName;
+    calibrationManifestDownload.hidden = false;
+    downloadsWrap.hidden = false;
+  }
+
   function updateSubmitAvailability(): void {
-    submitButton.disabled = printExportSubmitDisabled({
+    const disabled = printExportSubmitDisabled({
       busy: controller.state.status === "busy",
       profileKind: selectedProfileKind(),
       hasCustomProfile: customProfile !== undefined,
       prusaToolCount: selectedPrusaTools().length,
     });
+    submitButton.disabled = disabled;
+    calibrationButton.disabled = disabled;
   }
 
   function renderState(state: PrintExportControllerState): void {
@@ -348,6 +447,11 @@ export function installPrintExportDialog(
           ? state.error.issues
           : [state.error.message],
       );
+      return;
+    }
+    if (state.status === "calibration-ready") {
+      renderCalibrationPreflight(state.preflight);
+      renderCalibrationReady(state);
       return;
     }
     renderPreflight(state.preflight);
@@ -483,7 +587,20 @@ export function installPrintExportDialog(
       },
     });
   }
+  function startCalibration(): void {
+    clearResultPanels();
+    let profile: PrinterProfile;
+    try {
+      profile = resolveProfile();
+    } catch (error) {
+      renderErrors(issuesOf(error));
+      return;
+    }
+    invalidateCustomProfileRead();
+    controller.startCalibration({ profile });
+  }
   form.addEventListener("submit", startExport);
+  calibrationButton.addEventListener("click", startCalibration);
   window.addEventListener("beforeunload", () => {
     controller.dispose();
     downloads.dispose();

@@ -8,10 +8,15 @@ import {
   type PrintExportWorkerScope,
 } from "../apps/viewer/src/print-export-worker.js";
 import type {
+  PrintCalibrationGenerateRequest,
   PrintExportGenerateRequest,
   PrintExportWorkerResponse,
 } from "../apps/viewer/src/print-export-protocol.js";
-import { createPrusaXLProfile } from "../packages/core/src/index.js";
+import {
+  createPrusaXLProfile,
+  createSingleChannelProfile,
+} from "../packages/core/src/index.js";
+import { generateCalibrationExport } from "../packages/exporter/src/calibration.js";
 import { generateThreeMfExport } from "../packages/exporter/src/index.js";
 
 function request(
@@ -114,6 +119,61 @@ describe("viewer print export worker", () => {
         message: expect.stringMatching(/schemaVersion/iu),
       },
     });
+  });
+
+  it("generates profile-only calibration files without network access", () => {
+    const calibrationRequest: PrintCalibrationGenerateRequest = {
+      type: "calibrate",
+      jobId: 18,
+      profile: createSingleChannelProfile(),
+    };
+    const shared = generateCalibrationExport(
+      calibrationRequest.profile,
+    );
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() => {
+        throw new Error("The calibration worker must not access the network.");
+      });
+    const emitted: Array<{
+      response: PrintExportWorkerResponse;
+      transfer: readonly ArrayBuffer[];
+    }> = [];
+
+    try {
+      runPrintExportRequest(
+        calibrationRequest,
+        (response, transfer = []) => {
+          emitted.push({ response, transfer });
+        },
+      );
+    } finally {
+      fetch.mockRestore();
+    }
+
+    expect(fetch).not.toHaveBeenCalled();
+    expect(
+      emitted
+        .filter(({ response }) => response.type === "progress")
+        .map(({ response }) =>
+          response.type === "progress" ? response.phase : "",
+        ),
+    ).toEqual(["validating", "complete"]);
+    const result = emitted.at(-1)!;
+    expect(result.response.type).toBe("calibration-result");
+    if (result.response.type !== "calibration-result") {
+      throw new Error("Expected a calibration result response.");
+    }
+    expect(new Uint8Array(result.response.threeMfBytes)).toEqual(
+      shared.threeMfBytes,
+    );
+    expect(new Uint8Array(result.response.manifestBytes)).toEqual(
+      shared.manifestBytes,
+    );
+    expect(result.transfer).toEqual([
+      result.response.threeMfBytes,
+      result.response.manifestBytes,
+    ]);
   });
 
   it("installs only in a dedicated worker-like scope and ignores other messages", () => {
