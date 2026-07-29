@@ -14,12 +14,15 @@ import {
   PersistentJobQueue,
   type JobRecord,
 } from "./job-queue.js";
+import { ImportArtifactStore } from "./import-artifacts.js";
 
 const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_PORT = 3_000;
 const MAXIMUM_REQUEST_TARGET_CHARACTERS = 2_048;
 const JOB_PATH_PATTERN =
   /^\/api\/v1\/jobs\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/u;
+const CITY_MODEL_ARTIFACT_PATH_PATTERN =
+  /^\/api\/v1\/artifacts\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/city-model\.json$/u;
 
 const CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
@@ -51,6 +54,7 @@ export interface CodeCityServerHandle {
   readonly port: number;
   readonly url: URL;
   readonly jobs: PersistentJobQueue;
+  readonly artifacts: ImportArtifactStore;
   readonly closed: Promise<void>;
   close(): Promise<void>;
 }
@@ -254,11 +258,88 @@ function publicJob(record: JobRecord): JobRecord {
   return record;
 }
 
+function completedCityModelArtifactTokens(
+  jobs: PersistentJobQueue,
+): ReadonlySet<string> {
+  const tokens = new Set<string>();
+  for (const job of jobs.list()) {
+    if (
+      job.state === "completed" &&
+      job.result?.kind === "city-model" &&
+      job.result.artifactToken === job.id &&
+      job.result.artifactUrl ===
+        `/api/v1/artifacts/${job.id}/city-model.json`
+    ) {
+      tokens.add(job.id);
+    }
+  }
+  return tokens;
+}
+
+function completedJobOwnsCityModelArtifact(
+  jobs: PersistentJobQueue,
+  token: string,
+): boolean {
+  const job = jobs.get(token);
+  return (
+    job?.state === "completed" &&
+    job.result?.kind === "city-model" &&
+    job.result.artifactToken === token &&
+    job.result.artifactUrl ===
+      `/api/v1/artifacts/${token}/city-model.json`
+  );
+}
+
+class ArtifactResponseGate {
+  #active = false;
+  #idle: Promise<void> = Promise.resolve();
+  #resolveIdle: (() => void) | undefined;
+
+  public tryAcquire(
+    response: ServerResponse,
+  ): (() => void) | undefined {
+    if (this.#active) return undefined;
+    this.#active = true;
+    this.#idle = new Promise<void>((resolve) => {
+      this.#resolveIdle = resolve;
+    });
+    let operationSettled = false;
+    let responseCompleted = false;
+    let released = false;
+    const releaseIfComplete = (): void => {
+      if (released || !operationSettled || !responseCompleted) return;
+      released = true;
+      response.off("finish", completeResponse);
+      response.off("close", completeResponse);
+      this.#active = false;
+      const resolveIdle = this.#resolveIdle;
+      this.#resolveIdle = undefined;
+      resolveIdle?.();
+    };
+    const completeResponse = (): void => {
+      responseCompleted = true;
+      releaseIfComplete();
+    };
+    response.once("finish", completeResponse);
+    response.once("close", completeResponse);
+    return () => {
+      operationSettled = true;
+      releaseIfComplete();
+    };
+  }
+
+  public waitForIdle(): Promise<void> {
+    return this.#idle;
+  }
+}
+
 function apiHandler(
   request: IncomingMessage,
   response: ServerResponse,
   target: ParsedTarget,
   jobs: PersistentJobQueue,
+  artifacts: ImportArtifactStore,
+  artifactResponses: ArtifactResponseGate,
 ): boolean {
   if (target.path === "/api/v1/health") {
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -280,6 +361,114 @@ function apiHandler(
     sendJson(request, response, 200, {
       jobs: jobs.list().map(publicJob),
     });
+    return true;
+  }
+  const artifactMatch = CITY_MODEL_ARTIFACT_PATH_PATTERN.exec(target.path);
+  if (artifactMatch) {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      sendMethodNotAllowed(request, response, ["GET", "HEAD"]);
+      return true;
+    }
+    const token = artifactMatch[1]!;
+    if (!completedJobOwnsCityModelArtifact(jobs, token)) {
+      sendJson(request, response, 404, {
+        error: {
+          code: "artifact-not-found",
+          message: "City-model artifact not found.",
+        },
+      });
+      return true;
+    }
+    const completeArtifactOperation =
+      artifactResponses.tryAcquire(response);
+    if (!completeArtifactOperation) {
+      response.setHeader("Retry-After", "1");
+      sendJson(request, response, 503, {
+        error: {
+          code: "artifact-busy",
+          message: "Another city-model artifact response is in progress.",
+        },
+      });
+      return true;
+    }
+    if (request.method === "HEAD") {
+      void artifacts
+        .statCityModel(token)
+        .then(
+          (artifact) => {
+            if (response.destroyed) return;
+            if (!artifact) {
+              sendJson(request, response, 404, {
+                error: {
+                  code: "artifact-not-found",
+                  message: "City-model artifact not found.",
+                },
+              });
+              return;
+            }
+            response.statusCode = 200;
+            securityHeaders(
+              response,
+              "application/json; charset=utf-8",
+              "no-store",
+            );
+            response.setHeader("Content-Length", artifact.size);
+            response.end();
+          },
+          () => {
+            if (!response.destroyed) {
+              sendJson(request, response, 500, {
+                error: {
+                  code: "artifact-read-failed",
+                  message: "The city-model artifact could not be read.",
+                },
+              });
+            }
+          },
+        )
+        .then(
+          completeArtifactOperation,
+          completeArtifactOperation,
+        );
+      return true;
+    }
+    void artifacts
+      .readCityModel(token)
+      .then(
+        (artifact) => {
+          if (response.destroyed) return;
+          if (!artifact) {
+            sendJson(request, response, 404, {
+              error: {
+                code: "artifact-not-found",
+                message: "City-model artifact not found.",
+              },
+            });
+            return;
+          }
+          send(
+            request,
+            response,
+            200,
+            artifact.bytes,
+            "application/json; charset=utf-8",
+          );
+        },
+        () => {
+          if (!response.destroyed) {
+            sendJson(request, response, 500, {
+              error: {
+                code: "artifact-read-failed",
+                message: "The city-model artifact could not be read.",
+              },
+            });
+          }
+        },
+      )
+      .then(
+        completeArtifactOperation,
+        completeArtifactOperation,
+      );
     return true;
   }
   const match = JOB_PATH_PATTERN.exec(target.path);
@@ -370,6 +559,8 @@ function staticHandler(
 function requestHandler(
   assets: ReadonlyMap<string, ViewerAsset>,
   jobs: PersistentJobQueue,
+  artifacts: ImportArtifactStore,
+  artifactResponses: ArtifactResponseGate,
   allowedHosts: ReadonlySet<string>,
 ): (request: IncomingMessage, response: ServerResponse) => void {
   return (request, response) => {
@@ -383,7 +574,16 @@ function requestHandler(
       return;
     }
     if (target.path.startsWith("/api/")) {
-      if (!apiHandler(request, response, target, jobs)) {
+      if (
+        !apiHandler(
+          request,
+          response,
+          target,
+          jobs,
+          artifacts,
+          artifactResponses,
+        )
+      ) {
         sendJson(request, response, 404, {
           error: { code: "not-found", message: "API endpoint not found." },
         });
@@ -452,48 +652,63 @@ export async function startCodeCityServer(
   const assets = await collectViewerAssets(
     options.viewerRoot ?? productionViewerRoot(),
   );
+  const artifacts = await ImportArtifactStore.open({
+    dataDirectory: options.dataDirectory,
+  });
   const jobs = await PersistentJobQueue.open({
     dataDirectory: options.dataDirectory,
     concurrency: 1,
   });
+  try {
+    await artifacts.reconcileCityModelArtifacts(
+      completedCityModelArtifactTokens(jobs),
+    );
+  } catch (error) {
+    await jobs.close().catch(() => undefined);
+    throw error;
+  }
   const allowedHosts = allowedHostnames(host, options.allowedHosts);
+  const artifactResponses = new ArtifactResponseGate();
   const server = http.createServer(
-    requestHandler(assets, jobs, allowedHosts),
+    requestHandler(
+      assets,
+      jobs,
+      artifacts,
+      artifactResponses,
+      allowedHosts,
+    ),
   );
   server.requestTimeout = 15_000;
   server.headersTimeout = 10_000;
   server.keepAliveTimeout = 5_000;
   server.maxHeadersCount = 64;
 
-  let closed = false;
+  let closePromise: Promise<void> | undefined;
   let resolveClosed: (() => void) | undefined;
   const closedPromise = new Promise<void>((resolve) => {
     resolveClosed = resolve;
   });
-  server.once("close", () => {
-    closed = true;
-    resolveClosed?.();
-  });
 
-  const close = async (): Promise<void> => {
-    if (closed) return closedPromise;
-    await jobs.close();
-    try {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error && !serverWasNotRunning(error)) reject(error);
-          else resolve();
+  const close = (): Promise<void> => {
+    if (closePromise) return closePromise;
+    closePromise = (async () => {
+      await jobs.close();
+      try {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error && !serverWasNotRunning(error)) reject(error);
+            else resolve();
+          });
+          server.closeAllConnections();
         });
-        server.closeAllConnections();
-      });
-    } catch (error) {
-      if (!serverWasNotRunning(error)) throw error;
-    }
-    if (!closed) {
-      closed = true;
+      } catch (error) {
+        if (!serverWasNotRunning(error)) throw error;
+      }
+      await artifactResponses.waitForIdle();
       resolveClosed?.();
-    }
-    await closedPromise;
+      await closedPromise;
+    })();
+    return closePromise;
   };
 
   const onAbort = (): void => {
@@ -516,6 +731,7 @@ export async function startCodeCityServer(
       port,
       url: new URL(`http://${urlHost}:${port}/`),
       jobs,
+      artifacts,
       closed: closedPromise,
       close: async () => {
         options.signal?.removeEventListener("abort", onAbort);
