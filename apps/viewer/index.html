@@ -38,6 +38,9 @@
             />
           </label>
           <button id="demo-button" class="button" type="button">Demo</button>
+          <button id="print-export-open" class="button" type="button">
+            Export 3MF
+          </button>
         </div>
       </header>
 
@@ -554,6 +557,212 @@
           Drag to orbit · Scroll to zoom · Right-drag to pan
         </p>
       </main>
+
+      <dialog
+        id="print-export-dialog"
+        class="print-export-dialog"
+        aria-labelledby="print-export-title"
+        aria-describedby="print-export-privacy"
+      >
+        <form id="print-export-form">
+          <header class="print-export-heading">
+            <div>
+              <p class="eyebrow">Local fabrication</p>
+              <h2 id="print-export-title">Export 3MF</h2>
+            </div>
+            <button
+              id="print-export-close"
+              class="icon-button"
+              type="button"
+              aria-label="Close 3MF export"
+            >
+              ×
+            </button>
+          </header>
+
+          <p id="print-export-privacy" class="print-export-privacy">
+            The model and printer profile stay in this browser. Nothing is
+            uploaded.
+          </p>
+
+          <fieldset id="print-export-options" class="print-export-options">
+            <legend class="visually-hidden">3MF export options</legend>
+
+            <label class="print-export-field" for="print-profile-kind">
+              <span>Printer profile</span>
+              <select id="print-profile-kind">
+                <option value="generic">Generic single channel</option>
+                <option value="prusa-xl">Prusa XL</option>
+                <option value="custom">Custom profile JSON</option>
+              </select>
+            </label>
+
+            <fieldset
+              id="print-prusa-tools"
+              class="print-tool-selection"
+              hidden
+            >
+              <legend>Enabled Prusa XL tools</legend>
+              <div>
+                <label><input type="checkbox" value="1" checked /> Tool 1</label>
+                <label><input type="checkbox" value="2" checked /> Tool 2</label>
+                <label><input type="checkbox" value="3" checked /> Tool 3</label>
+                <label><input type="checkbox" value="4" checked /> Tool 4</label>
+                <label><input type="checkbox" value="5" checked /> Tool 5</label>
+              </div>
+            </fieldset>
+
+            <div id="print-custom-profile-wrap" hidden>
+              <label class="print-export-field" for="print-custom-profile">
+                <span>Local profile file</span>
+                <input
+                  id="print-custom-profile"
+                  type="file"
+                  accept=".json,application/json"
+                />
+              </label>
+              <p
+                id="print-custom-profile-status"
+                class="print-export-help"
+                role="status"
+                aria-live="polite"
+              >
+                Choose a Code City printer-profile JSON file.
+              </p>
+            </div>
+
+            <div class="print-export-grid">
+              <label class="print-export-field" for="print-scale">
+                <span>Scale</span>
+                <input
+                  id="print-scale"
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value="3"
+                  inputmode="decimal"
+                  required
+                />
+              </label>
+
+              <label class="print-export-field" for="print-labels">
+                <span>Physical labels</span>
+                <select id="print-labels">
+                  <option value="auto">Auto</option>
+                  <option value="off">Off</option>
+                </select>
+              </label>
+            </div>
+
+            <label class="print-export-check">
+              <input id="print-routes" type="checkbox" />
+              <span>Print aggregated dependencies</span>
+            </label>
+            <label class="print-export-check">
+              <input id="print-legend-download-enabled" type="checkbox" checked />
+              <span>Prepare private companion legend</span>
+            </label>
+          </fieldset>
+
+          <p class="print-export-help">
+            V1 exports one 3MF at the requested scale. Oversized cities fail;
+            they are not silently fitted or tiled.
+          </p>
+
+          <div class="print-export-actions">
+            <button
+              id="print-export-submit"
+              class="button button-primary"
+              type="submit"
+            >
+              Prepare export
+            </button>
+            <button
+              id="print-export-cancel"
+              class="button"
+              type="button"
+              hidden
+            >
+              Cancel
+            </button>
+          </div>
+
+          <div
+            id="print-export-progress"
+            class="print-export-progress"
+            aria-live="polite"
+            aria-atomic="true"
+            hidden
+          >
+            <progress
+              id="print-export-progress-meter"
+              aria-labelledby="print-export-status"
+              max="1"
+              value="0"
+            ></progress>
+            <span id="print-export-status">Preparing export…</span>
+          </div>
+
+          <section
+            id="print-export-errors"
+            class="print-export-errors"
+            role="alert"
+            hidden
+          >
+            <h3>Export cannot be generated</h3>
+            <ul id="print-export-error-list"></ul>
+          </section>
+
+          <section
+            id="print-export-preflight"
+            class="print-export-preflight"
+            aria-labelledby="print-export-preflight-title"
+            hidden
+          >
+            <h3 id="print-export-preflight-title">Preflight</h3>
+            <dl>
+              <div>
+                <dt>Physical size</dt>
+                <dd id="print-export-dimensions"></dd>
+              </div>
+              <div>
+                <dt>Parts</dt>
+                <dd id="print-export-parts"></dd>
+              </div>
+            </dl>
+            <h4>Used channels</h4>
+            <ul id="print-export-channels"></ul>
+            <div id="print-export-warning-wrap" hidden>
+              <h4>Warnings</h4>
+              <ul id="print-export-warnings"></ul>
+            </div>
+          </section>
+
+          <div
+            id="print-export-downloads"
+            class="print-export-downloads"
+            hidden
+          >
+            <a
+              id="print-export-download"
+              class="button button-primary"
+              href="#"
+              download
+            >
+              Download 3MF
+            </a>
+            <a
+              id="print-export-legend-download"
+              class="button"
+              href="#"
+              download
+              hidden
+            >
+              Download legend
+            </a>
+          </div>
+        </form>
+      </dialog>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

@@ -58,6 +58,7 @@ import {
 } from "./dependency-route-layout.js";
 import { DEMO_MODEL } from "./demo-model.js";
 import { presentExternalDependency } from "./external-dependency-inspector.js";
+import { installPrintExportDialog } from "./print-export-dialog.js";
 import {
   AutomaticModelLoadGate,
   assetRootFromResponseUrl,
@@ -1186,6 +1187,9 @@ const cityScene = new CityScene(
   synchronizeExplorerState,
 );
 const automaticModelLoadGate = new AutomaticModelLoadGate();
+const printExportDialog = installPrintExportDialog({
+  getModel: () => activeModel,
+});
 
 fileInput.addEventListener("change", async () => {
   const file = fileInput.files?.[0];
@@ -1384,6 +1388,7 @@ async function loadModelFromQuery(): Promise<void> {
 }
 
 function applyModel(model: CityModel, source: ModelSource): void {
+  printExportDialog.invalidate();
   const buildingsById = new Map(
     model.buildings.map((building) => [building.id, building]),
   );
