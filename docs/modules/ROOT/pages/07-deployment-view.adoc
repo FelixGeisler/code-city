@@ -8,7 +8,7 @@
 |Self-contained CLI and static viewer with an export worker
 
 |Hosted
-|Static web UI, bounded analysis API, isolated workers
+|Planned static web UI, bounded analysis API, isolated workers
 
 |Enterprise
 |CLI or container on a self-hosted build agent

@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 
 import {
   analyzeLocalRepositories,
+  analyzePublicGitHubRepository,
   type LocalAnalysisOptions,
 } from "../../../packages/analyzer/src/index.js";
 import {
@@ -41,6 +42,8 @@ const HELP = `Code City
 
 Usage:
   codecity analyze <root...> --output <city-model.json> [options]
+  codecity analyze-github <https://github.com/owner/repository> \\
+    --output <city-model.json> [--ref <branch|tag|commit>] [options]
   codecity open <root...> [--port <port>] [options]
   codecity plan --model <city-model.json> --profile <profile.json> \\
     --format <stl|3mf> --output <print-plan.json> [--scale <factor>] \\
@@ -74,8 +77,9 @@ Print options:
 General:
   -h, --help           Show this help
 
-Analysis reads only the explicitly supplied local roots. It does not require
-Git, use the network, restore/build projects, or execute repository code.
+Local analysis reads only explicitly supplied roots and never uses the network.
+GitHub analysis is anonymous, public-only, and resolves an immutable commit.
+Neither mode restores/builds projects or executes repository code.
 `;
 
 export interface CliIo {
@@ -83,10 +87,26 @@ export interface CliIo {
   readonly stderr: (message: string) => void;
 }
 
+export interface CliDependencies {
+  readonly analyzeLocalRepositories?: typeof analyzeLocalRepositories;
+  readonly analyzePublicGitHubRepository?: typeof analyzePublicGitHubRepository;
+}
+
 interface ParsedArguments {
   readonly positionals: readonly string[];
   readonly options: ReadonlyMap<string, string>;
 }
+
+const ANALYSIS_OPTIONS = Object.freeze([
+  "output",
+  "title",
+  "version",
+  "logo",
+  "max-files",
+  "max-file-bytes",
+  "max-total-bytes",
+  "timeout-ms",
+]);
 
 const defaultIo: CliIo = {
   stdout: (message) => process.stdout.write(message),
@@ -179,61 +199,82 @@ function parseCityModel(value: unknown): CityModel {
   return validateCityModel(value);
 }
 
-async function analyzeCommand(args: readonly string[], io: CliIo): Promise<void> {
-  const parsed = parseArguments(
-    args,
-    new Set([
-      "output",
-      "title",
-      "version",
-      "logo",
-      "max-files",
-      "max-file-bytes",
-      "max-total-bytes",
-      "timeout-ms",
-    ]),
-  );
-  if (parsed.positionals.length === 0) {
-    throw new Error("The analyze command requires at least one local root.");
-  }
-  const output = requiredOption(parsed.options, "output");
-  const maxRetainedFiles = positiveSafeIntegerOption(
-    parsed.options,
-    "max-files",
-  );
-  const maxFileBytes = positiveSafeIntegerOption(
-    parsed.options,
-    "max-file-bytes",
-  );
-  const maxTotalBytes = positiveSafeIntegerOption(
-    parsed.options,
-    "max-total-bytes",
-  );
-  const timeoutMs = positiveSafeIntegerOption(parsed.options, "timeout-ms");
-  const analysisOptions: LocalAnalysisOptions = {
-    ...(parsed.options.get("title") === undefined
+function analysisOptions(
+  options: ReadonlyMap<string, string>,
+): LocalAnalysisOptions {
+  const maxRetainedFiles = positiveSafeIntegerOption(options, "max-files");
+  const maxFileBytes = positiveSafeIntegerOption(options, "max-file-bytes");
+  const maxTotalBytes = positiveSafeIntegerOption(options, "max-total-bytes");
+  const timeoutMs = positiveSafeIntegerOption(options, "timeout-ms");
+  return {
+    ...(options.get("title") === undefined
       ? {}
-      : { title: parsed.options.get("title")! }),
-    ...(parsed.options.get("version") === undefined
+      : { title: options.get("title")! }),
+    ...(options.get("version") === undefined
       ? {}
-      : { version: parsed.options.get("version")! }),
-    ...(parsed.options.get("logo") === undefined
+      : { version: options.get("version")! }),
+    ...(options.get("logo") === undefined
       ? {}
-      : { logo: parsed.options.get("logo")! }),
+      : { logo: options.get("logo")! }),
     ...(maxRetainedFiles === undefined ? {} : { maxRetainedFiles }),
     ...(maxFileBytes === undefined ? {} : { maxFileBytes }),
     ...(maxTotalBytes === undefined ? {} : { maxTotalBytes }),
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
   };
-  const model = await analyzeLocalRepositories(
+}
+
+async function analyzeCommand(
+  args: readonly string[],
+  io: CliIo,
+  analyze: typeof analyzeLocalRepositories,
+): Promise<void> {
+  const parsed = parseArguments(args, new Set(ANALYSIS_OPTIONS));
+  if (parsed.positionals.length === 0) {
+    throw new Error("The analyze command requires at least one local root.");
+  }
+  const output = requiredOption(parsed.options, "output");
+  const model = await analyze(
     parsed.positionals,
-    analysisOptions,
+    analysisOptions(parsed.options),
   );
   await publishPrivateJson(output, model, "city model");
   io.stdout(
     `Analyzed ${model.repositories.length} root(s), ${model.modules.length} module(s), and ${model.buildings.length} source file(s).\nWrote ${path.resolve(output)}\n`,
   );
   for (const warning of model.analysis?.warnings ?? []) {
+    io.stderr(`Warning: ${warning}\n`);
+  }
+}
+
+async function analyzeGitHubCommand(
+  args: readonly string[],
+  io: CliIo,
+  analyze: typeof analyzePublicGitHubRepository,
+): Promise<void> {
+  const parsed = parseArguments(
+    args,
+    new Set([...ANALYSIS_OPTIONS, "ref"]),
+  );
+  if (parsed.positionals.length !== 1) {
+    throw new Error(
+      "The analyze-github command requires exactly one public GitHub URL.",
+    );
+  }
+  const output = requiredOption(parsed.options, "output");
+  const result = await analyze(
+    {
+      repositoryUrl: parsed.positionals[0]!,
+      ...(parsed.options.get("ref") === undefined
+        ? {}
+        : { ref: parsed.options.get("ref")! }),
+    },
+    analysisOptions(parsed.options),
+  );
+  await publishPrivateJson(output, result.model, "city model");
+  io.stdout(
+    `Analyzed ${result.canonicalRepositoryUrl} at ${result.commitSha} with ${result.model.modules.length} module(s) and ${result.model.buildings.length} source file(s).\nWrote ${path.resolve(output)}\n`,
+  );
+  for (const warning of result.model.analysis?.warnings ?? []) {
     io.stderr(`Warning: ${warning}\n`);
   }
 }
@@ -680,6 +721,7 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
 export async function runCli(
   args: readonly string[],
   io: CliIo = defaultIo,
+  dependencies: CliDependencies = {},
 ): Promise<number> {
   const command = args[0];
   if (
@@ -698,7 +740,18 @@ export async function runCli(
 
   try {
     if (command === "analyze") {
-      await analyzeCommand(args.slice(1), io);
+      await analyzeCommand(
+        args.slice(1),
+        io,
+        dependencies.analyzeLocalRepositories ?? analyzeLocalRepositories,
+      );
+    } else if (command === "analyze-github") {
+      await analyzeGitHubCommand(
+        args.slice(1),
+        io,
+        dependencies.analyzePublicGitHubRepository ??
+          analyzePublicGitHubRepository,
+      );
     } else if (command === "open") {
       await openCommand(args.slice(1), io);
     } else if (command === "plan") {

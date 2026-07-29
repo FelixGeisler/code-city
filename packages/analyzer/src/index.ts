@@ -11,6 +11,14 @@ import {
   analyzeLocalFacts,
   analyzeRepositorySnapshotFacts,
 } from "./discovery.js";
+import {
+  snapshotPublicGitHubRepository,
+  type GitHubSnapshotDependencies,
+} from "./github-snapshot.js";
+import {
+  DEFAULT_SNAPSHOT_LIMITS,
+  SnapshotDeadlineError,
+} from "./snapshot.js";
 import type { RepositorySnapshot } from "./snapshot.js";
 import type {
   LocalAnalysisFacts,
@@ -20,11 +28,26 @@ import type {
 export * from "./csharp-lexical.js";
 export * from "./discovery.js";
 export * from "./filesystem.js";
+export * from "./github-snapshot.js";
 export * from "./local-snapshot.js";
 export * from "./roslyn-host.js";
 export * from "./snapshot.js";
 export * from "./typescript-metrics.js";
 export * from "./types.js";
+export * from "./zip-snapshot-source.js";
+
+export interface PublicGitHubRepositoryRequest {
+  readonly repositoryUrl: string;
+  readonly ref?: string;
+}
+
+export interface PublicGitHubAnalysisResult {
+  readonly owner: string;
+  readonly repository: string;
+  readonly canonicalRepositoryUrl: string;
+  readonly commitSha: string;
+  readonly model: CityModel;
+}
 
 function cityModelFromFacts(facts: LocalAnalysisFacts): CityModel {
   const layout = layoutCity({
@@ -82,4 +105,39 @@ export async function analyzeLocalRepositories(
   options: LocalAnalysisOptions = {},
 ): Promise<CityModel> {
   return cityModelFromFacts(await analyzeLocalFacts(roots, options));
+}
+
+export async function analyzePublicGitHubRepository(
+  request: PublicGitHubRepositoryRequest,
+  options: LocalAnalysisOptions = {},
+  dependencies?: GitHubSnapshotDependencies,
+): Promise<PublicGitHubAnalysisResult> {
+  const startedAt = Date.now();
+  const totalTimeout =
+    options.timeoutMs ?? DEFAULT_SNAPSHOT_LIMITS.timeoutMs;
+  const result = await snapshotPublicGitHubRepository(
+    {
+      ...request,
+      snapshotOptions: options,
+      timeoutMs: totalTimeout,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    },
+    dependencies,
+  );
+  const remainingTimeout = totalTimeout - (Date.now() - startedAt);
+  if (remainingTimeout <= 0) throw new SnapshotDeadlineError();
+  const commitSha = result.commitSha;
+  const model = await analyzeRepositorySnapshots([result.snapshot], {
+    ...options,
+    title: options.title ?? result.repository,
+    version: options.version ?? commitSha,
+    timeoutMs: remainingTimeout,
+  });
+  return Object.freeze({
+    owner: result.owner,
+    repository: result.repository,
+    canonicalRepositoryUrl: result.canonicalRepositoryUrl,
+    commitSha,
+    model,
+  });
 }

@@ -2,6 +2,7 @@
 
 * The analyzer does not execute repository code.
 * Local analysis and viewing work without network access.
+* GitHub ingestion is anonymous and limited to public repositories.
 * .NET/C# and TypeScript are the first analyzer targets.
 * Browser and print output use one `city-model.json`.
 * Export emits multi-part 3MF or single-material binary STL.

@@ -7,8 +7,9 @@ Code City turns a software repository into:
 - an interactive 3D city that can be explored in a web browser; and
 - a printable multi-part 3MF or single-material STL model.
 
-The project will support public GitHub repositories, generic Git remotes such as
-Azure DevOps Server, and local checkouts that can be analyzed fully offline.
+The CLI supports public GitHub repositories and local checkouts that can be
+analyzed fully offline. Generic Git remotes such as Azure DevOps Server are
+planned.
 
 ## Product idea
 
@@ -37,6 +38,11 @@ npm run cli -- analyze C:\Code\RepoA C:\Code\RepoB `
   --output build\city-model.json `
   --title "Product City" `
   --version "1.0.0"
+
+# Analyze an anonymous public GitHub snapshot at one immutable commit
+npm run cli -- analyze-github https://github.com/owner/repository `
+  --ref main `
+  --output build\github-city-model.json
 
 # Run the browser viewer
 npm run viewer:dev
@@ -74,6 +80,12 @@ C# is analyzed by the bundled, syntax-only Roslyn helper. TypeScript and
 JavaScript use the pinned compiler API. Neither analyzer restores, builds, runs
 plugins, or executes repository content.
 
+`analyze-github` accepts canonical `https://github.com/owner/repository` URLs
+and normalizes an optional `.git` suffix. It resolves a public ref through
+GitHub's anonymous API and downloads the matching commit archive with strict
+size, path, and time limits. It sends no credentials and retains no archive,
+source checkout, or derived cache; every run is fresh.
+
 The Demo imports into PrusaSlicer as one object with five aligned tool parts;
 the command reports its profile-derived size. `--routes auto` prints capped,
 aggregated district dependencies; routes default to `off`. The private JSON
@@ -85,9 +97,8 @@ planned.
 ## Planned product flow
 
 `codecity open` accepts one or more local roots and serves only on
-`127.0.0.1`; it prints the URL without launching a browser. Public GitHub and
-generic Git remotes such as Azure DevOps Server and oversized multi-plate
-exports remain planned.
+`127.0.0.1`; it prints the URL without launching a browser. Generic Git remotes
+such as Azure DevOps Server and oversized multi-plate exports remain planned.
 
 Architecture documentation uses Antora and the concise arc42 structure. It is
 published at
