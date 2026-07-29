@@ -1,0 +1,18 @@
+services:
+  code-city:
+    build:
+      context: .
+    image: code-city:local
+    restart: unless-stopped
+    ports:
+      - "8080:3000"
+    environment:
+      CODECITY_HOST: "0.0.0.0"
+      CODECITY_PORT: "3000"
+      CODECITY_DATA_DIR: "/data"
+      CODECITY_ALLOWED_HOSTS: "${CODECITY_ALLOWED_HOSTS:-}"
+    volumes:
+      - code-city-data:/data
+
+volumes:
+  code-city-data:

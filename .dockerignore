@@ -1,0 +1,9 @@
+.git
+.github
+.npm-cache
+.worktrees
+build
+data
+node_modules
+output
+tmp
