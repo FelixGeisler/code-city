@@ -3,23 +3,29 @@ import {
   DEFAULT_METRIC_MAPPING,
   DEFAULT_SEMANTIC_GROUPS,
   layoutCity,
+  validateCityModel,
 } from "../../core/src/index.js";
 import type { CityModel } from "../../core/src/index.js";
 
-import { analyzeLocalFacts } from "./discovery.js";
-import type { LocalAnalysisOptions } from "./types.js";
+import {
+  analyzeLocalFacts,
+  analyzeRepositorySnapshotFacts,
+} from "./discovery.js";
+import type { RepositorySnapshot } from "./snapshot.js";
+import type {
+  LocalAnalysisFacts,
+  LocalAnalysisOptions,
+} from "./types.js";
 
 export * from "./csharp-lexical.js";
 export * from "./discovery.js";
 export * from "./filesystem.js";
+export * from "./local-snapshot.js";
+export * from "./snapshot.js";
 export * from "./typescript-metrics.js";
 export * from "./types.js";
 
-export async function analyzeLocalRepositories(
-  roots: readonly string[],
-  options: LocalAnalysisOptions = {},
-): Promise<CityModel> {
-  const facts = await analyzeLocalFacts(roots, options);
+function cityModelFromFacts(facts: LocalAnalysisFacts): CityModel {
   const layout = layoutCity({
     repositories: facts.repositories,
     modules: facts.modules,
@@ -37,7 +43,7 @@ export async function analyzeLocalRepositories(
     ...(facts.identity === undefined ? {} : { identity: facts.identity }),
   });
 
-  return {
+  return validateCityModel({
     schemaVersion: CITY_MODEL_SCHEMA_VERSION,
     generator: {
       name: "code-city",
@@ -58,5 +64,21 @@ export async function analyzeLocalRepositories(
     buildings: layout.buildings,
     dependencies: facts.dependencies,
     bounds: layout.bounds,
-  };
+  });
+}
+
+export async function analyzeRepositorySnapshots(
+  snapshots: readonly RepositorySnapshot[],
+  options: LocalAnalysisOptions = {},
+): Promise<CityModel> {
+  return cityModelFromFacts(
+    await analyzeRepositorySnapshotFacts(snapshots, options),
+  );
+}
+
+export async function analyzeLocalRepositories(
+  roots: readonly string[],
+  options: LocalAnalysisOptions = {},
+): Promise<CityModel> {
+  return cityModelFromFacts(await analyzeLocalFacts(roots, options));
 }

@@ -169,6 +169,87 @@ it("requires an explicit title for printable identity metadata", async () => {
   expect(messages.join("")).toContain("Identity title is required");
 });
 
+it(
+  "accepts explicit bounded-analysis limits",
+  { timeout: 5_000 },
+  async () => {
+    const directory = await temporaryDirectory();
+    await fs.writeFile(
+      path.join(directory, "bounded.ts"),
+      "export const bounded = true;\n",
+      "utf8",
+    );
+    const modelPath = path.join(directory, "model.json");
+    const messages: string[] = [];
+
+    expect(
+      await runCli(
+        [
+          "analyze",
+          directory,
+          "--output",
+          modelPath,
+          "--max-files",
+          "10",
+          "--max-file-bytes",
+          "1024",
+          "--max-total-bytes",
+          "4096",
+          "--timeout-ms",
+          "5000",
+        ],
+        {
+          stdout: () => undefined,
+          stderr: (message) => messages.push(message),
+        },
+      ),
+    ).toBe(0);
+
+    const model = JSON.parse(await fs.readFile(modelPath, "utf8")) as {
+      buildings: unknown[];
+    };
+    expect(model.buildings).toHaveLength(1);
+    expect(messages).toEqual([]);
+  },
+);
+
+it(
+  "rejects non-positive or unsafe bounded-analysis limits",
+  { timeout: 2_000 },
+  async () => {
+    const directory = await temporaryDirectory();
+    const invalidLimits = [
+      ["--max-files", "0"],
+      ["--max-file-bytes", "-1"],
+      ["--max-total-bytes", "1.5"],
+      ["--timeout-ms", "9007199254740992"],
+    ] as const;
+
+    for (const [flag, value] of invalidLimits) {
+      const messages: string[] = [];
+      expect(
+        await runCli(
+          [
+            "analyze",
+            directory,
+            "--output",
+            path.join(directory, `${flag.slice(2)}.json`),
+            flag,
+            value,
+          ],
+          {
+            stdout: () => undefined,
+            stderr: (message) => messages.push(message),
+          },
+        ),
+      ).toBe(1);
+      expect(messages.join("")).toContain(
+        `${flag} must be a positive safe integer.`,
+      );
+    }
+  },
+);
+
 it("persists analyzer warnings and prints them on stderr", async () => {
   const directory = await temporaryDirectory();
   await fs.writeFile(
@@ -388,6 +469,29 @@ it("documents both dependency-route policy values", async () => {
   expect(stdout.join("")).toContain("--routes <auto|off>");
   expect(stdout.join("")).toContain("default: off");
 });
+
+it(
+  "documents all bounded-analysis controls and defaults",
+  { timeout: 1_000 },
+  async () => {
+    const stdout: string[] = [];
+    expect(
+      await runCli(["analyze", "--help"], {
+        stdout: (message) => stdout.push(message),
+        stderr: () => undefined,
+      }),
+    ).toBe(0);
+    const help = stdout.join("");
+    expect(help).toContain("--max-files <count>");
+    expect(help).toContain("--max-file-bytes <bytes>");
+    expect(help).toContain("--max-total-bytes <bytes>");
+    expect(help).toContain("--timeout-ms <ms>");
+    expect(help).toContain("default: 50000");
+    expect(help).toContain("default: 2097152");
+    expect(help).toContain("default: 268435456");
+    expect(help).toContain("default: 300000");
+  },
+);
 
 it("rejects structurally incomplete export models before geometry work", async () => {
   const directory = await temporaryDirectory();

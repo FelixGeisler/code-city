@@ -1,4 +1,3 @@
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
 
@@ -19,13 +18,18 @@ import { semanticGroupForRisk } from "../../core/src/semantics.js";
 import { analyzeCSharpLexically } from "./csharp-lexical.js";
 import {
   compareStable,
-  filesystemKey,
   isSourceFile,
-  isWithin,
-  repositoryRelative,
-  validateRoots,
-  walkLocalRoot,
 } from "./filesystem.js";
+import { materializeLocalRepositorySnapshots } from "./local-snapshot.js";
+import type {
+  RepositorySnapshot,
+  SnapshotDiagnosticCode,
+} from "./snapshot.js";
+import {
+  assertRepositorySnapshots,
+  DEFAULT_SNAPSHOT_LIMITS,
+  SnapshotDeadlineError,
+} from "./snapshot.js";
 import type {
   LocalAnalysisFacts,
   LocalAnalysisOptions,
@@ -35,9 +39,10 @@ import type {
 import { analyzeTypeScriptSource } from "./typescript-metrics.js";
 
 interface RootContext {
-  readonly absoluteRoot: string;
+  readonly virtualRoot: string;
   readonly repository: CityRepository;
   readonly files: readonly string[];
+  readonly textByPath: ReadonlyMap<string, string>;
 }
 
 interface ProjectReference {
@@ -51,17 +56,113 @@ interface PackageReference {
 
 interface InternalModule {
   module: CityModule;
-  readonly absoluteRoot: string;
+  readonly rootPath: string;
   readonly projectFile?: string;
   readonly projectReferences: readonly ProjectReference[];
   readonly packageReferences: readonly PackageReference[];
 }
 
 interface PendingSource {
-  readonly absolutePath: string;
+  readonly virtualPath: string;
   readonly repositoryRoot: string;
   readonly fact: SourceFileFact;
   readonly imports: readonly StaticImportFact[];
+}
+
+interface AnalysisGuard {
+  check(): void;
+}
+
+const VIRTUAL_WORKSPACE_ROOT = "/code-city";
+
+function portableSegment(value: string): string {
+  const normalized = value.replaceAll("\\", "/");
+  const leaf = normalized.split("/").filter(Boolean).at(-1) ?? "repository";
+  return leaf === "." || leaf === ".." ? `repository-${leaf.length}` : leaf;
+}
+
+function virtualPath(...parts: readonly string[]): string {
+  return path.posix.resolve(
+    ...parts.map((part) => part.replaceAll("\\", "/")),
+  );
+}
+
+function virtualKey(value: string): string {
+  return virtualPath(value);
+}
+
+function virtualIsWithin(parent: string, candidate: string): boolean {
+  const relative = path.posix.relative(
+    virtualPath(parent),
+    virtualPath(candidate),
+  );
+  return (
+    relative === "" ||
+    (!relative.startsWith("../") &&
+      relative !== ".." &&
+      !path.posix.isAbsolute(relative))
+  );
+}
+
+function virtualRelative(root: string, candidate: string): string {
+  if (!virtualIsWithin(root, candidate)) {
+    throw new Error(`Snapshot path escapes its repository: ${candidate}`);
+  }
+  return path.posix.relative(virtualPath(root), virtualPath(candidate)) || ".";
+}
+
+function snapshotText(context: RootContext, filePath: string): string {
+  const text = context.textByPath.get(virtualKey(filePath));
+  if (text === undefined) {
+    throw new Error(
+      `Snapshot file was not admitted: ${virtualRelative(context.virtualRoot, filePath)}`,
+    );
+  }
+  return text;
+}
+
+function snapshotOrderKey(snapshot: RepositorySnapshot): string {
+  return snapshot.files
+    .map((file) => `${file.path}\u0000${file.byteLength}`)
+    .join("\u0001");
+}
+
+const SNAPSHOT_WARNING_TEXT: Readonly<Record<SnapshotDiagnosticCode, string>> = {
+  binary: "Binary or invalid UTF-8 source skipped.",
+  "diagnostics-omitted": "Additional snapshot diagnostics were omitted.",
+  "invalid-size": "Source with invalid declared size skipped.",
+  oversized: "Source exceeding the per-file limit skipped.",
+  "symlink-skipped": "Symbolic link skipped.",
+  unreadable: "Unreadable source skipped.",
+};
+
+function orderedSnapshots(
+  snapshots: readonly RepositorySnapshot[],
+): readonly RepositorySnapshot[] {
+  return [...snapshots].sort(
+    (left, right) =>
+      compareStable(left.name, right.name) ||
+      compareStable(snapshotOrderKey(left), snapshotOrderKey(right)),
+  );
+}
+
+function createAnalysisGuard(options: LocalAnalysisOptions): AnalysisGuard {
+  const deadline =
+    Date.now() + (options.timeoutMs ?? DEFAULT_SNAPSHOT_LIMITS.timeoutMs);
+  return {
+    check(): void {
+      if (options.signal?.aborted) {
+        throw new SnapshotDeadlineError(
+          "Repository snapshot analysis was aborted.",
+        );
+      }
+      if (Date.now() >= deadline) {
+        throw new SnapshotDeadlineError(
+          "Repository snapshot analysis exceeded its deadline.",
+        );
+      }
+    },
+  };
 }
 
 function decodeXml(value: string): string {
@@ -146,22 +247,17 @@ function redactAbsoluteReference(value: string): string {
   return path.isAbsolute(value) ||
     /^[A-Za-z]:[\\/]/u.test(value) ||
     value.startsWith("\\\\")
-    ? path.basename(value.replaceAll("\\", "/"))
+    ? path.posix.basename(value.replaceAll("\\", "/"))
     : value;
 }
 
-function repositoryName(root: string): string {
-  return path.basename(root) || "Filesystem root";
-}
-
 function createRepositories(
-  roots: readonly string[],
+  snapshots: readonly RepositorySnapshot[],
 ): readonly CityRepository[] {
   const occurrences = new Map<string, number>();
-  return roots.map((root) => {
-    const name = repositoryName(root);
-    const nameKey =
-      process.platform === "win32" ? name.toLocaleLowerCase("en-US") : name;
+  return snapshots.map((snapshot) => {
+    const name = snapshot.name || "Repository";
+    const nameKey = name.toLocaleLowerCase("en-US");
     const occurrence = (occurrences.get(nameKey) ?? 0) + 1;
     occurrences.set(nameKey, occurrence);
     return {
@@ -173,21 +269,27 @@ function createRepositories(
 
 async function discoverDotnetModules(
   context: RootContext,
+  guard: AnalysisGuard,
 ): Promise<readonly InternalModule[]> {
   const projectFiles = context.files.filter(
-    (file) => path.extname(file).toLocaleLowerCase("en-US") === ".csproj",
+    (file) =>
+      path.posix.extname(file).toLocaleLowerCase("en-US") === ".csproj",
   );
   return Promise.all(
     projectFiles.map(async (projectFile) => {
-      const xml = withoutXmlComments(await fs.readFile(projectFile, "utf8"));
-      const relativeProject = repositoryRelative(
-        context.absoluteRoot,
+      guard.check();
+      const xml = withoutXmlComments(snapshotText(context, projectFile));
+      const relativeProject = virtualRelative(
+        context.virtualRoot,
         projectFile,
       );
       const frameworks = targetFrameworks(xml);
       const moduleName = redactAbsoluteReference(
         firstElement(xml, "AssemblyName") ??
-          path.basename(projectFile, path.extname(projectFile)),
+          path.posix.basename(
+            projectFile,
+            path.posix.extname(projectFile),
+          ),
       );
       // NuGet defaults PackageId to AssemblyName/project name. Retaining the
       // effective id lets separately supplied roots reconnect package bridges.
@@ -211,7 +313,7 @@ async function discoverDotnetModules(
       };
       return {
         module,
-        absoluteRoot: path.dirname(projectFile),
+        rootPath: path.posix.dirname(projectFile),
         projectFile,
         projectReferences: parseProjectReferences(xml),
         packageReferences: parsePackageReferences(xml),
@@ -233,14 +335,17 @@ function parseJsonFile(
 async function discoverAngularModules(
   context: RootContext,
   warnings: string[],
+  guard: AnalysisGuard,
 ): Promise<readonly InternalModule[]> {
   const workspaceFiles = context.files.filter(
-    (file) => path.basename(file).toLocaleLowerCase("en-US") === "angular.json",
+    (file) =>
+      path.posix.basename(file).toLocaleLowerCase("en-US") === "angular.json",
   );
   const modules: InternalModule[] = [];
 
   for (const workspaceFile of workspaceFiles) {
-    const text = await fs.readFile(workspaceFile, "utf8");
+    guard.check();
+    const text = snapshotText(context, workspaceFile);
     const config = parseJsonFile(workspaceFile, text);
     const projects =
       config?.["projects"] && typeof config["projects"] === "object"
@@ -248,26 +353,30 @@ async function discoverAngularModules(
         : undefined;
     if (!projects) {
       warnings.push(
-        `${repositoryRelative(context.absoluteRoot, workspaceFile)}: invalid angular.json or missing projects`,
+        `${virtualRelative(context.virtualRoot, workspaceFile)}: invalid angular.json or missing projects`,
       );
       continue;
     }
 
     for (const projectName of Object.keys(projects).sort(compareStable)) {
+      guard.check();
       const project = projects[projectName];
       if (!project || typeof project !== "object") continue;
       const rootValue = (project as Record<string, unknown>)["root"];
       const configuredRoot = typeof rootValue === "string" ? rootValue : "";
-      const absoluteRoot = path.resolve(path.dirname(workspaceFile), configuredRoot);
-      if (!isWithin(context.absoluteRoot, absoluteRoot)) {
+      const projectRoot = virtualPath(
+        path.posix.dirname(workspaceFile),
+        configuredRoot,
+      );
+      if (!virtualIsWithin(context.virtualRoot, projectRoot)) {
         warnings.push(
-          `${repositoryRelative(context.absoluteRoot, workspaceFile)}: Angular project '${projectName}' escapes the repository root`,
+          `${virtualRelative(context.virtualRoot, workspaceFile)}: Angular project '${projectName}' escapes the repository root`,
         );
         continue;
       }
-      const relativeRoot = repositoryRelative(context.absoluteRoot, absoluteRoot);
-      const workspacePath = repositoryRelative(
-        context.absoluteRoot,
+      const relativeRoot = virtualRelative(context.virtualRoot, projectRoot);
+      const workspacePath = virtualRelative(
+        context.virtualRoot,
         workspaceFile,
       );
       modules.push({
@@ -285,7 +394,7 @@ async function discoverAngularModules(
           path: normalizePath(relativeRoot),
           solutionIds: [],
         },
-        absoluteRoot,
+        rootPath: projectRoot,
         projectReferences: [],
         packageReferences: [],
       });
@@ -303,7 +412,9 @@ function solutionProjectPaths(
     /^\s*Project\("[^"]+"\)\s*=\s*"[^"]*",\s*"([^"]+\.csproj)"\s*,/gimu;
   for (const match of solutionText.matchAll(expression)) {
     const relative = match[1];
-    if (relative) paths.push(path.resolve(solutionDirectory, decodeXml(relative)));
+    if (relative) {
+      paths.push(virtualPath(solutionDirectory, decodeXml(relative)));
+    }
   }
   return paths.sort(compareStable);
 }
@@ -311,6 +422,7 @@ function solutionProjectPaths(
 async function discoverSolutions(
   contexts: readonly RootContext[],
   modules: readonly InternalModule[],
+  guard: AnalysisGuard,
 ): Promise<{
   readonly solutions: readonly CitySolution[];
   readonly solutionIdsByModule: ReadonlyMap<string, readonly string[]>;
@@ -322,7 +434,7 @@ async function discoverSolutions(
           candidate.projectFile !== undefined,
       )
       .map((candidate) => [
-        filesystemKey(candidate.projectFile),
+        virtualKey(candidate.projectFile),
         candidate.module,
       ]),
   );
@@ -331,10 +443,12 @@ async function discoverSolutions(
 
   for (const context of contexts) {
     for (const solutionFile of context.files.filter(
-      (file) => path.extname(file).toLocaleLowerCase("en-US") === ".sln",
+      (file) =>
+        path.posix.extname(file).toLocaleLowerCase("en-US") === ".sln",
     )) {
-      const relativePath = repositoryRelative(
-        context.absoluteRoot,
+      guard.check();
+      const relativePath = virtualRelative(
+        context.virtualRoot,
         solutionFile,
       );
       const id = stableId(
@@ -342,12 +456,12 @@ async function discoverSolutions(
         context.repository.id,
         normalizePath(relativePath),
       );
-      const text = await fs.readFile(solutionFile, "utf8");
+      const text = snapshotText(context, solutionFile);
       const moduleIds = [
         ...new Set(
-          solutionProjectPaths(text, path.dirname(solutionFile))
+          solutionProjectPaths(text, path.posix.dirname(solutionFile))
             .map((projectPath) =>
-              byProjectPath.get(filesystemKey(projectPath)),
+              byProjectPath.get(virtualKey(projectPath)),
             )
             .filter(
               (module): module is CityModule =>
@@ -360,7 +474,10 @@ async function discoverSolutions(
       solutions.push({
         id,
         repositoryId: context.repository.id,
-        name: path.basename(solutionFile, path.extname(solutionFile)),
+        name: path.posix.basename(
+          solutionFile,
+          path.posix.extname(solutionFile),
+        ),
         path: normalizePath(relativePath),
         moduleIds,
       });
@@ -384,7 +501,7 @@ async function discoverSolutions(
 }
 
 function languageOf(filePath: string): SourceLanguage {
-  const extension = path.extname(filePath).toLocaleLowerCase("en-US");
+  const extension = path.posix.extname(filePath).toLocaleLowerCase("en-US");
   if (extension === ".cs") return "csharp";
   if (extension === ".js" || extension === ".jsx") return "javascript";
   return "typescript";
@@ -401,11 +518,11 @@ function chooseModule(
     .filter(
       (candidate) =>
         candidate.module.kind === expectedKind &&
-        isWithin(candidate.absoluteRoot, sourcePath),
+        virtualIsWithin(candidate.rootPath, sourcePath),
     )
     .sort(
       (left, right) =>
-        right.absoluteRoot.length - left.absoluteRoot.length ||
+        right.rootPath.length - left.rootPath.length ||
         compareStable(left.module.id, right.module.id),
     )[0];
 }
@@ -418,7 +535,9 @@ function explicitIdentity(
     if (path.isAbsolute(options.logo) || /^[A-Za-z][A-Za-z0-9+.-]*:/u.test(options.logo)) {
       throw new Error("Logo must be a relative .svg or .png asset reference.");
     }
-    const extension = path.extname(options.logo).toLocaleLowerCase("en-US");
+    const extension = path.posix
+      .extname(options.logo.replaceAll("\\", "/"))
+      .toLocaleLowerCase("en-US");
     if (extension !== ".svg" && extension !== ".png") {
       throw new Error("Logo must use the .svg or .png extension.");
     }
@@ -445,6 +564,7 @@ function explicitIdentity(
 async function analyzeSources(
   contexts: readonly RootContext[],
   modules: InternalModule[],
+  guard: AnalysisGuard,
 ): Promise<{
   readonly sources: readonly PendingSource[];
   readonly unassignedModules: readonly InternalModule[];
@@ -458,9 +578,10 @@ async function analyzeSources(
         candidate.module.repositoryId === context.repository.id &&
         candidate.module.kind !== "unassigned",
     );
-    for (const absolutePath of context.files.filter(isSourceFile)) {
-      const language = languageOf(absolutePath);
-      let selected = chooseModule(absolutePath, language, repositoryModules);
+    for (const sourcePath of context.files.filter(isSourceFile)) {
+      guard.check();
+      const language = languageOf(sourcePath);
+      let selected = chooseModule(sourcePath, language, repositoryModules);
       if (!selected) {
         selected = unassignedByRepository.get(context.repository.id);
         if (!selected) {
@@ -478,7 +599,7 @@ async function analyzeSources(
               path: ".",
               solutionIds: [],
             },
-            absoluteRoot: context.absoluteRoot,
+            rootPath: context.virtualRoot,
             projectReferences: [],
             packageReferences: [],
           };
@@ -487,7 +608,7 @@ async function analyzeSources(
       }
 
       const relativePath = normalizePath(
-        repositoryRelative(context.absoluteRoot, absolutePath),
+        virtualRelative(context.virtualRoot, sourcePath),
       );
       const directory = normalizePath(path.posix.dirname(relativePath));
       const districtId = stableId(
@@ -495,11 +616,11 @@ async function analyzeSources(
         context.repository.id,
         selected.module.id,
       );
-      const sourceText = await fs.readFile(absolutePath, "utf8");
+      const sourceText = snapshotText(context, sourcePath);
       const analysis =
         language === "csharp"
           ? analyzeCSharpLexically(sourceText)
-          : analyzeTypeScriptSource(absolutePath, sourceText);
+          : analyzeTypeScriptSource(sourcePath, sourceText);
       const metrics: SourceMetrics = {
         sloc: analysis.sloc,
         decisionLoad: analysis.decisionLoad,
@@ -540,8 +661,8 @@ async function analyzeSources(
         imports,
       };
       pendingSources.push({
-        absolutePath,
-        repositoryRoot: context.absoluteRoot,
+        virtualPath: sourcePath,
+        repositoryRoot: context.virtualRoot,
         fact,
         imports,
       });
@@ -559,61 +680,54 @@ async function analyzeSources(
 
 type RestrictedTypeScriptHost = ts.ParseConfigHost & ts.ModuleResolutionHost;
 
-function restrictedTypeScriptHost(
-  authorizedRoots: readonly string[],
+function snapshotTypeScriptHost(
+  contexts: readonly RootContext[],
 ): RestrictedTypeScriptHost {
-  const roots = authorizedRoots.map((root) => path.resolve(root));
-
-  function withinAuthorizedRoot(candidate: string): boolean {
-    return roots.some((root) => isWithin(root, candidate));
+  const files = new Map<string, string>();
+  const directories = new Set<string>();
+  for (const context of contexts) {
+    directories.add(virtualKey(context.virtualRoot));
+    for (const file of context.files) {
+      const key = virtualKey(file);
+      const text = context.textByPath.get(key);
+      if (text !== undefined) files.set(key, text);
+      let directory = path.posix.dirname(key);
+      while (virtualIsWithin(context.virtualRoot, directory)) {
+        directories.add(directory);
+        if (directory === context.virtualRoot) break;
+        directory = path.posix.dirname(directory);
+      }
+    }
   }
 
-  function permitted(candidate: string): boolean {
-    const resolved = path.resolve(candidate);
-    if (!withinAuthorizedRoot(resolved)) return false;
-    if (
-      ts.sys.fileExists(resolved) ||
-      (ts.sys.directoryExists?.(resolved) ?? false)
-    ) {
-      const real = ts.sys.realpath?.(resolved) ?? resolved;
-      return withinAuthorizedRoot(path.resolve(real));
-    }
-    return true;
+  function admittedFile(candidate: string): string | undefined {
+    return files.get(virtualKey(candidate));
   }
 
   return {
-    useCaseSensitiveFileNames: ts.sys.useCaseSensitiveFileNames,
-    fileExists: (fileName) =>
-      permitted(fileName) && ts.sys.fileExists(fileName),
-    readFile: (fileName) =>
-      permitted(fileName) ? ts.sys.readFile(fileName) : undefined,
-    // Only compiler options are consumed. Delegating to ts.sys.readDirectory
-    // would let config expansion traverse symlinked directories before results
-    // can be filtered.
+    useCaseSensitiveFileNames: true,
+    fileExists: (fileName) => admittedFile(fileName) !== undefined,
+    readFile: (fileName) => admittedFile(fileName),
+    // Analysis consumes compiler options only. Config include/exclude expansion
+    // is intentionally disabled so it cannot widen the immutable snapshot.
     readDirectory: () => [],
     directoryExists: (directoryName) =>
-      permitted(directoryName) &&
-      (ts.sys.directoryExists?.(directoryName) ?? false),
+      directories.has(virtualKey(directoryName)),
     getDirectories: () => [],
-    realpath: (candidate) => {
-      if (!permitted(candidate)) return candidate;
-      const real = ts.sys.realpath?.(candidate) ?? candidate;
-      return permitted(real) ? real : candidate;
-    },
+    realpath: (candidate) => virtualKey(candidate),
   };
 }
 
 function parseCompilerOptions(
   configPath: string,
-  authorizedRoots: readonly string[],
+  host: RestrictedTypeScriptHost,
 ): ts.CompilerOptions {
-  const host = restrictedTypeScriptHost(authorizedRoots);
   const read = ts.readConfigFile(configPath, host.readFile);
   if (read.error) return {};
   return ts.parseJsonConfigFileContent(
     read.config,
     host,
-    path.dirname(configPath),
+    path.posix.dirname(configPath),
     undefined,
     configPath,
   ).options;
@@ -622,18 +736,23 @@ function parseCompilerOptions(
 function compilerOptionsFor(
   sourcePath: string,
   repositoryRoot: string,
-  authorizedRoots: readonly string[],
   configFiles: readonly string[],
   cache: Map<string, ts.CompilerOptions>,
+  host: RestrictedTypeScriptHost,
 ): ts.CompilerOptions {
   function directoryDepth(configPath: string): number {
-    const relative = path.relative(repositoryRoot, path.dirname(configPath));
+    const relative = path.posix.relative(
+      repositoryRoot,
+      path.posix.dirname(configPath),
+    );
     if (relative === "") return 0;
-    return relative.split(path.sep).filter(Boolean).length;
+    return relative.split("/").filter(Boolean).length;
   }
 
   const selected = configFiles
-    .filter((config) => isWithin(path.dirname(config), sourcePath))
+    .filter((config) =>
+      virtualIsWithin(path.posix.dirname(config), sourcePath),
+    )
     .sort(
       (left, right) =>
         directoryDepth(right) - directoryDepth(left) ||
@@ -647,7 +766,7 @@ function compilerOptionsFor(
   }
   const cached = cache.get(selected);
   if (cached) return cached;
-  const parsed = parseCompilerOptions(selected, authorizedRoots);
+  const parsed = parseCompilerOptions(selected, host);
   cache.set(selected, parsed);
   return parsed;
 }
@@ -698,6 +817,7 @@ function buildDependencies(
   contexts: readonly RootContext[],
   modules: readonly InternalModule[],
   sources: readonly PendingSource[],
+  guard: AnalysisGuard,
 ): readonly CityDependency[] {
   const dependencies: CityDependency[] = [];
   const moduleByProjectPath = new Map(
@@ -707,7 +827,7 @@ function buildDependencies(
           candidate.projectFile !== undefined,
       )
       .map((candidate) => [
-        filesystemKey(candidate.projectFile),
+        virtualKey(candidate.projectFile),
         candidate.module,
       ]),
   );
@@ -724,11 +844,16 @@ function buildDependencies(
   }
 
   for (const candidate of modules) {
+    guard.check();
     if (!candidate.projectFile) continue;
     for (const reference of candidate.projectReferences) {
+      guard.check();
       const target = moduleByProjectPath.get(
-        filesystemKey(
-          path.resolve(path.dirname(candidate.projectFile), reference.include),
+        virtualKey(
+          virtualPath(
+            path.posix.dirname(candidate.projectFile),
+            reference.include,
+          ),
         ),
       );
       if (target && target.id !== candidate.module.id) {
@@ -769,6 +894,7 @@ function buildDependencies(
       }
     }
     for (const reference of candidate.packageReferences) {
+      guard.check();
       const target = producerByPackage.get(
         reference.packageId.toLocaleLowerCase("en-US"),
       );
@@ -798,43 +924,44 @@ function buildDependencies(
 
   const sourceByPath = new Map(
     sources.map((source) => [
-      filesystemKey(source.absolutePath),
+      virtualKey(source.virtualPath),
       source.fact,
     ]),
   );
   const configsByRoot = new Map<string, readonly string[]>();
   for (const context of contexts) {
     configsByRoot.set(
-      context.absoluteRoot,
+      context.virtualRoot,
       context.files.filter((file) =>
-        /^tsconfig(?:\..+)?\.json$/iu.test(path.basename(file)),
+        /^tsconfig(?:\..+)?\.json$/iu.test(path.posix.basename(file)),
       ),
     );
   }
   const compilerOptionsCache = new Map<string, ts.CompilerOptions>();
-  const authorizedRoots = contexts.map((context) => context.absoluteRoot);
-  const resolutionHost = restrictedTypeScriptHost(authorizedRoots);
+  const resolutionHost = snapshotTypeScriptHost(contexts);
 
   for (const source of sources) {
+    guard.check();
     if (source.fact.language === "csharp") continue;
     const configs = configsByRoot.get(source.repositoryRoot) ?? [];
     const options = compilerOptionsFor(
-      source.absolutePath,
+      source.virtualPath,
       source.repositoryRoot,
-      authorizedRoots,
       configs,
       compilerOptionsCache,
+      resolutionHost,
     );
     for (const imported of source.imports) {
+      guard.check();
       const resolved = ts.resolveModuleName(
         imported.specifier,
-        source.absolutePath,
+        source.virtualPath,
         options,
         resolutionHost,
       ).resolvedModule?.resolvedFileName;
       const target = resolved
         ? sourceByPath.get(
-            filesystemKey(resolved),
+            virtualKey(resolved),
           )
         : undefined;
       if (target?.id === source.fact.id) continue;
@@ -872,33 +999,99 @@ export async function analyzeLocalFacts(
   requestedRoots: readonly string[],
   options: LocalAnalysisOptions = {},
 ): Promise<LocalAnalysisFacts> {
-  const roots = await validateRoots(requestedRoots);
-  const repositories = createRepositories(roots);
-  const contexts: RootContext[] = await Promise.all(
-    roots.map(async (absoluteRoot, index) => ({
-      absoluteRoot,
-      repository: repositories[index]!,
-      files: await walkLocalRoot(absoluteRoot),
-    })),
+  const startedAt = Date.now();
+  const snapshots = await materializeLocalRepositorySnapshots(
+    requestedRoots,
+    options,
   );
-  const warnings: string[] = [];
+  const elapsed = Date.now() - startedAt;
+  const totalTimeout =
+    options.timeoutMs ?? DEFAULT_SNAPSHOT_LIMITS.timeoutMs;
+  const remainingTimeout = totalTimeout - elapsed;
+  if (remainingTimeout <= 0) {
+    throw new SnapshotDeadlineError();
+  }
+  return analyzeRepositorySnapshotFacts(snapshots, {
+    ...options,
+    timeoutMs: remainingTimeout,
+  });
+}
+
+export async function analyzeRepositorySnapshotFacts(
+  requestedSnapshots: readonly RepositorySnapshot[],
+  options: LocalAnalysisOptions = {},
+): Promise<LocalAnalysisFacts> {
+  if (requestedSnapshots.length === 0) {
+    throw new Error("At least one repository snapshot is required.");
+  }
+  const guard = createAnalysisGuard(options);
+  guard.check();
+  assertRepositorySnapshots(requestedSnapshots, options);
+  guard.check();
+  const snapshots = orderedSnapshots(requestedSnapshots);
+  const repositories = createRepositories(snapshots);
+  const rootOccurrences = new Map<string, number>();
+  const contexts: RootContext[] = snapshots.map((snapshot, index) => {
+    guard.check();
+    const segment = portableSegment(snapshot.name);
+    const occurrence = (rootOccurrences.get(segment) ?? 0) + 1;
+    rootOccurrences.set(segment, occurrence);
+    const virtualRoot = path.posix.join(
+      VIRTUAL_WORKSPACE_ROOT,
+      occurrence === 1 ? segment : `${segment}~${occurrence}`,
+    );
+    const textByPath = new Map<string, string>();
+    const files = snapshot.files.map((file) => {
+      guard.check();
+      const filePath = virtualPath(virtualRoot, file.path);
+      if (!virtualIsWithin(virtualRoot, filePath)) {
+        throw new Error(`Invalid snapshot path: ${file.path}`);
+      }
+      textByPath.set(virtualKey(filePath), file.text);
+      return filePath;
+    });
+    return {
+      virtualRoot,
+      repository: repositories[index]!,
+      files,
+      textByPath,
+    };
+  });
+  const warnings: string[] = snapshots.flatMap((snapshot) =>
+    snapshot.diagnostics.map((diagnostic) =>
+      [
+        diagnostic.code,
+        snapshot.name,
+        diagnostic.path,
+        SNAPSHOT_WARNING_TEXT[diagnostic.code],
+      ]
+        .filter((part) => part !== undefined && part !== "")
+        .join(": "),
+    ),
+  );
   const discoveredModules = (
     await Promise.all(
       contexts.map(async (context) => [
-        ...(await discoverDotnetModules(context)),
-        ...(await discoverAngularModules(context, warnings)),
+        ...(await discoverDotnetModules(context, guard)),
+        ...(await discoverAngularModules(context, warnings, guard)),
       ]),
     )
   ).flat();
   const { solutions, solutionIdsByModule } = await discoverSolutions(
     contexts,
     discoveredModules,
+    guard,
   );
   for (const candidate of discoveredModules) {
+    guard.check();
     const solutionIds = solutionIdsByModule.get(candidate.module.id) ?? [];
     candidate.module = { ...candidate.module, solutionIds };
   }
-  const sourceResult = await analyzeSources(contexts, discoveredModules);
+  const sourceResult = await analyzeSources(
+    contexts,
+    discoveredModules,
+    guard,
+  );
   const allModules = [
     ...discoveredModules,
     ...sourceResult.unassignedModules,
@@ -907,9 +1100,11 @@ export async function analyzeLocalFacts(
     contexts,
     allModules,
     sourceResult.sources,
+    guard,
   );
 
   const identity = explicitIdentity(options);
+  guard.check();
   return {
     ...(identity === undefined ? {} : { identity }),
     repositories,

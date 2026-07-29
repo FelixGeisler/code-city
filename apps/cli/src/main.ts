@@ -4,7 +4,10 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { analyzeLocalRepositories } from "../../../packages/analyzer/src/index.js";
+import {
+  analyzeLocalRepositories,
+  type LocalAnalysisOptions,
+} from "../../../packages/analyzer/src/index.js";
 import {
   assignSemanticGroups,
   parsePrinterProfile,
@@ -43,9 +46,13 @@ Usage:
     [--instructions <instructions.txt>]
 
 Analyze options:
-  --title <text>       Printed city/repository title
-  --version <text>     Optional printed version or commit label
-  --logo <path>        Relative .svg or .png asset reference
+  --title <text>             Printed city/repository title
+  --version <text>           Optional printed version or commit label
+  --logo <path>              Relative .svg or .png asset reference
+  --max-files <count>        Retained input files (default: 50000)
+  --max-file-bytes <bytes>   Bytes per retained file (default: 2097152)
+  --max-total-bytes <bytes>  Retained content bytes (default: 268435456)
+  --timeout-ms <ms>          Snapshot + analysis deadline (default: 300000)
 
 Print options:
   --labels <auto|off>  Same-channel physical labels (default: auto)
@@ -119,6 +126,19 @@ function requiredOption(
   return value;
 }
 
+function positiveSafeIntegerOption(
+  options: ReadonlyMap<string, string>,
+  name: string,
+): number | undefined {
+  const value = options.get(name);
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`--${name} must be a positive safe integer.`);
+  }
+  return parsed;
+}
+
 async function writeJson(filePath: string, value: unknown): Promise<void> {
   const absolutePath = path.resolve(filePath);
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
@@ -148,13 +168,35 @@ function parseCityModel(value: unknown): CityModel {
 async function analyzeCommand(args: readonly string[], io: CliIo): Promise<void> {
   const parsed = parseArguments(
     args,
-    new Set(["output", "title", "version", "logo"]),
+    new Set([
+      "output",
+      "title",
+      "version",
+      "logo",
+      "max-files",
+      "max-file-bytes",
+      "max-total-bytes",
+      "timeout-ms",
+    ]),
   );
   if (parsed.positionals.length === 0) {
     throw new Error("The analyze command requires at least one local root.");
   }
   const output = requiredOption(parsed.options, "output");
-  const model = await analyzeLocalRepositories(parsed.positionals, {
+  const maxRetainedFiles = positiveSafeIntegerOption(
+    parsed.options,
+    "max-files",
+  );
+  const maxFileBytes = positiveSafeIntegerOption(
+    parsed.options,
+    "max-file-bytes",
+  );
+  const maxTotalBytes = positiveSafeIntegerOption(
+    parsed.options,
+    "max-total-bytes",
+  );
+  const timeoutMs = positiveSafeIntegerOption(parsed.options, "timeout-ms");
+  const analysisOptions: LocalAnalysisOptions = {
     ...(parsed.options.get("title") === undefined
       ? {}
       : { title: parsed.options.get("title")! }),
@@ -164,7 +206,15 @@ async function analyzeCommand(args: readonly string[], io: CliIo): Promise<void>
     ...(parsed.options.get("logo") === undefined
       ? {}
       : { logo: parsed.options.get("logo")! }),
-  });
+    ...(maxRetainedFiles === undefined ? {} : { maxRetainedFiles }),
+    ...(maxFileBytes === undefined ? {} : { maxFileBytes }),
+    ...(maxTotalBytes === undefined ? {} : { maxTotalBytes }),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  };
+  const model = await analyzeLocalRepositories(
+    parsed.positionals,
+    analysisOptions,
+  );
   await writeJson(output, model);
   io.stdout(
     `Analyzed ${model.repositories.length} root(s), ${model.modules.length} module(s), and ${model.buildings.length} source file(s).\nWrote ${path.resolve(output)}\n`,
