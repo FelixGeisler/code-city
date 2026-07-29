@@ -167,7 +167,8 @@ feature size. Width is the minimum wall thickness times
 `min(3, max(1, 1 + floor(log2(max(weight, 1)))))`; a same-height arrowhead marks
 the provider. Unroutable or capped bundles are omitted with reported count and
 weight. Traces do not provide structural connectivity for the base. Detachable
-connectors are calibration artifacts, not default city geometry.
+connectors remain calibration artifacts: the generated comparison selects the
+integrated raised trace because it needs neither clearance nor loose hardware.
 
 Printer layouts may later derive multiple plate bases without changing the
 semantic city coordinates.

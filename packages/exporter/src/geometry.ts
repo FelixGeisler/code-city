@@ -57,6 +57,11 @@ export type PrintPrimitiveKind =
   | "building"
   | "building-label"
   | "district-label"
+  | "comparison-cell"
+  | "comparison-label"
+  | "dependency-endpoint"
+  | "dependency-trace"
+  | "dependency-socket"
   | "identity-panel"
   | "identity-relief";
 
@@ -156,8 +161,13 @@ const KIND_ORDER: Readonly<Record<PrintPrimitiveKind, number>> = Object.freeze({
   building: 2,
   "building-label": 3,
   "district-label": 4,
-  "identity-panel": 5,
-  "identity-relief": 6,
+  "comparison-cell": 5,
+  "comparison-label": 6,
+  "dependency-endpoint": 7,
+  "dependency-trace": 8,
+  "dependency-socket": 9,
+  "identity-panel": 10,
+  "identity-relief": 11,
 });
 
 const MINIMUM_DEMO_RELIEF_FEATURE = 0.8;
@@ -496,7 +506,7 @@ function createParts(
     });
 }
 
-type RoofTextOrientation = "horizontal" | "vertical";
+export type RoofTextOrientation = "horizontal" | "vertical";
 
 interface RoofTextPlacement {
   readonly x: number;
@@ -667,6 +677,54 @@ function glyphComponentMesh(
   return { vertices, triangles };
 }
 
+/**
+ * Builds raised block text on a horizontal surface. Adjacent glyph cells are
+ * unioned into face-clean components, so the mesh has no coincident internal
+ * faces while disconnected strokes remain independent watertight shells.
+ */
+export function raisedPrintableTextMesh(
+  text: string,
+  featureSize: number,
+  origin: PrintPoint,
+  orientation: RoofTextOrientation = "horizontal",
+): PrintMesh {
+  finitePositive(featureSize, "Printable text feature size");
+  validatePrintableText(text);
+  const footprint = textFootprint(text, featureSize, orientation);
+  const placement: RoofTextPlacement = {
+    x: origin.x,
+    y: origin.y,
+    ...footprint,
+    orientation,
+  };
+  const cells = printableTextCells(text, featureSize);
+  if (cells.length === 0) {
+    throw new PrintGeometryValidationError([
+      "Printable text must contain at least one solid glyph cell.",
+    ]);
+  }
+  const gridCells = cells.map((cell): GridCell => ({
+    x: Math.round(
+      (orientation === "horizontal" ? cell.u : cell.v) /
+        featureSize,
+    ),
+    y: Math.round(
+      (orientation === "horizontal" ? cell.v : cell.u) /
+        featureSize,
+    ),
+  }));
+  return concatenateMeshes(
+    connectedGridComponents(gridCells).map((component) =>
+      glyphComponentMesh(
+        component,
+        featureSize,
+        origin.z,
+        placement,
+      ),
+    ),
+  );
+}
+
 function roofTextPrimitive(
   id: string,
   kind: "building-label" | "district-label",
@@ -677,31 +735,23 @@ function roofTextPrimitive(
   roofZ: number,
   placement: RoofTextPlacement,
 ): PrintPrimitive {
-  const cells = printableTextCells(text, featureSize);
-  const gridCells = cells.map((cell): GridCell => ({
-    x: Math.round(
-      (placement.orientation === "horizontal" ? cell.u : cell.v) /
-        featureSize,
-    ),
-    y: Math.round(
-      (placement.orientation === "horizontal" ? cell.v : cell.u) /
-        featureSize,
-    ),
-  }));
-  const meshes = connectedGridComponents(gridCells).map((component) =>
-    glyphComponentMesh(
-      component,
-      featureSize,
-      roofZ,
-      placement,
-    ),
-  );
   return compositePrimitive(
     id,
     kind,
     semanticGroupId,
     channelId,
-    meshes,
+    [
+      raisedPrintableTextMesh(
+        text,
+        featureSize,
+        {
+          x: placement.x,
+          y: placement.y,
+          z: roofZ,
+        },
+        placement.orientation,
+      ),
+    ],
   );
 }
 
