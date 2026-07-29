@@ -1487,7 +1487,9 @@ it("syncs record contents before committing POSIX directory metadata", async () 
   await taskStarted;
   await waitFor(queue, queued.id, ({ state }) => state === "running");
 
-  const jobsDirectory = path.resolve(dataDirectory, "jobs");
+  const jobsDirectory = await fs.realpath(
+    path.join(dataDirectory, "jobs"),
+  );
   const openFile = fs.open.bind(fs);
   const renameFile = fs.rename.bind(fs);
   const removeFile = fs.rm.bind(fs);
@@ -1596,13 +1598,11 @@ it("keeps a committed terminal record when backup cleanup fails", async () => {
   await taskStarted;
   await waitFor(queue, queued.id, ({ state }) => state === "running");
 
-  const destination = path.join(
-    dataDirectory,
-    "jobs",
-    `${queued.id}.json`,
+  const jobsDirectory = await fs.realpath(
+    path.join(dataDirectory, "jobs"),
   );
+  const destination = path.join(jobsDirectory, `${queued.id}.json`);
   const backup = `${destination}.bak`;
-  const jobsDirectory = path.resolve(dataDirectory, "jobs");
   const openFile = fs.open.bind(fs);
   const renameFile = fs.rename.bind(fs);
   const removeFile = fs.rm.bind(fs);
