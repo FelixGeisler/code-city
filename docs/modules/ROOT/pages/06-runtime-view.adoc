@@ -30,6 +30,26 @@ bottom sheet. Selecting geometry only peeks at details, while explicit search
 opens them. A persistent scope chip resets district isolation and scopes the
 overview metrics.
 
+== Viewer performance
+
+Buildings render as deterministic, color-per-instance batches over one shared
+box geometry. A building AABB BVH handles exact nearest picking, and pointer
+movement is coalesced to one pick per animation frame. Selection and hover use
+two reusable non-raycast overlays.
+
+The viewer deliberately pins Three.js r162, the final release with WebGL 1
+rendering support. It uses instanced batches when WebGL 2 core operations or
+the WebGL 1 `ANGLE_instanced_arrays` extension are available. Otherwise,
+models through 500 buildings use ordinary meshes; larger models produce an
+accessible capability error. Dependency arrows and gateways use the same
+bounded fallback.
+
+`?fixture=large-city-25k&performance=1` opens the public deterministic upper
+bound fixture: 25,000 buildings, 100 districts, and five visual styles.
+`npm run test:viewer-performance` builds the production viewer and checks its
+Chromium startup, scene-object, draw-call, and warmed-pick budgets within 45
+seconds.
+
 == Public GitHub
 
 `codecity analyze-github https://github.com/owner/repository --ref main

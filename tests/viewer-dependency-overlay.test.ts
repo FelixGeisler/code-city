@@ -172,6 +172,66 @@ describe("DependencyRouteOverlay lifecycle", () => {
     expect(overlay.object.parent).toBeNull();
   });
 
+  it("preserves arrows and gateways with ordinary meshes without instancing", () => {
+    const scene = new THREE.Scene();
+    const overlay = new DependencyRouteOverlay(
+      scene,
+      "code-city:dependency-routes",
+      { instancingSupported: false },
+    );
+    const route = dependencyRoute({
+      id: "legacy-incoming",
+      direction: "incoming",
+      consumer: groundedEndpoint(
+        { x: -3, y: 0, z: 1 },
+        { x: -3, y: 2, z: 1 },
+      ),
+      provider: { x: 9, y: 4, z: 5 },
+    });
+
+    overlay.replace([route]);
+
+    const arrows = overlay.object.getObjectByName(
+      "code-city:dependency-route-arrows",
+    );
+    const gateways = overlay.object.getObjectByName(
+      "code-city:dependency-route-gateways",
+    );
+    expect(arrows).toBeInstanceOf(THREE.Group);
+    expect(gateways).toBeInstanceOf(THREE.Group);
+    expect(
+      overlay.object.children.some(
+        (child) => child instanceof THREE.InstancedMesh,
+      ),
+    ).toBe(false);
+    expect(arrows?.children).toHaveLength(1);
+    expect(gateways?.children).toHaveLength(1);
+
+    const arrow = arrows?.children[0];
+    const gateway = gateways?.children[0];
+    expect(arrow).toBeInstanceOf(THREE.Mesh);
+    expect(gateway).toBeInstanceOf(THREE.Mesh);
+    expect(
+      ((arrow as THREE.Mesh).material as THREE.MeshBasicMaterial).color
+        .getHexString(),
+    ).toBe(
+      new THREE.Color(DEPENDENCY_OVERLAY_COLORS.incoming).getHexString(),
+    );
+    expect(gateway?.position).toEqual(new THREE.Vector3(-3, 1, 1));
+    expect(gateway?.scale.y).toBe(2);
+
+    const raycaster = new THREE.Raycaster(
+      new THREE.Vector3(-3, 20, 1),
+      new THREE.Vector3(0, -1, 0),
+    );
+    expect(
+      raycaster.intersectObjects(overlay.object.children, true),
+    ).toEqual([]);
+
+    overlay.dispose();
+    expect(overlay.object.parent).toBeNull();
+  });
+
   it("places an amber pylon between a surface contact and route anchor", () => {
     const scene = new THREE.Scene();
     const overlay = new DependencyRouteOverlay(scene);
@@ -364,6 +424,52 @@ describe("DependencyRouteOverlay lifecycle", () => {
     overlay.dispose();
     overlay.dispose();
     expect(() => overlay.replace([dependencyRoute()])).toThrow(/disposed/u);
+  });
+
+  it("disposes every ordinary fallback mesh across replace and clear", () => {
+    const scene = new THREE.Scene();
+    const overlay = new DependencyRouteOverlay(
+      scene,
+      "code-city:dependency-routes",
+      { instancingSupported: false },
+    );
+    overlay.replace([
+      dependencyRoute({
+        provider: groundedEndpoint(
+          { x: 10, y: 0, z: 0 },
+          { x: 10, y: 2, z: 0 },
+        ),
+      }),
+    ]);
+    let geometryDisposals = 0;
+    let materialDisposals = 0;
+    overlay.object.traverse((child) => {
+      if (!(child instanceof THREE.Mesh)) return;
+      child.geometry.addEventListener("dispose", () => {
+        geometryDisposals += 1;
+      });
+      const material = child.material as THREE.Material;
+      material.addEventListener("dispose", () => {
+        materialDisposals += 1;
+      });
+    });
+
+    overlay.replace([dependencyRoute()]);
+
+    expect(geometryDisposals).toBe(2);
+    expect(materialDisposals).toBe(2);
+    expect(overlay.object.children).toHaveLength(2);
+    expect(
+      overlay.object.children.every(
+        (child) => !(child instanceof THREE.InstancedMesh),
+      ),
+    ).toBe(true);
+
+    overlay.clear();
+    overlay.clear();
+    overlay.dispose();
+    overlay.dispose();
+    expect(overlay.object.parent).toBeNull();
   });
 
   it("rejects invalid endpoint geometry and duplicate route ids", () => {

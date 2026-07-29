@@ -1,10 +1,44 @@
+import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 
 import {
   cameraDistanceForBounds,
   cameraMaximumDistanceForFrame,
+  focusedDistrictBounds,
   semanticPickingEnabled,
 } from "../apps/viewer/src/scene-navigation.js";
+
+describe("focusedDistrictBounds", () => {
+  it("includes selected-district buildings before isolation and external nodes", () => {
+    const district = new THREE.Mesh(
+      new THREE.BoxGeometry(10, 1, 10),
+    );
+    district.position.y = 0.5;
+    const tallBuildingBounds = new THREE.Box3(
+      new THREE.Vector3(-1, 0, -1),
+      new THREE.Vector3(1, 80, 1),
+    );
+    const external = new THREE.Mesh(new THREE.BoxGeometry(4, 4, 4));
+    external.position.set(30, 2, 0);
+    const requestedDistrictIds: string[] = [];
+
+    const bounds = focusedDistrictBounds(
+      "district-a",
+      district,
+      (districtId) => {
+        requestedDistrictIds.push(districtId);
+        return districtId === "district-a"
+          ? tallBuildingBounds
+          : undefined;
+      },
+      [external],
+    );
+
+    expect(requestedDistrictIds).toEqual(["district-a"]);
+    expect(bounds.max.y).toBe(80);
+    expect(bounds.max.x).toBe(32);
+  });
+});
 
 describe("cameraDistanceForBounds", () => {
   it("uses horizontal field of view when a viewport is narrow", () => {

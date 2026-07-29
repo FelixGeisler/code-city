@@ -67,6 +67,10 @@ import { DEMO_MODEL } from "./demo-model.js";
 import { presentExternalDependency } from "./external-dependency-inspector.js";
 import { installPrintExportDialog } from "./print-export-dialog.js";
 import {
+  createLargeCityFixture,
+  LARGE_CITY_FIXTURE_NAME,
+} from "./large-city-fixture.js";
+import {
   type ProjectedPrintPlate,
   viewerPrintMeshBatches,
 } from "./print-plate-preview.js";
@@ -116,6 +120,7 @@ import { groundGridLayout } from "./scene-grid.js";
 import {
   cameraDistanceForBounds,
   cameraMaximumDistanceForFrame,
+  focusedDistrictBounds,
   semanticPickingEnabled,
   type ScenePresentationMode,
 } from "./scene-navigation.js";
@@ -124,6 +129,14 @@ import {
   nextBoundedResultLimit,
 } from "./viewer-workspace.js";
 import { summarizeViewerScope } from "./viewer-overview.js";
+import {
+  assertViewerBuildingCapability,
+  ViewerBuildingLayer,
+  type ViewerBuildingDefinition,
+  type ViewerBuildingRenderMode,
+} from "./viewer-building-layer.js";
+import { ViewerFramePicker } from "./viewer-frame-picker.js";
+import { supportsViewerInstancing } from "./viewer-render-capability.js";
 import "./styles.css";
 
 interface BuildingContext {
@@ -158,6 +171,27 @@ interface CameraTransition {
 interface ModelSource {
   readonly label: string;
   readonly assetRoot?: URL;
+}
+
+interface ViewerPerformanceDiagnostics {
+  readonly buildingRenderMode: ViewerBuildingRenderMode | null;
+  readonly buildingBatchCount: number;
+  readonly objectCount: number;
+  readonly renderCalls: number;
+  readonly pickBenchmark: {
+    readonly count: number;
+    readonly p95Milliseconds: number;
+    readonly maximumAabbTests: number;
+  };
+}
+
+declare global {
+  interface Window {
+    __CODE_CITY_PERFORMANCE__?: ViewerPerformanceDiagnostics & {
+      readonly ready: true;
+      readonly firstInteractiveMilliseconds: number;
+    };
+  }
 }
 
 const INITIAL_ROUTE_RESULT_LIMIT = 8;
@@ -365,6 +399,9 @@ class CityScene {
     antialias: true,
     powerPreference: "high-performance",
   });
+  private readonly instancingSupported = supportsViewerInstancing(
+    this.renderer.getContext(),
+  );
   private readonly controls = new OrbitControls(
     this.camera,
     this.renderer.domElement,
@@ -372,16 +409,17 @@ class CityScene {
   private readonly raycaster = new THREE.Raycaster();
   private readonly city = new THREE.Group();
   private readonly printPlate = new THREE.Group();
-  private readonly dependencyOverlay = new DependencyRouteOverlay(this.scene);
+  private readonly dependencyOverlay = new DependencyRouteOverlay(
+    this.scene,
+    "code-city:dependency-routes",
+    { instancingSupported: this.instancingSupported },
+  );
   private readonly districtDependencyOverlay = new DependencyRouteOverlay(
     this.scene,
     "code-city:district-dependency-routes",
+    { instancingSupported: this.instancingSupported },
   );
   private readonly sceneLabelOverlay = new SceneLabelOverlay(this.scene);
-  private readonly buildingMeshes = new Map<
-    string,
-    THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>
-  >();
   private readonly districtMeshes = new Map<
     string,
     THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>
@@ -395,6 +433,11 @@ class CityScene {
   private readonly districtContexts = new Map<string, DistrictContext>();
   private readonly districtGroups = new Map<string, THREE.Group>();
   private readonly resizeObserver: ResizeObserver;
+  private readonly pointerPicker: ViewerFramePicker<
+    PointerPosition,
+    SceneEntity | null
+  >;
+  private buildingLayer: ViewerBuildingLayer | null = null;
   private grid: THREE.GridHelper | null = null;
   private hoveredEntity: SceneEntity | null = null;
   private selectedEntity: SceneEntity | null = null;
@@ -473,6 +516,14 @@ class CityScene {
       "pointerleave",
       this.onPointerLeave,
     );
+    this.pointerPicker = new ViewerFramePicker(
+      (pointer) => this.pick(pointer),
+      (entity) => this.hover(entity),
+      {
+        request: (callback) => window.requestAnimationFrame(callback),
+        cancel: (handle) => window.cancelAnimationFrame(handle),
+      },
+    );
 
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(this.host);
@@ -485,9 +536,7 @@ class CityScene {
     effectiveBase: CityBase | undefined,
     externalNodes: readonly ExternalSceneNode[],
   ): void {
-    this.clear();
-    this.showCityLayout(false);
-
+    this.assertBuildingCapability(model.buildings.length);
     const repositories = new Map(
       model.repositories.map((item) => [item.id, item]),
     );
@@ -495,6 +544,52 @@ class CityScene {
     const groups = new Map(
       model.semanticGroups.map((item) => [item.id, item]),
     );
+    const districtIds = new Set(model.districts.map(({ id }) => id));
+    for (const district of model.districts) {
+      if (
+        !repositories.has(district.repositoryId) ||
+        !modules.has(district.moduleId)
+      ) {
+        throw new Error(
+          `District "${district.id}" has invalid model references`,
+        );
+      }
+    }
+    const buildingDefinitions: ViewerBuildingDefinition[] =
+      model.buildings.map((building) => {
+        const semanticGroup = groups.get(building.semanticGroupId);
+        if (
+          !semanticGroup ||
+          !repositories.has(building.repositoryId) ||
+          !modules.has(building.moduleId)
+        ) {
+          throw new Error(
+            `Building "${building.id}" has invalid model references`,
+          );
+        }
+        if (!districtIds.has(building.districtId)) {
+          throw new Error(
+            `Building "${building.id}" references an unknown district`,
+          );
+        }
+        return {
+          id: building.id,
+          districtId: building.districtId,
+          position: building.position,
+          size: building.size,
+          color: semanticGroup.color,
+          style: {
+            roughness: 0.58,
+            metalness: 0.08,
+          },
+        };
+      });
+    const nextBuildingLayer = new ViewerBuildingLayer(buildingDefinitions, {
+      instancingSupported: this.instancingSupported,
+    });
+
+    this.clear();
+    this.showCityLayout(false);
     this.semanticColors = new Map(
       model.semanticGroups.map(({ id, color }) => [id, color]),
     );
@@ -596,51 +691,21 @@ class CityScene {
     }
 
     for (const building of model.buildings) {
-      const semanticGroup = groups.get(building.semanticGroupId);
       const repository = repositories.get(building.repositoryId);
       const module = modules.get(building.moduleId);
-      if (!semanticGroup || !repository || !module) {
+      if (!repository || !module) {
         throw new Error(
           `Building "${building.id}" has invalid model references`,
         );
       }
-
-      const geometry = new THREE.BoxGeometry(
-        building.size.x,
-        building.size.y,
-        building.size.z,
-      );
-      const material = new THREE.MeshStandardMaterial({
-        color: semanticGroup.color,
-        roughness: 0.58,
-        metalness: 0.08,
-      });
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.set(
-        building.position.x,
-        building.position.y,
-        building.position.z,
-      );
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      mesh.userData["buildingId"] = building.id;
-      mesh.userData["sceneEntityKey"] = encodeSceneEntityKey(
-        createSceneEntity("building", building.id),
-      );
-      const districtGroup = this.districtGroups.get(building.districtId);
-      if (!districtGroup) {
-        throw new Error(
-          `Building "${building.id}" references an unknown district`,
-        );
-      }
-      districtGroup.add(mesh);
-      this.buildingMeshes.set(building.id, mesh);
       this.buildingContexts.set(building.id, {
         building,
         repository,
         module,
       });
     }
+    this.buildingLayer = nextBuildingLayer;
+    this.city.add(nextBuildingLayer.object);
 
     for (const node of externalNodes) {
       const geometry = new THREE.BoxGeometry(
@@ -710,6 +775,7 @@ class CityScene {
 
   public showPrintPlate(plate: ProjectedPrintPlate): void {
     this.hover(null);
+    this.pointerPicker.cancel();
     this.pointerStart = null;
     this.presentationMode = "print";
     if (!this.printPlate.visible) {
@@ -909,7 +975,7 @@ class CityScene {
     }
     this.select(createSceneEntity("district", id));
     if (focus) {
-      this.frameIsolatedDistrict(group, true);
+      this.frameDistrict(id, group, true);
     }
     return true;
   }
@@ -948,6 +1014,7 @@ class CityScene {
     for (const [districtId, group] of this.districtGroups) {
       group.visible = districtId === id;
     }
+    this.buildingLayer?.setIsolatedDistrict(id);
     this.isolatedDistrictId = id;
     const selection = this.selectedEntity;
     const hiddenSelection =
@@ -960,7 +1027,7 @@ class CityScene {
       this.select(null);
     }
     if (focus) {
-      this.frameIsolatedDistrict(selectedGroup, true);
+      this.frameDistrict(id, selectedGroup, true);
     }
     return true;
   }
@@ -970,9 +1037,40 @@ class CityScene {
     for (const group of this.districtGroups.values()) {
       group.visible = true;
     }
+    this.buildingLayer?.setIsolatedDistrict(null);
     this.isolatedDistrictId = null;
     this.frameObject(this.city, true);
     this.emitState();
+  }
+
+  public assertBuildingCapability(buildingCount: number): void {
+    assertViewerBuildingCapability(
+      buildingCount,
+      this.instancingSupported,
+    );
+  }
+
+  public performanceDiagnostics(): ViewerPerformanceDiagnostics {
+    this.controls.update();
+    this.updateFog();
+    this.renderer.render(this.scene, this.camera);
+    let objectCount = 0;
+    this.scene.traverse(() => {
+      objectCount += 1;
+    });
+    return Object.freeze({
+      buildingRenderMode: this.buildingLayer?.mode ?? null,
+      buildingBatchCount: this.buildingLayer?.batchCount ?? 0,
+      objectCount,
+      renderCalls: this.renderer.info.render.calls,
+      pickBenchmark:
+        this.buildingLayer?.benchmarkPicks(50) ??
+        Object.freeze({
+          count: 0,
+          p95Milliseconds: 0,
+          maximumAabbTests: 0,
+        }),
+    });
   }
 
   private readonly render = (): void => {
@@ -998,13 +1096,13 @@ class CityScene {
 
   private clear(): void {
     this.hover(null);
+    this.pointerPicker.cancel();
     this.sceneLabelOverlay.clear();
     this.dependencyOverlay.clear();
     this.districtDependencyOverlay.clear();
     this.isolatedDistrictId = null;
     this.cameraTransition = null;
     this.select(null);
-    this.buildingMeshes.clear();
     this.buildingContexts.clear();
     this.districtMeshes.clear();
     this.districtContexts.clear();
@@ -1012,6 +1110,11 @@ class CityScene {
     this.externalNodes.clear();
     this.districtGroups.clear();
     this.clearPrintPlate();
+    if (this.buildingLayer !== null) {
+      this.city.remove(this.buildingLayer.object);
+      this.buildingLayer.dispose();
+      this.buildingLayer = null;
+    }
 
     for (const child of [...this.city.children]) {
       this.city.remove(child);
@@ -1048,23 +1151,26 @@ class CityScene {
     }
   }
 
-  private frameIsolatedDistrict(
+  private frameDistrict(
+    districtId: string,
     district: THREE.Object3D,
     animate: boolean,
   ): void {
-    const bounds = new THREE.Box3().setFromObject(district);
-    for (const mesh of this.externalMeshes.values()) {
-      bounds.expandByObject(mesh);
-    }
+    const bounds = focusedDistrictBounds(
+      districtId,
+      district,
+      (id) => this.buildingLayer?.districtBounds(id),
+      this.externalMeshes.values(),
+    );
     if (!bounds.isEmpty()) {
       this.frameBounds(bounds, animate);
     }
   }
 
   private focusBuilding(id: string): void {
-    const mesh = this.buildingMeshes.get(id);
-    if (mesh) {
-      this.frameObject(mesh, true);
+    const bounds = this.buildingLayer?.bounds(id);
+    if (bounds) {
+      this.frameBounds(bounds, true);
     }
   }
 
@@ -1188,10 +1294,14 @@ class CityScene {
 
   private readonly onPointerMove = (event: PointerEvent): void => {
     if (!semanticPickingEnabled(this.presentationMode)) {
+      this.pointerPicker.cancel();
       this.hover(null);
       return;
     }
-    this.hover(this.pick(event));
+    this.pointerPicker.request({
+      x: event.clientX,
+      y: event.clientY,
+    });
   };
 
   private readonly onPointerUp = (event: PointerEvent): void => {
@@ -1207,20 +1317,27 @@ class CityScene {
     ) {
       return;
     }
-    this.select(this.pick(event));
+    this.pointerPicker.cancel();
+    this.select(
+      this.pick({
+        x: event.clientX,
+        y: event.clientY,
+      }),
+    );
   };
 
   private readonly onPointerLeave = (): void => {
     this.pointerStart = null;
+    this.pointerPicker.cancel();
     this.hover(null);
   };
 
-  private pick(event: PointerEvent): SceneEntity | null {
+  private pick(pointerPosition: PointerPosition): SceneEntity | null {
     if (!semanticPickingEnabled(this.presentationMode)) {
       return null;
     }
     if (
-      this.buildingMeshes.size === 0 &&
+      (this.buildingLayer?.size ?? 0) === 0 &&
       this.districtMeshes.size === 0 &&
       this.externalMeshes.size === 0
     ) {
@@ -1229,15 +1346,12 @@ class CityScene {
 
     const bounds = this.renderer.domElement.getBoundingClientRect();
     const pointer = new THREE.Vector2(
-      ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
-      -((event.clientY - bounds.top) / bounds.height) * 2 + 1,
+      ((pointerPosition.x - bounds.left) / bounds.width) * 2 - 1,
+      -((pointerPosition.y - bounds.top) / bounds.height) * 2 + 1,
     );
     this.raycaster.setFromCamera(pointer, this.camera);
-    const hit = this.raycaster.intersectObjects(
+    const sceneHit = this.raycaster.intersectObjects(
       [
-        ...[...this.buildingMeshes.values()].filter(
-          (mesh) => mesh.parent?.visible !== false,
-        ),
         ...[...this.districtMeshes.values()].filter(
           (mesh) => mesh.parent?.visible !== false,
         ),
@@ -1245,7 +1359,25 @@ class CityScene {
       ],
       false,
     )[0];
-    return decodeSceneEntityKey(hit?.object.userData["sceneEntityKey"]);
+    const buildingHit = this.buildingLayer?.pick(
+      {
+        origin: this.raycaster.ray.origin,
+        direction: this.raycaster.ray.direction,
+      },
+      this.isolatedDistrictId === null
+        ? {}
+        : { districtId: this.isolatedDistrictId },
+    ).hit;
+    if (
+      buildingHit !== null &&
+      buildingHit !== undefined &&
+      (sceneHit === undefined || buildingHit.distance <= sceneHit.distance)
+    ) {
+      return createSceneEntity("building", buildingHit.id);
+    }
+    return decodeSceneEntityKey(
+      sceneHit?.object.userData["sceneEntityKey"],
+    );
   }
 
   private hover(entity: SceneEntity | null): void {
@@ -1315,6 +1447,21 @@ class CityScene {
     if (!entity) {
       return;
     }
+    if (entity.kind === "building") {
+      this.buildingLayer?.setHighlight(
+        "selected",
+        this.selectedEntity?.kind === "building"
+          ? this.selectedEntity.id
+          : null,
+      );
+      this.buildingLayer?.setHighlight(
+        "hovered",
+        this.hoveredEntity?.kind === "building"
+          ? this.hoveredEntity.id
+          : null,
+      );
+      return;
+    }
     const mesh = this.entityMesh(entity);
     if (!mesh) {
       return;
@@ -1333,7 +1480,7 @@ class CityScene {
     | undefined {
     switch (entity.kind) {
       case "building":
-        return this.buildingMeshes.get(entity.id);
+        return undefined;
       case "district":
         return this.districtMeshes.get(entity.id);
       case "external":
@@ -1713,8 +1860,21 @@ window.addEventListener("beforeunload", () => {
   loadedModelLogo = undefined;
 });
 
-applyModel(DEMO_MODEL, { label: "Built-in demo" });
-void loadModelFromQuery();
+let performanceDiagnosticsGeneration = 0;
+const initialParameters = new URL(window.location.href).searchParams;
+if (initialParameters.get("fixture") === LARGE_CITY_FIXTURE_NAME) {
+  try {
+    applyModel(createLargeCityFixture(), {
+      label: "Built-in 25k performance fixture",
+    });
+  } catch (error) {
+    applyModel(DEMO_MODEL, { label: "Built-in demo" });
+    showError(messageOf(error));
+  }
+} else {
+  applyModel(DEMO_MODEL, { label: "Built-in demo" });
+  void loadModelFromQuery();
+}
 
 async function loadModelFromQuery(): Promise<void> {
   const modelParameter = new URL(window.location.href).searchParams.get(
@@ -1766,6 +1926,7 @@ function applyModel(model: CityModel, source: ModelSource): void {
   const nextRepositoryExplorerIndex =
     createRepositoryExplorerIndex(model);
   const nextExternalLayout = createExternalDependencyLayout(model);
+  cityScene.assertBuildingCapability(model.buildings.length);
 
   activeModel = model;
   activeBuildingsById = buildingsById;
@@ -1809,6 +1970,29 @@ function applyModel(model: CityModel, source: ModelSource): void {
   );
   renderLegend(model);
   hideError();
+  schedulePerformanceDiagnostics();
+}
+
+function schedulePerformanceDiagnostics(): void {
+  const parameters = new URL(window.location.href).searchParams;
+  if (parameters.get("performance") !== "1") {
+    delete window.__CODE_CITY_PERFORMANCE__;
+    delete document.documentElement.dataset["viewerPerformance"];
+    return;
+  }
+  const generation = ++performanceDiagnosticsGeneration;
+  window.setTimeout(() => {
+    if (generation !== performanceDiagnosticsGeneration) return;
+    const diagnostics = cityScene.performanceDiagnostics();
+    const snapshot = Object.freeze({
+      ready: true as const,
+      firstInteractiveMilliseconds: performance.now(),
+      ...diagnostics,
+    });
+    window.__CODE_CITY_PERFORMANCE__ = snapshot;
+    document.documentElement.dataset["viewerPerformance"] =
+      JSON.stringify(snapshot);
+  }, 0);
 }
 
 function createExternalDependencyLayout(
