@@ -119,11 +119,39 @@ sets use bounded shelves. Configured gaps remain visible streets.
 
 == Privacy
 
-Do not embed source text. Support exclusions and path redaction.
-Default discovery skips exact `.git`, `.angular`, `node_modules`, `bin`, `obj`,
-`dist`, `build`, and `coverage` directory segments plus generated C# suffixes.
-Deterministic user exclusions and compiler-owned source-boundary discovery,
-independent of `.git`, remain follow-up work.
+Do not persist source text, absolute roots, credential URLs, or adapter error
+details. Default discovery hard-skips `.git`, `.angular`, `node_modules`, `bin`,
+`obj`, `dist`, `build`, and `coverage` segments plus generated C# suffixes.
+Nested `.gitignore` rules apply; root `.codecityignore` may override them but
+cannot override hard skips.
+
+== Threat model
+
+Repository bytes, city models, printer profiles, URLs, logos, and worker
+messages are untrusted. Protected assets are source, credentials, host paths,
+local files, browser origin data, memory, CPU, and output files.
+
+Repository content is data only. Code City does not run hooks, filters,
+scripts, builds, restores, generators, analyzers, or repository plugins.
+Snapshots never follow symlinks and admit only analyzer inputs. One analysis
+allows 100,000 visited entries, 50,000 retained files, 25,000 source buildings,
+2 MiB per file, 256 MiB total, 1,000 diagnostics plus one omission summary, and
+300 seconds for snapshot plus analysis.
+
+CLI input is capped at 128 MiB per city model and 1 MiB per printer profile.
+Derived JSON is staged with mode `0600`, atomically renamed, and rolled back on
+failure. The viewer uses one explicit-load gateway: 128 MiB model, 1 MiB local
+profile, 2 MiB logo, and 30 seconds. It rejects redirects and credentialed URLs,
+sends no credentials or referrer, and exposes fetched images only through local
+Blob URLs. CSP restricts assets to the application and Blob images; executable
+checks permit network primitives only in the explicit gateway and prohibit
+bundled telemetry, CDN, upload, frame, or object paths. Print workers have a
+60-second watchdog and are terminated on every exit.
+
+Residual risks are platform filesystem races that cannot be removed by portable
+Node APIs, browser/DNS behavior below the fetch boundary, and slicer behavior.
+Remote archive and Git transports add their own limits in their ingestion
+adapters.
 
 == Physical identity
 

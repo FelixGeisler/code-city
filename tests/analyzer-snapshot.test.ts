@@ -113,6 +113,14 @@ describe("repository snapshot materialization", () => {
         source([file("src/Main.ts", "first"), file("src/main.ts", "second")]),
       ),
     ).rejects.toBeInstanceOf(SnapshotPathError);
+    expect(() => normalizeSnapshotPath(`${"x".repeat(2_049)}.ts`)).toThrow(
+      SnapshotPathError,
+    );
+    await expect(
+      materializeRepositorySnapshot(
+        source([file("safe.ts", "safe")], "r".repeat(257)),
+      ),
+    ).rejects.toBeInstanceOf(SnapshotPathError);
   });
 
   it("isolates unreadable, oversized, and binary files deterministically", async () => {
@@ -254,6 +262,23 @@ describe("repository snapshot materialization", () => {
       code: "SNAPSHOT_POLICY_REJECTED",
       path: ".codecityignore",
     });
+
+    let message = "";
+    try {
+      await materializeRepositorySnapshot(
+        source([
+          {
+            kind: "unreadable",
+            path: "private-name/.gitignore",
+            message: "secret adapter detail",
+          },
+        ]),
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).not.toContain("private-name");
+    expect(message).not.toContain("secret adapter detail");
   });
 
   it("does not require ignored nested policy files to be readable", async () => {

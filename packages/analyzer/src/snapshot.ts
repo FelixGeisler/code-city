@@ -2,6 +2,7 @@ import ignorePackage, {
   type Ignore,
   type Options as IgnoreOptions,
 } from "ignore";
+import { CITY_MODEL_LIMITS } from "../../core/src/model-validation.js";
 
 const MEBIBYTE = 1024 * 1024;
 
@@ -134,7 +135,7 @@ export class SnapshotPolicyError extends Error {
     readonly path: string,
     readonly reason: string,
   ) {
-    super(`Snapshot ignore policy '${path}' was rejected: ${reason}.`);
+    super(`Snapshot ignore policy was rejected: ${reason}.`);
     this.name = "SnapshotPolicyError";
   }
 }
@@ -186,7 +187,7 @@ const HARD_EXCLUDED_DIRECTORIES = new Set([
 ]);
 
 const GENERATED_CSHARP = /\.(?:g(?:\.i)?|generated|designer)\.cs$/iu;
-const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/u;
+const UNSAFE_PATH_CHARACTERS = /[\p{Cc}\p{Cf}\p{Cs}]/u;
 const URI_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/u;
 const WINDOWS_DRIVE = /^[A-Za-z]:/u;
 const SOURCE_FILE = /\.(?:cs|jsx?|tsx?)$/iu;
@@ -277,7 +278,8 @@ function normalizeRepositoryName(value: string): string {
     normalized === ".." ||
     normalized.includes("/") ||
     normalized.includes("\\") ||
-    CONTROL_CHARACTERS.test(normalized)
+    normalized.length > CITY_MODEL_LIMITS.displayTextCharacters ||
+    UNSAFE_PATH_CHARACTERS.test(normalized)
   ) {
     throw new SnapshotPathError("Snapshot repository name is not portable.");
   }
@@ -292,7 +294,8 @@ export function normalizeSnapshotPath(value: string): string {
     normalized.startsWith("//") ||
     WINDOWS_DRIVE.test(normalized) ||
     URI_SCHEME.test(normalized) ||
-    CONTROL_CHARACTERS.test(normalized)
+    normalized.length > CITY_MODEL_LIMITS.pathCharacters ||
+    UNSAFE_PATH_CHARACTERS.test(normalized)
   ) {
     throw new SnapshotPathError("Snapshot entry path is not portable.");
   }
@@ -621,7 +624,7 @@ function rejectPortableCollisions(repository: RepositoryWork): void {
     const previous = seen.get(key);
     if (previous !== undefined) {
       throw new SnapshotPathError(
-        `Portable snapshot path collision: '${previous}' and '${candidate.path}'.`,
+        "Portable snapshot paths collide after case and Unicode normalization.",
       );
     }
     seen.set(key, candidate.path);
@@ -969,15 +972,13 @@ export function assertRepositorySnapshots(
     for (const file of snapshot.files) {
       const normalized = normalizeSnapshotPath(file.path);
       if (normalized !== file.path) {
-        throw new SnapshotPathError(
-          `Snapshot file path is not normalized: '${file.path}'.`,
-        );
+        throw new SnapshotPathError("Snapshot file path is not normalized.");
       }
       const key = portablePathKey(normalized);
       const previous = paths.get(key);
       if (previous !== undefined) {
         throw new SnapshotPathError(
-          `Portable snapshot path collision: '${previous}' and '${normalized}'.`,
+          "Portable snapshot paths collide after case and Unicode normalization.",
         );
       }
       paths.set(key, normalized);
@@ -986,12 +987,12 @@ export function assertRepositorySnapshots(
         !isAnalyzerInputPath(normalized)
       ) {
         throw new SnapshotPathError(
-          `Snapshot file is not an admitted analyzer input: '${normalized}'.`,
+          "Snapshot file is not an admitted analyzer input.",
         );
       }
       if (file.text.includes("\u0000")) {
         throw new SnapshotPathError(
-          `Snapshot file contains binary NUL content: '${normalized}'.`,
+          "Snapshot file contains binary NUL content.",
         );
       }
       if (
@@ -999,7 +1000,7 @@ export function assertRepositorySnapshots(
         file.byteLength < new TextEncoder().encode(file.text).byteLength
       ) {
         throw new SnapshotPathError(
-          `Snapshot file has an invalid byte length: '${normalized}'.`,
+          "Snapshot file has an invalid byte length.",
         );
       }
       if (file.byteLength > resolved.maxFileBytes) {

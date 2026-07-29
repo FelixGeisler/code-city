@@ -69,8 +69,11 @@ import { installPrintExportDialog } from "./print-export-dialog.js";
 import {
   AutomaticModelLoadGate,
   assetRootFromResponseUrl,
+  type LoadedViewerImage,
+  remoteViewerDisplayUrl,
   resolveAssetUrl,
   sortLegendGroups,
+  ViewerLoadGateway,
 } from "./model-source.js";
 import { validateCityModel } from "./model-validation.js";
 import {
@@ -1223,9 +1226,13 @@ const cityScene = new CityScene(
   sceneHost,
   synchronizeExplorerState,
 );
+const viewerLoadGateway = new ViewerLoadGateway();
 const automaticModelLoadGate = new AutomaticModelLoadGate();
+const logoLoadGate = new AutomaticModelLoadGate();
+let loadedModelLogo: LoadedViewerImage | undefined;
 const printExportDialog = installPrintExportDialog({
   getModel: () => activeModel,
+  loadGateway: viewerLoadGateway,
 });
 
 fileOpenButton.addEventListener("click", () => {
@@ -1242,7 +1249,7 @@ fileInput.addEventListener("change", async () => {
   automaticModelLoadGate.invalidate();
   setStatus(`Reading ${file.name}…`);
   try {
-    const parsed: unknown = JSON.parse(await file.text());
+    const parsed = await viewerLoadGateway.loadLocalJson(file, "model");
     applyModel(validateCityModel(parsed), { label: file.name });
   } catch (error) {
     showError(messageOf(error));
@@ -1429,6 +1436,11 @@ window.addEventListener("keydown", (event) => {
     hideError();
   }
 });
+window.addEventListener("beforeunload", () => {
+  logoLoadGate.invalidate();
+  loadedModelLogo?.dispose();
+  loadedModelLogo = undefined;
+});
 
 applyModel(DEMO_MODEL, { label: "Built-in demo" });
 void loadModelFromQuery();
@@ -1444,25 +1456,17 @@ async function loadModelFromQuery(): Promise<void> {
   const attempt = automaticModelLoadGate.begin();
   try {
     const modelUrl = new URL(modelParameter, window.location.href);
-    if (modelUrl.protocol !== "http:" && modelUrl.protocol !== "https:") {
-      throw new Error("the model URL must use HTTP or HTTPS");
-    }
-
-    setStatus(`Fetching ${modelUrl.href}…`);
-    const response = await fetch(modelUrl, {
-      cache: "no-store",
-      signal: attempt.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ${response.statusText}`);
-    }
-    const parsed: unknown = await response.json();
+    setStatus(`Fetching ${remoteViewerDisplayUrl(modelUrl)}…`);
+    const loaded = await viewerLoadGateway.loadRemoteModel(
+      modelUrl,
+      attempt.signal,
+    );
     if (!attempt.isCurrent()) {
       return;
     }
-    applyModel(validateCityModel(parsed), {
-      label: response.url,
-      assetRoot: assetRootFromResponseUrl(response.url),
+    applyModel(validateCityModel(loaded.model), {
+      label: remoteViewerDisplayUrl(loaded.responseUrl),
+      assetRoot: assetRootFromResponseUrl(loaded.responseUrl.href),
     });
   } catch (error) {
     if (attempt.isCurrent()) {
@@ -1524,7 +1528,7 @@ function applyModel(model: CityModel, source: ModelSource): void {
     source.label;
   modelNameElement.textContent = title;
   modelNameElement.title = `Source: ${source.label}`;
-  applyLogo(model, source);
+  void applyLogo(model, source);
   const version = model.identity?.version
     ? `${model.identity.version} · `
     : "";
@@ -2717,7 +2721,13 @@ function referenceCountLabel(count: number): string {
   return `${count.toLocaleString()} ${count === 1 ? "reference" : "references"}`;
 }
 
-function applyLogo(model: CityModel, source: ModelSource): void {
+async function applyLogo(
+  model: CityModel,
+  source: ModelSource,
+): Promise<void> {
+  logoLoadGate.invalidate();
+  loadedModelLogo?.dispose();
+  loadedModelLogo = undefined;
   const logo = model.identity?.logo;
   modelLogo.onerror = null;
   modelLogo.hidden = true;
@@ -2732,27 +2742,51 @@ function applyLogo(model: CityModel, source: ModelSource): void {
   const alt = logo.alt ?? `${model.identity?.title ?? "Model"} logo`;
   modelLogo.alt = alt;
   if (!source.assetRoot) {
-    modelLogoPlaceholder.textContent = initials(
-      model.identity?.title ?? "Code City",
-    );
-    modelLogoPlaceholder.title = `${alt}: ${logo.relativePath}`;
-    modelLogoPlaceholder.hidden = false;
+    showLogoPlaceholder(model, alt, logo.relativePath);
     return;
   }
 
-  modelLogo.src = resolveAssetUrl(
-    logo.relativePath,
-    source.assetRoot,
-  ).href;
-  modelLogo.hidden = false;
-  modelLogo.onerror = () => {
-    modelLogo.hidden = true;
-    modelLogoPlaceholder.textContent = initials(
-      model.identity?.title ?? "Code City",
+  const attempt = logoLoadGate.begin();
+  try {
+    const image = await viewerLoadGateway.loadRemoteLogo(
+      resolveAssetUrl(logo.relativePath, source.assetRoot),
+      logo.format,
+      attempt.signal,
     );
-    modelLogoPlaceholder.title = `${alt}: ${logo.relativePath}`;
-    modelLogoPlaceholder.hidden = false;
-  };
+    if (!attempt.isCurrent()) {
+      image.dispose();
+      return;
+    }
+    loadedModelLogo = image;
+    modelLogo.src = image.objectUrl;
+    modelLogo.hidden = false;
+    modelLogo.onerror = () => {
+      if (loadedModelLogo !== image) return;
+      loadedModelLogo = undefined;
+      image.dispose();
+      modelLogo.hidden = true;
+      modelLogo.removeAttribute("src");
+      showLogoPlaceholder(model, alt, logo.relativePath);
+    };
+  } catch {
+    if (attempt.isCurrent()) {
+      showLogoPlaceholder(model, alt, logo.relativePath);
+    }
+  } finally {
+    attempt.finish();
+  }
+}
+
+function showLogoPlaceholder(
+  model: CityModel,
+  alt: string,
+  relativePath: string,
+): void {
+  modelLogoPlaceholder.textContent = initials(
+    model.identity?.title ?? "Code City",
+  );
+  modelLogoPlaceholder.title = `${alt}: ${relativePath}`;
+  modelLogoPlaceholder.hidden = false;
 }
 
 function initials(title: string): string {

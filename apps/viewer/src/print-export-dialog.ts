@@ -15,9 +15,11 @@ import {
   PrintDownloadManager,
   tryPublishPrintDownloads,
 } from "./print-download.js";
+import type { ViewerLoadGateway } from "./model-source.js";
 
 export interface PrintExportDialogOptions {
   readonly getModel: () => CityModel;
+  readonly loadGateway: ViewerLoadGateway;
 }
 
 export interface PrintExportDialogHandle {
@@ -392,7 +394,9 @@ export function installPrintExportDialog(
     customProfileStatus.textContent = `Checking ${file.name}…`;
     updateSubmitAvailability();
     try {
-      const parsed = parsePrinterProfileJson(await file.text());
+      const parsed = parsePrinterProfileJson(
+        await options.loadGateway.loadLocalText(file, "profile"),
+      );
       if (
         !customProfileReads.isCurrent(readId) ||
         selectedProfileKind() !== "custom"

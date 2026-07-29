@@ -224,9 +224,49 @@ describe("viewer model validation", () => {
             },
           ],
         }),
-      ).toThrow(/dependencies\[0\]\.externalTarget must not be empty/u);
+      ).toThrow(
+        /dependencies\[0\]\.externalTarget must not (?:be empty|contain control)/u,
+      );
     },
   );
+
+  it("rejects unbounded or control-bearing text without reflecting it", () => {
+    const oversized = `private-${"x".repeat(300)}`;
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        repositories: [
+          { ...DEMO_MODEL.repositories[0]!, name: oversized },
+        ],
+      }),
+    ).toThrow(/repositories\[0\]\.name must not exceed 256 characters/u);
+
+    let message = "";
+    try {
+      validateCityModel({
+        ...DEMO_MODEL,
+        dependencies: [
+          {
+            ...DEMO_MODEL.dependencies[0]!,
+            sourceId: "https://user:password@example.test/private",
+          },
+        ],
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain("sourceId references an unknown id");
+    expect(message).not.toContain("user:password");
+
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        repositories: [
+          { ...DEMO_MODEL.repositories[0]!, name: "unsafe\u202Ename" },
+        ],
+      }),
+    ).toThrow(/control or formatting characters/u);
+  });
 
   it("accepts a deterministic empty-city result", () => {
     const {
@@ -298,7 +338,7 @@ describe("viewer model validation", () => {
               : group,
           ),
       }),
-    ).toThrow(/base\.semanticGroupId references unknown id "base"/u);
+    ).toThrow(/base\.semanticGroupId references an unknown id/u);
     expect(() =>
       validateCityModel({
         ...DEMO_MODEL,
@@ -503,7 +543,9 @@ describe("viewer model validation", () => {
             : solution,
         ),
       }),
-    ).toThrow(/solutions\[0\]\.moduleIds\[2\].*repository "repository:demo"/u);
+    ).toThrow(
+      /solutions\[0\]\.moduleIds\[2\].*same repository/u,
+    );
 
     expect(() =>
       validateCityModel({
@@ -517,7 +559,9 @@ describe("viewer model validation", () => {
           },
         ],
       }),
-    ).toThrow(/modules\[2\]\.solutionIds\[0\].*repository "repository:other"/u);
+    ).toThrow(
+      /modules\[2\]\.solutionIds\[0\].*same repository/u,
+    );
   });
 
   it("rejects a parent module owned by another repository", () => {
@@ -547,7 +591,7 @@ describe("viewer model validation", () => {
           otherModule,
         ],
       }),
-    ).toThrow(/modules\[0\]\.parentModuleId.*repository "repository:demo"/u);
+    ).toThrow(/modules\[0\]\.parentModuleId.*same repository/u);
   });
 
   it.each([

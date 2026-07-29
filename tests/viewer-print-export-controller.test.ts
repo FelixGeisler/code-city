@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  PRINT_EXPORT_WATCHDOG_MS,
   PrintExportController,
   type PrintExportControllerState,
   type PrintExportWorkerLike,
@@ -92,6 +93,10 @@ const START_REQUEST = {
 } as const;
 
 describe("viewer print export controller", () => {
+  it("uses a stable one-minute watchdog", () => {
+    expect(PRINT_EXPORT_WATCHDOG_MS).toBe(60_000);
+  });
+
   it("reports progress and preflight before exposing a completed result", () => {
     const worker = new FakeWorker();
     const states: PrintExportControllerState[] = [];
@@ -249,5 +254,37 @@ describe("viewer print export controller", () => {
       jobId: 1,
       error: { message: "Workers are unavailable." },
     });
+  });
+
+  it("terminates a timed-out worker and clears its watchdog handle", () => {
+    const worker = new FakeWorker();
+    let expire: (() => void) | undefined;
+    const cleared: unknown[] = [];
+    const controller = new PrintExportController(() => worker, {
+      watchdogMs: 25,
+      scheduleWatchdog: (callback, milliseconds) => {
+        expect(milliseconds).toBe(25);
+        expire = callback;
+        return "print-watchdog";
+      },
+      clearWatchdog: (handle) => {
+        cleared.push(handle);
+      },
+    });
+
+    const jobId = controller.start(START_REQUEST);
+    expire?.();
+
+    expect(controller.state).toMatchObject({
+      status: "failed",
+      jobId,
+      error: {
+        name: "PrintExportTimeoutError",
+        message: expect.stringMatching(/25 ms browser limit/u),
+      },
+    });
+    expect(worker.terminationCount).toBe(1);
+    expect(worker.onmessage).toBeNull();
+    expect(cleared).toEqual(["print-watchdog"]);
   });
 });
