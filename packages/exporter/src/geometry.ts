@@ -13,13 +13,31 @@ import {
   type PrintLabelPolicy,
   type PrintLegend,
 } from "../../core/src/print-labels.js";
+import {
+  createDistrictDependencyExplorerIndex,
+  INITIAL_DISTRICT_DEPENDENCY_FILTERS,
+  summarizeDistrictDependencies,
+  type DistrictDependencyEndpoint,
+  type DistrictDependencySummary,
+} from "../../core/src/district-dependencies.js";
+import {
+  layoutExternalDependencies,
+  selectExternalDependencies,
+} from "../../core/src/external-dependencies.js";
 import { normalizeRepositoryRelativePath } from "../../core/src/path.js";
 import type { PrinterProfile } from "../../core/src/print.js";
+import type { PrintRoutePolicy } from "../../core/src/print-routes.js";
 
 import {
   PrintGeometryValidationError,
   validatePrintableCity,
 } from "./validate.js";
+import {
+  planPrintableDependencyRoutes,
+  type PrintDependencyRouteBundle,
+  type PrintRouteEndpoint,
+  type PrintRouteObstacle,
+} from "./dependency-routes.js";
 import {
   printableTextCells,
   printableTextSupported,
@@ -113,6 +131,7 @@ export interface BuildPrintableCityOptions {
   readonly scale: number;
   readonly profile: PrinterProfile;
   readonly labelPolicy?: PrintLabelPolicy;
+  readonly routePolicy?: PrintRoutePolicy;
 }
 
 export interface PrintLabelReport {
@@ -122,10 +141,21 @@ export interface PrintLabelReport {
   readonly skippedDistricts: number;
 }
 
+export interface PrintRouteReport {
+  readonly policy: PrintRoutePolicy;
+  readonly totalCount: number;
+  readonly printedCount: number;
+  readonly omittedCount: number;
+  readonly totalWeight: number;
+  readonly printedWeight: number;
+  readonly omittedWeight: number;
+}
+
 export interface PrintableCityArtifacts {
   readonly city: PrintableCity;
   readonly legend: PrintLegend;
   readonly labels: PrintLabelReport;
+  readonly routes: PrintRouteReport;
 }
 
 export interface PrintablePlanGeometry {
@@ -1343,12 +1373,42 @@ export function buildPrintableCityArtifacts(
   if (labelPolicy !== "auto" && labelPolicy !== "off") {
     throw new TypeError("Label policy must be either 'auto' or 'off'.");
   }
-  const base = model.base;
-  if (!base) {
+  const routePolicy = options.routePolicy ?? "off";
+  if (routePolicy !== "auto" && routePolicy !== "off") {
+    throw new TypeError("Print route policy must be either 'auto' or 'off'.");
+  }
+  const sourceBase = model.base;
+  if (!sourceBase) {
     throw new PrintGeometryValidationError([
       "Printable export requires explicit shared-base geometry.",
     ]);
   }
+  const externalSelection =
+    routePolicy === "auto"
+      ? selectExternalDependencies(model.dependencies)
+      : undefined;
+  const externalLayout =
+    externalSelection !== undefined
+      ? layoutExternalDependencies(
+          externalSelection,
+          sourceBase,
+        )
+      : {
+          nodes: [],
+          assignments: new Map<string, string>(),
+          ignoredDependencyCount: 0,
+          base: sourceBase,
+        };
+  const dependencySummary: DistrictDependencySummary | undefined =
+    externalSelection === undefined
+      ? undefined
+      : summarizeDistrictDependencies(
+          createDistrictDependencyExplorerIndex(model),
+          INITIAL_DISTRICT_DEPENDENCY_FILTERS,
+          null,
+          externalSelection,
+        );
+  const base = externalLayout.base ?? sourceBase;
   const semanticChannels = semanticChannelMap(
     model,
     assignments,
@@ -1381,6 +1441,7 @@ export function buildPrintableCityArtifacts(
   );
   const districtPrimitives = new Map<string, PrintPrimitive>();
   const buildingPrimitives = new Map<string, PrintPrimitive>();
+  const externalPrimitives = new Map<string, PrintPrimitive>();
   const baseTop = baseCityBox.maximum.y;
 
   for (const district of [...model.districts].sort((left, right) =>
@@ -1429,6 +1490,29 @@ export function buildPrintableCityArtifacts(
     );
     buildingPrimitives.set(building.id, buildingPrimitive);
     primitives.push(buildingPrimitive);
+  }
+
+  if (externalLayout.nodes.length > 0) {
+    const externalChannelId = requiredChannel(
+      semanticChannels,
+      "external",
+    );
+    [...externalLayout.nodes]
+      .sort((left, right) => compare(left.id, right.id))
+      .forEach((node, index) => {
+        const externalPrimitive = primitive(
+          `external-node:${String(index + 1).padStart(3, "0")}`,
+          "dependency-endpoint",
+          "external",
+          externalChannelId,
+          printBoundsFromCityBox(
+            cityBox(node.position, node.size),
+            transform,
+          ),
+        );
+        externalPrimitives.set(node.id, externalPrimitive);
+        primitives.push(externalPrimitive);
+      });
   }
 
   const title =
@@ -1483,17 +1567,79 @@ export function buildPrintableCityArtifacts(
     districtStatuses.set(id, result.status);
     if (result.primitive) primitives.push(result.primitive);
   }
-  primitives.push(
-    ...identityPrimitives(
-      model,
-      transform,
-      baseBounds,
-      semanticChannels,
-      options.profile,
-      title,
-      version,
-    ),
+  const identityGeometry = identityPrimitives(
+    model,
+    transform,
+    baseBounds,
+    semanticChannels,
+    options.profile,
+    title,
+    version,
   );
+  primitives.push(...identityGeometry);
+
+  let routeReport: PrintRouteReport = {
+    policy: routePolicy,
+    totalCount: dependencySummary?.totalBundleCount ?? 0,
+    printedCount: 0,
+    omittedCount: dependencySummary?.totalBundleCount ?? 0,
+    totalWeight: dependencySummary?.totalReferenceWeight ?? 0,
+    printedWeight: 0,
+    omittedWeight: dependencySummary?.totalReferenceWeight ?? 0,
+  };
+  if (dependencySummary !== undefined && dependencySummary.bundles.length > 0) {
+    const routeChannelId = requiredChannel(
+      semanticChannels,
+      "routes",
+    );
+    const endpoints: PrintRouteEndpoint[] = [
+      ...[...districtPrimitives].map(([id, item]) => ({
+        id: printableDistrictRouteEndpointId(id),
+        bounds: horizontalBounds(item.bounds),
+      })),
+      ...[...externalPrimitives].map(([id, item]) => ({
+        id: printableExternalRouteEndpointId(id),
+        bounds: horizontalBounds(item.bounds),
+      })),
+    ];
+    const bundles: PrintDependencyRouteBundle[] =
+      dependencySummary.bundles.map((bundle) => ({
+        id: bundle.id,
+        sourceEndpointId: printableRouteEndpointId(bundle.source),
+        targetEndpointId: printableRouteEndpointId(bundle.target),
+        weight: bundle.weight,
+      }));
+    const identityObstacle = horizontalEnvelope(
+      identityGeometry.map(({ bounds: item }) => item),
+    );
+    const obstacles: PrintRouteObstacle[] =
+      identityObstacle === undefined
+        ? []
+        : [{ bounds: identityObstacle }];
+    const plannedRoutes = planPrintableDependencyRoutes({
+      bundles,
+      endpoints,
+      obstacles,
+      baseBounds,
+      geometryLimits: options.profile.geometryLimits,
+      channelId: routeChannelId,
+    });
+    primitives.push(...plannedRoutes.primitives);
+    routeReport = {
+      policy: routePolicy,
+      totalCount: dependencySummary.totalBundleCount,
+      printedCount: plannedRoutes.report.printedRouteCount,
+      omittedCount:
+        dependencySummary.hiddenBundleCount +
+        plannedRoutes.report.omittedRouteCount,
+      totalWeight: dependencySummary.totalReferenceWeight,
+      printedWeight: plannedRoutes.report.printedWeight,
+      omittedWeight: saturatingPrintWeight(
+        dependencySummary.hiddenReferenceWeight,
+        plannedRoutes.report.omittedWeight,
+      ),
+    };
+  }
   primitives.sort(primitiveOrder);
   const cityBounds = measuredBounds(primitives);
   const minimumFeatureSize = minimumPrimitiveFeature(primitives);
@@ -1547,7 +1693,65 @@ export function buildPrintableCityArtifacts(
         ({ status }) => status === "skipped",
       ).length,
     },
+    routes: routeReport,
   };
+}
+
+function horizontalBounds(
+  value: PrintBounds,
+): {
+  readonly minimum: { readonly x: number; readonly y: number };
+  readonly maximum: { readonly x: number; readonly y: number };
+} {
+  return {
+    minimum: { x: value.minimum.x, y: value.minimum.y },
+    maximum: { x: value.maximum.x, y: value.maximum.y },
+  };
+}
+
+function horizontalEnvelope(
+  values: readonly PrintBounds[],
+): ReturnType<typeof horizontalBounds> | undefined {
+  if (values.length === 0) return undefined;
+  return {
+    minimum: {
+      x: Math.min(...values.map(({ minimum }) => minimum.x)),
+      y: Math.min(...values.map(({ minimum }) => minimum.y)),
+    },
+    maximum: {
+      x: Math.max(...values.map(({ maximum }) => maximum.x)),
+      y: Math.max(...values.map(({ maximum }) => maximum.y)),
+    },
+  };
+}
+
+function printableRouteEndpointId(
+  endpoint: DistrictDependencyEndpoint,
+): string {
+  switch (endpoint.kind) {
+    case "district":
+      return printableDistrictRouteEndpointId(endpoint.districtId);
+    case "district-boundary":
+      return printableDistrictRouteEndpointId(endpoint.hiddenDistrictId);
+    case "external":
+      return printableExternalRouteEndpointId(
+        endpoint.nodeId ?? endpoint.target,
+      );
+  }
+}
+
+function printableDistrictRouteEndpointId(id: string): string {
+  return `district\0${id}`;
+}
+
+function printableExternalRouteEndpointId(id: string): string {
+  return `external\0${id}`;
+}
+
+function saturatingPrintWeight(left: number, right: number): number {
+  return right > Number.MAX_VALUE - left
+    ? Number.MAX_VALUE
+    : left + right;
 }
 
 export function buildPrintableCity(

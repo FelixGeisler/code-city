@@ -8,6 +8,7 @@ import {
   createPrusaXLProfile,
   createSingleChannelProfile,
   layoutCity,
+  parsePrintRoutePolicy,
   planPrint,
   validatePrinterProfile,
   type PrinterProfile,
@@ -182,6 +183,32 @@ describe("deterministic print planning", () => {
         labelPolicy: "invalid" as "auto",
       }),
     ).toThrow(/Label policy/u);
+  });
+
+  it("defaults, parses, persists, and validates the shared route policy", () => {
+    const profile = createSingleChannelProfile();
+    const request = {
+      format: "3mf" as const,
+      semanticGroups: DEFAULT_SEMANTIC_GROUPS.slice(0, 1),
+      bounds: { x: 100, y: 50, z: 100 },
+      geometry,
+    };
+
+    expect(parsePrintRoutePolicy(undefined)).toBe("off");
+    expect(parsePrintRoutePolicy("off")).toBe("off");
+    expect(parsePrintRoutePolicy("auto")).toBe("auto");
+    expect(() => parsePrintRoutePolicy("always")).toThrow(
+      /Print route policy/u,
+    );
+    expect(planPrint(profile, request).routePolicy).toBe("off");
+    expect(planPrint(profile, { ...request, routePolicy: "auto" }).routePolicy)
+      .toBe("auto");
+    expect(() =>
+      planPrint(profile, {
+        ...request,
+        routePolicy: "invalid" as "auto",
+      }),
+    ).toThrow(/route policy/u);
   });
 
   it("assigns an embossed identity panel to a monochrome channel", () => {

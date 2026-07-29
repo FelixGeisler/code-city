@@ -12,8 +12,9 @@ isolated worker, and returns derived artifacts.
 
 == Print
 
-`npm run print:demo` writes a 93 x 48 x 33.8 mm labelled 3MF and private JSON
-legend. PrusaSlicer imports the 3MF as one object with five aligned tool parts.
+`npm run print:demo` writes a labelled 3MF with aggregated dependency traces
+and a private JSON legend. PrusaSlicer imports it as one object with five
+aligned tool parts; the command reports its profile-derived size.
 `npm run print:connector-comparison` writes the profile-derived connector test
 and its measurement instructions.
 
@@ -25,9 +26,13 @@ npm run cli -- export `
   --format 3mf `
   --scale 3 `
   --labels auto `
+  --routes auto `
   --legend build\print\code-city-demo.legend.json `
   --output build\print\code-city-demo.3mf
 ----
+
+Routes default to `off`; select `--routes auto` to print capped,
+district-aggregated dependencies.
 
 STL, FLOW-sized tiling, arbitrary fonts and logos, and slicer settings remain
 separate work.

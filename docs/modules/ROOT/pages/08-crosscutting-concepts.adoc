@@ -162,13 +162,17 @@ geometry against profile limits and contain no printer-specific tool count.
 
 Printable dependencies are optional and aggregate district/module relations;
 file edges are never printed. V1 uses base-connected raised traces in available
-street lanes, capped like the overview. Trace height equals the profile minimum
-feature size. Width is the minimum wall thickness times
+street lanes, capped like the overview. Let `feature` be the larger profile
+minimum feature size and minimum wall thickness. Trace height is `feature`;
+width is `feature` times
 `min(3, max(1, 1 + floor(log2(max(weight, 1)))))`; a same-height arrowhead marks
 the provider. Unroutable or capped bundles are omitted with reported count and
 weight. Traces do not provide structural connectivity for the base. Detachable
 connectors remain calibration artifacts: the generated comparison selects the
 integrated raised trace because it needs neither clearance nor loose hardware.
+
+The CLI defaults to `--routes off`; `--routes auto` enables this deterministic
+geometry without mutating the city model.
 
 Printer layouts may later derive multiple plate bases without changing the
 semantic city coordinates.

@@ -7,6 +7,7 @@ import type {
 import { isDisplayColor } from "./color.js";
 import { normalizeCityIdentity } from "./identity.js";
 import type { PrintLabelPolicy } from "./print-labels.js";
+import type { PrintRoutePolicy } from "./print-routes.js";
 
 export type PrintFormat = "stl" | "3mf";
 export type PrintChannelMechanism =
@@ -53,6 +54,7 @@ export interface PrintPlanRequest {
   readonly format: PrintFormat;
   readonly scale?: number;
   readonly labelPolicy?: PrintLabelPolicy;
+  readonly routePolicy?: PrintRoutePolicy;
   readonly semanticGroups: readonly SemanticGroup[];
   readonly bounds: Vector3;
   readonly geometry: PrintGeometryMeasurements;
@@ -81,6 +83,7 @@ export interface PrintPlan {
   readonly bounds: Vector3;
   readonly scale: number;
   readonly labelPolicy: PrintLabelPolicy;
+  readonly routePolicy: PrintRoutePolicy;
   readonly assignments: readonly SemanticGroupAssignment[];
   readonly channels: readonly PrintChannelPlan[];
   readonly identity?: CityIdentity;
@@ -250,6 +253,13 @@ function validateRequest(
     request.labelPolicy !== "off"
   ) {
     issues.push("Label policy must be either 'auto' or 'off'.");
+  }
+  if (
+    request.routePolicy !== undefined &&
+    request.routePolicy !== "auto" &&
+    request.routePolicy !== "off"
+  ) {
+    issues.push("Print route policy must be either 'auto' or 'off'.");
   }
   for (const axis of ["x", "y", "z"] as const) {
     const value = request.bounds[axis];
@@ -524,6 +534,7 @@ export function planPrint(
     bounds: { ...request.bounds },
     scale: request.scale ?? 1,
     labelPolicy: request.labelPolicy ?? "auto",
+    routePolicy: request.routePolicy ?? "off",
     assignments,
     channels: profile.printChannels
       .map((channel) => ({
