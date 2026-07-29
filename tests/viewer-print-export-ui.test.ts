@@ -16,7 +16,10 @@ describe("viewer 3MF export UI", () => {
     expect(html).toMatch(
       /<dialog[\s\S]*id="print-export-dialog"[\s\S]*aria-labelledby="print-export-title"[\s\S]*aria-describedby="print-export-privacy"/u,
     );
-    expect(html).toContain("Nothing is\n            uploaded.");
+    const privacyStatement = /Nothing is\r?\n\s+uploaded\./u;
+    expect("Nothing is\n uploaded.").toMatch(privacyStatement);
+    expect("Nothing is\r\n uploaded.").toMatch(privacyStatement);
+    expect(html).toMatch(privacyStatement);
     expect(html).toContain('<option value="generic">');
     expect(html).toContain('<option value="prusa-xl">');
     expect(html).toContain('<option value="custom">');
