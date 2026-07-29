@@ -1,0 +1,54 @@
+import { promises as fs } from "node:fs";
+
+import { describe, expect, it } from "vitest";
+
+interface PackageContract {
+  readonly packageManager?: string;
+  readonly engines?: Readonly<Record<string, string>>;
+  readonly scripts?: Readonly<Record<string, string>>;
+}
+
+describe("development toolchain contract", () => {
+  it("pins Node, npm, and one root verification command", async () => {
+    const packageContract = JSON.parse(
+      await fs.readFile("package.json", "utf8"),
+    ) as PackageContract;
+
+    expect(packageContract.packageManager).toBe("npm@11.6.2");
+    expect(packageContract.engines).toMatchObject({
+      node: ">=24 <25",
+      npm: ">=11 <12",
+    });
+    expect(packageContract.scripts?.["verify"]).toBe(
+      "npm run typecheck && npm test && npm run build && npm run docs:build",
+    );
+  });
+
+  it("uses the same bounded verification workflow on Linux and Windows", async () => {
+    const workflow = await fs.readFile(
+      ".github/workflows/ci.yml",
+      "utf8",
+    );
+
+    expect(workflow).toContain(
+      "os: [ubuntu-latest, windows-latest]",
+    );
+    expect(workflow).toContain("timeout-minutes: 20");
+    expect(workflow).toContain("- run: npm ci");
+    expect(workflow).toContain("- run: npm run verify");
+    expect(workflow).not.toContain("- run: npm install");
+  });
+
+  it("keeps documentation installation reproducible and documented", async () => {
+    const [workflow, readme] = await Promise.all([
+      fs.readFile(".github/workflows/docs.yml", "utf8"),
+      fs.readFile("README.md", "utf8"),
+    ]);
+
+    expect(workflow).toContain("- run: npm ci --ignore-scripts");
+    expect(workflow).toContain("timeout-minutes: 15");
+    expect(readme).toContain("Node.js 24.x");
+    expect(readme).toContain("npm 11.6.2");
+    expect(readme).toContain("npm run verify");
+  });
+});

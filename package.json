@@ -2,8 +2,10 @@
   "name": "code-city",
   "private": true,
   "type": "module",
+  "packageManager": "npm@11.6.2",
   "engines": {
-    "node": ">=24 <25"
+    "node": ">=24 <25",
+    "npm": ">=11 <12"
   },
   "scripts": {
     "build": "npm run typecheck && npm run compile && npm run viewer:build",
@@ -14,6 +16,7 @@
     "print:demo": "npm run compile --silent && node build/app/apps/cli/src/main.js export --model examples/demo-city.json --profile profiles/prusa-xl-5t.json --format 3mf --scale 3 --labels auto --routes auto --legend build/print/code-city-demo.legend.json --output build/print/code-city-demo.3mf",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "verify": "npm run typecheck && npm test && npm run build && npm run docs:build",
     "precli": "npm run compile --silent",
     "viewer:build": "vite build --config apps/viewer/vite.config.ts",
     "viewer:dev": "vite --config apps/viewer/vite.config.ts"
