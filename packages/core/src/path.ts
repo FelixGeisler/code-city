@@ -57,6 +57,28 @@ export function normalizePath(value: string): string {
   return suffix === "" ? "." : suffix;
 }
 
+/**
+ * Normalizes a path that must stay inside a repository root.
+ *
+ * This is intentionally lexical and browser-safe: it never resolves or reads
+ * the path on the host filesystem.
+ */
+export function normalizeRepositoryRelativePath(original: string): string {
+  if (
+    original.startsWith("/") ||
+    original.startsWith("\\") ||
+    /^[A-Za-z]:/u.test(original) ||
+    /^[A-Za-z][A-Za-z0-9+.-]*:/u.test(original)
+  ) {
+    throw new TypeError("Source paths must be repository-relative.");
+  }
+  const normalized = normalizePath(original);
+  if (normalized === ".." || normalized.startsWith("../")) {
+    throw new TypeError("Source paths must stay inside the repository root.");
+  }
+  return normalized;
+}
+
 /** A deterministic, browser-safe 64-bit FNV-1a identifier. */
 export function stableId(scope: string, ...components: readonly string[]): string {
   const safeScope =

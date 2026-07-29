@@ -23,5 +23,5 @@
 |Validate geometry and map semantic groups to printer capabilities
 
 |Exporters
-|Write STL and 3MF from a validated print plan
+|Write 3MF plus a private code legend from validated geometry
 |===

@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest";
 import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
 import {
   buildPrintableCity,
+  buildPrintableCityArtifacts,
   cuboidMesh,
   printablePlanGeometry,
   type PrintBounds,
   type PrintSemanticAssignment,
   type PrintableCity,
 } from "../packages/exporter/src/geometry.js";
+import { printableTextCells } from "../packages/exporter/src/printable-font.js";
 import {
   PrintGeometryValidationError,
   signedMeshVolume,
@@ -43,6 +45,7 @@ function demoCity(): PrintableCity {
     {
       scale: 3,
       profile: createPrusaXLProfile([1, 2, 3, 4, 5]),
+      labelPolicy: "off",
     },
   );
 }
@@ -195,6 +198,83 @@ describe("Demo printable geometry", () => {
           bounds.size.z >= 0.8 - 1e-9,
       ),
     ).toBe(true);
+  });
+
+  it("adds fitting same-channel roof codes and ground district labels", () => {
+    const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
+    const artifacts = buildPrintableCityArtifacts(
+      DEMO_MODEL,
+      assignments(),
+      { scale: 3, profile, labelPolicy: "auto" },
+    );
+    const primitives = artifacts.city.parts.flatMap(
+      ({ primitives }) => primitives,
+    );
+    const buildingLabels = primitives.filter(
+      ({ kind }) => kind === "building-label",
+    );
+    const districtLabels = primitives.filter(
+      ({ kind }) => kind === "district-label",
+    );
+
+    expect(artifacts.labels).toEqual({
+      printedBuildings: 5,
+      skippedBuildings: 0,
+      printedDistricts: 2,
+      skippedDistricts: 0,
+    });
+    expect(buildingLabels).toHaveLength(5);
+    expect(districtLabels).toHaveLength(2);
+    for (const label of buildingLabels) {
+      const building = primitives.find(
+        ({ id }) => `building-label:${id}` === label.id,
+      )!;
+      expect(label.channelId).toBe(building.channelId);
+      expect(label.semanticGroupId).toBe(building.semanticGroupId);
+      expect(label.bounds.minimum.z).toBe(building.bounds.maximum.z);
+    }
+    const base = primitives.find(({ kind }) => kind === "base")!;
+    expect(
+      districtLabels.every(
+        ({ channelId, semanticGroupId }) =>
+          channelId === base.channelId && semanticGroupId === "base",
+      ),
+    ).toBe(true);
+    expect(validatePrintableCity(artifacts.city, profile)).toEqual([]);
+    expect(artifacts.city.bounds.size.z).toBeCloseTo(33.8, 10);
+    const codeZero = artifacts.legend.buildings.find(
+      ({ code }) => code === "000",
+    )!;
+    const unionedLabel = buildingLabels.find(
+      ({ id }) => id === `building-label:${codeZero.buildingId}`,
+    )!;
+    expect(unionedLabel.mesh.triangles.length).toBeLessThan(
+      printableTextCells("000", 0.8).length * 12,
+    );
+  });
+
+  it("enlarges or omits labels when a profile requires wider glyph gaps", () => {
+    const profile = {
+      ...createPrusaXLProfile([1, 2, 3, 4, 5]),
+      geometryLimits: {
+        ...createPrusaXLProfile([1]).geometryLimits,
+        minimumGap: 1.2,
+      },
+    };
+    const {
+      identity: _identity,
+      identityPanel: _identityPanel,
+      ...model
+    } = DEMO_MODEL;
+    const artifacts = buildPrintableCityArtifacts(
+      model,
+      assignments(),
+      { scale: 3, profile, labelPolicy: "auto" },
+    );
+
+    expect(artifacts.labels.printedBuildings).toBe(0);
+    expect(artifacts.labels.skippedBuildings).toBe(5);
+    expect(validatePrintableCity(artifacts.city, profile)).toEqual([]);
   });
 
   it("is byte-input deterministic and independent of assignment order", () => {
