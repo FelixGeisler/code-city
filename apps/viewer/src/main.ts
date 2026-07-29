@@ -123,6 +123,7 @@ import {
   installViewerWorkspace,
   nextBoundedResultLimit,
 } from "./viewer-workspace.js";
+import { summarizeViewerScope } from "./viewer-overview.js";
 import "./styles.css";
 
 interface BuildingContext {
@@ -185,9 +186,57 @@ const externalInspectorContent = element<HTMLDivElement>(
 );
 const clearSelectionButton =
   element<HTMLButtonElement>("clear-selection");
+const selectionKind = element<HTMLElement>("inspector-title");
+const selectionName = element<HTMLHeadingElement>("selection-name");
+const dependencySection =
+  element<HTMLDetailsElement>("dependency-section");
+const viewerScopeName = element<HTMLElement>("viewer-scope-name");
+const viewerScopeReset =
+  element<HTMLButtonElement>("viewer-scope-reset");
 const legend = element<HTMLUListElement>("legend");
 const externalZone = element<HTMLElement>("external-zone");
 const externalList = element<HTMLUListElement>("external-list");
+const overviewFields = {
+  description: element<HTMLParagraphElement>(
+    "overview-scope-description",
+  ),
+  repositories: element<HTMLElement>("overview-repositories"),
+  solutions: element<HTMLElement>("overview-solutions"),
+  modules: element<HTMLElement>("overview-modules"),
+  districts: element<HTMLElement>("overview-districts"),
+  buildings: element<HTMLElement>("overview-buildings"),
+  sloc: element<HTMLElement>("overview-sloc"),
+  medianComplexity: element<HTMLElement>(
+    "overview-median-complexity",
+  ),
+  maximumComplexity: element<HTMLElement>(
+    "overview-max-complexity",
+  ),
+  dependencyEdges: element<HTMLElement>(
+    "overview-dependency-edges",
+  ),
+  referenceWeight: element<HTMLElement>(
+    "overview-reference-weight",
+  ),
+};
+const overviewRiskFields = {
+  low: {
+    count: element<HTMLElement>("overview-risk-low"),
+    bar: element<HTMLElement>("overview-risk-low-bar"),
+  },
+  moderate: {
+    count: element<HTMLElement>("overview-risk-moderate"),
+    bar: element<HTMLElement>("overview-risk-moderate-bar"),
+  },
+  high: {
+    count: element<HTMLElement>("overview-risk-high"),
+    bar: element<HTMLElement>("overview-risk-high-bar"),
+  },
+  "very-high": {
+    count: element<HTMLElement>("overview-risk-very-high"),
+    bar: element<HTMLElement>("overview-risk-very-high-bar"),
+  },
+} as const;
 const selectionStatus = element<HTMLParagraphElement>("selection-status");
 const errorBanner = element<HTMLDivElement>("error-banner");
 const errorMessage = element<HTMLSpanElement>("error-message");
@@ -1221,7 +1270,7 @@ class CityScene {
 
   private select(entity: SceneEntity | null): void {
     if (entity !== null) {
-      viewerWorkspace.show("inspect");
+      viewerWorkspace.show("details", { intent: "passive" });
     }
     if (sameSceneEntity(entity, this.selectedEntity)) {
       return;
@@ -1642,6 +1691,11 @@ showWholeCityButton.addEventListener("click", () => {
     cityScene.showWholeCity();
   }
 });
+viewerScopeReset.addEventListener("click", () => {
+  if (explorerState.isolatedDistrictId !== null) {
+    cityScene.showWholeCity();
+  }
+});
 
 dismissErrorButton.addEventListener("click", hideError);
 
@@ -1652,6 +1706,7 @@ window.addEventListener("keydown", (event) => {
   }
 });
 window.addEventListener("beforeunload", () => {
+  viewerWorkspace.dispose();
   printPlateToolbar.dispose();
   logoLoadGate.invalidate();
   loadedModelLogo?.dispose();
@@ -1787,7 +1842,10 @@ function renderExternalNodeList(): void {
       button.setAttribute("aria-current", "true");
     }
     button.addEventListener("click", () => {
-      viewerWorkspace.show("inspect", { focusTab: true });
+      viewerWorkspace.show("details", {
+        intent: "explicit",
+        focusTab: true,
+      });
       cityScene.selectExternalNode(node.id);
     });
 
@@ -1895,7 +1953,10 @@ function renderBuildingSearch(): void {
         button.setAttribute("aria-current", "true");
       }
       button.addEventListener("click", () => {
-        viewerWorkspace.show("inspect", { focusTab: true });
+        viewerWorkspace.show("details", {
+          intent: "explicit",
+          focusTab: true,
+        });
         selectBuildingFromExplorer(result.buildingId);
       });
     } else {
@@ -1907,7 +1968,10 @@ function renderBuildingSearch(): void {
         button.setAttribute("aria-current", "true");
       }
       button.addEventListener("click", () => {
-        viewerWorkspace.show("inspect", { focusTab: true });
+        viewerWorkspace.show("details", {
+          intent: "explicit",
+          focusTab: true,
+        });
         selectDistrictFromExplorer(result.districtId);
       });
     }
@@ -2027,6 +2091,7 @@ function synchronizeExplorerState(state: ExplorerState): void {
   renderExternalNodeList();
   renderDependencyExplorer();
   renderDistrictDependencyExplorer();
+  renderViewerOverview();
 }
 
 function toggleDistrictDependencyFilter(kind: DependencyKind): void {
@@ -2344,7 +2409,10 @@ function isolateDistrictDependencyEndpoint(
     return;
   }
   if (focusInspectTab) {
-    viewerWorkspace.show("inspect", { focusTab: true });
+    viewerWorkspace.show("details", {
+      intent: "explicit",
+      focusTab: true,
+    });
   }
   cityScene.isolateDistrict(districtId);
   cityScene.selectDistrict(districtId);
@@ -2565,13 +2633,19 @@ function dependencyListItem(
         target,
       );
       if (!node) return;
-      viewerWorkspace.show("inspect", { focusTab: true });
+      viewerWorkspace.show("details", {
+        intent: "explicit",
+        focusTab: true,
+      });
       cityScene.selectExternalNode(node.id);
     });
   } else if (route.counterpart.kind === "building") {
     const counterpartBuildingId = route.counterpart.buildingId;
     row.addEventListener("click", () => {
-      viewerWorkspace.show("inspect", { focusTab: true });
+      viewerWorkspace.show("details", {
+        intent: "explicit",
+        focusTab: true,
+      });
       selectBuildingFromExplorer(counterpartBuildingId);
     });
   }
@@ -3049,19 +3123,76 @@ function renderLegend(model: CityModel): void {
   }
 }
 
+function renderViewerOverview(): void {
+  const summary = summarizeViewerScope(
+    activeModel,
+    explorerState.isolatedDistrictId,
+  );
+  viewerScopeName.textContent = summary.scope.label;
+  viewerScopeName.title = summary.scope.label;
+  viewerScopeReset.disabled = summary.scope.kind === "city";
+  overviewFields.description.textContent =
+    summary.scope.kind === "city"
+      ? "Metrics for the whole city."
+      : `Metrics for district ${summary.scope.name}.`;
+  overviewFields.repositories.textContent =
+    summary.counts.repositories.toLocaleString();
+  overviewFields.solutions.textContent =
+    summary.counts.solutions.toLocaleString();
+  overviewFields.modules.textContent =
+    summary.counts.modules.toLocaleString();
+  overviewFields.districts.textContent =
+    summary.counts.districts.toLocaleString();
+  overviewFields.buildings.textContent =
+    summary.counts.buildings.toLocaleString();
+  overviewFields.sloc.textContent =
+    summary.complexity.totalSloc.toLocaleString();
+  overviewFields.medianComplexity.textContent =
+    summary.complexity.medianMaximumComplexity.toLocaleString(
+      undefined,
+      { maximumFractionDigits: 1 },
+    );
+  overviewFields.maximumComplexity.textContent =
+    summary.complexity.maximumComplexity.toLocaleString();
+  overviewFields.dependencyEdges.textContent =
+    summary.dependencies.edgeCount.toLocaleString();
+  overviewFields.referenceWeight.textContent =
+    summary.dependencies.totalReferenceWeight.toLocaleString();
+
+  const totalBuildings = summary.counts.buildings;
+  for (const risk of [
+    "low",
+    "moderate",
+    "high",
+    "very-high",
+  ] as const) {
+    const count = summary.risks[risk];
+    const field = overviewRiskFields[risk];
+    field.count.textContent = count.toLocaleString();
+    field.bar.style.width =
+      totalBuildings === 0
+        ? "0%"
+        : `${(count / totalBuildings) * 100}%`;
+  }
+}
+
 function showInspector(context: BuildingContext | null): void {
   inspectorEmpty.hidden = context !== null;
   inspectorContent.hidden = context === null;
   districtInspectorContent.hidden = true;
   externalInspectorContent.hidden = true;
   clearSelectionButton.hidden = context === null;
+  dependencySection.open = false;
   if (!context) {
+    selectionKind.textContent = "Details";
+    selectionName.textContent = "Nothing selected";
     selectionStatus.textContent = "Selection cleared.";
     return;
   }
 
   const { building, repository, module } = context;
-  inspectorContent.scrollTop = 0;
+  selectionKind.textContent = "Building";
+  selectionName.textContent = building.name;
   inspectorFields.name.textContent = building.name;
   inspectorFields.repository.textContent = repository.name;
   inspectorFields.module.textContent = module.name;
@@ -3090,7 +3221,9 @@ function showDistrictInspector(context: DistrictContext): void {
   districtInspectorContent.hidden = false;
   externalInspectorContent.hidden = true;
   clearSelectionButton.hidden = false;
-  districtInspectorContent.scrollTop = 0;
+  selectionKind.textContent = "District";
+  selectionName.textContent = district.name;
+  dependencySection.open = false;
   districtInspectorFields.name.textContent = district.name;
   districtInspectorFields.repository.textContent = repository.name;
   districtInspectorFields.module.textContent = module.name;
@@ -3115,7 +3248,9 @@ function showExternalInspector(node: ExternalSceneNode): void {
   districtInspectorContent.hidden = true;
   externalInspectorContent.hidden = false;
   clearSelectionButton.hidden = false;
-  externalInspectorContent.scrollTop = 0;
+  selectionKind.textContent = "External dependency";
+  selectionName.textContent = presentation.label;
+  dependencySection.open = false;
   externalInspectorFields.name.textContent = presentation.label;
   externalInspectorFields.target.textContent =
     presentation.kind === "external"
@@ -3218,9 +3353,7 @@ function renderExecutableUnits(building: CityBuilding): void {
   const unitLabel = presentation.count === 1 ? "unit" : "units";
   const maximumComplexity =
     presentation.maximumComplexity.toLocaleString();
-  inspectorFields.unitsDetails.open =
-    wasOpen ||
-    presentation.count <= INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;
+  inspectorFields.unitsDetails.open = wasOpen;
   inspectorFields.unitCount.textContent = count;
   const cappedOmission =
     presentation.hiddenCount > 0 &&

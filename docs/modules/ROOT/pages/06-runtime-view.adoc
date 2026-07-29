@@ -7,6 +7,15 @@ on an ephemeral `127.0.0.1` port. It prints the URL and does not launch a
 browser. The server exposes only bundled viewer assets and one in-memory model;
 SIGINT, SIGTERM, or explicit close stops it.
 
+== Viewer workspace
+
+The workspace opens on **Overview** and provides **Explore**, **Routes**,
+**Details**, and **Overview** in one scrolling surface. On desktop it is a
+resizable side dock; below 1100 px it becomes a collapsed, peek, or expanded
+bottom sheet. Selecting geometry only peeks at details, while explicit search
+opens them. A persistent scope chip resets district isolation and scopes the
+overview metrics.
+
 == Public GitHub
 
 `codecity analyze-github https://github.com/owner/repository --ref main
