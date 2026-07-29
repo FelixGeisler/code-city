@@ -29,14 +29,19 @@
         </a>
 
         <div class="actions">
-          <label class="button button-primary" for="model-file">
+          <button
+            id="model-file-open"
+            class="button button-primary"
+            type="button"
+          >
             Open model
-            <input
-              id="model-file"
-              type="file"
-              accept=".json,application/json"
-            />
-          </label>
+          </button>
+          <input
+            id="model-file"
+            type="file"
+            accept=".json,application/json"
+            hidden
+          />
           <button id="demo-button" class="button" type="button">Demo</button>
           <button id="print-export-open" class="button" type="button">
             Export 3MF
@@ -56,7 +61,92 @@
           </div>
         </div>
 
-        <div class="viewer-rail">
+        <aside
+          id="viewer-workspace"
+          class="viewer-workspace"
+          aria-label="Viewer tools"
+          data-active-view="find"
+        >
+          <header class="viewer-workspace-header">
+          <div
+            class="viewer-workspace-tabs"
+            role="tablist"
+            aria-label="Viewer tools"
+          >
+            <button
+              id="viewer-tab-find"
+              class="viewer-workspace-tab"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              aria-controls="viewer-view-find"
+              data-workspace-view="find"
+            >
+              Find
+            </button>
+            <button
+              id="viewer-tab-routes"
+              class="viewer-workspace-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="viewer-view-routes"
+              data-workspace-view="routes"
+              tabindex="-1"
+            >
+              Routes
+            </button>
+            <button
+              id="viewer-tab-inspect"
+              class="viewer-workspace-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="viewer-view-inspect"
+              data-workspace-view="inspect"
+              tabindex="-1"
+            >
+              Inspect
+            </button>
+            <button
+              id="viewer-tab-legend"
+              class="viewer-workspace-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="viewer-view-legend"
+              data-workspace-view="legend"
+              tabindex="-1"
+            >
+              Legend
+            </button>
+          </div>
+            <button
+              id="viewer-workspace-toggle"
+              class="viewer-workspace-toggle"
+              type="button"
+              aria-expanded="true"
+              aria-controls="viewer-workspace-scroll"
+              aria-label="Collapse viewer tools"
+              title="Collapse viewer tools"
+              data-workspace-toggle
+            >
+              <span aria-hidden="true">−</span>
+            </button>
+          </header>
+          <div
+            id="viewer-workspace-scroll"
+            class="viewer-workspace-scroll"
+            tabindex="0"
+            aria-label="Viewer tool content"
+          >
+            <div
+              id="viewer-view-find"
+              class="viewer-workspace-view"
+              role="tabpanel"
+              aria-labelledby="viewer-tab-find"
+              data-workspace-panel="find"
+            >
         <section
           id="find-panel"
           class="panel find-panel"
@@ -67,13 +157,13 @@
           </div>
           <div class="find-panel-body">
             <label class="search-label" for="building-search">
-              Building name or path
+              Building or district name/path
             </label>
             <input
               id="building-search"
               class="search-input"
               type="search"
-              placeholder="Search buildings"
+              placeholder="Search city"
               autocomplete="off"
               spellcheck="false"
               aria-controls="search-results"
@@ -90,8 +180,17 @@
             <ul
               id="search-results"
               class="search-results"
-              aria-label="Building search results"
+              aria-label="Building and district search results"
             ></ul>
+            <button
+              id="search-show-more"
+              class="button button-compact search-show-more"
+              type="button"
+              aria-controls="search-results"
+              hidden
+            >
+              Show more results
+            </button>
             <div
               class="isolation-actions"
               role="group"
@@ -116,7 +215,16 @@
             </div>
           </div>
         </section>
+            </div>
 
+            <div
+              id="viewer-view-routes"
+              class="viewer-workspace-view"
+              role="tabpanel"
+              aria-labelledby="viewer-tab-routes"
+              data-workspace-panel="routes"
+              hidden
+            >
         <section
           id="district-routes-panel"
           class="panel district-routes-panel"
@@ -201,10 +309,18 @@
             <ul
               id="district-routes-list"
               class="district-routes-list"
-              tabindex="0"
               aria-label="Bundled district routes"
               hidden
             ></ul>
+            <button
+              id="district-routes-show-more"
+              class="button button-compact route-show-more"
+              type="button"
+              aria-controls="district-routes-list"
+              hidden
+            >
+              Show more routes
+            </button>
             <section
               id="district-route-details"
               class="district-route-details"
@@ -224,7 +340,6 @@
               <ul
                 id="district-route-contributors"
                 class="district-route-contributors"
-                tabindex="0"
                 aria-label="Top route contributors"
               ></ul>
               <div
@@ -250,8 +365,17 @@
             </section>
           </div>
         </section>
+            </div>
 
-        <aside
+            <div
+              id="viewer-view-inspect"
+              class="viewer-workspace-view"
+              role="tabpanel"
+              aria-labelledby="viewer-tab-inspect"
+              data-workspace-panel="inspect"
+              hidden
+            >
+        <section
           id="inspector"
           class="panel inspector"
           aria-labelledby="inspector-title"
@@ -274,7 +398,6 @@
           </div>
           <div
             id="inspector-content"
-            tabindex="0"
             aria-label="Selected building details"
             hidden
           >
@@ -385,9 +508,17 @@
                 id="dependency-list"
                 class="dependency-list"
                 aria-label="Selected building dependencies"
-                tabindex="0"
                 hidden
               ></ul>
+              <button
+                id="dependency-show-more"
+                class="button button-compact route-show-more"
+                type="button"
+                aria-controls="dependency-list"
+                hidden
+              >
+                Show more routes
+              </button>
             </section>
 
             <section
@@ -418,13 +549,21 @@
                     </thead>
                     <tbody id="building-units"></tbody>
                   </table>
+                  <button
+                    id="building-units-show-more"
+                    class="button button-compact units-show-more"
+                    type="button"
+                    aria-controls="building-units"
+                    hidden
+                  >
+                    Show more units
+                  </button>
                 </div>
               </details>
             </section>
           </div>
           <div
             id="district-inspector-content"
-            tabindex="0"
             aria-label="Selected district details"
             hidden
           >
@@ -450,7 +589,6 @@
           </div>
           <div
             id="external-inspector-content"
-            tabindex="0"
             aria-label="Selected external dependency details"
             hidden
           >
@@ -500,8 +638,17 @@
               ></p>
             </section>
           </div>
-        </aside>
+        </section>
+            </div>
 
+            <div
+              id="viewer-view-legend"
+              class="viewer-workspace-view"
+              role="tabpanel"
+              aria-labelledby="viewer-tab-legend"
+              data-workspace-panel="legend"
+              hidden
+            >
         <section
           class="panel legend-panel"
           aria-labelledby="legend-title"
@@ -512,7 +659,6 @@
           <ul
             id="legend"
             class="legend"
-            tabindex="0"
             aria-label="Semantic groups"
           ></ul>
           <section
@@ -529,7 +675,9 @@
             ></ul>
           </section>
         </section>
-        </div>
+            </div>
+          </div>
+        </aside>
 
         <p
           id="selection-status"

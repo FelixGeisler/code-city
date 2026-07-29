@@ -18,10 +18,16 @@ import type {
   CityRepository,
   DependencyKind,
 } from "../../../packages/core/src/model.js";
-import { presentExecutableUnits } from "./building-inspector.js";
+import {
+  canRevealMoreExecutableUnits,
+  INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT,
+  MAXIMUM_EXECUTABLE_UNIT_VISIBLE_LIMIT,
+  presentExecutableUnits,
+} from "./building-inspector.js";
 import { cityBaseForModel } from "./city-surface.js";
 import {
   createDependencyExplorerIndex,
+  DEPENDENCY_ROUTES_PER_DIRECTION,
   dependencyRoutesForBuilding,
   type DependencyRouteDirection,
   type DependencyRouteEndpoint,
@@ -34,6 +40,7 @@ import {
 } from "./dependency-explorer.js";
 import {
   createDistrictDependencyExplorerIndex,
+  DISTRICT_DEPENDENCY_BUNDLES_LIMIT,
   type DistrictDependencyBundle,
   type DistrictDependencyEndpoint,
   type DistrictDependencyFilters,
@@ -68,13 +75,17 @@ import {
 import { validateCityModel } from "./model-validation.js";
 import {
   createRepositoryExplorerIndex,
+  DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT,
   type ExplorerState,
   isolateSelectedDistrict as isolateExplorerDistrict,
+  MAXIMUM_REPOSITORY_EXPLORER_RESULT_LIMIT,
   resetExplorerState,
-  searchRepositoryBuildings,
+  searchRepositoryEntities,
   selectedExplorerBuildingId,
+  selectedExplorerDistrictId,
   selectedExplorerExternalId,
   selectExplorerBuilding,
+  selectExplorerDistrict,
   showAllDistricts,
 } from "./repository-explorer.js";
 import {
@@ -95,6 +106,10 @@ import {
 } from "./scene-environment.js";
 import { groundGridLayout } from "./scene-grid.js";
 import { cameraDistanceForBounds } from "./scene-navigation.js";
+import {
+  installViewerWorkspace,
+  nextBoundedResultLimit,
+} from "./viewer-workspace.js";
 import "./styles.css";
 
 interface BuildingContext {
@@ -131,8 +146,15 @@ interface ModelSource {
   readonly assetRoot?: URL;
 }
 
+const INITIAL_ROUTE_RESULT_LIMIT = 8;
+
 const sceneHost = element<HTMLDivElement>("scene");
+const viewerWorkspace = installViewerWorkspace(
+  element<HTMLElement>("viewer-workspace"),
+  element<HTMLElement>("viewer-workspace-scroll"),
+);
 const fileInput = element<HTMLInputElement>("model-file");
+const fileOpenButton = element<HTMLButtonElement>("model-file-open");
 const demoButton = element<HTMLButtonElement>("demo-button");
 const statusElement = element<HTMLParagraphElement>("status");
 const modelNameElement = element<HTMLParagraphElement>("model-name");
@@ -173,10 +195,13 @@ const dependencyStatus =
   element<HTMLParagraphElement>("dependency-status");
 const dependencyEmpty = element<HTMLParagraphElement>("dependency-empty");
 const dependencyList = element<HTMLUListElement>("dependency-list");
+const dependencyShowMore =
+  element<HTMLButtonElement>("dependency-show-more");
 const findPanel = element<HTMLElement>("find-panel");
 const buildingSearch = element<HTMLInputElement>("building-search");
 const searchStatus = element<HTMLParagraphElement>("search-status");
 const searchResults = element<HTMLUListElement>("search-results");
+const searchShowMore = element<HTMLButtonElement>("search-show-more");
 const isolateDistrictButton =
   element<HTMLButtonElement>("isolate-district");
 const showWholeCityButton =
@@ -205,6 +230,9 @@ const districtRoutesStatus =
   element<HTMLParagraphElement>("district-routes-status");
 const districtRoutesList =
   element<HTMLUListElement>("district-routes-list");
+const districtRoutesShowMore = element<HTMLButtonElement>(
+  "district-routes-show-more",
+);
 const districtRouteDetails =
   element<HTMLElement>("district-route-details");
 const districtRouteDetailTitle =
@@ -241,6 +269,7 @@ const inspectorFields = {
   unitsSummary: element<HTMLElement>("building-units-summary"),
   unitsCaption: element<HTMLTableCaptionElement>("building-units-caption"),
   units: element<HTMLTableSectionElement>("building-units"),
+  unitsShowMore: element<HTMLButtonElement>("building-units-show-more"),
 };
 
 const districtInspectorFields = {
@@ -1000,6 +1029,9 @@ class CityScene {
   }
 
   private select(entity: SceneEntity | null): void {
+    if (entity !== null) {
+      viewerWorkspace.show("inspect");
+    }
     if (sameSceneEntity(entity, this.selectedEntity)) {
       return;
     }
@@ -1165,11 +1197,13 @@ let activeDistrictsById = new Map(
 let dependencyExplorerIndex = createDependencyExplorerIndex(DEMO_MODEL);
 let dependencyRouteState: DependencyRouteToggleState =
   resetDependencyRouteState();
+let dependencyRouteVisibleLimit = INITIAL_ROUTE_RESULT_LIMIT;
 let districtDependencyExplorerIndex =
   createDistrictDependencyExplorerIndex(DEMO_MODEL);
 let districtDependencyFilters: DistrictDependencyFilters =
   resetDistrictDependencyFilters();
 let districtDependencyRoutesVisible = false;
+let districtRouteVisibleLimit = INITIAL_ROUTE_RESULT_LIMIT;
 let selectedDistrictDependencyBundleId: string | null = null;
 let visibleDistrictDependencyBundlesById = new Map<
   string,
@@ -1178,6 +1212,9 @@ let visibleDistrictDependencyBundlesById = new Map<
 let districtDependencyFootprintsById =
   createDistrictDependencyFootprints(DEMO_MODEL);
 let repositoryExplorerIndex = createRepositoryExplorerIndex(DEMO_MODEL);
+let searchResultLimit = DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT;
+let executableUnitVisibleLimit =
+  INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;
 let explorerState = resetExplorerState();
 let activeExternalLayout = createExternalDependencyLayout(DEMO_MODEL);
 let activeExternalNodes: readonly ExternalSceneNode[] =
@@ -1189,6 +1226,10 @@ const cityScene = new CityScene(
 const automaticModelLoadGate = new AutomaticModelLoadGate();
 const printExportDialog = installPrintExportDialog({
   getModel: () => activeModel,
+});
+
+fileOpenButton.addEventListener("click", () => {
+  fileInput.click();
 });
 
 fileInput.addEventListener("change", async () => {
@@ -1223,8 +1264,27 @@ dependencyIncomingToggle.addEventListener("click", () => {
 dependencyOutgoingToggle.addEventListener("click", () => {
   toggleDependencyDirection("outgoing");
 });
+dependencyShowMore.addEventListener("click", () => {
+  dependencyRouteVisibleLimit = nextBoundedResultLimit(
+    dependencyRouteVisibleLimit,
+    DEPENDENCY_ROUTES_PER_DIRECTION,
+    INITIAL_ROUTE_RESULT_LIMIT,
+  );
+  renderDependencyExplorer();
+});
 districtRoutesToggle.addEventListener("click", () => {
+  if (!districtDependencyRoutesVisible) {
+    districtRouteVisibleLimit = INITIAL_ROUTE_RESULT_LIMIT;
+  }
   districtDependencyRoutesVisible = !districtDependencyRoutesVisible;
+  renderDistrictDependencyExplorer();
+});
+districtRoutesShowMore.addEventListener("click", () => {
+  districtRouteVisibleLimit = nextBoundedResultLimit(
+    districtRouteVisibleLimit,
+    DISTRICT_DEPENDENCY_BUNDLES_LIMIT,
+    INITIAL_ROUTE_RESULT_LIMIT,
+  );
   renderDistrictDependencyExplorer();
 });
 districtRouteTypeScriptFilter.addEventListener("click", () => {
@@ -1243,18 +1303,44 @@ externalList.addEventListener("keydown", (event) => {
   navigateExternalNodes(event);
 });
 districtRouteIsolateConsumer.addEventListener("click", () => {
-  isolateDistrictDependencyEndpoint("consumer");
+  isolateDistrictDependencyEndpoint("consumer", true);
 });
 districtRouteIsolateProvider.addEventListener("click", () => {
-  isolateDistrictDependencyEndpoint("provider");
+  isolateDistrictDependencyEndpoint("provider", true);
 });
 
-buildingSearch.addEventListener("input", renderBuildingSearch);
+buildingSearch.addEventListener("input", () => {
+  searchResultLimit = DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT;
+  renderBuildingSearch();
+});
+searchShowMore.addEventListener("click", () => {
+  searchResultLimit = nextBoundedResultLimit(
+    searchResultLimit,
+    MAXIMUM_REPOSITORY_EXPLORER_RESULT_LIMIT,
+    DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT,
+  );
+  renderBuildingSearch();
+});
+inspectorFields.unitsShowMore.addEventListener("click", () => {
+  const selectedBuildingId =
+    selectedExplorerBuildingId(explorerState);
+  const building = selectedBuildingId
+    ? activeBuildingsById.get(selectedBuildingId)
+    : undefined;
+  if (!building) return;
+  executableUnitVisibleLimit = nextBoundedResultLimit(
+    executableUnitVisibleLimit,
+    MAXIMUM_EXECUTABLE_UNIT_VISIBLE_LIMIT,
+    INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT,
+  );
+  renderExecutableUnits(building);
+});
 buildingSearch.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && buildingSearch.value !== "") {
     event.preventDefault();
     event.stopPropagation();
     buildingSearch.value = "";
+    searchResultLimit = DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT;
     renderBuildingSearch();
     return;
   }
@@ -1410,10 +1496,12 @@ function applyModel(model: CityModel, source: ModelSource): void {
   activeDistrictsById = districtsById;
   dependencyExplorerIndex = nextDependencyExplorerIndex;
   dependencyRouteState = resetDependencyRouteState();
+  dependencyRouteVisibleLimit = INITIAL_ROUTE_RESULT_LIMIT;
   districtDependencyExplorerIndex =
     nextDistrictDependencyExplorerIndex;
   districtDependencyFilters = resetDistrictDependencyFilters();
   districtDependencyRoutesVisible = false;
+  districtRouteVisibleLimit = INITIAL_ROUTE_RESULT_LIMIT;
   selectedDistrictDependencyBundleId = null;
   visibleDistrictDependencyBundlesById = new Map();
   districtDependencyFootprintsById =
@@ -1423,6 +1511,7 @@ function applyModel(model: CityModel, source: ModelSource): void {
   activeExternalLayout = nextExternalLayout;
   activeExternalNodes = nextExternalLayout.nodes;
   buildingSearch.value = "";
+  searchResultLimit = DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT;
   synchronizeExplorerState(explorerState);
   renderBuildingSearch();
   cityScene.load(model, nextExternalLayout.base, nextExternalLayout.nodes);
@@ -1477,9 +1566,8 @@ function renderExternalNodeList(): void {
       button.setAttribute("aria-current", "true");
     }
     button.addEventListener("click", () => {
-      if (cityScene.selectExternalNode(node.id)) {
-        externalInspectorContent.focus({ preventScroll: true });
-      }
+      viewerWorkspace.show("inspect", { focusTab: true });
+      cityScene.selectExternalNode(node.id);
     });
 
     const label = document.createElement("span");
@@ -1531,65 +1619,99 @@ function navigateExternalNodes(event: KeyboardEvent): void {
 
 function renderBuildingSearch(): void {
   searchResults.replaceChildren();
+  searchShowMore.hidden = true;
   findPanel.classList.remove("has-results");
-  buildingSearch.disabled = activeModel.buildings.length === 0;
-  if (activeModel.buildings.length === 0) {
-    searchStatus.textContent = "This model has no buildings.";
+  const entityCount =
+    activeModel.buildings.length + activeModel.districts.length;
+  buildingSearch.disabled = entityCount === 0;
+  if (entityCount === 0) {
+    searchStatus.textContent = "This model has no searchable city entities.";
     return;
   }
 
-  const search = searchRepositoryBuildings(
+  const matches = searchRepositoryEntities(
     repositoryExplorerIndex,
     buildingSearch.value,
+    { limit: MAXIMUM_REPOSITORY_EXPLORER_RESULT_LIMIT },
   );
-  if (search.state === "empty-query") {
-    searchStatus.textContent = "Type to find a building.";
+  if (matches.state === "empty-query") {
+    searchStatus.textContent = "Type to find a building or district.";
     return;
   }
-  if (search.state === "no-matches") {
-    searchStatus.textContent = `No buildings match “${search.query}”.`;
+  const totalCount = matches.totalCount;
+  if (totalCount === 0) {
+    searchStatus.textContent =
+      `No city entities match “${matches.query}”.`;
     return;
   }
 
-  const visibleCount = search.results.length;
-  const totalCount = search.totalCount;
+  const results = matches.results.slice(0, searchResultLimit);
+  const visibleCount = results.length;
   findPanel.classList.add("has-results");
   searchStatus.textContent =
-    `${totalCount.toLocaleString()} ${totalCount === 1 ? "building" : "buildings"} found` +
+    `${totalCount.toLocaleString()} ${totalCount === 1 ? "result" : "results"} found` +
     (visibleCount < totalCount
       ? ` · showing ${visibleCount.toLocaleString()}`
       : "");
+  searchShowMore.hidden =
+    visibleCount >= totalCount ||
+    searchResultLimit >= MAXIMUM_REPOSITORY_EXPLORER_RESULT_LIMIT;
 
-  for (const result of search.results) {
+  for (const entry of results) {
     const item = document.createElement("li");
     item.className = "search-result";
 
     const button = document.createElement("button");
     button.type = "button";
     button.className = "search-result-button";
-    button.dataset["buildingId"] = result.buildingId;
-    button.title = result.path;
-    if (
-      result.buildingId === selectedExplorerBuildingId(explorerState)
-    ) {
-      button.setAttribute("aria-current", "true");
+    button.title = entry.result.path;
+    if (entry.kind === "building") {
+      const { result } = entry;
+      button.dataset["buildingId"] = result.buildingId;
+      if (
+        result.buildingId === selectedExplorerBuildingId(explorerState)
+      ) {
+        button.setAttribute("aria-current", "true");
+      }
+      button.addEventListener("click", () => {
+        viewerWorkspace.show("inspect", { focusTab: true });
+        selectBuildingFromExplorer(result.buildingId);
+      });
+    } else {
+      const { result } = entry;
+      button.dataset["districtId"] = result.districtId;
+      if (
+        result.districtId === selectedExplorerDistrictId(explorerState)
+      ) {
+        button.setAttribute("aria-current", "true");
+      }
+      button.addEventListener("click", () => {
+        viewerWorkspace.show("inspect", { focusTab: true });
+        selectDistrictFromExplorer(result.districtId);
+      });
     }
-    button.addEventListener("click", () => {
-      selectBuildingFromExplorer(result.buildingId);
-    });
 
     const name = document.createElement("span");
     name.className = "search-result-name";
-    name.textContent = result.name;
+    name.textContent = entry.result.name;
 
     const path = document.createElement("span");
     path.className = "search-result-path";
-    path.textContent = result.path;
+    path.textContent = entry.result.path;
 
     const metadata = document.createElement("span");
     metadata.className = "search-result-meta";
-    metadata.textContent =
-      `${result.moduleName} · Max CC ${result.maximumComplexity.toLocaleString()}`;
+    if (entry.kind === "building") {
+      metadata.textContent =
+        `${entry.result.moduleName} · Max CC ` +
+        entry.result.maximumComplexity.toLocaleString();
+    } else {
+      metadata.textContent =
+        `${entry.result.moduleName} · ` +
+        `${entry.result.buildingCount.toLocaleString()} ${
+          entry.result.buildingCount === 1 ? "building" : "buildings"
+        }`;
+    }
 
     button.append(name, path, metadata);
     item.append(button);
@@ -1616,6 +1738,17 @@ function selectBuildingFromExplorer(buildingId: string): void {
   }
 }
 
+function selectDistrictFromExplorer(districtId: string): void {
+  const next = selectExplorerDistrict(
+    explorerState,
+    activeModel,
+    districtId,
+  );
+  if (selectedExplorerDistrictId(next) === districtId) {
+    cityScene.selectDistrict(districtId, true);
+  }
+}
+
 function clearBuildingSelection(): void {
   cityScene.resetSelection();
 }
@@ -1623,8 +1756,11 @@ function clearBuildingSelection(): void {
 function synchronizeExplorerState(state: ExplorerState): void {
   const previousSelectedBuildingId =
     selectedExplorerBuildingId(explorerState);
+  const previousIsolatedDistrictId =
+    explorerState.isolatedDistrictId;
   explorerState = state;
   const selectedBuildingId = selectedExplorerBuildingId(state);
+  const selectedDistrictId = selectedExplorerDistrictId(state);
   const selectedExternalNodeId = selectedExplorerExternalId(state);
   if (selectedExternalNodeId !== null) {
     const selectedExternal = activeExternalNodes.find(
@@ -1640,17 +1776,28 @@ function synchronizeExplorerState(state: ExplorerState): void {
   ) {
     dependencyRouteState = resetDependencyRouteState();
   }
+  if (previousSelectedBuildingId !== selectedBuildingId) {
+    dependencyRouteVisibleLimit = INITIAL_ROUTE_RESULT_LIMIT;
+  }
+  if (previousIsolatedDistrictId !== state.isolatedDistrictId) {
+    districtRouteVisibleLimit = INITIAL_ROUTE_RESULT_LIMIT;
+  }
   const selected = selectedBuildingId
     ? activeModel.buildings.find(
         ({ id }) => id === selectedBuildingId,
       )
     : undefined;
+  const isolatableDistrictId =
+    selected?.districtId ?? selectedDistrictId;
   isolateDistrictButton.disabled =
-    !selected ||
-    state.isolatedDistrictId === selected.districtId;
+    isolatableDistrictId === null ||
+    state.isolatedDistrictId === isolatableDistrictId;
   showWholeCityButton.disabled = state.isolatedDistrictId === null;
   for (const button of searchResultButtons()) {
-    if (button.dataset["buildingId"] === selectedBuildingId) {
+    if (
+      button.dataset["buildingId"] === selectedBuildingId ||
+      button.dataset["districtId"] === selectedDistrictId
+    ) {
       button.setAttribute("aria-current", "true");
     } else {
       button.removeAttribute("aria-current");
@@ -1666,6 +1813,7 @@ function toggleDistrictDependencyFilter(kind: DependencyKind): void {
     districtDependencyFilters,
     kind,
   );
+  districtRouteVisibleLimit = INITIAL_ROUTE_RESULT_LIMIT;
   renderDistrictDependencyExplorer();
 }
 
@@ -1679,6 +1827,18 @@ function renderDistrictDependencyExplorer(): void {
     districtDependencyFilters,
     explorerState.isolatedDistrictId,
   );
+  const visibleBundles = summary.bundles.slice(
+    0,
+    districtRouteVisibleLimit,
+  );
+  const visibleReferenceWeight = visibleBundles.reduce(
+    (total, bundle) => total + bundle.weight,
+    0,
+  );
+  const revealableBundleCount =
+    summary.bundles.length - visibleBundles.length;
+  const hiddenBundleCount =
+    summary.totalBundleCount - visibleBundles.length;
   const availableKinds = new Map(
     summary.availableKinds.map((kind) => [kind.kind, kind]),
   );
@@ -1715,8 +1875,13 @@ function renderDistrictDependencyExplorer(): void {
     districtDependencyRoutesVisible ? "Hide" : "Show";
   districtRoutesList.replaceChildren();
   visibleDistrictDependencyBundlesById = new Map(
-    summary.bundles.map((bundle) => [bundle.id, bundle]),
+    visibleBundles.map((bundle) => [bundle.id, bundle]),
   );
+  districtRoutesShowMore.hidden =
+    !districtDependencyRoutesVisible || revealableBundleCount === 0;
+  districtRoutesShowMore.textContent =
+    "Show more routes" +
+    ` (${revealableBundleCount.toLocaleString()} available)`;
 
   if (
     selectedDistrictDependencyBundleId !== null &&
@@ -1729,6 +1894,7 @@ function renderDistrictDependencyExplorer(): void {
 
   if (!districtDependencyRoutesVisible) {
     districtRoutesList.hidden = true;
+    districtRoutesShowMore.hidden = true;
     districtRouteDetails.hidden = true;
     districtRoutesStatus.textContent =
       districtDependencyExplorerIndex.bundleCount === 0
@@ -1742,7 +1908,7 @@ function renderDistrictDependencyExplorer(): void {
     districtDependencyFilters.typescriptImport ||
     districtDependencyFilters.projectReference ||
     districtDependencyFilters.packageReference;
-  districtRoutesList.hidden = summary.bundles.length === 0;
+  districtRoutesList.hidden = visibleBundles.length === 0;
   if (!hasEnabledKind) {
     districtRoutesStatus.textContent = "No route kinds selected.";
   } else if (summary.totalBundleCount === 0) {
@@ -1752,17 +1918,17 @@ function renderDistrictDependencyExplorer(): void {
         : "No matching routes touch this district.";
   } else {
     districtRoutesStatus.textContent =
-      `Showing ${summary.visibleBundleCount.toLocaleString()} of ` +
+      `Showing ${visibleBundles.length.toLocaleString()} of ` +
       `${routeCountLabel(summary.totalBundleCount)} · ` +
-      `${summary.visibleReferenceWeight.toLocaleString()} of ` +
+      `${visibleReferenceWeight.toLocaleString()} of ` +
       `${referenceCountLabel(summary.totalReferenceWeight)}` +
-      (summary.hiddenBundleCount > 0
-        ? ` · ${summary.hiddenBundleCount.toLocaleString()} bundles hidden by limit`
+      (hiddenBundleCount > 0
+        ? ` · ${hiddenBundleCount.toLocaleString()} not shown`
         : "");
   }
 
   const overlayRoutes: DependencyOverlayRoute[] = [];
-  for (const bundle of summary.bundles) {
+  for (const bundle of visibleBundles) {
     overlayRoutes.push(districtDependencyOverlayRoute(bundle));
     districtRoutesList.append(districtDependencyListItem(bundle));
   }
@@ -1940,6 +2106,7 @@ function updateDistrictEndpointAction(
 
 function isolateDistrictDependencyEndpoint(
   role: "consumer" | "provider",
+  focusInspectTab = false,
 ): void {
   if (selectedDistrictDependencyBundleId === null) {
     return;
@@ -1955,10 +2122,11 @@ function isolateDistrictDependencyEndpoint(
   if (districtId === null) {
     return;
   }
-  cityScene.isolateDistrict(districtId);
-  if (cityScene.selectDistrict(districtId)) {
-    districtInspectorContent.focus({ preventScroll: true });
+  if (focusInspectTab) {
+    viewerWorkspace.show("inspect", { focusTab: true });
   }
+  cityScene.isolateDistrict(districtId);
+  cityScene.selectDistrict(districtId);
 }
 
 function navigateDistrictDependencyRoutes(event: KeyboardEvent): void {
@@ -2030,11 +2198,13 @@ function toggleDependencyDirection(
     dependencyRouteState,
     direction,
   );
+  dependencyRouteVisibleLimit = INITIAL_ROUTE_RESULT_LIMIT;
   renderDependencyExplorer();
 }
 
 function renderDependencyExplorer(): void {
   dependencyList.replaceChildren();
+  dependencyShowMore.hidden = true;
   const selectedBuildingId = selectedExplorerBuildingId(explorerState);
   const summary =
     selectedBuildingId === null
@@ -2071,9 +2241,15 @@ function renderDependencyExplorer(): void {
     return;
   }
 
+  const visibleIncomingRoutes = dependencyRouteState.incoming
+    ? summary.incoming.routes.slice(0, dependencyRouteVisibleLimit)
+    : [];
+  const visibleOutgoingRoutes = dependencyRouteState.outgoing
+    ? summary.outgoing.routes.slice(0, dependencyRouteVisibleLimit)
+    : [];
   const visibleRoutes = [
-    ...(dependencyRouteState.incoming ? summary.incoming.routes : []),
-    ...(dependencyRouteState.outgoing ? summary.outgoing.routes : []),
+    ...visibleIncomingRoutes,
+    ...visibleOutgoingRoutes,
   ];
   const activeSummaries = [
     ...(dependencyRouteState.incoming ? [summary.incoming] : []),
@@ -2089,18 +2265,30 @@ function renderDependencyExplorer(): void {
     return;
   }
 
-  const hiddenCount = activeSummaries.reduce(
-    (total, direction) => total + direction.hiddenCount,
+  const totalCount = activeSummaries.reduce(
+    (total, direction) => total + direction.totalCount,
     0,
   );
-  const visibleWeight = activeSummaries.reduce(
-    (total, direction) => total + direction.visibleWeight,
+  const revealableCount = activeSummaries.reduce(
+    (total, direction) =>
+      total +
+      Math.max(0, direction.routes.length - dependencyRouteVisibleLimit),
     0,
   );
-  const hiddenWeight = activeSummaries.reduce(
-    (total, direction) => total + direction.hiddenWeight,
+  const visibleWeight = visibleRoutes.reduce(
+    (total, route) => total + route.weight,
     0,
   );
+  const totalWeight = activeSummaries.reduce(
+    (total, direction) => total + direction.totalWeight,
+    0,
+  );
+  const hiddenCount = totalCount - visibleRoutes.length;
+  const hiddenWeight = totalWeight - visibleWeight;
+  dependencyShowMore.hidden = revealableCount === 0;
+  dependencyShowMore.textContent =
+    "Show more routes" +
+    ` (${revealableCount.toLocaleString()} available)`;
   dependencyStatus.textContent =
     visibleRoutes.length === 0
       ? "No routes in the selected direction."
@@ -2155,15 +2343,15 @@ function dependencyListItem(
         activeExternalLayout,
         target,
       );
-      if (node && cityScene.selectExternalNode(node.id)) {
-        externalInspectorContent.focus({ preventScroll: true });
-      }
+      if (!node) return;
+      viewerWorkspace.show("inspect", { focusTab: true });
+      cityScene.selectExternalNode(node.id);
     });
   } else if (route.counterpart.kind === "building") {
     const counterpartBuildingId = route.counterpart.buildingId;
     row.addEventListener("click", () => {
+      viewerWorkspace.show("inspect", { focusTab: true });
       selectBuildingFromExplorer(counterpartBuildingId);
-      inspectorContent.focus({ preventScroll: true });
     });
   }
 
@@ -2635,6 +2823,9 @@ function showInspector(context: BuildingContext | null): void {
     building.metrics.maximumComplexity.toLocaleString();
   inspectorFields.metricMethod.textContent =
     building.metricMethod ?? "Not recorded";
+  executableUnitVisibleLimit =
+    INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;
+  inspectorFields.unitsDetails.open = false;
   renderExecutableUnits(building);
   selectionStatus.textContent =
     `Selected ${building.name}. Maximum cyclomatic complexity ` +
@@ -2751,17 +2942,24 @@ function externalConsumerIdentity(
 }
 
 function renderExecutableUnits(building: CityBuilding): void {
-  const presentation = presentExecutableUnits(building.units);
+  const presentation = presentExecutableUnits(building.units, {
+    visibleLimit: executableUnitVisibleLimit,
+  });
+  const wasOpen = inspectorFields.unitsDetails.open;
   inspectorFields.units.replaceChildren();
-  inspectorFields.unitsDetails.open = false;
   inspectorFields.unitsDetails.hidden = presentation === null;
   inspectorFields.unitsEmpty.hidden = presentation !== null;
   inspectorFields.unitCount.hidden = presentation === null;
+  inspectorFields.unitsShowMore.hidden =
+    presentation === null ||
+    !canRevealMoreExecutableUnits(presentation);
 
   if (!presentation) {
+    inspectorFields.unitsDetails.open = false;
     inspectorFields.unitCount.textContent = "";
     inspectorFields.unitsSummary.textContent = "";
     inspectorFields.unitsCaption.textContent = "";
+    inspectorFields.unitsShowMore.textContent = "Show more units";
     return;
   }
 
@@ -2769,12 +2967,30 @@ function renderExecutableUnits(building: CityBuilding): void {
   const unitLabel = presentation.count === 1 ? "unit" : "units";
   const maximumComplexity =
     presentation.maximumComplexity.toLocaleString();
-  inspectorFields.unitsDetails.open = presentation.count <= 10;
+  inspectorFields.unitsDetails.open =
+    wasOpen ||
+    presentation.count <= INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;
   inspectorFields.unitCount.textContent = count;
+  const cappedOmission =
+    presentation.hiddenCount > 0 &&
+    !canRevealMoreExecutableUnits(presentation);
   inspectorFields.unitsSummary.textContent =
-    `${count} ${unitLabel} · highest complexity ${maximumComplexity}`;
+    `${count} ${unitLabel} · highest complexity ${maximumComplexity}` +
+    (presentation.hiddenCount > 0
+      ? cappedOmission
+        ? ` · showing first ${presentation.visibleCount.toLocaleString()}` +
+          ` · ${presentation.hiddenCount.toLocaleString()} omitted at viewer limit`
+        : ` · showing ${presentation.visibleCount.toLocaleString()}`
+      : "");
   inspectorFields.unitsCaption.textContent =
     `Executable units for ${building.name}`;
+  const nextRevealCount = Math.min(
+    INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT,
+    presentation.hiddenCount,
+  );
+  inspectorFields.unitsShowMore.textContent =
+    `Show ${nextRevealCount.toLocaleString()} more` +
+    ` (${presentation.hiddenCount.toLocaleString()} remaining)`;
 
   for (const unit of presentation.rows) {
     const row = document.createElement("tr");
