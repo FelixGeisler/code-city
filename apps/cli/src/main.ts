@@ -34,11 +34,13 @@ import {
   publishPrivateJson,
   readBoundedJsonFile,
 } from "./json-file.js";
+import { startLocalOpenServer } from "./open-server.js";
 
 const HELP = `Code City
 
 Usage:
   codecity analyze <root...> --output <city-model.json> [options]
+  codecity open <root...> [--port <port>] [options]
   codecity plan --model <city-model.json> --profile <profile.json> \\
     --format <stl|3mf> --output <print-plan.json> [--scale <factor>] \\
     [--labels <auto|off>] [--routes <auto|off>]
@@ -57,6 +59,9 @@ Analyze options:
   --max-file-bytes <bytes>   Bytes per retained file (default: 2097152)
   --max-total-bytes <bytes>  Retained content bytes (default: 268435456)
   --timeout-ms <ms>          Snapshot + analysis deadline (default: 300000)
+
+Open options:
+  --port <port>              Loopback port; 0 selects a free port (default: 0)
 
 Print options:
   --labels <auto|off>  Same-channel physical labels (default: auto)
@@ -143,6 +148,22 @@ function positiveSafeIntegerOption(
   return parsed;
 }
 
+function loopbackPortOption(
+  options: ReadonlyMap<string, string>,
+): number | undefined {
+  const value = options.get("port");
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (
+    !Number.isSafeInteger(parsed) ||
+    parsed < 0 ||
+    parsed > 65_535
+  ) {
+    throw new Error("--port must be 0 or an integer from 1 to 65535.");
+  }
+  return parsed;
+}
+
 async function readJson(filePath: string, description: string): Promise<unknown> {
   const maximumBytes =
     description === "city model"
@@ -212,6 +233,62 @@ async function analyzeCommand(args: readonly string[], io: CliIo): Promise<void>
   for (const warning of model.analysis?.warnings ?? []) {
     io.stderr(`Warning: ${warning}\n`);
   }
+}
+
+async function openCommand(args: readonly string[], io: CliIo): Promise<void> {
+  const parsed = parseArguments(
+    args,
+    new Set([
+      "port",
+      "title",
+      "version",
+      "logo",
+      "max-files",
+      "max-file-bytes",
+      "max-total-bytes",
+      "timeout-ms",
+    ]),
+  );
+  if (parsed.positionals.length === 0) {
+    throw new Error("The open command requires at least one local root.");
+  }
+  const maxRetainedFiles = positiveSafeIntegerOption(
+    parsed.options,
+    "max-files",
+  );
+  const maxFileBytes = positiveSafeIntegerOption(
+    parsed.options,
+    "max-file-bytes",
+  );
+  const maxTotalBytes = positiveSafeIntegerOption(
+    parsed.options,
+    "max-total-bytes",
+  );
+  const timeoutMs = positiveSafeIntegerOption(parsed.options, "timeout-ms");
+  const port = loopbackPortOption(parsed.options);
+  const analysis: LocalAnalysisOptions = {
+    ...(parsed.options.get("title") === undefined
+      ? {}
+      : { title: parsed.options.get("title")! }),
+    ...(parsed.options.get("version") === undefined
+      ? {}
+      : { version: parsed.options.get("version")! }),
+    ...(parsed.options.get("logo") === undefined
+      ? {}
+      : { logo: parsed.options.get("logo")! }),
+    ...(maxRetainedFiles === undefined ? {} : { maxRetainedFiles }),
+    ...(maxFileBytes === undefined ? {} : { maxFileBytes }),
+    ...(maxTotalBytes === undefined ? {} : { maxTotalBytes }),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
+  };
+  const server = await startLocalOpenServer({
+    roots: parsed.positionals,
+    analysis,
+    ...(port === undefined ? {} : { port }),
+  });
+  io.stdout(`Code City viewer: ${server.url.href}\n`);
+  io.stdout("Press Ctrl+C to stop the local viewer.\n");
+  await server.closed;
 }
 
 async function planCommand(args: readonly string[], io: CliIo): Promise<void> {
@@ -534,6 +611,8 @@ export async function runCli(
   try {
     if (command === "analyze") {
       await analyzeCommand(args.slice(1), io);
+    } else if (command === "open") {
+      await openCommand(args.slice(1), io);
     } else if (command === "plan") {
       await planCommand(args.slice(1), io);
     } else if (command === "export") {

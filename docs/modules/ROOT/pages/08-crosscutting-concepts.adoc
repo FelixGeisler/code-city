@@ -142,6 +142,9 @@ The bundled Roslyn helper parses syntax only, receives opaque source IDs over a
 versioned bounded protocol, and runs once per analysis. It never loads a
 solution, project, MSBuild, NuGet, generators, or repository analyzers.
 
+`codecity open` binds only to `127.0.0.1`, validates the exact Host header, and
+serves a startup-captured viewer allowlist plus one no-store in-memory model.
+
 CLI input is capped at 128 MiB per city model and 1 MiB per printer profile.
 Derived JSON is staged with mode `0600`, atomically renamed, and rolled back on
 failure. The viewer uses one explicit-load gateway: 128 MiB model, 1 MiB local

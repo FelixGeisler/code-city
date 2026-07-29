@@ -44,4 +44,12 @@ describe("viewer security boundary", () => {
       }
     }
   });
+
+  it("emits icons as CSP-compatible same-origin assets", async () => {
+    const config = await fs.readFile(
+      path.join(viewerRoot, "vite.config.ts"),
+      "utf8",
+    );
+    expect(config).toContain("assetsInlineLimit: 0");
+  });
 });

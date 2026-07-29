@@ -470,6 +470,31 @@ it("documents both dependency-route policy values", async () => {
   expect(stdout.join("")).toContain("default: off");
 });
 
+it("documents local open and rejects invalid loopback ports before startup", async () => {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  expect(
+    await runCli(["open", "--help"], {
+      stdout: (message) => stdout.push(message),
+      stderr: (message) => stderr.push(message),
+    }),
+  ).toBe(0);
+  expect(stdout.join("")).toContain("codecity open <root...>");
+  expect(stdout.join("")).toContain(
+    "--port <port>              Loopback port",
+  );
+
+  expect(
+    await runCli(["open", "repository", "--port", "65536"], {
+      stdout: () => undefined,
+      stderr: (message) => stderr.push(message),
+    }),
+  ).toBe(1);
+  expect(stderr.join("")).toContain(
+    "--port must be 0 or an integer from 1 to 65535",
+  );
+});
+
 it(
   "documents all bounded-analysis controls and defaults",
   { timeout: 1_000 },

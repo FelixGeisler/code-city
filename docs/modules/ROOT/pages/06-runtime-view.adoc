@@ -3,7 +3,9 @@
 == Local
 
 `codecity open .` reads a checkout, builds the city model, and serves the viewer
-on `127.0.0.1`.
+on an ephemeral `127.0.0.1` port. It prints the URL and does not launch a
+browser. The server exposes only bundled viewer assets and one in-memory model;
+SIGINT, SIGTERM, or explicit close stops it.
 
 == Public GitHub
 
