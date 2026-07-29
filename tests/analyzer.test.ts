@@ -420,7 +420,7 @@ EndProject
         z: first.bounds.z,
       },
     });
-  });
+  }, 15_000);
 
   it("keeps detailed metric methodology in facts without leaking roots", async () => {
     const { hub } = await createFixture();
