@@ -34,7 +34,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -1292,6 +1293,241 @@ button,
   pointer-events: none;
 }
 
+.print-export-dialog {
+  width: min(640px, calc(100vw - 32px));
+  max-height: min(860px, calc(100vh - 32px));
+  padding: 0;
+  overflow: auto;
+  border: 1px solid rgba(121, 196, 255, 0.3);
+  border-radius: 14px;
+  color: #eff7ff;
+  background:
+    linear-gradient(145deg, rgba(54, 163, 255, 0.08), transparent 42%),
+    #091726;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+
+.print-export-dialog::backdrop {
+  background: rgba(2, 8, 16, 0.76);
+  backdrop-filter: blur(7px);
+}
+
+#print-export-form {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+}
+
+.print-export-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.print-export-heading h2,
+.print-export-heading p,
+.print-export-preflight h3,
+.print-export-preflight h4,
+.print-export-errors h3 {
+  margin: 0;
+}
+
+.eyebrow {
+  margin-bottom: 5px !important;
+  color: var(--accent-strong);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.print-export-heading h2 {
+  font-size: 22px;
+}
+
+.print-export-privacy,
+.print-export-help {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.print-export-options {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.print-export-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #cfe3f7;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.print-export-field input,
+.print-export-field select {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: #eff7ff;
+  background: rgba(4, 14, 26, 0.72);
+}
+
+.print-export-field input:focus-visible,
+.print-export-field select:focus-visible,
+.print-export-check input:focus-visible,
+.print-tool-selection input:focus-visible,
+.print-export-downloads a:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+
+.print-export-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.print-tool-selection {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+.print-tool-selection legend {
+  padding: 0 5px;
+  color: #cfe3f7;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.print-tool-selection > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.print-tool-selection label,
+.print-export-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #c4d8eb;
+  font-size: 12px;
+}
+
+.print-export-check {
+  width: fit-content;
+}
+
+.print-export-check input,
+.print-tool-selection input {
+  accent-color: var(--accent);
+}
+
+.print-export-actions,
+.print-export-downloads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+.print-export-progress {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.45fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  color: #d7eaff;
+  font-size: 12px;
+}
+
+.print-export-progress progress {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.print-export-errors,
+.print-export-preflight {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(4, 14, 26, 0.58);
+}
+
+.print-export-errors {
+  border-color: rgba(255, 128, 144, 0.38);
+  color: #ffd5da;
+}
+
+.print-export-errors h3,
+.print-export-preflight h3 {
+  font-size: 14px;
+}
+
+.print-export-errors ul,
+.print-export-preflight ul {
+  margin: 9px 0 0;
+  padding-left: 20px;
+  color: #c6d9ea;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.print-export-preflight {
+  display: grid;
+  gap: 12px;
+}
+
+.print-export-preflight dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 9px;
+  margin: 0;
+}
+
+.print-export-preflight dl > div {
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(40, 69, 96, 0.38);
+}
+
+.print-export-preflight dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.print-export-preflight dd {
+  margin: 4px 0 0;
+  color: #f0f8ff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.print-export-preflight h4 {
+  color: #bdd5e9;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.print-export-downloads .button {
+  text-decoration: none;
+}
+
 .visually-hidden {
   position: absolute !important;
   width: 1px !important;
@@ -1417,6 +1653,25 @@ button,
   .error-banner {
     bottom: 18px;
     width: calc(100% - 24px);
+  }
+
+  #print-export-form {
+    padding: 18px;
+  }
+}
+
+@media (max-width: 600px) {
+  .brand span {
+    display: none;
+  }
+
+  .print-export-dialog {
+    width: calc(100vw - 20px);
+    max-height: calc(100vh - 20px);
+  }
+
+  .print-export-grid {
+    grid-template-columns: 1fr;
   }
 }
 

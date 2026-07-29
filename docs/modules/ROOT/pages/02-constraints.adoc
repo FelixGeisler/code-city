@@ -4,6 +4,8 @@
 * Local analysis and viewing work without network access.
 * .NET/C# and TypeScript are the first analyzer targets.
 * Browser and print output use one `city-model.json`.
-* STL is the fallback; multi-part 3MF is the primary print format.
+* The current exporter emits multi-part 3MF; STL is planned.
 * Printer profiles declare configured print channels; no global channel limit
   exists.
+* Browser export is local-only, emits 3MF, and does not auto-fit or tile an
+  oversized city.

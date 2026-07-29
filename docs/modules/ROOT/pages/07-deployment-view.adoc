@@ -5,7 +5,7 @@
 |Mode |Deployment
 
 |Offline
-|Self-contained CLI plus bundled browser assets
+|Self-contained CLI and static viewer with an export worker
 
 |Hosted
 |Static web UI, bounded analysis API, isolated workers

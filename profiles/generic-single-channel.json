@@ -1,6 +1,6 @@
 {
   "id": "generic-single-channel",
-  "name": "Generic single-channel FFF printer",
+  "name": "Generic single-channel printer",
   "printChannels": [
     {
       "id": "channel-1",

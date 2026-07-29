@@ -7,23 +7,22 @@ import { pathToFileURL } from "node:url";
 import { analyzeLocalRepositories } from "../../../packages/analyzer/src/index.js";
 import {
   assignSemanticGroups,
+  parsePrinterProfile,
   parsePrintLabelPolicy,
   parsePrintRoutePolicy,
   planPrint,
   PrintPlanValidationError,
-  serializePrintLegend,
   validateCityModel,
-  validatePrinterProfile,
 } from "../../../packages/core/src/index.js";
 import type {
   CityModel,
-  PrinterProfile,
   PrintFormat,
   PrintRoutePolicy,
 } from "../../../packages/core/src/index.js";
 import {
   buildDependencyConnectorComparison,
   buildPrintableCityArtifacts,
+  generateThreeMfExport,
   printablePlanGeometry,
   serializeThreeMf,
 } from "../../../packages/exporter/src/index.js";
@@ -142,52 +141,8 @@ async function readJson(filePath: string, description: string): Promise<unknown>
   }
 }
 
-function object(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function parseCityModel(value: unknown): CityModel {
   return validateCityModel(value);
-}
-
-function parsePrinterProfile(value: unknown): PrinterProfile {
-  const channels = object(value) ? value["printChannels"] : undefined;
-  const formats = object(value) ? value["supportedFormats"] : undefined;
-  const buildVolume = object(value) ? value["buildVolume"] : undefined;
-  const geometryLimits = object(value) ? value["geometryLimits"] : undefined;
-  if (
-    !object(value) ||
-    typeof value["id"] !== "string" ||
-    typeof value["name"] !== "string" ||
-    !Array.isArray(channels) ||
-    !channels.every(
-      (channel) =>
-        object(channel) &&
-        typeof channel["id"] === "string" &&
-        typeof channel["label"] === "string" &&
-        typeof channel["mechanism"] === "string",
-    ) ||
-    !Array.isArray(formats) ||
-    !formats.every((format) => format === "stl" || format === "3mf") ||
-    !object(buildVolume) ||
-    typeof buildVolume["x"] !== "number" ||
-    typeof buildVolume["y"] !== "number" ||
-    typeof buildVolume["z"] !== "number" ||
-    !object(geometryLimits) ||
-    typeof geometryLimits["minimumWallThickness"] !== "number" ||
-    typeof geometryLimits["minimumGap"] !== "number" ||
-    typeof geometryLimits["minimumFeatureSize"] !== "number" ||
-    typeof geometryLimits["minimumBaseThickness"] !== "number" ||
-    typeof value["overflowPolicy"] !== "string"
-  ) {
-    throw new Error("Profile is not a valid Code City printer profile.");
-  }
-  const profile = value as unknown as PrinterProfile;
-  const issues = validatePrinterProfile(profile);
-  if (issues.length > 0) {
-    throw new Error(`Invalid printer profile: ${issues.join(" ")}`);
-  }
-  return profile;
 }
 
 async function analyzeCommand(args: readonly string[], io: CliIo): Promise<void> {
@@ -485,48 +440,41 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
   const profile = parsePrinterProfile(
     await readJson(profilePath, "printer profile"),
   );
-  if (!profile.supportedFormats.includes("3mf")) {
-    throw new Error(
-      `Format '3mf' is not supported by profile '${profile.id}'.`,
-    );
-  }
-  const artifacts = buildPrintableCityArtifacts(
+  const exported = generateThreeMfExport({
     model,
-    assignSemanticGroups(profile, model.semanticGroups),
-    {
-      profile,
+    profile,
+    options: {
       scale,
       labelPolicy,
       routePolicy,
+      includeLegend: companionOutput !== undefined,
     },
-  );
-  const printable = artifacts.city;
-  const archiveBytes = serializeThreeMf(printable);
+  });
   const publishedPaths = await publishArtifactsAtomically([
-    { destination: output, bytes: archiveBytes },
+    { destination: output, bytes: exported.threeMfBytes },
     ...(companionOutput === undefined
       ? []
       : [
           {
             destination: companionOutput,
-            bytes: serializePrintLegend(artifacts.legend),
+            bytes: exported.legendBytes!,
             mode: 0o600,
           },
         ]),
   ]);
   const absoluteOutput = publishedPaths[0]!;
   const absoluteLegend = publishedPaths[1];
-  const bounds = printable.bounds.size;
+  const bounds = exported.preflight.dimensions;
   io.stdout(
-    `Exported 3MF with ${printable.parts.length} aligned part(s) at ${bounds.x} × ${bounds.y} × ${bounds.z} mm.\nWrote ${absoluteOutput}\n`,
+    `Exported 3MF with ${exported.preflight.partCount} aligned part(s) at ${bounds.x} × ${bounds.y} × ${bounds.z} mm.\nWrote ${absoluteOutput}\n`,
   );
   if (absoluteLegend !== undefined) {
     io.stdout(`Wrote ${absoluteLegend}\n`);
   } else {
     io.stdout("Legend output disabled.\n");
   }
-  io.stdout(`${labelSummary(artifacts.labels)}\n`);
-  io.stdout(`${routeSummary(artifacts.routes)}\n`);
+  io.stdout(`${labelSummary(exported.preflight.labels)}\n`);
+  io.stdout(`${routeSummary(exported.preflight.routes)}\n`);
 }
 
 export async function runCli(

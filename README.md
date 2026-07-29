@@ -5,7 +5,7 @@
 Code City turns a software repository into:
 
 - an interactive 3D city that can be explored in a web browser; and
-- a printable STL or multi-part 3MF model for a 3D printer.
+- a printable multi-part 3MF model for a 3D printer.
 
 The project will support public GitHub repositories, generic Git remotes such as
 Azure DevOps Server, and local checkouts that can be analyzed fully offline.
@@ -56,7 +56,12 @@ npm run cli -- export `
   --output build\print\code-city-demo.3mf
 ```
 
-The viewer also accepts a `city-model.json` through its **Open model** button.
+The viewer accepts a `city-model.json` through **Open model**. **Export 3MF**
+selects a generic, Prusa XL, or local custom printer profile, shows exact
+preflight dimensions and channel assignments, then downloads the 3MF and
+optional private legend. Generation runs locally in a cancellable worker; no
+model or profile is uploaded.
+
 The first C# implementation is explicitly labelled lexical; Roslyn replaces it
 without changing the model contract.
 
@@ -64,8 +69,9 @@ The Demo imports into PrusaSlicer as one object with five aligned tool parts;
 the command reports its profile-derived size. `--routes auto` prints capped,
 aggregated district dependencies; routes default to `off`. The private JSON
 legend maps printed codes to repository-relative paths; use `--labels off` or
-`--legend off` as needed. STL, FLOW-sized tiling, arbitrary fonts or logos, and
-slicer settings remain planned.
+`--legend off` as needed. Oversized exports fail with measured bounds; automatic
+fitting and tiling, STL, arbitrary fonts or logos, and slicer settings remain
+planned.
 
 ## Planned product flow
 
