@@ -2,10 +2,12 @@ import { promises as fs } from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  resolveProductionViewerRoot,
   startLocalOpenServer,
   type LocalOpenServerHandle,
 } from "../apps/cli/src/open-server.js";
@@ -120,13 +122,13 @@ function expectSecurityHeaders(
   }
 }
 
-async function settleWithin(
-  promise: Promise<unknown>,
+async function settleWithin<T>(
+  promise: Promise<T>,
   milliseconds = 2_000,
-): Promise<void> {
+): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
+    return await Promise.race([
       promise,
       new Promise<never>((_resolve, reject) => {
         timeout = setTimeout(
@@ -142,6 +144,7 @@ async function settleWithin(
 
 afterEach(async () => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   await Promise.allSettled(openServers.splice(0).map((server) => server.close()));
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) =>
@@ -151,6 +154,22 @@ afterEach(async () => {
 });
 
 describe("bounded local codecity open server", () => {
+  it("maps the compiled CLI module to the production viewer output", () => {
+    const compiledModule = pathToFileURL(
+      path.resolve(
+        "build",
+        "app",
+        "apps",
+        "cli",
+        "src",
+        "open-server.js",
+      ),
+    );
+    expect(resolveProductionViewerRoot(compiledModule)).toBe(
+      path.resolve("build", "viewer"),
+    );
+  });
+
   it("analyzes a repository in memory and serves a validated model offline", async () => {
     const roots = await fixture();
     const network = vi.fn(async () => {
@@ -286,4 +305,72 @@ describe("bounded local codecity open server", () => {
     await settleWithin(explicitlyClosed.close());
     await settleWithin(explicitlyClosed.closed);
   });
+
+  it(
+    "rolls back startup when a captured process signal handler runs",
+    { timeout: 3_000 },
+    async () => {
+      const roots = await fixture();
+      const sigintListeners = process.listenerCount("SIGINT");
+      const sigtermListeners = process.listenerCount("SIGTERM");
+      const originalOnce = process.once;
+      let injected = false;
+      vi.spyOn(process, "once").mockImplementation(
+        ((eventName: string | symbol, listener: () => void) => {
+          const result = Reflect.apply(originalOnce, process, [
+            eventName,
+            listener,
+          ]) as NodeJS.Process;
+          if (eventName === "SIGTERM" && !injected) {
+            injected = true;
+            queueMicrotask(listener);
+          }
+          return result;
+        }) as typeof process.once,
+      );
+
+      const startup = startLocalOpenServer({
+        roots: [roots.repositoryRoot],
+        viewerRoot: roots.viewerRoot,
+      }).then((server) => {
+        openServers.push(server);
+        return server;
+      });
+      await expect(settleWithin(startup)).rejects.toThrow(
+        /startup was aborted/iu,
+      );
+      expect(injected).toBe(true);
+      expect(process.listenerCount("SIGINT")).toBe(sigintListeners);
+      expect(process.listenerCount("SIGTERM")).toBe(sigtermListeners);
+    },
+  );
+
+  it(
+    "rolls back lifecycle listeners after a bind failure",
+    { timeout: 4_000 },
+    async () => {
+      const roots = await fixture();
+      const blocker = await startLocalOpenServer({
+        roots: [roots.repositoryRoot],
+        viewerRoot: roots.viewerRoot,
+      });
+      openServers.push(blocker);
+      const sigintListeners = process.listenerCount("SIGINT");
+      const sigtermListeners = process.listenerCount("SIGTERM");
+
+      const startup = startLocalOpenServer({
+        roots: [roots.repositoryRoot],
+        viewerRoot: roots.viewerRoot,
+        port: Number(blocker.url.port),
+      }).then((server) => {
+        openServers.push(server);
+        return server;
+      });
+      await expect(settleWithin(startup, 3_000)).rejects.toThrow(
+        /could not bind/iu,
+      );
+      expect(process.listenerCount("SIGINT")).toBe(sigintListeners);
+      expect(process.listenerCount("SIGTERM")).toBe(sigtermListeners);
+    },
+  );
 });
