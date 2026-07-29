@@ -60,8 +60,16 @@ export interface LocalOpenServerHandle {
   close(): Promise<void>;
 }
 
+export function resolveProductionViewerRoot(
+  moduleUrl: string | URL,
+): string {
+  return path.resolve(
+    fileURLToPath(new URL("../../../../viewer/", moduleUrl)),
+  );
+}
+
 function productionViewerRoot(): string {
-  return fileURLToPath(new URL("../../../../viewer/", import.meta.url));
+  return resolveProductionViewerRoot(import.meta.url);
 }
 
 function isWithin(root: string, candidate: string): boolean {
@@ -381,7 +389,6 @@ function listen(
     throw new Error("Local viewer startup was aborted.");
   }
   return new Promise((resolve, reject) => {
-    let listenStarted = false;
     const onError = (): void => {
       cleanup();
       reject(new Error("The local viewer could not bind to loopback."));
@@ -397,7 +404,6 @@ function listen(
     };
     const onAbort = (): void => {
       cleanup();
-      if (listenStarted) server.close();
       reject(new Error("Local viewer startup was aborted."));
     };
     const cleanup = (): void => {
@@ -412,9 +418,16 @@ function listen(
       onAbort();
       return;
     }
-    listenStarted = true;
     server.listen({ host: LOOPBACK_HOST, port, exclusive: true });
   });
+}
+
+function serverWasNotRunning(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "ERR_SERVER_NOT_RUNNING"
+  );
 }
 
 export async function startLocalOpenServer(
@@ -460,44 +473,99 @@ export async function startLocalOpenServer(
       "no-store",
     );
   });
-  const port = await listen(server, validPort(options.port), options.signal);
-  activeHandler = requestHandler(assets, modelBytes, port);
 
   let resolveClosed!: () => void;
   const closed = new Promise<void>((resolve) => {
     resolveClosed = resolve;
   });
   let closePromise: Promise<void> | undefined;
-  const onSignal = (): void => {
-    void close().catch(() => undefined);
-  };
+  let listenStarted = false;
+  let shutdownRequested = false;
+  let sigintInstalled = false;
+  let sigtermInstalled = false;
+  let abortInstalled = false;
+  const startup = new AbortController();
   const cleanup = (): void => {
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
-    options.signal?.removeEventListener("abort", onSignal);
+    if (sigintInstalled) {
+      sigintInstalled = false;
+      process.off("SIGINT", onShutdown);
+    }
+    if (sigtermInstalled) {
+      sigtermInstalled = false;
+      process.off("SIGTERM", onShutdown);
+    }
+    if (abortInstalled) {
+      abortInstalled = false;
+      options.signal?.removeEventListener("abort", onShutdown);
+    }
   };
   const close = (): Promise<void> => {
     if (closePromise) return closePromise;
     cleanup();
+    startup.abort();
     closePromise = new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error) reject(new Error("The local viewer did not close cleanly."));
-        else resolve();
-      });
-      server.closeAllConnections();
+      const finish = (error?: Error): void => {
+        if (error && !serverWasNotRunning(error)) {
+          reject(new Error("The local viewer did not close cleanly."));
+          return;
+        }
+        resolveClosed();
+        resolve();
+      };
+      if (!listenStarted) {
+        finish();
+        return;
+      }
+      try {
+        server.close(finish);
+        server.closeAllConnections();
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      }
     });
     return closePromise;
   };
+  function onShutdown(): void {
+    shutdownRequested = true;
+    void close().catch(() => undefined);
+  }
   server.once("close", () => {
     cleanup();
     resolveClosed();
   });
-  process.once("SIGINT", onSignal);
-  process.once("SIGTERM", onSignal);
-  options.signal?.addEventListener("abort", onSignal, { once: true });
-  if (options.signal?.aborted) {
-    void close().catch(() => undefined);
+
+  let port: number;
+  try {
+    process.once("SIGINT", onShutdown);
+    sigintInstalled = true;
+    process.once("SIGTERM", onShutdown);
+    sigtermInstalled = true;
+    if (options.signal) {
+      options.signal.addEventListener("abort", onShutdown, {
+        once: true,
+      });
+      abortInstalled = true;
+    }
+    if (options.signal?.aborted) onShutdown();
+    if (shutdownRequested) {
+      throw new Error("Local viewer startup was aborted.");
+    }
+    listenStarted = true;
+    port = await listen(
+      server,
+      validPort(options.port),
+      startup.signal,
+    );
+    if (shutdownRequested) {
+      await close();
+      throw new Error("Local viewer startup was aborted.");
+    }
+  } catch (error) {
+    cleanup();
+    await close().catch(() => undefined);
+    throw error;
   }
+  activeHandler = requestHandler(assets, modelBytes, port);
 
   const origin = `http://${LOOPBACK_HOST}:${port}`;
   const modelUrl = new URL(MODEL_PATH, origin);
