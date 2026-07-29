@@ -40,7 +40,7 @@ const MIME_TYPES = new Map([
   [".svg", "image/svg+xml; charset=utf-8"],
 ]);
 
-interface ViewerAsset {
+export interface ViewerAsset {
   readonly body: Buffer;
   readonly contentType?: string;
 }
@@ -82,7 +82,7 @@ function isWithin(root: string, candidate: string): boolean {
   );
 }
 
-async function collectViewerAssets(
+export async function collectViewerAssets(
   requestedRoot: string,
 ): Promise<ReadonlyMap<string, ViewerAsset>> {
   try {

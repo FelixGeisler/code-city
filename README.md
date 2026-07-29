@@ -10,6 +10,22 @@ Code City turns a software repository into:
 The CLI supports public GitHub repositories, generic Git remotes such as Azure
 DevOps Server, and local checkouts that can be analyzed fully offline.
 
+For a self-hosted network deployment, build and start the Raspberry Pi/AMD64
+container:
+
+```powershell
+docker compose up --build
+```
+
+Then open `http://<server-address>:8080`. The container serves the viewer and
+versioned API from one process, runs as a non-root user, and keeps persistent
+job state in the `code-city-data` Docker volume. No external database, queue,
+or cloud service is required. This first deployment has no authentication, so
+expose it only on a trusted private network, not directly on the public
+Internet. Numeric IP addresses and `localhost` are accepted by default. To use
+a DNS name, set `CODECITY_ALLOWED_HOSTS` to a comma-separated allowlist before
+starting Compose, for example `raspberrypi.local,codecity.lan`.
+
 ## Product idea
 
 | Code concept | City representation |
@@ -125,6 +141,16 @@ npm --version  # must be 11.6.2
 dotnet --version # must be 10.0.302
 npm ci
 npm run verify
+```
+
+After a production build, the same server can run without Docker:
+
+```powershell
+$env:CODECITY_DATA_DIR = "C:\CodeCityData"
+$env:CODECITY_HOST = "0.0.0.0"
+$env:CODECITY_PORT = "3000"
+$env:CODECITY_ALLOWED_HOSTS = "codecity.lan"
+npm run server:start
 ```
 
 `verify` runs the same sequence used by Linux and Windows CI: typecheck, tests,

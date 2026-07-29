@@ -7,8 +7,13 @@
 |Offline
 |Self-contained CLI and static viewer with an export worker
 
+|Raspberry Pi
+|One non-root ARM64 container serves the viewer and API and provides a bounded
+persistent job queue backed by a mounted data directory
+
 |Hosted
-|Planned static web UI, bounded analysis API, isolated workers
+|The same AMD64 container runs on a web host; the initial single process can be
+split into web and worker commands later without changing the API or job model
 
 |Enterprise
 |CLI or container on a self-hosted build agent
@@ -16,6 +21,17 @@
 |Documentation
 |Antora site deployed by GitHub Actions to GitHub Pages
 |===
+
+The initial self-hosted deployment uses `docker compose up --build`, publishes
+container port 3000 as host port 8080, and mounts the `code-city-data` volume at
+`/data`. It has no mandatory database, message queue, reverse proxy, or cloud
+dependency.
+
+The initial API has no authentication. Publish it only on a trusted private
+network. An Internet-facing deployment must add an authenticated ingress before
+exposing the service. IP-literal requests and `localhost` are accepted by
+default. Set `CODECITY_ALLOWED_HOSTS` to a comma-separated list when clients use
+DNS names; other hostnames are rejected to prevent DNS-rebinding access.
 
 For Azure Pipelines, prefer the already authorized local checkout:
 

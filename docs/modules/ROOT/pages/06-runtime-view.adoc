@@ -1,5 +1,19 @@
 = 6. Runtime View
 
+== Self-hosted server
+
+The production server loads the built viewer once, serves it with same-origin
+security headers, and exposes a versioned `/api/v1` surface. Its persistent job
+queue keeps records beneath the configured data directory. Single concurrency
+is the safe Raspberry Pi default, and queued or active jobs can be cancelled.
+If the process restarts, unfinished records become explicitly failed with an
+interrupted reason instead of remaining permanently active.
+
+`GET /api/v1/health` provides a cache-free health check. `GET /api/v1/jobs` and
+`GET` or `DELETE /api/v1/jobs/\{id\}` expose bounded job state and cancellation.
+Import endpoints will enqueue actual analysis work and expose its artifacts in
+the next implementation slice.
+
 == Local
 
 `codecity open .` reads a checkout, builds the city model, and serves the viewer

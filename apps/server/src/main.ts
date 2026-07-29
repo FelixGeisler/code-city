@@ -1,0 +1,66 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+import { startCodeCityServer } from "./server.js";
+
+function environmentPort(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 65_535) {
+    throw new Error("CODECITY_PORT must be an integer from 1 to 65535.");
+  }
+  return parsed;
+}
+
+function environmentAllowedHosts(
+  value: string | undefined,
+): readonly string[] | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const hosts = value.split(",").map((host) => host.trim());
+  if (hosts.some((host) => host === "")) {
+    throw new Error(
+      "CODECITY_ALLOWED_HOSTS must be a comma-separated list of hostnames.",
+    );
+  }
+  return hosts;
+}
+
+export async function runServer(): Promise<void> {
+  const controller = new AbortController();
+  const stop = (): void => controller.abort();
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  try {
+    const host = process.env["CODECITY_HOST"];
+    const port = environmentPort(process.env["CODECITY_PORT"]);
+    const allowedHosts = environmentAllowedHosts(
+      process.env["CODECITY_ALLOWED_HOSTS"],
+    );
+    const server = await startCodeCityServer({
+      ...(host === undefined ? {} : { host }),
+      ...(port === undefined ? {} : { port }),
+      ...(allowedHosts === undefined ? {} : { allowedHosts }),
+      dataDirectory: path.resolve(
+        process.env["CODECITY_DATA_DIR"] ?? "data",
+      ),
+      signal: controller.signal,
+    });
+    process.stdout.write(`Code City is listening at ${server.url.href}\n`);
+    await server.closed;
+  } finally {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+  }
+}
+
+const invokedPath = process.argv[1];
+if (
+  invokedPath !== undefined &&
+  import.meta.url === pathToFileURL(path.resolve(invokedPath)).href
+) {
+  await runServer().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`Error: ${message}\n`);
+    process.exitCode = 1;
+  });
+}
