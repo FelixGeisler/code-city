@@ -343,6 +343,20 @@ describe("deterministic 3MF package serialization", () => {
     expect(() => serializeThreeMf(city([invalidPart]))).toThrow(/finite/u);
   });
 
+  it("preserves decimal coordinates that would collapse in Float32", () => {
+    const precisePart: PrintPart = {
+      ...part(0),
+      mesh: boxMesh(
+        { x: 16_777_216, y: 0, z: 0 },
+        { x: 16_777_217, y: 1, z: 1 },
+      ),
+    };
+
+    const xml = model(serializeThreeMf(city([precisePart])));
+    expect(xml).toContain('x="16777216"');
+    expect(xml).toContain('x="16777217"');
+  });
+
   it.each([
     [
       "title",

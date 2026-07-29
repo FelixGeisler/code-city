@@ -1,20 +1,24 @@
+import type {
+  PrintExportTransferArtifact,
+} from "./print-export-protocol.js";
+
 export interface PrintExportName {
   readonly title?: string;
   readonly version?: string;
 }
 
 export interface PrintExportFileNames {
-  readonly threeMf: string;
+  readonly artifact: string;
   readonly legend: string;
 }
 
 export interface PrintCalibrationFileNames {
-  readonly threeMf: string;
+  readonly artifact: string;
   readonly manifest: string;
 }
 
 export interface PrintExportDownloadInput {
-  readonly threeMfBytes: ArrayBuffer;
+  readonly artifact: PrintExportTransferArtifact;
   readonly legendBytes?: ArrayBuffer;
 }
 
@@ -25,17 +29,17 @@ export interface PrintExportDownload {
 }
 
 export interface PrintExportDownloads {
-  readonly threeMf: PrintExportDownload;
+  readonly artifact: PrintExportDownload;
   readonly legend?: PrintExportDownload;
 }
 
 export interface PrintCalibrationDownloadInput {
-  readonly threeMfBytes: ArrayBuffer;
+  readonly artifact: PrintExportTransferArtifact;
   readonly manifestBytes: ArrayBuffer;
 }
 
 export interface PrintCalibrationDownloads {
-  readonly threeMf: PrintExportDownload;
+  readonly artifact: PrintExportDownload;
   readonly manifest: PrintExportDownload;
 }
 
@@ -93,6 +97,7 @@ export function sanitizePrintFileStem(value: string): string {
 
 export function printExportFileNames(
   name: PrintExportName,
+  fileExtension: PrintExportTransferArtifact["fileExtension"] = ".3mf",
 ): PrintExportFileNames {
   const parts = [name.title, name.version]
     .filter(
@@ -102,17 +107,18 @@ export function printExportFileNames(
     .join("-");
   const stem = sanitizePrintFileStem(parts);
   return {
-    threeMf: `${stem}.3mf`,
+    artifact: `${stem}${fileExtension}`,
     legend: `${stem}.legend.json`,
   };
 }
 
 export function printCalibrationFileNames(
   profileId: string,
+  fileExtension: PrintExportTransferArtifact["fileExtension"] = ".3mf",
 ): PrintCalibrationFileNames {
   const stem = sanitizePrintFileStem(profileId);
   return {
-    threeMf: `${stem}.calibration.3mf`,
+    artifact: `${stem}.calibration${fileExtension}`,
     manifest: `${stem}.calibration.json`,
   };
 }
@@ -137,22 +143,25 @@ export class PrintDownloadManager {
     input: PrintExportDownloadInput,
   ): PrintExportDownloads {
     this.clear();
-    const names = printExportFileNames(name);
+    const names = printExportFileNames(
+      name,
+      input.artifact.fileExtension,
+    );
     const created: string[] = [];
     try {
-      const threeMfBlob = new Blob([input.threeMfBytes], {
-        type: "application/vnd.ms-package.3dmanufacturing-3dmodel+xml",
+      const artifactBlob = new Blob([input.artifact.bytes], {
+        type: input.artifact.mimeType,
       });
-      const threeMfUrl = this.objectUrls.createObjectURL(threeMfBlob);
-      created.push(threeMfUrl);
-      const threeMf: PrintExportDownload = {
-        fileName: names.threeMf,
-        url: threeMfUrl,
-        blob: threeMfBlob,
+      const artifactUrl = this.objectUrls.createObjectURL(artifactBlob);
+      created.push(artifactUrl);
+      const artifact: PrintExportDownload = {
+        fileName: names.artifact,
+        url: artifactUrl,
+        blob: artifactBlob,
       };
       if (input.legendBytes === undefined) {
         this.activeUrls = created;
-        return { threeMf };
+        return { artifact };
       }
 
       const legendBlob = new Blob([input.legendBytes], {
@@ -162,7 +171,7 @@ export class PrintDownloadManager {
       created.push(legendUrl);
       this.activeUrls = created;
       return {
-        threeMf,
+        artifact,
         legend: {
           fileName: names.legend,
           url: legendUrl,
@@ -183,14 +192,17 @@ export class PrintDownloadManager {
     input: PrintCalibrationDownloadInput,
   ): PrintCalibrationDownloads {
     this.clear();
-    const names = printCalibrationFileNames(profileId);
+    const names = printCalibrationFileNames(
+      profileId,
+      input.artifact.fileExtension,
+    );
     const created: string[] = [];
     try {
-      const threeMfBlob = new Blob([input.threeMfBytes], {
-        type: "application/vnd.ms-package.3dmanufacturing-3dmodel+xml",
+      const artifactBlob = new Blob([input.artifact.bytes], {
+        type: input.artifact.mimeType,
       });
-      const threeMfUrl = this.objectUrls.createObjectURL(threeMfBlob);
-      created.push(threeMfUrl);
+      const artifactUrl = this.objectUrls.createObjectURL(artifactBlob);
+      created.push(artifactUrl);
 
       const manifestBlob = new Blob([input.manifestBytes], {
         type: "application/json",
@@ -199,10 +211,10 @@ export class PrintDownloadManager {
       created.push(manifestUrl);
       this.activeUrls = created;
       return {
-        threeMf: {
-          fileName: names.threeMf,
-          url: threeMfUrl,
-          blob: threeMfBlob,
+        artifact: {
+          fileName: names.artifact,
+          url: artifactUrl,
+          blob: artifactBlob,
         },
         manifest: {
           fileName: names.manifest,

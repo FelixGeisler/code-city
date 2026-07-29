@@ -5,11 +5,10 @@ import {
 
 import { normalizeDisplayColor } from "../../core/src/color.js";
 import type {
-  PrintMesh,
   PrintPart,
-  PrintPoint,
   PrintableCity,
 } from "./geometry.js";
+import { validateMeshForSerialization } from "./validate.js";
 
 const CONTENT_TYPES_PATH = "[Content_Types].xml";
 const PACKAGE_RELATIONSHIPS_PATH = "_rels/.rels";
@@ -38,7 +37,6 @@ const BASE_MATERIAL_RESOURCE_ID = 1;
 const CITY_OBJECT_RESOURCE_ID = 2;
 const FIXED_ZIP_DATE = new Date(1980, 0, 1, 0, 0, 0, 0);
 const CORE_INDEX_LIMIT = 0x80000000;
-const GEOMETRY_EPSILON = 1e-12;
 
 function compare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -101,169 +99,6 @@ function coordinate(value: number, field: string): string {
   return canonicalNumber(value, field);
 }
 
-function validateTriangleIndex(
-  value: number,
-  vertexCount: number,
-  field: string,
-): void {
-  if (
-    !Number.isSafeInteger(value) ||
-    value < 0 ||
-    value >= vertexCount
-  ) {
-    throw new TypeError(
-      `${field} must reference a vertex in the same mesh.`,
-    );
-  }
-}
-
-function subtract(left: PrintPoint, right: PrintPoint): PrintPoint {
-  return {
-    x: left.x - right.x,
-    y: left.y - right.y,
-    z: left.z - right.z,
-  };
-}
-
-function cross(left: PrintPoint, right: PrintPoint): PrintPoint {
-  return {
-    x: left.y * right.z - left.z * right.y,
-    y: left.z * right.x - left.x * right.z,
-    z: left.x * right.y - left.y * right.x,
-  };
-}
-
-function dot(left: PrintPoint, right: PrintPoint): number {
-  return left.x * right.x + left.y * right.y + left.z * right.z;
-}
-
-interface MeshEdge {
-  readonly directions: number[];
-  readonly triangles: number[];
-}
-
-function analyzeMesh(mesh: PrintMesh, field: string): void {
-  if (mesh.vertices.length < 3) {
-    throw new TypeError(`${field} must contain at least three vertices.`);
-  }
-  if (mesh.triangles.length < 4) {
-    throw new TypeError(`${field} must contain at least four triangles.`);
-  }
-  if (
-    mesh.vertices.length >= CORE_INDEX_LIMIT ||
-    mesh.triangles.length >= CORE_INDEX_LIMIT
-  ) {
-    throw new TypeError(`${field} exceeds the 3MF Core index limit.`);
-  }
-  mesh.vertices.forEach((vertex, index) => {
-    coordinate(vertex.x, `${field}.vertices[${index}].x`);
-    coordinate(vertex.y, `${field}.vertices[${index}].y`);
-    coordinate(vertex.z, `${field}.vertices[${index}].z`);
-  });
-
-  const edges = new Map<string, MeshEdge>();
-  mesh.triangles.forEach((triangle, index) => {
-    validateTriangleIndex(
-      triangle.a,
-      mesh.vertices.length,
-      `${field}.triangles[${index}].a`,
-    );
-    validateTriangleIndex(
-      triangle.b,
-      mesh.vertices.length,
-      `${field}.triangles[${index}].b`,
-    );
-    validateTriangleIndex(
-      triangle.c,
-      mesh.vertices.length,
-      `${field}.triangles[${index}].c`,
-    );
-    if (
-      triangle.a === triangle.b ||
-      triangle.b === triangle.c ||
-      triangle.c === triangle.a
-    ) {
-      throw new TypeError(`${field}.triangles[${index}] is degenerate.`);
-    }
-    const a = mesh.vertices[triangle.a]!;
-    const b = mesh.vertices[triangle.b]!;
-    const c = mesh.vertices[triangle.c]!;
-    const normal = cross(subtract(b, a), subtract(c, a));
-    if (
-      !Number.isFinite(normal.x) ||
-      !Number.isFinite(normal.y) ||
-      !Number.isFinite(normal.z) ||
-      Math.hypot(normal.x, normal.y, normal.z) <= GEOMETRY_EPSILON
-    ) {
-      throw new TypeError(
-        `${field}.triangles[${index}] has no positive area.`,
-      );
-    }
-    for (const [left, right] of [
-      [triangle.a, triangle.b],
-      [triangle.b, triangle.c],
-      [triangle.c, triangle.a],
-    ] as const) {
-      const key =
-        left < right ? `${left}:${right}` : `${right}:${left}`;
-      const edge = edges.get(key) ?? {
-        directions: [],
-        triangles: [],
-      };
-      edge.directions.push(left < right ? 1 : -1);
-      edge.triangles.push(index);
-      edges.set(key, edge);
-    }
-  });
-
-  const adjacency = mesh.triangles.map(() => new Set<number>());
-  for (const edge of edges.values()) {
-    if (
-      edge.triangles.length !== 2 ||
-      edge.directions[0]! + edge.directions[1]! !== 0
-    ) {
-      throw new TypeError(
-        `${field} must be watertight with consistently wound edges.`,
-      );
-    }
-    const [left, right] = edge.triangles;
-    adjacency[left!]!.add(right!);
-    adjacency[right!]!.add(left!);
-  }
-
-  const visited = new Set<number>();
-  for (
-    let firstTriangle = 0;
-    firstTriangle < mesh.triangles.length;
-    firstTriangle += 1
-  ) {
-    if (visited.has(firstTriangle)) continue;
-    const first = mesh.triangles[firstTriangle]!;
-    const origin = mesh.vertices[first.a]!;
-    const queue = [firstTriangle];
-    visited.add(firstTriangle);
-    let volume = 0;
-    while (queue.length > 0) {
-      const index = queue.shift()!;
-      const triangle = mesh.triangles[index]!;
-      const a = subtract(mesh.vertices[triangle.a]!, origin);
-      const b = subtract(mesh.vertices[triangle.b]!, origin);
-      const c = subtract(mesh.vertices[triangle.c]!, origin);
-      volume += dot(a, cross(b, c)) / 6;
-      for (const adjacent of adjacency[index]!) {
-        if (visited.has(adjacent)) continue;
-        visited.add(adjacent);
-        queue.push(adjacent);
-      }
-    }
-    if (!Number.isFinite(volume) || volume <= GEOMETRY_EPSILON) {
-      throw new TypeError(
-        `${field} must contain only outward-wound positive-volume shells.`,
-      );
-    }
-  }
-}
-
 interface SerializedPart {
   readonly part: PrintPart;
   readonly materialIndex: number;
@@ -303,7 +138,33 @@ function serializedParts(
     }
     ids.add(id);
     channelIds.add(channelId);
-    analyzeMesh(part.mesh, `parts[${index}].mesh`);
+    if (
+      part.mesh.vertices.length >= CORE_INDEX_LIMIT ||
+      part.mesh.triangles.length >= CORE_INDEX_LIMIT
+    ) {
+      throw new TypeError(
+        `parts[${index}].mesh exceeds the 3MF Core index limit.`,
+      );
+    }
+    validateMeshForSerialization(
+      part.mesh,
+      `parts[${index}].mesh`,
+      "decimal",
+    );
+    part.mesh.vertices.forEach((vertex, vertexIndex) => {
+      coordinate(
+        vertex.x,
+        `parts[${index}].mesh.vertices[${vertexIndex}].x`,
+      );
+      coordinate(
+        vertex.y,
+        `parts[${index}].mesh.vertices[${vertexIndex}].y`,
+      );
+      coordinate(
+        vertex.z,
+        `parts[${index}].mesh.vertices[${vertexIndex}].z`,
+      );
+    });
     const serialized: SerializedPart = {
       part,
       materialIndex: index,

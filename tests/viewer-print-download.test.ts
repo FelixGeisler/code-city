@@ -8,6 +8,28 @@ import {
   tryPublishPrintDownloads,
   type ObjectUrlApi,
 } from "../apps/viewer/src/print-download.js";
+import type {
+  PrintExportTransferArtifact,
+} from "../apps/viewer/src/print-export-protocol.js";
+
+function artifact(
+  format: "3mf" | "stl",
+  bytes: ArrayBuffer = new ArrayBuffer(1),
+): PrintExportTransferArtifact {
+  return format === "3mf"
+    ? {
+        format,
+        mimeType: "model/3mf",
+        fileExtension: ".3mf",
+        bytes,
+      }
+    : {
+        format,
+        mimeType: "model/stl",
+        fileExtension: ".stl",
+        bytes,
+      };
+}
 
 class FakeObjectUrls implements ObjectUrlApi {
   public readonly blobs: Blob[] = [];
@@ -36,22 +58,28 @@ describe("viewer print downloads", () => {
     expect(sanitizePrintFileStem("x".repeat(120))).toHaveLength(96);
   });
 
-  it("builds stable 3MF and companion legend names", () => {
+  it("builds stable format-neutral artifact and companion names", () => {
     expect(
       printExportFileNames({
         title: "FLOW / Hub",
         version: "test:1",
       }),
     ).toEqual({
-      threeMf: "FLOW-Hub-test-1.3mf",
+      artifact: "FLOW-Hub-test-1.3mf",
       legend: "FLOW-Hub-test-1.legend.json",
     });
-    expect(printExportFileNames({})).toEqual({
-      threeMf: "code-city.3mf",
+    expect(printExportFileNames({}, ".stl")).toEqual({
+      artifact: "code-city.stl",
       legend: "code-city.legend.json",
     });
     expect(printCalibrationFileNames("prusa-xl-t1-t2")).toEqual({
-      threeMf: "prusa-xl-t1-t2.calibration.3mf",
+      artifact: "prusa-xl-t1-t2.calibration.3mf",
+      manifest: "prusa-xl-t1-t2.calibration.json",
+    });
+    expect(
+      printCalibrationFileNames("prusa-xl-t1-t2", ".stl"),
+    ).toEqual({
+      artifact: "prusa-xl-t1-t2.calibration.stl",
       manifest: "prusa-xl-t1-t2.calibration.json",
     });
   });
@@ -62,14 +90,17 @@ describe("viewer print downloads", () => {
     const calibration = manager.replaceCalibration(
       "Custom / Profile",
       {
-        threeMfBytes: Uint8Array.from([1, 2]).buffer,
+        artifact: artifact(
+          "stl",
+          Uint8Array.from([1, 2]).buffer,
+        ),
         manifestBytes: Uint8Array.from([3, 4]).buffer,
       },
     );
 
     expect(calibration).toMatchObject({
-      threeMf: {
-        fileName: "Custom-Profile.calibration.3mf",
+      artifact: {
+        fileName: "Custom-Profile.calibration.stl",
         url: "blob:test-1",
       },
       manifest: {
@@ -77,9 +108,7 @@ describe("viewer print downloads", () => {
         url: "blob:test-2",
       },
     });
-    expect(calibration.threeMf.blob.type).toBe(
-      "application/vnd.ms-package.3dmanufacturing-3dmodel+xml",
-    );
+    expect(calibration.artifact.blob.type).toBe("model/stl");
     expect(calibration.manifest.blob.type).toBe("application/json");
     manager.clear();
     expect(urls.revoked).toEqual(["blob:test-1", "blob:test-2"]);
@@ -91,13 +120,16 @@ describe("viewer print downloads", () => {
     const first = manager.replace(
       { title: "Code City", version: "Demo" },
       {
-        threeMfBytes: Uint8Array.from([1, 2, 3]).buffer,
+        artifact: artifact(
+          "3mf",
+          Uint8Array.from([1, 2, 3]).buffer,
+        ),
         legendBytes: Uint8Array.from([4, 5]).buffer,
       },
     );
 
     expect(first).toMatchObject({
-      threeMf: {
+      artifact: {
         fileName: "Code-City-Demo.3mf",
         url: "blob:test-1",
       },
@@ -106,17 +138,15 @@ describe("viewer print downloads", () => {
         url: "blob:test-2",
       },
     });
-    expect(first.threeMf.blob.type).toBe(
-      "application/vnd.ms-package.3dmanufacturing-3dmodel+xml",
-    );
+    expect(first.artifact.blob.type).toBe("model/3mf");
     expect(first.legend?.blob.type).toBe("application/json");
     expect(
-      new Uint8Array(await first.threeMf.blob.arrayBuffer()),
+      new Uint8Array(await first.artifact.blob.arrayBuffer()),
     ).toEqual(Uint8Array.from([1, 2, 3]));
 
     const second = manager.replace(
       { title: "Next" },
-      { threeMfBytes: new ArrayBuffer(0) },
+      { artifact: artifact("stl", new ArrayBuffer(0)) },
     );
     expect(urls.revoked).toEqual(["blob:test-1", "blob:test-2"]);
     expect(second.legend).toBeUndefined();
@@ -139,7 +169,7 @@ describe("viewer print downloads", () => {
       manager.replace(
         { title: "Code City" },
         {
-          threeMfBytes: new ArrayBuffer(1),
+          artifact: artifact("3mf"),
           legendBytes: new ArrayBuffer(1),
         },
       ),
@@ -156,7 +186,7 @@ describe("viewer print downloads", () => {
       tryPublishPrintDownloads(
         manager,
         { title: "Code City" },
-        { threeMfBytes: new ArrayBuffer(1) },
+        { artifact: artifact("3mf") },
       ),
     ).toEqual({
       ok: false,

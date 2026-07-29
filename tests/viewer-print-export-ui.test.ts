@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 
 const viewerRoot = path.resolve("apps/viewer");
 
-describe("viewer 3MF export UI", () => {
+describe("viewer print export UI", () => {
   it("exposes an accessible local-only export dialog and every v1 option", async () => {
     const html = await fs.readFile(
       path.join(viewerRoot, "index.html"),
@@ -25,6 +25,9 @@ describe("viewer 3MF export UI", () => {
     expect(html).toContain('<option value="custom">');
     expect(html).toContain('id="print-prusa-tools"');
     expect(html).toContain('id="print-custom-profile"');
+    expect(html).toContain('id="print-format"');
+    expect(html).toContain('<option value="3mf">3MF</option>');
+    expect(html).toContain('<option value="stl">STL</option>');
     expect(html).toContain('id="print-scale"');
     expect(html).toContain('id="print-labels"');
     expect(html).toContain('id="print-routes"');
@@ -48,6 +51,7 @@ describe("viewer 3MF export UI", () => {
     expect(html).toMatch(
       /id="print-export-progress-meter"[\s\S]*aria-labelledby="print-export-status"/u,
     );
+    expect(html).not.toContain("Export 3MF");
   });
 
   it("bundles a module worker and keeps downloads in local Blob URLs", async () => {
@@ -62,7 +66,12 @@ describe("viewer 3MF export UI", () => {
     expect(source).toContain("new PrintDownloadManager()");
     expect(source).toContain("tryPublishPrintDownloads(");
     expect(source).toContain("tryPublishCalibrationDownloads(");
-    expect(source).toContain("controller.startCalibration({ profile })");
+    expect(source).toContain(
+      "controller.startCalibration({ profile, format })",
+    );
+    expect(source).toContain(
+      "profile.supportedFormats.includes(format)",
+    );
     expect(source).toContain("preflight.manifest.couponCount");
     expect(source).toContain('"printable coupons"');
     expect(source).not.toContain(

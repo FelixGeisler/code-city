@@ -23,6 +23,7 @@ describe("viewer print export dialog state", () => {
     expect(
       printExportSubmitDisabled({
         busy: true,
+        formatSupported: true,
         profileKind: "generic",
         hasCustomProfile: true,
         prusaToolCount: 5,
@@ -31,6 +32,7 @@ describe("viewer print export dialog state", () => {
     expect(
       printExportSubmitDisabled({
         busy: false,
+        formatSupported: true,
         profileKind: "custom",
         hasCustomProfile: false,
         prusaToolCount: 5,
@@ -39,6 +41,7 @@ describe("viewer print export dialog state", () => {
     expect(
       printExportSubmitDisabled({
         busy: false,
+        formatSupported: true,
         profileKind: "prusa-xl",
         hasCustomProfile: true,
         prusaToolCount: 0,
@@ -47,10 +50,20 @@ describe("viewer print export dialog state", () => {
     expect(
       printExportSubmitDisabled({
         busy: false,
+        formatSupported: true,
         profileKind: "generic",
         hasCustomProfile: false,
         prusaToolCount: 0,
       }),
     ).toBe(false);
+    expect(
+      printExportSubmitDisabled({
+        busy: false,
+        formatSupported: false,
+        profileKind: "generic",
+        hasCustomProfile: true,
+        prusaToolCount: 5,
+      }),
+    ).toBe(true);
   });
 });

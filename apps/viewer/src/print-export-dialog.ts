@@ -4,9 +4,14 @@ import {
   createSingleChannelProfile,
   parsePrinterProfileJson,
 } from "../../../packages/core/src/printer-profiles.js";
-import type { PrinterProfile } from "../../../packages/core/src/print.js";
-import type { ThreeMfExportPreflight } from "../../../packages/exporter/src/three-mf-export.js";
-import type { CalibrationPreflight } from "../../../packages/exporter/src/calibration.js";
+import type {
+  PrinterProfile,
+  PrintFormat,
+} from "../../../packages/core/src/print.js";
+import type { PrintExportPreflight } from "../../../packages/exporter/src/print-export.js";
+import type {
+  CalibrationPrintExportPreflight,
+} from "../../../packages/exporter/src/calibration.js";
 
 import {
   PrintExportController,
@@ -50,6 +55,7 @@ export class LatestPrintProfileRead {
 
 export interface PrintExportSubmitAvailability {
   readonly busy: boolean;
+  readonly formatSupported: boolean;
   readonly profileKind: ProfileKind;
   readonly hasCustomProfile: boolean;
   readonly prusaToolCount: number;
@@ -60,6 +66,7 @@ export function printExportSubmitDisabled(
 ): boolean {
   return (
     availability.busy ||
+    !availability.formatSupported ||
     (availability.profileKind === "custom" &&
       !availability.hasCustomProfile) ||
     (availability.profileKind === "prusa-xl" &&
@@ -101,6 +108,11 @@ function profileKind(value: string): ProfileKind {
   throw new Error("Choose a supported printer profile.");
 }
 
+function printFormat(value: string): PrintFormat {
+  if (value === "3mf" || value === "stl") return value;
+  throw new Error("Choose either 3MF or STL.");
+}
+
 export function installPrintExportDialog(
   options: PrintExportDialogOptions,
 ): PrintExportDialogHandle {
@@ -124,6 +136,8 @@ export function installPrintExportDialog(
   const customProfileStatus = requiredElement<HTMLParagraphElement>(
     "print-custom-profile-status",
   );
+  const formatSelect =
+    requiredElement<HTMLSelectElement>("print-format");
   const scaleInput = requiredElement<HTMLInputElement>("print-scale");
   const labelsSelect =
     requiredElement<HTMLSelectElement>("print-labels");
@@ -168,7 +182,7 @@ export function installPrintExportDialog(
     requiredElement<HTMLUListElement>("print-export-warnings");
   const downloadsWrap =
     requiredElement<HTMLDivElement>("print-export-downloads");
-  const threeMfDownload =
+  const artifactDownload =
     requiredElement<HTMLAnchorElement>("print-export-download");
   const legendDownload = requiredElement<HTMLAnchorElement>(
     "print-export-legend-download",
@@ -190,7 +204,7 @@ export function installPrintExportDialog(
     () =>
       new Worker(new URL("./print-export-worker.ts", import.meta.url), {
         type: "module",
-        name: "code-city-3mf-export",
+        name: "code-city-print-export",
       }),
     {
       onStateChange: (state) => {
@@ -201,6 +215,10 @@ export function installPrintExportDialog(
 
   function selectedProfileKind(): ProfileKind {
     return profileKind(profileSelect.value);
+  }
+
+  function selectedFormat(): PrintFormat {
+    return printFormat(formatSelect.value);
   }
 
   function selectedPrusaTools(): readonly number[] {
@@ -225,11 +243,25 @@ export function installPrintExportDialog(
     }
   }
 
+  function resolveProfileForFormat(): {
+    readonly profile: PrinterProfile;
+    readonly format: PrintFormat;
+  } {
+    const profile = resolveProfile();
+    const format = selectedFormat();
+    if (!profile.supportedFormats.includes(format)) {
+      throw new Error(
+        `${format.toUpperCase()} is not supported by ${profile.name}.`,
+      );
+    }
+    return { profile, format };
+  }
+
   function clearDownloads(): void {
     downloads.clear();
     downloadsWrap.hidden = true;
-    threeMfDownload.removeAttribute("href");
-    threeMfDownload.removeAttribute("download");
+    artifactDownload.removeAttribute("href");
+    artifactDownload.removeAttribute("download");
     legendDownload.removeAttribute("href");
     legendDownload.removeAttribute("download");
     legendDownload.hidden = true;
@@ -259,9 +291,10 @@ export function installPrintExportDialog(
     errorSection.hidden = false;
   }
 
-  function renderPreflight(preflight: ThreeMfExportPreflight): void {
-    trianglesWrap.hidden = true;
-    trianglesElement.textContent = "";
+  function renderPreflight(preflight: PrintExportPreflight): void {
+    trianglesWrap.hidden = false;
+    trianglesElement.textContent =
+      preflight.triangleCount.toLocaleString();
     channelsTitle.textContent = "Used channels";
     dimensionsElement.textContent =
       `${millimeters(preflight.dimensions.x)} × ` +
@@ -269,9 +302,9 @@ export function installPrintExportDialog(
       `${millimeters(preflight.dimensions.z)} mm`;
     partsElement.textContent =
       `${preflight.partCount.toLocaleString()} ` +
-      `${preflight.partCount === 1 ? "part" : "parts"} across ` +
+      `${preflight.partCount === 1 ? "serialized part" : "serialized parts"} \u00b7 ` +
       `${preflight.channels.length.toLocaleString()} ` +
-      `${preflight.channels.length === 1 ? "channel" : "channels"}`;
+      `${preflight.channels.length === 1 ? "source channel" : "source channels"}`;
     channelsList.replaceChildren(
       ...preflight.channels.map((channel) => {
         const item = document.createElement("li");
@@ -294,7 +327,7 @@ export function installPrintExportDialog(
   }
 
   function renderCalibrationPreflight(
-    preflight: CalibrationPreflight,
+    preflight: CalibrationPrintExportPreflight,
   ): void {
     dimensionsElement.textContent =
       `${millimeters(preflight.dimensions.x)} \u00d7 ` +
@@ -328,8 +361,14 @@ export function installPrintExportDialog(
         ? "channel marker"
         : "channel markers"}`;
     channelsList.replaceChildren(measurements, coupons, markers);
-    warningsList.replaceChildren();
-    warningWrap.hidden = true;
+    warningsList.replaceChildren(
+      ...preflight.warnings.map((warning) => {
+        const item = document.createElement("li");
+        item.textContent = warning;
+        return item;
+      }),
+    );
+    warningWrap.hidden = preflight.warnings.length === 0;
     preflightSection.hidden = false;
   }
 
@@ -349,7 +388,7 @@ export function installPrintExportDialog(
           : { version: model.identity.version }),
       },
       {
-        threeMfBytes: state.threeMfBytes,
+        artifact: state.artifact,
         ...(state.legendBytes === undefined
           ? {}
           : { legendBytes: state.legendBytes }),
@@ -361,8 +400,10 @@ export function installPrintExportDialog(
       return;
     }
     const available = publication.downloads;
-    threeMfDownload.href = available.threeMf.url;
-    threeMfDownload.download = available.threeMf.fileName;
+    artifactDownload.href = available.artifact.url;
+    artifactDownload.download = available.artifact.fileName;
+    artifactDownload.textContent =
+      `Download ${state.artifact.format.toUpperCase()}`;
     if (available.legend !== undefined) {
       legendDownload.href = available.legend.url;
       legendDownload.download = available.legend.fileName;
@@ -381,7 +422,7 @@ export function installPrintExportDialog(
       downloads,
       state.preflight.profileId,
       {
-        threeMfBytes: state.threeMfBytes,
+        artifact: state.artifact,
         manifestBytes: state.manifestBytes,
       },
     );
@@ -390,9 +431,11 @@ export function installPrintExportDialog(
       renderErrors([publication.message]);
       return;
     }
-    calibrationDownload.href = publication.downloads.threeMf.url;
+    calibrationDownload.href = publication.downloads.artifact.url;
     calibrationDownload.download =
-      publication.downloads.threeMf.fileName;
+      publication.downloads.artifact.fileName;
+    calibrationDownload.textContent =
+      `Download calibration ${state.artifact.format.toUpperCase()}`;
     calibrationDownload.hidden = false;
     calibrationManifestDownload.href =
       publication.downloads.manifest.url;
@@ -403,8 +446,16 @@ export function installPrintExportDialog(
   }
 
   function updateSubmitAvailability(): void {
+    let formatSupported = false;
+    try {
+      formatSupported = resolveProfile()
+        .supportedFormats.includes(selectedFormat());
+    } catch {
+      formatSupported = false;
+    }
     const disabled = printExportSubmitDisabled({
       busy: controller.state.status === "busy",
+      formatSupported,
       profileKind: selectedProfileKind(),
       hasCustomProfile: customProfile !== undefined,
       prusaToolCount: selectedPrusaTools().length,
@@ -557,6 +608,7 @@ export function installPrintExportDialog(
     updateProfileControls();
   });
   prusaTools.addEventListener("change", invalidateOutput);
+  formatSelect.addEventListener("change", invalidateOutput);
   customProfileInput.addEventListener("change", () => {
     invalidateOutput();
     void readCustomProfile();
@@ -569,14 +621,16 @@ export function installPrintExportDialog(
     event.preventDefault();
     clearResultPanels();
     let profile: PrinterProfile;
+    let format: PrintFormat;
     try {
-      profile = resolveProfile();
+      ({ profile, format } = resolveProfileForFormat());
     } catch (error) {
       renderErrors(issuesOf(error));
       return;
     }
     invalidateCustomProfileRead();
     controller.start({
+      format,
       model: options.getModel(),
       profile,
       options: {
@@ -590,14 +644,15 @@ export function installPrintExportDialog(
   function startCalibration(): void {
     clearResultPanels();
     let profile: PrinterProfile;
+    let format: PrintFormat;
     try {
-      profile = resolveProfile();
+      ({ profile, format } = resolveProfileForFormat());
     } catch (error) {
       renderErrors(issuesOf(error));
       return;
     }
     invalidateCustomProfileRead();
-    controller.startCalibration({ profile });
+    controller.startCalibration({ profile, format });
   }
   form.addEventListener("submit", startExport);
   calibrationButton.addEventListener("click", startCalibration);

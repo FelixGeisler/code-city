@@ -1,24 +1,26 @@
 import type {
-  ThreeMfExportOptions,
-  ThreeMfExportPhase,
-  ThreeMfExportPreflight,
-} from "../../../packages/exporter/src/three-mf-export.js";
+  PrintExportOptions,
+  PrintExportPhase,
+  PrintExportPreflight,
+} from "../../../packages/exporter/src/print-export.js";
 import type {
   CalibrationMeasurement,
-  CalibrationPreflight,
+  CalibrationPrintExportPreflight,
 } from "../../../packages/exporter/src/calibration.js";
 
 export interface PrintExportGenerateRequest {
   readonly type: "generate";
   readonly jobId: number;
+  readonly format: "3mf" | "stl";
   readonly model: unknown;
   readonly profile: unknown;
-  readonly options: ThreeMfExportOptions;
+  readonly options: PrintExportOptions;
 }
 
 export interface PrintCalibrationGenerateRequest {
   readonly type: "calibrate";
   readonly jobId: number;
+  readonly format: "3mf" | "stl";
   readonly profile: unknown;
 }
 
@@ -29,7 +31,7 @@ export type PrintExportWorkerRequest =
 export interface PrintExportProgressResponse {
   readonly type: "progress";
   readonly jobId: number;
-  readonly phase: ThreeMfExportPhase;
+  readonly phase: PrintExportPhase;
   readonly completed: number;
   readonly message: string;
 }
@@ -37,22 +39,36 @@ export interface PrintExportProgressResponse {
 export interface PrintExportPreflightResponse {
   readonly type: "preflight";
   readonly jobId: number;
-  readonly preflight: ThreeMfExportPreflight;
+  readonly preflight: PrintExportPreflight;
 }
+
+export type PrintExportTransferArtifact =
+  | {
+      readonly format: "3mf";
+      readonly mimeType: "model/3mf";
+      readonly fileExtension: ".3mf";
+      readonly bytes: ArrayBuffer;
+    }
+  | {
+      readonly format: "stl";
+      readonly mimeType: "model/stl";
+      readonly fileExtension: ".stl";
+      readonly bytes: ArrayBuffer;
+    };
 
 export interface PrintExportResultResponse {
   readonly type: "result";
   readonly jobId: number;
-  readonly preflight: ThreeMfExportPreflight;
-  readonly threeMfBytes: ArrayBuffer;
+  readonly preflight: PrintExportPreflight;
+  readonly artifact: PrintExportTransferArtifact;
   readonly legendBytes?: ArrayBuffer;
 }
 
 export interface PrintCalibrationResultResponse {
   readonly type: "calibration-result";
   readonly jobId: number;
-  readonly preflight: CalibrationPreflight;
-  readonly threeMfBytes: ArrayBuffer;
+  readonly preflight: CalibrationPrintExportPreflight;
+  readonly artifact: PrintExportTransferArtifact;
   readonly manifestBytes: ArrayBuffer;
 }
 
@@ -81,7 +97,7 @@ export type PrintExportWorkerResponse =
   | PrintCalibrationResultResponse
   | PrintExportFailureResponse;
 
-const EXPORT_PHASES: ReadonlySet<ThreeMfExportPhase> = new Set([
+const EXPORT_PHASES: ReadonlySet<PrintExportPhase> = new Set([
   "validating",
   "geometry",
   "serializing",
@@ -174,11 +190,16 @@ function positiveInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) > 0;
 }
 
-function exportOptions(value: unknown): value is ThreeMfExportOptions {
+function printFormat(value: unknown): value is "3mf" | "stl" {
+  return value === "3mf" || value === "stl";
+}
+
+function exportOptions(value: unknown): value is PrintExportOptions {
   const candidate = record(value);
   return (
     candidate !== undefined &&
-    typeof candidate["scale"] === "number" &&
+    finiteNumber(candidate["scale"]) &&
+    candidate["scale"] > 0 &&
     (candidate["labelPolicy"] === "auto" ||
       candidate["labelPolicy"] === "off") &&
     (candidate["routePolicy"] === "auto" ||
@@ -240,15 +261,17 @@ function routes(value: unknown): boolean {
   );
 }
 
-function preflight(value: unknown): value is ThreeMfExportPreflight {
+function preflight(value: unknown): value is PrintExportPreflight {
   const candidate = record(value);
   return (
     candidate !== undefined &&
+    printFormat(candidate["format"]) &&
     typeof candidate["title"] === "string" &&
     typeof candidate["profileId"] === "string" &&
     typeof candidate["profileName"] === "string" &&
     dimensions(candidate["dimensions"]) &&
-    nonnegativeInteger(candidate["partCount"]) &&
+    positiveInteger(candidate["partCount"]) &&
+    positiveInteger(candidate["triangleCount"]) &&
     Array.isArray(candidate["channels"]) &&
     candidate["channels"].every(channel) &&
     stringArray(candidate["warnings"]) &&
@@ -256,6 +279,25 @@ function preflight(value: unknown): value is ThreeMfExportPreflight {
     routes(candidate["routes"]) &&
     typeof candidate["legendIncluded"] === "boolean"
   );
+}
+
+function transferArtifact(
+  value: unknown,
+): value is PrintExportTransferArtifact {
+  const candidate = record(value);
+  if (
+    candidate === undefined ||
+    !(candidate["bytes"] instanceof ArrayBuffer) ||
+    candidate["bytes"].byteLength === 0
+  ) {
+    return false;
+  }
+  return candidate["format"] === "3mf"
+    ? candidate["mimeType"] === "model/3mf" &&
+        candidate["fileExtension"] === ".3mf"
+    : candidate["format"] === "stl" &&
+        candidate["mimeType"] === "model/stl" &&
+        candidate["fileExtension"] === ".stl";
 }
 
 function calibrationMeasurement(
@@ -293,7 +335,7 @@ function calibrationMeasurement(
 
 function calibrationPreflight(
   value: unknown,
-): value is CalibrationPreflight {
+): value is CalibrationPrintExportPreflight {
   const candidate = record(value);
   const manifest = record(candidate?.["manifest"]);
   const measurementValues = candidate?.["measurements"];
@@ -317,6 +359,7 @@ function calibrationPreflight(
   const calibrationDimensions = record(candidate?.["dimensions"]);
   return (
     candidate !== undefined &&
+    printFormat(candidate["format"]) &&
     typeof candidate["profileId"] === "string" &&
     candidate["profileId"].length > 0 &&
     typeof candidate["profileName"] === "string" &&
@@ -328,6 +371,7 @@ function calibrationPreflight(
     positiveInteger(candidate["partCount"]) &&
     positiveInteger(candidate["channelCount"]) &&
     positiveInteger(candidate["triangleCount"]) &&
+    stringArray(candidate["warnings"]) &&
     measurementIds !== undefined &&
     measurementIds.size === CALIBRATION_MEASUREMENT_IDS.size &&
     measurements !== undefined &&
@@ -365,6 +409,7 @@ export function isPrintExportGenerateRequest(
     candidate !== undefined &&
     candidate["type"] === "generate" &&
     jobId(candidate["jobId"]) &&
+    printFormat(candidate["format"]) &&
     "model" in candidate &&
     "profile" in candidate &&
     exportOptions(candidate["options"])
@@ -379,6 +424,7 @@ export function isPrintCalibrationGenerateRequest(
     candidate !== undefined &&
     candidate["type"] === "calibrate" &&
     jobId(candidate["jobId"]) &&
+    printFormat(candidate["format"]) &&
     "profile" in candidate
   );
 }
@@ -402,7 +448,7 @@ export function isPrintExportWorkerResponse(
     case "progress":
       return (
         typeof candidate["phase"] === "string" &&
-        EXPORT_PHASES.has(candidate["phase"] as ThreeMfExportPhase) &&
+        EXPORT_PHASES.has(candidate["phase"] as PrintExportPhase) &&
         typeof candidate["completed"] === "number" &&
         Number.isFinite(candidate["completed"]) &&
         candidate["completed"] >= 0 &&
@@ -411,19 +457,29 @@ export function isPrintExportWorkerResponse(
       );
     case "preflight":
       return preflight(candidate["preflight"]);
-    case "result":
+    case "result": {
+      const artifact = candidate["artifact"];
+      const cityPreflight = candidate["preflight"];
       return (
-        preflight(candidate["preflight"]) &&
-        candidate["threeMfBytes"] instanceof ArrayBuffer &&
+        preflight(cityPreflight) &&
+        transferArtifact(artifact) &&
+        cityPreflight.format === artifact.format &&
         (candidate["legendBytes"] === undefined ||
-          candidate["legendBytes"] instanceof ArrayBuffer)
+          (candidate["legendBytes"] instanceof ArrayBuffer &&
+            candidate["legendBytes"].byteLength > 0))
       );
-    case "calibration-result":
+    }
+    case "calibration-result": {
+      const calibration = candidate["preflight"];
+      const artifact = candidate["artifact"];
       return (
-        calibrationPreflight(candidate["preflight"]) &&
-        candidate["threeMfBytes"] instanceof ArrayBuffer &&
-        candidate["manifestBytes"] instanceof ArrayBuffer
+        calibrationPreflight(calibration) &&
+        transferArtifact(artifact) &&
+        calibration.format === artifact.format &&
+        candidate["manifestBytes"] instanceof ArrayBuffer &&
+        candidate["manifestBytes"].byteLength > 0
       );
+    }
     case "failure":
       return failure(candidate["error"]);
     default:
@@ -450,7 +506,7 @@ export function serializePrintExportError(
       ? error.message
       : typeof error === "string"
         ? error
-        : "The 3MF export failed unexpectedly.";
+        : "The print export failed unexpectedly.";
   const name =
     error instanceof Error
       ? error.name

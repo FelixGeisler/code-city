@@ -6,18 +6,23 @@ import {
   isPrintExportWorkerResponse,
   serializePrintExportError,
   type PrintExportGenerateRequest,
+  type PrintExportTransferArtifact,
 } from "../apps/viewer/src/print-export-protocol.js";
 import { createSingleChannelProfile } from "../packages/core/src/index.js";
-import { generateCalibrationExport } from "../packages/exporter/src/calibration.js";
-import type { ThreeMfExportPreflight } from "../packages/exporter/src/three-mf-export.js";
+import {
+  generateCalibrationPrintExport,
+} from "../packages/exporter/src/calibration.js";
+import type { PrintExportPreflight } from "../packages/exporter/src/print-export.js";
 
-function samplePreflight(): ThreeMfExportPreflight {
+function samplePreflight(): PrintExportPreflight {
   return {
+    format: "3mf",
     title: "Code City",
     profileId: "printer",
     profileName: "Printer",
     dimensions: { x: 10, y: 20, z: 30 },
     partCount: 1,
+    triangleCount: 12,
     channels: [
       {
         id: "channel-1",
@@ -47,11 +52,30 @@ function samplePreflight(): ThreeMfExportPreflight {
   };
 }
 
+function sampleArtifact(
+  format: "3mf" | "stl" = "3mf",
+): PrintExportTransferArtifact {
+  return format === "3mf"
+    ? {
+        format,
+        mimeType: "model/3mf",
+        fileExtension: ".3mf",
+        bytes: new ArrayBuffer(4),
+      }
+    : {
+        format,
+        mimeType: "model/stl",
+        fileExtension: ".stl",
+        bytes: new ArrayBuffer(4),
+      };
+}
+
 describe("viewer print export protocol", () => {
   it("accepts only complete generate requests with positive job ids", () => {
     const request: PrintExportGenerateRequest = {
       type: "generate",
       jobId: 7,
+      format: "3mf",
       model: { schemaVersion: "1.0" },
       profile: { id: "printer" },
       options: {
@@ -69,6 +93,12 @@ describe("viewer print export protocol", () => {
     expect(
       isPrintExportGenerateRequest({
         ...request,
+        format: "obj",
+      }),
+    ).toBe(false);
+    expect(
+      isPrintExportGenerateRequest({
+        ...request,
         options: { ...request.options, routePolicy: "always" },
       }),
     ).toBe(false);
@@ -76,6 +106,7 @@ describe("viewer print export protocol", () => {
       isPrintExportGenerateRequest({
         type: "generate",
         jobId: 1,
+        format: "3mf",
         profile: {},
         options: request.options,
       }),
@@ -86,6 +117,7 @@ describe("viewer print export protocol", () => {
     const request = {
       type: "calibrate",
       jobId: 8,
+      format: "stl",
       profile: createSingleChannelProfile(),
     } as const;
 
@@ -97,6 +129,12 @@ describe("viewer print export protocol", () => {
       isPrintCalibrationGenerateRequest({
         type: "calibrate",
         jobId: 8,
+      }),
+    ).toBe(false);
+    expect(
+      isPrintCalibrationGenerateRequest({
+        ...request,
+        format: "obj",
       }),
     ).toBe(false);
     expect(
@@ -132,7 +170,7 @@ describe("viewer print export protocol", () => {
         type: "result",
         jobId: 1,
         preflight,
-        threeMfBytes: archive,
+        artifact: { ...sampleArtifact(), bytes: archive },
       }),
     ).toBe(true);
     expect(
@@ -140,7 +178,29 @@ describe("viewer print export protocol", () => {
         type: "result",
         jobId: 1,
         preflight,
-        threeMfBytes: new Uint8Array(4),
+        artifact: {
+          ...sampleArtifact(),
+          bytes: new Uint8Array(4),
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isPrintExportWorkerResponse({
+        type: "result",
+        jobId: 1,
+        preflight,
+        artifact: {
+          ...sampleArtifact(),
+          mimeType: "model/stl",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isPrintExportWorkerResponse({
+        type: "result",
+        jobId: 1,
+        preflight,
+        artifact: sampleArtifact("stl"),
       }),
     ).toBe(false);
     expect(
@@ -195,14 +255,21 @@ describe("viewer print export protocol", () => {
   });
 
   it("validates complete, internally consistent calibration results", () => {
-    const preflight = generateCalibrationExport(
-      createSingleChannelProfile(),
-    ).preflight;
+    const generated = generateCalibrationPrintExport({
+      profile: createSingleChannelProfile(),
+      format: "3mf",
+    });
+    const preflight = generated.preflight;
     const response = {
       type: "calibration-result",
       jobId: 2,
       preflight,
-      threeMfBytes: new ArrayBuffer(8),
+      artifact: {
+        format: "3mf",
+        mimeType: "model/3mf",
+        fileExtension: ".3mf",
+        bytes: new ArrayBuffer(8),
+      },
       manifestBytes: new ArrayBuffer(8),
     } as const;
 

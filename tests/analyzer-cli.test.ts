@@ -319,7 +319,9 @@ it("exports the canonical Demo as a real five-part 3MF", async () => {
   expect(archive.length).toBeGreaterThan(1_000);
   expect(legend.labelPolicy).toBe("auto");
   expect(legend.buildings).toHaveLength(5);
-  expect(stderr).toEqual([]);
+  expect(stderr.join("")).toContain(
+    "Warning: 2 semantic groups were merged",
+  );
   expect(stdout.join("")).toContain("5 aligned part(s)");
   expect(stdout.join("")).toContain(" mm.");
   expect(stdout.join("")).toContain(legendPath);
@@ -367,7 +369,9 @@ it("supports explicit label and companion-legend controls", async () => {
   await expect(
     fs.access(path.join(directory, "without-labels.legend.json")),
   ).rejects.toThrow();
-  expect(stderr).toEqual([]);
+  expect(stderr.join("")).toContain(
+    "Warning: 2 semantic groups were merged",
+  );
   expect(stdout.join("")).toContain("93 × 48 × 33 mm");
   expect(stdout.join("")).toContain("Legend output disabled");
   expect(stdout.join("")).toContain("0 building and 0 district");
@@ -452,7 +456,9 @@ it("rejects unsupported export formats and invalid scale values", async () => {
       },
     ),
   ).toBe(1);
-  expect(messages.join("")).toContain("currently supports only '3mf'");
+  expect(messages.join("")).toContain(
+    "STL output must use the '.stl'",
+  );
   expect(messages.join("")).toContain("--scale must be a positive");
   expect(messages.join("")).toContain("--labels must be either");
   expect(messages.join("")).toContain("--routes must be either");
