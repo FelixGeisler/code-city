@@ -10,6 +10,7 @@ import {
   analyzeLocalRepositories,
   type LocalAnalysisOptions,
 } from "../../../packages/analyzer/src/index.js";
+import { CLI_JSON_LIMITS } from "./json-file.js";
 
 const LOOPBACK_HOST = "127.0.0.1";
 const MODEL_PATH = "/__codecity/model.json";
@@ -162,6 +163,71 @@ function validPort(port: number | undefined): number {
   return value;
 }
 
+function boundedJsonBuffer(value: unknown, maximumBytes: number): Buffer {
+  let bytes = 0;
+  const active = new WeakSet<object>();
+  const add = (count: number): void => {
+    bytes += count;
+    if (bytes > maximumBytes) {
+      throw new Error(
+        "The analyzed city model exceeds the local viewer's 128 MiB limit.",
+      );
+    }
+  };
+  const visit = (item: unknown, inArray = false): void => {
+    if (item === null) {
+      add(4);
+      return;
+    }
+    if (
+      item === undefined ||
+      typeof item === "function" ||
+      typeof item === "symbol"
+    ) {
+      if (inArray) add(4);
+      return;
+    }
+    if (typeof item !== "object") {
+      const encoded = JSON.stringify(item);
+      if (encoded === undefined) throw new Error("City model is not JSON-safe.");
+      add(Buffer.byteLength(encoded, "utf8"));
+      return;
+    }
+    if (active.has(item)) throw new Error("City model is not JSON-safe.");
+    active.add(item);
+    if (Array.isArray(item)) {
+      add(2);
+      item.forEach((entry, index) => {
+        if (index > 0) add(1);
+        visit(entry, true);
+      });
+    } else {
+      add(2);
+      let emitted = 0;
+      for (const [key, entry] of Object.entries(item)) {
+        if (
+          entry === undefined ||
+          typeof entry === "function" ||
+          typeof entry === "symbol"
+        ) {
+          continue;
+        }
+        if (emitted > 0) add(1);
+        add(Buffer.byteLength(JSON.stringify(key), "utf8") + 1);
+        visit(entry);
+        emitted += 1;
+      }
+    }
+    active.delete(item);
+  };
+  visit(value);
+  const result = Buffer.from(JSON.stringify(value), "utf8");
+  if (result.byteLength !== bytes || result.byteLength > maximumBytes) {
+    throw new Error("City model is not JSON-safe.");
+  }
+  return result;
+}
+
 function securityHeaders(
   response: ServerResponse,
   contentType: string,
@@ -249,7 +315,8 @@ function requestHandler(
   model: Buffer,
   port: number,
 ): (request: IncomingMessage, response: ServerResponse) => void {
-  const expectedHost = `${LOOPBACK_HOST}:${port}`;
+  const expectedHost =
+    port === 80 ? LOOPBACK_HOST : `${LOOPBACK_HOST}:${port}`;
   return (request, response) => {
     if (!hostHeaderIsValid(request, expectedHost)) {
       send(request, response, 400, "Bad request.\n", "text/plain; charset=utf-8");
@@ -366,7 +433,10 @@ export async function startLocalOpenServer(
     ...options.analysis,
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   });
-  const modelBytes = Buffer.from(JSON.stringify(model), "utf8");
+  const modelBytes = boundedJsonBuffer(
+    model,
+    CLI_JSON_LIMITS.cityModelBytes,
+  );
   const server = http.createServer();
   server.requestTimeout = 5_000;
   server.headersTimeout = 5_000;
