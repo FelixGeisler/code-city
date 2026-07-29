@@ -27,6 +27,8 @@ export interface PrintExportWorkerLike {
 
 export type PrintExportWorkerFactory = () => PrintExportWorkerLike;
 
+export const PRINT_EXPORT_WATCHDOG_MS = 60_000;
+
 export interface PrintExportStartRequest {
   readonly model: unknown;
   readonly profile: unknown;
@@ -67,11 +69,18 @@ export type PrintExportControllerState =
 
 export interface PrintExportControllerCallbacks {
   readonly onStateChange?: (state: PrintExportControllerState) => void;
+  readonly watchdogMs?: number;
+  readonly scheduleWatchdog?: (
+    callback: () => void,
+    milliseconds: number,
+  ) => unknown;
+  readonly clearWatchdog?: (handle: unknown) => void;
 }
 
 interface ActiveWorker {
   readonly jobId: number;
   readonly worker: PrintExportWorkerLike;
+  watchdogHandle?: unknown;
 }
 
 const IDLE_STATE: PrintExportIdleState = Object.freeze({ status: "idle" });
@@ -90,6 +99,12 @@ export class PrintExportController {
   private readonly onStateChange:
     | ((state: PrintExportControllerState) => void)
     | undefined;
+  private readonly watchdogMs: number;
+  private readonly scheduleWatchdog: (
+    callback: () => void,
+    milliseconds: number,
+  ) => unknown;
+  private readonly clearWatchdog: (handle: unknown) => void;
   private nextJobId = 0;
   private active: ActiveWorker | undefined;
   private currentState: PrintExportControllerState = IDLE_STATE;
@@ -101,6 +116,20 @@ export class PrintExportController {
   ) {
     this.workerFactory = workerFactory;
     this.onStateChange = callbacks.onStateChange;
+    this.watchdogMs =
+      callbacks.watchdogMs ?? PRINT_EXPORT_WATCHDOG_MS;
+    if (!Number.isSafeInteger(this.watchdogMs) || this.watchdogMs <= 0) {
+      throw new TypeError(
+        "The print export watchdog must be a positive integer.",
+      );
+    }
+    this.scheduleWatchdog =
+      callbacks.scheduleWatchdog ??
+      ((callback, milliseconds) =>
+        globalThis.setTimeout(callback, milliseconds));
+    this.clearWatchdog =
+      callbacks.clearWatchdog ??
+      ((handle) => globalThis.clearTimeout(handle as number));
   }
 
   public get state(): PrintExportControllerState {
@@ -150,6 +179,8 @@ export class PrintExportController {
     };
     this.updateState({ status: "busy", jobId });
 
+    if (!this.isCurrent(worker, jobId)) return jobId;
+    this.armWatchdog(worker, jobId);
     if (!this.isCurrent(worker, jobId)) return jobId;
     try {
       worker.postMessage({
@@ -297,7 +328,9 @@ export class PrintExportController {
     jobId: number,
   ): void {
     if (!this.isCurrent(worker, jobId)) return;
+    const active = this.active!;
     this.active = undefined;
+    this.clearActiveWatchdog(active);
     this.detachAndTerminate(worker);
   }
 
@@ -305,7 +338,61 @@ export class PrintExportController {
     const active = this.active;
     this.active = undefined;
     if (active !== undefined) {
+      this.clearActiveWatchdog(active);
       this.detachAndTerminate(active.worker);
+    }
+  }
+
+  private armWatchdog(
+    worker: PrintExportWorkerLike,
+    jobId: number,
+  ): void {
+    const active = this.active;
+    if (
+      active === undefined ||
+      active.worker !== worker ||
+      active.jobId !== jobId
+    ) {
+      return;
+    }
+    try {
+      const handle = this.scheduleWatchdog(() => {
+        this.fail(
+          worker,
+          jobId,
+          {
+            kind: "unexpected",
+            name: "PrintExportTimeoutError",
+            message:
+              `The 3MF export exceeded the ${this.watchdogMs.toLocaleString(
+                "en-US",
+              )} ms browser limit.`,
+            issues: [],
+          },
+        );
+      }, this.watchdogMs);
+      if (this.isCurrent(worker, jobId)) {
+        active.watchdogHandle = handle;
+      } else {
+        this.tryClearWatchdog(handle);
+      }
+    } catch (error) {
+      this.fail(worker, jobId, serializePrintExportError(error));
+    }
+  }
+
+  private clearActiveWatchdog(active: ActiveWorker): void {
+    if (active.watchdogHandle === undefined) return;
+    const handle = active.watchdogHandle;
+    active.watchdogHandle = undefined;
+    this.tryClearWatchdog(handle);
+  }
+
+  private tryClearWatchdog(handle: unknown): void {
+    try {
+      this.clearWatchdog(handle);
+    } catch {
+      // Worker termination remains the authoritative cleanup boundary.
     }
   }
 

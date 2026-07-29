@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { promises as fs } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -30,6 +29,11 @@ import {
   serializeThreeMf,
 } from "../../../packages/exporter/src/index.js";
 import { publishArtifactsAtomically } from "./artifact-publication.js";
+import {
+  CLI_JSON_LIMITS,
+  publishPrivateJson,
+  readBoundedJsonFile,
+} from "./json-file.js";
 
 const HELP = `Code City
 
@@ -139,26 +143,12 @@ function positiveSafeIntegerOption(
   return parsed;
 }
 
-async function writeJson(filePath: string, value: unknown): Promise<void> {
-  const absolutePath = path.resolve(filePath);
-  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-  await fs.writeFile(absolutePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
 async function readJson(filePath: string, description: string): Promise<unknown> {
-  let text: string;
-  try {
-    text = await fs.readFile(path.resolve(filePath), "utf8");
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`Cannot read ${description} '${filePath}': ${detail}`);
-  }
-  try {
-    return JSON.parse(text) as unknown;
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(`Invalid JSON in ${description} '${filePath}': ${detail}`);
-  }
+  const maximumBytes =
+    description === "city model"
+      ? CLI_JSON_LIMITS.cityModelBytes
+      : CLI_JSON_LIMITS.printerProfileBytes;
+  return readBoundedJsonFile(path.resolve(filePath), description, maximumBytes);
 }
 
 function parseCityModel(value: unknown): CityModel {
@@ -215,7 +205,7 @@ async function analyzeCommand(args: readonly string[], io: CliIo): Promise<void>
     parsed.positionals,
     analysisOptions,
   );
-  await writeJson(output, model);
+  await publishPrivateJson(output, model, "city model");
   io.stdout(
     `Analyzed ${model.repositories.length} root(s), ${model.modules.length} module(s), and ${model.buildings.length} source file(s).\nWrote ${path.resolve(output)}\n`,
   );
@@ -289,7 +279,7 @@ async function planCommand(args: readonly string[], io: CliIo): Promise<void> {
       ? {}
       : { identityPanel: planGeometry.identityPanel }),
   });
-  await writeJson(output, plan);
+  await publishPrivateJson(output, plan, "print plan");
   io.stdout(
     `Planned ${format.toUpperCase()} output across ${plan.channels.length} print channel(s).\nWrote ${path.resolve(output)}\n`,
   );

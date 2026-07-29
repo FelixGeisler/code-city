@@ -564,6 +564,58 @@ EndProject
     expect(JSON.stringify(model)).not.toContain("secret adapter detail");
   });
 
+  it("bounds and redacts repository-derived model text", async () => {
+    const root = await temporaryDirectory();
+    const longName = `Unit${"x".repeat(400)}`;
+    await fixtureFile(
+      root,
+      "App.csproj",
+      `<Project>
+  <PropertyGroup>
+    <AssemblyName>C:\\private\\Raw\u202EName</AssemblyName>
+    <PackageId>https://user:password@packages.example/pkg?token=secret</PackageId>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../private/Secret.csproj" />
+  </ItemGroup>
+</Project>`,
+    );
+    await fixtureFile(
+      root,
+      "angular.json",
+      JSON.stringify({
+        projects: {
+          [`Project\u202E${"z".repeat(400)}`]: { root: "." },
+        },
+      }),
+    );
+    await fixtureFile(
+      root,
+      "main.ts",
+      `export function ${longName}() { return true; }`,
+    );
+
+    const model = await analyzeLocalRepositories([root]);
+    const serialized = JSON.stringify(model);
+
+    expect(serialized).not.toContain("C:\\\\private");
+    expect(serialized).not.toContain("user:password");
+    expect(serialized).not.toContain("token=secret");
+    expect(serialized).not.toContain("\u202E");
+    expect(serialized).not.toContain(longName);
+    expect(
+      model.dependencies.find(
+        ({ kind }) => kind === "project-reference",
+      )?.externalTarget,
+    ).toBe("Secret.csproj");
+    expect(model.modules.every(({ name }) => name.length <= 256)).toBe(true);
+    expect(
+      model.buildings.every(({ units }) =>
+        (units ?? []).every(({ name }) => name.length <= 256),
+      ),
+    ).toBe(true);
+  });
+
   it("allows TypeScript config extensions that were admitted to the snapshot", async () => {
     const root = await temporaryDirectory();
     await fixtureFile(

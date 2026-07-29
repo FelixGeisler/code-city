@@ -21,6 +21,15 @@ import {
   isSourceFile,
 } from "./filesystem.js";
 import { materializeLocalRepositorySnapshots } from "./local-snapshot.js";
+import {
+  safeRelativeInputPath,
+  safeRepositoryRelativePath,
+  sanitizeDisplayText,
+  sanitizeExternalReference,
+  sanitizeImportSpecifier,
+  sanitizeVersionText,
+  sanitizeWarningText,
+} from "./sanitization.js";
 import type {
   RepositorySnapshot,
   SnapshotDiagnosticCode,
@@ -46,7 +55,8 @@ interface RootContext {
 }
 
 interface ProjectReference {
-  readonly include: string;
+  readonly include?: string;
+  readonly externalTarget: string;
 }
 
 interface PackageReference {
@@ -106,7 +116,7 @@ function virtualIsWithin(parent: string, candidate: string): boolean {
 
 function virtualRelative(root: string, candidate: string): string {
   if (!virtualIsWithin(root, candidate)) {
-    throw new Error(`Snapshot path escapes its repository: ${candidate}`);
+    throw new Error("Snapshot path escapes its repository.");
   }
   return path.posix.relative(virtualPath(root), virtualPath(candidate)) || ".";
 }
@@ -114,9 +124,7 @@ function virtualRelative(root: string, candidate: string): string {
 function snapshotText(context: RootContext, filePath: string): string {
   const text = context.textByPath.get(virtualKey(filePath));
   if (text === undefined) {
-    throw new Error(
-      `Snapshot file was not admitted: ${virtualRelative(context.virtualRoot, filePath)}`,
-    );
+    throw new Error("Snapshot file was not admitted.");
   }
   return text;
 }
@@ -199,11 +207,26 @@ function attribute(tag: string, name: string): string | undefined {
 function parseProjectReferences(xml: string): readonly ProjectReference[] {
   const references: ProjectReference[] = [];
   for (const match of xml.matchAll(/<ProjectReference\b[^>]*>/giu)) {
-    const include = attribute(match[0], "Include");
-    if (include) references.push({ include });
+    const rawInclude = attribute(match[0], "Include");
+    if (rawInclude) {
+      let include: string | undefined;
+      try {
+        include = safeRelativeInputPath(rawInclude);
+      } catch {
+        // Absolute, URI, control-bearing, and oversized references are display
+        // data only. They are never used for virtual path resolution.
+      }
+      references.push({
+        ...(include === undefined ? {} : { include }),
+        externalTarget: sanitizeExternalReference(
+          rawInclude,
+          "unresolved-project",
+        ),
+      });
+    }
   }
   return references.sort((left, right) =>
-    compareStable(left.include, right.include),
+    compareStable(left.externalTarget, right.externalTarget),
   );
 }
 
@@ -220,8 +243,10 @@ function parsePackageReferences(xml: string): readonly PackageReference[] {
       attribute(opening, "Version") ??
       (match[2] ? firstElement(match[2], "Version") : undefined);
     references.push({
-      packageId: redactAbsoluteReference(packageId),
-      ...(version === undefined ? {} : { version }),
+      packageId: sanitizeExternalReference(packageId, "external-package"),
+      ...(version === undefined
+        ? {}
+        : { version: sanitizeVersionText(version) }),
     });
   }
   return references.sort(
@@ -237,18 +262,12 @@ function targetFrameworks(xml: string): readonly string[] {
   return frameworks
     ? frameworks
         .split(";")
-        .map((framework) => framework.trim())
+        .map((framework) =>
+          sanitizeExternalReference(framework, "unknown-framework"),
+        )
         .filter(Boolean)
         .sort(compareStable)
     : [];
-}
-
-function redactAbsoluteReference(value: string): string {
-  return path.isAbsolute(value) ||
-    /^[A-Za-z]:[\\/]/u.test(value) ||
-    value.startsWith("\\\\")
-    ? path.posix.basename(value.replaceAll("\\", "/"))
-    : value;
 }
 
 function createRepositories(
@@ -256,7 +275,7 @@ function createRepositories(
 ): readonly CityRepository[] {
   const occurrences = new Map<string, number>();
   return snapshots.map((snapshot) => {
-    const name = snapshot.name || "Repository";
+    const name = sanitizeDisplayText(snapshot.name, "Repository");
     const nameKey = name.toLocaleLowerCase("en-US");
     const occurrence = (occurrences.get(nameKey) ?? 0) + 1;
     occurrences.set(nameKey, occurrence);
@@ -284,17 +303,19 @@ async function discoverDotnetModules(
         projectFile,
       );
       const frameworks = targetFrameworks(xml);
-      const moduleName = redactAbsoluteReference(
+      const moduleName = sanitizeDisplayText(
         firstElement(xml, "AssemblyName") ??
           path.posix.basename(
             projectFile,
             path.posix.extname(projectFile),
           ),
+        "Unnamed project",
       );
       // NuGet defaults PackageId to AssemblyName/project name. Retaining the
       // effective id lets separately supplied roots reconnect package bridges.
-      const packageId = redactAbsoluteReference(
+      const packageId = sanitizeExternalReference(
         firstElement(xml, "PackageId") ?? moduleName,
+        moduleName,
       );
       const module: CityModule = {
         id: stableId(
@@ -306,7 +327,7 @@ async function discoverDotnetModules(
         repositoryId: context.repository.id,
         kind: "dotnet-project",
         name: moduleName,
-        path: normalizePath(relativeProject),
+        path: safeRepositoryRelativePath(relativeProject),
         solutionIds: [],
         ...(frameworks.length === 0 ? {} : { targetFrameworks: frameworks }),
         ...(packageId === undefined ? {} : { packageId }),
@@ -353,7 +374,9 @@ async function discoverAngularModules(
         : undefined;
     if (!projects) {
       warnings.push(
-        `${virtualRelative(context.virtualRoot, workspaceFile)}: invalid angular.json or missing projects`,
+        sanitizeWarningText(
+          `${safeRepositoryRelativePath(virtualRelative(context.virtualRoot, workspaceFile))}: invalid angular.json or missing projects`,
+        ),
       );
       continue;
     }
@@ -362,22 +385,42 @@ async function discoverAngularModules(
       guard.check();
       const project = projects[projectName];
       if (!project || typeof project !== "object") continue;
+      const safeProjectName = sanitizeDisplayText(
+        projectName,
+        "Unnamed Angular project",
+      );
       const rootValue = (project as Record<string, unknown>)["root"];
       const configuredRoot = typeof rootValue === "string" ? rootValue : "";
-      const projectRoot = virtualPath(
-        path.posix.dirname(workspaceFile),
-        configuredRoot,
-      );
-      if (!virtualIsWithin(context.virtualRoot, projectRoot)) {
+      let safeConfiguredRoot: string;
+      try {
+        safeConfiguredRoot = safeRelativeInputPath(
+          configuredRoot || ".",
+        );
+      } catch {
         warnings.push(
-          `${virtualRelative(context.virtualRoot, workspaceFile)}: Angular project '${projectName}' escapes the repository root`,
+          sanitizeWarningText(
+            `${safeRepositoryRelativePath(virtualRelative(context.virtualRoot, workspaceFile))}: Angular project '${safeProjectName}' has an unsafe root`,
+          ),
         );
         continue;
       }
-      const relativeRoot = virtualRelative(context.virtualRoot, projectRoot);
-      const workspacePath = virtualRelative(
-        context.virtualRoot,
-        workspaceFile,
+      const projectRoot = virtualPath(
+        path.posix.dirname(workspaceFile),
+        safeConfiguredRoot,
+      );
+      if (!virtualIsWithin(context.virtualRoot, projectRoot)) {
+        warnings.push(
+          sanitizeWarningText(
+            `${safeRepositoryRelativePath(virtualRelative(context.virtualRoot, workspaceFile))}: Angular project '${safeProjectName}' escapes the repository root`,
+          ),
+        );
+        continue;
+      }
+      const relativeRoot = safeRepositoryRelativePath(
+        virtualRelative(context.virtualRoot, projectRoot),
+      );
+      const workspacePath = safeRepositoryRelativePath(
+        virtualRelative(context.virtualRoot, workspaceFile),
       );
       modules.push({
         module: {
@@ -390,8 +433,8 @@ async function discoverAngularModules(
           ),
           repositoryId: context.repository.id,
           kind: "angular-project",
-          name: projectName,
-          path: normalizePath(relativeRoot),
+          name: safeProjectName,
+          path: relativeRoot,
           solutionIds: [],
         },
         rootPath: projectRoot,
@@ -413,7 +456,17 @@ function solutionProjectPaths(
   for (const match of solutionText.matchAll(expression)) {
     const relative = match[1];
     if (relative) {
-      paths.push(virtualPath(solutionDirectory, decodeXml(relative)));
+      try {
+        paths.push(
+          virtualPath(
+            solutionDirectory,
+            safeRelativeInputPath(decodeXml(relative)),
+          ),
+        );
+      } catch {
+        // Unsafe source references are treated as unresolved data and are
+        // never used to construct virtual or host paths.
+      }
     }
   }
   return paths.sort(compareStable);
@@ -447,14 +500,13 @@ async function discoverSolutions(
         path.posix.extname(file).toLocaleLowerCase("en-US") === ".sln",
     )) {
       guard.check();
-      const relativePath = virtualRelative(
-        context.virtualRoot,
-        solutionFile,
+      const relativePath = safeRepositoryRelativePath(
+        virtualRelative(context.virtualRoot, solutionFile),
       );
       const id = stableId(
         "solution",
         context.repository.id,
-        normalizePath(relativePath),
+        relativePath,
       );
       const text = snapshotText(context, solutionFile);
       const moduleIds = [
@@ -474,11 +526,14 @@ async function discoverSolutions(
       solutions.push({
         id,
         repositoryId: context.repository.id,
-        name: path.posix.basename(
-          solutionFile,
-          path.posix.extname(solutionFile),
+        name: sanitizeDisplayText(
+          path.posix.basename(
+            solutionFile,
+            path.posix.extname(solutionFile),
+          ),
+          "Unnamed solution",
         ),
-        path: normalizePath(relativePath),
+        path: relativePath,
         moduleIds,
       });
       for (const moduleId of moduleIds) {
@@ -505,6 +560,19 @@ function languageOf(filePath: string): SourceLanguage {
   if (extension === ".cs") return "csharp";
   if (extension === ".js" || extension === ".jsx") return "javascript";
   return "typescript";
+}
+
+function sanitizedImports(
+  imports: readonly StaticImportFact[],
+): readonly StaticImportFact[] {
+  const counts = new Map<string, number>();
+  for (const imported of imports) {
+    const specifier = sanitizeImportSpecifier(imported.specifier);
+    counts.set(specifier, (counts.get(specifier) ?? 0) + imported.count);
+  }
+  return [...counts.entries()]
+    .map(([specifier, count]) => ({ specifier, count }))
+    .sort((left, right) => compareStable(left.specifier, right.specifier));
 }
 
 function chooseModule(
@@ -607,10 +675,12 @@ async function analyzeSources(
         }
       }
 
-      const relativePath = normalizePath(
+      const relativePath = safeRepositoryRelativePath(
         virtualRelative(context.virtualRoot, sourcePath),
       );
-      const directory = normalizePath(path.posix.dirname(relativePath));
+      const directory = safeRepositoryRelativePath(
+        path.posix.dirname(relativePath),
+      );
       const districtId = stableId(
         "district",
         context.repository.id,
@@ -631,7 +701,10 @@ async function analyzeSources(
       const imports =
         language === "csharp"
           ? []
-          : (analysis as ReturnType<typeof analyzeTypeScriptSource>).imports;
+          : sanitizedImports(
+              (analysis as ReturnType<typeof analyzeTypeScriptSource>)
+                .imports,
+            );
       const fact: SourceFileFact = {
         id: stableId(
           "building",
@@ -645,9 +718,15 @@ async function analyzeSources(
         districtName:
           directory === "."
             ? selected.module.name
-            : path.posix.basename(directory),
+            : sanitizeDisplayText(
+                path.posix.basename(directory),
+                "Unnamed district",
+              ),
         districtPath: directory,
-        name: path.posix.basename(relativePath),
+        name: sanitizeDisplayText(
+          path.posix.basename(relativePath),
+          "Unnamed source",
+        ),
         path: relativePath,
         language,
         metrics,
@@ -655,7 +734,10 @@ async function analyzeSources(
           language === "csharp"
             ? "csharp-lexical-v1"
             : "typescript-compiler-api-v1",
-        units: analysis.units,
+        units: analysis.units.map((unit) => ({
+          ...unit,
+          name: sanitizeDisplayText(unit.name, "Unnamed unit"),
+        })),
         risk,
         semanticGroupId: semanticGroupForRisk(risk),
         imports,
@@ -772,9 +854,11 @@ function compilerOptionsFor(
 }
 
 function packageGateway(specifier: string): string {
-  const redacted = redactAbsoluteReference(specifier);
+  if (specifier.startsWith(".")) {
+    return sanitizeExternalReference(specifier, "unresolved-module");
+  }
+  const redacted = sanitizeExternalReference(specifier, "external-module");
   if (redacted !== specifier) return redacted;
-  if (specifier.startsWith(".")) return normalizePath(specifier);
   if (specifier.startsWith("@")) {
     return specifier.split("/").slice(0, 2).join("/");
   }
@@ -848,14 +932,17 @@ function buildDependencies(
     if (!candidate.projectFile) continue;
     for (const reference of candidate.projectReferences) {
       guard.check();
-      const target = moduleByProjectPath.get(
-        virtualKey(
-          virtualPath(
-            path.posix.dirname(candidate.projectFile),
-            reference.include,
-          ),
-        ),
-      );
+      const target =
+        reference.include === undefined
+          ? undefined
+          : moduleByProjectPath.get(
+              virtualKey(
+                virtualPath(
+                  path.posix.dirname(candidate.projectFile),
+                  reference.include,
+                ),
+              ),
+            );
       if (target && target.id !== candidate.module.id) {
         dependencies.push({
           id: stableId(
@@ -872,11 +959,7 @@ function buildDependencies(
           weight: 1,
         });
       } else {
-        const redacted = redactAbsoluteReference(reference.include);
-        const externalReference =
-          redacted === reference.include
-            ? normalizePath(reference.include)
-            : redacted;
+        const externalReference = reference.externalTarget;
         dependencies.push({
           id: stableId(
             "dependency",
@@ -1033,7 +1116,7 @@ export async function analyzeRepositorySnapshotFacts(
   const rootOccurrences = new Map<string, number>();
   const contexts: RootContext[] = snapshots.map((snapshot, index) => {
     guard.check();
-    const segment = portableSegment(snapshot.name);
+    const segment = portableSegment(repositories[index]!.name);
     const occurrence = (rootOccurrences.get(segment) ?? 0) + 1;
     rootOccurrences.set(segment, occurrence);
     const virtualRoot = path.posix.join(
@@ -1045,7 +1128,7 @@ export async function analyzeRepositorySnapshotFacts(
       guard.check();
       const filePath = virtualPath(virtualRoot, file.path);
       if (!virtualIsWithin(virtualRoot, filePath)) {
-        throw new Error(`Invalid snapshot path: ${file.path}`);
+        throw new Error("Invalid snapshot path.");
       }
       textByPath.set(virtualKey(filePath), file.text);
       return filePath;
@@ -1059,14 +1142,21 @@ export async function analyzeRepositorySnapshotFacts(
   });
   const warnings: string[] = snapshots.flatMap((snapshot) =>
     snapshot.diagnostics.map((diagnostic) =>
-      [
-        diagnostic.code,
-        snapshot.name,
-        diagnostic.path,
-        SNAPSHOT_WARNING_TEXT[diagnostic.code],
-      ]
-        .filter((part) => part !== undefined && part !== "")
-        .join(": "),
+      sanitizeWarningText(
+        [
+          diagnostic.code,
+          sanitizeDisplayText(snapshot.name, "Repository"),
+          diagnostic.path === undefined
+            ? undefined
+            : sanitizeExternalReference(
+                diagnostic.path,
+                "unavailable-path",
+              ),
+          SNAPSHOT_WARNING_TEXT[diagnostic.code],
+        ]
+          .filter((part) => part !== undefined && part !== "")
+          .join(": "),
+      ),
     ),
   );
   const discoveredModules = (

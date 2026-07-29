@@ -41,6 +41,7 @@ const DEPENDENCY_RESOLUTIONS = new Set([
   "external",
   "unresolved",
 ]);
+const UNSAFE_TEXT_CHARACTERS = /[\p{Cc}\p{Cf}\p{Cs}]/u;
 
 export const CITY_MODEL_LIMITS = Object.freeze({
   repositories: 1_000,
@@ -55,6 +56,13 @@ export const CITY_MODEL_LIMITS = Object.freeze({
   metricUnitsPerBuilding: 10_000,
   warnings: 10_000,
   coordinateMagnitude: 1_000_000,
+  identifierCharacters: 256,
+  displayTextCharacters: 256,
+  versionCharacters: 256,
+  externalReferenceCharacters: 512,
+  warningCharacters: 1_024,
+  pathCharacters: 2_048,
+  textCharacters: 2_048,
 });
 
 export function validateCityModel(value: unknown): CityModel {
@@ -72,7 +80,11 @@ export function validateCityModel(value: unknown): CityModel {
   if (generator.name !== "code-city") {
     fail('generator.name must be "code-city"');
   }
-  nonEmptyString(generator.version, "generator.version");
+  nonEmptyString(
+    generator.version,
+    "generator.version",
+    CITY_MODEL_LIMITS.versionCharacters,
+  );
 
   const repositories = objectArray(
     model.repositories,
@@ -131,7 +143,11 @@ export function validateCityModel(value: unknown): CityModel {
   );
 
   repositories.forEach((repository, index) => {
-    nonEmptyString(repository.name, `repositories[${index}].name`);
+    nonEmptyString(
+      repository.name,
+      `repositories[${index}].name`,
+      CITY_MODEL_LIMITS.displayTextCharacters,
+    );
   });
 
   solutions.forEach((solution, index) => {
@@ -141,7 +157,11 @@ export function validateCityModel(value: unknown): CityModel {
       repositoryIds,
       `${prefix}.repositoryId`,
     );
-    nonEmptyString(solution.name, `${prefix}.name`);
+    nonEmptyString(
+      solution.name,
+      `${prefix}.name`,
+      CITY_MODEL_LIMITS.displayTextCharacters,
+    );
     repositoryRelativePath(solution.path, `${prefix}.path`);
     const referencedModuleIds = referenceArray(
       solution.moduleIds,
@@ -152,7 +172,7 @@ export function validateCityModel(value: unknown): CityModel {
     referencedModuleIds.forEach((moduleId, moduleIndex) => {
       if (modulesById.get(moduleId)!.repositoryId !== repositoryId) {
         fail(
-          `${prefix}.moduleIds[${moduleIndex}] must reference a module in repository "${repositoryId}"`,
+          `${prefix}.moduleIds[${moduleIndex}] must reference a module in the same repository`,
         );
       }
     });
@@ -175,11 +195,15 @@ export function validateCityModel(value: unknown): CityModel {
       modulesById.get(parentModuleId)!.repositoryId !== repositoryId
     ) {
       fail(
-        `${prefix}.parentModuleId must reference a module in repository "${repositoryId}"`,
+        `${prefix}.parentModuleId must reference a module in the same repository`,
       );
     }
     enumValue(module.kind, MODULE_KINDS, `${prefix}.kind`);
-    nonEmptyString(module.name, `${prefix}.name`);
+    nonEmptyString(
+      module.name,
+      `${prefix}.name`,
+      CITY_MODEL_LIMITS.displayTextCharacters,
+    );
     repositoryRelativePath(module.path, `${prefix}.path`);
     const referencedSolutionIds = referenceArray(
       module.solutionIds,
@@ -190,7 +214,7 @@ export function validateCityModel(value: unknown): CityModel {
     referencedSolutionIds.forEach((solutionId, solutionIndex) => {
       if (solutionsById.get(solutionId)!.repositoryId !== repositoryId) {
         fail(
-          `${prefix}.solutionIds[${solutionIndex}] must reference a solution in repository "${repositoryId}"`,
+          `${prefix}.solutionIds[${solutionIndex}] must reference a solution in the same repository`,
         );
       }
     });
@@ -198,13 +222,22 @@ export function validateCityModel(value: unknown): CityModel {
       module.targetFrameworks,
       `${prefix}.targetFrameworks`,
       CITY_MODEL_LIMITS.targetFrameworksPerModule,
+      CITY_MODEL_LIMITS.externalReferenceCharacters,
     );
-    optionalString(module.packageId, `${prefix}.packageId`);
+    optionalString(
+      module.packageId,
+      `${prefix}.packageId`,
+      CITY_MODEL_LIMITS.externalReferenceCharacters,
+    );
   });
 
   semanticGroups.forEach((group, index) => {
     const prefix = `semanticGroups[${index}]`;
-    nonEmptyString(group.label, `${prefix}.label`);
+    nonEmptyString(
+      group.label,
+      `${prefix}.label`,
+      CITY_MODEL_LIMITS.displayTextCharacters,
+    );
     const color = nonEmptyString(group.color, `${prefix}.color`);
     if (!isDisplayColor(color)) {
       fail(`${prefix}.color must be a #RRGGBB or #RRGGBBAA color`);
@@ -233,7 +266,11 @@ export function validateCityModel(value: unknown): CityModel {
         `${prefix}.repositoryId must match its referenced module repository`,
       );
     }
-    nonEmptyString(district.name, `${prefix}.name`);
+    nonEmptyString(
+      district.name,
+      `${prefix}.name`,
+      CITY_MODEL_LIMITS.displayTextCharacters,
+    );
     repositoryRelativePath(district.path, `${prefix}.path`);
     vector(district.position, `${prefix}.position`, false);
     vector(district.size, `${prefix}.size`, true);
@@ -266,7 +303,11 @@ export function validateCityModel(value: unknown): CityModel {
       groupIds,
       `${prefix}.semanticGroupId`,
     );
-    nonEmptyString(building.name, `${prefix}.name`);
+    nonEmptyString(
+      building.name,
+      `${prefix}.name`,
+      CITY_MODEL_LIMITS.displayTextCharacters,
+    );
     repositoryRelativePath(building.path, `${prefix}.path`);
     enumValue(building.language, LANGUAGES, `${prefix}.language`);
     enumValue(building.risk, RISKS, `${prefix}.risk`);
@@ -334,8 +375,13 @@ export function validateCityModel(value: unknown): CityModel {
     optionalNonEmptyString(
       dependency.externalTarget,
       `${prefix}.externalTarget`,
+      CITY_MODEL_LIMITS.externalReferenceCharacters,
     );
-    optionalString(dependency.version, `${prefix}.version`);
+    optionalString(
+      dependency.version,
+      `${prefix}.version`,
+      CITY_MODEL_LIMITS.versionCharacters,
+    );
     positiveNumber(dependency.weight, `${prefix}.weight`);
 
     const hasInternal = dependency.targetId !== undefined;
@@ -393,7 +439,11 @@ function validateAnalysis(value: unknown): void {
     );
   }
   analysis.warnings.forEach((warning, index) =>
-    nonEmptyString(warning, `analysis.warnings[${index}]`),
+    nonEmptyString(
+      warning,
+      `analysis.warnings[${index}]`,
+      CITY_MODEL_LIMITS.warningCharacters,
+    ),
   );
 }
 
@@ -512,7 +562,11 @@ function validateBuildingMetricDetails(
   );
   units.forEach((unit, index) => {
     const unitPrefix = `${prefix}.units[${index}]`;
-    nonEmptyString(unit.name, `${unitPrefix}.name`);
+    nonEmptyString(
+      unit.name,
+      `${unitPrefix}.name`,
+      CITY_MODEL_LIMITS.displayTextCharacters,
+    );
     positiveInteger(unit.line, `${unitPrefix}.line`);
     positiveInteger(unit.complexity, `${unitPrefix}.complexity`);
   });
@@ -536,8 +590,8 @@ function validateIdentity(
   }
 
   const identity = objectAt(value, "identity");
-  nonEmptyString(identity.title, "identity.title");
-  optionalNonEmptyString(identity.version, "identity.version");
+  nonEmptyString(identity.title, "identity.title", 160);
+  optionalNonEmptyString(identity.version, "identity.version", 80);
   validateLogo(identity.logo, "identity.logo");
 
   if (identity.repositories !== undefined) {
@@ -552,16 +606,17 @@ function validateIdentity(
       const repositoryId = nonEmptyString(
         repository.repositoryId,
         `${prefix}.repositoryId`,
+        CITY_MODEL_LIMITS.identifierCharacters,
       );
       if (!repositoryIds.has(repositoryId)) {
-        fail(`${prefix}.repositoryId references unknown id "${repositoryId}"`);
+        fail(`${prefix}.repositoryId references an unknown id`);
       }
       if (seen.has(repositoryId)) {
-        fail(`${prefix}.repositoryId duplicates "${repositoryId}"`);
+        fail(`${prefix}.repositoryId is duplicated`);
       }
       seen.add(repositoryId);
-      optionalNonEmptyString(repository.title, `${prefix}.title`);
-      optionalNonEmptyString(repository.version, `${prefix}.version`);
+      optionalNonEmptyString(repository.title, `${prefix}.title`, 160);
+      optionalNonEmptyString(repository.version, `${prefix}.version`, 80);
       validateLogo(repository.logo, `${prefix}.logo`);
     });
   }
@@ -593,7 +648,7 @@ function validateLogo(value: unknown, path: string): void {
   if (!relativePath.toLowerCase().endsWith(`.${format}`)) {
     fail(`${path}.relativePath must use the .${format} extension`);
   }
-  optionalNonEmptyString(logo.alt, `${path}.alt`);
+  optionalNonEmptyString(logo.alt, `${path}.alt`, 160);
 }
 
 function validateIdentityPanel(
@@ -783,9 +838,13 @@ function objectArray(
 function validateIds(items: JsonObject[], path: string): Set<string> {
   const ids = new Set<string>();
   items.forEach((item, index) => {
-    const id = nonEmptyString(item.id, `${path}[${index}].id`);
+    const id = nonEmptyString(
+      item.id,
+      `${path}[${index}].id`,
+      CITY_MODEL_LIMITS.identifierCharacters,
+    );
     if (ids.has(id)) {
-      fail(`${path}[${index}].id duplicates "${id}"`);
+      fail(`${path}[${index}].id is duplicated`);
     }
     ids.add(id);
   });
@@ -793,9 +852,13 @@ function validateIds(items: JsonObject[], path: string): Set<string> {
 }
 
 function reference(value: unknown, ids: Set<string>, path: string): string {
-  const id = nonEmptyString(value, path);
+  const id = nonEmptyString(
+    value,
+    path,
+    CITY_MODEL_LIMITS.identifierCharacters,
+  );
   if (!ids.has(id)) {
-    fail(`${path} references unknown id "${id}"`);
+    fail(`${path} references an unknown id`);
   }
   return id;
 }
@@ -829,6 +892,7 @@ function optionalStringArray(
   value: unknown,
   path: string,
   maximumLength: number,
+  maximumItemLength: number = CITY_MODEL_LIMITS.textCharacters,
 ): void {
   if (value === undefined) {
     return;
@@ -839,7 +903,9 @@ function optionalStringArray(
   if (value.length > maximumLength) {
     fail(`${path} must contain at most ${maximumLength} items`);
   }
-  value.forEach((item, index) => nonEmptyString(item, `${path}[${index}]`));
+  value.forEach((item, index) =>
+    nonEmptyString(item, `${path}[${index}]`, maximumItemLength),
+  );
 }
 
 function vector(value: unknown, path: string, positive: boolean): Vector3 {
@@ -869,32 +935,50 @@ function enumValue(
 ): string {
   const item = nonEmptyString(value, path);
   if (!allowed.has(item)) {
-    fail(`${path} has unsupported value "${item}"`);
+    fail(`${path} has an unsupported value`);
   }
   return item;
 }
 
-function optionalString(value: unknown, path: string): void {
+function optionalString(
+  value: unknown,
+  path: string,
+  maximumLength: number = CITY_MODEL_LIMITS.textCharacters,
+): void {
   if (value !== undefined) {
-    stringAt(value, path);
+    stringAt(value, path, maximumLength);
   }
 }
 
-function optionalNonEmptyString(value: unknown, path: string): void {
+function optionalNonEmptyString(
+  value: unknown,
+  path: string,
+  maximumLength: number = CITY_MODEL_LIMITS.textCharacters,
+): void {
   if (value !== undefined) {
-    nonEmptyString(value, path);
+    nonEmptyString(value, path, maximumLength);
   }
 }
 
-function stringAt(value: unknown, path: string): string {
+function stringAt(
+  value: unknown,
+  path: string,
+  maximumLength: number = CITY_MODEL_LIMITS.textCharacters,
+): string {
   if (typeof value !== "string") {
     fail(`${path} must be a string`);
+  }
+  if (value.length > maximumLength) {
+    fail(`${path} must not exceed ${maximumLength} characters`);
+  }
+  if (UNSAFE_TEXT_CHARACTERS.test(value)) {
+    fail(`${path} must not contain control or formatting characters`);
   }
   return value;
 }
 
 function repositoryRelativePath(value: unknown, path: string): string {
-  const item = stringAt(value, path);
+  const item = stringAt(value, path, CITY_MODEL_LIMITS.pathCharacters);
   let normalized: string;
   try {
     normalized = normalizeRepositoryRelativePath(item);
@@ -907,8 +991,12 @@ function repositoryRelativePath(value: unknown, path: string): string {
   return normalized;
 }
 
-function nonEmptyString(value: unknown, path: string): string {
-  const item = stringAt(value, path);
+function nonEmptyString(
+  value: unknown,
+  path: string,
+  maximumLength: number = CITY_MODEL_LIMITS.textCharacters,
+): string {
+  const item = stringAt(value, path, maximumLength);
   if (item.trim().length === 0) {
     fail(`${path} must not be empty`);
   }
@@ -948,7 +1036,7 @@ function positiveInteger(value: unknown, path: string): number {
 
 function describe(value: unknown): string {
   if (typeof value === "string") {
-    return `"${value}"`;
+    return "a string";
   }
   if (value === undefined) {
     return "undefined";

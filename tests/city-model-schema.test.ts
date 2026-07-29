@@ -106,7 +106,7 @@ describe("CityModel JSON Schema", () => {
 
     expect(validateSchema(invalidCrossReference), errors()).toBe(true);
     expect(() => validateCityModel(invalidCrossReference)).toThrow(
-      /sourceId references unknown id/u,
+      /sourceId references an unknown id/u,
     );
   });
 });
