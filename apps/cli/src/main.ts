@@ -20,6 +20,7 @@ import type {
   PrintFormat,
 } from "../../../packages/core/src/index.js";
 import {
+  buildDependencyConnectorComparison,
   buildPrintableCityArtifacts,
   printablePlanGeometry,
   serializeThreeMf,
@@ -36,6 +37,8 @@ Usage:
   codecity export --model <city-model.json> --profile <profile.json> \\
     --format 3mf --output <model.3mf> [--scale <factor>] \\
     [--labels <auto|off>] [--legend <legend.json|off>]
+  codecity compare-connectors --profile <profile.json> --output <model.3mf> \\
+    [--instructions <instructions.txt>]
 
 Analyze options:
   --title <text>       Printed city/repository title
@@ -281,6 +284,10 @@ function positiveScale(value: string | undefined): number {
   return scale;
 }
 
+function millimeters(value: number): string {
+  return String(Number(value.toFixed(3)));
+}
+
 function cliLabelPolicy(value: string | undefined): "auto" | "off" {
   try {
     return parsePrintLabelPolicy(value);
@@ -326,6 +333,71 @@ function legendPath(
     throw new Error("3MF and legend outputs must use different paths.");
   }
   return result;
+}
+
+function companionInstructionsPath(
+  output: string,
+  configured: string | undefined,
+): string {
+  const result =
+    configured ?? output.replace(/\.3mf$/iu, ".instructions.txt");
+  if (path.extname(result).toLowerCase() !== ".txt") {
+    throw new Error(
+      "Connector instructions must use the '.txt' file extension.",
+    );
+  }
+  return result;
+}
+
+async function compareConnectorsCommand(
+  args: readonly string[],
+  io: CliIo,
+): Promise<void> {
+  const parsed = parseArguments(
+    args,
+    new Set(["profile", "output", "instructions"]),
+  );
+  if (parsed.positionals.length > 0) {
+    throw new Error(
+      `Unexpected compare-connectors argument '${parsed.positionals[0]}'. Use named options.`,
+    );
+  }
+  const profilePath = requiredOption(parsed.options, "profile");
+  const output = requiredOption(parsed.options, "output");
+  if (path.extname(output).toLowerCase() !== ".3mf") {
+    throw new Error(
+      "Connector comparison output must use the '.3mf' file extension.",
+    );
+  }
+  const instructionsOutput = companionInstructionsPath(
+    output,
+    parsed.options.get("instructions"),
+  );
+  const profile = parsePrinterProfile(
+    await readJson(profilePath, "printer profile"),
+  );
+  if (!profile.supportedFormats.includes("3mf")) {
+    throw new Error(
+      `Format '3mf' is not supported by profile '${profile.id}'.`,
+    );
+  }
+  const comparison = buildDependencyConnectorComparison(profile);
+  const publishedPaths = await publishArtifactsAtomically([
+    {
+      destination: output,
+      bytes: serializeThreeMf(comparison.printable),
+    },
+    {
+      destination: instructionsOutput,
+      bytes: new TextEncoder().encode(comparison.instructions),
+    },
+  ]);
+  const size = comparison.printable.bounds.size;
+  io.stdout(
+    `Exported connector comparison with ${comparison.printable.parts.length} aligned part(s) at ${millimeters(size.x)} × ${millimeters(size.y)} × ${millimeters(size.z)} mm.\n`,
+  );
+  io.stdout(`Decision: ${comparison.decision}\n`);
+  io.stdout(`Wrote ${publishedPaths[0]}\nWrote ${publishedPaths[1]}\n`);
 }
 
 async function exportCommand(args: readonly string[], io: CliIo): Promise<void> {
@@ -437,6 +509,8 @@ export async function runCli(
       await planCommand(args.slice(1), io);
     } else if (command === "export") {
       await exportCommand(args.slice(1), io);
+    } else if (command === "compare-connectors") {
+      await compareConnectorsCommand(args.slice(1), io);
     } else {
       throw new Error(`Unknown command '${command}'.`);
     }

@@ -1,3 +1,4 @@
+export * from "./connector-comparison.js";
 export * from "./geometry.js";
 export * from "./printable-font.js";
 export * from "./spatial.js";
