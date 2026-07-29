@@ -12,6 +12,11 @@ import {
   analyzeRepositorySnapshotFacts,
 } from "./discovery.js";
 import {
+  snapshotGenericGitRepository,
+  type GenericGitSnapshotDependencies,
+  type GenericGitTransport,
+} from "./git-snapshot.js";
+import {
   snapshotPublicGitHubRepository,
   type GitHubSnapshotDependencies,
 } from "./github-snapshot.js";
@@ -28,6 +33,7 @@ import type {
 export * from "./csharp-lexical.js";
 export * from "./discovery.js";
 export * from "./filesystem.js";
+export * from "./git-snapshot.js";
 export * from "./github-snapshot.js";
 export * from "./local-snapshot.js";
 export * from "./roslyn-host.js";
@@ -46,6 +52,18 @@ export interface PublicGitHubAnalysisResult {
   readonly repository: string;
   readonly canonicalRepositoryUrl: string;
   readonly commitSha: string;
+  readonly model: CityModel;
+}
+
+export interface GenericGitRepositoryRequest {
+  readonly repositoryUrl: string;
+  readonly ref?: string;
+}
+
+export interface GenericGitAnalysisResult {
+  readonly repository: string;
+  readonly commitSha: string;
+  readonly transport: GenericGitTransport;
   readonly model: CityModel;
 }
 
@@ -138,6 +156,39 @@ export async function analyzePublicGitHubRepository(
     repository: result.repository,
     canonicalRepositoryUrl: result.canonicalRepositoryUrl,
     commitSha,
+    model,
+  });
+}
+
+export async function analyzeGenericGitRepository(
+  request: GenericGitRepositoryRequest,
+  options: LocalAnalysisOptions = {},
+  dependencies?: GenericGitSnapshotDependencies,
+): Promise<GenericGitAnalysisResult> {
+  const startedAt = Date.now();
+  const totalTimeout =
+    options.timeoutMs ?? DEFAULT_SNAPSHOT_LIMITS.timeoutMs;
+  const result = await snapshotGenericGitRepository(
+    {
+      ...request,
+      snapshotOptions: options,
+      timeoutMs: totalTimeout,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    },
+    dependencies,
+  );
+  const remainingTimeout = totalTimeout - (Date.now() - startedAt);
+  if (remainingTimeout <= 0) throw new SnapshotDeadlineError();
+  const model = await analyzeRepositorySnapshots([result.snapshot], {
+    ...options,
+    title: options.title ?? result.repository,
+    version: options.version ?? result.commitSha,
+    timeoutMs: remainingTimeout,
+  });
+  return Object.freeze({
+    repository: result.repository,
+    commitSha: result.commitSha,
+    transport: result.transport,
     model,
   });
 }

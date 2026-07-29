@@ -15,6 +15,16 @@ through GitHub's anonymous API. It downloads that commit archive, validates and
 analyzes it through the same snapshot boundary as local input, then discards
 the archive. No checkout, temporary directory, credential, or cache is created.
 
+== Generic Git
+
+`codecity analyze-git <remote> --ref <ref> --output <model>` validates an HTTPS,
+SSH, or scp-style remote, resolves one advertised branch, tag, or exact commit,
+and shallow fetches it into a private temporary bare repository. It verifies
+the advertised object and commit, creates a bounded temporary `snapshot/` ZIP,
+reads it, removes the complete workspace, then uses the shared snapshot and
+analyzer pipeline. It never checks out files, runs hooks, filters, submodules,
+or LFS, or stores a derived cache.
+
 == Print
 
 `npm run print:demo` writes a labelled 3MF with aggregated dependency traces

@@ -16,3 +16,21 @@
 |Documentation
 |Antora site deployed by GitHub Actions to GitHub Pages
 |===
+
+For Azure Pipelines, prefer the already authorized local checkout:
+
+[source,yaml]
+----
+steps:
+  - checkout: self
+    persistCredentials: false
+  - powershell: >
+      npm run cli -- analyze "$(Build.SourcesDirectory)"
+      --output build/city-model.json
+----
+
+The convenience `analyze-git` flow uses the agent's installed Git credential
+helper, SSH agent, and enterprise certificate configuration. Do not place
+credentials in the remote URL. Configure SSH host keys and the agent for
+non-interactive access first; HTTPS enterprise CAs must already be trusted by
+Git.

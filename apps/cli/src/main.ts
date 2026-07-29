@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
+  analyzeGenericGitRepository,
   analyzeLocalRepositories,
   analyzePublicGitHubRepository,
   type LocalAnalysisOptions,
@@ -44,6 +45,8 @@ Usage:
   codecity analyze <root...> --output <city-model.json> [options]
   codecity analyze-github <https://github.com/owner/repository> \\
     --output <city-model.json> [--ref <branch|tag|commit>] [options]
+  codecity analyze-git <https|ssh|scp-remote> \\
+    --output <city-model.json> [--ref <branch|tag|commit>] [options]
   codecity open <root...> [--port <port>] [options]
   codecity plan --model <city-model.json> --profile <profile.json> \\
     --format <stl|3mf> --output <print-plan.json> [--scale <factor>] \\
@@ -79,7 +82,8 @@ General:
 
 Local analysis reads only explicitly supplied roots and never uses the network.
 GitHub analysis is anonymous, public-only, and resolves an immutable commit.
-Neither mode restores/builds projects or executes repository code.
+Generic Git uses installed credentials without storing or printing them.
+No mode restores/builds projects or executes repository code.
 `;
 
 export interface CliIo {
@@ -88,6 +92,7 @@ export interface CliIo {
 }
 
 export interface CliDependencies {
+  readonly analyzeGenericGitRepository?: typeof analyzeGenericGitRepository;
   readonly analyzeLocalRepositories?: typeof analyzeLocalRepositories;
   readonly analyzePublicGitHubRepository?: typeof analyzePublicGitHubRepository;
 }
@@ -273,6 +278,39 @@ async function analyzeGitHubCommand(
   await publishPrivateJson(output, result.model, "city model");
   io.stdout(
     `Analyzed ${result.canonicalRepositoryUrl} at ${result.commitSha} with ${result.model.modules.length} module(s) and ${result.model.buildings.length} source file(s).\nWrote ${path.resolve(output)}\n`,
+  );
+  for (const warning of result.model.analysis?.warnings ?? []) {
+    io.stderr(`Warning: ${warning}\n`);
+  }
+}
+
+async function analyzeGenericGitCommand(
+  args: readonly string[],
+  io: CliIo,
+  analyze: typeof analyzeGenericGitRepository,
+): Promise<void> {
+  const parsed = parseArguments(
+    args,
+    new Set([...ANALYSIS_OPTIONS, "ref"]),
+  );
+  if (parsed.positionals.length !== 1) {
+    throw new Error(
+      "The analyze-git command requires exactly one Git remote.",
+    );
+  }
+  const output = requiredOption(parsed.options, "output");
+  const result = await analyze(
+    {
+      repositoryUrl: parsed.positionals[0]!,
+      ...(parsed.options.get("ref") === undefined
+        ? {}
+        : { ref: parsed.options.get("ref")! }),
+    },
+    analysisOptions(parsed.options),
+  );
+  await publishPrivateJson(output, result.model, "city model");
+  io.stdout(
+    `Analyzed remote repository ${result.repository} at ${result.commitSha} with ${result.model.modules.length} module(s) and ${result.model.buildings.length} source file(s).\nWrote ${path.resolve(output)}\n`,
   );
   for (const warning of result.model.analysis?.warnings ?? []) {
     io.stderr(`Warning: ${warning}\n`);
@@ -751,6 +789,13 @@ export async function runCli(
         io,
         dependencies.analyzePublicGitHubRepository ??
           analyzePublicGitHubRepository,
+      );
+    } else if (command === "analyze-git") {
+      await analyzeGenericGitCommand(
+        args.slice(1),
+        io,
+        dependencies.analyzeGenericGitRepository ??
+          analyzeGenericGitRepository,
       );
     } else if (command === "open") {
       await openCommand(args.slice(1), io);
