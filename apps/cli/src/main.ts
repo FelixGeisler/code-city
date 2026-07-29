@@ -24,6 +24,7 @@ import type {
 import {
   buildDependencyConnectorComparison,
   buildPrintableCityArtifacts,
+  generateCalibrationExport,
   generateThreeMfExport,
   printablePlanGeometry,
   serializeThreeMf,
@@ -48,6 +49,8 @@ Usage:
     --format 3mf --output <model.3mf> [--scale <factor>] \\
     [--labels <auto|off>] [--routes <auto|off>] \\
     [--legend <legend.json|off>]
+  codecity calibrate --profile <profile.json> --output <model.3mf> \\
+    [--manifest <manifest.json>]
   codecity compare-connectors --profile <profile.json> --output <model.3mf> \\
     [--instructions <instructions.txt>]
 
@@ -458,6 +461,71 @@ function companionInstructionsPath(
   return result;
 }
 
+function calibrationManifestPath(
+  output: string,
+  configured: string | undefined,
+): string {
+  const result =
+    configured ?? output.replace(/\.3mf$/iu, ".manifest.json");
+  if (path.extname(result).toLowerCase() !== ".json") {
+    throw new Error(
+      "Calibration manifest output must use the '.json' file extension.",
+    );
+  }
+  const archivePath = path.resolve(output);
+  const manifestPath = path.resolve(result);
+  const comparable = (value: string) =>
+    process.platform === "win32" ? value.toLowerCase() : value;
+  if (comparable(archivePath) === comparable(manifestPath)) {
+    throw new Error(
+      "Calibration 3MF and manifest outputs must use different paths.",
+    );
+  }
+  return result;
+}
+
+async function calibrateCommand(
+  args: readonly string[],
+  io: CliIo,
+): Promise<void> {
+  const parsed = parseArguments(
+    args,
+    new Set(["profile", "output", "manifest"]),
+  );
+  if (parsed.positionals.length > 0) {
+    throw new Error(
+      `Unexpected calibrate argument '${parsed.positionals[0]}'. Use named options.`,
+    );
+  }
+  const profilePath = requiredOption(parsed.options, "profile");
+  const output = requiredOption(parsed.options, "output");
+  if (path.extname(output).toLowerCase() !== ".3mf") {
+    throw new Error(
+      "Calibration output must use the '.3mf' file extension.",
+    );
+  }
+  const manifestOutput = calibrationManifestPath(
+    output,
+    parsed.options.get("manifest"),
+  );
+  const exported = generateCalibrationExport(
+    await readJson(profilePath, "printer profile"),
+  );
+  const published = await publishArtifactsAtomically([
+    { destination: output, bytes: exported.threeMfBytes },
+    {
+      destination: manifestOutput,
+      bytes: exported.manifestBytes,
+      mode: 0o600,
+    },
+  ]);
+  const size = exported.preflight.dimensions;
+  io.stdout(
+    `Exported calibration 3MF with ${exported.preflight.partCount} aligned part(s) across ${exported.preflight.channelCount} channel(s) at ${millimeters(size.x)} × ${millimeters(size.y)} × ${millimeters(size.z)} mm.\n`,
+  );
+  io.stdout(`Wrote ${published[0]}\nWrote ${published[1]}\n`);
+}
+
 async function compareConnectorsCommand(
   args: readonly string[],
   io: CliIo,
@@ -617,6 +685,8 @@ export async function runCli(
       await planCommand(args.slice(1), io);
     } else if (command === "export") {
       await exportCommand(args.slice(1), io);
+    } else if (command === "calibrate") {
+      await calibrateCommand(args.slice(1), io);
     } else if (command === "compare-connectors") {
       await compareConnectorsCommand(args.slice(1), io);
     } else {

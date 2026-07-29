@@ -8,6 +8,11 @@ export interface PrintExportFileNames {
   readonly legend: string;
 }
 
+export interface PrintCalibrationFileNames {
+  readonly threeMf: string;
+  readonly manifest: string;
+}
+
 export interface PrintExportDownloadInput {
   readonly threeMfBytes: ArrayBuffer;
   readonly legendBytes?: ArrayBuffer;
@@ -24,10 +29,30 @@ export interface PrintExportDownloads {
   readonly legend?: PrintExportDownload;
 }
 
+export interface PrintCalibrationDownloadInput {
+  readonly threeMfBytes: ArrayBuffer;
+  readonly manifestBytes: ArrayBuffer;
+}
+
+export interface PrintCalibrationDownloads {
+  readonly threeMf: PrintExportDownload;
+  readonly manifest: PrintExportDownload;
+}
+
 export type PrintDownloadPublication =
   | {
       readonly ok: true;
       readonly downloads: PrintExportDownloads;
+    }
+  | {
+      readonly ok: false;
+      readonly message: string;
+    };
+
+export type PrintCalibrationDownloadPublication =
+  | {
+      readonly ok: true;
+      readonly downloads: PrintCalibrationDownloads;
     }
   | {
       readonly ok: false;
@@ -79,6 +104,16 @@ export function printExportFileNames(
   return {
     threeMf: `${stem}.3mf`,
     legend: `${stem}.legend.json`,
+  };
+}
+
+export function printCalibrationFileNames(
+  profileId: string,
+): PrintCalibrationFileNames {
+  const stem = sanitizePrintFileStem(profileId);
+  return {
+    threeMf: `${stem}.calibration.3mf`,
+    manifest: `${stem}.calibration.json`,
   };
 }
 
@@ -143,6 +178,47 @@ export class PrintDownloadManager {
     }
   }
 
+  public replaceCalibration(
+    profileId: string,
+    input: PrintCalibrationDownloadInput,
+  ): PrintCalibrationDownloads {
+    this.clear();
+    const names = printCalibrationFileNames(profileId);
+    const created: string[] = [];
+    try {
+      const threeMfBlob = new Blob([input.threeMfBytes], {
+        type: "application/vnd.ms-package.3dmanufacturing-3dmodel+xml",
+      });
+      const threeMfUrl = this.objectUrls.createObjectURL(threeMfBlob);
+      created.push(threeMfUrl);
+
+      const manifestBlob = new Blob([input.manifestBytes], {
+        type: "application/json",
+      });
+      const manifestUrl = this.objectUrls.createObjectURL(manifestBlob);
+      created.push(manifestUrl);
+      this.activeUrls = created;
+      return {
+        threeMf: {
+          fileName: names.threeMf,
+          url: threeMfUrl,
+          blob: threeMfBlob,
+        },
+        manifest: {
+          fileName: names.manifest,
+          url: manifestUrl,
+          blob: manifestBlob,
+        },
+      };
+    } catch (error) {
+      for (const url of created) {
+        this.objectUrls.revokeObjectURL(url);
+      }
+      this.activeUrls = [];
+      throw error;
+    }
+  }
+
   public clear(): void {
     for (const url of this.activeUrls) {
       this.objectUrls.revokeObjectURL(url);
@@ -171,6 +247,27 @@ export function tryPublishPrintDownloads(
     return {
       ok: false,
       message: `Local downloads could not be prepared: ${detail}`,
+    };
+  }
+}
+
+export function tryPublishCalibrationDownloads(
+  manager: PrintDownloadManager,
+  profileId: string,
+  input: PrintCalibrationDownloadInput,
+): PrintCalibrationDownloadPublication {
+  try {
+    return {
+      ok: true,
+      downloads: manager.replaceCalibration(profileId, input),
+    };
+  } catch (error) {
+    const detail =
+      error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      message:
+        `Local calibration downloads could not be prepared: ${detail}`,
     };
   }
 }

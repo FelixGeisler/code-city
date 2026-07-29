@@ -76,6 +76,45 @@ describe("dependency connector comparison", () => {
     expect(validatePrintableCity(result.printable, profile)).toEqual([]);
   });
 
+  it("applies explicit label, route, and raised-feature limits", () => {
+    const profile = createSingleChannelProfile({
+      geometryLimits: {
+        minimumWallThickness: 0.45,
+        minimumGap: 0.4,
+        minimumFeatureSize: 0.8,
+        minimumBaseThickness: 1.2,
+        minimumLabelStrokeWidth: 1.4,
+        minimumRouteWidth: 1.6,
+        minimumRaisedFeatureHeight: 1.8,
+      },
+    });
+    const result = buildDependencyConnectorComparison(profile);
+    const primitives = result.printable.parts.flatMap(
+      ({ primitives: items }) => items,
+    );
+
+    expect(result.measurements).toMatchObject({
+      labelFeatureSize: 1.4,
+      traceWidth: 1.6,
+      traceHeight: 1.8,
+    });
+    expect(
+      primitives
+        .filter(({ kind }) => kind === "comparison-label")
+        .every(({ bounds }) =>
+          Math.abs(bounds.size.z - 1.8) < 1e-9
+        ),
+    ).toBe(true);
+    expect(
+      primitives
+        .filter(({ kind }) => kind === "dependency-trace")
+        .every(({ bounds }) =>
+          Math.abs(bounds.size.z - 1.8) < 1e-9
+        ),
+    ).toBe(true);
+    expect(validatePrintableCity(result.printable, profile)).toEqual([]);
+  });
+
   it("aligns the five comparison roles with Prusa XL channels", () => {
     const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
     const result = buildDependencyConnectorComparison(profile);

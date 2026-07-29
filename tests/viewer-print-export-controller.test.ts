@@ -6,10 +6,12 @@ import {
   type PrintExportControllerState,
   type PrintExportWorkerLike,
 } from "../apps/viewer/src/print-export-controller.js";
+import { runPrintExportRequest } from "../apps/viewer/src/print-export-worker.js";
 import type {
-  PrintExportGenerateRequest,
+  PrintExportWorkerRequest,
   PrintExportWorkerResponse,
 } from "../apps/viewer/src/print-export-protocol.js";
+import { createSingleChannelProfile } from "../packages/core/src/index.js";
 import type { ThreeMfExportPreflight } from "../packages/exporter/src/three-mf-export.js";
 
 class FakeWorker implements PrintExportWorkerLike {
@@ -22,10 +24,10 @@ class FakeWorker implements PrintExportWorkerLike {
   public onmessageerror:
     | ((event: MessageEvent<unknown>) => unknown)
     | null = null;
-  public readonly messages: PrintExportGenerateRequest[] = [];
+  public readonly messages: PrintExportWorkerRequest[] = [];
   public terminationCount = 0;
 
-  public postMessage(message: PrintExportGenerateRequest): void {
+  public postMessage(message: PrintExportWorkerRequest): void {
     this.messages.push(message);
   }
 
@@ -141,6 +143,36 @@ describe("viewer print export controller", () => {
     expect(worker.terminationCount).toBe(1);
     expect(worker.onmessage).toBeNull();
     expect(states.at(-1)?.status).toBe("ready");
+  });
+
+  it("accepts a real calibration worker result and terminates the job", () => {
+    const worker = new FakeWorker();
+    const controller = new PrintExportController(() => worker);
+    const profile = createSingleChannelProfile();
+
+    const jobId = controller.startCalibration({ profile });
+    expect(worker.messages).toEqual([
+      { type: "calibrate", jobId, profile },
+    ]);
+    const responses: PrintExportWorkerResponse[] = [];
+    runPrintExportRequest(worker.messages[0]!, (response) => {
+      responses.push(response);
+    });
+    for (const response of responses) worker.emit(response);
+
+    expect(controller.state).toMatchObject({
+      status: "calibration-ready",
+      jobId,
+      preflight: {
+        profileId: profile.id,
+        channelCount: 1,
+        triangleCount: expect.any(Number),
+      },
+      threeMfBytes: expect.any(ArrayBuffer),
+      manifestBytes: expect.any(ArrayBuffer),
+    });
+    expect(worker.terminationCount).toBe(1);
+    expect(worker.onmessage).toBeNull();
   });
 
   it("terminates on cancel, returns to idle, and ignores stale jobs", () => {

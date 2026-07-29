@@ -48,6 +48,9 @@ npm run cli -- open C:\Code\RepoA
 # Export the connected five-part Demo for a Prusa XL
 npm run print:demo
 
+# Export the profile calibration plate and measurement manifest
+npm run print:calibration
+
 # Export another model through the same printer-general path
 npm run cli -- export `
   --model examples\demo-city.json `
@@ -64,7 +67,8 @@ The viewer accepts a `city-model.json` through **Open model**. **Export 3MF**
 selects a generic, Prusa XL, or local custom printer profile, shows exact
 preflight dimensions and channel assignments, then downloads the 3MF and
 optional private legend. Generation runs locally in a cancellable worker; no
-model or profile is uploaded.
+model or profile is uploaded. **Prepare calibration** downloads a profile-only
+test plate and exact measurement manifest through the same local worker.
 
 C# is analyzed by the bundled, syntax-only Roslyn helper. TypeScript and
 JavaScript use the pinned compiler API. Neither analyzer restores, builds, runs

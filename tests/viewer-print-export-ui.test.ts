@@ -30,9 +30,18 @@ describe("viewer 3MF export UI", () => {
     expect(html).toContain('id="print-routes"');
     expect(html).toContain('id="print-legend-download-enabled"');
     expect(html).toContain('id="print-export-cancel"');
+    expect(html).toContain('id="print-calibration-submit"');
     expect(html).toContain('id="print-export-preflight"');
+    expect(html).toContain('id="print-export-triangles"');
     expect(html).toContain('id="print-export-download"');
     expect(html).toContain('id="print-export-legend-download"');
+    expect(html).toContain('id="print-calibration-download"');
+    expect(html).toContain(
+      'id="print-calibration-manifest-download"',
+    );
+    expect(html).toMatch(
+      /Calibration uses only the selected printer profile and never\r?\n\s+includes repository content\./u,
+    );
     expect(html).toMatch(
       /id="print-scale"[\s\S]*min="0\.01"[\s\S]*step="0\.01"[\s\S]*value="3"[\s\S]*required/u,
     );
@@ -52,6 +61,10 @@ describe("viewer 3MF export UI", () => {
     );
     expect(source).toContain("new PrintDownloadManager()");
     expect(source).toContain("tryPublishPrintDownloads(");
+    expect(source).toContain("tryPublishCalibrationDownloads(");
+    expect(source).toContain("controller.startCalibration({ profile })");
+    expect(source).toContain("preflight.manifest.couponCount");
+    expect(source).toContain('"printable coupons"');
     expect(source).not.toContain(
       'submitButton.addEventListener("click"',
     );

@@ -190,6 +190,39 @@ print channels, their assignment mechanism, and an overflow policy.
 Build volume uses city axes: X width, Y height, Z depth. Export maps city
 X/Y/Z to printer X/Z/Y.
 
+Geometry limits resolve legacy four-field profiles into explicit nozzle and
+line-width assumptions, symmetric X/Y/Z build margins, wall and gap minima,
+raised and recessed feature minima, label and route widths, base thickness,
+and maximum model height. Omitted fields use documented conservative defaults;
+parsed and bundled profiles expose the resolved values.
+
+[cols="2,3",options="header"]
+|===
+|Omitted field |Resolved value
+
+|`nozzleDiameter`, `lineWidth`
+|`minimumWallThickness`
+
+|`buildMargins`
+|`{x: 0, y: 0, z: 0}`
+
+|raised or recessed minimum
+|`minimumFeatureSize`
+
+|label stroke
+|`minimumWallThickness`
+
+|route width
+|maximum of feature size and line width
+
+|maximum model height
+|build-volume Y minus twice the Y margin
+|===
+
+Line width must be from one through two nozzle diameters. Wall, label and route
+widths must be at least one line. Twice each margin must leave a positive build
+span; base plus raised-feature height must fit the declared maximum height.
+
 The print planner maps semantic groups onto one or more channels. If groups
 outnumber channels, it deterministically merges them, produces monochrome
 output, or fails, as selected by the profile. Exporters measure transformed
@@ -218,3 +251,10 @@ semantic city coordinates.
 
 The Prusa XL one-, two-, and five-tool configurations are profiles of the same
 model.
+
+The deterministic calibration plate contains a shared base, one marker per
+configured channel, and measured coupons for every resolved feature limit.
+Its JSON manifest maps coupon IDs and print-space bounds to each measurement.
+Profile axes are X width, Y height, Z depth; print axes are x=X, y=Z, z=Y.
+Measure wall, gap, raised and recessed references after slicing and printing;
+adjust the profile before exporting a full city.

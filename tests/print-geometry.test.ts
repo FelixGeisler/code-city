@@ -170,6 +170,34 @@ describe("Demo printable geometry", () => {
     ).toEqual([]);
   });
 
+  it("applies model-axis margins as print X/Z/Y usable spans", () => {
+    const city = demoCity();
+    const baseProfile = createPrusaXLProfile([1, 2, 3, 4, 5]);
+    const profile: PrinterProfile = {
+      ...baseProfile,
+      buildVolume: { x: 94, y: 34, z: 49 },
+      geometryLimits: {
+        ...baseProfile.geometryLimits,
+        buildMargins: { x: 1, y: 1, z: 1 },
+        maximumModelHeight: 32,
+      },
+    };
+    const issues = validatePrintableCity(city, profile);
+
+    expect(issues).toContain(
+      "Printable city X size (93) exceeds the usable build span (92) after margins.",
+    );
+    expect(issues).toContain(
+      "Printable city Y size (48) exceeds the usable build span (47) after margins.",
+    );
+    expect(issues).toContain(
+      "Printable city Z size (33) exceeds the usable build span (32) after margins.",
+    );
+    expect(issues).toContain(
+      "Printable city model height (33) exceeds profile maximum (32).",
+    );
+  });
+
   it("adds minimum-detail block text and a skyline to the plaque", () => {
     const city = demoCity();
     const identityPart = city.parts.find(
@@ -196,6 +224,36 @@ describe("Demo printable geometry", () => {
           bounds.size.z >= 0.8 - 1e-9,
       ),
     ).toBe(true);
+  });
+
+  it("applies explicit label-stroke and raised-feature limits to relief", () => {
+    const baseProfile = createPrusaXLProfile([1, 2, 3, 4, 5]);
+    const profile: PrinterProfile = {
+      ...baseProfile,
+      geometryLimits: {
+        ...baseProfile.geometryLimits,
+        minimumLabelStrokeWidth: 1.2,
+        minimumRaisedFeatureHeight: 1.6,
+      },
+    };
+    const city = buildPrintableCity(
+      DEMO_MODEL,
+      assignments(),
+      { scale: 3, profile, labelPolicy: "off" },
+    );
+    const relief = city.parts
+      .flatMap(({ primitives }) => primitives)
+      .filter(({ kind }) => kind === "identity-relief");
+
+    expect(relief.length).toBeGreaterThan(0);
+    expect(
+      relief.every(({ bounds }) =>
+        bounds.size.x >= 1.2 - 1e-9 &&
+        bounds.size.y >= 1.6 - 1e-9 &&
+        bounds.size.z >= 1.2 - 1e-9
+      ),
+    ).toBe(true);
+    expect(validatePrintableCity(city, profile)).toEqual([]);
   });
 
   it("adds fitting same-channel roof codes and ground district labels", () => {

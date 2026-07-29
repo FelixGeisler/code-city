@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   PrintDownloadManager,
+  printCalibrationFileNames,
   printExportFileNames,
   sanitizePrintFileStem,
   tryPublishPrintDownloads,
@@ -49,6 +50,39 @@ describe("viewer print downloads", () => {
       threeMf: "code-city.3mf",
       legend: "code-city.legend.json",
     });
+    expect(printCalibrationFileNames("prusa-xl-t1-t2")).toEqual({
+      threeMf: "prusa-xl-t1-t2.calibration.3mf",
+      manifest: "prusa-xl-t1-t2.calibration.json",
+    });
+  });
+
+  it("publishes deterministic calibration files with precise MIME types", () => {
+    const urls = new FakeObjectUrls();
+    const manager = new PrintDownloadManager(urls);
+    const calibration = manager.replaceCalibration(
+      "Custom / Profile",
+      {
+        threeMfBytes: Uint8Array.from([1, 2]).buffer,
+        manifestBytes: Uint8Array.from([3, 4]).buffer,
+      },
+    );
+
+    expect(calibration).toMatchObject({
+      threeMf: {
+        fileName: "Custom-Profile.calibration.3mf",
+        url: "blob:test-1",
+      },
+      manifest: {
+        fileName: "Custom-Profile.calibration.json",
+        url: "blob:test-2",
+      },
+    });
+    expect(calibration.threeMf.blob.type).toBe(
+      "application/vnd.ms-package.3dmanufacturing-3dmodel+xml",
+    );
+    expect(calibration.manifest.blob.type).toBe("application/json");
+    manager.clear();
+    expect(urls.revoked).toEqual(["blob:test-1", "blob:test-2"]);
   });
 
   it("replaces and revokes every active object URL", async () => {

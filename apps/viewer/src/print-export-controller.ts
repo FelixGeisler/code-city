@@ -1,15 +1,20 @@
 import {
   isPrintExportWorkerResponse,
   serializePrintExportError,
+  type PrintCalibrationGenerateRequest,
   type PrintExportFailure,
   type PrintExportGenerateRequest,
   type PrintExportProgressResponse,
+  type PrintExportWorkerRequest,
   type PrintExportWorkerResponse,
 } from "./print-export-protocol.js";
 import type {
   ThreeMfExportOptions,
   ThreeMfExportPreflight,
 } from "../../../packages/exporter/src/three-mf-export.js";
+import type {
+  CalibrationPreflight,
+} from "../../../packages/exporter/src/calibration.js";
 
 export interface PrintExportWorkerLike {
   onmessage:
@@ -21,7 +26,7 @@ export interface PrintExportWorkerLike {
   onmessageerror:
     | ((event: MessageEvent<unknown>) => unknown)
     | null;
-  postMessage(message: PrintExportGenerateRequest): void;
+  postMessage(message: PrintExportWorkerRequest): void;
   terminate(): void;
 }
 
@@ -33,6 +38,10 @@ export interface PrintExportStartRequest {
   readonly model: unknown;
   readonly profile: unknown;
   readonly options: ThreeMfExportOptions;
+}
+
+export interface PrintCalibrationStartRequest {
+  readonly profile: unknown;
 }
 
 export interface PrintExportIdleState {
@@ -54,6 +63,14 @@ export interface PrintExportReadyState {
   readonly legendBytes?: ArrayBuffer;
 }
 
+export interface PrintCalibrationReadyState {
+  readonly status: "calibration-ready";
+  readonly jobId: number;
+  readonly preflight: CalibrationPreflight;
+  readonly threeMfBytes: ArrayBuffer;
+  readonly manifestBytes: ArrayBuffer;
+}
+
 export interface PrintExportFailedState {
   readonly status: "failed";
   readonly jobId: number;
@@ -65,6 +82,7 @@ export type PrintExportControllerState =
   | PrintExportIdleState
   | PrintExportBusyState
   | PrintExportReadyState
+  | PrintCalibrationReadyState
   | PrintExportFailedState;
 
 export interface PrintExportControllerCallbacks {
@@ -79,6 +97,7 @@ export interface PrintExportControllerCallbacks {
 
 interface ActiveWorker {
   readonly jobId: number;
+  readonly kind: "city" | "calibration";
   readonly worker: PrintExportWorkerLike;
   watchdogHandle?: unknown;
 }
@@ -137,6 +156,30 @@ export class PrintExportController {
   }
 
   public start(request: PrintExportStartRequest): number {
+    return this.startWorker("city", (jobId): PrintExportGenerateRequest => ({
+      type: "generate",
+      jobId,
+      model: request.model,
+      profile: request.profile,
+      options: request.options,
+    }));
+  }
+
+  public startCalibration(request: PrintCalibrationStartRequest): number {
+    return this.startWorker(
+      "calibration",
+      (jobId): PrintCalibrationGenerateRequest => ({
+        type: "calibrate",
+        jobId,
+        profile: request.profile,
+      }),
+    );
+  }
+
+  private startWorker(
+    kind: ActiveWorker["kind"],
+    createRequest: (jobId: number) => PrintExportWorkerRequest,
+  ): number {
     if (this.disposed) {
       throw new Error("The print export controller has been disposed.");
     }
@@ -156,7 +199,7 @@ export class PrintExportController {
       return jobId;
     }
 
-    this.active = { jobId, worker };
+    this.active = { jobId, kind, worker };
     worker.onmessage = (event) => {
       this.receive(worker, jobId, event.data);
     };
@@ -183,13 +226,7 @@ export class PrintExportController {
     this.armWatchdog(worker, jobId);
     if (!this.isCurrent(worker, jobId)) return jobId;
     try {
-      worker.postMessage({
-        type: "generate",
-        jobId,
-        model: request.model,
-        profile: request.profile,
-        options: request.options,
-      });
+      worker.postMessage(createRequest(jobId));
     } catch (error) {
       this.fail(worker, jobId, serializePrintExportError(error));
     }
@@ -231,6 +268,7 @@ export class PrintExportController {
       return;
     }
     if (value.jobId !== jobId) return;
+    const kind = this.active!.kind;
 
     switch (value.type) {
       case "progress": {
@@ -250,6 +288,16 @@ export class PrintExportController {
         break;
       }
       case "preflight": {
+        if (kind !== "city") {
+          this.fail(
+            worker,
+            jobId,
+            protocolFailure(
+              "The calibration worker returned a city preflight.",
+            ),
+          );
+          break;
+        }
         const state = this.busyState(jobId);
         this.updateState({
           status: "busy",
@@ -262,6 +310,16 @@ export class PrintExportController {
         break;
       }
       case "result":
+        if (kind !== "city") {
+          this.fail(
+            worker,
+            jobId,
+            protocolFailure(
+              "The calibration worker returned a city export.",
+            ),
+          );
+          break;
+        }
         this.finishWorker(worker, jobId);
         this.updateState({
           status: "ready",
@@ -271,6 +329,26 @@ export class PrintExportController {
           ...(value.legendBytes === undefined
             ? {}
             : { legendBytes: value.legendBytes }),
+        });
+        break;
+      case "calibration-result":
+        if (kind !== "calibration") {
+          this.fail(
+            worker,
+            jobId,
+            protocolFailure(
+              "The city worker returned a calibration export.",
+            ),
+          );
+          break;
+        }
+        this.finishWorker(worker, jobId);
+        this.updateState({
+          status: "calibration-ready",
+          jobId,
+          preflight: value.preflight,
+          threeMfBytes: value.threeMfBytes,
+          manifestBytes: value.manifestBytes,
         });
         break;
       case "failure": {

@@ -12,6 +12,7 @@
     "cli": "node build/app/apps/cli/src/main.js",
     "compile": "tsc --project tsconfig.build.json",
     "docs:build": "antora antora-playbook.yml",
+    "print:calibration": "npm run compile --silent && node build/app/apps/cli/src/main.js calibrate --profile profiles/prusa-xl-5t.json --output build/print/prusa-xl-calibration.3mf --manifest build/print/prusa-xl-calibration.json",
     "print:connector-comparison": "npm run compile --silent && node build/app/apps/cli/src/main.js compare-connectors --profile profiles/prusa-xl-5t.json --output build/print/dependency-connector-comparison.3mf --instructions build/print/dependency-connector-comparison.instructions.txt",
     "print:demo": "npm run compile --silent && node build/app/apps/cli/src/main.js export --model examples/demo-city.json --profile profiles/prusa-xl-5t.json --format 3mf --scale 3 --labels auto --routes auto --legend build/print/code-city-demo.legend.json --output build/print/code-city-demo.3mf",
     "test": "vitest run",

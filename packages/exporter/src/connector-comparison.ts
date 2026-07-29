@@ -1,4 +1,5 @@
 import {
+  resolvePrinterGeometryLimits,
   validatePrinterProfile,
   type PrinterProfile,
 } from "../../core/src/print.js";
@@ -118,9 +119,16 @@ function textPrimitive(
   channelId: string,
   text: string,
   featureSize: number,
+  raisedHeight: number,
   origin: PrintPoint,
 ): PrintPrimitive {
-  const mesh = raisedPrintableTextMesh(text, featureSize, origin);
+  const mesh = raisedPrintableTextMesh(
+    text,
+    featureSize,
+    origin,
+    "horizontal",
+    raisedHeight,
+  );
   return {
     id,
     kind: "comparison-label",
@@ -210,14 +218,28 @@ export function buildDependencyConnectorComparison(
     throw new PrintGeometryValidationError(profileIssues);
   }
 
+  const limits = resolvePrinterGeometryLimits(profile);
   const feature = Math.max(
-    profile.geometryLimits.minimumFeatureSize,
-    profile.geometryLimits.minimumWallThickness,
+    limits.minimumFeatureSize,
+    limits.minimumWallThickness,
   );
-  const clearance = profile.geometryLimits.minimumGap;
-  const labelFeature = Math.max(feature, clearance);
+  const clearance = limits.minimumGap;
+  const labelFeature = Math.max(
+    feature,
+    clearance,
+    limits.minimumLabelStrokeWidth,
+  );
+  const labelRaisedHeight = Math.max(
+    labelFeature,
+    limits.minimumRaisedFeatureHeight,
+  );
+  const routeWidth = Math.max(feature, limits.minimumRouteWidth);
+  const routeHeight = Math.max(
+    feature,
+    limits.minimumRaisedFeatureHeight,
+  );
   const baseThickness = Math.max(
-    profile.geometryLimits.minimumBaseThickness,
+    limits.minimumBaseThickness,
     feature,
   );
   const padding = Math.max(feature, clearance);
@@ -230,7 +252,11 @@ export function buildDependencyConnectorComparison(
   const nominalConnectorWidth = 2 * feature;
   const socketOpeningWidth = nominalConnectorWidth + 2 * clearance;
   const socketOuterDepth = socketOpeningWidth + 2 * feature;
-  const diagramDepth = Math.max(endpointDepth, socketOuterDepth);
+  const diagramDepth = Math.max(
+    endpointDepth,
+    socketOuterDepth,
+    5 * routeWidth,
+  );
   const labels = ["INTEGRATED", "DETACHABLE"] as const;
   const cellWidth =
     Math.max(...labels.map((text) => printableTextWidth(text, labelFeature))) +
@@ -244,12 +270,20 @@ export function buildDependencyConnectorComparison(
   const totalHeight =
     baseThickness +
     cellHeight +
-    Math.max(endpointHeight, 3 * feature, labelFeature);
+    Math.max(
+      endpointHeight,
+      3 * feature,
+      routeHeight,
+      labelRaisedHeight,
+    );
 
   const printVolume = {
-    x: profile.buildVolume.x,
-    y: profile.buildVolume.z,
-    z: profile.buildVolume.y,
+    x: profile.buildVolume.x - limits.buildMargins.x * 2,
+    y: profile.buildVolume.z - limits.buildMargins.z * 2,
+    z: Math.min(
+      profile.buildVolume.y - limits.buildMargins.y * 2,
+      limits.maximumModelHeight,
+    ),
   };
   if (
     baseWidth > printVolume.x + EPSILON ||
@@ -341,7 +375,7 @@ export function buildDependencyConnectorComparison(
   );
   const arrowStepLength = padding;
   const arrowStart = providerX - 3 * arrowStepLength;
-  const traceY = diagramY + (endpointDepth - feature) / 2;
+  const traceY = diagramY + (endpointDepth - routeWidth) / 2;
   const trace = primitive(
     "comparison:integrated:trace",
     "dependency-trace",
@@ -352,8 +386,8 @@ export function buildDependencyConnectorComparison(
       traceY,
       cellTop,
       arrowStart - (consumerX + endpointWidth),
-      feature,
-      feature,
+      routeWidth,
+      routeHeight,
     ),
   );
   const arrow = [5, 3, 1].map((width, index) =>
@@ -364,11 +398,11 @@ export function buildDependencyConnectorComparison(
       integratedChannel,
       box(
         arrowStart + index * arrowStepLength,
-        diagramY + (endpointDepth - width * feature) / 2,
+        diagramY + (endpointDepth - width * routeWidth) / 2,
         cellTop,
         arrowStepLength,
-        width * feature,
-        feature,
+        width * routeWidth,
+        routeHeight,
       ),
     ),
   );
@@ -431,6 +465,7 @@ export function buildDependencyConnectorComparison(
     integratedLabelChannel,
     labels[0],
     labelFeature,
+    labelRaisedHeight,
     { x: integratedX + padding, y: labelY, z: cellTop },
   );
   const detachableLabel = textPrimitive(
@@ -439,6 +474,7 @@ export function buildDependencyConnectorComparison(
     socketLabelChannel,
     labels[1],
     labelFeature,
+    labelRaisedHeight,
     { x: detachableX + padding, y: labelY, z: cellTop },
   );
 
@@ -480,8 +516,8 @@ export function buildDependencyConnectorComparison(
     featureSize: feature,
     labelFeatureSize: labelFeature,
     baseThickness,
-    traceWidth: feature,
-    traceHeight: feature,
+    traceWidth: routeWidth,
+    traceHeight: routeHeight,
     clearance,
     socketWallThickness: feature,
     nominalConnectorWidth,

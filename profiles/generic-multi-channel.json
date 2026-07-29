@@ -1,11 +1,21 @@
 {
-  "id": "generic-single-channel",
-  "name": "Generic single-channel printer",
+  "id": "generic-multi-channel",
+  "name": "Generic three-channel printer",
   "printChannels": [
     {
       "id": "channel-1",
       "label": "Channel 1",
-      "mechanism": "single"
+      "mechanism": "filament-switcher"
+    },
+    {
+      "id": "channel-2",
+      "label": "Channel 2",
+      "mechanism": "filament-switcher"
+    },
+    {
+      "id": "channel-3",
+      "label": "Channel 3",
+      "mechanism": "filament-switcher"
     }
   ],
   "supportedFormats": ["stl", "3mf"],
@@ -32,5 +42,5 @@
     "minimumRouteWidth": 0.8,
     "maximumModelHeight": 250
   },
-  "overflowPolicy": "monochrome"
+  "overflowPolicy": "merge"
 }
