@@ -81,6 +81,71 @@ describe("dependency explorer index", () => {
     ]);
   });
 
+  it("normalizes external aliases before route indexing and projection", () => {
+    const dependencies = [
+      externalDependency(
+        "a-to-decomposed",
+        "building-a",
+        "  Cafe\u0301  ",
+        2,
+      ),
+      externalDependency(
+        "a-to-composed",
+        "building-a",
+        "Caf\u00e9",
+        3,
+      ),
+    ];
+    const forward = createDependencyExplorerIndex(
+      fixtureModel({ dependencies }),
+    );
+    const reversed = createDependencyExplorerIndex(
+      fixtureModel({ dependencies: dependencies.toReversed() }),
+    );
+
+    const routes = dependencyRoutesForBuilding(
+      forward,
+      "building-a",
+    )!.outgoing.routes;
+    const reversedRoutes = dependencyRoutesForBuilding(
+      reversed,
+      "building-a",
+    )!.outgoing.routes;
+
+    expect(
+      routes.map((route) => {
+        if (
+          route.counterpart.kind !== "external" ||
+          !("externalTarget" in route)
+        ) {
+          throw new TypeError("Expected external dependency routes.");
+        }
+        return {
+          externalTarget: route.externalTarget,
+          counterpart: route.counterpart,
+        };
+      }),
+    ).toEqual([
+      {
+        externalTarget: "Caf\u00e9",
+        counterpart: { kind: "external", target: "Caf\u00e9" },
+      },
+      {
+        externalTarget: "Caf\u00e9",
+        counterpart: { kind: "external", target: "Caf\u00e9" },
+      },
+    ]);
+    expect(reversedRoutes).toEqual(routes);
+    expect(
+      projectDependencyRoute(
+        forward,
+        "building-a",
+        routes[0]!,
+        null,
+      ).target,
+    ).toEqual({ kind: "external", target: "Caf\u00e9" });
+  });
+
   it("returns empty directions for a known disconnected building", () => {
     const index = createDependencyExplorerIndex(fixtureModel());
 
@@ -309,7 +374,7 @@ describe("dependency explorer index", () => {
           ],
         }),
       ),
-    ).toThrow(/empty external target/u);
+    ).toThrow(/external dependency target must not be empty/iu);
   });
 });
 

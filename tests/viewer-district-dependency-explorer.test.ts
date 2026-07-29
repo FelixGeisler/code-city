@@ -111,6 +111,78 @@ describe("district dependency aggregation", () => {
     });
   });
 
+  it("normalizes external aliases before deterministic bundle aggregation", () => {
+    const model = fixtureModel({
+      dependencies: [
+        externalDependency(
+          "package-decomposed",
+          "module-a",
+          "package-reference",
+          "  Cafe\u0301  ",
+          2,
+        ),
+        externalDependency(
+          "package-composed",
+          "module-a",
+          "package-reference",
+          "Caf\u00e9",
+          3,
+        ),
+        externalDependency(
+          "package-distinct-case",
+          "module-a",
+          "package-reference",
+          "CAF\u00c9",
+          1,
+        ),
+      ],
+    });
+    const reversed = {
+      ...model,
+      dependencies: model.dependencies.toReversed(),
+    };
+
+    const forwardSummary = summarizeDistrictDependencies(
+      createDistrictDependencyExplorerIndex(model),
+      INITIAL_DISTRICT_DEPENDENCY_FILTERS,
+      null,
+    );
+    const reversedSummary = summarizeDistrictDependencies(
+      createDistrictDependencyExplorerIndex(reversed),
+      INITIAL_DISTRICT_DEPENDENCY_FILTERS,
+      null,
+    );
+
+    expect(reversedSummary).toEqual(forwardSummary);
+    expect(forwardSummary).toMatchObject({
+      totalBundleCount: 2,
+      totalReferenceWeight: 6,
+    });
+    expect(forwardSummary.bundles[0]).toMatchObject({
+      id: "district-dependency:district-a:external:Caf%C3%A9",
+      target: { kind: "external", target: "Caf\u00e9" },
+      edgeCount: 2,
+      weight: 5,
+      contributors: [
+        {
+          dependencyId: "package-composed",
+          targetLabel: "Caf\u00e9",
+          targetPath: "Caf\u00e9",
+        },
+        {
+          dependencyId: "package-decomposed",
+          targetLabel: "Caf\u00e9",
+          targetPath: "Caf\u00e9",
+        },
+      ],
+    });
+    expect(forwardSummary.bundles[1]).toMatchObject({
+      target: { kind: "external", target: "CAF\u00c9" },
+      edgeCount: 1,
+      weight: 1,
+    });
+  });
+
   it("recalculates bundles and contributors while availability stays scope-wide", () => {
     const index = createDistrictDependencyExplorerIndex(
       aggregationModel(),
@@ -506,7 +578,7 @@ describe("district dependency model safety", () => {
           "   ",
           1,
         ),
-        pattern: /empty external target/u,
+        pattern: /external dependency target must not be empty/iu,
       },
       {
         dependency: projectDependency(

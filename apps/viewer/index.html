@@ -254,12 +254,12 @@
           aria-labelledby="inspector-title"
         >
           <div class="panel-heading">
-            <h2 id="inspector-title">Building</h2>
+            <h2 id="inspector-title">Details</h2>
             <button
               id="clear-selection"
               class="icon-button"
               type="button"
-              aria-label="Clear building selection"
+              aria-label="Clear selection"
               title="Clear selection"
               hidden
             >
@@ -267,7 +267,7 @@
             </button>
           </div>
           <div id="inspector-empty" class="empty-state">
-            Select a building to inspect it.
+            Select a building or external dependency to inspect it.
           </div>
           <div
             id="inspector-content"
@@ -419,6 +419,58 @@
               </details>
             </section>
           </div>
+          <div
+            id="external-inspector-content"
+            tabindex="0"
+            aria-label="Selected external dependency details"
+            hidden
+          >
+            <h3 id="external-name"></h3>
+            <dl class="building-details external-details">
+              <div class="wide">
+                <dt>Target</dt>
+                <dd id="external-target" class="path-value"></dd>
+              </div>
+              <div class="metric">
+                <dt>References</dt>
+                <dd id="external-weight"></dd>
+              </div>
+              <div class="metric">
+                <dt>Edges</dt>
+                <dd id="external-edge-count"></dd>
+              </div>
+              <div class="metric">
+                <dt>Targets</dt>
+                <dd id="external-target-count"></dd>
+              </div>
+              <div class="wide">
+                <dt>Kinds</dt>
+                <dd id="external-kinds"></dd>
+              </div>
+            </dl>
+            <section
+              class="external-consumers-section"
+              aria-labelledby="external-consumers-title"
+            >
+              <div class="units-heading">
+                <h3 id="external-consumers-title">Consumers</h3>
+                <span
+                  id="external-consumer-count"
+                  class="unit-count"
+                ></span>
+              </div>
+              <ul
+                id="external-consumers"
+                class="external-consumers"
+                aria-label="External dependency consumers"
+              ></ul>
+              <p
+                id="external-consumers-omitted"
+                class="dependency-status"
+                hidden
+              ></p>
+            </section>
+          </div>
         </aside>
 
         <section
@@ -434,6 +486,19 @@
             tabindex="0"
             aria-label="Semantic groups"
           ></ul>
+          <section
+            id="external-zone"
+            class="external-zone"
+            aria-labelledby="external-zone-title"
+            hidden
+          >
+            <h3 id="external-zone-title">External dependencies</h3>
+            <ul
+              id="external-list"
+              class="external-list"
+              aria-label="External dependencies"
+            ></ul>
+          </section>
         </section>
         </div>
 
