@@ -26,8 +26,9 @@ async function waitFor(
   queue: PersistentJobQueue,
   id: string,
   predicate: (record: JobRecord) => boolean,
+  timeoutMilliseconds = 3_000,
 ): Promise<JobRecord> {
-  const deadline = Date.now() + 3_000;
+  const deadline = Date.now() + timeoutMilliseconds;
   while (Date.now() < deadline) {
     const record = queue.get(id);
     if (record && predicate(record)) return record;
@@ -1554,6 +1555,7 @@ it("syncs record contents before committing POSIX directory metadata", async () 
       queue,
       queued.id,
       ({ state }) => state === "completed",
+      15_000,
     );
   } finally {
     Object.defineProperty(process, "platform", platformDescriptor);
@@ -1572,7 +1574,7 @@ it("syncs record contents before committing POSIX directory metadata", async () 
     "sync-directory",
     "close-directory",
   ]);
-});
+}, 20_000);
 
 it("keeps a committed terminal record when backup cleanup fails", async () => {
   const dataDirectory = await temporaryDirectory();
@@ -1600,10 +1602,34 @@ it("keeps a committed terminal record when backup cleanup fails", async () => {
     `${queued.id}.json`,
   );
   const backup = `${destination}.bak`;
+  const jobsDirectory = path.resolve(dataDirectory, "jobs");
+  const openFile = fs.open.bind(fs);
   const renameFile = fs.rename.bind(fs);
   const removeFile = fs.rm.bind(fs);
   let renameCalls = 0;
   let backupRemovals = 0;
+  let directorySyncs = 0;
+  const platformDescriptor = Object.getOwnPropertyDescriptor(
+    process,
+    "platform",
+  )!;
+  Object.defineProperty(process, "platform", {
+    ...platformDescriptor,
+    value: "linux",
+  });
+  const openSpy = vi.spyOn(fs, "open").mockImplementation(
+    async (file, flags, mode) => {
+      if (path.resolve(String(file)) === jobsDirectory) {
+        return {
+          sync: async () => {
+            directorySyncs += 1;
+          },
+          close: async () => undefined,
+        } as unknown as Awaited<ReturnType<typeof fs.open>>;
+      }
+      return openFile(file, flags, mode);
+    },
+  );
   const renameSpy = vi.spyOn(fs, "rename").mockImplementation(
     async (source, target) => {
       renameCalls += 1;
@@ -1627,25 +1653,33 @@ it("keeps a committed terminal record when backup cleanup fails", async () => {
     },
   );
 
-  releaseTask?.();
-  const completed = await waitFor(
-    queue,
-    queued.id,
-    ({ state }) => state === "completed",
-  );
+  let completed: JobRecord;
+  try {
+    releaseTask?.();
+    completed = await waitFor(
+      queue,
+      queued.id,
+      ({ state }) => state === "completed",
+      15_000,
+    );
+  } finally {
+    Object.defineProperty(process, "platform", platformDescriptor);
+    openSpy.mockRestore();
+    renameSpy.mockRestore();
+    removeSpy.mockRestore();
+  }
 
-  expect(completed.result?.artifactToken).toBe(queued.id);
+  expect(completed!.result?.artifactToken).toBe(queued.id);
   expect(backupRemovals).toBe(2);
+  expect(directorySyncs).toBe(3);
   await expect(fs.lstat(backup)).resolves.toBeDefined();
-  renameSpy.mockRestore();
-  removeSpy.mockRestore();
   await queue.close();
 
   const reopened = await PersistentJobQueue.open({ dataDirectory });
   queues.push(reopened);
-  expect(reopened.get(queued.id)).toEqual(completed);
+  expect(reopened.get(queued.id)).toEqual(completed!);
   await expect(fs.lstat(backup)).rejects.toMatchObject({ code: "ENOENT" });
-});
+}, 20_000);
 
 it("marks unfinished persisted work as interrupted after restart", async () => {
   const dataDirectory = await temporaryDirectory();

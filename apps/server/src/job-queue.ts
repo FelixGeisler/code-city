@@ -557,12 +557,19 @@ export class PersistentJobQueue {
         !entry.isSymbolicLink()
       ) {
         const destination = candidate.slice(0, -".bak".length);
+        let destinationExists = true;
         try {
           await fs.lstat(destination);
-          await fs.rm(candidate, { force: true });
         } catch (error) {
           if (!hasErrorCode(error, "ENOENT")) throw error;
+          destinationExists = false;
+        }
+        if (destinationExists) {
+          await fs.rm(candidate, { force: true });
+          await this.syncJobsDirectory();
+        } else {
           await fs.rename(candidate, destination);
+          await this.syncJobsDirectory();
         }
       }
     }
