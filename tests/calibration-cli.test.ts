@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import { runCli } from "../apps/cli/src/main.js";
+import { createSingleChannelProfile } from "../packages/core/src/index.js";
+import { generateCalibrationPrintExport } from "../packages/exporter/src/calibration.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -125,4 +127,97 @@ it("supports an explicit manifest and rejects unsafe extensions", async () => {
     ),
   ).toBe(1);
   expect(messages.join("")).toContain("must use the '.3mf'");
+});
+
+it("publishes STL bytes identical to the pure calibration generator", async () => {
+  const directory = await temporaryDirectory();
+  const profile = createSingleChannelProfile();
+  const profilePath = path.join(directory, "profile.json");
+  const output = path.join(directory, "calibration.stl");
+  const manifest = path.join(directory, "calibration.manifest.json");
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  await fs.writeFile(profilePath, JSON.stringify(profile), "utf8");
+
+  expect(
+    await runCli(
+      [
+        "calibrate",
+        "--profile",
+        profilePath,
+        "--format",
+        "stl",
+        "--output",
+        output,
+      ],
+      {
+        stdout: (message) => stdout.push(message),
+        stderr: (message) => stderr.push(message),
+      },
+    ),
+  ).toBe(0);
+  const shared = generateCalibrationPrintExport({
+    profile,
+    format: "stl",
+  });
+
+  expect(await fs.readFile(output)).toEqual(
+    Buffer.from(shared.artifact.bytes),
+  );
+  expect(await fs.readFile(manifest)).toEqual(
+    Buffer.from(shared.manifestBytes),
+  );
+  expect(stdout.join("")).toContain(
+    `${shared.preflight.triangleCount} triangle(s)`,
+  );
+  expect(stderr.join("")).toContain(
+    "colors, tool assignments, and 3MF metadata are not preserved",
+  );
+});
+
+it("rejects calibration format/extension mismatches", async () => {
+  const directory = await temporaryDirectory();
+  const messages: string[] = [];
+  const profile = path.resolve("profiles/generic-single-channel.json");
+
+  expect(
+    await runCli(
+      [
+        "calibrate",
+        "--profile",
+        profile,
+        "--format",
+        "stl",
+        "--output",
+        path.join(directory, "wrong.3mf"),
+      ],
+      {
+        stdout: () => undefined,
+        stderr: (message) => messages.push(message),
+      },
+    ),
+  ).toBe(1);
+  expect(
+    await runCli(
+      [
+        "calibrate",
+        "--profile",
+        profile,
+        "--format",
+        "3mf",
+        "--output",
+        path.join(directory, "wrong.stl"),
+      ],
+      {
+        stdout: () => undefined,
+        stderr: (message) => messages.push(message),
+      },
+    ),
+  ).toBe(1);
+  expect(messages.join("")).toContain(
+    "STL output must use the '.stl'",
+  );
+  expect(messages.join("")).toContain(
+    "3MF output must use the '.3mf'",
+  );
 });

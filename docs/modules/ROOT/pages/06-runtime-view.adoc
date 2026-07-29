@@ -38,13 +38,14 @@ npm run cli -- export `
 Routes default to `off`; select `--routes auto` to print capped,
 district-aggregated dependencies.
 
-In the viewer, **Export 3MF** uses the same pipeline in a cancellable module
-worker. It accepts bundled or local JSON profiles, reports preflight dimensions,
-parts, channels, and warnings, then creates local Blob downloads. No input is
-sent over the network.
+In the viewer, **Export print file** uses the same pipeline in a cancellable
+module worker. Select 3MF or STL and a bundled or local JSON profile. Preflight
+reports dimensions, triangles, parts, channels, and warnings. No input is sent
+over the network.
 
 **Prepare calibration** uses the selected profile without repository content
-and downloads the same deterministic calibration 3MF and manifest.
+and downloads the deterministic calibration plate in the selected format plus
+its manifest.
 
 Oversized exports report their measured bounds. Automatic fitting and tiling,
-STL, arbitrary fonts and logos, and slicer settings remain separate work.
+arbitrary fonts and logos, and slicer settings remain separate work.

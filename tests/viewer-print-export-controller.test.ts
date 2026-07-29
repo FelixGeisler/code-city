@@ -8,11 +8,12 @@ import {
 } from "../apps/viewer/src/print-export-controller.js";
 import { runPrintExportRequest } from "../apps/viewer/src/print-export-worker.js";
 import type {
+  PrintExportTransferArtifact,
   PrintExportWorkerRequest,
   PrintExportWorkerResponse,
 } from "../apps/viewer/src/print-export-protocol.js";
 import { createSingleChannelProfile } from "../packages/core/src/index.js";
-import type { ThreeMfExportPreflight } from "../packages/exporter/src/three-mf-export.js";
+import type { PrintExportPreflight } from "../packages/exporter/src/print-export.js";
 
 class FakeWorker implements PrintExportWorkerLike {
   public onmessage:
@@ -55,13 +56,17 @@ class FakeWorker implements PrintExportWorkerLike {
   }
 }
 
-function preflight(): ThreeMfExportPreflight {
+function preflight(
+  format: "3mf" | "stl" = "3mf",
+): PrintExportPreflight {
   return {
+    format,
     title: "Code City",
     profileId: "printer",
     profileName: "Printer",
     dimensions: { x: 10, y: 20, z: 30 },
     partCount: 1,
+    triangleCount: 12,
     channels: [],
     warnings: [],
     labels: {
@@ -83,7 +88,26 @@ function preflight(): ThreeMfExportPreflight {
   };
 }
 
+function artifact(
+  format: "3mf" | "stl" = "3mf",
+): PrintExportTransferArtifact {
+  return format === "3mf"
+    ? {
+        format,
+        mimeType: "model/3mf",
+        fileExtension: ".3mf",
+        bytes: new ArrayBuffer(8),
+      }
+    : {
+        format,
+        mimeType: "model/stl",
+        fileExtension: ".stl",
+        bytes: new ArrayBuffer(8),
+      };
+}
+
 const START_REQUEST = {
+  format: "3mf",
   model: { schemaVersion: "1.0" },
   profile: { id: "printer" },
   options: {
@@ -128,17 +152,17 @@ describe("viewer print export controller", () => {
       preflight: { title: "Code City" },
     });
 
-    const threeMfBytes = new ArrayBuffer(8);
+    const exported = artifact();
     worker.emit({
       type: "result",
       jobId,
       preflight: preflight(),
-      threeMfBytes,
+      artifact: exported,
     });
     expect(controller.state).toMatchObject({
       status: "ready",
       jobId,
-      threeMfBytes,
+      artifact: exported,
     });
     expect(worker.terminationCount).toBe(1);
     expect(worker.onmessage).toBeNull();
@@ -150,9 +174,12 @@ describe("viewer print export controller", () => {
     const controller = new PrintExportController(() => worker);
     const profile = createSingleChannelProfile();
 
-    const jobId = controller.startCalibration({ profile });
+    const jobId = controller.startCalibration({
+      profile,
+      format: "stl",
+    });
     expect(worker.messages).toEqual([
-      { type: "calibrate", jobId, profile },
+      { type: "calibrate", jobId, format: "stl", profile },
     ]);
     const responses: PrintExportWorkerResponse[] = [];
     runPrintExportRequest(worker.messages[0]!, (response) => {
@@ -165,14 +192,46 @@ describe("viewer print export controller", () => {
       jobId,
       preflight: {
         profileId: profile.id,
+        format: "stl",
         channelCount: 1,
         triangleCount: expect.any(Number),
       },
-      threeMfBytes: expect.any(ArrayBuffer),
+      artifact: {
+        format: "stl",
+        mimeType: "model/stl",
+        fileExtension: ".stl",
+        bytes: expect.any(ArrayBuffer),
+      },
       manifestBytes: expect.any(ArrayBuffer),
     });
     expect(worker.terminationCount).toBe(1);
     expect(worker.onmessage).toBeNull();
+  });
+
+  it("rejects a valid artifact for a format other than the requested one", () => {
+    const worker = new FakeWorker();
+    const controller = new PrintExportController(() => worker);
+    const jobId = controller.start({
+      ...START_REQUEST,
+      format: "stl",
+    });
+
+    worker.emit({
+      type: "result",
+      jobId,
+      preflight: preflight(),
+      artifact: artifact(),
+    });
+
+    expect(controller.state).toMatchObject({
+      status: "failed",
+      jobId,
+      error: {
+        kind: "protocol",
+        message: expect.stringMatching(/unexpected artifact format/iu),
+      },
+    });
+    expect(worker.terminationCount).toBe(1);
   });
 
   it("terminates on cancel, returns to idle, and ignores stale jobs", () => {
@@ -194,7 +253,7 @@ describe("viewer print export controller", () => {
         type: "result",
         jobId: firstJob,
         preflight: preflight(),
-        threeMfBytes: new ArrayBuffer(1),
+        artifact: artifact(),
       },
     } as MessageEvent<unknown>);
     expect(controller.state).toEqual({

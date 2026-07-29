@@ -5,15 +5,16 @@ import {
   type PrintExportFailure,
   type PrintExportGenerateRequest,
   type PrintExportProgressResponse,
+  type PrintExportTransferArtifact,
   type PrintExportWorkerRequest,
   type PrintExportWorkerResponse,
 } from "./print-export-protocol.js";
 import type {
-  ThreeMfExportOptions,
-  ThreeMfExportPreflight,
-} from "../../../packages/exporter/src/three-mf-export.js";
+  PrintExportOptions,
+  PrintExportPreflight,
+} from "../../../packages/exporter/src/print-export.js";
 import type {
-  CalibrationPreflight,
+  CalibrationPrintExportPreflight,
 } from "../../../packages/exporter/src/calibration.js";
 
 export interface PrintExportWorkerLike {
@@ -35,12 +36,14 @@ export type PrintExportWorkerFactory = () => PrintExportWorkerLike;
 export const PRINT_EXPORT_WATCHDOG_MS = 60_000;
 
 export interface PrintExportStartRequest {
+  readonly format: "3mf" | "stl";
   readonly model: unknown;
   readonly profile: unknown;
-  readonly options: ThreeMfExportOptions;
+  readonly options: PrintExportOptions;
 }
 
 export interface PrintCalibrationStartRequest {
+  readonly format: "3mf" | "stl";
   readonly profile: unknown;
 }
 
@@ -52,22 +55,22 @@ export interface PrintExportBusyState {
   readonly status: "busy";
   readonly jobId: number;
   readonly progress?: Omit<PrintExportProgressResponse, "type" | "jobId">;
-  readonly preflight?: ThreeMfExportPreflight;
+  readonly preflight?: PrintExportPreflight;
 }
 
 export interface PrintExportReadyState {
   readonly status: "ready";
   readonly jobId: number;
-  readonly preflight: ThreeMfExportPreflight;
-  readonly threeMfBytes: ArrayBuffer;
+  readonly preflight: PrintExportPreflight;
+  readonly artifact: PrintExportTransferArtifact;
   readonly legendBytes?: ArrayBuffer;
 }
 
 export interface PrintCalibrationReadyState {
   readonly status: "calibration-ready";
   readonly jobId: number;
-  readonly preflight: CalibrationPreflight;
-  readonly threeMfBytes: ArrayBuffer;
+  readonly preflight: CalibrationPrintExportPreflight;
+  readonly artifact: PrintExportTransferArtifact;
   readonly manifestBytes: ArrayBuffer;
 }
 
@@ -75,7 +78,7 @@ export interface PrintExportFailedState {
   readonly status: "failed";
   readonly jobId: number;
   readonly error: PrintExportFailure;
-  readonly preflight?: ThreeMfExportPreflight;
+  readonly preflight?: PrintExportPreflight;
 }
 
 export type PrintExportControllerState =
@@ -98,6 +101,7 @@ export interface PrintExportControllerCallbacks {
 interface ActiveWorker {
   readonly jobId: number;
   readonly kind: "city" | "calibration";
+  readonly format: "3mf" | "stl";
   readonly worker: PrintExportWorkerLike;
   watchdogHandle?: unknown;
 }
@@ -156,21 +160,28 @@ export class PrintExportController {
   }
 
   public start(request: PrintExportStartRequest): number {
-    return this.startWorker("city", (jobId): PrintExportGenerateRequest => ({
-      type: "generate",
-      jobId,
-      model: request.model,
-      profile: request.profile,
-      options: request.options,
-    }));
+    return this.startWorker(
+      "city",
+      request.format,
+      (jobId): PrintExportGenerateRequest => ({
+        type: "generate",
+        jobId,
+        format: request.format,
+        model: request.model,
+        profile: request.profile,
+        options: request.options,
+      }),
+    );
   }
 
   public startCalibration(request: PrintCalibrationStartRequest): number {
     return this.startWorker(
       "calibration",
+      request.format,
       (jobId): PrintCalibrationGenerateRequest => ({
         type: "calibrate",
         jobId,
+        format: request.format,
         profile: request.profile,
       }),
     );
@@ -178,6 +189,7 @@ export class PrintExportController {
 
   private startWorker(
     kind: ActiveWorker["kind"],
+    format: ActiveWorker["format"],
     createRequest: (jobId: number) => PrintExportWorkerRequest,
   ): number {
     if (this.disposed) {
@@ -199,7 +211,7 @@ export class PrintExportController {
       return jobId;
     }
 
-    this.active = { jobId, kind, worker };
+    this.active = { jobId, kind, format, worker };
     worker.onmessage = (event) => {
       this.receive(worker, jobId, event.data);
     };
@@ -209,7 +221,7 @@ export class PrintExportController {
         worker,
         jobId,
         serializePrintExportError(
-          new Error(event.message || "The 3MF export worker failed."),
+          new Error(event.message || "The print export worker failed."),
         ),
       );
     };
@@ -217,7 +229,7 @@ export class PrintExportController {
       this.fail(
         worker,
         jobId,
-        protocolFailure("The 3MF export worker returned unreadable data."),
+        protocolFailure("The print export worker returned unreadable data."),
       );
     };
     this.updateState({ status: "busy", jobId });
@@ -263,12 +275,12 @@ export class PrintExportController {
       this.fail(
         worker,
         jobId,
-        protocolFailure("The 3MF export worker returned an invalid message."),
+        protocolFailure("The print export worker returned an invalid message."),
       );
       return;
     }
     if (value.jobId !== jobId) return;
-    const kind = this.active!.kind;
+    const { kind, format } = this.active!;
 
     switch (value.type) {
       case "progress": {
@@ -298,6 +310,16 @@ export class PrintExportController {
           );
           break;
         }
+        if (value.preflight.format !== format) {
+          this.fail(
+            worker,
+            jobId,
+            protocolFailure(
+              "The print worker returned preflight for another format.",
+            ),
+          );
+          break;
+        }
         const state = this.busyState(jobId);
         this.updateState({
           status: "busy",
@@ -320,12 +342,22 @@ export class PrintExportController {
           );
           break;
         }
+        if (value.artifact.format !== format) {
+          this.fail(
+            worker,
+            jobId,
+            protocolFailure(
+              "The print worker returned an unexpected artifact format.",
+            ),
+          );
+          break;
+        }
         this.finishWorker(worker, jobId);
         this.updateState({
           status: "ready",
           jobId,
           preflight: value.preflight,
-          threeMfBytes: value.threeMfBytes,
+          artifact: value.artifact,
           ...(value.legendBytes === undefined
             ? {}
             : { legendBytes: value.legendBytes }),
@@ -342,12 +374,22 @@ export class PrintExportController {
           );
           break;
         }
+        if (value.artifact.format !== format) {
+          this.fail(
+            worker,
+            jobId,
+            protocolFailure(
+              "The calibration worker returned an unexpected artifact format.",
+            ),
+          );
+          break;
+        }
         this.finishWorker(worker, jobId);
         this.updateState({
           status: "calibration-ready",
           jobId,
           preflight: value.preflight,
-          threeMfBytes: value.threeMfBytes,
+          artifact: value.artifact,
           manifestBytes: value.manifestBytes,
         });
         break;
@@ -442,7 +484,7 @@ export class PrintExportController {
             kind: "unexpected",
             name: "PrintExportTimeoutError",
             message:
-              `The 3MF export exceeded the ${this.watchdogMs.toLocaleString(
+              `The print export exceeded the ${this.watchdogMs.toLocaleString(
                 "en-US",
               )} ms browser limit.`,
             issues: [],

@@ -1,13 +1,15 @@
 import {
-  prepareThreeMfExport,
-  serializePreparedThreeMfExport,
-} from "../../../packages/exporter/src/three-mf-export.js";
+  preparePrintExport,
+  serializePreparedPrintExport,
+  type PrintExportArtifact,
+} from "../../../packages/exporter/src/print-export.js";
 import {
-  generateCalibrationExport,
+  generateCalibrationPrintExport,
 } from "../../../packages/exporter/src/calibration.js";
 import {
   isPrintExportWorkerRequest,
   serializePrintExportError,
+  type PrintExportTransferArtifact,
   type PrintExportWorkerRequest,
   type PrintExportWorkerResponse,
 } from "./print-export-protocol.js";
@@ -47,6 +49,37 @@ function transferableBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.slice().buffer;
 }
 
+function transferableArtifact(
+  artifact: PrintExportArtifact,
+): PrintExportTransferArtifact {
+  const bytes = transferableBuffer(artifact.bytes);
+  if (
+    artifact.format === "3mf" &&
+    artifact.mimeType === "model/3mf" &&
+    artifact.fileExtension === ".3mf"
+  ) {
+    return {
+      format: "3mf",
+      mimeType: "model/3mf",
+      fileExtension: ".3mf",
+      bytes,
+    };
+  }
+  if (
+    artifact.format === "stl" &&
+    artifact.mimeType === "model/stl" &&
+    artifact.fileExtension === ".stl"
+  ) {
+    return {
+      format: "stl",
+      mimeType: "model/stl",
+      fileExtension: ".stl",
+      bytes,
+    };
+  }
+  throw new Error("The print exporter returned an invalid artifact tuple.");
+}
+
 export function runPrintExportRequest(
   request: PrintExportWorkerRequest,
   emit: PrintExportWorkerEmitter,
@@ -60,31 +93,35 @@ export function runPrintExportRequest(
         completed: 0,
         message: "Validating calibration profile",
       });
-      const result = generateCalibrationExport(request.profile);
-      const threeMfBytes = transferableBuffer(result.threeMfBytes);
+      const result = generateCalibrationPrintExport({
+        profile: request.profile,
+        format: request.format,
+      });
+      const artifact = transferableArtifact(result.artifact);
       const manifestBytes = transferableBuffer(result.manifestBytes);
       emit({
         type: "progress",
         jobId: request.jobId,
         phase: "complete",
         completed: 1,
-        message: "Calibration files are ready",
+        message: `${request.format.toUpperCase()} calibration files are ready`,
       });
       emit(
         {
           type: "calibration-result",
           jobId: request.jobId,
           preflight: result.preflight,
-          threeMfBytes,
+          artifact,
           manifestBytes,
         },
-        [threeMfBytes, manifestBytes],
+        [artifact.bytes, manifestBytes],
       );
       return;
     }
 
-    const prepared = prepareThreeMfExport(
+    const prepared = preparePrintExport(
       {
+        format: request.format,
         model: request.model,
         profile: request.profile,
         options: request.options,
@@ -103,14 +140,14 @@ export function runPrintExportRequest(
       preflight: prepared.preflight,
     });
 
-    const result = serializePreparedThreeMfExport(prepared, (progress) => {
+    const result = serializePreparedPrintExport(prepared, (progress) => {
       emit({
         type: "progress",
         jobId: request.jobId,
         ...progress,
       });
     });
-    const threeMfBytes = transferableBuffer(result.threeMfBytes);
+    const artifact = transferableArtifact(result.artifact);
     const legendBytes =
       result.legendBytes === undefined
         ? undefined
@@ -119,14 +156,14 @@ export function runPrintExportRequest(
       type: "result",
       jobId: request.jobId,
       preflight: result.preflight,
-      threeMfBytes,
+      artifact,
       ...(legendBytes === undefined ? {} : { legendBytes }),
     };
     emit(
       response,
       legendBytes === undefined
-        ? [threeMfBytes]
-        : [threeMfBytes, legendBytes],
+        ? [artifact.bytes]
+        : [artifact.bytes, legendBytes],
     );
   } catch (error) {
     emit({

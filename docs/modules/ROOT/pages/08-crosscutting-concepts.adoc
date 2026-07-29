@@ -182,6 +182,12 @@ sort. A deterministic companion JSON legend records code, repository ID and
 name, district ID and name, building name, repository-relative path, and printed
 status/reason. Absolute paths, source text, and legend data never enter 3MF.
 
+Binary STL uses the same validated geometry in stable part order. It combines
+all channel parts as one multi-shell mesh with outward unit normals. STL does
+not preserve colors, tool assignments, or 3MF metadata; preflight reports this
+loss before export. Serialization is capped at 500,000 vertices and triangles
+(25,000,084 output bytes).
+
 == Print planning
 
 The city model retains semantic groups without a hardware limit. A printer
@@ -242,8 +248,8 @@ integrated raised trace because it needs neither clearance nor loose hardware.
 The CLI defaults to `--routes off`; `--routes auto` enables this deterministic
 geometry without mutating the city model.
 
-The viewer calls the same parser and export orchestration in a module worker.
-It terminates the worker on cancellation, transfers exact archive bytes, and
+The viewer calls the same format-neutral export orchestration in a module
+worker. It terminates the worker on cancellation, transfers exact bytes, and
 publishes only local Blob downloads.
 
 Printer layouts may later derive multiple plate bases without changing the

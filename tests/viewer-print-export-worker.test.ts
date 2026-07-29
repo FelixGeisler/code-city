@@ -16,8 +16,10 @@ import {
   createPrusaXLProfile,
   createSingleChannelProfile,
 } from "../packages/core/src/index.js";
-import { generateCalibrationExport } from "../packages/exporter/src/calibration.js";
-import { generateThreeMfExport } from "../packages/exporter/src/index.js";
+import {
+  generateCalibrationPrintExport,
+} from "../packages/exporter/src/calibration.js";
+import { generatePrintExport } from "../packages/exporter/src/print-export.js";
 
 function request(
   overrides: Partial<PrintExportGenerateRequest> = {},
@@ -25,6 +27,7 @@ function request(
   return {
     type: "generate",
     jobId: 17,
+    format: "3mf",
     model: DEMO_MODEL,
     profile: createPrusaXLProfile([1, 2, 3, 4, 5]),
     options: {
@@ -38,9 +41,12 @@ function request(
 }
 
 describe("viewer print export worker", () => {
-  it("runs the deterministic exporter without network access and transfers results", () => {
-    const workerRequest = request();
-    const shared = generateThreeMfExport({
+  it.each(["3mf", "stl"] as const)(
+    "runs the deterministic %s exporter without network access and transfers exact bytes",
+    (format) => {
+    const workerRequest = request({ format });
+    const shared = generatePrintExport({
+      format,
       model: workerRequest.model,
       profile: workerRequest.profile,
       options: workerRequest.options,
@@ -85,19 +91,28 @@ describe("viewer print export worker", () => {
     if (result.response.type !== "result") {
       throw new Error("Expected a result response.");
     }
-    expect(result.response.threeMfBytes.byteLength).toBeGreaterThan(0);
+    expect(result.response.artifact).toMatchObject({
+      format,
+      mimeType:
+        format === "3mf"
+          ? "model/3mf"
+          : "model/stl",
+      fileExtension: format === "3mf" ? ".3mf" : ".stl",
+    });
+    expect(result.response.artifact.bytes.byteLength).toBeGreaterThan(0);
     expect(result.response.legendBytes?.byteLength).toBeGreaterThan(0);
-    expect(new Uint8Array(result.response.threeMfBytes)).toEqual(
-      shared.threeMfBytes,
+    expect(new Uint8Array(result.response.artifact.bytes)).toEqual(
+      shared.artifact.bytes,
     );
     expect(new Uint8Array(result.response.legendBytes!)).toEqual(
       shared.legendBytes,
     );
     expect(result.transfer).toEqual([
-      result.response.threeMfBytes,
+      result.response.artifact.bytes,
       result.response.legendBytes,
     ]);
-  });
+    },
+  );
 
   it("returns structured failures instead of throwing out of the worker", () => {
     const responses: PrintExportWorkerResponse[] = [];
@@ -121,15 +136,19 @@ describe("viewer print export worker", () => {
     });
   });
 
-  it("generates profile-only calibration files without network access", () => {
+  it.each(["3mf", "stl"] as const)(
+    "generates profile-only %s calibration files without network access",
+    (format) => {
     const calibrationRequest: PrintCalibrationGenerateRequest = {
       type: "calibrate",
       jobId: 18,
+      format,
       profile: createSingleChannelProfile(),
     };
-    const shared = generateCalibrationExport(
-      calibrationRequest.profile,
-    );
+    const shared = generateCalibrationPrintExport({
+      profile: calibrationRequest.profile,
+      format,
+    });
     const fetch = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation(() => {
@@ -164,17 +183,26 @@ describe("viewer print export worker", () => {
     if (result.response.type !== "calibration-result") {
       throw new Error("Expected a calibration result response.");
     }
-    expect(new Uint8Array(result.response.threeMfBytes)).toEqual(
-      shared.threeMfBytes,
+    expect(result.response.artifact).toMatchObject({
+      format,
+      mimeType:
+        format === "3mf"
+          ? "model/3mf"
+          : "model/stl",
+      fileExtension: format === "3mf" ? ".3mf" : ".stl",
+    });
+    expect(new Uint8Array(result.response.artifact.bytes)).toEqual(
+      shared.artifact.bytes,
     );
     expect(new Uint8Array(result.response.manifestBytes)).toEqual(
       shared.manifestBytes,
     );
     expect(result.transfer).toEqual([
-      result.response.threeMfBytes,
+      result.response.artifact.bytes,
       result.response.manifestBytes,
     ]);
-  });
+    },
+  );
 
   it("installs only in a dedicated worker-like scope and ignores other messages", () => {
     let listener:

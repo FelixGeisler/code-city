@@ -24,8 +24,8 @@ import type {
 import {
   buildDependencyConnectorComparison,
   buildPrintableCityArtifacts,
-  generateCalibrationExport,
-  generateThreeMfExport,
+  generateCalibrationPrintExport,
+  generatePrintExport,
   printablePlanGeometry,
   serializeThreeMf,
 } from "../../../packages/exporter/src/index.js";
@@ -46,11 +46,11 @@ Usage:
     --format <stl|3mf> --output <print-plan.json> [--scale <factor>] \\
     [--labels <auto|off>] [--routes <auto|off>]
   codecity export --model <city-model.json> --profile <profile.json> \\
-    --format 3mf --output <model.3mf> [--scale <factor>] \\
+    --format <stl|3mf> --output <model.stl|model.3mf> [--scale <factor>] \\
     [--labels <auto|off>] [--routes <auto|off>] \\
     [--legend <legend.json|off>]
-  codecity calibrate --profile <profile.json> --output <model.3mf> \\
-    [--manifest <manifest.json>]
+  codecity calibrate --profile <profile.json> --output <model.stl|model.3mf> \\
+    [--format <stl|3mf>] [--manifest <manifest.json>]
   codecity compare-connectors --profile <profile.json> --output <model.3mf> \\
     [--instructions <instructions.txt>]
 
@@ -69,7 +69,7 @@ Open options:
 Print options:
   --labels <auto|off>  Same-channel physical labels (default: auto)
   --routes <auto|off>  Aggregated dependency traces (default: off)
-  --legend <path|off>  Private companion legend (default: beside 3MF)
+  --legend <path|off>  Private companion legend (default: beside model)
 
 General:
   -h, --help           Show this help
@@ -422,7 +422,7 @@ function routeSummary(routes: {
 }
 
 function defaultLegendPath(output: string): string {
-  return output.replace(/\.3mf$/iu, ".legend.json");
+  return output.replace(/\.(?:3mf|stl)$/iu, ".legend.json");
 }
 
 function legendPath(
@@ -442,7 +442,7 @@ function legendPath(
     normalizeForComparison(binaryPath) ===
     normalizeForComparison(companionPath)
   ) {
-    throw new Error("3MF and legend outputs must use different paths.");
+    throw new Error("Model and legend outputs must use different paths.");
   }
   return result;
 }
@@ -466,7 +466,7 @@ function calibrationManifestPath(
   configured: string | undefined,
 ): string {
   const result =
-    configured ?? output.replace(/\.3mf$/iu, ".manifest.json");
+    configured ?? output.replace(/\.(?:3mf|stl)$/iu, ".manifest.json");
   if (path.extname(result).toLowerCase() !== ".json") {
     throw new Error(
       "Calibration manifest output must use the '.json' file extension.",
@@ -478,10 +478,30 @@ function calibrationManifestPath(
     process.platform === "win32" ? value.toLowerCase() : value;
   if (comparable(archivePath) === comparable(manifestPath)) {
     throw new Error(
-      "Calibration 3MF and manifest outputs must use different paths.",
+      "Calibration model and manifest outputs must use different paths.",
     );
   }
   return result;
+}
+
+function cliPrintFormat(value: string | undefined): PrintFormat {
+  if (value !== "3mf" && value !== "stl") {
+    throw new Error("--format must be either 'stl' or '3mf'.");
+  }
+  return value;
+}
+
+function requireMatchingOutputExtension(
+  output: string,
+  format: PrintFormat,
+  description: string,
+): void {
+  const expected = `.${format}`;
+  if (path.extname(output).toLowerCase() !== expected) {
+    throw new Error(
+      `${description} ${format.toUpperCase()} output must use the '${expected}' file extension.`,
+    );
+  }
 }
 
 async function calibrateCommand(
@@ -490,7 +510,7 @@ async function calibrateCommand(
 ): Promise<void> {
   const parsed = parseArguments(
     args,
-    new Set(["profile", "output", "manifest"]),
+    new Set(["profile", "output", "format", "manifest"]),
   );
   if (parsed.positionals.length > 0) {
     throw new Error(
@@ -499,20 +519,18 @@ async function calibrateCommand(
   }
   const profilePath = requiredOption(parsed.options, "profile");
   const output = requiredOption(parsed.options, "output");
-  if (path.extname(output).toLowerCase() !== ".3mf") {
-    throw new Error(
-      "Calibration output must use the '.3mf' file extension.",
-    );
-  }
+  const format = cliPrintFormat(parsed.options.get("format") ?? "3mf");
+  requireMatchingOutputExtension(output, format, "Calibration");
   const manifestOutput = calibrationManifestPath(
     output,
     parsed.options.get("manifest"),
   );
-  const exported = generateCalibrationExport(
-    await readJson(profilePath, "printer profile"),
-  );
+  const exported = generateCalibrationPrintExport({
+    profile: await readJson(profilePath, "printer profile"),
+    format,
+  });
   const published = await publishArtifactsAtomically([
-    { destination: output, bytes: exported.threeMfBytes },
+    { destination: output, bytes: exported.artifact.bytes },
     {
       destination: manifestOutput,
       bytes: exported.manifestBytes,
@@ -521,9 +539,12 @@ async function calibrateCommand(
   ]);
   const size = exported.preflight.dimensions;
   io.stdout(
-    `Exported calibration 3MF with ${exported.preflight.partCount} aligned part(s) across ${exported.preflight.channelCount} channel(s) at ${millimeters(size.x)} × ${millimeters(size.y)} × ${millimeters(size.z)} mm.\n`,
+    `Exported calibration ${format.toUpperCase()} with ${exported.preflight.partCount} aligned part(s), ${exported.preflight.triangleCount} triangle(s), across ${exported.preflight.channelCount} channel(s) at ${millimeters(size.x)} × ${millimeters(size.y)} × ${millimeters(size.z)} mm.\n`,
   );
   io.stdout(`Wrote ${published[0]}\nWrote ${published[1]}\n`);
+  for (const warning of exported.preflight.warnings) {
+    io.stderr(`Warning: ${warning}\n`);
+  }
 }
 
 async function compareConnectorsCommand(
@@ -598,19 +619,14 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
   }
   const modelPath = requiredOption(parsed.options, "model");
   const profilePath = requiredOption(parsed.options, "profile");
-  const format = requiredOption(parsed.options, "format");
+  const format = cliPrintFormat(
+    requiredOption(parsed.options, "format"),
+  );
   const output = requiredOption(parsed.options, "output");
   const scale = positiveScale(parsed.options.get("scale"));
   const labelPolicy = cliLabelPolicy(parsed.options.get("labels"));
   const routePolicy = cliRoutePolicy(parsed.options.get("routes"));
-  if (format !== "3mf") {
-    throw new Error(
-      "The export command currently supports only '3mf'; STL remains planned in issue #12.",
-    );
-  }
-  if (path.extname(output).toLowerCase() !== ".3mf") {
-    throw new Error("3MF output must use the '.3mf' file extension.");
-  }
+  requireMatchingOutputExtension(output, format, "Export");
   const companionOutput = legendPath(
     output,
     parsed.options.get("legend"),
@@ -620,7 +636,8 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
   const profile = parsePrinterProfile(
     await readJson(profilePath, "printer profile"),
   );
-  const exported = generateThreeMfExport({
+  const exported = generatePrintExport({
+    format,
     model,
     profile,
     options: {
@@ -631,7 +648,7 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
     },
   });
   const publishedPaths = await publishArtifactsAtomically([
-    { destination: output, bytes: exported.threeMfBytes },
+    { destination: output, bytes: exported.artifact.bytes },
     ...(companionOutput === undefined
       ? []
       : [
@@ -646,7 +663,7 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
   const absoluteLegend = publishedPaths[1];
   const bounds = exported.preflight.dimensions;
   io.stdout(
-    `Exported 3MF with ${exported.preflight.partCount} aligned part(s) at ${bounds.x} × ${bounds.y} × ${bounds.z} mm.\nWrote ${absoluteOutput}\n`,
+    `Exported ${format.toUpperCase()} with ${exported.preflight.partCount} aligned part(s) and ${exported.preflight.triangleCount} triangle(s) at ${bounds.x} × ${bounds.y} × ${bounds.z} mm.\nWrote ${absoluteOutput}\n`,
   );
   if (absoluteLegend !== undefined) {
     io.stdout(`Wrote ${absoluteLegend}\n`);
@@ -655,6 +672,9 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
   }
   io.stdout(`${labelSummary(exported.preflight.labels)}\n`);
   io.stdout(`${routeSummary(exported.preflight.routes)}\n`);
+  for (const warning of exported.preflight.warnings) {
+    io.stderr(`Warning: ${warning}\n`);
+  }
 }
 
 export async function runCli(

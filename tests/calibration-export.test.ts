@@ -8,10 +8,12 @@ import {
 import {
   type CalibrationManifest,
   generateCalibrationExport,
+  generateCalibrationPrintExport,
   MAXIMUM_CALIBRATION_CHANNELS,
   validateCalibrationPrintable,
 } from "../packages/exporter/src/calibration.js";
 import { cuboidMesh } from "../packages/exporter/src/geometry.js";
+import { STL_INFORMATION_LOSS_WARNING } from "../packages/exporter/src/print-export.js";
 
 const genericMultiChannel = {
   ...createSingleChannelProfile(),
@@ -62,6 +64,49 @@ it.each([
     ).toHaveLength(profile.printChannels.length);
   },
 );
+
+it("keeps the legacy 3MF API byte-identical to the generic artifact", () => {
+  const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
+  const legacy = generateCalibrationExport(profile);
+  const generic = generateCalibrationPrintExport({
+    profile,
+    format: "3mf",
+  });
+
+  expect(generic.artifact).toMatchObject({
+    format: "3mf",
+    mimeType: "model/3mf",
+    fileExtension: ".3mf",
+    bytes: legacy.threeMfBytes,
+  });
+  expect(generic.manifestBytes).toEqual(legacy.manifestBytes);
+  expect(generic.preflight.warnings).toEqual([]);
+});
+
+it("generates one deterministic multi-shell STL calibration artifact", () => {
+  const profile = createSingleChannelProfile();
+  const first = generateCalibrationPrintExport({
+    profile,
+    format: "stl",
+  });
+  const second = generateCalibrationPrintExport({
+    profile,
+    format: "stl",
+  });
+
+  expect(second).toEqual(first);
+  expect(first.artifact).toMatchObject({
+    format: "stl",
+    mimeType: "model/stl",
+    fileExtension: ".stl",
+  });
+  expect(first.artifact.bytes.byteLength).toBeGreaterThan(84);
+  expect(first.preflight.partCount).toBe(1);
+  expect(first.preflight.triangleCount).toBeGreaterThan(0);
+  expect(first.preflight.warnings).toEqual([
+    STL_INFORMATION_LOSS_WARNING,
+  ]);
+});
 
 it("maps every physical measurement and channel marker to deterministic bounds", () => {
   const result = generateCalibrationExport(genericMultiChannel);

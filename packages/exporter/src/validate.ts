@@ -16,6 +16,7 @@ import {
 } from "./spatial.js";
 
 const GEOMETRY_EPSILON = 1e-7;
+const SERIALIZATION_GEOMETRY_EPSILON = 1e-12;
 
 export class PrintGeometryValidationError extends Error {
   public readonly issues: readonly string[];
@@ -89,6 +90,259 @@ export function signedMeshVolume(mesh: PrintMesh): number {
     volume += dot(a, cross(b, c)) / 6;
   }
   return volume;
+}
+
+interface SerializationMeshEdge {
+  count: number;
+  directionSum: number;
+  readonly firstTriangle: number;
+}
+
+/**
+ * Geometry normalized to the selected target coordinate encoding. One outward
+ * unit normal is returned for every input triangle.
+ */
+export interface ValidatedSerializationMesh {
+  readonly vertices: readonly PrintPoint[];
+  readonly normals: readonly PrintPoint[];
+}
+
+export type SerializationCoordinateEncoding = "decimal" | "float32";
+
+function findSerializationComponent(
+  parents: Int32Array,
+  index: number,
+): number {
+  let root = index;
+  while (parents[root] !== root) root = parents[root]!;
+  let current = index;
+  while (parents[current] !== current) {
+    const next = parents[current]!;
+    parents[current] = root;
+    current = next;
+  }
+  return root;
+}
+
+function joinSerializationComponents(
+  parents: Int32Array,
+  ranks: Uint8Array,
+  left: number,
+  right: number,
+): void {
+  let leftRoot = findSerializationComponent(parents, left);
+  let rightRoot = findSerializationComponent(parents, right);
+  if (leftRoot === rightRoot) return;
+  if (ranks[leftRoot]! < ranks[rightRoot]!) {
+    [leftRoot, rightRoot] = [rightRoot, leftRoot];
+  }
+  parents[rightRoot] = leftRoot;
+  if (ranks[leftRoot] === ranks[rightRoot]) {
+    ranks[leftRoot] = ranks[leftRoot]! + 1;
+  }
+}
+
+function serializationCoordinate(
+  value: number,
+  field: string,
+  encoding: SerializationCoordinateEncoding,
+): number {
+  if (!Number.isFinite(value)) {
+    throw new TypeError(`${field} must be finite.`);
+  }
+  const encoded = encoding === "float32" ? Math.fround(value) : value;
+  if (!Number.isFinite(encoded)) {
+    throw new TypeError(
+      `${field} must be finite and representable as a Float32 value.`,
+    );
+  }
+  return Object.is(encoded, -0) ? 0 : encoded;
+}
+
+function serializationTriangleIndex(
+  value: number,
+  vertexCount: number,
+  field: string,
+): void {
+  if (
+    !Number.isSafeInteger(value) ||
+    value < 0 ||
+    value >= vertexCount
+  ) {
+    throw new TypeError(
+      `${field} must reference a vertex in the same mesh.`,
+    );
+  }
+}
+
+/**
+ * Validates the invariants shared by triangle-mesh serializers.
+ *
+ * Validation uses the coordinate representation written by the target format.
+ * Binary STL selects Float32 so geometry that collapses during encoding is
+ * rejected; decimal 3MF keeps JavaScript's finite number values. Disconnected
+ * shells are supported, but each shell must independently be closed,
+ * consistently wound, and have positive outward volume.
+ */
+export function validateMeshForSerialization(
+  mesh: PrintMesh,
+  field = "mesh",
+  coordinateEncoding: SerializationCoordinateEncoding,
+): ValidatedSerializationMesh {
+  if (mesh.vertices.length < 3) {
+    throw new TypeError(`${field} must contain at least three vertices.`);
+  }
+  if (mesh.triangles.length < 4) {
+    throw new TypeError(`${field} must contain at least four triangles.`);
+  }
+
+  const vertices = new Array<PrintPoint>(mesh.vertices.length);
+  for (let index = 0; index < mesh.vertices.length; index += 1) {
+    const vertex = mesh.vertices[index];
+    if (vertex === undefined || vertex === null) {
+      throw new TypeError(`${field}.vertices[${index}] must be a point.`);
+    }
+    vertices[index] = {
+      x: serializationCoordinate(
+        vertex.x,
+        `${field}.vertices[${index}].x`,
+        coordinateEncoding,
+      ),
+      y: serializationCoordinate(
+        vertex.y,
+        `${field}.vertices[${index}].y`,
+        coordinateEncoding,
+      ),
+      z: serializationCoordinate(
+        vertex.z,
+        `${field}.vertices[${index}].z`,
+        coordinateEncoding,
+      ),
+    };
+  }
+  const normals = new Array<PrintPoint>(mesh.triangles.length);
+  const edges = new Map<string, SerializationMeshEdge>();
+  const parents = new Int32Array(mesh.triangles.length);
+  const ranks = new Uint8Array(mesh.triangles.length);
+  for (let index = 0; index < parents.length; index += 1) {
+    parents[index] = index;
+  }
+
+  for (let index = 0; index < mesh.triangles.length; index += 1) {
+    const triangle = mesh.triangles[index];
+    if (triangle === undefined || triangle === null) {
+      throw new TypeError(`${field}.triangles[${index}] must be a triangle.`);
+    }
+    serializationTriangleIndex(
+      triangle.a,
+      vertices.length,
+      `${field}.triangles[${index}].a`,
+    );
+    serializationTriangleIndex(
+      triangle.b,
+      vertices.length,
+      `${field}.triangles[${index}].b`,
+    );
+    serializationTriangleIndex(
+      triangle.c,
+      vertices.length,
+      `${field}.triangles[${index}].c`,
+    );
+    if (
+      triangle.a === triangle.b ||
+      triangle.b === triangle.c ||
+      triangle.c === triangle.a
+    ) {
+      throw new TypeError(`${field}.triangles[${index}] is degenerate.`);
+    }
+
+    const a = vertices[triangle.a]!;
+    const b = vertices[triangle.b]!;
+    const c = vertices[triangle.c]!;
+    const normal = cross(subtract(b, a), subtract(c, a));
+    const magnitude = length(normal);
+    if (
+      !Number.isFinite(normal.x) ||
+      !Number.isFinite(normal.y) ||
+      !Number.isFinite(normal.z) ||
+      !Number.isFinite(magnitude) ||
+      magnitude <= SERIALIZATION_GEOMETRY_EPSILON
+    ) {
+      throw new TypeError(
+        `${field}.triangles[${index}] has no positive area.`,
+      );
+    }
+    normals[index] = {
+      x: normal.x / magnitude,
+      y: normal.y / magnitude,
+      z: normal.z / magnitude,
+    };
+
+    for (const [left, right] of [
+      [triangle.a, triangle.b],
+      [triangle.b, triangle.c],
+      [triangle.c, triangle.a],
+    ] as const) {
+      const key =
+        left < right ? `${left}:${right}` : `${right}:${left}`;
+      const direction = left < right ? 1 : -1;
+      const edge = edges.get(key);
+      if (edge === undefined) {
+        edges.set(key, {
+          count: 1,
+          directionSum: direction,
+          firstTriangle: index,
+        });
+      } else {
+        edge.count += 1;
+        edge.directionSum += direction;
+        joinSerializationComponents(
+          parents,
+          ranks,
+          edge.firstTriangle,
+          index,
+        );
+      }
+    }
+  }
+
+  for (const edge of edges.values()) {
+    if (edge.count !== 2 || edge.directionSum !== 0) {
+      throw new TypeError(
+        `${field} must be watertight with consistently wound edges.`,
+      );
+    }
+  }
+
+  const componentOrigins = new Int32Array(mesh.triangles.length);
+  componentOrigins.fill(-1);
+  const componentVolumes = new Float64Array(mesh.triangles.length);
+  for (let index = 0; index < mesh.triangles.length; index += 1) {
+    const root = findSerializationComponent(parents, index);
+    if (componentOrigins[root] === -1) componentOrigins[root] = index;
+    const originTriangle = mesh.triangles[componentOrigins[root]!]!;
+    const origin = vertices[originTriangle.a]!;
+    const triangle = mesh.triangles[index]!;
+    const a = subtract(vertices[triangle.a]!, origin);
+    const b = subtract(vertices[triangle.b]!, origin);
+    const c = subtract(vertices[triangle.c]!, origin);
+    componentVolumes[root] =
+      componentVolumes[root]! + dot(a, cross(b, c)) / 6;
+  }
+  for (let root = 0; root < componentOrigins.length; root += 1) {
+    if (componentOrigins[root] === -1) continue;
+    const volume = componentVolumes[root]!;
+    if (
+      !Number.isFinite(volume) ||
+      volume <= SERIALIZATION_GEOMETRY_EPSILON
+    ) {
+      throw new TypeError(
+        `${field} must contain only outward-wound positive-volume shells.`,
+      );
+    }
+  }
+
+  return { vertices, normals };
 }
 
 export function measureMeshBounds(mesh: PrintMesh): PrintBounds | undefined {

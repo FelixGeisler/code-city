@@ -1,6 +1,7 @@
 import {
   parsePrinterProfile,
   resolvePrinterGeometryLimits,
+  type PrintFormat,
   type PrinterProfile,
 } from "../../core/src/index.js";
 
@@ -13,6 +14,11 @@ import {
   type PrintPrimitive,
   type PrintableCity,
 } from "./geometry.js";
+import {
+  STL_INFORMATION_LOSS_WARNING,
+  type PrintExportArtifact,
+} from "./print-export.js";
+import { serializeBinaryStl } from "./stl.js";
 import { serializeThreeMf } from "./three-mf.js";
 
 const APPLICATION_VERSION = "0.1.0";
@@ -132,6 +138,30 @@ export interface CalibrationExportResult {
   readonly printable: PrintableCity;
   readonly preflight: CalibrationPreflight;
   readonly threeMfBytes: Uint8Array;
+  readonly manifestBytes: Uint8Array;
+}
+
+export interface CalibrationPrintExportRequest {
+  readonly profile: unknown;
+  readonly format?: PrintFormat;
+}
+
+export interface CalibrationPrintExportPreflight
+  extends CalibrationPreflight {
+  readonly format: PrintFormat;
+  readonly warnings: readonly string[];
+}
+
+export interface CalibrationPrintExportResult {
+  readonly printable: PrintableCity;
+  readonly preflight: CalibrationPrintExportPreflight;
+  readonly artifact: PrintExportArtifact;
+  readonly manifestBytes: Uint8Array;
+}
+
+interface PreparedCalibrationExport {
+  readonly printable: PrintableCity;
+  readonly preflight: CalibrationPreflight;
   readonly manifestBytes: Uint8Array;
 }
 
@@ -1021,13 +1051,14 @@ export function validateCalibrationPrintable(
  * Builds the complete calibration artifact without filesystem, browser, or
  * network access. Identical normalized profiles produce identical bytes.
  */
-export function generateCalibrationExport(
+function prepareCalibrationExport(
   profileInput: unknown,
-): CalibrationExportResult {
+  format: PrintFormat,
+): PreparedCalibrationExport {
   const profile = parsePrinterProfile(profileInput);
-  if (!profile.supportedFormats.includes("3mf")) {
+  if (!profile.supportedFormats.includes(format)) {
     throw new CalibrationValidationError([
-      `Profile '${profile.id}' does not support 3MF calibration output.`,
+      `Profile '${profile.id}' does not support ${format.toUpperCase()} calibration output.`,
     ]);
   }
   if (profile.printChannels.length > MAXIMUM_CALIBRATION_CHANNELS) {
@@ -1213,7 +1244,77 @@ export function generateCalibrationExport(
   return {
     printable,
     preflight,
-    threeMfBytes: serializeThreeMf(printable),
     manifestBytes: manifestBytes(manifest),
+  };
+}
+
+/**
+ * Generates a format-neutral calibration artifact. STL preserves all shells
+ * but collapses channel/color metadata into one mesh.
+ */
+export function generateCalibrationPrintExport(
+  request: CalibrationPrintExportRequest,
+): CalibrationPrintExportResult {
+  const format = request.format ?? "3mf";
+  if (format !== "3mf" && format !== "stl") {
+    throw new CalibrationValidationError([
+      "Calibration format must be either '3mf' or 'stl'.",
+    ]);
+  }
+  const prepared = prepareCalibrationExport(request.profile, format);
+  const artifact: PrintExportArtifact =
+    format === "3mf"
+      ? {
+          format,
+          mimeType: "model/3mf",
+          fileExtension: ".3mf",
+          bytes: serializeThreeMf(prepared.printable),
+        }
+      : {
+          format,
+          mimeType: "model/stl",
+          fileExtension: ".stl",
+          bytes: serializeBinaryStl(prepared.printable),
+        };
+  return {
+    printable: prepared.printable,
+    preflight: {
+      ...prepared.preflight,
+      format,
+      partCount:
+        format === "stl" ? 1 : prepared.preflight.partCount,
+      warnings:
+        format === "stl" ? [STL_INFORMATION_LOSS_WARNING] : [],
+    },
+    artifact,
+    manifestBytes: prepared.manifestBytes,
+  };
+}
+
+/**
+ * Backward-compatible 3MF calibration API.
+ */
+export function generateCalibrationExport(
+  profileInput: unknown,
+): CalibrationExportResult {
+  const result = generateCalibrationPrintExport({
+    profile: profileInput,
+    format: "3mf",
+  });
+  const preflight: CalibrationPreflight = {
+    profileId: result.preflight.profileId,
+    profileName: result.preflight.profileName,
+    dimensions: result.preflight.dimensions,
+    partCount: result.preflight.partCount,
+    channelCount: result.preflight.channelCount,
+    triangleCount: result.preflight.triangleCount,
+    measurements: result.preflight.measurements,
+    manifest: result.preflight.manifest,
+  };
+  return {
+    printable: result.printable,
+    preflight,
+    threeMfBytes: result.artifact.bytes,
+    manifestBytes: result.manifestBytes,
   };
 }

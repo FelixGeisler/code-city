@@ -49,7 +49,7 @@
           />
           <button id="demo-button" class="button" type="button">Demo</button>
           <button id="print-export-open" class="button" type="button">
-            Export 3MF
+            Export print file
           </button>
         </div>
       </header>
@@ -721,13 +721,13 @@
           <header class="print-export-heading">
             <div>
               <p class="eyebrow">Local fabrication</p>
-              <h2 id="print-export-title">Export 3MF</h2>
+              <h2 id="print-export-title">Export print file</h2>
             </div>
             <button
               id="print-export-close"
               class="icon-button"
               type="button"
-              aria-label="Close 3MF export"
+              aria-label="Close print export"
             >
               ×
             </button>
@@ -739,7 +739,7 @@
           </p>
 
           <fieldset id="print-export-options" class="print-export-options">
-            <legend class="visually-hidden">3MF export options</legend>
+            <legend class="visually-hidden">Print export options</legend>
 
             <label class="print-export-field" for="print-profile-kind">
               <span>Printer profile</span>
@@ -784,6 +784,14 @@
               </p>
             </div>
 
+            <label class="print-export-field" for="print-format">
+              <span>File format</span>
+              <select id="print-format">
+                <option value="3mf">3MF</option>
+                <option value="stl">STL</option>
+              </select>
+            </label>
+
             <div class="print-export-grid">
               <label class="print-export-field" for="print-scale">
                 <span>Scale</span>
@@ -818,8 +826,8 @@
           </fieldset>
 
           <p class="print-export-help">
-            V1 exports one 3MF at the requested scale. Oversized cities fail;
-            they are not silently fitted or tiled.
+            Exports one print file at the requested scale. Oversized cities
+            fail; they are not silently fitted or tiled.
             Calibration uses only the selected printer profile and never
             includes repository content.
           </p>
@@ -915,7 +923,7 @@
               href="#"
               download
             >
-              Download 3MF
+              Download print file
             </a>
             <a
               id="print-export-legend-download"
@@ -933,7 +941,7 @@
               download
               hidden
             >
-              Download calibration 3MF
+              Download calibration
             </a>
             <a
               id="print-calibration-manifest-download"

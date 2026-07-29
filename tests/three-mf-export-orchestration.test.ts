@@ -42,6 +42,25 @@ describe("shared browser-safe 3MF export orchestration", () => {
       options: demoOptions,
     });
 
+    expect(Object.keys(prepared)).toEqual([
+      "model",
+      "profile",
+      "options",
+      "artifacts",
+      "preflight",
+    ]);
+    expect(Object.keys(prepared.preflight)).toEqual([
+      "title",
+      "profileId",
+      "profileName",
+      "dimensions",
+      "partCount",
+      "channels",
+      "warnings",
+      "labels",
+      "routes",
+      "legendIncluded",
+    ]);
     expect(prepared.preflight.dimensions.x).toBeGreaterThan(0);
     expect(prepared.preflight.dimensions.y).toBeGreaterThan(0);
     expect(prepared.preflight.dimensions.z).toBeGreaterThan(0);

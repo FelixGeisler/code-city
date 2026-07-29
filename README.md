@@ -5,7 +5,7 @@
 Code City turns a software repository into:
 
 - an interactive 3D city that can be explored in a web browser; and
-- a printable multi-part 3MF model for a 3D printer.
+- a printable multi-part 3MF or single-material STL model.
 
 The project will support public GitHub repositories, generic Git remotes such as
 Azure DevOps Server, and local checkouts that can be analyzed fully offline.
@@ -55,20 +55,20 @@ npm run print:calibration
 npm run cli -- export `
   --model examples\demo-city.json `
   --profile profiles\prusa-xl-5t.json `
-  --format 3mf `
+  --format stl `
   --scale 3 `
   --labels auto `
   --routes auto `
   --legend build\print\code-city-demo.legend.json `
-  --output build\print\code-city-demo.3mf
+  --output build\print\code-city-demo.stl
 ```
 
-The viewer accepts a `city-model.json` through **Open model**. **Export 3MF**
+The viewer accepts a `city-model.json` through **Open model**. **Export print file**
 selects a generic, Prusa XL, or local custom printer profile, shows exact
-preflight dimensions and channel assignments, then downloads the 3MF and
+preflight dimensions and channel assignments, then downloads 3MF or STL and an
 optional private legend. Generation runs locally in a cancellable worker; no
 model or profile is uploaded. **Prepare calibration** downloads a profile-only
-test plate and exact measurement manifest through the same local worker.
+test plate in the selected format and an exact measurement manifest.
 
 C# is analyzed by the bundled, syntax-only Roslyn helper. TypeScript and
 JavaScript use the pinned compiler API. Neither analyzer restores, builds, runs
@@ -79,15 +79,15 @@ the command reports its profile-derived size. `--routes auto` prints capped,
 aggregated district dependencies; routes default to `off`. The private JSON
 legend maps printed codes to repository-relative paths; use `--labels off` or
 `--legend off` as needed. Oversized exports fail with measured bounds; automatic
-fitting and tiling, STL, arbitrary fonts or logos, and slicer settings remain
+fitting and tiling, arbitrary fonts or logos, and slicer settings remain
 planned.
 
 ## Planned product flow
 
 `codecity open` accepts one or more local roots and serves only on
 `127.0.0.1`; it prints the URL without launching a browser. Public GitHub and
-generic Git remotes such as Azure DevOps Server remain planned, as do STL and
-oversized multi-plate exports.
+generic Git remotes such as Azure DevOps Server and oversized multi-plate
+exports remain planned.
 
 Architecture documentation uses Antora and the concise arc42 structure. It is
 published at
