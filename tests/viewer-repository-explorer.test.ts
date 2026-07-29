@@ -9,13 +9,18 @@ import {
   MAXIMUM_REPOSITORY_EXPLORER_RESULT_LIMIT,
   resetExplorerState,
   searchRepositoryBuildings,
+  searchRepositoryDistricts,
+  searchRepositoryEntities,
   selectedExplorerBuildingId,
+  selectedExplorerDistrictId,
   selectedExplorerExternalId,
   selectExplorerBuilding,
+  selectExplorerDistrict,
   showAllDistricts,
 } from "../apps/viewer/src/repository-explorer.js";
 import type {
   CityBuilding,
+  CityDistrict,
   CityModel,
   CityModule,
 } from "../packages/core/src/model.js";
@@ -341,10 +346,142 @@ describe("viewer repository explorer", () => {
   });
 });
 
+describe("viewer repository explorer districts", () => {
+  it("ranks exact building matches ahead of district prefixes", () => {
+    const districts = Array.from({ length: 20 }, (_, index) =>
+      district({
+        id: `target-district-${index.toString().padStart(2, "0")}`,
+        name: `target district ${index.toString().padStart(2, "0")}`,
+        path: `districts/target-${index.toString().padStart(2, "0")}`,
+      }),
+    );
+    const index = createRepositoryExplorerIndex(
+      modelFrom(
+        [
+          building({
+            id: "exact-building",
+            name: "target",
+            path: "target",
+          }),
+        ],
+        districts,
+      ),
+    );
+
+    const result = searchRepositoryEntities(index, "target");
+
+    expect(result.totalCount).toBe(21);
+    expect(result.results).toHaveLength(
+      DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT,
+    );
+    expect(result.results[0]).toMatchObject({
+      kind: "building",
+      result: { buildingId: "exact-building" },
+    });
+  });
+
+  it("matches district names and normalized paths without regard to case", () => {
+    const model = modelFrom(
+      [
+        building({
+          id: "report-a",
+          districtId: "district-reports",
+        }),
+        building({
+          id: "report-b",
+          districtId: "district-reports",
+        }),
+        building({
+          id: "core-a",
+          districtId: "district-core",
+        }),
+      ],
+      [
+        district({
+          id: "district-reports",
+          name: "Release Reports",
+          path: String.raw`FLOW.Hub.Web\ClientApp\src\release-reports`,
+        }),
+        district({
+          id: "district-core",
+          name: "Core",
+          path: "FLOW.Hub.Web/ClientApp/src/core",
+        }),
+      ],
+    );
+    const index = createRepositoryExplorerIndex(model);
+
+    const byName = searchRepositoryDistricts(
+      index,
+      "RELEASE REPORTS",
+    );
+    const byPath = searchRepositoryDistricts(
+      index,
+      String.raw`.\clientapp\src\RELEASE-REPORTS`,
+    );
+
+    expect(index.districtCount).toBe(2);
+    expect(byName.results).toEqual([
+      {
+        districtId: "district-reports",
+        moduleId: "module-a",
+        moduleName: "FLOW.Hub.Web",
+        name: "Release Reports",
+        path: "FLOW.Hub.Web/ClientApp/src/release-reports",
+        buildingCount: 2,
+      },
+    ]);
+    expect(byPath.query).toBe("clientapp/src/RELEASE-REPORTS");
+    expect(byPath.results).toEqual(byName.results);
+  });
+
+  it("returns deterministic bounded district results", () => {
+    const districts = Array.from({ length: 27 }, (_, offset) => {
+      const index = 26 - offset;
+      const suffix = index.toString().padStart(2, "0");
+      return district({
+        id: `match-${suffix}`,
+        name: `match-${suffix}`,
+        path: `src/match-${suffix}`,
+      });
+    });
+
+    const forward = searchRepositoryDistricts(
+      createRepositoryExplorerIndex(modelFrom([], districts)),
+      "match",
+      { limit: 5 },
+    );
+    const reversed = searchRepositoryDistricts(
+      createRepositoryExplorerIndex(
+        modelFrom([], districts.toReversed()),
+      ),
+      "match",
+      { limit: 5 },
+    );
+
+    expect(forward.totalCount).toBe(27);
+    expect(forward.results).toHaveLength(5);
+    expect(forward.results.map(({ districtId }) => districtId)).toEqual([
+      "match-00",
+      "match-01",
+      "match-02",
+      "match-03",
+      "match-04",
+    ]);
+    expect(reversed.results).toEqual(forward.results);
+  });
+});
+
 describe("viewer repository explorer state", () => {
-  const model = modelWith(
-    building({ id: "district-a-building", districtId: "district-a" }),
-    building({ id: "district-b-building", districtId: "district-b" }),
+  const model = modelFrom(
+    [
+      building({ id: "district-a-building", districtId: "district-a" }),
+      building({ id: "district-b-building", districtId: "district-b" }),
+    ],
+    [
+      district({ id: "district-a", name: "District A" }),
+      district({ id: "district-b", name: "District B" }),
+    ],
   );
 
   it("starts and resets with the whole city visible and no selection", () => {
@@ -377,6 +514,54 @@ describe("viewer repository explorer state", () => {
     expect(
       selectExplorerBuilding(selected, model, "stale-building"),
     ).toBe(selected);
+  });
+
+  it("selects and isolates a district that belongs to the model", () => {
+    const selected = selectExplorerDistrict(
+      INITIAL_EXPLORER_STATE,
+      model,
+      "district-a",
+    );
+
+    expect(selected).toEqual({
+      selectedEntity: {
+        kind: "district",
+        id: "district-a",
+      },
+      isolatedDistrictId: null,
+    });
+    expect(selectedExplorerDistrictId(selected)).toBe("district-a");
+    expect(selectedExplorerBuildingId(selected)).toBeNull();
+    expect(
+      selectExplorerDistrict(selected, model, "stale-district"),
+    ).toBe(selected);
+    expect(isolateSelectedDistrict(selected, model)).toEqual({
+      selectedEntity: {
+        kind: "district",
+        id: "district-a",
+      },
+      isolatedDistrictId: "district-a",
+    });
+  });
+
+  it("moves active isolation when selecting another district directly", () => {
+    const isolated = {
+      selectedEntity: {
+        kind: "district" as const,
+        id: "district-a",
+      },
+      isolatedDistrictId: "district-a",
+    };
+
+    expect(
+      selectExplorerDistrict(isolated, model, "district-b"),
+    ).toEqual({
+      selectedEntity: {
+        kind: "district",
+        id: "district-b",
+      },
+      isolatedDistrictId: "district-b",
+    });
   });
 
   it("isolates the selected building's district", () => {
@@ -477,7 +662,10 @@ function modelWith(...buildings: readonly CityBuilding[]): CityModel {
   return modelFrom(buildings);
 }
 
-function modelFrom(buildings: readonly CityBuilding[]): CityModel {
+function modelFrom(
+  buildings: readonly CityBuilding[],
+  districts: readonly CityDistrict[] = [],
+): CityModel {
   return {
     schemaVersion: "1.0",
     generator: { name: "code-city", version: "test" },
@@ -494,10 +682,29 @@ function modelFrom(buildings: readonly CityBuilding[]): CityModel {
       },
     ],
     semanticGroups: [],
-    districts: [],
+    districts,
     buildings,
     dependencies: [],
     bounds: { x: 1, y: 1, z: 1 },
+  };
+}
+
+function district(
+  overrides: {
+    readonly id?: string;
+    readonly name?: string;
+    readonly path?: string;
+    readonly moduleId?: string;
+  } = {},
+): CityDistrict {
+  return {
+    id: overrides.id ?? "district-a",
+    repositoryId: "repository-a",
+    moduleId: overrides.moduleId ?? "module-a",
+    name: overrides.name ?? "Feature",
+    path: overrides.path ?? "src/Feature",
+    position: { x: 0, y: 0, z: 0 },
+    size: { x: 1, y: 1, z: 1 },
   };
 }
 
