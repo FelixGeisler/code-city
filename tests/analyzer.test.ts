@@ -226,7 +226,7 @@ EndProject
     await fixtureFile(hub, ".git/ignored-git.ts", `if (true) {}`);
     await fixtureFile(
       hub,
-      ".angular/cache/vite/deps/chart__js.js",
+      ".AnGuLaR/cache/vite/deps/chart__js.js",
       `if (true) {}`,
     );
     await fixtureFile(
