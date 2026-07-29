@@ -5,7 +5,8 @@
 |Quality |Acceptance
 
 |Determinism
-|Same revision and config produce the same model
+|Same revision, config, and input order variants produce identical layout and
+bundle bytes
 
 |Privacy
 |Local analysis succeeds with networking disabled
@@ -14,7 +15,8 @@
 |Every visual dimension links to a documented metric
 
 |Printability
-|Exports and identity details pass mesh and printer-profile bounds
+|Every artifact fits the usable profile volume; scaling stays profile-safe and
+tiling keeps districts whole
 
 |Performance
 |Viewer input is bounded; instancing is required before raising the limits

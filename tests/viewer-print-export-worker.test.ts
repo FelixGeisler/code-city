@@ -19,7 +19,11 @@ import {
 import {
   generateCalibrationPrintExport,
 } from "../packages/exporter/src/calibration.js";
-import { generatePrintExport } from "../packages/exporter/src/print-export.js";
+import {
+  generatePrintPlateBundle,
+  preparePrintPlateBundle,
+  serializePreparedSinglePrintPlateExport,
+} from "../packages/exporter/src/print-plates.js";
 
 function request(
   overrides: Partial<PrintExportGenerateRequest> = {},
@@ -45,12 +49,17 @@ describe("viewer print export worker", () => {
     "runs the deterministic %s exporter without network access and transfers exact bytes",
     (format) => {
     const workerRequest = request({ format });
-    const shared = generatePrintExport({
-      format,
-      model: workerRequest.model,
-      profile: workerRequest.profile,
-      options: workerRequest.options,
-    });
+    const shared = serializePreparedSinglePrintPlateExport(
+      preparePrintPlateBundle({
+        format,
+        model: workerRequest.model,
+        profile: workerRequest.profile,
+        options: {
+          ...workerRequest.options,
+          fitPolicy: "error",
+        },
+      }),
+    );
     const fetch = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation(() => {
@@ -76,7 +85,13 @@ describe("viewer print export worker", () => {
         .map(({ response }) =>
           response.type === "progress" ? response.phase : "",
         ),
-    ).toEqual(["validating", "geometry", "serializing", "complete"]);
+    ).toEqual([
+      "validating",
+      "layout",
+      "geometry",
+      "serializing",
+      "complete",
+    ]);
     const preflightIndex = emitted.findIndex(
       ({ response }) => response.type === "preflight",
     );
@@ -85,6 +100,32 @@ describe("viewer print export worker", () => {
     );
     expect(preflightIndex).toBeGreaterThan(0);
     expect(resultIndex).toBeGreaterThan(preflightIndex);
+    const preflight = emitted[preflightIndex]!.response;
+    expect(preflight.type).toBe("preflight");
+    if (preflight.type !== "preflight") {
+      throw new Error("Expected a preflight response.");
+    }
+    expect(preflight.preview).toMatchObject({
+      fitPolicy: "error",
+      appliedPolicy: "error",
+      plates: [
+        {
+          number: 1,
+          id: "plate-01",
+          fileName: `plate-01.${format}`,
+        },
+      ],
+    });
+    const previewPrimitives = preflight.preview.plates[0]?.parts.flatMap(
+      ({ primitives }) => primitives,
+    );
+    expect(previewPrimitives?.length).toBeGreaterThan(0);
+    expect(
+      previewPrimitives?.every(
+        ({ mesh }) =>
+          mesh.vertices.length > 0 && mesh.triangles.length > 0,
+      ),
+    ).toBe(true);
 
     const result = emitted[resultIndex]!;
     expect(result.response.type).toBe("result");
@@ -114,6 +155,34 @@ describe("viewer print export worker", () => {
     },
   );
 
+  it("fails an oversized default export before publishing a preview", () => {
+    const responses: PrintExportWorkerResponse[] = [];
+
+    runPrintExportRequest(
+      request({
+        options: {
+          scale: 100,
+          labelPolicy: "off",
+          routePolicy: "off",
+          includeLegend: false,
+        },
+      }),
+      (response) => responses.push(response),
+    );
+
+    expect(
+      responses.some(
+        ({ type }) => type === "preflight" || type === "result",
+      ),
+    ).toBe(false);
+    expect(responses.at(-1)).toMatchObject({
+      type: "failure",
+      error: {
+        message: expect.stringMatching(/requires.*packing span/iu),
+      },
+    });
+  });
+
   it("returns structured failures instead of throwing out of the worker", () => {
     const responses: PrintExportWorkerResponse[] = [];
 
@@ -134,6 +203,85 @@ describe("viewer print export worker", () => {
         message: expect.stringMatching(/schemaVersion/iu),
       },
     });
+  });
+
+  it("returns an exact deterministic ZIP and preview for fitted plate bundles", () => {
+    const workerRequest = request({
+      options: {
+        scale: 3,
+        fitPolicy: "scale",
+        maximumPlateCount: 12,
+        labelPolicy: "auto",
+        routePolicy: "auto",
+        includeLegend: true,
+      },
+    });
+    const shared = generatePrintPlateBundle({
+      format: workerRequest.format,
+      model: workerRequest.model,
+      profile: workerRequest.profile,
+      options: {
+        ...workerRequest.options,
+        fitPolicy: "scale",
+      },
+    });
+    const emitted: Array<{
+      response: PrintExportWorkerResponse;
+      transfer: readonly ArrayBuffer[];
+    }> = [];
+
+    runPrintExportRequest(workerRequest, (response, transfer = []) => {
+      emitted.push({ response, transfer });
+    });
+
+    expect(
+      emitted
+        .filter(({ response }) => response.type === "progress")
+        .map(({ response }) =>
+          response.type === "progress" ? response.phase : "",
+        ),
+    ).toEqual([
+      "validating",
+      "layout",
+      "geometry",
+      "serializing",
+      "complete",
+    ]);
+    const preflight = emitted.find(
+      ({ response }) => response.type === "bundle-preflight",
+    )?.response;
+    expect(preflight).toMatchObject({
+      type: "bundle-preflight",
+      preflight: {
+        plateCount: shared.preflight.plateCount,
+        appliedScale: shared.preflight.appliedScale,
+      },
+    });
+    if (preflight?.type !== "bundle-preflight") {
+      throw new Error("Expected a bundle preflight response.");
+    }
+    expect(preflight.preview.plates).toHaveLength(
+      shared.manifest.plateCount,
+    );
+    const result = emitted.at(-1)!;
+    expect(result.response.type).toBe("bundle-result");
+    if (result.response.type !== "bundle-result") {
+      throw new Error("Expected a bundle result response.");
+    }
+    expect(new Uint8Array(result.response.artifact.bytes)).toEqual(
+      shared.bytes,
+    );
+    expect(new Uint8Array(result.response.manifestBytes)).toEqual(
+      shared.manifestBytes,
+    );
+    expect(new Uint8Array(result.response.legendBytes!)).toEqual(
+      shared.legendBytes,
+    );
+    expect(result.transfer).toEqual([
+      result.response.artifact.bytes,
+      result.response.manifestBytes,
+      result.response.legendBytes,
+    ]);
   });
 
   it.each(["3mf", "stl"] as const)(

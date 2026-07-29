@@ -401,6 +401,21 @@ describe("printable dependency routes", () => {
       printedWeight: 8,
       omittedWeight: 5,
     });
+    expect(planned.routes.map(({ bundleId }) => bundleId)).toEqual([
+      "high",
+    ]);
+    expect(planned.omissions).toEqual([
+      {
+        bundleId: "middle-unresolved",
+        reason: "unresolved-endpoint",
+        weight: 4,
+      },
+      {
+        bundleId: "low-capped",
+        reason: "route-limit",
+        weight: 1,
+      },
+    ]);
   });
 
   it("uses only the three documented logarithmic width classes", () => {

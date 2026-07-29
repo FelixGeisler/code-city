@@ -13,8 +13,10 @@ import {
 } from "../packages/core/src/index.js";
 import {
   generateThreeMfExport,
+  preparePrintPlateBundle,
   prepareThreeMfExport,
   PrintGeometryValidationError,
+  serializePreparedSinglePrintPlateExport,
 } from "../packages/exporter/src/index.js";
 
 const demoOptions = {
@@ -168,7 +170,7 @@ describe("shared browser-safe 3MF export orchestration", () => {
   });
 
   it(
-    "emits byte-identical CLI and shared-orchestrator archives",
+    "emits byte-identical CLI and exact plate archives",
     async () => {
       const directory = await fs.mkdtemp(
         path.join(os.tmpdir(), "code-city-browser-export-"),
@@ -203,15 +205,22 @@ describe("shared browser-safe 3MF export orchestration", () => {
         ],
         { stdout: () => undefined, stderr: () => undefined },
       );
-      const shared = generateThreeMfExport({
-        model: DEMO_MODEL,
-        profile,
-        options: { ...demoOptions, includeLegend: false },
-      });
+      const shared = serializePreparedSinglePrintPlateExport(
+        preparePrintPlateBundle({
+          format: "3mf",
+          model: DEMO_MODEL,
+          profile,
+          options: {
+            ...demoOptions,
+            fitPolicy: "error",
+            includeLegend: false,
+          },
+        }),
+      );
 
       expect(exitCode).toBe(0);
       expect(await fs.readFile(outputPath)).toEqual(
-        Buffer.from(shared.threeMfBytes),
+        Buffer.from(shared.artifact.bytes),
       );
     },
     EXPORT_TEST_TIMEOUT_MS,

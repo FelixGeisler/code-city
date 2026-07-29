@@ -154,6 +154,36 @@ it("rejects destinations that become canonical aliases through a linked director
   expect(await transactionFiles(realDirectory)).toEqual([]);
 });
 
+it("does not replace a protected input through a canonical directory alias", async () => {
+  const directory = await temporaryDirectory();
+  const realDirectory = path.join(directory, "real");
+  const aliasDirectory = path.join(directory, "alias");
+  await fs.mkdir(realDirectory);
+  await fs.symlink(
+    realDirectory,
+    aliasDirectory,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const inputPath = path.join(realDirectory, "city.legend.json");
+  const destinationPath = path.join(aliasDirectory, "city.legend.json");
+  await fs.writeFile(inputPath, "source model", "utf8");
+
+  await expect(
+    publishArtifactsAtomically(
+      [
+        {
+          destination: destinationPath,
+          bytes: Buffer.from("replacement legend"),
+        },
+      ],
+      { protectedPaths: [inputPath] },
+    ),
+  ).rejects.toThrow(/must not replace protected input/u);
+
+  expect(await fs.readFile(inputPath, "utf8")).toBe("source model");
+  expect(await transactionFiles(realDirectory)).toEqual([]);
+});
+
 it("rejects a symbolic-link destination without following it", async () => {
   if (process.platform === "win32") return;
   const directory = await temporaryDirectory();

@@ -74,10 +74,22 @@ export interface PlanPrintableDependencyRoutesRequest {
 export type PrintDependencyRouteWidthClass = 1 | 2 | 3;
 
 export interface PlannedPrintableDependencyRoute {
+  readonly bundleId: string;
   readonly ordinal: number;
   readonly widthClass: PrintDependencyRouteWidthClass;
   readonly weight: number;
   readonly primitiveIds: readonly string[];
+}
+
+export type PrintableDependencyRouteOmissionReason =
+  | "route-limit"
+  | "unresolved-endpoint"
+  | "unroutable";
+
+export interface PrintableDependencyRouteOmission {
+  readonly bundleId: string;
+  readonly reason: PrintableDependencyRouteOmissionReason;
+  readonly weight: number;
 }
 
 export interface PrintableDependencyRouteReport {
@@ -95,6 +107,7 @@ export interface PrintableDependencyRouteReport {
 export interface PrintableDependencyRoutes {
   readonly primitives: readonly PrintPrimitive[];
   readonly routes: readonly PlannedPrintableDependencyRoute[];
+  readonly omissions: readonly PrintableDependencyRouteOmission[];
   readonly report: PrintableDependencyRouteReport;
 }
 
@@ -205,6 +218,12 @@ export function planPrintableDependencyRoutes(
   const acceptedFootprints: MutableRectangle[] = [];
   const primitives: PrintPrimitive[] = [];
   const routes: PlannedPrintableDependencyRoute[] = [];
+  const omissionReasons = new Map<
+    string,
+    PrintableDependencyRouteOmissionReason
+  >(
+    capped.map(({ id }) => [id, "route-limit"]),
+  );
   const printedBundleIds = new Set<string>();
   let unresolvedEndpointRouteCount = 0;
   let unroutableRouteCount = 0;
@@ -215,6 +234,7 @@ export function planPrintableDependencyRoutes(
     const target = endpoints.get(bundle.targetEndpointId);
     if (!source || !target) {
       unresolvedEndpointRouteCount += 1;
+      omissionReasons.set(bundle.id, "unresolved-endpoint");
       continue;
     }
     if (
@@ -222,6 +242,7 @@ export function planPrintableDependencyRoutes(
       rectanglesOverlapPositive(source.bounds, target.bounds)
     ) {
       unroutableRouteCount += 1;
+      omissionReasons.set(bundle.id, "unroutable");
       continue;
     }
     const widthClass = dependencyRouteWidthClass(bundle.weight);
@@ -238,6 +259,7 @@ export function planPrintableDependencyRoutes(
     );
     if (!path) {
       unroutableRouteCount += 1;
+      omissionReasons.set(bundle.id, "unroutable");
       continue;
     }
     const rectangles = routeRectangles(
@@ -260,6 +282,7 @@ export function planPrintableDependencyRoutes(
       )
     ) {
       unroutableRouteCount += 1;
+      omissionReasons.set(bundle.id, "unroutable");
       continue;
     }
 
@@ -281,6 +304,7 @@ export function planPrintableDependencyRoutes(
     printedWeight = addWeight(printedWeight, bundle.weight);
     printedBundleIds.add(bundle.id);
     routes.push({
+      bundleId: bundle.id,
       ordinal,
       widthClass,
       weight: bundle.weight,
@@ -292,9 +316,17 @@ export function planPrintableDependencyRoutes(
   const omittedWeight = sumWeights(
     ranked.filter(({ id }) => !printedBundleIds.has(id)),
   );
+  const omissions = ranked
+    .filter(({ id }) => !printedBundleIds.has(id))
+    .map(({ id, weight }) => ({
+      bundleId: id,
+      reason: omissionReasons.get(id) ?? "unroutable",
+      weight,
+    }));
   return {
     primitives,
     routes,
+    omissions,
     report: {
       totalRouteCount: ranked.length,
       printedRouteCount: routes.length,

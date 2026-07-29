@@ -8,10 +8,15 @@ import type {
   PrinterProfile,
   PrintFormat,
 } from "../../../packages/core/src/print.js";
-import type { PrintExportPreflight } from "../../../packages/exporter/src/print-export.js";
+import type {
+  PrintFitPolicy,
+} from "../../../packages/core/src/print-layout.js";
 import type {
   CalibrationPrintExportPreflight,
 } from "../../../packages/exporter/src/calibration.js";
+import type {
+  PrintPlateBundlePreflight,
+} from "../../../packages/exporter/src/print-plates.js";
 
 import {
   PrintExportController,
@@ -20,13 +25,21 @@ import {
 import {
   PrintDownloadManager,
   tryPublishCalibrationDownloads,
+  tryPublishPrintBundleDownload,
   tryPublishPrintDownloads,
 } from "./print-download.js";
 import type { ViewerLoadGateway } from "./model-source.js";
+import {
+  withPrintLayoutPreviewReadiness,
+  type PrintLayoutPreviewPlan,
+} from "./print-plate-preview.js";
 
 export interface PrintExportDialogOptions {
   readonly getModel: () => CityModel;
   readonly loadGateway: ViewerLoadGateway;
+  readonly onPrintLayoutPlan?: (
+    plan: PrintLayoutPreviewPlan | undefined,
+  ) => void;
 }
 
 export interface PrintExportDialogHandle {
@@ -59,6 +72,8 @@ export interface PrintExportSubmitAvailability {
   readonly profileKind: ProfileKind;
   readonly hasCustomProfile: boolean;
   readonly prusaToolCount: number;
+  readonly fitPolicyValid: boolean;
+  readonly maximumPlateCountValid: boolean;
 }
 
 export function printExportSubmitDisabled(
@@ -67,11 +82,19 @@ export function printExportSubmitDisabled(
   return (
     availability.busy ||
     !availability.formatSupported ||
+    !availability.fitPolicyValid ||
+    !availability.maximumPlateCountValid ||
     (availability.profileKind === "custom" &&
       !availability.hasCustomProfile) ||
     (availability.profileKind === "prusa-xl" &&
       availability.prusaToolCount === 0)
   );
+}
+
+export function shouldRetainPrintLayoutOnDialogClose(
+  status: PrintExportControllerState["status"],
+): boolean {
+  return status === "ready" || status === "bundle-ready";
 }
 
 function requiredElement<T extends HTMLElement>(id: string): T {
@@ -113,6 +136,21 @@ function printFormat(value: string): PrintFormat {
   throw new Error("Choose either 3MF or STL.");
 }
 
+function printFitPolicy(value: string): PrintFitPolicy {
+  if (value === "error" || value === "scale" || value === "tile") {
+    return value;
+  }
+  throw new Error("Choose error, scale, or tile as the fit policy.");
+}
+
+function maximumPlateCount(value: string): number {
+  const count = Number(value);
+  if (!Number.isSafeInteger(count) || count < 1 || count > 99) {
+    throw new Error("Maximum plates must be an integer from 1 to 99.");
+  }
+  return count;
+}
+
 export function installPrintExportDialog(
   options: PrintExportDialogOptions,
 ): PrintExportDialogHandle {
@@ -139,6 +177,9 @@ export function installPrintExportDialog(
   const formatSelect =
     requiredElement<HTMLSelectElement>("print-format");
   const scaleInput = requiredElement<HTMLInputElement>("print-scale");
+  const fitSelect = requiredElement<HTMLSelectElement>("print-fit");
+  const maximumPlateCountInput =
+    requiredElement<HTMLInputElement>("print-max-plates");
   const labelsSelect =
     requiredElement<HTMLSelectElement>("print-labels");
   const routesInput = requiredElement<HTMLInputElement>("print-routes");
@@ -199,6 +240,12 @@ export function installPrintExportDialog(
   const customProfileReads = new LatestPrintProfileRead();
   let customProfile: PrinterProfile | undefined;
   let customProfilePending = false;
+  let publishedLayout:
+    | {
+        readonly jobId: number;
+        readonly readiness: "planned" | "ready";
+      }
+    | undefined;
 
   const controller = new PrintExportController(
     () =>
@@ -219,6 +266,49 @@ export function installPrintExportDialog(
 
   function selectedFormat(): PrintFormat {
     return printFormat(formatSelect.value);
+  }
+
+  function selectedFitPolicy(): PrintFitPolicy {
+    return printFitPolicy(fitSelect.value);
+  }
+
+  function selectedMaximumPlateCount(): number {
+    return maximumPlateCount(maximumPlateCountInput.value);
+  }
+
+  function publishPrintLayout(
+    jobId: number,
+    preview: PrintLayoutPreviewPlan,
+    readiness: "planned" | "ready",
+  ): void {
+    if (
+      options.onPrintLayoutPlan === undefined ||
+      (publishedLayout?.jobId === jobId &&
+        (publishedLayout.readiness === readiness ||
+          publishedLayout.readiness === "ready"))
+    ) {
+      return;
+    }
+    try {
+      options.onPrintLayoutPlan(
+        withPrintLayoutPreviewReadiness(preview, readiness),
+      );
+      publishedLayout = { jobId, readiness };
+    } catch (error) {
+      renderErrors([
+        `The printable plate preview could not be shown: ${messageOf(error)}`,
+      ]);
+    }
+  }
+
+  function clearPrintLayout(): void {
+    if (publishedLayout === undefined) return;
+    publishedLayout = undefined;
+    try {
+      options.onPrintLayoutPlan?.(undefined);
+    } catch {
+      // The export dialog remains usable if an optional preview host fails.
+    }
   }
 
   function selectedPrusaTools(): readonly number[] {
@@ -262,6 +352,7 @@ export function installPrintExportDialog(
     downloadsWrap.hidden = true;
     artifactDownload.removeAttribute("href");
     artifactDownload.removeAttribute("download");
+    artifactDownload.hidden = true;
     legendDownload.removeAttribute("href");
     legendDownload.removeAttribute("download");
     legendDownload.hidden = true;
@@ -274,6 +365,7 @@ export function installPrintExportDialog(
   }
 
   function clearResultPanels(): void {
+    clearPrintLayout();
     clearDownloads();
     preflightSection.hidden = true;
     errorSection.hidden = true;
@@ -291,38 +383,88 @@ export function installPrintExportDialog(
     errorSection.hidden = false;
   }
 
-  function renderPreflight(preflight: PrintExportPreflight): void {
-    trianglesWrap.hidden = false;
-    trianglesElement.textContent =
-      preflight.triangleCount.toLocaleString();
-    channelsTitle.textContent = "Used channels";
-    dimensionsElement.textContent =
-      `${millimeters(preflight.dimensions.x)} × ` +
-      `${millimeters(preflight.dimensions.y)} × ` +
-      `${millimeters(preflight.dimensions.z)} mm`;
-    partsElement.textContent =
-      `${preflight.partCount.toLocaleString()} ` +
-      `${preflight.partCount === 1 ? "serialized part" : "serialized parts"} \u00b7 ` +
-      `${preflight.channels.length.toLocaleString()} ` +
-      `${preflight.channels.length === 1 ? "source channel" : "source channels"}`;
-    channelsList.replaceChildren(
-      ...preflight.channels.map((channel) => {
-        const item = document.createElement("li");
-        item.textContent =
-          `${channel.label}: ${channel.semanticGroupIds.length.toLocaleString()} ` +
-          `${channel.semanticGroupIds.length === 1 ? "group" : "groups"}, ` +
-          `${channel.primitiveCount.toLocaleString()} primitives`;
-        return item;
+  function renderBundlePreflight(
+    preflight: PrintPlateBundlePreflight,
+  ): void {
+    const largest = preflight.plates.reduce(
+      (current, plate) => ({
+        width: Math.max(current.width, plate.dimensions.width),
+        depth: Math.max(current.depth, plate.dimensions.depth),
+        height: Math.max(current.height, plate.dimensions.height),
       }),
+      { width: 0, depth: 0, height: 0 },
     );
+    const printedLabels =
+      preflight.labels.printedBuildings +
+      preflight.labels.printedDistricts;
+    dimensionsElement.textContent =
+      `${preflight.plateCount.toLocaleString()} ` +
+      `${preflight.plateCount === 1 ? "plate" : "plates"} \u00b7 largest ` +
+      `${millimeters(largest.width)} \u00d7 ` +
+      `${millimeters(largest.depth)} \u00d7 ` +
+      `${millimeters(largest.height)} mm`;
+    partsElement.textContent =
+      `Scale ${millimeters(preflight.requestedScale)} \u2192 ` +
+      `${millimeters(preflight.appliedScale)} \u00b7 ` +
+      `${printedLabels.toLocaleString()} labels \u00b7 ` +
+      `${preflight.routes.printedCount.toLocaleString()} routes`;
+    trianglesWrap.hidden = true;
+    channelsTitle.textContent = "Plate summary";
+    const visiblePlates = preflight.plates.slice(0, 6);
+    const plateItems = visiblePlates.map((plate) => {
+      const item = document.createElement("li");
+      const utilization = Math.round(plate.utilization * 100);
+      item.textContent =
+        `Plate ${plate.number.toLocaleString()}: ` +
+        `${utilization.toLocaleString()}% used \u00b7 ` +
+        `${plate.channelIds.length.toLocaleString()} ` +
+        `${plate.channelIds.length === 1 ? "channel" : "channels"} \u00b7 ` +
+        `${millimeters(plate.dimensions.width)} \u00d7 ` +
+        `${millimeters(plate.dimensions.depth)} \u00d7 ` +
+        `${millimeters(plate.dimensions.height)} mm`;
+      return item;
+    });
+    if (preflight.plates.length > visiblePlates.length) {
+      const remaining = document.createElement("li");
+      remaining.textContent =
+        `${(preflight.plates.length - visiblePlates.length).toLocaleString()} ` +
+        "more plates are listed in manifest.json.";
+      plateItems.push(remaining);
+    }
+    channelsList.replaceChildren(...plateItems);
+    const allWarnings = [
+      ...preflight.warnings,
+      ...preflight.plates.flatMap((plate) =>
+        plate.warnings.map(
+          (warning) => `Plate ${plate.number}: ${warning}`,
+        ),
+      ),
+      ...(preflight.unplacedObjects.length === 0
+        ? []
+        : [
+            `${preflight.unplacedObjects.length.toLocaleString()} objects could not be placed.`,
+          ]),
+      ...(preflight.routeOmissions.length === 0
+        ? []
+        : [
+            `${preflight.routeOmissions.length.toLocaleString()} routes were omitted from the bundle.`,
+          ]),
+    ];
+    const uniqueWarnings = [...new Set(allWarnings)];
+    const visibleWarnings = uniqueWarnings.slice(0, 8);
+    if (uniqueWarnings.length > visibleWarnings.length) {
+      visibleWarnings.push(
+        `${(uniqueWarnings.length - visibleWarnings.length).toLocaleString()} more warnings are recorded in manifest.json.`,
+      );
+    }
     warningsList.replaceChildren(
-      ...preflight.warnings.map((warning) => {
+      ...visibleWarnings.map((warning) => {
         const item = document.createElement("li");
         item.textContent = warning;
         return item;
       }),
     );
-    warningWrap.hidden = preflight.warnings.length === 0;
+    warningWrap.hidden = visibleWarnings.length === 0;
     preflightSection.hidden = false;
   }
 
@@ -404,11 +546,48 @@ export function installPrintExportDialog(
     artifactDownload.download = available.artifact.fileName;
     artifactDownload.textContent =
       `Download ${state.artifact.format.toUpperCase()}`;
+    artifactDownload.hidden = false;
     if (available.legend !== undefined) {
       legendDownload.href = available.legend.url;
       legendDownload.download = available.legend.fileName;
       legendDownload.hidden = false;
     }
+    downloadsWrap.hidden = false;
+  }
+
+  function renderBundleReady(
+    state: Extract<
+      PrintExportControllerState,
+      { readonly status: "bundle-ready" }
+    >,
+  ): void {
+    const model = options.getModel();
+    const publication = tryPublishPrintBundleDownload(
+      downloads,
+      {
+        title:
+          model.identity?.title ??
+          model.repositories[0]?.name ??
+          state.preflight.title,
+        ...(model.identity?.version === undefined
+          ? {}
+          : { version: model.identity.version }),
+      },
+      { artifact: state.artifact },
+    );
+    if (!publication.ok) {
+      clearDownloads();
+      renderErrors([publication.message]);
+      return;
+    }
+    artifactDownload.href = publication.downloads.artifact.url;
+    artifactDownload.download =
+      publication.downloads.artifact.fileName;
+    artifactDownload.textContent =
+      `Download print ZIP (${state.preflight.plateCount.toLocaleString()} ` +
+      `${state.preflight.plateCount === 1 ? "plate" : "plates"} + manifest)`;
+    artifactDownload.hidden = false;
+    legendDownload.hidden = true;
     downloadsWrap.hidden = false;
   }
 
@@ -447,11 +626,23 @@ export function installPrintExportDialog(
 
   function updateSubmitAvailability(): void {
     let formatSupported = false;
+    let fitPolicyValid = false;
+    let maximumPlateCountValid = false;
     try {
       formatSupported = resolveProfile()
         .supportedFormats.includes(selectedFormat());
     } catch {
       formatSupported = false;
+    }
+    try {
+      const fitPolicy = selectedFitPolicy();
+      fitPolicyValid = true;
+      maximumPlateCountValid =
+        fitPolicy !== "tile" ||
+        Number.isSafeInteger(selectedMaximumPlateCount());
+    } catch {
+      fitPolicyValid = false;
+      maximumPlateCountValid = false;
     }
     const disabled = printExportSubmitDisabled({
       busy: controller.state.status === "busy",
@@ -459,6 +650,8 @@ export function installPrintExportDialog(
       profileKind: selectedProfileKind(),
       hasCustomProfile: customProfile !== undefined,
       prusaToolCount: selectedPrusaTools().length,
+      fitPolicyValid,
+      maximumPlateCountValid,
     });
     submitButton.disabled = disabled;
     calibrationButton.disabled = disabled;
@@ -483,15 +676,41 @@ export function installPrintExportDialog(
       progressElement.value = completed;
       progressStatus.textContent =
         state.progress?.message ?? "Starting export worker…";
-      if (state.preflight !== undefined) {
-        renderPreflight(state.preflight);
+      if (
+        state.bundlePreflight !== undefined &&
+        state.bundlePreview !== undefined
+      ) {
+        renderBundlePreflight(state.bundlePreflight);
+        publishPrintLayout(
+          state.jobId,
+          state.bundlePreview,
+          "planned",
+        );
+      } else if (
+        state.preflight !== undefined &&
+        state.preview !== undefined
+      ) {
+        renderBundlePreflight(state.preflight);
+        publishPrintLayout(state.jobId, state.preview, "planned");
       }
       return;
     }
     if (state.status === "failed") {
       clearDownloads();
       if (state.preflight !== undefined) {
-        renderPreflight(state.preflight);
+        renderBundlePreflight(state.preflight);
+        if (state.preview !== undefined) {
+          publishPrintLayout(state.jobId, state.preview, "planned");
+        }
+      } else if (state.bundlePreflight !== undefined) {
+        renderBundlePreflight(state.bundlePreflight);
+        if (state.bundlePreview !== undefined) {
+          publishPrintLayout(
+            state.jobId,
+            state.bundlePreview,
+            "planned",
+          );
+        }
       }
       renderErrors(
         state.error.issues.length > 0
@@ -505,7 +724,14 @@ export function installPrintExportDialog(
       renderCalibrationReady(state);
       return;
     }
-    renderPreflight(state.preflight);
+    if (state.status === "bundle-ready") {
+      renderBundlePreflight(state.preflight);
+      publishPrintLayout(state.jobId, state.preview, "ready");
+      renderBundleReady(state);
+      return;
+    }
+    renderBundlePreflight(state.preflight);
+    publishPrintLayout(state.jobId, state.preview, "ready");
     renderReady(state);
   }
 
@@ -530,6 +756,17 @@ export function installPrintExportDialog(
     const kind = selectedProfileKind();
     prusaTools.hidden = kind !== "prusa-xl";
     customProfileWrap.hidden = kind !== "custom";
+    updateSubmitAvailability();
+  }
+
+  function updateFitControls(): void {
+    let tiled = false;
+    try {
+      tiled = selectedFitPolicy() === "tile";
+    } catch {
+      tiled = false;
+    }
+    maximumPlateCountInput.disabled = !tiled;
     updateSubmitAvailability();
   }
 
@@ -583,13 +820,17 @@ export function installPrintExportDialog(
 
   function closeDialog(): void {
     invalidateCustomProfileRead();
-    invalidateOutput();
+    if (!shouldRetainPrintLayoutOnDialogClose(controller.state.status)) {
+      invalidateOutput();
+    }
     if (dialog.open) dialog.close();
     openButton.focus({ preventScroll: true });
   }
 
   openButton.addEventListener("click", () => {
-    invalidateOutput();
+    if (!shouldRetainPrintLayoutOnDialogClose(controller.state.status)) {
+      invalidateOutput();
+    }
     updateProfileControls();
     dialog.showModal();
   });
@@ -609,11 +850,16 @@ export function installPrintExportDialog(
   });
   prusaTools.addEventListener("change", invalidateOutput);
   formatSelect.addEventListener("change", invalidateOutput);
+  fitSelect.addEventListener("change", () => {
+    invalidateOutput();
+    updateFitControls();
+  });
   customProfileInput.addEventListener("change", () => {
     invalidateOutput();
     void readCustomProfile();
   });
   scaleInput.addEventListener("input", invalidateOutput);
+  maximumPlateCountInput.addEventListener("input", invalidateOutput);
   labelsSelect.addEventListener("change", invalidateOutput);
   routesInput.addEventListener("change", invalidateOutput);
   legendInput.addEventListener("change", invalidateOutput);
@@ -622,8 +868,15 @@ export function installPrintExportDialog(
     clearResultPanels();
     let profile: PrinterProfile;
     let format: PrintFormat;
+    let fitPolicy: PrintFitPolicy;
+    let maximumPlates: number | undefined;
     try {
       ({ profile, format } = resolveProfileForFormat());
+      fitPolicy = selectedFitPolicy();
+      maximumPlates =
+        fitPolicy === "tile"
+          ? selectedMaximumPlateCount()
+          : undefined;
     } catch (error) {
       renderErrors(issuesOf(error));
       return;
@@ -638,6 +891,10 @@ export function installPrintExportDialog(
         labelPolicy: labelsSelect.value === "off" ? "off" : "auto",
         routePolicy: routesInput.checked ? "auto" : "off",
         includeLegend: legendInput.checked,
+        fitPolicy,
+        ...(maximumPlates === undefined
+          ? {}
+          : { maximumPlateCount: maximumPlates }),
       },
     });
   }
@@ -662,6 +919,7 @@ export function installPrintExportDialog(
   });
 
   updateProfileControls();
+  updateFitControls();
   renderState(controller.state);
 
   return {
@@ -673,6 +931,7 @@ export function installPrintExportDialog(
       invalidateCustomProfileRead();
       controller.dispose();
       downloads.dispose();
+      clearPrintLayout();
     },
   };
 }

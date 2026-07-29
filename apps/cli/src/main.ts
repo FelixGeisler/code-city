@@ -10,25 +10,24 @@ import {
   type LocalAnalysisOptions,
 } from "../../../packages/analyzer/src/index.js";
 import {
-  assignSemanticGroups,
   parsePrinterProfile,
   parsePrintLabelPolicy,
   parsePrintRoutePolicy,
-  planPrint,
   PrintPlanValidationError,
   validateCityModel,
 } from "../../../packages/core/src/index.js";
 import type {
   CityModel,
+  PrintFitPolicy,
   PrintFormat,
   PrintRoutePolicy,
 } from "../../../packages/core/src/index.js";
 import {
   buildDependencyConnectorComparison,
-  buildPrintableCityArtifacts,
   generateCalibrationPrintExport,
-  generatePrintExport,
-  printablePlanGeometry,
+  preparePrintPlateBundle,
+  serializePreparedPrintPlateBundle,
+  serializePreparedSinglePrintPlateExport,
   serializeThreeMf,
 } from "../../../packages/exporter/src/index.js";
 import { publishArtifactsAtomically } from "./artifact-publication.js";
@@ -50,9 +49,12 @@ Usage:
   codecity open <root...> [--port <port>] [options]
   codecity plan --model <city-model.json> --profile <profile.json> \\
     --format <stl|3mf> --output <print-plan.json> [--scale <factor>] \\
+    [--fit <error|scale|tile>] [--max-plates <count>] \\
     [--labels <auto|off>] [--routes <auto|off>]
   codecity export --model <city-model.json> --profile <profile.json> \\
-    --format <stl|3mf> --output <model.stl|model.3mf> [--scale <factor>] \\
+    --format <stl|3mf> --output <model.stl|model.3mf|bundle.zip> \\
+    [--scale <factor>] [--fit <error|scale|tile>] \\
+    [--max-plates <count>] \\
     [--labels <auto|off>] [--routes <auto|off>] \\
     [--legend <legend.json|off>]
   codecity calibrate --profile <profile.json> --output <model.stl|model.3mf> \\
@@ -73,6 +75,9 @@ Open options:
   --port <port>              Loopback port; 0 selects a free port (default: 0)
 
 Print options:
+  --fit <error|scale|tile>
+                       Oversize policy (default: error)
+  --max-plates <count> Tile artifact cap, 1-99 (default: 99)
   --labels <auto|off>  Same-channel physical labels (default: auto)
   --routes <auto|off>  Aggregated dependency traces (default: off)
   --legend <path|off>  Private companion legend (default: beside model)
@@ -382,6 +387,8 @@ async function planCommand(args: readonly string[], io: CliIo): Promise<void> {
       "format",
       "output",
       "scale",
+      "fit",
+      "max-plates",
       "labels",
       "routes",
     ]),
@@ -400,45 +407,61 @@ async function planCommand(args: readonly string[], io: CliIo): Promise<void> {
   }
   const format: PrintFormat = formatValue;
   const scale = positiveScale(parsed.options.get("scale"));
+  const fitPolicy = cliFitPolicy(parsed.options.get("fit"));
+  const plateLimit = maximumPlateCount(
+    parsed.options.get("max-plates"),
+    fitPolicy,
+  );
   const labelPolicy = cliLabelPolicy(parsed.options.get("labels"));
   const routePolicy = cliRoutePolicy(parsed.options.get("routes"));
   const model = parseCityModel(await readJson(modelPath, "city model"));
   const profile = parsePrinterProfile(
     await readJson(profilePath, "printer profile"),
   );
-  const assignments = assignSemanticGroups(profile, model.semanticGroups);
-  const artifacts = buildPrintableCityArtifacts(model, assignments, {
-    profile,
-    scale,
-    labelPolicy,
-    routePolicy,
-  });
-  const printable = artifacts.city;
-  const planGeometry = printablePlanGeometry(printable);
-  const plan = planPrint(profile, {
+  const prepared = preparePrintPlateBundle({
     format,
-    scale,
-    labelPolicy,
-    routePolicy,
-    semanticGroups: model.semanticGroups,
-    bounds: planGeometry.bounds,
-    geometry: {
-      wallThickness: printable.measurements.wallThickness,
-      gap: printable.measurements.minimumGap,
-      minimumFeatureSize: printable.measurements.minimumFeatureSize,
-      baseThickness: printable.measurements.baseThickness,
+    model,
+    profile,
+    options: {
+      scale,
+      fitPolicy,
+      labelPolicy,
+      routePolicy,
+      includeLegend: false,
+      ...(plateLimit === undefined
+        ? {}
+        : { maximumPlateCount: plateLimit }),
     },
-    ...(model.identity === undefined ? {} : { identity: model.identity }),
-    ...(planGeometry.identityPanel === undefined
-      ? {}
-      : { identityPanel: planGeometry.identityPanel }),
   });
-  await publishPrivateJson(output, plan, "print plan");
+  const plan = {
+    schemaVersion: "1.0",
+    format,
+    layout: prepared.layout,
+    warnings: prepared.preflight.warnings,
+    unplacedObjects: prepared.preflight.unplacedObjects,
+    routeOmissions: prepared.preflight.routeOmissions,
+    labels: prepared.preflight.labels,
+    routes: prepared.preflight.routes,
+    plates: prepared.preflight.plates.map((plate) => ({
+      number: plate.number,
+      id: plate.id,
+      fileName: plate.fileName,
+      dimensions: plate.dimensions,
+      utilization: plate.utilization,
+      channels: plate.channelIds,
+      warnings: plate.warnings,
+    })),
+  };
+  await publishPrivateJson(output, plan, "print plate plan", {
+    protectedPaths: [modelPath, profilePath],
+  });
   io.stdout(
-    `Planned ${format.toUpperCase()} output across ${plan.channels.length} print channel(s).\nWrote ${path.resolve(output)}\n`,
+    `Planned ${prepared.layout.plates.length} ${format.toUpperCase()} print ${
+      prepared.layout.plates.length === 1 ? "plate" : "plates"
+    } at scale ${millimeters(prepared.layout.appliedScale)}.\nWrote ${path.resolve(output)}\n`,
   );
-  io.stdout(`${labelSummary(artifacts.labels)}\n`);
-  io.stdout(`${routeSummary(artifacts.routes)}\n`);
+  io.stdout(`${labelSummary(prepared.preflight.labels)}\n`);
+  io.stdout(`${routeSummary(prepared.preflight.routes)}\n`);
 }
 
 function positiveScale(value: string | undefined): number {
@@ -447,6 +470,27 @@ function positiveScale(value: string | undefined): number {
     throw new Error("--scale must be a positive finite number.");
   }
   return scale;
+}
+
+function cliFitPolicy(value: string | undefined): PrintFitPolicy {
+  if (value === undefined || value === "error") return "error";
+  if (value === "scale" || value === "tile") return value;
+  throw new Error("--fit must be 'error', 'scale', or 'tile'.");
+}
+
+function maximumPlateCount(
+  value: string | undefined,
+  fitPolicy: PrintFitPolicy,
+): number | undefined {
+  if (value === undefined) return undefined;
+  if (fitPolicy !== "tile") {
+    throw new Error("--max-plates may only be used with --fit tile.");
+  }
+  const count = Number(value);
+  if (!Number.isSafeInteger(count) || count < 1 || count > 99) {
+    throw new Error("--max-plates must be an integer between 1 and 99.");
+  }
+  return count;
 }
 
 function millimeters(value: number): string {
@@ -501,7 +545,7 @@ function routeSummary(routes: {
 }
 
 function defaultLegendPath(output: string): string {
-  return output.replace(/\.(?:3mf|stl)$/iu, ".legend.json");
+  return output.replace(/\.(?:3mf|stl|zip)$/iu, ".legend.json");
 }
 
 function legendPath(
@@ -608,14 +652,17 @@ async function calibrateCommand(
     profile: await readJson(profilePath, "printer profile"),
     format,
   });
-  const published = await publishArtifactsAtomically([
-    { destination: output, bytes: exported.artifact.bytes },
-    {
-      destination: manifestOutput,
-      bytes: exported.manifestBytes,
-      mode: 0o600,
-    },
-  ]);
+  const published = await publishArtifactsAtomically(
+    [
+      { destination: output, bytes: exported.artifact.bytes },
+      {
+        destination: manifestOutput,
+        bytes: exported.manifestBytes,
+        mode: 0o600,
+      },
+    ],
+    { protectedPaths: [profilePath] },
+  );
   const size = exported.preflight.dimensions;
   io.stdout(
     `Exported calibration ${format.toUpperCase()} with ${exported.preflight.partCount} aligned part(s), ${exported.preflight.triangleCount} triangle(s), across ${exported.preflight.channelCount} channel(s) at ${millimeters(size.x)} × ${millimeters(size.y)} × ${millimeters(size.z)} mm.\n`,
@@ -659,16 +706,19 @@ async function compareConnectorsCommand(
     );
   }
   const comparison = buildDependencyConnectorComparison(profile);
-  const publishedPaths = await publishArtifactsAtomically([
-    {
-      destination: output,
-      bytes: serializeThreeMf(comparison.printable),
-    },
-    {
-      destination: instructionsOutput,
-      bytes: new TextEncoder().encode(comparison.instructions),
-    },
-  ]);
+  const publishedPaths = await publishArtifactsAtomically(
+    [
+      {
+        destination: output,
+        bytes: serializeThreeMf(comparison.printable),
+      },
+      {
+        destination: instructionsOutput,
+        bytes: new TextEncoder().encode(comparison.instructions),
+      },
+    ],
+    { protectedPaths: [profilePath] },
+  );
   const size = comparison.printable.bounds.size;
   io.stdout(
     `Exported connector comparison with ${comparison.printable.parts.length} aligned part(s) at ${millimeters(size.x)} × ${millimeters(size.y)} × ${millimeters(size.z)} mm.\n`,
@@ -686,6 +736,8 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
       "format",
       "output",
       "scale",
+      "fit",
+      "max-plates",
       "labels",
       "routes",
       "legend",
@@ -703,9 +755,20 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
   );
   const output = requiredOption(parsed.options, "output");
   const scale = positiveScale(parsed.options.get("scale"));
+  const fitPolicy = cliFitPolicy(parsed.options.get("fit"));
+  const plateLimit = maximumPlateCount(
+    parsed.options.get("max-plates"),
+    fitPolicy,
+  );
   const labelPolicy = cliLabelPolicy(parsed.options.get("labels"));
   const routePolicy = cliRoutePolicy(parsed.options.get("routes"));
-  requireMatchingOutputExtension(output, format, "Export");
+  if (fitPolicy === "error") {
+    requireMatchingOutputExtension(output, format, "Export");
+  } else if (path.extname(output).toLowerCase() !== ".zip") {
+    throw new Error(
+      `Export with --fit ${fitPolicy} writes a multi-file bundle and must use the '.zip' file extension.`,
+    );
+  }
   const companionOutput = legendPath(
     output,
     parsed.options.get("legend"),
@@ -715,35 +778,90 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
   const profile = parsePrinterProfile(
     await readJson(profilePath, "printer profile"),
   );
-  const exported = generatePrintExport({
+  const prepared = preparePrintPlateBundle({
     format,
     model,
     profile,
     options: {
       scale,
+      fitPolicy,
       labelPolicy,
       routePolicy,
       includeLegend: companionOutput !== undefined,
+      ...(plateLimit === undefined
+        ? {}
+        : { maximumPlateCount: plateLimit }),
     },
   });
-  const publishedPaths = await publishArtifactsAtomically([
-    { destination: output, bytes: exported.artifact.bytes },
-    ...(companionOutput === undefined
-      ? []
-      : [
-          {
-            destination: companionOutput,
-            bytes: exported.legendBytes!,
-            mode: 0o600,
-          },
-        ]),
-  ]);
+  if (fitPolicy !== "error") {
+    const exported = serializePreparedPrintPlateBundle(prepared);
+    const publishedPaths = await publishArtifactsAtomically(
+      [
+        { destination: output, bytes: exported.bytes },
+        ...(companionOutput === undefined
+          ? []
+          : [
+              {
+                destination: companionOutput,
+                bytes: exported.legendBytes!,
+                mode: 0o600,
+              },
+            ]),
+      ],
+      { protectedPaths: [modelPath, profilePath] },
+    );
+    io.stdout(
+      `Exported ${exported.manifest.plateCount} ${format.toUpperCase()} print ${
+        exported.manifest.plateCount === 1 ? "plate" : "plates"
+      } at applied scale ${millimeters(exported.layout.appliedScale)}.\n`,
+    );
+    for (const plate of exported.manifest.plates) {
+      const size = plate.preflight.dimensions;
+      io.stdout(
+        `Plate ${plate.number}: ${plate.file} · ${millimeters(size.width)} × ${millimeters(size.depth)} × ${millimeters(size.height)} mm · ${Math.round(plate.layout.utilization * 100)}% used.\n`,
+      );
+    }
+    io.stdout(`Wrote ${publishedPaths[0]}\n`);
+    if (publishedPaths[1] !== undefined) {
+      io.stdout(`Wrote ${publishedPaths[1]}\n`);
+    } else {
+      io.stdout("Legend output disabled.\n");
+    }
+    io.stdout(
+      `Route omissions: ${exported.manifest.routeOmissionSummary.count}; unplaced objects: ${exported.manifest.unplacedObjects.length}.\n`,
+    );
+    for (const warning of exported.manifest.warnings) {
+      io.stderr(`Warning: ${warning}\n`);
+    }
+    return;
+  }
+  const exported = serializePreparedSinglePrintPlateExport(prepared);
+  const publishedPaths = await publishArtifactsAtomically(
+    [
+      { destination: output, bytes: exported.artifact.bytes },
+      ...(companionOutput === undefined
+        ? []
+        : [
+            {
+              destination: companionOutput,
+              bytes: exported.legendBytes!,
+              mode: 0o600,
+            },
+          ]),
+    ],
+    { protectedPaths: [modelPath, profilePath] },
+  );
   const absoluteOutput = publishedPaths[0]!;
   const absoluteLegend = publishedPaths[1];
-  const bounds = exported.preflight.dimensions;
+  const plate = exported.preflight.plates[0]!;
+  const bounds = plate.dimensions;
   io.stdout(
-    `Exported ${format.toUpperCase()} with ${exported.preflight.partCount} aligned part(s) and ${exported.preflight.triangleCount} triangle(s) at ${bounds.x} × ${bounds.y} × ${bounds.z} mm.\nWrote ${absoluteOutput}\n`,
+    `Exported 1 ${format.toUpperCase()} print plate at applied scale ${millimeters(exported.layout.appliedScale)}.\n`,
   );
+  io.stdout(
+    `Plate 1: ${path.basename(output)} · ${millimeters(bounds.width)} × ${millimeters(bounds.depth)} × ${millimeters(bounds.height)} mm · ${Math.round(plate.utilization * 100)}% used.\n`,
+  );
+  io.stdout(`Wrote ${absoluteOutput}\n`);
   if (absoluteLegend !== undefined) {
     io.stdout(`Wrote ${absoluteLegend}\n`);
   } else {
@@ -751,6 +869,9 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
   }
   io.stdout(`${labelSummary(exported.preflight.labels)}\n`);
   io.stdout(`${routeSummary(exported.preflight.routes)}\n`);
+  io.stdout(
+    `Route omissions: ${exported.preflight.routeOmissions.length}; unplaced objects: ${exported.preflight.unplacedObjects.length}.\n`,
+  );
   for (const warning of exported.preflight.warnings) {
     io.stderr(`Warning: ${warning}\n`);
   }

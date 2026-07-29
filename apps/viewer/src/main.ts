@@ -67,6 +67,11 @@ import { DEMO_MODEL } from "./demo-model.js";
 import { presentExternalDependency } from "./external-dependency-inspector.js";
 import { installPrintExportDialog } from "./print-export-dialog.js";
 import {
+  type ProjectedPrintPlate,
+  viewerPrintMeshBatches,
+} from "./print-plate-preview.js";
+import { installPrintPlateToolbar } from "./print-plate-toolbar.js";
+import {
   AutomaticModelLoadGate,
   assetRootFromResponseUrl,
   type LoadedViewerImage,
@@ -108,7 +113,12 @@ import {
   fogDensityForCameraDistance,
 } from "./scene-environment.js";
 import { groundGridLayout } from "./scene-grid.js";
-import { cameraDistanceForBounds } from "./scene-navigation.js";
+import {
+  cameraDistanceForBounds,
+  cameraMaximumDistanceForFrame,
+  semanticPickingEnabled,
+  type ScenePresentationMode,
+} from "./scene-navigation.js";
 import {
   installViewerWorkspace,
   nextBoundedResultLimit,
@@ -312,6 +322,7 @@ class CityScene {
   );
   private readonly raycaster = new THREE.Raycaster();
   private readonly city = new THREE.Group();
+  private readonly printPlate = new THREE.Group();
   private readonly dependencyOverlay = new DependencyRouteOverlay(this.scene);
   private readonly districtDependencyOverlay = new DependencyRouteOverlay(
     this.scene,
@@ -343,14 +354,26 @@ class CityScene {
   private fullCityMaxDistance = 20;
   private fullCityFar = 100;
   private pointerStart: PointerPosition | null = null;
+  private presentationMode: ScenePresentationMode = "city";
+  private semanticColors = new Map<string, string>();
+  private prePrintOverlayVisibility:
+    | {
+        dependencies: boolean;
+        districtDependencies: boolean;
+        labels: boolean;
+      }
+    | undefined;
 
   public constructor(
     private readonly host: HTMLDivElement,
     private readonly onStateChange: (state: ExplorerState) => void,
+    private readonly requestCityPresentation: () => void,
   ) {
     this.scene.background = new THREE.Color("#07111f");
     this.scene.fog = this.fog;
     this.scene.add(this.city);
+    this.printPlate.visible = false;
+    this.scene.add(this.printPlate);
 
     const hemisphere = new THREE.HemisphereLight("#b9ddff", "#162033", 2.1);
     this.scene.add(hemisphere);
@@ -414,6 +437,7 @@ class CityScene {
     externalNodes: readonly ExternalSceneNode[],
   ): void {
     this.clear();
+    this.showCityLayout(false);
 
     const repositories = new Map(
       model.repositories.map((item) => [item.id, item]),
@@ -421,6 +445,9 @@ class CityScene {
     const modules = new Map(model.modules.map((item) => [item.id, item]));
     const groups = new Map(
       model.semanticGroups.map((item) => [item.id, item]),
+    );
+    this.semanticColors = new Map(
+      model.semanticGroups.map(({ id, color }) => [id, color]),
     );
     const buildingCountsByDistrictId = new Map<string, number>();
     for (const building of model.buildings) {
@@ -613,6 +640,118 @@ class CityScene {
     this.frame();
   }
 
+  public showCityLayout(frame = true): void {
+    this.presentationMode = "city";
+    this.city.visible = true;
+    this.printPlate.visible = false;
+    if (this.prePrintOverlayVisibility !== undefined) {
+      this.dependencyOverlay.object.visible =
+        this.prePrintOverlayVisibility.dependencies;
+      this.districtDependencyOverlay.object.visible =
+        this.prePrintOverlayVisibility.districtDependencies;
+      this.sceneLabelOverlay.object.visible =
+        this.prePrintOverlayVisibility.labels;
+      this.prePrintOverlayVisibility = undefined;
+    }
+    if (frame && this.city.children.length > 0) {
+      this.replaceGrid(this.bounds(), this.cityBaseBottom());
+      this.frameObject(this.city, true);
+    }
+  }
+
+  public showPrintPlate(plate: ProjectedPrintPlate): void {
+    this.hover(null);
+    this.pointerStart = null;
+    this.presentationMode = "print";
+    if (!this.printPlate.visible) {
+      this.prePrintOverlayVisibility = {
+        dependencies: this.dependencyOverlay.object.visible,
+        districtDependencies:
+          this.districtDependencyOverlay.object.visible,
+        labels: this.sceneLabelOverlay.object.visible,
+      };
+    }
+    this.clearPrintPlate();
+    const batchStyles = new Map<
+      string,
+      {
+        readonly color: string;
+        readonly roughness: number;
+        readonly castShadow: boolean;
+      }
+    >();
+    const batches = viewerPrintMeshBatches(plate.entities, (entity) => {
+      const color = this.printEntityColor(
+        entity.kind,
+        entity.semanticGroupId,
+      );
+      const roughness = entity.kind === "base" ? 0.92 : 0.66;
+      const castShadow = entity.kind !== "base";
+      const key = `${color}|${roughness}|${String(castShadow)}`;
+      batchStyles.set(key, { color, roughness, castShadow });
+      return key;
+    });
+    for (const batch of batches) {
+      const style = batchStyles.get(batch.key)!;
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute(
+        "position",
+        new THREE.BufferAttribute(batch.buffers.positions, 3),
+      );
+      geometry.setIndex(
+        new THREE.BufferAttribute(batch.buffers.indices, 1),
+      );
+      geometry.computeVertexNormals();
+      geometry.computeBoundingBox();
+      geometry.computeBoundingSphere();
+      const material = new THREE.MeshStandardMaterial({
+        color: style.color,
+        roughness: style.roughness,
+        metalness: 0.03,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.castShadow = style.castShadow;
+      mesh.receiveShadow = true;
+      this.printPlate.add(mesh);
+    }
+    this.city.visible = false;
+    this.printPlate.visible = true;
+    this.dependencyOverlay.object.visible = false;
+    this.districtDependencyOverlay.object.visible = false;
+    this.sceneLabelOverlay.object.visible = false;
+    const bounds = new THREE.Box3().setFromObject(this.printPlate);
+    if (!bounds.isEmpty()) {
+      this.replaceGrid(bounds, bounds.min.y - 0.01);
+      this.frameObject(this.printPlate, true);
+    }
+  }
+
+  private printEntityColor(
+    kind: string,
+    semanticGroupId: string | undefined,
+  ): string {
+    if (kind === "dependency-endpoint") return EXTERNAL_DEPENDENCY_COLOR;
+    if (kind === "dependency-trace" || kind === "dependency-socket") {
+      return "#3b82f6";
+    }
+    if (kind === "identity-panel" || kind === "identity-relief") {
+      return this.semanticColors.get("identity") ?? "#78d6c6";
+    }
+    if (kind === "base" || kind === "district") {
+      return this.semanticColors.get("base") ?? "#718096";
+    }
+    return (
+      (semanticGroupId === undefined
+        ? undefined
+        : this.semanticColors.get(semanticGroupId)) ?? "#75d5a7"
+    );
+  }
+
+  private cityBaseBottom(): number {
+    const bounds = new THREE.Box3().setFromObject(this.city);
+    return bounds.isEmpty() ? 0 : bounds.min.y - 0.01;
+  }
+
   private addIdentityPanel(model: CityModel): void {
     const panel = model.identityPanel;
     if (!panel) {
@@ -673,12 +812,19 @@ class CityScene {
     routes: readonly DependencyOverlayRoute[],
   ): void {
     this.dependencyOverlay.replace(routes);
+    if (this.prePrintOverlayVisibility !== undefined) {
+      this.prePrintOverlayVisibility.dependencies = routes.length > 0;
+    }
   }
 
   public replaceDistrictDependencyRoutes(
     routes: readonly DependencyOverlayRoute[],
   ): void {
     this.districtDependencyOverlay.replace(routes);
+    if (this.prePrintOverlayVisibility !== undefined) {
+      this.prePrintOverlayVisibility.districtDependencies =
+        routes.length > 0;
+    }
   }
 
   public selectBuilding(id: string, focus = false): boolean {
@@ -686,6 +832,7 @@ class CityScene {
     if (!context) {
       return false;
     }
+    this.ensureCityPresentation();
     if (
       this.isolatedDistrictId !== null &&
       this.isolatedDistrictId !== context.building.districtId
@@ -704,6 +851,7 @@ class CityScene {
     if (!group || !this.districtContexts.has(id)) {
       return false;
     }
+    this.ensureCityPresentation();
     if (
       this.isolatedDistrictId !== null &&
       this.isolatedDistrictId !== id
@@ -722,6 +870,7 @@ class CityScene {
     if (!mesh) {
       return false;
     }
+    this.ensureCityPresentation();
     this.select(createSceneEntity("external", id));
     if (focus) {
       this.frameObject(mesh, true);
@@ -730,6 +879,10 @@ class CityScene {
   }
 
   public isolateDistrict(id: string, focus = true): boolean {
+    if (!this.districtGroups.has(id)) {
+      return false;
+    }
+    this.ensureCityPresentation();
     if (!this.applyDistrictIsolation(id, focus)) {
       return false;
     }
@@ -764,6 +917,7 @@ class CityScene {
   }
 
   public showWholeCity(): void {
+    this.ensureCityPresentation();
     for (const group of this.districtGroups.values()) {
       group.visible = true;
     }
@@ -808,9 +962,17 @@ class CityScene {
     this.externalMeshes.clear();
     this.externalNodes.clear();
     this.districtGroups.clear();
+    this.clearPrintPlate();
 
     for (const child of [...this.city.children]) {
       this.city.remove(child);
+      disposeObject(child);
+    }
+  }
+
+  private clearPrintPlate(): void {
+    for (const child of [...this.printPlate.children]) {
+      this.printPlate.remove(child);
       disposeObject(child);
     }
   }
@@ -891,7 +1053,10 @@ class CityScene {
     }
     this.camera.far = Math.max(requiredFar, this.fullCityFar);
     this.camera.updateProjectionMatrix();
-    this.controls.maxDistance = this.fullCityMaxDistance;
+    this.controls.maxDistance = cameraMaximumDistanceForFrame(
+      this.fullCityMaxDistance,
+      distance,
+    );
     if (
       !animate ||
       window.matchMedia("(prefers-reduced-motion: reduce)").matches
@@ -965,14 +1130,26 @@ class CityScene {
   }
 
   private readonly onPointerDown = (event: PointerEvent): void => {
+    if (!semanticPickingEnabled(this.presentationMode)) {
+      this.pointerStart = null;
+      return;
+    }
     this.pointerStart = { x: event.clientX, y: event.clientY };
   };
 
   private readonly onPointerMove = (event: PointerEvent): void => {
+    if (!semanticPickingEnabled(this.presentationMode)) {
+      this.hover(null);
+      return;
+    }
     this.hover(this.pick(event));
   };
 
   private readonly onPointerUp = (event: PointerEvent): void => {
+    if (!semanticPickingEnabled(this.presentationMode)) {
+      this.pointerStart = null;
+      return;
+    }
     const start = this.pointerStart;
     this.pointerStart = null;
     if (
@@ -990,6 +1167,9 @@ class CityScene {
   };
 
   private pick(event: PointerEvent): SceneEntity | null {
+    if (!semanticPickingEnabled(this.presentationMode)) {
+      return null;
+    }
     if (
       this.buildingMeshes.size === 0 &&
       this.districtMeshes.size === 0 &&
@@ -1029,6 +1209,14 @@ class CityScene {
     this.updateHighlight(entity);
     this.refreshSceneLabels();
     this.renderer.domElement.style.cursor = entity ? "pointer" : "grab";
+  }
+
+  private ensureCityPresentation(): void {
+    if (this.presentationMode === "city") {
+      return;
+    }
+    this.requestCityPresentation();
+    this.showCityLayout(false);
   }
 
   private select(entity: SceneEntity | null): void {
@@ -1222,10 +1410,31 @@ let explorerState = resetExplorerState();
 let activeExternalLayout = createExternalDependencyLayout(DEMO_MODEL);
 let activeExternalNodes: readonly ExternalSceneNode[] =
   activeExternalLayout.nodes;
+let requestCityPresentation = (): void => {};
 const cityScene = new CityScene(
   sceneHost,
   synchronizeExplorerState,
+  () => requestCityPresentation(),
 );
+const printPlateToolbar = installPrintPlateToolbar(
+  {
+    root: element<HTMLElement>("print-plate-toolbar"),
+    cityModeButton: element<HTMLButtonElement>("print-preview-city"),
+    platesModeButton: element<HTMLButtonElement>("print-preview-plates"),
+    plateSelect: element<HTMLSelectElement>("print-preview-plate"),
+    status: element<HTMLElement>("print-preview-status"),
+  },
+  {
+    onStateChange: (state) => {
+      if (state.mode === "plates" && state.projection !== undefined) {
+        cityScene.showPrintPlate(state.projection);
+      } else {
+        cityScene.showCityLayout();
+      }
+    },
+  },
+);
+requestCityPresentation = (): void => printPlateToolbar.show("city");
 const viewerLoadGateway = new ViewerLoadGateway();
 const automaticModelLoadGate = new AutomaticModelLoadGate();
 const logoLoadGate = new AutomaticModelLoadGate();
@@ -1233,6 +1442,12 @@ let loadedModelLogo: LoadedViewerImage | undefined;
 const printExportDialog = installPrintExportDialog({
   getModel: () => activeModel,
   loadGateway: viewerLoadGateway,
+  onPrintLayoutPlan: (plan) => {
+    printPlateToolbar.setPlan(plan);
+    if (plan !== undefined) {
+      printPlateToolbar.show("plates");
+    }
+  },
 });
 
 fileOpenButton.addEventListener("click", () => {
@@ -1437,6 +1652,7 @@ window.addEventListener("keydown", (event) => {
   }
 });
 window.addEventListener("beforeunload", () => {
+  printPlateToolbar.dispose();
   logoLoadGate.invalidate();
   loadedModelLogo?.dispose();
   loadedModelLogo = undefined;
@@ -1479,6 +1695,7 @@ async function loadModelFromQuery(): Promise<void> {
 
 function applyModel(model: CityModel, source: ModelSource): void {
   printExportDialog.invalidate();
+  printPlateToolbar.setPlan(undefined);
   const buildingsById = new Map(
     model.buildings.map((building) => [building.id, building]),
   );

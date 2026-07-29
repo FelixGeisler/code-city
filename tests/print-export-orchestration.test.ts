@@ -14,6 +14,8 @@ import {
 } from "../packages/core/src/index.js";
 import {
   generatePrintExport,
+  preparePrintPlateBundle,
+  serializePreparedSinglePrintPlateExport,
   STL_INFORMATION_LOSS_WARNING,
 } from "../packages/exporter/src/index.js";
 
@@ -113,7 +115,7 @@ describe("format-neutral print export orchestration", () => {
   });
 
   it.each(profileCases())(
-    "publishes CLI %s bytes identical to the pure generator",
+    "publishes CLI %s bytes identical to the exact plate generator",
     async (format, profile) => {
       const directory = await fs.mkdtemp(
         path.join(os.tmpdir(), `code-city-${format}-export-`),
@@ -151,12 +153,14 @@ describe("format-neutral print export orchestration", () => {
           stderr: (message) => stderr.push(message),
         },
       );
-      const shared = generatePrintExport({
-        format,
-        model: DEMO_MODEL,
-        profile,
-        options,
-      });
+      const shared = serializePreparedSinglePrintPlateExport(
+        preparePrintPlateBundle({
+          format,
+          model: DEMO_MODEL,
+          profile,
+          options: { ...options, fitPolicy: "error" },
+        }),
+      );
 
       expect(exitCode).toBe(0);
       expect(await fs.readFile(outputPath)).toEqual(
@@ -166,7 +170,7 @@ describe("format-neutral print export orchestration", () => {
         Buffer.from(shared.legendBytes!),
       );
       expect(stdout.join("")).toContain(
-        `${shared.preflight.triangleCount} triangle(s)`,
+        `Exported 1 ${format.toUpperCase()} print plate`,
       );
       for (const warning of shared.preflight.warnings) {
         expect(stderr.join("")).toContain(`Warning: ${warning}`);

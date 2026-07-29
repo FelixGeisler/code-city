@@ -1,12 +1,19 @@
 import type {
   PrintExportOptions,
   PrintExportPhase,
-  PrintExportPreflight,
 } from "../../../packages/exporter/src/print-export.js";
 import type {
   CalibrationMeasurement,
   CalibrationPrintExportPreflight,
 } from "../../../packages/exporter/src/calibration.js";
+import type {
+  PrintPlateBundlePreflight,
+  PrintPlatePreviewSource,
+} from "../../../packages/exporter/src/print-plates.js";
+import {
+  printLayoutPreviewPlanFromBundle,
+  type PrintLayoutPreviewPlan,
+} from "./print-plate-preview.js";
 
 export interface PrintExportGenerateRequest {
   readonly type: "generate";
@@ -31,15 +38,23 @@ export type PrintExportWorkerRequest =
 export interface PrintExportProgressResponse {
   readonly type: "progress";
   readonly jobId: number;
-  readonly phase: PrintExportPhase;
+  readonly phase: PrintExportPhase | "layout";
   readonly completed: number;
   readonly message: string;
+}
+
+export interface PrintPlateBundlePreflightResponse {
+  readonly type: "bundle-preflight";
+  readonly jobId: number;
+  readonly preflight: PrintPlateBundlePreflight;
+  readonly preview: PrintPlatePreviewSource;
 }
 
 export interface PrintExportPreflightResponse {
   readonly type: "preflight";
   readonly jobId: number;
-  readonly preflight: PrintExportPreflight;
+  readonly preflight: PrintPlateBundlePreflight;
+  readonly preview: PrintPlatePreviewSource;
 }
 
 export type PrintExportTransferArtifact =
@@ -59,8 +74,20 @@ export type PrintExportTransferArtifact =
 export interface PrintExportResultResponse {
   readonly type: "result";
   readonly jobId: number;
-  readonly preflight: PrintExportPreflight;
   readonly artifact: PrintExportTransferArtifact;
+  readonly legendBytes?: ArrayBuffer;
+}
+
+export interface PrintPlateBundleResultResponse {
+  readonly type: "bundle-result";
+  readonly jobId: number;
+  readonly artifact: {
+    readonly format: "zip";
+    readonly mimeType: "application/zip";
+    readonly fileExtension: ".zip";
+    readonly bytes: ArrayBuffer;
+  };
+  readonly manifestBytes: ArrayBuffer;
   readonly legendBytes?: ArrayBuffer;
 }
 
@@ -93,7 +120,9 @@ export interface PrintExportFailureResponse {
 export type PrintExportWorkerResponse =
   | PrintExportProgressResponse
   | PrintExportPreflightResponse
+  | PrintPlateBundlePreflightResponse
   | PrintExportResultResponse
+  | PrintPlateBundleResultResponse
   | PrintCalibrationResultResponse
   | PrintExportFailureResponse;
 
@@ -103,6 +132,22 @@ const EXPORT_PHASES: ReadonlySet<PrintExportPhase> = new Set([
   "serializing",
   "complete",
 ]);
+const BUNDLE_PHASES = new Set([
+  ...EXPORT_PHASES,
+  "layout",
+]);
+const BUNDLE_PLATE_LIMIT = 99;
+const BUNDLE_CHANNEL_LIMIT = 1_000;
+const BUNDLE_WARNING_LIMIT = 1_000;
+const BUNDLE_ROUTE_OMISSION_LIMIT = 100_000;
+const BUNDLE_UNPLACED_OBJECT_LIMIT = 100_000;
+const BUNDLE_IDENTIFIER_LIMIT = 512;
+const BUNDLE_WARNING_TEXT_LIMIT = 2_048;
+const BOUNDS_EPSILON = 1e-7;
+const PRINT_ARTIFACT_BYTE_LIMIT = 512 * 1024 * 1024;
+const PRINT_MANIFEST_BYTE_LIMIT = 4 * 1024 * 1024;
+const PRINT_LEGEND_BYTE_LIMIT = 16 * 1024 * 1024;
+const normalizedPreviewCache = new WeakMap<object, PrintLayoutPreviewPlan>();
 const CALIBRATION_MEASUREMENT_IDS: ReadonlySet<
   CalibrationMeasurement["id"]
 > = new Set([
@@ -178,6 +223,31 @@ function stringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
+function boundedText(
+  value: unknown,
+  maximumLength = BUNDLE_IDENTIFIER_LIMIT,
+): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= maximumLength &&
+    !/[\p{Cc}\p{Cf}\p{Cs}]/u.test(value)
+  );
+}
+
+function boundedStringArray(
+  value: unknown,
+  maximumItems: number,
+  maximumLength = BUNDLE_IDENTIFIER_LIMIT,
+): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= maximumItems &&
+    value.every((item) => boundedText(item, maximumLength)) &&
+    new Set(value).size === value.length
+  );
+}
+
 function finiteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
@@ -204,7 +274,14 @@ function exportOptions(value: unknown): value is PrintExportOptions {
       candidate["labelPolicy"] === "off") &&
     (candidate["routePolicy"] === "auto" ||
       candidate["routePolicy"] === "off") &&
-    typeof candidate["includeLegend"] === "boolean"
+    typeof candidate["includeLegend"] === "boolean" &&
+    (candidate["fitPolicy"] === undefined ||
+      candidate["fitPolicy"] === "error" ||
+      candidate["fitPolicy"] === "scale" ||
+      candidate["fitPolicy"] === "tile") &&
+    (candidate["maximumPlateCount"] === undefined ||
+      (positiveInteger(candidate["maximumPlateCount"]) &&
+        Number(candidate["maximumPlateCount"]) <= 99))
   );
 }
 
@@ -218,18 +295,6 @@ function dimensions(value: unknown): boolean {
     candidate["y"] >= 0 &&
     finiteNumber(candidate["z"]) &&
     candidate["z"] >= 0
-  );
-}
-
-function channel(value: unknown): boolean {
-  const candidate = record(value);
-  return (
-    candidate !== undefined &&
-    typeof candidate["id"] === "string" &&
-    typeof candidate["label"] === "string" &&
-    stringArray(candidate["partIds"]) &&
-    stringArray(candidate["semanticGroupIds"]) &&
-    nonnegativeInteger(candidate["primitiveCount"])
   );
 }
 
@@ -257,27 +322,457 @@ function routes(value: unknown): boolean {
     finiteNumber(candidate["printedWeight"]) &&
     candidate["printedWeight"] >= 0 &&
     finiteNumber(candidate["omittedWeight"]) &&
-    candidate["omittedWeight"] >= 0
+    candidate["omittedWeight"] >= 0 &&
+    candidate["totalCount"] ===
+      Number(candidate["printedCount"]) + Number(candidate["omittedCount"]) &&
+    approximatelyEqual(
+      Number(candidate["totalWeight"]),
+      saturatingWeightAdd(
+        Number(candidate["printedWeight"]),
+        Number(candidate["omittedWeight"]),
+      ),
+    )
   );
 }
 
-function preflight(value: unknown): value is PrintExportPreflight {
+function printSize(value: unknown): boolean {
   const candidate = record(value);
   return (
     candidate !== undefined &&
-    printFormat(candidate["format"]) &&
-    typeof candidate["title"] === "string" &&
-    typeof candidate["profileId"] === "string" &&
-    typeof candidate["profileName"] === "string" &&
-    dimensions(candidate["dimensions"]) &&
-    positiveInteger(candidate["partCount"]) &&
-    positiveInteger(candidate["triangleCount"]) &&
-    Array.isArray(candidate["channels"]) &&
-    candidate["channels"].every(channel) &&
-    stringArray(candidate["warnings"]) &&
+    finiteNumber(candidate["width"]) &&
+    candidate["width"] > 0 &&
+    finiteNumber(candidate["depth"]) &&
+    candidate["depth"] > 0 &&
+    finiteNumber(candidate["height"]) &&
+    candidate["height"] > 0
+  );
+}
+
+function portablePlateFileName(
+  value: unknown,
+  format: "3mf" | "stl",
+): value is string {
+  return (
+    typeof value === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}\.(?:3mf|stl)$/u.test(value) &&
+    value.toLocaleLowerCase("en-US").endsWith(`.${format}`)
+  );
+}
+
+function bundleEndpoint(value: unknown, plateCount: number): boolean {
+  const candidate = record(value);
+  return (
+    candidate !== undefined &&
+    (candidate["kind"] === "building" ||
+      candidate["kind"] === "district" ||
+      candidate["kind"] === "external") &&
+    boundedText(candidate["id"]) &&
+    boundedText(candidate["label"]) &&
+    (candidate["plateNumber"] === undefined ||
+      (positiveInteger(candidate["plateNumber"]) &&
+        Number(candidate["plateNumber"]) <= plateCount))
+  );
+}
+
+function bundleRouteOmissions(
+  value: unknown,
+  plateCount: number,
+): boolean {
+  if (
+    !Array.isArray(value) ||
+    value.length > BUNDLE_ROUTE_OMISSION_LIMIT
+  ) {
+    return false;
+  }
+  const routeIds = new Set<string>();
+  for (const item of value) {
+    const candidate = record(item);
+    if (
+      candidate === undefined ||
+      !boundedText(candidate["routeId"]) ||
+      routeIds.has(candidate["routeId"]) ||
+      !finiteNumber(candidate["weight"]) ||
+      candidate["weight"] <= 0 ||
+      (candidate["reason"] !== "cross-plate" &&
+        candidate["reason"] !== "route-limit" &&
+        candidate["reason"] !== "unroutable" &&
+        candidate["reason"] !== "policy" &&
+        candidate["reason"] !== "unplaced-endpoint") ||
+      !bundleEndpoint(candidate["consumer"], plateCount) ||
+      !bundleEndpoint(candidate["provider"], plateCount)
+    ) {
+      return false;
+    }
+    routeIds.add(candidate["routeId"]);
+  }
+  return true;
+}
+
+function bundleUnplacedObjects(value: unknown): boolean {
+  if (
+    !Array.isArray(value) ||
+    value.length > BUNDLE_UNPLACED_OBJECT_LIMIT
+  ) {
+    return false;
+  }
+  const keys = new Set<string>();
+  for (const item of value) {
+    const candidate = record(item);
+    if (
+      candidate === undefined ||
+      (candidate["kind"] !== "district" &&
+        candidate["kind"] !== "identity" &&
+        candidate["kind"] !== "external") ||
+      !boundedText(candidate["id"]) ||
+      !boundedText(candidate["label"]) ||
+      (candidate["reason"] !== "too-large" &&
+        candidate["reason"] !== "no-space" &&
+        candidate["reason"] !== "minimum-feature" &&
+        candidate["reason"] !== "unsupported" &&
+        candidate["reason"] !== "other") ||
+      (candidate["size"] !== undefined && !printSize(candidate["size"]))
+    ) {
+      return false;
+    }
+    const key = `${candidate["kind"]}\0${candidate["id"]}`;
+    if (keys.has(key)) return false;
+    keys.add(key);
+  }
+  return true;
+}
+
+function bundlePlatePreflight(
+  value: unknown,
+  format: "3mf" | "stl",
+): boolean {
+  const candidate = record(value);
+  return (
+    candidate !== undefined &&
+    positiveInteger(candidate["number"]) &&
+    Number(candidate["number"]) <= BUNDLE_PLATE_LIMIT &&
+    boundedText(candidate["id"]) &&
+    portablePlateFileName(candidate["fileName"], format) &&
+    printSize(candidate["dimensions"]) &&
+    finiteNumber(candidate["utilization"]) &&
+    candidate["utilization"] >= 0 &&
+    candidate["utilization"] <= 1 &&
+    boundedStringArray(candidate["channelIds"], BUNDLE_CHANNEL_LIMIT) &&
+    boundedStringArray(
+      candidate["warnings"],
+      BUNDLE_WARNING_LIMIT,
+      BUNDLE_WARNING_TEXT_LIMIT,
+    ) &&
     labels(candidate["labels"]) &&
-    routes(candidate["routes"]) &&
-    typeof candidate["legendIncluded"] === "boolean"
+    routes(candidate["routes"])
+  );
+}
+
+function bundlePreflight(
+  value: unknown,
+): value is PrintPlateBundlePreflight {
+  const candidate = record(value);
+  if (
+    candidate === undefined ||
+    !printFormat(candidate["format"]) ||
+    !boundedText(candidate["title"]) ||
+    !boundedText(candidate["profileId"]) ||
+    !boundedText(candidate["profileName"]) ||
+    (candidate["fitPolicy"] !== "error" &&
+      candidate["fitPolicy"] !== "scale" &&
+      candidate["fitPolicy"] !== "tile") ||
+    !finiteNumber(candidate["requestedScale"]) ||
+    candidate["requestedScale"] <= 0 ||
+    !finiteNumber(candidate["appliedScale"]) ||
+    candidate["appliedScale"] <= 0 ||
+    !positiveInteger(candidate["plateCount"]) ||
+    Number(candidate["plateCount"]) > BUNDLE_PLATE_LIMIT ||
+    !Array.isArray(candidate["plates"]) ||
+    candidate["plates"].length !== candidate["plateCount"] ||
+    candidate["plates"].length > BUNDLE_PLATE_LIMIT ||
+    !candidate["plates"].every((plate) =>
+      bundlePlatePreflight(plate, candidate["format"] as "3mf" | "stl"),
+    ) ||
+    !labels(candidate["labels"]) ||
+    !routes(candidate["routes"]) ||
+    !boundedStringArray(
+      candidate["warnings"],
+      BUNDLE_WARNING_LIMIT,
+      BUNDLE_WARNING_TEXT_LIMIT,
+    ) ||
+    !bundleUnplacedObjects(candidate["unplacedObjects"]) ||
+    !bundleRouteOmissions(
+      candidate["routeOmissions"],
+      Number(candidate["plateCount"]),
+    ) ||
+    typeof candidate["legendIncluded"] !== "boolean"
+  ) {
+    return false;
+  }
+
+  const plates = candidate["plates"] as readonly Record<string, unknown>[];
+  const numbers = plates.map(({ number }) => Number(number));
+  const ids = plates.map(({ id }) => String(id));
+  const fileNames = plates.map(({ fileName }) =>
+    String(fileName).toLocaleLowerCase("en-US"),
+  );
+  const normalized = candidate as unknown as PrintPlateBundlePreflight;
+  if (
+    ((normalized.fitPolicy === "tile" ||
+      normalized.fitPolicy === "error") &&
+      !approximatelyEqual(
+        normalized.appliedScale,
+        normalized.requestedScale,
+      )) ||
+    (normalized.fitPolicy === "error" && normalized.plateCount !== 1) ||
+    (normalized.fitPolicy === "scale" && normalized.plateCount !== 1) ||
+    (normalized.fitPolicy === "scale" &&
+      normalized.appliedScale > normalized.requestedScale + BOUNDS_EPSILON)
+  ) {
+    return false;
+  }
+  const labelTotals = normalized.plates.reduce(
+    (total, plate) => ({
+      printedBuildings:
+        total.printedBuildings + plate.labels.printedBuildings,
+      skippedBuildings:
+        total.skippedBuildings + plate.labels.skippedBuildings,
+      printedDistricts:
+        total.printedDistricts + plate.labels.printedDistricts,
+      skippedDistricts:
+        total.skippedDistricts + plate.labels.skippedDistricts,
+    }),
+    {
+      printedBuildings: 0,
+      skippedBuildings: 0,
+      printedDistricts: 0,
+      skippedDistricts: 0,
+    },
+  );
+  const routeTotals = normalized.plates.reduce(
+    (total, plate) => ({
+      totalCount: total.totalCount + plate.routes.totalCount,
+      printedCount: total.printedCount + plate.routes.printedCount,
+      omittedCount: total.omittedCount + plate.routes.omittedCount,
+      totalWeight: saturatingWeightAdd(
+        total.totalWeight,
+        plate.routes.totalWeight,
+      ),
+      printedWeight: saturatingWeightAdd(
+        total.printedWeight,
+        plate.routes.printedWeight,
+      ),
+      omittedWeight: saturatingWeightAdd(
+        total.omittedWeight,
+        plate.routes.omittedWeight,
+      ),
+    }),
+    {
+      totalCount: 0,
+      printedCount: 0,
+      omittedCount: 0,
+      totalWeight: 0,
+      printedWeight: 0,
+      omittedWeight: 0,
+    },
+  );
+  return (
+    new Set(numbers).size === plates.length &&
+    new Set(ids).size === plates.length &&
+    new Set(fileNames).size === plates.length &&
+    [...numbers].sort((left, right) => left - right).every(
+      (number, index) => number === index + 1,
+    ) &&
+    labelTotals.printedBuildings === normalized.labels.printedBuildings &&
+    labelTotals.skippedBuildings === normalized.labels.skippedBuildings &&
+    labelTotals.printedDistricts === normalized.labels.printedDistricts &&
+    labelTotals.skippedDistricts === normalized.labels.skippedDistricts &&
+    normalized.plates.every(
+      (plate) => plate.routes.policy === normalized.routes.policy,
+    ) &&
+    routeTotals.totalCount === normalized.routes.totalCount &&
+    routeTotals.printedCount === normalized.routes.printedCount &&
+    routeTotals.omittedCount === normalized.routes.omittedCount &&
+    approximatelyEqual(
+      routeTotals.totalWeight,
+      normalized.routes.totalWeight,
+    ) &&
+    approximatelyEqual(
+      routeTotals.printedWeight,
+      normalized.routes.printedWeight,
+    ) &&
+    approximatelyEqual(
+      routeTotals.omittedWeight,
+      normalized.routes.omittedWeight,
+    )
+  );
+}
+
+export function normalizePrintExportPreviewSource(
+  value: unknown,
+): PrintLayoutPreviewPlan | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const cached = normalizedPreviewCache.get(value);
+  if (cached !== undefined) return cached;
+  try {
+    const normalized = printLayoutPreviewPlanFromBundle(
+      value as PrintPlatePreviewSource,
+    );
+    normalizedPreviewCache.set(value, normalized);
+    return normalized;
+  } catch {
+    return undefined;
+  }
+}
+
+function approximatelyEqual(left: number, right: number): boolean {
+  if (left === right) return true;
+  const scale = Math.max(1, Math.abs(left), Math.abs(right));
+  return Math.abs(left - right) <= BOUNDS_EPSILON * scale;
+}
+
+function saturatingWeightAdd(left: number, right: number): number {
+  const sum = left + right;
+  return Number.isFinite(sum) ? sum : Number.MAX_VALUE;
+}
+
+function equalStringSets(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].sort();
+  const sortedRight = [...right].sort();
+  return sortedLeft.every(
+    (value, index) => value === sortedRight[index],
+  );
+}
+
+function zeroOriginBoundsMatch(
+  candidate: PrintLayoutPreviewPlan["printableBounds"],
+  expected: { readonly x: number; readonly y: number; readonly z: number },
+): boolean {
+  return (
+    approximatelyEqual(candidate.minimum.x, 0) &&
+    approximatelyEqual(candidate.minimum.y, 0) &&
+    approximatelyEqual(candidate.minimum.z, 0) &&
+    approximatelyEqual(candidate.maximum.x, expected.x) &&
+    approximatelyEqual(candidate.maximum.y, expected.y) &&
+    approximatelyEqual(candidate.maximum.z, expected.z) &&
+    approximatelyEqual(candidate.size.x, expected.x) &&
+    approximatelyEqual(candidate.size.y, expected.y) &&
+    approximatelyEqual(candidate.size.z, expected.z)
+  );
+}
+
+function bundleMatchesPreview(
+  preflight: PrintPlateBundlePreflight,
+  preview: PrintLayoutPreviewPlan,
+): boolean {
+  if (
+    preview.requestedPolicy !== preflight.fitPolicy ||
+    preview.appliedPolicy !== preflight.fitPolicy ||
+    !approximatelyEqual(preview.requestedScale, preflight.requestedScale) ||
+    !approximatelyEqual(preview.appliedScale, preflight.appliedScale) ||
+    preview.plates.length !== preflight.plateCount ||
+    !equalStringSets(preview.warnings, preflight.warnings) ||
+    !equalStringSets(
+      preview.unplacedObjects,
+      preflight.unplacedObjects.map(({ id }) => id),
+    )
+  ) {
+    return false;
+  }
+
+  const maximum = preflight.plates.reduce(
+    (current, plate) => ({
+      x: Math.max(current.x, plate.dimensions.width),
+      y: Math.max(current.y, plate.dimensions.depth),
+      z: Math.max(current.z, plate.dimensions.height),
+    }),
+    { x: 0, y: 0, z: 0 },
+  );
+  if (!zeroOriginBoundsMatch(preview.printableBounds, maximum)) {
+    return false;
+  }
+
+  const previewByIndex = new Map(
+    preview.plates.map((plate) => [plate.index + 1, plate]),
+  );
+  return preflight.plates.every((plate) => {
+    const projected = previewByIndex.get(plate.number);
+    return (
+      projected !== undefined &&
+      projected.id === plate.id &&
+      projected.fileName === plate.fileName &&
+      approximatelyEqual(projected.utilization, plate.utilization) &&
+      zeroOriginBoundsMatch(projected.bounds, {
+        x: plate.dimensions.width,
+        y: plate.dimensions.depth,
+        z: plate.dimensions.height,
+      }) &&
+      equalStringSets(projected.channels, plate.channelIds) &&
+      equalStringSets(projected.warnings, plate.warnings)
+    );
+  });
+}
+
+function singleMatchesPreview(
+  preflight: PrintPlateBundlePreflight,
+  preview: PrintLayoutPreviewPlan,
+): boolean {
+  if (
+    preflight.fitPolicy !== "error" ||
+    preflight.plateCount !== 1 ||
+    preview.requestedPolicy !== "error" ||
+    preview.appliedPolicy !== "error" ||
+    !approximatelyEqual(preview.requestedScale, preview.appliedScale) ||
+    preview.plates.length !== 1 ||
+    preview.unplacedObjects.length !== 0 ||
+    !equalStringSets(preview.warnings, preflight.warnings) ||
+    !bundleMatchesPreview(preflight, preview)
+  ) {
+    return false;
+  }
+  const plate = preview.plates[0]!;
+  const preflightPlate = preflight.plates[0]!;
+  return (
+    plate.index === 0 &&
+    portablePlateFileName(plate.fileName, preflight.format) &&
+    plate.id === preflightPlate.id &&
+    plate.fileName === preflightPlate.fileName
+  );
+}
+
+function bundleTransferArtifact(value: unknown): value is {
+  readonly format: "zip";
+  readonly mimeType: "application/zip";
+  readonly fileExtension: ".zip";
+  readonly bytes: ArrayBuffer;
+} {
+  const candidate = record(value);
+  return (
+    candidate !== undefined &&
+    candidate["format"] === "zip" &&
+    candidate["mimeType"] === "application/zip" &&
+    candidate["fileExtension"] === ".zip" &&
+    boundedPrintTransferBuffer(
+      candidate["bytes"],
+      PRINT_ARTIFACT_BYTE_LIMIT,
+    )
+  );
+}
+
+export function boundedPrintTransferBuffer(
+  value: unknown,
+  maximumBytes: number,
+): value is ArrayBuffer {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes <= 0) {
+    throw new TypeError("Transfer-buffer limit must be a positive integer.");
+  }
+  return (
+    value instanceof ArrayBuffer &&
+    value.byteLength > 0 &&
+    value.byteLength <= maximumBytes
   );
 }
 
@@ -287,8 +782,10 @@ function transferArtifact(
   const candidate = record(value);
   if (
     candidate === undefined ||
-    !(candidate["bytes"] instanceof ArrayBuffer) ||
-    candidate["bytes"].byteLength === 0
+    !boundedPrintTransferBuffer(
+      candidate["bytes"],
+      PRINT_ARTIFACT_BYTE_LIMIT,
+    )
   ) {
     return false;
   }
@@ -448,25 +945,40 @@ export function isPrintExportWorkerResponse(
     case "progress":
       return (
         typeof candidate["phase"] === "string" &&
-        EXPORT_PHASES.has(candidate["phase"] as PrintExportPhase) &&
+        BUNDLE_PHASES.has(candidate["phase"]) &&
         typeof candidate["completed"] === "number" &&
         Number.isFinite(candidate["completed"]) &&
         candidate["completed"] >= 0 &&
         candidate["completed"] <= 1 &&
         typeof candidate["message"] === "string"
       );
-    case "preflight":
-      return preflight(candidate["preflight"]);
+    case "preflight": {
+      const cityPreflight = candidate["preflight"];
+      const preview = normalizePrintExportPreviewSource(candidate["preview"]);
+      return (
+        bundlePreflight(cityPreflight) &&
+        preview !== undefined &&
+        singleMatchesPreview(cityPreflight, preview)
+      );
+    }
+    case "bundle-preflight": {
+      const bundle = candidate["preflight"];
+      const preview = normalizePrintExportPreviewSource(candidate["preview"]);
+      return (
+        bundlePreflight(bundle) &&
+        preview !== undefined &&
+        bundleMatchesPreview(bundle, preview)
+      );
+    }
     case "result": {
       const artifact = candidate["artifact"];
-      const cityPreflight = candidate["preflight"];
       return (
-        preflight(cityPreflight) &&
         transferArtifact(artifact) &&
-        cityPreflight.format === artifact.format &&
         (candidate["legendBytes"] === undefined ||
           (candidate["legendBytes"] instanceof ArrayBuffer &&
-            candidate["legendBytes"].byteLength > 0))
+            candidate["legendBytes"].byteLength > 0 &&
+            candidate["legendBytes"].byteLength <=
+              PRINT_LEGEND_BYTE_LIMIT))
       );
     }
     case "calibration-result": {
@@ -477,7 +989,23 @@ export function isPrintExportWorkerResponse(
         transferArtifact(artifact) &&
         calibration.format === artifact.format &&
         candidate["manifestBytes"] instanceof ArrayBuffer &&
-        candidate["manifestBytes"].byteLength > 0
+        candidate["manifestBytes"].byteLength > 0 &&
+        candidate["manifestBytes"].byteLength <=
+          PRINT_MANIFEST_BYTE_LIMIT
+      );
+    }
+    case "bundle-result": {
+      return (
+        bundleTransferArtifact(candidate["artifact"]) &&
+        candidate["manifestBytes"] instanceof ArrayBuffer &&
+        candidate["manifestBytes"].byteLength > 0 &&
+        candidate["manifestBytes"].byteLength <=
+          PRINT_MANIFEST_BYTE_LIMIT &&
+        (candidate["legendBytes"] === undefined ||
+          (candidate["legendBytes"] instanceof ArrayBuffer &&
+            candidate["legendBytes"].byteLength > 0 &&
+            candidate["legendBytes"].byteLength <=
+              PRINT_LEGEND_BYTE_LIMIT))
       );
     }
     case "failure":

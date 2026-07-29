@@ -11,6 +11,11 @@ export interface ArtifactPublication {
 
 export interface ArtifactPublicationOptions {
   /**
+   * Existing input paths that must never be replaced, including through
+   * canonical path aliases or file-system identities.
+   */
+  readonly protectedPaths?: readonly string[];
+  /**
    * Test hook invoked after every destination has been backed up and before
    * each staged artifact is published.
    */
@@ -127,6 +132,58 @@ async function assertDistinctDestinations(
         identity.fileIdentity,
         item.absoluteDestination,
       );
+    }
+  }
+}
+
+async function protectedPathIdentity(
+  absolutePath: string,
+): Promise<DestinationIdentity> {
+  const status = await fs.stat(absolutePath, { bigint: true });
+  if (!status.isFile()) {
+    throw new Error(
+      `Protected input '${absolutePath}' must be a regular file.`,
+    );
+  }
+  return {
+    canonicalPath: await fs.realpath(absolutePath),
+    ...(status.dev === 0n && status.ino === 0n
+      ? {}
+      : { fileIdentity: `${status.dev}:${status.ino}` }),
+  };
+}
+
+async function assertDestinationsDoNotReplaceProtectedPaths(
+  prepared: readonly PreparedArtifact[],
+  protectedPaths: readonly string[],
+): Promise<void> {
+  if (protectedPaths.length === 0) return;
+  const protectedIdentities = await Promise.all(
+    protectedPaths.map(async (protectedPath) => {
+      const absolutePath = path.resolve(protectedPath);
+      return {
+        absolutePath,
+        identity: await protectedPathIdentity(absolutePath),
+      };
+    }),
+  );
+  for (const item of prepared) {
+    const destination = await destinationIdentity(
+      item.absoluteDestination,
+    );
+    for (const protectedInput of protectedIdentities) {
+      const sameCanonicalPath =
+        comparisonKey(destination.canonicalPath) ===
+        comparisonKey(protectedInput.identity.canonicalPath);
+      const sameFileIdentity =
+        destination.fileIdentity !== undefined &&
+        protectedInput.identity.fileIdentity !== undefined &&
+        destination.fileIdentity === protectedInput.identity.fileIdentity;
+      if (sameCanonicalPath || sameFileIdentity) {
+        throw new Error(
+          `Artifact destination '${item.absoluteDestination}' must not replace protected input '${protectedInput.absolutePath}'.`,
+        );
+      }
     }
   }
 }
@@ -307,6 +364,10 @@ export async function publishArtifactsAtomically(
     ].map((directory) => fs.mkdir(directory, { recursive: true })),
   );
   await assertDistinctDestinations(prepared);
+  await assertDestinationsDoNotReplaceProtectedPaths(
+    prepared,
+    options.protectedPaths ?? [],
+  );
 
   const transactionId = `${process.pid}-${randomUUID()}`;
   try {

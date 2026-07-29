@@ -8,6 +8,7 @@ export * from "./model.js";
 export * from "./model-validation.js";
 export * from "./path.js";
 export * from "./print.js";
+export * from "./print-layout.js";
 export * from "./print-labels.js";
 export * from "./print-routes.js";
 export * from "./printer-profiles.js";

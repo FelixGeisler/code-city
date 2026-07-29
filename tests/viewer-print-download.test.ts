@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   PrintDownloadManager,
+  printBundleFileNames,
   printCalibrationFileNames,
   printExportFileNames,
   sanitizePrintFileStem,
+  tryPublishPrintBundleDownload,
   tryPublishPrintDownloads,
   type ObjectUrlApi,
 } from "../apps/viewer/src/print-download.js";
@@ -82,6 +84,47 @@ describe("viewer print downloads", () => {
       artifact: "prusa-xl-t1-t2.calibration.stl",
       manifest: "prusa-xl-t1-t2.calibration.json",
     });
+    expect(
+      printBundleFileNames({
+        title: "FLOW / Hub",
+        version: "test:1",
+      }),
+    ).toEqual({
+      artifact: "FLOW-Hub-test-1-print-bundle.zip",
+    });
+  });
+
+  it("publishes one ZIP because its manifest and legend are bundled", async () => {
+    const urls = new FakeObjectUrls();
+    const manager = new PrintDownloadManager(urls);
+    const bytes = Uint8Array.from([80, 75, 3, 4]).buffer;
+
+    const bundle = manager.replaceBundle(
+      { title: "Code City", version: "Demo" },
+      {
+        artifact: {
+          format: "zip",
+          mimeType: "application/zip",
+          fileExtension: ".zip",
+          bytes,
+        },
+      },
+    );
+
+    expect(bundle).toMatchObject({
+      artifact: {
+        fileName: "Code-City-Demo-print-bundle.zip",
+        url: "blob:test-1",
+      },
+    });
+    expect(urls.blobs).toHaveLength(1);
+    expect(bundle.artifact.blob.type).toBe("application/zip");
+    expect(
+      new Uint8Array(await bundle.artifact.blob.arrayBuffer()),
+    ).toEqual(Uint8Array.from([80, 75, 3, 4]));
+
+    manager.clear();
+    expect(urls.revoked).toEqual(["blob:test-1"]);
   });
 
   it("publishes deterministic calibration files with precise MIME types", () => {
@@ -194,5 +237,24 @@ describe("viewer print downloads", () => {
         "Local downloads could not be prepared: Object URL creation failed.",
     });
     expect(urls.revoked).toEqual([]);
+
+    expect(
+      tryPublishPrintBundleDownload(
+        manager,
+        { title: "Code City" },
+        {
+          artifact: {
+            format: "zip",
+            mimeType: "application/zip",
+            fileExtension: ".zip",
+            bytes: new ArrayBuffer(1),
+          },
+        },
+      ),
+    ).toEqual({
+      ok: false,
+      message:
+        "Local downloads could not be prepared: Object URL creation failed.",
+    });
   });
 });

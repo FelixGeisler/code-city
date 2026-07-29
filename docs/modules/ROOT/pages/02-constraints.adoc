@@ -10,5 +10,4 @@
 * Export emits multi-part 3MF or single-material binary STL.
 * Printer profiles declare configured print channels; no global channel limit
   exists.
-* Browser export is local-only and does not auto-fit or tile an
-  oversized city.
+* Browser export, safe scaling, and complete-district tiling are local-only.

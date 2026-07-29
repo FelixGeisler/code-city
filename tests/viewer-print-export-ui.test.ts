@@ -52,6 +52,9 @@ describe("viewer print export UI", () => {
       /id="print-export-progress-meter"[\s\S]*aria-labelledby="print-export-status"/u,
     );
     expect(html).not.toContain("Export 3MF");
+    expect(html).toMatch(
+      /id="print-plate-toolbar"[\s\S]*aria-label="Canvas layout"[\s\S]*hidden/u,
+    );
   });
 
   it("bundles a module worker and keeps downloads in local Blob URLs", async () => {
@@ -74,10 +77,48 @@ describe("viewer print export UI", () => {
     );
     expect(source).toContain("preflight.manifest.couponCount");
     expect(source).toContain('"printable coupons"');
+    expect(source).toContain("artifactDownload.hidden = true");
+    expect(
+      source.match(/artifactDownload\.hidden = false/gu)?.length,
+    ).toBe(2);
+    expect(source).toContain(
+      "withPrintLayoutPreviewReadiness(preview, readiness)",
+    );
     expect(source).not.toContain(
       'submitButton.addEventListener("click"',
     );
     expect(source).not.toMatch(/\bfetch\s*\(/u);
     expect(source).not.toMatch(/XMLHttpRequest/u);
+  });
+
+  it("keeps the print-plate toolbar compact and touch accessible", async () => {
+    const css = await fs.readFile(
+      path.join(viewerRoot, "src/styles.css"),
+      "utf8",
+    );
+
+    expect(css).toMatch(
+      /\.print-plate-mode button,\s*\.print-plate-toolbar select\s*\{[\s\S]*min-height:\s*36px/u,
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 720px\)[\s\S]*\.print-plate-toolbar\s*\{[\s\S]*width:\s*calc\(100% - 24px\)[\s\S]*max-width:\s*none[\s\S]*flex-wrap:\s*wrap/u,
+    );
+    expect(css).toMatch(
+      /\.print-plate-toolbar select\s*\{[\s\S]*min-width:\s*0;[\s\S]*max-width:\s*100%;/u,
+    );
+    expect(css).toMatch(
+      /#print-preview-status\s*\{[\s\S]*flex:\s*1 1 100%;[\s\S]*max-width:\s*100%;/u,
+    );
+    const main = await fs.readFile(
+      path.join(viewerRoot, "src/main.ts"),
+      "utf8",
+    );
+    expect(main).toContain(
+      "this.prePrintOverlayVisibility.dependencies = routes.length > 0",
+    );
+    expect(main).toContain(
+      "this.prePrintOverlayVisibility.districtDependencies =",
+    );
+    expect(main).toContain("viewerPrintMeshBatches(plate.entities");
   });
 });

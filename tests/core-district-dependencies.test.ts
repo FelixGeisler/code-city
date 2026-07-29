@@ -192,6 +192,7 @@ describe("core district dependency aggregation", () => {
       kinds: [
         { kind: "package-reference", edgeCount: 4, weight: 10 },
       ],
+      dependencyIds: ["weak-00", "weak-01", "weak-02", "weak-03"],
       contributors: [
         {
           dependencyId: "weak-03",

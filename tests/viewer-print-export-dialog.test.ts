@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   LatestPrintProfileRead,
   printExportSubmitDisabled,
+  shouldRetainPrintLayoutOnDialogClose,
 } from "../apps/viewer/src/print-export-dialog.js";
 
 describe("viewer print export dialog state", () => {
@@ -27,6 +28,8 @@ describe("viewer print export dialog state", () => {
         profileKind: "generic",
         hasCustomProfile: true,
         prusaToolCount: 5,
+        fitPolicyValid: true,
+        maximumPlateCountValid: true,
       }),
     ).toBe(true);
     expect(
@@ -36,6 +39,8 @@ describe("viewer print export dialog state", () => {
         profileKind: "custom",
         hasCustomProfile: false,
         prusaToolCount: 5,
+        fitPolicyValid: true,
+        maximumPlateCountValid: true,
       }),
     ).toBe(true);
     expect(
@@ -45,6 +50,8 @@ describe("viewer print export dialog state", () => {
         profileKind: "prusa-xl",
         hasCustomProfile: true,
         prusaToolCount: 0,
+        fitPolicyValid: true,
+        maximumPlateCountValid: true,
       }),
     ).toBe(true);
     expect(
@@ -54,6 +61,8 @@ describe("viewer print export dialog state", () => {
         profileKind: "generic",
         hasCustomProfile: false,
         prusaToolCount: 0,
+        fitPolicyValid: true,
+        maximumPlateCountValid: true,
       }),
     ).toBe(false);
     expect(
@@ -63,7 +72,41 @@ describe("viewer print export dialog state", () => {
         profileKind: "generic",
         hasCustomProfile: true,
         prusaToolCount: 5,
+        fitPolicyValid: true,
+        maximumPlateCountValid: true,
       }),
     ).toBe(true);
+    expect(
+      printExportSubmitDisabled({
+        busy: false,
+        formatSupported: true,
+        profileKind: "generic",
+        hasCustomProfile: true,
+        prusaToolCount: 1,
+        fitPolicyValid: false,
+        maximumPlateCountValid: true,
+      }),
+    ).toBe(true);
+    expect(
+      printExportSubmitDisabled({
+        busy: false,
+        formatSupported: true,
+        profileKind: "generic",
+        hasCustomProfile: true,
+        prusaToolCount: 1,
+        fitPolicyValid: true,
+        maximumPlateCountValid: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("retains every completed printable preview when the dialog closes", () => {
+    expect(
+      shouldRetainPrintLayoutOnDialogClose("bundle-ready"),
+    ).toBe(true);
+    expect(shouldRetainPrintLayoutOnDialogClose("busy")).toBe(false);
+    expect(shouldRetainPrintLayoutOnDialogClose("failed")).toBe(false);
+    expect(shouldRetainPrintLayoutOnDialogClose("ready")).toBe(true);
+    expect(shouldRetainPrintLayoutOnDialogClose("idle")).toBe(false);
   });
 });

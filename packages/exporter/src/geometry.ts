@@ -9,6 +9,7 @@ import type {
 import {
   assignBuildingPrintCodes,
   assignDistrictPrintCodes,
+  type AssignedPrintCode,
   type PhysicalPrintStatus,
   type PrintLabelPolicy,
   type PrintLegend,
@@ -23,6 +24,7 @@ import {
 import {
   layoutExternalDependencies,
   selectExternalDependencies,
+  type ExternalDependencyLayout,
 } from "../../core/src/external-dependencies.js";
 import { normalizeRepositoryRelativePath } from "../../core/src/path.js";
 import {
@@ -83,6 +85,7 @@ export type PrintPrimitiveKind =
   | "dependency-endpoint"
   | "dependency-trace"
   | "dependency-socket"
+  | "plate-number"
   | "identity-panel"
   | "identity-relief";
 
@@ -135,6 +138,34 @@ export interface BuildPrintableCityOptions {
   readonly profile: PrinterProfile;
   readonly labelPolicy?: PrintLabelPolicy;
   readonly routePolicy?: PrintRoutePolicy;
+  /**
+   * Optional fixed-size plate identifier in CityModel coordinates. Each glyph
+   * is raised directly from the shared base so it remains attached and does
+   * not depend on a second plaque.
+   */
+  readonly plateNumber?: {
+    readonly id: string;
+    readonly label: string;
+    readonly bounds: {
+      readonly minimum: Vector3;
+      readonly maximum: Vector3;
+    };
+  };
+  /** Exact plate reservation for the name/version/fixed-icon plaque. */
+  readonly identityReservation?: {
+    readonly minimum: Vector3;
+    readonly maximum: Vector3;
+  };
+  /**
+   * Plate-local external boxes already placed on the supplied base. Used by
+   * multi-plate export to populate its reserved rear strip without growing
+   * the plate after packing.
+   */
+  readonly externalLayout?: ExternalDependencyLayout;
+  /** Optional city-wide codes retained when a multi-plate model is sliced. */
+  readonly buildingPrintCodes?: readonly AssignedPrintCode[];
+  /** Optional city-wide codes retained when a multi-plate model is sliced. */
+  readonly districtPrintCodes?: readonly AssignedPrintCode[];
 }
 
 export interface PrintLabelReport {
@@ -154,11 +185,30 @@ export interface PrintRouteReport {
   readonly omittedWeight: number;
 }
 
+export type PrintRouteOmissionReason =
+  | "route-limit"
+  | "unroutable"
+  | "policy"
+  | "unplaced-endpoint";
+
+export type PrintRouteOutcome =
+  | {
+      readonly dependencyId: string;
+      readonly status: "printed";
+    }
+  | {
+      readonly dependencyId: string;
+      readonly status: "omitted";
+      readonly reason: PrintRouteOmissionReason;
+    };
+
 export interface PrintableCityArtifacts {
   readonly city: PrintableCity;
   readonly legend: PrintLegend;
   readonly labels: PrintLabelReport;
   readonly routes: PrintRouteReport;
+  /** One exact outcome per printable aggregate member; self-edges are excluded. */
+  readonly routeOutcomes: readonly PrintRouteOutcome[];
 }
 
 export interface PrintablePlanGeometry {
@@ -199,8 +249,9 @@ const KIND_ORDER: Readonly<Record<PrintPrimitiveKind, number>> = Object.freeze({
   "dependency-endpoint": 7,
   "dependency-trace": 8,
   "dependency-socket": 9,
-  "identity-panel": 10,
-  "identity-relief": 11,
+  "plate-number": 10,
+  "identity-panel": 11,
+  "identity-relief": 12,
 });
 
 const MINIMUM_DEMO_RELIEF_FEATURE = 0.8;
@@ -1093,6 +1144,7 @@ function plaqueLayout(
   title: string,
   version: string,
   minimumReliefDepth: number,
+  reservation: PrintBounds | undefined,
 ): PlaqueLayout {
   const panel = model.identityPanel!;
   const margin = featureSize * 2;
@@ -1106,7 +1158,8 @@ function plaqueLayout(
     margin * 2 + iconWidth + contentGap + textBlockWidth;
   const requiredHeight =
     margin * 2 + featureSize * 5 * 2 + lineGap;
-  const availableWidth = baseBounds.size.x - featureSize * 2;
+  const availableWidth =
+    reservation?.size.x ?? baseBounds.size.x - featureSize * 2;
   if (requiredWidth > availableWidth + EPSILON) {
     throw new PrintGeometryValidationError([
       `Identity plaque needs ${requiredWidth.toFixed(3)} mm but only ${availableWidth.toFixed(3)} mm are available.`,
@@ -1125,32 +1178,47 @@ function plaqueLayout(
     minimumReliefDepth,
   );
   const centerX =
-    (panel.position.x - transform.origin.x) * transform.scale;
+    reservation === undefined
+      ? (panel.position.x - transform.origin.x) * transform.scale
+      : (reservation.minimum.x + reservation.maximum.x) / 2;
   const minimumX = centerX - panelWidth / 2;
   const maximumX = centerX + panelWidth / 2;
+  const horizontalBounds = reservation ?? baseBounds;
   if (
-    minimumX < baseBounds.minimum.x - EPSILON ||
-    maximumX > baseBounds.maximum.x + EPSILON
+    minimumX < horizontalBounds.minimum.x - EPSILON ||
+    maximumX > horizontalBounds.maximum.x + EPSILON
   ) {
     throw new PrintGeometryValidationError([
       "Identity plaque does not fit inside the shared base width.",
     ]);
   }
+  const bodyMinimumY =
+    (reservation?.minimum.y ?? baseBounds.minimum.y) + reliefDepth;
   const body = bounds(
     {
       x: minimumX,
-      y: baseBounds.minimum.y + reliefDepth,
+      y: bodyMinimumY,
       z: baseBounds.maximum.z,
     },
     {
       x: maximumX,
-      y: baseBounds.minimum.y + reliefDepth + panelDepth,
+      y: bodyMinimumY + panelDepth,
       z: baseBounds.maximum.z + panelHeight,
     },
   );
-  if (body.maximum.y > baseBounds.maximum.y + EPSILON) {
+  const depthMaximum =
+    reservation?.maximum.y ?? baseBounds.maximum.y;
+  if (body.maximum.y > depthMaximum + EPSILON) {
     throw new PrintGeometryValidationError([
       "Identity plaque does not fit inside the shared base depth.",
+    ]);
+  }
+  if (
+    reservation !== undefined &&
+    body.maximum.z > reservation.maximum.z + EPSILON
+  ) {
+    throw new PrintGeometryValidationError([
+      "Identity plaque does not fit inside its reserved height.",
     ]);
   }
   return {
@@ -1243,6 +1311,7 @@ function identityPrimitives(
   profile: PrinterProfile,
   title: string,
   version: string | undefined,
+  reservation: PrintBounds | undefined,
 ): readonly PrintPrimitive[] {
   const panel = model.identityPanel;
   if (!panel) return [];
@@ -1270,6 +1339,7 @@ function identityPrimitives(
     printableTitle,
     printableVersion,
     minimumReliefDepth,
+    reservation,
   );
   const body = primitive(
     panel.id,
@@ -1316,6 +1386,103 @@ function identityPrimitives(
       channelId,
     ),
   ];
+}
+
+function retainedPrintCodes(
+  supplied: readonly AssignedPrintCode[] | undefined,
+  ids: readonly string[],
+  fallback: () => readonly AssignedPrintCode[],
+  description: string,
+): readonly AssignedPrintCode[] {
+  if (supplied === undefined) return fallback();
+  const expected = new Set(ids);
+  const retained = supplied.filter(({ id }) => expected.has(id));
+  if (
+    retained.length !== expected.size ||
+    new Set(retained.map(({ id }) => id)).size !== retained.length ||
+    new Set(retained.map(({ code }) => code)).size !== retained.length
+  ) {
+    throw new PrintGeometryValidationError([
+      `Supplied ${description} print codes must identify every retained object exactly once.`,
+    ]);
+  }
+  return retained;
+}
+
+function plateNumberPrimitives(
+  value: NonNullable<BuildPrintableCityOptions["plateNumber"]>,
+  transform: CoordinateTransform,
+  baseBounds: PrintBounds,
+  channelId: string,
+  profile: PrinterProfile,
+): readonly PrintPrimitive[] {
+  if (value.id.trim() === "") {
+    throw new PrintGeometryValidationError([
+      "Plate-number id must not be empty.",
+    ]);
+  }
+  if (!/^[0-9]+$/u.test(value.label)) {
+    throw new PrintGeometryValidationError([
+      "Plate-number label must contain only digits.",
+    ]);
+  }
+  const reservation = printBoundsFromCityBox(
+    {
+      minimum: { ...value.bounds.minimum },
+      maximum: { ...value.bounds.maximum },
+    },
+    transform,
+  );
+  if (
+    Math.abs(reservation.minimum.z - baseBounds.maximum.z) > EPSILON ||
+    reservation.minimum.x < baseBounds.minimum.x - EPSILON ||
+    reservation.maximum.x > baseBounds.maximum.x + EPSILON ||
+    reservation.minimum.y < baseBounds.minimum.y - EPSILON ||
+    reservation.maximum.y > baseBounds.maximum.y + EPSILON
+  ) {
+    throw new PrintGeometryValidationError([
+      "Plate number must rest on top of and remain inside the shared base.",
+    ]);
+  }
+  const limits = resolvePrinterGeometryLimits(profile);
+  const featureSize = Math.max(
+    limits.minimumFeatureSize,
+    limits.minimumLabelStrokeWidth,
+    limits.lineWidth,
+  );
+  const textWidth = printableTextWidth(value.label, featureSize);
+  const textDepth = featureSize * 5;
+  if (
+    textWidth > reservation.size.x + EPSILON ||
+    textDepth > reservation.size.y + EPSILON ||
+    reservation.size.z + EPSILON < limits.minimumRaisedFeatureHeight
+  ) {
+    throw new PrintGeometryValidationError([
+      `Plate number '${value.label}' does not fit its profile-safe reservation.`,
+    ]);
+  }
+  const startX =
+    reservation.minimum.x + (reservation.size.x - textWidth) / 2;
+  const startY =
+    reservation.minimum.y + (reservation.size.y - textDepth) / 2;
+  return printableTextCells(value.label, featureSize).map((cell) => {
+    const minimum = {
+      x: startX + cell.u,
+      y: startY + cell.v,
+      z: reservation.minimum.z,
+    };
+    return primitive(
+      `${value.id}:${cell.characterIndex}:${cell.row}:${cell.column}`,
+      "plate-number",
+      "base",
+      channelId,
+      bounds(minimum, {
+        x: minimum.x + featureSize,
+        y: minimum.y + featureSize,
+        z: reservation.maximum.z,
+      }),
+    );
+  });
 }
 
 /**
@@ -1393,6 +1560,38 @@ export function printablePlanGeometry(
   };
 }
 
+function printableRouteDependencyIds(model: CityModel): ReadonlySet<string> {
+  const districtByNode = new Map<string, string>();
+  for (const district of model.districts) {
+    districtByNode.set(district.moduleId, district.id);
+  }
+  for (const building of model.buildings) {
+    districtByNode.set(building.id, building.districtId);
+  }
+  const result = new Set<string>();
+  for (const dependency of model.dependencies) {
+    const sourceDistrict = districtByNode.get(dependency.sourceId);
+    if (
+      sourceDistrict === undefined ||
+      dependency.externalTarget !== undefined
+    ) {
+      result.add(dependency.id);
+      continue;
+    }
+    const targetDistrict =
+      dependency.targetId === undefined
+        ? undefined
+        : districtByNode.get(dependency.targetId);
+    if (
+      targetDistrict === undefined ||
+      targetDistrict !== sourceDistrict
+    ) {
+      result.add(dependency.id);
+    }
+  }
+  return result;
+}
+
 /**
  * Converts the shared CityModel coordinate system into millimetres:
  * city X -> printer X, city Z -> printer Y, and city Y -> printer Z.
@@ -1418,12 +1617,13 @@ export function buildPrintableCityArtifacts(
     ]);
   }
   const externalSelection =
-    routePolicy === "auto"
+    routePolicy === "auto" || options.externalLayout !== undefined
       ? selectExternalDependencies(model.dependencies)
       : undefined;
   const externalLayout =
     externalSelection !== undefined
-      ? layoutExternalDependencies(
+      ? options.externalLayout ??
+        layoutExternalDependencies(
           externalSelection,
           sourceBase,
         )
@@ -1434,7 +1634,7 @@ export function buildPrintableCityArtifacts(
           base: sourceBase,
         };
   const dependencySummary: DistrictDependencySummary | undefined =
-    externalSelection === undefined
+    externalSelection === undefined || routePolicy !== "auto"
       ? undefined
       : summarizeDistrictDependencies(
           createDistrictDependencyExplorerIndex(model),
@@ -1467,6 +1667,17 @@ export function buildPrintableCityArtifacts(
       baseBounds,
     ),
   ];
+  if (options.plateNumber !== undefined) {
+    primitives.push(
+      ...plateNumberPrimitives(
+        options.plateNumber,
+        transform,
+        baseBounds,
+        baseChannelId,
+        options.profile,
+      ),
+    );
+  }
   const districtsById = new Map(
     model.districts.map((district) => [district.id, district]),
   );
@@ -1554,11 +1765,21 @@ export function buildPrintableCityArtifacts(
     model.repositories[0]?.name ??
     "Code City";
   const version = model.identity?.version;
-  const assignedBuildingCodes = assignBuildingPrintCodes(model.buildings);
+  const assignedBuildingCodes = retainedPrintCodes(
+    options.buildingPrintCodes,
+    model.buildings.map(({ id }) => id),
+    () => assignBuildingPrintCodes(model.buildings),
+    "building",
+  );
   const buildingCodes = new Map(
     assignedBuildingCodes.map(({ id, code }) => [id, code]),
   );
-  const assignedDistrictCodes = assignDistrictPrintCodes(model.districts);
+  const assignedDistrictCodes = retainedPrintCodes(
+    options.districtPrintCodes,
+    model.districts.map(({ id }) => id),
+    () => assignDistrictPrintCodes(model.districts),
+    "district",
+  );
   const districtCodes = new Map(
     assignedDistrictCodes.map(({ id, code }) => [id, code]),
   );
@@ -1609,6 +1830,15 @@ export function buildPrintableCityArtifacts(
     options.profile,
     title,
     version,
+    options.identityReservation === undefined
+      ? undefined
+      : printBoundsFromCityBox(
+          {
+            minimum: { ...options.identityReservation.minimum },
+            maximum: { ...options.identityReservation.maximum },
+          },
+          transform,
+        ),
   );
   primitives.push(...identityGeometry);
 
@@ -1621,6 +1851,15 @@ export function buildPrintableCityArtifacts(
     printedWeight: 0,
     omittedWeight: dependencySummary?.totalReferenceWeight ?? 0,
   };
+  const routeCandidateIds = printableRouteDependencyIds(model);
+  let routeOutcomes: readonly PrintRouteOutcome[] = [...model.dependencies]
+    .filter(({ id }) => routeCandidateIds.has(id))
+    .sort((left, right) => compare(left.id, right.id))
+    .map(({ id }) => ({
+      dependencyId: id,
+      status: "omitted",
+      reason: routePolicy === "off" ? "policy" : "route-limit",
+    }));
   if (dependencySummary !== undefined && dependencySummary.bundles.length > 0) {
     const routeChannelId = requiredChannel(
       semanticChannels,
@@ -1646,10 +1885,15 @@ export function buildPrintableCityArtifacts(
     const identityObstacle = horizontalEnvelope(
       identityGeometry.map(({ bounds: item }) => item),
     );
-    const obstacles: PrintRouteObstacle[] =
-      identityObstacle === undefined
+    const plateNumberObstacles: PrintRouteObstacle[] = primitives
+      .filter(({ kind }) => kind === "plate-number")
+      .map(({ bounds: item }) => ({ bounds: horizontalBounds(item) }));
+    const obstacles: PrintRouteObstacle[] = [
+      ...(identityObstacle === undefined
         ? []
-        : [{ bounds: identityObstacle }];
+        : [{ bounds: identityObstacle }]),
+      ...plateNumberObstacles,
+    ];
     const plannedRoutes = planPrintableDependencyRoutes({
       bundles,
       endpoints,
@@ -1659,6 +1903,52 @@ export function buildPrintableCityArtifacts(
       channelId: routeChannelId,
     });
     primitives.push(...plannedRoutes.primitives);
+    const printedBundleIds = new Set(
+      plannedRoutes.routes.map(({ bundleId }) => bundleId),
+    );
+    const omissionReasonByBundle = new Map(
+      plannedRoutes.omissions.map(({ bundleId, reason }) => [
+        bundleId,
+        reason === "unresolved-endpoint"
+          ? ("unplaced-endpoint" as const)
+          : reason,
+      ]),
+    );
+    const outcomes = new Map<string, PrintRouteOutcome>(
+      model.dependencies
+        .filter(({ id }) => routeCandidateIds.has(id))
+        .map(({ id }) => [
+          id,
+          {
+            dependencyId: id,
+            status: "omitted",
+            reason: "route-limit",
+          },
+        ]),
+    );
+    for (const bundle of dependencySummary.bundles) {
+      const printed = printedBundleIds.has(bundle.id);
+      const reason =
+        omissionReasonByBundle.get(bundle.id) ?? "unroutable";
+      for (const dependencyId of bundle.dependencyIds) {
+        outcomes.set(
+          dependencyId,
+          printed
+            ? {
+                dependencyId,
+                status: "printed",
+              }
+            : {
+                dependencyId,
+                status: "omitted",
+                reason,
+              },
+        );
+      }
+    }
+    routeOutcomes = [...outcomes.values()].sort((left, right) =>
+      compare(left.dependencyId, right.dependencyId),
+    );
     routeReport = {
       policy: routePolicy,
       totalCount: dependencySummary.totalBundleCount,
@@ -1728,6 +2018,7 @@ export function buildPrintableCityArtifacts(
       ).length,
     },
     routes: routeReport,
+    routeOutcomes,
   };
 }
 

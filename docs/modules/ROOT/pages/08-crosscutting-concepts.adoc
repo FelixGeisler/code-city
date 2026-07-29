@@ -275,8 +275,14 @@ The viewer calls the same format-neutral export orchestration in a module
 worker. It terminates the worker on cancellation, transfers exact bytes, and
 publishes only local Blob downloads.
 
-Printer layouts may later derive multiple plate bases without changing the
-semantic city coordinates.
+Multi-plate layout is deterministic and printer-neutral. `scale` keeps one
+plate and stops at the profile-safe feature scale; `tile` keeps the requested
+scale and packs complete districts with optional 90-degree rotation. Every
+plate has one compact continuous base and a plate number. Plate 1 also carries
+the identity plaque. A relevant external target is one fixed-size box on each
+affected plate, marked as original once and replica thereafter. Cross-plate
+routes are not printed; the bundle manifest records consumer, provider, and
+their plate numbers. No artifact may exceed the usable profile volume.
 
 The Prusa XL one-, two-, and five-tool configurations are profiles of the same
 model.
