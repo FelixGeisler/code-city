@@ -33,10 +33,23 @@ describe("development toolchain contract", () => {
     expect(workflow).toContain(
       "os: [ubuntu-latest, windows-latest]",
     );
+    expect(workflow).toContain("actions/setup-dotnet@v5");
+    expect(workflow).toContain("dotnet-version: 10.0.302");
     expect(workflow).toContain("timeout-minutes: 20");
     expect(workflow).toContain("- run: npm ci");
     expect(workflow).toContain("- run: npm run verify");
     expect(workflow).not.toContain("- run: npm install");
+  });
+
+  it("pins the SDK that supplies the trusted Roslyn assemblies", async () => {
+    const sdk = JSON.parse(
+      await fs.readFile("global.json", "utf8"),
+    ) as { readonly sdk?: Readonly<Record<string, unknown>> };
+    expect(sdk.sdk).toEqual({
+      version: "10.0.302",
+      rollForward: "disable",
+      allowPrerelease: false,
+    });
   });
 
   it("keeps documentation installation reproducible and documented", async () => {

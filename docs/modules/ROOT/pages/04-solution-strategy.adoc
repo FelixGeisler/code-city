@@ -1,7 +1,8 @@
 = 4. Solution Strategy
 
 . Normalize every source into a read-only repository snapshot.
-. Extract language facts through analyzer plugins.
+. Extract C# facts through the bundled syntax-only Roslyn helper and
+  TypeScript/JavaScript facts through the pinned compiler API.
 . Produce a deterministic hierarchical layout.
 . Persist the result as a versioned city model.
 . Render that model in Three.js.

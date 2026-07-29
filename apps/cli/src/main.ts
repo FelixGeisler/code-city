@@ -212,11 +212,6 @@ async function analyzeCommand(args: readonly string[], io: CliIo): Promise<void>
   for (const warning of model.analysis?.warnings ?? []) {
     io.stderr(`Warning: ${warning}\n`);
   }
-  if (model.buildings.some((building) => building.language === "csharp")) {
-    io.stderr(
-      "Note: C# complexity currently uses the safe lexical-v1 first slice; TypeScript/JavaScript use the compiler API.\n",
-    );
-  }
 }
 
 async function planCommand(args: readonly string[], io: CliIo): Promise<void> {

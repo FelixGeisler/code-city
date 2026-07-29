@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>codecity-roslyn-helper</AssemblyName>
+    <RootNamespace>CodeCity.RoslynHelper</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <PackageVersion>1.0.0</PackageVersion>
+    <RoslynBinariesPath>$([System.IO.Path]::GetFullPath('$(MSBuildSDKsPath)/../Roslyn/bincore'))</RoslynBinariesPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The repository-pinned .NET SDK supplies these trusted compiler assemblies. -->
+    <Reference Include="Microsoft.CodeAnalysis">
+      <HintPath>$(RoslynBinariesPath)/Microsoft.CodeAnalysis.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Microsoft.CodeAnalysis.CSharp">
+      <HintPath>$(RoslynBinariesPath)/Microsoft.CodeAnalysis.CSharp.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

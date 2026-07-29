@@ -138,6 +138,10 @@ allows 100,000 visited entries, 50,000 retained files, 25,000 source buildings,
 2 MiB per file, 256 MiB total, 1,000 diagnostics plus one omission summary, and
 300 seconds for snapshot plus analysis.
 
+The bundled Roslyn helper parses syntax only, receives opaque source IDs over a
+versioned bounded protocol, and runs once per analysis. It never loads a
+solution, project, MSBuild, NuGet, generators, or repository analyzers.
+
 CLI input is capped at 128 MiB per city model and 1 MiB per printer profile.
 Derived JSON is staged with mode `0600`, atomically renamed, and rolled back on
 failure. The viewer uses one explicit-load gateway: 128 MiB model, 1 MiB local

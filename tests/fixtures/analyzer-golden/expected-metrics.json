@@ -1,0 +1,70 @@
+{
+  "App/Calculator.cs": {
+    "metricMethod": "csharp-roslyn-v1",
+    "metrics": {
+      "sloc": 9,
+      "decisionLoad": 3,
+      "maximumComplexity": 4,
+      "executableUnitCount": 2
+    },
+    "units": [
+      {
+        "name": "<top-level>",
+        "line": 1,
+        "complexity": 1
+      },
+      {
+        "name": "Choose",
+        "line": 5,
+        "complexity": 4
+      }
+    ]
+  },
+  "web/main.ts": {
+    "metricMethod": "typescript-compiler-api-v1",
+    "metrics": {
+      "sloc": 7,
+      "decisionLoad": 3,
+      "maximumComplexity": 4,
+      "executableUnitCount": 2
+    },
+    "units": [
+      {
+        "name": "<top-level>",
+        "line": 1,
+        "complexity": 1
+      },
+      {
+        "name": "choose",
+        "line": 6,
+        "complexity": 4
+      }
+    ]
+  },
+  "web/card.tsx": {
+    "metricMethod": "typescript-compiler-api-v1",
+    "metrics": {
+      "sloc": 9,
+      "decisionLoad": 1,
+      "maximumComplexity": 2,
+      "executableUnitCount": 3
+    },
+    "units": [
+      {
+        "name": "<top-level>",
+        "line": 1,
+        "complexity": 1
+      },
+      {
+        "name": "Card",
+        "line": 7,
+        "complexity": 2
+      },
+      {
+        "name": "<callback>",
+        "line": 9,
+        "complexity": 1
+      }
+    ]
+  }
+}
