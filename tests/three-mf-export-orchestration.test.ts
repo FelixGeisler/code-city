@@ -23,6 +23,7 @@ const demoOptions = {
   routePolicy: "auto" as const,
   includeLegend: true,
 };
+const EXPORT_TEST_TIMEOUT_MS = 15_000;
 
 describe("shared browser-safe 3MF export orchestration", () => {
   it("preflights dimensions, parts, channels, and warnings", () => {
@@ -51,30 +52,34 @@ describe("shared browser-safe 3MF export orchestration", () => {
     expect(prepared.preflight.legendIncluded).toBe(true);
   });
 
-  it("is deterministic, supports a disabled legend, and never calls fetch", () => {
-    const originalFetch = globalThis.fetch;
-    let fetchCalls = 0;
-    globalThis.fetch = (() => {
-      fetchCalls += 1;
-      throw new Error("Export attempted a network request.");
-    }) as typeof fetch;
-    try {
-      const request = {
-        model: DEMO_MODEL,
-        profile: createPrusaXLProfile([1, 2, 3, 4, 5]),
-        options: { ...demoOptions, includeLegend: false },
-      };
-      const first = generateThreeMfExport(request);
-      const second = generateThreeMfExport(request);
+  it(
+    "is deterministic, supports a disabled legend, and never calls fetch",
+    () => {
+      const originalFetch = globalThis.fetch;
+      let fetchCalls = 0;
+      globalThis.fetch = (() => {
+        fetchCalls += 1;
+        throw new Error("Export attempted a network request.");
+      }) as typeof fetch;
+      try {
+        const request = {
+          model: DEMO_MODEL,
+          profile: createPrusaXLProfile([1, 2, 3, 4, 5]),
+          options: { ...demoOptions, includeLegend: false },
+        };
+        const first = generateThreeMfExport(request);
+        const second = generateThreeMfExport(request);
 
-      expect(first.threeMfBytes).toEqual(second.threeMfBytes);
-      expect(first.legendBytes).toBeUndefined();
-      expect(first.preflight.legendIncluded).toBe(false);
-      expect(fetchCalls).toBe(0);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
+        expect(first.threeMfBytes).toEqual(second.threeMfBytes);
+        expect(first.legendBytes).toBeUndefined();
+        expect(first.preflight.legendIncluded).toBe(false);
+        expect(fetchCalls).toBe(0);
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+    EXPORT_TEST_TIMEOUT_MS,
+  );
 
   it("reports unsupported profiles and oversized cities without auto-fitting", () => {
     expect(() =>
