@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { runCli } from "../apps/cli/src/main.js";
 import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
@@ -24,6 +24,15 @@ const demoOptions = {
   includeLegend: true,
 };
 const EXPORT_TEST_TIMEOUT_MS = 15_000;
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryDirectories.splice(0).map((directory) =>
+      fs.rm(directory, { recursive: true, force: true }),
+    ),
+  );
+});
 
 describe("shared browser-safe 3MF export orchestration", () => {
   it("preflights dimensions, parts, channels, and warnings", () => {
@@ -139,48 +148,53 @@ describe("shared browser-safe 3MF export orchestration", () => {
     );
   });
 
-  it("emits byte-identical CLI and shared-orchestrator archives", async () => {
-    const directory = await fs.mkdtemp(
-      path.join(os.tmpdir(), "code-city-browser-export-"),
-    );
-    const modelPath = path.join(directory, "demo.json");
-    const profilePath = path.join(directory, "profile.json");
-    const outputPath = path.join(directory, "demo.3mf");
-    const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
-    await fs.writeFile(modelPath, JSON.stringify(DEMO_MODEL), "utf8");
-    await fs.writeFile(profilePath, JSON.stringify(profile), "utf8");
+  it(
+    "emits byte-identical CLI and shared-orchestrator archives",
+    async () => {
+      const directory = await fs.mkdtemp(
+        path.join(os.tmpdir(), "code-city-browser-export-"),
+      );
+      temporaryDirectories.push(directory);
+      const modelPath = path.join(directory, "demo.json");
+      const profilePath = path.join(directory, "profile.json");
+      const outputPath = path.join(directory, "demo.3mf");
+      const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
+      await fs.writeFile(modelPath, JSON.stringify(DEMO_MODEL), "utf8");
+      await fs.writeFile(profilePath, JSON.stringify(profile), "utf8");
 
-    const exitCode = await runCli(
-      [
-        "export",
-        "--model",
-        modelPath,
-        "--profile",
-        profilePath,
-        "--format",
-        "3mf",
-        "--scale",
-        "3",
-        "--labels",
-        "auto",
-        "--routes",
-        "auto",
-        "--legend",
-        "off",
-        "--output",
-        outputPath,
-      ],
-      { stdout: () => undefined, stderr: () => undefined },
-    );
-    const shared = generateThreeMfExport({
-      model: DEMO_MODEL,
-      profile,
-      options: { ...demoOptions, includeLegend: false },
-    });
+      const exitCode = await runCli(
+        [
+          "export",
+          "--model",
+          modelPath,
+          "--profile",
+          profilePath,
+          "--format",
+          "3mf",
+          "--scale",
+          "3",
+          "--labels",
+          "auto",
+          "--routes",
+          "auto",
+          "--legend",
+          "off",
+          "--output",
+          outputPath,
+        ],
+        { stdout: () => undefined, stderr: () => undefined },
+      );
+      const shared = generateThreeMfExport({
+        model: DEMO_MODEL,
+        profile,
+        options: { ...demoOptions, includeLegend: false },
+      });
 
-    expect(exitCode).toBe(0);
-    expect(await fs.readFile(outputPath)).toEqual(
-      Buffer.from(shared.threeMfBytes),
-    );
-  });
+      expect(exitCode).toBe(0);
+      expect(await fs.readFile(outputPath)).toEqual(
+        Buffer.from(shared.threeMfBytes),
+      );
+    },
+    EXPORT_TEST_TIMEOUT_MS,
+  );
 });
