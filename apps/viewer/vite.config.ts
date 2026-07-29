@@ -9,6 +9,7 @@ export default defineConfig({
   base: "./",
   publicDir: false,
   build: {
+    assetsInlineLimit: 0,
     outDir: fileURLToPath(new URL("../../build/viewer", import.meta.url)),
     emptyOutDir: true,
   },

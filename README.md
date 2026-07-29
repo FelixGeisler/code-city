@@ -41,6 +41,10 @@ npm run cli -- analyze C:\Code\RepoA C:\Code\RepoB `
 # Run the browser viewer
 npm run viewer:dev
 
+# Build and open a local repository through the bundled production viewer
+npm run viewer:build
+npm run cli -- open C:\Code\RepoA
+
 # Export the connected five-part Demo for a Prusa XL
 npm run print:demo
 
@@ -76,9 +80,10 @@ planned.
 
 ## Planned product flow
 
-`codecity open` will accept local roots, public GitHub repositories, and generic
-Git remotes such as Azure DevOps Server. STL and oversized multi-plate exports
-remain planned.
+`codecity open` accepts one or more local roots and serves only on
+`127.0.0.1`; it prints the URL without launching a browser. Public GitHub and
+generic Git remotes such as Azure DevOps Server remain planned, as do STL and
+oversized multi-plate exports.
 
 Architecture documentation uses Antora and the concise arc42 structure. It is
 published at
