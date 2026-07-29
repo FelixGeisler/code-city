@@ -158,10 +158,30 @@ describe("deterministic print planning", () => {
       geometry: { ...geometry, gap: null },
     });
     expect(plan.scale).toBe(3);
+    expect(plan.labelPolicy).toBe("auto");
     expect(plan.channels.map(({ channel }) => channel.id)).toEqual([
       "tool-1",
       "tool-2",
     ]);
+  });
+
+  it("persists and validates the shared physical-label policy", () => {
+    const profile = createSingleChannelProfile();
+    const request = {
+      format: "3mf" as const,
+      semanticGroups: DEFAULT_SEMANTIC_GROUPS.slice(0, 1),
+      bounds: { x: 100, y: 50, z: 100 },
+      geometry,
+    };
+
+    expect(planPrint(profile, { ...request, labelPolicy: "off" }).labelPolicy)
+      .toBe("off");
+    expect(() =>
+      planPrint(profile, {
+        ...request,
+        labelPolicy: "invalid" as "auto",
+      }),
+    ).toThrow(/Label policy/u);
   });
 
   it("assigns an embossed identity panel to a monochrome channel", () => {

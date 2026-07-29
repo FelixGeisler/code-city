@@ -5,6 +5,7 @@ import {
 } from "./model.js";
 import { isDisplayColor } from "./color.js";
 import { normalizeAssetRelativePath } from "./identity.js";
+import { normalizeRepositoryRelativePath } from "./path.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -101,6 +102,18 @@ export function validateCityModel(value: unknown): CityModel {
   const districtIds = validateIds(districts, "districts");
   const buildingIds = validateIds(buildings, "buildings");
   validateIds(dependencies, "dependencies");
+  const solutionsById = new Map(
+    solutions.map((solution) => [solution.id as string, solution]),
+  );
+  const modulesById = new Map(
+    modules.map((module) => [module.id as string, module]),
+  );
+  const districtsById = new Map(
+    districts.map((district) => [district.id as string, district]),
+  );
+  const buildingsById = new Map(
+    buildings.map((building) => [building.id as string, building]),
+  );
 
   repositories.forEach((repository, index) => {
     nonEmptyString(repository.name, `repositories[${index}].name`);
@@ -108,34 +121,64 @@ export function validateCityModel(value: unknown): CityModel {
 
   solutions.forEach((solution, index) => {
     const prefix = `solutions[${index}]`;
-    reference(solution.repositoryId, repositoryIds, `${prefix}.repositoryId`);
+    const repositoryId = reference(
+      solution.repositoryId,
+      repositoryIds,
+      `${prefix}.repositoryId`,
+    );
     nonEmptyString(solution.name, `${prefix}.name`);
-    stringAt(solution.path, `${prefix}.path`);
-    referenceArray(
+    repositoryRelativePath(solution.path, `${prefix}.path`);
+    const referencedModuleIds = referenceArray(
       solution.moduleIds,
       moduleIds,
       `${prefix}.moduleIds`,
       CITY_MODEL_LIMITS.referencesPerEntity,
     );
+    referencedModuleIds.forEach((moduleId, moduleIndex) => {
+      if (modulesById.get(moduleId)!.repositoryId !== repositoryId) {
+        fail(
+          `${prefix}.moduleIds[${moduleIndex}] must reference a module in repository "${repositoryId}"`,
+        );
+      }
+    });
   });
 
   modules.forEach((module, index) => {
     const prefix = `modules[${index}]`;
-    reference(module.repositoryId, repositoryIds, `${prefix}.repositoryId`);
-    optionalReference(
+    const repositoryId = reference(
+      module.repositoryId,
+      repositoryIds,
+      `${prefix}.repositoryId`,
+    );
+    const parentModuleId = optionalReference(
       module.parentModuleId,
       moduleIds,
       `${prefix}.parentModuleId`,
     );
+    if (
+      parentModuleId !== undefined &&
+      modulesById.get(parentModuleId)!.repositoryId !== repositoryId
+    ) {
+      fail(
+        `${prefix}.parentModuleId must reference a module in repository "${repositoryId}"`,
+      );
+    }
     enumValue(module.kind, MODULE_KINDS, `${prefix}.kind`);
     nonEmptyString(module.name, `${prefix}.name`);
-    stringAt(module.path, `${prefix}.path`);
-    referenceArray(
+    repositoryRelativePath(module.path, `${prefix}.path`);
+    const referencedSolutionIds = referenceArray(
       module.solutionIds,
       solutionIds,
       `${prefix}.solutionIds`,
       CITY_MODEL_LIMITS.referencesPerEntity,
     );
+    referencedSolutionIds.forEach((solutionId, solutionIndex) => {
+      if (solutionsById.get(solutionId)!.repositoryId !== repositoryId) {
+        fail(
+          `${prefix}.solutionIds[${solutionIndex}] must reference a solution in repository "${repositoryId}"`,
+        );
+      }
+    });
     optionalStringArray(
       module.targetFrameworks,
       `${prefix}.targetFrameworks`,
@@ -168,8 +211,14 @@ export function validateCityModel(value: unknown): CityModel {
       `${prefix}.repositoryId`,
     );
     reference(district.moduleId, moduleIds, `${prefix}.moduleId`);
+    const referencedModule = modulesById.get(district.moduleId as string)!;
+    if (referencedModule.repositoryId !== district.repositoryId) {
+      fail(
+        `${prefix}.repositoryId must match its referenced module repository`,
+      );
+    }
     nonEmptyString(district.name, `${prefix}.name`);
-    stringAt(district.path, `${prefix}.path`);
+    repositoryRelativePath(district.path, `${prefix}.path`);
     vector(district.position, `${prefix}.position`, false);
     vector(district.size, `${prefix}.size`, true);
   });
@@ -183,13 +232,26 @@ export function validateCityModel(value: unknown): CityModel {
     );
     reference(building.moduleId, moduleIds, `${prefix}.moduleId`);
     reference(building.districtId, districtIds, `${prefix}.districtId`);
+    const referencedDistrict = districtsById.get(
+      building.districtId as string,
+    )!;
+    const referencedModule = modulesById.get(building.moduleId as string)!;
+    if (
+      referencedDistrict.repositoryId !== building.repositoryId ||
+      referencedDistrict.moduleId !== building.moduleId ||
+      referencedModule.repositoryId !== building.repositoryId
+    ) {
+      fail(
+        `${prefix} repository/module ownership must match its referenced district and module`,
+      );
+    }
     reference(
       building.semanticGroupId,
       groupIds,
       `${prefix}.semanticGroupId`,
     );
     nonEmptyString(building.name, `${prefix}.name`);
-    stringAt(building.path, `${prefix}.path`);
+    repositoryRelativePath(building.path, `${prefix}.path`);
     enumValue(building.language, LANGUAGES, `${prefix}.language`);
     enumValue(building.risk, RISKS, `${prefix}.risk`);
     vector(building.position, `${prefix}.position`, false);
@@ -219,19 +281,30 @@ export function validateCityModel(value: unknown): CityModel {
 
   dependencies.forEach((dependency, index) => {
     const prefix = `dependencies[${index}]`;
-    reference(
+    const repositoryId = reference(
       dependency.repositoryId,
       repositoryIds,
       `${prefix}.repositoryId`,
     );
-    enumValue(dependency.kind, DEPENDENCY_KINDS, `${prefix}.kind`);
+    const kind = enumValue(
+      dependency.kind,
+      DEPENDENCY_KINDS,
+      `${prefix}.kind`,
+    );
     const dependencyNodeIds =
-      dependency.kind === "typescript-import" ? buildingIds : moduleIds;
-    reference(
+      kind === "typescript-import" ? buildingIds : moduleIds;
+    const dependencyNodes =
+      kind === "typescript-import" ? buildingsById : modulesById;
+    const sourceId = reference(
       dependency.sourceId,
       dependencyNodeIds,
       `${prefix}.sourceId`,
     );
+    if (dependencyNodes.get(sourceId)!.repositoryId !== repositoryId) {
+      fail(
+        `${prefix}.repositoryId must match its source repository`,
+      );
+    }
     optionalReference(
       dependency.targetId,
       dependencyNodeIds,
@@ -584,21 +657,20 @@ function validateIds(items: JsonObject[], path: string): Set<string> {
   return ids;
 }
 
-function reference(value: unknown, ids: Set<string>, path: string): void {
+function reference(value: unknown, ids: Set<string>, path: string): string {
   const id = nonEmptyString(value, path);
   if (!ids.has(id)) {
     fail(`${path} references unknown id "${id}"`);
   }
+  return id;
 }
 
 function optionalReference(
   value: unknown,
   ids: Set<string>,
   path: string,
-): void {
-  if (value !== undefined) {
-    reference(value, ids, path);
-  }
+): string | undefined {
+  return value === undefined ? undefined : reference(value, ids, path);
 }
 
 function referenceArray(
@@ -606,14 +678,16 @@ function referenceArray(
   ids: Set<string>,
   path: string,
   maximumLength: number,
-): void {
+): readonly string[] {
   if (!Array.isArray(value)) {
     fail(`${path} must be an array`);
   }
   if (value.length > maximumLength) {
     fail(`${path} must contain at most ${maximumLength} items`);
   }
-  value.forEach((item, index) => reference(item, ids, `${path}[${index}]`));
+  return value.map((item, index) =>
+    reference(item, ids, `${path}[${index}]`),
+  );
 }
 
 function optionalStringArray(
@@ -682,6 +756,20 @@ function stringAt(value: unknown, path: string): string {
     fail(`${path} must be a string`);
   }
   return value;
+}
+
+function repositoryRelativePath(value: unknown, path: string): string {
+  const item = stringAt(value, path);
+  let normalized: string;
+  try {
+    normalized = normalizeRepositoryRelativePath(item);
+  } catch {
+    fail(`${path} must be a normalized repository-relative path`);
+  }
+  if (normalized !== item) {
+    fail(`${path} must be a normalized repository-relative path`);
+  }
+  return normalized;
 }
 
 function nonEmptyString(value: unknown, path: string): string {

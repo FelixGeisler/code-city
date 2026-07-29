@@ -7,6 +7,7 @@ export * from "./model.js";
 export * from "./model-validation.js";
 export * from "./path.js";
 export * from "./print.js";
+export * from "./print-labels.js";
 export * from "./printer-profiles.js";
 export * from "./rectangle-packing.js";
 export * from "./semantics.js";

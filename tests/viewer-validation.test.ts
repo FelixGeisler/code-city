@@ -223,6 +223,265 @@ describe("viewer model validation", () => {
     );
   });
 
+  it.each([
+    "C:\\private\\source.ts",
+    "//server/share/source.ts",
+    "/home/private/source.ts",
+    "../private/source.ts",
+  ])("rejects non-repository-relative source path %s", (path) => {
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        buildings: DEMO_MODEL.buildings.map((building, index) =>
+          index === 0 ? { ...building, path } : building,
+        ),
+      }),
+    ).toThrow(/normalized repository-relative path/u);
+  });
+
+  it("requires every source-structure path to be normalized", () => {
+    for (const model of [
+      {
+        ...DEMO_MODEL,
+        solutions: DEMO_MODEL.solutions.map((solution, index) =>
+          index === 0 ? { ...solution, path: "src\\solution.sln" } : solution,
+        ),
+      },
+      {
+        ...DEMO_MODEL,
+        modules: DEMO_MODEL.modules.map((module, index) =>
+          index === 0 ? { ...module, path: "src\\module" } : module,
+        ),
+      },
+      {
+        ...DEMO_MODEL,
+        districts: DEMO_MODEL.districts.map((district, index) =>
+          index === 0 ? { ...district, path: "src\\district" } : district,
+        ),
+      },
+    ]) {
+      expect(() => validateCityModel(model)).toThrow(
+        /normalized repository-relative path/u,
+      );
+    }
+  });
+
+  it("rejects inconsistent repository and module ownership", () => {
+    const repositories = [
+      ...DEMO_MODEL.repositories,
+      { id: "repository:other", name: "other" },
+    ];
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        repositories,
+        districts: DEMO_MODEL.districts.map((district, index) =>
+          index === 0
+            ? { ...district, repositoryId: "repository:other" }
+            : district,
+        ),
+      }),
+    ).toThrow(/referenced module repository/u);
+
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        buildings: DEMO_MODEL.buildings.map((building, index) =>
+          index === 0
+            ? {
+                ...building,
+                moduleId: DEMO_MODEL.modules[1]!.id,
+              }
+            : building,
+        ),
+      }),
+    ).toThrow(/ownership must match/u);
+  });
+
+  it("rejects cross-repository solution and module membership", () => {
+    const otherRepository = {
+      id: "repository:other",
+      name: "Other",
+    };
+    const otherModule = {
+      ...DEMO_MODEL.modules[0]!,
+      id: "module:other",
+      repositoryId: otherRepository.id,
+      name: "Other module",
+      path: "other",
+      solutionIds: [],
+    };
+
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        repositories: [...DEMO_MODEL.repositories, otherRepository],
+        modules: [...DEMO_MODEL.modules, otherModule],
+        solutions: DEMO_MODEL.solutions.map((solution, index) =>
+          index === 0
+            ? {
+                ...solution,
+                moduleIds: [...solution.moduleIds, otherModule.id],
+              }
+            : solution,
+        ),
+      }),
+    ).toThrow(/solutions\[0\]\.moduleIds\[2\].*repository "repository:demo"/u);
+
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        repositories: [...DEMO_MODEL.repositories, otherRepository],
+        modules: [
+          ...DEMO_MODEL.modules,
+          {
+            ...otherModule,
+            solutionIds: [DEMO_MODEL.solutions[0]!.id],
+          },
+        ],
+      }),
+    ).toThrow(/modules\[2\]\.solutionIds\[0\].*repository "repository:other"/u);
+  });
+
+  it("rejects a parent module owned by another repository", () => {
+    const otherRepository = {
+      id: "repository:other",
+      name: "Other",
+    };
+    const otherModule = {
+      ...DEMO_MODEL.modules[0]!,
+      id: "module:other",
+      repositoryId: otherRepository.id,
+      name: "Other module",
+      path: "other",
+      solutionIds: [],
+    };
+
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        repositories: [...DEMO_MODEL.repositories, otherRepository],
+        modules: [
+          {
+            ...DEMO_MODEL.modules[0]!,
+            parentModuleId: otherModule.id,
+          },
+          ...DEMO_MODEL.modules.slice(1),
+          otherModule,
+        ],
+      }),
+    ).toThrow(/modules\[0\]\.parentModuleId.*repository "repository:demo"/u);
+  });
+
+  it.each([
+    {
+      kind: "typescript-import" as const,
+      sourceId: DEMO_MODEL.buildings[0]!.id,
+      targetId: DEMO_MODEL.buildings[1]!.id,
+    },
+    {
+      kind: "project-reference" as const,
+      sourceId: DEMO_MODEL.modules[0]!.id,
+      targetId: DEMO_MODEL.modules[1]!.id,
+    },
+    {
+      kind: "package-reference" as const,
+      sourceId: DEMO_MODEL.modules[0]!.id,
+      targetId: DEMO_MODEL.modules[1]!.id,
+    },
+  ])("requires $kind dependencies to be owned by their source", (dependency) => {
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        repositories: [
+          ...DEMO_MODEL.repositories,
+          { id: "repository:other", name: "Other" },
+        ],
+        dependencies: [
+          {
+            id: `dependency:wrong-owner:${dependency.kind}`,
+            repositoryId: "repository:other",
+            ...dependency,
+            weight: 1,
+          },
+        ],
+      }),
+    ).toThrow(/dependencies\[0\]\.repositoryId must match its source repository/u);
+  });
+
+  it("allows internal dependency targets in another repository", () => {
+    const otherRepository = {
+      id: "repository:other",
+      name: "Other",
+    };
+    const districtTemplate = DEMO_MODEL.districts[0]!;
+    const buildingTemplate = DEMO_MODEL.buildings.find(
+      ({ districtId }) => districtId === districtTemplate.id,
+    )!;
+    const otherModule = {
+      ...DEMO_MODEL.modules[0]!,
+      id: "module:other",
+      repositoryId: otherRepository.id,
+      name: "Other module",
+      path: "other",
+      solutionIds: [],
+    };
+    const otherDistrict = {
+      ...districtTemplate,
+      id: "district:other",
+      repositoryId: otherRepository.id,
+      moduleId: otherModule.id,
+      name: "Other district",
+      path: "other",
+    };
+    const otherBuilding = {
+      ...buildingTemplate,
+      id: "building:other",
+      repositoryId: otherRepository.id,
+      moduleId: otherModule.id,
+      districtId: otherDistrict.id,
+      name: "other.ts",
+      path: "other/other.ts",
+    };
+    const sourceBuilding = DEMO_MODEL.buildings[0]!;
+    const sourceModule = DEMO_MODEL.modules[0]!;
+    const model = {
+      ...DEMO_MODEL,
+      repositories: [...DEMO_MODEL.repositories, otherRepository],
+      modules: [...DEMO_MODEL.modules, otherModule],
+      districts: [...DEMO_MODEL.districts, otherDistrict],
+      buildings: [...DEMO_MODEL.buildings, otherBuilding],
+      dependencies: [
+        {
+          id: "dependency:cross-repository:typescript",
+          repositoryId: sourceBuilding.repositoryId,
+          sourceId: sourceBuilding.id,
+          targetId: otherBuilding.id,
+          kind: "typescript-import" as const,
+          weight: 1,
+        },
+        {
+          id: "dependency:cross-repository:project",
+          repositoryId: sourceModule.repositoryId,
+          sourceId: sourceModule.id,
+          targetId: otherModule.id,
+          kind: "project-reference" as const,
+          weight: 1,
+        },
+        {
+          id: "dependency:cross-repository:package",
+          repositoryId: sourceModule.repositoryId,
+          sourceId: sourceModule.id,
+          targetId: otherModule.id,
+          kind: "package-reference" as const,
+          weight: 1,
+        },
+      ],
+    };
+
+    expect(validateCityModel(model)).toBe(model);
+  });
+
   it.each(["red", "#123", "#12345", "#123456789"])(
     "rejects non-portable semantic color %s",
     (color) => {

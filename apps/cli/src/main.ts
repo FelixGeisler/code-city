@@ -7,8 +7,10 @@ import { pathToFileURL } from "node:url";
 import { analyzeLocalRepositories } from "../../../packages/analyzer/src/index.js";
 import {
   assignSemanticGroups,
+  parsePrintLabelPolicy,
   planPrint,
   PrintPlanValidationError,
+  serializePrintLegend,
   validateCityModel,
   validatePrinterProfile,
 } from "../../../packages/core/src/index.js";
@@ -18,24 +20,31 @@ import type {
   PrintFormat,
 } from "../../../packages/core/src/index.js";
 import {
-  buildPrintableCity,
+  buildPrintableCityArtifacts,
   printablePlanGeometry,
   serializeThreeMf,
 } from "../../../packages/exporter/src/index.js";
+import { publishArtifactsAtomically } from "./artifact-publication.js";
 
 const HELP = `Code City
 
 Usage:
   codecity analyze <root...> --output <city-model.json> [options]
   codecity plan --model <city-model.json> --profile <profile.json> \\
-    --format <stl|3mf> --output <print-plan.json> [--scale <factor>]
+    --format <stl|3mf> --output <print-plan.json> [--scale <factor>] \\
+    [--labels <auto|off>]
   codecity export --model <city-model.json> --profile <profile.json> \\
-    --format 3mf --output <model.3mf> [--scale <factor>]
+    --format 3mf --output <model.3mf> [--scale <factor>] \\
+    [--labels <auto|off>] [--legend <legend.json|off>]
 
 Analyze options:
   --title <text>       Printed city/repository title
   --version <text>     Optional printed version or commit label
   --logo <path>        Relative .svg or .png asset reference
+
+Print options:
+  --labels <auto|off>  Same-channel physical labels (default: auto)
+  --legend <path|off>  Private companion legend (default: beside 3MF)
 
 General:
   -h, --help           Show this help
@@ -108,16 +117,6 @@ async function writeJson(filePath: string, value: unknown): Promise<void> {
   const absolutePath = path.resolve(filePath);
   await fs.mkdir(path.dirname(absolutePath), { recursive: true });
   await fs.writeFile(absolutePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-async function writeBinary(
-  filePath: string,
-  value: Uint8Array,
-): Promise<string> {
-  const absolutePath = path.resolve(filePath);
-  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-  await fs.writeFile(absolutePath, value);
-  return absolutePath;
 }
 
 async function readJson(filePath: string, description: string): Promise<unknown> {
@@ -221,7 +220,7 @@ async function analyzeCommand(args: readonly string[], io: CliIo): Promise<void>
 async function planCommand(args: readonly string[], io: CliIo): Promise<void> {
   const parsed = parseArguments(
     args,
-    new Set(["model", "profile", "format", "output", "scale"]),
+    new Set(["model", "profile", "format", "output", "scale", "labels"]),
   );
   if (parsed.positionals.length > 0) {
     throw new Error(
@@ -237,16 +236,23 @@ async function planCommand(args: readonly string[], io: CliIo): Promise<void> {
   }
   const format: PrintFormat = formatValue;
   const scale = positiveScale(parsed.options.get("scale"));
+  const labelPolicy = cliLabelPolicy(parsed.options.get("labels"));
   const model = parseCityModel(await readJson(modelPath, "city model"));
   const profile = parsePrinterProfile(
     await readJson(profilePath, "printer profile"),
   );
   const assignments = assignSemanticGroups(profile, model.semanticGroups);
-  const printable = buildPrintableCity(model, assignments, { profile, scale });
+  const artifacts = buildPrintableCityArtifacts(model, assignments, {
+    profile,
+    scale,
+    labelPolicy,
+  });
+  const printable = artifacts.city;
   const planGeometry = printablePlanGeometry(printable);
   const plan = planPrint(profile, {
     format,
     scale,
+    labelPolicy,
     semanticGroups: model.semanticGroups,
     bounds: planGeometry.bounds,
     geometry: {
@@ -264,6 +270,7 @@ async function planCommand(args: readonly string[], io: CliIo): Promise<void> {
   io.stdout(
     `Planned ${format.toUpperCase()} output across ${plan.channels.length} print channel(s).\nWrote ${path.resolve(output)}\n`,
   );
+  io.stdout(`${labelSummary(artifacts.labels)}\n`);
 }
 
 function positiveScale(value: string | undefined): number {
@@ -274,10 +281,65 @@ function positiveScale(value: string | undefined): number {
   return scale;
 }
 
+function cliLabelPolicy(value: string | undefined): "auto" | "off" {
+  try {
+    return parsePrintLabelPolicy(value);
+  } catch {
+    throw new Error("--labels must be either 'auto' or 'off'.");
+  }
+}
+
+function labelSummary(labels: {
+  readonly printedBuildings: number;
+  readonly skippedBuildings: number;
+  readonly printedDistricts: number;
+  readonly skippedDistricts: number;
+}): string {
+  return (
+    `Labels: ${labels.printedBuildings} building and ` +
+    `${labels.printedDistricts} district label(s) printed; ` +
+    `${labels.skippedBuildings + labels.skippedDistricts} skipped.`
+  );
+}
+
+function defaultLegendPath(output: string): string {
+  return output.replace(/\.3mf$/iu, ".legend.json");
+}
+
+function legendPath(
+  output: string,
+  configured: string | undefined,
+): string | undefined {
+  if (configured?.toLowerCase() === "off") return undefined;
+  const result = configured ?? defaultLegendPath(output);
+  if (path.extname(result).toLowerCase() !== ".json") {
+    throw new Error("Legend output must use the '.json' file extension.");
+  }
+  const binaryPath = path.resolve(output);
+  const companionPath = path.resolve(result);
+  const normalizeForComparison = (value: string) =>
+    process.platform === "win32" ? value.toLowerCase() : value;
+  if (
+    normalizeForComparison(binaryPath) ===
+    normalizeForComparison(companionPath)
+  ) {
+    throw new Error("3MF and legend outputs must use different paths.");
+  }
+  return result;
+}
+
 async function exportCommand(args: readonly string[], io: CliIo): Promise<void> {
   const parsed = parseArguments(
     args,
-    new Set(["model", "profile", "format", "output", "scale"]),
+    new Set([
+      "model",
+      "profile",
+      "format",
+      "output",
+      "scale",
+      "labels",
+      "legend",
+    ]),
   );
   if (parsed.positionals.length > 0) {
     throw new Error(
@@ -289,6 +351,7 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
   const format = requiredOption(parsed.options, "format");
   const output = requiredOption(parsed.options, "output");
   const scale = positiveScale(parsed.options.get("scale"));
+  const labelPolicy = cliLabelPolicy(parsed.options.get("labels"));
   if (format !== "3mf") {
     throw new Error(
       "The export command currently supports only '3mf'; STL remains planned in issue #12.",
@@ -297,6 +360,10 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
   if (path.extname(output).toLowerCase() !== ".3mf") {
     throw new Error("3MF output must use the '.3mf' file extension.");
   }
+  const companionOutput = legendPath(
+    output,
+    parsed.options.get("legend"),
+  );
 
   const model = parseCityModel(await readJson(modelPath, "city model"));
   const profile = parsePrinterProfile(
@@ -307,22 +374,41 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
       `Format '3mf' is not supported by profile '${profile.id}'.`,
     );
   }
-  const printable = buildPrintableCity(
+  const artifacts = buildPrintableCityArtifacts(
     model,
     assignSemanticGroups(profile, model.semanticGroups),
     {
       profile,
       scale,
+      labelPolicy,
     },
   );
-  const absoluteOutput = await writeBinary(
-    output,
-    serializeThreeMf(printable),
-  );
+  const printable = artifacts.city;
+  const archiveBytes = serializeThreeMf(printable);
+  const publishedPaths = await publishArtifactsAtomically([
+    { destination: output, bytes: archiveBytes },
+    ...(companionOutput === undefined
+      ? []
+      : [
+          {
+            destination: companionOutput,
+            bytes: serializePrintLegend(artifacts.legend),
+            mode: 0o600,
+          },
+        ]),
+  ]);
+  const absoluteOutput = publishedPaths[0]!;
+  const absoluteLegend = publishedPaths[1];
   const bounds = printable.bounds.size;
   io.stdout(
     `Exported 3MF with ${printable.parts.length} aligned part(s) at ${bounds.x} × ${bounds.y} × ${bounds.z} mm.\nWrote ${absoluteOutput}\n`,
   );
+  if (absoluteLegend !== undefined) {
+    io.stdout(`Wrote ${absoluteLegend}\n`);
+  } else {
+    io.stdout("Legend output disabled.\n");
+  }
+  io.stdout(`${labelSummary(artifacts.labels)}\n`);
 }
 
 export async function runCli(

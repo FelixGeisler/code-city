@@ -50,6 +50,8 @@ npm run cli -- export `
   --profile profiles\prusa-xl-5t.json `
   --format 3mf `
   --scale 3 `
+  --labels auto `
+  --legend build\print\code-city-demo.legend.json `
   --output build\print\code-city-demo.3mf
 ```
 
@@ -57,10 +59,11 @@ The viewer also accepts a `city-model.json` through its **Open model** button.
 The first C# implementation is explicitly labelled lexical; Roslyn replaces it
 without changing the model contract.
 
-The Demo export is 93 x 48 x 33 mm and imports into PrusaSlicer as one object
-with five aligned, independently assignable tool parts. This first exporter
-does not yet cover STL, FLOW-sized tiling, arbitrary fonts or logos, or
-slicer-specific settings.
+The labelled Demo is 93 x 48 x 33.8 mm and imports into PrusaSlicer as one
+object with five aligned tool parts. Its private JSON legend maps printed codes
+to repository-relative paths; use `--labels off` or `--legend off` as needed.
+STL, FLOW-sized tiling, arbitrary fonts or logos, and slicer settings remain
+planned.
 
 ## Planned product flow
 

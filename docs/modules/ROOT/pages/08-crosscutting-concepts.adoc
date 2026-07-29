@@ -132,8 +132,8 @@ reference. Layout reserves a compact plaque joined to the center of the front
 edge; the viewer previews it, and the print plan preserves its content and
 channel assignment.
 
-The first exporter supports the Demo's fixed title, version, and printable
-Code City icon. Arbitrary fonts and logos remain separate work. A
+The exporter supports the Demo's title, version, printable Code City icon, and
+the shared block font below. Arbitrary fonts and logos remain separate work. A
 multi-repository city has one main panel. Local paths are never inferred as
 printed identity.
 

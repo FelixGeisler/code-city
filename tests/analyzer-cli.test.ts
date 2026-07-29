@@ -194,6 +194,7 @@ it("persists analyzer warnings and prints them on stderr", async () => {
 it("exports the canonical Demo as a real five-part 3MF", async () => {
   const directory = await temporaryDirectory();
   const outputPath = path.join(directory, "code-city-demo.3mf");
+  const legendPath = path.join(directory, "code-city-demo.legend.json");
   const stdout: string[] = [];
   const stderr: string[] = [];
 
@@ -220,11 +221,94 @@ it("exports the canonical Demo as a real five-part 3MF", async () => {
   ).toBe(0);
 
   const archive = await fs.readFile(outputPath);
+  const legend = JSON.parse(await fs.readFile(legendPath, "utf8")) as {
+    labelPolicy: string;
+    buildings: unknown[];
+  };
   expect(archive.subarray(0, 2).toString("ascii")).toBe("PK");
   expect(archive.length).toBeGreaterThan(1_000);
+  expect(legend.labelPolicy).toBe("auto");
+  expect(legend.buildings).toHaveLength(5);
   expect(stderr).toEqual([]);
   expect(stdout.join("")).toContain("5 aligned part(s)");
+  expect(stdout.join("")).toContain("93 × 48 × 33.8 mm");
+  expect(stdout.join("")).toContain(legendPath);
+  expect(stdout.join("")).toContain("5 building and 2 district");
+});
+
+it("supports explicit label and companion-legend controls", async () => {
+  const directory = await temporaryDirectory();
+  const outputPath = path.join(directory, "without-labels.3mf");
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+
+  expect(
+    await runCli(
+      [
+        "export",
+        "--model",
+        path.resolve("examples/demo-city.json"),
+        "--profile",
+        path.resolve("profiles/prusa-xl-5t.json"),
+        "--format",
+        "3mf",
+        "--scale",
+        "3",
+        "--labels",
+        "off",
+        "--legend",
+        "off",
+        "--output",
+        outputPath,
+      ],
+      {
+        stdout: (message) => stdout.push(message),
+        stderr: (message) => stderr.push(message),
+      },
+    ),
+  ).toBe(0);
+
+  expect(await fs.readFile(outputPath)).not.toHaveLength(0);
+  await expect(
+    fs.access(path.join(directory, "without-labels.legend.json")),
+  ).rejects.toThrow();
+  expect(stderr).toEqual([]);
   expect(stdout.join("")).toContain("93 × 48 × 33 mm");
+  expect(stdout.join("")).toContain("Legend output disabled");
+  expect(stdout.join("")).toContain("0 building and 0 district");
+});
+
+it("emits deterministic companion legend bytes", async () => {
+  const directory = await temporaryDirectory();
+  const legends: Buffer[] = [];
+  for (const suffix of ["a", "b"]) {
+    const outputPath = path.join(directory, `${suffix}.3mf`);
+    const legendPath = path.join(directory, `${suffix}.json`);
+    expect(
+      await runCli(
+        [
+          "export",
+          "--model",
+          path.resolve("examples/demo-city.json"),
+          "--profile",
+          path.resolve("profiles/prusa-xl-5t.json"),
+          "--format",
+          "3mf",
+          "--scale",
+          "3",
+          "--labels",
+          "auto",
+          "--legend",
+          legendPath,
+          "--output",
+          outputPath,
+        ],
+        { stdout: () => undefined, stderr: () => undefined },
+      ),
+    ).toBe(0);
+    legends.push(await fs.readFile(legendPath));
+  }
+  expect(legends[1]).toEqual(legends[0]);
 });
 
 it("rejects unsupported export formats and invalid scale values", async () => {
@@ -254,8 +338,18 @@ it("rejects unsupported export formats and invalid scale values", async () => {
       },
     ),
   ).toBe(1);
+  expect(
+    await runCli(
+      ["export", ...common, "--format", "3mf", "--labels", "always"],
+      {
+        stdout: () => undefined,
+        stderr: (message) => messages.push(message),
+      },
+    ),
+  ).toBe(1);
   expect(messages.join("")).toContain("currently supports only '3mf'");
   expect(messages.join("")).toContain("--scale must be a positive");
+  expect(messages.join("")).toContain("--labels must be either");
 });
 
 it("rejects structurally incomplete export models before geometry work", async () => {

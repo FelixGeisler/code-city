@@ -7,6 +7,10 @@ import type {
   PrintPrimitive,
   PrintTriangle,
 } from "./geometry.js";
+import {
+  minimumPositiveHorizontalGap,
+  potentialPrintPairs,
+} from "./spatial.js";
 
 const GEOMETRY_EPSILON = 1e-7;
 
@@ -144,7 +148,10 @@ function meshIssues(
     }
   });
 
-  const edgeCounts = new Map<string, number>();
+  const edgeCounts = new Map<
+    string,
+    { count: number; direction: number }
+  >();
   mesh.triangles.forEach((triangle, index) => {
     const indices = [triangle.a, triangle.b, triangle.c];
     if (
@@ -173,13 +180,26 @@ function meshIssues(
     ] as const) {
       const key =
         left < right ? `${left}:${right}` : `${right}:${left}`;
-      edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
+      const edge = edgeCounts.get(key) ?? { count: 0, direction: 0 };
+      edge.count += 1;
+      edge.direction += left < right ? 1 : -1;
+      edgeCounts.set(key, edge);
     }
   });
-  const openEdges = [...edgeCounts.values()].filter((count) => count !== 2);
+  const openEdges = [...edgeCounts.values()].filter(
+    ({ count }) => count !== 2,
+  );
   if (openEdges.length > 0) {
     issues.push(
       `${path} is not watertight; ${openEdges.length} edge(s) do not have exactly two faces.`,
+    );
+  }
+  const inconsistentEdges = [...edgeCounts.values()].filter(
+    ({ count, direction }) => count === 2 && direction !== 0,
+  );
+  if (inconsistentEdges.length > 0) {
+    issues.push(
+      `${path} is not wound outward consistently; ${inconsistentEdges.length} edge(s) use the same direction twice.`,
     );
   }
   const volume = signedMeshVolume(mesh);
@@ -201,25 +221,68 @@ function outwardPrimitiveIssues(
   path: string,
 ): readonly string[] {
   const issues: string[] = [];
-  const center = {
-    x: (item.bounds.minimum.x + item.bounds.maximum.x) / 2,
-    y: (item.bounds.minimum.y + item.bounds.maximum.y) / 2,
-    z: (item.bounds.minimum.z + item.bounds.maximum.z) / 2,
-  };
-  item.mesh.triangles.forEach((triangle, index) => {
-    const vertices = triangleVertices(item.mesh, triangle);
-    if (!vertices) return;
-    const [a, b, c] = vertices;
-    const normal = cross(subtract(b, a), subtract(c, a));
-    const centroid = {
-      x: (a.x + b.x + c.x) / 3,
-      y: (a.y + b.y + c.y) / 3,
-      z: (a.z + b.z + c.z) / 3,
-    };
-    if (dot(normal, subtract(centroid, center)) <= GEOMETRY_EPSILON) {
-      issues.push(`${path}.triangles[${index}] is not wound outward.`);
+  const adjacency = item.mesh.triangles.map(() => new Set<number>());
+  const edges = new Map<string, number[]>();
+  item.mesh.triangles.forEach((triangle, triangleIndex) => {
+    for (const [left, right] of [
+      [triangle.a, triangle.b],
+      [triangle.b, triangle.c],
+      [triangle.c, triangle.a],
+    ] as const) {
+      if (
+        left < 0 ||
+        right < 0 ||
+        left >= item.mesh.vertices.length ||
+        right >= item.mesh.vertices.length
+      ) {
+        continue;
+      }
+      const key = left < right ? `${left}:${right}` : `${right}:${left}`;
+      const triangles = edges.get(key) ?? [];
+      triangles.push(triangleIndex);
+      edges.set(key, triangles);
     }
   });
+  for (const triangles of edges.values()) {
+    for (const left of triangles) {
+      for (const right of triangles) {
+        if (left !== right) adjacency[left]!.add(right);
+      }
+    }
+  }
+  const visited = new Set<number>();
+  for (
+    let firstTriangle = 0;
+    firstTriangle < item.mesh.triangles.length;
+    firstTriangle += 1
+  ) {
+    if (visited.has(firstTriangle)) continue;
+    const component: number[] = [];
+    const queue = [firstTriangle];
+    visited.add(firstTriangle);
+    while (queue.length > 0) {
+      const triangleIndex = queue.shift()!;
+      component.push(triangleIndex);
+      for (const adjacent of adjacency[triangleIndex]!) {
+        if (visited.has(adjacent)) continue;
+        visited.add(adjacent);
+        queue.push(adjacent);
+      }
+    }
+    let volume = 0;
+    for (const triangleIndex of component) {
+      const triangle = item.mesh.triangles[triangleIndex]!;
+      const trianglePoints = triangleVertices(item.mesh, triangle);
+      if (!trianglePoints) continue;
+      const [a, b, c] = trianglePoints;
+      volume += dot(a, cross(b, c)) / 6;
+    }
+    if (!Number.isFinite(volume) || volume <= GEOMETRY_EPSILON) {
+      issues.push(
+        `${path} component containing triangle ${firstTriangle} is not wound outward.`,
+      );
+    }
+  }
   return issues;
 }
 
@@ -260,23 +323,23 @@ function primitiveTopologyIssues(
 ): readonly string[] {
   const issues: string[] = [];
   const graph = primitives.map(() => new Set<number>());
-  for (let leftIndex = 0; leftIndex < primitives.length; leftIndex += 1) {
-    const left = primitives[leftIndex]!;
-    for (
-      let rightIndex = leftIndex + 1;
-      rightIndex < primitives.length;
-      rightIndex += 1
-    ) {
-      const right = primitives[rightIndex]!;
-      if (positiveOverlap(left.bounds, right.bounds)) {
-        issues.push(
-          `Primitives '${left.id}' and '${right.id}' overlap with positive volume.`,
-        );
-      }
-      if (positiveFaceContact(left.bounds, right.bounds)) {
-        graph[leftIndex]!.add(rightIndex);
-        graph[rightIndex]!.add(leftIndex);
-      }
+  const indexByPrimitive = new Map(
+    primitives.map((item, index) => [item, index]),
+  );
+  for (const [left, right] of potentialPrintPairs(
+    primitives,
+    GEOMETRY_EPSILON,
+  )) {
+    const leftIndex = indexByPrimitive.get(left)!;
+    const rightIndex = indexByPrimitive.get(right)!;
+    if (positiveOverlap(left.bounds, right.bounds)) {
+      issues.push(
+        `Primitives '${left.id}' and '${right.id}' overlap with positive volume.`,
+      );
+    }
+    if (positiveFaceContact(left.bounds, right.bounds)) {
+      graph[leftIndex]!.add(rightIndex);
+      graph[rightIndex]!.add(leftIndex);
     }
   }
   const baseIndices = primitives
@@ -343,53 +406,10 @@ function minimumPrimitiveFeature(
   );
 }
 
-function intervalGap(
-  leftMinimum: number,
-  leftMaximum: number,
-  rightMinimum: number,
-  rightMaximum: number,
-): number {
-  return Math.max(
-    0,
-    Math.max(leftMinimum, rightMinimum) -
-      Math.min(leftMaximum, rightMaximum),
-  );
-}
-
 function minimumHorizontalGap(
   primitives: readonly PrintPrimitive[],
 ): number | null {
-  let minimum = Number.POSITIVE_INFINITY;
-  for (let leftIndex = 0; leftIndex < primitives.length; leftIndex += 1) {
-    const left = primitives[leftIndex]!;
-    for (
-      let rightIndex = leftIndex + 1;
-      rightIndex < primitives.length;
-      rightIndex += 1
-    ) {
-      const right = primitives[rightIndex]!;
-      const verticalOverlap =
-        Math.min(left.bounds.maximum.z, right.bounds.maximum.z) -
-        Math.max(left.bounds.minimum.z, right.bounds.minimum.z);
-      if (verticalOverlap <= GEOMETRY_EPSILON) continue;
-      const gap = Math.hypot(
-        intervalGap(
-          left.bounds.minimum.x,
-          left.bounds.maximum.x,
-          right.bounds.minimum.x,
-          right.bounds.maximum.x,
-        ),
-        intervalGap(
-          left.bounds.minimum.y,
-          left.bounds.maximum.y,
-          right.bounds.minimum.y,
-          right.bounds.maximum.y,
-        ),
-      );
-      if (gap > GEOMETRY_EPSILON) minimum = Math.min(minimum, gap);
-    }
-  }
-  return Number.isFinite(minimum) ? minimum : null;
+  return minimumPositiveHorizontalGap(primitives, GEOMETRY_EPSILON);
 }
 
 export function validatePrintableCity(

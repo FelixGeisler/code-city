@@ -1,15 +1,32 @@
 import type {
+  CityBuilding,
+  CityDistrict,
   CityIdentityPanel,
   CityModel,
   SemanticGroup,
   Vector3,
 } from "../../core/src/model.js";
+import {
+  assignBuildingPrintCodes,
+  assignDistrictPrintCodes,
+  type PhysicalPrintStatus,
+  type PrintLabelPolicy,
+  type PrintLegend,
+} from "../../core/src/print-labels.js";
+import { normalizeRepositoryRelativePath } from "../../core/src/path.js";
 import type { PrinterProfile } from "../../core/src/print.js";
 
 import {
   PrintGeometryValidationError,
   validatePrintableCity,
 } from "./validate.js";
+import {
+  printableTextCells,
+  printableTextSupported,
+  printableTextWidth,
+  validatePrintableText,
+} from "./printable-font.js";
+import { minimumPositiveHorizontalGap } from "./spatial.js";
 
 export interface PrintPoint {
   readonly x: number;
@@ -38,6 +55,8 @@ export type PrintPrimitiveKind =
   | "base"
   | "district"
   | "building"
+  | "building-label"
+  | "district-label"
   | "identity-panel"
   | "identity-relief";
 
@@ -88,6 +107,20 @@ export interface PrintSemanticAssignment {
 export interface BuildPrintableCityOptions {
   readonly scale: number;
   readonly profile: PrinterProfile;
+  readonly labelPolicy?: PrintLabelPolicy;
+}
+
+export interface PrintLabelReport {
+  readonly printedBuildings: number;
+  readonly skippedBuildings: number;
+  readonly printedDistricts: number;
+  readonly skippedDistricts: number;
+}
+
+export interface PrintableCityArtifacts {
+  readonly city: PrintableCity;
+  readonly legend: PrintLegend;
+  readonly labels: PrintLabelReport;
 }
 
 export interface PrintablePlanGeometry {
@@ -121,53 +154,11 @@ const KIND_ORDER: Readonly<Record<PrintPrimitiveKind, number>> = Object.freeze({
   base: 0,
   district: 1,
   building: 2,
-  "identity-panel": 3,
-  "identity-relief": 4,
+  "building-label": 3,
+  "district-label": 4,
+  "identity-panel": 5,
+  "identity-relief": 6,
 });
-
-const THREE_BY_FIVE_FONT: Readonly<Record<string, readonly string[]>> =
-  Object.freeze({
-    "?": Object.freeze(["111", "001", "011", "000", "010"]),
-    "-": Object.freeze(["000", "000", "111", "000", "000"]),
-    ".": Object.freeze(["000", "000", "000", "000", "010"]),
-    _: Object.freeze(["000", "000", "000", "000", "111"]),
-    "0": Object.freeze(["111", "101", "101", "101", "111"]),
-    "1": Object.freeze(["010", "110", "010", "010", "111"]),
-    "2": Object.freeze(["111", "001", "111", "100", "111"]),
-    "3": Object.freeze(["111", "001", "111", "001", "111"]),
-    "4": Object.freeze(["101", "101", "111", "001", "001"]),
-    "5": Object.freeze(["111", "100", "111", "001", "111"]),
-    "6": Object.freeze(["111", "100", "111", "101", "111"]),
-    "7": Object.freeze(["111", "001", "010", "010", "010"]),
-    "8": Object.freeze(["111", "101", "111", "101", "111"]),
-    "9": Object.freeze(["111", "101", "111", "001", "111"]),
-    A: Object.freeze(["010", "101", "111", "101", "101"]),
-    B: Object.freeze(["110", "101", "110", "101", "110"]),
-    C: Object.freeze(["111", "100", "100", "100", "111"]),
-    D: Object.freeze(["110", "101", "101", "101", "110"]),
-    E: Object.freeze(["111", "100", "110", "100", "111"]),
-    F: Object.freeze(["111", "100", "110", "100", "100"]),
-    G: Object.freeze(["111", "100", "101", "101", "111"]),
-    H: Object.freeze(["101", "101", "111", "101", "101"]),
-    I: Object.freeze(["111", "010", "010", "010", "111"]),
-    J: Object.freeze(["001", "001", "001", "101", "111"]),
-    K: Object.freeze(["101", "101", "110", "101", "101"]),
-    L: Object.freeze(["100", "100", "100", "100", "111"]),
-    M: Object.freeze(["101", "111", "111", "101", "101"]),
-    N: Object.freeze(["101", "111", "111", "111", "101"]),
-    O: Object.freeze(["111", "101", "101", "101", "111"]),
-    P: Object.freeze(["110", "101", "110", "100", "100"]),
-    Q: Object.freeze(["111", "101", "101", "111", "001"]),
-    R: Object.freeze(["110", "101", "110", "101", "101"]),
-    S: Object.freeze(["111", "100", "111", "001", "111"]),
-    T: Object.freeze(["111", "010", "010", "010", "010"]),
-    U: Object.freeze(["101", "101", "101", "101", "111"]),
-    V: Object.freeze(["101", "101", "101", "101", "010"]),
-    W: Object.freeze(["101", "101", "111", "111", "101"]),
-    X: Object.freeze(["101", "101", "010", "101", "101"]),
-    Y: Object.freeze(["101", "101", "010", "010", "010"]),
-    Z: Object.freeze(["111", "001", "010", "100", "111"]),
-  });
 
 const MINIMUM_DEMO_RELIEF_FEATURE = 0.8;
 const EPSILON = 1e-9;
@@ -300,6 +291,43 @@ function concatenateMeshes(
   return { vertices, triangles };
 }
 
+function measuredMeshBounds(mesh: PrintMesh): PrintBounds {
+  if (mesh.vertices.length === 0) {
+    throw new PrintGeometryValidationError([
+      "Printable text must contain at least one solid glyph cell.",
+    ]);
+  }
+  const minimum = {
+    x: Math.min(...mesh.vertices.map(({ x }) => x)),
+    y: Math.min(...mesh.vertices.map(({ y }) => y)),
+    z: Math.min(...mesh.vertices.map(({ z }) => z)),
+  };
+  const maximum = {
+    x: Math.max(...mesh.vertices.map(({ x }) => x)),
+    y: Math.max(...mesh.vertices.map(({ y }) => y)),
+    z: Math.max(...mesh.vertices.map(({ z }) => z)),
+  };
+  return bounds(minimum, maximum);
+}
+
+function compositePrimitive(
+  id: string,
+  kind: PrintPrimitiveKind,
+  semanticGroupId: string,
+  channelId: string,
+  meshes: readonly PrintMesh[],
+): PrintPrimitive {
+  const mesh = concatenateMeshes(meshes);
+  return {
+    id,
+    kind,
+    semanticGroupId,
+    channelId,
+    mesh,
+    bounds: measuredMeshBounds(mesh),
+  };
+}
+
 function measuredBounds(
   primitives: readonly PrintPrimitive[],
 ): PrintBounds {
@@ -357,36 +385,7 @@ function intervalGap(
 function minimumHorizontalGap(
   primitives: readonly PrintPrimitive[],
 ): number | null {
-  let minimum = Number.POSITIVE_INFINITY;
-  for (let leftIndex = 0; leftIndex < primitives.length; leftIndex += 1) {
-    const left = primitives[leftIndex]!;
-    for (
-      let rightIndex = leftIndex + 1;
-      rightIndex < primitives.length;
-      rightIndex += 1
-    ) {
-      const right = primitives[rightIndex]!;
-      const verticalOverlap =
-        Math.min(left.bounds.maximum.z, right.bounds.maximum.z) -
-        Math.max(left.bounds.minimum.z, right.bounds.minimum.z);
-      if (verticalOverlap <= EPSILON) continue;
-      const xGap = intervalGap(
-        left.bounds.minimum.x,
-        left.bounds.maximum.x,
-        right.bounds.minimum.x,
-        right.bounds.maximum.x,
-      );
-      const yGap = intervalGap(
-        left.bounds.minimum.y,
-        left.bounds.maximum.y,
-        right.bounds.minimum.y,
-        right.bounds.maximum.y,
-      );
-      const gap = Math.hypot(xGap, yGap);
-      if (gap > EPSILON) minimum = Math.min(minimum, gap);
-    }
-  }
-  return Number.isFinite(minimum) ? minimum : null;
+  return minimumPositiveHorizontalGap(primitives, EPSILON);
 }
 
 function semanticChannelMap(
@@ -497,33 +496,488 @@ function createParts(
     });
 }
 
-function glyphPattern(character: string): readonly string[] | undefined {
-  if (character === " ") return undefined;
-  const pattern = THREE_BY_FIVE_FONT[character];
-  if (!pattern) {
-    throw new PrintGeometryValidationError([
-      `Printable identity contains unsupported character '${character}'. Use A-Z, 0-9, space, '.', '-', '_', or '?'.`,
+type RoofTextOrientation = "horizontal" | "vertical";
+
+interface RoofTextPlacement {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly depth: number;
+  readonly orientation: RoofTextOrientation;
+}
+
+interface LabelBuildResult {
+  readonly status: PhysicalPrintStatus;
+  readonly primitive?: PrintPrimitive;
+}
+
+interface GridCell {
+  readonly x: number;
+  readonly y: number;
+}
+
+function labelFeatureSize(profile: PrinterProfile): number {
+  return Math.max(
+    MINIMUM_DEMO_RELIEF_FEATURE,
+    profile.geometryLimits.minimumFeatureSize,
+    profile.geometryLimits.minimumWallThickness,
+    profile.geometryLimits.minimumGap,
+  );
+}
+
+function textFootprint(
+  text: string,
+  featureSize: number,
+  orientation: RoofTextOrientation,
+): Pick<RoofTextPlacement, "width" | "depth"> {
+  const textWidth = printableTextWidth(text, featureSize);
+  const textHeight = featureSize * 5;
+  return orientation === "horizontal"
+    ? { width: textWidth, depth: textHeight }
+    : { width: textHeight, depth: textWidth };
+}
+
+function gridCellKey(x: number, y: number): string {
+  return `${x}:${y}`;
+}
+
+function connectedGridComponents(
+  cells: readonly GridCell[],
+): readonly (readonly GridCell[])[] {
+  const byKey = new Map(
+    cells.map((cell) => [gridCellKey(cell.x, cell.y), cell]),
+  );
+  const visited = new Set<string>();
+  const result: GridCell[][] = [];
+  for (const first of [...cells].sort(
+    (left, right) => left.y - right.y || left.x - right.x,
+  )) {
+    const firstKey = gridCellKey(first.x, first.y);
+    if (visited.has(firstKey)) continue;
+    const component: GridCell[] = [];
+    const queue = [first];
+    visited.add(firstKey);
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      component.push(current);
+      for (const [x, y] of [
+        [current.x - 1, current.y],
+        [current.x + 1, current.y],
+        [current.x, current.y - 1],
+        [current.x, current.y + 1],
+      ] as const) {
+        const key = gridCellKey(x, y);
+        const adjacent = byKey.get(key);
+        if (!adjacent || visited.has(key)) continue;
+        visited.add(key);
+        queue.push(adjacent);
+      }
+    }
+    result.push(
+      component.sort(
+        (left, right) => left.y - right.y || left.x - right.x,
+      ),
+    );
+  }
+  return result;
+}
+
+function glyphComponentMesh(
+  component: readonly GridCell[],
+  featureSize: number,
+  roofZ: number,
+  placement: RoofTextPlacement,
+): PrintMesh {
+  const occupied = new Set(
+    component.map(({ x, y }) => gridCellKey(x, y)),
+  );
+  const vertices: PrintPoint[] = [];
+  const triangles: PrintTriangle[] = [];
+  const vertexIndices = new Map<string, number>();
+  const vertex = (x: number, y: number, z: number): number => {
+    const key = `${x}:${y}:${z}`;
+    const existing = vertexIndices.get(key);
+    if (existing !== undefined) return existing;
+    const index = vertices.length;
+    vertexIndices.set(key, index);
+    vertices.push({
+      x: placement.x + x * featureSize,
+      y: placement.y + y * featureSize,
+      z: roofZ + z * featureSize,
+    });
+    return index;
+  };
+  const face = (
+    points: readonly [
+      readonly [number, number, number],
+      readonly [number, number, number],
+      readonly [number, number, number],
+      readonly [number, number, number],
+    ],
+  ): void => {
+    const [a, b, c, d] = points.map(([x, y, z]) => vertex(x, y, z));
+    triangles.push({ a: a!, b: b!, c: c! }, { a: a!, b: c!, c: d! });
+  };
+  for (const { x, y } of component) {
+    if (!occupied.has(gridCellKey(x - 1, y))) {
+      face([
+        [x, y, 0],
+        [x, y, 1],
+        [x, y + 1, 1],
+        [x, y + 1, 0],
+      ]);
+    }
+    if (!occupied.has(gridCellKey(x + 1, y))) {
+      face([
+        [x + 1, y, 0],
+        [x + 1, y + 1, 0],
+        [x + 1, y + 1, 1],
+        [x + 1, y, 1],
+      ]);
+    }
+    if (!occupied.has(gridCellKey(x, y - 1))) {
+      face([
+        [x, y, 0],
+        [x + 1, y, 0],
+        [x + 1, y, 1],
+        [x, y, 1],
+      ]);
+    }
+    if (!occupied.has(gridCellKey(x, y + 1))) {
+      face([
+        [x, y + 1, 0],
+        [x, y + 1, 1],
+        [x + 1, y + 1, 1],
+        [x + 1, y + 1, 0],
+      ]);
+    }
+    face([
+      [x, y, 0],
+      [x, y + 1, 0],
+      [x + 1, y + 1, 0],
+      [x + 1, y, 0],
+    ]);
+    face([
+      [x, y, 1],
+      [x + 1, y, 1],
+      [x + 1, y + 1, 1],
+      [x, y + 1, 1],
     ]);
   }
-  return pattern;
+  return { vertices, triangles };
 }
 
-function validatePrintableText(text: string): void {
-  for (const character of text) {
-    glyphPattern(character);
-  }
+function roofTextPrimitive(
+  id: string,
+  kind: "building-label" | "district-label",
+  semanticGroupId: string,
+  channelId: string,
+  text: string,
+  featureSize: number,
+  roofZ: number,
+  placement: RoofTextPlacement,
+): PrintPrimitive {
+  const cells = printableTextCells(text, featureSize);
+  const gridCells = cells.map((cell): GridCell => ({
+    x: Math.round(
+      (placement.orientation === "horizontal" ? cell.u : cell.v) /
+        featureSize,
+    ),
+    y: Math.round(
+      (placement.orientation === "horizontal" ? cell.v : cell.u) /
+        featureSize,
+    ),
+  }));
+  const meshes = connectedGridComponents(gridCells).map((component) =>
+    glyphComponentMesh(
+      component,
+      featureSize,
+      roofZ,
+      placement,
+    ),
+  );
+  return compositePrimitive(
+    id,
+    kind,
+    semanticGroupId,
+    channelId,
+    meshes,
+  );
 }
 
-function textWidth(text: string, featureSize: number): number {
-  let width = 0;
-  const characters = [...text];
-  characters.forEach((character, index) => {
-    width += character === " " ? featureSize * 2 : featureSize * 3;
-    if (index < characters.length - 1 && character !== " ") {
-      width += featureSize;
+function centeredRoofPlacement(
+  roof: PrintBounds,
+  text: string,
+  featureSize: number,
+): RoofTextPlacement | undefined {
+  for (const orientation of ["horizontal", "vertical"] as const) {
+    const footprint = textFootprint(text, featureSize, orientation);
+    if (
+      footprint.width <= roof.size.x + EPSILON &&
+      footprint.depth <= roof.size.y + EPSILON
+    ) {
+      return {
+        x:
+          roof.minimum.x +
+          (roof.size.x - footprint.width) / 2,
+        y:
+          roof.minimum.y +
+          (roof.size.y - footprint.depth) / 2,
+        ...footprint,
+        orientation,
+      };
     }
+  }
+  return undefined;
+}
+
+function districtRoofPlacements(
+  roof: PrintBounds,
+  text: string,
+  featureSize: number,
+): readonly RoofTextPlacement[] {
+  const result: RoofTextPlacement[] = [];
+  for (const orientation of ["horizontal", "vertical"] as const) {
+    const footprint = textFootprint(text, featureSize, orientation);
+    if (
+      footprint.width > roof.size.x + EPSILON ||
+      footprint.depth > roof.size.y + EPSILON
+    ) {
+      continue;
+    }
+    const minimumX = roof.minimum.x;
+    const maximumX = roof.maximum.x - footprint.width;
+    const middleX = (minimumX + maximumX) / 2;
+    const minimumY = roof.minimum.y;
+    const maximumY = roof.maximum.y - footprint.depth;
+    const middleY = (minimumY + maximumY) / 2;
+    const ordered = [
+      [middleX, minimumY],
+      [minimumX, minimumY],
+      [maximumX, minimumY],
+      [middleX, maximumY],
+      [minimumX, maximumY],
+      [maximumX, maximumY],
+      [minimumX, middleY],
+      [maximumX, middleY],
+      [middleX, middleY],
+    ] as const;
+    for (const [x, y] of ordered) {
+      result.push({ x, y, ...footprint, orientation });
+    }
+  }
+  return result.filter(
+    (placement, index) =>
+      result.findIndex(
+        (candidate) =>
+          candidate.orientation === placement.orientation &&
+          Math.abs(candidate.x - placement.x) <= EPSILON &&
+          Math.abs(candidate.y - placement.y) <= EPSILON,
+      ) === index,
+  );
+}
+
+function placementClearOfBuildings(
+  placement: RoofTextPlacement,
+  buildings: readonly PrintBounds[],
+  minimumGap: number,
+): boolean {
+  const maximumX = placement.x + placement.width;
+  const maximumY = placement.y + placement.depth;
+  return buildings.every((building) => {
+    const xGap = intervalGap(
+      placement.x,
+      maximumX,
+      building.minimum.x,
+      building.maximum.x,
+    );
+    const yGap = intervalGap(
+      placement.y,
+      maximumY,
+      building.minimum.y,
+      building.maximum.y,
+    );
+    return Math.hypot(xGap, yGap) + EPSILON >= minimumGap;
   });
-  return width;
+}
+
+function buildingLabel(
+  building: CityBuilding,
+  roof: PrintBounds,
+  code: string,
+  channelId: string,
+  policy: PrintLabelPolicy,
+  profile: PrinterProfile,
+): LabelBuildResult {
+  if (policy === "off") {
+    return { status: { status: "skipped", reason: "policy-off" } };
+  }
+  const featureSize = labelFeatureSize(profile);
+  if (
+    roof.maximum.z + featureSize >
+    profile.buildVolume.y + EPSILON
+  ) {
+    return {
+      status: { status: "skipped", reason: "build-volume-height" },
+    };
+  }
+  const placement = centeredRoofPlacement(roof, code, featureSize);
+  if (!placement) {
+    return { status: { status: "skipped", reason: "roof-too-small" } };
+  }
+  return {
+    status: { status: "printed", text: code, mode: "code" },
+    primitive: roofTextPrimitive(
+      `building-label:${building.id}`,
+      "building-label",
+      building.semanticGroupId,
+      channelId,
+      code,
+      featureSize,
+      roof.maximum.z,
+      placement,
+    ),
+  };
+}
+
+function districtLabel(
+  district: CityDistrict,
+  roof: PrintBounds,
+  code: string,
+  occupied: readonly PrintBounds[],
+  channelId: string,
+  policy: PrintLabelPolicy,
+  profile: PrinterProfile,
+): LabelBuildResult {
+  if (policy === "off") {
+    return { status: { status: "skipped", reason: "policy-off" } };
+  }
+  const featureSize = labelFeatureSize(profile);
+  if (
+    roof.maximum.z + featureSize >
+    profile.buildVolume.y + EPSILON
+  ) {
+    return {
+      status: { status: "skipped", reason: "build-volume-height" },
+    };
+  }
+  const name = district.name
+    .normalize("NFC")
+    .trim()
+    .replace(/\s+/gu, " ")
+    .toUpperCase();
+  const candidates = [
+    ...(name !== "" && printableTextSupported(name)
+      ? [{ text: name, mode: "name" as const }]
+      : []),
+    { text: code, mode: "code" as const },
+  ];
+  for (const candidate of candidates) {
+    const placement = districtRoofPlacements(
+      roof,
+      candidate.text,
+      featureSize,
+    ).find((item) =>
+      placementClearOfBuildings(
+        item,
+        occupied,
+        profile.geometryLimits.minimumGap,
+      ),
+    );
+    if (!placement) continue;
+    return {
+      status: {
+        status: "printed",
+        text: candidate.text,
+        mode: candidate.mode,
+      },
+      primitive: roofTextPrimitive(
+        `district-label:${district.id}`,
+        "district-label",
+        "base",
+        channelId,
+        candidate.text,
+        featureSize,
+        roof.maximum.z,
+        placement,
+      ),
+    };
+  }
+  return {
+    status: { status: "skipped", reason: "ground-space-unavailable" },
+  };
+}
+
+function requiredStatus(
+  statuses: ReadonlyMap<string, PhysicalPrintStatus>,
+  id: string,
+): PhysicalPrintStatus {
+  const status = statuses.get(id);
+  if (!status) {
+    throw new Error(`Missing physical print status for '${id}'.`);
+  }
+  return status;
+}
+
+function printLegend(
+  model: CityModel,
+  profile: PrinterProfile,
+  title: string,
+  policy: PrintLabelPolicy,
+  buildingCodes: ReadonlyMap<string, string>,
+  districtCodes: ReadonlyMap<string, string>,
+  buildingStatuses: ReadonlyMap<string, PhysicalPrintStatus>,
+  districtStatuses: ReadonlyMap<string, PhysicalPrintStatus>,
+): PrintLegend {
+  const repositories = new Map(
+    model.repositories.map((repository) => [repository.id, repository]),
+  );
+  const districts = new Map(
+    model.districts.map((district) => [district.id, district]),
+  );
+  return {
+    schemaVersion: "1.0",
+    title,
+    profileId: profile.id,
+    labelPolicy: policy,
+    districts: [...model.districts]
+      .sort((left, right) =>
+        compare(
+          districtCodes.get(left.id)!,
+          districtCodes.get(right.id)!,
+        ),
+      )
+      .map((district) => ({
+        code: districtCodes.get(district.id)!,
+        repositoryId: district.repositoryId,
+        repositoryName: repositories.get(district.repositoryId)!.name,
+        districtId: district.id,
+        districtName: district.name,
+        path: normalizeRepositoryRelativePath(district.path),
+        physicalPrint: requiredStatus(districtStatuses, district.id),
+      })),
+    buildings: [...model.buildings]
+      .sort((left, right) =>
+        compare(
+          buildingCodes.get(left.id)!,
+          buildingCodes.get(right.id)!,
+        ),
+      )
+      .map((building) => {
+        const district = districts.get(building.districtId)!;
+        return {
+          code: buildingCodes.get(building.id)!,
+          repositoryId: building.repositoryId,
+          repositoryName: repositories.get(building.repositoryId)!.name,
+          districtId: building.districtId,
+          districtName: district.name,
+          buildingId: building.id,
+          buildingName: building.name,
+          path: normalizeRepositoryRelativePath(building.path),
+          physicalPrint: requiredStatus(buildingStatuses, building.id),
+        };
+      }),
+  };
 }
 
 function plaqueLayout(
@@ -539,8 +993,8 @@ function plaqueLayout(
   const contentGap = featureSize * 2;
   const lineGap = featureSize * 2;
   const iconWidth = featureSize * 8;
-  const titleWidth = textWidth(title, featureSize);
-  const versionWidth = textWidth(version, featureSize);
+  const titleWidth = printableTextWidth(title, featureSize);
+  const versionWidth = printableTextWidth(version, featureSize);
   const textBlockWidth = Math.max(titleWidth, versionWidth);
   const requiredWidth =
     margin * 2 + iconWidth + contentGap + textBlockWidth;
@@ -614,42 +1068,24 @@ function textReliefPrimitives(
   semanticGroupId: string,
   channelId: string,
 ): readonly PrintPrimitive[] {
-  const result: PrintPrimitive[] = [];
-  let cursorX = startX;
-  [...text].forEach((character, characterIndex) => {
-    const pattern = glyphPattern(character);
-    if (!pattern) {
-      cursorX += layout.featureSize * 2;
-      return;
-    }
-    pattern.forEach((row, rowIndex) => {
-      [...row].forEach((value, columnIndex) => {
-        if (value !== "1") return;
-        const minimum = {
-          x: cursorX + columnIndex * layout.featureSize,
-          y: layout.body.minimum.y - layout.reliefDepth,
-          z:
-            bottomZ +
-            (4 - rowIndex) * layout.featureSize,
-        };
-        result.push(
-          primitive(
-            `identity-relief:${line}:${characterIndex}:${rowIndex}:${columnIndex}`,
-            "identity-relief",
-            semanticGroupId,
-            channelId,
-            bounds(minimum, {
-              x: minimum.x + layout.featureSize,
-              y: minimum.y + layout.reliefDepth,
-              z: minimum.z + layout.featureSize,
-            }),
-          ),
-        );
-      });
-    });
-    cursorX += layout.featureSize * 4;
+  return printableTextCells(text, layout.featureSize).map((cell) => {
+    const minimum = {
+      x: startX + cell.u,
+      y: layout.body.minimum.y - layout.reliefDepth,
+      z: bottomZ + cell.v,
+    };
+    return primitive(
+      `identity-relief:${line}:${cell.characterIndex}:${cell.row}:${cell.column}`,
+      "identity-relief",
+      semanticGroupId,
+      channelId,
+      bounds(minimum, {
+        x: minimum.x + layout.featureSize,
+        y: minimum.y + layout.reliefDepth,
+        z: minimum.z + layout.featureSize,
+      }),
+    );
   });
-  return result;
 }
 
 function skylineReliefPrimitives(
@@ -847,12 +1283,16 @@ export function printablePlanGeometry(
  * Converts the shared CityModel coordinate system into millimetres:
  * city X -> printer X, city Z -> printer Y, and city Y -> printer Z.
  */
-export function buildPrintableCity(
+export function buildPrintableCityArtifacts(
   model: CityModel,
   assignments: readonly PrintSemanticAssignment[],
   options: BuildPrintableCityOptions,
-): PrintableCity {
+): PrintableCityArtifacts {
   const scale = finitePositive(options.scale, "Print scale");
+  const labelPolicy = options.labelPolicy ?? "auto";
+  if (labelPolicy !== "auto" && labelPolicy !== "off") {
+    throw new TypeError("Label policy must be either 'auto' or 'off'.");
+  }
   const base = model.base;
   if (!base) {
     throw new PrintGeometryValidationError([
@@ -883,6 +1323,14 @@ export function buildPrintableCity(
       baseBounds,
     ),
   ];
+  const districtsById = new Map(
+    model.districts.map((district) => [district.id, district]),
+  );
+  const buildingsById = new Map(
+    model.buildings.map((building) => [building.id, building]),
+  );
+  const districtPrimitives = new Map<string, PrintPrimitive>();
+  const buildingPrimitives = new Map<string, PrintPrimitive>();
   const baseTop = baseCityBox.maximum.y;
 
   for (const district of [...model.districts].sort((left, right) =>
@@ -901,15 +1349,15 @@ export function buildPrintableCity(
         `District '${district.id}' has no printable volume above the shared base.`,
       ]);
     }
-    primitives.push(
-      primitive(
-        district.id,
-        "district",
-        base.semanticGroupId,
-        baseChannelId,
-        printBoundsFromCityBox(clipped, transform),
-      ),
+    const districtPrimitive = primitive(
+      district.id,
+      "district",
+      base.semanticGroupId,
+      baseChannelId,
+      printBoundsFromCityBox(clipped, transform),
     );
+    districtPrimitives.set(district.id, districtPrimitive);
+    primitives.push(districtPrimitive);
   }
 
   for (const building of [...model.buildings].sort((left, right) =>
@@ -919,18 +1367,18 @@ export function buildPrintableCity(
       semanticChannels,
       building.semanticGroupId,
     );
-    primitives.push(
-      primitive(
-        building.id,
-        "building",
-        building.semanticGroupId,
-        channelId,
-        printBoundsFromCityBox(
-          cityBox(building.position, building.size),
-          transform,
-        ),
+    const buildingPrimitive = primitive(
+      building.id,
+      "building",
+      building.semanticGroupId,
+      channelId,
+      printBoundsFromCityBox(
+        cityBox(building.position, building.size),
+        transform,
       ),
     );
+    buildingPrimitives.set(building.id, buildingPrimitive);
+    primitives.push(buildingPrimitive);
   }
 
   const title =
@@ -938,6 +1386,53 @@ export function buildPrintableCity(
     model.repositories[0]?.name ??
     "Code City";
   const version = model.identity?.version;
+  const assignedBuildingCodes = assignBuildingPrintCodes(model.buildings);
+  const buildingCodes = new Map(
+    assignedBuildingCodes.map(({ id, code }) => [id, code]),
+  );
+  const assignedDistrictCodes = assignDistrictPrintCodes(model.districts);
+  const districtCodes = new Map(
+    assignedDistrictCodes.map(({ id, code }) => [id, code]),
+  );
+  const buildingStatuses = new Map<string, PhysicalPrintStatus>();
+  for (const { id, code } of assignedBuildingCodes) {
+    const building = buildingsById.get(id)!;
+    const buildingPrimitive = buildingPrimitives.get(id)!;
+    const result = buildingLabel(
+      building,
+      buildingPrimitive.bounds,
+      code,
+      buildingPrimitive.channelId,
+      labelPolicy,
+      options.profile,
+    );
+    buildingStatuses.set(id, result.status);
+    if (result.primitive) primitives.push(result.primitive);
+  }
+  const districtStatuses = new Map<string, PhysicalPrintStatus>();
+  const buildingBoundsByDistrict = new Map<string, PrintBounds[]>();
+  for (const building of [...model.buildings].sort((left, right) =>
+    compare(left.id, right.id),
+  )) {
+    const items = buildingBoundsByDistrict.get(building.districtId) ?? [];
+    items.push(buildingPrimitives.get(building.id)!.bounds);
+    buildingBoundsByDistrict.set(building.districtId, items);
+  }
+  for (const { id, code } of assignedDistrictCodes) {
+    const district = districtsById.get(id)!;
+    const districtPrimitive = districtPrimitives.get(id)!;
+    const result = districtLabel(
+      district,
+      districtPrimitive.bounds,
+      code,
+      buildingBoundsByDistrict.get(id) ?? [],
+      baseChannelId,
+      labelPolicy,
+      options.profile,
+    );
+    districtStatuses.set(id, result.status);
+    if (result.primitive) primitives.push(result.primitive);
+  }
   primitives.push(
     ...identityPrimitives(
       model,
@@ -975,5 +1470,40 @@ export function buildPrintableCity(
   if (issues.length > 0) {
     throw new PrintGeometryValidationError(issues);
   }
-  return city;
+  const legend = printLegend(
+    model,
+    options.profile,
+    title,
+    labelPolicy,
+    buildingCodes,
+    districtCodes,
+    buildingStatuses,
+    districtStatuses,
+  );
+  return {
+    city,
+    legend,
+    labels: {
+      printedBuildings: [...buildingStatuses.values()].filter(
+        ({ status }) => status === "printed",
+      ).length,
+      skippedBuildings: [...buildingStatuses.values()].filter(
+        ({ status }) => status === "skipped",
+      ).length,
+      printedDistricts: [...districtStatuses.values()].filter(
+        ({ status }) => status === "printed",
+      ).length,
+      skippedDistricts: [...districtStatuses.values()].filter(
+        ({ status }) => status === "skipped",
+      ).length,
+    },
+  };
+}
+
+export function buildPrintableCity(
+  model: CityModel,
+  assignments: readonly PrintSemanticAssignment[],
+  options: BuildPrintableCityOptions,
+): PrintableCity {
+  return buildPrintableCityArtifacts(model, assignments, options).city;
 }

@@ -12,8 +12,8 @@ isolated worker, and returns derived artifacts.
 
 == Print
 
-`npm run print:demo` writes a 93 x 48 x 33 mm 3MF. PrusaSlicer imports it as
-one object with five aligned tool parts.
+`npm run print:demo` writes a 93 x 48 x 33.8 mm labelled 3MF and private JSON
+legend. PrusaSlicer imports the 3MF as one object with five aligned tool parts.
 
 [source,powershell]
 ----
@@ -22,6 +22,8 @@ npm run cli -- export `
   --profile profiles\prusa-xl-5t.json `
   --format 3mf `
   --scale 3 `
+  --labels auto `
+  --legend build\print\code-city-demo.legend.json `
   --output build\print\code-city-demo.3mf
 ----
 
