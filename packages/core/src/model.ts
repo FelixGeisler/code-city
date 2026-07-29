@@ -4,7 +4,8 @@ export type SourceLanguage = "csharp" | "typescript" | "javascript";
 export type RiskBand = "low" | "moderate" | "high" | "very-high";
 export type MetricMethod =
   | "typescript-compiler-api-v1"
-  | "csharp-lexical-v1";
+  | "csharp-lexical-v1"
+  | "csharp-roslyn-v1";
 export type ModuleKind =
   | "dotnet-project"
   | "angular-project"
@@ -47,6 +48,39 @@ export interface SourceMetrics {
   readonly decisionLoad: number;
   readonly maximumComplexity: number;
   readonly executableUnitCount: number;
+}
+
+export interface MetricMapping {
+  readonly formulas: {
+    readonly normalization: "log1p-cap-v1";
+    readonly footprint: "sloc-footprint-side-v1";
+    readonly height: "decision-load-height-v1";
+    readonly risk: "maximum-complexity-bands-v1";
+  };
+  readonly normalizationCaps: {
+    readonly sloc: 1_000;
+    readonly decisionLoad: 100;
+  };
+}
+
+export type MetricNormalizationState =
+  | "available"
+  | "clamped"
+  | "unavailable";
+
+export type NormalizedMetric =
+  | {
+      readonly state: Exclude<MetricNormalizationState, "unavailable">;
+      readonly normalizedValue: number;
+    }
+  | {
+      readonly state: "unavailable";
+      readonly normalizedValue?: never;
+    };
+
+export interface BuildingMetricNormalization {
+  readonly sloc: NormalizedMetric;
+  readonly decisionLoad: NormalizedMetric;
 }
 
 export interface ExecutableUnitMetric {
@@ -140,6 +174,11 @@ export interface CityBuilding {
    * schema-1.0 fixtures, which keeps the extension backwards-compatible.
    */
   readonly metricMethod?: MetricMethod;
+  /**
+   * Persisted explanation inputs for schema-1.0 consumers. Older models may
+   * omit them and derive the values from metrics plus the default mapping.
+   */
+  readonly metricNormalization?: BuildingMetricNormalization;
   readonly units?: readonly ExecutableUnitMetric[];
   readonly risk: RiskBand;
   readonly semanticGroupId: string;
@@ -152,12 +191,22 @@ export type DependencyKind =
   | "project-reference"
   | "package-reference";
 
+export type DependencyResolution =
+  | "internal"
+  | "external"
+  | "unresolved";
+
 export interface CityDependency {
   readonly id: string;
   readonly repositoryId: string;
   readonly sourceId: string;
   readonly targetId?: string;
   readonly externalTarget?: string;
+  /**
+   * Optional for legacy schema-1.0 models. Consumers infer `internal` from
+   * targetId and `external` from externalTarget when this field is absent.
+   */
+  readonly resolution?: DependencyResolution;
   readonly kind: DependencyKind;
   readonly version?: string;
   readonly weight: number;
@@ -173,6 +222,11 @@ export interface CityModel {
   readonly solutions: readonly CitySolution[];
   readonly modules: readonly CityModule[];
   readonly semanticGroups: readonly SemanticGroup[];
+  /**
+   * Formula provenance for analyzer-produced models. Older schema-1.0 models
+   * use the documented default mapping when this extension is absent.
+   */
+  readonly metricMapping?: MetricMapping;
   /**
    * Analyzer diagnostics are persisted without leaking absolute local paths.
    */

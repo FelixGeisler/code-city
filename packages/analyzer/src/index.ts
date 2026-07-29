@@ -1,5 +1,6 @@
 import {
   CITY_MODEL_SCHEMA_VERSION,
+  DEFAULT_METRIC_MAPPING,
   DEFAULT_SEMANTIC_GROUPS,
   layoutCity,
 } from "../../core/src/index.js";
@@ -46,6 +47,7 @@ export async function analyzeLocalRepositories(
     solutions: facts.solutions,
     modules: facts.modules,
     semanticGroups: DEFAULT_SEMANTIC_GROUPS,
+    metricMapping: DEFAULT_METRIC_MAPPING,
     analysis: { warnings: facts.warnings },
     ...(layout.identity === undefined ? {} : { identity: layout.identity }),
     ...(layout.identityPanel === undefined

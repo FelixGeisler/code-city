@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
 import {
+  calculateBuildingGeometry,
+  DEFAULT_METRIC_MAPPING,
+  metricNormalizationForGeometry,
+} from "../packages/core/src/index.js";
+import {
   CITY_MODEL_LIMITS,
   validateCityModel,
 } from "../apps/viewer/src/model-validation.js";
 
 describe("viewer model validation", () => {
-  it("accepts module-level project and package dependencies", () => {
+  it("accepts legacy module-level project and package dependencies", () => {
     const [source, target] = DEMO_MODEL.modules;
     expect(source).toBeDefined();
     expect(target).toBeDefined();
@@ -36,6 +41,169 @@ describe("viewer model validation", () => {
     };
 
     expect(validateCityModel(model)).toBe(model);
+  });
+
+  it("accepts additive metric provenance and the reserved Roslyn method", () => {
+    const template = DEMO_MODEL.buildings[0]!;
+    const geometry = calculateBuildingGeometry(template.metrics);
+    const extendedBuilding = {
+      ...template,
+      metrics: {
+        ...template.metrics,
+        maximumComplexity: 1,
+        executableUnitCount: 1,
+      },
+      metricMethod: "csharp-roslyn-v1",
+      metricNormalization: metricNormalizationForGeometry(geometry),
+      units: [{ name: "Reserved", line: 1, complexity: 1 }],
+      risk: "low",
+    };
+    const model = {
+      ...DEMO_MODEL,
+      metricMapping: DEFAULT_METRIC_MAPPING,
+      buildings: [extendedBuilding, ...DEMO_MODEL.buildings.slice(1)],
+    };
+
+    expect(validateCityModel(model)).toBe(model);
+
+    const unavailableModel = {
+      ...model,
+      buildings: [
+        {
+          ...extendedBuilding,
+          metricNormalization: {
+            ...extendedBuilding.metricNormalization,
+            decisionLoad: { state: "unavailable" },
+          },
+        },
+        ...DEMO_MODEL.buildings.slice(1),
+      ],
+    };
+    expect(validateCityModel(unavailableModel)).toBe(unavailableModel);
+  });
+
+  it("rejects unsupported metric mapping and misleading normalized values", () => {
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        metricMapping: {
+          ...DEFAULT_METRIC_MAPPING,
+          formulas: {
+            ...DEFAULT_METRIC_MAPPING.formulas,
+            normalization: "linear-v1",
+          },
+        },
+      }),
+    ).toThrow(/metricMapping\.formulas\.normalization/u);
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        metricMapping: {
+          ...DEFAULT_METRIC_MAPPING,
+          normalizationCaps: {
+            ...DEFAULT_METRIC_MAPPING.normalizationCaps,
+            sloc: 999,
+          },
+        },
+      }),
+    ).toThrow(/metricMapping\.normalizationCaps\.sloc/u);
+
+    const template = DEMO_MODEL.buildings[0]!;
+    const normalization = metricNormalizationForGeometry(
+      calculateBuildingGeometry(template.metrics),
+    );
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        buildings: [
+          {
+            ...template,
+            metricNormalization: {
+              ...normalization,
+              sloc: {
+                state: "available",
+                normalizedValue: 0,
+              },
+            },
+          },
+          ...DEMO_MODEL.buildings.slice(1),
+        ],
+      }),
+    ).toThrow(/normalizedValue must match log1p-cap-v1/u);
+  });
+
+  it("accepts explicit dependency resolutions and enforces their endpoints", () => {
+    const [source, target] = DEMO_MODEL.modules;
+    expect(source).toBeDefined();
+    expect(target).toBeDefined();
+    const model = {
+      ...DEMO_MODEL,
+      dependencies: [
+        {
+          id: "dependency:explicit-internal",
+          repositoryId: source!.repositoryId,
+          sourceId: source!.id,
+          targetId: target!.id,
+          resolution: "internal",
+          kind: "project-reference",
+          weight: 1,
+        },
+        {
+          id: "dependency:explicit-external",
+          repositoryId: source!.repositoryId,
+          sourceId: source!.id,
+          externalTarget: "example.package",
+          resolution: "external",
+          kind: "package-reference",
+          weight: 1,
+        },
+        {
+          id: "dependency:explicit-unresolved",
+          repositoryId: source!.repositoryId,
+          sourceId: source!.id,
+          externalTarget: "../missing/missing.csproj",
+          resolution: "unresolved",
+          kind: "project-reference",
+          weight: 1,
+        },
+      ],
+    };
+
+    expect(validateCityModel(model)).toBe(model);
+
+    for (const dependency of [
+      {
+        ...model.dependencies[0],
+        targetId: undefined,
+        externalTarget: "wrong",
+      },
+      {
+        ...model.dependencies[1],
+        targetId: target!.id,
+        externalTarget: undefined,
+      },
+      {
+        ...model.dependencies[2],
+        targetId: target!.id,
+        externalTarget: undefined,
+      },
+    ]) {
+      expect(() =>
+        validateCityModel({
+          ...DEMO_MODEL,
+          dependencies: [dependency],
+        }),
+      ).toThrow(/resolution.*requires/u);
+    }
+  });
+
+  it("rejects unknown schema versions without rewriting the model", () => {
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        schemaVersion: "2.0",
+      }),
+    ).toThrow(/schemaVersion must be "1\.0"/u);
   });
 
   it.each(["", " \t "])(

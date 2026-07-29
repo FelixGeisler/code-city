@@ -284,6 +284,18 @@ EndProject
     });
 
     expect(second).toEqual(first);
+    expect(first.metricMapping).toEqual({
+      formulas: {
+        normalization: "log1p-cap-v1",
+        footprint: "sloc-footprint-side-v1",
+        height: "decision-load-height-v1",
+        risk: "maximum-complexity-bands-v1",
+      },
+      normalizationCaps: {
+        sloc: 1_000,
+        decisionLoad: 100,
+      },
+    });
     expect(first.repositories).toHaveLength(2);
     expect(first.solutions).toHaveLength(2);
     expect(
@@ -328,12 +340,27 @@ EndProject
     expect(first.buildings.find(({ name }) => name === "Program.cs")).toEqual(
       expect.objectContaining({
         metricMethod: "csharp-lexical-v1",
+        metricNormalization: {
+          sloc: {
+            state: "available",
+            normalizedValue: expect.any(Number),
+          },
+          decisionLoad: {
+            state: "available",
+            normalizedValue: expect.any(Number),
+          },
+        },
         units: expect.arrayContaining([
           expect.objectContaining({ name: "Pick", complexity: 2 }),
         ]),
       }),
     );
     expect(first.analysis).toEqual({ warnings: [] });
+    expect(
+      first.dependencies.every(
+        ({ resolution }) => resolution !== undefined,
+      ),
+    ).toBe(true);
 
     const app = first.modules.find(({ name }) => name === "App");
     expect(app?.solutionIds).toHaveLength(2);
@@ -343,6 +370,7 @@ EndProject
     expect(projectRoad?.targetId).toBe(
       first.modules.find(({ name }) => name === "Shared")?.id,
     );
+    expect(projectRoad?.resolution).toBe("internal");
     const packageBridge = first.dependencies.find(
       ({ kind, version }) =>
         kind === "package-reference" && version === "2.4.0",
@@ -350,12 +378,13 @@ EndProject
     expect(packageBridge?.targetId).toBe(
       first.modules.find(({ packageId }) => packageId === "FLOW.Client")?.id,
     );
+    expect(packageBridge?.resolution).toBe("internal");
     expect(
       first.dependencies.find(
         ({ kind, externalTarget }) =>
           kind === "typescript-import" && externalTarget === "rxjs",
       ),
-    ).toBeDefined();
+    ).toMatchObject({ resolution: "external" });
 
     const serialized = JSON.stringify(first);
     expect(serialized).not.toContain(path.resolve(hub));
@@ -434,6 +463,38 @@ EndProject
           kind === "typescript-import" && sourceId === source?.id,
       )?.targetId,
     ).toBe(target?.id);
+  });
+
+  it("preserves unresolved relative imports explicitly", async () => {
+    const root = await temporaryDirectory();
+    await fixtureFile(
+      root,
+      "main.ts",
+      `import "./missing"; import "missing";`,
+    );
+
+    const model = await analyzeLocalRepositories([root]);
+
+    expect(model.dependencies).toHaveLength(2);
+    expect(model.dependencies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceId: model.buildings[0]?.id,
+          externalTarget: "missing",
+          resolution: "unresolved",
+          kind: "typescript-import",
+          weight: 1,
+        }),
+        expect.objectContaining({
+          sourceId: model.buildings[0]?.id,
+          externalTarget: "missing",
+          resolution: "external",
+          kind: "typescript-import",
+          weight: 1,
+        }),
+      ]),
+    );
+    expect(new Set(model.dependencies.map(({ id }) => id)).size).toBe(2);
   });
 
   it("ignores MSBuild elements hidden in XML comments", async () => {

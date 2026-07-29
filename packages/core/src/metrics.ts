@@ -1,9 +1,25 @@
-import type { RiskBand, SourceMetrics, Vector3 } from "./model.js";
+import type {
+  BuildingMetricNormalization,
+  MetricMapping,
+  RiskBand,
+  SourceMetrics,
+  Vector3,
+} from "./model.js";
 
 export const METRIC_NORMALIZATION_CAPS = Object.freeze({
   sloc: 1_000,
   decisionLoad: 100,
-});
+} as const);
+
+export const DEFAULT_METRIC_MAPPING = Object.freeze({
+  formulas: Object.freeze({
+    normalization: "log1p-cap-v1",
+    footprint: "sloc-footprint-side-v1",
+    height: "decision-load-height-v1",
+    risk: "maximum-complexity-bands-v1",
+  }),
+  normalizationCaps: METRIC_NORMALIZATION_CAPS,
+}) satisfies MetricMapping;
 
 export const BUILDING_FOOTPRINT_SCALE = Object.freeze({
   minimumSide: 3,
@@ -97,6 +113,27 @@ export function calculateBuildingGeometry(
       x: side,
       y: 4 + 36 * normalizedDecisionLoad,
       z: side,
+    },
+  };
+}
+
+export function metricNormalizationForGeometry(
+  geometry: Pick<
+    BuildingGeometry,
+    | "normalizedSloc"
+    | "normalizedDecisionLoad"
+    | "slocClamped"
+    | "decisionLoadClamped"
+  >,
+): BuildingMetricNormalization {
+  return {
+    sloc: {
+      state: geometry.slocClamped ? "clamped" : "available",
+      normalizedValue: geometry.normalizedSloc,
+    },
+    decisionLoad: {
+      state: geometry.decisionLoadClamped ? "clamped" : "available",
+      normalizedValue: geometry.normalizedDecisionLoad,
     },
   };
 }

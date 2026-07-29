@@ -1,0 +1,944 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://felixgeisler.github.io/code-city/schema/city-model-1.0.schema.json",
+  "title": "Code City CityModel 1.0",
+  "description": "Portable contract shared by Code City analyzers, viewers, and exporters.",
+  "$comment": "ID uniqueness, cross-references, repository ownership, normalized paths, aggregate/unit consistency, metric formula consistency, and shared geometry are additionally enforced by validateCityModel().",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "generator",
+    "repositories",
+    "solutions",
+    "modules",
+    "semanticGroups",
+    "districts",
+    "buildings",
+    "dependencies",
+    "bounds"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "generator": {
+      "$ref": "#/$defs/generator"
+    },
+    "repositories": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "$ref": "#/$defs/repository"
+      }
+    },
+    "solutions": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": {
+        "$ref": "#/$defs/solution"
+      }
+    },
+    "modules": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "$ref": "#/$defs/module"
+      }
+    },
+    "semanticGroups": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/semanticGroup"
+      }
+    },
+    "metricMapping": {
+      "$ref": "#/$defs/metricMapping"
+    },
+    "analysis": {
+      "$ref": "#/$defs/analysis"
+    },
+    "identity": {
+      "$ref": "#/$defs/identity"
+    },
+    "identityPanel": {
+      "$ref": "#/$defs/identityPanel"
+    },
+    "base": {
+      "$ref": "#/$defs/base"
+    },
+    "districts": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": {
+        "$ref": "#/$defs/district"
+      }
+    },
+    "buildings": {
+      "type": "array",
+      "maxItems": 25000,
+      "items": {
+        "$ref": "#/$defs/building"
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": {
+        "$ref": "#/$defs/dependency"
+      }
+    },
+    "bounds": {
+      "$ref": "#/$defs/nonNegativeVector"
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "nonEmptyString": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "repositoryRelativePath": {
+      "type": "string",
+      "pattern": "^(?:\\.|(?!/)(?![A-Za-z][A-Za-z0-9+.-]*:)(?!\\.\\.?$)(?!\\.\\.?/)(?!.*\\/\\.\\.?(?:\\/|$))(?!.*\\/\\/)(?!.*\\/$)[^\\\\\\u0000]+)$"
+    },
+    "coordinate": {
+      "type": "number",
+      "minimum": -1000000,
+      "maximum": 1000000
+    },
+    "vector": {
+      "type": "object",
+      "required": [
+        "x",
+        "y",
+        "z"
+      ],
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/coordinate"
+        },
+        "y": {
+          "$ref": "#/$defs/coordinate"
+        },
+        "z": {
+          "$ref": "#/$defs/coordinate"
+        }
+      },
+      "additionalProperties": true
+    },
+    "positiveVector": {
+      "type": "object",
+      "required": [
+        "x",
+        "y",
+        "z"
+      ],
+      "properties": {
+        "x": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1000000
+        },
+        "y": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1000000
+        },
+        "z": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1000000
+        }
+      },
+      "additionalProperties": true
+    },
+    "nonNegativeVector": {
+      "type": "object",
+      "required": [
+        "x",
+        "y",
+        "z"
+      ],
+      "properties": {
+        "x": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "y": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "z": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000000
+        }
+      },
+      "additionalProperties": true
+    },
+    "generator": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "const": "code-city"
+        },
+        "version": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "additionalProperties": true
+    },
+    "repository": {
+      "type": "object",
+      "required": [
+        "id",
+        "name"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "additionalProperties": true
+    },
+    "solution": {
+      "type": "object",
+      "required": [
+        "id",
+        "repositoryId",
+        "name",
+        "path",
+        "moduleIds"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "path": {
+          "$ref": "#/$defs/repositoryRelativePath"
+        },
+        "moduleIds": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "module": {
+      "type": "object",
+      "required": [
+        "id",
+        "repositoryId",
+        "kind",
+        "name",
+        "path",
+        "solutionIds"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "parentModuleId": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "kind": {
+          "enum": [
+            "dotnet-project",
+            "angular-project",
+            "npm-package",
+            "unassigned"
+          ]
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "path": {
+          "$ref": "#/$defs/repositoryRelativePath"
+        },
+        "solutionIds": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "targetFrameworks": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        },
+        "packageId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": true
+    },
+    "semanticGroup": {
+      "type": "object",
+      "required": [
+        "id",
+        "label",
+        "color",
+        "priority"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "label": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "color": {
+          "type": "string",
+          "pattern": "^\\s*#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?\\s*$"
+        },
+        "priority": {
+          "type": "number"
+        },
+        "mergeInto": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "additionalProperties": true
+    },
+    "metricMapping": {
+      "type": "object",
+      "required": [
+        "formulas",
+        "normalizationCaps"
+      ],
+      "properties": {
+        "formulas": {
+          "type": "object",
+          "required": [
+            "normalization",
+            "footprint",
+            "height",
+            "risk"
+          ],
+          "properties": {
+            "normalization": {
+              "const": "log1p-cap-v1"
+            },
+            "footprint": {
+              "const": "sloc-footprint-side-v1"
+            },
+            "height": {
+              "const": "decision-load-height-v1"
+            },
+            "risk": {
+              "const": "maximum-complexity-bands-v1"
+            }
+          },
+          "additionalProperties": true
+        },
+        "normalizationCaps": {
+          "type": "object",
+          "required": [
+            "sloc",
+            "decisionLoad"
+          ],
+          "properties": {
+            "sloc": {
+              "const": 1000
+            },
+            "decisionLoad": {
+              "const": 100
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "analysis": {
+      "type": "object",
+      "required": [
+        "warnings"
+      ],
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "$ref": "#/$defs/nonEmptyString"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "logo": {
+      "type": "object",
+      "required": [
+        "relativePath",
+        "format"
+      ],
+      "properties": {
+        "relativePath": {
+          "$ref": "#/$defs/repositoryRelativePath"
+        },
+        "format": {
+          "enum": [
+            "svg",
+            "png"
+          ]
+        },
+        "alt": {
+          "$ref": "#/$defs/nonEmptyString"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "format": {
+                "const": "svg"
+              }
+            },
+            "required": [
+              "format"
+            ]
+          },
+          "then": {
+            "properties": {
+              "relativePath": {
+                "type": "string",
+                "pattern": "\\.[sS][vV][gG]$"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "format": {
+                "const": "png"
+              }
+            },
+            "required": [
+              "format"
+            ]
+          },
+          "then": {
+            "properties": {
+              "relativePath": {
+                "type": "string",
+                "pattern": "\\.[pP][nN][gG]$"
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "repositoryIdentity": {
+      "type": "object",
+      "required": [
+        "repositoryId"
+      ],
+      "properties": {
+        "repositoryId": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "title": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "version": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "logo": {
+          "$ref": "#/$defs/logo"
+        }
+      },
+      "additionalProperties": true
+    },
+    "identity": {
+      "type": "object",
+      "required": [
+        "title"
+      ],
+      "properties": {
+        "title": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "version": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "logo": {
+          "$ref": "#/$defs/logo"
+        },
+        "repositories": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "$ref": "#/$defs/repositoryIdentity"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "identityPanel": {
+      "type": "object",
+      "required": [
+        "id",
+        "edge",
+        "semanticGroupId",
+        "position",
+        "size",
+        "relief",
+        "reliefDepth"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "edge": {
+          "const": "front"
+        },
+        "semanticGroupId": {
+          "const": "identity"
+        },
+        "position": {
+          "$ref": "#/$defs/vector"
+        },
+        "size": {
+          "$ref": "#/$defs/positiveVector"
+        },
+        "relief": {
+          "const": "embossed"
+        },
+        "reliefDepth": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "base": {
+      "type": "object",
+      "required": [
+        "id",
+        "semanticGroupId",
+        "position",
+        "size"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "semanticGroupId": {
+          "const": "base"
+        },
+        "position": {
+          "$ref": "#/$defs/vector"
+        },
+        "size": {
+          "$ref": "#/$defs/positiveVector"
+        }
+      },
+      "additionalProperties": true
+    },
+    "district": {
+      "type": "object",
+      "required": [
+        "id",
+        "repositoryId",
+        "moduleId",
+        "name",
+        "path",
+        "position",
+        "size"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "moduleId": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "path": {
+          "$ref": "#/$defs/repositoryRelativePath"
+        },
+        "position": {
+          "$ref": "#/$defs/vector"
+        },
+        "size": {
+          "$ref": "#/$defs/positiveVector"
+        }
+      },
+      "additionalProperties": true
+    },
+    "sourceMetrics": {
+      "type": "object",
+      "required": [
+        "sloc",
+        "decisionLoad",
+        "maximumComplexity",
+        "executableUnitCount"
+      ],
+      "properties": {
+        "sloc": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "decisionLoad": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maximumComplexity": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "executableUnitCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": true
+    },
+    "executableUnit": {
+      "type": "object",
+      "required": [
+        "name",
+        "line",
+        "complexity"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "complexity": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": true
+    },
+    "normalizedMetric": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "state",
+            "normalizedValue"
+          ],
+          "properties": {
+            "state": {
+              "const": "available"
+            },
+            "normalizedValue": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "state",
+            "normalizedValue"
+          ],
+          "properties": {
+            "state": {
+              "const": "clamped"
+            },
+            "normalizedValue": {
+              "const": 1
+            }
+          },
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "required": [
+            "state"
+          ],
+          "properties": {
+            "state": {
+              "const": "unavailable"
+            }
+          },
+          "not": {
+            "properties": {
+              "normalizedValue": true
+            },
+            "required": [
+              "normalizedValue"
+            ]
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "buildingMetricNormalization": {
+      "type": "object",
+      "required": [
+        "sloc",
+        "decisionLoad"
+      ],
+      "properties": {
+        "sloc": {
+          "$ref": "#/$defs/normalizedMetric"
+        },
+        "decisionLoad": {
+          "$ref": "#/$defs/normalizedMetric"
+        }
+      },
+      "additionalProperties": true
+    },
+    "building": {
+      "type": "object",
+      "required": [
+        "id",
+        "repositoryId",
+        "moduleId",
+        "districtId",
+        "name",
+        "path",
+        "language",
+        "metrics",
+        "risk",
+        "semanticGroupId",
+        "position",
+        "size"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "moduleId": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "districtId": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "name": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "path": {
+          "$ref": "#/$defs/repositoryRelativePath"
+        },
+        "language": {
+          "enum": [
+            "csharp",
+            "typescript",
+            "javascript"
+          ]
+        },
+        "metrics": {
+          "$ref": "#/$defs/sourceMetrics"
+        },
+        "metricMethod": {
+          "enum": [
+            "typescript-compiler-api-v1",
+            "csharp-lexical-v1",
+            "csharp-roslyn-v1"
+          ]
+        },
+        "metricNormalization": {
+          "$ref": "#/$defs/buildingMetricNormalization"
+        },
+        "units": {
+          "type": "array",
+          "maxItems": 10000,
+          "items": {
+            "$ref": "#/$defs/executableUnit"
+          }
+        },
+        "risk": {
+          "enum": [
+            "low",
+            "moderate",
+            "high",
+            "very-high"
+          ]
+        },
+        "semanticGroupId": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "position": {
+          "$ref": "#/$defs/vector"
+        },
+        "size": {
+          "$ref": "#/$defs/positiveVector"
+        }
+      },
+      "dependentRequired": {
+        "metricMethod": [
+          "units"
+        ],
+        "units": [
+          "metricMethod"
+        ]
+      },
+      "additionalProperties": true
+    },
+    "dependency": {
+      "type": "object",
+      "required": [
+        "id",
+        "repositoryId",
+        "sourceId",
+        "kind",
+        "weight"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "repositoryId": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "sourceId": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "targetId": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "externalTarget": {
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "resolution": {
+          "enum": [
+            "internal",
+            "external",
+            "unresolved"
+          ]
+        },
+        "kind": {
+          "enum": [
+            "typescript-import",
+            "project-reference",
+            "package-reference"
+          ]
+        },
+        "version": {
+          "type": "string"
+        },
+        "weight": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "targetId": true
+          },
+          "required": [
+            "targetId"
+          ],
+          "not": {
+            "properties": {
+              "externalTarget": true
+            },
+            "required": [
+              "externalTarget"
+            ]
+          }
+        },
+        {
+          "properties": {
+            "externalTarget": true
+          },
+          "required": [
+            "externalTarget"
+          ],
+          "not": {
+            "properties": {
+              "targetId": true
+            },
+            "required": [
+              "targetId"
+            ]
+          }
+        }
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "resolution": {
+                "const": "internal"
+              }
+            },
+            "required": [
+              "resolution"
+            ]
+          },
+          "then": {
+            "properties": {
+              "targetId": true
+            },
+            "required": [
+              "targetId"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "resolution": {
+                "enum": [
+                  "external",
+                  "unresolved"
+                ]
+              }
+            },
+            "required": [
+              "resolution"
+            ]
+          },
+          "then": {
+            "properties": {
+              "externalTarget": true
+            },
+            "required": [
+              "externalTarget"
+            ]
+          }
+        }
+      ],
+      "additionalProperties": true
+    }
+  }
+}
