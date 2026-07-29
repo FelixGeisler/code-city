@@ -267,7 +267,7 @@
             </button>
           </div>
           <div id="inspector-empty" class="empty-state">
-            Select a building or external dependency to inspect it.
+            Select a building, district, or external dependency to inspect it.
           </div>
           <div
             id="inspector-content"
@@ -420,6 +420,32 @@
             </section>
           </div>
           <div
+            id="district-inspector-content"
+            tabindex="0"
+            aria-label="Selected district details"
+            hidden
+          >
+            <h3 id="district-name"></h3>
+            <dl class="building-details district-details">
+              <div>
+                <dt>Repository</dt>
+                <dd id="district-repository"></dd>
+              </div>
+              <div>
+                <dt>Module</dt>
+                <dd id="district-module"></dd>
+              </div>
+              <div class="wide">
+                <dt>Path</dt>
+                <dd id="district-path" class="path-value"></dd>
+              </div>
+              <div class="metric">
+                <dt>Buildings</dt>
+                <dd id="district-building-count"></dd>
+              </div>
+            </dl>
+          </div>
+          <div
             id="external-inspector-content"
             tabindex="0"
             aria-label="Selected external dependency details"
@@ -508,8 +534,6 @@
           role="status"
           aria-live="polite"
         ></p>
-
-        <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
 
         <div id="error-banner" class="error-banner" role="alert" hidden>
           <div>

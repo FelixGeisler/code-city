@@ -12,6 +12,7 @@ import {
 import type {
   CityBase,
   CityBuilding,
+  CityDistrict,
   CityModel,
   CityModule,
   CityRepository,
@@ -70,9 +71,23 @@ import {
   isolateSelectedDistrict as isolateExplorerDistrict,
   resetExplorerState,
   searchRepositoryBuildings,
+  selectedExplorerBuildingId,
+  selectedExplorerExternalId,
   selectExplorerBuilding,
   showAllDistricts,
 } from "./repository-explorer.js";
+import {
+  createSceneEntity,
+  decodeSceneEntityKey,
+  encodeSceneEntityKey,
+  sameSceneEntity,
+  type SceneEntity,
+} from "./scene-entity.js";
+import {
+  type SceneLabel,
+  sceneLabelAccessibleName,
+  SceneLabelOverlay,
+} from "./scene-label-overlay.js";
 import {
   DEFAULT_FOG_DENSITY,
   fogDensityForCameraDistance,
@@ -85,6 +100,13 @@ interface BuildingContext {
   readonly building: CityBuilding;
   readonly repository: CityRepository;
   readonly module: CityModule;
+}
+
+interface DistrictContext {
+  readonly district: CityDistrict;
+  readonly repository: CityRepository;
+  readonly module: CityModule;
+  readonly buildingCount: number;
 }
 
 type ExternalSceneNode = ExternalDependencyLayoutNode;
@@ -117,9 +139,11 @@ const modelLogo = element<HTMLImageElement>("model-logo");
 const modelLogoPlaceholder = element<HTMLSpanElement>(
   "model-logo-placeholder",
 );
-const tooltip = element<HTMLDivElement>("tooltip");
 const inspectorEmpty = element<HTMLDivElement>("inspector-empty");
 const inspectorContent = element<HTMLDivElement>("inspector-content");
+const districtInspectorContent = element<HTMLDivElement>(
+  "district-inspector-content",
+);
 const externalInspectorContent = element<HTMLDivElement>(
   "external-inspector-content",
 );
@@ -218,6 +242,14 @@ const inspectorFields = {
   units: element<HTMLTableSectionElement>("building-units"),
 };
 
+const districtInspectorFields = {
+  name: element<HTMLHeadingElement>("district-name"),
+  repository: element<HTMLElement>("district-repository"),
+  module: element<HTMLElement>("district-module"),
+  path: element<HTMLElement>("district-path"),
+  buildingCount: element<HTMLElement>("district-building-count"),
+};
+
 const externalInspectorFields = {
   name: element<HTMLHeadingElement>("external-name"),
   target: element<HTMLElement>("external-target"),
@@ -252,7 +284,12 @@ class CityScene {
     this.scene,
     "code-city:district-dependency-routes",
   );
+  private readonly sceneLabelOverlay = new SceneLabelOverlay(this.scene);
   private readonly buildingMeshes = new Map<
+    string,
+    THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>
+  >();
+  private readonly districtMeshes = new Map<
     string,
     THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>
   >();
@@ -262,11 +299,12 @@ class CityScene {
   >();
   private readonly externalNodes = new Map<string, ExternalSceneNode>();
   private readonly buildingContexts = new Map<string, BuildingContext>();
+  private readonly districtContexts = new Map<string, DistrictContext>();
   private readonly districtGroups = new Map<string, THREE.Group>();
   private readonly resizeObserver: ResizeObserver;
   private grid: THREE.GridHelper | null = null;
-  private hoveredId: string | null = null;
-  private selectedId: string | null = null;
+  private hoveredEntity: SceneEntity | null = null;
+  private selectedEntity: SceneEntity | null = null;
   private isolatedDistrictId: string | null = null;
   private cameraTransition: CameraTransition | null = null;
   private fullCityMaxDistance = 20;
@@ -276,9 +314,6 @@ class CityScene {
   public constructor(
     private readonly host: HTMLDivElement,
     private readonly onStateChange: (state: ExplorerState) => void,
-    private readonly onExternalSelectionChange: (
-      id: string | null,
-    ) => void,
   ) {
     this.scene.background = new THREE.Color("#07111f");
     this.scene.fog = this.fog;
@@ -303,6 +338,11 @@ class CityScene {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.domElement.setAttribute("role", "img");
+    this.renderer.domElement.setAttribute(
+      "aria-label",
+      "Interactive 3D code city",
+    );
     this.host.append(this.renderer.domElement);
 
     this.camera.position.set(25, 22, 28);
@@ -349,6 +389,13 @@ class CityScene {
     const groups = new Map(
       model.semanticGroups.map((item) => [item.id, item]),
     );
+    const buildingCountsByDistrictId = new Map<string, number>();
+    for (const building of model.buildings) {
+      buildingCountsByDistrictId.set(
+        building.districtId,
+        (buildingCountsByDistrictId.get(building.districtId) ?? 0) + 1,
+      );
+    }
     const base = effectiveBase ?? cityBaseForModel(model);
     let gridY = 0;
     if (base !== undefined) {
@@ -386,6 +433,13 @@ class CityScene {
     }
 
     for (const district of model.districts) {
+      const repository = repositories.get(district.repositoryId);
+      const module = modules.get(district.moduleId);
+      if (!repository || !module) {
+        throw new Error(
+          `District "${district.id}" has invalid model references`,
+        );
+      }
       const districtGroup = new THREE.Group();
       districtGroup.userData["districtId"] = district.id;
       this.city.add(districtGroup);
@@ -408,7 +462,17 @@ class CityScene {
         district.position.z,
       );
       base.receiveShadow = true;
+      base.userData["sceneEntityKey"] = encodeSceneEntityKey(
+        createSceneEntity("district", district.id),
+      );
       districtGroup.add(base);
+      this.districtMeshes.set(district.id, base);
+      this.districtContexts.set(district.id, {
+        district,
+        repository,
+        module,
+        buildingCount: buildingCountsByDistrictId.get(district.id) ?? 0,
+      });
 
       const outline = new THREE.LineSegments(
         new THREE.EdgesGeometry(geometry),
@@ -451,7 +515,9 @@ class CityScene {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.userData["buildingId"] = building.id;
-      mesh.userData["sceneEntityKey"] = buildingEntityKey(building.id);
+      mesh.userData["sceneEntityKey"] = encodeSceneEntityKey(
+        createSceneEntity("building", building.id),
+      );
       const districtGroup = this.districtGroups.get(building.districtId);
       if (!districtGroup) {
         throw new Error(
@@ -487,7 +553,9 @@ class CityScene {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.userData["externalNodeId"] = node.id;
-      mesh.userData["sceneEntityKey"] = externalEntityKey(node.id);
+      mesh.userData["sceneEntityKey"] = encodeSceneEntityKey(
+        createSceneEntity("external", node.id),
+      );
       this.city.add(mesh);
       this.externalMeshes.set(node.id, mesh);
       this.externalNodes.set(node.id, node);
@@ -591,9 +659,27 @@ class CityScene {
     ) {
       this.applyDistrictIsolation(context.building.districtId, false);
     }
-    this.select(buildingEntityKey(id));
+    this.select(createSceneEntity("building", id));
     if (focus) {
       this.focusBuilding(id);
+    }
+    return true;
+  }
+
+  public selectDistrict(id: string, focus = false): boolean {
+    const group = this.districtGroups.get(id);
+    if (!group || !this.districtContexts.has(id)) {
+      return false;
+    }
+    if (
+      this.isolatedDistrictId !== null &&
+      this.isolatedDistrictId !== id
+    ) {
+      this.applyDistrictIsolation(id, false);
+    }
+    this.select(createSceneEntity("district", id));
+    if (focus) {
+      this.frameIsolatedDistrict(group, true);
     }
     return true;
   }
@@ -603,7 +689,7 @@ class CityScene {
     if (!mesh) {
       return false;
     }
-    this.select(externalEntityKey(id));
+    this.select(createSceneEntity("external", id));
     if (focus) {
       this.frameObject(mesh, true);
     }
@@ -628,6 +714,16 @@ class CityScene {
       group.visible = districtId === id;
     }
     this.isolatedDistrictId = id;
+    const selection = this.selectedEntity;
+    const hiddenSelection =
+      selection?.kind === "district"
+        ? selection.id !== id
+        : selection?.kind === "building"
+          ? this.buildingContexts.get(selection.id)?.building.districtId !== id
+          : false;
+    if (hiddenSelection) {
+      this.select(null);
+    }
     if (focus) {
       this.frameIsolatedDistrict(selectedGroup, true);
     }
@@ -666,6 +762,7 @@ class CityScene {
 
   private clear(): void {
     this.hover(null);
+    this.sceneLabelOverlay.clear();
     this.dependencyOverlay.clear();
     this.districtDependencyOverlay.clear();
     this.isolatedDistrictId = null;
@@ -673,6 +770,8 @@ class CityScene {
     this.select(null);
     this.buildingMeshes.clear();
     this.buildingContexts.clear();
+    this.districtMeshes.clear();
+    this.districtContexts.clear();
     this.externalMeshes.clear();
     this.externalNodes.clear();
     this.districtGroups.clear();
@@ -837,43 +936,7 @@ class CityScene {
   };
 
   private readonly onPointerMove = (event: PointerEvent): void => {
-    const entityKey = this.pick(event);
-    this.hover(entityKey);
-
-    if (!entityKey) {
-      tooltip.hidden = true;
-      return;
-    }
-
-    const buildingId = entityId(entityKey, "building");
-    const context =
-      buildingId === null
-        ? null
-        : this.buildingContexts.get(buildingId) ?? null;
-    const externalId = entityId(entityKey, "external");
-    const external =
-      externalId === null
-        ? null
-        : this.externalNodes.get(externalId) ?? null;
-    if (!context && !external) {
-      tooltip.hidden = true;
-      return;
-    }
-
-    tooltip.textContent = context
-      ? `${context.building.name} · CC ${context.building.metrics.maximumComplexity.toLocaleString()}`
-      : `${external!.label} · ${referenceCountLabel(external!.weight)}`;
-    tooltip.hidden = false;
-    const bounds = this.host.getBoundingClientRect();
-    const left = Math.min(
-      event.clientX - bounds.left + 14,
-      Math.max(8, bounds.width - 230),
-    );
-    const top = Math.min(
-      event.clientY - bounds.top + 14,
-      Math.max(8, bounds.height - 56),
-    );
-    tooltip.style.transform = `translate3d(${left}px, ${top}px, 0)`;
+    this.hover(this.pick(event));
   };
 
   private readonly onPointerUp = (event: PointerEvent): void => {
@@ -891,12 +954,12 @@ class CityScene {
   private readonly onPointerLeave = (): void => {
     this.pointerStart = null;
     this.hover(null);
-    tooltip.hidden = true;
   };
 
-  private pick(event: PointerEvent): string | null {
+  private pick(event: PointerEvent): SceneEntity | null {
     if (
       this.buildingMeshes.size === 0 &&
+      this.districtMeshes.size === 0 &&
       this.externalMeshes.size === 0
     ) {
       return null;
@@ -913,104 +976,182 @@ class CityScene {
         ...[...this.buildingMeshes.values()].filter(
           (mesh) => mesh.parent?.visible !== false,
         ),
+        ...[...this.districtMeshes.values()].filter(
+          (mesh) => mesh.parent?.visible !== false,
+        ),
         ...this.externalMeshes.values(),
       ],
       false,
     )[0];
-    const entityKey = hit?.object.userData["sceneEntityKey"];
-    return typeof entityKey === "string" ? entityKey : null;
+    return decodeSceneEntityKey(hit?.object.userData["sceneEntityKey"]);
   }
 
-  private hover(id: string | null): void {
-    if (id === this.hoveredId) {
+  private hover(entity: SceneEntity | null): void {
+    if (sameSceneEntity(entity, this.hoveredEntity)) {
       return;
     }
-    const previous = this.hoveredId;
-    this.hoveredId = id;
+    const previous = this.hoveredEntity;
+    this.hoveredEntity = entity;
     this.updateHighlight(previous);
-    this.updateHighlight(id);
-    this.renderer.domElement.style.cursor = id ? "pointer" : "grab";
+    this.updateHighlight(entity);
+    this.refreshSceneLabels();
+    this.renderer.domElement.style.cursor = entity ? "pointer" : "grab";
   }
 
-  private select(id: string | null): void {
-    if (id === this.selectedId) {
+  private select(entity: SceneEntity | null): void {
+    if (sameSceneEntity(entity, this.selectedEntity)) {
       return;
     }
-    const previous = this.selectedId;
-    this.selectedId = id;
+    const previous = this.selectedEntity;
+    this.selectedEntity = entity;
     this.updateHighlight(previous);
-    this.updateHighlight(id);
-    const buildingId =
-      id === null ? null : entityId(id, "building");
-    const context =
-      buildingId === null
-        ? null
-        : this.buildingContexts.get(buildingId) ?? null;
-    const externalId =
-      id === null ? null : entityId(id, "external");
+    this.updateHighlight(entity);
+    this.refreshSceneLabels();
+    const building =
+      entity?.kind === "building"
+        ? this.buildingContexts.get(entity.id) ?? null
+        : null;
+    const district =
+      entity?.kind === "district"
+        ? this.districtContexts.get(entity.id) ?? null
+        : null;
     const external =
-      externalId === null
-        ? null
-        : this.externalNodes.get(externalId) ?? null;
-    if (context) {
-      showInspector(context);
+      entity?.kind === "external"
+        ? this.externalNodes.get(entity.id) ?? null
+        : null;
+    if (building) {
+      showInspector(building);
+    } else if (district) {
+      showDistrictInspector(district);
     } else if (external) {
       showExternalInspector(external);
     } else {
       showInspector(null);
     }
-    this.onExternalSelectionChange(external?.id ?? null);
     this.emitState();
   }
 
   private emitState(): void {
-    const selectedBuildingId =
-      this.selectedId === null
-        ? null
-        : entityId(this.selectedId, "building");
     this.onStateChange({
-      selectedBuildingId,
+      selectedEntity: this.selectedEntity,
       isolatedDistrictId: this.isolatedDistrictId,
     });
   }
 
-  private updateHighlight(id: string | null): void {
-    if (!id) {
+  private updateHighlight(entity: SceneEntity | null): void {
+    if (!entity) {
       return;
     }
-    const buildingId = entityId(id, "building");
-    const externalId = entityId(id, "external");
-    const mesh =
-      buildingId !== null
-        ? this.buildingMeshes.get(buildingId)
-        : externalId !== null
-          ? this.externalMeshes.get(externalId)
-          : undefined;
+    const mesh = this.entityMesh(entity);
     if (!mesh) {
       return;
     }
-    const selected = id === this.selectedId;
-    const hovered = id === this.hoveredId;
+    const selected = sameSceneEntity(entity, this.selectedEntity);
+    const hovered = sameSceneEntity(entity, this.hoveredEntity);
     mesh.material.emissive.copy(mesh.material.color);
     mesh.material.emissiveIntensity =
       selected && hovered ? 0.62 : selected ? 0.45 : hovered ? 0.26 : 0;
   }
-}
 
-function buildingEntityKey(id: string): string {
-  return `building\u0000${id}`;
-}
+  private entityMesh(
+    entity: SceneEntity,
+  ):
+    | THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>
+    | undefined {
+    switch (entity.kind) {
+      case "building":
+        return this.buildingMeshes.get(entity.id);
+      case "district":
+        return this.districtMeshes.get(entity.id);
+      case "external":
+        return this.externalMeshes.get(entity.id);
+    }
+  }
 
-function externalEntityKey(id: string): string {
-  return `external\u0000${id}`;
-}
+  private refreshSceneLabels(): void {
+    const labels = {
+      selected: this.sceneLabel(this.selectedEntity),
+      hovered: this.sceneLabel(this.hoveredEntity),
+    };
+    this.sceneLabelOverlay.replace(labels);
+    this.renderer.domElement.setAttribute(
+      "aria-label",
+      sceneLabelAccessibleName(labels),
+    );
+    this.renderer.domElement.title =
+      labels.hovered?.text ?? labels.selected?.text ?? "";
+  }
 
-function entityId(
-  key: string,
-  kind: "building" | "external",
-): string | null {
-  const prefix = `${kind}\u0000`;
-  return key.startsWith(prefix) ? key.slice(prefix.length) : null;
+  private sceneLabel(entity: SceneEntity | null): SceneLabel | null {
+    if (!entity) {
+      return null;
+    }
+    switch (entity.kind) {
+      case "building": {
+        const context = this.buildingContexts.get(entity.id);
+        if (!context) {
+          return null;
+        }
+        const { building } = context;
+        return {
+          id: encodeSceneEntityKey(entity),
+          text: building.name,
+          position: {
+            x: building.position.x,
+            y: building.position.y + building.size.y * 0.5 + 1.35,
+            z: building.position.z,
+          },
+          worldHeight: 1.2,
+        };
+      }
+      case "district": {
+        const context = this.districtContexts.get(entity.id);
+        if (!context) {
+          return null;
+        }
+        const { district } = context;
+        let skylineY = district.position.y + district.size.y * 0.5;
+        for (const buildingContext of this.buildingContexts.values()) {
+          const building = buildingContext.building;
+          if (building.districtId === district.id) {
+            skylineY = Math.max(
+              skylineY,
+              building.position.y + building.size.y * 0.5,
+            );
+          }
+        }
+        return {
+          id: encodeSceneEntityKey(entity),
+          text: district.name,
+          position: {
+            x: district.position.x,
+            y: skylineY + 1.55,
+            z: district.position.z,
+          },
+          worldHeight: 1.6,
+        };
+      }
+      case "external": {
+        const node = this.externalNodes.get(entity.id);
+        if (!node) {
+          return null;
+        }
+        return {
+          id: encodeSceneEntityKey(entity),
+          text:
+            node.kind === "external"
+              ? node.normalizedTarget ?? node.label
+              : node.label,
+          position: {
+            x: node.position.x,
+            y: node.position.y + node.size.y * 0.5 + 1.35,
+            z: node.position.z,
+          },
+          worldHeight: 1.4,
+        };
+      }
+    }
+  }
 }
 
 let activeModel: CityModel = DEMO_MODEL;
@@ -1040,14 +1181,9 @@ let explorerState = resetExplorerState();
 let activeExternalLayout = createExternalDependencyLayout(DEMO_MODEL);
 let activeExternalNodes: readonly ExternalSceneNode[] =
   activeExternalLayout.nodes;
-let selectedExternalNodeId: string | null = null;
 const cityScene = new CityScene(
   sceneHost,
   synchronizeExplorerState,
-  (id) => {
-    selectedExternalNodeId = id;
-    renderExternalNodeList();
-  },
 );
 const automaticModelLoadGate = new AutomaticModelLoadGate();
 
@@ -1281,7 +1417,6 @@ function applyModel(model: CityModel, source: ModelSource): void {
   explorerState = resetExplorerState();
   activeExternalLayout = nextExternalLayout;
   activeExternalNodes = nextExternalLayout.nodes;
-  selectedExternalNodeId = null;
   buildingSearch.value = "";
   synchronizeExplorerState(explorerState);
   renderBuildingSearch();
@@ -1318,6 +1453,8 @@ function createExternalDependencyLayout(
 function renderExternalNodeList(): void {
   externalList.replaceChildren();
   externalZone.hidden = activeExternalNodes.length === 0;
+  const selectedExternalNodeId =
+    selectedExplorerExternalId(explorerState);
   for (const node of activeExternalNodes) {
     const item = document.createElement("li");
     const button = document.createElement("button");
@@ -1427,7 +1564,9 @@ function renderBuildingSearch(): void {
     button.className = "search-result-button";
     button.dataset["buildingId"] = result.buildingId;
     button.title = result.path;
-    if (result.buildingId === explorerState.selectedBuildingId) {
+    if (
+      result.buildingId === selectedExplorerBuildingId(explorerState)
+    ) {
       button.setAttribute("aria-current", "true");
     }
     button.addEventListener("click", () => {
@@ -1467,7 +1606,7 @@ function selectBuildingFromExplorer(buildingId: string): void {
     activeModel,
     buildingId,
   );
-  if (next.selectedBuildingId === buildingId) {
+  if (selectedExplorerBuildingId(next) === buildingId) {
     cityScene.selectBuilding(buildingId, true);
   }
 }
@@ -1477,8 +1616,11 @@ function clearBuildingSelection(): void {
 }
 
 function synchronizeExplorerState(state: ExplorerState): void {
-  const previousSelectedBuildingId = explorerState.selectedBuildingId;
+  const previousSelectedBuildingId =
+    selectedExplorerBuildingId(explorerState);
   explorerState = state;
+  const selectedBuildingId = selectedExplorerBuildingId(state);
+  const selectedExternalNodeId = selectedExplorerExternalId(state);
   if (selectedExternalNodeId !== null) {
     const selectedExternal = activeExternalNodes.find(
       ({ id }) => id === selectedExternalNodeId,
@@ -1489,13 +1631,13 @@ function synchronizeExplorerState(state: ExplorerState): void {
   }
   if (
     previousSelectedBuildingId !== null &&
-    state.selectedBuildingId === null
+    selectedBuildingId === null
   ) {
     dependencyRouteState = resetDependencyRouteState();
   }
-  const selected = state.selectedBuildingId
+  const selected = selectedBuildingId
     ? activeModel.buildings.find(
-        ({ id }) => id === state.selectedBuildingId,
+        ({ id }) => id === selectedBuildingId,
       )
     : undefined;
   isolateDistrictButton.disabled =
@@ -1503,12 +1645,13 @@ function synchronizeExplorerState(state: ExplorerState): void {
     state.isolatedDistrictId === selected.districtId;
   showWholeCityButton.disabled = state.isolatedDistrictId === null;
   for (const button of searchResultButtons()) {
-    if (button.dataset["buildingId"] === state.selectedBuildingId) {
+    if (button.dataset["buildingId"] === selectedBuildingId) {
       button.setAttribute("aria-current", "true");
     } else {
       button.removeAttribute("aria-current");
     }
   }
+  renderExternalNodeList();
   renderDependencyExplorer();
   renderDistrictDependencyExplorer();
 }
@@ -1807,10 +1950,10 @@ function isolateDistrictDependencyEndpoint(
   if (districtId === null) {
     return;
   }
-  if (explorerState.selectedBuildingId !== null) {
-    cityScene.resetSelection();
-  }
   cityScene.isolateDistrict(districtId);
+  if (cityScene.selectDistrict(districtId)) {
+    districtInspectorContent.focus({ preventScroll: true });
+  }
 }
 
 function navigateDistrictDependencyRoutes(event: KeyboardEvent): void {
@@ -1867,7 +2010,7 @@ function districtRouteButton(
 function toggleDependencyDirection(
   direction: DependencyRouteDirection,
 ): void {
-  const selectedBuildingId = explorerState.selectedBuildingId;
+  const selectedBuildingId = selectedExplorerBuildingId(explorerState);
   if (selectedBuildingId === null) {
     return;
   }
@@ -1887,7 +2030,7 @@ function toggleDependencyDirection(
 
 function renderDependencyExplorer(): void {
   dependencyList.replaceChildren();
-  const selectedBuildingId = explorerState.selectedBuildingId;
+  const selectedBuildingId = selectedExplorerBuildingId(explorerState);
   const summary =
     selectedBuildingId === null
       ? null
@@ -2465,10 +2608,11 @@ function renderLegend(model: CityModel): void {
 function showInspector(context: BuildingContext | null): void {
   inspectorEmpty.hidden = context !== null;
   inspectorContent.hidden = context === null;
+  districtInspectorContent.hidden = true;
   externalInspectorContent.hidden = true;
   clearSelectionButton.hidden = context === null;
   if (!context) {
-    selectionStatus.textContent = "Building selection cleared.";
+    selectionStatus.textContent = "Selection cleared.";
     return;
   }
 
@@ -2492,6 +2636,27 @@ function showInspector(context: BuildingContext | null): void {
     `${building.metrics.maximumComplexity.toLocaleString()}.`;
 }
 
+function showDistrictInspector(context: DistrictContext): void {
+  const { district, repository, module, buildingCount } = context;
+  inspectorEmpty.hidden = true;
+  inspectorContent.hidden = true;
+  districtInspectorContent.hidden = false;
+  externalInspectorContent.hidden = true;
+  clearSelectionButton.hidden = false;
+  districtInspectorContent.scrollTop = 0;
+  districtInspectorFields.name.textContent = district.name;
+  districtInspectorFields.repository.textContent = repository.name;
+  districtInspectorFields.module.textContent = module.name;
+  districtInspectorFields.path.textContent = district.path;
+  districtInspectorFields.buildingCount.textContent =
+    buildingCount.toLocaleString();
+  selectionStatus.textContent =
+    `Selected district ${district.name}. ` +
+    `${buildingCount.toLocaleString()} ${
+      buildingCount === 1 ? "building" : "buildings"
+    }.`;
+}
+
 function showExternalInspector(node: ExternalSceneNode): void {
   const presentation = presentExternalDependency(
     node,
@@ -2500,6 +2665,7 @@ function showExternalInspector(node: ExternalSceneNode): void {
 
   inspectorEmpty.hidden = true;
   inspectorContent.hidden = true;
+  districtInspectorContent.hidden = true;
   externalInspectorContent.hidden = false;
   clearSelectionButton.hidden = false;
   externalInspectorContent.scrollTop = 0;

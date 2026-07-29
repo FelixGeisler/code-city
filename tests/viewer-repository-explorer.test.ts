@@ -9,6 +9,8 @@ import {
   MAXIMUM_REPOSITORY_EXPLORER_RESULT_LIMIT,
   resetExplorerState,
   searchRepositoryBuildings,
+  selectedExplorerBuildingId,
+  selectedExplorerExternalId,
   selectExplorerBuilding,
   showAllDistricts,
 } from "../apps/viewer/src/repository-explorer.js";
@@ -347,7 +349,7 @@ describe("viewer repository explorer state", () => {
 
   it("starts and resets with the whole city visible and no selection", () => {
     expect(INITIAL_EXPLORER_STATE).toEqual({
-      selectedBuildingId: null,
+      selectedEntity: null,
       isolatedDistrictId: null,
     });
     expect(
@@ -363,9 +365,15 @@ describe("viewer repository explorer state", () => {
     );
 
     expect(selected).toEqual({
-      selectedBuildingId: "district-a-building",
+      selectedEntity: {
+        kind: "building",
+        id: "district-a-building",
+      },
       isolatedDistrictId: null,
     });
+    expect(selectedExplorerBuildingId(selected)).toBe(
+      "district-a-building",
+    );
     expect(
       selectExplorerBuilding(selected, model, "stale-building"),
     ).toBe(selected);
@@ -379,7 +387,10 @@ describe("viewer repository explorer state", () => {
     );
 
     expect(isolateSelectedDistrict(selected, model)).toEqual({
-      selectedBuildingId: "district-a-building",
+      selectedEntity: {
+        kind: "building",
+        id: "district-a-building",
+      },
       isolatedDistrictId: "district-a",
     });
     expect(
@@ -389,40 +400,76 @@ describe("viewer repository explorer state", () => {
 
   it("clears selection without changing an active isolation", () => {
     const isolated = {
-      selectedBuildingId: "district-a-building",
+      selectedEntity: {
+        kind: "building" as const,
+        id: "district-a-building",
+      },
       isolatedDistrictId: "district-a",
     };
 
     expect(clearExplorerSelection(isolated)).toEqual({
-      selectedBuildingId: null,
+      selectedEntity: null,
       isolatedDistrictId: "district-a",
     });
   });
 
   it("moves active isolation when selecting another district", () => {
     const isolated = {
-      selectedBuildingId: "district-a-building",
+      selectedEntity: {
+        kind: "building" as const,
+        id: "district-a-building",
+      },
       isolatedDistrictId: "district-a",
     };
 
     expect(
       selectExplorerBuilding(isolated, model, "district-b-building"),
     ).toEqual({
-      selectedBuildingId: "district-b-building",
+      selectedEntity: {
+        kind: "building",
+        id: "district-b-building",
+      },
       isolatedDistrictId: "district-b",
     });
   });
 
   it("shows all districts without clearing the selection", () => {
     const isolated = {
-      selectedBuildingId: "district-a-building",
+      selectedEntity: {
+        kind: "building" as const,
+        id: "district-a-building",
+      },
       isolatedDistrictId: "district-a",
     };
 
     expect(showAllDistricts(isolated)).toEqual({
-      selectedBuildingId: "district-a-building",
+      selectedEntity: {
+        kind: "building",
+        id: "district-a-building",
+      },
       isolatedDistrictId: null,
     });
+  });
+
+  it("keeps an external selection addressable across isolation changes", () => {
+    const selectedExternal = {
+      selectedEntity: {
+        kind: "external" as const,
+        id: "external-rxjs",
+      },
+      isolatedDistrictId: "district-a",
+    };
+
+    expect(selectedExplorerExternalId(selectedExternal)).toBe(
+      "external-rxjs",
+    );
+    expect(selectedExplorerBuildingId(selectedExternal)).toBeNull();
+    expect(
+      selectedExplorerExternalId({
+        ...selectedExternal,
+        isolatedDistrictId: null,
+      }),
+    ).toBe("external-rxjs");
   });
 });
 

@@ -2,6 +2,10 @@ import type {
   CityBuilding,
   CityModel,
 } from "../../../packages/core/src/model.js";
+import {
+  createSceneEntity,
+  type SceneEntity,
+} from "./scene-entity.js";
 
 export const DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT = 20;
 export const MAXIMUM_REPOSITORY_EXPLORER_RESULT_LIMIT = 100;
@@ -62,12 +66,12 @@ export interface RepositoryExplorerIndex {
 }
 
 export interface ExplorerState {
-  readonly selectedBuildingId: string | null;
+  readonly selectedEntity: SceneEntity | null;
   readonly isolatedDistrictId: string | null;
 }
 
 export const INITIAL_EXPLORER_STATE: ExplorerState = Object.freeze({
-  selectedBuildingId: null,
+  selectedEntity: null,
   isolatedDistrictId: null,
 });
 
@@ -175,7 +179,7 @@ export function selectExplorerBuilding(
   }
 
   return {
-    selectedBuildingId: building.id,
+    selectedEntity: createSceneEntity("building", building.id),
     isolatedDistrictId:
       state.isolatedDistrictId === null
         ? null
@@ -184,30 +188,47 @@ export function selectExplorerBuilding(
 }
 
 export function clearExplorerSelection(state: ExplorerState): ExplorerState {
-  if (state.selectedBuildingId === null) {
+  if (state.selectedEntity === null) {
     return state;
   }
   return {
-    selectedBuildingId: null,
+    selectedEntity: null,
     isolatedDistrictId: state.isolatedDistrictId,
   };
+}
+
+export function selectedExplorerBuildingId(
+  state: ExplorerState,
+): string | null {
+  return state.selectedEntity?.kind === "building"
+    ? state.selectedEntity.id
+    : null;
+}
+
+export function selectedExplorerExternalId(
+  state: ExplorerState,
+): string | null {
+  return state.selectedEntity?.kind === "external"
+    ? state.selectedEntity.id
+    : null;
 }
 
 export function isolateSelectedDistrict(
   state: ExplorerState,
   model: Pick<CityModel, "buildings">,
 ): ExplorerState {
-  if (state.selectedBuildingId === null) {
+  const selectedBuildingId = selectedExplorerBuildingId(state);
+  if (selectedBuildingId === null) {
     return state;
   }
   const building = model.buildings.find(
-    ({ id }) => id === state.selectedBuildingId,
+    ({ id }) => id === selectedBuildingId,
   );
   if (!building || state.isolatedDistrictId === building.districtId) {
     return state;
   }
   return {
-    selectedBuildingId: state.selectedBuildingId,
+    selectedEntity: state.selectedEntity,
     isolatedDistrictId: building.districtId,
   };
 }
@@ -217,7 +238,7 @@ export function showAllDistricts(state: ExplorerState): ExplorerState {
     return state;
   }
   return {
-    selectedBuildingId: state.selectedBuildingId,
+    selectedEntity: state.selectedEntity,
     isolatedDistrictId: null,
   };
 }
