@@ -105,11 +105,16 @@ async function bundledHelperFile(): Promise<string> {
 async function dotnetExecutable(): Promise<string> {
   const fileName = process.platform === "win32" ? "dotnet.exe" : "dotnet";
   const candidates: string[] = [];
-  if (process.env["DOTNET_ROOT"]) {
+  if (
+    process.env["DOTNET_ROOT"] &&
+    path.isAbsolute(process.env["DOTNET_ROOT"])
+  ) {
     candidates.push(path.join(process.env["DOTNET_ROOT"], fileName));
   }
   for (const directory of (process.env["PATH"] ?? "").split(path.delimiter)) {
-    if (directory) candidates.push(path.join(directory, fileName));
+    if (directory && path.isAbsolute(directory)) {
+      candidates.push(path.join(directory, fileName));
+    }
   }
   for (const candidate of candidates) {
     const resolved = await regularRealPath(candidate);
@@ -306,6 +311,7 @@ function runHelper(
     );
     timeout.unref();
     options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options.signal?.aborted) onAbort();
 
     child.stdout.on("data", (chunk: Buffer) => {
       if (settled || failure) return;
