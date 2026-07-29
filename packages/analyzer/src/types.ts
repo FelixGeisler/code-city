@@ -10,6 +10,7 @@ import type {
   SourceLanguage,
   SourceMetrics,
 } from "../../core/src/model.js";
+import type { SnapshotOptions } from "./snapshot.js";
 
 export type {
   ExecutableUnitMetric,
@@ -49,7 +50,7 @@ export interface LocalAnalysisFacts {
   readonly warnings: readonly string[];
 }
 
-export interface LocalAnalysisOptions {
+export interface LocalAnalysisOptions extends SnapshotOptions {
   readonly title?: string;
   readonly version?: string;
   /**

@@ -1,14 +1,17 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import ts from "typescript";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   analyzeCSharpLexically,
   analyzeLocalFacts,
   analyzeLocalRepositories,
+  analyzeRepositorySnapshots,
   analyzeTypeScriptSource,
+  snapshotLocalDirectory,
 } from "../packages/analyzer/src/index.js";
 
 const temporaryDirectories: string[] = [];
@@ -282,8 +285,18 @@ EndProject
       version: "test",
       logo: "assets/flow.svg",
     });
+    const snapshots = await Promise.all([
+      snapshotLocalDirectory(hub),
+      snapshotLocalDirectory(client),
+    ]);
+    const fromSnapshots = await analyzeRepositorySnapshots(snapshots, {
+      title: "FLOW",
+      version: "test",
+      logo: "assets/flow.svg",
+    });
 
     expect(second).toEqual(first);
+    expect(fromSnapshots).toEqual(first);
     expect(first.metricMapping).toEqual({
       formulas: {
         normalization: "log1p-cap-v1",
@@ -463,6 +476,130 @@ EndProject
           kind === "typescript-import" && sourceId === source?.id,
       )?.targetId,
     ).toBe(target?.id);
+  });
+
+  it("never lets TypeScript read ignored or unadmitted config extensions", async () => {
+    const root = await temporaryDirectory();
+    await fixtureFile(
+      root,
+      "main.ts",
+      `import { secret } from "@secret"; export const value = secret;`,
+    );
+    await fixtureFile(root, "target.ts", "export const secret = true;");
+    await fixtureFile(
+      root,
+      "tsconfig.json",
+      JSON.stringify({ extends: "./node_modules/secret-config.json" }),
+    );
+    await fixtureFile(
+      root,
+      "node_modules/secret-config.json",
+      JSON.stringify({
+        compilerOptions: {
+          baseUrl: "..",
+          paths: { "@secret": ["target.ts"] },
+        },
+      }),
+    );
+
+    const snapshot = await snapshotLocalDirectory(root);
+    expect(
+      snapshot.files.some(({ path: filePath }) =>
+        filePath.startsWith("node_modules/"),
+      ),
+    ).toBe(false);
+
+    const systemRead = vi
+      .spyOn(ts.sys, "readFile")
+      .mockImplementation(() => {
+        throw new Error("TypeScript attempted a host filesystem read.");
+      });
+    const systemExists = vi
+      .spyOn(ts.sys, "fileExists")
+      .mockImplementation(() => {
+        throw new Error("TypeScript attempted a host filesystem lookup.");
+      });
+    try {
+      const model = await analyzeRepositorySnapshots([snapshot]);
+      expect(
+        model.dependencies.find(
+          ({ kind }) => kind === "typescript-import",
+        ),
+      ).toMatchObject({
+        externalTarget: "@secret",
+        resolution: "external",
+      });
+      expect(systemRead).not.toHaveBeenCalled();
+      expect(systemExists).not.toHaveBeenCalled();
+    } finally {
+      systemRead.mockRestore();
+      systemExists.mockRestore();
+    }
+  });
+
+  it("does not propagate adapter diagnostic text into the city model", async () => {
+    const model = await analyzeRepositorySnapshots([
+      {
+        name: "Example",
+        files: [
+          {
+            path: "safe.ts",
+            text: "export const safe = true;",
+            byteLength: 25,
+          },
+        ],
+        diagnostics: [
+          {
+            code: "unreadable",
+            path: "hidden.ts",
+            message: "secret adapter detail",
+          },
+        ],
+      },
+    ]);
+
+    expect(model.analysis?.warnings).toContain(
+      "unreadable: Example: hidden.ts: Unreadable source skipped.",
+    );
+    expect(JSON.stringify(model)).not.toContain("secret adapter detail");
+  });
+
+  it("allows TypeScript config extensions that were admitted to the snapshot", async () => {
+    const root = await temporaryDirectory();
+    await fixtureFile(
+      root,
+      "main.ts",
+      `import { target } from "@target"; export const value = target;`,
+    );
+    await fixtureFile(root, "target.ts", "export const target = true;");
+    await fixtureFile(
+      root,
+      "tsconfig.json",
+      JSON.stringify({ extends: "./config/tsconfig.base.json" }),
+    );
+    await fixtureFile(
+      root,
+      "config/tsconfig.base.json",
+      JSON.stringify({
+        compilerOptions: {
+          baseUrl: "..",
+          paths: { "@target": ["target.ts"] },
+        },
+      }),
+    );
+
+    const model = await analyzeLocalRepositories([root]);
+    const main = model.buildings.find(({ name }) => name === "main.ts");
+    const target = model.buildings.find(({ name }) => name === "target.ts");
+    expect(
+      model.dependencies.find(
+        ({ kind, sourceId }) =>
+          kind === "typescript-import" && sourceId === main?.id,
+      ),
+    ).toMatchObject({
+      targetId: target?.id,
+      resolution: "internal",
+    });
   });
 
   it("preserves unresolved relative imports explicitly", async () => {
