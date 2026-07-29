@@ -8,6 +8,7 @@ import { analyzeLocalRepositories } from "../../../packages/analyzer/src/index.j
 import {
   assignSemanticGroups,
   parsePrintLabelPolicy,
+  parsePrintRoutePolicy,
   planPrint,
   PrintPlanValidationError,
   serializePrintLegend,
@@ -18,6 +19,7 @@ import type {
   CityModel,
   PrinterProfile,
   PrintFormat,
+  PrintRoutePolicy,
 } from "../../../packages/core/src/index.js";
 import {
   buildDependencyConnectorComparison,
@@ -33,10 +35,11 @@ Usage:
   codecity analyze <root...> --output <city-model.json> [options]
   codecity plan --model <city-model.json> --profile <profile.json> \\
     --format <stl|3mf> --output <print-plan.json> [--scale <factor>] \\
-    [--labels <auto|off>]
+    [--labels <auto|off>] [--routes <auto|off>]
   codecity export --model <city-model.json> --profile <profile.json> \\
     --format 3mf --output <model.3mf> [--scale <factor>] \\
-    [--labels <auto|off>] [--legend <legend.json|off>]
+    [--labels <auto|off>] [--routes <auto|off>] \\
+    [--legend <legend.json|off>]
   codecity compare-connectors --profile <profile.json> --output <model.3mf> \\
     [--instructions <instructions.txt>]
 
@@ -47,6 +50,7 @@ Analyze options:
 
 Print options:
   --labels <auto|off>  Same-channel physical labels (default: auto)
+  --routes <auto|off>  Aggregated dependency traces (default: off)
   --legend <path|off>  Private companion legend (default: beside 3MF)
 
 General:
@@ -223,7 +227,15 @@ async function analyzeCommand(args: readonly string[], io: CliIo): Promise<void>
 async function planCommand(args: readonly string[], io: CliIo): Promise<void> {
   const parsed = parseArguments(
     args,
-    new Set(["model", "profile", "format", "output", "scale", "labels"]),
+    new Set([
+      "model",
+      "profile",
+      "format",
+      "output",
+      "scale",
+      "labels",
+      "routes",
+    ]),
   );
   if (parsed.positionals.length > 0) {
     throw new Error(
@@ -240,6 +252,7 @@ async function planCommand(args: readonly string[], io: CliIo): Promise<void> {
   const format: PrintFormat = formatValue;
   const scale = positiveScale(parsed.options.get("scale"));
   const labelPolicy = cliLabelPolicy(parsed.options.get("labels"));
+  const routePolicy = cliRoutePolicy(parsed.options.get("routes"));
   const model = parseCityModel(await readJson(modelPath, "city model"));
   const profile = parsePrinterProfile(
     await readJson(profilePath, "printer profile"),
@@ -249,6 +262,7 @@ async function planCommand(args: readonly string[], io: CliIo): Promise<void> {
     profile,
     scale,
     labelPolicy,
+    routePolicy,
   });
   const printable = artifacts.city;
   const planGeometry = printablePlanGeometry(printable);
@@ -256,6 +270,7 @@ async function planCommand(args: readonly string[], io: CliIo): Promise<void> {
     format,
     scale,
     labelPolicy,
+    routePolicy,
     semanticGroups: model.semanticGroups,
     bounds: planGeometry.bounds,
     geometry: {
@@ -274,6 +289,7 @@ async function planCommand(args: readonly string[], io: CliIo): Promise<void> {
     `Planned ${format.toUpperCase()} output across ${plan.channels.length} print channel(s).\nWrote ${path.resolve(output)}\n`,
   );
   io.stdout(`${labelSummary(artifacts.labels)}\n`);
+  io.stdout(`${routeSummary(artifacts.routes)}\n`);
 }
 
 function positiveScale(value: string | undefined): number {
@@ -296,6 +312,14 @@ function cliLabelPolicy(value: string | undefined): "auto" | "off" {
   }
 }
 
+function cliRoutePolicy(value: string | undefined): PrintRoutePolicy {
+  try {
+    return parsePrintRoutePolicy(value);
+  } catch {
+    throw new Error("--routes must be either 'auto' or 'off'.");
+  }
+}
+
 function labelSummary(labels: {
   readonly printedBuildings: number;
   readonly skippedBuildings: number;
@@ -306,6 +330,24 @@ function labelSummary(labels: {
     `Labels: ${labels.printedBuildings} building and ` +
     `${labels.printedDistricts} district label(s) printed; ` +
     `${labels.skippedBuildings + labels.skippedDistricts} skipped.`
+  );
+}
+
+function routeSummary(routes: {
+  readonly policy: PrintRoutePolicy;
+  readonly totalCount: number;
+  readonly printedCount: number;
+  readonly omittedCount: number;
+  readonly totalWeight: number;
+  readonly printedWeight: number;
+  readonly omittedWeight: number;
+}): string {
+  if (routes.policy === "off") return "Routes: disabled.";
+  return (
+    `Routes: ${routes.printedCount} of ${routes.totalCount} aggregated ` +
+    `bundle(s) printed (${routes.printedWeight} of ${routes.totalWeight} ` +
+    `weight); ${routes.omittedCount} omitted ` +
+    `(${routes.omittedWeight} weight).`
   );
 }
 
@@ -410,6 +452,7 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
       "output",
       "scale",
       "labels",
+      "routes",
       "legend",
     ]),
   );
@@ -424,6 +467,7 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
   const output = requiredOption(parsed.options, "output");
   const scale = positiveScale(parsed.options.get("scale"));
   const labelPolicy = cliLabelPolicy(parsed.options.get("labels"));
+  const routePolicy = cliRoutePolicy(parsed.options.get("routes"));
   if (format !== "3mf") {
     throw new Error(
       "The export command currently supports only '3mf'; STL remains planned in issue #12.",
@@ -453,6 +497,7 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
       profile,
       scale,
       labelPolicy,
+      routePolicy,
     },
   );
   const printable = artifacts.city;
@@ -481,6 +526,7 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
     io.stdout("Legend output disabled.\n");
   }
   io.stdout(`${labelSummary(artifacts.labels)}\n`);
+  io.stdout(`${routeSummary(artifacts.routes)}\n`);
 }
 
 export async function runCli(

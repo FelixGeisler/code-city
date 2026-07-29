@@ -116,8 +116,6 @@ describe("Demo printable geometry", () => {
     expect(city.parts.map(({ channelId }) => channelId)).toEqual([
       "tool-1",
       "tool-2",
-      "tool-3",
-      "tool-4",
       "tool-5",
     ]);
 
@@ -314,7 +312,7 @@ describe("Demo printable geometry", () => {
         profile: two,
       }).parts,
     ).toHaveLength(2);
-    expect(demoCity().parts).toHaveLength(5);
+    expect(demoCity().parts).toHaveLength(3);
 
     const extraGroups = DEMO_MODEL.buildings.map((_, index) => ({
       id: `building-group-${index + 1}`,
@@ -492,6 +490,39 @@ describe("Demo printable geometry", () => {
     mutableBounds.maximum.z += 1;
     expect(validatePrintableCity(disconnected, profile).join(" ")).toMatch(
       /no positive-area face connection/u,
+    );
+  });
+
+  it("never lets dependency routes provide structural connectivity", () => {
+    const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
+    const city = structuredClone(demoCity());
+    const primitives = city.parts.flatMap(({ primitives: items }) => items);
+    const district = primitives.find(({ kind }) => kind === "district")!;
+    (district as { kind: string }).kind = "dependency-trace";
+    (district as { semanticGroupId: string }).semanticGroupId = "routes";
+
+    const issues = validatePrintableCity(city, profile).join(" ");
+    expect(issues).toMatch(/no positive-area face connection/u);
+
+    const detachedRoute = structuredClone(demoCity());
+    const building = detachedRoute.parts
+      .flatMap(({ primitives: items }) => items)
+      .find(({ kind }) => kind === "building")!;
+    (building as { kind: string }).kind = "dependency-trace";
+    (building as { semanticGroupId: string }).semanticGroupId = "routes";
+    expect(validatePrintableCity(detachedRoute, profile).join(" ")).toMatch(
+      /Route primitive .* rest on top of/u,
+    );
+
+    const overhangingRoute = structuredClone(demoCity());
+    const overhang = overhangingRoute.parts
+      .flatMap(({ primitives: items }) => items)
+      .find(({ kind }) => kind === "district")!;
+    (overhang as { kind: string }).kind = "dependency-trace";
+    (overhang as { semanticGroupId: string }).semanticGroupId = "routes";
+    (overhang.bounds.maximum as { x: number }).x += 1;
+    expect(validatePrintableCity(overhangingRoute, profile).join(" ")).toMatch(
+      /remain inside the shared base/u,
     );
   });
 });

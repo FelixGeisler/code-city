@@ -322,7 +322,7 @@ function primitiveTopologyIssues(
   primitives: readonly PrintPrimitive[],
 ): readonly string[] {
   const issues: string[] = [];
-  const graph = primitives.map(() => new Set<number>());
+  const structuralGraph = primitives.map(() => new Set<number>());
   const indexByPrimitive = new Map(
     primitives.map((item, index) => [item, index]),
   );
@@ -338,8 +338,13 @@ function primitiveTopologyIssues(
       );
     }
     if (positiveFaceContact(left.bounds, right.bounds)) {
-      graph[leftIndex]!.add(rightIndex);
-      graph[rightIndex]!.add(leftIndex);
+      if (
+        left.semanticGroupId !== "routes" &&
+        right.semanticGroupId !== "routes"
+      ) {
+        structuralGraph[leftIndex]!.add(rightIndex);
+        structuralGraph[rightIndex]!.add(leftIndex);
+      }
     }
   }
   const baseIndices = primitives
@@ -353,16 +358,32 @@ function primitiveTopologyIssues(
   const queue = [...baseIndices];
   while (queue.length > 0) {
     const current = queue.shift()!;
-    for (const adjacent of graph[current]!) {
+    for (const adjacent of structuralGraph[current]!) {
       if (reached.has(adjacent)) continue;
       reached.add(adjacent);
       queue.push(adjacent);
     }
   }
+  const base = primitives[baseIndices[0]!]!;
   primitives.forEach((item, index) => {
-    if (!reached.has(index)) {
+    if (
+      item.semanticGroupId !== "routes" &&
+      !reached.has(index)
+    ) {
       issues.push(
         `Primitive '${item.id}' has no positive-area face connection to the shared base.`,
+      );
+    }
+    if (
+      item.semanticGroupId === "routes" &&
+      (!close(item.bounds.minimum.z, base.bounds.maximum.z) ||
+        item.bounds.minimum.x < base.bounds.minimum.x - GEOMETRY_EPSILON ||
+        item.bounds.maximum.x > base.bounds.maximum.x + GEOMETRY_EPSILON ||
+        item.bounds.minimum.y < base.bounds.minimum.y - GEOMETRY_EPSILON ||
+        item.bounds.maximum.y > base.bounds.maximum.y + GEOMETRY_EPSILON)
+    ) {
+      issues.push(
+        `Route primitive '${item.id}' must rest on top of and remain inside the shared base.`,
       );
     }
   });

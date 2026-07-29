@@ -51,6 +51,7 @@ npm run cli -- export `
   --format 3mf `
   --scale 3 `
   --labels auto `
+  --routes auto `
   --legend build\print\code-city-demo.legend.json `
   --output build\print\code-city-demo.3mf
 ```
@@ -59,11 +60,12 @@ The viewer also accepts a `city-model.json` through its **Open model** button.
 The first C# implementation is explicitly labelled lexical; Roslyn replaces it
 without changing the model contract.
 
-The labelled Demo is 93 x 48 x 33.8 mm and imports into PrusaSlicer as one
-object with five aligned tool parts. Its private JSON legend maps printed codes
-to repository-relative paths; use `--labels off` or `--legend off` as needed.
-STL, FLOW-sized tiling, arbitrary fonts or logos, and slicer settings remain
-planned.
+The Demo imports into PrusaSlicer as one object with five aligned tool parts;
+the command reports its profile-derived size. `--routes auto` prints capped,
+aggregated district dependencies; routes default to `off`. The private JSON
+legend maps printed codes to repository-relative paths; use `--labels off` or
+`--legend off` as needed. STL, FLOW-sized tiling, arbitrary fonts or logos, and
+slicer settings remain planned.
 
 ## Planned product flow
 

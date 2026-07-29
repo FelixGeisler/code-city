@@ -1,4 +1,5 @@
 export * from "./color.js";
+export * from "./district-dependencies.js";
 export * from "./external-dependencies.js";
 export * from "./identity.js";
 export * from "./layout.js";
@@ -8,6 +9,7 @@ export * from "./model-validation.js";
 export * from "./path.js";
 export * from "./print.js";
 export * from "./print-labels.js";
+export * from "./print-routes.js";
 export * from "./printer-profiles.js";
 export * from "./rectangle-packing.js";
 export * from "./semantics.js";

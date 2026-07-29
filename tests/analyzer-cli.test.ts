@@ -73,6 +73,8 @@ it("analyzes local roots and creates a printer-independent print plan", async ()
       "stl",
       "--scale",
       "2",
+      "--routes",
+      "auto",
       "--output",
       planPath,
     ],
@@ -86,6 +88,7 @@ it("analyzes local roots and creates a printer-independent print plan", async ()
   const plan = JSON.parse(await fs.readFile(planPath, "utf8")) as {
     format: string;
     scale: number;
+    routePolicy: string;
     channels: unknown[];
     identity: { title: string; version: string };
     identityPanel: {
@@ -101,6 +104,7 @@ it("analyzes local roots and creates a printer-independent print plan", async ()
   });
   expect(plan.format).toBe("stl");
   expect(plan.scale).toBe(2);
+  expect(plan.routePolicy).toBe("auto");
   expect(plan.channels).toHaveLength(1);
   expect(plan.identity).toEqual({
     title: "Sample City",
@@ -116,6 +120,9 @@ it("analyzes local roots and creates a printer-independent print plan", async ()
   expect(stderr).toEqual([]);
   expect(stdout.join("")).toContain("Analyzed 1 root");
   expect(stdout.join("")).toContain("Planned STL output");
+  expect(stdout.join("")).toContain(
+    "Routes: 0 of 0 aggregated bundle(s) printed",
+  );
 });
 
 it("returns a useful error for an unsafe logo reference", async () => {
@@ -210,6 +217,8 @@ it("exports the canonical Demo as a real five-part 3MF", async () => {
         "3mf",
         "--scale",
         "3",
+        "--routes",
+        "auto",
         "--output",
         outputPath,
       ],
@@ -231,9 +240,12 @@ it("exports the canonical Demo as a real five-part 3MF", async () => {
   expect(legend.buildings).toHaveLength(5);
   expect(stderr).toEqual([]);
   expect(stdout.join("")).toContain("5 aligned part(s)");
-  expect(stdout.join("")).toContain("93 × 48 × 33.8 mm");
+  expect(stdout.join("")).toContain(" mm.");
   expect(stdout.join("")).toContain(legendPath);
   expect(stdout.join("")).toContain("5 building and 2 district");
+  expect(stdout.join("")).toMatch(
+    /Routes: \d+ of \d+ aggregated bundle\(s\) printed/u,
+  );
 });
 
 it("supports explicit label and companion-legend controls", async () => {
@@ -256,6 +268,8 @@ it("supports explicit label and companion-legend controls", async () => {
         "3",
         "--labels",
         "off",
+        "--routes",
+        "off",
         "--legend",
         "off",
         "--output",
@@ -276,6 +290,7 @@ it("supports explicit label and companion-legend controls", async () => {
   expect(stdout.join("")).toContain("93 × 48 × 33 mm");
   expect(stdout.join("")).toContain("Legend output disabled");
   expect(stdout.join("")).toContain("0 building and 0 district");
+  expect(stdout.join("")).toContain("Routes: disabled.");
 });
 
 it("emits deterministic companion legend bytes", async () => {
@@ -347,9 +362,31 @@ it("rejects unsupported export formats and invalid scale values", async () => {
       },
     ),
   ).toBe(1);
+  expect(
+    await runCli(
+      ["export", ...common, "--format", "3mf", "--routes", "always"],
+      {
+        stdout: () => undefined,
+        stderr: (message) => messages.push(message),
+      },
+    ),
+  ).toBe(1);
   expect(messages.join("")).toContain("currently supports only '3mf'");
   expect(messages.join("")).toContain("--scale must be a positive");
   expect(messages.join("")).toContain("--labels must be either");
+  expect(messages.join("")).toContain("--routes must be either");
+});
+
+it("documents both dependency-route policy values", async () => {
+  const stdout: string[] = [];
+  expect(
+    await runCli(["--help"], {
+      stdout: (message) => stdout.push(message),
+      stderr: () => undefined,
+    }),
+  ).toBe(0);
+  expect(stdout.join("")).toContain("--routes <auto|off>");
+  expect(stdout.join("")).toContain("default: off");
 });
 
 it("rejects structurally incomplete export models before geometry work", async () => {

@@ -60,6 +60,20 @@
       "priority": 30
     },
     {
+      "id": "external",
+      "label": "External dependencies",
+      "color": "#111827",
+      "priority": 55,
+      "mergeInto": "base"
+    },
+    {
+      "id": "routes",
+      "label": "Dependency routes",
+      "color": "#2563EB",
+      "priority": 50,
+      "mergeInto": "base"
+    },
+    {
       "id": "group:viewer",
       "label": "Viewer",
       "color": "#36a3ff",

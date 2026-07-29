@@ -117,9 +117,18 @@ describe("viewer model validation", () => {
     expect(() =>
       validateCityModel({
         ...DEMO_MODEL,
-        semanticGroups: DEMO_MODEL.semanticGroups.filter(
-          ({ id }) => id !== "base",
-        ),
+        semanticGroups: DEMO_MODEL.semanticGroups
+          .filter(({ id }) => id !== "base")
+          .map((group) =>
+            group.mergeInto === "base"
+              ? {
+                  id: group.id,
+                  label: group.label,
+                  color: group.color,
+                  priority: group.priority,
+                }
+              : group,
+          ),
       }),
     ).toThrow(/base\.semanticGroupId references unknown id "base"/u);
     expect(() =>
