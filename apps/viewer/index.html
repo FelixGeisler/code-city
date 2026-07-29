@@ -103,8 +103,22 @@
           id="viewer-workspace"
           class="viewer-workspace"
           aria-label="Viewer tools"
-          data-active-view="find"
+          data-active-view="overview"
+          data-sheet-state="expanded"
+          data-collapsed="false"
         >
+          <div
+            id="viewer-workspace-resizer"
+            class="viewer-workspace-resizer"
+            role="separator"
+            aria-label="Resize viewer tools"
+            aria-orientation="vertical"
+            aria-valuemin="320"
+            aria-valuemax="640"
+            aria-valuenow="420"
+            tabindex="0"
+            data-workspace-resizer
+          ></div>
           <header class="viewer-workspace-header">
           <div
             class="viewer-workspace-tabs"
@@ -112,15 +126,16 @@
             aria-label="Viewer tools"
           >
             <button
-              id="viewer-tab-find"
+              id="viewer-tab-explore"
               class="viewer-workspace-tab"
               type="button"
               role="tab"
-              aria-selected="true"
-              aria-controls="viewer-view-find"
-              data-workspace-view="find"
+              aria-selected="false"
+              aria-controls="viewer-view-explore"
+              data-workspace-view="explore"
+              tabindex="-1"
             >
-              Find
+              Explore
             </button>
             <button
               id="viewer-tab-routes"
@@ -135,28 +150,27 @@
               Routes
             </button>
             <button
-              id="viewer-tab-inspect"
+              id="viewer-tab-details"
               class="viewer-workspace-tab"
               type="button"
               role="tab"
               aria-selected="false"
-              aria-controls="viewer-view-inspect"
-              data-workspace-view="inspect"
+              aria-controls="viewer-view-details"
+              data-workspace-view="details"
               tabindex="-1"
             >
-              Inspect
+              Details
             </button>
             <button
-              id="viewer-tab-legend"
+              id="viewer-tab-overview"
               class="viewer-workspace-tab"
               type="button"
               role="tab"
-              aria-selected="false"
-              aria-controls="viewer-view-legend"
-              data-workspace-view="legend"
-              tabindex="-1"
+              aria-selected="true"
+              aria-controls="viewer-view-overview"
+              data-workspace-view="overview"
             >
-              Legend
+              Overview
             </button>
           </div>
             <button
@@ -172,6 +186,20 @@
               <span aria-hidden="true">−</span>
             </button>
           </header>
+          <div class="viewer-scope" aria-label="Current city scope">
+            <span class="viewer-scope-eyebrow">Scope</span>
+            <strong id="viewer-scope-name">Whole city</strong>
+            <button
+              id="viewer-scope-reset"
+              class="viewer-scope-reset"
+              type="button"
+              aria-label="Show whole city"
+              title="Show whole city"
+              disabled
+            >
+              Reset
+            </button>
+          </div>
           <div
             id="viewer-workspace-scroll"
             class="viewer-workspace-scroll"
@@ -179,11 +207,12 @@
             aria-label="Viewer tool content"
           >
             <div
-              id="viewer-view-find"
+              id="viewer-view-explore"
               class="viewer-workspace-view"
               role="tabpanel"
-              aria-labelledby="viewer-tab-find"
-              data-workspace-panel="find"
+              aria-labelledby="viewer-tab-explore"
+              data-workspace-panel="explore"
+              hidden
             >
         <section
           id="find-panel"
@@ -406,20 +435,23 @@
             </div>
 
             <div
-              id="viewer-view-inspect"
+              id="viewer-view-details"
               class="viewer-workspace-view"
               role="tabpanel"
-              aria-labelledby="viewer-tab-inspect"
-              data-workspace-panel="inspect"
+              aria-labelledby="viewer-tab-details"
+              data-workspace-panel="details"
               hidden
             >
         <section
           id="inspector"
           class="panel inspector"
-          aria-labelledby="inspector-title"
+          aria-labelledby="selection-name"
         >
-          <div class="panel-heading">
-            <h2 id="inspector-title">Details</h2>
+          <div class="panel-heading selection-header">
+            <div class="selection-heading-copy">
+              <span id="inspector-title" class="selection-kind">Details</span>
+              <h2 id="selection-name">Nothing selected</h2>
+            </div>
             <button
               id="clear-selection"
               class="icon-button"
@@ -475,14 +507,12 @@
               </div>
             </dl>
 
-            <section
+            <details
               id="dependency-section"
               class="dependencies-section"
-              aria-labelledby="dependency-title"
             >
-              <div class="dependencies-heading">
-                <h3 id="dependency-title">Dependencies</h3>
-              </div>
+              <summary id="dependency-title">Dependencies</summary>
+              <div class="collapsible-section-body">
               <p
                 id="dependency-direction-help"
                 class="dependency-direction-help"
@@ -557,21 +587,25 @@
               >
                 Show more routes
               </button>
-            </section>
-
-            <section
-              class="units-section"
-              aria-labelledby="executable-units-title"
-            >
-              <div class="units-heading">
-                <h3 id="executable-units-title">Executable units</h3>
-                <span id="building-unit-count" class="unit-count">0</span>
               </div>
-              <p id="building-units-empty" class="units-empty">
-                Not recorded
-              </p>
-              <details id="building-units-details" hidden>
-                <summary id="building-units-summary"></summary>
+            </details>
+
+            <p id="building-units-empty" class="units-empty">
+              Executable units not recorded.
+            </p>
+              <details
+                id="building-units-details"
+                class="units-section"
+                hidden
+              >
+                <summary>
+                  <span id="executable-units-title">Executable units</span>
+                  <span id="building-unit-count" class="unit-count">0</span>
+                  <span
+                    id="building-units-summary"
+                    class="details-summary-meta"
+                  ></span>
+                </summary>
                 <div class="unit-table-wrap">
                   <table class="unit-table">
                     <caption
@@ -598,7 +632,6 @@
                   </button>
                 </div>
               </details>
-            </section>
           </div>
           <div
             id="district-inspector-content"
@@ -680,38 +713,105 @@
             </div>
 
             <div
-              id="viewer-view-legend"
+              id="viewer-view-overview"
               class="viewer-workspace-view"
               role="tabpanel"
-              aria-labelledby="viewer-tab-legend"
-              data-workspace-panel="legend"
-              hidden
+              aria-labelledby="viewer-tab-overview"
+              data-workspace-panel="overview"
             >
         <section
-          class="panel legend-panel"
-          aria-labelledby="legend-title"
+          class="panel overview-panel"
+          aria-labelledby="overview-title"
         >
           <div class="panel-heading">
-            <h2 id="legend-title">Groups</h2>
+            <h2 id="overview-title">Scoped overview</h2>
           </div>
-          <ul
-            id="legend"
-            class="legend"
-            aria-label="Semantic groups"
-          ></ul>
-          <section
-            id="external-zone"
-            class="external-zone"
-            aria-labelledby="external-zone-title"
-            hidden
-          >
-            <h3 id="external-zone-title">External dependencies</h3>
-            <ul
-              id="external-list"
-              class="external-list"
-              aria-label="External dependencies"
-            ></ul>
-          </section>
+          <div class="overview-content">
+            <p id="overview-scope-description" class="overview-scope-description">
+              Metrics for the whole city.
+            </p>
+            <dl class="overview-metrics" aria-label="Scoped city metrics">
+              <div><dt>Repositories</dt><dd id="overview-repositories">0</dd></div>
+              <div><dt>Solutions</dt><dd id="overview-solutions">0</dd></div>
+              <div><dt>Modules</dt><dd id="overview-modules">0</dd></div>
+              <div><dt>Districts</dt><dd id="overview-districts">0</dd></div>
+              <div><dt>Buildings</dt><dd id="overview-buildings">0</dd></div>
+              <div><dt>Total SLOC</dt><dd id="overview-sloc">0</dd></div>
+              <div>
+                <dt>Median complexity</dt>
+                <dd id="overview-median-complexity">0</dd>
+              </div>
+              <div>
+                <dt>Maximum complexity</dt>
+                <dd id="overview-max-complexity">0</dd>
+              </div>
+              <div>
+                <dt>Dependency edges</dt>
+                <dd id="overview-dependency-edges">0</dd>
+              </div>
+              <div>
+                <dt>Reference weight</dt>
+                <dd id="overview-reference-weight">0</dd>
+              </div>
+            </dl>
+            <section
+              class="overview-risk"
+              aria-labelledby="overview-risk-title"
+            >
+              <h3 id="overview-risk-title">Risk distribution</h3>
+              <ul>
+                <li>
+                  <span>Low</span>
+                  <span class="overview-risk-track" aria-hidden="true">
+                    <span id="overview-risk-low-bar"></span>
+                  </span>
+                  <strong id="overview-risk-low">0</strong>
+                </li>
+                <li>
+                  <span>Moderate</span>
+                  <span class="overview-risk-track" aria-hidden="true">
+                    <span id="overview-risk-moderate-bar"></span>
+                  </span>
+                  <strong id="overview-risk-moderate">0</strong>
+                </li>
+                <li>
+                  <span>High</span>
+                  <span class="overview-risk-track" aria-hidden="true">
+                    <span id="overview-risk-high-bar"></span>
+                  </span>
+                  <strong id="overview-risk-high">0</strong>
+                </li>
+                <li>
+                  <span>Very high</span>
+                  <span class="overview-risk-track" aria-hidden="true">
+                    <span id="overview-risk-very-high-bar"></span>
+                  </span>
+                  <strong id="overview-risk-very-high">0</strong>
+                </li>
+              </ul>
+            </section>
+            <section
+              id="external-zone"
+              class="external-zone"
+              aria-labelledby="external-zone-title"
+              hidden
+            >
+              <h3 id="external-zone-title">External dependencies</h3>
+              <ul
+                id="external-list"
+                class="external-list"
+                aria-label="External dependencies"
+              ></ul>
+            </section>
+            <details id="overview-legend" class="legend-details">
+              <summary id="legend-title">Legend</summary>
+              <ul
+                id="legend"
+                class="legend"
+                aria-label="Semantic groups"
+              ></ul>
+            </details>
+          </div>
         </section>
             </div>
           </div>
