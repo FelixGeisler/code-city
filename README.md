@@ -79,18 +79,26 @@ planned.
 Git remotes such as Azure DevOps Server. STL and oversized multi-plate exports
 remain planned.
 
-Architecture documentation uses Antora and the concise arc42 structure. Once
-GitHub Pages is enabled, it is published at
+Architecture documentation uses Antora and the concise arc42 structure. It is
+published at
 <https://felixgeisler.github.io/code-city/>.
 
-Build it locally with:
+## Development
+
+The supported local toolchain is **Node.js 24.x** with **npm 11.6.2**. The
+repository records both constraints in `package.json`; use the committed
+`package-lock.json` through `npm ci`.
 
 ```powershell
+node --version # must be v24.x
+npm --version  # must be 11.6.2
 npm ci
-npm test
-npm run build
-npm run docs:build
+npm run verify
 ```
+
+`verify` runs the same sequence used by Linux and Windows CI: typecheck, tests,
+the production build, and the Antora documentation build. CI bounds each
+verification job to 20 minutes.
 
 ## Status
 
