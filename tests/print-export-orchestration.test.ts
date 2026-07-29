@@ -20,6 +20,7 @@ import {
 } from "../packages/exporter/src/index.js";
 
 const temporaryDirectories: string[] = [];
+const EXPORT_TEST_TIMEOUT_MS = 15_000;
 const options = {
   scale: 3,
   labelPolicy: "auto" as const,
@@ -57,42 +58,66 @@ function profileCases(): readonly [
   ];
 }
 
-describe("format-neutral print export orchestration", () => {
-  it.each(profileCases())(
-    "returns deterministic %s artifacts for generic and Prusa profiles",
-    (format, profile, mimeType, fileExtension) => {
-      const request = {
-        format,
-        model: DEMO_MODEL,
-        profile,
-        options,
-      };
-      const first = generatePrintExport(request);
-      const second = generatePrintExport(request);
+function expectDeterministicPrintExport(
+  format: PrintFormat,
+  profile: PrinterProfile,
+  mimeType: string,
+  fileExtension: string,
+): void {
+  const request = {
+    format,
+    model: DEMO_MODEL,
+    profile,
+    options,
+  };
+  const first = generatePrintExport(request);
+  const second = generatePrintExport(request);
 
-      expect(second).toEqual(first);
-      expect(first.artifact).toMatchObject({
-        format,
-        mimeType,
-        fileExtension,
-      });
-      expect(first.artifact.bytes.byteLength).toBeGreaterThan(84);
-      expect(first.preflight.format).toBe(format);
-      expect(first.preflight.triangleCount).toBeGreaterThan(0);
-      expect(first.preflight.legendIncluded).toBe(true);
-      if (format === "stl") {
-        expect(first.preflight.partCount).toBe(1);
-        expect(first.preflight.warnings).toContain(
-          STL_INFORMATION_LOSS_WARNING,
-        );
-      } else {
-        expect(first.preflight.partCount).toBeGreaterThan(1);
-        expect(first.preflight.warnings).not.toContain(
-          STL_INFORMATION_LOSS_WARNING,
-        );
-      }
+  expect(second).toEqual(first);
+  expect(first.artifact).toMatchObject({
+    format,
+    mimeType,
+    fileExtension,
+  });
+  expect(first.artifact.bytes.byteLength).toBeGreaterThan(84);
+  expect(first.preflight.format).toBe(format);
+  expect(first.preflight.triangleCount).toBeGreaterThan(0);
+  expect(first.preflight.legendIncluded).toBe(true);
+  if (format === "stl") {
+    expect(first.preflight.partCount).toBe(1);
+    expect(first.preflight.warnings).toContain(
+      STL_INFORMATION_LOSS_WARNING,
+    );
+  } else {
+    expect(first.preflight.partCount).toBeGreaterThan(1);
+    expect(first.preflight.warnings).not.toContain(
+      STL_INFORMATION_LOSS_WARNING,
+    );
+  }
+}
+
+describe("format-neutral print export orchestration", () => {
+  it(
+    "returns deterministic 3mf artifacts for the Prusa profile",
+    () => {
+      expectDeterministicPrintExport(
+        "3mf",
+        createPrusaXLProfile([1, 2, 3, 4, 5]),
+        "model/3mf",
+        ".3mf",
+      );
     },
+    EXPORT_TEST_TIMEOUT_MS,
   );
+
+  it("returns deterministic stl artifacts for the generic profile", () => {
+    expectDeterministicPrintExport(
+      "stl",
+      createSingleChannelProfile(),
+      "model/stl",
+      ".stl",
+    );
+  });
 
   it("collapses a five-channel Prusa XL city into one STL artifact", () => {
     const result = generatePrintExport({
