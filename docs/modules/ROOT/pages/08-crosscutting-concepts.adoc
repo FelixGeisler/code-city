@@ -138,6 +138,16 @@ allows 100,000 visited entries, 50,000 retained files, 25,000 source buildings,
 2 MiB per file, 256 MiB total, 1,000 diagnostics plus one omission summary, and
 300 seconds for snapshot plus analysis.
 
+The GitHub adapter accepts only canonical HTTPS `github.com/owner/repository`
+URLs. It performs anonymous, no-store requests to `api.github.com`, resolves an
+exact 40-digit commit, and fetches only that commit from `codeload.github.com`.
+Redirects, credentials, encrypted or ZIP64 archives, unsafe or colliding paths,
+and inconsistent ZIP metadata are rejected. API responses are capped at 1 MiB,
+archives at 64 MiB, individual ZIP entries at 256 MiB, expanded archive data at
+1 GiB, and refs at 256 UTF-8 bytes. All remote work shares the 300-second
+default analysis deadline. Ignored content is never inflated. Archives and
+source bytes are not persisted or cached.
+
 The bundled Roslyn helper parses syntax only, receives opaque source IDs over a
 versioned bounded protocol, and runs once per analysis. It never loads a
 solution, project, MSBuild, NuGet, generators, or repository analyzers.
@@ -157,8 +167,6 @@ bundled telemetry, CDN, upload, frame, or object paths. Print workers have a
 
 Residual risks are platform filesystem races that cannot be removed by portable
 Node APIs, browser/DNS behavior below the fetch boundary, and slicer behavior.
-Remote archive and Git transports add their own limits in their ingestion
-adapters.
 
 == Physical identity
 

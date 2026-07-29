@@ -9,8 +9,11 @@ SIGINT, SIGTERM, or explicit close stops it.
 
 == Public GitHub
 
-The hosted service downloads a bounded public snapshot, analyzes it in an
-isolated worker, and returns derived artifacts.
+`codecity analyze-github https://github.com/owner/repository --ref main
+--output build/city-model.json` resolves one public ref to an immutable commit
+through GitHub's anonymous API. It downloads that commit archive, validates and
+analyzes it through the same snapshot boundary as local input, then discards
+the archive. No checkout, temporary directory, credential, or cache is created.
 
 == Print
 
