@@ -36,7 +36,7 @@ async function waitFor(
   throw new Error(`Job '${id}' did not reach the expected state.`);
 }
 
-function cityModelResult(token = randomUUID()): JobResult {
+function cityModelResult(token: string = randomUUID()): JobResult {
   return Object.freeze({
     kind: "city-model",
     artifactToken: token,
@@ -59,7 +59,7 @@ it("does not expose a job whose initial record could not be persisted", async ()
     dataDirectory: await temporaryDirectory(),
   });
   queues.push(queue);
-  vi.spyOn(fs, "writeFile").mockRejectedValueOnce(
+  vi.spyOn(fs, "open").mockRejectedValueOnce(
     new Error("Simulated storage failure."),
   );
 
@@ -74,7 +74,7 @@ it("waits for an in-flight enqueue before closing the queue", async () => {
     dataDirectory: await temporaryDirectory(),
   });
   queues.push(queue);
-  const writeFile = fs.writeFile.bind(fs);
+  const openFile = fs.open.bind(fs);
   let signalWriteStarted: (() => void) | undefined;
   let releaseWrite: (() => void) | undefined;
   const writeStarted = new Promise<void>((resolve) => {
@@ -83,11 +83,11 @@ it("waits for an in-flight enqueue before closing the queue", async () => {
   const writeReleased = new Promise<void>((resolve) => {
     releaseWrite = resolve;
   });
-  vi.spyOn(fs, "writeFile").mockImplementationOnce(
-    async (file, data, options) => {
+  vi.spyOn(fs, "open").mockImplementationOnce(
+    async (file, flags, mode) => {
       signalWriteStarted?.();
       await writeReleased;
-      await writeFile(file, data, options);
+      return openFile(file, flags, mode);
     },
   );
 
@@ -128,7 +128,7 @@ it("waits for an in-flight queued cancellation before closing", async () => {
   await waitFor(queue, first.id, ({ state }) => state === "running");
   expect(queue.get(second.id)?.state).toBe("queued");
 
-  const writeFile = fs.writeFile.bind(fs);
+  const openFile = fs.open.bind(fs);
   let signalWriteStarted: (() => void) | undefined;
   let releaseWrite: (() => void) | undefined;
   const writeStarted = new Promise<void>((resolve) => {
@@ -137,11 +137,11 @@ it("waits for an in-flight queued cancellation before closing", async () => {
   const writeReleased = new Promise<void>((resolve) => {
     releaseWrite = resolve;
   });
-  vi.spyOn(fs, "writeFile").mockImplementationOnce(
-    async (file, data, options) => {
+  vi.spyOn(fs, "open").mockImplementationOnce(
+    async (file, flags, mode) => {
       signalWriteStarted?.();
       await writeReleased;
-      await writeFile(file, data, options);
+      return openFile(file, flags, mode);
     },
   );
 
@@ -192,15 +192,141 @@ it("persists bounded job progress and completion", async () => {
   expect(persisted).toEqual(completed);
 });
 
+it("captures progress primitives once before persistence", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  let phaseReads = 0;
+  const changingProgress = {
+    get phase(): string {
+      phaseReads += 1;
+      return phaseReads === 1
+        ? "Analyzing files"
+        : "never-persist-this-secret";
+    },
+    current: 1,
+    total: 2,
+  };
+
+  const queued = await queue.enqueue("analysis", async ({ report }) => {
+    await report(changingProgress);
+  });
+  const completed = await waitFor(
+    queue,
+    queued.id,
+    ({ state }) => state === "completed",
+  );
+
+  expect(phaseReads).toBe(1);
+  expect(completed.progress).toEqual({
+    phase: "Analyzing files",
+    current: 1,
+    total: 2,
+  });
+  const persisted = await fs.readFile(
+    path.join(dataDirectory, "jobs", `${queued.id}.json`),
+    "utf8",
+  );
+  expect(persisted).not.toContain("never-persist-this-secret");
+});
+
+it("rejects extra progress fields without persisting credentials", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+
+  const queued = await queue.enqueue("analysis", async ({ report }) => {
+    await report({
+      phase: "Analyzing files",
+      credential: "never-persist-this-secret",
+    } as unknown as Parameters<typeof report>[0]);
+  });
+  const failed = await waitFor(
+    queue,
+    queued.id,
+    ({ state }) => state === "failed",
+  );
+
+  expect(failed.error).toEqual({
+    code: "failed",
+    message: "Job progress is invalid.",
+  });
+  expect(failed.progress).toBeUndefined();
+  const persisted = await fs.readFile(
+    path.join(dataDirectory, "jobs", `${queued.id}.json`),
+    "utf8",
+  );
+  expect(persisted).not.toContain("never-persist-this-secret");
+});
+
+it("rejects extra fields in persisted progress", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  const queued = await queue.enqueue("analysis", async ({ report }) => {
+    await report({ phase: "Analyzing files", current: 1, total: 1 });
+  });
+  const completed = await waitFor(
+    queue,
+    queued.id,
+    ({ state }) => state === "completed",
+  );
+  await queue.close();
+  const file = path.join(dataDirectory, "jobs", `${queued.id}.json`);
+  await fs.writeFile(
+    file,
+    `${JSON.stringify({
+      ...completed,
+      progress: {
+        ...completed.progress,
+        credential: "not-allowed",
+      },
+    })}\n`,
+    "utf8",
+  );
+
+  await expect(
+    PersistentJobQueue.open({ dataDirectory }),
+  ).rejects.toThrow("Invalid persisted job progress.");
+});
+
+it("settles safely when a thrown value cannot be stringified", async () => {
+  const queue = await PersistentJobQueue.open({
+    dataDirectory: await temporaryDirectory(),
+  });
+  queues.push(queue);
+  const hostile = {
+    toString(): string {
+      throw new Error("never-persist-this-secret");
+    },
+  };
+  const queued = await queue.enqueue("analysis", async () => {
+    throw hostile;
+  });
+
+  const failed = await waitFor(
+    queue,
+    queued.id,
+    ({ state }) => state === "failed",
+  );
+
+  expect(failed.error).toEqual({
+    code: "failed",
+    message: "The job failed.",
+  });
+  await queue.close();
+});
+
 it("provides the job id and strictly persists a city-model result", async () => {
   const dataDirectory = await temporaryDirectory();
   const queue = await PersistentJobQueue.open({ dataDirectory });
   queues.push(queue);
-  const result = cityModelResult();
+  let result: JobResult | undefined;
   let taskId: string | undefined;
 
   const queued = await queue.enqueue("analysis", async ({ id }) => {
     taskId = id;
+    result = cityModelResult(id);
     return result;
   });
   const completed = await waitFor(
@@ -224,23 +350,24 @@ it("captures result primitives once before persistence", async () => {
   const dataDirectory = await temporaryDirectory();
   const queue = await PersistentJobQueue.open({ dataDirectory });
   queues.push(queue);
-  const token = randomUUID();
-  const expectedUrl = `/api/v1/artifacts/${token}/city-model.json`;
-  const secretUrl =
-    `https://user:never-persist-this-secret@example.test/${token}`;
+  let expectedUrl: string | undefined;
   let urlReads = 0;
-  const changingResult = {
-    kind: "city-model" as const,
-    artifactToken: token,
-    get artifactUrl(): string {
-      urlReads += 1;
-      return urlReads === 1 ? expectedUrl : secretUrl;
-    },
-  };
 
   const queued = await queue.enqueue(
     "analysis",
-    async () => changingResult,
+    async ({ id }) => {
+      expectedUrl = `/api/v1/artifacts/${id}/city-model.json`;
+      const secretUrl =
+        `https://user:never-persist-this-secret@example.test/${id}`;
+      return {
+        kind: "city-model" as const,
+        artifactToken: id,
+        get artifactUrl(): string {
+          urlReads += 1;
+          return urlReads === 1 ? expectedUrl! : secretUrl;
+        },
+      };
+    },
   );
   const completed = await waitFor(
     queue,
@@ -251,7 +378,7 @@ it("captures result primitives once before persistence", async () => {
   expect(urlReads).toBe(1);
   expect(completed.result).toEqual({
     kind: "city-model",
-    artifactToken: token,
+    artifactToken: queued.id,
     artifactUrl: expectedUrl,
   });
   const persisted = await fs.readFile(
@@ -268,31 +395,34 @@ it("fails without persisting invalid or credential-bearing results", async () =>
   const dataDirectory = await temporaryDirectory();
   const queue = await PersistentJobQueue.open({ dataDirectory });
   queues.push(queue);
-  const token = randomUUID();
-  const invalidResults: readonly unknown[] = [
-    {
-      ...cityModelResult(token),
+  const invalidResults: readonly ((id: string) => unknown)[] = [
+    (id) => ({
+      ...cityModelResult(id),
       credential: "never-persist-this-secret",
-    },
-    {
-      ...cityModelResult(token),
+    }),
+    (id) => ({
+      ...cityModelResult(id),
       artifactUrl:
-        `https://user:never-persist-this-secret@example.test/${token}`,
-    },
-    {
-      ...cityModelResult(token),
+        `https://user:never-persist-this-secret@example.test/${id}`,
+    }),
+    (id) => ({
+      ...cityModelResult(id),
       artifactUrl: `/api/v1/artifacts/${randomUUID()}/city-model.json`,
-    },
-    {
-      ...cityModelResult(token),
+    }),
+    (id) => ({
+      ...cityModelResult(id),
       artifactToken: "not-a-token",
+    }),
+    () => {
+      const otherId = randomUUID();
+      return cityModelResult(otherId);
     },
   ];
 
   for (const invalid of invalidResults) {
     const queued = await queue.enqueue(
       "analysis",
-      async () => invalid as JobResult,
+      async ({ id }) => invalid(id) as JobResult,
     );
     const failed = await waitFor(
       queue,
@@ -319,7 +449,7 @@ it("rejects malformed results and results on non-completed records", async () =>
   queues.push(queue);
   const queued = await queue.enqueue(
     "analysis",
-    async () => cityModelResult(),
+    async ({ id }) => cityModelResult(id),
   );
   const completed = await waitFor(
     queue,
@@ -352,6 +482,18 @@ it("rejects malformed results and results on non-completed records", async () =>
   await expect(
     PersistentJobQueue.open({ dataDirectory }),
   ).rejects.toThrow("Invalid persisted job result state.");
+
+  await fs.writeFile(
+    file,
+    `${JSON.stringify({
+      ...completed,
+      result: cityModelResult(randomUUID()),
+    })}\n`,
+    "utf8",
+  );
+  await expect(
+    PersistentJobQueue.open({ dataDirectory }),
+  ).rejects.toThrow("Invalid persisted job result.");
 });
 
 it("cancels an active job and keeps the terminal state stable", async () => {
@@ -417,14 +559,15 @@ it("finalizes completed and failed jobs exactly once", async () => {
     const finalization = new Promise<void>((resolve) => {
       signalFinalized = resolve;
     });
-    const result = cityModelResult();
+    let result: JobResult | undefined;
 
     const queued = await queue.enqueue(
       "analysis",
-      async () => {
+      async ({ id }) => {
         if (expectedState === "failed") {
           throw new Error("Expected task failure.");
         }
+        result = cityModelResult(id);
         return result;
       },
       {
@@ -436,15 +579,202 @@ it("finalizes completed and failed jobs exactly once", async () => {
     );
 
     await finalization;
-    expect(queue.get(queued.id)?.state).toBe(expectedState);
+    expect(queue.get(queued.id)?.state).toBe("running");
     expect(finalized).toHaveLength(1);
     expect(finalized[0]?.state).toBe(expectedState);
     expect(finalized[0]?.result).toEqual(
       expectedState === "completed" ? result : undefined,
     );
+    await waitFor(
+      queue,
+      queued.id,
+      ({ state }) => state === expectedState,
+    );
     await queue.close();
     expect(finalized).toHaveLength(1);
   }
+});
+
+it("does not publish completion before its finalizer settles", async () => {
+  const queue = await PersistentJobQueue.open({
+    dataDirectory: await temporaryDirectory(),
+  });
+  queues.push(queue);
+  let signalFinalizerStarted: (() => void) | undefined;
+  let releaseFinalizer: (() => void) | undefined;
+  const finalizerStarted = new Promise<void>((resolve) => {
+    signalFinalizerStarted = resolve;
+  });
+  const finalizerReleased = new Promise<void>((resolve) => {
+    releaseFinalizer = resolve;
+  });
+  let result: JobResult | undefined;
+  const queued = await queue.enqueue(
+    "analysis",
+    async ({ id }) => {
+      result = cityModelResult(id);
+      return result;
+    },
+    {
+      finalize: async (prospective) => {
+        expect(prospective.state).toBe("completed");
+        expect(prospective.result).toEqual(result);
+        signalFinalizerStarted?.();
+        await finalizerReleased;
+      },
+    },
+  );
+
+  await finalizerStarted;
+  expect(queue.get(queued.id)).toMatchObject({
+    id: queued.id,
+    state: "running",
+  });
+  expect(queue.get(queued.id)?.result).toBeUndefined();
+  expect(queue.list().find(({ id }) => id === queued.id)?.state).toBe(
+    "running",
+  );
+
+  releaseFinalizer?.();
+  const completed = await waitFor(
+    queue,
+    queued.id,
+    ({ state }) => state === "completed",
+  );
+  expect(completed.result).toEqual(result);
+  expect((await queue.cancel(queued.id))?.state).toBe("completed");
+  expect(queue.get(queued.id)?.state).toBe("completed");
+});
+
+it("captures enqueue cleanup callbacks exactly once before persistence", async () => {
+  const queue = await PersistentJobQueue.open({
+    dataDirectory: await temporaryDirectory(),
+  });
+  queues.push(queue);
+  const expected = vi.fn(async (_record: JobRecord) => undefined);
+  const unexpected = vi.fn(async (_record: JobRecord) => undefined);
+  const expectedRollback = vi.fn(async (_record: JobRecord) => undefined);
+  const unexpectedRollback = vi.fn(async (_record: JobRecord) => undefined);
+  let finalizerReads = 0;
+  let rollbackReads = 0;
+  const options = {
+    get finalize(): (record: JobRecord) => Promise<void> {
+      finalizerReads += 1;
+      return finalizerReads === 1 ? expected : unexpected;
+    },
+    get rollback(): (record: JobRecord) => Promise<void> {
+      rollbackReads += 1;
+      return rollbackReads === 1 ? expectedRollback : unexpectedRollback;
+    },
+  };
+
+  const queued = await queue.enqueue(
+    "analysis",
+    async () => undefined,
+    options,
+  );
+  await waitFor(queue, queued.id, ({ state }) => state === "completed");
+  await queue.close();
+
+  expect(finalizerReads).toBe(1);
+  expect(rollbackReads).toBe(1);
+  expect(expected).toHaveBeenCalledTimes(1);
+  expect(expected.mock.calls[0]?.[0]).toMatchObject({
+    id: queued.id,
+    state: "completed",
+  });
+  expect(unexpected).not.toHaveBeenCalled();
+  expect(expectedRollback).not.toHaveBeenCalled();
+  expect(unexpectedRollback).not.toHaveBeenCalled();
+});
+
+it("records a generic cleanup failure after completion or task failure", async () => {
+  for (const taskState of ["completed", "failed"] as const) {
+    const dataDirectory = await temporaryDirectory();
+    const queue = await PersistentJobQueue.open({ dataDirectory });
+    queues.push(queue);
+    const finalize = vi.fn(async (_record: JobRecord) => {
+      throw new Error(
+        "never-persist-this-secret at C:\\private\\job-workspace",
+      );
+    });
+    const queued = await queue.enqueue(
+      "analysis",
+      async ({ id }) => {
+        if (taskState === "failed") {
+          throw new Error("Expected task failure.");
+        }
+        return cityModelResult(id);
+      },
+      { finalize },
+    );
+
+    const failed = await waitFor(
+      queue,
+      queued.id,
+      (record) =>
+        record.state === "failed" &&
+        record.error?.message === "The job cleanup did not complete.",
+    );
+
+    expect(failed.error).toEqual({
+      code: "failed",
+      message: "The job cleanup did not complete.",
+    });
+    expect(failed.result).toBeUndefined();
+    expect(finalize).toHaveBeenCalledTimes(1);
+    const persisted = await fs.readFile(
+      path.join(dataDirectory, "jobs", `${queued.id}.json`),
+      "utf8",
+    );
+    expect(persisted).not.toContain("never-persist-this-secret");
+    expect(persisted).not.toContain("private");
+    await queue.close();
+    expect(finalize).toHaveBeenCalledTimes(1);
+  }
+});
+
+it("compensates partial finalization when the finalizer rejects", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  const retained = new Set<string>();
+  const finalize = vi.fn(async (prospective: JobRecord) => {
+    expect(prospective.state).toBe("completed");
+    retained.add(prospective.result!.artifactToken);
+    throw new Error("never-persist-this-secret from finalization");
+  });
+  const rollback = vi.fn(async (prospective: JobRecord) => {
+    expect(prospective.state).toBe("completed");
+    retained.delete(prospective.result!.artifactToken);
+  });
+  const queued = await queue.enqueue(
+    "analysis",
+    async ({ id }) => cityModelResult(id),
+    { finalize, rollback },
+  );
+
+  const failed = await waitFor(
+    queue,
+    queued.id,
+    (record) =>
+      record.state === "failed" &&
+      record.error?.message === "The job cleanup did not complete.",
+  );
+
+  expect(failed.result).toBeUndefined();
+  expect(retained).toEqual(new Set());
+  expect(finalize).toHaveBeenCalledTimes(1);
+  expect(rollback).toHaveBeenCalledTimes(1);
+  const persisted = await fs.readFile(
+    path.join(dataDirectory, "jobs", `${queued.id}.json`),
+    "utf8",
+  );
+  expect(persisted).not.toContain("never-persist-this-secret");
+  expect(JSON.parse(persisted)).toEqual(failed);
+  await queue.close();
+  expect(finalize).toHaveBeenCalledTimes(1);
+  expect(rollback).toHaveBeenCalledTimes(1);
 });
 
 it("finalizes a queued cancellation once without starting its task", async () => {
@@ -464,16 +794,38 @@ it("finalizes a queued cancellation once without starting its task", async () =>
         signalBlockerStarted?.();
       }),
   );
-  const task = vi.fn(async () => cityModelResult());
-  const finalize = vi.fn(async (_record: JobRecord) => undefined);
+  const task = vi.fn(async ({ id }: { id: string }) => cityModelResult(id));
+  let signalFinalizerStarted: (() => void) | undefined;
+  let releaseFinalizer: (() => void) | undefined;
+  const finalizerStarted = new Promise<void>((resolve) => {
+    signalFinalizerStarted = resolve;
+  });
+  const finalizerReleased = new Promise<void>((resolve) => {
+    releaseFinalizer = resolve;
+  });
+  const finalize = vi.fn(async (_record: JobRecord) => {
+    signalFinalizerStarted?.();
+    await finalizerReleased;
+  });
   const queued = await queue.enqueue("analysis", task, { finalize });
   await waitFor(queue, blocker.id, ({ state }) => state === "running");
   await blockerStarted;
   expect(queue.get(queued.id)?.state).toBe("queued");
 
+  const firstCancellation = queue.cancel(queued.id);
+  const secondCancellation = queue.cancel(queued.id);
+  expect(secondCancellation).toBe(firstCancellation);
+  await finalizerStarted;
+  expect(queue.get(queued.id)?.state).toBe("queued");
+  expect(queue.list().find(({ id }) => id === queued.id)?.state).toBe(
+    "queued",
+  );
+  expect(task).not.toHaveBeenCalled();
+
+  releaseFinalizer?.();
   const [first, second] = await Promise.all([
-    queue.cancel(queued.id),
-    queue.cancel(queued.id),
+    firstCancellation,
+    secondCancellation,
   ]);
 
   expect(first?.state).toBe("cancelled");
@@ -486,6 +838,52 @@ it("finalizes a queued cancellation once without starting its task", async () =>
     state: "cancelled",
     error: { code: "cancelled" },
   });
+  await queue.close();
+  expect(finalize).toHaveBeenCalledTimes(1);
+});
+
+it("records a generic cleanup failure for a queued cancellation", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  let signalBlockerStarted: (() => void) | undefined;
+  const blockerStarted = new Promise<void>((resolve) => {
+    signalBlockerStarted = resolve;
+  });
+  const blocker = await queue.enqueue(
+    "analysis",
+    ({ signal }) =>
+      new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => resolve(), { once: true });
+        signalBlockerStarted?.();
+      }),
+  );
+  const task = vi.fn(async ({ id }: { id: string }) => cityModelResult(id));
+  const finalize = vi.fn(async (_record: JobRecord) => {
+    throw new Error("never-persist-this-secret in queued workspace");
+  });
+  const queued = await queue.enqueue("analysis", task, { finalize });
+  await waitFor(queue, blocker.id, ({ state }) => state === "running");
+  await blockerStarted;
+
+  const failed = await queue.cancel(queued.id);
+
+  expect(failed).toMatchObject({
+    id: queued.id,
+    state: "failed",
+    error: {
+      code: "failed",
+      message: "The job cleanup did not complete.",
+    },
+  });
+  expect(failed?.result).toBeUndefined();
+  expect(task).not.toHaveBeenCalled();
+  expect(finalize).toHaveBeenCalledTimes(1);
+  const persisted = await fs.readFile(
+    path.join(dataDirectory, "jobs", `${queued.id}.json`),
+    "utf8",
+  );
+  expect(persisted).not.toContain("never-persist-this-secret");
   await queue.close();
   expect(finalize).toHaveBeenCalledTimes(1);
 });
@@ -518,7 +916,7 @@ it("finalizes an active cancellation once and close awaits it", async () => {
   const finalized: JobRecord[] = [];
   const queued = await queue.enqueue(
     "analysis",
-    async ({ signal }) => {
+    async ({ id, signal }) => {
       await new Promise<void>((resolve) => {
         const onAbort = (): void => {
           signalTaskAborted?.();
@@ -529,7 +927,7 @@ it("finalizes an active cancellation once and close awaits it", async () => {
         if (signal.aborted) onAbort();
       });
       await taskReleased;
-      return cityModelResult();
+      return cityModelResult(id);
     },
     {
       finalize: async (record) => {
@@ -543,9 +941,14 @@ it("finalizes an active cancellation once and close awaits it", async () => {
   await taskStarted;
 
   const cancellation = queue.cancel(queued.id);
+  const duplicateCancellation = queue.cancel(queued.id);
+  expect(duplicateCancellation).toBe(cancellation);
   await taskAborted;
-  expect((await cancellation)?.state).toBe("cancelled");
   const close = queue.close();
+  let cancellationFinished = false;
+  void cancellation.then(() => {
+    cancellationFinished = true;
+  });
   let closeFinished = false;
   void close.then(() => {
     closeFinished = true;
@@ -555,6 +958,9 @@ it("finalizes an active cancellation once and close awaits it", async () => {
   await new Promise((resolve) => setTimeout(resolve, 10));
 
   expect(closeFinished).toBe(false);
+  expect(cancellationFinished).toBe(false);
+  expect(queue.get(queued.id)?.state).toBe("running");
+  expect(queue.get(queued.id)?.result).toBeUndefined();
   expect(finalized).toHaveLength(1);
   expect(finalized[0]).toMatchObject({
     id: queued.id,
@@ -563,9 +969,58 @@ it("finalizes an active cancellation once and close awaits it", async () => {
   expect(finalized[0]?.result).toBeUndefined();
 
   releaseFinalizer?.();
+  expect((await cancellation)?.state).toBe("cancelled");
+  expect((await duplicateCancellation)?.state).toBe("cancelled");
   await close;
   expect(closeFinished).toBe(true);
+  expect(cancellationFinished).toBe(true);
+  expect(queue.get(queued.id)?.state).toBe("cancelled");
   expect(finalized).toHaveLength(1);
+});
+
+it("records a generic cleanup failure for an active cancellation", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  let signalTaskStarted: (() => void) | undefined;
+  const taskStarted = new Promise<void>((resolve) => {
+    signalTaskStarted = resolve;
+  });
+  const finalize = vi.fn(async (_record: JobRecord) => {
+    throw new Error("never-persist-this-secret in active workspace");
+  });
+  const queued = await queue.enqueue(
+    "analysis",
+    ({ signal }) =>
+      new Promise<void>((resolve) => {
+        const onAbort = (): void => resolve();
+        signal.addEventListener("abort", onAbort, { once: true });
+        signalTaskStarted?.();
+        if (signal.aborted) onAbort();
+      }),
+    { finalize },
+  );
+  await taskStarted;
+  await waitFor(queue, queued.id, ({ state }) => state === "running");
+
+  const failed = await queue.cancel(queued.id);
+
+  expect(failed).toMatchObject({
+    state: "failed",
+    error: {
+      code: "failed",
+      message: "The job cleanup did not complete.",
+    },
+  });
+  expect(failed?.result).toBeUndefined();
+  expect(finalize).toHaveBeenCalledTimes(1);
+  const persisted = await fs.readFile(
+    path.join(dataDirectory, "jobs", `${queued.id}.json`),
+    "utf8",
+  );
+  expect(persisted).not.toContain("never-persist-this-secret");
+  await queue.close();
+  expect(finalize).toHaveBeenCalledTimes(1);
 });
 
 it("finalizes active and queued jobs during shutdown", async () => {
@@ -590,7 +1045,9 @@ it("finalizes active and queued jobs during shutdown", async () => {
       }),
     { finalize },
   );
-  const queuedTask = vi.fn(async () => cityModelResult());
+  const queuedTask = vi.fn(async ({ id }: { id: string }) =>
+    cityModelResult(id),
+  );
   const queued = await queue.enqueue("analysis", queuedTask, { finalize });
   await waitFor(queue, active.id, ({ state }) => state === "running");
   await activeStarted;
@@ -604,6 +1061,152 @@ it("finalizes active and queued jobs during shutdown", async () => {
   );
   expect(finalized.every(({ state }) => state === "cancelled")).toBe(true);
   expect(finalized.every(({ result }) => result === undefined)).toBe(true);
+});
+
+it("rolls back a retained result before exposing terminal persistence failure", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  const retained = new Set<string>();
+  let signalFinalizerStarted: (() => void) | undefined;
+  let releaseFinalizer: (() => void) | undefined;
+  const finalizerStarted = new Promise<void>((resolve) => {
+    signalFinalizerStarted = resolve;
+  });
+  const finalizerReleased = new Promise<void>((resolve) => {
+    releaseFinalizer = resolve;
+  });
+  let signalRollbackStarted: (() => void) | undefined;
+  let releaseRollback: (() => void) | undefined;
+  const rollbackStarted = new Promise<void>((resolve) => {
+    signalRollbackStarted = resolve;
+  });
+  const rollbackReleased = new Promise<void>((resolve) => {
+    releaseRollback = resolve;
+  });
+  let result: JobResult | undefined;
+  const rollback = vi.fn(async (prospective: JobRecord) => {
+    expect(prospective.state).toBe("completed");
+    expect(prospective.result).toEqual(result);
+    retained.delete(prospective.result!.artifactToken);
+    signalRollbackStarted?.();
+    await rollbackReleased;
+  });
+  const queued = await queue.enqueue(
+    "analysis",
+    async ({ id }) => {
+      result = cityModelResult(id);
+      return result;
+    },
+    {
+      finalize: async (prospective) => {
+        expect(prospective.state).toBe("completed");
+        expect(prospective.result).toEqual(result);
+        retained.add(prospective.result!.artifactToken);
+        signalFinalizerStarted?.();
+        await finalizerReleased;
+      },
+      rollback,
+    },
+  );
+  await finalizerStarted;
+  expect(queue.get(queued.id)?.state).toBe("running");
+  expect(queue.get(queued.id)?.result).toBeUndefined();
+  expect(retained).toEqual(new Set([queued.id]));
+  vi.spyOn(fs, "open").mockRejectedValueOnce(
+    new Error("Simulated terminal storage failure."),
+  );
+
+  releaseFinalizer?.();
+  await rollbackStarted;
+  const close = queue.close();
+  let closeFinished = false;
+  void close.then(() => {
+    closeFinished = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  expect(closeFinished).toBe(false);
+  expect(queue.get(queued.id)?.state).toBe("running");
+  expect(queue.get(queued.id)?.result).toBeUndefined();
+  expect(retained).toEqual(new Set());
+  expect(rollback).toHaveBeenCalledTimes(1);
+
+  releaseRollback?.();
+  await close;
+  const failed = queue.get(queued.id)!;
+  expect(failed).toMatchObject({
+    state: "failed",
+    error: {
+      code: "failed",
+      message: "The job terminal state could not be persisted.",
+    },
+  });
+  expect(failed.result).toBeUndefined();
+  const persisted = JSON.parse(
+    await fs.readFile(
+      path.join(dataDirectory, "jobs", `${queued.id}.json`),
+      "utf8",
+    ),
+  ) as JobRecord;
+  expect(persisted).toEqual(failed);
+  expect(queue.get(queued.id)).toEqual(failed);
+  expect(rollback).toHaveBeenCalledTimes(1);
+});
+
+it("does not expose rollback failures or a completed result", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  const retained = new Set<string>();
+  let signalFinalizerStarted: (() => void) | undefined;
+  let releaseFinalizer: (() => void) | undefined;
+  const finalizerStarted = new Promise<void>((resolve) => {
+    signalFinalizerStarted = resolve;
+  });
+  const finalizerReleased = new Promise<void>((resolve) => {
+    releaseFinalizer = resolve;
+  });
+  const rollback = vi.fn(async (_prospective: JobRecord) => {
+    throw new Error("never-persist-this-secret from rollback");
+  });
+  const queued = await queue.enqueue(
+    "analysis",
+    async ({ id }) => cityModelResult(id),
+    {
+      finalize: async (prospective) => {
+        retained.add(prospective.result!.artifactToken);
+        signalFinalizerStarted?.();
+        await finalizerReleased;
+      },
+      rollback,
+    },
+  );
+  await finalizerStarted;
+  vi.spyOn(fs, "open").mockRejectedValueOnce(
+    new Error("Simulated terminal storage failure."),
+  );
+
+  releaseFinalizer?.();
+  const failed = await waitFor(
+    queue,
+    queued.id,
+    (record) =>
+      record.state === "failed" &&
+      record.error?.message === "The job cleanup did not complete.",
+  );
+
+  expect(failed.result).toBeUndefined();
+  expect(retained).toEqual(new Set([queued.id]));
+  expect(rollback).toHaveBeenCalledTimes(1);
+  const persisted = await fs.readFile(
+    path.join(dataDirectory, "jobs", `${queued.id}.json`),
+    "utf8",
+  );
+  expect(persisted).not.toContain("never-persist-this-secret");
+  expect(JSON.parse(persisted)).toEqual(failed);
+  await queue.close();
+  expect(rollback).toHaveBeenCalledTimes(1);
 });
 
 it("finalizes a queued cancellation when its terminal write fails", async () => {
@@ -623,7 +1226,7 @@ it("finalizes a queued cancellation when its terminal write fails", async () => 
         signalBlockerStarted?.();
       }),
   );
-  const task = vi.fn(async () => cityModelResult());
+  const task = vi.fn(async ({ id }: { id: string }) => cityModelResult(id));
   const finalized: JobRecord[] = [];
   const queued = await queue.enqueue(
     "analysis",
@@ -636,16 +1239,22 @@ it("finalizes a queued cancellation when its terminal write fails", async () => 
   );
   await waitFor(queue, blocker.id, ({ state }) => state === "running");
   await blockerStarted;
-  vi.spyOn(fs, "writeFile").mockRejectedValue(
+  vi.spyOn(fs, "open").mockRejectedValue(
     new Error("Simulated terminal storage failure."),
   );
 
-  await expect(queue.cancel(queued.id)).rejects.toThrow(
-    "Simulated terminal storage failure.",
-  );
+  const failed = await queue.cancel(queued.id);
 
   expect(task).not.toHaveBeenCalled();
-  expect(queue.get(queued.id)?.state).toBe("cancelled");
+  expect(failed).toMatchObject({
+    id: queued.id,
+    state: "failed",
+    error: {
+      code: "failed",
+      message: "The job terminal state could not be persisted.",
+    },
+  });
+  expect(queue.get(queued.id)).toEqual(failed);
   expect(finalized).toHaveLength(1);
   expect(finalized[0]).toMatchObject({
     id: queued.id,
@@ -694,14 +1303,14 @@ it("finalizes a failed task when its terminal write fails", async () => {
   );
   await taskStarted;
   await waitFor(queue, queued.id, ({ state }) => state === "running");
-  vi.spyOn(fs, "writeFile").mockRejectedValueOnce(
+  vi.spyOn(fs, "open").mockRejectedValueOnce(
     new Error("Simulated terminal storage failure."),
   );
 
   releaseTask?.();
   await finalization;
 
-  expect(queue.get(queued.id)?.state).toBe("failed");
+  expect(queue.get(queued.id)?.state).toBe("running");
   expect(finalized).toHaveLength(1);
   expect(finalized[0]).toMatchObject({
     id: queued.id,
@@ -712,6 +1321,15 @@ it("finalizes a failed task when its terminal write fails", async () => {
     },
   });
   expect(finalized[0]?.result).toBeUndefined();
+  const failed = await waitFor(
+    queue,
+    queued.id,
+    (record) =>
+      record.state === "failed" &&
+      record.error?.message ===
+        "The job terminal state could not be persisted.",
+  );
+  expect(failed.result).toBeUndefined();
   await queue.close();
   expect(finalized).toHaveLength(1);
 });
@@ -753,15 +1371,17 @@ it("awaits active finalization when cancellation persistence fails", async () =>
   );
   await taskStarted;
   await waitFor(queue, queued.id, ({ state }) => state === "running");
-  vi.spyOn(fs, "writeFile").mockRejectedValue(
+  vi.spyOn(fs, "open").mockRejectedValue(
     new Error("Simulated terminal storage failure."),
   );
 
-  await expect(queue.cancel(queued.id)).rejects.toThrow(
-    "Simulated terminal storage failure.",
-  );
+  const cancellation = queue.cancel(queued.id);
   await finalizerStarted;
   const close = queue.close();
+  let cancellationFinished = false;
+  void cancellation.then(() => {
+    cancellationFinished = true;
+  });
   let closeFinished = false;
   void close.then(() => {
     closeFinished = true;
@@ -769,7 +1389,8 @@ it("awaits active finalization when cancellation persistence fails", async () =>
   await new Promise((resolve) => setTimeout(resolve, 10));
 
   expect(closeFinished).toBe(false);
-  expect(queue.get(queued.id)?.state).toBe("cancelled");
+  expect(cancellationFinished).toBe(false);
+  expect(queue.get(queued.id)?.state).toBe("running");
   expect(finalized).toHaveLength(1);
   expect(finalized[0]).toMatchObject({
     id: queued.id,
@@ -779,8 +1400,251 @@ it("awaits active finalization when cancellation persistence fails", async () =>
   expect(finalized[0]?.result).toBeUndefined();
 
   releaseFinalizer?.();
+  const failed = await cancellation;
+  expect(failed).toMatchObject({
+    state: "failed",
+    error: {
+      code: "failed",
+      message: "The job terminal state could not be persisted.",
+    },
+  });
   await close;
+  expect(cancellationFinished).toBe(true);
+  expect(queue.get(queued.id)).toEqual(failed);
   expect(finalized).toHaveLength(1);
+});
+
+it("installs a cleanup failure after persistence is exhausted", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  let signalFinalizerStarted: (() => void) | undefined;
+  let releaseFinalizer: (() => void) | undefined;
+  const finalizerStarted = new Promise<void>((resolve) => {
+    signalFinalizerStarted = resolve;
+  });
+  const finalizerReleased = new Promise<void>((resolve) => {
+    releaseFinalizer = resolve;
+  });
+  const finalize = vi.fn(async (_record: JobRecord) => {
+    signalFinalizerStarted?.();
+    await finalizerReleased;
+    throw new Error("never-persist-this-secret in cleanup path");
+  });
+  const queued = await queue.enqueue(
+    "analysis",
+    async ({ id }) => cityModelResult(id),
+    { finalize },
+  );
+  await finalizerStarted;
+  expect(queue.get(queued.id)?.state).toBe("running");
+  expect(queue.get(queued.id)?.result).toBeUndefined();
+  vi.spyOn(fs, "open").mockRejectedValue(
+    new Error("Simulated cleanup-state storage failure."),
+  );
+
+  releaseFinalizer?.();
+  const failed = await waitFor(
+    queue,
+    queued.id,
+    (record) =>
+      record.state === "failed" &&
+      record.error?.message === "The job cleanup did not complete.",
+  );
+
+  expect(failed.result).toBeUndefined();
+  expect(finalize).toHaveBeenCalledTimes(1);
+  const persisted = JSON.parse(
+    await fs.readFile(
+      path.join(dataDirectory, "jobs", `${queued.id}.json`),
+      "utf8",
+    ),
+  ) as JobRecord;
+  expect(persisted.state).toBe("running");
+  expect(persisted.result).toBeUndefined();
+  await queue.close();
+  expect(finalize).toHaveBeenCalledTimes(1);
+});
+
+it("syncs record contents before committing POSIX directory metadata", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  let signalTaskStarted: (() => void) | undefined;
+  let releaseTask: (() => void) | undefined;
+  const taskStarted = new Promise<void>((resolve) => {
+    signalTaskStarted = resolve;
+  });
+  const taskReleased = new Promise<void>((resolve) => {
+    releaseTask = resolve;
+  });
+  const queued = await queue.enqueue("analysis", async ({ id }) => {
+    signalTaskStarted?.();
+    await taskReleased;
+    return cityModelResult(id);
+  });
+  await taskStarted;
+  await waitFor(queue, queued.id, ({ state }) => state === "running");
+
+  const jobsDirectory = path.resolve(dataDirectory, "jobs");
+  const openFile = fs.open.bind(fs);
+  const renameFile = fs.rename.bind(fs);
+  const removeFile = fs.rm.bind(fs);
+  const events: string[] = [];
+  const platformDescriptor = Object.getOwnPropertyDescriptor(
+    process,
+    "platform",
+  )!;
+  Object.defineProperty(process, "platform", {
+    ...platformDescriptor,
+    value: "linux",
+  });
+  const openSpy = vi.spyOn(fs, "open").mockImplementation(
+    async (file, flags, mode) => {
+      if (path.resolve(String(file)) === jobsDirectory) {
+        events.push("open-directory");
+        return {
+          sync: async () => {
+            events.push("sync-directory");
+          },
+          close: async () => {
+            events.push("close-directory");
+          },
+        } as unknown as Awaited<ReturnType<typeof fs.open>>;
+      }
+      expect(flags).toBe("wx");
+      expect(mode).toBe(0o600);
+      events.push("open-temporary");
+      const realHandle = await openFile(file, flags, mode);
+      return {
+        writeFile: async (
+          data: string | Uint8Array,
+          options?: Parameters<typeof realHandle.writeFile>[1],
+        ) => {
+          events.push("write-temporary");
+          await realHandle.writeFile(data, options);
+        },
+        sync: async () => {
+          events.push("sync-temporary");
+          await realHandle.sync();
+        },
+        close: async () => {
+          events.push("close-temporary");
+          await realHandle.close();
+        },
+      } as unknown as Awaited<ReturnType<typeof fs.open>>;
+    },
+  );
+  const renameSpy = vi.spyOn(fs, "rename").mockImplementation(
+    async (source, destination) => {
+      events.push("rename-record");
+      try {
+        await renameFile(source, destination);
+      } catch {
+        await removeFile(destination, { force: true });
+        await renameFile(source, destination);
+      }
+    },
+  );
+
+  let completed: JobRecord;
+  try {
+    releaseTask?.();
+    completed = await waitFor(
+      queue,
+      queued.id,
+      ({ state }) => state === "completed",
+    );
+  } finally {
+    Object.defineProperty(process, "platform", platformDescriptor);
+    openSpy.mockRestore();
+    renameSpy.mockRestore();
+  }
+
+  expect(completed!.result?.artifactToken).toBe(queued.id);
+  expect(events).toEqual([
+    "open-temporary",
+    "write-temporary",
+    "sync-temporary",
+    "close-temporary",
+    "rename-record",
+    "open-directory",
+    "sync-directory",
+    "close-directory",
+  ]);
+});
+
+it("keeps a committed terminal record when backup cleanup fails", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  let signalTaskStarted: (() => void) | undefined;
+  let releaseTask: (() => void) | undefined;
+  const taskStarted = new Promise<void>((resolve) => {
+    signalTaskStarted = resolve;
+  });
+  const taskReleased = new Promise<void>((resolve) => {
+    releaseTask = resolve;
+  });
+  const queued = await queue.enqueue("analysis", async ({ id }) => {
+    signalTaskStarted?.();
+    await taskReleased;
+    return cityModelResult(id);
+  });
+  await taskStarted;
+  await waitFor(queue, queued.id, ({ state }) => state === "running");
+
+  const destination = path.join(
+    dataDirectory,
+    "jobs",
+    `${queued.id}.json`,
+  );
+  const backup = `${destination}.bak`;
+  const renameFile = fs.rename.bind(fs);
+  const removeFile = fs.rm.bind(fs);
+  let renameCalls = 0;
+  let backupRemovals = 0;
+  const renameSpy = vi.spyOn(fs, "rename").mockImplementation(
+    async (source, target) => {
+      renameCalls += 1;
+      if (renameCalls === 1) {
+        throw Object.assign(new Error("Simulated replacement requirement."), {
+          code: "EPERM",
+        });
+      }
+      await renameFile(source, target);
+    },
+  );
+  const removeSpy = vi.spyOn(fs, "rm").mockImplementation(
+    async (target, options) => {
+      if (String(target) === backup) {
+        backupRemovals += 1;
+        if (backupRemovals === 2) {
+          throw new Error("Simulated post-commit backup cleanup failure.");
+        }
+      }
+      await removeFile(target, options);
+    },
+  );
+
+  releaseTask?.();
+  const completed = await waitFor(
+    queue,
+    queued.id,
+    ({ state }) => state === "completed",
+  );
+
+  expect(completed.result?.artifactToken).toBe(queued.id);
+  expect(backupRemovals).toBe(2);
+  await expect(fs.lstat(backup)).resolves.toBeDefined();
+  renameSpy.mockRestore();
+  removeSpy.mockRestore();
+  await queue.close();
+
+  const reopened = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(reopened);
+  expect(reopened.get(queued.id)).toEqual(completed);
+  await expect(fs.lstat(backup)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 it("marks unfinished persisted work as interrupted after restart", async () => {
