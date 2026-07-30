@@ -7,6 +7,8 @@ export const VIEWER_MODEL_MAX_BYTES = 128 * MEBIBYTE;
 export const VIEWER_PROFILE_MAX_BYTES = MEBIBYTE;
 export const VIEWER_LOGO_MAX_BYTES = 2 * MEBIBYTE;
 export const VIEWER_LOAD_DEADLINE_MS = 30_000;
+const IMPORTED_CITY_MODEL_PATH_PATTERN =
+  /^\/api\/v1\/artifacts\/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/city-model\.json$/u;
 
 export type ViewerLocalJsonKind = "model" | "profile";
 export type ViewerLogoFormat = "png" | "svg";
@@ -34,7 +36,10 @@ export interface ViewerLoadGatewayOptions {
 }
 
 export class ViewerLoadError extends Error {
-  public constructor(message: string) {
+  public constructor(
+    message: string,
+    public readonly status?: number,
+  ) {
     super(message);
     this.name = "ViewerLoadError";
   }
@@ -386,6 +391,51 @@ export class ViewerLoadGateway {
     };
   }
 
+  /**
+   * Loads a model produced by the self-hosted import API. Unlike arbitrary
+   * remote model loading, this narrow path may send the same-origin session
+   * cookie. Callers must still supply the viewer origin independently of the
+   * artifact URL so a compromised response cannot widen the credential scope.
+   */
+  public async loadSameOriginModel(
+    input: URL,
+    expectedOrigin: string | URL,
+    signal?: AbortSignal,
+  ): Promise<{
+    readonly model: unknown;
+    readonly responseUrl: URL;
+  }> {
+    const requested = validateRemoteUrl(new URL(input.href));
+    const expected = validateRemoteUrl(
+      new URL(
+        typeof expectedOrigin === "string"
+          ? expectedOrigin
+          : expectedOrigin.href,
+      ),
+    );
+    if (
+      requested.origin !== expected.origin ||
+      !IMPORTED_CITY_MODEL_PATH_PATTERN.test(requested.pathname) ||
+      requested.search !== "" ||
+      requested.hash !== ""
+    ) {
+      throw new ViewerLoadError(
+        "Imported city models must use an exact same-origin artifact URL.",
+      );
+    }
+    const loaded = await this.loadRemoteBytes(
+      requested,
+      "model",
+      VIEWER_MODEL_MAX_BYTES,
+      signal,
+      "same-origin",
+    );
+    return {
+      model: parseJson(decodeUtf8(loaded.bytes, "model"), "model"),
+      responseUrl: loaded.responseUrl,
+    };
+  }
+
   public async loadRemoteLogo(
     input: URL,
     format: ViewerLogoFormat,
@@ -421,6 +471,7 @@ export class ViewerLoadGateway {
     purpose: "model" | "logo",
     maxBytes: number,
     signal?: AbortSignal,
+    access: "public-remote" | "same-origin" = "public-remote",
   ): Promise<{
     readonly bytes: Uint8Array;
     readonly responseUrl: URL;
@@ -436,10 +487,11 @@ export class ViewerLoadGateway {
             this.fetchImplementation(requestedUrl, {
               method: "GET",
               cache: "no-store",
-              credentials: "omit",
+              credentials:
+                access === "same-origin" ? "same-origin" : "omit",
               redirect: "error",
               referrerPolicy: "no-referrer",
-              mode: "cors",
+              mode: access === "same-origin" ? "same-origin" : "cors",
               signal: loadSignal,
             }),
             loadSignal,
@@ -474,6 +526,17 @@ export class ViewerLoadGateway {
         if (!response.ok) {
           throw new ViewerLoadError(
             `Remote ${purposeLabel(purpose).toLowerCase()} request failed with HTTP ${response.status}.`,
+            response.status,
+          );
+        }
+        if (
+          access === "same-origin" &&
+          !/^application\/json(?:\s*;\s*charset=utf-8)?$/iu.test(
+            response.headers.get("content-type") ?? "",
+          )
+        ) {
+          throw new ViewerLoadError(
+            "Imported city model response must contain UTF-8 JSON.",
           );
         }
         parseContentLength(response, maxBytes, purpose);

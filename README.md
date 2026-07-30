@@ -44,8 +44,26 @@ byte length; the PUT requires the same `Content-Length`, rejects transfer and
 content encoding, and becomes a persistent import job only after the private
 staged file is complete. Repository ZIP metadata selects either one common
 top-level directory or paths already relative to the archive root. This is the
-server API for a later browser directory/ZIP wizard; multipart uploads and
-browser-supplied filenames are deliberately not accepted.
+protocol used by the viewer's **Import project** wizard; multipart uploads and
+browser-supplied filenames are deliberately not accepted by the server.
+
+The wizard can package a browser-selected local directory, upload a ZIP or
+existing city model, or queue public/private GitHub, Azure DevOps, HTTPS, SSH,
+and scp-style Git imports. Remote imports support the default revision, a
+branch, a tag, or one exact commit, plus optional city identity and bounded
+analysis settings. Directory packaging runs in a cancellable browser worker,
+keeps only analyzer inputs and ignore controls, rejects unsafe or colliding
+portable paths, and produces a deterministic, size-bounded ZIP before making
+an upload reservation. The server applies the same snapshot and analyzer
+pipeline used by the CLI and remains authoritative for validation.
+
+Import jobs report live progress, can be cancelled explicitly, and open their
+generated city automatically. The browser persists only the opaque job UUID,
+so a queued, running, or completed import can be recovered after refresh. It
+does not persist the source URL, selected credential profile, revision, token,
+file metadata, repository bytes, or generated model. Closing the dialog or
+browser leaves an accepted server job running; **Cancel import** requests
+server cleanup.
 
 At most four upload reservations and 256 MiB of staged upload data exist at
 once. City models are capped at 128 MiB, ZIPs at 64 MiB, unused reservations

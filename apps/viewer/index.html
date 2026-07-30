@@ -35,8 +35,15 @@
 
         <div class="actions">
           <button
-            id="model-file-open"
+            id="project-import-open"
             class="button button-primary"
+            type="button"
+          >
+            Import project
+          </button>
+          <button
+            id="model-file-open"
+            class="button"
             type="button"
           >
             Open model
@@ -843,6 +850,683 @@
           Drag to orbit · Scroll to zoom · Right-drag to pan
         </p>
       </main>
+
+      <dialog
+        id="project-import-dialog"
+        class="project-import-dialog"
+        aria-labelledby="project-import-title"
+        aria-describedby="project-import-privacy"
+      >
+        <form id="project-import-form" novalidate>
+          <header class="project-import-heading">
+            <div>
+              <p class="eyebrow">Self-hosted analysis</p>
+              <h2 id="project-import-title">Import a project</h2>
+            </div>
+            <div class="project-import-heading-actions">
+              <button
+                id="project-import-sign-out"
+                class="button button-compact"
+                type="button"
+                hidden
+              >
+                Sign out
+              </button>
+              <button
+                id="project-import-close"
+                class="icon-button"
+                type="button"
+                aria-label="Close project import"
+              >
+                ×
+              </button>
+            </div>
+          </header>
+
+          <p id="project-import-privacy" class="project-import-privacy">
+            Code is sent only to this Code City server. Repository credentials
+            stay in administrator-configured server profiles and are never
+            stored in this browser.
+          </p>
+
+          <section
+            id="project-import-auth"
+            class="project-import-auth"
+            aria-labelledby="project-import-auth-title"
+            hidden
+          >
+            <h3 id="project-import-auth-title">Sign in to Code City</h3>
+            <p>
+              Enter the access token configured for this self-hosted server.
+              It is exchanged once for a protected browser session.
+            </p>
+            <label class="project-import-field" for="project-import-token">
+              <span>Code City access token</span>
+              <input
+                id="project-import-token"
+                type="password"
+                autocomplete="off"
+                autocapitalize="none"
+                spellcheck="false"
+              />
+            </label>
+            <div class="project-import-inline-actions">
+              <button
+                id="project-import-authenticate"
+                class="button button-primary"
+                type="button"
+              >
+                Sign in
+              </button>
+              <span
+                id="project-import-auth-status"
+                role="status"
+                aria-live="polite"
+              ></span>
+            </div>
+          </section>
+
+          <ol
+            id="project-import-steps"
+            class="project-import-steps"
+            aria-label="Import steps"
+          >
+            <li data-import-step-indicator="source" aria-current="step">
+              <span>1</span> Source
+            </li>
+            <li data-import-step-indicator="details">
+              <span>2</span> Details
+            </li>
+            <li data-import-step-indicator="options">
+              <span>3</span> Options
+            </li>
+            <li data-import-step-indicator="progress">
+              <span>4</span> Import
+            </li>
+          </ol>
+
+          <section
+            id="project-import-step-source"
+            class="project-import-step"
+            data-import-step="source"
+            aria-labelledby="project-import-source-title"
+          >
+            <h3 id="project-import-source-title" tabindex="-1">
+              Choose a source
+            </h3>
+            <fieldset class="project-import-sources">
+              <legend class="visually-hidden">Project source</legend>
+              <label>
+                <input
+                  type="radio"
+                  name="project-import-source"
+                  value="directory"
+                  checked
+                />
+                <span>
+                  <strong>Local directory</strong>
+                  <small>Package a browser-selected repository folder.</small>
+                </span>
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="project-import-source"
+                  value="zip"
+                />
+                <span>
+                  <strong>ZIP archive</strong>
+                  <small>Upload an existing repository archive.</small>
+                </span>
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="project-import-source"
+                  value="github-public"
+                />
+                <span>
+                  <strong>Public GitHub</strong>
+                  <small>Analyze a public github.com repository.</small>
+                </span>
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="project-import-source"
+                  value="github-authenticated"
+                />
+                <span>
+                  <strong>Authenticated GitHub</strong>
+                  <small>Use a server-side GitHub credential profile.</small>
+                </span>
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="project-import-source"
+                  value="azure-devops"
+                />
+                <span>
+                  <strong>Azure DevOps</strong>
+                  <small>Clone an allowed Azure Repos Git URL.</small>
+                </span>
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="project-import-source"
+                  value="git"
+                />
+                <span>
+                  <strong>Generic Git</strong>
+                  <small>HTTPS, SSH, or scp-style remote.</small>
+                </span>
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="project-import-source"
+                  value="city-model"
+                />
+                <span>
+                  <strong>Existing city model</strong>
+                  <small>Upload a generated city-model.json.</small>
+                </span>
+              </label>
+            </fieldset>
+          </section>
+
+          <section
+            id="project-import-step-details"
+            class="project-import-step"
+            data-import-step="details"
+            aria-labelledby="project-import-details-title"
+            hidden
+          >
+            <h3 id="project-import-details-title" tabindex="-1">
+              Source details
+            </h3>
+
+            <div data-import-source-panel="directory">
+              <label
+                class="project-import-field"
+                for="project-import-directory"
+              >
+                <span>Repository directory</span>
+                <input
+                  id="project-import-directory"
+                  type="file"
+                  webkitdirectory
+                  multiple
+                  aria-describedby="project-import-directory-help project-import-error-directory"
+                />
+              </label>
+              <p id="project-import-directory-help" class="project-import-help">
+                Only analyzable source and project files are packaged. Empty
+                directories and symlink metadata are not available through the
+                browser picker; use ZIP or Git when those details matter.
+              </p>
+              <p
+                id="project-import-error-directory"
+                class="project-import-field-error"
+                data-import-field-error="directory"
+                role="alert"
+                hidden
+              ></p>
+            </div>
+
+            <div data-import-source-panel="zip" hidden>
+              <label class="project-import-field" for="project-import-zip">
+                <span>Repository ZIP</span>
+                <input
+                  id="project-import-zip"
+                  type="file"
+                  accept=".zip,application/zip"
+                  aria-describedby="project-import-error-zip"
+                />
+              </label>
+              <p
+                id="project-import-error-zip"
+                class="project-import-field-error"
+                data-import-field-error="zip"
+                role="alert"
+                hidden
+              ></p>
+              <div class="project-import-grid">
+                <label
+                  class="project-import-field"
+                  for="project-import-zip-name"
+                >
+                  <span>Repository name</span>
+                  <input
+                    id="project-import-zip-name"
+                    type="text"
+                    maxlength="160"
+                    autocomplete="off"
+                    spellcheck="false"
+                    aria-describedby="project-import-error-repository-name"
+                  />
+                </label>
+                <label
+                  class="project-import-field"
+                  for="project-import-zip-root"
+                >
+                  <span>Archive layout</span>
+                  <select id="project-import-zip-root">
+                    <option value="single-directory">
+                      One top-level directory
+                    </option>
+                    <option value="archive-root">
+                      Repository files at archive root
+                    </option>
+                  </select>
+                </label>
+              </div>
+              <p
+                id="project-import-error-repository-name"
+                class="project-import-field-error"
+                data-import-field-error="repositoryName"
+                role="alert"
+                hidden
+              ></p>
+            </div>
+
+            <div data-import-source-panel="city-model" hidden>
+              <label class="project-import-field" for="project-import-model">
+                <span>city-model.json</span>
+                <input
+                  id="project-import-model"
+                  type="file"
+                  accept=".json,application/json"
+                  aria-describedby="project-import-error-model"
+                />
+              </label>
+              <p
+                id="project-import-error-model"
+                class="project-import-field-error"
+                data-import-field-error="model"
+                role="alert"
+                hidden
+              ></p>
+            </div>
+
+            <div data-import-source-panel="remote" hidden>
+              <label
+                class="project-import-field"
+                for="project-import-repository-url"
+              >
+                <span>Repository URL</span>
+                <input
+                  id="project-import-repository-url"
+                  type="text"
+                  maxlength="4096"
+                  inputmode="url"
+                  autocomplete="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  placeholder="https://github.com/owner/repository"
+                  aria-describedby="project-import-error-repository-url"
+                />
+              </label>
+              <p
+                id="project-import-error-repository-url"
+                class="project-import-field-error"
+                data-import-field-error="repositoryUrl"
+                role="alert"
+                hidden
+              ></p>
+
+              <div id="project-import-profile-wrap" hidden>
+                <label
+                  class="project-import-field"
+                  for="project-import-profile"
+                >
+                  <span>Server credential profile</span>
+                  <select
+                    id="project-import-profile"
+                    aria-describedby="project-import-profile-help project-import-error-profile"
+                  ></select>
+                </label>
+                <p id="project-import-profile-help" class="project-import-help">
+                  Profiles are configured by the server administrator and
+                  reveal only a label. No password, token, or key is entered
+                  here.
+                </p>
+                <p
+                  id="project-import-error-profile"
+                  class="project-import-field-error"
+                  data-import-field-error="credentialProfileId"
+                  role="alert"
+                  hidden
+                ></p>
+              </div>
+
+              <fieldset class="project-import-revision">
+                <legend>Revision</legend>
+                <label>
+                  <input
+                    type="radio"
+                    name="project-import-revision"
+                    value="default"
+                    checked
+                  />
+                  Default
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="project-import-revision"
+                    value="branch"
+                  />
+                  Branch
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="project-import-revision"
+                    value="tag"
+                  />
+                  Tag
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="project-import-revision"
+                    value="commit"
+                  />
+                  Commit
+                </label>
+              </fieldset>
+              <label
+                id="project-import-revision-value-wrap"
+                class="project-import-field"
+                for="project-import-revision-value"
+                hidden
+              >
+                <span id="project-import-revision-label">Revision value</span>
+                <input
+                  id="project-import-revision-value"
+                  type="text"
+                  maxlength="256"
+                  autocomplete="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  aria-describedby="project-import-error-revision"
+                />
+              </label>
+              <p
+                id="project-import-error-revision"
+                class="project-import-field-error"
+                data-import-field-error="revision"
+                role="alert"
+                hidden
+              ></p>
+            </div>
+          </section>
+
+          <section
+            id="project-import-step-options"
+            class="project-import-step"
+            data-import-step="options"
+            aria-labelledby="project-import-options-title"
+            hidden
+          >
+            <h3 id="project-import-options-title" tabindex="-1">
+              Identity and analysis
+            </h3>
+            <div class="project-import-grid">
+              <label
+                class="project-import-field"
+                for="project-import-identity-title"
+              >
+                <span>City title <small>(optional)</small></span>
+                <input
+                  id="project-import-identity-title"
+                  type="text"
+                  maxlength="160"
+                  autocomplete="off"
+                  aria-describedby="project-import-error-title"
+                />
+              </label>
+              <label
+                class="project-import-field"
+                for="project-import-identity-version"
+              >
+                <span>
+                  City version
+                  <small>(optional; requires a city title)</small>
+                </span>
+                <input
+                  id="project-import-identity-version"
+                  type="text"
+                  maxlength="80"
+                  autocomplete="off"
+                  aria-describedby="project-import-version-help project-import-error-version"
+                />
+                <small
+                  id="project-import-version-help"
+                  class="project-import-field-help"
+                >
+                  Use a release name, tag, or snapshot label.
+                </small>
+              </label>
+            </div>
+            <p
+              id="project-import-error-title"
+              class="project-import-field-error"
+              data-import-field-error="title"
+              role="alert"
+              hidden
+            ></p>
+            <p
+              id="project-import-error-version"
+              class="project-import-field-error"
+              data-import-field-error="version"
+              role="alert"
+              hidden
+            ></p>
+
+            <fieldset class="project-import-analysis">
+              <legend>Analysis limits</legend>
+              <p
+                id="project-import-analysis-help"
+                class="project-import-field-help"
+              >
+                Leave a limit blank to use the server default.
+              </p>
+              <div class="project-import-grid project-import-grid-limits">
+                <label
+                  class="project-import-field"
+                  for="project-import-max-files"
+                >
+                  <span>Retained files</span>
+                  <input
+                    id="project-import-max-files"
+                    type="number"
+                    min="1"
+                    max="50000"
+                    step="1"
+                    placeholder="Server default"
+                    inputmode="numeric"
+                    aria-describedby="project-import-analysis-help project-import-error-analysis"
+                  />
+                </label>
+                <label
+                  class="project-import-field"
+                  for="project-import-max-file-mib"
+                >
+                  <span>Per-file MiB</span>
+                  <input
+                    id="project-import-max-file-mib"
+                    type="number"
+                    min="1"
+                    max="2"
+                    step="1"
+                    placeholder="Server default"
+                    inputmode="numeric"
+                    aria-describedby="project-import-analysis-help project-import-error-analysis"
+                  />
+                </label>
+                <label
+                  class="project-import-field"
+                  for="project-import-max-total-mib"
+                >
+                  <span>Total MiB</span>
+                  <input
+                    id="project-import-max-total-mib"
+                    type="number"
+                    min="1"
+                    max="256"
+                    step="1"
+                    placeholder="Server default"
+                    inputmode="numeric"
+                    aria-describedby="project-import-analysis-help project-import-error-analysis"
+                  />
+                </label>
+                <label
+                  class="project-import-field"
+                  for="project-import-timeout-seconds"
+                >
+                  <span>Timeout seconds</span>
+                  <input
+                    id="project-import-timeout-seconds"
+                    type="number"
+                    min="1"
+                    max="300"
+                    step="1"
+                    placeholder="Server default"
+                    inputmode="numeric"
+                    aria-describedby="project-import-analysis-help project-import-error-analysis"
+                  />
+                </label>
+              </div>
+              <p
+                id="project-import-error-analysis"
+                class="project-import-field-error"
+                data-import-field-error="analysis"
+                role="alert"
+                hidden
+              ></p>
+            </fieldset>
+          </section>
+
+          <section
+            id="project-import-step-progress"
+            class="project-import-step"
+            data-import-step="progress"
+            aria-labelledby="project-import-progress-title"
+            hidden
+          >
+            <h3 id="project-import-progress-title" tabindex="-1">
+              Import project
+            </h3>
+            <dl id="project-import-review" class="project-import-review">
+              <div>
+                <dt>Source</dt>
+                <dd id="project-import-review-source"></dd>
+              </div>
+              <div>
+                <dt>Input</dt>
+                <dd id="project-import-review-input"></dd>
+              </div>
+              <div>
+                <dt>Revision</dt>
+                <dd id="project-import-review-revision"></dd>
+              </div>
+            </dl>
+
+            <div
+              id="project-import-progress"
+              class="project-import-progress"
+              aria-live="polite"
+              aria-atomic="true"
+              hidden
+            >
+              <progress
+                id="project-import-progress-meter"
+                aria-labelledby="project-import-status"
+                max="1"
+              ></progress>
+              <div>
+                <strong id="project-import-status">Ready to import</strong>
+                <span id="project-import-progress-detail"></span>
+              </div>
+            </div>
+
+            <p
+              id="project-import-persistence-warning"
+              class="project-import-persistence-warning"
+              role="status"
+              hidden
+            ></p>
+
+            <section
+              id="project-import-errors"
+              class="project-import-errors"
+              role="alert"
+              tabindex="-1"
+              hidden
+            >
+              <h4>Import needs attention</h4>
+              <ul id="project-import-error-list"></ul>
+            </section>
+          </section>
+
+          <div class="project-import-actions">
+            <button id="project-import-back" class="button" type="button" hidden>
+              Back
+            </button>
+            <button
+              id="project-import-next"
+              class="button button-primary"
+              type="button"
+            >
+              Continue
+            </button>
+            <button
+              id="project-import-submit"
+              class="button button-primary"
+              type="submit"
+              hidden
+            >
+              Start import
+            </button>
+            <button
+              id="project-import-retry"
+              class="button button-primary"
+              type="button"
+              hidden
+            >
+              Retry
+            </button>
+            <button
+              id="project-import-restart"
+              class="button"
+              type="button"
+              hidden
+            >
+              Start another import
+            </button>
+            <button
+              id="project-import-cancel"
+              class="button"
+              type="button"
+              hidden
+            >
+              Cancel import
+            </button>
+          </div>
+
+          <p
+            id="project-import-live-status"
+            class="visually-hidden"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          ></p>
+        </form>
+      </dialog>
 
       <dialog
         id="print-export-dialog"

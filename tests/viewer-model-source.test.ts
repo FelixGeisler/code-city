@@ -84,6 +84,97 @@ describe("viewer model sources", () => {
     expect(calls[0]?.init.signal).toBeInstanceOf(AbortSignal);
   });
 
+  it("loads an imported model only through the exact same-origin session path", async () => {
+    const calls: Array<{
+      readonly input: string | URL;
+      readonly init: RequestInit;
+    }> = [];
+    const gateway = new ViewerLoadGateway({
+      fetch: async (input, init) => {
+        calls.push({ input, init });
+        return new Response('{"schemaVersion":"1.0"}', {
+          status: 200,
+          headers: {
+            "content-type": "application/json; charset=utf-8",
+          },
+        });
+      },
+    });
+    const artifact = new URL(
+      "https://city.example.test/api/v1/artifacts/11111111-1111-4111-8111-111111111111/city-model.json",
+    );
+
+    const loaded = await gateway.loadSameOriginModel(
+      artifact,
+      new URL("https://city.example.test/viewer"),
+    );
+
+    expect(loaded.model).toEqual({ schemaVersion: "1.0" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.input.toString()).toBe(artifact.href);
+    expect(calls[0]?.init).toMatchObject({
+      method: "GET",
+      cache: "no-store",
+      credentials: "same-origin",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+      mode: "same-origin",
+    });
+  });
+
+  it("never sends session credentials to foreign, signed, or redirected artifact URLs", async () => {
+    let fetchCount = 0;
+    const gateway = new ViewerLoadGateway({
+      fetch: async () => {
+        fetchCount += 1;
+        return new Response("{}", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    const origin = new URL("https://city.example.test/");
+
+    await expect(
+      gateway.loadSameOriginModel(
+        new URL("https://attacker.example/model.json"),
+        origin,
+      ),
+    ).rejects.toThrow(/same-origin/u);
+    await expect(
+      gateway.loadSameOriginModel(
+        new URL(
+          "https://city.example.test/api/v1/artifacts/model.json?token=secret",
+        ),
+        origin,
+      ),
+    ).rejects.toThrow(/exact/u);
+    await expect(
+      gateway.loadSameOriginModel(
+        new URL("https://city.example.test/api/v1/auth/session"),
+        origin,
+      ),
+    ).rejects.toThrow(/exact/u);
+    expect(fetchCount).toBe(0);
+
+    const redirected = new Response("{}", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+    Object.defineProperty(redirected, "redirected", { value: true });
+    const redirectGateway = new ViewerLoadGateway({
+      fetch: async () => redirected,
+    });
+    await expect(
+      redirectGateway.loadSameOriginModel(
+        new URL(
+          "https://city.example.test/api/v1/artifacts/11111111-1111-4111-8111-111111111111/city-model.json",
+        ),
+        origin,
+      ),
+    ).rejects.toThrow(/redirect/u);
+  });
+
   it("rejects credential-bearing URLs and remote redirects", async () => {
     let fetchCount = 0;
     const credentialGateway = new ViewerLoadGateway({
