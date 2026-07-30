@@ -374,6 +374,27 @@ export class ViewerBuildingLayer {
     return true;
   }
 
+  public setColors(colorsById: ReadonlyMap<string, string>): void {
+    this.assertActive();
+    for (const [id, color] of colorsById) {
+      const building = this.definitionsById.get(id);
+      if (!building) continue;
+      const colorValue = new THREE.Color(color).getHex();
+      Object.assign(building, { color, colorValue });
+    }
+    if (this.mode === "instanced") {
+      this.populateBatches();
+    } else {
+      for (const [id, mesh] of this.legacyMeshes) {
+        mesh.material.color.setHex(
+          this.definitionsById.get(id)!.colorValue,
+        );
+      }
+    }
+    this.refreshHighlight("hovered");
+    this.refreshHighlight("selected");
+  }
+
   public dispose(): void {
     if (this.disposed) return;
     this.disposed = true;

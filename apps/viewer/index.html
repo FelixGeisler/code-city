@@ -513,6 +513,7 @@
                 <dd id="building-metric-method"></dd>
               </div>
             </dl>
+            <p id="building-metric-explanation" class="dependency-status"></p>
 
             <details
               id="dependency-section"
@@ -737,6 +738,20 @@
             <p id="overview-scope-description" class="overview-scope-description">
               Metrics for the whole city.
             </p>
+            <label class="project-import-field" for="visualization-mode">
+              <span>Visualization mode</span>
+              <select id="visualization-mode">
+                <option value="semantic">Semantic groups</option>
+                <option value="complexity">Complexity risk</option>
+                <option value="print">Printer-profile assignment preview</option>
+              </select>
+            </label>
+            <p
+              id="visualization-mode-status"
+              class="overview-scope-description"
+              role="status"
+              aria-live="polite"
+            ></p>
             <dl class="overview-metrics" aria-label="Scoped city metrics">
               <div><dt>Repositories</dt><dd id="overview-repositories">0</dd></div>
               <div><dt>Solutions</dt><dd id="overview-solutions">0</dd></div>
