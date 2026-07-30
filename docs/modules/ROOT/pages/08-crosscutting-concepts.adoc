@@ -5,6 +5,58 @@
 Repository = borough; build module = district; source file = building. A
 solution is a filter over modules, not a duplicated physical hierarchy.
 
+A metric mapping is data, not viewer-only styling. Mapping definition `1.0`
+has a stable ID and name, `built-in` or `custom` provenance with a description,
+and independent `footprint`, `height`, and `color` channels. The complete
+definition travels with the resulting city model. A preset name alone is not
+enough to reproduce a city.
+
+[cols="1,2,2"]
+|===
+|Channel |Definition |Result
+
+|Footprint
+|Metric, formula, normalization, cap, missing-value policy, minimum and maximum
+side, and exponent
+|Building X/Z size and therefore district packing
+
+|Height
+|Metric, formula, normalization, cap, missing-value policy, minimum and maximum
+height, and exponent
+|Building Y size
+
+|Color
+|Metric, formula, normalization, cap, missing-value policy, and an ordered
+labelled color scale
+|Stable semantic color group shared by browser and print
+|===
+
+The supported building metrics are `sloc`, `decisionLoad`,
+`maximumComplexity`, and `executableUnitCount`. Geometry and color may select
+the same metric or three different metrics. The formula ID is
+`metric-value-v1`. Normalization is either `linear-cap-v1` or
+`log1p-cap-v1`, always with an explicit positive cap. Missing values either
+become zero or fail evaluation according to the recorded `zero` or `error`
+policy. Values above a cap are clamped and remain identifiable as clamped in
+the legend and inspector.
+
+[source,text]
+----
+linear_n = clamp(value / cap, 0, 1)
+log_n = clamp(ln(1 + value) / ln(1 + cap), 0, 1)
+footprint_side = minimum_side
+                 + (maximum_side - minimum_side) * normalized^exponent
+height = minimum_height
+         + (maximum_height - minimum_height) * normalized^exponent
+----
+
+Color chooses the first palette entry whose `maximum` contains the normalized
+value. Palette maxima are strictly increasing and the final entry ends at
+`1`; every entry records a stable ID, label, and color. The inspector and
+legend expose the selected metric, raw and normalized values, availability or
+clamping state, formula and normalization IDs, cap, missing-value behavior,
+geometry range or color scale, and mapping provenance.
+
 `SLOC` counts lines containing a non-comment syntax token. An executable unit is
 a method, constructor, accessor, local function, lambda, or top-level block.
 Nested units are measured separately.
@@ -14,10 +66,63 @@ Nested units are measured separately.
 each `&&`, `||`, or `??`. TypeScript also counts `&&=`, `||=`, and `??=`; C#
 counts `??=`, `when` guards, and `and`/`or` patterns.
 Do not count `else`, `default`, `return`, `throw`, `await`, or optional chaining.
+`decisionLoad` is `sum(CC(unit) - 1)`; `maximumComplexity` is the greatest
+recorded unit CC.
+
+=== Curated presets
+
+The preset catalog is versioned and distinguishes an unavailable design from
+an invalid definition. Unavailable entries remain visible with a reason; they
+cannot be previewed or applied.
+
+[cols="1,1,3"]
+|===
+|Preset |Status |Meaning
+
+|Complexity
+|Available
+|Uses the current size and complexity facts; it is the default for newly
+analyzed models.
+
+|Maintenance
+|Available
+|Emphasizes the recorded size, executable-unit, and complexity facts that are
+available in a snapshot.
+
+|Print
+|Available
+|Uses deterministic, discrete print-friendly color groups while retaining the
+same geometry contract.
+
+|Dependencies
+|Unavailable
+|The dependency graph exists, but a reproducible per-building dependency metric
+has not yet been added to analyzer facts.
+
+|Ownership
+|Unavailable
+|No per-building ownership metric is recorded; history author data is
+deliberately omitted.
+
+|Evolution
+|Unavailable
+|History does not yet expose a per-building churn or age metric to the mapping
+evaluator.
+|===
+
+Custom definitions use the same validator and evaluator as curated presets.
+The same model and canonical definition therefore produce the same semantic
+groups, geometry, layout, and legend independent of input order.
+
+=== Legacy mapping
+
+CityModel `1.0` readers continue to accept the exact original fixed mapping.
+It uses `log1p-cap-v1`, SLOC cap `1000`, decision-load cap `100`,
+`sloc-footprint-side-v1`, `decision-load-height-v1`, and
+`maximum-complexity-bands-v1`:
 
 [source,text]
 ----
-decision_load = sum(CC(unit) - 1)
 sloc_n = clamp(ln(1 + SLOC) / ln(1001), 0, 1)
 cc_n   = clamp(ln(1 + decision_load) / ln(101), 0, 1)
 footprint_side = 3 + 15 * sloc_n^1.5
@@ -25,9 +130,24 @@ footprint_area = footprint_side^2
 height = 4 + 36 * cc_n
 ----
 
-The inspector exposes the metric method, raw per-unit CC, SLOC, decision load,
-and maximum CC. Building color uses the worst unit: 0-5, 6-10, 11-20, or above
-20.
+Its color bands remain maximum CC 0-5, 6-10, 11-20, and above 20. Readers
+reject altered legacy formula IDs or caps instead of interpreting them as a
+new mapping. New analysis emits the versioned Complexity definition.
+
+=== History semantics
+
+One resolved mapping definition applies to every sampled commit in a history
+analysis. Each frame evaluates that definition against the facts in that
+frame; missing-value behavior is therefore evaluated per frame. The canonical
+definition contributes to the metric-configuration and result fingerprints,
+so cache entries from different mappings cannot alias.
+
+History configuration accepts a direct `1.0` definition, a
+`metricMapping` wrapper containing that definition, or the legacy
+`metricMapping: "default-v1"` claim. Other string claims are rejected. The
+legacy claim resolves to the exact fixed mapping above before analysis.
+Evolution replay retains the frame's complete mapping data, rather than
+inferring behavior from the current preset catalog.
 
 == Dependency routes
 

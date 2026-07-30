@@ -4,11 +4,18 @@ import path from "node:path";
 import {
   EVOLUTION_AUTHOR_POLICY,
   EVOLUTION_BUNDLE_SCHEMA_VERSION,
+  DEFAULT_METRIC_MAPPING,
+  DEFAULT_VERSIONED_METRIC_MAPPING,
   DEFAULT_SEMANTIC_GROUPS,
+  LEGACY_BUILDING_METRIC_SEMANTIC_GROUP_IDS,
   deriveEvolutionChangeKinds,
   layoutCity,
   prepareEvolutionSerialization,
+  projectBuildingMetricMapping,
+  semanticGroupsForMetricMapping,
   stableId,
+  validateLegacyMetricMapping,
+  validateMetricMappingDefinition,
   validateCityModel,
   type CityBuilding,
   type CityDependency,
@@ -23,6 +30,8 @@ import {
   type EvolutionEntityDelta,
   type EvolutionFingerprint,
   type EvolutionModelChanges,
+  type MetricMapping,
+  type MetricMappingDefinitionV1,
   type PreparedEvolutionSerialization,
   type SemanticGroup,
   type SourceMetrics,
@@ -58,6 +67,7 @@ const SLOT_PREFIX = "history-slot";
 const IDENTITY_DEADLINE_CHECK_INTERVAL = 256;
 const IDENTITY_WORK_MULTIPLIER = 8;
 const EVOLUTION_WORK_MULTIPLIER = 64;
+const HISTORY_METRIC_CONFIGURATION_MAX_WRAPPER_DEPTH = 64;
 const CHANGE_KINDS = new Set([
   "added",
   "deleted",
@@ -196,6 +206,120 @@ function fail(
   message: string,
 ): never {
   throw new HistoryEvolutionError(code, message);
+}
+
+function mappingValidation<T>(operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    fail(
+      "invalid-input",
+      error instanceof Error
+        ? error.message
+        : "metricConfiguration.metricMapping is invalid.",
+    );
+  }
+}
+
+function mappingRecord(
+  value: unknown,
+): Record<string, unknown> | undefined {
+  return typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function claimedHistoryMetricMapping(
+  value: unknown,
+  path = "metricConfiguration",
+  depth = 0,
+  seen = new Set<object>(),
+): MetricMapping | undefined {
+  if (depth > HISTORY_METRIC_CONFIGURATION_MAX_WRAPPER_DEPTH) {
+    fail(
+      "invalid-input",
+      `${path} is too deeply nested; metricConfiguration wrappers must not exceed ${HISTORY_METRIC_CONFIGURATION_MAX_WRAPPER_DEPTH} levels.`,
+    );
+  }
+  const configuration = mappingRecord(value);
+  if (configuration === undefined) return undefined;
+  if (seen.has(configuration)) {
+    fail(
+      "invalid-input",
+      `${path} must not contain a metricConfiguration wrapper cycle.`,
+    );
+  }
+  seen.add(configuration);
+
+  try {
+    if (configuration["definitionVersion"] !== undefined) {
+      return mappingValidation(() =>
+        validateMetricMappingDefinition(configuration, path),
+      );
+    }
+    if (
+      configuration["formulas"] !== undefined ||
+      configuration["normalizationCaps"] !== undefined
+    ) {
+      return mappingValidation(() =>
+        validateLegacyMetricMapping(configuration, path),
+      );
+    }
+    if (Object.prototype.hasOwnProperty.call(configuration, "metricMapping")) {
+      const claim = configuration["metricMapping"];
+      const claimPath = `${path}.metricMapping`;
+      if (claim === "default-v1") return DEFAULT_METRIC_MAPPING;
+      if (typeof claim === "string") {
+        fail(
+          "invalid-input",
+          `${claimPath} must be exactly "default-v1" or a complete versioned metric mapping definition; other string aliases are not reproducible.`,
+        );
+      }
+      const record = mappingRecord(claim);
+      if (record === undefined) {
+        fail(
+          "invalid-input",
+          `${claimPath} must be "default-v1" or a recognized metric mapping definition.`,
+        );
+      }
+      if (record["definitionVersion"] !== undefined) {
+        return mappingValidation(() =>
+          validateMetricMappingDefinition(record, claimPath),
+        );
+      }
+      return mappingValidation(() =>
+        validateLegacyMetricMapping(record, claimPath),
+      );
+    }
+
+    // Generic Git history wraps the caller's complete metric configuration in
+    // its semantic cache configuration. Only this known wrapper is traversed.
+    if (
+      Object.prototype.hasOwnProperty.call(
+        configuration,
+        "metricConfiguration",
+      )
+    ) {
+      return claimedHistoryMetricMapping(
+        configuration["metricConfiguration"],
+        `${path}.metricConfiguration`,
+        depth + 1,
+        seen,
+      );
+    }
+    return undefined;
+  } finally {
+    seen.delete(configuration);
+  }
+}
+
+function resolveHistoryMetricMapping(value: unknown): MetricMapping {
+  return (
+    claimedHistoryMetricMapping(value) ??
+    DEFAULT_VERSIONED_METRIC_MAPPING
+  );
 }
 
 function compareText(left: string, right: string): number {
@@ -1830,6 +1954,7 @@ function createUnionLayout(
   frames: readonly AssignedFrame[],
   registry: LineageRegistry,
   budget: EvolutionWorkBudget,
+  metricMapping: MetricMapping,
 ) {
   const repositories = new Map<string, CityRepository>();
   const modules = new Map<string, CityModule>();
@@ -1880,8 +2005,16 @@ function createUnionLayout(
     {
       repositories: [...repositories.values()],
       modules: [...modules.values()],
-      buildings: [...slots.values()].map((slot) => {
+      buildings: [...slots.values()].map((slot, index) => {
         budget.consume();
+        const projection =
+          "definitionVersion" in metricMapping
+            ? projectBuildingMetricMapping(
+                slot.metrics,
+                metricMapping,
+                `union.buildings[${index}]`,
+              )
+            : undefined;
         return {
           id: slot.id,
           repositoryId: slot.representative.repositoryId,
@@ -1892,7 +2025,10 @@ function createUnionLayout(
           metrics: slot.metrics,
           metricMethod: slot.representative.metricMethod,
           units: slot.representative.units,
-          semanticGroupId: slot.representative.semanticGroupId,
+          semanticGroupId:
+            projection?.semanticGroupId ??
+            slot.representative.semanticGroupId,
+          ...(projection === undefined ? {} : { size: projection.size }),
         };
       }),
       ...(identity === undefined ? {} : { identity }),
@@ -1914,8 +2050,14 @@ function* positionFrames(
   frames: readonly AssignedFrame[],
   registry: LineageRegistry,
   budget: EvolutionWorkBudget,
+  metricMapping: MetricMapping,
 ): Generator<CityModel, void, undefined> {
-  const union = createUnionLayout(frames, registry, budget);
+  const union = createUnionLayout(
+    frames,
+    registry,
+    budget,
+    metricMapping,
+  );
   const districts = new Map(
     union.layout.districts.map((district) => {
       budget.consume();
@@ -1932,6 +2074,7 @@ function* positionFrames(
     budget.consume();
     budget.checkpoint();
     const model = cityModelFromFacts(frame.facts, {
+      metricMapping,
       layoutPackingSearchMode: "bounded",
       layoutCheckpoint: (operations) => {
         budget.consume(operations);
@@ -2267,6 +2410,9 @@ export function createHistoryEvolution(
     request.signal,
   );
   validateRequest(request, workBudget);
+  const metricMapping = resolveHistoryMetricMapping(
+    request.metricConfiguration,
+  );
   enforceAggregateTreeLimit(
     request.frames,
     bounds.maxAggregateTreeEntries,
@@ -2295,7 +2441,23 @@ export function createHistoryEvolution(
     request.signal,
   );
   lineageBudget.add("repositories", repositoryId);
-  lineageBudget.addAll("semanticGroups", DEFAULT_SEMANTIC_GROUPS);
+  lineageBudget.addAll(
+    "semanticGroups",
+    "definitionVersion" in metricMapping
+      ? DEFAULT_SEMANTIC_GROUPS.filter(
+          ({ id }) =>
+            !LEGACY_BUILDING_METRIC_SEMANTIC_GROUP_IDS.some(
+              (legacyId) => legacyId === id,
+            ),
+        )
+      : DEFAULT_SEMANTIC_GROUPS,
+  );
+  if ("definitionVersion" in metricMapping) {
+    lineageBudget.addAll(
+      "semanticGroups",
+      semanticGroupsForMetricMapping(metricMapping, "base"),
+    );
+  }
   const prepared = prepareFrames(
     request,
     registry,
@@ -2362,6 +2524,7 @@ export function createHistoryEvolution(
     assigned,
     registry,
     workBudget,
+    metricMapping,
   );
   const baselineStep = positionedModels.next();
   if (baselineStep.done) {

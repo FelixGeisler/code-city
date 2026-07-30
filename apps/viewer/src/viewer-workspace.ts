@@ -3,6 +3,7 @@ export const VIEWER_WORKSPACE_VIEWS = [
   "routes",
   "details",
   "overview",
+  "metrics",
 ] as const;
 
 export type ViewerWorkspaceView =

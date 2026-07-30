@@ -154,6 +154,50 @@ bottom sheet. Selecting geometry only peeks at details, while explicit search
 opens them. A persistent scope chip resets district isolation and scopes the
 overview metrics.
 
+== Metric configuration
+
+The metric-mapping workspace lists the curated presets and saved custom
+configurations for the loaded project. Complexity, Maintenance, and Print are
+available. Dependencies, Ownership, and Evolution stay visible but disabled
+with the missing-fact reason described in
+xref:08-crosscutting-concepts.adoc#_curated_presets[Curated presets].
+Footprint, height, and color are edited independently, and the legend exposes
+the complete formula, normalization, cap, missing-value, color-scale, and
+provenance contract before application.
+
+**Preview** validates the complete candidate and derives its result in a
+cancellable worker without committing it. A successful result is shown
+temporarily in the scene, labelled as a preview, and print export stays disabled
+until the user applies or cancels it. Editing again or canceling supersedes the
+in-flight request; a late result from an older request cannot become current.
+**Apply** is available only for the latest successful preview. Invalid fields
+and unavailable metrics fail with a specific reason and leave the committed
+mapping untouched.
+
+Every preview starts from the immutable imported model and performs a full
+deterministic relayout, including a color-only candidate. Building positions
+and dimensions, districts, base and identity geometry, bounds, picking data,
+route contacts and anchors, semantic groups, and derived overview state are
+replaced together; partial results are never published. Every successful apply
+invalidates stale print preflight and export data, so the next print preview is
+generated from the exact mapping visible in the browser.
+
+Users may name and save a valid custom configuration. Browser persistence is
+origin-local and scoped by the loaded project's stable identity: a
+configuration from one repository or imported model is not offered silently
+for another. Only a derived project identity, the name, and the canonical
+mapping definition are retained; no source text, repository credential, remote
+URL, local path, or generated model is added to browser storage. Deleting
+browser data removes these saved configurations without changing the
+city-model artifact.
+
+During evolution analysis, one selected mapping is evaluated for every frame
+against that frame's raw facts, including its per-frame missing-value behavior.
+The resulting bundle therefore never mixes layouts or legends from different
+configurations. The bundle's analysis-time metric-configuration fingerprint
+remains provenance and is not rewritten by a browser-only preview. The
+time-travel workspace will consume this invariant when its controls are added.
+
 == Viewer performance
 
 Buildings render as deterministic, color-per-instance batches over one shared

@@ -355,7 +355,7 @@ button,
 .viewer-workspace-tabs {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   padding: 6px;
   background: rgba(7, 17, 31, 0.68);
 }
@@ -1433,6 +1433,216 @@ button,
 
 .overview-content {
   padding: 12px;
+}
+
+.metric-mapping-panel .panel-heading {
+  min-height: 54px;
+}
+
+.metric-mapping-panel .panel-heading .eyebrow {
+  margin: 0 0 2px !important;
+  font-size: 10px;
+}
+
+.metric-mapping-preview-badge {
+  padding: 4px 7px;
+  border: 1px solid rgba(250, 204, 21, 0.42);
+  border-radius: 999px;
+  color: #fde68a;
+  background: rgba(133, 77, 14, 0.32);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.metric-mapping-content {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+}
+
+.metric-mapping-help,
+.metric-mapping-formula,
+.metric-mapping-provenance p,
+.metric-mapping-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.metric-mapping-unavailable {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.metric-mapping-unavailable summary {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  color: #c9deee;
+  cursor: pointer;
+}
+
+.metric-mapping-unavailable ul {
+  display: grid;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 0 0 0 18px;
+  line-height: 1.45;
+}
+
+.metric-mapping-field,
+.metric-mapping-channel label,
+.metric-mapping-saved label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  color: #dcecff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.metric-mapping-field select,
+.metric-mapping-channel select,
+.metric-mapping-channel input,
+.metric-mapping-saved select,
+.metric-mapping-saved input {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: #e8f4ff;
+  background: #0d1d30;
+}
+
+.metric-mapping-field select:focus-visible,
+.metric-mapping-channel select:focus-visible,
+.metric-mapping-channel input:focus-visible,
+.metric-mapping-saved select:focus-visible,
+.metric-mapping-saved input:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 1px;
+}
+
+.metric-mapping-channel {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+  margin: 0;
+  padding: 11px;
+  border: 1px solid rgba(148, 188, 226, 0.16);
+  border-radius: 9px;
+  background: rgba(121, 196, 255, 0.035);
+}
+
+.metric-mapping-channel legend {
+  padding: 0 5px;
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.metric-mapping-formula,
+.metric-color-legend {
+  grid-column: 1 / -1;
+}
+
+.metric-mapping-formula {
+  padding-top: 2px;
+  overflow-wrap: anywhere;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.metric-color-legend {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.metric-color-legend li {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  color: #c9deee;
+  font-size: 10px;
+}
+
+.metric-color-swatch {
+  width: 14px;
+  height: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 3px;
+}
+
+.metric-color-range {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-mapping-provenance,
+.metric-mapping-saved {
+  display: grid;
+  gap: 8px;
+  padding: 11px;
+  border: 1px solid rgba(148, 188, 226, 0.14);
+  border-radius: 9px;
+  background: rgba(7, 17, 31, 0.42);
+}
+
+.metric-mapping-provenance h3,
+.metric-mapping-saved h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.metric-mapping-saved-actions,
+.metric-mapping-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.metric-mapping-status {
+  min-height: 34px;
+  padding: 8px 9px;
+  border-left: 3px solid rgba(121, 196, 255, 0.52);
+  background: rgba(54, 163, 255, 0.06);
+}
+
+.metric-mapping-panel[data-projection-state="preview"]
+  .metric-mapping-status,
+.metric-mapping-panel[data-projection-state="projecting"]
+  .metric-mapping-status {
+  border-left-color: #facc15;
+  color: #fde68a;
+  background: rgba(133, 77, 14, 0.18);
+}
+
+.metric-preview-banner {
+  position: absolute;
+  z-index: 3;
+  top: 82px;
+  left: 20px;
+  max-width: min(560px, calc(100% - 480px));
+  margin: 0;
+  padding: 8px 11px;
+  border: 1px solid rgba(250, 204, 21, 0.42);
+  border-radius: 8px;
+  color: #fde68a;
+  background: rgba(69, 43, 8, 0.92);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.24);
+  font-size: 11px;
+  line-height: 1.4;
+  pointer-events: none;
 }
 
 .overview-scope-description {
@@ -2601,8 +2811,15 @@ button,
 
   .viewer-workspace-tab {
     min-height: 42px;
-    padding: 0 5px;
-    font-size: 12px;
+    padding: 0 3px;
+    font-size: 10px;
+  }
+
+  .metric-preview-banner {
+    top: 68px;
+    right: 12px;
+    left: 12px;
+    max-width: none;
   }
 
   .viewer-workspace-scroll {
@@ -2673,6 +2890,10 @@ button,
 
   .project-import-steps li > span {
     font-size: 11px;
+  }
+
+  .metric-mapping-channel {
+    grid-template-columns: 1fr;
   }
 
   .project-import-review {

@@ -12,8 +12,11 @@ import {
   type LocalAnalysisFacts,
 } from "../packages/analyzer/src/index.js";
 import {
+  DEFAULT_METRIC_MAPPING,
+  DEFAULT_VERSIONED_METRIC_MAPPING,
   replayEvolutionBundle,
   serializeEvolutionBundle,
+  type MetricMappingDefinitionV1,
 } from "../packages/core/src/index.js";
 
 const A = "1111111111111111111111111111111111111111";
@@ -265,6 +268,10 @@ function evolve(
   >,
   now?: () => number,
   signal?: AbortSignal,
+  metricConfiguration: unknown = {
+    geometry: "default-v1",
+    metrics: "default-v1",
+  },
 ) {
   return createHistoryEvolution({
     repositoryIdentity: "https://example.invalid/org/example.git",
@@ -278,10 +285,7 @@ function evolve(
       renamePolicyRevision:
         GENERIC_GIT_HISTORY_RENAME_POLICY_REVISION,
     },
-    metricConfiguration: {
-      geometry: "default-v1",
-      metrics: "default-v1",
-    },
+    metricConfiguration,
     ...(now === undefined ? {} : { now }),
     ...(signal === undefined ? {} : { signal }),
   });
@@ -373,6 +377,233 @@ describe("history evolution analysis", () => {
     );
     expect(result.bundle.deltas[0]!.changes.buildings.removed).toEqual(
       [],
+    );
+  });
+
+  it("applies a recognized mapping to every frame and the union layout", async () => {
+    const before = await facts({
+      "src/a.ts":
+        "export function choose(value: boolean) { return value ? 1 : 0; }\n",
+    });
+    const after = await facts({
+      "src/a.ts":
+        "export function choose(a: boolean, b: boolean) { if (a) { if (b) return 2; return 1; } return 0; }\n",
+    });
+    const mapping: MetricMappingDefinitionV1 = {
+      ...DEFAULT_VERSIONED_METRIC_MAPPING,
+      id: "history-test",
+      name: "History test",
+      provenance: {
+        kind: "custom",
+        description: "Exercises frame and union projection.",
+      },
+      channels: {
+        ...DEFAULT_VERSIONED_METRIC_MAPPING.channels,
+        footprint: {
+          metric: "executableUnitCount",
+          formula: "metric-value-v1",
+          normalization: {
+            formula: "linear-cap-v1",
+            cap: 10,
+            missing: "error",
+          },
+        },
+        height: {
+          metric: "maximumComplexity",
+          formula: "metric-value-v1",
+          normalization: {
+            formula: "linear-cap-v1",
+            cap: 10,
+            missing: "error",
+          },
+        },
+      },
+      geometry: {
+        footprint: {
+          formula: "normalized-side-range-v1",
+          minimumSide: 2,
+          maximumSide: 12,
+          exponent: 1,
+        },
+        height: {
+          formula: "normalized-height-range-v1",
+          minimumHeight: 2,
+          maximumHeight: 22,
+          exponent: 1,
+        },
+      },
+    };
+    const selected = selection([COMMITS.b, COMMITS.a], {
+      mode: "commit-count",
+      commitCount: 2,
+    });
+    const result = evolve(
+      selected,
+      [
+        { commit: COMMITS.a, facts: before },
+        { commit: COMMITS.b, facts: after },
+      ],
+      new Map([
+        [B, [{ kind: "modified" as const, path: "src/a.ts" }]],
+      ]),
+      undefined,
+      undefined,
+      {
+        metricConfiguration: { metricMapping: mapping },
+        snapshotOptions: { maxEntries: 100_000 },
+      },
+    );
+    const frames = [...replayEvolutionBundle(result.bundle)].map(
+      ({ model }) => model,
+    );
+
+    expect(frames).toHaveLength(2);
+    for (const frame of frames) {
+      expect(frame.metricMapping).toEqual(mapping);
+      const building = frame.buildings[0]!;
+      expect(building.size.y).toBeCloseTo(
+        2 + 20 * Math.min(1, building.metrics.maximumComplexity / 10),
+        12,
+      );
+      expect(building.semanticGroupId).toMatch(
+        /^metric-color-history-test-/u,
+      );
+    }
+    expect(frames[0]!.districts[0]!.size).toEqual(
+      frames[1]!.districts[0]!.size,
+    );
+    expect(frames[0]!.buildings[0]!.position.x).toBe(
+      frames[1]!.buildings[0]!.position.x,
+    );
+    expect(frames[0]!.buildings[0]!.position.z).toBe(
+      frames[1]!.buildings[0]!.position.z,
+    );
+  });
+
+  it("preserves explicit legacy history mapping and rejects invalid claims", async () => {
+    const snapshot = await facts({
+      "src/a.ts": "export const value = 1;\n",
+    });
+    const selected = selection([COMMITS.a], {
+      mode: "commit-count",
+      commitCount: 1,
+    });
+    const legacy = evolve(
+      selected,
+      [{ commit: COMMITS.a, facts: snapshot }],
+      new Map(),
+      undefined,
+      undefined,
+      { metricMapping: "default-v1" },
+    );
+    expect(legacy.model.metricMapping).toEqual(DEFAULT_METRIC_MAPPING);
+    const versioned = evolve(
+      selected,
+      [{ commit: COMMITS.a, facts: snapshot }],
+      new Map(),
+      undefined,
+      undefined,
+      { metricMapping: DEFAULT_VERSIONED_METRIC_MAPPING },
+    );
+    expect(
+      versioned.bundle.provenance.metricConfigurationFingerprint,
+    ).not.toBe(
+      legacy.bundle.provenance.metricConfigurationFingerprint,
+    );
+
+    expect(() =>
+      evolve(
+        selected,
+        [{ commit: COMMITS.a, facts: snapshot }],
+        new Map(),
+        undefined,
+        undefined,
+        {
+          metricMapping: {
+            ...DEFAULT_VERSIONED_METRIC_MAPPING,
+            channels: {
+              ...DEFAULT_VERSIONED_METRIC_MAPPING.channels,
+              height: {
+                ...DEFAULT_VERSIONED_METRIC_MAPPING.channels.height,
+                metric: "dependencies",
+              },
+            },
+          },
+        },
+      ),
+    ).toThrow(
+      /metricConfiguration\.metricMapping\.channels\.height\.metric/u,
+    );
+    expect(() =>
+      evolve(
+        selected,
+        [{ commit: COMMITS.a, facts: snapshot }],
+        new Map(),
+        undefined,
+        undefined,
+        { metricMapping: "maintenance" },
+      ),
+    ).toThrowError(
+      expect.objectContaining<Partial<HistoryEvolutionError>>({
+        code: "invalid-input",
+        message: expect.stringMatching(
+          /metricConfiguration\.metricMapping.*string aliases.*not reproducible/u,
+        ),
+      }),
+    );
+  });
+
+  it("rejects cyclic and excessively deep metric configuration wrappers", async () => {
+    const snapshot = await facts({
+      "src/a.ts": "export const value = 1;\n",
+    });
+    const selected = selection([COMMITS.a], {
+      mode: "commit-count",
+      commitCount: 1,
+    });
+    const cyclic: Record<string, unknown> = {};
+    cyclic["metricConfiguration"] = cyclic;
+
+    expect(() =>
+      evolve(
+        selected,
+        [{ commit: COMMITS.a, facts: snapshot }],
+        new Map(),
+        undefined,
+        undefined,
+        cyclic,
+      ),
+    ).toThrowError(
+      expect.objectContaining<Partial<HistoryEvolutionError>>({
+        code: "invalid-input",
+        message: expect.stringMatching(
+          /metricConfiguration\.metricConfiguration.*cycle/u,
+        ),
+      }),
+    );
+
+    let deeplyNested: unknown = {
+      metricMapping: DEFAULT_VERSIONED_METRIC_MAPPING,
+    };
+    for (let depth = 0; depth < 66; depth += 1) {
+      deeplyNested = { metricConfiguration: deeplyNested };
+    }
+    expect(() =>
+      evolve(
+        selected,
+        [{ commit: COMMITS.a, facts: snapshot }],
+        new Map(),
+        undefined,
+        undefined,
+        deeplyNested,
+      ),
+    ).toThrowError(
+      expect.objectContaining<Partial<HistoryEvolutionError>>({
+        code: "invalid-input",
+        message: expect.stringMatching(
+          /metricConfiguration.*too deeply nested.*64 levels/u,
+        ),
+      }),
     );
   });
 

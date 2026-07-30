@@ -143,6 +143,65 @@ test("WebGL 1 without ANGLE uses the bounded accessible fallback", async ({
   ).toBe("legacy");
 });
 
+test("metric mappings require an explicit preview and preserve named project configurations", async ({
+  page,
+}) => {
+  await page.goto(viewerUrl, {
+    waitUntil: "domcontentloaded",
+    timeout: 45_000,
+  });
+  await page.getByRole("tab", { name: "Metrics" }).click();
+
+  await expect(
+    page.locator("#metric-mapping-unavailable-reasons"),
+  ).toContainText("Dependencies");
+  await expect(
+    page.locator("#metric-mapping-unavailable-reasons"),
+  ).toContainText("not yet present on every building");
+
+  await page
+    .locator("#metric-mapping-preset")
+    .selectOption("maintenance");
+  await expect(page.locator("#metric-mapping-apply")).toBeDisabled();
+  await page.locator("#metric-mapping-preview").click();
+  await expect(page.locator("#metric-mapping-status")).toContainText(
+    "Preview active",
+  );
+  await expect(page.locator("#metric-preview-banner")).toBeVisible();
+  await expect(page.locator("#print-export-open")).toBeDisabled();
+  await expect(page.locator("#metric-mapping-apply")).toBeEnabled();
+
+  await page.locator("#metric-mapping-cancel").click();
+  await expect(page.locator("#metric-preview-banner")).toBeHidden();
+  await expect(page.locator("#print-export-open")).toBeEnabled();
+  await expect(page.locator("#metric-mapping-status")).toContainText(
+    "Committed city restored",
+  );
+
+  await page
+    .locator("#metric-mapping-preset")
+    .selectOption("print");
+  await page.locator("#metric-configuration-name").fill("Team print");
+  await page.locator("#metric-configuration-save").click();
+  await expect(page.locator("#metric-configuration-select")).toHaveValue(
+    "Team print",
+  );
+  await page.locator("#metric-mapping-preview").click();
+  await expect(page.locator("#metric-mapping-apply")).toBeEnabled();
+  await page.locator("#metric-mapping-apply").click();
+  await expect(page.locator("#metric-preview-banner")).toBeHidden();
+  await expect(page.locator("#print-export-open")).toBeEnabled();
+  await expect(page.locator("#metric-mapping-status")).toContainText(
+    "now the committed city",
+  );
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "Metrics" }).click();
+  await expect(
+    page.locator("#metric-configuration-select option"),
+  ).toContainText(["Choose configuration", "Team print"]);
+});
+
 async function disableBrowserInstancing(
   page: import("@playwright/test").Page,
 ): Promise<void> {

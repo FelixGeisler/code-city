@@ -50,7 +50,11 @@ export interface SourceMetrics {
   readonly executableUnitCount: number;
 }
 
-export interface MetricMapping {
+/**
+ * The original schema-1.0 mapping. Its exact shape and values remain part of
+ * the public compatibility contract.
+ */
+export interface LegacyMetricMapping {
   readonly formulas: {
     readonly normalization: "log1p-cap-v1";
     readonly footprint: "sloc-footprint-side-v1";
@@ -62,6 +66,73 @@ export interface MetricMapping {
     readonly decisionLoad: 100;
   };
 }
+
+export type MetricSourceKey = keyof SourceMetrics;
+export type MetricValueFormula = "metric-value-v1";
+export type MetricNormalizationFormula =
+  | "linear-cap-v1"
+  | "log1p-cap-v1";
+export type MetricMissingBehavior = "zero" | "error";
+
+export interface MetricChannelNormalizationV1 {
+  readonly formula: MetricNormalizationFormula;
+  readonly cap: number;
+  readonly missing: MetricMissingBehavior;
+}
+
+export interface MetricChannelDefinitionV1 {
+  readonly metric: MetricSourceKey;
+  readonly formula: MetricValueFormula;
+  readonly normalization: MetricChannelNormalizationV1;
+}
+
+export interface MetricColorPaletteEntryV1 {
+  readonly id: string;
+  readonly label: string;
+  /** Stable #RRGGBB or #RRGGBBAA display color. */
+  readonly color: string;
+  /** Inclusive normalized upper bound. Entries must end at 1. */
+  readonly maximum: number;
+}
+
+export interface MetricColorChannelDefinitionV1
+  extends MetricChannelDefinitionV1 {
+  readonly scale: "normalized-threshold-palette-v1";
+  readonly palette: readonly MetricColorPaletteEntryV1[];
+}
+
+export interface MetricMappingDefinitionV1 {
+  readonly definitionVersion: "1.0";
+  readonly id: string;
+  readonly name: string;
+  readonly provenance: {
+    readonly kind: "built-in" | "custom";
+    readonly description: string;
+  };
+  readonly channels: {
+    readonly footprint: MetricChannelDefinitionV1;
+    readonly height: MetricChannelDefinitionV1;
+    readonly color: MetricColorChannelDefinitionV1;
+  };
+  readonly geometry: {
+    readonly footprint: {
+      readonly formula: "normalized-side-range-v1";
+      readonly minimumSide: number;
+      readonly maximumSide: number;
+      readonly exponent: number;
+    };
+    readonly height: {
+      readonly formula: "normalized-height-range-v1";
+      readonly minimumHeight: number;
+      readonly maximumHeight: number;
+      readonly exponent: number;
+    };
+  };
+}
+
+export type MetricMapping =
+  | LegacyMetricMapping
+  | MetricMappingDefinitionV1;
 
 export type MetricNormalizationState =
   | "available"

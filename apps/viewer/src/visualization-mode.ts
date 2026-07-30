@@ -1,4 +1,9 @@
-import { DEFAULT_METRIC_MAPPING } from "../../../packages/core/src/metrics.js";
+import {
+  DEFAULT_METRIC_MAPPING,
+  describeMetricMapping,
+  isVersionedMetricMapping,
+  normalizeMetricChannelValue,
+} from "../../../packages/core/src/metrics.js";
 import type {
   CityBuilding,
   CityModel,
@@ -197,6 +202,26 @@ export function describeBuildingMetrics(
   building: CityBuilding,
 ): string {
   const mapping = model.metricMapping ?? DEFAULT_METRIC_MAPPING;
+  if (isVersionedMetricMapping(mapping)) {
+    const channel = (
+      name: "footprint" | "height" | "color",
+    ): string => {
+      const definition = mapping.channels[name];
+      const value = building.metrics[definition.metric];
+      const normalized = normalizeMetricChannelValue(
+        building.metrics,
+        definition,
+      );
+      return `${name} ${definition.metric} raw ${value}, normalized ${normalized.value.toFixed(4)} (${normalized.clamped ? "clamped" : "available"}), ${definition.formula} → ${definition.normalization.formula} (cap ${definition.normalization.cap}, missing ${definition.normalization.missing})`;
+    };
+    return [
+      `Raw SLOC ${building.metrics.sloc}; decision load ${building.metrics.decisionLoad}; maximum per-unit complexity ${building.metrics.maximumComplexity}; executable units ${building.metrics.executableUnitCount}.`,
+      `Metric method ${building.metricMethod ?? "not recorded"}.`,
+      `Metric channels: ${channel("footprint")}; ${channel("height")}; ${channel("color")}.`,
+      `Geometry formulas: footprint ${mapping.geometry.footprint.formula} (${mapping.geometry.footprint.minimumSide}–${mapping.geometry.footprint.maximumSide}); height ${mapping.geometry.height.formula} (${mapping.geometry.height.minimumHeight}–${mapping.geometry.height.maximumHeight}); color ${mapping.channels.color.scale}.`,
+      `Mapping provenance: ${describeMetricMapping(mapping)}`,
+    ].join(" ");
+  }
   const normalization = building.metricNormalization;
   const state = (metric: "sloc" | "decisionLoad"): string => {
     const persisted = normalization?.[metric].state;

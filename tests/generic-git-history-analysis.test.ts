@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type {
-  CityModel,
-  EvolutionBundle,
+import {
+  DEFAULT_VERSIONED_METRIC_MAPPING,
+  resolveMetricMappingPreset,
+  type CityModel,
+  type EvolutionBundle,
 } from "../packages/core/src/index.js";
 import {
   analyzeGenericGitHistory,
@@ -406,6 +408,56 @@ describe("Generic Git history analysis orchestration", () => {
     );
   });
 
+  it("separates semantic cache configuration across metric mappings", async () => {
+    const configurations: unknown[] = [];
+    const semanticCache: HistorySemanticCacheLike = {
+      async acquire(cacheRequest, compute) {
+        configurations.push(cacheRequest.configuration);
+        const value = await compute();
+        return {
+          hit: false,
+          read: async () => value,
+          release: () => undefined,
+        };
+      },
+    };
+    for (const mapping of [
+      DEFAULT_VERSIONED_METRIC_MAPPING,
+      resolveMetricMappingPreset("maintenance"),
+    ]) {
+      const session = sessionHarness(1);
+      const provider = providerHarness(session.session);
+      await analyzeGenericGitHistory(
+        request({
+          mode: "commit-count",
+          commitCount: 1,
+        }),
+        { metricConfiguration: { metricMapping: mapping } },
+        {
+          withHistoryRepository: provider.provider,
+          semanticCache,
+          analyzeSnapshot: async () => facts(mapping.id),
+          createEvolution: evolutionResult,
+        },
+      );
+    }
+
+    expect(configurations).toHaveLength(2);
+    expect(configurations[0]).toMatchObject({
+      metricConfiguration: {
+        metricMapping: { id: "complexity" },
+      },
+    });
+    expect(configurations[1]).toMatchObject({
+      metricConfiguration: {
+        metricMapping: { id: "maintenance" },
+      },
+    });
+    expect(JSON.stringify(configurations[0])).not.toBe(
+      JSON.stringify(configurations[1]),
+    );
+  });
+
   it("reads unsampled commit changes while snapshotting only sampled frames", async () => {
     const session = sessionHarness(5);
     const provider = providerHarness(session.session);
@@ -428,7 +480,7 @@ describe("Generic Git history analysis orchestration", () => {
         withHistoryRepository: provider.provider,
         analyzeSnapshot: async (_, context) => {
           expect(context.metricConfiguration).toEqual({
-            metricMapping: "default-v1",
+            metricMapping: DEFAULT_VERSIONED_METRIC_MAPPING,
           });
           expect(context.analysisOptions.maxFileBytes).toBe(
             2 * 1024 * 1024,

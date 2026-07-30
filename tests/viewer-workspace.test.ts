@@ -196,6 +196,7 @@ describe("viewer workspace navigation", () => {
       "routes",
       "details",
       "overview",
+      "metrics",
     ]);
   });
 
@@ -210,16 +211,16 @@ describe("viewer workspace navigation", () => {
 
   it("wraps predictably and supports Home and End", () => {
     expect(workspaceViewForNavigation("explore", "ArrowLeft")).toBe(
-      "overview",
+      "metrics",
     );
-    expect(workspaceViewForNavigation("overview", "ArrowRight")).toBe(
+    expect(workspaceViewForNavigation("metrics", "ArrowRight")).toBe(
       "explore",
     );
     expect(workspaceViewForNavigation("routes", "Home")).toBe(
       "explore",
     );
     expect(workspaceViewForNavigation("routes", "End")).toBe(
-      "overview",
+      "metrics",
     );
   });
 

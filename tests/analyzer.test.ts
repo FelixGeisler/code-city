@@ -9,10 +9,18 @@ import {
   analyzeCSharpLexically,
   analyzeLocalFacts,
   analyzeLocalRepositories,
+  analyzeRepositorySnapshotFacts,
   analyzeRepositorySnapshots,
   analyzeTypeScriptSource,
+  cityModelFromFacts,
   snapshotLocalDirectory,
 } from "../packages/analyzer/src/index.js";
+import {
+  applyMetricMapping,
+  DEFAULT_METRIC_MAPPING,
+  DEFAULT_VERSIONED_METRIC_MAPPING,
+  type MetricMapping,
+} from "../packages/core/src/index.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -136,6 +144,38 @@ class Sample {
         expect.objectContaining({ name: "Map", complexity: 4 }),
       ]),
     );
+  });
+});
+
+describe("city model metric mapping input", () => {
+  it("validates supplied runtime values and preserves explicit legacy mapping", async () => {
+    const text = "export const value = 1;\n";
+    const facts = await analyzeRepositorySnapshotFacts([
+      {
+        name: "Runtime mapping",
+        files: [
+          {
+            path: "value.ts",
+            text,
+            byteLength: Buffer.byteLength(text, "utf8"),
+          },
+        ],
+        diagnostics: [],
+      },
+    ]);
+
+    for (const invalid of [false, 0, "", null]) {
+      expect(() =>
+        cityModelFromFacts(facts, {
+          metricMapping: invalid as unknown as MetricMapping,
+        }),
+      ).toThrow(/metricMapping must be an object/u);
+    }
+    expect(
+      cityModelFromFacts(facts, {
+        metricMapping: DEFAULT_METRIC_MAPPING,
+      }).metricMapping,
+    ).toBe(DEFAULT_METRIC_MAPPING);
   });
 });
 
@@ -303,18 +343,12 @@ EndProject
     expect(first.analysis?.warnings).toEqual([
       "Printable logo relief is unavailable; the fixed Code City icon will be used.",
     ]);
-    expect(first.metricMapping).toEqual({
-      formulas: {
-        normalization: "log1p-cap-v1",
-        footprint: "sloc-footprint-side-v1",
-        height: "decision-load-height-v1",
-        risk: "maximum-complexity-bands-v1",
-      },
-      normalizationCaps: {
-        sloc: 1_000,
-        decisionLoad: 100,
-      },
-    });
+    expect(first.metricMapping).toEqual(
+      DEFAULT_VERSIONED_METRIC_MAPPING,
+    );
+    expect(
+      applyMetricMapping(first, DEFAULT_VERSIONED_METRIC_MAPPING),
+    ).toEqual(first);
     expect(first.repositories).toHaveLength(2);
     expect(first.solutions).toHaveLength(2);
     expect(

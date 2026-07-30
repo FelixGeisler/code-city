@@ -331,12 +331,23 @@
       "additionalProperties": true
     },
     "metricMapping": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/legacyMetricMapping"
+        },
+        {
+          "$ref": "#/$defs/metricMappingDefinitionV1"
+        }
+      ]
+    },
+    "legacyMetricMapping": {
       "type": "object",
       "required": [
         "formulas",
         "normalizationCaps"
       ],
       "properties": {
+        "definitionVersion": false,
         "formulas": {
           "type": "object",
           "required": [
@@ -373,6 +384,266 @@
             },
             "decisionLoad": {
               "const": 100
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "metricChannelNormalizationV1": {
+      "type": "object",
+      "required": [
+        "formula",
+        "cap",
+        "missing"
+      ],
+      "properties": {
+        "formula": {
+          "enum": [
+            "linear-cap-v1",
+            "log1p-cap-v1"
+          ]
+        },
+        "cap": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 1000000000
+        },
+        "missing": {
+          "enum": [
+            "zero",
+            "error"
+          ]
+        }
+      },
+      "additionalProperties": true
+    },
+    "metricChannelV1": {
+      "type": "object",
+      "required": [
+        "metric",
+        "formula",
+        "normalization"
+      ],
+      "properties": {
+        "metric": {
+          "enum": [
+            "sloc",
+            "decisionLoad",
+            "maximumComplexity",
+            "executableUnitCount"
+          ]
+        },
+        "formula": {
+          "const": "metric-value-v1"
+        },
+        "normalization": {
+          "$ref": "#/$defs/metricChannelNormalizationV1"
+        }
+      },
+      "additionalProperties": true
+    },
+    "metricColorChannelV1": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/metricChannelV1"
+        },
+        {
+          "type": "object",
+          "required": [
+            "scale",
+            "palette"
+          ],
+          "properties": {
+            "scale": {
+              "const": "normalized-threshold-palette-v1"
+            },
+            "palette": {
+              "type": "array",
+              "minItems": 2,
+              "maxItems": 12,
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "label",
+                  "color",
+                  "maximum"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "maxLength": 48,
+                    "pattern": "^[a-z][a-z0-9-]*$"
+                  },
+                  "label": {
+                    "type": "string",
+                    "maxLength": 160,
+                    "pattern": "\\S"
+                  },
+                  "color": {
+                    "type": "string",
+                    "pattern": "^#[0-9A-Fa-f]{6}(?:[0-9A-Fa-f]{2})?$"
+                  },
+                  "maximum": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                  }
+                },
+                "additionalProperties": true
+              },
+              "contains": {
+                "type": "object",
+                "required": [
+                  "maximum"
+                ],
+                "properties": {
+                  "maximum": {
+                    "const": 1
+                  }
+                }
+              },
+              "minContains": 1,
+              "maxContains": 1
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "metricMappingDefinitionV1": {
+      "type": "object",
+      "required": [
+        "definitionVersion",
+        "id",
+        "name",
+        "provenance",
+        "channels",
+        "geometry"
+      ],
+      "properties": {
+        "definitionVersion": {
+          "const": "1.0"
+        },
+        "id": {
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 160,
+          "pattern": "\\S"
+        },
+        "provenance": {
+          "type": "object",
+          "required": [
+            "kind",
+            "description"
+          ],
+          "properties": {
+            "kind": {
+              "enum": [
+                "built-in",
+                "custom"
+              ]
+            },
+            "description": {
+              "type": "string",
+              "maxLength": 512,
+              "pattern": "\\S"
+            }
+          },
+          "additionalProperties": true
+        },
+        "channels": {
+          "type": "object",
+          "required": [
+            "footprint",
+            "height",
+            "color"
+          ],
+          "properties": {
+            "footprint": {
+              "$ref": "#/$defs/metricChannelV1"
+            },
+            "height": {
+              "$ref": "#/$defs/metricChannelV1"
+            },
+            "color": {
+              "$ref": "#/$defs/metricColorChannelV1"
+            }
+          },
+          "additionalProperties": true
+        },
+        "geometry": {
+          "type": "object",
+          "required": [
+            "footprint",
+            "height"
+          ],
+          "properties": {
+            "footprint": {
+              "type": "object",
+              "required": [
+                "formula",
+                "minimumSide",
+                "maximumSide",
+                "exponent"
+              ],
+              "properties": {
+                "formula": {
+                  "const": "normalized-side-range-v1"
+                },
+                "minimumSide": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 10000
+                },
+                "maximumSide": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 10000
+                },
+                "exponent": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 4
+                }
+              },
+              "additionalProperties": true
+            },
+            "height": {
+              "type": "object",
+              "required": [
+                "formula",
+                "minimumHeight",
+                "maximumHeight",
+                "exponent"
+              ],
+              "properties": {
+                "formula": {
+                  "const": "normalized-height-range-v1"
+                },
+                "minimumHeight": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 10000
+                },
+                "maximumHeight": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 10000
+                },
+                "exponent": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "maximum": 4
+                }
+              },
+              "additionalProperties": true
             }
           },
           "additionalProperties": true

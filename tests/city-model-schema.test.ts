@@ -7,6 +7,7 @@ import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
 import {
   calculateBuildingGeometry,
   DEFAULT_METRIC_MAPPING,
+  DEFAULT_VERSIONED_METRIC_MAPPING,
   metricNormalizationForGeometry,
   validateCityModel,
 } from "../packages/core/src/index.js";
@@ -100,10 +101,62 @@ describe("CityModel JSON Schema", () => {
     );
   });
 
+  it("accepts the bounded versioned metric-mapping definition", () => {
+    const versioned = {
+      ...DEMO_MODEL,
+      metricMapping: DEFAULT_VERSIONED_METRIC_MAPPING,
+    };
+
+    expect(validateSchema(versioned), errors()).toBe(true);
+    expect(validateCityModel(versioned)).toBe(versioned);
+
+    const whitespaceColor = {
+      ...versioned,
+      metricMapping: {
+        ...DEFAULT_VERSIONED_METRIC_MAPPING,
+        channels: {
+          ...DEFAULT_VERSIONED_METRIC_MAPPING.channels,
+          color: {
+            ...DEFAULT_VERSIONED_METRIC_MAPPING.channels.color,
+            palette:
+              DEFAULT_VERSIONED_METRIC_MAPPING.channels.color.palette.map(
+                (entry, index) =>
+                  index === 0
+                    ? { ...entry, color: ` ${entry.color}` }
+                    : entry,
+              ),
+          },
+        },
+      },
+    };
+    expect(validateSchema(whitespaceColor), errors()).toBe(false);
+    expect(() => validateCityModel(whitespaceColor)).toThrow(
+      /metricMapping\.channels\.color\.palette\[0\]\.color/u,
+    );
+  });
+
   it("rejects unknown versions and incoherent additive fields", () => {
     expect(
       validateSchema({ ...DEMO_MODEL, schemaVersion: "2.0" }),
     ).toBe(false);
+    expect(
+      validateSchema({
+        ...DEMO_MODEL,
+        metricMapping: {
+          ...DEFAULT_METRIC_MAPPING,
+          definitionVersion: "2.0",
+        },
+      }),
+    ).toBe(false);
+    expect(() =>
+      validateCityModel({
+        ...DEMO_MODEL,
+        metricMapping: {
+          ...DEFAULT_METRIC_MAPPING,
+          definitionVersion: "2.0",
+        },
+      }),
+    ).toThrow(/metricMapping\.definitionVersion/u);
     expect(
       validateSchema({
         ...DEMO_MODEL,

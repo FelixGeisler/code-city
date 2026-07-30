@@ -9,6 +9,7 @@ import { normalizeIdentityLogoPrintRelief } from "./logo-relief.js";
 import {
   DEFAULT_METRIC_MAPPING,
   normalizeLogarithmically,
+  validateMetricMapping as validateMetricMappingContract,
 } from "./metrics.js";
 import { normalizeRepositoryRelativePath } from "./path.js";
 
@@ -290,7 +291,9 @@ export function validateCityModel(
     optionalReference(group.mergeInto, groupIds, `${prefix}.mergeInto`);
   });
 
-  validateMetricMapping(model.metricMapping);
+  if (model.metricMapping !== undefined) {
+    validateMetricMappingContract(model.metricMapping, "metricMapping");
+  }
   validateAnalysis(model.analysis, work);
   validateIdentity(model.identity, repositoryIds, work);
   const identityPanel = validateIdentityPanel(model.identityPanel, groupIds);
@@ -499,38 +502,6 @@ function validateAnalysis(
       CITY_MODEL_LIMITS.warningCharacters,
     );
   });
-}
-
-function validateMetricMapping(value: unknown): void {
-  if (value === undefined) return;
-  const mapping = objectAt(value, "metricMapping");
-  const formulas = objectAt(
-    mapping.formulas,
-    "metricMapping.formulas",
-  );
-  for (const [name, expected] of Object.entries(
-    DEFAULT_METRIC_MAPPING.formulas,
-  )) {
-    if (formulas[name] !== expected) {
-      fail(
-        `metricMapping.formulas.${name} must be "${expected}"`,
-      );
-    }
-  }
-
-  const caps = objectAt(
-    mapping.normalizationCaps,
-    "metricMapping.normalizationCaps",
-  );
-  for (const [name, expected] of Object.entries(
-    DEFAULT_METRIC_MAPPING.normalizationCaps,
-  )) {
-    if (caps[name] !== expected) {
-      fail(
-        `metricMapping.normalizationCaps.${name} must be ${expected}`,
-      );
-    }
-  }
 }
 
 function validateBuildingMetricNormalization(
