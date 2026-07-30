@@ -12,6 +12,7 @@ import { validateCityModel } from "../../../packages/core/src/index.js";
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
 const CITY_MODEL_FILE_NAME = "city-model.json";
+const STAGED_UPLOAD_FILE_NAME = "upload.bin";
 const UUID_V4_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const CITY_MODEL_TEMPORARY_FILE_PATTERN =
@@ -60,6 +61,12 @@ export interface ImportCityModelArtifactMetadata {
 export interface ImportCityModelArtifact
   extends ImportCityModelArtifactMetadata {
   readonly bytes: Buffer;
+}
+
+export interface StagedUploadWriteOptions {
+  readonly expectedBytes: number;
+  readonly maximumBytes: number;
+  readonly signal?: AbortSignal;
 }
 
 interface TrustedDirectory {
@@ -459,6 +466,13 @@ function serializeValidatedCityModel(value: unknown): Buffer {
   return bytes;
 }
 
+function positiveByteLimit(value: number, description: string): number {
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new TypeError(`${description} must be a positive safe integer.`);
+  }
+  return value;
+}
+
 function metadata(
   token: string,
   status: OpenArtifact["status"],
@@ -740,6 +754,242 @@ export class ImportArtifactStore {
     throw policyError(
       "A unique import staging directory could not be allocated.",
     );
+  }
+
+  /**
+   * Streams one request body into the only admitted staging filename.
+   * Neither the browser filename nor any archive member is materialized.
+   */
+  public async writeStagedUpload(
+    token: string,
+    chunks: AsyncIterable<Uint8Array>,
+    options: StagedUploadWriteOptions,
+  ): Promise<void> {
+    const normalized = validatedToken(token);
+    const expectedBytes = positiveByteLimit(
+      options.expectedBytes,
+      "Expected upload bytes",
+    );
+    const maximumBytes = positiveByteLimit(
+      options.maximumBytes,
+      "Maximum upload bytes",
+    );
+    if (expectedBytes > maximumBytes) {
+      throw new ImportArtifactStoreError(
+        "CITY_MODEL_TOO_LARGE",
+        "Staged upload exceeds its byte limit.",
+      );
+    }
+    const directory = await existingDirectChild(
+      this.#importsDirectory,
+      normalized,
+      "Import staging directory",
+    );
+    if (directory === undefined) {
+      throw policyError("Import staging directory is unavailable.");
+    }
+    const destination = path.join(
+      directory.canonicalPath,
+      STAGED_UPLOAD_FILE_NAME,
+    );
+    let handle: FileHandle | undefined;
+    let identity: FileIdentity | undefined;
+    try {
+      options.signal?.throwIfAborted();
+      handle = await fs.open(
+        destination,
+        constants.O_WRONLY |
+          constants.O_CREAT |
+          constants.O_EXCL |
+          (constants.O_NOFOLLOW ?? 0),
+        FILE_MODE,
+      );
+      const created = await handle.stat({ bigint: true });
+      if (
+        !created.isFile() ||
+        created.nlink !== 1n ||
+        !hasPrivateMode(created.mode, FILE_MODE) ||
+        (created.dev === 0n && created.ino === 0n)
+      ) {
+        throw policyError(
+          "Staged upload failed its filesystem policy.",
+        );
+      }
+      identity = { device: created.dev, inode: created.ino };
+      let received = 0;
+      for await (const chunk of chunks) {
+        options.signal?.throwIfAborted();
+        if (!(chunk instanceof Uint8Array)) {
+          throw new TypeError("Upload chunks must be Uint8Array values.");
+        }
+        received += chunk.byteLength;
+        if (
+          !Number.isSafeInteger(received) ||
+          received > expectedBytes ||
+          received > maximumBytes
+        ) {
+          throw new ImportArtifactStoreError(
+            "CITY_MODEL_TOO_LARGE",
+            "Staged upload exceeds its declared byte length.",
+          );
+        }
+        await handle.writeFile(chunk);
+      }
+      options.signal?.throwIfAborted();
+      if (received !== expectedBytes) {
+        throw new ImportArtifactStoreError(
+          "CITY_MODEL_INVALID",
+          "Staged upload did not match its declared byte length.",
+        );
+      }
+      try {
+        await handle.chmod(FILE_MODE);
+      } catch (error) {
+        if (process.platform !== "win32") throw error;
+      }
+      await handle.sync();
+      const completed = await handle.stat({ bigint: true });
+      if (
+        !completed.isFile() ||
+        completed.nlink !== 1n ||
+        !hasPrivateMode(completed.mode, FILE_MODE) ||
+        completed.dev !== identity.device ||
+        completed.ino !== identity.inode ||
+        completed.size !== BigInt(received)
+      ) {
+        throw policyError(
+          "Staged upload changed while it was received.",
+        );
+      }
+      await handle.close();
+      handle = undefined;
+      const canonicalPath = await fs.realpath(destination);
+      if (!samePath(canonicalPath, destination)) {
+        throw policyError(
+          "Staged upload resolves outside its private directory.",
+        );
+      }
+      await syncDirectory(directory, "Import staging directory");
+      const inspected = await inspectPrivateFile(
+        destination,
+        "Staged upload",
+      );
+      if (
+        inspected === undefined ||
+        inspected.status.nlink !== 1n ||
+        inspected.status.dev !== identity.device ||
+        inspected.status.ino !== identity.inode ||
+        inspected.status.size !== BigInt(received)
+      ) {
+        throw policyError(
+          "Staged upload changed after it was flushed.",
+        );
+      }
+      options.signal?.throwIfAborted();
+    } catch (error) {
+      await handle?.close().catch(() => undefined);
+      if (identity !== undefined) {
+        await removeFileIfIdentityMatches(
+          destination,
+          identity,
+          "Failed staged upload cleanup",
+          directory,
+        ).catch(() => undefined);
+      }
+      throw error;
+    }
+  }
+
+  public async readStagedUpload(
+    token: string,
+    maximumBytes: number,
+    signal?: AbortSignal,
+  ): Promise<Buffer> {
+    const normalized = validatedToken(token);
+    const maximum = positiveByteLimit(
+      maximumBytes,
+      "Maximum upload bytes",
+    );
+    const directory = await existingDirectChild(
+      this.#importsDirectory,
+      normalized,
+      "Import staging directory",
+    );
+    if (directory === undefined) {
+      throw policyError("Import staging directory is unavailable.");
+    }
+    await assertTrustedDirectory(directory, "Import staging directory");
+    const filePath = path.join(
+      directory.canonicalPath,
+      STAGED_UPLOAD_FILE_NAME,
+    );
+    const before = await inspectPrivateFile(filePath, "Staged upload");
+    if (
+      before === undefined ||
+      before.status.nlink !== 1n ||
+      before.status.size < 1n ||
+      before.status.size > BigInt(maximum)
+    ) {
+      throw policyError("Staged upload is unavailable or exceeds its limit.");
+    }
+    signal?.throwIfAborted();
+    let handle: FileHandle | undefined;
+    try {
+      handle = await fs.open(
+        filePath,
+        constants.O_RDONLY |
+          (constants.O_NOFOLLOW ?? 0) |
+          (constants.O_NONBLOCK ?? 0),
+      );
+      const opened = await handle.stat({ bigint: true });
+      if (
+        !opened.isFile() ||
+        opened.nlink !== 1n ||
+        !hasPrivateMode(opened.mode, FILE_MODE) ||
+        opened.dev !== before.status.dev ||
+        opened.ino !== before.status.ino ||
+        opened.size !== before.status.size
+      ) {
+        throw policyError(
+          "Staged upload changed while it was opened.",
+        );
+      }
+      const expectedBytes = Number(opened.size);
+      const bytes = Buffer.allocUnsafe(expectedBytes);
+      let totalBytes = 0;
+      while (totalBytes < expectedBytes) {
+        signal?.throwIfAborted();
+        const { bytesRead } = await handle.read(
+          bytes,
+          totalBytes,
+          expectedBytes - totalBytes,
+          totalBytes,
+        );
+        if (bytesRead === 0) break;
+        totalBytes += bytesRead;
+      }
+      signal?.throwIfAborted();
+      const after = await handle.stat({ bigint: true });
+      const canonicalAfter = await fs.realpath(filePath);
+      if (
+        !after.isFile() ||
+        after.nlink !== 1n ||
+        !hasPrivateMode(after.mode, FILE_MODE) ||
+        after.dev !== opened.dev ||
+        after.ino !== opened.ino ||
+        after.size !== opened.size ||
+        after.mtimeNs !== opened.mtimeNs ||
+        totalBytes !== expectedBytes ||
+        !samePath(canonicalAfter, before.canonicalPath)
+      ) {
+        throw policyError(
+          "Staged upload changed while it was read.",
+        );
+      }
+      return bytes;
+    } finally {
+      await handle?.close().catch(() => undefined);
+    }
   }
 
   public async cleanupStagingDirectory(token: string): Promise<void> {

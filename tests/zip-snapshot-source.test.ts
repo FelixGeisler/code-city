@@ -95,6 +95,34 @@ function expectInvalid(open: () => unknown): void {
 }
 
 describe("ZIP snapshot source", () => {
+  it("supports an explicit repository-relative archive root without guessing", async () => {
+    const archive = zipSync({
+      "src/main.ts": strToU8("export const value = 1;\n"),
+      "package.json": strToU8('{"name":"example"}\n'),
+    });
+    const source = openZipSnapshotSource(archive, "Example", {
+      rootMode: "archive-root",
+    });
+    try {
+      const snapshot = await materializeRepositorySnapshot(source);
+      expect(snapshot.files.map(({ path }) => path)).toEqual([
+        "src/main.ts",
+      ]);
+    } finally {
+      source.dispose();
+    }
+    expect(() =>
+      openZipSnapshotSource(archive, "Example", {
+        rootMode: "single-directory",
+      }),
+    ).toThrow(ZipSnapshotValidationError);
+    expect(() =>
+      openZipSnapshotSource(archive, "Example", {
+        rootMode: "invalid" as "archive-root",
+      }),
+    ).toThrow(TypeError);
+  });
+
   it("strips one common root and materializes stored and deflated files deterministically", async () => {
     const first = zipSync(
       {
@@ -414,10 +442,31 @@ describe("ZIP snapshot source", () => {
       ],
       "Repo-sha/link/child.ts": strToU8("child"),
     });
+    const caseVariedSymlinkDescendant = zipSync({
+      "Repo-sha/LINK": [
+        strToU8("target"),
+        { os: 3, attrs: (0o120777 << 16) >>> 0 },
+      ],
+      "Repo-sha/link/child.ts": strToU8("child"),
+    });
+    const archiveRootCaseVariedFileDescendant = zipSync({
+      ROOT: strToU8("file"),
+      "root/child.ts": strToU8("child"),
+    });
 
     expectInvalid(() => openZipSnapshotSource(duplicateRoot, "Example"));
     expectInvalid(() =>
       openZipSnapshotSource(symlinkDescendant, "Example"),
+    );
+    expectInvalid(() =>
+      openZipSnapshotSource(caseVariedSymlinkDescendant, "Example"),
+    );
+    expectInvalid(() =>
+      openZipSnapshotSource(
+        archiveRootCaseVariedFileDescendant,
+        "Example",
+        { rootMode: "archive-root" },
+      ),
     );
   });
 

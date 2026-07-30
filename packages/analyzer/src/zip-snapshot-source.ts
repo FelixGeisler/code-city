@@ -11,9 +11,11 @@ import {
 } from "./snapshot.js";
 
 const MEBIBYTE = 1024 * 1024;
-const DEFAULT_MAX_ARCHIVE_BYTES = 64 * MEBIBYTE;
-const DEFAULT_MAX_ENTRY_BYTES = 256 * MEBIBYTE;
-const DEFAULT_MAX_EXPANDED_BYTES = 1024 * MEBIBYTE;
+export const DEFAULT_ZIP_SNAPSHOT_LIMITS = Object.freeze({
+  maxArchiveBytes: 64 * MEBIBYTE,
+  maxEntryBytes: 256 * MEBIBYTE,
+  maxExpandedBytes: 1024 * MEBIBYTE,
+});
 const OUTPUT_CHUNK_BYTES = 64 * 1024;
 const DEFLATE_INPUT_CHUNK_BYTES = 4 * 1024;
 
@@ -43,6 +45,11 @@ export interface ZipSnapshotSourceOptions {
   readonly maxEntries?: number;
   readonly maxEntryBytes?: number;
   readonly maxExpandedBytes?: number;
+  /**
+   * `single-directory` strips one required common archive directory.
+   * `archive-root` treats every entry as repository-relative.
+   */
+  readonly rootMode?: "single-directory" | "archive-root";
   readonly signal?: AbortSignal;
 }
 
@@ -68,6 +75,7 @@ interface ResolvedZipSnapshotSourceOptions {
   readonly maxEntries: number;
   readonly maxEntryBytes: number;
   readonly maxExpandedBytes: number;
+  readonly rootMode: "single-directory" | "archive-root";
   readonly signal?: AbortSignal;
 }
 
@@ -113,10 +121,19 @@ function resolveLimit(
 function resolveOptions(
   options: ZipSnapshotSourceOptions,
 ): ResolvedZipSnapshotSourceOptions {
+  if (
+    options.rootMode !== undefined &&
+    options.rootMode !== "single-directory" &&
+    options.rootMode !== "archive-root"
+  ) {
+    throw new TypeError(
+      'rootMode must be "single-directory" or "archive-root".',
+    );
+  }
   return {
     maxArchiveBytes: resolveLimit(
       options.maxArchiveBytes,
-      DEFAULT_MAX_ARCHIVE_BYTES,
+      DEFAULT_ZIP_SNAPSHOT_LIMITS.maxArchiveBytes,
       "maxArchiveBytes",
     ),
     maxEntries: resolveLimit(
@@ -126,14 +143,15 @@ function resolveOptions(
     ),
     maxEntryBytes: resolveLimit(
       options.maxEntryBytes,
-      DEFAULT_MAX_ENTRY_BYTES,
+      DEFAULT_ZIP_SNAPSHOT_LIMITS.maxEntryBytes,
       "maxEntryBytes",
     ),
     maxExpandedBytes: resolveLimit(
       options.maxExpandedBytes,
-      DEFAULT_MAX_EXPANDED_BYTES,
+      DEFAULT_ZIP_SNAPSHOT_LIMITS.maxExpandedBytes,
       "maxExpandedBytes",
     ),
+    rootMode: options.rootMode ?? "single-directory",
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   };
 }
@@ -599,11 +617,64 @@ function comparePath(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
+function normalizedEntries(
+  entries: readonly CentralEntry[],
+  relativePath: (entry: CentralEntry) => string | undefined,
+): CentralEntry[] {
+  const normalized: CentralEntry[] = [];
+  const portablePaths = new Map<string, string>();
+  for (const entry of entries) {
+    const relativeArchivePath = relativePath(entry);
+    if (relativeArchivePath === undefined) continue;
+    const withoutDirectorySlash =
+      entry.kind === "directory" && relativeArchivePath.endsWith("/")
+        ? relativeArchivePath.slice(0, -1)
+        : relativeArchivePath;
+    let path: string;
+    try {
+      path = normalizeSnapshotPath(withoutDirectorySlash);
+    } catch {
+      throw validationError("ZIP entry path is not portable.");
+    }
+    const key = path.toLocaleLowerCase("en-US");
+    if (portablePaths.has(key)) {
+      throw validationError(
+        "ZIP entry paths collide after portable normalization.",
+      );
+    }
+    portablePaths.set(key, path);
+    normalized.push({ ...entry, path });
+  }
+  const byPath = new Map(
+    normalized.map((entry) => [
+      entry.path!.toLocaleLowerCase("en-US"),
+      entry,
+    ]),
+  );
+  for (const entry of normalized) {
+    let separator = entry.path!.lastIndexOf("/");
+    while (separator !== -1) {
+      const ancestor = byPath.get(
+        entry.path!
+          .slice(0, separator)
+          .toLocaleLowerCase("en-US"),
+      );
+      if (ancestor !== undefined && ancestor.kind !== "directory") {
+        throw validationError(
+          "ZIP file or symbolic-link entry has descendant entries.",
+        );
+      }
+      separator = entry.path!.lastIndexOf("/", separator - 1);
+    }
+  }
+  return normalized.sort((left, right) =>
+    comparePath(left.path!, right.path!),
+  );
+}
+
 function stripCommonRoot(entries: readonly CentralEntry[]): CentralEntry[] {
   let commonRoot: string | undefined;
   let rootEntrySeen = false;
-  const stripped: CentralEntry[] = [];
-  const portablePaths = new Map<string, string>();
   for (const entry of entries) {
     const separator = entry.archivePath.indexOf("/");
     if (separator <= 0) {
@@ -634,45 +705,22 @@ function stripCommonRoot(entries: readonly CentralEntry[]): CentralEntry[] {
         );
       }
       rootEntrySeen = true;
-      continue;
     }
-    const withoutDirectorySlash =
-      entry.kind === "directory" && relativeArchivePath.endsWith("/")
-        ? relativeArchivePath.slice(0, -1)
-        : relativeArchivePath;
-    let path: string;
-    try {
-      path = normalizeSnapshotPath(withoutDirectorySlash);
-    } catch {
-      throw validationError("ZIP entry path is not portable.");
-    }
-    const key = path.toLocaleLowerCase("en-US");
-    if (portablePaths.has(key)) {
-      throw validationError(
-        "ZIP entry paths collide after portable normalization.",
-      );
-    }
-    portablePaths.set(key, path);
-    stripped.push({ ...entry, path });
   }
   if (commonRoot === undefined) {
     throw validationError("ZIP archive must contain a repository root.");
   }
-  const byPath = new Map(stripped.map((entry) => [entry.path!, entry]));
-  for (const entry of stripped) {
-    let separator = entry.path!.lastIndexOf("/");
-    while (separator !== -1) {
-      const ancestor = byPath.get(entry.path!.slice(0, separator));
-      if (ancestor !== undefined && ancestor.kind !== "directory") {
-        throw validationError(
-          "ZIP file or symbolic-link entry has descendant entries.",
-        );
-      }
-      separator = entry.path!.lastIndexOf("/", separator - 1);
-    }
-  }
-  return stripped.sort((left, right) =>
-    comparePath(left.path!, right.path!),
+  return normalizedEntries(entries, (entry) => {
+    const separator = entry.archivePath.indexOf("/");
+    const relativeArchivePath = entry.archivePath.slice(separator + 1);
+    return relativeArchivePath === "" ? undefined : relativeArchivePath;
+  });
+}
+
+function useArchiveRoot(entries: readonly CentralEntry[]): CentralEntry[] {
+  return normalizedEntries(
+    entries,
+    (entry) => entry.archivePath,
   );
 }
 
@@ -945,7 +993,10 @@ export function openZipSnapshotSource(
     eocd.centralOffset,
     centralEntries,
   );
-  const entries = stripCommonRoot(localEntries);
+  const entries =
+    resolved.rootMode === "single-directory"
+      ? stripCommonRoot(localEntries)
+      : useArchiveRoot(localEntries);
   throwIfAborted(resolved.signal);
   return new OpenZipSnapshotSource(
     ownedArchive,

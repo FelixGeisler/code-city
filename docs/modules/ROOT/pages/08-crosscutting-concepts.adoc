@@ -145,6 +145,35 @@ instead of retaining a slow body on a keep-alive connection. Inputs are
 validated before private staging or job persistence. Jobs retain fixed progress,
 fixed safe error codes, and owned artifact URLs only.
 
+Raw uploads avoid multipart parsing and never trust a filename. Exact-shape
+metadata reserves one opaque UUID and its declared bytes before the server
+creates a private staging directory. The PUT admits exactly one unencoded
+`application/json` or `application/zip` body with one matching
+`Content-Length`; transfer encoding, concurrent reuse, underflow, overflow,
+idle senders, and expired reservations fail closed. Four reservations and
+256 MiB of reserved/staged bytes are global hard limits, and quota remains
+charged while the upload is queued or running.
+
+The staged body is written once to fixed `upload.bin` with create-exclusive
+and, where the platform exposes it, no-follow semantics, owner-only
+permissions, portable handle identity checks, payload and directory flushes,
+and a second fixed-path identity check. Cleanup waits
+until an active writer closes its handle, is idempotent across finalizer and
+rollback, and retains quota until removal succeeds. Startup removes abandoned
+UUID staging directories. ZIPs are inspected in memory and never extracted:
+portable paths, case/Unicode collisions, symlink or file descendants,
+compression metadata, CRCs, entry count, compressed, expanded, per-entry, and
+analysis deadlines remain bounded. Uploaded city models require fatal UTF-8
+and the established runtime validator, then are reserialized through the
+artifact store rather than publishing attacker-supplied bytes.
+
+Windows/IIS must place `CODECITY_DATA_DIR`, uploads, and artifacts behind a
+service-private ACL even if Generic Git is disabled. Inherited child ACLs must
+exclude untrusted identities, and the protected directory entry and canonical
+ancestors must prevent untrusted rename, delete, and delete-child access.
+Portable Node APIs enforce fixed-path and open-handle identity but cannot prove
+or establish those ACL properties.
+
 Generic Git is default-denied at the server boundary. An exact
 operator-configured scheme, normalized hostname/IP, and effective port must
 match before staging. This origin list is egress control, not per-repository or

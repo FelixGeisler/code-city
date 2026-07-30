@@ -22,6 +22,14 @@ import {
   RemoteImportRequestError,
   type RemoteImportDependencies,
 } from "./remote-import.js";
+import {
+  enqueueUploadedImport,
+  parseUploadImportJson,
+  UPLOAD_IMPORT_LIMITS,
+  UploadReservationFailure,
+  UploadReservationRegistry,
+  type UploadReception,
+} from "./upload-import.js";
 
 const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_PORT = 3_000;
@@ -32,6 +40,8 @@ const JOB_PATH_PATTERN =
   /^\/api\/v1\/jobs\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/u;
 const CITY_MODEL_ARTIFACT_PATH_PATTERN =
   /^\/api\/v1\/artifacts\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/city-model\.json$/u;
+const UPLOAD_IMPORT_PATH_PATTERN =
+  /^\/api\/v1\/imports\/uploads\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/u;
 
 const CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
@@ -84,6 +94,20 @@ type RequestBodyResult =
         | "timed-out"
         | "too-large";
     };
+
+class UploadBodyError extends Error {
+  public override readonly name = "UploadBodyError";
+
+  public constructor(
+    public readonly code:
+      | "aborted"
+      | "disconnected"
+      | "idle-timeout"
+      | "total-timeout",
+  ) {
+    super(code);
+  }
+}
 
 function productionViewerRoot(): string {
   return resolveProductionViewerRoot(import.meta.url);
@@ -346,6 +370,48 @@ function declaredRequestBytes(
   return Number.isSafeInteger(value) ? value : "invalid";
 }
 
+function hasUnexpectedRequestBody(
+  request: IncomingMessage,
+): boolean {
+  const transferEncodings = rawHeaderValues(
+    request,
+    "transfer-encoding",
+  );
+  const declaredBytes = declaredRequestBytes(request);
+  return (
+    transferEncodings.length !== 0 ||
+    declaredBytes === "invalid" ||
+    (declaredBytes !== undefined && declaredBytes !== 0)
+  );
+}
+
+function routeConsumesRequestBody(
+  method: string | undefined,
+  path: string,
+): boolean {
+  return (
+    (method === "POST" && path === "/api/v1/imports") ||
+    (method === "POST" &&
+      path === "/api/v1/imports/uploads") ||
+    (method === "PUT" &&
+      UPLOAD_IMPORT_PATH_PATTERN.test(path))
+  );
+}
+
+function rejectUnexpectedRequestBody(
+  request: IncomingMessage,
+  response: ServerResponse,
+): void {
+  response.setHeader("Connection", "close");
+  closePausedRequestAfterResponse(request, response);
+  sendJson(request, response, 400, {
+    error: {
+      code: "unexpected-request-body",
+      message: "This endpoint does not accept a request body.",
+    },
+  });
+}
+
 function readBoundedRequestBody(
   request: IncomingMessage,
 ): Promise<RequestBodyResult> {
@@ -415,6 +481,102 @@ function readBoundedRequestBody(
     request.once("close", onClose);
     request.once("error", onError);
   });
+}
+
+async function* uploadBodyChunks(
+  request: IncomingMessage,
+  signal: AbortSignal,
+): AsyncGenerator<Uint8Array> {
+  if (request.destroyed || request.readableAborted) {
+    throw new UploadBodyError("disconnected");
+  }
+  if (signal.aborted) throw new UploadBodyError("aborted");
+  const queued: Buffer[] = [];
+  let ended = false;
+  let failure: UploadBodyError | undefined;
+  let wake: (() => void) | undefined;
+  let idleTimer: NodeJS.Timeout | undefined;
+
+  const notify = (): void => {
+    const current = wake;
+    wake = undefined;
+    current?.();
+  };
+  const fail = (code: UploadBodyError["code"]): void => {
+    if (failure !== undefined) return;
+    failure = new UploadBodyError(code);
+    request.pause();
+    notify();
+  };
+  const resetIdle = (): void => {
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
+    idleTimer = setTimeout(
+      () => fail("idle-timeout"),
+      UPLOAD_IMPORT_LIMITS.bodyIdleTimeoutMs,
+    );
+    idleTimer.unref();
+  };
+  const onData = (chunk: Buffer): void => {
+    request.pause();
+    queued.push(chunk);
+    resetIdle();
+    notify();
+  };
+  const onEnd = (): void => {
+    ended = true;
+    notify();
+  };
+  const onAborted = (): void => fail("disconnected");
+  const onClose = (): void => {
+    if (!request.complete) fail("disconnected");
+  };
+  const onError = (): void => fail("disconnected");
+  const onSignal = (): void => fail("aborted");
+  const totalTimer = setTimeout(
+    () => fail("total-timeout"),
+    UPLOAD_IMPORT_LIMITS.bodyTotalTimeoutMs,
+  );
+  totalTimer.unref();
+
+  request.on("data", onData);
+  request.once("end", onEnd);
+  request.once("aborted", onAborted);
+  request.once("close", onClose);
+  request.once("error", onError);
+  signal.addEventListener("abort", onSignal, { once: true });
+  resetIdle();
+  request.resume();
+  try {
+    while (true) {
+      if (failure !== undefined) throw failure;
+      const chunk = queued.shift();
+      if (chunk !== undefined) {
+        yield chunk;
+        if (failure === undefined && !ended) request.resume();
+        continue;
+      }
+      if (ended) return;
+      await new Promise<void>((resolve) => {
+        wake = resolve;
+        if (
+          queued.length > 0 ||
+          failure !== undefined ||
+          ended
+        ) {
+          notify();
+        }
+      });
+    }
+  } finally {
+    clearTimeout(totalTimer);
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
+    request.off("data", onData);
+    request.off("end", onEnd);
+    request.off("aborted", onAborted);
+    request.off("close", onClose);
+    request.off("error", onError);
+    signal.removeEventListener("abort", onSignal);
+  }
 }
 
 class ImportRequestOperations {
@@ -682,6 +844,468 @@ async function remoteImportHandler(
   }
 }
 
+function hasMutationHeader(request: IncomingMessage): boolean {
+  const values = rawHeaderValues(request, "x-code-city-request");
+  return values.length === 1 && values[0] === "1";
+}
+
+function rejectMissingMutationHeader(
+  request: IncomingMessage,
+  response: ServerResponse,
+): void {
+  response.setHeader("Connection", "close");
+  request.resume();
+  sendJson(request, response, 403, {
+    error: {
+      code: "request-header-required",
+      message: "X-Code-City-Request: 1 is required.",
+    },
+  });
+}
+
+function closePausedRequestAfterResponse(
+  request: IncomingMessage,
+  response: ServerResponse,
+): void {
+  if (request.destroyed) return;
+  if (response.destroyed) {
+    request.destroy();
+    return;
+  }
+  response.once("finish", () => request.destroy());
+}
+
+async function uploadReservationHandler(
+  request: IncomingMessage,
+  response: ServerResponse,
+  uploads: UploadReservationRegistry,
+): Promise<void> {
+  if (request.method !== "POST") {
+    response.setHeader("Connection", "close");
+    request.resume();
+    sendMethodNotAllowed(request, response, ["POST"]);
+    return;
+  }
+  if (!hasMutationHeader(request)) {
+    rejectMissingMutationHeader(request, response);
+    return;
+  }
+  const contentTypes = rawHeaderValues(request, "content-type");
+  const contentEncodings = rawHeaderValues(
+    request,
+    "content-encoding",
+  );
+  if (
+    contentTypes.length !== 1 ||
+    !validJsonContentType(contentTypes[0]!) ||
+    contentEncodings.length !== 0
+  ) {
+    response.setHeader("Connection", "close");
+    request.resume();
+    sendJson(request, response, 415, {
+      error: {
+        code: "unsupported-media-type",
+        message:
+          "The upload reservation must be unencoded application/json using UTF-8.",
+      },
+    });
+    return;
+  }
+  const transferEncodings = rawHeaderValues(
+    request,
+    "transfer-encoding",
+  );
+  const declaredBytes = declaredRequestBytes(request);
+  if (
+    transferEncodings.length > 1 ||
+    (transferEncodings.length === 1 &&
+      transferEncodings[0]!.toLowerCase() !== "chunked") ||
+    (transferEncodings.length > 0 &&
+      declaredBytes !== undefined) ||
+    declaredBytes === "invalid"
+  ) {
+    response.setHeader("Connection", "close");
+    request.resume();
+    sendJson(request, response, 400, {
+      error: {
+        code: "invalid-request-framing",
+        message: "The upload reservation framing is invalid.",
+      },
+    });
+    return;
+  }
+  if (
+    declaredBytes !== undefined &&
+    declaredBytes > REMOTE_IMPORT_REQUEST_MAX_BYTES
+  ) {
+    response.setHeader("Connection", "close");
+    request.resume();
+    sendJson(request, response, 413, {
+      error: {
+        code: "request-too-large",
+        message: `The upload reservation must not exceed ${REMOTE_IMPORT_REQUEST_MAX_BYTES} bytes.`,
+      },
+    });
+    return;
+  }
+  const body = await readBoundedRequestBody(request);
+  if (body.kind === "disconnected") return;
+  if (body.kind === "too-large") {
+    response.setHeader("Connection", "close");
+    sendJson(request, response, 413, {
+      error: {
+        code: "request-too-large",
+        message: `The upload reservation must not exceed ${REMOTE_IMPORT_REQUEST_MAX_BYTES} bytes.`,
+      },
+    });
+    return;
+  }
+  if (body.kind === "timed-out") {
+    response.setHeader("Connection", "close");
+    sendJson(request, response, 408, {
+      error: {
+        code: "request-timeout",
+        message: "The upload reservation was not received in time.",
+      },
+    });
+    return;
+  }
+  if (body.kind === "invalid-utf8") {
+    sendJson(request, response, 400, {
+      error: {
+        code: "invalid-import-request",
+        message: "The import request is invalid.",
+        fields: [
+          {
+            code: "invalid-json",
+            path: "$",
+            message: "Must be valid UTF-8 JSON.",
+          },
+        ],
+      },
+    });
+    return;
+  }
+  if (body.kind !== "ok") return;
+  let parsed;
+  try {
+    parsed = parseUploadImportJson(body.text);
+  } catch (error) {
+    if (!(error instanceof RemoteImportRequestError)) throw error;
+    sendJson(request, response, 400, {
+      error: {
+        code: "invalid-import-request",
+        message: error.message,
+        fields: error.fields,
+      },
+    });
+    return;
+  }
+  try {
+    const reservation = await uploads.reserve(parsed);
+    if (response.destroyed) {
+      await uploads.abandon(reservation.token).catch(() => undefined);
+      return;
+    }
+    response.setHeader("Location", reservation.uploadUrl);
+    sendJson(request, response, 201, { upload: reservation });
+  } catch (error) {
+    if (
+      error instanceof UploadReservationFailure &&
+      error.code === "quota-exceeded"
+    ) {
+      response.setHeader("Retry-After", "5");
+      sendJson(request, response, 429, {
+        error: {
+          code: "upload-capacity-reached",
+          message: "The server has no upload capacity available.",
+        },
+      });
+      return;
+    }
+    sendJson(request, response, 500, {
+      error: {
+        code: "upload-reservation-failed",
+        message: "The upload reservation could not be created.",
+      },
+    });
+  }
+}
+
+async function deleteUploadReservation(
+  request: IncomingMessage,
+  response: ServerResponse,
+  token: string,
+  uploads: UploadReservationRegistry,
+): Promise<void> {
+  if (!hasMutationHeader(request)) {
+    rejectMissingMutationHeader(request, response);
+    return;
+  }
+  const transferEncodings = rawHeaderValues(
+    request,
+    "transfer-encoding",
+  );
+  const declaredBytes = declaredRequestBytes(request);
+  if (
+    transferEncodings.length !== 0 ||
+    declaredBytes === "invalid" ||
+    (declaredBytes !== undefined && declaredBytes !== 0)
+  ) {
+    response.setHeader("Connection", "close");
+    request.resume();
+    sendJson(request, response, 400, {
+      error: {
+        code: "invalid-request-framing",
+        message: "Upload deletion must not contain a request body.",
+      },
+    });
+    return;
+  }
+  let removed: boolean;
+  try {
+    removed = await uploads.abandon(token);
+  } catch {
+    sendJson(request, response, 500, {
+      error: {
+        code: "upload-delete-failed",
+        message: "Upload reservation could not be removed.",
+      },
+    });
+    return;
+  }
+  if (!removed) {
+    sendJson(request, response, 404, {
+      error: {
+        code: "upload-not-found",
+        message: "Upload reservation not found.",
+      },
+    });
+    return;
+  }
+  sendJson(request, response, 200, { deleted: true });
+}
+
+async function uploadContentHandler(
+  request: IncomingMessage,
+  response: ServerResponse,
+  token: string,
+  jobs: PersistentJobQueue,
+  artifacts: ImportArtifactStore,
+  uploads: UploadReservationRegistry,
+): Promise<void> {
+  if (request.method === "DELETE") {
+    await deleteUploadReservation(request, response, token, uploads);
+    return;
+  }
+  if (request.method !== "PUT") {
+    response.setHeader("Connection", "close");
+    request.resume();
+    sendMethodNotAllowed(request, response, ["PUT", "DELETE"]);
+    return;
+  }
+  if (!hasMutationHeader(request)) {
+    rejectMissingMutationHeader(request, response);
+    return;
+  }
+  const transferEncodings = rawHeaderValues(
+    request,
+    "transfer-encoding",
+  );
+  const declaredBytes = declaredRequestBytes(request);
+  if (
+    transferEncodings.length !== 0 ||
+    declaredBytes === "invalid"
+  ) {
+    response.setHeader("Connection", "close");
+    request.resume();
+    sendJson(request, response, 400, {
+      error: {
+        code: "invalid-request-framing",
+        message:
+          "Upload content requires one exact Content-Length and no Transfer-Encoding.",
+      },
+    });
+    return;
+  }
+  if (declaredBytes === undefined) {
+    response.setHeader("Connection", "close");
+    request.resume();
+    sendJson(request, response, 411, {
+      error: {
+        code: "content-length-required",
+        message: "Upload content requires Content-Length.",
+      },
+    });
+    return;
+  }
+
+  let reception: UploadReception;
+  try {
+    reception = uploads.begin(token);
+  } catch (error) {
+    response.setHeader("Connection", "close");
+    request.resume();
+    const unavailable =
+      error instanceof UploadReservationFailure &&
+      error.code === "unavailable";
+    sendJson(request, response, unavailable ? 409 : 404, {
+      error: {
+        code: unavailable ? "upload-unavailable" : "upload-not-found",
+        message: unavailable
+          ? "Upload reservation is no longer available."
+          : "Upload reservation not found.",
+      },
+    });
+    return;
+  }
+
+  let transferred = false;
+  let clientDisconnected = false;
+  const onResponseClose = (): void => {
+    if (!response.writableEnded) clientDisconnected = true;
+  };
+  response.once("close", onResponseClose);
+  try {
+    const expectedMedia =
+      reception.request.source.kind === "city-model"
+        ? "application/json"
+        : "application/zip";
+    const contentTypes = rawHeaderValues(request, "content-type");
+    const contentEncodings = rawHeaderValues(
+      request,
+      "content-encoding",
+    );
+    const validMedia =
+      contentTypes.length === 1 &&
+      (expectedMedia === "application/json"
+        ? validJsonContentType(contentTypes[0]!)
+        : /^application\/zip$/iu.test(contentTypes[0]!));
+    if (!validMedia || contentEncodings.length !== 0) {
+      response.setHeader("Connection", "close");
+      request.resume();
+      sendJson(request, response, 415, {
+        error: {
+          code: "unsupported-media-type",
+          message: `Upload content must be unencoded ${expectedMedia}.`,
+        },
+      });
+      return;
+    }
+    if (declaredBytes !== reception.request.source.sizeBytes) {
+      response.setHeader("Connection", "close");
+      request.resume();
+      sendJson(request, response, 400, {
+        error: {
+          code: "upload-size-mismatch",
+          message:
+            "Content-Length does not match the reserved upload size.",
+        },
+      });
+      return;
+    }
+    try {
+      await artifacts.writeStagedUpload(
+        reception.staging.token,
+        uploadBodyChunks(request, reception.signal),
+        {
+          expectedBytes: declaredBytes,
+          maximumBytes: reception.request.source.sizeBytes,
+          signal: reception.signal,
+        },
+      );
+    } catch (error) {
+      closePausedRequestAfterResponse(request, response);
+      if (
+        error instanceof UploadBodyError &&
+        error.code === "disconnected"
+      ) {
+        return;
+      }
+      if (
+        error instanceof UploadBodyError &&
+        (error.code === "idle-timeout" ||
+          error.code === "total-timeout")
+      ) {
+        if (!response.destroyed) {
+          response.setHeader("Connection", "close");
+          sendJson(request, response, 408, {
+            error: {
+              code: "upload-timeout",
+              message: "Upload content was not received in time.",
+            },
+          });
+        }
+        return;
+      }
+      if (!response.destroyed && !clientDisconnected) {
+        response.setHeader("Connection", "close");
+        sendJson(request, response, 400, {
+          error: {
+            code: "upload-invalid",
+            message:
+              "Upload content did not match the reserved request.",
+          },
+        });
+      }
+      return;
+    }
+    if (
+      reception.signal.aborted ||
+      clientDisconnected ||
+      response.destroyed
+    ) {
+      return;
+    }
+    let lease;
+    try {
+      lease = reception.transfer();
+    } catch {
+      if (!response.destroyed && !clientDisconnected) {
+        response.setHeader("Connection", "close");
+        sendJson(request, response, 409, {
+          error: {
+            code: "upload-unavailable",
+            message: "Upload reservation is no longer available.",
+          },
+        });
+      }
+      return;
+    }
+    transferred = true;
+    let queued: JobRecord;
+    try {
+      queued = await enqueueUploadedImport(lease, {
+        jobs,
+        artifacts,
+      });
+    } catch {
+      if (!response.destroyed && !clientDisconnected) {
+        sendJson(request, response, 500, {
+          error: {
+            code: "import-enqueue-failed",
+            message: "The uploaded import could not be queued.",
+          },
+        });
+      }
+      return;
+    }
+    if (clientDisconnected || response.destroyed) {
+      await jobs.cancel(queued.id).catch(() => undefined);
+      return;
+    }
+    response.setHeader("Location", `/api/v1/jobs/${queued.id}`);
+    sendJson(request, response, 202, {
+      job: publicJob(queued),
+    });
+  } finally {
+    response.off("close", onResponseClose);
+    if (!transferred) {
+      await reception.fail().catch(() => undefined);
+    }
+  }
+}
+
 function apiHandler(
   request: IncomingMessage,
   response: ServerResponse,
@@ -690,6 +1314,7 @@ function apiHandler(
   artifacts: ImportArtifactStore,
   artifactResponses: ArtifactResponseGate,
   importRequests: ImportRequestOperations,
+  uploads: UploadReservationRegistry,
   importPolicy: RemoteImportPolicy,
   importDependencies: RemoteImportDependencies | undefined,
 ): boolean {
@@ -724,6 +1349,26 @@ function apiHandler(
         artifacts,
         importPolicy,
         importDependencies,
+      ),
+    );
+    return true;
+  }
+  if (target.path === "/api/v1/imports/uploads") {
+    importRequests.start(
+      uploadReservationHandler(request, response, uploads),
+    );
+    return true;
+  }
+  const uploadMatch = UPLOAD_IMPORT_PATH_PATTERN.exec(target.path);
+  if (uploadMatch) {
+    importRequests.start(
+      uploadContentHandler(
+        request,
+        response,
+        uploadMatch[1]!,
+        jobs,
+        artifacts,
+        uploads,
       ),
     );
     return true;
@@ -927,18 +1572,34 @@ function requestHandler(
   artifacts: ImportArtifactStore,
   artifactResponses: ArtifactResponseGate,
   importRequests: ImportRequestOperations,
+  uploads: UploadReservationRegistry,
   importPolicy: RemoteImportPolicy,
   importDependencies: RemoteImportDependencies | undefined,
   allowedHosts: ReadonlySet<string>,
 ): (request: IncomingMessage, response: ServerResponse) => void {
   return (request, response) => {
     if (!hostHeaderIsAllowed(request, allowedHosts)) {
+      if (hasUnexpectedRequestBody(request)) {
+        rejectUnexpectedRequestBody(request, response);
+        return;
+      }
       send(request, response, 400, "Bad request.\n", "text/plain; charset=utf-8");
       return;
     }
     const target = parseTarget(request.url);
     if (!target) {
+      if (hasUnexpectedRequestBody(request)) {
+        rejectUnexpectedRequestBody(request, response);
+        return;
+      }
       send(request, response, 400, "Bad request.\n", "text/plain; charset=utf-8");
+      return;
+    }
+    if (
+      !routeConsumesRequestBody(request.method, target.path) &&
+      hasUnexpectedRequestBody(request)
+    ) {
+      rejectUnexpectedRequestBody(request, response);
       return;
     }
     if (target.path.startsWith("/api/")) {
@@ -951,6 +1612,7 @@ function requestHandler(
           artifacts,
           artifactResponses,
           importRequests,
+          uploads,
           importPolicy,
           importDependencies,
         )
@@ -1048,6 +1710,7 @@ export async function startCodeCityServer(
   const allowedHosts = allowedHostnames(host, options.allowedHosts);
   const artifactResponses = new ArtifactResponseGate();
   const importRequests = new ImportRequestOperations();
+  const uploads = new UploadReservationRegistry(artifacts);
   const server = http.createServer(
     requestHandler(
       assets,
@@ -1055,12 +1718,14 @@ export async function startCodeCityServer(
       artifacts,
       artifactResponses,
       importRequests,
+      uploads,
       importPolicy,
       options.importDependencies,
       allowedHosts,
     ),
   );
-  server.requestTimeout = 15_000;
+  server.requestTimeout =
+    UPLOAD_IMPORT_LIMITS.bodyTotalTimeoutMs + 5_000;
   server.headersTimeout = 10_000;
   server.keepAliveTimeout = 5_000;
   server.maxHeadersCount = 64;
@@ -1074,28 +1739,37 @@ export async function startCodeCityServer(
   const close = (): Promise<void> => {
     if (closePromise) return closePromise;
     closePromise = (async () => {
-      await jobs.close();
       try {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => {
-            if (error && !serverWasNotRunning(error)) reject(error);
-            else resolve();
+        await jobs.close();
+        try {
+          await new Promise<void>((resolve, reject) => {
+            server.close((error) => {
+              if (error && !serverWasNotRunning(error)) reject(error);
+              else resolve();
+            });
+            server.closeAllConnections();
           });
-          server.closeAllConnections();
-        });
-      } catch (error) {
-        if (!serverWasNotRunning(error)) throw error;
+        } catch (error) {
+          if (!serverWasNotRunning(error)) throw error;
+        }
+        await artifactResponses.waitForIdle();
+        const uploadClose = uploads.close().then(
+          () => ({ ok: true as const }),
+          (error: unknown) => ({ ok: false as const, error }),
+        );
+        await importRequests.waitForIdle();
+        const uploadCloseResult = await uploadClose;
+        if (!uploadCloseResult.ok) throw uploadCloseResult.error;
+      } finally {
+        resolveClosed?.();
+        await closedPromise;
       }
-      await artifactResponses.waitForIdle();
-      await importRequests.waitForIdle();
-      resolveClosed?.();
-      await closedPromise;
     })();
     return closePromise;
   };
 
   const onAbort = (): void => {
-    void close();
+    void close().catch(() => undefined);
   };
   options.signal?.addEventListener("abort", onAbort, { once: true });
 

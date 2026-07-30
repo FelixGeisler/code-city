@@ -19,6 +19,18 @@ persisted job under `Location`. Branches and tags are discriminated from exact
 commit SHAs. A completed job owns
 `/api/v1/artifacts/\{id\}/city-model.json`.
 
+Raw browser uploads use a two-step protocol without multipart parsing.
+`POST /api/v1/imports/uploads` validates exact-shape metadata and allocates a
+short-lived, one-use reservation. `PUT /api/v1/imports/uploads/\{token\}`
+requires the reserved media type and exact `Content-Length`, streams into the
+fixed private name `upload.bin`, flushes and identity-checks it, and only then
+returns a durable job. `DELETE` abandons an unused reservation. Existing city
+models are decoded as fatal UTF-8, parsed, validated, and re-published through
+the artifact store; their raw bytes are never promoted. Repository archives
+reuse the bounded ZIP snapshot source and the same snapshot-analysis pipeline
+as other sources. Explicit `single-directory` and `archive-root` modes avoid
+guessing which path prefix represents the project root.
+
 The job reports only fixed progress phases and fixed, non-reflective failure
 codes. Cancellation, analysis failure, publication failure, finalizer failure,
 and terminal-state persistence failure all run idempotent staging and artifact

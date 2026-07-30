@@ -33,6 +33,24 @@ exposing the service. IP-literal requests and `localhost` are accepted by
 default. Set `CODECITY_ALLOWED_HOSTS` to a comma-separated list when clients use
 DNS names; other hostnames are rejected to prevent DNS-rebinding access.
 
+Upload reservations share the same unauthenticated trusted-network boundary.
+The server admits at most four reservations and 256 MiB of staged data across
+reserved, receiving, queued, and running uploads. Individual city-model and
+ZIP bodies are limited to 128 MiB and 64 MiB respectively. Unused reservations
+expire after five minutes; body idle and total deadlines are 30 seconds and ten
+minutes. Staging is owner-private beneath `CODECITY_DATA_DIR/tmp/imports`,
+contains only a server-chosen fixed filename, and is swept during startup.
+Size and concurrency limits are intentionally hard deployment safety limits,
+not client-controlled analysis options.
+
+Windows/IIS deployments must protect `CODECITY_DATA_DIR` for uploads and
+artifacts even when Generic Git is disabled. Its ACL and inherited child ACLs
+must admit only the service identity and trusted administrators. The data
+directory entry and canonical ancestors must also prevent untrusted rename,
+delete, and delete-child access. Code City uses create-exclusive files and
+portable fixed-path/handle identity checks, but cannot create, repair, or prove
+these Windows ACL guarantees.
+
 Generic Git imports are default-denied. Set `CODECITY_ALLOWED_GIT_ORIGINS` to a
 comma-separated list of exact origin-only URLs such as
 `https://dev.azure.example,ssh://git.example:22`. There are no wildcards;
