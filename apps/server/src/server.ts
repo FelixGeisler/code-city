@@ -16,6 +16,11 @@ import {
 } from "./job-queue.js";
 import { ImportArtifactStore } from "./import-artifacts.js";
 import {
+  InboundAuthorization,
+  type InboundAuthorizationMethod,
+  type InboundAuthorizationOptions,
+} from "./inbound-authorization.js";
+import {
   enqueueRemoteImport,
   parseRemoteImportJson,
   RemoteImportPolicy,
@@ -42,6 +47,7 @@ const CITY_MODEL_ARTIFACT_PATH_PATTERN =
   /^\/api\/v1\/artifacts\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/city-model\.json$/u;
 const UPLOAD_IMPORT_PATH_PATTERN =
   /^\/api\/v1\/imports\/uploads\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/u;
+const AUTHORIZATION_SESSION_PATH = "/api/v1/auth/session";
 
 const CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
@@ -67,6 +73,7 @@ export interface CodeCityServerOptions {
   readonly allowedHosts?: readonly string[];
   readonly allowedGitOrigins?: readonly string[];
   readonly trustWindowsGitWorkspace?: boolean;
+  readonly authorization?: InboundAuthorizationOptions;
   readonly importDependencies?: RemoteImportDependencies;
   readonly signal?: AbortSignal;
 }
@@ -395,6 +402,15 @@ function routeConsumesRequestBody(
       path === "/api/v1/imports/uploads") ||
     (method === "PUT" &&
       UPLOAD_IMPORT_PATH_PATTERN.test(path))
+  );
+}
+
+function isApiMutationMethod(method: string | undefined): boolean {
+  return (
+    method === "POST" ||
+    method === "PUT" ||
+    method === "PATCH" ||
+    method === "DELETE"
   );
 }
 
@@ -854,11 +870,46 @@ function rejectMissingMutationHeader(
   response: ServerResponse,
 ): void {
   response.setHeader("Connection", "close");
-  request.resume();
+  closePausedRequestAfterResponse(request, response);
   sendJson(request, response, 403, {
     error: {
       code: "request-header-required",
       message: "X-Code-City-Request: 1 is required.",
+    },
+  });
+}
+
+function rejectMutationOrigin(
+  request: IncomingMessage,
+  response: ServerResponse,
+): void {
+  response.setHeader("Connection", "close");
+  closePausedRequestAfterResponse(request, response);
+  sendJson(request, response, 403, {
+    error: {
+      code: "request-origin-rejected",
+      message: "The request origin is not allowed.",
+    },
+  });
+}
+
+function rejectUnauthorized(
+  request: IncomingMessage,
+  response: ServerResponse,
+  closeConnection = false,
+): void {
+  response.setHeader(
+    "WWW-Authenticate",
+    'Bearer realm="Code City"',
+  );
+  if (closeConnection) {
+    response.setHeader("Connection", "close");
+    closePausedRequestAfterResponse(request, response);
+  }
+  sendJson(request, response, 401, {
+    error: {
+      code: "authorization-required",
+      message: "Authorization is required.",
     },
   });
 }
@@ -873,6 +924,97 @@ function closePausedRequestAfterResponse(
     return;
   }
   response.once("finish", () => request.destroy());
+}
+
+function sendEmpty(
+  request: IncomingMessage,
+  response: ServerResponse,
+  status: number,
+): void {
+  send(
+    request,
+    response,
+    status,
+    Buffer.alloc(0),
+    "text/plain; charset=utf-8",
+  );
+}
+
+function authorizationSessionHandler(
+  request: IncomingMessage,
+  response: ServerResponse,
+  authorization: InboundAuthorization,
+): void {
+  if (request.method === "GET" || request.method === "HEAD") {
+    sendJson(request, response, 200, {
+      authorization: authorization.status(request),
+    });
+    return;
+  }
+  if (request.method !== "POST" && request.method !== "DELETE") {
+    sendMethodNotAllowed(request, response, [
+      "GET",
+      "HEAD",
+      "POST",
+      "DELETE",
+    ]);
+    return;
+  }
+  if (!hasMutationHeader(request)) {
+    rejectMissingMutationHeader(request, response);
+    return;
+  }
+  if (authorization.mode === "trusted-network") {
+    if (request.method === "DELETE") {
+      response.setHeader("Set-Cookie", authorization.clearSessionCookie());
+      sendEmpty(request, response, 204);
+      return;
+    }
+    sendJson(request, response, 409, {
+      error: {
+        code: "authorization-not-configured",
+        message: "Inbound authorization is not configured.",
+      },
+    });
+    return;
+  }
+  if (request.method === "POST") {
+    if (
+      !authorization.mutationOriginAllowed(request, "bearer")
+    ) {
+      rejectMutationOrigin(request, response);
+      return;
+    }
+    if (!authorization.authenticateBearer(request)) {
+      rejectUnauthorized(request, response);
+      return;
+    }
+    let cookie: string;
+    try {
+      cookie = authorization.createSession();
+    } catch {
+      sendJson(request, response, 503, {
+        error: {
+          code: "authorization-session-unavailable",
+          message: "An authorization session could not be created.",
+        },
+      });
+      return;
+    }
+    response.setHeader("Set-Cookie", cookie);
+    sendEmpty(request, response, 204);
+    return;
+  }
+  const result = authorization.authorize(request);
+  const method: InboundAuthorizationMethod =
+    result.method === "bearer" ? "bearer" : "session";
+  if (!authorization.mutationOriginAllowed(request, method)) {
+    rejectMutationOrigin(request, response);
+    return;
+  }
+  authorization.revokeSession(request);
+  response.setHeader("Set-Cookie", authorization.clearSessionCookie());
+  sendEmpty(request, response, 204);
 }
 
 async function uploadReservationHandler(
@@ -1485,6 +1627,10 @@ function apiHandler(
   if (!match) return false;
   const id = match[1]!;
   if (request.method === "DELETE") {
+    if (!hasMutationHeader(request)) {
+      rejectMissingMutationHeader(request, response);
+      return true;
+    }
     void jobs.cancel(id).then(
       (job) => {
         if (response.destroyed) return;
@@ -1576,6 +1722,7 @@ function requestHandler(
   importPolicy: RemoteImportPolicy,
   importDependencies: RemoteImportDependencies | undefined,
   allowedHosts: ReadonlySet<string>,
+  authorization: InboundAuthorization,
 ): (request: IncomingMessage, response: ServerResponse) => void {
   return (request, response) => {
     if (!hostHeaderIsAllowed(request, allowedHosts)) {
@@ -1595,6 +1742,31 @@ function requestHandler(
       send(request, response, 400, "Bad request.\n", "text/plain; charset=utf-8");
       return;
     }
+    let authorizationMethod:
+      | InboundAuthorizationMethod
+      | undefined;
+    const publicHealthRead =
+      target.path === "/api/v1/health" &&
+      (request.method === "GET" || request.method === "HEAD");
+    const apiNamespace =
+      target.path === "/api" || target.path.startsWith("/api/");
+    const protectedApi =
+      apiNamespace &&
+      target.path !== AUTHORIZATION_SESSION_PATH &&
+      !publicHealthRead;
+    if (protectedApi) {
+      const authorized = authorization.authorize(request);
+      if (!authorized.authorized || authorized.method === undefined) {
+        rejectUnauthorized(
+          request,
+          response,
+          routeConsumesRequestBody(request.method, target.path) ||
+            hasUnexpectedRequestBody(request),
+        );
+        return;
+      }
+      authorizationMethod = authorized.method;
+    }
     if (
       !routeConsumesRequestBody(request.method, target.path) &&
       hasUnexpectedRequestBody(request)
@@ -1602,7 +1774,27 @@ function requestHandler(
       rejectUnexpectedRequestBody(request, response);
       return;
     }
-    if (target.path.startsWith("/api/")) {
+    if (apiNamespace) {
+      if (target.path === AUTHORIZATION_SESSION_PATH) {
+        authorizationSessionHandler(
+          request,
+          response,
+          authorization,
+        );
+        return;
+      }
+      if (protectedApi && authorizationMethod !== undefined) {
+        if (
+          isApiMutationMethod(request.method) &&
+          !authorization.mutationOriginAllowed(
+            request,
+            authorizationMethod,
+          )
+        ) {
+          rejectMutationOrigin(request, response);
+          return;
+        }
+      }
       if (
         !apiHandler(
           request,
@@ -1688,47 +1880,82 @@ export async function startCodeCityServer(
         options.trustWindowsGitWorkspace ?? false,
     },
   );
-  if (options.signal?.aborted) throw new Error("Server startup was aborted.");
-  const assets = await collectViewerAssets(
-    options.viewerRoot ?? productionViewerRoot(),
+  const configuredAllowedHosts = allowedHostnames(
+    host,
+    options.allowedHosts,
   );
-  const artifacts = await ImportArtifactStore.open({
-    dataDirectory: options.dataDirectory,
-  });
-  const jobs = await PersistentJobQueue.open({
-    dataDirectory: options.dataDirectory,
-    concurrency: 1,
-  });
+  if (options.signal?.aborted) throw new Error("Server startup was aborted.");
+  const authorization = await InboundAuthorization.open(
+    options.authorization ?? {},
+    host,
+  );
+  if (options.signal?.aborted) {
+    authorization.close();
+    throw new Error("Server startup was aborted.");
+  }
+  let assets: ReadonlyMap<string, ViewerAsset>;
+  let artifacts: ImportArtifactStore;
+  let jobs: PersistentJobQueue;
+  try {
+    assets = await collectViewerAssets(
+      options.viewerRoot ?? productionViewerRoot(),
+    );
+    artifacts = await ImportArtifactStore.open({
+      dataDirectory: options.dataDirectory,
+    });
+    jobs = await PersistentJobQueue.open({
+      dataDirectory: options.dataDirectory,
+      concurrency: 1,
+    });
+  } catch (error) {
+    authorization.close();
+    throw error;
+  }
   try {
     await artifacts.reconcileCityModelArtifacts(
       completedCityModelArtifactTokens(jobs),
     );
   } catch (error) {
     await jobs.close().catch(() => undefined);
+    authorization.close();
     throw error;
   }
-  const allowedHosts = allowedHostnames(host, options.allowedHosts);
-  const artifactResponses = new ArtifactResponseGate();
-  const importRequests = new ImportRequestOperations();
-  const uploads = new UploadReservationRegistry(artifacts);
-  const server = http.createServer(
-    requestHandler(
-      assets,
-      jobs,
-      artifacts,
-      artifactResponses,
-      importRequests,
-      uploads,
-      importPolicy,
-      options.importDependencies,
-      allowedHosts,
-    ),
-  );
-  server.requestTimeout =
-    UPLOAD_IMPORT_LIMITS.bodyTotalTimeoutMs + 5_000;
-  server.headersTimeout = 10_000;
-  server.keepAliveTimeout = 5_000;
-  server.maxHeadersCount = 64;
+  const allowedHosts = new Set(configuredAllowedHosts);
+  if (authorization.publicHostname !== undefined) {
+    allowedHosts.add(authorization.publicHostname);
+  }
+  let artifactResponses: ArtifactResponseGate;
+  let importRequests: ImportRequestOperations;
+  let uploads: UploadReservationRegistry;
+  let server: http.Server;
+  try {
+    artifactResponses = new ArtifactResponseGate();
+    importRequests = new ImportRequestOperations();
+    uploads = new UploadReservationRegistry(artifacts);
+    server = http.createServer(
+      requestHandler(
+        assets,
+        jobs,
+        artifacts,
+        artifactResponses,
+        importRequests,
+        uploads,
+        importPolicy,
+        options.importDependencies,
+        allowedHosts,
+        authorization,
+      ),
+    );
+    server.requestTimeout =
+      UPLOAD_IMPORT_LIMITS.bodyTotalTimeoutMs + 5_000;
+    server.headersTimeout = 10_000;
+    server.keepAliveTimeout = 5_000;
+    server.maxHeadersCount = 64;
+  } catch (error) {
+    await jobs.close().catch(() => undefined);
+    authorization.close();
+    throw error;
+  }
 
   let closePromise: Promise<void> | undefined;
   let resolveClosed: (() => void) | undefined;
@@ -1761,6 +1988,7 @@ export async function startCodeCityServer(
         const uploadCloseResult = await uploadClose;
         if (!uploadCloseResult.ok) throw uploadCloseResult.error;
       } finally {
+        authorization.close();
         resolveClosed?.();
         await closedPromise;
       }

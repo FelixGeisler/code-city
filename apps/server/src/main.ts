@@ -48,6 +48,40 @@ export function environmentWindowsGitWorkspaceTrust(
   );
 }
 
+export function environmentAuthorizationTokenFile(
+  value: string | undefined,
+): string | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (value !== value.trim()) {
+    throw new Error(
+      "CODECITY_AUTH_TOKEN_FILE must not contain surrounding whitespace.",
+    );
+  }
+  return value;
+}
+
+export function environmentPublicOrigin(
+  value: string | undefined,
+): string | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (value !== value.trim()) {
+    throw new Error(
+      "CODECITY_PUBLIC_ORIGIN must not contain surrounding whitespace.",
+    );
+  }
+  return value;
+}
+
+export function environmentWindowsAuthTokenFileTrust(
+  value: string | undefined,
+): boolean {
+  if (value === undefined || value === "") return false;
+  if (value === "1") return true;
+  throw new Error(
+    "CODECITY_TRUST_WINDOWS_AUTH_TOKEN_FILE must be exactly 1 when enabled.",
+  );
+}
+
 export async function runServer(): Promise<void> {
   const controller = new AbortController();
   const stop = (): void => controller.abort();
@@ -65,12 +99,29 @@ export async function runServer(): Promise<void> {
     const trustWindowsGitWorkspace = environmentWindowsGitWorkspaceTrust(
       process.env["CODECITY_TRUST_WINDOWS_GIT_WORKSPACE"],
     );
+    const authorizationTokenFile = environmentAuthorizationTokenFile(
+      process.env["CODECITY_AUTH_TOKEN_FILE"],
+    );
+    const publicOrigin = environmentPublicOrigin(
+      process.env["CODECITY_PUBLIC_ORIGIN"],
+    );
+    const trustWindowsAuthTokenFile =
+      environmentWindowsAuthTokenFileTrust(
+        process.env["CODECITY_TRUST_WINDOWS_AUTH_TOKEN_FILE"],
+      );
     const server = await startCodeCityServer({
       ...(host === undefined ? {} : { host }),
       ...(port === undefined ? {} : { port }),
       ...(allowedHosts === undefined ? {} : { allowedHosts }),
       ...(allowedGitOrigins === undefined ? {} : { allowedGitOrigins }),
       trustWindowsGitWorkspace,
+      authorization: {
+        ...(authorizationTokenFile === undefined
+          ? {}
+          : { tokenFile: authorizationTokenFile }),
+        ...(publicOrigin === undefined ? {} : { publicOrigin }),
+        trustWindowsTokenFile: trustWindowsAuthTokenFile,
+      },
       dataDirectory: path.resolve(
         process.env["CODECITY_DATA_DIR"] ?? "data",
       ),

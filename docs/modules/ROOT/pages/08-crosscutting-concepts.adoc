@@ -145,6 +145,31 @@ instead of retaining a slow body on a keep-alive connection. Inputs are
 validated before private staging or job persistence. Jobs retain fixed progress,
 fixed safe error codes, and owned artifact URLs only.
 
+Inbound authorization is an explicit deployment boundary, not an inference
+from network location or forwarded identity headers. Without a token file, the
+existing trusted-network API remains open. With one, every API operation except
+health reads and session bootstrap requires either the fixed-entropy root
+bearer or an opaque server-side session. Authorization runs before protected
+route body handling, so an unauthenticated slow or unexpected body is closed
+without staging, queueing, or endpoint discovery.
+
+The root token is loaded once from a stable, bounded, private regular file
+before data-directory mutation. It is never accepted through an environment
+value, URL, JSON body, cookie, job, or artifact. POSIX ownership and mode are
+verified; Windows requires an explicit ACL-and-ancestry trust attestation.
+Presented bearer values are decoded into a fixed 32-byte buffer and compared
+in constant time. Failure responses do not distinguish missing, malformed,
+duplicate, expired, or incorrect credentials. Shutdown overwrites the loaded
+key and clears all in-memory session digests.
+
+Browser storage contains only an opaque, random, bounded-lifetime `HttpOnly`
+session capability, never the root token or repository credential. The cookie
+uses `SameSite=Strict`, API-only path scope, and `Secure` on every non-loopback
+deployment. Existing non-simple mutation headers remain mandatory, including
+job cancellation; cookie mutations additionally require the exact configured
+same-origin Origin. CORS remains disabled. Health is deliberately anonymous,
+cache-free, and contains no authorization or credential-profile state.
+
 Raw uploads avoid multipart parsing and never trust a filename. Exact-shape
 metadata reserves one opaque UUID and its declared bytes before the server
 creates a private staging directory. The PUT admits exactly one unencoded
@@ -176,12 +201,14 @@ or establish those ACL properties.
 
 Generic Git is default-denied at the server boundary. An exact
 operator-configured scheme, normalized hostname/IP, and effective port must
-match before staging. This origin list is egress control, not per-repository or
-inbound authorization: every unauthenticated client can invoke the
+match before staging. This origin list is egress control, not per-repository
+authorization. In default trusted-network mode every client can invoke the
 least-privileged service identity's ambient Git/SSH credentials for any
-repository/user at an enabled origin. Windows additionally requires an explicit
-attestation that the data/import ACLs, inherited child ACLs, and protected
-canonical ancestry satisfy the private-workspace contract.
+repository/user at an enabled origin. Enabling inbound authorization gates API
+access but does not narrow that service identity's repository scope. Windows
+additionally requires an explicit attestation that the data/import ACLs,
+inherited child ACLs, and protected canonical ancestry satisfy the
+private-workspace contract.
 
 The GitHub adapter accepts only canonical HTTPS `github.com/owner/repository`
 URLs. It performs anonymous, no-store requests to `api.github.com`, resolves an
