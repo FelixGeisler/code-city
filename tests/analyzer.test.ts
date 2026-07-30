@@ -296,7 +296,13 @@ EndProject
     });
 
     expect(second).toEqual(first);
-    expect(fromSnapshots).toEqual(first);
+    expect(fromSnapshots).toEqual({
+      ...first,
+      analysis: { warnings: [] },
+    });
+    expect(first.analysis?.warnings).toEqual([
+      "Printable logo relief is unavailable; the fixed Code City icon will be used.",
+    ]);
     expect(first.metricMapping).toEqual({
       formulas: {
         normalization: "log1p-cap-v1",
@@ -368,7 +374,9 @@ EndProject
         ]),
       }),
     );
-    expect(first.analysis).toEqual({ warnings: [] });
+    expect(first.analysis?.warnings).toEqual([
+      "Printable logo relief is unavailable; the fixed Code City icon will be used.",
+    ]);
     expect(
       first.dependencies.every(
         ({ resolution }) => resolution !== undefined,

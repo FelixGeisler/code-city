@@ -5,6 +5,7 @@ import {
   buildPrintableCity,
   buildPrintableCityArtifacts,
   cuboidMesh,
+  PRINT_LOGO_RELIEF_FALLBACK_WARNING,
   printablePlanGeometry,
   type PrintBounds,
   type PrintSemanticAssignment,
@@ -20,6 +21,7 @@ import {
   DEFAULT_FDM_GEOMETRY_LIMITS,
   createPrusaXLProfile,
   createSingleChannelProfile,
+  encodeIdentityLogoPrintReliefMask,
   type PrinterProfile,
 } from "../packages/core/src/index.js";
 
@@ -224,6 +226,145 @@ describe("Demo printable geometry", () => {
           bounds.size.z >= 0.8 - 1e-9,
       ),
     ).toBe(true);
+  });
+
+  it("uses the main identity logo relief instead of the fixed skyline", () => {
+    const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
+    const model = {
+      ...DEMO_MODEL,
+      identity: {
+        ...DEMO_MODEL.identity!,
+        logo: {
+          relativePath: "assets/logo.png",
+          format: "png" as const,
+          printRelief: {
+            version: "codecity.logo-relief/1" as const,
+            width: 4,
+            height: 4,
+            mask: "-Z8",
+          },
+        },
+      },
+    };
+
+    const first = buildPrintableCityArtifacts(
+      model,
+      assignments(),
+      { scale: 3, profile, labelPolicy: "off" },
+    );
+    const second = buildPrintableCityArtifacts(
+      model,
+      assignments(),
+      { scale: 3, profile, labelPolicy: "off" },
+    );
+    const primitives = first.city.parts.flatMap(
+      ({ primitives: items }) => items,
+    );
+    const panel = primitives.find(
+      ({ kind }) => kind === "identity-panel",
+    )!;
+    const logo = primitives.filter(({ id }) =>
+      id.startsWith("identity-relief:logo:"),
+    );
+
+    expect(first.warnings).toEqual([]);
+    expect(logo.length).toBeGreaterThan(0);
+    expect(logo.length).toBeLessThanOrEqual(256);
+    expect(
+      primitives.some(({ id }) =>
+        id.startsWith("identity-relief:skyline:"),
+      ),
+    ).toBe(false);
+    expect(
+      logo.every(
+        ({ bounds }) =>
+          bounds.minimum.x >= panel.bounds.minimum.x - 1e-9 &&
+          bounds.maximum.x <= panel.bounds.maximum.x + 1e-9 &&
+          bounds.minimum.z >= panel.bounds.minimum.z - 1e-9 &&
+          bounds.maximum.z <= panel.bounds.maximum.z + 1e-9 &&
+          bounds.size.x >= 0.8 - 1e-9 &&
+          bounds.size.y >= 0.8 - 1e-9 &&
+          bounds.size.z >= 0.8 - 1e-9,
+      ),
+    ).toBe(true);
+    expect(first.city).toEqual(second.city);
+    expect(validatePrintableCity(first.city, profile)).toEqual([]);
+  });
+
+  it("simplifies a dense 64x64 logo to at most 256 stable rectangles", () => {
+    const bytes = new Uint8Array(64 * 64 / 8);
+    for (let bit = 0; bit < 64 * 64; bit += 1) {
+      const x = bit % 64;
+      const y = Math.floor(bit / 64);
+      if ((x + y) % 2 === 0) {
+        bytes[Math.floor(bit / 8)]! |= 0x80 >> (bit % 8);
+      }
+    }
+    const model = {
+      ...DEMO_MODEL,
+      identity: {
+        ...DEMO_MODEL.identity!,
+        logo: {
+          relativePath: "assets/logo.svg",
+          format: "svg" as const,
+          printRelief: {
+            version: "codecity.logo-relief/1" as const,
+            width: 64,
+            height: 64,
+            mask: encodeIdentityLogoPrintReliefMask(bytes),
+          },
+        },
+      },
+    };
+    const artifacts = buildPrintableCityArtifacts(
+      model,
+      assignments(),
+      {
+        scale: 3,
+        profile: createPrusaXLProfile([1, 2, 3, 4, 5]),
+        labelPolicy: "off",
+      },
+    );
+    const logo = artifacts.city.parts
+      .flatMap(({ primitives }) => primitives)
+      .filter(({ id }) => id.startsWith("identity-relief:logo:"));
+
+    expect(logo.length).toBeGreaterThan(0);
+    expect(logo.length).toBeLessThanOrEqual(256);
+    expect(artifacts.warnings).toEqual([]);
+  });
+
+  it("falls back once for a requested display logo without print relief", () => {
+    const artifacts = buildPrintableCityArtifacts(
+      {
+        ...DEMO_MODEL,
+        identity: {
+          ...DEMO_MODEL.identity!,
+          logo: {
+            relativePath: "assets/logo.svg",
+            format: "svg",
+          },
+        },
+      },
+      assignments(),
+      {
+        scale: 3,
+        profile: createPrusaXLProfile([1, 2, 3, 4, 5]),
+        labelPolicy: "off",
+      },
+    );
+    const primitives = artifacts.city.parts.flatMap(
+      ({ primitives: items }) => items,
+    );
+
+    expect(artifacts.warnings).toEqual([
+      PRINT_LOGO_RELIEF_FALLBACK_WARNING,
+    ]);
+    expect(
+      primitives.filter(({ id }) =>
+        id.startsWith("identity-relief:skyline:"),
+      ),
+    ).toHaveLength(3);
   });
 
   it("applies explicit label-stroke and raised-feature limits to relief", () => {

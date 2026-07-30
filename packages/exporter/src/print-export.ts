@@ -188,7 +188,7 @@ function exportWarnings(
   planWarnings: readonly string[],
   includeLegend: boolean,
 ): readonly string[] {
-  const warnings = [...planWarnings];
+  const warnings = [...planWarnings, ...artifacts.warnings];
   const merged = mergedGroupWarning(assignments);
   if (merged !== undefined) warnings.push(merged);
   if (format === "stl") warnings.push(STL_INFORMATION_LOSS_WARNING);

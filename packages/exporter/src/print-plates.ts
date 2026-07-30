@@ -1333,6 +1333,11 @@ export function preparePrintPlateBundle(
     }),
   );
   const warnings = [...layout.warnings];
+  warnings.push(
+    ...new Set(
+      preparedPlates.flatMap(({ artifacts }) => artifacts.warnings),
+    ),
+  );
   const mergedGroups = assignments.filter(
     ({ mergedIntoSemanticGroupId }) =>
       mergedIntoSemanticGroupId !== undefined,

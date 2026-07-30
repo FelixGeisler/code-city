@@ -21,6 +21,9 @@ import {
   preparePrintPlateBundle,
   serializePreparedSinglePrintPlateExport,
 } from "../packages/exporter/src/print-plates.js";
+import {
+  PRINT_LOGO_RELIEF_FALLBACK_WARNING,
+} from "../packages/exporter/src/geometry.js";
 
 interface DistrictShape {
   readonly width: number;
@@ -206,6 +209,44 @@ function withinBuildVolume(
 }
 
 describe("physical print-plate orchestration", () => {
+  it("records one manifest-level warning for fixed-icon logo fallback", () => {
+    const prepared = preparePrintPlateBundle({
+      format: "3mf",
+      model: {
+        ...DEMO_MODEL,
+        identity: {
+          ...DEMO_MODEL.identity!,
+          logo: {
+            relativePath: "assets/logo.svg",
+            format: "svg",
+          },
+        },
+      },
+      profile: createSingleChannelProfile(),
+      options: {
+        scale: 3,
+        fitPolicy: "error",
+        labelPolicy: "off",
+        routePolicy: "off",
+        includeLegend: false,
+      },
+    });
+
+    expect(
+      prepared.bundleRequest.warnings.filter(
+        (warning) => warning === PRINT_LOGO_RELIEF_FALLBACK_WARNING,
+      ),
+    ).toEqual([PRINT_LOGO_RELIEF_FALLBACK_WARNING]);
+    expect(
+      prepared.preflight.warnings.filter(
+        (warning) => warning === PRINT_LOGO_RELIEF_FALLBACK_WARNING,
+      ),
+    ).toEqual([PRINT_LOGO_RELIEF_FALLBACK_WARNING]);
+    expect(
+      prepared.bundleRequest.plates.flatMap(({ warnings }) => warnings),
+    ).not.toContain(PRINT_LOGO_RELIEF_FALLBACK_WARNING);
+  });
+
   it.each(["3mf", "stl"] as const)(
     "serializes the exact compact numbered error-policy plate directly as %s",
     (format) => {

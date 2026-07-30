@@ -54,8 +54,10 @@ export interface LocalAnalysisOptions extends SnapshotOptions {
   readonly title?: string;
   readonly version?: string;
   /**
-   * A repository-relative path or portable reference. Absolute paths are rejected.
-   * The analyzer never reads or embeds the referenced image.
+   * A repository-relative SVG or PNG. Local analysis may read exactly one
+   * matching regular non-symlink file beneath the explicitly supplied roots
+   * to derive a bounded printable mask; original image bytes are never
+   * embedded.
    */
   readonly logo?: string;
 }

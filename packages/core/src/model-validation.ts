@@ -5,6 +5,7 @@ import {
 } from "./model.js";
 import { isDisplayColor } from "./color.js";
 import { normalizeAssetRelativePath } from "./identity.js";
+import { normalizeIdentityLogoPrintRelief } from "./logo-relief.js";
 import {
   DEFAULT_METRIC_MAPPING,
   normalizeLogarithmically,
@@ -712,6 +713,17 @@ function validateLogo(value: unknown, path: string): void {
     fail(`${path}.relativePath must use the .${format} extension`);
   }
   optionalNonEmptyString(logo.alt, `${path}.alt`, 160);
+  if (logo.printRelief !== undefined) {
+    try {
+      normalizeIdentityLogoPrintRelief(logo.printRelief);
+    } catch (error) {
+      fail(
+        `${path}.printRelief is invalid: ${
+          error instanceof Error ? error.message : "Invalid value."
+        }`,
+      );
+    }
+  }
 }
 
 function validateIdentityPanel(

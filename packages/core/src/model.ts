@@ -100,6 +100,14 @@ export interface SemanticGroup {
 
 export type IdentityLogoFormat = "svg" | "png";
 
+export interface IdentityLogoPrintRelief {
+  readonly version: "codecity.logo-relief/1";
+  readonly width: number;
+  readonly height: number;
+  /** Row-major 1bpp mask, most-significant bit first, as unpadded base64url. */
+  readonly mask: string;
+}
+
 /**
  * A reference to a logo asset, never inline markup or an absolute filesystem
  * path. Consumers must resolve the normalized, repository-relative path from
@@ -109,6 +117,7 @@ export interface IdentityLogo {
   readonly relativePath: string;
   readonly format: IdentityLogoFormat;
   readonly alt?: string;
+  readonly printRelief?: IdentityLogoPrintRelief;
 }
 
 export interface RepositoryIdentity {

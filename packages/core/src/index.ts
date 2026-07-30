@@ -5,6 +5,7 @@ export * from "./evolution-validation.js";
 export * from "./external-dependencies.js";
 export * from "./identity.js";
 export * from "./layout.js";
+export * from "./logo-relief.js";
 export * from "./metrics.js";
 export * from "./model.js";
 export * from "./model-validation.js";

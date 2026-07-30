@@ -51,6 +51,9 @@ import type {
   SourceFileFact,
   StaticImportFact,
 } from "./types.js";
+import {
+  acquireLocalLogoPrintRelief,
+} from "./local-logo-relief.js";
 import { analyzeTypeScriptSource } from "./typescript-metrics.js";
 
 interface RootContext {
@@ -1366,21 +1369,60 @@ export async function analyzeLocalFacts(
   options: LocalAnalysisOptions = {},
 ): Promise<LocalAnalysisFacts> {
   const startedAt = Date.now();
+  const totalTimeout =
+    options.timeoutMs ?? DEFAULT_SNAPSHOT_LIMITS.timeoutMs;
+  const logoRelief =
+    options.logo === undefined
+      ? undefined
+      : await acquireLocalLogoPrintRelief(
+          requestedRoots,
+          options.logo,
+          {
+            timeoutMs: Math.min(
+              5_000,
+              Math.max(1, totalTimeout - (Date.now() - startedAt)),
+            ),
+            ...(options.signal === undefined
+              ? {}
+              : { signal: options.signal }),
+          },
+        );
   const snapshots = await materializeLocalRepositorySnapshots(
     requestedRoots,
     options,
   );
   const elapsed = Date.now() - startedAt;
-  const totalTimeout =
-    options.timeoutMs ?? DEFAULT_SNAPSHOT_LIMITS.timeoutMs;
   const remainingTimeout = totalTimeout - elapsed;
   if (remainingTimeout <= 0) {
     throw new SnapshotDeadlineError();
   }
-  return analyzeRepositorySnapshotFacts(snapshots, {
+  const facts = await analyzeRepositorySnapshotFacts(snapshots, {
     ...options,
     timeoutMs: remainingTimeout,
   });
+  if (logoRelief === undefined) return facts;
+  const identity =
+    facts.identity?.logo === undefined
+      ? facts.identity
+      : {
+          ...facts.identity,
+          logo: {
+            ...facts.identity.logo,
+            ...(logoRelief.relief === undefined
+              ? {}
+              : { printRelief: logoRelief.relief }),
+          },
+        };
+  return {
+    ...facts,
+    ...(identity === undefined ? {} : { identity }),
+    warnings: boundedWarnings([
+      ...facts.warnings,
+      ...(logoRelief.warning === undefined
+        ? []
+        : [logoRelief.warning]),
+    ]),
+  };
 }
 
 export async function analyzeRepositorySnapshotFacts(

@@ -348,12 +348,21 @@ Node APIs, browser/DNS behavior below the fetch boundary, and slicer behavior.
 The model may carry an explicit title, version, and relative SVG/PNG logo
 reference. Layout reserves a compact plaque joined to the center of the front
 edge; the viewer previews it, and the print plan preserves its content and
-channel assignment.
+channel assignment. Local analysis may resolve exactly one regular, non-symlink
+logo file beneath an explicitly analyzed root. A terminated five-second worker
+accepts only bounded transparent, single-solid-color SVG or PNG silhouettes and
+stores a normalized, canonical one-bit mask of at most 64 by 64 pixels. It
+never stores original markup, absolute paths, URLs, credentials, or converter
+diagnostics in the city model.
 
-The exporter supports the Demo's title, version, printable Code City icon, and
-the shared block font below. Arbitrary fonts and logos remain separate work. A
-multi-repository city has one main panel. Local paths are never inferred as
-printed identity.
+The exporter fits that mask to the main city panel, resamples it to the printer
+profile's minimum feature size, and merges it into at most 256 raised
+rectangles. The shared printable-city geometry feeds both 3MF and STL. Missing,
+unsafe, ambiguous, or unsimplifiable relief uses the fixed Code City icon and
+adds exactly one sanitized preflight and manifest warning; an identity with no
+logo uses the icon without a warning. Repository logos remain display metadata.
+A multi-repository city has one main panel. Local paths are never inferred as
+printed identity. Arbitrary fonts remain separate work.
 
 Printed building labels use `000` through `ZZZ`. Sort ordinally by repository
 ID, district ID, normalized path, and building ID; encode the zero-based index
