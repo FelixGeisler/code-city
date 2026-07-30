@@ -15,6 +15,7 @@ internal static class Program
     private static ReadOnlySpan<byte> HelperAcknowledgementMagic => "CCGITA1\n"u8;
     private static ReadOnlySpan<byte> HttpsValue => "https"u8;
     private static ReadOnlySpan<byte> RejectPayload => "quit=1\n\n"u8;
+    private static ReadOnlySpan<byte> CapabilityAnnouncement => "version 0\n"u8;
 
     private const int MaximumHostBytes = 512;
     private const int MaximumPathBytes = 4096;
@@ -57,10 +58,21 @@ internal static class Program
 
             if (arguments.Length == 3 &&
                 string.Equals(arguments[0], "helper", StringComparison.Ordinal) &&
-                ValidPipeName(arguments[1]) &&
-                TryParseAction(arguments[2], out HelperAction action))
+                ValidPipeName(arguments[1]))
             {
-                return await RunHelperAsync(arguments[1], action).ConfigureAwait(false);
+                if (string.Equals(
+                        arguments[2],
+                        "capability",
+                        StringComparison.Ordinal))
+                {
+                    return await AnnounceCapabilitiesAsync().ConfigureAwait(false);
+                }
+
+                if (TryParseAction(arguments[2], out HelperAction action))
+                {
+                    return await RunHelperAsync(arguments[1], action)
+                        .ConfigureAwait(false);
+                }
             }
         }
         catch
@@ -81,6 +93,15 @@ internal static class Program
             _ => 0,
         };
         return action != 0;
+    }
+
+    private static async Task<int> AnnounceCapabilitiesAsync()
+    {
+        Stream output = Console.OpenStandardOutput();
+        await output.WriteAsync(CapabilityAnnouncement.ToArray())
+            .ConfigureAwait(false);
+        await output.FlushAsync().ConfigureAwait(false);
+        return 0;
     }
 
     private static bool ValidPipeName(string? value)

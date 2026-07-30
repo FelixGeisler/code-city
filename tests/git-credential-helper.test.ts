@@ -334,9 +334,25 @@ async function invoke(
 function expectCleanExit(
   result: CompletedProcess,
   expectedStdout: Buffer,
+  redactions: readonly string[] = [],
 ): void {
-  expect(result.code).toBe(0);
-  expect(result.signal).toBeNull();
+  if (result.code !== 0 || result.signal !== null) {
+    let diagnostic = result.stderr.toString("utf8");
+    for (const redaction of redactions) {
+      diagnostic = diagnostic.replaceAll(redaction, "[redacted]");
+    }
+    diagnostic = diagnostic
+      .replace(/[^\t\n\r\x20-\x7e]/gu, "?")
+      .trim();
+    if (diagnostic.length > 4_096) {
+      diagnostic = diagnostic.slice(0, 4_096) + "...";
+    }
+    throw new Error(
+      `Credential test process exited ${String(result.code)}${
+        result.signal === null ? "" : ` (${result.signal})`
+      }: ${diagnostic.length === 0 ? "<empty stderr>" : diagnostic}`,
+    );
+  }
   expect(result.stderr).toEqual(Buffer.alloc(0));
   expect(result.stdout).toEqual(expectedStdout);
 }
@@ -424,6 +440,22 @@ afterEach(async () => {
 });
 
 describe("Git credential helper binary protocol", () => {
+  it("announces no optional capabilities without reading stdin or contacting a broker", async () => {
+    const process = launch([
+      "helper",
+      `codecity-git-${"f".repeat(64)}`,
+      "capability",
+    ]);
+    const result = await complete(process);
+    const expected = Buffer.from("version 0\n", "ascii");
+    try {
+      expectCleanExit(result, expected);
+    } finally {
+      process.child.stdin.destroy();
+      zeroAll([result.stdout, result.stderr, expected]);
+    }
+  });
+
   it(
     "serves one exact Basic credential without persisting store or erase",
     async () => {
@@ -628,7 +660,18 @@ describe("Git credential helper binary protocol", () => {
         );
         await write(git.child.stdin, gitInput, true);
         const result = await complete(git);
-        const expected = Buffer.from(
+        const expectedCore = Buffer.from(
+          [
+            "protocol=https",
+            `host=${host}`,
+            `path=${decodedPath}`,
+            `username=${username}`,
+            `password=${secret}`,
+            "",
+          ].join("\n"),
+          "utf8",
+        );
+        const expectedWithChallenge = Buffer.from(
           [
             "protocol=https",
             `host=${host}`,
@@ -641,9 +684,21 @@ describe("Git credential helper binary protocol", () => {
           "utf8",
         );
         try {
-          expectCleanExit(result, expected);
+          const expectedOutput = result.stdout.equals(expectedCore)
+            ? expectedCore
+            : expectedWithChallenge;
+          expectCleanExit(
+            result,
+            expectedOutput,
+            [secret, username],
+          );
         } finally {
-          zeroAll([result.stdout, result.stderr, expected]);
+          zeroAll([
+            result.stdout,
+            result.stderr,
+            expectedCore,
+            expectedWithChallenge,
+          ]);
         }
 
         const stopped = await stopBroker(broker);

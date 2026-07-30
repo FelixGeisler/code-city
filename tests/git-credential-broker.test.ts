@@ -596,7 +596,6 @@ describe("Generic Git selected credential integration", () => {
     const harness = await snapshotHarness();
     let captured: GenericGitCredentialBrokerRequest | undefined;
     const started = Date.now();
-    globalThis.setTimeout(() => controller.abort(), 10);
 
     await expect(
       snapshotGenericGitRepository(
@@ -610,6 +609,7 @@ describe("Generic Git selected credential integration", () => {
           credentialProvider: credentials.provider,
           createCredentialBroker: (request) => {
             captured = request;
+            controller.abort();
             return new Promise(() => undefined);
           },
         },
@@ -852,6 +852,7 @@ describe("one-shot .NET credential broker launcher", () => {
   function gitCredentialFill(
     helperCommand: string,
     input: Buffer,
+    redactions: readonly string[],
   ): Promise<Buffer> {
     return new Promise<Buffer>((resolve, reject) => {
       const child = spawn(
@@ -883,8 +884,47 @@ describe("one-shot .NET credential broker launcher", () => {
         },
       );
       const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
       let stderrBytes = 0;
+      let stderrOverflow = false;
       let settled = false;
+      const clearStderr = (): void => {
+        for (const chunk of stderr) chunk.fill(0);
+        stderr.length = 0;
+        stderrBytes = 0;
+      };
+      const clearStdout = (): void => {
+        for (const chunk of stdout) chunk.fill(0);
+        stdout.length = 0;
+      };
+      const failure = (code: number | null): Error => {
+        const captured = Buffer.concat(stderr, stderrBytes);
+        clearStderr();
+        try {
+          let diagnostic = captured.toString("utf8");
+          for (const redaction of redactions) {
+            diagnostic = diagnostic.replaceAll(redaction, "[redacted]");
+          }
+          diagnostic = diagnostic
+            .replace(/[^\t\n\r\x20-\x7e]/gu, "?")
+            .trim();
+          if (diagnostic.length > 4_096) {
+            diagnostic = diagnostic.slice(0, 4_096) + "...";
+          }
+          if (stderrOverflow) {
+            diagnostic +=
+              (diagnostic.length === 0 ? "" : " ") +
+              "[stderr exceeded bound]";
+          }
+          return new Error(
+            `git credential fill exited ${String(code)}: ${
+              diagnostic.length === 0 ? "<empty stderr>" : diagnostic
+            }`,
+          );
+        } finally {
+          captured.fill(0);
+        }
+      };
       const finish = (callback: () => void): void => {
         if (settled) return;
         settled = true;
@@ -893,27 +933,52 @@ describe("one-shot .NET credential broker launcher", () => {
       };
       const timer = globalThis.setTimeout(() => {
         child.kill("SIGKILL");
-        finish(() => reject(new Error("git credential fill timed out")));
+        finish(() => {
+          clearStdout();
+          clearStderr();
+          reject(new Error("git credential fill timed out"));
+        });
       }, 5_000);
       child.stdout.on("data", (chunk: Buffer) => {
-        stdout.push(Buffer.from(chunk));
+        const copy = Buffer.from(chunk);
+        if (settled) {
+          copy.fill(0);
+          return;
+        }
+        stdout.push(copy);
       });
       child.stderr.on("data", (chunk: Buffer) => {
-        stderrBytes += chunk.byteLength;
-        if (stderrBytes > 64 * 1024) child.kill("SIGKILL");
+        const copy = Buffer.from(chunk);
+        if (settled || stderrOverflow) {
+          copy.fill(0);
+          return;
+        }
+        if (stderrBytes + copy.byteLength > 64 * 1024) {
+          copy.fill(0);
+          stderrOverflow = true;
+          child.kill("SIGKILL");
+          return;
+        }
+        stderr.push(copy);
+        stderrBytes += copy.byteLength;
       });
       child.once("error", () =>
-        finish(() =>
-          reject(new Error("git credential fill failed")),
-        ),
+        finish(() => {
+          clearStdout();
+          reject(failure(null));
+        }),
       );
       child.once("close", (code) =>
         finish(() => {
           if (code !== 0) {
-            reject(new Error("git credential fill failed"));
+            clearStdout();
+            reject(failure(code));
             return;
           }
-          resolve(Buffer.concat(stdout));
+          clearStderr();
+          const output = Buffer.concat(stdout);
+          clearStdout();
+          resolve(output);
         }),
       );
       child.stdin.end(input, () => input.fill(0));
@@ -934,8 +999,8 @@ describe("one-shot .NET credential broker launcher", () => {
       "codecity-git-" + "a".repeat(64),
     );
     expect(command).toBe(
-      "!'C:\\Program Files\\dotnet.exe' " +
-        "'C:\\Trusted App\\helper.dll' helper " +
+      "!'C:/Program Files/dotnet.exe' " +
+        "'C:/Trusted App/helper.dll' helper " +
         `'codecity-git-${"a".repeat(64)}'`,
     );
     expect(() =>
@@ -966,6 +1031,7 @@ describe("one-shot .NET credential broker launcher", () => {
             "Org/Project/_git/Repo%20Name.git\n\n",
           "utf8",
         ),
+        ["p\u00e4ss/word=", "user name"],
       );
       const text = output.toString("utf8");
       expect(text).toContain("protocol=https\n");
