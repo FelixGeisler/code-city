@@ -13,14 +13,21 @@ import {
   GENERIC_GIT_PRESECURED_WINDOWS_ACL,
   GenericGitSnapshotError,
   GitHubSnapshotError,
+  HISTORY_SELECTION_LIMITS,
   SnapshotDeadlineError,
   SnapshotLimitError,
   SnapshotPathError,
   SnapshotPolicyError,
   type GenericGitAnalysisResult,
+  type GenericGitHistoryAnalysisResult,
   type PublicGitHubAnalysisResult,
 } from "../packages/analyzer/src/index.js";
-import type { CityModel } from "../packages/core/src/index.js";
+import {
+  prepareEvolutionSerialization,
+  serializeEvolutionBundle,
+  type CityModel,
+  type EvolutionBundle,
+} from "../packages/core/src/index.js";
 import type { JobRecord } from "../apps/server/src/job-queue.js";
 import {
   environmentAllowedGitOrigins,
@@ -29,6 +36,7 @@ import {
 import {
   parseRemoteImportJson,
   parseRemoteImportRequest,
+  enqueueRemoteImport,
   RemoteImportPolicy,
   RemoteImportRequestError,
   type RemoteImportDependencies,
@@ -74,6 +82,128 @@ function cityModelFixture(): CityModel {
     buildings: [],
     dependencies: [],
     bounds: { x: 0, y: 0, z: 0 },
+  };
+}
+
+function historyCityModelFixture(): CityModel {
+  return {
+    ...cityModelFixture(),
+    repositories: [{ id: "repository:one", name: "One" }],
+  };
+}
+
+function evolutionBundleFixture(
+  model = historyCityModelFixture(),
+): EvolutionBundle {
+  const fingerprint = `sha256:${"1".repeat(64)}` as const;
+  return {
+    schemaVersion: "1.0",
+    generator: model.generator,
+    authorPolicy: "omit-v1",
+    selection: {
+      mode: "commit-count",
+      traversal: "first-parent",
+      order: "oldest-first",
+      sampleEvery: 1,
+      requestedCommitCount: 1,
+      selectedCommitCount: 1,
+      sampledCommitCount: 1,
+      traversedCommitCount: 1,
+      resolvedOldestSha: COMMIT,
+      resolvedNewestSha: COMMIT,
+      sampledCommitShas: [COMMIT],
+    },
+    provenance: {
+      repositoryId: "repository:one",
+      repositoryFingerprint: fingerprint,
+      analyzer: {
+        name: "code-city",
+        version: model.generator.version,
+        fingerprint,
+      },
+      historyBackend: {
+        name: "git",
+        version: "2.47.1.windows.2",
+        renamePolicyRevision: "diff-tree-renames-50-myers-v1",
+      },
+      metricConfigurationFingerprint: fingerprint,
+      selectionFingerprint: fingerprint,
+    },
+    baseline: {
+      commit: {
+        index: 0,
+        sha: COMMIT,
+        committedAt: "2026-01-01T00:00:00.000Z",
+        parentShas: [],
+        analyzerVersion: model.generator.version,
+        analysisFingerprint: fingerprint,
+      },
+      model,
+    },
+    deltas: [],
+  };
+}
+
+function historyAnalysisResultFixture(
+  model = historyCityModelFixture(),
+): GenericGitHistoryAnalysisResult {
+  const bundle = evolutionBundleFixture(model);
+  const preparedSerialization =
+    prepareEvolutionSerialization(bundle);
+  const commit = {
+    sha: COMMIT,
+    parents: [] as const,
+    committedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const analysisBounds = {
+    totalDeadlineMs: 60_000,
+    maxAggregateChangedPaths: 500_000,
+    maxAggregateChangedPathBytes: 16 * 1024 * 1024,
+    maxAggregateSemanticBytes: 128 * 1024 * 1024,
+    maxUniqueLineages: 100_000,
+    maxEvolutionOutputBytes: 512 * 1024 * 1024,
+    maxAggregateTreeEntries: 2_000_000,
+  };
+  return {
+    repository: "example",
+    tipSha: COMMIT,
+    transport: "https",
+    historyBackend: {
+      name: "git",
+      version: "2.47.1.windows.2",
+      renamePolicyRevision: "diff-tree-renames-50-myers-v1",
+    },
+    selection: {
+      selectedCommits: [commit],
+      sampledCommits: [commit],
+      summary: bundle.selection,
+      analysisBounds,
+      requestedTagCount: 0,
+    },
+    model,
+    evolution: {
+      repositoryId: "repository:one",
+      model,
+      bundle: preparedSerialization.bundle,
+      preparedSerialization,
+    },
+    costEstimate: {
+      traversedCommitCount: 1,
+      selectedCommitCount: 1,
+      sampledFrameCount: 1,
+      maximumChangedPathEntries:
+        analysisBounds.maxAggregateChangedPaths,
+      maximumChangedPathBytes:
+        analysisBounds.maxAggregateChangedPathBytes,
+      maximumSemanticBytes:
+        analysisBounds.maxAggregateSemanticBytes,
+      maximumTreeEntries: analysisBounds.maxAggregateTreeEntries,
+      maximumUniqueLineages: analysisBounds.maxUniqueLineages,
+      maximumOutputBytes: analysisBounds.maxEvolutionOutputBytes,
+      totalDeadlineMs: analysisBounds.totalDeadlineMs,
+    },
+    cacheHits: 0,
+    cacheMisses: 1,
   };
 }
 
@@ -415,6 +545,283 @@ describe("remote import request parsing", () => {
     expect(sameNameTag.source.ref).toBe("tags/release");
   });
 
+  it("normalizes bounded commit, date, and tag history selections", () => {
+    expect(
+      parseRemoteImportRequest({
+        source: {
+          kind: "github",
+          repositoryUrl: "https://github.com/openai/example",
+        },
+        history: {
+          mode: "commit-count",
+          commitCount: 500,
+          sampleEvery: 6,
+          totalDeadlineMs: 60_000,
+          maxAggregateChangedPaths: 10_000,
+          maxAggregateChangedPathBytes: 250_000,
+          maxAggregateSemanticBytes: 750_000,
+          maxAggregateTreeEntries: 20_000,
+          maxUniqueLineages: 5_000,
+          maxEvolutionOutputBytes: 1_000_000,
+        },
+      }).history,
+    ).toEqual({
+      mode: "commit-count",
+      commitCount: 500,
+      sampleEvery: 6,
+      totalDeadlineMs: 60_000,
+      maxAggregateChangedPaths: 10_000,
+      maxAggregateChangedPathBytes: 250_000,
+      maxAggregateSemanticBytes: 750_000,
+      maxAggregateTreeEntries: 20_000,
+      maxUniqueLineages: 5_000,
+      maxEvolutionOutputBytes: 1_000_000,
+    });
+
+    expect(
+      parseRemoteImportRequest({
+        source: {
+          kind: "git",
+          repositoryUrl: "https://example.test/repository.git",
+        },
+        history: {
+          mode: "date-range",
+          fromInclusive: "2025-01-01T01:00:00+01:00",
+          toInclusive: "2025-01-03T00:00:00Z",
+          maxCommits: 100,
+        },
+      }).history,
+    ).toEqual({
+      mode: "date-range",
+      fromInclusive: "2025-01-01T00:00:00.000Z",
+      toInclusive: "2025-01-03T00:00:00.000Z",
+      maxCommits: 100,
+    });
+
+    expect(
+      parseRemoteImportRequest({
+        source: {
+          kind: "github",
+          repositoryUrl: "https://github.com/openai/example",
+        },
+        history: {
+          mode: "tag-range",
+          oldestTagName: "rele\u0301ase/v1.0.0",
+          newestTagName: "release/v2.0.0",
+          maxCommits: 100,
+        },
+      }).history,
+    ).toEqual({
+      mode: "tag-range",
+      oldestTagName: "reléase/v1.0.0",
+      newestTagName: "release/v2.0.0",
+      maxCommits: 100,
+    });
+  });
+
+  it("rejects history selections that cannot be bounded before analysis", () => {
+    const source = {
+      kind: "github",
+      repositoryUrl: "https://github.com/openai/example",
+    };
+    for (const history of [
+      {
+        mode: "commit-count",
+        commitCount: 101,
+      },
+      {
+        mode: "commit-count",
+        commitCount: 501,
+        sampleEvery: 6,
+      },
+      {
+        mode: "commit-count",
+        commitCount: 1,
+        maxAggregateSemanticBytes:
+          HISTORY_SELECTION_LIMITS.maxAggregateSemanticBytes + 1,
+      },
+      {
+        mode: "date-range",
+        fromInclusive: "2025-01-03T00:00:00Z",
+        toInclusive: "2025-01-01T00:00:00Z",
+        maxCommits: 100,
+      },
+      {
+        mode: "date-range",
+        fromInclusive: "2025-01-01",
+        toInclusive: "2025-01-03T00:00:00Z",
+        maxCommits: 100,
+      },
+      {
+        mode: "date-range",
+        fromInclusive: "2025-02-30T00:00:00Z",
+        toInclusive: "2025-03-03T00:00:00Z",
+        maxCommits: 100,
+      },
+      {
+        mode: "date-range",
+        fromInclusive: "2025-01-01T24:00:00Z",
+        toInclusive: "2025-01-03T00:00:00Z",
+        maxCommits: 100,
+      },
+      {
+        mode: "date-range",
+        fromInclusive: "9999-12-31T23:00:00-23:00",
+        toInclusive: "9999-12-31T23:59:59Z",
+        maxCommits: 100,
+      },
+      {
+        mode: "date-range",
+        fromInclusive: "9999-12-31T23:59:59Z",
+        toInclusive: "9999-12-31T23:00:00-23:00",
+        maxCommits: 100,
+      },
+      {
+        mode: "tag-range",
+        oldestTagName: "refs/tags/v1",
+        newestTagName: "v2",
+        maxCommits: 100,
+      },
+      {
+        mode: "tag-range",
+        oldestTagName: "v1",
+        newestTagName: "v2",
+        maxCommits: 100,
+        unexpected: true,
+      },
+    ]) {
+      expect(() =>
+        parseRemoteImportRequest({ source, history }),
+      ).toThrow(RemoteImportRequestError);
+    }
+
+    expect(() =>
+      parseRemoteImportRequest({
+        source: {
+          ...source,
+          revision: { kind: "branch", name: "main" },
+        },
+        history: {
+          mode: "tag-range",
+          oldestTagName: "v1",
+          newestTagName: "v2",
+          maxCommits: 100,
+        },
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        fields: [
+          expect.objectContaining({
+            path: "$.source.revision",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("accepts only tag names that fit after the exact refs/tags prefix", () => {
+    const maximumTag = "a".repeat(
+      HISTORY_SELECTION_LIMITS.maxTagNameBytes,
+    );
+    expect(
+      parseRemoteImportRequest({
+        source: {
+          kind: "github",
+          repositoryUrl: "https://github.com/openai/example",
+        },
+        history: {
+          mode: "tag-range",
+          oldestTagName: maximumTag,
+          newestTagName: maximumTag,
+          maxCommits: 1,
+        },
+      }).history,
+    ).toMatchObject({
+      oldestTagName: maximumTag,
+      newestTagName: maximumTag,
+    });
+    expect(() =>
+      parseRemoteImportRequest({
+        source: {
+          kind: "github",
+          repositoryUrl: "https://github.com/openai/example",
+        },
+        history: {
+          mode: "tag-range",
+          oldestTagName: `${maximumTag}a`,
+          newestTagName: "v2",
+          maxCommits: 1,
+        },
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        fields: [
+          expect.objectContaining({
+            path: "$.history.oldestTagName",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("rejects a snapshot timeout too short to supply the history deadline", () => {
+    try {
+      parseRemoteImportRequest({
+        source: {
+          kind: "github",
+          repositoryUrl: "https://github.com/openai/example",
+        },
+        history: {
+          mode: "commit-count",
+          commitCount: 1,
+        },
+        analysis: {
+          timeoutMs:
+            HISTORY_SELECTION_LIMITS.minTotalDeadlineMs - 1,
+        },
+      });
+      throw new Error("Expected parsing to fail.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RemoteImportRequestError);
+      expect((error as RemoteImportRequestError).fields).toEqual([
+        expect.objectContaining({
+          path: "$.analysis.timeoutMs",
+          message: expect.stringContaining(
+            String(HISTORY_SELECTION_LIMITS.minTotalDeadlineMs),
+          ),
+        }),
+      ]);
+    }
+  });
+
+  it("rejects ambiguous analysis and history deadlines", () => {
+    expect(() =>
+      parseRemoteImportRequest({
+        source: {
+          kind: "github",
+          repositoryUrl: "https://github.com/openai/example",
+        },
+        history: {
+          mode: "commit-count",
+          commitCount: 1,
+          totalDeadlineMs: 60_000,
+        },
+        analysis: { timeoutMs: 30_000 },
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        fields: [
+          expect.objectContaining({
+            path: "$.analysis.timeoutMs",
+            message: expect.stringContaining(
+              "history.totalDeadlineMs",
+            ),
+          }),
+        ],
+      }),
+    );
+  });
+
   it("accepts only an exact bounded credential profile identifier", () => {
     const maximumIdentifier = `a${"0".repeat(63)}`;
     expect(
@@ -704,6 +1111,72 @@ describe("Generic Git outbound policy", () => {
     expect(
       () => new RemoteImportPolicy([], { platform: "win32" }),
     ).not.toThrow();
+
+    const githubHistory = parseRemoteImportRequest({
+      source: {
+        kind: "github",
+        repositoryUrl: "https://github.com/openai/example",
+      },
+      history: {
+        mode: "commit-count",
+        commitCount: 1,
+      },
+    });
+    let missingTrust: unknown;
+    try {
+      new RemoteImportPolicy([], {
+        platform: "win32",
+      }).assertAllowed(githubHistory);
+    } catch (error) {
+      missingTrust = error;
+    }
+    expect(missingTrust).toBeInstanceOf(RemoteImportRequestError);
+    expect(
+      (missingTrust as RemoteImportRequestError).fields[0]?.message,
+    ).toContain("CODECITY_TRUST_WINDOWS_GIT_WORKSPACE");
+    expect(() =>
+      new RemoteImportPolicy([], {
+        platform: "win32",
+        trustWindowsGitWorkspace: true,
+      }).assertAllowed(githubHistory),
+    ).not.toThrow();
+  });
+
+  it("preserves the Windows history trust guidance for credentialed imports", async () => {
+    const createStagingDirectory = vi.fn();
+    const request = parseRemoteImportRequest({
+      source: {
+        kind: "github",
+        repositoryUrl: "https://github.com/openai/private",
+        credentialProfileId: "github-private",
+      },
+      history: {
+        mode: "commit-count",
+        commitCount: 1,
+      },
+    });
+
+    await expect(
+      enqueueRemoteImport(request, {
+        jobs: undefined as never,
+        artifacts: { createStagingDirectory } as never,
+        policy: new RemoteImportPolicy([], {
+          platform: "win32",
+        }),
+        credentialProfiles: undefined as never,
+      }),
+    ).rejects.toMatchObject({
+      status: 403,
+      fields: [
+        {
+          path: "$.history",
+          message: expect.stringContaining(
+            "CODECITY_TRUST_WINDOWS_GIT_WORKSPACE",
+          ),
+        },
+      ],
+    });
+    expect(createStagingDirectory).not.toHaveBeenCalled();
   });
 
   it("parses fixed environment configuration without permissive fallbacks", () => {
@@ -854,6 +1327,313 @@ describe("remote import HTTP API", () => {
     );
     expect(persisted).not.toContain(repositoryUrl);
     expect(persisted).not.toContain("v1.0.0");
+    expect(
+      await fs.readdir(
+        path.join(roots.dataDirectory, "tmp", "imports"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("runs bounded GitHub history analysis and publishes both artifacts", async () => {
+    const roots = await fixture();
+    const model = historyCityModelFixture();
+    const historyResult = historyAnalysisResultFixture(model);
+    const historyImplementation: NonNullable<
+      RemoteImportDependencies["analyzeGenericGitHistory"]
+    > = async (): Promise<GenericGitHistoryAnalysisResult> =>
+      historyResult;
+    const history = vi.fn(historyImplementation);
+    const server = await startCodeCityServer({
+      host: "127.0.0.1",
+      port: 0,
+      ...roots,
+      trustWindowsGitWorkspace: true,
+      importDependencies: {
+        analyzeGenericGitHistory: history,
+      },
+    });
+    servers.push(server);
+    const publishHistory = vi.spyOn(
+      server.artifacts,
+      "publishHistoryArtifacts",
+    );
+
+    const repositoryUrl = "https://github.com/openai/example";
+    const response = await request(
+      new URL("/api/v1/imports", server.url),
+      {
+        method: "POST",
+        headers: importHeaders(),
+        body: JSON.stringify({
+          source: {
+            kind: "github",
+            repositoryUrl,
+            revision: { kind: "branch", name: "main" },
+          },
+          history: {
+            mode: "commit-count",
+            commitCount: 25,
+            sampleEvery: 5,
+          },
+          identity: { title: "Evolution city" },
+          analysis: {
+            maxRetainedFiles: 1_000,
+            timeoutMs: 60_000,
+          },
+        }),
+      },
+    );
+    expect(response.status).toBe(202);
+    const queued = (JSON.parse(response.body) as { job: JobRecord }).job;
+    const terminal = await waitForTerminal(server, queued.id);
+    expect(terminal).toMatchObject({
+      state: "completed",
+      progress: { phase: "ready", current: 3, total: 3 },
+      result: {
+        kind: "city-model",
+        artifactToken: queued.id,
+        artifactUrl: `/api/v1/artifacts/${queued.id}/city-model.json`,
+        evolution: {
+          artifactUrl:
+            `/api/v1/artifacts/${queued.id}/evolution.json`,
+          size: expect.any(Number),
+          sha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        },
+      },
+    });
+
+    expect(history).toHaveBeenCalledTimes(1);
+    expect(
+      publishHistory.mock.calls[0]?.[3]?.preparedSerialization,
+    ).toBe(historyResult.evolution.preparedSerialization);
+    expect(history.mock.calls[0]).toHaveLength(3);
+    const [historyRequest, historyOptions, historyDependencies] =
+      history.mock.calls[0]!;
+    expect(historyRequest).toMatchObject({
+      repositoryUrl,
+      repositoryIdentity: repositoryUrl,
+      ref: "refs/heads/main",
+      selection: {
+        mode: "commit-count",
+        commitCount: 25,
+        sampleEvery: 5,
+        totalDeadlineMs: 60_000,
+      },
+      signal: expect.any(AbortSignal),
+    });
+    expect(historyOptions).toEqual({
+      identity: { title: "Evolution city" },
+      analysisOptions: { maxRetainedFiles: 1_000 },
+    });
+    expect(historyDependencies).toMatchObject({
+      semanticCache: expect.objectContaining({
+        acquire: expect.any(Function),
+      }),
+      git: {
+        isolateCredentials: true,
+        temporaryWorkspaceOptions: {
+          trustedPrivateParent: {
+            directory: expect.any(String),
+            windowsAclProtection:
+              GENERIC_GIT_PRESECURED_WINDOWS_ACL,
+            canonicalAncestryProtection:
+              GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY,
+          },
+        },
+      },
+    });
+
+    const cityArtifact = await request(
+      new URL(terminal.result!.artifactUrl, server.url),
+    );
+    expect(cityArtifact.status).toBe(200);
+    expect(JSON.parse(cityArtifact.body)).toEqual(model);
+
+    const evolutionUrl = terminal.result!.evolution!.artifactUrl;
+    const evolutionArtifact = await request(
+      new URL(evolutionUrl, server.url),
+    );
+    expect(evolutionArtifact.status).toBe(200);
+    expect(evolutionArtifact.headers["cache-control"]).toBe(
+      "no-store",
+    );
+    expect(JSON.parse(evolutionArtifact.body)).toEqual(
+      JSON.parse(
+        new TextDecoder().decode(
+          serializeEvolutionBundle(historyResult.evolution.bundle),
+        ),
+      ),
+    );
+
+    const persisted = await fs.readFile(
+      path.join(roots.dataDirectory, "jobs", `${queued.id}.json`),
+      "utf8",
+    );
+    expect(persisted).not.toContain(repositoryUrl);
+    expect(persisted).not.toContain("refs/heads/main");
+    expect(persisted).not.toContain("Evolution city");
+  });
+
+  it("applies the history deadline to artifact publication", async () => {
+    const roots = await fixture();
+    const history = vi.fn(
+      async (): Promise<GenericGitHistoryAnalysisResult> =>
+        historyAnalysisResultFixture(),
+    );
+    const server = await startCodeCityServer({
+      host: "127.0.0.1",
+      port: 0,
+      ...roots,
+      trustWindowsGitWorkspace: true,
+      importDependencies: {
+        analyzeGenericGitHistory: history,
+      },
+    });
+    servers.push(server);
+
+    const publish = vi.spyOn(
+      server.artifacts,
+      "publishHistoryArtifacts",
+    );
+    publish.mockImplementation(
+      async (_token, _model, _evolution, options = {}) => {
+        const signal = options.signal;
+        if (signal === undefined) {
+          throw new Error("Expected a publication deadline signal.");
+        }
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) {
+            resolve();
+            return;
+          }
+          signal.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
+        });
+        signal.throwIfAborted();
+        throw new Error("Expected the deadline signal to abort.");
+      },
+    );
+
+    const response = await request(
+      new URL("/api/v1/imports", server.url),
+      {
+        method: "POST",
+        headers: importHeaders(),
+        body: JSON.stringify({
+          source: {
+            kind: "github",
+            repositoryUrl: "https://github.com/openai/example",
+          },
+          history: {
+            mode: "commit-count",
+            commitCount: 1,
+            totalDeadlineMs:
+              HISTORY_SELECTION_LIMITS.minTotalDeadlineMs,
+          },
+        }),
+      },
+    );
+    expect(response.status).toBe(202);
+    const queued = (JSON.parse(response.body) as { job: JobRecord }).job;
+    const terminal = await waitForTerminal(server, queued.id);
+    expect(terminal).toMatchObject({
+      state: "failed",
+      error: {
+        code: "deadline-exceeded",
+        message: "The repository import exceeded its time limit.",
+      },
+    });
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(
+      await fs.readdir(path.join(roots.dataDirectory, "artifacts")),
+    ).toEqual([]);
+    expect(
+      await fs.readdir(
+        path.join(roots.dataDirectory, "tmp", "imports"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("checks the history deadline during temporary-data cleanup", async () => {
+    const roots = await fixture();
+    const history = vi.fn(
+      async (): Promise<GenericGitHistoryAnalysisResult> =>
+        historyAnalysisResultFixture(),
+    );
+    const server = await startCodeCityServer({
+      host: "127.0.0.1",
+      port: 0,
+      ...roots,
+      trustWindowsGitWorkspace: true,
+      importDependencies: {
+        analyzeGenericGitHistory: history,
+      },
+    });
+    servers.push(server);
+
+    const cleanupOriginal =
+      server.artifacts.cleanupStagingDirectory.bind(
+        server.artifacts,
+      );
+    let guardedCleanupCalls = 0;
+    const cleanup = vi.spyOn(
+      server.artifacts,
+      "cleanupStagingDirectory",
+    );
+    cleanup.mockImplementation(async (token, options = {}) => {
+      if (
+        options.signal !== undefined &&
+        options.checkpoint !== undefined
+      ) {
+        guardedCleanupCalls += 1;
+        await new Promise<void>((resolve) => {
+          if (options.signal!.aborted) {
+            resolve();
+            return;
+          }
+          options.signal!.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
+        });
+        options.checkpoint();
+      }
+      await cleanupOriginal(token, options);
+    });
+
+    const response = await request(
+      new URL("/api/v1/imports", server.url),
+      {
+        method: "POST",
+        headers: importHeaders(),
+        body: JSON.stringify({
+          source: {
+            kind: "github",
+            repositoryUrl: "https://github.com/openai/example",
+          },
+          history: {
+            mode: "commit-count",
+            commitCount: 1,
+            totalDeadlineMs:
+              HISTORY_SELECTION_LIMITS.minTotalDeadlineMs,
+          },
+        }),
+      },
+    );
+    expect(response.status).toBe(202);
+    const queued = (JSON.parse(response.body) as { job: JobRecord }).job;
+    const terminal = await waitForTerminal(server, queued.id);
+    expect(terminal).toMatchObject({
+      state: "failed",
+      error: {
+        code: "deadline-exceeded",
+        message: "The repository import exceeded its time limit.",
+      },
+    });
+    expect(guardedCleanupCalls).toBe(1);
+    expect(
+      await fs.readdir(path.join(roots.dataDirectory, "artifacts")),
+    ).toEqual([]);
     expect(
       await fs.readdir(
         path.join(roots.dataDirectory, "tmp", "imports"),

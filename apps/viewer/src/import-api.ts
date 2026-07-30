@@ -3,6 +3,7 @@ const API_REQUEST_DEADLINE_MS = 30_000;
 const API_UPLOAD_DEADLINE_MS = 11 * 60_000;
 const MAXIMUM_ERROR_FIELDS = 64;
 const MAXIMUM_TEXT_CHARACTERS = 2_048;
+const MAXIMUM_EVOLUTION_ARTIFACT_BYTES = 512 * 1024 * 1024;
 
 export const IMPORT_JOB_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -57,6 +58,35 @@ export interface ImportAnalysisOptions {
   readonly timeoutMs?: number;
 }
 
+export interface RemoteImportHistoryBounds {
+  readonly sampleEvery?: number;
+  readonly totalDeadlineMs?: number;
+  readonly maxAggregateChangedPaths?: number;
+  readonly maxAggregateChangedPathBytes?: number;
+  readonly maxAggregateSemanticBytes?: number;
+  readonly maxAggregateTreeEntries?: number;
+  readonly maxUniqueLineages?: number;
+  readonly maxEvolutionOutputBytes?: number;
+}
+
+export type RemoteImportHistorySelection =
+  | (RemoteImportHistoryBounds & {
+      readonly mode: "commit-count";
+      readonly commitCount: number;
+    })
+  | (RemoteImportHistoryBounds & {
+      readonly mode: "date-range";
+      readonly fromInclusive: string;
+      readonly toInclusive: string;
+      readonly maxCommits: number;
+    })
+  | (RemoteImportHistoryBounds & {
+      readonly mode: "tag-range";
+      readonly oldestTagName: string;
+      readonly newestTagName: string;
+      readonly maxCommits: number;
+    });
+
 export interface RemoteImportSubmission {
   readonly source: {
     readonly kind: "github" | "git";
@@ -64,6 +94,7 @@ export interface RemoteImportSubmission {
     readonly credentialProfileId?: string;
     readonly revision?: ImportRevision;
   };
+  readonly history?: RemoteImportHistorySelection;
   readonly identity?: ImportIdentityOptions;
   readonly analysis?: ImportAnalysisOptions;
 }
@@ -120,6 +151,11 @@ export interface ImportJobResult {
   readonly kind: "city-model";
   readonly artifactToken: string;
   readonly artifactUrl: string;
+  readonly evolution?: {
+    readonly artifactUrl: string;
+    readonly size: number;
+    readonly sha256: string;
+  };
 }
 
 export interface ImportJob {
@@ -404,9 +440,19 @@ function parseJobError(value: unknown): ImportJobError {
 }
 
 function parseJobResult(value: unknown, jobId: string): ImportJobResult {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw protocolError("Import job result is invalid.");
+  }
+  const candidate = value as Record<string, unknown>;
+  const evolutionPresent = Object.hasOwn(candidate, "evolution");
   const object = exactObject(
     value,
-    ["artifactToken", "artifactUrl", "kind"],
+    [
+      "artifactToken",
+      "artifactUrl",
+      "kind",
+      ...(evolutionPresent ? ["evolution"] : []),
+    ],
     "Import job result",
   );
   const token = object["artifactToken"];
@@ -418,10 +464,37 @@ function parseJobResult(value: unknown, jobId: string): ImportJobResult {
   ) {
     throw protocolError("Import job result is invalid.");
   }
+  let evolution: ImportJobResult["evolution"];
+  if (evolutionPresent) {
+    const evolutionObject = exactObject(
+      object["evolution"],
+      ["artifactUrl", "sha256", "size"],
+      "Import evolution result",
+    );
+    const size = evolutionObject["size"];
+    const sha256 = evolutionObject["sha256"];
+    if (
+      evolutionObject["artifactUrl"] !==
+        `/api/v1/artifacts/${jobId}/evolution.json` ||
+      !Number.isSafeInteger(size) ||
+      (size as number) < 1 ||
+      (size as number) > MAXIMUM_EVOLUTION_ARTIFACT_BYTES ||
+      typeof sha256 !== "string" ||
+      !/^[0-9a-f]{64}$/u.test(sha256)
+    ) {
+      throw protocolError("Import evolution result is invalid.");
+    }
+    evolution = Object.freeze({
+      artifactUrl: evolutionObject["artifactUrl"],
+      size: size as number,
+      sha256,
+    });
+  }
   return Object.freeze({
     kind: "city-model",
     artifactToken: jobId,
     artifactUrl,
+    ...(evolution === undefined ? {} : { evolution }),
   });
 }
 

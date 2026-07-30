@@ -20,10 +20,19 @@ import type {
   Vector3,
 } from "./model.js";
 import { normalizePath, stableId } from "./path.js";
-import { packRectangles } from "./rectangle-packing.js";
+import {
+  packRectangles,
+  type RectanglePackingSearchMode,
+} from "./rectangle-packing.js";
 import { semanticGroupForRisk } from "./semantics.js";
 
 export interface UnpositionedBuilding {
+  /**
+   * Optional caller-owned stable identity. Snapshot layouts omit it and keep
+   * the schema-1.0 path-derived identity; evolution layouts provide a lineage
+   * identity so a rename does not create a new building.
+   */
+  readonly id?: string;
   readonly repositoryId: string;
   readonly moduleId: string;
   readonly name: string;
@@ -64,6 +73,47 @@ export interface CityLayoutResult {
   readonly districts: readonly CityDistrict[];
   readonly buildings: readonly CityBuilding[];
   readonly bounds: Vector3;
+}
+
+export interface CityLayoutExecutionOptions {
+  /**
+   * Called with completed work units at bounded intervals and with zero at
+   * otherwise idle phase boundaries. Throwing cancels layout.
+   */
+  readonly checkpoint?: (operations: number) => void;
+  /**
+   * Uses fixed-cap rectangle candidate searches throughout the entire city
+   * layout when set to `bounded`. Evolution analysis uses this mode because it
+   * lays out a union plus every sampled frame.
+   */
+  readonly packingSearchMode?: RectanglePackingSearchMode;
+}
+
+const LAYOUT_CHECKPOINT_INTERVAL = 256;
+
+class LayoutCheckpoint {
+  #operations = 0;
+
+  public constructor(
+    private readonly callback:
+      | ((operations: number) => void)
+      | undefined,
+  ) {}
+
+  public checkpoint(): void {
+    const operations = this.#operations;
+    this.#operations = 0;
+    this.callback?.(operations);
+  }
+
+  public consume(operations = 1): void {
+    if (this.callback === undefined) return;
+    this.#operations += operations;
+    while (this.#operations >= LAYOUT_CHECKPOINT_INTERVAL) {
+      this.#operations -= LAYOUT_CHECKPOINT_INTERVAL;
+      this.callback(LAYOUT_CHECKPOINT_INTERVAL);
+    }
+  }
 }
 
 export const DEFAULT_LAYOUT_OPTIONS: Readonly<LayoutOptions> = Object.freeze({
@@ -156,9 +206,11 @@ function normalizeOptions(options: Partial<LayoutOptions>): LayoutOptions {
 function assertUniqueIds(
   values: readonly { readonly id: string }[],
   kind: string,
+  work: LayoutCheckpoint,
 ): void {
   const ids = new Set<string>();
   for (const value of values) {
+    work.consume();
     if (ids.has(value.id)) {
       throw new TypeError(`Duplicate ${kind} id '${value.id}'.`);
     }
@@ -170,13 +222,20 @@ function createLocalDistrict(
   module: CityModule,
   facts: readonly UnpositionedBuilding[],
   options: LayoutOptions,
+  packingSearchMode: RectanglePackingSearchMode,
+  work: LayoutCheckpoint,
 ): LocalDistrict {
-  const ordered = [...facts].sort(
-    (left, right) =>
+  work.checkpoint();
+  const ordered = [...facts].sort((left, right) => {
+    work.consume();
+    return (
       compare(normalizePath(left.path), normalizePath(right.path)) ||
-      compare(left.name, right.name),
-  );
+      compare(left.name, right.name)
+    );
+  });
+  work.checkpoint();
   const sized = ordered.map((fact) => {
+    work.consume();
     validateSourceMetrics(fact.metrics);
     const path = normalizePath(fact.path);
     const risk = classifyRisk(fact.metrics.maximumComplexity);
@@ -187,16 +246,19 @@ function createLocalDistrict(
       geometry,
       size: geometry.size,
       risk,
-      id: stableId(
-        "building",
-        fact.repositoryId,
-        fact.moduleId,
-        path,
-      ),
+      id:
+        fact.id ??
+        stableId(
+          "building",
+          fact.repositoryId,
+          fact.moduleId,
+          path,
+        ),
     };
   });
   const buildingIds = new Set<string>();
   for (const item of sized) {
+    work.consume();
     if (buildingIds.has(item.id)) {
       throw new TypeError(
         `Duplicate building path '${item.path}' in module '${module.id}'.`,
@@ -212,12 +274,19 @@ function createLocalDistrict(
       depth: item.size.z,
     })),
     options.buildingGap,
+    {
+      searchMode: packingSearchMode,
+      checkpoint: (operations) => {
+        work.consume(operations);
+        work.checkpoint();
+      },
+    },
   );
   const buildingPlacements = new Map(
-    buildingPacking.rectangles.map((rectangle) => [
-      rectangle.id,
-      rectangle,
-    ]),
+    buildingPacking.rectangles.map((rectangle) => {
+      work.consume();
+      return [rectangle.id, rectangle] as const;
+    }),
   );
   const width = Math.max(
     options.minimumDistrictSize,
@@ -231,6 +300,7 @@ function createLocalDistrict(
   const buildingInsetZ = (depth - buildingPacking.depth) / 2;
   const districtId = stableId("district", module.repositoryId, module.id);
   const buildings = sized.map((item): LocalBuilding => {
+    work.consume();
     const placement = buildingPlacements.get(item.id)!;
     return {
       building: {
@@ -280,6 +350,8 @@ function packDistricts(
   repositoryId: string,
   districts: readonly LocalDistrict[],
   gap: number,
+  packingSearchMode: RectanglePackingSearchMode,
+  work: LayoutCheckpoint,
 ): RepositoryBlock {
   if (districts.length === 0) {
     return { repositoryId, districts: [], width: 0, depth: 0 };
@@ -291,13 +363,24 @@ function packDistricts(
       depth: local.depth,
     })),
     gap,
+    {
+      searchMode: packingSearchMode,
+      checkpoint: (operations) => {
+        work.consume(operations);
+        work.checkpoint();
+      },
+    },
   );
   const placements = new Map(
-    packing.rectangles.map((rectangle) => [rectangle.id, rectangle]),
+    packing.rectangles.map((rectangle) => {
+      work.consume();
+      return [rectangle.id, rectangle] as const;
+    }),
   );
   return {
     repositoryId,
     districts: districts.map((local) => {
+      work.consume();
       const placement = placements.get(local.district.id)!;
       return {
         local,
@@ -313,13 +396,36 @@ function packDistricts(
 export function layoutCity(
   input: CityLayoutInput,
   partialOptions: Partial<LayoutOptions> = {},
+  execution: CityLayoutExecutionOptions = {},
 ): CityLayoutResult {
+  const work = new LayoutCheckpoint(execution.checkpoint);
+  work.checkpoint();
+  const packingSearchMode = execution.packingSearchMode ?? "quality";
+  if (
+    packingSearchMode !== "quality" &&
+    packingSearchMode !== "bounded"
+  ) {
+    throw new TypeError(
+      "City layout packingSearchMode must be 'quality' or 'bounded'.",
+    );
+  }
   const options = normalizeOptions(partialOptions);
-  assertUniqueIds(input.repositories, "repository");
-  assertUniqueIds(input.modules, "module");
-  const repositoryIds = new Set(input.repositories.map(({ id }) => id));
-  const modulesById = new Map(input.modules.map((module) => [module.id, module]));
+  assertUniqueIds(input.repositories, "repository", work);
+  assertUniqueIds(input.modules, "module", work);
+  const repositoryIds = new Set(
+    input.repositories.map(({ id }) => {
+      work.consume();
+      return id;
+    }),
+  );
+  const modulesById = new Map(
+    input.modules.map((module) => {
+      work.consume();
+      return [module.id, module] as const;
+    }),
+  );
   for (const module of input.modules) {
+    work.consume();
     if (!repositoryIds.has(module.repositoryId)) {
       throw new TypeError(
         `Module '${module.id}' references unknown repository '${module.repositoryId}'.`,
@@ -329,6 +435,7 @@ export function layoutCity(
 
   const factsByModule = new Map<string, UnpositionedBuilding[]>();
   for (const fact of input.buildings) {
+    work.consume();
     const module = modulesById.get(fact.moduleId);
     if (!module) {
       throw new TypeError(
@@ -348,26 +455,43 @@ export function layoutCity(
     factsByModule.set(fact.moduleId, list);
   }
 
-  const orderedRepositories = [...input.repositories].sort((left, right) =>
-    compare(left.id, right.id),
-  );
+  work.checkpoint();
+  const orderedRepositories = [...input.repositories].sort((left, right) => {
+    work.consume();
+    return compare(left.id, right.id);
+  });
+  work.checkpoint();
   const blocks = orderedRepositories
     .map((repository) => {
+      work.consume();
       const localDistricts = input.modules
-        .filter((module) => module.repositoryId === repository.id)
-        .sort(
-          (left, right) =>
+        .filter((module) => {
+          work.consume();
+          return module.repositoryId === repository.id;
+        })
+        .sort((left, right) => {
+          work.consume();
+          return (
             compare(normalizePath(left.path), normalizePath(right.path)) ||
-            compare(left.id, right.id),
-        )
+            compare(left.id, right.id)
+          );
+        })
         .map((module) =>
           createLocalDistrict(
             module,
             factsByModule.get(module.id) ?? [],
             options,
+            packingSearchMode,
+            work,
           ),
         );
-      return packDistricts(repository.id, localDistricts, options.districtGap);
+      return packDistricts(
+        repository.id,
+        localDistricts,
+        options.districtGap,
+        packingSearchMode,
+        work,
+      );
     })
     .filter((block) => block.districts.length > 0);
 
@@ -378,12 +502,19 @@ export function layoutCity(
       depth: block.depth,
     })),
     options.repositoryGap,
+    {
+      searchMode: packingSearchMode,
+      checkpoint: (operations) => {
+        work.consume(operations);
+        work.checkpoint();
+      },
+    },
   );
   const repositoryPlacements = new Map(
-    repositoryPacking.rectangles.map((rectangle) => [
-      rectangle.id,
-      rectangle,
-    ]),
+    repositoryPacking.rectangles.map((rectangle) => {
+      work.consume();
+      return [rectangle.id, rectangle] as const;
+    }),
   );
   const cityWidth = repositoryPacking.width;
   const cityDepth = repositoryPacking.depth;
@@ -406,6 +537,7 @@ export function layoutCity(
   let maximumHeight = 0;
 
   blocks.forEach((block) => {
+    work.consume();
     const repositoryPlacement = repositoryPlacements.get(
       block.repositoryId,
     )!;
@@ -413,6 +545,7 @@ export function layoutCity(
       xInset + repositoryPlacement.x;
     const repositoryZ = zInset + repositoryPlacement.z;
     for (const positioned of block.districts) {
+      work.consume();
       const originX = repositoryX + positioned.x;
       const originZ = repositoryZ + positioned.z;
       const { local } = positioned;
@@ -426,6 +559,7 @@ export function layoutCity(
       });
       maximumHeight = Math.max(maximumHeight, options.districtBaseHeight);
       for (const item of local.buildings) {
+        work.consume();
         buildings.push({
           ...item.building,
           position: {
@@ -486,6 +620,7 @@ export function layoutCity(
         }
       : undefined;
 
+  work.checkpoint();
   return {
     ...(identity === undefined ? {} : { identity }),
     ...(identityPanel === undefined ? {} : { identityPanel }),

@@ -1998,6 +1998,7 @@ button,
 }
 
 .project-import-revision,
+.project-import-history,
 .project-import-analysis {
   margin: 0;
   padding: 12px;
@@ -2006,6 +2007,7 @@ button,
 }
 
 .project-import-revision legend,
+.project-import-history legend,
 .project-import-analysis legend {
   padding: 0 5px;
   color: #cfe3f7;
@@ -2029,6 +2031,44 @@ button,
 
 .project-import-revision input {
   accent-color: var(--accent);
+}
+
+.project-import-history {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.project-import-history-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  color: #e7f4ff;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.project-import-history-toggle input {
+  accent-color: var(--accent);
+}
+
+.project-import-history-options {
+  display: grid;
+  gap: 10px;
+  padding-top: 2px;
+}
+
+.project-import-history-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.project-import-history-toggle input:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
 }
 
 .project-import-analysis {
@@ -2616,6 +2656,7 @@ button,
   .project-import-sources,
   .project-import-grid,
   .project-import-grid-limits,
+  .project-import-history-fields,
   .print-export-grid {
     grid-template-columns: 1fr;
   }

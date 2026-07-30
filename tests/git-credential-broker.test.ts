@@ -294,7 +294,10 @@ describe("Generic Git selected credential integration", () => {
       ).toBe(true);
     }
     for (const request of localCalls) {
-      expect(request.arguments).not.toContain("credential.helper=");
+      expect(request.arguments).toContain("credential.helper=");
+      expect(request.arguments).toContain("http.extraHeader=");
+      expect(request.arguments).toContain("http.cookieFile=");
+      expect(request.arguments).toContain("core.askPass=");
       expect(
         request.arguments.some((argument) =>
           argument.startsWith("credential.helper=!"),

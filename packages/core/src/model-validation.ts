@@ -42,6 +42,36 @@ const DEPENDENCY_RESOLUTIONS = new Set([
   "unresolved",
 ]);
 const UNSAFE_TEXT_CHARACTERS = /[\p{Cc}\p{Cf}\p{Cs}]/u;
+const VALIDATION_CHECKPOINT_INTERVAL = 256;
+
+export interface CityModelValidationOptions {
+  /**
+   * Called at bounded intervals while validating large collections.
+   * Throwing aborts validation immediately.
+   */
+  readonly checkpoint?: () => void;
+}
+
+class ValidationCheckpoint {
+  #operations = 0;
+
+  public constructor(
+    private readonly callback: (() => void) | undefined,
+  ) {}
+
+  public checkpoint(): void {
+    this.#operations = 0;
+    this.callback?.();
+  }
+
+  public consume(operations = 1): void {
+    if (this.callback === undefined) return;
+    this.#operations += operations;
+    if (this.#operations < VALIDATION_CHECKPOINT_INTERVAL) return;
+    this.#operations %= VALIDATION_CHECKPOINT_INTERVAL;
+    this.callback();
+  }
+}
 
 export const CITY_MODEL_LIMITS = Object.freeze({
   repositories: 1_000,
@@ -65,7 +95,12 @@ export const CITY_MODEL_LIMITS = Object.freeze({
   textCharacters: 2_048,
 });
 
-export function validateCityModel(value: unknown): CityModel {
+export function validateCityModel(
+  value: unknown,
+  options: CityModelValidationOptions = {},
+): CityModel {
+  const work = new ValidationCheckpoint(options.checkpoint);
+  work.checkpoint();
   const model = objectAt(value, "model");
 
   if (model.schemaVersion !== CITY_MODEL_SCHEMA_VERSION) {
@@ -90,59 +125,59 @@ export function validateCityModel(value: unknown): CityModel {
     model.repositories,
     "repositories",
     CITY_MODEL_LIMITS.repositories,
+    work,
   );
   const solutions = objectArray(
     model.solutions,
     "solutions",
     CITY_MODEL_LIMITS.solutions,
+    work,
   );
   const modules = objectArray(
     model.modules,
     "modules",
     CITY_MODEL_LIMITS.modules,
+    work,
   );
   const semanticGroups = objectArray(
     model.semanticGroups,
     "semanticGroups",
     CITY_MODEL_LIMITS.semanticGroups,
+    work,
   );
   const districts = objectArray(
     model.districts,
     "districts",
     CITY_MODEL_LIMITS.districts,
+    work,
   );
   const buildings = objectArray(
     model.buildings,
     "buildings",
     CITY_MODEL_LIMITS.buildings,
+    work,
   );
   const dependencies = objectArray(
     model.dependencies,
     "dependencies",
     CITY_MODEL_LIMITS.dependencies,
+    work,
   );
 
-  const repositoryIds = validateIds(repositories, "repositories");
-  const solutionIds = validateIds(solutions, "solutions");
-  const moduleIds = validateIds(modules, "modules");
-  const groupIds = validateIds(semanticGroups, "semanticGroups");
-  const districtIds = validateIds(districts, "districts");
-  const buildingIds = validateIds(buildings, "buildings");
-  validateIds(dependencies, "dependencies");
-  const solutionsById = new Map(
-    solutions.map((solution) => [solution.id as string, solution]),
-  );
-  const modulesById = new Map(
-    modules.map((module) => [module.id as string, module]),
-  );
-  const districtsById = new Map(
-    districts.map((district) => [district.id as string, district]),
-  );
-  const buildingsById = new Map(
-    buildings.map((building) => [building.id as string, building]),
-  );
+  const repositoryIds = validateIds(repositories, "repositories", work);
+  const solutionIds = validateIds(solutions, "solutions", work);
+  const moduleIds = validateIds(modules, "modules", work);
+  const groupIds = validateIds(semanticGroups, "semanticGroups", work);
+  const districtIds = validateIds(districts, "districts", work);
+  const buildingIds = validateIds(buildings, "buildings", work);
+  validateIds(dependencies, "dependencies", work);
+  const solutionsById = entitiesById(solutions, work);
+  const modulesById = entitiesById(modules, work);
+  const districtsById = entitiesById(districts, work);
+  const buildingsById = entitiesById(buildings, work);
 
   repositories.forEach((repository, index) => {
+    work.consume();
     nonEmptyString(
       repository.name,
       `repositories[${index}].name`,
@@ -151,6 +186,7 @@ export function validateCityModel(value: unknown): CityModel {
   });
 
   solutions.forEach((solution, index) => {
+    work.consume();
     const prefix = `solutions[${index}]`;
     const repositoryId = reference(
       solution.repositoryId,
@@ -168,8 +204,10 @@ export function validateCityModel(value: unknown): CityModel {
       moduleIds,
       `${prefix}.moduleIds`,
       CITY_MODEL_LIMITS.referencesPerEntity,
+      work,
     );
     referencedModuleIds.forEach((moduleId, moduleIndex) => {
+      work.consume();
       if (modulesById.get(moduleId)!.repositoryId !== repositoryId) {
         fail(
           `${prefix}.moduleIds[${moduleIndex}] must reference a module in the same repository`,
@@ -179,6 +217,7 @@ export function validateCityModel(value: unknown): CityModel {
   });
 
   modules.forEach((module, index) => {
+    work.consume();
     const prefix = `modules[${index}]`;
     const repositoryId = reference(
       module.repositoryId,
@@ -210,8 +249,10 @@ export function validateCityModel(value: unknown): CityModel {
       solutionIds,
       `${prefix}.solutionIds`,
       CITY_MODEL_LIMITS.referencesPerEntity,
+      work,
     );
     referencedSolutionIds.forEach((solutionId, solutionIndex) => {
+      work.consume();
       if (solutionsById.get(solutionId)!.repositoryId !== repositoryId) {
         fail(
           `${prefix}.solutionIds[${solutionIndex}] must reference a solution in the same repository`,
@@ -223,6 +264,7 @@ export function validateCityModel(value: unknown): CityModel {
       `${prefix}.targetFrameworks`,
       CITY_MODEL_LIMITS.targetFrameworksPerModule,
       CITY_MODEL_LIMITS.externalReferenceCharacters,
+      work,
     );
     optionalString(
       module.packageId,
@@ -232,6 +274,7 @@ export function validateCityModel(value: unknown): CityModel {
   });
 
   semanticGroups.forEach((group, index) => {
+    work.consume();
     const prefix = `semanticGroups[${index}]`;
     nonEmptyString(
       group.label,
@@ -247,12 +290,13 @@ export function validateCityModel(value: unknown): CityModel {
   });
 
   validateMetricMapping(model.metricMapping);
-  validateAnalysis(model.analysis);
-  validateIdentity(model.identity, repositoryIds);
+  validateAnalysis(model.analysis, work);
+  validateIdentity(model.identity, repositoryIds, work);
   const identityPanel = validateIdentityPanel(model.identityPanel, groupIds);
   const base = validateCityBase(model.base, groupIds);
 
   districts.forEach((district, index) => {
+    work.consume();
     const prefix = `districts[${index}]`;
     reference(
       district.repositoryId,
@@ -277,6 +321,7 @@ export function validateCityModel(value: unknown): CityModel {
   });
 
   buildings.forEach((building, index) => {
+    work.consume();
     const prefix = `buildings[${index}]`;
     reference(
       building.repositoryId,
@@ -333,6 +378,7 @@ export function validateCityModel(value: unknown): CityModel {
       building.units,
       metrics,
       prefix,
+      work,
     );
     validateBuildingMetricNormalization(
       building.metricNormalization,
@@ -342,6 +388,7 @@ export function validateCityModel(value: unknown): CityModel {
   });
 
   dependencies.forEach((dependency, index) => {
+    work.consume();
     const prefix = `dependencies[${index}]`;
     const repositoryId = reference(
       dependency.repositoryId,
@@ -422,12 +469,17 @@ export function validateCityModel(value: unknown): CityModel {
       districts,
       buildings,
       bounds,
+      work,
     );
   }
+  work.checkpoint();
   return model as unknown as CityModel;
 }
 
-function validateAnalysis(value: unknown): void {
+function validateAnalysis(
+  value: unknown,
+  work: ValidationCheckpoint,
+): void {
   if (value === undefined) return;
   const analysis = objectAt(value, "analysis");
   if (!Array.isArray(analysis.warnings)) {
@@ -438,13 +490,14 @@ function validateAnalysis(value: unknown): void {
       `analysis.warnings must contain at most ${CITY_MODEL_LIMITS.warnings} items`,
     );
   }
-  analysis.warnings.forEach((warning, index) =>
+  analysis.warnings.forEach((warning, index) => {
+    work.consume();
     nonEmptyString(
       warning,
       `analysis.warnings[${index}]`,
       CITY_MODEL_LIMITS.warningCharacters,
-    ),
-  );
+    );
+  });
 }
 
 function validateMetricMapping(value: unknown): void {
@@ -548,6 +601,7 @@ function validateBuildingMetricDetails(
   unitsValue: unknown,
   aggregate: JsonObject,
   prefix: string,
+  work: ValidationCheckpoint,
 ): void {
   if (methodValue === undefined && unitsValue === undefined) return;
   if (methodValue === undefined || unitsValue === undefined) {
@@ -559,8 +613,10 @@ function validateBuildingMetricDetails(
     unitsValue,
     `${prefix}.units`,
     CITY_MODEL_LIMITS.metricUnitsPerBuilding,
+    work,
   );
   units.forEach((unit, index) => {
+    work.consume();
     const unitPrefix = `${prefix}.units[${index}]`;
     nonEmptyString(
       unit.name,
@@ -575,7 +631,11 @@ function validateBuildingMetricDetails(
       `${prefix}.units length must equal metrics.executableUnitCount`,
     );
   }
-  const maximum = Math.max(...units.map((unit) => unit.complexity as number));
+  let maximum = Number.NEGATIVE_INFINITY;
+  for (const unit of units) {
+    work.consume();
+    maximum = Math.max(maximum, unit.complexity as number);
+  }
   if (maximum !== aggregate.maximumComplexity) {
     fail(`${prefix}.units must preserve metrics.maximumComplexity`);
   }
@@ -584,6 +644,7 @@ function validateBuildingMetricDetails(
 function validateIdentity(
   value: unknown,
   repositoryIds: Set<string>,
+  work: ValidationCheckpoint,
 ): void {
   if (value === undefined) {
     return;
@@ -599,9 +660,11 @@ function validateIdentity(
       identity.repositories,
       "identity.repositories",
       CITY_MODEL_LIMITS.repositories,
+      work,
     );
     const seen = new Set<string>();
     repositories.forEach((repository, index) => {
+      work.consume();
       const prefix = `identity.repositories[${index}]`;
       const repositoryId = nonEmptyString(
         repository.repositoryId,
@@ -711,6 +774,7 @@ function validateSharedGeometry(
   districts: readonly JsonObject[],
   buildings: readonly JsonObject[],
   bounds: Vector3,
+  work: ValidationCheckpoint,
 ): void {
   const baseSize = vector(base.size, "base.size", true);
   if (
@@ -723,6 +787,7 @@ function validateSharedGeometry(
   const baseBox = geometryBox(base, "base");
   const districtBoxes = new Map<string, GeometryBox>();
   districts.forEach((district, index) => {
+    work.consume();
     const path = `districts[${index}]`;
     const box = geometryBox(district, path);
     districtBoxes.set(nonEmptyString(district.id, `${path}.id`), box);
@@ -743,6 +808,7 @@ function validateSharedGeometry(
   }
 
   buildings.forEach((building, index) => {
+    work.consume();
     const path = `buildings[${index}]`;
     const districtId = nonEmptyString(
       building.districtId,
@@ -825,6 +891,7 @@ function objectArray(
   value: unknown,
   path: string,
   maximumLength: number,
+  work?: ValidationCheckpoint,
 ): JsonObject[] {
   if (!Array.isArray(value)) {
     fail(`${path} must be an array`);
@@ -832,12 +899,20 @@ function objectArray(
   if (value.length > maximumLength) {
     fail(`${path} must contain at most ${maximumLength} items`);
   }
-  return value.map((item, index) => objectAt(item, `${path}[${index}]`));
+  return value.map((item, index) => {
+    work?.consume();
+    return objectAt(item, `${path}[${index}]`);
+  });
 }
 
-function validateIds(items: JsonObject[], path: string): Set<string> {
+function validateIds(
+  items: JsonObject[],
+  path: string,
+  work: ValidationCheckpoint,
+): Set<string> {
   const ids = new Set<string>();
   items.forEach((item, index) => {
+    work.consume();
     const id = nonEmptyString(
       item.id,
       `${path}[${index}].id`,
@@ -849,6 +924,18 @@ function validateIds(items: JsonObject[], path: string): Set<string> {
     ids.add(id);
   });
   return ids;
+}
+
+function entitiesById(
+  items: readonly JsonObject[],
+  work: ValidationCheckpoint,
+): Map<string, JsonObject> {
+  const result = new Map<string, JsonObject>();
+  for (const item of items) {
+    work.consume();
+    result.set(item.id as string, item);
+  }
+  return result;
 }
 
 function reference(value: unknown, ids: Set<string>, path: string): string {
@@ -876,6 +963,7 @@ function referenceArray(
   ids: Set<string>,
   path: string,
   maximumLength: number,
+  work: ValidationCheckpoint,
 ): readonly string[] {
   if (!Array.isArray(value)) {
     fail(`${path} must be an array`);
@@ -883,9 +971,10 @@ function referenceArray(
   if (value.length > maximumLength) {
     fail(`${path} must contain at most ${maximumLength} items`);
   }
-  return value.map((item, index) =>
-    reference(item, ids, `${path}[${index}]`),
-  );
+  return value.map((item, index) => {
+    work.consume();
+    return reference(item, ids, `${path}[${index}]`);
+  });
 }
 
 function optionalStringArray(
@@ -893,6 +982,7 @@ function optionalStringArray(
   path: string,
   maximumLength: number,
   maximumItemLength: number = CITY_MODEL_LIMITS.textCharacters,
+  work?: ValidationCheckpoint,
 ): void {
   if (value === undefined) {
     return;
@@ -903,9 +993,10 @@ function optionalStringArray(
   if (value.length > maximumLength) {
     fail(`${path} must contain at most ${maximumLength} items`);
   }
-  value.forEach((item, index) =>
-    nonEmptyString(item, `${path}[${index}]`, maximumItemLength),
-  );
+  value.forEach((item, index) => {
+    work?.consume();
+    nonEmptyString(item, `${path}[${index}]`, maximumItemLength);
+  });
 }
 
 function vector(value: unknown, path: string, positive: boolean): Vector3 {

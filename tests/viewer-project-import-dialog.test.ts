@@ -2,10 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   PROJECT_IMPORT_ANALYSIS_LIMITS,
+  PROJECT_IMPORT_HISTORY_LIMITS,
   PROJECT_IMPORT_SOURCE_CHOICES,
   projectImportAnalysisOptions,
   projectImportCityModelSubmission,
   projectImportFieldForServerPath,
+  projectImportHistoryRevisionError,
+  projectImportHistorySelection,
   projectImportIdentityOptions,
   projectImportNavigationLocked,
   projectImportPersistenceWarning,
@@ -81,6 +84,15 @@ describe("viewer project import dialog state", () => {
         timeoutSeconds: "",
       }),
     ).toThrow(/must not exceed/u);
+  });
+
+  it("keeps repository history within the acquisition and frame bounds", () => {
+    expect(PROJECT_IMPORT_HISTORY_LIMITS).toEqual({
+      maxCommits: 500,
+      maxSampleEvery: 500,
+      maxFrames: 100,
+      maxTagNameBytes: 246,
+    });
   });
 
   it("keeps every accepted project source explicit", () => {
@@ -206,6 +218,196 @@ describe("viewer project import dialog state", () => {
     },
   ])("serializes the $name source contract", ({ values, expected }) => {
     expect(projectImportRemoteSubmission(values).source).toEqual(expected);
+    expect(projectImportRemoteSubmission(values)).not.toHaveProperty(
+      "history",
+    );
+  });
+
+  it("serializes each opt-in history mode as an exact root request", () => {
+    const common = {
+      enabled: true,
+      mode: "commit-count",
+      commitCount: "500",
+      fromInclusive: "",
+      toInclusive: "",
+      dateMaxCommits: "",
+      oldestTagName: "",
+      newestTagName: "",
+      tagMaxCommits: "",
+      sampleEvery: "6",
+    };
+    const commitCount = projectImportHistorySelection(common);
+    expect(commitCount).toEqual({
+      mode: "commit-count",
+      commitCount: 500,
+      sampleEvery: 6,
+    });
+    expect(
+      projectImportHistorySelection({
+        ...common,
+        mode: "date-range",
+        fromInclusive: "2026-01-02T03:04",
+        toInclusive: "2026-02-03T04:05:06",
+        dateMaxCommits: "100",
+        sampleEvery: "",
+      }),
+    ).toEqual({
+      mode: "date-range",
+      fromInclusive: "2026-01-02T03:04:00.000Z",
+      toInclusive: "2026-02-03T04:05:06.000Z",
+      maxCommits: 100,
+    });
+    const tagRange = projectImportHistorySelection({
+      ...common,
+      mode: "tag-range",
+      oldestTagName: "releases/v1.0.0",
+      newestTagName: "v2.0.0",
+      tagMaxCommits: "250",
+      sampleEvery: "3",
+    });
+    expect(tagRange).toEqual({
+      mode: "tag-range",
+      oldestTagName: "releases/v1.0.0",
+      newestTagName: "v2.0.0",
+      maxCommits: 250,
+      sampleEvery: 3,
+    });
+    if (tagRange === undefined) {
+      throw new Error("Expected an enabled tag-range history selection.");
+    }
+    expect(
+      projectImportRemoteSubmission({
+        source: "github-public",
+        repositoryUrl: "https://github.com/example/history",
+        credentialProfileId: "",
+        revisionKind: "default",
+        revisionValue: "",
+        history: tagRange,
+      }),
+    ).toEqual({
+      source: {
+        kind: "github",
+        repositoryUrl: "https://github.com/example/history",
+      },
+      history: tagRange,
+    });
+    expect(
+      projectImportHistorySelection({
+        ...common,
+        enabled: false,
+        commitCount: "not validated while disabled",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("rejects unbounded, oversampled, unordered, and inexact history input", () => {
+    const common = {
+      enabled: true,
+      mode: "commit-count",
+      commitCount: "1",
+      fromInclusive: "",
+      toInclusive: "",
+      dateMaxCommits: "1",
+      oldestTagName: "v1",
+      newestTagName: "v2",
+      tagMaxCommits: "1",
+      sampleEvery: "1",
+    };
+    for (const values of [
+      { ...common, commitCount: "0" },
+      { ...common, commitCount: "501" },
+      { ...common, sampleEvery: "0" },
+      { ...common, sampleEvery: "501" },
+      { ...common, commitCount: "101", sampleEvery: "1" },
+      { ...common, commitCount: "500", sampleEvery: "5" },
+    ]) {
+      expect(() => projectImportHistorySelection(values)).toThrow();
+    }
+    expect(() =>
+      projectImportHistorySelection({
+        ...common,
+        mode: "date-range",
+        fromInclusive: "2026-02-30T00:00",
+        toInclusive: "2026-03-01T00:00",
+      }),
+    ).toThrow(/valid starting UTC/iu);
+    expect(() =>
+      projectImportHistorySelection({
+        ...common,
+        mode: "date-range",
+        fromInclusive: "2026-03-02T00:00",
+        toInclusive: "2026-03-01T00:00",
+      }),
+    ).toThrow(/must not be later/iu);
+    for (const oldestTagName of [
+      "",
+      " v1",
+      "refs/heads/main",
+      "refs/tags/v1",
+      "release..candidate",
+    ]) {
+      expect(() =>
+        projectImportHistorySelection({
+          ...common,
+          mode: "tag-range",
+          oldestTagName,
+        }),
+      ).toThrow(/oldest tag/iu);
+    }
+    expect(
+      projectImportHistorySelection({
+        ...common,
+        mode: "tag-range",
+        oldestTagName: "a".repeat(
+          PROJECT_IMPORT_HISTORY_LIMITS.maxTagNameBytes,
+        ),
+      }),
+    ).toMatchObject({
+      oldestTagName: "a".repeat(
+        PROJECT_IMPORT_HISTORY_LIMITS.maxTagNameBytes,
+      ),
+    });
+    expect(() =>
+      projectImportHistorySelection({
+        ...common,
+        mode: "tag-range",
+        oldestTagName: "a".repeat(
+          PROJECT_IMPORT_HISTORY_LIMITS.maxTagNameBytes + 1,
+        ),
+      }),
+    ).toThrow(/246 UTF-8 bytes/iu);
+  });
+
+  it("requires the default revision for an exact tag-range history", () => {
+    const history = {
+      mode: "tag-range",
+      oldestTagName: "v1",
+      newestTagName: "v2",
+      maxCommits: 100,
+    } as const;
+    const revision = { kind: "branch", name: "main" } as const;
+    expect(
+      projectImportHistoryRevisionError(history, revision),
+    ).toMatch(/default revision/iu);
+    expect(
+      projectImportHistoryRevisionError(history, undefined),
+    ).toBeUndefined();
+    expect(
+      projectImportHistoryRevisionError(
+        { mode: "commit-count", commitCount: 10 },
+        revision,
+      ),
+    ).toBeUndefined();
+    expect(() =>
+      projectImportRemoteSubmission({
+        source: "github-public",
+        repositoryUrl: "https://github.com/example/history",
+        credentialProfileId: "",
+        revisionKind: "branch",
+        revisionValue: "main",
+        history,
+      }),
+    ).toThrow(/default revision/iu);
   });
 
   it("serializes directory, ZIP, and city-model uploads distinctly", () => {
@@ -313,6 +515,12 @@ describe("viewer project import dialog state", () => {
         "$.analysis.maxTotalBytes",
       ),
     ).toBe("analysis");
+    expect(
+      projectImportFieldForServerPath("$.history.oldestTagName"),
+    ).toBe("history");
+    expect(
+      projectImportFieldForServerPath("$.history.sampleEvery"),
+    ).toBe("history");
     expect(
       projectImportFieldForServerPath("$.identity.title"),
     ).toBe("title");

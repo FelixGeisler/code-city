@@ -206,6 +206,76 @@ describe("deterministic rectangle packing", () => {
     expect(Number.isFinite(result.depth)).toBe(true);
   });
 
+  it("caps large shelf searches and supports cooperative cancellation", () => {
+    const rectangles = Array.from({ length: 5_000 }, (_, index) => ({
+      id: `large-${String(index).padStart(5, "0")}`,
+      width: 1 + (index % 17),
+      depth: 1 + (index % 23),
+    }));
+    let checkpoints = 0;
+    const result = packRectangles(rectangles, 1, {
+      checkpoint: () => {
+        checkpoints += 1;
+      },
+    });
+
+    expect(result.rectangles).toHaveLength(rectangles.length);
+    expect(checkpoints).toBeGreaterThan(0);
+    expect(checkpoints).toBeLessThan(5_000);
+
+    const cancellation = new Error("cancel packing");
+    let cancellationChecks = 0;
+    expect(() =>
+      packRectangles(rectangles, 1, {
+        checkpoint: () => {
+          cancellationChecks += 1;
+          if (cancellationChecks === 5) throw cancellation;
+        },
+      }),
+    ).toThrow(cancellation);
+  });
+
+  it("keeps a large homogeneous packing compact with bounded candidates", () => {
+    const rectangles = Array.from({ length: 5_000 }, (_, index) => ({
+      id: `unit-${String(index).padStart(5, "0")}`,
+      width: 1,
+      depth: 1,
+    }));
+
+    const result = packRectangles(rectangles, 1);
+    const longest = Math.max(result.width, result.depth);
+    const shortest = Math.min(result.width, result.depth);
+
+    expect(longest).toBeLessThan(180);
+    expect(longest / shortest).toBeLessThan(1.25);
+  });
+
+  it("bounds small-input search explicitly without losing compactness", () => {
+    const rectangles = Array.from({ length: 64 }, (_, index) => ({
+      id: `bounded-${String(index).padStart(2, "0")}`,
+      width: 2,
+      depth: 2,
+    }));
+    let operations = 0;
+    const result = packRectangles(rectangles, 1, {
+      searchMode: "bounded",
+      checkpoint: (completed) => {
+        operations += completed;
+      },
+    });
+
+    expect(
+      packRectangles([...rectangles].reverse(), 1, {
+        searchMode: "bounded",
+      }),
+    ).toEqual(result);
+    expect(operations).toBeLessThan(5_000);
+    expect(
+      Math.max(result.width, result.depth) /
+        Math.min(result.width, result.depth),
+    ).toBeLessThan(1.25);
+  });
+
   it("returns deterministic zero bounds for empty input", () => {
     expect(packRectangles([], 8)).toEqual({
       rectangles: [],

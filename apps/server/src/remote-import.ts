@@ -1,6 +1,8 @@
+import { Buffer } from "node:buffer";
 import net from "node:net";
 
 import {
+  analyzeGenericGitHistory,
   analyzeGenericGitRepository,
   analyzePublicGitHubRepository,
   DEFAULT_SNAPSHOT_LIMITS,
@@ -9,6 +11,9 @@ import {
   GENERIC_GIT_PRESECURED_WINDOWS_ACL,
   GenericGitSnapshotError,
   GitHubSnapshotError,
+  HISTORY_SELECTION_LIMITS,
+  HistoryEvolutionError,
+  HistorySelectionError,
   SnapshotDeadlineError,
   SnapshotLimitError,
   SnapshotPathError,
@@ -19,11 +24,18 @@ import {
   validatePublicGitHubRepositoryUrl,
   type GenericGitSnapshotCredential,
   type GenericGitSnapshotCredentialProvider,
+  type GenericGitHistoryAnalysisResult,
+  type GenericGitHistorySelectionRequest,
+  type HistorySemanticCacheLike,
   type GitHubSnapshotCredential,
   type GitHubSnapshotCredentialProvider,
   type LocalAnalysisOptions,
 } from "../../../packages/analyzer/src/index.js";
-import { normalizeAssetRelativePath } from "../../../packages/core/src/index.js";
+import {
+  normalizeAssetRelativePath,
+  type EvolutionBundle,
+  type PreparedEvolutionSerialization,
+} from "../../../packages/core/src/index.js";
 import type { CityModel } from "../../../packages/core/src/index.js";
 
 import {
@@ -34,6 +46,7 @@ import {
 } from "./job-queue.js";
 import {
   ImportArtifactStore,
+  type CleanupStagingDirectoryOptions,
   type ImportStagingDirectory,
 } from "./import-artifacts.js";
 import type {
@@ -41,7 +54,7 @@ import type {
   CredentialProfileRegistry,
 } from "./credential-profiles.js";
 
-const ROOT_KEYS = ["analysis", "identity", "source"] as const;
+const ROOT_KEYS = ["analysis", "history", "identity", "source"] as const;
 const SOURCE_KEYS = [
   "credentialProfileId",
   "kind",
@@ -56,12 +69,25 @@ const ANALYSIS_KEYS = [
   "maxTotalBytes",
   "timeoutMs",
 ] as const;
+const HISTORY_COMMON_KEYS = [
+  "maxAggregateChangedPathBytes",
+  "maxAggregateChangedPaths",
+  "maxAggregateSemanticBytes",
+  "maxAggregateTreeEntries",
+  "maxEvolutionOutputBytes",
+  "maxUniqueLineages",
+  "mode",
+  "sampleEvery",
+  "totalDeadlineMs",
+] as const;
 const PROTOTYPE_LIKE_KEYS = new Set([
   "__proto__",
   "constructor",
   "prototype",
 ]);
 const COMMIT_SHA = /^[0-9a-f]{40}$/iu;
+const HISTORY_ISO_INSTANT =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|([+-])(\d{2}):(\d{2}))$/u;
 const CREDENTIAL_PROFILE_ID = /^[a-z][a-z0-9-]{0,63}$/u;
 const UNSAFE_TEXT = /[\p{Cc}\p{Cf}\p{Cs}]/u;
 const MAXIMUM_TITLE_CHARACTERS = 160;
@@ -136,6 +162,7 @@ export interface RemoteImportAnalysis {
 
 export interface RemoteImportRequest {
   readonly source: RemoteImportSource;
+  readonly history?: GenericGitHistorySelectionRequest;
   readonly identity?: RemoteImportIdentity;
   readonly analysis?: RemoteImportAnalysis;
 }
@@ -143,6 +170,8 @@ export interface RemoteImportRequest {
 export interface RemoteImportDependencies {
   readonly analyzePublicGitHubRepository?: typeof analyzePublicGitHubRepository;
   readonly analyzeGenericGitRepository?: typeof analyzeGenericGitRepository;
+  readonly analyzeGenericGitHistory?: typeof analyzeGenericGitHistory;
+  readonly semanticCache?: HistorySemanticCacheLike;
 }
 
 function gitOriginKey(
@@ -219,6 +248,8 @@ function normalizedAllowedGitOrigin(value: string): string {
 
 export class RemoteImportPolicy {
   readonly #allowedGenericGitOrigins: ReadonlySet<string>;
+  readonly #platform: NodeJS.Platform;
+  readonly #trustWindowsGitWorkspace: boolean;
 
   public constructor(
     origins: readonly string[] = [],
@@ -257,9 +288,29 @@ export class RemoteImportPolicy {
       );
     }
     this.#allowedGenericGitOrigins = normalized;
+    this.#platform = platform;
+    this.#trustWindowsGitWorkspace =
+      trustWindowsGitWorkspace;
   }
 
   public assertAllowed(request: RemoteImportRequest): void {
+    if (
+      this.#platform === "win32" &&
+      request.history !== undefined &&
+      !this.#trustWindowsGitWorkspace
+    ) {
+      throw new RemoteImportRequestError(
+        [
+          Object.freeze({
+            code: "source-not-allowed",
+            path: "$.history",
+            message:
+              "Repository history on Windows requires CODECITY_TRUST_WINDOWS_GIT_WORKSPACE=1 after securing the private workspace ACL and ancestry.",
+          }),
+        ],
+        403,
+      );
+    }
     if (request.source.kind !== "git") return;
     const origin = genericGitRepositoryOrigin(
       request.source.repositoryUrl,
@@ -704,6 +755,362 @@ export function parseImportAnalysis(
   });
 }
 
+function historyInteger(
+  object: Readonly<Record<string, unknown>>,
+  key: string,
+  maximum: number,
+  requiredValue = false,
+): number | undefined {
+  if (!Object.hasOwn(object, key)) {
+    if (requiredValue) fail(`$.history.${key}`, "Required.", "required");
+    return undefined;
+  }
+  const value = object[key];
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > maximum
+  ) {
+    fail(
+      `$.history.${key}`,
+      `Must be an integer from 1 to ${maximum}.`,
+      "limit-exceeded",
+    );
+  }
+  return value;
+}
+
+function historyBounds(
+  object: Readonly<Record<string, unknown>>,
+): {
+  readonly sampleEvery?: number;
+  readonly totalDeadlineMs?: number;
+  readonly maxAggregateChangedPathBytes?: number;
+  readonly maxAggregateChangedPaths?: number;
+  readonly maxAggregateSemanticBytes?: number;
+  readonly maxAggregateTreeEntries?: number;
+  readonly maxUniqueLineages?: number;
+  readonly maxEvolutionOutputBytes?: number;
+} {
+  const sampleEvery = historyInteger(
+    object,
+    "sampleEvery",
+    HISTORY_SELECTION_LIMITS.maxSampleEvery,
+  );
+  const totalDeadlineMs = Object.hasOwn(object, "totalDeadlineMs")
+    ? historyInteger(
+        object,
+        "totalDeadlineMs",
+        HISTORY_SELECTION_LIMITS.maxTotalDeadlineMs,
+        true,
+      )
+    : undefined;
+  if (
+    totalDeadlineMs !== undefined &&
+    totalDeadlineMs < HISTORY_SELECTION_LIMITS.minTotalDeadlineMs
+  ) {
+    fail(
+      "$.history.totalDeadlineMs",
+      `Must be at least ${HISTORY_SELECTION_LIMITS.minTotalDeadlineMs}.`,
+      "limit-exceeded",
+    );
+  }
+  const maxAggregateChangedPaths = historyInteger(
+    object,
+    "maxAggregateChangedPaths",
+    HISTORY_SELECTION_LIMITS.maxAggregateChangedPaths,
+  );
+  const maxAggregateChangedPathBytes = historyInteger(
+    object,
+    "maxAggregateChangedPathBytes",
+    HISTORY_SELECTION_LIMITS.maxAggregateChangedPathBytes,
+  );
+  const maxAggregateSemanticBytes = historyInteger(
+    object,
+    "maxAggregateSemanticBytes",
+    HISTORY_SELECTION_LIMITS.maxAggregateSemanticBytes,
+  );
+  const maxAggregateTreeEntries = historyInteger(
+    object,
+    "maxAggregateTreeEntries",
+    HISTORY_SELECTION_LIMITS.maxAggregateTreeEntries,
+  );
+  const maxUniqueLineages = historyInteger(
+    object,
+    "maxUniqueLineages",
+    HISTORY_SELECTION_LIMITS.maxUniqueLineages,
+  );
+  const maxEvolutionOutputBytes = historyInteger(
+    object,
+    "maxEvolutionOutputBytes",
+    HISTORY_SELECTION_LIMITS.maxEvolutionOutputBytes,
+  );
+  return Object.freeze({
+    ...(sampleEvery === undefined ? {} : { sampleEvery }),
+    ...(totalDeadlineMs === undefined ? {} : { totalDeadlineMs }),
+    ...(maxAggregateChangedPaths === undefined
+      ? {}
+      : { maxAggregateChangedPaths }),
+    ...(maxAggregateChangedPathBytes === undefined
+      ? {}
+      : { maxAggregateChangedPathBytes }),
+    ...(maxAggregateSemanticBytes === undefined
+      ? {}
+      : { maxAggregateSemanticBytes }),
+    ...(maxAggregateTreeEntries === undefined
+      ? {}
+      : { maxAggregateTreeEntries }),
+    ...(maxUniqueLineages === undefined
+      ? {}
+      : { maxUniqueLineages }),
+    ...(maxEvolutionOutputBytes === undefined
+      ? {}
+      : { maxEvolutionOutputBytes }),
+  });
+}
+
+function assertHistoryFrameBound(
+  maximumCommits: number,
+  sampleEvery: number | undefined,
+): void {
+  const interval = sampleEvery ?? 1;
+  const frames = Math.ceil((maximumCommits - 1) / interval) + 1;
+  if (frames > HISTORY_SELECTION_LIMITS.maxSampledFrames) {
+    fail(
+      "$.history.sampleEvery",
+      `This selection can produce ${frames} frames; increase sampleEvery so no more than ${HISTORY_SELECTION_LIMITS.maxSampledFrames} frames are requested.`,
+      "limit-exceeded",
+    );
+  }
+}
+
+function canonicalHistoryInstant(
+  value: unknown,
+  key: "fromInclusive" | "toInclusive",
+): string {
+  const text = boundedExactText(value, `$.history.${key}`, 64);
+  const match = HISTORY_ISO_INSTANT.exec(text);
+  if (match === null) {
+    fail(
+      `$.history.${key}`,
+      "Must be an ISO-8601 instant with an explicit UTC offset.",
+    );
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const millisecond = Number((match[7] ?? "").padEnd(3, "0"));
+  const offsetHour = match[8] === "Z" ? 0 : Number(match[10]);
+  const offsetMinute = match[8] === "Z" ? 0 : Number(match[11]);
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31 ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHour > 23 ||
+    offsetMinute > 59
+  ) {
+    fail(`$.history.${key}`, "Must be a valid ISO-8601 instant.");
+  }
+
+  const local = new Date(0);
+  local.setUTCFullYear(year, month - 1, day);
+  local.setUTCHours(hour, minute, second, millisecond);
+  if (
+    local.getUTCFullYear() !== year ||
+    local.getUTCMonth() !== month - 1 ||
+    local.getUTCDate() !== day ||
+    local.getUTCHours() !== hour ||
+    local.getUTCMinutes() !== minute ||
+    local.getUTCSeconds() !== second ||
+    local.getUTCMilliseconds() !== millisecond
+  ) {
+    fail(`$.history.${key}`, "Must be a valid calendar instant.");
+  }
+
+  const offsetMilliseconds =
+    (offsetHour * 60 + offsetMinute) * 60 * 1_000;
+  const signedOffset =
+    match[8] === "Z" || match[9] === "+"
+      ? offsetMilliseconds
+      : -offsetMilliseconds;
+  const utcMilliseconds = local.getTime() - signedOffset;
+  let normalized: string;
+  try {
+    normalized = new Date(utcMilliseconds).toISOString();
+  } catch {
+    fail(
+      `$.history.${key}`,
+      "Must be an ISO-8601 instant in the supported date range.",
+    );
+  }
+  if (normalized.length !== 24) {
+    fail(
+      `$.history.${key}`,
+      "Must normalize to a supported four-digit UTC year.",
+    );
+  }
+  return normalized;
+}
+
+function historyTagName(
+  value: unknown,
+  key: "oldestTagName" | "newestTagName",
+): string {
+  const name = boundedExactText(
+    value,
+    `$.history.${key}`,
+    HISTORY_SELECTION_LIMITS.maxTagNameBytes,
+  );
+  if (
+    Buffer.byteLength(name, "utf8") >
+    HISTORY_SELECTION_LIMITS.maxTagNameBytes
+  ) {
+    fail(
+      `$.history.${key}`,
+      `Must be no larger than ${HISTORY_SELECTION_LIMITS.maxTagNameBytes} UTF-8 bytes.`,
+      "limit-exceeded",
+    );
+  }
+  if (name.startsWith("refs/")) {
+    fail(
+      `$.history.${key}`,
+      "Must be an unqualified exact tag name.",
+    );
+  }
+  try {
+    return validateGenericGitRef(`refs/tags/${name}`).slice(
+      "refs/tags/".length,
+    );
+  } catch {
+    fail(`$.history.${key}`, "Must be a valid exact Git tag name.");
+  }
+}
+
+export function parseImportHistory(
+  value: unknown,
+): GenericGitHistorySelectionRequest {
+  const initial = jsonObject(
+    value,
+    "$.history",
+    [
+      ...HISTORY_COMMON_KEYS,
+      "commitCount",
+      "fromInclusive",
+      "maxCommits",
+      "newestTagName",
+      "oldestTagName",
+      "toInclusive",
+    ],
+  );
+  const mode = required(initial, "mode", "$.history.mode");
+  if (
+    mode !== "commit-count" &&
+    mode !== "date-range" &&
+    mode !== "tag-range"
+  ) {
+    fail(
+      "$.history.mode",
+      'Must be "commit-count", "date-range", or "tag-range".',
+    );
+  }
+  const modeKeys =
+    mode === "commit-count"
+      ? [...HISTORY_COMMON_KEYS, "commitCount"]
+      : mode === "date-range"
+        ? [
+            ...HISTORY_COMMON_KEYS,
+            "fromInclusive",
+            "maxCommits",
+            "toInclusive",
+          ]
+        : [
+            ...HISTORY_COMMON_KEYS,
+            "maxCommits",
+            "newestTagName",
+            "oldestTagName",
+          ];
+  const object = jsonObject(value, "$.history", modeKeys);
+  const bounds = historyBounds(object);
+  if (mode === "commit-count") {
+    const commitCount = historyInteger(
+      object,
+      "commitCount",
+      HISTORY_SELECTION_LIMITS.maxTraversedCommits,
+      true,
+    )!;
+    assertHistoryFrameBound(commitCount, bounds.sampleEvery);
+    return Object.freeze({
+      mode,
+      commitCount,
+      ...bounds,
+    });
+  }
+  const maxCommits = historyInteger(
+    object,
+    "maxCommits",
+    HISTORY_SELECTION_LIMITS.maxTraversedCommits,
+    true,
+  )!;
+  assertHistoryFrameBound(maxCommits, bounds.sampleEvery);
+  if (mode === "date-range") {
+    const fromInclusive = canonicalHistoryInstant(
+      required(
+        object,
+        "fromInclusive",
+        "$.history.fromInclusive",
+      ),
+      "fromInclusive",
+    );
+    const toInclusive = canonicalHistoryInstant(
+      required(object, "toInclusive", "$.history.toInclusive"),
+      "toInclusive",
+    );
+    if (Date.parse(fromInclusive) > Date.parse(toInclusive)) {
+      fail(
+        "$.history.fromInclusive",
+        "Must not be later than toInclusive.",
+      );
+    }
+    return Object.freeze({
+      mode,
+      fromInclusive,
+      toInclusive,
+      maxCommits,
+      ...bounds,
+    });
+  }
+  return Object.freeze({
+    mode,
+    oldestTagName: historyTagName(
+      required(
+        object,
+        "oldestTagName",
+        "$.history.oldestTagName",
+      ),
+      "oldestTagName",
+    ),
+    newestTagName: historyTagName(
+      required(
+        object,
+        "newestTagName",
+        "$.history.newestTagName",
+      ),
+      "newestTagName",
+    ),
+    maxCommits,
+    ...bounds,
+  });
+}
+
 function revisionRef(
   value: unknown,
   sourceKind: "github" | "git",
@@ -864,14 +1271,47 @@ export function parseRemoteImportRequest(
     const source = parseSource(
       required(object, "source", "$.source"),
     );
+    const history = Object.hasOwn(object, "history")
+      ? parseImportHistory(object["history"])
+      : undefined;
+    if (
+      history?.mode === "tag-range" &&
+      source.revision !== undefined
+    ) {
+      fail(
+        "$.source.revision",
+        "Must be omitted when history uses a tag range.",
+      );
+    }
     const identity = Object.hasOwn(object, "identity")
       ? parseImportIdentity(object["identity"])
       : undefined;
     const analysis = Object.hasOwn(object, "analysis")
       ? parseImportAnalysis(object["analysis"])
       : undefined;
+    if (
+      history?.totalDeadlineMs !== undefined &&
+      analysis?.timeoutMs !== undefined
+    ) {
+      fail(
+        "$.analysis.timeoutMs",
+        "Must be omitted when history.totalDeadlineMs is provided.",
+      );
+    }
+    if (
+      history !== undefined &&
+      history.totalDeadlineMs === undefined &&
+      analysis?.timeoutMs !== undefined &&
+      analysis.timeoutMs < HISTORY_SELECTION_LIMITS.minTotalDeadlineMs
+    ) {
+      fail(
+        "$.analysis.timeoutMs",
+        `Must be at least ${HISTORY_SELECTION_LIMITS.minTotalDeadlineMs} when it supplies the history total deadline.`,
+      );
+    }
     return Object.freeze({
       source,
+      ...(history === undefined ? {} : { history }),
       ...(identity === undefined ? {} : { identity }),
       ...(analysis === undefined ? {} : { analysis }),
     });
@@ -944,6 +1384,31 @@ function genericGitCredentialProvider(
   });
 }
 
+function githubHistoryCredentialProvider(
+  binding: CredentialProfileBinding<"github">,
+): GenericGitSnapshotCredentialProvider {
+  return Object.freeze({
+    provider: "basic" as const,
+    use<T>(
+      signal: AbortSignal,
+      operation: (
+        credential: GenericGitSnapshotCredential,
+      ) => T | Promise<T>,
+    ): Promise<T> {
+      return binding.use(signal, (credential) => {
+        if (credential.kind !== "bearer") {
+          throw fixedTaskFailure();
+        }
+        return operation({
+          kind: "basic",
+          username: "x-access-token",
+          secret: credential.secret,
+        });
+      });
+    },
+  });
+}
+
 type BoundCredentialProfile =
   | CredentialProfileBinding<"github">
   | CredentialProfileBinding<
@@ -951,6 +1416,24 @@ type BoundCredentialProfile =
     >;
 
 function analysisTaskFailure(error: unknown): JobTaskFailure {
+  if (error instanceof HistorySelectionError) {
+    if (error.code === "limit-exceeded") {
+      return new JobTaskFailure("import-limit-exceeded");
+    }
+    if (error.code === "selection-unavailable") {
+      return new JobTaskFailure("revision-unavailable");
+    }
+    return new JobTaskFailure("analysis-failed");
+  }
+  if (error instanceof HistoryEvolutionError) {
+    if (error.code === "deadline-exceeded") {
+      return new JobTaskFailure("deadline-exceeded");
+    }
+    if (error.code === "limit-exceeded") {
+      return new JobTaskFailure("import-limit-exceeded");
+    }
+    return new JobTaskFailure("analysis-failed");
+  }
   if (error instanceof SnapshotDeadlineError) {
     return new JobTaskFailure("deadline-exceeded");
   }
@@ -1019,20 +1502,120 @@ async function allCleanupOperations(
 function stagingCleanup(
   artifacts: ImportArtifactStore,
   staging: ImportStagingDirectory,
-): () => Promise<void> {
+): (options?: CleanupStagingDirectoryOptions) => Promise<void> {
   let cleaned = false;
   let active: Promise<void> | undefined;
-  return () => {
+  return (options = {}) => {
     if (cleaned) return Promise.resolve();
     if (active !== undefined) return active;
-    active = artifacts.cleanupStagingDirectory(staging.token).then(() => {
-      cleaned = true;
-    });
+    active = artifacts
+      .cleanupStagingDirectory(staging.token, options)
+      .then(() => {
+        cleaned = true;
+      });
     void active.finally(() => {
       active = undefined;
     }).catch(() => undefined);
     return active;
   };
+}
+
+interface RemoteImportAnalysisOutput {
+  readonly model: CityModel;
+  readonly evolution?: EvolutionBundle;
+  readonly preparedEvolution?: PreparedEvolutionSerialization;
+  /**
+   * Absolute wall-clock deadline shared by history analysis, publication,
+   * and temporary-data cleanup.
+   */
+  readonly historyDeadlineAt?: number;
+}
+
+interface HistoryDeadlineScope {
+  readonly signal: AbortSignal;
+  checkpoint(): void;
+  dispose(): void;
+}
+
+function historyDeadlineScope(
+  deadlineAt: number,
+  parentSignal: AbortSignal,
+): HistoryDeadlineScope {
+  const controller = new AbortController();
+  const abortFromParent = (): void => {
+    controller.abort(parentSignal.reason);
+  };
+  if (parentSignal.aborted) {
+    abortFromParent();
+  } else {
+    parentSignal.addEventListener("abort", abortFromParent, {
+      once: true,
+    });
+  }
+
+  const remainingMilliseconds = deadlineAt - Date.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const abortForDeadline = (): void => {
+    controller.abort(
+      new HistoryEvolutionError(
+        "deadline-exceeded",
+        "Repository history processing exceeded its total deadline.",
+      ),
+    );
+  };
+  if (remainingMilliseconds <= 0) {
+    abortForDeadline();
+  } else {
+    timer = setTimeout(abortForDeadline, remainingMilliseconds);
+  }
+
+  return Object.freeze({
+    signal: controller.signal,
+    checkpoint(): void {
+      parentSignal.throwIfAborted();
+      if (!controller.signal.aborted && Date.now() >= deadlineAt) {
+        abortForDeadline();
+      }
+      controller.signal.throwIfAborted();
+    },
+    dispose(): void {
+      if (timer !== undefined) clearTimeout(timer);
+      parentSignal.removeEventListener("abort", abortFromParent);
+    },
+  });
+}
+
+function historyRepositoryIdentity(repositoryUrl: string): string {
+  try {
+    const parsed = new URL(repositoryUrl);
+    parsed.username = "";
+    parsed.password = "";
+    return parsed.toString();
+  } catch {
+    const match =
+      /^(?:[^@\s]+@)?(\[[^\]]+\]|[^:\s]+):([A-Za-z0-9._/-]+)$/u.exec(
+        repositoryUrl,
+      );
+    if (match === null) throw fixedTaskFailure();
+    const host = match[1]!;
+    const repositoryPath = match[2]!.replace(/^\/+/u, "");
+    return `ssh://${host}/${repositoryPath}`;
+  }
+}
+
+function genericHistoryRef(request: RemoteImportRequest): string | undefined {
+  if (request.history?.mode === "tag-range") {
+    return `refs/tags/${request.history.newestTagName}`;
+  }
+  const ref = request.source.ref;
+  if (ref === undefined || request.source.kind === "git") return ref;
+  if (ref.startsWith("heads/")) {
+    return `refs/heads/${ref.slice("heads/".length)}`;
+  }
+  if (ref.startsWith("tags/")) {
+    return `refs/tags/${ref.slice("tags/".length)}`;
+  }
+  return ref;
 }
 
 async function analyze(
@@ -1041,7 +1624,7 @@ async function analyze(
   staging: ImportStagingDirectory,
   credentialBinding: BoundCredentialProfile | undefined,
   dependencies: RemoteImportDependencies | undefined,
-): Promise<CityModel> {
+): Promise<RemoteImportAnalysisOutput> {
   const options = analyzerOptions(request, context.signal);
   const repositoryRequest = {
     repositoryUrl: request.source.repositoryUrl,
@@ -1049,22 +1632,121 @@ async function analyze(
       ? {}
       : { ref: request.source.ref }),
   };
+  if (request.history !== undefined) {
+    const implementation =
+      dependencies?.analyzeGenericGitHistory ??
+      analyzeGenericGitHistory;
+    const selection =
+      request.history.totalDeadlineMs === undefined &&
+      request.analysis?.timeoutMs !== undefined
+        ? Object.freeze({
+            ...request.history,
+            totalDeadlineMs: request.analysis.timeoutMs,
+          })
+        : request.history;
+    const historyDeadlineAt =
+      Date.now() +
+      (selection.totalDeadlineMs ??
+        HISTORY_SELECTION_LIMITS.defaultTotalDeadlineMs);
+    const historyCredentialProvider =
+      credentialBinding === undefined
+        ? undefined
+        : credentialBinding.provider === "github"
+          ? githubHistoryCredentialProvider(credentialBinding)
+          : genericGitCredentialProvider(credentialBinding);
+    const resolvedHistoryRef = genericHistoryRef(request);
+    const result: GenericGitHistoryAnalysisResult =
+      await implementation(
+        {
+          repositoryUrl: request.source.repositoryUrl,
+          repositoryIdentity: historyRepositoryIdentity(
+            request.source.repositoryUrl,
+          ),
+          ...(resolvedHistoryRef === undefined
+            ? {}
+            : { ref: resolvedHistoryRef }),
+          selection,
+          signal: context.signal,
+        },
+        {
+          ...(request.identity === undefined
+            ? {}
+            : { identity: request.identity }),
+          ...(request.analysis === undefined
+            ? {}
+            : {
+                analysisOptions: {
+                  ...(request.analysis.maxRetainedFiles === undefined
+                    ? {}
+                    : {
+                        maxRetainedFiles:
+                          request.analysis.maxRetainedFiles,
+                      }),
+                  ...(request.analysis.maxFileBytes === undefined
+                    ? {}
+                    : { maxFileBytes: request.analysis.maxFileBytes }),
+                  ...(request.analysis.maxTotalBytes === undefined
+                    ? {}
+                    : { maxTotalBytes: request.analysis.maxTotalBytes }),
+                },
+              }),
+        },
+        {
+          ...(dependencies?.semanticCache === undefined
+            ? {}
+            : { semanticCache: dependencies.semanticCache }),
+          git: {
+            ...(request.source.kind === "github" &&
+            credentialBinding === undefined
+              ? { isolateCredentials: true }
+              : {}),
+            ...(historyCredentialProvider === undefined
+              ? {}
+              : { credentialProvider: historyCredentialProvider }),
+            temporaryWorkspaceOptions: {
+              trustedPrivateParent: {
+                directory: staging.directory,
+                windowsAclProtection:
+                  GENERIC_GIT_PRESECURED_WINDOWS_ACL,
+                canonicalAncestryProtection:
+                  GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY,
+              },
+            },
+          },
+        },
+      );
+    return Object.freeze({
+      model: result.model,
+      evolution: result.evolution.bundle,
+      ...(result.evolution.preparedSerialization === undefined
+        ? {}
+        : {
+            preparedEvolution:
+              result.evolution.preparedSerialization,
+          }),
+      historyDeadlineAt,
+    });
+  }
   if (request.source.kind === "github") {
     const implementation =
       dependencies?.analyzePublicGitHubRepository ??
       analyzePublicGitHubRepository;
     if (credentialBinding === undefined) {
-      return (await implementation(repositoryRequest, options)).model;
+      return Object.freeze({
+        model: (await implementation(repositoryRequest, options)).model,
+      });
     }
     if (credentialBinding.provider !== "github") {
       throw fixedTaskFailure();
     }
-    return (
-      await implementation(repositoryRequest, options, {
+    return Object.freeze({
+      model: (
+        await implementation(repositoryRequest, options, {
         credentialProvider:
           githubCredentialProvider(credentialBinding),
-      })
-    ).model;
+        })
+      ).model,
+    });
   }
   const implementation =
     dependencies?.analyzeGenericGitRepository ??
@@ -1072,8 +1754,9 @@ async function analyze(
   if (credentialBinding?.provider === "github") {
     throw fixedTaskFailure();
   }
-  return (
-    await implementation(repositoryRequest, options, {
+  return Object.freeze({
+    model: (
+      await implementation(repositoryRequest, options, {
       ...(credentialBinding === undefined
         ? {}
         : {
@@ -1089,8 +1772,9 @@ async function analyze(
             GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY,
         },
       },
-    })
-  ).model;
+      })
+    ).model,
+  });
 }
 
 function unavailableCredentialProfile(): RemoteImportRequestError {
@@ -1161,7 +1845,11 @@ export async function enqueueRemoteImport(
   } catch (error) {
     if (
       error instanceof RemoteImportRequestError &&
-      request.source.credentialProfileId !== undefined
+      request.source.credentialProfileId !== undefined &&
+      error.fields.length > 0 &&
+      error.fields.every(
+        ({ path }) => path === "$.source.repositoryUrl",
+      )
     ) {
       throw unavailableCredentialProfile();
     }
@@ -1190,9 +1878,9 @@ export async function enqueueRemoteImport(
             current: 0,
             total: IMPORT_PROGRESS_TOTAL,
           });
-          let model: CityModel;
+          let analyzed: RemoteImportAnalysisOutput;
           try {
-            model = await analyze(
+            analyzed = await analyze(
               request,
               context,
               staging,
@@ -1202,32 +1890,91 @@ export async function enqueueRemoteImport(
           } catch (error) {
             throw analysisTaskFailure(error);
           }
-          context.signal.throwIfAborted();
-          await context.report({
-            phase: "publishing-city-model",
-            current: 1,
-            total: IMPORT_PROGRESS_TOTAL,
-          });
-          await runtime.artifacts.publishCityModel(context.id, model);
-          context.signal.throwIfAborted();
-          await context.report({
-            phase: "cleaning-temporary-data",
-            current: 2,
-            total: IMPORT_PROGRESS_TOTAL,
-          });
-          await cleanupStaging();
-          context.signal.throwIfAborted();
-          await context.report({
-            phase: "ready",
-            current: IMPORT_PROGRESS_TOTAL,
-            total: IMPORT_PROGRESS_TOTAL,
-          });
-          return {
-            kind: "city-model",
-            artifactToken: context.id,
-            artifactUrl:
-              `/api/v1/artifacts/${context.id}/city-model.json`,
-          };
+          const deadline =
+            analyzed.historyDeadlineAt === undefined
+              ? undefined
+              : historyDeadlineScope(
+                  analyzed.historyDeadlineAt,
+                  context.signal,
+                );
+          try {
+            const operationSignal =
+              deadline?.signal ?? context.signal;
+            const operationCheckpoint =
+              deadline?.checkpoint ??
+              (() => context.signal.throwIfAborted());
+            operationCheckpoint();
+            await context.report({
+              phase:
+                analyzed.evolution === undefined
+                  ? "publishing-city-model"
+                  : "publishing-history",
+              current: 1,
+              total: IMPORT_PROGRESS_TOTAL,
+            });
+            operationCheckpoint();
+            const publishedHistory =
+              analyzed.evolution === undefined
+                ? undefined
+                : await runtime.artifacts.publishHistoryArtifacts(
+                    context.id,
+                    analyzed.model,
+                    analyzed.evolution,
+                    {
+                      signal: operationSignal,
+                      checkpoint: operationCheckpoint,
+                      ...(analyzed.preparedEvolution === undefined
+                        ? {}
+                        : {
+                            preparedSerialization:
+                              analyzed.preparedEvolution,
+                          }),
+                    },
+                  );
+            if (publishedHistory === undefined) {
+              await runtime.artifacts.publishCityModel(
+                context.id,
+                analyzed.model,
+              );
+            }
+            operationCheckpoint();
+            await context.report({
+              phase: "cleaning-temporary-data",
+              current: 2,
+              total: IMPORT_PROGRESS_TOTAL,
+            });
+            operationCheckpoint();
+            await cleanupStaging({
+              signal: operationSignal,
+              checkpoint: operationCheckpoint,
+            });
+            operationCheckpoint();
+            await context.report({
+              phase: "ready",
+              current: IMPORT_PROGRESS_TOTAL,
+              total: IMPORT_PROGRESS_TOTAL,
+            });
+            operationCheckpoint();
+            return {
+              kind: "city-model",
+              artifactToken: context.id,
+              artifactUrl:
+                `/api/v1/artifacts/${context.id}/city-model.json`,
+              ...(publishedHistory === undefined
+                ? {}
+                : {
+                    evolution: {
+                      artifactUrl:
+                        `/api/v1/artifacts/${context.id}/evolution.json`,
+                      size: publishedHistory.evolution.size,
+                      sha256:
+                        publishedHistory.evolution.sha256,
+                    },
+                  }),
+            };
+          } finally {
+            deadline?.dispose();
+          }
         } catch (error) {
           try {
             await cleanupStaging();
@@ -1235,6 +1982,12 @@ export async function enqueueRemoteImport(
             throw fixedTaskFailure();
           }
           if (error instanceof JobTaskFailure) throw error;
+          if (
+            error instanceof HistoryEvolutionError &&
+            error.code === "deadline-exceeded"
+          ) {
+            throw analysisTaskFailure(error);
+          }
           throw fixedTaskFailure();
         }
       },

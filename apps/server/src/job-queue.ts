@@ -94,6 +94,11 @@ export interface JobResult {
   readonly kind: "city-model";
   readonly artifactToken: string;
   readonly artifactUrl: string;
+  readonly evolution?: {
+    readonly artifactUrl: string;
+    readonly size: number;
+    readonly sha256: string;
+  };
 }
 
 export interface JobRecord {
@@ -170,6 +175,18 @@ const CITY_MODEL_ARTIFACT_KEYS = [
   "artifactUrl",
   "kind",
 ] as const;
+const HISTORY_ARTIFACT_KEYS = [
+  "artifactToken",
+  "artifactUrl",
+  "evolution",
+  "kind",
+] as const;
+const EVOLUTION_ARTIFACT_KEYS = [
+  "artifactUrl",
+  "sha256",
+  "size",
+] as const;
+const EVOLUTION_ARTIFACT_MAX_BYTES = 512 * 1024 * 1024;
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -268,9 +285,14 @@ function readResult(
     const kind = candidate["kind"];
     const token = candidate["artifactToken"];
     const url = candidate["artifactUrl"];
+    const evolution = candidate["evolution"];
+    const expectedKeys =
+      evolution === undefined
+        ? CITY_MODEL_ARTIFACT_KEYS
+        : HISTORY_ARTIFACT_KEYS;
     if (
-      keys.length !== CITY_MODEL_ARTIFACT_KEYS.length ||
-      !keys.every((key, index) => key === CITY_MODEL_ARTIFACT_KEYS[index]) ||
+      keys.length !== expectedKeys.length ||
+      !keys.every((key, index) => key === expectedKeys[index]) ||
       kind !== "city-model" ||
       typeof token !== "string" ||
       !JOB_ID_PATTERN.test(token) ||
@@ -279,10 +301,48 @@ function readResult(
     ) {
       return undefined;
     }
+    let normalizedEvolution:
+      | NonNullable<JobResult["evolution"]>
+      | undefined;
+    if (evolution !== undefined) {
+      if (typeof evolution !== "object" || evolution === null) {
+        return undefined;
+      }
+      const evolutionCandidate = evolution as Record<string, unknown>;
+      const evolutionKeys = Object.keys(evolutionCandidate).sort(
+        compareText,
+      );
+      const evolutionUrl = evolutionCandidate["artifactUrl"];
+      const size = evolutionCandidate["size"];
+      const digest = evolutionCandidate["sha256"];
+      if (
+        evolutionKeys.length !== EVOLUTION_ARTIFACT_KEYS.length ||
+        !evolutionKeys.every(
+          (key, index) => key === EVOLUTION_ARTIFACT_KEYS[index],
+        ) ||
+        evolutionUrl !==
+          `/api/v1/artifacts/${token}/evolution.json` ||
+        !Number.isSafeInteger(size) ||
+        (size as number) < 1 ||
+        (size as number) > EVOLUTION_ARTIFACT_MAX_BYTES ||
+        typeof digest !== "string" ||
+        !/^[0-9a-f]{64}$/u.test(digest)
+      ) {
+        return undefined;
+      }
+      normalizedEvolution = Object.freeze({
+        artifactUrl: evolutionUrl,
+        size: size as number,
+        sha256: digest,
+      });
+    }
     return Object.freeze({
       kind,
       artifactToken: token,
       artifactUrl: url,
+      ...(normalizedEvolution === undefined
+        ? {}
+        : { evolution: normalizedEvolution }),
     });
   } catch {
     return undefined;

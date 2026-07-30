@@ -11,6 +11,7 @@ import {
   startCodeCityServer,
   type CodeCityServerHandle,
 } from "../apps/server/src/server.js";
+import type { EvolutionBundle } from "../packages/core/src/index.js";
 
 interface ResponseSnapshot {
   readonly status: number;
@@ -50,7 +51,10 @@ async function fixture(): Promise<{
 
 function cityModelFixture(): {
   readonly schemaVersion: "1.0";
-  readonly generator: { readonly name: string; readonly version: string };
+  readonly generator: {
+    readonly name: "code-city";
+    readonly version: string;
+  };
   readonly repositories: readonly [];
   readonly solutions: readonly [];
   readonly modules: readonly [];
@@ -71,6 +75,89 @@ function cityModelFixture(): {
     buildings: [],
     dependencies: [],
     bounds: { x: 0, y: 0, z: 0 },
+  };
+}
+
+function historyCityModelFixture() {
+  return {
+    ...cityModelFixture(),
+    repositories: [{ id: "repository:one", name: "One" }],
+  } as const;
+}
+
+function evolutionBundleFixture(): EvolutionBundle {
+  const sha = "1".repeat(40);
+  const fingerprint = (
+    digit: string,
+  ): `sha256:${string}` => `sha256:${digit.repeat(64)}`;
+  const model = historyCityModelFixture();
+  return {
+    schemaVersion: "1.0",
+    generator: model.generator,
+    authorPolicy: "omit-v1",
+    selection: {
+      mode: "commit-count",
+      traversal: "first-parent",
+      order: "oldest-first",
+      requestedCommitCount: 1,
+      sampleEvery: 1,
+      selectedCommitCount: 1,
+      sampledCommitCount: 1,
+      traversedCommitCount: 1,
+      resolvedOldestSha: sha,
+      resolvedNewestSha: sha,
+      sampledCommitShas: [sha],
+    },
+    provenance: {
+      repositoryId: "repository:one",
+      repositoryFingerprint: fingerprint("2"),
+      analyzer: {
+        name: "code-city",
+        version: "test",
+        fingerprint: fingerprint("3"),
+      },
+      historyBackend: {
+        name: "git",
+        version: "2.47.1.windows.2",
+        renamePolicyRevision: "diff-tree-renames-50-myers-v1",
+      },
+      metricConfigurationFingerprint: fingerprint("4"),
+      selectionFingerprint: fingerprint("5"),
+    },
+    baseline: {
+      commit: {
+        index: 0,
+        sha,
+        committedAt: "2026-07-30T00:00:00.000Z",
+        parentShas: [],
+        analyzerVersion: "test",
+        analysisFingerprint: fingerprint("6"),
+      },
+      model,
+    },
+    deltas: [],
+  };
+}
+
+function largeEvolutionBundleFixture(): EvolutionBundle {
+  const bundle = evolutionBundleFixture();
+  return {
+    ...bundle,
+    baseline: {
+      ...bundle.baseline,
+      model: {
+        ...bundle.baseline.model,
+        repositories: [
+          { id: "repository:one", name: "One" },
+          ...Array.from({ length: 999 }, (_, index) => ({
+            id: `repository:stream-${index.toString().padStart(3, "0")}`,
+            name:
+              `Streaming repository ${index}: ` +
+              "x".repeat(200),
+          })),
+        ],
+      },
+    },
   };
 }
 
@@ -125,6 +212,48 @@ async function publishCompletedCityModel(
   return terminal;
 }
 
+async function publishCompletedHistory(
+  server: CodeCityServerHandle,
+  evolution = evolutionBundleFixture(),
+): Promise<JobRecord> {
+  const model = evolution.baseline.model;
+  const queued = await server.jobs.enqueue(
+    "history-analysis",
+    async ({ id }) => {
+      const published = await server.artifacts.publishHistoryArtifacts(
+        id,
+        model,
+        evolution,
+      );
+      return {
+        kind: "city-model",
+        artifactToken: id,
+        artifactUrl: `/api/v1/artifacts/${id}/city-model.json`,
+        evolution: {
+          artifactUrl: `/api/v1/artifacts/${id}/evolution.json`,
+          size: published.evolution.size,
+          sha256: published.evolution.sha256,
+        },
+      };
+    },
+    {
+      rollback: async ({ id }) => {
+        await server.artifacts.cleanupCityModelArtifact(id);
+      },
+    },
+  );
+  const terminal = await waitForJob(
+    server,
+    queued.id,
+    ({ state }) =>
+      state === "completed" ||
+      state === "failed" ||
+      state === "cancelled",
+  );
+  expect(terminal.state).toBe("completed");
+  return terminal;
+}
+
 function request(
   url: URL,
   options: {
@@ -170,6 +299,33 @@ function request(
     );
     outgoing.on("error", reject);
     outgoing.end();
+  });
+}
+
+async function waitForArtifactResponseGate(
+  url: URL,
+): Promise<ResponseSnapshot> {
+  const deadline = Date.now() + 1_000;
+  let response: ResponseSnapshot;
+  do {
+    response = await request(url);
+    if (response.status !== 503) return response;
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  } while (Date.now() < deadline);
+  return response;
+}
+
+function rejectWhenAborted(
+  signal: AbortSignal | undefined,
+): Promise<never> {
+  if (signal === undefined) {
+    return Promise.reject(new Error("Expected an abort signal."));
+  }
+  return new Promise<never>((_resolve, reject) => {
+    const abort = (): void =>
+      reject(signal.reason ?? new Error("aborted"));
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
   });
 }
 
@@ -319,6 +475,435 @@ it("serves immutable city-model job artifacts from fixed UUID paths", async () =
   expect(JSON.parse(retained.body)).toEqual(model);
 });
 
+it("serves an owned evolution companion with exact metadata and no-store", async () => {
+  const roots = await fixture();
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...roots,
+  });
+  servers.push(server);
+  const completed = await publishCompletedHistory(server);
+  const result = completed.result!;
+  expect(result.evolution).toMatchObject({
+    artifactUrl:
+      `/api/v1/artifacts/${completed.id}/evolution.json`,
+    size: expect.any(Number),
+    sha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+  });
+  const evolutionUrl = new URL(
+    result.evolution!.artifactUrl,
+    server.url,
+  );
+
+  const loaded = await request(evolutionUrl);
+  expect(loaded.status).toBe(200);
+  expect(loaded.headers["content-type"]).toBe(
+    "application/json; charset=utf-8",
+  );
+  expect(loaded.headers["cache-control"]).toBe("no-store");
+  expect(Number(loaded.headers["content-length"])).toBe(
+    result.evolution!.size,
+  );
+  expect(JSON.parse(loaded.body)).toEqual(
+    JSON.parse(JSON.stringify(evolutionBundleFixture())),
+  );
+
+  const head = await request(evolutionUrl, { method: "HEAD" });
+  expect(head.status).toBe(200);
+  expect(head.body).toBe("");
+  expect(head.headers["content-length"]).toBe(
+    loaded.headers["content-length"],
+  );
+  const method = await request(evolutionUrl, { method: "DELETE" });
+  expect(method.status).toBe(405);
+  expect(method.headers.allow).toBe("GET, HEAD");
+
+  const legacy = await publishCompletedCityModel(server);
+  const unowned = await request(
+    new URL(
+      `/api/v1/artifacts/${legacy.id}/evolution.json`,
+      server.url,
+    ),
+  );
+  expect(unowned.status).toBe(404);
+
+  await server.close();
+  const restarted = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...roots,
+  });
+  servers.push(restarted);
+  expect(
+    (
+      await request(
+        new URL(result.evolution!.artifactUrl, restarted.url),
+      )
+    ).status,
+  ).toBe(200);
+});
+
+it("streams a large verified evolution companion in bounded chunks", async () => {
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...(await fixture()),
+  });
+  servers.push(server);
+  const completed = await publishCompletedHistory(
+    server,
+    largeEvolutionBundleFixture(),
+  );
+  const artifactUrl = new URL(
+    completed.result!.evolution!.artifactUrl,
+    server.url,
+  );
+  const originalRead = server.artifacts.readEvolution.bind(
+    server.artifacts,
+  );
+  const servedChunkSizes: number[] = [];
+  vi.spyOn(server.artifacts, "readEvolution").mockImplementation(
+    async (token, expected, signal) => {
+      const artifact = await originalRead(token, expected, signal);
+      if (artifact === undefined) return undefined;
+      return {
+        ...artifact,
+        chunks: async function* (chunkSignal?: AbortSignal) {
+          for await (const chunk of artifact.chunks(chunkSignal)) {
+            servedChunkSizes.push(chunk.byteLength);
+            yield chunk;
+          }
+        },
+      };
+    },
+  );
+
+  const loaded = await request(artifactUrl);
+  expect(loaded.status).toBe(200);
+  expect(servedChunkSizes.length).toBeGreaterThan(2);
+  expect(Math.max(...servedChunkSizes)).toBeLessThanOrEqual(
+    64 * 1024,
+  );
+  expect(
+    servedChunkSizes.reduce((sum, size) => sum + size, 0),
+  ).toBe(completed.result!.evolution!.size);
+  expect(JSON.parse(loaded.body)).toEqual(
+    JSON.parse(JSON.stringify(largeEvolutionBundleFixture())),
+  );
+});
+
+it("refuses corrupted evolution bytes before starting GET or HEAD", async () => {
+  const roots = await fixture();
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...roots,
+  });
+  servers.push(server);
+  const completed = await publishCompletedHistory(server);
+  const artifactUrl = new URL(
+    completed.result!.evolution!.artifactUrl,
+    server.url,
+  );
+  const artifactPath = path.join(
+    roots.dataDirectory,
+    "artifacts",
+    completed.id,
+    "evolution.json",
+  );
+  const corrupted = await fs.readFile(artifactPath);
+  corrupted[Math.floor(corrupted.byteLength / 2)]! ^= 1;
+  await fs.writeFile(artifactPath, corrupted, { mode: 0o600 });
+
+  for (const method of ["GET", "HEAD"]) {
+    const response = await request(artifactUrl, { method });
+    expect(response.status).toBe(500);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    if (method === "GET") {
+      expect(JSON.parse(response.body)).toMatchObject({
+        error: { code: "artifact-read-failed" },
+      });
+    } else {
+      expect(response.body).toBe("");
+    }
+  }
+});
+
+it("cancels evolution verification when the client disconnects", async () => {
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...(await fixture()),
+  });
+  servers.push(server);
+  const completed = await publishCompletedHistory(server);
+  const artifactUrl = new URL(
+    completed.result!.evolution!.artifactUrl,
+    server.url,
+  );
+  const originalRead = server.artifacts.readEvolution.bind(
+    server.artifacts,
+  );
+  let announceStarted!: () => void;
+  let announceCancelled!: () => void;
+  const started = new Promise<void>((resolve) => {
+    announceStarted = resolve;
+  });
+  const cancelled = new Promise<void>((resolve) => {
+    announceCancelled = resolve;
+  });
+  let calls = 0;
+  vi.spyOn(server.artifacts, "readEvolution").mockImplementation(
+    async (token, expected, signal) => {
+      calls += 1;
+      if (calls === 1) {
+        announceStarted();
+        try {
+          await new Promise<never>((_resolve, reject) => {
+            const abort = (): void =>
+              reject(signal?.reason ?? new Error("aborted"));
+            signal?.addEventListener("abort", abort, { once: true });
+            if (signal?.aborted) abort();
+          });
+        } finally {
+          announceCancelled();
+        }
+      }
+      return originalRead(token, expected, signal);
+    },
+  );
+
+  const controller = new AbortController();
+  const disconnected = request(artifactUrl, {
+    signal: controller.signal,
+  }).catch(() => undefined);
+  await started;
+  controller.abort();
+  await disconnected;
+  await cancelled;
+  expect((await waitForArtifactResponseGate(artifactUrl)).status).toBe(
+    200,
+  );
+});
+
+it("times out an idle evolution stream and releases the artifact response gate", async () => {
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    artifactResponseTimeouts: {
+      idleMs: 25,
+      totalMs: 1_000,
+    },
+    ...(await fixture()),
+  });
+  servers.push(server);
+  const completed = await publishCompletedHistory(server);
+  const artifactUrl = new URL(
+    completed.result!.evolution!.artifactUrl,
+    server.url,
+  );
+  const originalRead = server.artifacts.readEvolution.bind(
+    server.artifacts,
+  );
+  let announceStarted!: () => void;
+  let announceAborted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    announceStarted = resolve;
+  });
+  const aborted = new Promise<void>((resolve) => {
+    announceAborted = resolve;
+  });
+  const read = vi.spyOn(
+    server.artifacts,
+    "readEvolution",
+  ).mockImplementation(async (token, expected, signal) => {
+    const artifact = await originalRead(token, expected, signal);
+    if (artifact === undefined) return undefined;
+    return {
+      ...artifact,
+      chunks: async function* (chunkSignal?: AbortSignal) {
+        announceStarted();
+        try {
+          await rejectWhenAborted(chunkSignal);
+        } finally {
+          announceAborted();
+        }
+      },
+    };
+  });
+
+  const stalled = request(artifactUrl).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await started;
+  const outcome = await stalled;
+  expect(outcome).toBeInstanceOf(Error);
+  await aborted;
+  read.mockRestore();
+  expect((await waitForArtifactResponseGate(artifactUrl)).status).toBe(
+    200,
+  );
+});
+
+it("times out evolution preverification and releases the artifact response gate", async () => {
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    artifactResponseTimeouts: {
+      idleMs: 50,
+      totalMs: 250,
+    },
+    ...(await fixture()),
+  });
+  servers.push(server);
+  const completed = await publishCompletedHistory(server);
+  const artifactUrl = new URL(
+    completed.result!.evolution!.artifactUrl,
+    server.url,
+  );
+  const originalRead = server.artifacts.readEvolution.bind(
+    server.artifacts,
+  );
+  let announceStarted!: () => void;
+  let announceAborted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    announceStarted = resolve;
+  });
+  const aborted = new Promise<void>((resolve) => {
+    announceAborted = resolve;
+  });
+  const read = vi.spyOn(
+    server.artifacts,
+    "readEvolution",
+  ).mockImplementation(async (_token, _expected, signal) => {
+    announceStarted();
+    try {
+      await rejectWhenAborted(signal);
+    } finally {
+      announceAborted();
+    }
+    return undefined;
+  });
+
+  const stalled = request(artifactUrl).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await started;
+  const outcome = await stalled;
+  expect(outcome).toBeInstanceOf(Error);
+  await aborted;
+  read.mockRestore();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const verified = await originalRead(
+    completed.id,
+    completed.result!.evolution,
+  );
+  expect(verified?.size).toBe(completed.result!.evolution!.size);
+  await verified?.close();
+  expect((await request(artifactUrl)).status).toBe(200);
+});
+
+it("cancels a timed-out city-model GET and releases the artifact response gate", async () => {
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    artifactResponseTimeouts: {
+      idleMs: 50,
+      totalMs: 250,
+    },
+    ...(await fixture()),
+  });
+  servers.push(server);
+  const completed = await publishCompletedCityModel(server);
+  const artifactUrl = new URL(completed.result!.artifactUrl, server.url);
+  const originalRead = server.artifacts.readCityModel.bind(
+    server.artifacts,
+  );
+  let announceStarted!: () => void;
+  let announceAborted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    announceStarted = resolve;
+  });
+  const aborted = new Promise<void>((resolve) => {
+    announceAborted = resolve;
+  });
+  const read = vi.spyOn(
+    server.artifacts,
+    "readCityModel",
+  ).mockImplementation(async (_token, signal) => {
+    announceStarted();
+    try {
+      await rejectWhenAborted(signal);
+    } finally {
+      announceAborted();
+    }
+    return undefined;
+  });
+
+  const stalled = request(artifactUrl).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await started;
+  const outcome = await stalled;
+  expect(outcome).toBeInstanceOf(Error);
+  await aborted;
+  read.mockRestore();
+  expect((await waitForArtifactResponseGate(artifactUrl)).status).toBe(
+    200,
+  );
+  expect(await originalRead(completed.id)).toBeDefined();
+});
+
+it("cancels a timed-out city-model HEAD before server close waits for the gate", async () => {
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    artifactResponseTimeouts: {
+      idleMs: 50,
+      totalMs: 250,
+    },
+    ...(await fixture()),
+  });
+  servers.push(server);
+  const completed = await publishCompletedCityModel(server);
+  const artifactUrl = new URL(completed.result!.artifactUrl, server.url);
+  let announceStarted!: () => void;
+  let announceAborted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    announceStarted = resolve;
+  });
+  const aborted = new Promise<void>((resolve) => {
+    announceAborted = resolve;
+  });
+  const stat = vi.spyOn(
+    server.artifacts,
+    "statCityModel",
+  ).mockImplementation(async (_token, signal) => {
+    announceStarted();
+    try {
+      await rejectWhenAborted(signal);
+    } finally {
+      announceAborted();
+    }
+    return undefined;
+  });
+
+  const stalled = request(artifactUrl, { method: "HEAD" }).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await started;
+  const outcome = await stalled;
+  expect(outcome).toBeInstanceOf(Error);
+  await aborted;
+  stat.mockRestore();
+  await expect(server.close()).resolves.toBeUndefined();
+});
+
 it("does not expose or retain artifacts without a completed owning job", async () => {
   const roots = await fixture();
   const server = await startCodeCityServer({
@@ -373,6 +958,34 @@ it("refuses startup when a completed job references a missing artifact", async (
       ...roots,
     }),
   ).rejects.toThrow(/artifact/iu);
+});
+
+it("refuses startup when a completed history job loses its evolution companion", async () => {
+  const roots = await fixture();
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...roots,
+  });
+  servers.push(server);
+  const completed = await publishCompletedHistory(server);
+  await server.close();
+  await fs.unlink(
+    path.join(
+      roots.dataDirectory,
+      "artifacts",
+      completed.id,
+      "evolution.json",
+    ),
+  );
+
+  await expect(
+    startCodeCityServer({
+      host: "127.0.0.1",
+      port: 0,
+      ...roots,
+    }),
+  ).rejects.toThrow(/evolution artifact/iu);
 });
 
 it("holds the artifact response gate until a disconnected read settles", async () => {

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   constants,
   promises as fs,
@@ -7,11 +7,18 @@ import {
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 
-import { validateCityModel } from "../../../packages/core/src/index.js";
+import {
+  EVOLUTION_BUNDLE_LIMITS,
+  iterateCanonicalEvolutionBundleBytes,
+  iteratePreparedEvolutionBundleBytes,
+  validateCityModel,
+  type PreparedEvolutionSerialization,
+} from "../../../packages/core/src/index.js";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
 const CITY_MODEL_FILE_NAME = "city-model.json";
+const EVOLUTION_FILE_NAME = "evolution.json";
 const STAGED_UPLOAD_FILE_NAME = "upload.bin";
 const UUID_V4_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -19,14 +26,22 @@ const CITY_MODEL_TEMPORARY_FILE_PATTERN =
   /^\.city-model-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/u;
 const CITY_MODEL_DELETION_FILE_PATTERN =
   /^\.city-model-delete-([0-9a-f]{1,32})-([0-9a-f]{1,32})-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/u;
+const EVOLUTION_TEMPORARY_FILE_PATTERN =
+  /^\.evolution-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/u;
+const EVOLUTION_DELETION_FILE_PATTERN =
+  /^\.evolution-delete-([0-9a-f]{1,32})-([0-9a-f]{1,32})-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/u;
 
 export const IMPORT_CITY_MODEL_MAX_BYTES = 128 * 1024 * 1024;
+export const IMPORT_EVOLUTION_MAX_BYTES =
+  EVOLUTION_BUNDLE_LIMITS.serializedBytes;
 
 export type ImportArtifactStoreErrorCode =
   | "INVALID_TOKEN"
   | "FILESYSTEM_POLICY"
   | "CITY_MODEL_INVALID"
   | "CITY_MODEL_TOO_LARGE"
+  | "EVOLUTION_INVALID"
+  | "EVOLUTION_TOO_LARGE"
   | "ARTIFACT_ALREADY_EXISTS";
 
 export class ImportArtifactStoreError extends Error {
@@ -61,6 +76,56 @@ export interface ImportCityModelArtifactMetadata {
 export interface ImportCityModelArtifact
   extends ImportCityModelArtifactMetadata {
   readonly bytes: Buffer;
+}
+
+export interface ImportEvolutionArtifactMetadata {
+  readonly token: string;
+  readonly size: number;
+  readonly sha256: string;
+  readonly lastModified: string;
+}
+
+export interface ImportEvolutionArtifactExpectation {
+  readonly size: number;
+  readonly sha256: string;
+}
+
+export interface ImportEvolutionArtifact
+  extends ImportEvolutionArtifactMetadata {
+  /**
+   * Reads the already verified, still-open artifact in bounded chunks.
+   * The iterable is single-use and closes its file handle on completion.
+   */
+  readonly chunks: (
+    signal?: AbortSignal,
+  ) => AsyncGenerator<Buffer, void, undefined>;
+  /** Releases the held file handle without reading any remaining bytes. */
+  readonly close: () => Promise<void>;
+}
+
+export interface PublishedHistoryArtifacts {
+  readonly cityModel: ImportCityModelArtifactMetadata;
+  readonly evolution: ImportEvolutionArtifactMetadata;
+}
+
+export interface PublishHistoryArtifactsOptions {
+  readonly signal?: AbortSignal;
+  /**
+   * Synchronous wall-clock/cancellation checkpoint used while serialization
+   * prevents timer callbacks from running.
+   */
+  readonly checkpoint?: () => void;
+  readonly preparedSerialization?: PreparedEvolutionSerialization;
+}
+
+export interface CleanupStagingDirectoryOptions {
+  readonly signal?: AbortSignal;
+  /** Direct wall-clock/cancellation checkpoint around cleanup operations. */
+  readonly checkpoint?: () => void;
+}
+
+export interface RetainedImportArtifactSet {
+  readonly evolution?: ImportEvolutionArtifactExpectation;
 }
 
 export interface StagedUploadWriteOptions {
@@ -156,9 +221,29 @@ function deletionMarkerIdentity(name: string): FileIdentity | undefined {
   };
 }
 
+function evolutionDeletionMarkerIdentity(
+  name: string,
+): FileIdentity | undefined {
+  const match = EVOLUTION_DELETION_FILE_PATTERN.exec(name);
+  if (match === null) return undefined;
+  return {
+    device: BigInt(`0x${match[1]}`),
+    inode: BigInt(`0x${match[2]}`),
+  };
+}
+
 function deletionFileName(status: BigIntStats): string {
   return [
     ".city-model-delete",
+    status.dev.toString(16),
+    status.ino.toString(16),
+    randomUUID(),
+  ].join("-") + ".tmp";
+}
+
+function evolutionDeletionFileName(status: BigIntStats): string {
+  return [
+    ".evolution-delete",
     status.dev.toString(16),
     status.ino.toString(16),
     randomUUID(),
@@ -407,6 +492,43 @@ async function assertArtifactDestinationAbsent(
   );
 }
 
+async function evolutionDestinationMustNotExist(
+  destination: string,
+): Promise<void> {
+  try {
+    const status = await fs.lstat(destination);
+    if (status.isSymbolicLink() || !status.isFile()) {
+      throw policyError(
+        "Evolution artifact destination must be a regular file path.",
+      );
+    }
+    throw new ImportArtifactStoreError(
+      "ARTIFACT_ALREADY_EXISTS",
+      "An evolution artifact already exists for this token.",
+    );
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return;
+    throw error;
+  }
+}
+
+async function assertEvolutionDestinationAbsent(
+  destination: string,
+): Promise<void> {
+  try {
+    await fs.lstat(destination);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return;
+    throw policyError(
+      "Evolution artifact destination could not be checked safely.",
+      error,
+    );
+  }
+  throw policyError(
+    "A replacement appeared at the evolution artifact destination during cleanup.",
+  );
+}
+
 async function inspectPrivateFile(
   filePath: string,
   description: string,
@@ -432,13 +554,41 @@ async function inspectPrivateFile(
   return { canonicalPath, status };
 }
 
-function serializeValidatedCityModel(value: unknown): Buffer {
+function publicationCheckpoint(
+  signal?: AbortSignal,
+  checkpoint?: () => void,
+): void {
+  signal?.throwIfAborted();
+  checkpoint?.();
+  signal?.throwIfAborted();
+}
+
+function serializeValidatedCityModel(
+  value: unknown,
+  signal?: AbortSignal,
+  checkpoint?: () => void,
+): Buffer {
   let serialized: string;
+  let propertiesSinceCheckpoint = 0;
   try {
-    const result = JSON.stringify(value, null, 2);
+    publicationCheckpoint(signal, checkpoint);
+    const result = JSON.stringify(
+      value,
+      (_key, item) => {
+        propertiesSinceCheckpoint += 1;
+        if (propertiesSinceCheckpoint >= 256) {
+          propertiesSinceCheckpoint = 0;
+          publicationCheckpoint(signal, checkpoint);
+        }
+        return item;
+      },
+      2,
+    );
+    publicationCheckpoint(signal, checkpoint);
     if (result === undefined) throw new TypeError("Not JSON serializable.");
     serialized = result;
   } catch (error) {
+    publicationCheckpoint(signal, checkpoint);
     throw new ImportArtifactStoreError(
       "CITY_MODEL_INVALID",
       "City model could not be serialized as JSON.",
@@ -447,6 +597,7 @@ function serializeValidatedCityModel(value: unknown): Buffer {
   }
 
   const bytes = Buffer.from(`${serialized}\n`, "utf8");
+  publicationCheckpoint(signal, checkpoint);
   if (bytes.byteLength > IMPORT_CITY_MODEL_MAX_BYTES) {
     throw new ImportArtifactStoreError(
       "CITY_MODEL_TOO_LARGE",
@@ -455,8 +606,15 @@ function serializeValidatedCityModel(value: unknown): Buffer {
   }
 
   try {
-    validateCityModel(JSON.parse(serialized) as unknown);
+    const parsed = JSON.parse(serialized) as unknown;
+    publicationCheckpoint(signal, checkpoint);
+    validateCityModel(parsed, {
+      checkpoint: () =>
+        publicationCheckpoint(signal, checkpoint),
+    });
+    publicationCheckpoint(signal, checkpoint);
   } catch (error) {
+    publicationCheckpoint(signal, checkpoint);
     throw new ImportArtifactStoreError(
       "CITY_MODEL_INVALID",
       "City model failed schema validation.",
@@ -464,6 +622,87 @@ function serializeValidatedCityModel(value: unknown): Buffer {
     );
   }
   return bytes;
+}
+
+function evolutionSerializationError(
+  error: unknown,
+): ImportArtifactStoreError {
+  if (error instanceof ImportArtifactStoreError) return error;
+  if (
+    error instanceof Error &&
+    error.message.includes("serialized bundle must not exceed")
+  ) {
+    return new ImportArtifactStoreError(
+      "EVOLUTION_TOO_LARGE",
+      `Evolution bundle exceeds the ${IMPORT_EVOLUTION_MAX_BYTES}-byte limit.`,
+      { cause: error },
+    );
+  }
+  return new ImportArtifactStoreError(
+    "EVOLUTION_INVALID",
+    "Evolution bundle failed schema validation.",
+    { cause: error },
+  );
+}
+
+function prepareEvolutionSerialization(
+  value: unknown,
+  signal?: AbortSignal,
+  prepared?: PreparedEvolutionSerialization,
+  checkpoint?: () => void,
+): {
+  readonly chunks: Iterable<Uint8Array>;
+  readonly expectedBytes?: number;
+} {
+  try {
+    if (prepared !== undefined && prepared.bundle !== value) {
+      throw new TypeError(
+        "Prepared evolution serialization does not match the supplied bundle.",
+      );
+    }
+    const iterationOptions =
+      signal === undefined && checkpoint === undefined
+        ? {}
+        : {
+            checkpoint: () =>
+              publicationCheckpoint(signal, checkpoint),
+          };
+    return Object.freeze({
+      chunks:
+        prepared === undefined
+          ? iterateCanonicalEvolutionBundleBytes(
+              value,
+              iterationOptions,
+            )
+          : iteratePreparedEvolutionBundleBytes(
+              prepared,
+              iterationOptions,
+            ),
+      ...(prepared === undefined
+        ? {}
+        : { expectedBytes: prepared.measuredBytes }),
+    });
+  } catch (error) {
+    publicationCheckpoint(signal, checkpoint);
+    throw evolutionSerializationError(error);
+  }
+}
+
+async function* mappedEvolutionChunks(
+  chunks: Iterable<Uint8Array>,
+  signal?: AbortSignal,
+  checkpoint?: () => void,
+): AsyncGenerator<Uint8Array, void, undefined> {
+  try {
+    for (const chunk of chunks) {
+      publicationCheckpoint(signal, checkpoint);
+      yield chunk;
+    }
+    publicationCheckpoint(signal, checkpoint);
+  } catch (error) {
+    publicationCheckpoint(signal, checkpoint);
+    throw evolutionSerializationError(error);
+  }
 }
 
 function positiveByteLimit(value: number, description: string): number {
@@ -480,6 +719,19 @@ function metadata(
   return Object.freeze({
     token,
     size: Number(status.size),
+    lastModified: new Date(Number(status.mtimeMs)).toUTCString(),
+  });
+}
+
+function evolutionMetadata(
+  token: string,
+  status: OpenArtifact["status"],
+  digest: string,
+): ImportEvolutionArtifactMetadata {
+  return Object.freeze({
+    token,
+    size: Number(status.size),
+    sha256: digest,
     lastModified: new Date(Number(status.mtimeMs)).toUTCString(),
   });
 }
@@ -565,6 +817,253 @@ async function openArtifactFile(
   }
 }
 
+async function openEvolutionArtifactFile(
+  directory: TrustedDirectory,
+  expectedLinks = 1n,
+): Promise<OpenArtifact | undefined> {
+  await assertTrustedDirectory(directory, "Evolution artifact directory");
+  const filePath = path.join(
+    directory.canonicalPath,
+    EVOLUTION_FILE_NAME,
+  );
+  let before;
+  try {
+    before = await fs.lstat(filePath, { bigint: true });
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return undefined;
+    throw policyError(
+      "Evolution artifact could not be inspected safely.",
+      error,
+    );
+  }
+  if (
+    before.isSymbolicLink() ||
+    !before.isFile() ||
+    before.nlink !== expectedLinks ||
+    !hasPrivateMode(before.mode, FILE_MODE)
+  ) {
+    throw policyError(
+      "Evolution artifact must be a private regular file.",
+    );
+  }
+  if (before.size > BigInt(IMPORT_EVOLUTION_MAX_BYTES)) {
+    throw new ImportArtifactStoreError(
+      "EVOLUTION_TOO_LARGE",
+      `Evolution bundle exceeds the ${IMPORT_EVOLUTION_MAX_BYTES}-byte limit.`,
+    );
+  }
+
+  const canonicalBefore = await fs.realpath(filePath);
+  if (
+    !samePath(
+      canonicalBefore,
+      path.join(directory.canonicalPath, EVOLUTION_FILE_NAME),
+    )
+  ) {
+    throw policyError(
+      "Evolution artifact resolves outside its private directory.",
+    );
+  }
+
+  let handle: FileHandle | undefined;
+  try {
+    handle = await fs.open(
+      filePath,
+      constants.O_RDONLY |
+        (constants.O_NOFOLLOW ?? 0) |
+        (constants.O_NONBLOCK ?? 0),
+    );
+    const status = await handle.stat({ bigint: true });
+    const canonicalAfter = await fs.realpath(filePath);
+    if (
+      !status.isFile() ||
+      status.nlink !== expectedLinks ||
+      !hasPrivateMode(status.mode, FILE_MODE) ||
+      status.dev !== before.dev ||
+      status.ino !== before.ino ||
+      !samePath(canonicalAfter, canonicalBefore)
+    ) {
+      throw policyError(
+        "Evolution artifact changed while it was being opened.",
+      );
+    }
+    if (status.size > BigInt(IMPORT_EVOLUTION_MAX_BYTES)) {
+      throw new ImportArtifactStoreError(
+        "EVOLUTION_TOO_LARGE",
+        `Evolution bundle exceeds the ${IMPORT_EVOLUTION_MAX_BYTES}-byte limit.`,
+      );
+    }
+    return {
+      handle,
+      status,
+      canonicalPath: canonicalAfter,
+    };
+  } catch (error) {
+    await handle?.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+async function assertOpenArtifactUnchanged(
+  opened: OpenArtifact,
+  totalBytes: number,
+  description: string,
+): Promise<BigIntStats> {
+  const after = await opened.handle.stat({ bigint: true });
+  const canonicalAfter = await fs.realpath(opened.canonicalPath);
+  if (
+    !after.isFile() ||
+    after.nlink !== 1n ||
+    !hasPrivateMode(after.mode, FILE_MODE) ||
+    after.dev !== opened.status.dev ||
+    after.ino !== opened.status.ino ||
+    after.size !== opened.status.size ||
+    after.mtimeNs !== opened.status.mtimeNs ||
+    BigInt(totalBytes) !== after.size ||
+    !samePath(canonicalAfter, opened.canonicalPath)
+  ) {
+    throw policyError(`${description} changed while it was being read.`);
+  }
+  return after;
+}
+
+async function digestOpenArtifact(
+  opened: OpenArtifact,
+  signal?: AbortSignal,
+): Promise<string> {
+  const digest = createHash("sha256");
+  const chunk = Buffer.allocUnsafe(64 * 1024);
+  const expectedBytes = Number(opened.status.size);
+  let totalBytes = 0;
+  while (totalBytes < expectedBytes) {
+    signal?.throwIfAborted();
+    const { bytesRead } = await opened.handle.read(
+      chunk,
+      0,
+      Math.min(chunk.byteLength, expectedBytes - totalBytes),
+      totalBytes,
+    );
+    if (bytesRead === 0) break;
+    digest.update(chunk.subarray(0, bytesRead));
+    totalBytes += bytesRead;
+  }
+  signal?.throwIfAborted();
+  await assertOpenArtifactUnchanged(
+    opened,
+    totalBytes,
+    "Evolution artifact",
+  );
+  return digest.digest("hex");
+}
+
+function validatedEvolutionExpectation(
+  value: ImportEvolutionArtifactExpectation,
+): ImportEvolutionArtifactExpectation {
+  if (
+    !Number.isSafeInteger(value.size) ||
+    value.size < 1 ||
+    value.size > IMPORT_EVOLUTION_MAX_BYTES ||
+    !/^[0-9a-f]{64}$/u.test(value.sha256)
+  ) {
+    throw new ImportArtifactStoreError(
+      "EVOLUTION_INVALID",
+      "Expected evolution artifact metadata is invalid.",
+    );
+  }
+  return value;
+}
+
+function evolutionVerificationError(): ImportArtifactStoreError {
+  return new ImportArtifactStoreError(
+    "EVOLUTION_INVALID",
+    "Evolution artifact failed its stored size or SHA-256 verification.",
+  );
+}
+
+function heldEvolutionArtifact(
+  token: string,
+  opened: OpenArtifact,
+  digest: string,
+): ImportEvolutionArtifact {
+  let state: "ready" | "reading" | "closed" = "ready";
+  let closePromise: Promise<void> | undefined;
+  const close = async (): Promise<void> => {
+    if (state === "closed") return;
+    closePromise ??= opened.handle.close().then(
+      () => {
+        state = "closed";
+      },
+      (error: unknown) => {
+        closePromise = undefined;
+        throw error;
+      },
+    );
+    await closePromise;
+  };
+  const chunks = async function* (
+    signal?: AbortSignal,
+  ): AsyncGenerator<
+    Buffer,
+    void,
+    undefined
+  > {
+    if (state !== "ready") {
+      throw new Error(
+        "Evolution artifact chunks can only be consumed once.",
+      );
+    }
+    state = "reading";
+    const expectedBytes = Number(opened.status.size);
+    const streamedDigest = createHash("sha256");
+    let totalBytes = 0;
+    let pendingChunk: Buffer | undefined;
+    try {
+      while (totalBytes < expectedBytes) {
+        signal?.throwIfAborted();
+        const chunk = Buffer.allocUnsafe(
+          Math.min(64 * 1024, expectedBytes - totalBytes),
+        );
+        const { bytesRead } = await opened.handle.read(
+          chunk,
+          0,
+          chunk.byteLength,
+          totalBytes,
+        );
+        if (bytesRead === 0) break;
+        totalBytes += bytesRead;
+        const bytes = bytesRead === chunk.byteLength
+          ? chunk
+          : chunk.subarray(0, bytesRead);
+        streamedDigest.update(bytes);
+        if (pendingChunk !== undefined) {
+          yield pendingChunk;
+        }
+        pendingChunk = bytes;
+      }
+      signal?.throwIfAborted();
+      await assertOpenArtifactUnchanged(
+        opened,
+        totalBytes,
+        "Evolution artifact",
+      );
+      if (streamedDigest.digest("hex") !== digest) {
+        throw evolutionVerificationError();
+      }
+      signal?.throwIfAborted();
+      if (pendingChunk !== undefined) {
+        yield pendingChunk;
+      }
+    } finally {
+      await close();
+    }
+  };
+  return Object.freeze({
+    ...evolutionMetadata(token, opened.status, digest),
+    chunks,
+    close,
+  });
+}
+
 async function removeFileIfIdentityMatches(
   filePath: string,
   identity: FileIdentity,
@@ -607,11 +1106,282 @@ async function removeFileIfIdentityMatches(
   }
 }
 
+async function writePrivateArtifactStage(
+  directory: TrustedDirectory,
+  temporaryPath: string,
+  bytes: Uint8Array,
+  description: string,
+  signal?: AbortSignal,
+  checkpoint?: () => void,
+): Promise<BigIntStats> {
+  let handle: FileHandle | undefined;
+  let identity: FileIdentity | undefined;
+  try {
+    publicationCheckpoint(signal, checkpoint);
+    handle = await fs.open(
+      temporaryPath,
+      constants.O_WRONLY |
+        constants.O_CREAT |
+        constants.O_EXCL |
+      (constants.O_NOFOLLOW ?? 0),
+        FILE_MODE,
+    );
+    publicationCheckpoint(signal, checkpoint);
+    const created = await handle.stat({ bigint: true });
+    publicationCheckpoint(signal, checkpoint);
+    if (
+      !created.isFile() ||
+      created.nlink !== 1n ||
+      !hasPrivateMode(created.mode, FILE_MODE) ||
+      (created.dev === 0n && created.ino === 0n)
+    ) {
+      throw policyError(`${description} failed its filesystem policy.`);
+    }
+    identity = { device: created.dev, inode: created.ino };
+    await handle.writeFile(bytes);
+    publicationCheckpoint(signal, checkpoint);
+    try {
+      await handle.chmod(FILE_MODE);
+    } catch (error) {
+      if (process.platform !== "win32") throw error;
+    }
+    await handle.sync();
+    publicationCheckpoint(signal, checkpoint);
+    const staged = await handle.stat({ bigint: true });
+    publicationCheckpoint(signal, checkpoint);
+    if (
+      !staged.isFile() ||
+      staged.nlink !== 1n ||
+      !hasPrivateMode(staged.mode, FILE_MODE) ||
+      staged.size !== BigInt(bytes.byteLength) ||
+      (staged.dev === 0n && staged.ino === 0n)
+    ) {
+      throw policyError(`${description} failed its filesystem policy.`);
+    }
+    await handle.close();
+    handle = undefined;
+    await syncDirectory(directory, `${description} directory`);
+    publicationCheckpoint(signal, checkpoint);
+    return staged;
+  } catch (error) {
+    await handle?.close().catch(() => undefined);
+    handle = undefined;
+    if (identity !== undefined) {
+      try {
+        await removeFileIfIdentityMatches(
+          temporaryPath,
+          identity,
+          `${description} failed-stage cleanup`,
+          directory,
+        );
+      } catch (cleanupError) {
+        throw policyError(
+          `${description} failed and could not be cleaned safely.`,
+          new AggregateError([error, cleanupError]),
+        );
+      }
+    }
+    throw error;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+async function writePrivateEvolutionStage(
+  directory: TrustedDirectory,
+  temporaryPath: string,
+  evolution: unknown,
+  signal?: AbortSignal,
+  prepared?: PreparedEvolutionSerialization,
+  checkpoint?: () => void,
+): Promise<{
+  readonly status: BigIntStats;
+  readonly sha256: string;
+}> {
+  let handle: FileHandle | undefined;
+  let identity: FileIdentity | undefined;
+  const digest = createHash("sha256");
+  let writtenBytes = 0;
+  try {
+    publicationCheckpoint(signal, checkpoint);
+    handle = await fs.open(
+      temporaryPath,
+      constants.O_WRONLY |
+        constants.O_CREAT |
+        constants.O_EXCL |
+      (constants.O_NOFOLLOW ?? 0),
+        FILE_MODE,
+    );
+    publicationCheckpoint(signal, checkpoint);
+    const created = await handle.stat({ bigint: true });
+    publicationCheckpoint(signal, checkpoint);
+    if (
+      !created.isFile() ||
+      created.nlink !== 1n ||
+      !hasPrivateMode(created.mode, FILE_MODE) ||
+      (created.dev === 0n && created.ino === 0n)
+    ) {
+      throw policyError(
+        "Staged evolution artifact failed its filesystem policy.",
+      );
+    }
+    identity = { device: created.dev, inode: created.ino };
+    const serialization = prepareEvolutionSerialization(
+      evolution,
+      signal,
+      prepared,
+      checkpoint,
+    );
+    for await (const chunk of mappedEvolutionChunks(
+      serialization.chunks,
+      signal,
+      checkpoint,
+    )) {
+      publicationCheckpoint(signal, checkpoint);
+      if (!(chunk instanceof Uint8Array)) {
+        throw new ImportArtifactStoreError(
+          "EVOLUTION_INVALID",
+          "Canonical evolution serialization produced an invalid chunk.",
+        );
+      }
+      if (chunk.byteLength === 0) continue;
+      writtenBytes += chunk.byteLength;
+      if (
+        !Number.isSafeInteger(writtenBytes) ||
+        writtenBytes > IMPORT_EVOLUTION_MAX_BYTES
+      ) {
+        throw new ImportArtifactStoreError(
+          "EVOLUTION_TOO_LARGE",
+          `Evolution bundle exceeds the ${IMPORT_EVOLUTION_MAX_BYTES}-byte limit.`,
+        );
+      }
+      digest.update(chunk);
+      await handle.writeFile(chunk);
+      publicationCheckpoint(signal, checkpoint);
+    }
+    publicationCheckpoint(signal, checkpoint);
+    if (
+      serialization.expectedBytes !== undefined &&
+      writtenBytes !== serialization.expectedBytes
+    ) {
+      throw new ImportArtifactStoreError(
+        "EVOLUTION_INVALID",
+        "Canonical evolution serialization did not match its prepared byte measurement.",
+      );
+    }
+    if (writtenBytes < 1) {
+      throw new ImportArtifactStoreError(
+        "EVOLUTION_INVALID",
+        "Canonical evolution serialization produced an empty artifact.",
+      );
+    }
+    try {
+      await handle.chmod(FILE_MODE);
+    } catch (error) {
+      if (process.platform !== "win32") throw error;
+    }
+    publicationCheckpoint(signal, checkpoint);
+    await handle.sync();
+    publicationCheckpoint(signal, checkpoint);
+    const staged = await handle.stat({ bigint: true });
+    publicationCheckpoint(signal, checkpoint);
+    if (
+      !staged.isFile() ||
+      staged.nlink !== 1n ||
+      !hasPrivateMode(staged.mode, FILE_MODE) ||
+      staged.size !== BigInt(writtenBytes) ||
+      (staged.dev === 0n && staged.ino === 0n)
+    ) {
+      throw policyError(
+        "Staged evolution artifact failed its filesystem policy.",
+      );
+    }
+    await handle.close();
+    handle = undefined;
+    await syncDirectory(
+      directory,
+      "Staged evolution artifact directory",
+    );
+    publicationCheckpoint(signal, checkpoint);
+    return Object.freeze({
+      status: staged,
+      sha256: digest.digest("hex"),
+    });
+  } catch (error) {
+    await handle?.close().catch(() => undefined);
+    handle = undefined;
+    if (identity !== undefined) {
+      try {
+        await removeFileIfIdentityMatches(
+          temporaryPath,
+          identity,
+          "Staged evolution artifact failed-stage cleanup",
+          directory,
+        );
+      } catch (cleanupError) {
+        throw policyError(
+          "Staged evolution artifact failed and could not be cleaned safely.",
+          new AggregateError([error, cleanupError]),
+        );
+      }
+    }
+    throw error;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+async function linkArtifactStage(
+  directory: TrustedDirectory,
+  temporaryPath: string,
+  destination: string,
+  staged: BigIntStats,
+  description: string,
+  openPublished: (
+    directory: TrustedDirectory,
+    expectedLinks: bigint,
+  ) => Promise<OpenArtifact | undefined>,
+): Promise<void> {
+  await assertTrustedDirectory(directory, `${description} directory`);
+  try {
+    await fs.link(temporaryPath, destination);
+  } catch (error) {
+    if (errorCode(error) === "EEXIST") {
+      throw new ImportArtifactStoreError(
+        "ARTIFACT_ALREADY_EXISTS",
+        `${description} already exists for this token.`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  await syncDirectory(directory, `${description} directory`);
+  const opened = await openPublished(directory, 2n);
+  if (opened === undefined) {
+    throw policyError(`Published ${description.toLowerCase()} is missing.`);
+  }
+  try {
+    if (
+      opened.status.dev !== staged.dev ||
+      opened.status.ino !== staged.ino ||
+      opened.status.size !== staged.size
+    ) {
+      throw policyError(
+        `Published ${description.toLowerCase()} has an unexpected identity.`,
+      );
+    }
+  } finally {
+    await opened.handle.close();
+  }
+}
+
 async function removePrivateDirectory(
   parent: TrustedDirectory,
   directory: TrustedDirectory,
   description: string,
+  options: CleanupStagingDirectoryOptions = {},
 ): Promise<void> {
+  publicationCheckpoint(options.signal, options.checkpoint);
   assertDirectChild(
     parent,
     directory,
@@ -622,14 +1392,18 @@ async function removePrivateDirectory(
   // recover even if interrupted or externally staged material has a broader
   // child mode; path identity and direct-child containment remain mandatory.
   await assertTrustedDirectory(directory, description, false);
+  publicationCheckpoint(options.signal, options.checkpoint);
   await fs.rm(directory.path, {
     recursive: true,
     force: true,
     maxRetries: 10,
     retryDelay: 100,
   });
+  publicationCheckpoint(options.signal, options.checkpoint);
   await syncDirectory(parent, `${description} parent directory`);
+  publicationCheckpoint(options.signal, options.checkpoint);
   await assertTrustedDirectory(parent, "Import data parent directory");
+  publicationCheckpoint(options.signal, options.checkpoint);
 }
 
 /**
@@ -992,24 +1766,31 @@ export class ImportArtifactStore {
     }
   }
 
-  public async cleanupStagingDirectory(token: string): Promise<void> {
+  public async cleanupStagingDirectory(
+    token: string,
+    options: CleanupStagingDirectoryOptions = {},
+  ): Promise<void> {
     const normalized = validatedToken(token);
+    publicationCheckpoint(options.signal, options.checkpoint);
     const directory = await existingDirectChild(
       this.#importsDirectory,
       normalized,
       "Import staging directory",
     );
+    publicationCheckpoint(options.signal, options.checkpoint);
     if (directory === undefined) {
       await syncDirectory(
         this.#importsDirectory,
         "Import staging directory",
       );
+      publicationCheckpoint(options.signal, options.checkpoint);
       return;
     }
     await removePrivateDirectory(
       this.#importsDirectory,
       directory,
       "Import staging directory",
+      options,
     );
   }
 
@@ -1242,19 +2023,247 @@ export class ImportArtifactStore {
     }
   }
 
+  /**
+   * Publishes the final city and its canonical history as one owned artifact
+   * set. Both fixed names are validated before either staging marker is
+   * removed. Routes additionally require the completed job result, so a
+   * process interruption can never expose a partially published set.
+   */
+  public async publishHistoryArtifacts(
+    token: string,
+    cityModel: unknown,
+    evolution: unknown,
+    options: PublishHistoryArtifactsOptions = {},
+  ): Promise<PublishedHistoryArtifacts> {
+    const normalized = validatedToken(token);
+    publicationCheckpoint(options.signal, options.checkpoint);
+    const cityBytes = serializeValidatedCityModel(
+      cityModel,
+      options.signal,
+      options.checkpoint,
+    );
+    publicationCheckpoint(options.signal, options.checkpoint);
+    if (
+      this.#publishing.has(normalized) ||
+      this.#cleanups.has(normalized) ||
+      this.#reconciling
+    ) {
+      throw new ImportArtifactStoreError(
+        "ARTIFACT_ALREADY_EXISTS",
+        "An import artifact mutation is already in progress for this token.",
+      );
+    }
+    this.#publishing.add(normalized);
+
+    let artifactDirectory: TrustedDirectory | undefined;
+    let cityTemporaryPath: string | undefined;
+    let evolutionTemporaryPath: string | undefined;
+    let cityDestination: string | undefined;
+    let evolutionDestination: string | undefined;
+    let cityStatus: BigIntStats | undefined;
+    let evolutionStatus: BigIntStats | undefined;
+    let evolutionDigest: string | undefined;
+    let cityLinkMayExist = false;
+    let evolutionLinkMayExist = false;
+    let preserveRecoveryMarkers = false;
+    try {
+      publicationCheckpoint(options.signal, options.checkpoint);
+      artifactDirectory = await ensurePrivateChild(
+        this.#artifactsDirectory,
+        normalized,
+        "Import artifact directory",
+      );
+      publicationCheckpoint(options.signal, options.checkpoint);
+      await syncDirectory(
+        this.#artifactsDirectory,
+        "Import artifacts directory",
+      );
+      publicationCheckpoint(options.signal, options.checkpoint);
+      cityDestination = path.join(
+        artifactDirectory.canonicalPath,
+        CITY_MODEL_FILE_NAME,
+      );
+      evolutionDestination = path.join(
+        artifactDirectory.canonicalPath,
+        EVOLUTION_FILE_NAME,
+      );
+      await destinationMustNotExist(cityDestination);
+      publicationCheckpoint(options.signal, options.checkpoint);
+      await evolutionDestinationMustNotExist(evolutionDestination);
+      publicationCheckpoint(options.signal, options.checkpoint);
+
+      cityTemporaryPath = path.join(
+        artifactDirectory.canonicalPath,
+        `.city-model-${randomUUID()}.tmp`,
+      );
+      evolutionTemporaryPath = path.join(
+        artifactDirectory.canonicalPath,
+        `.evolution-${randomUUID()}.tmp`,
+      );
+      publicationCheckpoint(options.signal, options.checkpoint);
+      cityStatus = await writePrivateArtifactStage(
+        artifactDirectory,
+        cityTemporaryPath,
+        cityBytes,
+        "Staged city-model artifact",
+        options.signal,
+        options.checkpoint,
+      );
+      publicationCheckpoint(options.signal, options.checkpoint);
+      const stagedEvolution = await writePrivateEvolutionStage(
+        artifactDirectory,
+        evolutionTemporaryPath,
+        evolution,
+        options.signal,
+        options.preparedSerialization,
+        options.checkpoint,
+      );
+      evolutionStatus = stagedEvolution.status;
+      evolutionDigest = stagedEvolution.sha256;
+
+      publicationCheckpoint(options.signal, options.checkpoint);
+      cityLinkMayExist = true;
+      await linkArtifactStage(
+        artifactDirectory,
+        cityTemporaryPath,
+        cityDestination,
+        cityStatus,
+        "City-model artifact",
+        openArtifactFile,
+      );
+      publicationCheckpoint(options.signal, options.checkpoint);
+      evolutionLinkMayExist = true;
+      await linkArtifactStage(
+        artifactDirectory,
+        evolutionTemporaryPath,
+        evolutionDestination,
+        evolutionStatus,
+        "Evolution artifact",
+        openEvolutionArtifactFile,
+      );
+
+      publicationCheckpoint(options.signal, options.checkpoint);
+      await removeFileIfIdentityMatches(
+        cityTemporaryPath,
+        { device: cityStatus.dev, inode: cityStatus.ino },
+        "City-model publication stage cleanup",
+        artifactDirectory,
+      );
+      publicationCheckpoint(options.signal, options.checkpoint);
+      cityTemporaryPath = undefined;
+      await removeFileIfIdentityMatches(
+        evolutionTemporaryPath,
+        {
+          device: evolutionStatus.dev,
+          inode: evolutionStatus.ino,
+        },
+        "Evolution publication stage cleanup",
+        artifactDirectory,
+      );
+      publicationCheckpoint(options.signal, options.checkpoint);
+      evolutionTemporaryPath = undefined;
+
+      return Object.freeze({
+        cityModel: metadata(normalized, cityStatus),
+        evolution: evolutionMetadata(
+          normalized,
+          evolutionStatus,
+          evolutionDigest,
+        ),
+      });
+    } catch (error) {
+      const rollbackErrors: unknown[] = [];
+      if (
+        evolutionLinkMayExist &&
+        evolutionDestination !== undefined &&
+        evolutionStatus !== undefined
+      ) {
+        try {
+          await removeFileIfIdentityMatches(
+            evolutionDestination,
+            {
+              device: evolutionStatus.dev,
+              inode: evolutionStatus.ino,
+            },
+            "Evolution artifact rollback",
+            artifactDirectory,
+          );
+          evolutionLinkMayExist = false;
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError);
+        }
+      }
+      if (
+        cityLinkMayExist &&
+        cityDestination !== undefined &&
+        cityStatus !== undefined
+      ) {
+        try {
+          await removeFileIfIdentityMatches(
+            cityDestination,
+            { device: cityStatus.dev, inode: cityStatus.ino },
+            "City-model artifact rollback",
+            artifactDirectory,
+          );
+          cityLinkMayExist = false;
+        } catch (rollbackError) {
+          rollbackErrors.push(rollbackError);
+        }
+      }
+      if (rollbackErrors.length > 0) {
+        preserveRecoveryMarkers = true;
+        throw policyError(
+          "History artifact publication failed and could not be rolled back safely.",
+          new AggregateError([error, ...rollbackErrors]),
+        );
+      }
+      throw error;
+    } finally {
+      this.#publishing.delete(normalized);
+      if (!preserveRecoveryMarkers) {
+        if (
+          evolutionTemporaryPath !== undefined &&
+          evolutionStatus !== undefined
+        ) {
+          await removeFileIfIdentityMatches(
+            evolutionTemporaryPath,
+            {
+              device: evolutionStatus.dev,
+              inode: evolutionStatus.ino,
+            },
+            "Abandoned evolution publication stage cleanup",
+            artifactDirectory,
+          ).catch(() => undefined);
+        }
+        if (cityTemporaryPath !== undefined && cityStatus !== undefined) {
+          await removeFileIfIdentityMatches(
+            cityTemporaryPath,
+            { device: cityStatus.dev, inode: cityStatus.ino },
+            "Abandoned city-model publication stage cleanup",
+            artifactDirectory,
+          ).catch(() => undefined);
+        }
+      }
+    }
+  }
+
   public async statCityModel(
     token: string,
+    signal?: AbortSignal,
   ): Promise<ImportCityModelArtifactMetadata | undefined> {
     const normalized = validatedToken(token);
+    signal?.throwIfAborted();
     const directory = await existingDirectChild(
       this.#artifactsDirectory,
       normalized,
       "City-model artifact directory",
     );
+    signal?.throwIfAborted();
     if (directory === undefined) return undefined;
     const opened = await openArtifactFile(directory);
     if (opened === undefined) return undefined;
     try {
+      signal?.throwIfAborted();
       return metadata(normalized, opened.status);
     } finally {
       await opened.handle.close();
@@ -1263,54 +2272,110 @@ export class ImportArtifactStore {
 
   public async readCityModel(
     token: string,
+    signal?: AbortSignal,
   ): Promise<ImportCityModelArtifact | undefined> {
     const normalized = validatedToken(token);
+    signal?.throwIfAborted();
     const directory = await existingDirectChild(
       this.#artifactsDirectory,
       normalized,
       "City-model artifact directory",
     );
+    signal?.throwIfAborted();
     if (directory === undefined) return undefined;
     const opened = await openArtifactFile(directory);
     if (opened === undefined) return undefined;
     try {
+      signal?.throwIfAborted();
       const expectedBytes = Number(opened.status.size);
       const bytes = Buffer.allocUnsafe(expectedBytes);
       let totalBytes = 0;
       while (totalBytes < expectedBytes) {
+        signal?.throwIfAborted();
         const { bytesRead } = await opened.handle.read(
           bytes,
           totalBytes,
-          expectedBytes - totalBytes,
+          Math.min(64 * 1024, expectedBytes - totalBytes),
           totalBytes,
         );
         if (bytesRead === 0) break;
         totalBytes += bytesRead;
       }
 
-      const after = await opened.handle.stat({ bigint: true });
-      const canonicalAfter = await fs.realpath(opened.canonicalPath);
-      if (
-        !after.isFile() ||
-        after.nlink !== 1n ||
-        !hasPrivateMode(after.mode, FILE_MODE) ||
-        after.dev !== opened.status.dev ||
-        after.ino !== opened.status.ino ||
-        after.size !== opened.status.size ||
-        after.mtimeNs !== opened.status.mtimeNs ||
-        BigInt(totalBytes) !== after.size ||
-        !samePath(canonicalAfter, opened.canonicalPath)
-      ) {
-        throw policyError(
-          "City-model artifact changed while it was being read.",
-        );
-      }
+      signal?.throwIfAborted();
+      const after = await assertOpenArtifactUnchanged(
+        opened,
+        totalBytes,
+        "City-model artifact",
+      );
+      signal?.throwIfAborted();
       return Object.freeze({
         ...metadata(normalized, after),
         bytes,
       });
     } finally {
       await opened.handle.close();
+    }
+  }
+
+  public async statEvolution(
+    token: string,
+  ): Promise<ImportEvolutionArtifactMetadata | undefined> {
+    const normalized = validatedToken(token);
+    const directory = await existingDirectChild(
+      this.#artifactsDirectory,
+      normalized,
+      "Evolution artifact directory",
+    );
+    if (directory === undefined) return undefined;
+    const opened = await openEvolutionArtifactFile(directory);
+    if (opened === undefined) return undefined;
+    try {
+      const digest = await digestOpenArtifact(opened);
+      return evolutionMetadata(normalized, opened.status, digest);
+    } finally {
+      await opened.handle.close();
+    }
+  }
+
+  public async readEvolution(
+    token: string,
+    expected?: ImportEvolutionArtifactExpectation,
+    signal?: AbortSignal,
+  ): Promise<ImportEvolutionArtifact | undefined> {
+    const normalized = validatedToken(token);
+    signal?.throwIfAborted();
+    const verifiedExpectation =
+      expected === undefined
+        ? undefined
+        : validatedEvolutionExpectation(expected);
+    const directory = await existingDirectChild(
+      this.#artifactsDirectory,
+      normalized,
+      "Evolution artifact directory",
+    );
+    if (directory === undefined) return undefined;
+    const opened = await openEvolutionArtifactFile(directory);
+    if (opened === undefined) return undefined;
+    try {
+      signal?.throwIfAborted();
+      if (
+        verifiedExpectation !== undefined &&
+        Number(opened.status.size) !== verifiedExpectation.size
+      ) {
+        throw evolutionVerificationError();
+      }
+      const digest = await digestOpenArtifact(opened, signal);
+      if (
+        verifiedExpectation !== undefined &&
+        digest !== verifiedExpectation.sha256
+      ) {
+        throw evolutionVerificationError();
+      }
+      return heldEvolutionArtifact(normalized, opened, digest);
+    } catch (error) {
+      await opened.handle.close().catch(() => undefined);
+      throw error;
     }
   }
 
@@ -1321,15 +2386,60 @@ export class ImportArtifactStore {
    * owns the data directory. Callers must derive retainedTokens solely from
    * already-validated completed job results, before accepting HTTP requests.
    * Every other UUID artifact is removed using the normal identity-checked
-   * cleanup path. Retained artifacts are read and schema-validated, so startup
-   * fails rather than exposing a missing or corrupt completed-job result.
+   * cleanup path. Retained city models are read and schema-validated; retained
+   * evolution companions must exactly match the canonical publication size
+   * and SHA-256 persisted in their owning job. Startup therefore fails rather
+   * than exposing a missing or corrupt completed-job result.
    */
   public async reconcileCityModelArtifacts(
     retainedTokens: ReadonlySet<string>,
   ): Promise<void> {
-    const retained = new Set<string>();
+    const retained = new Map<string, RetainedImportArtifactSet>();
     for (const token of retainedTokens) {
-      retained.add(validatedToken(token));
+      retained.set(validatedToken(token), Object.freeze({}));
+    }
+    await this.reconcileImportArtifacts(retained);
+  }
+
+  /**
+   * Reconciles the complete artifact ownership declared by completed jobs.
+   * A history job must own both fixed files and the persisted digest must
+   * match the canonical evolution bytes; a legacy job owns only its city.
+   */
+  public async reconcileImportArtifacts(
+    retainedArtifacts: ReadonlyMap<
+      string,
+      RetainedImportArtifactSet
+    >,
+  ): Promise<void> {
+    const retained = new Map<string, RetainedImportArtifactSet>();
+    for (const [token, expected] of retainedArtifacts) {
+      const normalized = validatedToken(token);
+      const evolution = expected.evolution;
+      if (
+        evolution !== undefined &&
+        (!Number.isSafeInteger(evolution.size) ||
+          evolution.size < 1 ||
+          evolution.size > IMPORT_EVOLUTION_MAX_BYTES ||
+          !/^[0-9a-f]{64}$/u.test(evolution.sha256))
+      ) {
+        throw policyError(
+          "Completed-job evolution artifact metadata is invalid.",
+        );
+      }
+      retained.set(
+        normalized,
+        Object.freeze({
+          ...(evolution === undefined
+            ? {}
+            : {
+                evolution: Object.freeze({
+                  size: evolution.size,
+                  sha256: evolution.sha256,
+                }),
+              }),
+        }),
+      );
     }
     if (
       this.#reconciling ||
@@ -1360,7 +2470,7 @@ export class ImportArtifactStore {
         await this.cleanupCityModelArtifactOnce(entry.name);
       }
 
-      for (const token of retained) {
+      for (const [token, expected] of retained) {
         const artifact = await this.readCityModel(token);
         if (artifact === undefined) {
           throw policyError(
@@ -1378,6 +2488,25 @@ export class ImportArtifactStore {
             "A completed import job references an invalid city-model artifact.",
             { cause: error },
           );
+        }
+        if (expected.evolution === undefined) {
+          const unexpectedEvolution = await this.statEvolution(token);
+          if (unexpectedEvolution !== undefined) {
+            throw policyError(
+              "A completed legacy import job has an unowned evolution artifact.",
+            );
+          }
+        } else {
+          const evolution = await this.readEvolution(
+            token,
+            expected.evolution,
+          );
+          if (evolution === undefined) {
+            throw policyError(
+              "A completed history import job references a missing or mismatched evolution artifact.",
+            );
+          }
+          await evolution.close();
         }
       }
       await assertTrustedDirectory(
@@ -1409,6 +2538,7 @@ export class ImportArtifactStore {
       );
       return;
     }
+    await this.cleanupEvolutionArtifactFileOnce(directory);
     const restoredReplacement =
       await this.removeCompletedDeletionMarkers(directory);
     if (restoredReplacement) {
@@ -1550,6 +2680,208 @@ export class ImportArtifactStore {
         await opened.handle.close().catch(() => undefined);
       }
     }
+  }
+
+  private async cleanupEvolutionArtifactFileOnce(
+    directory: TrustedDirectory,
+  ): Promise<void> {
+    const restoredReplacement =
+      await this.removeCompletedEvolutionDeletionMarkers(directory);
+    if (restoredReplacement) {
+      throw policyError(
+        "An interrupted evolution replacement restoration was recovered; the replacement was preserved.",
+      );
+    }
+
+    const opened = await openEvolutionArtifactFile(directory);
+    if (opened === undefined) return;
+    if (opened.status.dev === 0n && opened.status.ino === 0n) {
+      await opened.handle.close();
+      throw policyError(
+        "Evolution artifact cannot be cleaned without a stable file identity.",
+      );
+    }
+    let handleClosed = false;
+    const destination = path.join(
+      directory.canonicalPath,
+      EVOLUTION_FILE_NAME,
+    );
+    const deletionPath = path.join(
+      directory.canonicalPath,
+      evolutionDeletionFileName(opened.status),
+    );
+    try {
+      try {
+        await fs.rename(destination, deletionPath);
+        await syncDirectory(directory, "Evolution artifact directory");
+      } catch (error) {
+        if (errorCode(error) === "ENOENT") {
+          await opened.handle.close();
+          handleClosed = true;
+          return;
+        }
+        throw error;
+      }
+
+      let moved;
+      try {
+        moved = await fs.lstat(deletionPath, { bigint: true });
+      } catch (error) {
+        throw policyError(
+          "Evolution artifact changed during cleanup.",
+          error,
+        );
+      }
+      const expectedEntry =
+        !moved.isSymbolicLink() &&
+        moved.isFile() &&
+        moved.nlink === 1n &&
+        hasPrivateMode(moved.mode, FILE_MODE) &&
+        moved.dev === opened.status.dev &&
+        moved.ino === opened.status.ino;
+      await opened.handle.close();
+      handleClosed = true;
+
+      if (!expectedEntry) {
+        if (!moved.isSymbolicLink() && moved.isFile()) {
+          try {
+            await fs.link(deletionPath, destination);
+            await syncDirectory(directory, "Evolution artifact directory");
+            await removeFileIfIdentityMatches(
+              deletionPath,
+              { device: moved.dev, inode: moved.ino },
+              "Replaced evolution artifact restoration",
+              directory,
+            );
+          } catch (error) {
+            if (errorCode(error) !== "EEXIST") {
+              throw policyError(
+                "A replaced evolution artifact could not be restored safely.",
+                error,
+              );
+            }
+          }
+        } else {
+          const preservedPath = path.join(
+            directory.canonicalPath,
+            `.evolution-preserved-${randomUUID()}`,
+          );
+          await fs.rename(deletionPath, preservedPath);
+          await syncDirectory(directory, "Evolution artifact directory");
+        }
+        throw policyError(
+          "Evolution artifact changed during cleanup; the replacement was not removed.",
+        );
+      }
+
+      await assertEvolutionDestinationAbsent(destination);
+      await removeFileIfIdentityMatches(
+        deletionPath,
+        {
+          device: opened.status.dev,
+          inode: opened.status.ino,
+        },
+        "Evolution artifact cleanup",
+        directory,
+      );
+      await assertEvolutionDestinationAbsent(destination);
+    } finally {
+      if (!handleClosed) {
+        await opened.handle.close().catch(() => undefined);
+      }
+    }
+  }
+
+  private async removeCompletedEvolutionDeletionMarkers(
+    directory: TrustedDirectory,
+  ): Promise<boolean> {
+    const destination = path.join(
+      directory.canonicalPath,
+      EVOLUTION_FILE_NAME,
+    );
+    let published = await inspectPrivateFile(
+      destination,
+      "Evolution artifact",
+    );
+    let restoredReplacement = false;
+    const names = await fs.readdir(directory.canonicalPath);
+    for (const name of names) {
+      const expected = evolutionDeletionMarkerIdentity(name);
+      if (expected === undefined) continue;
+      const deletionPath = path.join(directory.canonicalPath, name);
+      const deletion = await inspectPrivateFile(
+        deletionPath,
+        "Interrupted evolution deletion",
+      );
+      if (deletion === undefined) continue;
+      if (deletion.status.dev === 0n && deletion.status.ino === 0n) {
+        throw policyError(
+          "Interrupted evolution deletion has no stable filesystem identity.",
+        );
+      }
+
+      const matchingDestination =
+        published !== undefined &&
+        deletion.status.dev === published.status.dev &&
+        deletion.status.ino === published.status.ino
+          ? published
+          : undefined;
+      if (matchingDestination !== undefined) {
+        if (
+          deletion.status.nlink !== 2n ||
+          matchingDestination.status.nlink !== 2n
+        ) {
+          throw policyError(
+            "Interrupted evolution deletion has an unknown hard-link target.",
+          );
+        }
+        const restoredIdentity = {
+          device: deletion.status.dev,
+          inode: deletion.status.ino,
+        };
+        await removeFileIfIdentityMatches(
+          deletionPath,
+          restoredIdentity,
+          "Interrupted evolution replacement restoration cleanup",
+          directory,
+        );
+        const restored = await inspectPrivateFile(
+          destination,
+          "Restored evolution artifact",
+        );
+        if (
+          restored === undefined ||
+          restored.status.nlink !== 1n ||
+          restored.status.dev !== restoredIdentity.device ||
+          restored.status.ino !== restoredIdentity.inode
+        ) {
+          throw policyError(
+            "Restored evolution artifact changed during recovery.",
+          );
+        }
+        published = restored;
+        restoredReplacement = true;
+        continue;
+      }
+
+      if (
+        deletion.status.nlink === 1n &&
+        deletion.status.dev === expected.device &&
+        deletion.status.ino === expected.inode
+      ) {
+        await removeFileIfIdentityMatches(
+          deletionPath,
+          expected,
+          "Interrupted evolution deletion cleanup",
+          directory,
+        );
+        continue;
+      }
+      throw policyError(
+        "Interrupted evolution deletion has an unknown identity or hard-link target.",
+      );
+    }
+    return restoredReplacement;
   }
 
   private async removeCompletedDeletionMarkers(
@@ -1703,12 +3035,20 @@ export class ImportArtifactStore {
       const temporaryNames = names.filter((name) =>
         CITY_MODEL_TEMPORARY_FILE_PATTERN.test(name),
       );
+      const evolutionTemporaryNames = names.filter((name) =>
+        EVOLUTION_TEMPORARY_FILE_PATTERN.test(name),
+      );
       const deletionNames = names.filter(
         (name) => deletionMarkerIdentity(name) !== undefined,
       );
+      const evolutionDeletionNames = names.filter(
+        (name) => evolutionDeletionMarkerIdentity(name) !== undefined,
+      );
       if (
         temporaryNames.length === 0 &&
-        deletionNames.length === 0
+        evolutionTemporaryNames.length === 0 &&
+        deletionNames.length === 0 &&
+        evolutionDeletionNames.length === 0
       ) {
         continue;
       }
@@ -1780,14 +3120,84 @@ export class ImportArtifactStore {
         );
       }
 
+      const evolutionDestination = path.join(
+        directory.canonicalPath,
+        EVOLUTION_FILE_NAME,
+      );
+      let publishedEvolution = await inspectPrivateFile(
+        evolutionDestination,
+        "Evolution artifact",
+      );
+      for (const name of evolutionTemporaryNames) {
+        const temporaryPath = path.join(directory.canonicalPath, name);
+        const staged = await inspectPrivateFile(
+          temporaryPath,
+          "Interrupted evolution stage",
+        );
+        if (staged === undefined) continue;
+        if (staged.status.dev === 0n && staged.status.ino === 0n) {
+          throw policyError(
+            "Interrupted evolution stage has no stable filesystem identity.",
+          );
+        }
+        const matchingDestination =
+          publishedEvolution !== undefined &&
+          staged.status.dev === publishedEvolution.status.dev &&
+          staged.status.ino === publishedEvolution.status.ino
+            ? publishedEvolution
+            : undefined;
+        const linkedToDestination =
+          matchingDestination !== undefined &&
+          staged.status.nlink === 2n &&
+          matchingDestination.status.nlink === 2n;
+        if (
+          matchingDestination !== undefined &&
+          !linkedToDestination
+        ) {
+          throw policyError(
+            "Interrupted evolution publication has an unknown hard-link target.",
+          );
+        }
+        if (staged.status.nlink !== 1n && !linkedToDestination) {
+          throw policyError(
+            "Interrupted evolution stage has an unknown hard-link target.",
+          );
+        }
+        if (linkedToDestination) {
+          await removeFileIfIdentityMatches(
+            evolutionDestination,
+            {
+              device: staged.status.dev,
+              inode: staged.status.ino,
+            },
+            "Interrupted evolution publication rollback",
+            directory,
+          );
+          publishedEvolution = undefined;
+        }
+        await removeFileIfIdentityMatches(
+          temporaryPath,
+          {
+            device: staged.status.dev,
+            inode: staged.status.ino,
+          },
+          "Interrupted evolution publication stage cleanup",
+          directory,
+        );
+      }
+
       // A standalone marker is removed only when its encoded identity matches.
       // A restoration marker may encode the replaced artifact's old identity;
       // in that case, an exact two-link marker/fixed-name pair proves which
       // marker can be removed without touching the restored replacement.
       await this.removeCompletedDeletionMarkers(directory);
+      await this.removeCompletedEvolutionDeletionMarkers(directory);
 
       const recovered = await openArtifactFile(directory);
       await recovered?.handle.close();
+      const recoveredEvolution =
+        await openEvolutionArtifactFile(directory);
+      await recoveredEvolution?.handle.close();
     }
   }
 

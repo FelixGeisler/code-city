@@ -8,6 +8,7 @@ import {
   ViewerImportApiClient,
   type ImportApiFetch,
   type ImportJob,
+  type RemoteImportSubmission,
   type UploadImportSubmission,
 } from "../apps/viewer/src/import-api.js";
 
@@ -36,6 +37,20 @@ function completedJob(id = JOB_ID): ImportJob {
       kind: "city-model",
       artifactToken: id,
       artifactUrl: `/api/v1/artifacts/${id}/city-model.json`,
+    },
+  };
+}
+
+function completedHistoryJob(id = JOB_ID): ImportJob {
+  return {
+    ...completedJob(id),
+    result: {
+      ...completedJob(id).result!,
+      evolution: {
+        artifactUrl: `/api/v1/artifacts/${id}/evolution.json`,
+        size: 12_345,
+        sha256: "a".repeat(64),
+      },
     },
   };
 }
@@ -208,15 +223,29 @@ describe("viewer import API protocol", () => {
       new URL("http://raspberrypi.local/"),
       { fetch },
     );
-    const request = {
+    const request: RemoteImportSubmission = {
       source: {
         kind: "github" as const,
         repositoryUrl: "https://github.com/openai/example",
         credentialProfileId: "github",
         revision: { kind: "tag" as const, name: "v1" },
       },
+      history: {
+        mode: "date-range" as const,
+        fromInclusive: "2026-01-01T00:00:00.000Z",
+        toInclusive: "2026-01-31T23:59:59.000Z",
+        maxCommits: 100,
+        sampleEvery: 2,
+        totalDeadlineMs: 60_000,
+        maxAggregateChangedPaths: 10_000,
+        maxAggregateChangedPathBytes: 250_000,
+        maxAggregateSemanticBytes: 750_000,
+        maxAggregateTreeEntries: 20_000,
+        maxUniqueLineages: 5_000,
+        maxEvolutionOutputBytes: 1_000_000,
+      },
       identity: { title: "Imported" },
-      analysis: { timeoutMs: 10_000 },
+      analysis: { maxRetainedFiles: 1_000 },
     };
 
     expect(await client.createRemoteImport(request)).toEqual(queuedJob());
@@ -401,6 +430,41 @@ describe("viewer import API protocol", () => {
         state: "completed",
       }),
     ).toThrow(/terminal/u);
+    expect(parseImportJob(completedHistoryJob())).toEqual(
+      completedHistoryJob(),
+    );
+    for (const evolution of [
+      {
+        ...completedHistoryJob().result!.evolution!,
+        artifactUrl: "https://attacker.example/evolution.json",
+      },
+      {
+        ...completedHistoryJob().result!.evolution!,
+        size: 0,
+      },
+      {
+        ...completedHistoryJob().result!.evolution!,
+        size: 512 * 1024 * 1024 + 1,
+      },
+      {
+        ...completedHistoryJob().result!.evolution!,
+        sha256: "A".repeat(64),
+      },
+      {
+        ...completedHistoryJob().result!.evolution!,
+        repositoryUrl: "https://github.com/private/repository",
+      },
+    ]) {
+      expect(() =>
+        parseImportJob({
+          ...completedHistoryJob(),
+          result: {
+            ...completedHistoryJob().result!,
+            evolution,
+          },
+        }),
+      ).toThrow(/evolution|shape/u);
+    }
 
     const request: UploadImportSubmission = {
       source: { kind: "city-model", sizeBytes: 2 },
