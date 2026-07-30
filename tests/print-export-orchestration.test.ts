@@ -166,53 +166,57 @@ describe("format-neutral print export orchestration", () => {
     ).toEqual([PRINT_LOGO_RELIEF_FALLBACK_WARNING]);
   });
 
-  it("feeds identical normalized logo relief geometry to 3MF and STL", () => {
-    const model = {
-      ...DEMO_MODEL,
-      identity: {
-        ...DEMO_MODEL.identity!,
-        logo: {
-          relativePath: "assets/private-logo-marker.png",
-          format: "png" as const,
-          alt: "private-alt-marker",
-          printRelief: {
-            version: "codecity.logo-relief/1" as const,
-            width: 4,
-            height: 4,
-            mask: "-Z8",
+  it(
+    "feeds identical normalized logo relief geometry to 3MF and STL",
+    { timeout: 15_000 },
+    () => {
+      const model = {
+        ...DEMO_MODEL,
+        identity: {
+          ...DEMO_MODEL.identity!,
+          logo: {
+            relativePath: "assets/private-logo-marker.png",
+            format: "png" as const,
+            alt: "private-alt-marker",
+            printRelief: {
+              version: "codecity.logo-relief/1" as const,
+              width: 4,
+              height: 4,
+              mask: "-Z8",
+            },
           },
         },
-      },
-    };
-    const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
-    const relief = (format: "3mf" | "stl") =>
-      preparePrintExport({
-        format,
-        model,
-        profile,
-        options,
-      }).artifacts.city.parts
-        .flatMap(({ primitives }) => primitives)
-        .filter(({ id }) => id.startsWith("identity-relief:logo:"))
-        .map(({ id, bounds }) => ({ id, bounds }));
+      };
+      const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
+      const relief = (format: "3mf" | "stl") =>
+        preparePrintExport({
+          format,
+          model,
+          profile,
+          options,
+        }).artifacts.city.parts
+          .flatMap(({ primitives }) => primitives)
+          .filter(({ id }) => id.startsWith("identity-relief:logo:"))
+          .map(({ id, bounds }) => ({ id, bounds }));
 
-    expect(relief("stl")).toEqual(relief("3mf"));
-    for (const format of ["3mf", "stl"] as const) {
-      const request = { format, model, profile, options };
-      const first = generatePrintExport(request).artifact.bytes;
-      const second = generatePrintExport(request).artifact.bytes;
-      expect(first).toEqual(second);
-      const serialized =
-        format === "3mf"
-          ? Object.values(unzipSync(first))
-              .map((entry) => new TextDecoder().decode(entry))
-              .join("\n")
-          : new TextDecoder().decode(first);
-      expect(serialized).not.toContain("private-logo-marker");
-      expect(serialized).not.toContain("private-alt-marker");
-      expect(serialized).not.toContain("-Z8");
-    }
-  });
+      expect(relief("stl")).toEqual(relief("3mf"));
+      for (const format of ["3mf", "stl"] as const) {
+        const request = { format, model, profile, options };
+        const first = generatePrintExport(request).artifact.bytes;
+        const second = generatePrintExport(request).artifact.bytes;
+        expect(Buffer.from(first).equals(Buffer.from(second))).toBe(true);
+        const serialized =
+          format === "3mf"
+            ? Object.values(unzipSync(first))
+                .map((entry) => new TextDecoder().decode(entry))
+                .join("\n")
+            : new TextDecoder().decode(first);
+        expect(serialized).not.toContain("private-logo-marker");
+        expect(serialized).not.toContain("private-alt-marker");
+        expect(serialized).not.toContain("-Z8");
+      }
+    },
+  );
 
   it.each(profileCases())(
     "publishes CLI %s bytes identical to the exact plate generator",

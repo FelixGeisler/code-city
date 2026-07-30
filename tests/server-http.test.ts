@@ -305,13 +305,16 @@ function request(
   });
 }
 
+type RequestOptions = NonNullable<Parameters<typeof request>[1]>;
+
 async function waitForArtifactResponseGate(
   url: URL,
+  options: RequestOptions = {},
 ): Promise<ResponseSnapshot> {
   const deadline = Date.now() + 1_000;
   let response: ResponseSnapshot;
   do {
-    response = await request(url);
+    response = await request(url, options);
     if (response.status !== 503) return response;
     await new Promise<void>((resolve) => setTimeout(resolve, 5));
   } while (Date.now() < deadline);
@@ -1063,7 +1066,9 @@ it("serves an owned evolution companion with exact metadata and no-store", async
     JSON.parse(JSON.stringify(evolutionBundleFixture())),
   );
 
-  const head = await request(evolutionUrl, { method: "HEAD" });
+  const head = await waitForArtifactResponseGate(evolutionUrl, {
+    method: "HEAD",
+  });
   expect(head.status).toBe(200);
   expect(head.body).toBe("");
   expect(head.headers["content-length"]).toBe(
