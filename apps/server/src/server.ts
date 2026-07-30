@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import http, {
   type IncomingMessage,
   type ServerResponse,
@@ -15,6 +16,8 @@ import {
   type JobRecord,
 } from "./job-queue.js";
 import { ImportArtifactStore } from "./import-artifacts.js";
+import type { RetainedImportArtifactSet } from "./import-artifacts.js";
+import { HistorySemanticCache } from "./history-cache.js";
 import {
   InboundAuthorization,
   type InboundAuthorizationMethod,
@@ -45,10 +48,14 @@ const DEFAULT_PORT = 3_000;
 const MAXIMUM_REQUEST_TARGET_CHARACTERS = 2_048;
 export const REMOTE_IMPORT_REQUEST_MAX_BYTES = 32 * 1024;
 export const REMOTE_IMPORT_REQUEST_DEADLINE_MS = 5_000;
+export const ARTIFACT_RESPONSE_IDLE_TIMEOUT_MS = 30_000;
+export const ARTIFACT_RESPONSE_TOTAL_TIMEOUT_MS = 30 * 60_000;
 const JOB_PATH_PATTERN =
   /^\/api\/v1\/jobs\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/u;
 const CITY_MODEL_ARTIFACT_PATH_PATTERN =
   /^\/api\/v1\/artifacts\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/city-model\.json$/u;
+const EVOLUTION_ARTIFACT_PATH_PATTERN =
+  /^\/api\/v1\/artifacts\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/evolution\.json$/u;
 const UPLOAD_IMPORT_PATH_PATTERN =
   /^\/api\/v1\/imports\/uploads\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/u;
 const AUTHORIZATION_SESSION_PATH = "/api/v1/auth/session";
@@ -80,6 +87,11 @@ export interface CodeCityServerOptions {
   readonly authorization?: InboundAuthorizationOptions;
   readonly credentialProfiles?: CredentialProfileRegistryOptions;
   readonly importDependencies?: RemoteImportDependencies;
+  /** Test seam; production callers should omit it. */
+  readonly artifactResponseTimeouts?: {
+    readonly idleMs: number;
+    readonly totalMs: number;
+  };
   readonly signal?: AbortSignal;
 }
 
@@ -147,6 +159,29 @@ function validHost(host: string | undefined): string {
     throw new Error("Server host is invalid.");
   }
   return value;
+}
+
+function artifactResponseTimeouts(
+  value: CodeCityServerOptions["artifactResponseTimeouts"],
+): {
+  readonly idleMs: number;
+  readonly totalMs: number;
+} {
+  const idleMs =
+    value?.idleMs ?? ARTIFACT_RESPONSE_IDLE_TIMEOUT_MS;
+  const totalMs =
+    value?.totalMs ?? ARTIFACT_RESPONSE_TOTAL_TIMEOUT_MS;
+  if (
+    !Number.isSafeInteger(idleMs) ||
+    idleMs < 1 ||
+    idleMs > ARTIFACT_RESPONSE_IDLE_TIMEOUT_MS ||
+    !Number.isSafeInteger(totalMs) ||
+    totalMs < idleMs ||
+    totalMs > ARTIFACT_RESPONSE_TOTAL_TIMEOUT_MS
+  ) {
+    throw new Error("Artifact response timeouts are invalid.");
+  }
+  return Object.freeze({ idleMs, totalMs });
 }
 
 function normalizeHostname(hostname: string): string {
@@ -316,22 +351,35 @@ function publicJob(record: JobRecord): JobRecord {
   return record;
 }
 
-function completedCityModelArtifactTokens(
+function completedImportArtifactSets(
   jobs: PersistentJobQueue,
-): ReadonlySet<string> {
-  const tokens = new Set<string>();
+): ReadonlyMap<string, RetainedImportArtifactSet> {
+  const artifacts = new Map<string, RetainedImportArtifactSet>();
   for (const job of jobs.list()) {
     if (
-      job.state === "completed" &&
-      job.result?.kind === "city-model" &&
-      job.result.artifactToken === job.id &&
-      job.result.artifactUrl ===
+      job.state !== "completed" ||
+      job.result?.kind !== "city-model" ||
+      job.result.artifactToken !== job.id ||
+      job.result.artifactUrl !==
         `/api/v1/artifacts/${job.id}/city-model.json`
     ) {
-      tokens.add(job.id);
+      continue;
     }
+    artifacts.set(
+      job.id,
+      Object.freeze({
+        ...(job.result.evolution === undefined
+          ? {}
+          : {
+              evolution: Object.freeze({
+                size: job.result.evolution.size,
+                sha256: job.result.evolution.sha256,
+              }),
+            }),
+      }),
+    );
   }
-  return tokens;
+  return artifacts;
 }
 
 function completedJobOwnsCityModelArtifact(
@@ -345,6 +393,22 @@ function completedJobOwnsCityModelArtifact(
     job.result.artifactToken === token &&
     job.result.artifactUrl ===
       `/api/v1/artifacts/${token}/city-model.json`
+  );
+}
+
+function completedJobOwnsEvolutionArtifact(
+  jobs: PersistentJobQueue,
+  token: string,
+): boolean {
+  const job = jobs.get(token);
+  return (
+    job?.state === "completed" &&
+    job.result?.kind === "city-model" &&
+    job.result.artifactToken === token &&
+    job.result.artifactUrl ===
+      `/api/v1/artifacts/${token}/city-model.json` &&
+    job.result.evolution?.artifactUrl ===
+      `/api/v1/artifacts/${token}/evolution.json`
   );
 }
 
@@ -617,27 +681,48 @@ class ImportRequestOperations {
   }
 }
 
+interface ArtifactResponseLease {
+  readonly signal: AbortSignal;
+  touch(): void;
+  settle(): void;
+}
+
 class ArtifactResponseGate {
   #active = false;
   #idle: Promise<void> = Promise.resolve();
   #resolveIdle: (() => void) | undefined;
 
+  public constructor(
+    private readonly timeouts: {
+      readonly idleMs: number;
+      readonly totalMs: number;
+    },
+  ) {}
+
   public tryAcquire(
     response: ServerResponse,
-  ): (() => void) | undefined {
+  ): ArtifactResponseLease | undefined {
     if (this.#active) return undefined;
     this.#active = true;
     this.#idle = new Promise<void>((resolve) => {
       this.#resolveIdle = resolve;
     });
+    const controller = new AbortController();
     let operationSettled = false;
     let responseCompleted = false;
     let released = false;
+    let idleTimer: NodeJS.Timeout | undefined;
+    const clearTimers = (): void => {
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
+      clearTimeout(totalTimer);
+      idleTimer = undefined;
+    };
     const releaseIfComplete = (): void => {
       if (released || !operationSettled || !responseCompleted) return;
       released = true;
+      clearTimers();
       response.off("finish", completeResponse);
-      response.off("close", completeResponse);
+      response.off("close", closeResponse);
       this.#active = false;
       const resolveIdle = this.#resolveIdle;
       this.#resolveIdle = undefined;
@@ -647,12 +732,49 @@ class ArtifactResponseGate {
       responseCompleted = true;
       releaseIfComplete();
     };
-    response.once("finish", completeResponse);
-    response.once("close", completeResponse);
-    return () => {
-      operationSettled = true;
+    const closeResponse = (): void => {
+      responseCompleted = true;
+      if (!operationSettled && !controller.signal.aborted) {
+        controller.abort(new Error("Artifact response closed."));
+      }
       releaseIfComplete();
     };
+    const timeoutResponse = (kind: "idle" | "total"): void => {
+      if (released) return;
+      clearTimers();
+      const error = new Error(
+        `Artifact response exceeded its ${kind} timeout.`,
+      );
+      if (!controller.signal.aborted) controller.abort(error);
+      if (!responseCompleted && !response.destroyed) {
+        response.destroy(error);
+      }
+    };
+    const totalTimer = setTimeout(
+      () => timeoutResponse("total"),
+      this.timeouts.totalMs,
+    );
+    totalTimer.unref();
+    const touch = (): void => {
+      if (released || responseCompleted) return;
+      if (idleTimer !== undefined) clearTimeout(idleTimer);
+      idleTimer = setTimeout(
+        () => timeoutResponse("idle"),
+        this.timeouts.idleMs,
+      );
+      idleTimer.unref();
+    };
+    response.once("finish", completeResponse);
+    response.once("close", closeResponse);
+    if (response.destroyed) closeResponse();
+    return Object.freeze({
+      signal: controller.signal,
+      touch,
+      settle: () => {
+        operationSettled = true;
+        releaseIfComplete();
+      },
+    });
   }
 
   public waitForIdle(): Promise<void> {
@@ -1533,6 +1655,121 @@ function apiHandler(
     );
     return true;
   }
+  const evolutionMatch = EVOLUTION_ARTIFACT_PATH_PATTERN.exec(
+    target.path,
+  );
+  if (evolutionMatch) {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      sendMethodNotAllowed(request, response, ["GET", "HEAD"]);
+      return true;
+    }
+    const token = evolutionMatch[1]!;
+    const expected = jobs.get(token)?.result?.evolution;
+    if (
+      !completedJobOwnsEvolutionArtifact(jobs, token) ||
+      expected === undefined
+    ) {
+      sendJson(request, response, 404, {
+        error: {
+          code: "artifact-not-found",
+          message: "Evolution artifact not found.",
+        },
+      });
+      return true;
+    }
+    const artifactResponse =
+      artifactResponses.tryAcquire(response);
+    if (!artifactResponse) {
+      response.setHeader("Retry-After", "1");
+      sendJson(request, response, 503, {
+        error: {
+          code: "artifact-busy",
+          message: "Another import artifact response is in progress.",
+        },
+      });
+      return true;
+    }
+    void (async () => {
+      let operationSettled = false;
+      const settleOperation = (): void => {
+        if (operationSettled) return;
+        operationSettled = true;
+        artifactResponse.settle();
+      };
+      let artifact:
+        | Awaited<ReturnType<ImportArtifactStore["readEvolution"]>>
+        | undefined;
+      try {
+        artifact = await artifacts.readEvolution(token, {
+          size: expected.size,
+          sha256: expected.sha256,
+        }, artifactResponse.signal);
+        if (response.destroyed) return;
+        if (artifact === undefined) {
+          settleOperation();
+          artifactResponse.touch();
+          sendJson(request, response, 404, {
+            error: {
+              code: "artifact-not-found",
+              message: "Evolution artifact not found.",
+            },
+          });
+          return;
+        }
+        response.statusCode = 200;
+        securityHeaders(
+          response,
+          "application/json; charset=utf-8",
+          "no-store",
+        );
+        response.setHeader("Content-Length", artifact.size);
+        artifactResponse.touch();
+        if (request.method === "HEAD") {
+          await artifact.close();
+          settleOperation();
+          response.end();
+          return;
+        }
+        for await (const chunk of artifact.chunks(
+          artifactResponse.signal,
+        )) {
+          artifactResponse.signal.throwIfAborted();
+          if (!response.write(chunk)) {
+            await once(response, "drain", {
+              signal: artifactResponse.signal,
+            });
+          }
+          artifactResponse.touch();
+        }
+        await artifact.close();
+        settleOperation();
+        response.end();
+      } catch (error) {
+        await artifact?.close().catch(() => undefined);
+        if (response.destroyed) return;
+        if (response.headersSent) {
+          settleOperation();
+          response.destroy(
+            error instanceof Error ? error : undefined,
+          );
+          return;
+        }
+        settleOperation();
+        artifactResponse.touch();
+        sendJson(request, response, 500, {
+          error: {
+            code: "artifact-read-failed",
+            message:
+              "The evolution artifact could not be verified.",
+          },
+        });
+      } finally {
+        await artifact?.close().catch(() => undefined);
+        settleOperation();
+      }
+    })();
+    return true;
+  }
   const artifactMatch = CITY_MODEL_ARTIFACT_PATH_PATTERN.exec(target.path);
   if (artifactMatch) {
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -1549,9 +1786,9 @@ function apiHandler(
       });
       return true;
     }
-    const completeArtifactOperation =
+    const artifactResponse =
       artifactResponses.tryAcquire(response);
-    if (!completeArtifactOperation) {
+    if (!artifactResponse) {
       response.setHeader("Retry-After", "1");
       sendJson(request, response, 503, {
         error: {
@@ -1563,11 +1800,12 @@ function apiHandler(
     }
     if (request.method === "HEAD") {
       void artifacts
-        .statCityModel(token)
+        .statCityModel(token, artifactResponse.signal)
         .then(
           (artifact) => {
             if (response.destroyed) return;
             if (!artifact) {
+              artifactResponse.touch();
               sendJson(request, response, 404, {
                 error: {
                   code: "artifact-not-found",
@@ -1583,10 +1821,12 @@ function apiHandler(
               "no-store",
             );
             response.setHeader("Content-Length", artifact.size);
+            artifactResponse.touch();
             response.end();
           },
           () => {
             if (!response.destroyed) {
+              artifactResponse.touch();
               sendJson(request, response, 500, {
                 error: {
                   code: "artifact-read-failed",
@@ -1597,17 +1837,18 @@ function apiHandler(
           },
         )
         .then(
-          completeArtifactOperation,
-          completeArtifactOperation,
+          () => artifactResponse.settle(),
+          () => artifactResponse.settle(),
         );
       return true;
     }
     void artifacts
-      .readCityModel(token)
+      .readCityModel(token, artifactResponse.signal)
       .then(
         (artifact) => {
           if (response.destroyed) return;
           if (!artifact) {
+            artifactResponse.touch();
             sendJson(request, response, 404, {
               error: {
                 code: "artifact-not-found",
@@ -1616,6 +1857,7 @@ function apiHandler(
             });
             return;
           }
+          artifactResponse.touch();
           send(
             request,
             response,
@@ -1626,6 +1868,7 @@ function apiHandler(
         },
         () => {
           if (!response.destroyed) {
+            artifactResponse.touch();
             sendJson(request, response, 500, {
               error: {
                 code: "artifact-read-failed",
@@ -1636,8 +1879,8 @@ function apiHandler(
         },
       )
       .then(
-        completeArtifactOperation,
-        completeArtifactOperation,
+        () => artifactResponse.settle(),
+        () => artifactResponse.settle(),
       );
     return true;
   }
@@ -1893,6 +2136,9 @@ export async function startCodeCityServer(
 ): Promise<CodeCityServerHandle> {
   const host = validHost(options.host);
   const requestedPort = validPort(options.port);
+  const responseTimeouts = artifactResponseTimeouts(
+    options.artifactResponseTimeouts,
+  );
   const importPolicy = new RemoteImportPolicy(
     options.allowedGitOrigins,
     {
@@ -1938,6 +2184,7 @@ export async function startCodeCityServer(
   }
   let assets: ReadonlyMap<string, ViewerAsset>;
   let artifacts: ImportArtifactStore;
+  let historyCache: HistorySemanticCache;
   let jobs: PersistentJobQueue;
   const viewerRoot =
     options.viewerRoot ?? productionViewerRoot();
@@ -1955,6 +2202,9 @@ export async function startCodeCityServer(
     artifacts = await ImportArtifactStore.open({
       dataDirectory: options.dataDirectory,
     });
+    historyCache = await HistorySemanticCache.open({
+      dataDirectory: options.dataDirectory,
+    });
     jobs = await PersistentJobQueue.open({
       dataDirectory: options.dataDirectory,
       concurrency: 1,
@@ -1965,8 +2215,8 @@ export async function startCodeCityServer(
     throw error;
   }
   try {
-    await artifacts.reconcileCityModelArtifacts(
-      completedCityModelArtifactTokens(jobs),
+    await artifacts.reconcileImportArtifacts(
+      completedImportArtifactSets(jobs),
     );
   } catch (error) {
     await jobs.close().catch(() => undefined);
@@ -1982,8 +2232,13 @@ export async function startCodeCityServer(
   let importRequests: ImportRequestOperations;
   let uploads: UploadReservationRegistry;
   let server: http.Server;
+  const importDependencies: RemoteImportDependencies = Object.freeze({
+    ...(options.importDependencies ?? {}),
+    semanticCache:
+      options.importDependencies?.semanticCache ?? historyCache,
+  });
   try {
-    artifactResponses = new ArtifactResponseGate();
+    artifactResponses = new ArtifactResponseGate(responseTimeouts);
     importRequests = new ImportRequestOperations();
     uploads = new UploadReservationRegistry(artifacts);
     server = http.createServer(
@@ -1996,7 +2251,7 @@ export async function startCodeCityServer(
         uploads,
         importPolicy,
         credentialProfiles,
-        options.importDependencies,
+        importDependencies,
         allowedHosts,
         authorization,
       ),

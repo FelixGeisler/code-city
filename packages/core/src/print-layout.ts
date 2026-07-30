@@ -2181,7 +2181,7 @@ export function planPrintLayout(
           code: "city-does-not-fit",
           message:
             `Complete districts do not fit together on one plate at scale ${formatDimension(appliedScale)}; ` +
-            "use fitPolicy 'scale' or 'tile'.",
+            'in Print export, set Fit policy to "Scale to one plate" or "Split complete districts (tiled multi-plate export)".',
           available: { ...context.usableSpan },
         },
       ]);
@@ -2203,7 +2203,7 @@ export function planPrintLayout(
             code: "city-does-not-fit",
             message:
               `Complete districts do not fit together on one plate at the minimum profile-safe scale ${formatDimension(safeScale)}; ` +
-              "use fitPolicy 'tile'.",
+              'in Print export, set Fit policy to "Split complete districts (tiled multi-plate export)".',
             available: { ...context.usableSpan },
           },
         ]);

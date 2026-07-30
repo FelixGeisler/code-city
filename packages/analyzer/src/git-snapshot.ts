@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   DEFAULT_SNAPSHOT_LIMITS,
   materializeRepositorySnapshot,
+  normalizeSnapshotPath,
   type RepositorySnapshot,
   type SnapshotOptions,
 } from "./snapshot.js";
@@ -16,6 +17,9 @@ import {
   type GenericGitCredentialBroker,
   type GenericGitCredentialBrokerFactory,
 } from "./git-credential-broker.js";
+import {
+  HISTORY_CHANGED_PATH_RECORD_OVERHEAD_BYTES,
+} from "./history-selection.js";
 import {
   openZipSnapshotSource,
   type DisposableSnapshotSource,
@@ -46,6 +50,14 @@ export const GENERIC_GIT_SNAPSHOT_TIMEOUT_MS =
   DEFAULT_SNAPSHOT_LIMITS.timeoutMs;
 export const GENERIC_GIT_ARCHIVE_MAX_BYTES = MAX_ARCHIVE_BYTES;
 export const GENERIC_GIT_TEMPORARY_MAX_BYTES = MAX_TEMPORARY_BYTES;
+export const GENERIC_GIT_HISTORY_MAX_COMMITS = 500;
+export const GENERIC_GIT_HISTORY_MAX_CHANGED_PATHS = 500_000;
+export const GENERIC_GIT_HISTORY_MAX_CHANGED_PATH_BYTES =
+  16 * MEBIBYTE;
+export const GENERIC_GIT_HISTORY_CHANGED_PATH_RECORD_OVERHEAD_BYTES =
+  HISTORY_CHANGED_PATH_RECORD_OVERHEAD_BYTES;
+export const GENERIC_GIT_HISTORY_RENAME_POLICY_REVISION =
+  "diff-tree-renames-50-myers-v1" as const;
 export const GENERIC_GIT_PRESECURED_WINDOWS_ACL =
   "pre-secured-private-directory" as const;
 export const GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY =
@@ -146,6 +158,11 @@ export interface GenericGitSnapshotDependencies {
   readonly createTemporaryWorkspace?: () => Promise<GenericGitTemporaryWorkspace>;
   readonly temporaryWorkspaceOptions?: GenericGitTemporaryWorkspaceOptions;
   readonly credentialProvider?: GenericGitSnapshotCredentialProvider;
+  /**
+   * Removes HOME/XDG/SSH-agent/system/global credential sources even when no
+   * explicit provider is selected. Public/anonymous callers should enable it.
+   */
+  readonly isolateCredentials?: boolean;
   /** Test seam; production callers use the bundled one-shot .NET broker. */
   readonly createCredentialBroker?: GenericGitCredentialBrokerFactory;
   readonly openZipSnapshotSource?: typeof openZipSnapshotSource;
@@ -161,6 +178,78 @@ export interface GenericGitSnapshotResult {
   readonly snapshot: RepositorySnapshot;
 }
 
+export type GenericGitHistoryPathChange =
+  | {
+      readonly kind: "added" | "deleted" | "modified" | "type-changed";
+      readonly path: string;
+    }
+  | {
+      readonly kind: "renamed";
+      readonly previousPath: string;
+      readonly path: string;
+    };
+
+export interface GenericGitHistoryCommit {
+  readonly sha: string;
+  /** All parents in Git's canonical order. Traversal follows parents[0]. */
+  readonly parents: readonly string[];
+  readonly committedAt: string;
+}
+
+export interface GenericGitHistoryTag {
+  /** Validated exact tag name, retained only for in-memory selection. */
+  readonly name: string;
+  readonly commitSha: string;
+}
+
+export interface GenericGitHistoryRequest
+  extends Omit<GenericGitSnapshotRequest, "snapshotOptions"> {
+  /** Bound for the selected first-parent chain, excluding the overflow probe. */
+  readonly maximumCommits: number;
+  /**
+   * Aggregate retained changed-path entry limit. Callers may lower, but not
+   * raise, the acquisition hard limit.
+   */
+  readonly maximumChangedPathEntries?: number;
+  /**
+   * Aggregate UTF-8 path bytes plus conservative per-record object overhead.
+   * This is enforced while Git output is parsed.
+   */
+  readonly maximumChangedPathBytes?: number;
+  readonly tagNames?: readonly string[];
+  readonly snapshotOptions?: SnapshotOptions;
+}
+
+export interface GenericGitHistoryBackend {
+  readonly name: "git";
+  /** Validated, locale-stable version suffix from `git --version`. */
+  readonly version: string;
+  readonly renamePolicyRevision: typeof GENERIC_GIT_HISTORY_RENAME_POLICY_REVISION;
+}
+
+/**
+ * A callback-scoped, private Git history view. Methods become invalid as soon
+ * as the callback returns, and accept only commits/edges from this session.
+ */
+export interface GenericGitHistorySession {
+  readonly repository: string;
+  readonly tipSha: string;
+  readonly transport: GenericGitTransport;
+  /** Output-affecting Git implementation and pinned rename-policy revision. */
+  readonly backend: GenericGitHistoryBackend;
+  /** Newest-to-oldest first-parent commits, including one overflow probe. */
+  readonly commits: readonly GenericGitHistoryCommit[];
+  readonly tags: readonly GenericGitHistoryTag[];
+  readChanges(
+    commitSha: string,
+  ): Promise<readonly GenericGitHistoryPathChange[]>;
+  readSnapshot(commitSha: string): Promise<RepositorySnapshot>;
+}
+
+export type GenericGitHistoryConsumer<T> = (
+  session: GenericGitHistorySession,
+) => Promise<T>;
+
 export type GenericGitSnapshotErrorCode =
   | "GIT_ABORTED"
   | "GIT_ARCHIVE_TOO_LARGE"
@@ -171,6 +260,7 @@ export type GenericGitSnapshotErrorCode =
   | "GIT_INVALID_REF"
   | "GIT_INVALID_REMOTE"
   | "GIT_INVALID_RESPONSE"
+  | "GIT_HISTORY_FAILED"
   | "GIT_OUTPUT_TOO_LARGE"
   | "GIT_REF_AMBIGUOUS"
   | "GIT_REF_CHANGED"
@@ -579,6 +669,17 @@ function resolveTimeout(value: number | undefined): number {
   return timeout;
 }
 
+function resolveCredentialIsolation(value: unknown): boolean {
+  if (value === undefined) return false;
+  if (typeof value !== "boolean") {
+    throw new GenericGitSnapshotError(
+      "GIT_INVALID_REQUEST",
+      "Generic Git credential isolation must be a boolean.",
+    );
+  }
+  return value;
+}
+
 function safeEnvironment(
   source: Readonly<Record<string, string | undefined>>,
 ): Readonly<Record<string, string>> {
@@ -674,6 +775,11 @@ async function selectedCredentialEnvironment(
   delete selected["SSH_AUTH_SOCK"];
   selected["GIT_CONFIG_NOSYSTEM"] = "1";
   selected["GIT_CONFIG_GLOBAL"] = globalConfig;
+  // Git otherwise walks above cwd looking for a repository-local config.
+  // The workspace root is process-created and privately validated; making it
+  // the ceiling prevents an ancestor .git/config from injecting credentials,
+  // headers, cookies, or arbitrary url.*.insteadOf rewrites.
+  selected["GIT_CEILING_DIRECTORIES"] = path.resolve(workspace.root);
   selected["HOME"] = directories.home;
   selected["XDG_CONFIG_HOME"] = directories.xdg;
   selected["USERPROFILE"] = directories.userProfile;
@@ -687,6 +793,7 @@ function hardenedArguments(
   hooksPath: string,
   operation: readonly string[],
   credentialHelper?: string,
+  isolateCredentials = false,
 ): readonly string[] {
   return Object.freeze([
     "-c",
@@ -721,23 +828,27 @@ function hardenedArguments(
     "filter.lfs.smudge=",
     "-c",
     "filter.lfs.process=",
-    ...(credentialHelper === undefined
-      ? []
-      : [
+    ...(credentialHelper !== undefined || isolateCredentials
+      ? [
           "-c",
           "credential.helper=",
-          "-c",
-          `credential.helper=${credentialHelper}`,
-          "-c",
-          "credential.useHttpPath=true",
-          "-c",
-          "credential.protectProtocol=true",
           "-c",
           "http.extraHeader=",
           "-c",
           "http.cookieFile=",
           "-c",
           "core.askPass=",
+        ]
+      : []),
+    ...(credentialHelper === undefined
+      ? []
+      : [
+          "-c",
+          `credential.helper=${credentialHelper}`,
+          "-c",
+          "credential.useHttpPath=true",
+          "-c",
+          "credential.protectProtocol=true",
         ]),
     ...(transport === "ssh"
       ? ["-c", "core.sshCommand=ssh -oBatchMode=yes"]
@@ -1994,6 +2105,7 @@ async function invokeGit(
   operation: readonly string[],
   monitorDisk = false,
   credentialHelper?: string,
+  isolateCredentials = false,
 ): Promise<Uint8Array> {
   const commandController = new AbortController();
   const abortCommand = (): void => commandController.abort();
@@ -2022,6 +2134,8 @@ async function invokeGit(
           workspace.templateDirectory,
           operation,
           credentialHelper,
+          isolateCredentials ||
+            environment["GIT_CONFIG_NOSYSTEM"] === "1",
         ),
         cwd: workspace.root,
         env: environment,
@@ -2237,6 +2351,7 @@ async function invokeGitWithCredential(
             operation,
             monitorDisk,
             broker.helperCommand,
+            true,
           );
         } catch (error) {
           failure = error;
@@ -2435,6 +2550,9 @@ export async function snapshotGenericGitRepository(
     dependencies.credentialProvider,
     remote,
   );
+  const isolateCredentials = resolveCredentialIsolation(
+    dependencies.isolateCredentials,
+  );
   const brokerFactory =
     dependencies.createCredentialBroker ??
     createGenericGitCredentialBroker;
@@ -2462,7 +2580,7 @@ export async function snapshotGenericGitRepository(
         let source: DisposableSnapshotSource | undefined;
         try {
           const commandEnvironment =
-            credentialProvider === undefined
+            credentialProvider === undefined && !isolateCredentials
               ? environment
               : await selectedCredentialEnvironment(
                   environment,
@@ -2686,6 +2804,909 @@ export async function snapshotGenericGitRepository(
     throw new GenericGitSnapshotError(
       "GIT_SNAPSHOT_FAILED",
       "Generic Git snapshot failed safely.",
+    );
+  }
+}
+
+function historyMaximumCommits(value: number): number {
+  if (
+    !Number.isSafeInteger(value) ||
+    value < 1 ||
+    value > GENERIC_GIT_HISTORY_MAX_COMMITS
+  ) {
+    throw new GenericGitSnapshotError(
+      "GIT_INVALID_REQUEST",
+      `Generic Git history must inspect between 1 and ${GENERIC_GIT_HISTORY_MAX_COMMITS.toLocaleString(
+        "en-US",
+      )} first-parent commits.`,
+    );
+  }
+  return value;
+}
+
+function historyMaximumChangedPaths(
+  value: number | undefined,
+): number {
+  const resolved =
+    value ?? GENERIC_GIT_HISTORY_MAX_CHANGED_PATHS;
+  if (
+    !Number.isSafeInteger(resolved) ||
+    resolved < 1 ||
+    resolved > GENERIC_GIT_HISTORY_MAX_CHANGED_PATHS
+  ) {
+    throw new GenericGitSnapshotError(
+      "GIT_INVALID_REQUEST",
+      `Generic Git history changed-path entries must be between 1 and ${GENERIC_GIT_HISTORY_MAX_CHANGED_PATHS.toLocaleString(
+        "en-US",
+      )}.`,
+    );
+  }
+  return resolved;
+}
+
+function historyMaximumChangedPathBytes(
+  value: number | undefined,
+): number {
+  const resolved =
+    value ?? GENERIC_GIT_HISTORY_MAX_CHANGED_PATH_BYTES;
+  if (
+    !Number.isSafeInteger(resolved) ||
+    resolved < 1 ||
+    resolved > GENERIC_GIT_HISTORY_MAX_CHANGED_PATH_BYTES
+  ) {
+    throw new GenericGitSnapshotError(
+      "GIT_INVALID_REQUEST",
+      `Generic Git history retained changed-path bytes must be between 1 and ${GENERIC_GIT_HISTORY_MAX_CHANGED_PATH_BYTES.toLocaleString(
+        "en-US",
+      )}.`,
+    );
+  }
+  return resolved;
+}
+
+function canonicalHistoryTagRefs(
+  values: readonly string[] | undefined,
+): readonly string[] {
+  if (values === undefined) return Object.freeze([]);
+  if (!Array.isArray(values) || values.length > 64) {
+    throw new GenericGitSnapshotError(
+      "GIT_INVALID_REQUEST",
+      "Generic Git history accepts at most 64 exact tag names.",
+    );
+  }
+  const refs: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of values) {
+    if (typeof candidate !== "string") {
+      throw new GenericGitSnapshotError(
+        "GIT_INVALID_REQUEST",
+        "Generic Git history tag names are invalid.",
+      );
+    }
+    const value = validateRef(candidate);
+    const reference = value.startsWith("refs/tags/")
+      ? value
+      : value.startsWith("refs/")
+        ? undefined
+        : `refs/tags/${value}`;
+    if (reference === undefined || seen.has(reference)) {
+      throw new GenericGitSnapshotError(
+        "GIT_INVALID_REQUEST",
+        "Generic Git history tag names must be unique exact tags.",
+      );
+    }
+    seen.add(reference);
+    refs.push(reference);
+  }
+  return Object.freeze(refs);
+}
+
+function historyTagOperation(
+  remote: ParsedRemote,
+  references: readonly string[],
+): readonly string[] {
+  return Object.freeze([
+    "ls-remote",
+    remote.value,
+    ...references.flatMap((reference) => [
+      reference,
+      `${reference}^{}`,
+    ]),
+  ]);
+}
+
+function historyTagBatches(
+  references: readonly string[],
+): readonly (readonly string[])[] {
+  const batches: string[][] = [];
+  for (let index = 0; index < references.length; index += 8) {
+    batches.push(references.slice(index, index + 8));
+  }
+  return Object.freeze(
+    batches.map((batch) => Object.freeze(batch)),
+  );
+}
+
+function historyTags(
+  references: readonly string[],
+  output: Uint8Array,
+): readonly GenericGitHistoryTag[] {
+  if (references.length === 0) return Object.freeze([]);
+  const parsed = parseLsRemote(output);
+  const expected = new Set(
+    references.flatMap((reference) => [
+      reference,
+      `${reference}^{}`,
+    ]),
+  );
+  if (
+    parsed.symbolicHead !== undefined ||
+    parsed.records.some((record) => !expected.has(record.name))
+  ) {
+    throw new GenericGitSnapshotError(
+      "GIT_INVALID_RESPONSE",
+      "Installed Git returned unexpected history tag data.",
+    );
+  }
+  return Object.freeze(
+    references.map((reference) => {
+      const tag = oneRecord(parsed.records, reference);
+      const peeled = oneRecord(parsed.records, `${reference}^{}`);
+      if (tag === undefined || (peeled !== undefined && tag === undefined)) {
+        throw new GenericGitSnapshotError(
+          "GIT_REF_UNAVAILABLE",
+          "A requested Generic Git history tag is unavailable.",
+        );
+      }
+      return Object.freeze({
+        name: reference.slice("refs/tags/".length),
+        commitSha: peeled?.objectSha ?? tag.objectSha,
+      });
+    }),
+  );
+}
+
+function sameHistoryTags(
+  left: readonly GenericGitHistoryTag[],
+  right: readonly GenericGitHistoryTag[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every(
+      (tag, index) =>
+        tag.name === right[index]?.name &&
+        tag.commitSha === right[index]?.commitSha,
+    )
+  );
+}
+
+function historyBackend(
+  output: Uint8Array,
+): GenericGitHistoryBackend {
+  const decoded = decodeGitOutput(output);
+  const line = decoded.endsWith("\r\n")
+    ? decoded.slice(0, -2)
+    : decoded.endsWith("\n")
+      ? decoded.slice(0, -1)
+      : decoded;
+  const prefix = "git version ";
+  const version = line.startsWith(prefix)
+    ? line.slice(prefix.length)
+    : "";
+  if (
+    version.length === 0 ||
+    version.length > 160 ||
+    version !== version.trim() ||
+    version !== version.normalize("NFC") ||
+    !/^[\u0020-\u007e]+$/u.test(version)
+  ) {
+    throw new GenericGitSnapshotError(
+      "GIT_INVALID_RESPONSE",
+      "Installed Git returned an invalid backend version.",
+    );
+  }
+  return Object.freeze({
+    name: "git",
+    version,
+    renamePolicyRevision:
+      GENERIC_GIT_HISTORY_RENAME_POLICY_REVISION,
+  });
+}
+
+function parseHistoryCommits(
+  output: Uint8Array,
+): readonly GenericGitHistoryCommit[] {
+  const text = decodeGitOutput(output);
+  const commits: GenericGitHistoryCommit[] = [];
+  const seen = new Set<string>();
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.endsWith("\r")
+      ? rawLine.slice(0, -1)
+      : rawLine;
+    if (line.length === 0) continue;
+    const fields = line.split(" ");
+    const timestampText = fields.shift();
+    const sha = fields.shift()?.toLocaleLowerCase("en-US");
+    const parents = fields.map((value) =>
+      value.toLocaleLowerCase("en-US"),
+    );
+    const timestamp = Number(timestampText);
+    if (
+      timestampText === undefined ||
+      !/^(?:0|[1-9][0-9]{0,15})$/u.test(timestampText) ||
+      !Number.isSafeInteger(timestamp) ||
+      timestamp < 0 ||
+      sha === undefined ||
+      !COMMIT_SHA.test(sha) ||
+      parents.some((parent) => !COMMIT_SHA.test(parent)) ||
+      new Set(parents).size !== parents.length ||
+      parents.includes(sha) ||
+      seen.has(sha)
+    ) {
+      throw new GenericGitSnapshotError(
+        "GIT_INVALID_RESPONSE",
+        "Installed Git returned invalid history metadata.",
+      );
+    }
+    const date = new Date(timestamp * 1_000);
+    if (Number.isNaN(date.getTime())) {
+      throw new GenericGitSnapshotError(
+        "GIT_INVALID_RESPONSE",
+        "Installed Git returned invalid history metadata.",
+      );
+    }
+    const committedAt = date.toISOString();
+    if (committedAt.length !== 24) {
+      throw new GenericGitSnapshotError(
+        "GIT_INVALID_RESPONSE",
+        "Installed Git returned a commit timestamp outside the supported four-digit UTC year range.",
+      );
+    }
+    seen.add(sha);
+    commits.push(
+      Object.freeze({
+        sha,
+        parents: Object.freeze(parents),
+        committedAt,
+      }),
+    );
+  }
+  if (commits.length === 0) {
+    throw new GenericGitSnapshotError(
+      "GIT_INVALID_RESPONSE",
+      "Installed Git returned no first-parent history.",
+    );
+  }
+  for (let index = 0; index + 1 < commits.length; index += 1) {
+    if (commits[index]?.parents[0] !== commits[index + 1]?.sha) {
+      throw new GenericGitSnapshotError(
+        "GIT_INVALID_RESPONSE",
+        "Installed Git returned a non-linear first-parent history.",
+      );
+    }
+  }
+  return Object.freeze(commits);
+}
+
+function historyChangeKind(
+  status: string,
+): GenericGitHistoryPathChange["kind"] | "renamed" {
+  if (status === "A") return "added";
+  if (status === "D") return "deleted";
+  if (status === "M") return "modified";
+  if (status === "T") return "type-changed";
+  if (/^R(?:100|[0-9]{1,2})$/u.test(status)) return "renamed";
+  throw new GenericGitSnapshotError(
+    "GIT_INVALID_RESPONSE",
+    "Installed Git returned an unsupported history change.",
+  );
+}
+
+interface HistoryChangeAdmission {
+  readonly existingEntries: number;
+  readonly existingBytes: number;
+  readonly maximumEntries: number;
+  readonly maximumBytes: number;
+}
+
+interface ParsedHistoryChanges {
+  readonly changes: readonly GenericGitHistoryPathChange[];
+  readonly entries: number;
+  readonly bytes: number;
+}
+
+function parseHistoryChanges(
+  output: Uint8Array,
+  admission: HistoryChangeAdmission,
+): ParsedHistoryChanges {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(output);
+  } catch {
+    throw new GenericGitSnapshotError(
+      "GIT_INVALID_RESPONSE",
+      "Installed Git returned invalid history paths.",
+    );
+  }
+  if (text.length === 0) {
+    return Object.freeze({
+      changes: Object.freeze([]),
+      entries: admission.existingEntries,
+      bytes: admission.existingBytes,
+    });
+  }
+  let cursor = 0;
+  const nextField = (): string | undefined => {
+    const terminator = text.indexOf("\0", cursor);
+    if (terminator < 0) return undefined;
+    const field = text.slice(cursor, terminator);
+    cursor = terminator + 1;
+    return field;
+  };
+  const changes: GenericGitHistoryPathChange[] = [];
+  let entries = admission.existingEntries;
+  let retainedBytes = admission.existingBytes;
+  const admit = (
+    path: string,
+    previousPath?: string,
+  ): void => {
+    const addedEntries = previousPath === undefined ? 1 : 2;
+    const addedBytes =
+      GENERIC_GIT_HISTORY_CHANGED_PATH_RECORD_OVERHEAD_BYTES +
+      Buffer.byteLength(path, "utf8") +
+      (previousPath === undefined
+        ? 0
+        : Buffer.byteLength(previousPath, "utf8"));
+    if (
+      entries > admission.maximumEntries - addedEntries ||
+      retainedBytes > admission.maximumBytes - addedBytes
+    ) {
+      throw new GenericGitSnapshotError(
+        "GIT_OUTPUT_TOO_LARGE",
+        "Generic Git history exceeded its changed-path retention limit.",
+      );
+    }
+    entries += addedEntries;
+    retainedBytes += addedBytes;
+  };
+  while (cursor < text.length) {
+    const status = nextField();
+    if (status === undefined || status.length === 0) {
+      throw new GenericGitSnapshotError(
+        "GIT_INVALID_RESPONSE",
+        "Installed Git returned invalid history paths.",
+      );
+    }
+    const kind = historyChangeKind(status);
+    if (kind === "renamed") {
+      const previous = nextField();
+      const current = nextField();
+      if (previous === undefined || current === undefined) {
+        throw new GenericGitSnapshotError(
+          "GIT_INVALID_RESPONSE",
+          "Installed Git returned incomplete rename data.",
+        );
+      }
+      const previousPath = normalizeSnapshotPath(previous);
+      const currentPath = normalizeSnapshotPath(current);
+      admit(currentPath, previousPath);
+      changes.push(
+        Object.freeze({
+          kind,
+          previousPath,
+          path: currentPath,
+        }),
+      );
+      continue;
+    }
+    const current = nextField();
+    if (current === undefined) {
+      throw new GenericGitSnapshotError(
+        "GIT_INVALID_RESPONSE",
+        "Installed Git returned incomplete history path data.",
+      );
+    }
+    const currentPath = normalizeSnapshotPath(current);
+    admit(currentPath);
+    changes.push(
+      Object.freeze({
+        kind,
+        path: currentPath,
+      }),
+    );
+  }
+  if (cursor !== text.length) {
+    throw new GenericGitSnapshotError(
+      "GIT_INVALID_RESPONSE",
+      "Installed Git returned incomplete history paths.",
+    );
+  }
+  return Object.freeze({
+    changes: Object.freeze(changes),
+    entries,
+    bytes: retainedBytes,
+  });
+}
+
+/**
+ * Opens one bounded, hardened Git session for history planning and streaming
+ * snapshots. The workspace, credential broker, archives, and callback-scoped
+ * methods are always disposed before the promise settles.
+ */
+export async function withGenericGitHistoryRepository<T>(
+  request: GenericGitHistoryRequest,
+  consumer: GenericGitHistoryConsumer<T>,
+  dependencies: GenericGitSnapshotDependencies = {},
+): Promise<T> {
+  if (typeof consumer !== "function") {
+    throw new GenericGitSnapshotError(
+      "GIT_INVALID_REQUEST",
+      "Generic Git history consumer is invalid.",
+    );
+  }
+  const remote = parseRemote(request.repositoryUrl);
+  const requestedRef =
+    request.ref === undefined ? undefined : validateRef(request.ref);
+  const maximumCommits = historyMaximumCommits(
+    request.maximumCommits,
+  );
+  const maximumChangedPathEntries = historyMaximumChangedPaths(
+    request.maximumChangedPathEntries,
+  );
+  const maximumChangedPathBytes = historyMaximumChangedPathBytes(
+    request.maximumChangedPathBytes,
+  );
+  const tagReferences = canonicalHistoryTagRefs(request.tagNames);
+  const timeoutMs = resolveTimeout(request.timeoutMs);
+  const runGit = dependencies.runGit ?? runInstalledGit;
+  const createWorkspace =
+    dependencies.createTemporaryWorkspace ??
+    (() =>
+      createGenericGitTemporaryWorkspace(
+        dependencies.temporaryWorkspaceOptions,
+      ));
+  const openZip =
+    dependencies.openZipSnapshotSource ?? openZipSnapshotSource;
+  const materialize =
+    dependencies.materializeRepositorySnapshot ??
+    materializeRepositorySnapshot;
+  const executable = dependencies.gitExecutable ?? "git";
+  const environment = safeEnvironment(
+    dependencies.environment ?? process.env,
+  );
+  const credentialProvider = validateCredentialProvider(
+    dependencies.credentialProvider,
+    remote,
+  );
+  const isolateCredentials = resolveCredentialIsolation(
+    dependencies.isolateCredentials,
+  );
+  const brokerFactory =
+    dependencies.createCredentialBroker ??
+    createGenericGitCredentialBroker;
+  if (
+    credentialProvider !== undefined &&
+    typeof brokerFactory !== "function"
+  ) {
+    throw invalidCredentialProvider();
+  }
+  const target =
+    credentialProvider === undefined
+      ? undefined
+      : credentialTarget(remote);
+
+  try {
+    return await withCombinedDeadline(
+      timeoutMs,
+      [request.signal, request.snapshotOptions?.signal],
+      async (deadline) => {
+        const workspace = await createWorkspaceWithinDeadline(
+          createWorkspace,
+          deadline,
+        );
+        try {
+          const commandEnvironment =
+            credentialProvider === undefined && !isolateCredentials
+              ? environment
+              : await selectedCredentialEnvironment(
+                  environment,
+                  workspace,
+                  deadline,
+                );
+          const runWithDeadline = async (
+            operation: readonly string[],
+            monitorDisk: boolean,
+            operationDeadline: CombinedDeadline,
+          ): Promise<Uint8Array> =>
+            credentialProvider === undefined || target === undefined
+              ? await invokeGit(
+                  runGit,
+                  executable,
+                  commandEnvironment,
+                  workspace,
+                  remote,
+                  operationDeadline,
+                  operation,
+                  monitorDisk,
+                )
+              : await invokeGitWithCredential(
+                  credentialProvider,
+                  brokerFactory,
+                  target,
+                  runGit,
+                  executable,
+                  commandEnvironment,
+                  workspace,
+                  remote,
+                  operationDeadline,
+                  operation,
+                  monitorDisk,
+                );
+          const run = async (
+            operation: readonly string[],
+            monitorDisk = false,
+          ): Promise<Uint8Array> =>
+            await runWithDeadline(operation, monitorDisk, deadline);
+          const readTags = async (): Promise<
+            readonly GenericGitHistoryTag[]
+          > => {
+            const tags: GenericGitHistoryTag[] = [];
+            for (const batch of historyTagBatches(tagReferences)) {
+              tags.push(
+                ...historyTags(
+                  batch,
+                  await run(historyTagOperation(remote, batch)),
+                ),
+              );
+            }
+            return Object.freeze(tags);
+          };
+
+          const backend = historyBackend(await run(["--version"]));
+          const firstSelection = selectRef(
+            requestedRef,
+            await run(lsRemoteOperation(remote, requestedRef)),
+          );
+          const firstTags =
+            tagReferences.length === 0
+              ? Object.freeze([] as GenericGitHistoryTag[])
+              : await readTags();
+
+          await run([
+            "init",
+            "--bare",
+            `--template=${workspace.templateDirectory}`,
+            workspace.repositoryDirectory,
+          ]);
+          await run(
+            [
+              "-C",
+              workspace.repositoryDirectory,
+              "fetch",
+              "--quiet",
+              `--depth=${maximumCommits + 1}`,
+              "--no-tags",
+              "--no-recurse-submodules",
+              "--no-write-fetch-head",
+              "--no-auto-maintenance",
+              "--no-auto-gc",
+              "--no-write-commit-graph",
+              remote.value,
+              firstSelection.commitSha,
+            ],
+            true,
+          );
+          await enforceTemporaryLimit(workspace, deadline);
+
+          const verified = decodeGitOutput(
+            await run([
+              "-C",
+              workspace.repositoryDirectory,
+              "rev-parse",
+              "--verify",
+              `${firstSelection.commitSha}^{commit}`,
+            ]),
+          )
+            .trim()
+            .toLocaleLowerCase("en-US");
+          if (
+            !COMMIT_SHA.test(verified) ||
+            verified !== firstSelection.commitSha
+          ) {
+            throw new GenericGitSnapshotError(
+              "GIT_INVALID_RESPONSE",
+              "Fetched Generic Git history tip could not be verified.",
+            );
+          }
+
+          const commits = parseHistoryCommits(
+            await run([
+              "-C",
+              workspace.repositoryDirectory,
+              "rev-list",
+              "--first-parent",
+              "--topo-order",
+              `--max-count=${maximumCommits + 1}`,
+              "--parents",
+              "--timestamp",
+              firstSelection.commitSha,
+            ]),
+          );
+          if (commits[0]?.sha !== firstSelection.commitSha) {
+            throw new GenericGitSnapshotError(
+              "GIT_INVALID_RESPONSE",
+              "Installed Git history did not start at the selected tip.",
+            );
+          }
+
+          const commitsBySha = new Map(
+            commits.map((commit) => [commit.sha, commit]),
+          );
+          const changeCache = new Map<
+            string,
+            readonly GenericGitHistoryPathChange[]
+          >();
+          const sessionController = new AbortController();
+          const abortSession = (): void => sessionController.abort();
+          deadline.signal.addEventListener("abort", abortSession, {
+            once: true,
+          });
+          if (deadline.signal.aborted) abortSession();
+          const sessionDeadline: CombinedDeadline = {
+            signal: sessionController.signal,
+            remainingMilliseconds: () => {
+              if (sessionController.signal.aborted) throw INTERNAL_ABORT;
+              return deadline.remainingMilliseconds();
+            },
+          };
+          const sessionRun = async (
+            operation: readonly string[],
+            monitorDisk = false,
+          ): Promise<Uint8Array> =>
+            await runWithDeadline(
+              operation,
+              monitorDisk,
+              sessionDeadline,
+            );
+          let changedPaths = 0;
+          let changedPathBytes = 0;
+          let active = true;
+          let operationActive = false;
+          let pendingOperation: Promise<unknown> | undefined;
+
+          const exclusive = async <Value>(
+            operation: () => Promise<Value>,
+          ): Promise<Value> => {
+            if (!active || operationActive) {
+              throw new GenericGitSnapshotError(
+                "GIT_INVALID_REQUEST",
+                "Generic Git history session is no longer available.",
+              );
+            }
+            operationActive = true;
+            const pending = Promise.resolve().then(operation);
+            pendingOperation = pending;
+            void pending.catch(() => undefined);
+            try {
+              return await pending;
+            } finally {
+              if (pendingOperation === pending) {
+                pendingOperation = undefined;
+              }
+              operationActive = false;
+            }
+          };
+
+          const readChanges = (
+            commitSha: string,
+          ): Promise<readonly GenericGitHistoryPathChange[]> => {
+            const pending = exclusive(async () => {
+              const commit = commitsBySha.get(commitSha);
+              if (commit === undefined) {
+                throw new GenericGitSnapshotError(
+                  "GIT_INVALID_REQUEST",
+                  "History changes were requested for an unknown commit.",
+                );
+              }
+              const cached = changeCache.get(commitSha);
+              if (cached !== undefined) return cached;
+              const parent = commit.parents[0];
+              const output = await sessionRun([
+                "-C",
+                workspace.repositoryDirectory,
+                "-c",
+                "core.bigFileThreshold=512m",
+                "-c",
+                "diff.algorithm=myers",
+                "-c",
+                "diff.indentHeuristic=false",
+                "-c",
+                "diff.orderFile=",
+                "-c",
+                "diff.renameFromRewrite=false",
+                "-c",
+                "diff.renameLimit=10000",
+                "-c",
+                "diff.renames=false",
+                "diff-tree",
+                "--no-commit-id",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--name-status",
+                "-r",
+                "-z",
+                "--diff-algorithm=myers",
+                "--no-indent-heuristic",
+                "--find-renames=50%",
+                "--diff-filter=ADMRT",
+                "--ignore-submodules=none",
+                ...(parent === undefined
+                  ? ["--root", commit.sha]
+                  : [parent, commit.sha]),
+                "--",
+              ]);
+              const parsed = parseHistoryChanges(output, {
+                existingEntries: changedPaths,
+                existingBytes: changedPathBytes,
+                maximumEntries: maximumChangedPathEntries,
+                maximumBytes: maximumChangedPathBytes,
+              });
+              changedPaths = parsed.entries;
+              changedPathBytes = parsed.bytes;
+              changeCache.set(commitSha, parsed.changes);
+              return parsed.changes;
+            });
+            void pending.catch(() => undefined);
+            return pending;
+          };
+
+          const readSnapshot = (
+            commitSha: string,
+          ): Promise<RepositorySnapshot> => {
+            const pending = exclusive(async () => {
+              if (!commitsBySha.has(commitSha)) {
+                throw new GenericGitSnapshotError(
+                  "GIT_INVALID_REQUEST",
+                  "A snapshot was requested for an unknown history commit.",
+                );
+              }
+              const archivePath = path.join(
+                workspace.root,
+                ARCHIVE_FILE_NAME,
+              );
+              let source: DisposableSnapshotSource | undefined;
+              try {
+                await sessionRun(
+                  [
+                    "-C",
+                    workspace.repositoryDirectory,
+                    "archive",
+                    "--format=zip",
+                    "--prefix=snapshot/",
+                    `--output=${archivePath}`,
+                    commitSha,
+                  ],
+                  true,
+                );
+                await enforceTemporaryLimit(
+                  workspace,
+                  sessionDeadline,
+                );
+                const archive = await readArchive(
+                  archivePath,
+                  sessionDeadline,
+                );
+                try {
+                  await withinDeadline(
+                    fs.unlink(archivePath),
+                    sessionDeadline,
+                  );
+                } catch (error) {
+                  if (error === INTERNAL_ABORT) throw error;
+                  throw new GenericGitSnapshotError(
+                    "GIT_CLEANUP_FAILED",
+                    "Temporary Git history archive cleanup failed.",
+                  );
+                }
+                source = openZip(
+                  archive,
+                  remote.repository,
+                  zipOptions(
+                    request.snapshotOptions,
+                    sessionDeadline.signal,
+                  ),
+                );
+                return await withinDeadline(
+                  materialize(
+                    source,
+                    materializationOptions(
+                      request.snapshotOptions,
+                      sessionDeadline,
+                    ),
+                  ),
+                  sessionDeadline,
+                );
+              } finally {
+                source?.dispose();
+              }
+            });
+            void pending.catch(() => undefined);
+            return pending;
+          };
+
+          const session: GenericGitHistorySession = Object.freeze({
+            repository: remote.repository,
+            tipSha: firstSelection.commitSha,
+            transport: remote.transport,
+            backend,
+            commits,
+            tags: firstTags,
+            readChanges,
+            readSnapshot,
+          });
+
+          let consumed!: T;
+          let consumerFailed = false;
+          let consumerFailure: unknown;
+          try {
+            consumed = await withinDeadline(
+              Promise.resolve().then(() => consumer(session)),
+              deadline,
+            );
+          } catch (error) {
+            consumerFailed = true;
+            consumerFailure = error;
+          } finally {
+            active = false;
+          }
+          const leftOperationRunning = operationActive;
+          sessionController.abort();
+          deadline.signal.removeEventListener("abort", abortSession);
+          const unfinished = pendingOperation;
+          if (unfinished !== undefined) {
+            try {
+              await unfinished;
+            } catch {
+              // The session-scope error below is stable and intentional.
+            }
+          }
+          if (leftOperationRunning) {
+            throw new GenericGitSnapshotError(
+              "GIT_INVALID_REQUEST",
+              "Generic Git history consumer left an operation running.",
+            );
+          }
+          if (consumerFailed) throw consumerFailure;
+
+          const secondSelection = selectRef(
+            requestedRef,
+            await run(lsRemoteOperation(remote, requestedRef)),
+          );
+          const secondTags =
+            tagReferences.length === 0
+              ? Object.freeze([] as GenericGitHistoryTag[])
+              : await readTags();
+          if (
+            !sameSelection(firstSelection, secondSelection) ||
+            !sameHistoryTags(firstTags, secondTags)
+          ) {
+            throw new GenericGitSnapshotError(
+              "GIT_REF_CHANGED",
+              "Requested Generic Git history refs changed during ingestion.",
+            );
+          }
+          return consumed;
+        } finally {
+          await workspace.dispose();
+        }
+      },
+    );
+  } catch (error) {
+    if (error instanceof GenericGitSnapshotError) throw error;
+    throw new GenericGitSnapshotError(
+      "GIT_HISTORY_FAILED",
+      "Generic Git history failed safely.",
     );
   }
 }

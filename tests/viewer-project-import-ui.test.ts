@@ -168,6 +168,36 @@ describe("viewer project import UI", () => {
     );
   });
 
+  it("adds accessible history controls only as an explicit remote opt-in", async () => {
+    const [dialogSource, css] = await Promise.all([
+      fs.readFile(
+        path.join(viewerRoot, "src/project-import-dialog.ts"),
+        "utf8",
+      ),
+      fs.readFile(path.join(viewerRoot, "src/styles.css"), "utf8"),
+    ]);
+
+    expect(dialogSource).toContain(
+      'enabled.id = "project-import-history-enabled"',
+    );
+    expect(dialogSource).toContain(
+      'enabled.setAttribute("aria-controls", "project-import-history-options")',
+    );
+    expect(dialogSource).toContain(
+      'frameHelp.setAttribute("aria-live", "polite")',
+    );
+    expect(dialogSource).toContain(
+      'createHistoryLabel("From, inclusive (UTC)"',
+    );
+    expect(dialogSource).toContain(
+      'createHistoryLabel("Oldest exact tag"',
+    );
+    expect(dialogSource).toContain("remotePanel.append(root)");
+    expect(css).toMatch(
+      /\.project-import-history-fields\s*\{[\s\S]*grid-template-columns:/u,
+    );
+  });
+
   it("keeps the wizard usable on a narrow touch viewport", async () => {
     const css = await fs.readFile(
       path.join(viewerRoot, "src/styles.css"),
@@ -182,6 +212,9 @@ describe("viewer project import UI", () => {
     );
     expect(css).toMatch(
       /@media \(max-width: 600px\)[\s\S]*\.project-import-sources,[\s\S]*grid-template-columns:\s*1fr/u,
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 600px\)[\s\S]*\.project-import-history-fields,[\s\S]*grid-template-columns:\s*1fr/u,
     );
   });
 });

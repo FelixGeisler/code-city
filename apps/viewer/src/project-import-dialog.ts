@@ -2,6 +2,9 @@ import type { CityModel } from "../../../packages/core/src/model.js";
 import {
   DEFAULT_SNAPSHOT_LIMITS,
 } from "../../../packages/analyzer/src/snapshot.js";
+import {
+  HISTORY_SELECTION_LIMITS,
+} from "../../../packages/analyzer/src/history-selection.js";
 
 import {
   type ImportAnalysisOptions,
@@ -10,6 +13,7 @@ import {
   type ImportFieldError,
   type ImportIdentityOptions,
   type ImportRevision,
+  type RemoteImportHistorySelection,
   type RemoteImportSubmission,
   type UploadImportSubmission,
   ViewerImportApiClient,
@@ -40,6 +44,13 @@ export const PROJECT_IMPORT_ANALYSIS_LIMITS = Object.freeze({
   timeoutSeconds: DEFAULT_SNAPSHOT_LIMITS.timeoutMs / 1_000,
 });
 
+export const PROJECT_IMPORT_HISTORY_LIMITS = Object.freeze({
+  maxCommits: HISTORY_SELECTION_LIMITS.maxTraversedCommits,
+  maxSampleEvery: HISTORY_SELECTION_LIMITS.maxSampleEvery,
+  maxFrames: HISTORY_SELECTION_LIMITS.maxSampledFrames,
+  maxTagNameBytes: HISTORY_SELECTION_LIMITS.maxTagNameBytes,
+});
+
 export const PROJECT_IMPORT_SOURCE_CHOICES = Object.freeze([
   "directory",
   "zip",
@@ -66,6 +77,7 @@ export type ProjectImportFieldKey =
   | "analysis"
   | "credentialProfileId"
   | "directory"
+  | "history"
   | "model"
   | "repositoryName"
   | "repositoryUrl"
@@ -106,6 +118,7 @@ export interface ProjectImportRemoteSubmissionValues {
   readonly credentialProfileId: string;
   readonly revisionKind: string;
   readonly revisionValue: string;
+  readonly history?: RemoteImportHistorySelection;
   readonly identity?: ImportIdentityOptions;
   readonly analysis?: ImportAnalysisOptions;
 }
@@ -141,6 +154,15 @@ const SERVER_FIELD_KEYS: Readonly<
   "$.source.revision.kind": "revision",
   "$.source.revision.name": "revision",
   "$.source.revision.sha": "revision",
+  "$.history": "history",
+  "$.history.mode": "history",
+  "$.history.commitCount": "history",
+  "$.history.fromInclusive": "history",
+  "$.history.toInclusive": "history",
+  "$.history.oldestTagName": "history",
+  "$.history.newestTagName": "history",
+  "$.history.maxCommits": "history",
+  "$.history.sampleEvery": "history",
   "$.source.repositoryName": "repositoryName",
   "$.source.rootMode": "repositoryName",
   "$.identity.title": "title",
@@ -280,6 +302,13 @@ export function projectImportRemoteSubmission(
     values.revisionKind,
     values.revisionValue,
   );
+  const historyRevisionError = projectImportHistoryRevisionError(
+    values.history,
+    revision,
+  );
+  if (historyRevisionError !== undefined) {
+    throw new Error(historyRevisionError);
+  }
   const selectedProfile =
     projectImportProvidersForSource(
       values.source,
@@ -296,6 +325,7 @@ export function projectImportRemoteSubmission(
         : { credentialProfileId: selectedProfile }),
       ...(revision === undefined ? {} : { revision }),
     },
+    ...(values.history === undefined ? {} : { history: values.history }),
     ...(values.identity === undefined ? {} : { identity: values.identity }),
     ...(values.analysis === undefined ? {} : { analysis: values.analysis }),
   };
@@ -337,6 +367,252 @@ function requiredElement<T extends HTMLElement>(id: string): T {
     throw new Error(`Missing required project import element #${id}.`);
   }
   return value as T;
+}
+
+interface ProjectImportHistoryControls {
+  readonly root: HTMLFieldSetElement;
+  readonly enabled: HTMLInputElement;
+  readonly options: HTMLElement;
+  readonly mode: HTMLSelectElement;
+  readonly panels: readonly HTMLElement[];
+  readonly commitCount: HTMLInputElement;
+  readonly fromInclusive: HTMLInputElement;
+  readonly toInclusive: HTMLInputElement;
+  readonly dateMaxCommits: HTMLInputElement;
+  readonly oldestTagName: HTMLInputElement;
+  readonly newestTagName: HTMLInputElement;
+  readonly tagMaxCommits: HTMLInputElement;
+  readonly sampleEvery: HTMLInputElement;
+  readonly frameHelp: HTMLElement;
+  readonly error: HTMLElement;
+  readonly allInputs: readonly HTMLElement[];
+}
+
+function createHistoryInput(
+  id: string,
+  type: "datetime-local" | "number" | "text",
+): HTMLInputElement {
+  const input = document.createElement("input");
+  input.id = id;
+  input.type = type;
+  input.autocomplete = "off";
+  input.setAttribute(
+    "aria-describedby",
+    "project-import-history-help project-import-history-frame-help project-import-error-history",
+  );
+  return input;
+}
+
+function createHistoryLabel(
+  text: string,
+  control: HTMLInputElement | HTMLSelectElement,
+): HTMLLabelElement {
+  const label = document.createElement("label");
+  label.className = "project-import-field";
+  label.htmlFor = control.id;
+  const title = document.createElement("span");
+  title.textContent = text;
+  label.append(title, control);
+  return label;
+}
+
+function configureHistoryCountInput(
+  input: HTMLInputElement,
+  value: string,
+): void {
+  input.min = "1";
+  input.max = PROJECT_IMPORT_HISTORY_LIMITS.maxCommits.toString();
+  input.step = "1";
+  input.inputMode = "numeric";
+  input.value = value;
+  input.defaultValue = value;
+}
+
+function createProjectImportHistoryControls(
+  remotePanel: HTMLElement,
+): ProjectImportHistoryControls {
+  const root = document.createElement("fieldset");
+  root.className = "project-import-history";
+  root.id = "project-import-history";
+
+  const legend = document.createElement("legend");
+  legend.textContent = "Repository history";
+
+  const enabled = document.createElement("input");
+  enabled.id = "project-import-history-enabled";
+  enabled.type = "checkbox";
+  enabled.setAttribute("aria-controls", "project-import-history-options");
+  enabled.setAttribute("aria-expanded", "false");
+  enabled.setAttribute(
+    "aria-describedby",
+    "project-import-history-help project-import-error-history",
+  );
+  const toggle = document.createElement("label");
+  toggle.className = "project-import-history-toggle";
+  toggle.htmlFor = enabled.id;
+  const toggleText = document.createElement("span");
+  toggleText.textContent = "Create a time-travel history";
+  toggle.append(enabled, toggleText);
+
+  const help = document.createElement("p");
+  help.id = "project-import-history-help";
+  help.className = "project-import-help";
+  help.textContent =
+    "Optional. Analyze a bounded first-parent history instead of only one snapshot. UTC date values are interpreted exactly as shown.";
+
+  const options = document.createElement("div");
+  options.id = "project-import-history-options";
+  options.className = "project-import-history-options";
+  options.hidden = true;
+
+  const mode = document.createElement("select");
+  mode.id = "project-import-history-mode";
+  mode.setAttribute(
+    "aria-describedby",
+    "project-import-history-help project-import-error-history",
+  );
+  for (const [value, text] of [
+    ["commit-count", "Most recent commits"],
+    ["date-range", "UTC date range"],
+    ["tag-range", "Exact tag range"],
+  ] as const) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = text;
+    mode.append(option);
+  }
+  options.append(createHistoryLabel("History range", mode));
+
+  const commitPanel = document.createElement("div");
+  commitPanel.className = "project-import-history-fields";
+  commitPanel.dataset["historyModePanel"] = "commit-count";
+  const commitCount = createHistoryInput(
+    "project-import-history-commit-count",
+    "number",
+  );
+  configureHistoryCountInput(commitCount, "50");
+  commitPanel.append(createHistoryLabel("Commit count", commitCount));
+
+  const datePanel = document.createElement("div");
+  datePanel.className = "project-import-history-fields";
+  datePanel.dataset["historyModePanel"] = "date-range";
+  datePanel.hidden = true;
+  const fromInclusive = createHistoryInput(
+    "project-import-history-from",
+    "datetime-local",
+  );
+  fromInclusive.step = "1";
+  const toInclusive = createHistoryInput(
+    "project-import-history-to",
+    "datetime-local",
+  );
+  toInclusive.step = "1";
+  const dateMaxCommits = createHistoryInput(
+    "project-import-history-date-max-commits",
+    "number",
+  );
+  configureHistoryCountInput(dateMaxCommits, "100");
+  datePanel.append(
+    createHistoryLabel("From, inclusive (UTC)", fromInclusive),
+    createHistoryLabel("To, inclusive (UTC)", toInclusive),
+    createHistoryLabel("Maximum commits", dateMaxCommits),
+  );
+
+  const tagPanel = document.createElement("div");
+  tagPanel.className = "project-import-history-fields";
+  tagPanel.dataset["historyModePanel"] = "tag-range";
+  tagPanel.hidden = true;
+  const oldestTagName = createHistoryInput(
+    "project-import-history-oldest-tag",
+    "text",
+  );
+  oldestTagName.maxLength = 256;
+  oldestTagName.autocapitalize = "none";
+  oldestTagName.spellcheck = false;
+  const newestTagName = createHistoryInput(
+    "project-import-history-newest-tag",
+    "text",
+  );
+  newestTagName.maxLength = 256;
+  newestTagName.autocapitalize = "none";
+  newestTagName.spellcheck = false;
+  const tagMaxCommits = createHistoryInput(
+    "project-import-history-tag-max-commits",
+    "number",
+  );
+  configureHistoryCountInput(tagMaxCommits, "100");
+  tagPanel.append(
+    createHistoryLabel("Oldest exact tag", oldestTagName),
+    createHistoryLabel("Newest exact tag", newestTagName),
+    createHistoryLabel("Maximum commits", tagMaxCommits),
+  );
+
+  const sampleEvery = createHistoryInput(
+    "project-import-history-sample-every",
+    "number",
+  );
+  sampleEvery.min = "1";
+  sampleEvery.max =
+    PROJECT_IMPORT_HISTORY_LIMITS.maxSampleEvery.toString();
+  sampleEvery.step = "1";
+  sampleEvery.inputMode = "numeric";
+  sampleEvery.value = "1";
+  sampleEvery.defaultValue = "1";
+
+  const frameHelp = document.createElement("p");
+  frameHelp.id = "project-import-history-frame-help";
+  frameHelp.className = "project-import-field-help";
+  frameHelp.setAttribute("role", "status");
+  frameHelp.setAttribute("aria-live", "polite");
+
+  options.append(
+    commitPanel,
+    datePanel,
+    tagPanel,
+    createHistoryLabel("Sample every N commits", sampleEvery),
+    frameHelp,
+  );
+
+  const error = document.createElement("p");
+  error.id = "project-import-error-history";
+  error.className = "project-import-field-error";
+  error.dataset["importFieldError"] = "history";
+  error.setAttribute("role", "alert");
+  error.hidden = true;
+
+  root.append(legend, toggle, help, options, error);
+  remotePanel.append(root);
+  const panels = Object.freeze([commitPanel, datePanel, tagPanel]);
+  const allInputs = Object.freeze([
+    enabled,
+    mode,
+    commitCount,
+    fromInclusive,
+    toInclusive,
+    dateMaxCommits,
+    oldestTagName,
+    newestTagName,
+    tagMaxCommits,
+    sampleEvery,
+  ]);
+  return {
+    root,
+    enabled,
+    options,
+    mode,
+    panels,
+    commitCount,
+    fromInclusive,
+    toInclusive,
+    dateMaxCommits,
+    oldestTagName,
+    newestTagName,
+    tagMaxCommits,
+    sampleEvery,
+    frameHelp,
+    error,
+    allInputs,
+  };
 }
 
 function checkedValue(name: string): string {
@@ -442,6 +718,207 @@ function optionalInteger(
     );
   }
   return value * multiplier;
+}
+
+export interface ProjectImportHistoryFieldValues {
+  readonly enabled: boolean;
+  readonly mode: string;
+  readonly commitCount: string;
+  readonly fromInclusive: string;
+  readonly toInclusive: string;
+  readonly dateMaxCommits: string;
+  readonly oldestTagName: string;
+  readonly newestTagName: string;
+  readonly tagMaxCommits: string;
+  readonly sampleEvery: string;
+}
+
+function requiredHistoryInteger(
+  rawValue: string,
+  label: string,
+): number {
+  const value = optionalInteger(
+    rawValue,
+    label,
+    1,
+    PROJECT_IMPORT_HISTORY_LIMITS.maxCommits,
+  );
+  if (value === undefined) {
+    throw new Error(`${label} is required.`);
+  }
+  return value;
+}
+
+function canonicalUtcDateTime(rawValue: string, label: string): string {
+  const value = rawValue.trim();
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/u.exec(
+      value,
+    );
+  if (match === null) {
+    throw new Error(`Enter a valid ${label} UTC date and time.`);
+  }
+  const [
+    ,
+    rawYear,
+    rawMonth,
+    rawDay,
+    rawHour,
+    rawMinute,
+    rawSecond = "0",
+    rawMillisecond = "0",
+  ] = match;
+  const year = Number(rawYear);
+  const month = Number(rawMonth);
+  const day = Number(rawDay);
+  const hour = Number(rawHour);
+  const minute = Number(rawMinute);
+  const second = Number(rawSecond);
+  const millisecond = Number(rawMillisecond.padEnd(3, "0"));
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
+  date.setUTCHours(hour, minute, second, millisecond);
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day ||
+    date.getUTCHours() !== hour ||
+    date.getUTCMinutes() !== minute ||
+    date.getUTCSeconds() !== second ||
+    date.getUTCMilliseconds() !== millisecond
+  ) {
+    throw new Error(`Enter a valid ${label} UTC date and time.`);
+  }
+  return date.toISOString();
+}
+
+function exactHistoryTagName(rawValue: string, label: string): string {
+  const value = rawValue.normalize("NFC");
+  const components = value.split("/");
+  if (
+    value.length === 0 ||
+    value !== value.trim() ||
+    value.length > PROJECT_IMPORT_HISTORY_LIMITS.maxTagNameBytes ||
+    new TextEncoder().encode(value).byteLength >
+      PROJECT_IMPORT_HISTORY_LIMITS.maxTagNameBytes ||
+    /[\s\\~^:?*]|\[|\]|\p{Cc}|\p{Cf}|\p{Cs}/u.test(value) ||
+    value === "@" ||
+    value.startsWith("-") ||
+    value.includes("..") ||
+    value.includes("@{") ||
+    value.startsWith("refs/") ||
+    components.some(
+      (component) =>
+        component.length === 0 ||
+        component.startsWith(".") ||
+        component.endsWith(".") ||
+        component.toLocaleLowerCase("en-US").endsWith(".lock"),
+    )
+  ) {
+    throw new Error(
+      `Enter an exact valid ${label} tag name of at most ${PROJECT_IMPORT_HISTORY_LIMITS.maxTagNameBytes} UTF-8 bytes.`,
+    );
+  }
+  return value;
+}
+
+export function projectImportHistoryRevisionError(
+  history: RemoteImportHistorySelection | undefined,
+  revision: ImportRevision | undefined,
+): string | undefined {
+  return history?.mode === "tag-range" && revision !== undefined
+    ? "Choose the repository default revision when using a tag-range history."
+    : undefined;
+}
+
+function assertHistoryFrameLimit(
+  maximumCommits: number,
+  sampleEvery: number,
+): void {
+  const maximumFrames =
+    Math.ceil((maximumCommits - 1) / sampleEvery) + 1;
+  if (maximumFrames > PROJECT_IMPORT_HISTORY_LIMITS.maxFrames) {
+    throw new Error(
+      `This selection could create ${maximumFrames.toLocaleString()} frames. Increase the sample interval or reduce the commit limit to create at most ${PROJECT_IMPORT_HISTORY_LIMITS.maxFrames.toLocaleString()} frames.`,
+    );
+  }
+}
+
+export function projectImportHistorySelection(
+  values: ProjectImportHistoryFieldValues,
+): RemoteImportHistorySelection | undefined {
+  if (!values.enabled) return undefined;
+  const sampleEvery = optionalInteger(
+    values.sampleEvery,
+    "Sample interval",
+    1,
+    PROJECT_IMPORT_HISTORY_LIMITS.maxSampleEvery,
+  );
+  const resolvedSampleEvery = sampleEvery ?? 1;
+  const sample = sampleEvery === undefined ? {} : { sampleEvery };
+
+  if (values.mode === "commit-count") {
+    const commitCount = requiredHistoryInteger(
+      values.commitCount,
+      "Commit count",
+    );
+    assertHistoryFrameLimit(commitCount, resolvedSampleEvery);
+    return {
+      mode: values.mode,
+      commitCount,
+      ...sample,
+    };
+  }
+  if (values.mode === "date-range") {
+    const fromInclusive = canonicalUtcDateTime(
+      values.fromInclusive,
+      "starting",
+    );
+    const toInclusive = canonicalUtcDateTime(
+      values.toInclusive,
+      "ending",
+    );
+    if (Date.parse(fromInclusive) > Date.parse(toInclusive)) {
+      throw new Error(
+        "The starting UTC date must not be later than the ending UTC date.",
+      );
+    }
+    const maxCommits = requiredHistoryInteger(
+      values.dateMaxCommits,
+      "Date-range commit limit",
+    );
+    assertHistoryFrameLimit(maxCommits, resolvedSampleEvery);
+    return {
+      mode: values.mode,
+      fromInclusive,
+      toInclusive,
+      maxCommits,
+      ...sample,
+    };
+  }
+  if (values.mode === "tag-range") {
+    const oldestTagName = exactHistoryTagName(
+      values.oldestTagName,
+      "oldest",
+    );
+    const newestTagName = exactHistoryTagName(
+      values.newestTagName,
+      "newest",
+    );
+    const maxCommits = requiredHistoryInteger(
+      values.tagMaxCommits,
+      "Tag-range commit limit",
+    );
+    assertHistoryFrameLimit(maxCommits, resolvedSampleEvery);
+    return {
+      mode: values.mode,
+      oldestTagName,
+      newestTagName,
+      maxCommits,
+      ...sample,
+    };
+  }
+  throw new Error("Choose a repository history range.");
 }
 
 export interface ProjectImportAnalysisFieldValues {
@@ -578,6 +1055,14 @@ export function installProjectImportDialog(
   const sourcePanels = [
     ...form.querySelectorAll<HTMLElement>("[data-import-source-panel]"),
   ];
+  const remotePanel = sourcePanels.find(
+    (panel) => panel.dataset["importSourcePanel"] === "remote",
+  );
+  if (remotePanel === undefined) {
+    throw new Error("Missing remote project import panel.");
+  }
+  const historyControls =
+    createProjectImportHistoryControls(remotePanel);
   const directoryInput = requiredElement<HTMLInputElement>(
     "project-import-directory",
   );
@@ -744,6 +1229,14 @@ export function installProjectImportDialog(
       {
         error: requiredElement("project-import-error-revision"),
         controls: [revisionValueInput, ...revisionInputs],
+        step: "details",
+      },
+    ],
+    [
+      "history",
+      {
+        error: historyControls.error,
+        controls: historyControls.allInputs,
         step: "details",
       },
     ],
@@ -1059,6 +1552,85 @@ export function installProjectImportDialog(
     }
   }
 
+  function historyFieldValues(): ProjectImportHistoryFieldValues {
+    return {
+      enabled: historyControls.enabled.checked,
+      mode: historyControls.mode.value,
+      commitCount: historyControls.commitCount.value,
+      fromInclusive: historyControls.fromInclusive.value,
+      toInclusive: historyControls.toInclusive.value,
+      dateMaxCommits: historyControls.dateMaxCommits.value,
+      oldestTagName: historyControls.oldestTagName.value,
+      newestTagName: historyControls.newestTagName.value,
+      tagMaxCommits: historyControls.tagMaxCommits.value,
+      sampleEvery: historyControls.sampleEvery.value,
+    };
+  }
+
+  function historyCommitBound(): number | undefined {
+    const input =
+      historyControls.mode.value === "commit-count"
+        ? historyControls.commitCount
+        : historyControls.mode.value === "date-range"
+          ? historyControls.dateMaxCommits
+          : historyControls.mode.value === "tag-range"
+            ? historyControls.tagMaxCommits
+            : undefined;
+    if (input === undefined || input.value.trim() === "") return undefined;
+    const value = Number(input.value);
+    return Number.isSafeInteger(value) && value > 0
+      ? value
+      : undefined;
+  }
+
+  function renderHistory(): void {
+    const enabled = historyControls.enabled.checked;
+    historyControls.options.hidden = !enabled;
+    historyControls.enabled.setAttribute(
+      "aria-expanded",
+      String(enabled),
+    );
+    for (const panel of historyControls.panels) {
+      panel.hidden =
+        panel.dataset["historyModePanel"] !== historyControls.mode.value;
+    }
+    const bound = historyCommitBound();
+    const sampleEvery = Number(historyControls.sampleEvery.value);
+    if (
+      !enabled ||
+      bound === undefined ||
+      !Number.isSafeInteger(sampleEvery) ||
+      sampleEvery < 1
+    ) {
+      historyControls.frameHelp.textContent =
+        `History imports are limited to ${PROJECT_IMPORT_HISTORY_LIMITS.maxCommits.toLocaleString()} commits and ${PROJECT_IMPORT_HISTORY_LIMITS.maxFrames.toLocaleString()} frames.`;
+      return;
+    }
+    const frames = Math.ceil((bound - 1) / sampleEvery) + 1;
+    historyControls.frameHelp.textContent =
+      `This range can produce up to ${frames.toLocaleString()} animation ${frames === 1 ? "frame" : "frames"}.`;
+  }
+
+  function historyReviewText(): string {
+    if (!historyControls.enabled.checked) return "Single snapshot";
+    try {
+      const selection = projectImportHistorySelection(
+        historyFieldValues(),
+      );
+      if (selection === undefined) return "Single snapshot";
+      switch (selection.mode) {
+        case "commit-count":
+          return `${selection.commitCount.toLocaleString()} recent commits`;
+        case "date-range":
+          return `${selection.fromInclusive} to ${selection.toInclusive}`;
+        case "tag-range":
+          return `${selection.oldestTagName} to ${selection.newestTagName}`;
+      }
+    } catch {
+      return "History settings incomplete";
+    }
+  }
+
   function renderRevision(): void {
     const kind = revisionChoice();
     revisionValueWrap.hidden = kind === "default";
@@ -1094,6 +1666,7 @@ export function installProjectImportDialog(
     restartButton.hidden = true;
     renderSourcePanels();
     renderRevision();
+    renderHistory();
   }
 
   function scrubAcceptedSubmission(jobId: string): void {
@@ -1106,6 +1679,16 @@ export function installProjectImportDialog(
     repositoryUrlInput.value = "";
     profileSelect.value = "";
     revisionValueInput.value = "";
+    historyControls.enabled.checked = false;
+    historyControls.fromInclusive.value = "";
+    historyControls.toInclusive.value = "";
+    historyControls.oldestTagName.value = "";
+    historyControls.newestTagName.value = "";
+    historyControls.commitCount.value = "";
+    historyControls.dateMaxCommits.value = "";
+    historyControls.tagMaxCommits.value = "";
+    historyControls.sampleEvery.value = "";
+    renderHistory();
     titleInput.value = "";
     versionInput.value = "";
     maxFilesInput.value = "";
@@ -1364,12 +1947,21 @@ export function installProjectImportDialog(
         break;
     }
     const revisionKind = revisionChoice();
-    reviewRevision.textContent =
-      source === "directory" || source === "zip" || source === "city-model"
-        ? "Uploaded content"
-        : revisionKind === "default"
-          ? "Repository default"
-          : `${revisionKind}: ${revisionValueInput.value.trim() || "not set"}`;
+    if (
+      source === "directory" ||
+      source === "zip" ||
+      source === "city-model"
+    ) {
+      reviewRevision.textContent = "Uploaded content";
+      return;
+    }
+    const revision =
+      revisionKind === "default"
+        ? "Repository default"
+        : `${revisionKind}: ${revisionValueInput.value.trim() || "not set"}`;
+    reviewRevision.textContent = historyControls.enabled.checked
+      ? `${revision}; ${historyReviewText()}`
+      : revision;
   }
 
   function validateDetails(): readonly FormValidationFailure[] {
@@ -1456,8 +2048,9 @@ export function installProjectImportDialog(
           "Choose a configured GitHub profile. Ask the server administrator to add one if the list is empty.",
       });
     }
+    let revision: ImportRevision | undefined;
     try {
-      projectImportRevision(
+      revision = projectImportRevision(
         revisionChoice(),
         revisionValueInput.value,
       );
@@ -1465,6 +2058,25 @@ export function installProjectImportDialog(
       failures.push({
         field: "revision",
         message: messageOf(error),
+      });
+    }
+    let history: RemoteImportHistorySelection | undefined;
+    try {
+      history = projectImportHistorySelection(historyFieldValues());
+    } catch (error) {
+      failures.push({
+        field: "history",
+        message: messageOf(error),
+      });
+    }
+    const historyRevisionError = projectImportHistoryRevisionError(
+      history,
+      revision,
+    );
+    if (historyRevisionError !== undefined) {
+      failures.push({
+        field: "revision",
+        message: historyRevisionError,
       });
     }
     return failures;
@@ -1526,12 +2138,14 @@ export function installProjectImportDialog(
     ) {
       throw new Error("The selected source is not a Git repository.");
     }
+    const history = projectImportHistorySelection(historyFieldValues());
     return projectImportRemoteSubmission({
       source,
       repositoryUrl: repositoryUrlInput.value,
       credentialProfileId: profileSelect.value,
       revisionKind: revisionChoice(),
       revisionValue: revisionValueInput.value,
+      ...(history === undefined ? {} : { history }),
       ...(values.identity === undefined ? {} : { identity: values.identity }),
       ...(values.analysis === undefined ? {} : { analysis: values.analysis }),
     });
@@ -1708,6 +2322,31 @@ export function installProjectImportDialog(
       updateReview();
     });
   });
+  historyControls.enabled.addEventListener("change", () => {
+    clearErrors();
+    renderHistory();
+    updateReview();
+  });
+  historyControls.mode.addEventListener("change", () => {
+    clearErrors();
+    renderHistory();
+    updateReview();
+  });
+  for (const input of [
+    historyControls.commitCount,
+    historyControls.fromInclusive,
+    historyControls.toInclusive,
+    historyControls.dateMaxCommits,
+    historyControls.oldestTagName,
+    historyControls.newestTagName,
+    historyControls.tagMaxCommits,
+    historyControls.sampleEvery,
+  ]) {
+    input.addEventListener("input", () => {
+      renderHistory();
+      updateReview();
+    });
+  }
   repositoryUrlInput.addEventListener("input", () => {
     if (sourceChoice() === "git") renderProfiles();
     updateReview();
@@ -1812,6 +2451,7 @@ export function installProjectImportDialog(
 
   renderSourcePanels();
   renderRevision();
+  renderHistory();
   resetProgress();
   setStep("source");
   if (options.autoResume !== false) {

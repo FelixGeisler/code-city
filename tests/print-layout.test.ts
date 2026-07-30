@@ -304,7 +304,23 @@ describe("deterministic physical print layout", () => {
           district("b", 45, 30),
         ],
       }),
-    ).toThrow(/use fitPolicy 'scale' or 'tile'/u);
+    ).toThrow(
+      /Fit policy.*"Scale to one plate".*"Split complete districts \(tiled multi-plate export\)"/u,
+    );
+    try {
+      planPrintLayout(profile(), {
+        requestedScale: 1,
+        features,
+        districts: [
+          district("a", 45, 30),
+          district("b", 45, 30),
+        ],
+      });
+    } catch (error) {
+      expect((error as Error).message).not.toMatch(
+        /fitPolicy|'scale'|'tile'/u,
+      );
+    }
   });
 
   it("scales only as far as all supplied printer features remain safe", () => {
@@ -328,6 +344,22 @@ describe("deterministic physical print layout", () => {
     expect(plan.plates).toHaveLength(1);
     expect(plan.warnings.some((warning) => /scaled from 2/u.test(warning)))
       .toBe(true);
+  });
+
+  it("names the visible tile option when one-plate scaling is impossible", () => {
+    expect(() =>
+      planPrintLayout(profile({ x: 60, y: 30, z: 40 }), {
+        fitPolicy: "scale",
+        requestedScale: 2,
+        features,
+        districts: [
+          district("a", 45, 30),
+          district("b", 45, 30),
+        ],
+      }),
+    ).toThrow(
+      /minimum profile-safe scale 1.*Fit policy.*"Split complete districts \(tiled multi-plate export\)"/u,
+    );
   });
 
   it("rejects a requested scale below the strictest feature constraint", () => {

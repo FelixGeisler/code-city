@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import os from "node:os";
@@ -9,16 +9,22 @@ import { afterEach, expect, it, vi } from "vitest";
 
 import {
   IMPORT_CITY_MODEL_MAX_BYTES,
+  IMPORT_EVOLUTION_MAX_BYTES,
   ImportArtifactStore,
   isImportArtifactToken,
 } from "../apps/server/src/import-artifacts.js";
+import {
+  prepareEvolutionSerialization,
+  serializeEvolutionBundle,
+  type EvolutionBundle,
+} from "../packages/core/src/index.js";
 
 const temporaryDirectories: string[] = [];
 
 const minimalCityModel = Object.freeze({
   schemaVersion: "1.0",
   generator: {
-    name: "code-city",
+    name: "code-city" as const,
     version: "test",
   },
   repositories: [],
@@ -30,6 +36,88 @@ const minimalCityModel = Object.freeze({
   dependencies: [],
   bounds: { x: 0, y: 0, z: 0 },
 });
+
+const historyCityModel = Object.freeze({
+  ...minimalCityModel,
+  repositories: Object.freeze([
+    Object.freeze({ id: "repository:one", name: "One" }),
+  ]),
+});
+
+function minimalEvolutionBundle(): EvolutionBundle {
+  const sha = "1".repeat(40);
+  const fingerprint = (
+    digit: string,
+  ): `sha256:${string}` => `sha256:${digit.repeat(64)}`;
+  return {
+    schemaVersion: "1.0",
+    generator: historyCityModel.generator,
+    authorPolicy: "omit-v1",
+    selection: {
+      mode: "commit-count",
+      traversal: "first-parent",
+      order: "oldest-first",
+      requestedCommitCount: 1,
+      sampleEvery: 1,
+      selectedCommitCount: 1,
+      sampledCommitCount: 1,
+      traversedCommitCount: 1,
+      resolvedOldestSha: sha,
+      resolvedNewestSha: sha,
+      sampledCommitShas: [sha],
+    },
+    provenance: {
+      repositoryId: "repository:one",
+      repositoryFingerprint: fingerprint("2"),
+      analyzer: {
+        name: "code-city",
+        version: "test",
+        fingerprint: fingerprint("3"),
+      },
+      historyBackend: {
+        name: "git",
+        version: "2.47.1.windows.2",
+        renamePolicyRevision: "diff-tree-renames-50-myers-v1",
+      },
+      metricConfigurationFingerprint: fingerprint("4"),
+      selectionFingerprint: fingerprint("5"),
+    },
+    baseline: {
+      commit: {
+        index: 0,
+        sha,
+        committedAt: "2026-07-30T00:00:00.000Z",
+        parentShas: [],
+        analyzerVersion: "test",
+        analysisFingerprint: fingerprint("6"),
+      },
+      model: historyCityModel,
+    },
+    deltas: [],
+  };
+}
+
+function largeEvolutionBundle(): EvolutionBundle {
+  const bundle = minimalEvolutionBundle();
+  return {
+    ...bundle,
+    baseline: {
+      ...bundle.baseline,
+      model: {
+        ...bundle.baseline.model,
+        repositories: [
+          { id: "repository:one", name: "One" },
+          ...Array.from({ length: 999 }, (_, index) => ({
+            id: `repository:stream-${index.toString().padStart(3, "0")}`,
+            name:
+              `Streaming repository ${index}: ` +
+              "x".repeat(200),
+          })),
+        ],
+      },
+    },
+  };
+}
 
 async function temporaryDirectory(): Promise<string> {
   const directory = await fs.mkdtemp(
@@ -150,6 +238,456 @@ it("creates private fixed-shape storage and publishes a validated model", async 
   });
   expect(await fs.readFile(storedPath, "utf8")).toContain(
     '"schemaVersion": "1.0"',
+  );
+});
+
+it("checks cancellation before and after staging cleanup operations", async () => {
+  const root = await temporaryDirectory();
+  const dataDirectory = path.join(root, "data");
+  const store = await ImportArtifactStore.open({ dataDirectory });
+  const staging = await store.createStagingDirectory();
+  const deadline = new Error("cleanup deadline");
+
+  await expect(
+    store.cleanupStagingDirectory(staging.token, {
+      checkpoint: () => {
+        throw deadline;
+      },
+    }),
+  ).rejects.toBe(deadline);
+  expect((await fs.stat(staging.directory)).isDirectory()).toBe(true);
+
+  await store.cleanupStagingDirectory(staging.token);
+  await expect(fs.lstat(staging.directory)).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+});
+
+it("transactionally publishes canonical city and evolution artifacts with digest metadata", async () => {
+  const root = await temporaryDirectory();
+  const dataDirectory = path.join(root, "data");
+  const store = await ImportArtifactStore.open({ dataDirectory });
+  const token = randomUUID();
+  const prepared = prepareEvolutionSerialization(
+    minimalEvolutionBundle(),
+  );
+  const evolution = prepared.bundle;
+  const canonicalEvolution = Buffer.from(
+    serializeEvolutionBundle(evolution),
+  );
+
+  const published = await store.publishHistoryArtifacts(
+    token,
+    historyCityModel,
+    evolution,
+    { preparedSerialization: prepared },
+  );
+  const artifactDirectory = path.join(
+    dataDirectory,
+    "artifacts",
+    token,
+  );
+  expect((await fs.readdir(artifactDirectory)).sort()).toEqual([
+    "city-model.json",
+    "evolution.json",
+  ]);
+  expect(await fs.readFile(path.join(
+    artifactDirectory,
+    "evolution.json",
+  ))).toEqual(canonicalEvolution);
+  expect(published.evolution).toEqual({
+    token,
+    size: canonicalEvolution.byteLength,
+    sha256: createHash("sha256")
+      .update(canonicalEvolution)
+      .digest("hex"),
+    lastModified: expect.any(String),
+  });
+  expect(Object.isFrozen(published)).toBe(true);
+  expect(Object.isFrozen(published.evolution)).toBe(true);
+
+  expect(await store.statEvolution(token)).toEqual(
+    published.evolution,
+  );
+  const openedEvolution = await store.readEvolution(
+    token,
+    published.evolution,
+  );
+  expect(openedEvolution).toMatchObject(published.evolution);
+  const evolutionChunks: Buffer[] = [];
+  for await (const chunk of openedEvolution!.chunks()) {
+    evolutionChunks.push(chunk);
+  }
+  expect(Buffer.concat(evolutionChunks)).toEqual(canonicalEvolution);
+  await openedEvolution!.close();
+
+  await store.reconcileImportArtifacts(
+    new Map([
+      [
+        token,
+        {
+          evolution: {
+            size: published.evolution.size,
+            sha256: published.evolution.sha256,
+          },
+        },
+      ],
+    ]),
+  );
+  await store.cleanupCityModelArtifact(token);
+  expect(await store.statCityModel(token)).toBeUndefined();
+  expect(await store.statEvolution(token)).toBeUndefined();
+});
+
+it("rejects a prepared evolution handle paired with a different bundle identity", async () => {
+  const root = await temporaryDirectory();
+  const dataDirectory = path.join(root, "data");
+  const store = await ImportArtifactStore.open({ dataDirectory });
+  const token = randomUUID();
+  const prepared = prepareEvolutionSerialization(
+    minimalEvolutionBundle(),
+  );
+
+  await expect(
+    store.publishHistoryArtifacts(
+      token,
+      historyCityModel,
+      minimalEvolutionBundle(),
+      { preparedSerialization: prepared },
+    ),
+  ).rejects.toMatchObject({ code: "EVOLUTION_INVALID" });
+  expect(await store.statCityModel(token)).toBeUndefined();
+  expect(await store.statEvolution(token)).toBeUndefined();
+});
+
+it("checks a direct wall-clock guard during synchronous history serialization", async () => {
+  const root = await temporaryDirectory();
+  const dataDirectory = path.join(root, "data");
+  const store = await ImportArtifactStore.open({ dataDirectory });
+  const token = randomUUID();
+  const deadline = new Error("history wall-clock deadline");
+  let checkpoints = 0;
+
+  await expect(
+    store.publishHistoryArtifacts(
+      token,
+      historyCityModel,
+      minimalEvolutionBundle(),
+      {
+        checkpoint: () => {
+          checkpoints += 1;
+          if (checkpoints >= 3) throw deadline;
+        },
+      },
+    ),
+  ).rejects.toBe(deadline);
+  expect(checkpoints).toBeGreaterThanOrEqual(3);
+  expect(await store.statCityModel(token)).toBeUndefined();
+  expect(await store.statEvolution(token)).toBeUndefined();
+});
+
+it("publishes a large canonical evolution artifact in bounded chunks", async () => {
+  const root = await temporaryDirectory();
+  const dataDirectory = path.join(root, "data");
+  const store = await ImportArtifactStore.open({ dataDirectory });
+  const token = randomUUID();
+  const encoding = new AsyncLocalStorage<boolean>();
+  const originalEncode = TextEncoder.prototype.encode;
+  const encodedChunkSizes: number[] = [];
+  vi.spyOn(TextEncoder.prototype, "encode").mockImplementation(
+    function (this: TextEncoder, input) {
+      const bytes = originalEncode.call(this, input);
+      if (encoding.getStore() === true) {
+        encodedChunkSizes.push(bytes.byteLength);
+      }
+      return bytes;
+    },
+  );
+
+  const evolution = largeEvolutionBundle();
+  const published = await encoding.run(true, () =>
+    store.publishHistoryArtifacts(
+      token,
+      evolution.baseline.model,
+      evolution,
+    ),
+  );
+  const stored = await fs.readFile(
+    path.join(
+      dataDirectory,
+      "artifacts",
+      token,
+      "evolution.json",
+    ),
+  );
+
+  expect(stored.byteLength).toBeGreaterThan(128 * 1024);
+  expect(published.evolution.size).toBe(stored.byteLength);
+  expect(published.evolution.sha256).toBe(
+    createHash("sha256").update(stored).digest("hex"),
+  );
+  expect(
+    encodedChunkSizes.filter((size) => size >= 8 * 1024).length,
+  ).toBeGreaterThan(1);
+  expect(Math.max(...encodedChunkSizes)).toBeLessThan(
+    stored.byteLength / 4,
+  );
+});
+
+it("withholds the final evolution chunk until the streaming digest is verified", async () => {
+  const root = await temporaryDirectory();
+  const dataDirectory = path.join(root, "data");
+  const store = await ImportArtifactStore.open({ dataDirectory });
+  const token = randomUUID();
+  const evolution = largeEvolutionBundle();
+  const published = await store.publishHistoryArtifacts(
+    token,
+    evolution.baseline.model,
+    evolution,
+  );
+  const artifact = await store.readEvolution(
+    token,
+    published.evolution,
+  );
+  expect(artifact).toBeDefined();
+
+  const artifactPath = path.join(
+    dataDirectory,
+    "artifacts",
+    token,
+    "evolution.json",
+  );
+  const mutationOffset = Math.floor(published.evolution.size / 2);
+  const mutation = Buffer.alloc(1);
+  const mutationHandle = await fs.open(artifactPath, "r+");
+  try {
+    await mutationHandle.read(mutation, 0, 1, mutationOffset);
+    mutation[0] = mutation[0]! ^ 1;
+    await mutationHandle.write(mutation, 0, 1, mutationOffset);
+    await mutationHandle.sync();
+  } finally {
+    await mutationHandle.close();
+  }
+
+  let yieldedBytes = 0;
+  await expect(
+    (async () => {
+      for await (const chunk of artifact!.chunks()) {
+        yieldedBytes += chunk.byteLength;
+      }
+    })(),
+  ).rejects.toThrow(/changed|verification/iu);
+  expect(yieldedBytes).toBeGreaterThan(0);
+  expect(yieldedBytes).toBeLessThan(published.evolution.size);
+  expect(published.evolution.size - yieldedBytes).toBeLessThanOrEqual(
+    64 * 1024,
+  );
+});
+
+it("aborts a partial streamed evolution stage without leaving files", async () => {
+  const root = await temporaryDirectory();
+  const dataDirectory = path.join(root, "data");
+  const store = await ImportArtifactStore.open({ dataDirectory });
+  const token = randomUUID();
+  const controller = new AbortController();
+  const encoding = new AsyncLocalStorage<boolean>();
+  const originalEncode = TextEncoder.prototype.encode;
+  let serializedChunks = 0;
+  vi.spyOn(TextEncoder.prototype, "encode").mockImplementation(
+    function (this: TextEncoder, input) {
+      const bytes = originalEncode.call(this, input);
+      if (
+        encoding.getStore() === true &&
+        bytes.byteLength >= 8 * 1024
+      ) {
+        serializedChunks += 1;
+        if (serializedChunks === 2) controller.abort();
+      }
+      return bytes;
+    },
+  );
+  const evolution = largeEvolutionBundle();
+
+  await expect(
+    encoding.run(true, () =>
+      store.publishHistoryArtifacts(
+        token,
+        evolution.baseline.model,
+        evolution,
+        { signal: controller.signal },
+      ),
+    ),
+  ).rejects.toMatchObject({ name: "AbortError" });
+  expect(serializedChunks).toBeGreaterThanOrEqual(2);
+  expect(
+    await fs.readdir(
+      path.join(dataDirectory, "artifacts", token),
+    ),
+  ).toEqual([]);
+  expect(await store.statCityModel(token)).toBeUndefined();
+  expect(await store.statEvolution(token)).toBeUndefined();
+});
+
+it("preserves AbortError when cancellation interrupts evolution prevalidation", async () => {
+  const root = await temporaryDirectory();
+  const dataDirectory = path.join(root, "data");
+  const store = await ImportArtifactStore.open({ dataDirectory });
+  const token = randomUUID();
+  const controller = new AbortController();
+  const originalThrowIfAborted =
+    AbortSignal.prototype.throwIfAborted;
+  let checks = 0;
+  vi.spyOn(
+    AbortSignal.prototype,
+    "throwIfAborted",
+  ).mockImplementation(function (this: AbortSignal) {
+    if (this === controller.signal) {
+      checks += 1;
+      if (checks === 5) controller.abort();
+    }
+    return originalThrowIfAborted.call(this);
+  });
+
+  await expect(
+    store.publishHistoryArtifacts(
+      token,
+      historyCityModel,
+      largeEvolutionBundle(),
+      { signal: controller.signal },
+    ),
+  ).rejects.toMatchObject({ name: "AbortError" });
+  expect(checks).toBeGreaterThanOrEqual(5);
+  const artifactDirectory = path.join(
+    dataDirectory,
+    "artifacts",
+    token,
+  );
+  let artifactEntries: string[] = [];
+  try {
+    artifactEntries = await fs.readdir(artifactDirectory);
+  } catch (error) {
+    if (
+      error === null ||
+      typeof error !== "object" ||
+      !("code" in error) ||
+      error.code !== "ENOENT"
+    ) {
+      throw error;
+    }
+  }
+  expect(artifactEntries).toEqual([]);
+  expect(await store.statCityModel(token)).toBeUndefined();
+  expect(await store.statEvolution(token)).toBeUndefined();
+});
+
+it("rolls back both fixed history filenames when dual publication fails", async () => {
+  const root = await temporaryDirectory();
+  const dataDirectory = path.join(root, "data");
+  const store = await ImportArtifactStore.open({ dataDirectory });
+  const token = randomUUID();
+  const originalLink = fs.link.bind(fs);
+  vi.spyOn(fs, "link").mockImplementation(async (source, destination) => {
+    if (path.basename(String(destination)) === "evolution.json") {
+      throw Object.assign(new Error("simulated link failure"), {
+        code: "EIO",
+      });
+    }
+    return originalLink(source, destination);
+  });
+
+  await expect(
+    store.publishHistoryArtifacts(
+      token,
+      historyCityModel,
+      minimalEvolutionBundle(),
+    ),
+  ).rejects.toThrow(/simulated link failure/u);
+
+  const artifactDirectory = path.join(
+    dataDirectory,
+    "artifacts",
+    token,
+  );
+  expect(await fs.readdir(artifactDirectory)).toEqual([]);
+  const restarted = await ImportArtifactStore.open({ dataDirectory });
+  expect(await restarted.statCityModel(token)).toBeUndefined();
+  expect(await restarted.statEvolution(token)).toBeUndefined();
+});
+
+it("rolls back both fixed files when final evolution stage cleanup fails", async () => {
+  const root = await temporaryDirectory();
+  const dataDirectory = path.join(root, "data");
+  const store = await ImportArtifactStore.open({ dataDirectory });
+  const token = randomUUID();
+  const originalUnlink = fs.unlink.bind(fs);
+  const unlink = vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
+    if (
+      path.basename(String(file)).startsWith(".evolution-") &&
+      path.basename(String(file)).endsWith(".tmp")
+    ) {
+      throw Object.assign(new Error("simulated stage cleanup failure"), {
+        code: "EIO",
+      });
+    }
+    return originalUnlink(file);
+  });
+
+  await expect(
+    store.publishHistoryArtifacts(
+      token,
+      historyCityModel,
+      minimalEvolutionBundle(),
+    ),
+  ).rejects.toThrow(/simulated stage cleanup failure/u);
+  const artifactDirectory = path.join(
+    dataDirectory,
+    "artifacts",
+    token,
+  );
+  expect(await fs.readdir(artifactDirectory)).not.toContain(
+    "city-model.json",
+  );
+  expect(await fs.readdir(artifactDirectory)).not.toContain(
+    "evolution.json",
+  );
+
+  unlink.mockRestore();
+  const restarted = await ImportArtifactStore.open({ dataDirectory });
+  expect(await fs.readdir(artifactDirectory)).toEqual([]);
+  expect(await restarted.statCityModel(token)).toBeUndefined();
+  expect(await restarted.statEvolution(token)).toBeUndefined();
+});
+
+it("rejects noncanonical or oversized persisted evolution artifacts", async () => {
+  const root = await temporaryDirectory();
+  const dataDirectory = path.join(root, "data");
+  const store = await ImportArtifactStore.open({ dataDirectory });
+  const token = randomUUID();
+  const published = await store.publishHistoryArtifacts(
+    token,
+    historyCityModel,
+    minimalEvolutionBundle(),
+  );
+  const evolutionPath = path.join(
+    dataDirectory,
+    "artifacts",
+    token,
+    "evolution.json",
+  );
+  const canonical = await fs.readFile(evolutionPath, "utf8");
+  await fs.writeFile(evolutionPath, `${canonical}\n`, { mode: 0o600 });
+  await expect(
+    store.readEvolution(token, published.evolution),
+  ).rejects.toMatchObject({
+    code: "EVOLUTION_INVALID",
+  });
+
+  await fs.truncate(evolutionPath, IMPORT_EVOLUTION_MAX_BYTES + 1);
+  await expect(store.statEvolution(token)).rejects.toMatchObject({
+    code: "EVOLUTION_TOO_LARGE",
+  });
+  expect(published.evolution.size).toBeLessThan(
+    IMPORT_EVOLUTION_MAX_BYTES,
   );
 });
 

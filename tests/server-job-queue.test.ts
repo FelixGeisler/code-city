@@ -46,6 +46,17 @@ function cityModelResult(token: string = randomUUID()): JobResult {
   });
 }
 
+function historyResult(token: string = randomUUID()): JobResult {
+  return Object.freeze({
+    ...cityModelResult(token),
+    evolution: Object.freeze({
+      artifactUrl: `/api/v1/artifacts/${token}/evolution.json`,
+      size: 123,
+      sha256: "a".repeat(64),
+    }),
+  });
+}
+
 it("validates, persists, and reloads structured task failures", async () => {
   expect(
     () =>
@@ -417,6 +428,33 @@ it("provides the job id and strictly persists a city-model result", async () => 
   expect(Object.isFrozen(reopened.get(queued.id)?.result)).toBe(true);
 });
 
+it("strictly persists and reloads optional evolution artifact metadata", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  const queued = await queue.enqueue(
+    "history-analysis",
+    async ({ id }) => historyResult(id),
+  );
+  const completed = await waitFor(
+    queue,
+    queued.id,
+    ({ state }) => state === "completed",
+  );
+  expect(completed.result).toEqual(historyResult(queued.id));
+  expect(Object.isFrozen(completed.result?.evolution)).toBe(true);
+  await queue.close();
+
+  const reopened = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(reopened);
+  expect(reopened.get(queued.id)?.result).toEqual(
+    historyResult(queued.id),
+  );
+  expect(
+    Object.isFrozen(reopened.get(queued.id)?.result?.evolution),
+  ).toBe(true);
+});
+
 it("captures result primitives once before persistence", async () => {
   const dataDirectory = await temporaryDirectory();
   const queue = await PersistentJobQueue.open({ dataDirectory });
@@ -483,6 +521,35 @@ it("fails without persisting invalid or credential-bearing results", async () =>
     (id) => ({
       ...cityModelResult(id),
       artifactToken: "not-a-token",
+    }),
+    (id) => ({
+      ...historyResult(id),
+      evolution: {
+        ...historyResult(id).evolution,
+        artifactUrl:
+          `/api/v1/artifacts/${randomUUID()}/evolution.json`,
+      },
+    }),
+    (id) => ({
+      ...historyResult(id),
+      evolution: {
+        ...historyResult(id).evolution,
+        sha256: "not-a-digest",
+      },
+    }),
+    (id) => ({
+      ...historyResult(id),
+      evolution: {
+        ...historyResult(id).evolution,
+        size: 512 * 1024 * 1024 + 1,
+      },
+    }),
+    (id) => ({
+      ...historyResult(id),
+      evolution: {
+        ...historyResult(id).evolution,
+        credential: "never-persist-this-secret",
+      },
     }),
     () => {
       const otherId = randomUUID();

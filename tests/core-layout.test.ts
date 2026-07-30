@@ -534,6 +534,75 @@ describe("deterministic city layout", () => {
     }
   });
 
+  it("bounds aggregate packing work across many small evolution districts", () => {
+    const districtCount = 96;
+    const buildingCount = 64;
+    const modules = Array.from({ length: districtCount }, (_, index) => {
+      const suffix = String(index).padStart(3, "0");
+      return {
+        id: `module-${suffix}`,
+        repositoryId: "repo",
+        kind: "unassigned" as const,
+        name: `Module ${suffix}`,
+        path: `src/${suffix}`,
+        solutionIds: [],
+      };
+    });
+    const buildings = modules.flatMap((module) =>
+      Array.from({ length: buildingCount }, (_, index) => {
+        const suffix = String(index).padStart(2, "0");
+        return {
+          repositoryId: "repo",
+          moduleId: module.id,
+          name: `${suffix}.ts`,
+          path: `${module.path}/${suffix}.ts`,
+          language: "typescript" as const,
+          metrics: {
+            sloc: 1,
+            decisionLoad: 0,
+            maximumComplexity: 0,
+            executableUnitCount: 0,
+          },
+        };
+      }),
+    );
+    const boundedInput: CityLayoutInput = {
+      repositories: [{ id: "repo", name: "Repository" }],
+      modules,
+      buildings,
+    };
+    let operations = 0;
+    const result = layoutCity(boundedInput, {}, {
+      packingSearchMode: "bounded",
+      checkpoint: (completed) => {
+        operations += completed;
+      },
+    });
+
+    expect(operations).toBeLessThan(500_000);
+    expect(
+      layoutCity(
+        {
+          repositories: boundedInput.repositories,
+          modules: [...modules].reverse(),
+          buildings: [...buildings].reverse(),
+        },
+        {},
+        { packingSearchMode: "bounded" },
+      ),
+    ).toEqual(result);
+    for (const district of result.districts) {
+      expect(
+        Math.max(district.size.x, district.size.z) /
+          Math.min(district.size.x, district.size.z),
+      ).toBeLessThan(1.25);
+    }
+    expect(
+      Math.max(result.bounds.x, result.bounds.z) /
+        Math.min(result.bounds.x, result.bounds.z),
+    ).toBeLessThan(1.5);
+  });
+
   it("rejects inconsistent and duplicate source facts", () => {
     expect(() =>
       layoutCity({

@@ -548,6 +548,27 @@ test("accepts all remote sources, revisions, profiles, and server field correcti
   await openAuthenticatedWizard(page);
 
   await chooseSource(page, "github-public");
+  const historyToggle = page.locator("#project-import-history-enabled");
+  await expect(historyToggle).toBeVisible();
+  await expect(historyToggle).not.toBeChecked();
+  await expect(
+    page.locator("#project-import-history-options"),
+  ).toBeHidden();
+  await historyToggle.check();
+  await expect(
+    page.locator("#project-import-history-options"),
+  ).toBeVisible();
+  await page
+    .locator("#project-import-history-mode")
+    .selectOption("date-range");
+  await expect(page.locator("#project-import-history-from")).toBeVisible();
+  await page
+    .locator("#project-import-history-mode")
+    .selectOption("tag-range");
+  await expect(
+    page.locator("#project-import-history-oldest-tag"),
+  ).toBeVisible();
+  await historyToggle.uncheck();
   await page
     .locator("#project-import-repository-url")
     .fill(`${PUBLIC_GITHUB_URL}/tree/main`);

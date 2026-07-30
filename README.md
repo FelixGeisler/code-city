@@ -27,10 +27,12 @@ a DNS name, set `CODECITY_ALLOWED_HOSTS` to a comma-separated allowlist before
 starting Compose, for example `raspberrypi.local,codecity.lan`.
 
 `POST /api/v1/imports` queues anonymous public-GitHub, exact-scope credentialed
-GitHub or HTTPS Git, or unselected Generic Git analysis directly through the
-server API. Requests are bounded JSON and must include
+GitHub or HTTPS Git, or Generic Git analysis directly through the server API.
+Requests are bounded JSON and must include
 `X-Code-City-Request: 1`; they return a persistent job URL, and a completed job
-owns one immutable `city-model.json` artifact.
+owns one immutable `city-model.json` artifact. A history import atomically
+publishes an additional immutable `evolution.json` artifact and returns its
+URL, byte size, and SHA-256 digest in `job.result.evolution`.
 Repository URLs, credential-profile selectors, secrets, requested symbolic
 refs, source bytes, diagnostics, and temporary paths are not written to job
 records. The resolved immutable commit SHA may become the generated model's
@@ -51,7 +53,9 @@ The wizard can package a browser-selected local directory, upload a ZIP or
 existing city model, or queue public/private GitHub, Azure DevOps, HTTPS, SSH,
 and scp-style Git imports. Remote imports support the default revision, a
 branch, a tag, or one exact commit, plus optional city identity and bounded
-analysis settings. Directory packaging runs in a cancellable browser worker,
+analysis settings. They can also opt into a bounded first-parent history by
+recent commit count, inclusive UTC date range, or two exact tag names.
+Directory packaging runs in a cancellable browser worker,
 keeps only analyzer inputs and ignore controls, rejects unsafe or colliding
 portable paths, and produces a deterministic, size-bounded ZIP before making
 an upload reservation. The server applies the same snapshot and analyzer
@@ -64,6 +68,63 @@ does not persist the source URL, selected credential profile, revision, token,
 file metadata, repository bytes, or generated model. Closing the dialog or
 browser leaves an accepted server job running; **Cancel import** requests
 server cleanup.
+
+History imports are reproducible from immutable commit SHAs and emit frames in
+oldest-first order. The oldest and newest selected commits are always included;
+`sampleEvery` controls intermediate frames. For example:
+
+```json
+{
+  "source": {
+    "kind": "github",
+    "repositoryUrl": "https://github.com/acme/example"
+  },
+  "history": {
+    "mode": "commit-count",
+    "commitCount": 500,
+    "sampleEvery": 6,
+    "totalDeadlineMs": 1800000
+  }
+}
+```
+
+Date selections use `fromInclusive`, `toInclusive`, and a mandatory
+`maxCommits`; tag selections use unqualified `oldestTagName`,
+`newestTagName`, and a mandatory `maxCommits`. Every request is rejected before
+repository analysis unless its declared bounds can produce at most 500
+traversed commits and 100 sampled frames. Because Git commit timestamps need not
+be monotonic, a date range is accepted only when the first-parent traversal
+reaches the repository root within `maxCommits`; this prevents an older commit
+with an in-range timestamp from being silently omitted. Hard ceilings also
+limit exact tags to 64, commit parents to 64, accumulated changed paths to
+500,000, and retained change data to 16 MiB. Retained change data charges the
+UTF-8 bytes of current and previous path names plus a conservative 128 bytes
+of record overhead for every parsed change. Retained semantic facts are capped
+at 128 MiB, including nested units, import metadata, warnings, strings,
+objects, arrays, references, and conservative copy overhead. Other ceilings
+limit accumulated tree entries to 2,000,000, stable lineages to 100,000, and
+the serialized evolution artifact to 512 MiB. Every runtime JSON string and
+property name in an evolution bundle is limited to 64 KiB of encoded UTF-8.
+The total deadline is at most two hours and covers history analysis, canonical
+evolution preparation and publication, and temporary import cleanup. Lower
+`analysis.timeoutMs` supplies that history deadline only when
+`history.totalDeadlineMs` is omitted; requests that provide both are rejected
+instead of silently ignoring either value. Lower
+per-request bounds are available through
+`maxAggregateChangedPaths`, `maxAggregateChangedPathBytes`,
+`maxAggregateSemanticBytes`, `maxAggregateTreeEntries`, `maxUniqueLineages`,
+`maxEvolutionOutputBytes`, and `totalDeadlineMs`.
+
+The server keeps credential-free semantic facts in a private, versioned,
+bounded cache under `CODECITY_DATA_DIR`; immutable commit SHA, analyzer
+fingerprint, and semantic configuration form the cache key. Interrupted jobs
+can therefore reuse completed commit analyses. Source URLs, credentials,
+symbolic tag names, and author identity are not stored in cache entries or
+evolution artifacts. Presentation identity is excluded from cache keys and
+entries, then attached to the published city frames. Evolution author policy
+`omit-v1` persists no author name, email, ID, or avatar. `GET` and `HEAD`
+`/api/v1/artifacts/<job-id>/evolution.json` use the same inbound authorization
+policy as the city-model artifact and send `Cache-Control: no-store`.
 
 At most four upload reservations and 256 MiB of staged upload data exist at
 once. City models are capped at 128 MiB, ZIPs at 64 MiB, unused reservations
@@ -200,12 +261,13 @@ trusted local dependencies.
 
 The selector, secret, remote URL, requested symbolic ref, and source bytes are
 never written to a job or artifact. The resolved immutable commit SHA may be
-stored as the generated model's default version. Existing anonymous GitHub and
-unselected Generic Git behavior are unchanged. The Compose file forwards the
-two configuration values but deliberately does not mount a host manifest or
-secret; operators must provide a private mount explicitly. Never place profile
-secrets in Compose environment values, Git configuration, a remote URL, or the
-repository.
+stored as the generated model's default version. Anonymous GitHub snapshot
+imports remain archive-based; history imports use the installed Git backend so
+its pinned rename behavior and version can be recorded in provenance. The
+Compose file forwards the two configuration values but deliberately does not
+mount a host manifest or secret; operators must provide a private mount
+explicitly. Never place profile secrets in Compose environment values, Git
+configuration, a remote URL, or the repository.
 
 Authorization protects credential use but does not encrypt the bearer or
 session capability in transit. `CODECITY_PUBLIC_ORIGIN` therefore requires
@@ -249,7 +311,10 @@ On Windows/IIS, enabled origins also require
 workspace ACL and inherited child ACLs are limited to the service identity and
 trusted administrators and that canonical ancestors prevent untrusted rename,
 delete, and delete-child access; Code City cannot verify or establish those ACL
-properties.
+properties. Every history import, including anonymous GitHub history, uses the
+installed Git backend and therefore requires the same Windows trust assertion.
+An anonymous GitHub snapshot without `history` remains archive-based and does
+not require it.
 
 ## Product idea
 
