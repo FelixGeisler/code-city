@@ -114,6 +114,12 @@ and direct-child secret files:
 ```
 
 The manifest and one-line UTF-8 secret files must share one private directory.
+That credential directory and the viewer asset root must be canonically
+disjoint in both directions; startup rejects overlap before viewer assets are
+collected or served. The asset collector also verifies the opened directory
+and file identities during traversal, rejecting bind-mount, hard-link, reparse,
+or rename aliases to the credential directory, manifest, or secrets before
+reading file bodies.
 On POSIX the directory must be owned by the service identity with mode `0700`;
 every file must be owned by it, regular, non-linked, and mode `0400` or `0600`.
 Canonical paths and file identities are checked around bounded reads. On

@@ -1937,9 +1937,18 @@ export async function startCodeCityServer(
   let assets: ReadonlyMap<string, ViewerAsset>;
   let artifacts: ImportArtifactStore;
   let jobs: PersistentJobQueue;
+  const viewerRoot =
+    options.viewerRoot ?? productionViewerRoot();
   try {
+    await credentialProfiles.assertViewerRootIsSeparate(viewerRoot);
     assets = await collectViewerAssets(
-      options.viewerRoot ?? productionViewerRoot(),
+      viewerRoot,
+      credentialProfiles.configured
+        ? {
+            guard: (entry) =>
+              credentialProfiles.assertViewerAssetEntryIsSeparate(entry),
+          }
+        : {},
     );
     artifacts = await ImportArtifactStore.open({
       dataDirectory: options.dataDirectory,

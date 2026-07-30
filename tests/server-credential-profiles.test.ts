@@ -11,6 +11,9 @@ import {
 } from "vitest";
 
 import {
+  collectViewerAssets,
+} from "../apps/cli/src/open-server.js";
+import {
   CredentialProfileRegistry,
   type CredentialProfileRegistryOptions,
 } from "../apps/server/src/credential-profiles.js";
@@ -155,11 +158,12 @@ function request(
 
 async function serverFixture(
   profiles: readonly ManifestProfile[],
+  secrets?: Readonly<Record<string, string | Buffer>>,
 ): Promise<{
   readonly server: CodeCityServerHandle;
   readonly profilesFile: string;
 }> {
-  const fixture = await credentialFixture(profiles);
+  const fixture = await credentialFixture(profiles, secrets);
   const viewerRoot = path.join(fixture.root, "viewer");
   await fs.mkdir(viewerRoot);
   await fs.writeFile(
@@ -525,18 +529,117 @@ describe("credential profile registry", () => {
     });
     expect(trusted.size).toBe(1);
   });
-});
 
-describe("credential profile server integration", () => {
-  it("serves an authenticated, cache-free, redacted GET and HEAD projection", async () => {
-    const { server } = await serverFixture([
+  it("rejects manifest and secret file aliases before asset reads", async () => {
+    const fixture = await credentialFixture([
       bearerProfile(
-        "github-profile",
+        "alias-profile",
         "github",
         ["https://github.com/Example/Repository"],
       ),
     ]);
+    const registry = await CredentialProfileRegistry.open(
+      registryOptions(fixture.profilesFile),
+    );
+    for (const source of [
+      fixture.profilesFile,
+      path.join(fixture.directory, "shared.secret"),
+    ]) {
+      const viewerRoot = path.join(
+        fixture.root,
+        `viewer-${path.basename(source)}`,
+      );
+      await fs.mkdir(viewerRoot);
+      await fs.writeFile(
+        path.join(viewerRoot, "index.html"),
+        "<!doctype html><title>Viewer</title>",
+        "utf8",
+      );
+      await fs.link(source, path.join(viewerRoot, "alias.js"));
+      await expect(
+        collectViewerAssets(viewerRoot, {
+          guard: (entry) =>
+            registry.assertViewerAssetEntryIsSeparate(entry),
+        }),
+      ).rejects.toThrow(/must not overlap or alias viewer assets/iu);
+    }
+    registry.close();
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "detects a viewer-root swap after the guard and before traversal",
+    async () => {
+      const fixture = await credentialFixture([
+        bearerProfile(
+          "swap-profile",
+          "github",
+          ["https://github.com/Example/Repository"],
+        ),
+      ]);
+      const registry = await CredentialProfileRegistry.open(
+        registryOptions(fixture.profilesFile),
+      );
+      const viewerRoot = path.join(fixture.root, "viewer-swap");
+      const originalViewer = path.join(
+        fixture.root,
+        "viewer-swap-original",
+      );
+      await fs.mkdir(viewerRoot);
+      await fs.writeFile(
+        path.join(viewerRoot, "index.html"),
+        "<!doctype html><title>Viewer</title>",
+        "utf8",
+      );
+      let swapped = false;
+      await expect(
+        collectViewerAssets(viewerRoot, {
+          guard: async (entry) => {
+            registry.assertViewerAssetEntryIsSeparate(entry);
+            if (!swapped && entry.kind === "directory") {
+              swapped = true;
+              await fs.rename(viewerRoot, originalViewer);
+              await fs.rename(fixture.directory, viewerRoot);
+            }
+          },
+        }),
+      ).rejects.toThrow(/Production viewer assets are unavailable/iu);
+      expect(swapped).toBe(true);
+      registry.close();
+    },
+  );
+});
+
+describe("credential profile server integration", () => {
+  it("serves an authenticated, cache-free, redacted GET and HEAD projection", async () => {
+    const { server } = await serverFixture(
+      [
+        {
+          ...bearerProfile(
+            "github-profile",
+            "github",
+            ["https://github.com/Example/Repository"],
+          ),
+          authentication: {
+            kind: "bearer",
+            secretFile: "private-token.js",
+          },
+        },
+      ],
+      { "private-token.js": "credential-secret\n" },
+    );
     const url = new URL("/api/v1/imports/capabilities", server.url);
+
+    const anonymousViewer = await request(new URL("/", server.url), {
+      headers: { Host: "codecity.test" },
+    });
+    expect(anonymousViewer.status).toBe(200);
+    expect(anonymousViewer.body).not.toContain("credential-secret");
+    const anonymousSecret = await request(
+      new URL("/credentials/private-token.js", server.url),
+      { headers: { Host: "codecity.test" } },
+    );
+    expect(anonymousSecret.status).toBe(404);
+    expect(anonymousSecret.body).not.toContain("credential-secret");
 
     const unauthorized = await request(url, {
       headers: { Host: "codecity.test" },
@@ -571,6 +674,68 @@ describe("credential profile server integration", () => {
     });
     expect(wrongMethod.status).toBe(405);
     expect(wrongMethod.headers.allow).toBe("GET, HEAD");
+  });
+
+  it("rejects credential and viewer directory overlap in either direction before serving assets", async () => {
+    for (const viewerPlacement of ["ancestor", "descendant"] as const) {
+      const fixture = await credentialFixture(
+        [
+          {
+            ...bearerProfile(
+              "overlap-profile",
+              "github",
+              ["https://github.com/Example/Repository"],
+            ),
+            authentication: {
+              kind: "bearer",
+              secretFile: "public-looking-secret.js",
+            },
+          },
+        ],
+        { "public-looking-secret.js": "credential-secret\n" },
+      );
+      const viewerRoot =
+        viewerPlacement === "ancestor"
+          ? fixture.root
+          : path.join(fixture.directory, "viewer");
+      if (viewerPlacement === "descendant") {
+        await fs.mkdir(viewerRoot);
+      }
+      await fs.writeFile(
+        path.join(viewerRoot, "index.html"),
+        "<!doctype html><title>Viewer</title>",
+        "utf8",
+      );
+      const tokenFile = path.join(
+        fixture.root,
+        `authorization-token-${viewerPlacement}`,
+      );
+      await privateFile(tokenFile, `${AUTHORIZATION_TOKEN}\n`);
+      const dataDirectory = path.join(
+        fixture.root,
+        `data-${viewerPlacement}`,
+      );
+
+      await expect(
+        startCodeCityServer({
+          host: "127.0.0.1",
+          port: 0,
+          dataDirectory,
+          viewerRoot,
+          authorization: {
+            tokenFile,
+            publicOrigin: "https://codecity.test",
+            trustWindowsTokenFile: process.platform === "win32",
+          },
+          credentialProfiles: registryOptions(fixture.profilesFile),
+        }),
+      ).rejects.toThrow(
+        /credential directory must not overlap the viewer asset directory/iu,
+      );
+      await expect(fs.stat(dataDirectory)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    }
   });
 
   it("fails the inbound-auth prerequisite before profile-file access", async () => {

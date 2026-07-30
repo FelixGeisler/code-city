@@ -13,6 +13,9 @@ import {
   validateGenericGitRepositoryUrl,
   validatePublicGitHubRepositoryUrl,
 } from "../../../packages/analyzer/src/index.js";
+import type {
+  ViewerAssetFilesystemEntry,
+} from "../../cli/src/open-server.js";
 
 import { parseExactImportJsonValue } from "./remote-import.js";
 
@@ -108,6 +111,11 @@ interface ProtectedFileContents {
   readonly status: BigIntStats;
 }
 
+interface ProtectedFileIdentity {
+  readonly canonicalPath: string;
+  readonly status: BigIntStats;
+}
+
 interface CanonicalRepository {
   readonly displayUrl: string;
   readonly key: string;
@@ -143,6 +151,41 @@ function samePath(
     ? normalizedLeft.toLocaleLowerCase("en-US") ===
         normalizedRight.toLocaleLowerCase("en-US")
     : normalizedLeft === normalizedRight;
+}
+
+function pathIsWithin(
+  root: string,
+  candidate: string,
+  platform: NodeJS.Platform,
+): boolean {
+  const normalizedRoot =
+    platform === "win32"
+      ? path.resolve(root).toLocaleLowerCase("en-US")
+      : path.resolve(root);
+  const normalizedCandidate =
+    platform === "win32"
+      ? path.resolve(candidate).toLocaleLowerCase("en-US")
+      : path.resolve(candidate);
+  const relative = path.relative(normalizedRoot, normalizedCandidate);
+  return (
+    relative === "" ||
+    (
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative)
+    )
+  );
+}
+
+function pathsOverlap(
+  left: string,
+  right: string,
+  platform: NodeJS.Platform,
+): boolean {
+  return (
+    pathIsWithin(left, right, platform) ||
+    pathIsWithin(right, left, platform)
+  );
 }
 
 function hasPrivateFileMode(status: BigIntStats): boolean {
@@ -1039,14 +1082,23 @@ export class CredentialProfileRegistry {
   readonly #profiles: ReadonlyMap<string, RegisteredCredentialProfile>;
   readonly #capabilities: readonly CredentialProfileCapability[];
   readonly #configured: boolean;
+  readonly #directory: TrustedDirectory | undefined;
+  readonly #protectedFiles: readonly ProtectedFileIdentity[];
+  readonly #platform: NodeJS.Platform;
   #closed = false;
 
   private constructor(
     profiles: ReadonlyMap<string, RegisteredCredentialProfile>,
     configured: boolean,
+    directory: TrustedDirectory | undefined,
+    protectedFiles: readonly ProtectedFileIdentity[],
+    platform: NodeJS.Platform,
   ) {
     this.#profiles = profiles;
     this.#configured = configured;
+    this.#directory = directory;
+    this.#protectedFiles = protectedFiles;
+    this.#platform = platform;
     this.#capabilities = Object.freeze(
       [...profiles.values()]
         .map((profile) =>
@@ -1078,7 +1130,13 @@ export class CredentialProfileRegistry {
           "CODECITY_TRUST_WINDOWS_CREDENTIAL_FILES requires CODECITY_CREDENTIAL_PROFILES_FILE.",
         );
       }
-      return new CredentialProfileRegistry(new Map(), false);
+      return new CredentialProfileRegistry(
+        new Map(),
+        false,
+        undefined,
+        Object.freeze([]),
+        platform,
+      );
     }
     if (platform === "win32" && !trustWindowsCredentialFiles) {
       throw configurationError(
@@ -1102,6 +1160,12 @@ export class CredentialProfileRegistry {
     } finally {
       manifestFile.bytes.fill(0);
     }
+    const protectedFiles: ProtectedFileIdentity[] = [
+      Object.freeze({
+        canonicalPath: manifestFile.canonicalPath,
+        status: manifestFile.status,
+      }),
+    ];
     const manifestName = path.basename(profilesFile);
     const validatedSecrets = new Set<string>();
     for (const profile of parsedProfiles) {
@@ -1146,6 +1210,10 @@ export class CredentialProfileRegistry {
           );
         }
         validateSecretBytes(secretFileContents.bytes);
+        protectedFiles.push(Object.freeze({
+          canonicalPath: secretFileContents.canonicalPath,
+          status: secretFileContents.status,
+        }));
       } finally {
         secretFileContents.bytes.fill(0);
       }
@@ -1173,7 +1241,13 @@ export class CredentialProfileRegistry {
         }),
       );
     }
-    return new CredentialProfileRegistry(registered, true);
+    return new CredentialProfileRegistry(
+      registered,
+      true,
+      directory,
+      Object.freeze(protectedFiles),
+      platform,
+    );
   }
 
   public get configured(): boolean {
@@ -1186,6 +1260,84 @@ export class CredentialProfileRegistry {
 
   public capabilities(): readonly CredentialProfileCapability[] {
     return this.#closed ? EMPTY_CAPABILITIES : this.#capabilities;
+  }
+
+  public async assertViewerRootIsSeparate(
+    requestedViewerRoot: string,
+  ): Promise<void> {
+    if (this.#closed || this.#directory === undefined) return;
+    let canonicalViewerRoot: string;
+    try {
+      canonicalViewerRoot = await fs.realpath(
+        path.resolve(requestedViewerRoot),
+      );
+      await assertTrustedDirectory(this.#directory, this.#platform);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.startsWith("Credential profile configuration")
+      ) {
+        throw error;
+      }
+      throw configurationError(
+        "the viewer asset directory could not be checked safely.",
+      );
+    }
+    if (
+      pathsOverlap(
+        this.#directory.canonicalPath,
+        canonicalViewerRoot,
+        this.#platform,
+      )
+    ) {
+      throw configurationError(
+        "the credential directory must not overlap the viewer asset directory.",
+      );
+    }
+  }
+
+  public assertViewerAssetEntryIsSeparate(
+    entry: ViewerAssetFilesystemEntry,
+  ): void {
+    if (this.#closed || this.#directory === undefined) return;
+    const sameEntryIdentity = (
+      status: BigIntStats,
+    ): boolean =>
+      entry.device === status.dev && entry.inode === status.ino;
+    const overlapsDirectory =
+      (
+        entry.kind === "directory" &&
+        (
+          pathsOverlap(
+            this.#directory.canonicalPath,
+            entry.canonicalPath,
+            this.#platform,
+          ) ||
+          sameEntryIdentity(this.#directory.status)
+        )
+      ) ||
+      (
+        entry.kind === "file" &&
+        pathIsWithin(
+          this.#directory.canonicalPath,
+          entry.canonicalPath,
+          this.#platform,
+        )
+      );
+    const aliasesProtectedFile =
+      entry.kind === "file" &&
+      this.#protectedFiles.some((file) =>
+        samePath(
+          file.canonicalPath,
+          entry.canonicalPath,
+          this.#platform,
+        ) || sameEntryIdentity(file.status),
+      );
+    if (overlapsDirectory || aliasesProtectedFile) {
+      throw configurationError(
+        "the credential directory and files must not overlap or alias viewer assets.",
+      );
+    }
   }
 
   public permits(

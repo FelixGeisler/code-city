@@ -177,7 +177,11 @@ and display label to one provider, exact repository scopes, and a direct-child
 secret basename. Protected directory, canonical path, stable file identity,
 ownership/mode or explicit Windows ACL-attestation, link-count, UTF-8,
 single-line, count, and byte limits all fail closed. Secret buffers are
-overwritten after validation.
+overwritten after validation. Canonical credential and public viewer roots
+must be disjoint; overlap fails before the viewer asset collector can retain
+or expose credential files. The collector additionally guards the canonical
+path and filesystem identity it actually opens, revalidates the traversal
+roots, and rejects directory, manifest, or secret aliases before body reads.
 
 The import capability response is an authenticated, no-store redacted
 projection, not a credential oracle: only ID, label, and provider cross the

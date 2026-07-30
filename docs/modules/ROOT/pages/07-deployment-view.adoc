@@ -50,6 +50,11 @@ process-owned, single-link regular files with mode `0400` or `0600`. Windows
 requires equivalent private ACLs and protected canonical ancestry plus
 `CODECITY_TRUST_WINDOWS_CREDENTIAL_FILES=1`. Reads are size-bounded and verify
 canonical path and file identity before, during, and after opening.
+The canonical credential directory and viewer asset root must not contain one
+another; startup rejects either overlap before collecting public viewer assets.
+The collector binds this exclusion to opened directory and file identities,
+revalidates the root and parent during traversal, and rejects mount, hard-link,
+reparse, or rename aliases before reading asset bodies.
 
 Profiles allow only `github`, `azure-devops`, or `generic-https` and enumerate
 exact repositories. GitHub repository identity is case-insensitive after its

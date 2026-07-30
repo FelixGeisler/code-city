@@ -1,4 +1,9 @@
-import { promises as fs } from "node:fs";
+import {
+  constants,
+  promises as fs,
+  type BigIntStats,
+} from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import http, {
   type IncomingMessage,
   type ServerResponse,
@@ -45,6 +50,20 @@ export interface ViewerAsset {
   readonly contentType?: string;
 }
 
+export interface ViewerAssetFilesystemEntry {
+  readonly kind: "directory" | "file";
+  readonly path: string;
+  readonly canonicalPath: string;
+  readonly device: bigint;
+  readonly inode: bigint;
+}
+
+export interface CollectViewerAssetsOptions {
+  readonly guard?: (
+    entry: ViewerAssetFilesystemEntry,
+  ) => void | Promise<void>;
+}
+
 export interface LocalOpenServerOptions {
   readonly roots: readonly string[];
   readonly port?: number;
@@ -82,80 +101,267 @@ function isWithin(root: string, candidate: string): boolean {
   );
 }
 
-export async function collectViewerAssets(
-  requestedRoot: string,
-): Promise<ReadonlyMap<string, ViewerAsset>> {
+interface OpenedViewerEntry {
+  readonly kind: "directory" | "file";
+  readonly path: string;
+  readonly canonicalPath: string;
+  readonly status: BigIntStats;
+  readonly handle: FileHandle;
+}
+
+class ViewerAssetGuardFailure {
+  public constructor(readonly reason: unknown) {}
+}
+
+function sameFilesystemIdentity(
+  left: BigIntStats,
+  right: BigIntStats,
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function sameFilesystemSnapshot(
+  left: BigIntStats,
+  right: BigIntStats,
+): boolean {
+  return (
+    sameFilesystemIdentity(left, right) &&
+    left.mode === right.mode &&
+    left.nlink === right.nlink &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+function sameCanonicalPath(left: string, right: string): boolean {
+  const normalizedLeft = path.resolve(left);
+  const normalizedRight = path.resolve(right);
+  return process.platform === "win32"
+    ? normalizedLeft.toLocaleLowerCase("en-US") ===
+        normalizedRight.toLocaleLowerCase("en-US")
+    : normalizedLeft === normalizedRight;
+}
+
+function viewerEntryKind(
+  status: BigIntStats,
+): "directory" | "file" | undefined {
+  if (status.isDirectory()) return "directory";
+  if (status.isFile()) return "file";
+  return undefined;
+}
+
+async function openViewerEntry(
+  candidate: string,
+  requiredKind: "directory" | "file" | undefined,
+  canonicalRoot: string | undefined,
+  requireReliableIdentity: boolean,
+): Promise<OpenedViewerEntry> {
+  const before = await fs.lstat(candidate, { bigint: true });
+  const kind = viewerEntryKind(before);
+  if (
+    kind === undefined ||
+    kind !== (requiredKind ?? kind) ||
+    before.isSymbolicLink()
+  ) {
+    throw new Error();
+  }
+  const canonicalBefore = await fs.realpath(candidate);
+  if (
+    canonicalRoot !== undefined &&
+    !isWithin(canonicalRoot, canonicalBefore)
+  ) {
+    throw new Error();
+  }
+  const flags =
+    constants.O_RDONLY |
+    (constants.O_NOFOLLOW ?? 0) |
+    (constants.O_NONBLOCK ?? 0) |
+    (kind === "directory" ? (constants.O_DIRECTORY ?? 0) : 0);
+  const handle = await fs.open(candidate, flags);
   try {
-    const absoluteRoot = path.resolve(requestedRoot);
-    const rootStatus = await fs.lstat(absoluteRoot);
-    if (!rootStatus.isDirectory() || rootStatus.isSymbolicLink()) {
+    const opened = await handle.stat({ bigint: true });
+    const after = await fs.lstat(candidate, { bigint: true });
+    const canonicalAfter = await fs.realpath(candidate);
+    if (
+      viewerEntryKind(opened) !== kind ||
+      viewerEntryKind(after) !== kind ||
+      after.isSymbolicLink() ||
+      !sameFilesystemSnapshot(before, opened) ||
+      !sameFilesystemSnapshot(opened, after) ||
+      !sameCanonicalPath(canonicalBefore, canonicalAfter) ||
+      (
+        requireReliableIdentity &&
+        opened.dev === 0n &&
+        opened.ino === 0n
+      )
+    ) {
       throw new Error();
     }
-    const root = await fs.realpath(absoluteRoot);
-    const assets = new Map<string, ViewerAsset>();
+    return {
+      kind,
+      path: candidate,
+      canonicalPath: canonicalAfter,
+      status: opened,
+      handle,
+    };
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+async function assertViewerEntryStable(
+  entry: OpenedViewerEntry,
+): Promise<void> {
+  const opened = await entry.handle.stat({ bigint: true });
+  const current = await fs.lstat(entry.path, { bigint: true });
+  const canonical = await fs.realpath(entry.path);
+  if (
+    viewerEntryKind(opened) !== entry.kind ||
+    viewerEntryKind(current) !== entry.kind ||
+    current.isSymbolicLink() ||
+    !sameFilesystemSnapshot(entry.status, opened) ||
+    !sameFilesystemSnapshot(opened, current) ||
+    !sameCanonicalPath(entry.canonicalPath, canonical)
+  ) {
+    throw new Error();
+  }
+}
+
+async function applyViewerAssetGuard(
+  guard: CollectViewerAssetsOptions["guard"],
+  entry: OpenedViewerEntry,
+): Promise<void> {
+  if (guard === undefined) return;
+  try {
+    await guard(Object.freeze({
+      kind: entry.kind,
+      path: entry.path,
+      canonicalPath: entry.canonicalPath,
+      device: entry.status.dev,
+      inode: entry.status.ino,
+    }));
+  } catch (error) {
+    throw new ViewerAssetGuardFailure(error);
+  }
+}
+
+export async function collectViewerAssets(
+  requestedRoot: string,
+  options: CollectViewerAssetsOptions = {},
+): Promise<ReadonlyMap<string, ViewerAsset>> {
+  let rootEntry: OpenedViewerEntry | undefined;
+  const assets = new Map<string, ViewerAsset>();
+  try {
+    const absoluteRoot = path.resolve(requestedRoot);
+    rootEntry = await openViewerEntry(
+      absoluteRoot,
+      "directory",
+      undefined,
+      options.guard !== undefined,
+    );
+    const root = rootEntry.canonicalPath;
     let totalBytes = 0;
     let visitedEntries = 0;
 
-    async function visit(directory: string, relativeDirectory: string): Promise<void> {
-      const entries = await fs.readdir(directory, { withFileTypes: true });
+    async function assertTraversalStable(
+      directory: OpenedViewerEntry,
+    ): Promise<void> {
+      await assertViewerEntryStable(rootEntry!);
+      if (directory !== rootEntry) {
+        await assertViewerEntryStable(directory);
+      }
+    }
+
+    async function visit(
+      directory: OpenedViewerEntry,
+      relativeDirectory: string,
+    ): Promise<void> {
+      await applyViewerAssetGuard(options.guard, directory);
+      await assertTraversalStable(directory);
+      const entries = await fs.readdir(directory.path, {
+        withFileTypes: true,
+      });
+      await assertTraversalStable(directory);
       entries.sort((left, right) =>
         left.name.localeCompare(right.name, "en-US"),
       );
       for (const entry of entries) {
+        await assertTraversalStable(directory);
         visitedEntries += 1;
         if (visitedEntries > MAX_ASSET_FILES) throw new Error();
         if (entry.isSymbolicLink()) throw new Error();
         const relative = relativeDirectory
           ? path.join(relativeDirectory, entry.name)
           : entry.name;
-        const candidate = path.join(directory, entry.name);
-        if (entry.isDirectory()) {
-          await visit(candidate, relative);
-          continue;
-        }
-        if (!entry.isFile()) throw new Error();
-        if (assets.size >= MAX_ASSET_FILES) throw new Error();
-        const status = await fs.lstat(candidate);
-        const real = await fs.realpath(candidate);
-        if (
-          !status.isFile() ||
-          status.isSymbolicLink() ||
-          !isWithin(root, real)
-        ) {
-          throw new Error();
-        }
-        if (
-          !Number.isSafeInteger(status.size) ||
-          status.size < 0 ||
-          status.size > MAX_ASSET_BYTES - totalBytes
-        ) {
-          throw new Error();
-        }
-        const body = await fs.readFile(real);
-        if (body.byteLength !== status.size) throw new Error();
-        totalBytes += body.byteLength;
-        if (totalBytes > MAX_ASSET_BYTES) throw new Error();
-        const requestPath = `/${relative.split(path.sep).join("/")}`;
-        const contentType = MIME_TYPES.get(
-          path.extname(entry.name).toLocaleLowerCase("en-US"),
+        const candidate = path.join(directory.path, entry.name);
+        const opened = await openViewerEntry(
+          candidate,
+          undefined,
+          root,
+          options.guard !== undefined,
         );
-        assets.set(requestPath, {
-          body,
-          ...(contentType === undefined ? {} : { contentType }),
-        });
+        try {
+          if (opened.kind === "directory") {
+            await visit(opened, relative);
+            continue;
+          }
+          if (assets.size >= MAX_ASSET_FILES) throw new Error();
+          await applyViewerAssetGuard(options.guard, opened);
+          await assertTraversalStable(directory);
+          await assertViewerEntryStable(opened);
+          const size = Number(opened.status.size);
+          if (
+            !Number.isSafeInteger(size) ||
+            size < 0 ||
+            size > MAX_ASSET_BYTES - totalBytes
+          ) {
+            throw new Error();
+          }
+          let body: Buffer | undefined;
+          try {
+            body = await opened.handle.readFile();
+            await assertViewerEntryStable(opened);
+            await assertTraversalStable(directory);
+            if (body.byteLength !== size) throw new Error();
+            totalBytes += body.byteLength;
+            if (totalBytes > MAX_ASSET_BYTES) throw new Error();
+            const requestPath =
+              `/${relative.split(path.sep).join("/")}`;
+            const contentType = MIME_TYPES.get(
+              path.extname(entry.name).toLocaleLowerCase("en-US"),
+            );
+            assets.set(requestPath, {
+              body,
+              ...(contentType === undefined ? {} : { contentType }),
+            });
+            body = undefined;
+          } finally {
+            body?.fill(0);
+          }
+        } finally {
+          await opened.handle.close().catch(() => undefined);
+        }
       }
+      await assertTraversalStable(directory);
     }
 
-    await visit(root, "");
+    await visit(rootEntry, "");
     const index = assets.get("/index.html");
     if (!index || index.contentType !== MIME_TYPES.get(".html")) {
       throw new Error();
     }
     return assets;
-  } catch {
+  } catch (error) {
+    for (const asset of assets.values()) asset.body.fill(0);
+    assets.clear();
+    if (error instanceof ViewerAssetGuardFailure) throw error.reason;
     throw new Error(
       "Production viewer assets are unavailable. Run 'npm run viewer:build' first.",
     );
+  } finally {
+    await rootEntry?.handle.close().catch(() => undefined);
   }
 }
 
