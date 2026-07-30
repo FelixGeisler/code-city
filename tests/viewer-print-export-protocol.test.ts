@@ -446,6 +446,20 @@ describe("viewer print export protocol", () => {
     });
   });
 
+  it("uses the visible Fit policy labels in recovery guidance", () => {
+    const failedPlan = new Error(
+      "Complete districts do not fit together on one plate at the minimum profile-safe scale 0.4; use fitPolicy 'tile'.",
+    );
+
+    const failure = serializePrintExportError(failedPlan);
+
+    expect(failure.message).toContain(
+      '"Split complete districts (tiled multi-plate export)" under Fit policy',
+    );
+    expect(failure.message).not.toContain("fitPolicy");
+    expect(failure.message).not.toContain("'tile'");
+  });
+
   it("validates fitted bundle preflight, preview, and ZIP responses", () => {
     const prepared = preparePrintPlateBundle({
       format: "3mf",

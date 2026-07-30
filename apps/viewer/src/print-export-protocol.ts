@@ -1021,20 +1021,33 @@ function errorRecord(error: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+export function viewerPrintExportGuidance(message: string): string {
+  return message
+    .replace(
+      "use fitPolicy 'scale' or 'tile'.",
+      'choose "Scale to one plate" or "Split complete districts (tiled multi-plate export)" under Fit policy.',
+    )
+    .replace(
+      "use fitPolicy 'tile'.",
+      'choose "Split complete districts (tiled multi-plate export)" under Fit policy.',
+    );
+}
+
 export function serializePrintExportError(
   error: unknown,
   kind?: PrintExportFailureKind,
 ): PrintExportFailure {
   const candidate = errorRecord(error);
   const issues = stringArray(candidate?.["issues"])
-    ? [...candidate["issues"]]
+    ? candidate["issues"].map(viewerPrintExportGuidance)
     : [];
-  const message =
+  const rawMessage =
     error instanceof Error
       ? error.message
       : typeof error === "string"
         ? error
         : "The print export failed unexpectedly.";
+  const message = viewerPrintExportGuidance(rawMessage);
   const name =
     error instanceof Error
       ? error.name

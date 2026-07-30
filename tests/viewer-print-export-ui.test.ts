@@ -31,6 +31,9 @@ describe("viewer print export UI", () => {
     expect(html).toContain('id="print-scale"');
     expect(html).toContain('id="print-labels"');
     expect(html).toContain('id="print-routes"');
+    expect(html).toMatch(
+      /<option value="tile">\s+Split complete districts \(tiled multi-plate export\)\s+<\/option>/u,
+    );
     expect(html).toContain('id="print-legend-download-enabled"');
     expect(html).toContain('id="print-export-cancel"');
     expect(html).toContain('id="print-calibration-submit"');
