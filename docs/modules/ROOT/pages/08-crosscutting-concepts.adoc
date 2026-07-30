@@ -163,6 +163,25 @@ limits are bounded. Errors omit Git diagnostics, remotes, refs, credentials,
 and temporary paths. The bare repository is removed before source analysis;
 no remote or derived-model cache remains.
 
+The temporary parent is part of the Generic Git trust boundary. Parent,
+workspace, and canonical-ancestor identities are captured with device/inode
+metadata and revalidated around path resolution, measurement, Git use, and
+cleanup. POSIX roots are process-owned mode `0700`; ancestors must be owned by
+root or the process identity and prevent untrusted entry replacement through
+permissions or valid sticky-directory semantics. Zero filesystem identities
+fail closed.
+
+Portable Node APIs cannot prove Windows ACL inheritance or directory
+delete-child rights. Windows therefore has no implicit Generic Git temporary
+parent. `--trusted-workspace-parent` attests that the existing parent's ACL,
+and inherited child ACLs prevent untrusted content reads, writes, and creation.
+It separately attests that the containing directory and canonical ancestor
+entries prevent untrusted rename, delete, and delete-child operations on the
+protected path entries; ancestors may otherwise permit read or traversal.
+Cleanup atomically moves only the captured workspace identity to a private
+quarantine name before recursive removal; mismatched replacements are
+preserved, and interrupted removal retries the same captured quarantine.
+
 The bundled Roslyn helper parses syntax only, receives opaque source IDs over a
 versioned bounded protocol, and runs once per analysis. It never loads a
 solution, project, MSBuild, NuGet, generators, or repository analyzers.

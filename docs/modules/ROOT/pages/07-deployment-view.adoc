@@ -50,3 +50,21 @@ helper, SSH agent, and enterprise certificate configuration. Do not place
 credentials in the remote URL. Configure SSH host keys and the agent for
 non-interactive access first; HTTPS enterprise CAs must already be trusted by
 Git.
+
+On Windows, provision a dedicated workspace directory before using
+`analyze-git`, restrict its ACL and inherited child ACLs to the Code City
+service identity and trusted administrators, and protect its canonical
+directory entry plus every ancestor from untrusted rename, delete, and
+delete-child rights. Then pass it with
+`--trusted-workspace-parent <directory>`. This flag explicitly attests those
+deployment properties; Code City does not create the directory or repair its
+ACL. Ancestors may remain readable or traversable; their protected child entries
+must not be replaceable or removable by untrusted identities. Do not point the
+option at a generally writable `%TEMP%`, shared build directory, or upload
+directory.
+
+On POSIX, an explicit workspace parent must already exist, be owned by the
+effective process user, and have exact mode `0700`. The implicit OS temporary
+directory remains available only when Code City can verify stable filesystem
+identities and a protected canonical ancestry; unsafe environment overrides
+fail closed.

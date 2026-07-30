@@ -59,9 +59,11 @@ npm run cli -- analyze-github https://github.com/owner/repository `
   --ref main `
   --output build\github-city-model.json
 
-# Analyze one advertised branch, tag, or exact commit through installed Git
+# Analyze one advertised branch, tag, or exact commit through installed Git.
+# On Windows, the trusted parent must already exist with the ACL described below.
 npm run cli -- analyze-git https://dev.azure.example/Collection/Project/_git/Repo `
   --ref main `
+  --trusted-workspace-parent C:\CodeCity\presecured-git-workspaces `
   --output build\remote-city-model.json
 
 # Run the browser viewer
@@ -111,6 +113,18 @@ installed Git client and the user's existing credential helper, SSH agent, and
 certificate configuration without storing or printing credentials. It fetches
 one advertised ref into a temporary bare repository, archives one verified
 commit, removes the repository, and enters the same bounded snapshot pipeline.
+On Windows, `--trusted-workspace-parent` is required and names an existing
+pre-secured private directory; the option is a trust assertion, not an ACL
+configuration command. The service identity must exclusively control the
+parent and inherited child ACLs so untrusted identities cannot read, write, or
+create workspace content. The containing directory and canonical ancestor
+entries must prevent untrusted rename, delete, and delete-child operations on
+the protected path entries; those ancestors may otherwise remain readable or
+traversable. Code City never claims that `chmod` establishes Windows privacy.
+On POSIX, an explicitly configured parent must be process-owned mode `0700`;
+the default OS temporary directory is accepted only when stable filesystem
+identities and protected canonical ancestry (including valid sticky-directory
+semantics) can be verified.
 For Azure Pipelines, prefer `checkout: self` with `persistCredentials: false`
 and analyze `$(Build.SourcesDirectory)` locally.
 
