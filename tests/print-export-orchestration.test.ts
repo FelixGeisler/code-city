@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { unzipSync } from "fflate";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runCli } from "../apps/cli/src/main.js";
@@ -14,7 +15,9 @@ import {
 } from "../packages/core/src/index.js";
 import {
   generatePrintExport,
+  preparePrintExport,
   preparePrintPlateBundle,
+  PRINT_LOGO_RELIEF_FALLBACK_WARNING,
   serializePreparedSinglePrintPlateExport,
   STL_INFORMATION_LOSS_WARNING,
 } from "../packages/exporter/src/index.js";
@@ -137,6 +140,78 @@ describe("format-neutral print export orchestration", () => {
     expect(result.preflight.warnings).toContain(
       STL_INFORMATION_LOSS_WARNING,
     );
+  });
+
+  it("emits one fallback warning when a display logo has no printable relief", () => {
+    const result = generatePrintExport({
+      format: "3mf",
+      model: {
+        ...DEMO_MODEL,
+        identity: {
+          ...DEMO_MODEL.identity!,
+          logo: {
+            relativePath: "assets/logo.svg",
+            format: "svg",
+          },
+        },
+      },
+      profile: createPrusaXLProfile([1, 2, 3, 4, 5]),
+      options,
+    });
+
+    expect(
+      result.preflight.warnings.filter(
+        (warning) => warning === PRINT_LOGO_RELIEF_FALLBACK_WARNING,
+      ),
+    ).toEqual([PRINT_LOGO_RELIEF_FALLBACK_WARNING]);
+  });
+
+  it("feeds identical normalized logo relief geometry to 3MF and STL", () => {
+    const model = {
+      ...DEMO_MODEL,
+      identity: {
+        ...DEMO_MODEL.identity!,
+        logo: {
+          relativePath: "assets/private-logo-marker.png",
+          format: "png" as const,
+          alt: "private-alt-marker",
+          printRelief: {
+            version: "codecity.logo-relief/1" as const,
+            width: 4,
+            height: 4,
+            mask: "-Z8",
+          },
+        },
+      },
+    };
+    const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
+    const relief = (format: "3mf" | "stl") =>
+      preparePrintExport({
+        format,
+        model,
+        profile,
+        options,
+      }).artifacts.city.parts
+        .flatMap(({ primitives }) => primitives)
+        .filter(({ id }) => id.startsWith("identity-relief:logo:"))
+        .map(({ id, bounds }) => ({ id, bounds }));
+
+    expect(relief("stl")).toEqual(relief("3mf"));
+    for (const format of ["3mf", "stl"] as const) {
+      const request = { format, model, profile, options };
+      const first = generatePrintExport(request).artifact.bytes;
+      const second = generatePrintExport(request).artifact.bytes;
+      expect(first).toEqual(second);
+      const serialized =
+        format === "3mf"
+          ? Object.values(unzipSync(first))
+              .map((entry) => new TextDecoder().decode(entry))
+              .join("\n")
+          : new TextDecoder().decode(first);
+      expect(serialized).not.toContain("private-logo-marker");
+      expect(serialized).not.toContain("private-alt-marker");
+      expect(serialized).not.toContain("-Z8");
+    }
   });
 
   it.each(profileCases())(

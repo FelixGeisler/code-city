@@ -2,10 +2,14 @@ import type {
   CityBuilding,
   CityDistrict,
   CityIdentityPanel,
+  IdentityLogoPrintRelief,
   CityModel,
   SemanticGroup,
   Vector3,
 } from "../../core/src/model.js";
+import {
+  decodeIdentityLogoPrintReliefMask,
+} from "../../core/src/logo-relief.js";
 import {
   assignBuildingPrintCodes,
   assignDistrictPrintCodes,
@@ -207,6 +211,7 @@ export interface PrintableCityArtifacts {
   readonly legend: PrintLegend;
   readonly labels: PrintLabelReport;
   readonly routes: PrintRouteReport;
+  readonly warnings: readonly string[];
   /** One exact outcome per printable aggregate member; self-edges are excluded. */
   readonly routeOutcomes: readonly PrintRouteOutcome[];
 }
@@ -255,6 +260,9 @@ const KIND_ORDER: Readonly<Record<PrintPrimitiveKind, number>> = Object.freeze({
 });
 
 const MINIMUM_DEMO_RELIEF_FEATURE = 0.8;
+const MAXIMUM_LOGO_RELIEF_RECTANGLES = 256;
+export const PRINT_LOGO_RELIEF_FALLBACK_WARNING =
+  "The requested logo could not be simplified safely for this printer profile; the fixed Code City icon was used.";
 const EPSILON = 1e-9;
 
 function compare(left: string, right: string): number {
@@ -1303,6 +1311,221 @@ function skylineReliefPrimitives(
   });
 }
 
+interface LogoMaskRectangle {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+function reliefPixels(
+  relief: IdentityLogoPrintRelief,
+): Uint8Array {
+  const bytes = decodeIdentityLogoPrintReliefMask(relief);
+  const pixels = new Uint8Array(relief.width * relief.height);
+  for (let index = 0; index < pixels.length; index += 1) {
+    if ((bytes[Math.floor(index / 8)]! & (0x80 >> (index % 8))) !== 0) {
+      pixels[index] = 1;
+    }
+  }
+  return pixels;
+}
+
+function resampleLogoMask(
+  relief: IdentityLogoPrintRelief,
+  width: number,
+  height: number,
+): Uint8Array {
+  const source = reliefPixels(relief);
+  const result = new Uint8Array(width * height);
+  for (let y = 0; y < height; y += 1) {
+    const sourceY0 = (y * relief.height) / height;
+    const sourceY1 = ((y + 1) * relief.height) / height;
+    for (let x = 0; x < width; x += 1) {
+      const sourceX0 = (x * relief.width) / width;
+      const sourceX1 = ((x + 1) * relief.width) / width;
+      let coveredArea = 0;
+      for (
+        let sourceY = Math.floor(sourceY0);
+        sourceY < Math.ceil(sourceY1);
+        sourceY += 1
+      ) {
+        const overlapY =
+          Math.min(sourceY + 1, sourceY1) -
+          Math.max(sourceY, sourceY0);
+        for (
+          let sourceX = Math.floor(sourceX0);
+          sourceX < Math.ceil(sourceX1);
+          sourceX += 1
+        ) {
+          if (
+            source[sourceY * relief.width + sourceX] === 0
+          ) {
+            continue;
+          }
+          const overlapX =
+            Math.min(sourceX + 1, sourceX1) -
+            Math.max(sourceX, sourceX0);
+          coveredArea += overlapX * overlapY;
+        }
+      }
+      const area = (sourceX1 - sourceX0) * (sourceY1 - sourceY0);
+      if (coveredArea * 2 >= area) result[y * width + x] = 1;
+    }
+  }
+  return result;
+}
+
+function mergedLogoRectangles(
+  pixels: Uint8Array,
+  width: number,
+  height: number,
+): readonly LogoMaskRectangle[] {
+  const completed: LogoMaskRectangle[] = [];
+  let active = new Map<string, LogoMaskRectangle>();
+  for (let y = 0; y < height; y += 1) {
+    const runs: Array<{ readonly x: number; readonly width: number }> = [];
+    let x = 0;
+    while (x < width) {
+      if (pixels[y * width + x] === 0) {
+        x += 1;
+        continue;
+      }
+      const start = x;
+      while (x < width && pixels[y * width + x] !== 0) x += 1;
+      runs.push({ x: start, width: x - start });
+    }
+    const next = new Map<string, LogoMaskRectangle>();
+    for (const run of runs) {
+      const key = `${run.x}:${run.width}`;
+      const previous = active.get(key);
+      next.set(
+        key,
+        previous === undefined
+          ? { x: run.x, y, width: run.width, height: 1 }
+          : { ...previous, height: previous.height + 1 },
+      );
+    }
+    for (const [key, rectangle] of active) {
+      if (!next.has(key)) completed.push(rectangle);
+    }
+    active = next;
+  }
+  completed.push(...active.values());
+  return completed.sort(
+    (left, right) =>
+      left.y - right.y ||
+      left.x - right.x ||
+      left.height - right.height ||
+      left.width - right.width,
+  );
+}
+
+function simplifiedLogoMask(
+  relief: IdentityLogoPrintRelief,
+  maximumWidth: number,
+  maximumHeight: number,
+):
+  | {
+      readonly width: number;
+      readonly height: number;
+      readonly rectangles: readonly LogoMaskRectangle[];
+    }
+  | undefined {
+  const initialScale = Math.min(
+    1,
+    maximumWidth / relief.width,
+    maximumHeight / relief.height,
+  );
+  let width = Math.max(1, Math.floor(relief.width * initialScale));
+  let height = Math.max(1, Math.floor(relief.height * initialScale));
+  const seen = new Set<string>();
+  while (width >= 1 && height >= 1) {
+    const key = `${width}:${height}`;
+    if (seen.has(key)) break;
+    seen.add(key);
+    const pixels = resampleLogoMask(relief, width, height);
+    const rectangles = mergedLogoRectangles(pixels, width, height);
+    if (
+      rectangles.length > 0 &&
+      rectangles.length <= MAXIMUM_LOGO_RELIEF_RECTANGLES
+    ) {
+      return { width, height, rectangles };
+    }
+    if (width === 1 && height === 1) break;
+    const scale = Math.min(
+      width === 1 ? 1 : (width - 1) / width,
+      height === 1 ? 1 : (height - 1) / height,
+    );
+    width = Math.max(1, Math.floor(width * scale));
+    height = Math.max(1, Math.floor(height * scale));
+  }
+  return undefined;
+}
+
+function logoReliefPrimitives(
+  relief: IdentityLogoPrintRelief,
+  layout: PlaqueLayout,
+  semanticGroupId: string,
+  channelId: string,
+): readonly PrintPrimitive[] | undefined {
+  const availableHeight = layout.body.size.z - layout.margin * 2;
+  const maximumWidth = Math.floor(
+    layout.iconWidth / layout.featureSize,
+  );
+  const maximumHeight = Math.floor(
+    availableHeight / layout.featureSize,
+  );
+  if (maximumWidth < 1 || maximumHeight < 1) return undefined;
+  const simplified = simplifiedLogoMask(
+    relief,
+    maximumWidth,
+    maximumHeight,
+  );
+  if (simplified === undefined) return undefined;
+  const cellSize = Math.max(
+    layout.featureSize,
+    Math.min(
+      layout.iconWidth / simplified.width,
+      availableHeight / simplified.height,
+    ),
+  );
+  const usedWidth = simplified.width * cellSize;
+  const usedHeight = simplified.height * cellSize;
+  if (
+    usedWidth > layout.iconWidth + EPSILON ||
+    usedHeight > availableHeight + EPSILON
+  ) {
+    return undefined;
+  }
+  const startX =
+    layout.body.minimum.x +
+    layout.margin +
+    (layout.iconWidth - usedWidth) / 2;
+  const topZ =
+    layout.body.maximum.z -
+    layout.margin -
+    (availableHeight - usedHeight) / 2;
+  return simplified.rectangles.map((rectangle, index) => {
+    const minimum = {
+      x: startX + rectangle.x * cellSize,
+      y: layout.body.minimum.y - layout.reliefDepth,
+      z: topZ - (rectangle.y + rectangle.height) * cellSize,
+    };
+    return primitive(
+      `identity-relief:logo:${String(index).padStart(3, "0")}`,
+      "identity-relief",
+      semanticGroupId,
+      channelId,
+      bounds(minimum, {
+        x: minimum.x + rectangle.width * cellSize,
+        y: minimum.y + layout.reliefDepth,
+        z: minimum.z + rectangle.height * cellSize,
+      }),
+    );
+  });
+}
+
 function identityPrimitives(
   model: CityModel,
   transform: CoordinateTransform,
@@ -1312,9 +1535,12 @@ function identityPrimitives(
   title: string,
   version: string | undefined,
   reservation: PrintBounds | undefined,
-): readonly PrintPrimitive[] {
+): {
+  readonly primitives: readonly PrintPrimitive[];
+  readonly logoFallback: boolean;
+} {
   const panel = model.identityPanel;
-  if (!panel) return [];
+  if (!panel) return { primitives: [], logoFallback: false };
   const semanticGroupId = panel.semanticGroupId;
   const channelId = requiredChannel(semanticChannels, semanticGroupId);
   const limits = resolvePrinterGeometryLimits(profile);
@@ -1364,9 +1590,24 @@ function identityPrimitives(
     textStart + (textRegionWidth - layout.titleWidth) / 2;
   const versionStart =
     textStart + (textRegionWidth - layout.versionWidth) / 2;
-  return [
+  const requestedLogo = model.identity?.logo;
+  const logoRelief =
+    requestedLogo?.printRelief === undefined
+      ? undefined
+      : logoReliefPrimitives(
+          requestedLogo.printRelief,
+          layout,
+          semanticGroupId,
+          channelId,
+        );
+  const logoFallback =
+    requestedLogo !== undefined && logoRelief === undefined;
+  return {
+    logoFallback,
+    primitives: [
     body,
-    ...skylineReliefPrimitives(layout, semanticGroupId, channelId),
+    ...(logoRelief ??
+      skylineReliefPrimitives(layout, semanticGroupId, channelId)),
     ...textReliefPrimitives(
       printableTitle,
       "title",
@@ -1385,7 +1626,8 @@ function identityPrimitives(
       semanticGroupId,
       channelId,
     ),
-  ];
+    ],
+  };
 }
 
 function retainedPrintCodes(
@@ -1840,7 +2082,7 @@ export function buildPrintableCityArtifacts(
           transform,
         ),
   );
-  primitives.push(...identityGeometry);
+  primitives.push(...identityGeometry.primitives);
 
   let routeReport: PrintRouteReport = {
     policy: routePolicy,
@@ -1883,7 +2125,7 @@ export function buildPrintableCityArtifacts(
         weight: bundle.weight,
       }));
     const identityObstacle = horizontalEnvelope(
-      identityGeometry.map(({ bounds: item }) => item),
+      identityGeometry.primitives.map(({ bounds: item }) => item),
     );
     const plateNumberObstacles: PrintRouteObstacle[] = primitives
       .filter(({ kind }) => kind === "plate-number")
@@ -2003,6 +2245,9 @@ export function buildPrintableCityArtifacts(
   return {
     city,
     legend,
+    warnings: identityGeometry.logoFallback
+      ? [PRINT_LOGO_RELIEF_FALLBACK_WARNING]
+      : [],
     labels: {
       printedBuildings: [...buildingStatuses.values()].filter(
         ({ status }) => status === "printed",

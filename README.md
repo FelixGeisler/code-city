@@ -343,7 +343,10 @@ The browser and print outputs are generated from the same versioned
 screen. Printer profiles map semantic groups onto any positive number of
 configured tools or material inputs; five is not a core limit. A printable
 identity panel carries the city name, version, and optional SVG/PNG logo
-reference.
+reference. Local analysis may also embed a normalized, one-bit printable relief
+derived from a single bounded logo file beneath an explicitly analyzed root.
+Both 3MF and STL consume that same relief geometry; unsupported or unsafe logos
+fall back to the fixed Code City icon with one sanitized preflight warning.
 
 ## Current development slice
 
@@ -432,7 +435,9 @@ The Demo imports into PrusaSlicer with aligned tool parts. `--routes auto`
 prints capped, aggregated district dependencies; routes default to `off`. The
 private JSON legend maps printed codes to repository-relative paths. Oversized
 cities use profile-safe `--fit scale` or complete-district `--fit tile`;
-arbitrary fonts, custom logos, and slicer settings remain separate.
+arbitrary fonts and slicer settings remain separate. Printable custom logos are
+local-only, must be transparent single-color SVG or PNG silhouettes, and are
+simplified to the selected printer profile's minimum feature size.
 
 ## Local product flow
 

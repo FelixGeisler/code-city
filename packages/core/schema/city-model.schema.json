@@ -414,6 +414,9 @@
         },
         "alt": {
           "$ref": "#/$defs/nonEmptyString"
+        },
+        "printRelief": {
+          "$ref": "#/$defs/logoPrintRelief"
         }
       },
       "allOf": [
@@ -459,6 +462,35 @@
         }
       ],
       "additionalProperties": true
+    },
+    "logoPrintRelief": {
+      "type": "object",
+      "required": [
+        "version",
+        "width",
+        "height",
+        "mask"
+      ],
+      "properties": {
+        "version": {
+          "const": "codecity.logo-relief/1"
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "mask": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$"
+        }
+      },
+      "additionalProperties": false
     },
     "repositoryIdentity": {
       "type": "object",

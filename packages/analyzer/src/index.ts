@@ -34,6 +34,8 @@ export * from "./git-snapshot.js";
 export * from "./github-snapshot.js";
 export * from "./history-selection.js";
 export * from "./local-snapshot.js";
+export * from "./local-logo-relief.js";
+export * from "./logo-relief-converter.js";
 export * from "./roslyn-host.js";
 export * from "./snapshot.js";
 export * from "./typescript-metrics.js";

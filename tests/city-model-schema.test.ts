@@ -62,6 +62,44 @@ describe("CityModel JSON Schema", () => {
     expect(validateCityModel(extended)).toBe(extended);
   });
 
+  it("accepts only the canonical additive logo print-relief contract", () => {
+    const logo = {
+      relativePath: "assets/logo.svg",
+      format: "svg" as const,
+      printRelief: {
+        version: "codecity.logo-relief/1" as const,
+        width: 3,
+        height: 2,
+        mask: "qA",
+      },
+    };
+    const extended = {
+      ...DEMO_MODEL,
+      identity: { ...DEMO_MODEL.identity!, logo },
+    };
+
+    expect(validateSchema(extended), errors()).toBe(true);
+    expect(validateCityModel(extended)).toBe(extended);
+
+    const unknownField = {
+      ...extended,
+      identity: {
+        ...extended.identity,
+        logo: {
+          ...logo,
+          printRelief: {
+            ...logo.printRelief,
+            sourcePath: "forbidden",
+          },
+        },
+      },
+    };
+    expect(validateSchema(unknownField)).toBe(false);
+    expect(() => validateCityModel(unknownField)).toThrow(
+      /unknown or missing fields/u,
+    );
+  });
+
   it("rejects unknown versions and incoherent additive fields", () => {
     expect(
       validateSchema({ ...DEMO_MODEL, schemaVersion: "2.0" }),

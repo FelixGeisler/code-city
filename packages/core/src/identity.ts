@@ -3,6 +3,7 @@ import type {
   IdentityLogo,
   RepositoryIdentity,
 } from "./model.js";
+import { normalizeIdentityLogoPrintRelief } from "./logo-relief.js";
 import { normalizePath } from "./path.js";
 
 function text(value: string, field: string, maximumLength: number): string {
@@ -77,6 +78,13 @@ export function normalizeIdentityLogo(logo: IdentityLogo): IdentityLogo {
     relativePath,
     format: logo.format,
     ...(logo.alt === undefined ? {} : { alt: text(logo.alt, "logo.alt", 160) }),
+    ...(logo.printRelief === undefined
+      ? {}
+      : {
+          printRelief: normalizeIdentityLogoPrintRelief(
+            logo.printRelief,
+          ),
+        }),
   };
 }
 
