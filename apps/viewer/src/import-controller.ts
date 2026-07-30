@@ -895,6 +895,7 @@ export class ImportController {
     controller: AbortController,
     generation: number,
   ): void {
+    this.retryAction = undefined;
     this.activeJob = job;
     this.persistenceAvailable = this.storage.write(job.id);
     this.recoveryFailures = 0;
