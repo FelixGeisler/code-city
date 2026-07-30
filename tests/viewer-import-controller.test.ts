@@ -714,6 +714,69 @@ describe("viewer import controller", () => {
     expect(fixture.controller.state.status).toBe("idle");
   });
 
+  it("does not retry completed-job removal after reauthentication and an artifact-open failure", async () => {
+    const storage = new MemoryJobStorage(JOB_ID);
+    const deleteCompletedJob = vi
+      .fn<ViewerImportApi["deleteCompletedJob"]>()
+      .mockRejectedValue(
+        new ImportApiError("http", "Authorization is required.", {
+          status: 401,
+          code: "authorization-required",
+        }),
+      );
+    const gateway = modelGateway([
+      new Response(JSON.stringify(DEMO_MODEL), {
+        status: 200,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      }),
+      new Response(
+        JSON.stringify({
+          error: { code: "artifact-busy", message: "Busy." },
+        }),
+        {
+          status: 503,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        },
+      ),
+      new Response(JSON.stringify(DEMO_MODEL), {
+        status: 200,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      }),
+    ]);
+    const fixture = controllerFixture({
+      storage,
+      gateway,
+      api: fakeApi({
+        authorizationStatus: async () => AUTHENTICATED,
+        getJob: async () => job("completed"),
+        deleteCompletedJob,
+      }),
+    });
+    fixture.controller.initialize();
+    await settle(16);
+    expect(fixture.controller.state.status).toBe("completed");
+
+    fixture.controller.removeCompleted();
+    await settle();
+    expect(fixture.controller.state).toMatchObject({
+      status: "authorization-required",
+      resumeJobId: JOB_ID,
+    });
+
+    fixture.controller.authenticate("replacement-token");
+    await settle(16);
+    expect(fixture.controller.state).toMatchObject({
+      status: "artifact-failed",
+      job: { id: JOB_ID, state: "completed" },
+    });
+
+    fixture.controller.retry();
+    await settle(16);
+    expect(deleteCompletedJob).toHaveBeenCalledTimes(1);
+    expect(fixture.modelReady).toHaveBeenCalledTimes(2);
+    expect(fixture.controller.state.status).toBe("completed");
+  });
+
   it("keeps a saved job through authorization expiry and resumes after login", async () => {
     const storage = new MemoryJobStorage(JOB_ID);
     const statuses = [UNAUTHENTICATED, AUTHENTICATED];
