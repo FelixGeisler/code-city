@@ -105,7 +105,8 @@ function fakeApi(
     abandonUpload: async () => undefined,
     getJob: async () => job("running"),
     cancelJob: async () => job("cancelled"),
-    deleteCompletedJob: async () => undefined,
+    removeCompletedJob: async () =>
+      job("completed") as ImportJob & { readonly state: "completed" },
     ...overrides,
   };
 }
@@ -622,54 +623,63 @@ describe("viewer import controller", () => {
     expect(fixture.controller.state.status).toBe("completed");
   });
 
-  it("removes a completed saved import and clears recovery state", async () => {
+  it("removes a completed result without reusing cancellation semantics", async () => {
     const storage = new MemoryJobStorage(JOB_ID);
-    let finishDeletion!: () => void;
-    const deletion = new Promise<void>((resolve) => {
-      finishDeletion = resolve;
-    });
-    const deleteCompletedJob = vi.fn(async () => deletion);
+    const cancelJob = vi.fn(async () => job("cancelled"));
+    const logout = vi.fn(async () => undefined);
+    const removeCompletedJob = vi.fn(async () =>
+      job("completed") as ImportJob & { readonly state: "completed" },
+    );
     const fixture = controllerFixture({
       storage,
       api: fakeApi({
         getJob: async () => job("completed"),
-        deleteCompletedJob,
+        cancelJob,
+        logout,
+        removeCompletedJob,
       }),
     });
     fixture.controller.initialize();
     await settle(16);
-    expect(fixture.controller.state.status).toBe("completed");
 
     fixture.controller.removeCompleted();
-    expect(fixture.controller.state).toMatchObject({
-      status: "removing-completed",
-      job: { id: JOB_ID, state: "completed" },
-    });
-    expect(storage.value).toBe(JOB_ID);
-    finishDeletion();
+    expect(fixture.controller.state.status).toBe("removing-result");
+    fixture.controller.logout();
+    expect(fixture.controller.state.status).toBe("removing-result");
+    expect(logout).not.toHaveBeenCalled();
     await settle();
 
-    expect(deleteCompletedJob).toHaveBeenCalledWith(
+    expect(removeCompletedJob).toHaveBeenCalledWith(
       JOB_ID,
       expect.any(AbortSignal),
     );
+    expect(cancelJob).not.toHaveBeenCalled();
     expect(storage.value).toBeUndefined();
     expect(fixture.controller.state.status).toBe("idle");
   });
 
-  it("retains a completed job after deletion failure and retries safely", async () => {
+  it("retains failed removal state, retries, and converges on a missing result", async () => {
     const storage = new MemoryJobStorage(JOB_ID);
-    const deleteCompletedJob = vi
-      .fn<ViewerImportApi["deleteCompletedJob"]>()
+    const removeCompletedJob = vi
+      .fn<ViewerImportApi["removeCompletedJob"]>()
       .mockRejectedValueOnce(
-        new ImportApiError("network", "Removal is temporarily unavailable."),
+        new ImportApiError(
+          "http",
+          "Artifact cleanup did not complete.",
+          { status: 500, code: "job-delete-incomplete" },
+        ),
       )
-      .mockResolvedValueOnce(undefined);
+      .mockRejectedValueOnce(
+        new ImportApiError("http", "Job not found.", {
+          status: 404,
+          code: "job-not-found",
+        }),
+      );
     const fixture = controllerFixture({
       storage,
       api: fakeApi({
         getJob: async () => job("completed"),
-        deleteCompletedJob,
+        removeCompletedJob,
       }),
     });
     fixture.controller.initialize();
@@ -679,29 +689,29 @@ describe("viewer import controller", () => {
     await settle();
     expect(fixture.controller.state).toMatchObject({
       status: "removal-failed",
-      job: { id: JOB_ID },
-      message: "Removal is temporarily unavailable.",
+      job: { id: JOB_ID, state: "completed" },
     });
     expect(storage.value).toBe(JOB_ID);
 
-    fixture.controller.removeCompleted();
+    fixture.controller.retry();
     await settle();
-    expect(deleteCompletedJob).toHaveBeenCalledTimes(2);
+    expect(removeCompletedJob).toHaveBeenCalledTimes(2);
     expect(storage.value).toBeUndefined();
     expect(fixture.controller.state.status).toBe("idle");
   });
 
-  it("treats an already missing completed job as a successful removal", async () => {
+  it("keeps the completed job id when removal authorization expires", async () => {
     const storage = new MemoryJobStorage(JOB_ID);
     const fixture = controllerFixture({
       storage,
       api: fakeApi({
         getJob: async () => job("completed"),
-        deleteCompletedJob: async () => {
-          throw new ImportApiError("http", "Job not found.", {
-            status: 404,
-            code: "job-not-found",
-          });
+        removeCompletedJob: async () => {
+          throw new ImportApiError(
+            "http",
+            "Authorization is required.",
+            { status: 401, code: "authorization-required" },
+          );
         },
       }),
     });
@@ -710,8 +720,76 @@ describe("viewer import controller", () => {
 
     fixture.controller.removeCompleted();
     await settle();
-    expect(storage.value).toBeUndefined();
-    expect(fixture.controller.state.status).toBe("idle");
+    expect(fixture.controller.state).toMatchObject({
+      status: "authorization-required",
+      resumeJobId: JOB_ID,
+    });
+    expect(storage.value).toBe(JOB_ID);
+  });
+
+  it("retries artifact opening instead of stale removal after authorization recovery", async () => {
+    const storage = new MemoryJobStorage(JOB_ID);
+    const removeCompletedJob = vi
+      .fn<ViewerImportApi["removeCompletedJob"]>()
+      .mockRejectedValue(
+        new ImportApiError(
+          "http",
+          "Authorization is required.",
+          { status: 401, code: "authorization-required" },
+        ),
+      );
+    const artifactResponses = [
+      new Response(JSON.stringify(DEMO_MODEL), {
+        status: 200,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      }),
+      new Response(
+        JSON.stringify({
+          error: { code: "artifact-busy", message: "Busy." },
+        }),
+        {
+          status: 503,
+          headers: { "content-type": "application/json; charset=utf-8" },
+        },
+      ),
+      new Response(JSON.stringify(DEMO_MODEL), {
+        status: 200,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      }),
+    ];
+    const loadArtifact = vi.fn(async () => artifactResponses.shift()!);
+    const fixture = controllerFixture({
+      storage,
+      api: fakeApi({
+        authorizationStatus: async () => AUTHENTICATED,
+        getJob: async () => job("completed"),
+        removeCompletedJob,
+      }),
+      gateway: new ViewerLoadGateway({ fetch: loadArtifact }),
+    });
+    fixture.controller.initialize();
+    await settle(16);
+
+    fixture.controller.removeCompleted();
+    await settle();
+    expect(fixture.controller.state).toMatchObject({
+      status: "authorization-required",
+      resumeJobId: JOB_ID,
+    });
+
+    fixture.controller.authenticate("replacement-token");
+    await settle(16);
+    expect(fixture.controller.state).toMatchObject({
+      status: "artifact-failed",
+      job: { id: JOB_ID, state: "completed" },
+    });
+    expect(loadArtifact).toHaveBeenCalledTimes(2);
+
+    fixture.controller.retry();
+    await settle(16);
+    expect(loadArtifact).toHaveBeenCalledTimes(3);
+    expect(removeCompletedJob).toHaveBeenCalledTimes(1);
+    expect(fixture.controller.state.status).toBe("completed");
   });
 
   it("keeps a saved job through authorization expiry and resumes after login", async () => {

@@ -1,17 +1,25 @@
 import { expect, test, type Page } from "@playwright/test";
 import { strToU8, zipSync } from "fflate";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 
-import type {
-  GenericGitAnalysisResult,
-  LocalAnalysisOptions,
-  PublicGitHubAnalysisResult,
+import {
+  GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY,
+  GENERIC_GIT_PRESECURED_WINDOWS_ACL,
+  type GenericGitAnalysisResult,
+  type GenericGitHistoryAnalysisResult,
+  type LocalAnalysisOptions,
+  type PublicGitHubAnalysisResult,
 } from "../../packages/analyzer/src/index.js";
 import type { CityModel } from "../../packages/core/src/model.js";
+import {
+  prepareEvolutionSerialization,
+  serializeEvolutionBundle,
+  type EvolutionBundle,
+} from "../../packages/core/src/index.js";
 import type {
   RemoteImportDependencies,
 } from "../../apps/server/src/remote-import.js";
@@ -37,6 +45,11 @@ const GENERIC_GIT_URL =
   "https://git.example.test/group/repository.git";
 const CANCELLATION_GIT_URL =
   "https://git.example.test/group/cancel.git";
+const HISTORY_COMMIT_COUNT = 37;
+const HISTORY_SAMPLE_EVERY = 4;
+const HISTORY_TIMEOUT_MS = 23_000;
+const HISTORY_TITLE = "History import E2E";
+const HISTORY_VERSION = "history-v1";
 
 interface RemoteInvocation {
   readonly kind: "github" | "git";
@@ -52,6 +65,20 @@ interface RemoteInvocation {
 }
 
 const remoteInvocations: RemoteInvocation[] = [];
+
+type HistoryAnalyzer = NonNullable<
+  RemoteImportDependencies["analyzeGenericGitHistory"]
+>;
+
+interface HistoryInvocation {
+  readonly request: Parameters<HistoryAnalyzer>[0];
+  readonly options: Parameters<HistoryAnalyzer>[1];
+  readonly dependencies: Parameters<HistoryAnalyzer>[2];
+}
+
+const historyInvocations: HistoryInvocation[] = [];
+let historyResultFixture: GenericGitHistoryAnalysisResult;
+let canonicalEvolutionFixture: Uint8Array;
 
 async function privateFile(
   file: string,
@@ -71,6 +98,116 @@ function modelForOptions(options?: LocalAnalysisOptions): CityModel {
       title,
       ...(version === undefined ? {} : { version }),
     },
+  };
+}
+
+function createHistoryAnalysisResult(
+  model: CityModel,
+): GenericGitHistoryAnalysisResult {
+  const repositoryId = model.repositories[0]?.id;
+  if (repositoryId === undefined) {
+    throw new Error("The history E2E fixture requires a repository.");
+  }
+  const fingerprint = `sha256:${"1".repeat(64)}` as const;
+  const historyBackend = {
+    name: "git" as const,
+    version: "2.47.1.windows.2",
+    renamePolicyRevision: "diff-tree-renames-50-myers-v1" as const,
+  };
+  const bundle: EvolutionBundle = {
+    schemaVersion: "1.0",
+    generator: model.generator,
+    authorPolicy: "omit-v1",
+    selection: {
+      mode: "commit-count",
+      traversal: "first-parent",
+      order: "oldest-first",
+      sampleEvery: HISTORY_SAMPLE_EVERY,
+      requestedCommitCount: HISTORY_COMMIT_COUNT,
+      selectedCommitCount: 1,
+      sampledCommitCount: 1,
+      traversedCommitCount: 1,
+      resolvedOldestSha: COMMIT,
+      resolvedNewestSha: COMMIT,
+      sampledCommitShas: [COMMIT],
+    },
+    provenance: {
+      repositoryId,
+      repositoryFingerprint: fingerprint,
+      analyzer: {
+        name: "code-city",
+        version: model.generator.version,
+        fingerprint,
+      },
+      historyBackend,
+      metricConfigurationFingerprint: fingerprint,
+      selectionFingerprint: fingerprint,
+    },
+    baseline: {
+      commit: {
+        index: 0,
+        sha: COMMIT,
+        committedAt: "2026-01-01T00:00:00.000Z",
+        parentShas: [],
+        analyzerVersion: model.generator.version,
+        analysisFingerprint: fingerprint,
+      },
+      model,
+    },
+    deltas: [],
+  };
+  const preparedSerialization =
+    prepareEvolutionSerialization(bundle);
+  const commit = {
+    sha: COMMIT,
+    parents: [] as const,
+    committedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const analysisBounds = {
+    totalDeadlineMs: HISTORY_TIMEOUT_MS,
+    maxAggregateChangedPaths: 500_000,
+    maxAggregateChangedPathBytes: 16 * 1024 * 1024,
+    maxAggregateSemanticBytes: 128 * 1024 * 1024,
+    maxUniqueLineages: 100_000,
+    maxEvolutionOutputBytes: 512 * 1024 * 1024,
+    maxAggregateTreeEntries: 2_000_000,
+  };
+  return {
+    repository: "public",
+    tipSha: COMMIT,
+    transport: "https",
+    historyBackend,
+    selection: {
+      selectedCommits: [commit],
+      sampledCommits: [commit],
+      summary: preparedSerialization.bundle.selection,
+      analysisBounds,
+      requestedTagCount: 0,
+    },
+    model,
+    evolution: {
+      repositoryId,
+      model,
+      bundle: preparedSerialization.bundle,
+      preparedSerialization,
+    },
+    costEstimate: {
+      traversedCommitCount: 1,
+      selectedCommitCount: 1,
+      sampledFrameCount: 1,
+      maximumChangedPathEntries:
+        analysisBounds.maxAggregateChangedPaths,
+      maximumChangedPathBytes:
+        analysisBounds.maxAggregateChangedPathBytes,
+      maximumSemanticBytes:
+        analysisBounds.maxAggregateSemanticBytes,
+      maximumTreeEntries: analysisBounds.maxAggregateTreeEntries,
+      maximumUniqueLineages: analysisBounds.maxUniqueLineages,
+      maximumOutputBytes: analysisBounds.maxEvolutionOutputBytes,
+      totalDeadlineMs: analysisBounds.totalDeadlineMs,
+    },
+    cacheHits: 0,
+    cacheMisses: 1,
   };
 }
 
@@ -166,6 +303,15 @@ const gitAnalyzer: NonNullable<
   };
 };
 
+const historyAnalyzer: HistoryAnalyzer = async (
+  request,
+  options,
+  dependencies,
+): Promise<GenericGitHistoryAnalysisResult> => {
+  historyInvocations.push({ request, options, dependencies });
+  return historyResultFixture;
+};
+
 async function availableLoopbackPort(): Promise<number> {
   const probe = createServer();
   await new Promise<void>((resolve, reject) => {
@@ -225,6 +371,15 @@ test.beforeAll(async () => {
       "utf8",
     ),
   ) as CityModel;
+  historyResultFixture = createHistoryAnalysisResult(
+    modelForOptions({
+      title: HISTORY_TITLE,
+      version: HISTORY_VERSION,
+    }),
+  );
+  canonicalEvolutionFixture = serializeEvolutionBundle(
+    historyResultFixture.evolution.bundle,
+  );
 
   accessToken = randomBytes(32).toString("base64url");
   const tokenFile = path.join(testRoot, "access-token");
@@ -314,6 +469,7 @@ test.beforeAll(async () => {
     importDependencies: {
       analyzePublicGitHubRepository: githubAnalyzer,
       analyzeGenericGitRepository: gitAnalyzer,
+      analyzeGenericGitHistory: historyAnalyzer,
     },
   });
 });
@@ -334,13 +490,11 @@ async function openAuthenticatedWizard(page: Page): Promise<void> {
 
 async function openNextImport(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Import project" }).click();
-  const restart = page.getByRole("button", {
+  const restartButton = page.getByRole("button", {
     name: "Start another import",
-    exact: true,
   });
-  if (await restart.isVisible()) {
-    await restart.click();
-  }
+  await expect(restartButton).toBeVisible();
+  await restartButton.click();
   await expect(page.locator("#project-import-source-title")).toBeVisible();
 }
 
@@ -476,6 +630,301 @@ test("uploads, opens, and restores a city model through the real browser API", a
       localStorage.getItem("code-city.last-import-job.v1"),
     ),
   ).toBeNull();
+});
+
+test("submits bounded history, validates both artifacts, and restores its recent job", async ({
+  page,
+}) => {
+  historyInvocations.length = 0;
+  const browserRequests: {
+    readonly method: string;
+    readonly pathname: string;
+    readonly origin: string;
+  }[] = [];
+  let submittedRequest: unknown;
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    browserRequests.push({
+      method: request.method(),
+      pathname: url.pathname,
+      origin: url.origin,
+    });
+    if (
+      request.method() === "POST" &&
+      url.pathname === "/api/v1/imports"
+    ) {
+      submittedRequest = request.postDataJSON();
+    }
+  });
+
+  await openAuthenticatedWizard(page);
+  await chooseSource(page, "github-public");
+  await page
+    .locator("#project-import-repository-url")
+    .fill(PUBLIC_GITHUB_URL);
+  await page
+    .locator('input[name="project-import-revision"][value="branch"]')
+    .check();
+  await page.locator("#project-import-revision-value").fill("main");
+  await page.locator("#project-import-history-enabled").check();
+  await page
+    .locator("#project-import-history-commit-count")
+    .fill(HISTORY_COMMIT_COUNT.toString());
+  await page
+    .locator("#project-import-history-sample-every")
+    .fill(HISTORY_SAMPLE_EVERY.toString());
+  await expect(
+    page.locator("#project-import-history-frame-help"),
+  ).toHaveText("This range can produce up to 10 animation frames.");
+
+  await continueToOptions(page);
+  await page
+    .locator("#project-import-identity-title")
+    .fill(HISTORY_TITLE);
+  await page
+    .locator("#project-import-identity-version")
+    .fill(HISTORY_VERSION);
+  await page.locator("#project-import-max-files").fill("432");
+  await page.locator("#project-import-max-file-mib").fill("1");
+  await page.locator("#project-import-max-total-mib").fill("3");
+  await page
+    .locator("#project-import-timeout-seconds")
+    .fill((HISTORY_TIMEOUT_MS / 1_000).toString());
+  await continueToReview(page);
+  await expect(page.locator("#project-import-review-source")).toHaveText(
+    "Public GitHub",
+  );
+  await expect(page.locator("#project-import-review-input")).toHaveText(
+    PUBLIC_GITHUB_URL,
+  );
+  await expect(page.locator("#project-import-review-revision")).toHaveText(
+    `branch: main; ${HISTORY_COMMIT_COUNT} recent commits`,
+  );
+
+  const jobId = await startAndWaitForImportedCity(page);
+  await expect(page.locator("#model-name")).toHaveText(HISTORY_TITLE);
+  await expect(page.locator("#status")).toContainText(HISTORY_VERSION);
+
+  expect(submittedRequest).toEqual({
+    source: {
+      kind: "github",
+      repositoryUrl: PUBLIC_GITHUB_URL,
+      revision: { kind: "branch", name: "main" },
+    },
+    history: {
+      mode: "commit-count",
+      commitCount: HISTORY_COMMIT_COUNT,
+      sampleEvery: HISTORY_SAMPLE_EVERY,
+    },
+    identity: {
+      title: HISTORY_TITLE,
+      version: HISTORY_VERSION,
+    },
+    analysis: {
+      maxRetainedFiles: 432,
+      maxFileBytes: 1024 * 1024,
+      maxTotalBytes: 3 * 1024 * 1024,
+      timeoutMs: HISTORY_TIMEOUT_MS,
+    },
+  });
+  expect(historyInvocations).toHaveLength(1);
+  const historyInvocation = historyInvocations[0]!;
+  expect(historyInvocation.request).toEqual({
+    repositoryUrl: PUBLIC_GITHUB_URL,
+    repositoryIdentity: PUBLIC_GITHUB_URL,
+    ref: "refs/heads/main",
+    selection: {
+      mode: "commit-count",
+      commitCount: HISTORY_COMMIT_COUNT,
+      sampleEvery: HISTORY_SAMPLE_EVERY,
+      totalDeadlineMs: HISTORY_TIMEOUT_MS,
+    },
+    signal: expect.any(AbortSignal),
+  });
+  expect(historyInvocation.options).toEqual({
+    identity: {
+      title: HISTORY_TITLE,
+      version: HISTORY_VERSION,
+    },
+    analysisOptions: {
+      maxRetainedFiles: 432,
+      maxFileBytes: 1024 * 1024,
+      maxTotalBytes: 3 * 1024 * 1024,
+    },
+  });
+  expect(historyInvocation.dependencies).toMatchObject({
+    semanticCache: {
+      acquire: expect.any(Function),
+    },
+    git: {
+      isolateCredentials: true,
+      temporaryWorkspaceOptions: {
+        trustedPrivateParent: {
+          directory: expect.any(String),
+          windowsAclProtection:
+            GENERIC_GIT_PRESECURED_WINDOWS_ACL,
+          canonicalAncestryProtection:
+            GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY,
+        },
+      },
+    },
+  });
+
+  const evolutionSha256 = createHash("sha256")
+    .update(canonicalEvolutionFixture)
+    .digest("hex");
+  const expectedResult = {
+    kind: "city-model",
+    artifactToken: jobId,
+    artifactUrl: `/api/v1/artifacts/${jobId}/city-model.json`,
+    evolution: {
+      artifactUrl: `/api/v1/artifacts/${jobId}/evolution.json`,
+      size: canonicalEvolutionFixture.byteLength,
+      sha256: evolutionSha256,
+    },
+  } as const;
+  expect(server.jobs.get(jobId)).toMatchObject({
+    kind: "project-import",
+    state: "completed",
+    progress: { phase: "ready", current: 3, total: 3 },
+    result: expectedResult,
+  });
+
+  const jobResponse = await page.evaluate(async (id) => {
+    const response = await fetch(`/api/v1/jobs/${id}`);
+    return {
+      status: response.status,
+      value: await response.json() as unknown,
+    };
+  }, jobId);
+  expect(jobResponse.status).toBe(200);
+  expect(jobResponse.value).toMatchObject({
+    job: {
+      id: jobId,
+      kind: "project-import",
+      state: "completed",
+      result: expectedResult,
+    },
+  });
+
+  const companionResponse = await page.evaluate(async (artifactUrl) => {
+    const response = await fetch(artifactUrl);
+    return {
+      status: response.status,
+      cacheControl: response.headers.get("cache-control"),
+      contentLength: response.headers.get("content-length"),
+      body: await response.text(),
+    };
+  }, expectedResult.evolution.artifactUrl);
+  expect(companionResponse).toEqual({
+    status: 200,
+    cacheControl: "no-store",
+    contentLength: canonicalEvolutionFixture.byteLength.toString(),
+    body: new TextDecoder().decode(canonicalEvolutionFixture),
+  });
+  const parsedCompanion = JSON.parse(companionResponse.body) as unknown;
+  expect(parsedCompanion).toMatchObject({
+    selection: historyResultFixture.evolution.bundle.selection,
+    baseline: {
+      commit: historyResultFixture.evolution.bundle.baseline.commit,
+      model: {
+        identity: {
+          title: HISTORY_TITLE,
+          version: HISTORY_VERSION,
+        },
+      },
+    },
+  });
+  expect(
+    new TextDecoder().decode(
+      serializeEvolutionBundle(parsedCompanion),
+    ),
+  ).toBe(companionResponse.body);
+
+  const jobPath = `/api/v1/jobs/${jobId}`;
+  const cityPath = expectedResult.artifactUrl;
+  const jobRequestsBeforeReload = browserRequests.filter(
+    ({ method, pathname }) =>
+      method === "GET" && pathname === jobPath,
+  ).length;
+  const cityRequestsBeforeReload = browserRequests.filter(
+    ({ method, pathname }) =>
+      method === "GET" && pathname === cityPath,
+  ).length;
+  expect(jobRequestsBeforeReload).toBeGreaterThan(0);
+  expect(cityRequestsBeforeReload).toBeGreaterThan(0);
+  expect(
+    await page.evaluate(() =>
+      localStorage.getItem("code-city.last-import-job.v1"),
+    ),
+  ).toBe(jobId);
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator("#model-name")).toHaveText(HISTORY_TITLE, {
+    timeout: 30_000,
+  });
+  await expect(page.locator("#model-name")).toHaveAttribute(
+    "title",
+    "Source: Imported project",
+  );
+  await expect(page.locator("#status")).toContainText(HISTORY_VERSION);
+  await expect.poll(
+    () =>
+      browserRequests.filter(
+        ({ method, pathname }) =>
+          method === "GET" && pathname === jobPath,
+      ).length,
+  ).toBeGreaterThan(jobRequestsBeforeReload);
+  await expect.poll(
+    () =>
+      browserRequests.filter(
+        ({ method, pathname }) =>
+          method === "GET" && pathname === cityPath,
+      ).length,
+  ).toBeGreaterThan(cityRequestsBeforeReload);
+  expect(
+    await page.evaluate(() =>
+      localStorage.getItem("code-city.last-import-job.v1"),
+    ),
+  ).toBe(jobId);
+  expect(
+    browserRequests.filter(
+      ({ origin }) => origin !== server.url.origin,
+    ),
+  ).toEqual([]);
+
+  await page.getByRole("button", { name: "Import project" }).click();
+  const removeResultButton = page.getByRole("button", {
+    name: "Remove stored import",
+  });
+  await expect(removeResultButton).toBeVisible();
+  await removeResultButton.click();
+
+  await expect.poll(() => server.jobs.get(jobId)).toBeUndefined();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        localStorage.getItem("code-city.last-import-job.v1"),
+      ),
+    )
+    .toBeNull();
+  const removedResponses = await page.evaluate(
+    async ({ jobUrl, cityUrl, evolutionUrl }) =>
+      await Promise.all(
+        [jobUrl, cityUrl, evolutionUrl].map(async (url) => {
+          const response = await fetch(url);
+          return response.status;
+        }),
+      ),
+    {
+      jobUrl: jobPath,
+      cityUrl: cityPath,
+      evolutionUrl: expectedResult.evolution.artifactUrl,
+    },
+  );
+  expect(removedResponses).toEqual([404, 404, 404]);
+  await expect(page.locator("#model-name")).toHaveText(HISTORY_TITLE);
+  await expect(page.locator("#status")).toContainText(HISTORY_VERSION);
 });
 
 test("imports a browser directory and repository ZIP with identity and analysis options", async ({

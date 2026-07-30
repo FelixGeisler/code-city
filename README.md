@@ -67,7 +67,17 @@ so a queued, running, or completed import can be recovered after refresh. It
 does not persist the source URL, selected credential profile, revision, token,
 file metadata, repository bytes, or generated model. Closing the dialog or
 browser leaves an accepted server job running; **Cancel import** requests
-server cleanup.
+server cancellation.
+
+Completed imports remain on the server until explicitly removed. An
+authenticated `GET /api/v1/jobs` enumerates all retained jobs; for each
+completed `project-import`, send
+`DELETE /api/v1/imports/<job-id>/result` with
+`X-Code-City-Request: 1` to remove its persisted job record, city model, and
+optional evolution companion. API reads and mutations remain `no-store`.
+The wizard's **Remove stored import** action manages the one completed result
+whose opaque UUID is saved in that browser; use the jobs API to enumerate and
+remove older retained results.
 
 History imports are reproducible from immutable commit SHAs and emit frames in
 oldest-first order. The oldest and newest selected commits are always included;

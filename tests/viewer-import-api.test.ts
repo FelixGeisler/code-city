@@ -261,6 +261,51 @@ describe("viewer import API protocol", () => {
     expect(JSON.parse(calls[0]!.init.body as string)).toEqual(request);
   });
 
+  it("keeps cancellation and completed-result removal on distinct requests", async () => {
+    const calls: Array<{
+      readonly input: string | URL;
+      readonly init: RequestInit;
+    }> = [];
+    const deadlines: number[] = [];
+    const responses = [
+      jsonResponse({ job: queuedJob() }),
+      jsonResponse({ deleted: true, job: completedJob() }),
+    ];
+    const client = new ViewerImportApiClient(
+      new URL("https://city.example.test/"),
+      {
+        fetch: async (input, init) => {
+          calls.push({ input, init });
+          return responses.shift()!;
+        },
+        scheduleDeadline: (_callback, milliseconds) => {
+          deadlines.push(milliseconds);
+          return milliseconds;
+        },
+        clearDeadline: () => undefined,
+      },
+    );
+
+    expect(await client.cancelJob(JOB_ID)).toEqual(queuedJob());
+    expect(await client.removeCompletedJob(JOB_ID)).toEqual(
+      completedJob(),
+    );
+    expect(calls.map(({ input }) => input.toString())).toEqual([
+      `https://city.example.test/api/v1/jobs/${JOB_ID}`,
+      `https://city.example.test/api/v1/imports/${JOB_ID}/result`,
+    ]);
+    for (const { init } of calls) {
+      expect(init.method).toBe("DELETE");
+      expect(headersOf(init)).toEqual({
+        "x-code-city-request": "1",
+      });
+    }
+    expect(deadlines).toEqual([
+      11 * 60_000,
+      31 * 60_000,
+    ]);
+  });
+
   it("reserves and uploads a Blob without attempting a forbidden Content-Length header", async () => {
     const request: UploadImportSubmission = {
       source: { kind: "city-model", sizeBytes: 2 },
@@ -309,51 +354,6 @@ describe("viewer import API protocol", () => {
     });
     expect(headersOf(calls[1]!)).not.toHaveProperty("content-length");
     expect(calls[1]!.body).toBe(body);
-  });
-
-  it("deletes a completed job through the protected same-origin endpoint", async () => {
-    const calls: Array<{
-      readonly input: string | URL;
-      readonly init: RequestInit;
-    }> = [];
-    const client = new ViewerImportApiClient(
-      new URL("https://city.example.test/"),
-      {
-        fetch: async (input, init) => {
-          calls.push({ input, init });
-          return jsonResponse({ deleted: true });
-        },
-      },
-    );
-
-    await client.deleteCompletedJob(JOB_ID);
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.input.toString()).toBe(
-      `https://city.example.test/api/v1/jobs/${JOB_ID}`,
-    );
-    expect(calls[0]!.init.method).toBe("DELETE");
-    expect(headersOf(calls[0]!.init)).toEqual({
-      "x-code-city-request": "1",
-    });
-  });
-
-  it("rejects malformed completed-job deletion acknowledgements", async () => {
-    const responses = [
-      jsonResponse({ deleted: false }),
-      jsonResponse({ deleted: true, job: completedJob() }),
-    ];
-    const client = new ViewerImportApiClient(
-      new URL("https://city.example.test/"),
-      { fetch: async () => responses.shift()! },
-    );
-
-    await expect(client.deleteCompletedJob(JOB_ID)).rejects.toThrow(
-      /invalid/u,
-    );
-    await expect(client.deleteCompletedJob(JOB_ID)).rejects.toThrow(
-      /invalid shape/u,
-    );
   });
 
   it("preserves bounded field errors without reflecting malformed error bodies", async () => {
