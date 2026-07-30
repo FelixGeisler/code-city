@@ -553,7 +553,7 @@ describe("viewer project import dialog state", () => {
       "completed",
       "opening-artifact",
       "removal-failed",
-      "removing-completed",
+      "removing-result",
       "terminal",
       "unavailable",
     ] as const) {
@@ -563,7 +563,7 @@ describe("viewer project import dialog state", () => {
     expect(projectImportNavigationLocked("request-failed")).toBe(false);
   });
 
-  it("preserves completed and failed jobs on reopen for explicit lifecycle actions", () => {
+  it("preserves completed results so their removal action remains reachable", () => {
     expect(projectImportShouldResetOnOpen("completed")).toBe(false);
     expect(projectImportShouldResetOnOpen("terminal")).toBe(false);
     expect(projectImportShouldResetOnOpen("artifact-failed")).toBe(false);
@@ -627,14 +627,14 @@ describe("viewer project import dialog state", () => {
         persistenceAvailable: false,
       },
       {
-        status: "removing-completed",
+        status: "removing-result",
         job: completedJob,
         persistenceAvailable: false,
       },
       {
         status: "removal-failed",
         job: completedJob,
-        message: "Could not remove the saved import.",
+        message: "Cleanup failed.",
         persistenceAvailable: false,
       },
       {

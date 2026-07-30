@@ -48,7 +48,10 @@ export interface ViewerImportApi {
   ): Promise<void>;
   getJob(id: string, signal?: AbortSignal): Promise<ImportJob>;
   cancelJob(id: string, signal?: AbortSignal): Promise<ImportJob>;
-  deleteCompletedJob(id: string, signal?: AbortSignal): Promise<void>;
+  removeCompletedJob(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<ImportJob & { readonly state: "completed" }>;
 }
 
 export interface ImportJobStorage {
@@ -200,7 +203,7 @@ export type ImportControllerState =
       readonly persistenceAvailable: boolean;
     }
   | {
-      readonly status: "removing-completed";
+      readonly status: "removing-result";
       readonly job: ImportJob & {
         readonly state: "completed";
       };
@@ -407,7 +410,12 @@ export class ImportController {
 
   public logout(): void {
     this.assertUsable();
-    if (this.currentState.status === "signing-out") return;
+    if (
+      this.currentState.status === "signing-out" ||
+      this.currentState.status === "removing-result"
+    ) {
+      return;
+    }
     if (this.currentState.status === "preparing") {
       this.acceptanceCancellationRequested = false;
       this.signOutAfterAcceptanceRequested = true;
@@ -657,18 +665,22 @@ export class ImportController {
 
   public removeCompleted(): void {
     this.assertUsable();
-    const job = this.activeJob;
-    if (job === undefined || !isCompletedJob(job)) {
-      throw new Error("A completed import job is required for removal.");
+    const job =
+      this.activeJob !== undefined &&
+      isCompletedJob(this.activeJob)
+        ? this.activeJob
+        : undefined;
+    if (job === undefined) {
+      throw new Error("No completed import result is available.");
     }
     const { controller, generation } = this.beginOperation();
-    this.retryAction = undefined;
+    this.retryAction = () => this.removeCompleted();
     this.updateState({
-      status: "removing-completed",
+      status: "removing-result",
       job,
       persistenceAvailable: this.persistenceAvailable,
     });
-    void this.api.deleteCompletedJob(job.id, controller.signal).then(
+    void this.api.removeCompletedJob(job.id, controller.signal).then(
       () => {
         if (!this.isCurrent(controller, generation)) return;
         this.finishCompletedRemoval();
@@ -696,6 +708,7 @@ export class ImportController {
   private finishCompletedRemoval(): void {
     this.activeJob = undefined;
     this.cancellationRequestedJobId = undefined;
+    this.retryAction = undefined;
     this.storage.clear();
     this.updateIdle();
   }

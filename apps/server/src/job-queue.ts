@@ -124,7 +124,6 @@ export type JobTask = (
 
 export type JobFinalizer = (record: JobRecord) => Promise<void>;
 export type JobRollback = (record: JobRecord) => Promise<void>;
-export type JobDeletion = (record: JobRecord) => Promise<void>;
 
 export interface JobEnqueueOptions {
   readonly finalize?: JobFinalizer;
@@ -162,10 +161,12 @@ interface JobTerminalIntent {
 }
 
 const MAXIMUM_JOB_RECORDS = 10_000;
+const MAXIMUM_JOB_DIRECTORY_ENTRIES = MAXIMUM_JOB_RECORDS * 4;
 const MAXIMUM_JOB_FILE_BYTES = 64 * 1024;
-const JOB_DELETION_SUFFIX = ".json.deleting";
 const JOB_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const JOB_DELETION_TOMBSTONE_PATTERN =
+  /^([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.json\.delete$/u;
 const JOB_KIND_PATTERN = /^[a-z][a-z0-9-]{0,63}$/u;
 const MAXIMUM_PHASE_CHARACTERS = 160;
 const FINALIZATION_FAILURE_MESSAGE = "The job cleanup did not complete.";
@@ -520,6 +521,7 @@ export class PersistentJobQueue {
     string,
     Promise<JobRecord | undefined>
   >();
+  readonly #pendingRemovals = new Map<string, JobRecord>();
   #disposed = false;
   #closePromise: Promise<void> | undefined;
 
@@ -600,7 +602,10 @@ export class PersistentJobQueue {
         "Job kind must start with a letter and contain at most 64 lowercase letters, digits, or hyphens.",
       );
     }
-    if (this.#records.size >= MAXIMUM_JOB_RECORDS) {
+    if (
+      this.#records.size + this.#pendingRemovals.size >=
+      MAXIMUM_JOB_RECORDS
+    ) {
       throw new Error("Job record limit reached.");
     }
     if (
@@ -650,37 +655,6 @@ export class PersistentJobQueue {
     return this.cancelJob(id);
   }
 
-  public deleteCompleted(
-    id: string,
-    removeOwnedArtifacts: JobDeletion,
-  ): Promise<JobRecord | undefined> {
-    if (this.#disposed) {
-      return Promise.reject(new Error("Job queue is closed."));
-    }
-    if (typeof removeOwnedArtifacts !== "function") {
-      return Promise.reject(
-        new Error("Job deletion cleanup must be a function."),
-      );
-    }
-    const active = this.#deletions.get(id);
-    if (active !== undefined) return active;
-    const operation = this.deleteCompletedJob(id, removeOwnedArtifacts);
-    this.#deletions.set(id, operation);
-    void operation.then(
-      () => {
-        if (this.#deletions.get(id) === operation) {
-          this.#deletions.delete(id);
-        }
-      },
-      () => {
-        if (this.#deletions.get(id) === operation) {
-          this.#deletions.delete(id);
-        }
-      },
-    );
-    return operation;
-  }
-
   private cancelJob(
     id: string,
   ): Promise<JobRecord | undefined> {
@@ -707,6 +681,197 @@ export class PersistentJobQueue {
     return job.settlement;
   }
 
+  /**
+   * Durably removes a completed record while leaving queued/running and other
+   * terminal records unchanged. The deletion tombstone is the commit point:
+   * after its directory sync, startup will finish the deletion even if the
+   * process stops before owned artifacts are cleaned.
+   */
+  public removeCompleted(
+    id: string,
+  ): Promise<JobRecord | undefined> {
+    if (!JOB_ID_PATTERN.test(id)) return Promise.resolve(undefined);
+    if (this.#disposed) {
+      return Promise.reject(new Error("Job queue is closed."));
+    }
+    const active = this.#deletions.get(id);
+    if (active !== undefined) return active;
+    const deletion = this.removeCompletedJob(id).finally(() => {
+      if (this.#deletions.get(id) === deletion) {
+        this.#deletions.delete(id);
+      }
+    });
+    this.#deletions.set(id, deletion);
+    return deletion;
+  }
+
+  private async removeCompletedJob(
+    id: string,
+  ): Promise<JobRecord | undefined> {
+    await this.#transitions.get(id)?.catch(() => undefined);
+    await this.#writes.get(id)?.catch(() => undefined);
+    const record = this.#records.get(id);
+    if (record === undefined) {
+      return (
+        this.#pendingRemovals.get(id) ??
+        this.readDeletionTombstone(id)
+      );
+    }
+    if (record.state !== "completed") {
+      return record;
+    }
+
+    const destination = path.join(
+      this.#jobsDirectory,
+      `${record.id}.json`,
+    );
+    const tombstone = `${destination}.delete`;
+    let renamedDestination = false;
+    let retained: JobRecord | undefined;
+    try {
+      await fs.rename(destination, tombstone);
+      renamedDestination = true;
+      retained = await this.readDeletionTombstone(id);
+    } catch (error) {
+      if (
+        !renamedDestination &&
+        hasErrorCode(error, "ENOENT")
+      ) {
+        retained = await this.readDeletionTombstone(id);
+        if (retained === undefined) throw error;
+      } else {
+        if (renamedDestination) {
+          await this.restoreDeletionRecord(
+            tombstone,
+            destination,
+            error,
+          );
+        }
+        throw error;
+      }
+    }
+    if (
+      retained === undefined ||
+      JSON.stringify(retained) !== JSON.stringify(record)
+    ) {
+      const error = new Error(
+        "Persisted job changed before deletion.",
+      );
+      if (renamedDestination) {
+        await this.restoreDeletionRecord(
+          tombstone,
+          destination,
+          error,
+        );
+      }
+      throw error;
+    }
+    await this.syncJobsDirectory();
+    this.#records.delete(record.id);
+    this.#pendingRemovals.set(record.id, retained);
+    return retained;
+  }
+
+  /**
+   * Removes the durable deletion intent only after the caller has finished
+   * cleanup of every resource owned by the completed job.
+   */
+  public async finishRemoval(id: string): Promise<void> {
+    if (!JOB_ID_PATTERN.test(id)) {
+      throw new Error("Job id is invalid.");
+    }
+    const destination = path.join(
+      this.#jobsDirectory,
+      `${id}.json`,
+    );
+    const tombstone = `${destination}.delete`;
+    const retained =
+      this.#pendingRemovals.get(id) ??
+      (await this.readDeletionTombstone(id));
+    if (retained === undefined) return;
+    await this.removeDeletionShadow(`${destination}.bak`);
+    await fs.rm(tombstone).catch((error: unknown) => {
+      if (!hasErrorCode(error, "ENOENT")) throw error;
+    });
+    await this.syncJobsDirectory();
+    this.#pendingRemovals.delete(id);
+  }
+
+  public async finishPendingRemovals(): Promise<void> {
+    for (const id of [...this.#pendingRemovals.keys()].sort(compareText)) {
+      await this.finishRemoval(id);
+    }
+  }
+
+  private async readDeletionTombstone(
+    id: string,
+  ): Promise<JobRecord | undefined> {
+    const tombstone = path.join(
+      this.#jobsDirectory,
+      `${id}.json.delete`,
+    );
+    let status;
+    try {
+      status = await fs.lstat(tombstone);
+    } catch (error) {
+      if (hasErrorCode(error, "ENOENT")) return undefined;
+      throw error;
+    }
+    if (
+      !status.isFile() ||
+      status.isSymbolicLink() ||
+      status.size > MAXIMUM_JOB_FILE_BYTES
+    ) {
+      throw new Error("Persisted job deletion tombstone is invalid.");
+    }
+    let record: JobRecord;
+    try {
+      record = parseJobRecord(
+        JSON.parse(await fs.readFile(tombstone, "utf8")) as unknown,
+      );
+    } catch (error) {
+      throw new Error(
+        "Persisted job deletion tombstone is invalid.",
+        { cause: error },
+      );
+    }
+    if (record.id !== id || record.state !== "completed") {
+      throw new Error("Persisted job deletion tombstone is invalid.");
+    }
+    return record;
+  }
+
+  private async removeDeletionShadow(file: string): Promise<void> {
+    let status;
+    try {
+      status = await fs.lstat(file);
+    } catch (error) {
+      if (hasErrorCode(error, "ENOENT")) return;
+      throw error;
+    }
+    if (!status.isFile() || status.isSymbolicLink()) {
+      throw new Error("Persisted job deletion shadow is invalid.");
+    }
+    await fs.rm(file);
+    await this.syncJobsDirectory();
+  }
+
+  private async restoreDeletionRecord(
+    tombstone: string,
+    destination: string,
+    cause: unknown,
+  ): Promise<void> {
+    try {
+      await fs.rename(tombstone, destination);
+      await this.syncJobsDirectory();
+    } catch (restoreError) {
+      throw new AggregateError(
+        [cause, restoreError],
+        "Persisted job deletion could not be rolled back.",
+      );
+    }
+  }
+
   public close(): Promise<void> {
     if (this.#closePromise) return this.#closePromise;
     this.#disposed = true;
@@ -728,9 +893,32 @@ export class PersistentJobQueue {
     let entries = await fs.readdir(this.#jobsDirectory, {
       withFileTypes: true,
     });
-    if (entries.length > MAXIMUM_JOB_RECORDS) {
-      throw new Error("Persisted job record limit exceeded.");
+    if (entries.length > MAXIMUM_JOB_DIRECTORY_ENTRIES) {
+      throw new Error("Persisted job directory entry limit exceeded.");
     }
+    for (const entry of entries) {
+      const match = JOB_DELETION_TOMBSTONE_PATTERN.exec(entry.name);
+      if (match === null) continue;
+      if (!entry.isFile() || entry.isSymbolicLink()) {
+        throw new Error("Persisted job deletion tombstone is invalid.");
+      }
+      const retained = await this.readDeletionTombstone(match[1]!);
+      if (retained === undefined) {
+        throw new Error("Persisted job deletion tombstone is invalid.");
+      }
+      this.#pendingRemovals.set(retained.id, retained);
+      const tombstone = path.join(this.#jobsDirectory, entry.name);
+      const destination = path.join(
+        this.#jobsDirectory,
+        `${match[1]!}.json`,
+      );
+      await this.removeDeletionShadow(destination);
+      await this.removeDeletionShadow(`${destination}.bak`);
+      await fs.lstat(tombstone);
+    }
+    entries = await fs.readdir(this.#jobsDirectory, {
+      withFileTypes: true,
+    });
     for (const entry of entries) {
       const candidate = path.join(this.#jobsDirectory, entry.name);
       if (
@@ -739,18 +927,6 @@ export class PersistentJobQueue {
         !entry.isSymbolicLink()
       ) {
         await fs.rm(candidate, { force: true });
-        continue;
-      }
-      if (
-        entry.name.endsWith(JOB_DELETION_SUFFIX) &&
-        JOB_ID_PATTERN.test(
-          entry.name.slice(0, -JOB_DELETION_SUFFIX.length),
-        ) &&
-        entry.isFile() &&
-        !entry.isSymbolicLink()
-      ) {
-        await fs.rm(candidate, { force: true });
-        await this.syncJobsDirectory();
         continue;
       }
       if (
@@ -801,6 +977,12 @@ export class PersistentJobQueue {
         throw new Error("Persisted job filename does not match its id.");
       }
       records.push(record);
+    }
+    if (
+      records.length + this.#pendingRemovals.size >
+      MAXIMUM_JOB_RECORDS
+    ) {
+      throw new Error("Persisted job record limit exceeded.");
     }
     for (const record of records) {
       if (this.#records.has(record.id)) {
@@ -1140,44 +1322,6 @@ export class PersistentJobQueue {
       if (handle) await handle.close().catch(() => undefined);
       await fs.rm(temporary, { force: true }).catch(() => undefined);
     }
-  }
-
-  private async deleteCompletedJob(
-    id: string,
-    removeOwnedArtifacts: JobDeletion,
-  ): Promise<JobRecord | undefined> {
-    const record = this.#records.get(id);
-    if (record === undefined) return undefined;
-    if (record.state !== "completed") {
-      throw new Error("Only completed jobs can be deleted.");
-    }
-    await this.#transitions.get(id)?.catch(() => undefined);
-    await this.#writes.get(id)?.catch(() => undefined);
-    const current = this.#records.get(id);
-    if (current === undefined) return undefined;
-    if (current.state !== "completed") {
-      throw new Error("Only completed jobs can be deleted.");
-    }
-    const destination = path.join(this.#jobsDirectory, `${id}.json`);
-    const deletion = path.join(
-      this.#jobsDirectory,
-      `${id}${JOB_DELETION_SUFFIX}`,
-    );
-    await fs.rename(destination, deletion);
-    try {
-      await this.syncJobsDirectory();
-    } catch (error) {
-      await fs
-        .rename(deletion, destination)
-        .then(() => this.syncJobsDirectory())
-        .catch(() => undefined);
-      throw error;
-    }
-    this.#records.delete(id);
-    await removeOwnedArtifacts(current);
-    await fs.rm(deletion, { force: true });
-    await this.syncJobsDirectory();
-    return current;
   }
 
   private async restoreBackup(

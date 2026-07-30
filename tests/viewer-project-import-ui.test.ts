@@ -21,7 +21,10 @@ describe("viewer project import UI", () => {
       /Closing or navigating away from the page\s+stops browser requests and polling without issuing server cancellation/u,
     );
     expect(runtimeGuide).toMatch(
-      /explicit \*Cancel import\* action abandons a live reservation or,\s+once acceptance is known, deletes the job/u,
+      /explicit \*Cancel import\* action abandons a live reservation or,\s+once acceptance is known, requests cancellation/u,
+    );
+    expect(runtimeGuide).toMatch(
+      /reopening the wizard exposes \*Remove stored import\*/u,
     );
     expect(runtimeGuide).toMatch(
       /explicit \*Sign out\* action revokes the HttpOnly browser\s+session, clears the saved import-job UUID/u,
@@ -61,8 +64,9 @@ describe("viewer project import UI", () => {
     expect(html).toContain('value="commit"');
     expect(html).toContain('id="project-import-progress-meter"');
     expect(html).toContain('id="project-import-cancel"');
-    expect(html).toContain('id="project-import-remove"');
-    expect(html).toContain("Remove saved import");
+    expect(html).toMatch(
+      /id="project-import-remove-result"[\s\S]*Remove stored import/u,
+    );
     expect(html).toMatch(
       /id="project-import-retry"[\s\S]*id="project-import-restart"[\s\S]*Start another import/u,
     );
@@ -161,6 +165,18 @@ describe("viewer project import UI", () => {
     );
     expect(controllerSource).toContain(
       "this.storage.write(job.id)",
+    );
+    expect(controllerSource).toContain(
+      "this.api.removeCompletedJob(job.id",
+    );
+    expect(dialogSource).toContain(
+      'currentState.status === "removal-failed"',
+    );
+    expect(dialogSource).toContain(
+      "controller.removeCompleted()",
+    );
+    expect(dialogSource).toMatch(
+      /case "completed":[\s\S]*previousState\?\.status === "opening-artifact"[\s\S]*dialog\.close\(\)/u,
     );
     expect(controllerSource).toContain(
       "await this.api.logout(controller.signal)",
