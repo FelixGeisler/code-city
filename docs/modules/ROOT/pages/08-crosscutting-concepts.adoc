@@ -195,10 +195,11 @@ aliases before body reads.
 The import capability response is an authenticated, no-store redacted
 projection, not a credential oracle: only ID, label, and provider cross the
 boundary. Scope URLs, usernames, filenames, and secret bytes do not. An
-authenticated GitHub source may contain one optional, strict
-`credentialProfileId`. Before staging, the registry requires that ID to select
-a GitHub provider with an exact canonical repository-scope match. Unknown,
-wrong-provider, and out-of-scope selections share one fixed rejection.
+authenticated GitHub or canonical HTTPS Generic Git source may contain one
+optional, strict `credentialProfileId`. Before staging, the registry requires
+that ID to select the correct provider with an exact canonical
+repository-scope match. Unknown, wrong-provider, out-of-scope, non-HTTPS, and
+origin-denied selections share one fixed rejection.
 
 Each credentialed job reopens its secret and revalidates the startup path and
 security-relevant startup snapshot: file identity, mode and ownership, link
@@ -243,13 +244,17 @@ or establish those ACL properties.
 Generic Git is default-denied at the server boundary. An exact
 operator-configured scheme, normalized hostname/IP, and effective port must
 match before staging. This origin list is egress control, not per-repository
-authorization. In default trusted-network mode every client can invoke the
-least-privileged service identity's ambient Git/SSH credentials for any
-repository/user at an enabled origin. Enabling inbound authorization gates API
-access but does not narrow that service identity's repository scope. Windows
-additionally requires an explicit attestation that the data/import ACLs,
-inherited child ACLs, and protected canonical ancestry satisfy the
-private-workspace contract.
+authorization. A selected HTTPS profile is a second independent gate requiring
+the correct provider and exact repository scope. In default trusted-network
+mode every client can request any repository/user at an enabled origin;
+unselected HTTPS and SSH/scp imports may use the least-privileged service
+identity's ambient Git/SSH credentials. Selected HTTPS imports isolate ambient
+Git configuration and repository credential helpers and use the chosen profile
+for repository authentication. Configured proxy and certificate environment
+settings remain trusted dependencies. Enabling inbound authorization gates API
+access but does not narrow ambient repository scope. Windows additionally
+requires explicit attestations for both the private data/import workspace and,
+when profiles are configured, the credential files and canonical ancestry.
 
 The GitHub adapter accepts only canonical HTTPS `github.com/owner/repository`
 URLs. Anonymous imports remain available. An exact-scope GitHub profile permits
@@ -263,8 +268,12 @@ GitHub's documented zipball API with redirect following disabled. It accepts
 only one `302` to `codeload.github.com` with the exact path
 `/\{owner\}/\{repo\}/legacy.zip/\{sha\}`. An opaque query string is accepted,
 and the second request sends no `Authorization` header. All other redirects are
-rejected. Selected-profile injection for Azure DevOps and Generic HTTPS remains
-pending, and Generic Git continues to use its existing ambient credentials.
+rejected. For selected Azure DevOps or Generic HTTPS imports, the adapter
+disables inherited system, global, and user Git configuration, clears ambient
+helpers, and supplies the exact Basic profile through a bounded
+owner-restricted broker for each remote command. The secret never enters a URL,
+argument, environment value, Git configuration, repository, or file. Unselected
+Generic Git retains its existing ambient credential behavior.
 
 API responses are capped at 1 MiB, archives at 64 MiB, individual ZIP entries
 at 256 MiB, expanded archive data at 1 GiB, and refs at 256 UTF-8 bytes. All
@@ -275,10 +284,14 @@ persisted or cached.
 
 The generic Git adapter accepts validated HTTPS, `ssh://`, and scp-style
 remotes without embedded passwords, query data, fragments, or leading options.
-The installed Git client and the user's credential helper, SSH agent/config,
-and certificate configuration are trusted local dependencies. Code City
-disables prompts, tracing, redirects, unsafe protocols, hooks, filesystem
-monitors, maintenance, submodules, and LFS behavior for the operation.
+For unselected imports, the installed Git client and the user's credential
+helper, SSH agent/configuration, and certificate configuration are trusted local
+dependencies. The installed Git client remains trusted for selected imports,
+as do the resolved .NET runtime and configured proxy and certificate
+environment settings. Selected HTTPS imports isolate user/system Git
+configuration and ambient repository credential helpers. Code City disables
+prompts, tracing, redirects, unsafe protocols, hooks, filesystem monitors,
+maintenance, submodules, and LFS behavior for the operation.
 
 Only an advertised branch, tag, or default `HEAD` is shallow-fetched into a
 private bare repository. The advertised object is rechecked before a local
