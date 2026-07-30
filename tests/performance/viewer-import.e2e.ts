@@ -344,6 +344,35 @@ async function openNextImport(page: Page): Promise<void> {
   await expect(page.locator("#project-import-source-title")).toBeVisible();
 }
 
+async function removeStoredImportAndOpenNext(
+  page: Page,
+  jobId: string,
+  cityTitle: string,
+): Promise<void> {
+  expect(server.jobs.get(jobId)?.state).toBe("completed");
+  expect(await server.artifacts.statCityModel(jobId)).toBeDefined();
+
+  await page.getByRole("button", { name: "Import project" }).click();
+  await page
+    .getByRole("button", { name: "Remove stored import", exact: true })
+    .click();
+
+  await expect.poll(() => server.jobs.get(jobId)).toBeUndefined();
+  await expect.poll(async () =>
+    server.artifacts.statCityModel(jobId),
+  ).toBeUndefined();
+  await expect.poll(async () =>
+    server.artifacts.statEvolution(jobId),
+  ).toBeUndefined();
+  await expect.poll(async () =>
+    page.evaluate(() =>
+      localStorage.getItem("code-city.last-import-job.v1"),
+    ),
+  ).toBeNull();
+  await expect(page.locator("#model-name")).toHaveText(cityTitle);
+  await expect(page.locator("#project-import-source-title")).toBeVisible();
+}
+
 async function chooseSource(
   page: Page,
   source:
@@ -514,13 +543,17 @@ test("imports a browser directory and repository ZIP with identity and analysis 
   await expect(page.locator("#project-import-review-revision")).toHaveText(
     "Uploaded content",
   );
-  await startAndWaitForImportedCity(page);
+  const directoryJobId = await startAndWaitForImportedCity(page);
   await expect(page.locator("#model-name")).toHaveText(
     "Directory import E2E",
   );
   await expect(page.locator("#status")).toContainText("directory-v1");
 
-  await openNextImport(page);
+  await removeStoredImportAndOpenNext(
+    page,
+    directoryJobId,
+    "Directory import E2E",
+  );
   await chooseSource(page, "zip");
   await page.locator("#project-import-zip").setInputFiles(zipFixture);
   await expect(page.locator("#project-import-zip-name")).toHaveValue(

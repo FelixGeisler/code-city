@@ -1478,7 +1478,7 @@ export function installProjectImportDialog(
     removeButton.textContent =
       currentState.status === "removal-failed"
         ? "Retry removal"
-        : "Remove saved import";
+        : "Remove stored import";
     if (
       currentStep !== "progress" ||
       currentState.status !== "artifact-failed" &&
@@ -1683,7 +1683,7 @@ export function installProjectImportDialog(
     retryButton.textContent = "Retry";
     restartButton.hidden = true;
     removeButton.hidden = true;
-    removeButton.textContent = "Remove saved import";
+    removeButton.textContent = "Remove stored import";
     renderSourcePanels();
     renderRevision();
     renderHistory();

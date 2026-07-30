@@ -62,7 +62,7 @@ describe("viewer project import UI", () => {
     expect(html).toContain('id="project-import-progress-meter"');
     expect(html).toContain('id="project-import-cancel"');
     expect(html).toContain('id="project-import-remove"');
-    expect(html).toContain("Remove saved import");
+    expect(html).toContain("Remove stored import");
     expect(html).toMatch(
       /id="project-import-retry"[\s\S]*id="project-import-restart"[\s\S]*Start another import/u,
     );
