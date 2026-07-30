@@ -827,13 +827,19 @@ export async function enqueueUploadedImport(
               `/api/v1/artifacts/${context.id}/city-model.json`,
             source:
               publishedSource === undefined
-                ? { availability: "disabled" as const }
+                ? {
+                    availability:
+                      request.source.kind === "city-model"
+                        ? ("not-captured" as const)
+                        : ("disabled" as const),
+                  }
                 : {
                     availability: "retained" as const,
                     artifactUrl:
                       `/api/v1/artifacts/${context.id}/source`,
                     size: publishedSource.size,
                     sha256: publishedSource.sha256,
+                    indexSha256: publishedSource.indexSha256,
                   },
           };
         } catch (error) {

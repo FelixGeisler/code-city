@@ -271,15 +271,18 @@ trusted local dependencies.
 
 The selector, secret, remote URL, and requested symbolic ref are never written
 to a job or artifact. The resolved immutable commit SHA may be stored as the
-generated model's default version. When `CODECITY_SOURCE_RETENTION=retain`
-(the production entrypoint default), bounded analyzed source files are
+generated model's default version. Source retention is disabled unless an
+operator explicitly sets `CODECITY_SOURCE_RETENTION=retain`. When enabled,
+bounded analyzed source files are
 published separately under the service-private
 `CODECITY_DATA_DIR/sources/<job-id>` tree. They are never embedded in the city
 model, evolution bundle, printable output, or public legend. Every source read
-uses the normal inbound API authorization and must match the completed job,
-repository, building ID, path, and language. Set
-`CODECITY_SOURCE_RETENTION=disabled` to retain only immutable provenance; the
-viewer then shows an explicit reduced-capability state.
+uses the normal inbound API authorization and reads only a bounded authenticated
+index plus the selected digest-verified file. Omitted, empty, or explicitly
+`disabled` retention keeps only immutable provenance; the viewer then shows an
+explicit reduced-capability state. Enabling retention stores private source
+bytes on the server and therefore requires the data directory's private
+filesystem and backup policy to be appropriate for that repository.
 
 The read-only inspector opens the selected building's exact retained file and
 lets executable-unit rows jump to their recorded line range. GitHub and Azure

@@ -1,4 +1,5 @@
 const API_RESPONSE_MAX_BYTES = 256 * 1024;
+const SOURCE_RESPONSE_MAX_BYTES = 16 * 1024 * 1024 * 6 + 64 * 1024;
 const API_REQUEST_DEADLINE_MS = 30_000;
 const API_UPLOAD_DEADLINE_MS = 11 * 60_000;
 const API_RESULT_REMOVAL_DEADLINE_MS = 31 * 60_000;
@@ -163,10 +164,14 @@ export interface ImportJobResult {
         readonly availability: "disabled";
       }
     | {
+        readonly availability: "not-captured";
+      }
+    | {
         readonly availability: "retained";
         readonly artifactUrl: string;
         readonly size: number;
         readonly sha256: string;
+        readonly indexSha256: string;
       };
 }
 
@@ -515,21 +520,33 @@ function parseJobResult(value: unknown, jobId: string): ImportJobResult {
       throw protocolError("Import source result is invalid.");
     }
     const sourceCandidate = object["source"] as Record<string, unknown>;
-    if (sourceCandidate["availability"] === "disabled") {
+    if (
+      sourceCandidate["availability"] === "disabled" ||
+      sourceCandidate["availability"] === "not-captured"
+    ) {
       exactObject(
         sourceCandidate,
         ["availability"],
         "Import source result",
       );
-      source = Object.freeze({ availability: "disabled" });
+      source = Object.freeze({
+        availability: sourceCandidate["availability"],
+      });
     } else {
       const sourceObject = exactObject(
         sourceCandidate,
-        ["artifactUrl", "availability", "sha256", "size"],
+        [
+          "artifactUrl",
+          "availability",
+          "indexSha256",
+          "sha256",
+          "size",
+        ],
         "Import source result",
       );
       const size = sourceObject["size"];
       const sha256 = sourceObject["sha256"];
+      const indexSha256 = sourceObject["indexSha256"];
       if (
         sourceObject["availability"] !== "retained" ||
         sourceObject["artifactUrl"] !==
@@ -538,7 +555,9 @@ function parseJobResult(value: unknown, jobId: string): ImportJobResult {
         (size as number) < 1 ||
         (size as number) > MAXIMUM_SOURCE_ARTIFACT_BYTES ||
         typeof sha256 !== "string" ||
-        !/^[0-9a-f]{64}$/u.test(sha256)
+        !/^[0-9a-f]{64}$/u.test(sha256) ||
+        typeof indexSha256 !== "string" ||
+        !/^[0-9a-f]{64}$/u.test(indexSha256)
       ) {
         throw protocolError("Import source result is invalid.");
       }
@@ -547,6 +566,7 @@ function parseJobResult(value: unknown, jobId: string): ImportJobResult {
         artifactUrl: sourceObject["artifactUrl"],
         size: size as number,
         sha256,
+        indexSha256,
       });
     }
   }
@@ -791,6 +811,7 @@ async function waitForAbort<T>(
 async function readBoundedBytes(
   response: Response,
   signal: AbortSignal,
+  maximumBytes = API_RESPONSE_MAX_BYTES,
 ): Promise<Uint8Array> {
   const contentLength = response.headers.get("content-length");
   if (contentLength !== null) {
@@ -800,7 +821,7 @@ async function readBoundedBytes(
     const length = Number(contentLength);
     if (
       !Number.isSafeInteger(length) ||
-      length > API_RESPONSE_MAX_BYTES
+      length > maximumBytes
     ) {
       throw protocolError("API response exceeds the viewer limit.");
     }
@@ -817,7 +838,7 @@ async function readBoundedBytes(
         complete = true;
         break;
       }
-      if (item.value.byteLength > API_RESPONSE_MAX_BYTES - size) {
+      if (item.value.byteLength > maximumBytes - size) {
         throw protocolError("API response exceeds the viewer limit.");
       }
       size += item.value.byteLength;
@@ -842,6 +863,7 @@ async function readBoundedBytes(
 async function readJsonResponse(
   response: Response,
   signal: AbortSignal,
+  maximumBytes = API_RESPONSE_MAX_BYTES,
 ): Promise<unknown> {
   const contentType = response.headers.get("content-type");
   if (
@@ -850,7 +872,7 @@ async function readJsonResponse(
   ) {
     throw protocolError("API response is not UTF-8 JSON.");
   }
-  const bytes = await readBoundedBytes(response, signal);
+  const bytes = await readBoundedBytes(response, signal, maximumBytes);
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -1001,6 +1023,8 @@ export class ViewerImportApiClient {
       `/api/v1/artifacts/${jobId}/sources/${buildingId}`,
       { method: "GET" },
       signal,
+      this.requestDeadlineMs,
+      SOURCE_RESPONSE_MAX_BYTES,
     );
     if (response.response.status === 409) {
       throw new ImportApiError(
@@ -1248,10 +1272,15 @@ export class ViewerImportApiClient {
     init: RequestInit,
     signal?: AbortSignal,
     deadlineMs = this.requestDeadlineMs,
+    maximumResponseBytes = API_RESPONSE_MAX_BYTES,
   ): Promise<{ readonly response: Response; readonly value: unknown }> {
     return await this.withDeadline(signal, deadlineMs, async (requestSignal) => {
       const response = await this.fetchResponse(path, init, requestSignal);
-      const value = await readJsonResponse(response, requestSignal);
+      const value = await readJsonResponse(
+        response,
+        requestSignal,
+        maximumResponseBytes,
+      );
       if (!response.ok) throw parseErrorResponse(value, response);
       return { response, value };
     });

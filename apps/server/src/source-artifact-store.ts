@@ -6,14 +6,20 @@ import path from "node:path";
 import { isImportArtifactToken } from "./import-artifacts.js";
 import {
   parseSourceArtifact,
+  parseSourceArtifactIndex,
   serializeSourceArtifact,
   SOURCE_ARTIFACT_MAX_BYTES,
+  SOURCE_ARTIFACT_PREFIX_BYTES,
+  sourceArtifactIndexLength,
+  sourceArtifactPayloadBytes,
   type SourceArtifact,
+  type SourceArtifactIndex,
+  type SourceArtifactIndexFile,
 } from "./source-artifact.js";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
-const SOURCE_FILE_NAME = "source.json";
+const SOURCE_FILE_NAME = "source.pack";
 const SOURCE_STAGE_PATTERN =
   /^\.source-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/u;
 
@@ -25,11 +31,20 @@ export interface SourceArtifactMetadata {
   readonly token: string;
   readonly size: number;
   readonly sha256: string;
+  readonly indexSha256: string;
   readonly lastModified: string;
 }
 
 export interface StoredSourceArtifact extends SourceArtifactMetadata {
   readonly artifact: SourceArtifact;
+}
+
+export interface StoredSourceArtifactFile extends SourceArtifactMetadata {
+  readonly file: Readonly<
+    SourceArtifactIndexFile & { readonly text: string }
+  >;
+  readonly provenance:
+    SourceArtifactIndex["provenance"]["repositories"][number];
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -178,7 +193,7 @@ async function openSourceFile(
     before.isSymbolicLink() ||
     !before.isFile() ||
     before.nlink !== 1 ||
-    before.size < 1 ||
+    before.size < SOURCE_ARTIFACT_PREFIX_BYTES + 2 ||
     before.size > SOURCE_ARTIFACT_MAX_BYTES ||
     !privateMode(before.mode, FILE_MODE)
   ) {
@@ -228,23 +243,46 @@ async function readOpened(
   opened: NonNullable<Awaited<ReturnType<typeof openSourceFile>>>,
   signal?: AbortSignal,
 ): Promise<Buffer> {
-  const bytes = Buffer.allocUnsafe(opened.size);
+  const bytes = await readExact(
+    opened.handle,
+    0,
+    opened.size,
+    signal,
+  );
+  await assertOpenedUnchanged(opened);
+  return bytes;
+}
+
+async function readExact(
+  handle: FileHandle,
+  position: number,
+  length: number,
+  signal?: AbortSignal,
+): Promise<Buffer> {
+  const bytes = Buffer.allocUnsafe(length);
   let offset = 0;
   while (offset < bytes.byteLength) {
     signal?.throwIfAborted();
-    const result = await opened.handle.read(
+    const result = await handle.read(
       bytes,
       offset,
       Math.min(64 * 1024, bytes.byteLength - offset),
-      offset,
+      position + offset,
     );
-    if (result.bytesRead === 0) break;
+    if (result.bytesRead === 0) {
+      throw new Error("Source artifact is truncated.");
+    }
     offset += result.bytesRead;
   }
+  return bytes;
+}
+
+async function assertOpenedUnchanged(
+  opened: NonNullable<Awaited<ReturnType<typeof openSourceFile>>>,
+): Promise<void> {
   const after = await opened.handle.stat();
   const canonicalAfter = await fs.realpath(opened.canonicalPath);
   if (
-    offset !== bytes.byteLength ||
     after.dev !== opened.device ||
     after.ino !== opened.inode ||
     after.size !== opened.size ||
@@ -252,7 +290,41 @@ async function readOpened(
   ) {
     throw new Error("Source artifact changed while it was read.");
   }
-  return bytes;
+}
+
+async function readIndex(
+  opened: NonNullable<Awaited<ReturnType<typeof openSourceFile>>>,
+  signal?: AbortSignal,
+): Promise<{
+  readonly prefix: Buffer;
+  readonly bytes: Buffer;
+  readonly index: SourceArtifactIndex;
+  readonly payloadOffset: number;
+}> {
+  const prefix = await readExact(
+    opened.handle,
+    0,
+    SOURCE_ARTIFACT_PREFIX_BYTES,
+    signal,
+  );
+  const length = sourceArtifactIndexLength(prefix);
+  const payloadOffset = SOURCE_ARTIFACT_PREFIX_BYTES + length;
+  if (payloadOffset > opened.size) {
+    throw new Error("Source artifact index is truncated.");
+  }
+  const bytes = await readExact(
+    opened.handle,
+    SOURCE_ARTIFACT_PREFIX_BYTES,
+    length,
+    signal,
+  );
+  const index = parseSourceArtifactIndex(bytes);
+  if (
+    payloadOffset + sourceArtifactPayloadBytes(index) !== opened.size
+  ) {
+    throw new Error("Source artifact payload bounds are invalid.");
+  }
+  return { prefix, bytes, index, payloadOffset };
 }
 
 function metadata(
@@ -260,10 +332,21 @@ function metadata(
   bytes: Uint8Array,
   mtimeMs: number,
 ): SourceArtifactMetadata {
+  const indexLength = sourceArtifactIndexLength(
+    bytes.subarray(0, SOURCE_ARTIFACT_PREFIX_BYTES),
+  );
   return Object.freeze({
     token: value,
     size: bytes.byteLength,
     sha256: createHash("sha256").update(bytes).digest("hex"),
+    indexSha256: createHash("sha256")
+      .update(
+        bytes.subarray(
+          SOURCE_ARTIFACT_PREFIX_BYTES,
+          SOURCE_ARTIFACT_PREFIX_BYTES + indexLength,
+        ),
+      )
+      .digest("hex"),
     lastModified: new Date(mtimeMs).toUTCString(),
   });
 }
@@ -443,6 +526,131 @@ export class SourceArtifactStore {
     }
   }
 
+  public async readFile(
+    value: string,
+    buildingId: string,
+    expected: Pick<
+      SourceArtifactMetadata,
+      "indexSha256" | "sha256" | "size"
+    >,
+    signal?: AbortSignal,
+  ): Promise<StoredSourceArtifactFile | undefined> {
+    const normalized = token(value);
+    const artifactDirectory = await existingTokenDirectory(
+      this.#sourcesDirectory,
+      normalized,
+    );
+    if (artifactDirectory === undefined) return undefined;
+    const opened = await openSourceFile(artifactDirectory);
+    if (opened === undefined) return undefined;
+    try {
+      if (opened.size !== expected.size) return undefined;
+      const indexed = await readIndex(opened, signal);
+      if (
+        createHash("sha256").update(indexed.bytes).digest("hex") !==
+        expected.indexSha256
+      ) {
+        throw new Error("Source artifact index digest is invalid.");
+      }
+      const file = indexed.index.files.find(
+        (candidate) => candidate.buildingId === buildingId,
+      );
+      if (file === undefined) return undefined;
+      const provenance = indexed.index.provenance.repositories.find(
+        ({ repositoryId }) => repositoryId === file.repositoryId,
+      );
+      if (provenance === undefined) {
+        throw new Error("Source artifact provenance is invalid.");
+      }
+      const bytes = await readExact(
+        opened.handle,
+        indexed.payloadOffset + file.offset,
+        file.size,
+        signal,
+      );
+      if (
+        createHash("sha256").update(bytes).digest("hex") !== file.sha256
+      ) {
+        throw new Error("Selected source file digest is invalid.");
+      }
+      let text: string;
+      try {
+        text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+      } catch {
+        throw new Error("Selected source file is not valid UTF-8.");
+      }
+      if (
+        Math.max(1, text.split(/\r\n?|\n/u).length) !==
+        file.location.endLine
+      ) {
+        throw new Error("Selected source file line bounds are invalid.");
+      }
+      await assertOpenedUnchanged(opened);
+      return Object.freeze({
+        token: normalized,
+        size: opened.size,
+        sha256: expected.sha256,
+        indexSha256: expected.indexSha256,
+        lastModified: new Date(opened.mtimeMs).toUTCString(),
+        file: Object.freeze({ ...file, text }),
+        provenance,
+      });
+    } finally {
+      await opened.handle.close();
+    }
+  }
+
+  private async verify(
+    value: string,
+    signal?: AbortSignal,
+  ): Promise<SourceArtifactMetadata | undefined> {
+    const normalized = token(value);
+    const artifactDirectory = await existingTokenDirectory(
+      this.#sourcesDirectory,
+      normalized,
+    );
+    if (artifactDirectory === undefined) return undefined;
+    const opened = await openSourceFile(artifactDirectory);
+    if (opened === undefined) return undefined;
+    try {
+      const indexed = await readIndex(opened, signal);
+      const overall = createHash("sha256")
+        .update(indexed.prefix)
+        .update(indexed.bytes);
+      for (const file of indexed.index.files) {
+        const digest = createHash("sha256");
+        let offset = 0;
+        while (offset < file.size) {
+          signal?.throwIfAborted();
+          const bytes = await readExact(
+            opened.handle,
+            indexed.payloadOffset + file.offset + offset,
+            Math.min(64 * 1024, file.size - offset),
+            signal,
+          );
+          digest.update(bytes);
+          overall.update(bytes);
+          offset += bytes.byteLength;
+        }
+        if (digest.digest("hex") !== file.sha256) {
+          throw new Error("Retained source file digest is invalid.");
+        }
+      }
+      await assertOpenedUnchanged(opened);
+      return Object.freeze({
+        token: normalized,
+        size: opened.size,
+        sha256: overall.digest("hex"),
+        indexSha256: createHash("sha256")
+          .update(indexed.bytes)
+          .digest("hex"),
+        lastModified: new Date(opened.mtimeMs).toUTCString(),
+      });
+    } finally {
+      await opened.handle.close();
+    }
+  }
+
   public async cleanup(value: string): Promise<void> {
     const normalized = token(value);
     if (this.#mutations.has(normalized)) {
@@ -487,11 +695,12 @@ export class SourceArtifactStore {
         await this.cleanup(retainedToken);
         continue;
       }
-      const stored = await this.read(retainedToken);
+      const stored = await this.verify(retainedToken);
       if (
         stored === undefined ||
         stored.size !== expected.size ||
-        stored.sha256 !== expected.sha256
+        stored.sha256 !== expected.sha256 ||
+        stored.indexSha256 !== expected.indexSha256
       ) {
         throw new Error(
           "A completed import references a missing or mismatched source artifact.",

@@ -2069,6 +2069,7 @@ export async function enqueueRemoteImport(
                         `/api/v1/artifacts/${context.id}/source`,
                       size: publishedSource.size,
                       sha256: publishedSource.sha256,
+                      indexSha256: publishedSource.indexSha256,
                     },
               ...(publishedHistory === undefined
                 ? {}

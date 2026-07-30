@@ -1487,6 +1487,16 @@ button,
   width: 48px;
 }
 
+.source-line-omitted {
+  color: #8a9aad;
+  font-style: italic;
+  user-select: none;
+}
+
+.source-line-omitted::before {
+  content: "";
+}
+
 .source-line-highlight {
   background: rgba(250, 204, 21, 0.18);
   box-shadow: inset 3px 0 #facc15;

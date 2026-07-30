@@ -17,15 +17,11 @@ import {
 } from "./job-queue.js";
 import { ImportArtifactStore } from "./import-artifacts.js";
 import type { RetainedImportArtifactSet } from "./import-artifacts.js";
-import {
-  sourceArtifactFile,
-  type SourceRetentionPolicy,
-} from "./source-artifact.js";
+import type { SourceRetentionPolicy } from "./source-artifact.js";
 import {
   SourceArtifactStore,
   type SourceArtifactMetadata,
 } from "./source-artifact-store.js";
-import { validateCityModel } from "../../../packages/core/src/index.js";
 import { HistorySemanticCache } from "./history-cache.js";
 import {
   InboundAuthorization,
@@ -422,6 +418,7 @@ function completedSourceArtifactSets(
             token: job.id,
             size: source.size,
             sha256: source.sha256,
+            indexSha256: source.indexSha256,
             lastModified: "",
           }),
     );
@@ -1976,6 +1973,16 @@ function apiHandler(
       });
       return true;
     }
+    if (expected?.availability === "not-captured") {
+      sendJson(request, response, 409, {
+        error: {
+          code: "source-not-captured",
+          message:
+            "This model-only import did not capture a source snapshot.",
+        },
+      });
+      return true;
+    }
     if (
       expected?.availability !== "retained" ||
       !completedJobOwnsCityModelArtifact(jobs, token)
@@ -2000,17 +2007,20 @@ function apiHandler(
       });
       return true;
     }
-    void Promise.all([
-      artifacts.readCityModel(token, artifactResponse.signal),
-      sources.read(token, artifactResponse.signal),
-    ])
-      .then(([cityArtifact, sourceArtifact]) => {
+    void sources
+      .readFile(
+        token,
+        buildingId,
+        expected,
+        artifactResponse.signal,
+      )
+      .then((sourceArtifact) => {
         if (response.destroyed) return;
         if (
-          cityArtifact === undefined ||
           sourceArtifact === undefined ||
           sourceArtifact.size !== expected.size ||
-          sourceArtifact.sha256 !== expected.sha256
+          sourceArtifact.sha256 !== expected.sha256 ||
+          sourceArtifact.indexSha256 !== expected.indexSha256
         ) {
           sendJson(request, response, 404, {
             error: {
@@ -2020,56 +2030,17 @@ function apiHandler(
           });
           return;
         }
-        const model = validateCityModel(
-          JSON.parse(
-            new TextDecoder("utf-8", { fatal: true }).decode(
-              cityArtifact.bytes,
-            ),
-          ),
-        );
-        const file = sourceArtifactFile(
-          sourceArtifact.artifact,
-          model,
-          buildingId,
-        );
-        const building = model.buildings.find(
-          ({ id }) => id === buildingId,
-        );
-        const provenance =
-          building === undefined
-            ? undefined
-            : model.sourceProvenance?.repositories.find(
-                ({ repositoryId }) =>
-                  repositoryId === building.repositoryId,
-              );
-        if (
-          file === undefined ||
-          building === undefined ||
-          provenance === undefined
-        ) {
-          sendJson(request, response, 404, {
-            error: {
-              code: "source-not-found",
-              message: "Source file not found.",
-            },
-          });
-          return;
-        }
-        const line = building.sourceLocation?.startLine ?? 1;
+        const file = sourceArtifact.file;
+        const provenance = sourceArtifact.provenance;
+        const line = file.location.startLine;
         sendJson(request, response, 200, {
           source: {
-            buildingId: building.id,
-            repositoryId: building.repositoryId,
+            buildingId: file.buildingId,
+            repositoryId: file.repositoryId,
             path: file.path,
             language: file.language,
             text: file.text,
-            location: building.sourceLocation ?? {
-              startLine: 1,
-              endLine: Math.max(
-                1,
-                file.text.split(/\r\n?|\n/u).length,
-              ),
-            },
+            location: file.location,
             provenance,
             externalUrl: immutableSourceUrl(
               provenance.provider,

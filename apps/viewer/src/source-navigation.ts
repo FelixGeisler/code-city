@@ -6,6 +6,10 @@ import type {
 const JOB_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const BUILDING_ID = /^[a-z0-9-]+:[0-9a-f]{16}$/u;
+const MAXIMUM_SOURCE_BYTES = 16 * 1024 * 1024;
+const UNSAFE_TEXT = /[\p{Cc}\p{Cf}\p{Cs}]/u;
+const SOURCE_LINE_CONTEXT = 120;
+const SOURCE_LINE_WINDOW_LIMIT = 500;
 
 export interface BuildingSource {
   readonly buildingId: string;
@@ -22,6 +26,69 @@ export interface BuildingSource {
   readonly editorUrl?: string;
 }
 
+export interface ExpectedBuildingSource {
+  readonly buildingId: string;
+  readonly repositoryId: string;
+  readonly path: string;
+  readonly language: SourceLanguage;
+  readonly location?: {
+    readonly startLine: number;
+    readonly endLine: number;
+  };
+  readonly provenance: SourceRepositoryProvenance;
+}
+
+export interface SourceLineWindow {
+  readonly requestedStart: number;
+  readonly requestedEnd: number;
+  readonly firstLine: number;
+  readonly lastLine: number;
+  readonly omittedBefore: number;
+  readonly omittedAfter: number;
+}
+
+export function sourceLineWindow(
+  totalLines: number,
+  startLine: number,
+  endLine = startLine,
+): SourceLineWindow {
+  if (
+    !Number.isSafeInteger(totalLines) ||
+    totalLines < 1 ||
+    !Number.isSafeInteger(startLine) ||
+    !Number.isSafeInteger(endLine)
+  ) {
+    throw new TypeError("Source line window bounds are invalid.");
+  }
+  const requestedStart = Math.min(totalLines, Math.max(1, startLine));
+  const requestedEnd = Math.min(
+    totalLines,
+    Math.max(requestedStart, endLine),
+  );
+  const firstLine = Math.max(
+    1,
+    requestedStart - SOURCE_LINE_CONTEXT,
+  );
+  let lastLine = Math.min(
+    totalLines,
+    requestedEnd + SOURCE_LINE_CONTEXT,
+  );
+  if (lastLine - firstLine + 1 > SOURCE_LINE_WINDOW_LIMIT) {
+    lastLine = Math.min(
+      totalLines,
+      firstLine + SOURCE_LINE_WINDOW_LIMIT - 1,
+    );
+  }
+  return Object.freeze({
+    requestedStart,
+    requestedEnd,
+    firstLine,
+    lastLine,
+    omittedBefore: firstLine - 1,
+    omittedAfter: totalLines - lastLine,
+  });
+}
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null &&
     typeof value === "object" &&
@@ -30,43 +97,147 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function parseBuildingSource(value: unknown): BuildingSource {
+function exactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+): boolean {
+  const actual = Object.keys(value).sort();
+  const sorted = [...expected].sort();
+  return (
+    actual.length === sorted.length &&
+    actual.every((key, index) => key === sorted[index])
+  );
+}
+
+function immutableExternalUrl(
+  provenance: SourceRepositoryProvenance,
+  sourcePath: string,
+  line: number,
+): string | undefined {
+  if (provenance.repositoryUrl === undefined) return undefined;
+  let repository: URL;
+  try {
+    repository = new URL(provenance.repositoryUrl);
+  } catch {
+    return undefined;
+  }
+  if (
+    repository.protocol !== "https:" ||
+    repository.username !== "" ||
+    repository.password !== ""
+  ) {
+    return undefined;
+  }
+  const encodedPath = sourcePath
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  if (provenance.provider === "github") {
+    return `${provenance.repositoryUrl.replace(/\.git\/?$/u, "").replace(/\/$/u, "")}/blob/${provenance.revision.value}/${encodedPath}#L${line}`;
+  }
+  if (provenance.provider === "azure-devops") {
+    repository.search = "";
+    repository.hash = "";
+    repository.searchParams.set("path", `/${sourcePath}`);
+    repository.searchParams.set(
+      "version",
+      `GC${provenance.revision.value}`,
+    );
+    repository.searchParams.set("line", String(line));
+    repository.searchParams.set("_a", "contents");
+    return repository.toString();
+  }
+  return undefined;
+}
+
+function safeEditorUrl(value: string): boolean {
+  if (UNSAFE_TEXT.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return (
+      ["https:", "vscode:", "vscode-insiders:"].includes(url.protocol) &&
+      url.username === "" &&
+      url.password === ""
+    );
+  } catch {
+    return false;
+  }
+}
+
+function parseBuildingSource(
+  value: unknown,
+  expected: ExpectedBuildingSource,
+): BuildingSource {
   const root = record(value);
   const source = record(root?.["source"]);
   const location = record(source?.["location"]);
   const provenance = record(source?.["provenance"]);
   const revision = record(provenance?.["revision"]);
+  const sourceKeys = [
+    "buildingId",
+    ...(source?.["editorUrl"] === undefined ? [] : ["editorUrl"]),
+    ...(source?.["externalUrl"] === undefined ? [] : ["externalUrl"]),
+    "language",
+    "location",
+    "path",
+    "provenance",
+    "repositoryId",
+    "text",
+  ];
+  const expectedProvenance = expected.provenance;
+  const expectedExternal = immutableExternalUrl(
+    expectedProvenance,
+    expected.path,
+    expected.location?.startLine ?? 1,
+  );
   if (
+    root === undefined ||
+    !exactKeys(root, ["source"]) ||
     source === undefined ||
-    typeof source["buildingId"] !== "string" ||
-    !BUILDING_ID.test(source["buildingId"]) ||
-    typeof source["repositoryId"] !== "string" ||
-    typeof source["path"] !== "string" ||
-    !["csharp", "javascript", "typescript"].includes(
-      String(source["language"]),
-    ) ||
+    !exactKeys(source, sourceKeys) ||
+    source["buildingId"] !== expected.buildingId ||
+    source["repositoryId"] !== expected.repositoryId ||
+    source["path"] !== expected.path ||
+    source["language"] !== expected.language ||
     typeof source["text"] !== "string" ||
+    new TextEncoder().encode(source["text"]).byteLength >
+      MAXIMUM_SOURCE_BYTES ||
     location === undefined ||
+    !exactKeys(location, ["endLine", "startLine"]) ||
     !Number.isSafeInteger(location["startLine"]) ||
     !Number.isSafeInteger(location["endLine"]) ||
     Number(location["startLine"]) < 1 ||
     Number(location["endLine"]) < Number(location["startLine"]) ||
+    (expected.location !== undefined &&
+      (location["startLine"] !== expected.location.startLine ||
+        location["endLine"] !== expected.location.endLine)) ||
+    (expected.location === undefined &&
+      (location["startLine"] !== 1 ||
+        location["endLine"] !==
+          Math.max(1, source["text"].split(/\r\n?|\n/u).length))) ||
     provenance === undefined ||
-    provenance["version"] !== undefined ||
-    typeof provenance["repositoryId"] !== "string" ||
-    ![
-      "github",
-      "azure-devops",
-      "generic-git",
-      "uploaded-archive",
-    ].includes(String(provenance["provider"])) ||
+    !exactKeys(provenance, [
+      "provider",
+      "repositoryId",
+      ...(expectedProvenance.repositoryUrl === undefined
+        ? []
+        : ["repositoryUrl"]),
+      "revision",
+    ]) ||
+    provenance["repositoryId"] !== expectedProvenance.repositoryId ||
+    provenance["provider"] !== expectedProvenance.provider ||
+    provenance["repositoryUrl"] !== expectedProvenance.repositoryUrl ||
     revision === undefined ||
-    !["commit", "snapshot"].includes(String(revision["kind"])) ||
-    typeof revision["value"] !== "string" ||
+    !exactKeys(revision, ["kind", "value"]) ||
+    revision["kind"] !== expectedProvenance.revision.kind ||
+    revision["value"] !== expectedProvenance.revision.value ||
     (source["externalUrl"] !== undefined &&
-      typeof source["externalUrl"] !== "string") ||
+      (typeof source["externalUrl"] !== "string" ||
+        expectedExternal === undefined ||
+        source["externalUrl"] !== expectedExternal)) ||
     (source["editorUrl"] !== undefined &&
-      typeof source["editorUrl"] !== "string")
+      (typeof source["editorUrl"] !== "string" ||
+        !safeEditorUrl(source["editorUrl"])))
   ) {
     throw new TypeError("The source response is invalid.");
   }
@@ -75,7 +246,7 @@ function parseBuildingSource(value: unknown): BuildingSource {
 
 export async function loadBuildingSource(
   jobId: string,
-  buildingId: string,
+  expected: ExpectedBuildingSource,
   gateway: (
     jobId: string,
     buildingId: string,
@@ -83,11 +254,12 @@ export async function loadBuildingSource(
   ) => Promise<unknown>,
   signal?: AbortSignal,
 ): Promise<BuildingSource> {
-  if (!JOB_ID.test(jobId) || !BUILDING_ID.test(buildingId)) {
+  if (!JOB_ID.test(jobId) || !BUILDING_ID.test(expected.buildingId)) {
     throw new TypeError("The source request identifiers are invalid.");
   }
   return parseBuildingSource(
-    await gateway(jobId, buildingId, signal),
+    await gateway(jobId, expected.buildingId, signal),
+    expected,
   );
 }
 

@@ -244,6 +244,7 @@ export interface ImportControllerOptions {
     source: ImportedCityModelSource,
   ) => void | Promise<void>;
   readonly onSignedOut?: () => void | Promise<void>;
+  readonly onResultRemoved?: (jobId: string) => void | Promise<void>;
   readonly pollIntervalMs?: number;
   readonly now?: () => number;
   readonly schedulePoll?: (
@@ -315,6 +316,9 @@ export class ImportController {
     | ((state: ImportControllerState) => void)
     | undefined;
   private readonly onModelReady: ImportControllerOptions["onModelReady"];
+  private readonly onResultRemoved:
+    | ImportControllerOptions["onResultRemoved"]
+    | undefined;
   private readonly onSignedOut: ImportControllerOptions["onSignedOut"];
   private readonly pollIntervalMs: number;
   private readonly now: () => number;
@@ -357,6 +361,7 @@ export class ImportController {
     this.storage = options.storage ?? defaultStorage();
     this.onStateChange = options.onStateChange;
     this.onModelReady = options.onModelReady;
+    this.onResultRemoved = options.onResultRemoved;
     this.onSignedOut = options.onSignedOut;
     this.pollIntervalMs =
       options.pollIntervalMs ?? IMPORT_JOB_POLL_INTERVAL_MS;
@@ -687,12 +692,12 @@ export class ImportController {
     void this.api.removeCompletedJob(job.id, controller.signal).then(
       () => {
         if (!this.isCurrent(controller, generation)) return;
-        this.finishCompletedRemoval();
+        this.finishCompletedRemoval(job.id);
       },
       (error: unknown) => {
         if (!this.isCurrent(controller, generation)) return;
         if (isMissingJob(error)) {
-          this.finishCompletedRemoval();
+          this.finishCompletedRemoval(job.id);
           return;
         }
         if (isAuthorizationFailure(error)) {
@@ -709,12 +714,13 @@ export class ImportController {
     );
   }
 
-  private finishCompletedRemoval(): void {
+  private finishCompletedRemoval(jobId: string): void {
     this.activeJob = undefined;
     this.cancellationRequestedJobId = undefined;
     this.retryAction = undefined;
     this.storage.clear();
     this.updateIdle();
+    void this.onResultRemoved?.(jobId);
   }
 
   public dispose(): void {

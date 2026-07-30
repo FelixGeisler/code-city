@@ -107,10 +107,10 @@ export function environmentWindowsCredentialFilesTrust(
 export function environmentSourceRetention(
   value: string | undefined,
 ): "retain" | "disabled" {
-  if (value === undefined || value === "" || value === "retain") {
-    return "retain";
+  if (value === undefined || value === "" || value === "disabled") {
+    return "disabled";
   }
-  if (value === "disabled") return "disabled";
+  if (value === "retain") return "retain";
   throw new Error(
     "CODECITY_SOURCE_RETENTION must be exactly retain or disabled.",
   );

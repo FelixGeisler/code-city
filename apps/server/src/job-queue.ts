@@ -104,10 +104,14 @@ export interface JobResult {
         readonly availability: "disabled";
       }
     | {
+        readonly availability: "not-captured";
+      }
+    | {
         readonly availability: "retained";
         readonly artifactUrl: string;
         readonly size: number;
         readonly sha256: string;
+        readonly indexSha256: string;
       };
 }
 
@@ -192,6 +196,7 @@ const DISABLED_SOURCE_KEYS = ["availability"] as const;
 const RETAINED_SOURCE_KEYS = [
   "artifactUrl",
   "availability",
+  "indexSha256",
   "sha256",
   "size",
 ] as const;
@@ -358,7 +363,10 @@ function readResult(
       const sourceCandidate = source as Record<string, unknown>;
       const sourceKeys = Object.keys(sourceCandidate).sort(compareText);
       const availability = sourceCandidate["availability"];
-      if (availability === "disabled") {
+      if (
+        availability === "disabled" ||
+        availability === "not-captured"
+      ) {
         if (
           sourceKeys.length !== DISABLED_SOURCE_KEYS.length ||
           !sourceKeys.every(
@@ -372,6 +380,7 @@ function readResult(
         const sourceUrl = sourceCandidate["artifactUrl"];
         const size = sourceCandidate["size"];
         const digest = sourceCandidate["sha256"];
+        const indexDigest = sourceCandidate["indexSha256"];
         if (
           sourceKeys.length !== RETAINED_SOURCE_KEYS.length ||
           !sourceKeys.every(
@@ -382,7 +391,9 @@ function readResult(
           (size as number) < 1 ||
           (size as number) > SOURCE_ARTIFACT_MAX_BYTES ||
           typeof digest !== "string" ||
-          !/^[0-9a-f]{64}$/u.test(digest)
+          !/^[0-9a-f]{64}$/u.test(digest) ||
+          typeof indexDigest !== "string" ||
+          !/^[0-9a-f]{64}$/u.test(indexDigest)
         ) {
           return undefined;
         }
@@ -391,6 +402,7 @@ function readResult(
           artifactUrl: sourceUrl,
           size: size as number,
           sha256: digest,
+          indexSha256: indexDigest,
         });
       } else {
         return undefined;

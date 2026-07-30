@@ -139,7 +139,10 @@ Size and concurrency limits are intentionally hard deployment safety limits,
 not client-controlled analysis options.
 
 `CODECITY_SOURCE_RETENTION` accepts exactly `retain` or `disabled`; the
-production entrypoint defaults to `retain`. Retained files are bounded to
+production entrypoint and Compose default to `disabled`. Only the exact
+`retain` value opts in. Retained files may contain private repository source
+and must be covered by the deployment's private storage, backup, and deletion
+policy. They are bounded to
 16 MiB each and 128 MiB per source artifact beneath
 `CODECITY_DATA_DIR/sources`, share completed-job lifecycle cleanup, and require
 the same private filesystem boundary as uploads and city artifacts. Set

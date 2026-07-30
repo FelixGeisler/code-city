@@ -3,7 +3,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { analyzeRepositorySnapshots } from "../packages/analyzer/src/index.js";
 import type { RepositorySnapshot } from "../packages/analyzer/src/snapshot.js";
@@ -82,6 +82,7 @@ async function publish(server: CodeCityServerHandle, name: string) {
           artifactUrl: `/api/v1/artifacts/${id}/source`,
           size: source.size,
           sha256: source.sha256,
+          indexSha256: source.indexSha256,
         },
       };
     },
@@ -153,6 +154,10 @@ describe("source navigation HTTP API", () => {
     const server = await fixture();
     const first = await publish(server, "alpha");
     const second = await publish(server, "beta");
+    const cityModelRead = vi.spyOn(
+      server.artifacts,
+      "readCityModel",
+    );
 
     const selected = await request(
       new URL(
@@ -168,6 +173,7 @@ describe("source navigation HTTP API", () => {
         text: expect.stringContaining("alpha"),
       },
     });
+    expect(cityModelRead).not.toHaveBeenCalled();
 
     const crossed = await request(
       new URL(

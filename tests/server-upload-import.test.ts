@@ -426,12 +426,26 @@ describe("upload import HTTP jobs", () => {
     const job = (JSON.parse(queued.body) as { job: JobRecord }).job;
     const terminal = await waitForTerminal(server, job.id);
     expect(terminal.state).toBe("completed");
+    expect(terminal.result?.source).toEqual({
+      availability: "not-captured",
+    });
     const artifact = await request(
       new URL(terminal.result!.artifactUrl, server.url),
       { method: "GET" },
     );
     expect(artifact.status).toBe(200);
     expect(JSON.parse(artifact.body)).toEqual(minimalCityModel);
+    const source = await request(
+      new URL(
+        `/api/v1/artifacts/${job.id}/sources/building:1234567890abcdef`,
+        server.url,
+      ),
+      { method: "GET" },
+    );
+    expect(source.status).toBe(409);
+    expect(JSON.parse(source.body)).toMatchObject({
+      error: { code: "source-not-captured" },
+    });
   });
 
   it("analyzes a bounded repository ZIP in either explicit root mode", async () => {

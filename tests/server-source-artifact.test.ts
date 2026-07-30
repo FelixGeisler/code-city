@@ -10,7 +10,10 @@ import {
   attachSourceProvenance,
   createSourceArtifact,
   parseSourceArtifact,
+  parseSourceArtifactIndex,
   serializeSourceArtifact,
+  SOURCE_ARTIFACT_PREFIX_BYTES,
+  sourceArtifactIndexLength,
   sourceArtifactFile,
   uploadedSnapshotProvenance,
 } from "../apps/server/src/source-artifact.js";
@@ -43,6 +46,38 @@ async function fixture() {
   return {
     model,
     artifact: createSourceArtifact(model, [
+      { repositoryId: repository.id, snapshot: retained },
+    ]),
+  };
+}
+
+async function multipleFileFixture() {
+  const firstText = "export const alpha = 1;\n";
+  const secondText = `// large unrelated file\n${"// filler\n".repeat(200_000)}`;
+  const retained: RepositorySnapshot = {
+    name: "multiple",
+    files: [
+      {
+        path: "src/alpha.ts",
+        text: firstText,
+        byteLength: Buffer.byteLength(firstText),
+      },
+      {
+        path: "src/beta.ts",
+        text: secondText,
+        byteLength: Buffer.byteLength(secondText),
+      },
+    ],
+    diagnostics: [],
+  };
+  const model = await analyzeRepositorySnapshots([retained]);
+  const repository = model.repositories[0]!;
+  const retainedModel = attachSourceProvenance(model, [
+    uploadedSnapshotProvenance(repository.id, retained),
+  ]);
+  return {
+    model: retainedModel,
+    artifact: createSourceArtifact(retainedModel, [
       { repositoryId: repository.id, snapshot: retained },
     ]),
   };
@@ -109,5 +144,79 @@ describe("source artifacts", () => {
         { repositoryId, snapshot: snapshot("export const answer = 42;\n") },
       ]),
     ).toThrow(/source location does not match/u);
+  });
+
+  it("rejects malformed offsets, truncation, and selected payload digest changes", async () => {
+    const { artifact } = await fixture();
+    const bytes = serializeSourceArtifact(artifact);
+    const indexLength = sourceArtifactIndexLength(
+      bytes.subarray(0, SOURCE_ARTIFACT_PREFIX_BYTES),
+    );
+    const payloadOffset = SOURCE_ARTIFACT_PREFIX_BYTES + indexLength;
+    const malformed = Buffer.from(bytes);
+    const index = JSON.parse(
+      malformed
+        .subarray(SOURCE_ARTIFACT_PREFIX_BYTES, payloadOffset)
+        .toString("utf8"),
+    ) as { files: Array<{ offset: number }> };
+    index.files[0]!.offset = 1;
+    const malformedIndex = Buffer.from(JSON.stringify(index), "utf8");
+    expect(malformedIndex.byteLength).toBe(indexLength);
+    malformedIndex.copy(malformed, SOURCE_ARTIFACT_PREFIX_BYTES);
+    expect(() => parseSourceArtifact(malformed)).toThrow(/offset|bounds/u);
+    expect(() => parseSourceArtifact(bytes.subarray(0, -1))).toThrow(
+      /bounds|truncated/u,
+    );
+    const corrupt = Buffer.from(bytes);
+    corrupt[payloadOffset] = corrupt[payloadOffset]! ^ 1;
+    expect(() => parseSourceArtifact(corrupt)).toThrow(/digest/u);
+  });
+
+  it("reads only the selected file while reconciliation detects a corrupt large sibling", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "code-city-source-"));
+    roots.push(root);
+    await fs.chmod(root, 0o700);
+    const store = await SourceArtifactStore.open({ dataDirectory: root });
+    const { model, artifact } = await multipleFileFixture();
+    const published = await store.publish(TOKEN, artifact);
+    const bytes = serializeSourceArtifact(artifact);
+    const indexLength = sourceArtifactIndexLength(
+      bytes.subarray(0, SOURCE_ARTIFACT_PREFIX_BYTES),
+    );
+    const index = parseSourceArtifactIndex(
+      bytes.subarray(
+        SOURCE_ARTIFACT_PREFIX_BYTES,
+        SOURCE_ARTIFACT_PREFIX_BYTES + indexLength,
+      ),
+    );
+    const sibling = index.files[1]!;
+    const siblingPosition =
+      SOURCE_ARTIFACT_PREFIX_BYTES + indexLength + sibling.offset;
+    const packPath = path.join(
+      root,
+      "sources",
+      TOKEN,
+      "source.pack",
+    );
+    const handle = await fs.open(packPath, "r+");
+    try {
+      const byte = Buffer.alloc(1);
+      await handle.read(byte, 0, 1, siblingPosition);
+      byte[0] = byte[0]! ^ 1;
+      await handle.write(byte, 0, 1, siblingPosition);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+
+    const selected = await store.readFile(
+      TOKEN,
+      model.buildings[0]!.id,
+      published,
+    );
+    expect(selected?.file.text).toContain("alpha");
+    await expect(
+      store.reconcile(new Map([[TOKEN, published]])),
+    ).rejects.toThrow(/digest/u);
   });
 });
