@@ -122,6 +122,25 @@ function bearerProfile(
   };
 }
 
+function basicProfile(
+  id: string,
+  provider: ManifestProfile["provider"],
+  repositories: readonly string[],
+  secretFile = "shared.secret",
+): ManifestProfile {
+  return {
+    id,
+    label: `${id} label`,
+    provider,
+    repositories,
+    authentication: {
+      kind: "basic",
+      username: "build-user",
+      secretFile,
+    },
+  };
+}
+
 function request(
   url: URL,
   options: {
@@ -222,7 +241,7 @@ describe("credential profile registry", () => {
           secretFile: "shared.secret",
         },
       },
-      bearerProfile(
+      basicProfile(
         "generic-profile",
         "generic-https",
         [
@@ -317,6 +336,335 @@ describe("credential profile registry", () => {
     registry.close();
     expect(registry.capabilities()).toEqual([]);
     expect(registry.size).toBe(0);
+  });
+
+  it("binds exact scopes and exposes callback-scoped bearer and basic bytes", async () => {
+    const fixture = await credentialFixture(
+      [
+        {
+          ...bearerProfile(
+            "github-bearer",
+            "github",
+            ["https://github.com/Example/Repository"],
+          ),
+          authentication: {
+            kind: "bearer",
+            secretFile: "bearer.secret",
+          },
+        },
+        basicProfile(
+          "generic-basic",
+          "generic-https",
+          ["https://git.example.test/Example/BasicRepository"],
+          "basic.secret",
+        ),
+      ],
+      {
+        "bearer.secret": "github-token==\r\n",
+        "basic.secret": "päss/wörd\n",
+      },
+    );
+    const registry = await CredentialProfileRegistry.open(
+      registryOptions(fixture.profilesFile),
+    );
+
+    const bearer = registry.bind(
+      "github-bearer",
+      "github",
+      "https://github.com/example/REPOSITORY",
+    );
+    expect(bearer?.provider).toBe("github");
+    expect(Object.keys(bearer ?? {})).toEqual(["provider", "use"]);
+    expect(JSON.stringify(bearer)).not.toMatch(
+      /token|secret|repository|github-bearer/iu,
+    );
+    expect(
+      registry.bind(
+        "github-bearer",
+        "github",
+        "https://github.com/Example/Repository.git",
+      ),
+    ).toBeUndefined();
+    expect(
+      registry.bind(
+        "github-bearer",
+        "github",
+        "https://github.com/Example/AnotherRepository",
+      ),
+    ).toBeUndefined();
+    expect(
+      registry.bind(
+        "github-bearer",
+        "git",
+        "https://github.com/Example/Repository",
+      ),
+    ).toBeUndefined();
+    expect(
+      registry.bind(
+        "missing-profile",
+        "github",
+        "https://github.com/Example/Repository",
+      ),
+    ).toBeUndefined();
+
+    let retainedBearer: Uint8Array | undefined;
+    const bearerResult = await bearer!.use(
+      new AbortController().signal,
+      (credential) => {
+        expect(credential.kind).toBe("bearer");
+        expect(Buffer.from(credential.secret).toString("ascii"))
+          .toBe("github-token==");
+        retainedBearer = credential.secret;
+        return "bearer-result";
+      },
+    );
+    expect(bearerResult).toBe("bearer-result");
+    expect([...retainedBearer!].every((value) => value === 0)).toBe(true);
+
+    const basic = registry.bind(
+      "generic-basic",
+      "git",
+      "https://git.example.test/Example/BasicRepository",
+    );
+    expect(basic?.provider).toBe("generic-https");
+    let retainedBasic: Uint8Array | undefined;
+    await basic!.use(
+      new AbortController().signal,
+      async (credential) => {
+        expect(credential.kind).toBe("basic");
+        if (credential.kind !== "basic") throw new Error();
+        expect(credential.username).toBe("build-user");
+        expect(Buffer.from(credential.secret).toString("utf8"))
+          .toBe("päss/wörd");
+        retainedBasic = credential.secret;
+      },
+    );
+    expect([...retainedBasic!].every((value) => value === 0)).toBe(true);
+    registry.close();
+  });
+
+  it("zeros active secret bytes after callback errors, abort, and registry close", async () => {
+    const fixture = await credentialFixture([
+      bearerProfile(
+        "github-profile",
+        "github",
+        ["https://github.com/Example/Repository"],
+      ),
+    ]);
+    const registry = await CredentialProfileRegistry.open(
+      registryOptions(fixture.profilesFile),
+    );
+    const binding = registry.bind(
+      "github-profile",
+      "github",
+      "https://github.com/Example/Repository",
+    )!;
+
+    let erroredBytes: Uint8Array | undefined;
+    await expect(
+      binding.use(
+        new AbortController().signal,
+        (credential) => {
+          erroredBytes = credential.secret;
+          throw new Error("credential callback failed");
+        },
+      ),
+    ).rejects.toThrow("credential callback failed");
+    expect([...erroredBytes!].every((value) => value === 0)).toBe(true);
+
+    const abortController = new AbortController();
+    let abortedBytes: Uint8Array | undefined;
+    const aborted = binding.use(
+      abortController.signal,
+      (credential) => {
+        abortedBytes = credential.secret;
+        abortController.abort();
+        return new Promise<never>(() => undefined);
+      },
+    );
+    await expect(aborted).rejects.toMatchObject({ name: "AbortError" });
+    expect([...abortedBytes!].every((value) => value === 0)).toBe(true);
+
+    const immediateAbortController = new AbortController();
+    let immediatelyAbortedOperationInvoked = false;
+    const immediatelyAborted = binding.use(
+      immediateAbortController.signal,
+      () => {
+        immediatelyAbortedOperationInvoked = true;
+      },
+    );
+    immediateAbortController.abort();
+    await expect(immediatelyAborted).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(immediatelyAbortedOperationInvoked).toBe(false);
+
+    let started!: () => void;
+    const operationStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let closedBytes: Uint8Array | undefined;
+    const closed = binding.use(
+      new AbortController().signal,
+      (credential) => {
+        closedBytes = credential.secret;
+        started();
+        return new Promise<never>(() => undefined);
+      },
+    );
+    await operationStarted;
+    registry.close();
+    await expect(closed).rejects.toThrow(/registry was closed/iu);
+    expect([...closedBytes!].every((value) => value === 0)).toBe(true);
+    await expect(
+      binding.use(
+        new AbortController().signal,
+        () => undefined,
+      ),
+    ).rejects.toThrow(/registry was closed/iu);
+  });
+
+  it("revalidates the startup secret path, identity, and snapshot before use", async () => {
+    for (const mutation of ["snapshot", "identity"] as const) {
+      const fixture = await credentialFixture([
+        bearerProfile(
+          "github-profile",
+          "github",
+          ["https://github.com/Example/Repository"],
+        ),
+      ]);
+      const registry = await CredentialProfileRegistry.open(
+        registryOptions(fixture.profilesFile),
+      );
+      const binding = registry.bind(
+        "github-profile",
+        "github",
+        "https://github.com/Example/Repository",
+      )!;
+      const secretPath = path.join(
+        fixture.directory,
+        "shared.secret",
+      );
+      if (mutation === "snapshot") {
+        await privateFile(secretPath, "credential-secret\n");
+        const changed = new Date(Date.now() + 5_000);
+        await fs.utimes(secretPath, changed, changed);
+      } else {
+        await fs.rename(
+          secretPath,
+          path.join(fixture.directory, "original.secret"),
+        );
+        await privateFile(secretPath, "replacement-token\n");
+      }
+      let invoked = false;
+      await expect(
+        binding.use(
+          new AbortController().signal,
+          () => {
+            invoked = true;
+          },
+        ),
+      ).rejects.toThrow(/changed after server startup/iu);
+      expect(invoked).toBe(false);
+      registry.close();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "revalidates credential-directory trust before runtime secret use",
+    async () => {
+      const fixture = await credentialFixture([
+        bearerProfile(
+          "github-profile",
+          "github",
+          ["https://github.com/Example/Repository"],
+        ),
+      ]);
+      const registry = await CredentialProfileRegistry.open(
+        registryOptions(fixture.profilesFile),
+      );
+      const binding = registry.bind(
+        "github-profile",
+        "github",
+        "https://github.com/Example/Repository",
+      )!;
+      let invoked = false;
+
+      await fs.chmod(fixture.directory, 0o777);
+      try {
+        await expect(
+          binding.use(
+            new AbortController().signal,
+            () => {
+              invoked = true;
+            },
+          ),
+        ).rejects.toThrow(/directory.*mode 0700/iu);
+        expect(invoked).toBe(false);
+      } finally {
+        await fs.chmod(fixture.directory, 0o700);
+        registry.close();
+      }
+    },
+  );
+
+  it("enforces provider authentication contracts and validates GitHub bearer tokens", async () => {
+    const githubBasic = await credentialFixture([
+      basicProfile(
+        "github-basic",
+        "github",
+        ["https://github.com/Example/Repository"],
+      ),
+    ]);
+    await expect(
+      CredentialProfileRegistry.open(
+        registryOptions(githubBasic.profilesFile),
+      ),
+    ).rejects.toThrow(/must be "bearer"/iu);
+
+    for (const profile of [
+      bearerProfile(
+        "azure-bearer",
+        "azure-devops",
+        ["https://dev.azure.com/Org/Project/_git/Repository"],
+      ),
+      bearerProfile(
+        "generic-bearer",
+        "generic-https",
+        ["https://git.example.test/Group/Repository"],
+      ),
+    ]) {
+      const fixture = await credentialFixture([profile]);
+      await expect(
+        CredentialProfileRegistry.open(
+          registryOptions(fixture.profilesFile),
+        ),
+      ).rejects.toThrow(/must be "basic"/iu);
+    }
+
+    for (const token of [
+      "token with space\n",
+      "tökén\n",
+      "=token\n",
+      "token=middle\n",
+    ]) {
+      const fixture = await credentialFixture(
+        [
+          bearerProfile(
+            "invalid-bearer",
+            "github",
+            ["https://github.com/Example/Repository"],
+          ),
+        ],
+        { "shared.secret": token },
+      );
+      await expect(
+        CredentialProfileRegistry.open(
+          registryOptions(fixture.profilesFile),
+        ),
+      ).rejects.toThrow(/ASCII b64token/iu);
+    }
   });
 
   it("rejects non-canonical authorities, unsafe paths, and invalid Azure shapes", async () => {
@@ -777,15 +1125,19 @@ describe("credential profile server integration", () => {
       .toThrow(/exactly 1/u);
   });
 
-  it("does not add credential selection to the import contract", () => {
-    expect(() =>
+  it("parses only the credential profile selector, never secret material", () => {
+    expect(
       parseRemoteImportRequest({
         source: {
           kind: "github",
           repositoryUrl: "https://github.com/Example/Repository",
           credentialProfileId: "github-profile",
         },
-      }),
-    ).toThrow("The import request is invalid.");
+      }).source,
+    ).toEqual({
+      kind: "github",
+      repositoryUrl: "https://github.com/Example/Repository",
+      credentialProfileId: "github-profile",
+    });
   });
 });

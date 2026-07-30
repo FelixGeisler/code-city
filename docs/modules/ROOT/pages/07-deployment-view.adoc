@@ -64,13 +64,40 @@ normalizes only a valid canonical authority; its raw path, case, uppercase
 percent encoding, and terminal `.git` remain exact. The authenticated
 `/api/v1/imports/capabilities` projection contains only ID, display label, and
 provider.
+GitHub profiles are bearer-only and accept one ASCII RFC 6750 `b64token` secret
+line. Azure DevOps and Generic HTTPS profiles are Basic-only; the
+visible-ASCII username cannot contain a colon, and they require a one-line UTF-8
+secret.
 
-The current implementation validates and advertises profiles but does not
-accept `credentialProfileId` or inject credentials into Git. The Compose file
-forwards the manifest path and Windows attestation only; it does not mount
-secrets. Supply an explicit read-only private mount owned by runtime UID 10001
-and never use environment values, remote URLs, repository files, or Git config
-for secret material.
+An authenticated GitHub import may select one profile through the optional,
+strict `source.credentialProfileId` field. Provider and exact repository scope
+must match before staging. At execution, the server reopens the secret and
+revalidates its protected path and security-relevant startup snapshot: file
+identity, mode and ownership, link count, size, and modification and change
+times. The operation callback receives only a callback-scoped mutable
+credential buffer; protected-read, validation, and callback-scoped buffers are
+overwritten after use, including failure, abort, or registry close. Profile
+secret replacement therefore requires a server restart.
+
+Bearer authorization is sent only to exact HTTPS `api.github.com` requests. A
+token used for private or internal archive access needs repository
+`Contents: read` permission. Automatic redirect following remains disabled.
+Code City accepts the documented zipball API's single `302` only when its target
+is `codeload.github.com` with the exact path
+`/\{owner\}/\{repo\}/legacy.zip/\{sha\}`. An opaque query string is accepted;
+the second request sends no `Authorization` header. All other redirects are
+rejected. This supports private and internal GitHub repositories without
+disclosing a profile credential to the archive host.
+
+Selected-profile injection for Azure DevOps and Generic HTTPS remains pending.
+Anonymous GitHub behavior and Generic Git's ambient credentials are unchanged.
+The Compose file forwards the manifest path and Windows attestation only; it
+does not mount secrets. Supply an explicit read-only private mount owned by
+runtime UID 10001 and never use environment values, remote URLs, repository
+files, or Git config for secret material. Profile selectors, secrets, remote
+URLs, requested symbolic refs, and source bytes are not persisted in jobs or
+artifacts. The resolved immutable commit SHA may be stored as the generated
+model's default version.
 
 On POSIX, the token file must be process-owned, mode `0400` or `0600`, regular,
 non-symlinked, and have one link. Its identity is checked around a bounded

@@ -42,6 +42,25 @@ import {
 const temporaryDirectories: string[] = [];
 const servers: CodeCityServerHandle[] = [];
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
+const AUTHORIZATION_TOKEN = Buffer.alloc(32, 0x3d).toString("base64url");
+const PROFILE_SECRET = "server-owned-repository-credential";
+
+interface TestCredentialProfile {
+  readonly id: string;
+  readonly label: string;
+  readonly provider: "github" | "azure-devops" | "generic-https";
+  readonly repositories: readonly string[];
+  readonly authentication:
+    | {
+        readonly kind: "bearer";
+        readonly secretFile: string;
+      }
+    | {
+        readonly kind: "basic";
+        readonly username: string;
+        readonly secretFile: string;
+      };
+}
 
 function cityModelFixture(): CityModel {
   return {
@@ -75,6 +94,61 @@ async function fixture(): Promise<{
     "utf8",
   );
   return { dataDirectory, viewerRoot };
+}
+
+async function privateFile(
+  file: string,
+  contents: string,
+): Promise<void> {
+  await fs.writeFile(file, contents, { mode: 0o600 });
+  if (process.platform !== "win32") await fs.chmod(file, 0o600);
+}
+
+async function credentialServerOptions(
+  roots: {
+    readonly dataDirectory: string;
+    readonly viewerRoot: string;
+  },
+  profiles: readonly TestCredentialProfile[],
+): Promise<{
+  readonly authorization: {
+    readonly tokenFile: string;
+    readonly publicOrigin: string;
+    readonly trustWindowsTokenFile: boolean;
+  };
+  readonly credentialProfiles: {
+    readonly profilesFile: string;
+    readonly trustWindowsCredentialFiles: boolean;
+  };
+}> {
+  const root = path.dirname(roots.dataDirectory);
+  const credentialDirectory = path.join(root, "credentials");
+  await fs.mkdir(credentialDirectory, { mode: 0o700 });
+  if (process.platform !== "win32") {
+    await fs.chmod(credentialDirectory, 0o700);
+  }
+  await privateFile(
+    path.join(credentialDirectory, "repository.secret"),
+    `${PROFILE_SECRET}\n`,
+  );
+  const profilesFile = path.join(credentialDirectory, "profiles.json");
+  await privateFile(
+    profilesFile,
+    JSON.stringify({ version: 1, profiles }),
+  );
+  const tokenFile = path.join(root, "authorization-token");
+  await privateFile(tokenFile, `${AUTHORIZATION_TOKEN}\n`);
+  return {
+    authorization: {
+      tokenFile,
+      publicOrigin: "https://codecity.test",
+      trustWindowsTokenFile: process.platform === "win32",
+    },
+    credentialProfiles: {
+      profilesFile,
+      trustWindowsCredentialFiles: process.platform === "win32",
+    },
+  };
 }
 
 async function waitForTerminal(
@@ -145,6 +219,14 @@ function importHeaders(): http.OutgoingHttpHeaders {
   return {
     "Content-Type": "application/json",
     "X-Code-City-Request": "1",
+  };
+}
+
+function authorizedImportHeaders(): http.OutgoingHttpHeaders {
+  return {
+    ...importHeaders(),
+    Authorization: `Bearer ${AUTHORIZATION_TOKEN}`,
+    Host: "codecity.test",
   };
 }
 
@@ -273,6 +355,7 @@ describe("remote import request parsing", () => {
           source: {
             kind: "github",
             repositoryUrl: "https://github.com/openai/example.git",
+            credentialProfileId: "github-private",
             revision: { kind: "branch", name: "feature/demo" },
           },
           identity: { title: "Demo", version: "1", logo: "art/logo.svg" },
@@ -288,6 +371,7 @@ describe("remote import request parsing", () => {
       source: {
         kind: "github",
         repositoryUrl: "https://github.com/openai/example",
+        credentialProfileId: "github-private",
         revision: { kind: "branch", name: "feature/demo" },
         ref: "heads/feature/demo",
       },
@@ -329,6 +413,53 @@ describe("remote import request parsing", () => {
     });
     expect(sameNameBranch.source.ref).toBe("heads/release");
     expect(sameNameTag.source.ref).toBe("tags/release");
+  });
+
+  it("accepts only an exact bounded credential profile identifier", () => {
+    const maximumIdentifier = `a${"0".repeat(63)}`;
+    expect(
+      parseRemoteImportRequest({
+        source: {
+          kind: "github",
+          repositoryUrl: "https://github.com/openai/example",
+          credentialProfileId: maximumIdentifier,
+        },
+      }).source.credentialProfileId,
+    ).toBe(maximumIdentifier);
+
+    for (const credentialProfileId of [
+      undefined,
+      null,
+      1,
+      "",
+      "1github",
+      "GitHub",
+      "github_profile",
+      " github",
+      "github ",
+      "github\nprofile",
+      `a${"0".repeat(64)}`,
+    ]) {
+      try {
+        parseRemoteImportRequest({
+          source: {
+            kind: "github",
+            repositoryUrl: "https://github.com/openai/example",
+            credentialProfileId,
+          },
+        });
+        throw new Error("Expected credential profile parsing to fail.");
+      } catch (error) {
+        expect(error).toBeInstanceOf(RemoteImportRequestError);
+        expect(
+          (error as RemoteImportRequestError).fields,
+        ).toEqual([
+          expect.objectContaining({
+            path: "$.source.credentialProfileId",
+          }),
+        ]);
+      }
+    }
   });
 
   it.each([
@@ -698,6 +829,7 @@ describe("remote import HTTP API", () => {
       },
     });
     expect(fakes.github).toHaveBeenCalledTimes(1);
+    expect(fakes.github.mock.calls[0]).toHaveLength(2);
     const [analyzerRequest, analyzerOptions] =
       fakes.github.mock.calls[0]!;
     expect(analyzerRequest).toEqual({
@@ -727,6 +859,231 @@ describe("remote import HTTP API", () => {
         path.join(roots.dataDirectory, "tmp", "imports"),
       ),
     ).toEqual([]);
+  });
+
+  it("uses an exact GitHub credential binding without persisting its selector or secret", async () => {
+    const roots = await fixture();
+    const profileId = "github-private";
+    const repositoryUrl = "https://github.com/openai/private";
+    const serverOptions = await credentialServerOptions(roots, [
+      {
+        id: profileId,
+        label: "Private GitHub repository",
+        provider: "github",
+        repositories: [repositoryUrl],
+        authentication: {
+          kind: "bearer",
+          secretFile: "repository.secret",
+        },
+      },
+    ]);
+    let retainedSecret: Uint8Array | undefined;
+    let credentialUseCount = 0;
+    let sawExpectedSecret = false;
+    const githubImplementation: NonNullable<
+      RemoteImportDependencies["analyzePublicGitHubRepository"]
+    > = async (
+      analyzerRequest,
+      analyzerOptions,
+      analyzerDependencies,
+    ): Promise<PublicGitHubAnalysisResult> => {
+      expect(analyzerRequest).toEqual({ repositoryUrl });
+      expect(analyzerDependencies?.credentialProvider?.provider).toBe(
+        "github",
+      );
+      const provider = analyzerDependencies?.credentialProvider;
+      const signal = analyzerOptions?.signal;
+      if (provider === undefined || signal === undefined) {
+        throw new Error("The credential provider was not supplied.");
+      }
+      await provider.use(signal, async (credential) => {
+        credentialUseCount += 1;
+        retainedSecret = credential.secret;
+        expect(credential.kind).toBe("bearer");
+        sawExpectedSecret =
+          Buffer.from(credential.secret).toString("utf8") ===
+            PROFILE_SECRET;
+      });
+      return {
+        owner: "openai",
+        repository: "private",
+        canonicalRepositoryUrl: repositoryUrl,
+        commitSha: COMMIT,
+        model: cityModelFixture(),
+      };
+    };
+    const github = vi.fn(githubImplementation);
+    const server = await startCodeCityServer({
+      host: "127.0.0.1",
+      port: 0,
+      ...roots,
+      ...serverOptions,
+      importDependencies: {
+        analyzePublicGitHubRepository: github,
+      },
+    });
+    servers.push(server);
+
+    const response = await request(
+      new URL("/api/v1/imports", server.url),
+      {
+        method: "POST",
+        headers: authorizedImportHeaders(),
+        body: importBody({
+          kind: "github",
+          repositoryUrl,
+          credentialProfileId: profileId,
+        }),
+      },
+    );
+    expect(response.status).toBe(202);
+    const queued = (JSON.parse(response.body) as { job: JobRecord }).job;
+    const terminal = await waitForTerminal(server, queued.id);
+    expect(terminal.state).toBe("completed");
+    expect(github).toHaveBeenCalledTimes(1);
+    expect(credentialUseCount).toBe(1);
+    expect(sawExpectedSecret).toBe(true);
+    expect(retainedSecret).toBeDefined();
+    expect(retainedSecret?.every((byte) => byte === 0)).toBe(true);
+
+    const artifact = await request(
+      new URL(terminal.result!.artifactUrl, server.url),
+      { headers: authorizedImportHeaders() },
+    );
+    expect(artifact.status).toBe(200);
+    const persisted = await fs.readFile(
+      path.join(roots.dataDirectory, "jobs", `${queued.id}.json`),
+      "utf8",
+    );
+    for (const representation of [
+      response.body,
+      JSON.stringify(terminal),
+      JSON.stringify(github.mock.calls[0]),
+      persisted,
+      artifact.body,
+    ]) {
+      expect(representation).not.toContain(profileId);
+      expect(representation).not.toContain(PROFILE_SECRET);
+    }
+    expect(
+      await fs.readdir(
+        path.join(roots.dataDirectory, "tmp", "imports"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("rejects unavailable credential selections uniformly before staging or analyzer work", async () => {
+    const roots = await fixture();
+    const githubRepository = "https://github.com/openai/private";
+    const genericRepository =
+      "https://git.example.test/group/repository.git";
+    const serverOptions = await credentialServerOptions(roots, [
+      {
+        id: "github-private",
+        label: "Private GitHub repository",
+        provider: "github",
+        repositories: [githubRepository],
+        authentication: {
+          kind: "bearer",
+          secretFile: "repository.secret",
+        },
+      },
+      {
+        id: "generic-private",
+        label: "Private generic repository",
+        provider: "generic-https",
+        repositories: [genericRepository],
+        authentication: {
+          kind: "basic",
+          username: "build-user",
+          secretFile: "repository.secret",
+        },
+      },
+    ]);
+    const fakes = successfulDependencies();
+    const server = await startCodeCityServer({
+      host: "127.0.0.1",
+      port: 0,
+      ...roots,
+      ...serverOptions,
+      allowedGitOrigins: ["https://git.example.test"],
+      trustWindowsGitWorkspace: true,
+      importDependencies: fakes.dependencies,
+    });
+    servers.push(server);
+    const createStaging = vi.fn();
+    const originalCreateStaging =
+      server.artifacts.createStagingDirectory.bind(server.artifacts);
+    vi.spyOn(
+      server.artifacts,
+      "createStagingDirectory",
+    ).mockImplementation(async () => {
+      createStaging();
+      return originalCreateStaging();
+    });
+    const expectedResponse = {
+      error: {
+        code: "invalid-import-request",
+        message: "The import request is invalid.",
+        fields: [
+          {
+            code: "source-not-allowed",
+            path: "$.source.credentialProfileId",
+            message:
+              "This credential profile is not available for the requested source.",
+          },
+        ],
+      },
+    };
+    const unavailableSources = [
+      {
+        kind: "github",
+        repositoryUrl: githubRepository,
+        credentialProfileId: "missing-profile",
+      },
+      {
+        kind: "github",
+        repositoryUrl: "https://github.com/openai/other",
+        credentialProfileId: "github-private",
+      },
+      {
+        kind: "github",
+        repositoryUrl: githubRepository,
+        credentialProfileId: "generic-private",
+      },
+      {
+        kind: "git",
+        repositoryUrl: genericRepository,
+        credentialProfileId: "github-private",
+      },
+      {
+        kind: "git",
+        repositoryUrl: genericRepository,
+        credentialProfileId: "generic-private",
+      },
+      {
+        kind: "git",
+        repositoryUrl: "https://denied.example.test/repository.git",
+        credentialProfileId: "github-private",
+      },
+    ] as const;
+
+    for (const source of unavailableSources) {
+      const response = await request(
+        new URL("/api/v1/imports", server.url),
+        {
+          method: "POST",
+          headers: authorizedImportHeaders(),
+          body: importBody(source),
+        },
+      );
+      expect(response.status).toBe(403);
+      expect(JSON.parse(response.body)).toEqual(expectedResponse);
+    }
+    expect(createStaging).not.toHaveBeenCalled();
+    expect(fakes.github).not.toHaveBeenCalled();
+    expect(fakes.git).not.toHaveBeenCalled();
+    expect(server.jobs.list()).toEqual([]);
   });
 
   it("uses a per-import trusted workspace parent for Generic Git", async () => {

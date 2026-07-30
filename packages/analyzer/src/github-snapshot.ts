@@ -24,6 +24,7 @@ const INVALID_REF_CHARACTERS =
   /[\s\\~^:?*]|\[|\]|\p{Cc}|\p{Cf}|\p{Cs}/u;
 const GITHUB_REPOSITORY_URL_MAX_CODE_UNITS = 164;
 const GITHUB_REF_INPUT_MAX_CODE_UNITS = 1024;
+const GITHUB_CREDENTIAL_SECRET_MAX_BYTES = 8 * 1024;
 
 export const GITHUB_METADATA_MAX_BYTES = MEBIBYTE;
 export const GITHUB_ARCHIVE_MAX_BYTES = 64 * MEBIBYTE;
@@ -40,6 +41,21 @@ export type GitHubSnapshotFetch = (
   init: RequestInit,
 ) => Promise<Response>;
 
+export interface GitHubSnapshotCredential {
+  readonly kind: "bearer";
+  readonly secret: Uint8Array;
+}
+
+export interface GitHubSnapshotCredentialProvider {
+  readonly provider: "github";
+  use<T>(
+    signal: AbortSignal,
+    operation: (
+      credential: GitHubSnapshotCredential,
+    ) => T | Promise<T>,
+  ): Promise<T>;
+}
+
 export interface GitHubSnapshotRequest {
   readonly repositoryUrl: string;
   readonly ref?: string;
@@ -50,6 +66,7 @@ export interface GitHubSnapshotRequest {
 
 export interface GitHubSnapshotDependencies {
   readonly fetch?: GitHubSnapshotFetch;
+  readonly credentialProvider?: GitHubSnapshotCredentialProvider;
 }
 
 export interface GitHubSnapshotResult {
@@ -314,6 +331,21 @@ function cancelUnusedBody(response: Response): void {
   });
 }
 
+async function cancelUnusedBodyBeforeFollowup(
+  response: Response,
+  signal: AbortSignal,
+): Promise<void> {
+  throwIfAborted(signal);
+  if (response.body === null) return;
+  try {
+    await raceWithAbort(response.body.cancel(), signal);
+  } catch (error) {
+    if (error === INTERNAL_ABORT) throw error;
+    // Preserve the validated redirect boundary instead of cleanup details.
+  }
+  throwIfAborted(signal);
+}
+
 function throwIfAborted(signal: AbortSignal): void {
   if (signal.aborted) throw INTERNAL_ABORT;
 }
@@ -417,21 +449,109 @@ async function readBoundedBody(
   return bytes;
 }
 
+function invalidCredential(): GitHubSnapshotError {
+  return new GitHubSnapshotError(
+    "GITHUB_INVALID_REQUEST",
+    "GitHub credential material is invalid.",
+  );
+}
+
+function validBearerSecret(secret: Uint8Array): boolean {
+  if (
+    secret.byteLength === 0 ||
+    secret.byteLength > GITHUB_CREDENTIAL_SECRET_MAX_BYTES
+  ) {
+    return false;
+  }
+  let padding = false;
+  let content = false;
+  for (const byte of secret) {
+    if (byte === 0x3d) {
+      padding = true;
+      continue;
+    }
+    const allowed =
+      (byte >= 0x30 && byte <= 0x39) ||
+      (byte >= 0x41 && byte <= 0x5a) ||
+      (byte >= 0x61 && byte <= 0x7a) ||
+      byte === 0x2d ||
+      byte === 0x2e ||
+      byte === 0x2f ||
+      byte === 0x5f ||
+      byte === 0x7e ||
+      byte === 0x2b;
+    if (padding || !allowed) return false;
+    content = true;
+  }
+  return content;
+}
+
+function authorizationHeader(
+  credential: GitHubSnapshotCredential,
+): string {
+  if (
+    typeof credential !== "object" ||
+    credential === null ||
+    credential.kind !== "bearer" ||
+    !(credential.secret instanceof Uint8Array) ||
+    !validBearerSecret(credential.secret)
+  ) {
+    throw invalidCredential();
+  }
+
+  const bytes = new Uint8Array(7 + credential.secret.byteLength);
+  try {
+    bytes[0] = 0x42;
+    bytes[1] = 0x65;
+    bytes[2] = 0x61;
+    bytes[3] = 0x72;
+    bytes[4] = 0x65;
+    bytes[5] = 0x72;
+    bytes[6] = 0x20;
+    bytes.set(credential.secret, 7);
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } finally {
+    bytes.fill(0);
+  }
+}
+
+function credentialEndpoint(url: URL): boolean {
+  return (
+    url.origin === GITHUB_API_ORIGIN &&
+    url.username === "" &&
+    url.password === "" &&
+    url.search === "" &&
+    url.hash === ""
+  );
+}
+
 function requestInit(
+  url: URL,
   signal: AbortSignal,
   accept: string,
+  authorization: string | undefined,
+  redirect: RequestRedirect = "error",
 ): RequestInit {
+  if (authorization !== undefined && !credentialEndpoint(url)) {
+    throw new GitHubSnapshotError(
+      "GITHUB_INVALID_REQUEST",
+      "GitHub credentials may only be sent to exact GitHub endpoints.",
+    );
+  }
   return {
     method: "GET",
     cache: "no-store",
     credentials: "omit",
-    redirect: "error",
+    redirect,
     referrerPolicy: "no-referrer",
     headers: {
       Accept: accept,
       ...(accept === GITHUB_API_ACCEPT
         ? { "X-GitHub-Api-Version": GITHUB_API_VERSION }
         : {}),
+      ...(authorization === undefined
+        ? {}
+        : { Authorization: authorization }),
     },
     signal,
   };
@@ -471,7 +591,6 @@ function validateExactResponseUrl(
     responseUrl.href !== requestedUrl.href ||
     responseUrl.username !== "" ||
     responseUrl.password !== "" ||
-    responseUrl.search !== "" ||
     responseUrl.hash !== ""
   ) {
     throw new GitHubSnapshotError(
@@ -481,19 +600,26 @@ function validateExactResponseUrl(
   }
 }
 
-async function fetchExact(
+async function fetchResponse(
   fetchImplementation: GitHubSnapshotFetch,
   url: URL,
   accept: string,
   signal: AbortSignal,
+  authorization: string | undefined,
+  redirect: RequestRedirect,
 ): Promise<Response> {
   let pending: Promise<Response>;
   try {
-    pending = fetchImplementation(url.href, requestInit(signal, accept));
+    pending = fetchImplementation(
+      url.href,
+      requestInit(url, signal, accept, authorization, redirect),
+    );
   } catch {
     throw new GitHubSnapshotError(
       "GITHUB_REQUEST_FAILED",
-      "Anonymous GitHub request failed.",
+      authorization === undefined
+        ? "Anonymous GitHub request failed."
+        : "GitHub request failed.",
     );
   }
 
@@ -504,9 +630,29 @@ async function fetchExact(
     if (error === INTERNAL_ABORT) throw error;
     throw new GitHubSnapshotError(
       "GITHUB_REQUEST_FAILED",
-      "Anonymous GitHub request failed.",
+      authorization === undefined
+        ? "Anonymous GitHub request failed."
+        : "GitHub request failed.",
     );
   }
+  return response;
+}
+
+async function fetchExact(
+  fetchImplementation: GitHubSnapshotFetch,
+  url: URL,
+  accept: string,
+  signal: AbortSignal,
+  authorization: string | undefined,
+): Promise<Response> {
+  const response = await fetchResponse(
+    fetchImplementation,
+    url,
+    accept,
+    signal,
+    authorization,
+    "error",
+  );
   try {
     validateExactResponseUrl(response, url);
   } catch (error) {
@@ -523,12 +669,14 @@ async function fetchJson(
   unavailableCode:
     | "GITHUB_REF_UNAVAILABLE"
     | "GITHUB_REPOSITORY_UNAVAILABLE",
+  authorization: string | undefined,
 ): Promise<JsonObject> {
   const response = await fetchExact(
     fetchImplementation,
     url,
     GITHUB_API_ACCEPT,
     signal,
+    authorization,
   );
   if (
     response.status === 404 ||
@@ -539,7 +687,9 @@ async function fetchJson(
     throw new GitHubSnapshotError(
       unavailableCode,
       unavailableCode === "GITHUB_REPOSITORY_UNAVAILABLE"
-        ? "Public GitHub repository is unavailable."
+        ? authorization === undefined
+          ? "Public GitHub repository is unavailable."
+          : "GitHub repository is unavailable."
         : "Requested GitHub ref is unavailable.",
     );
   }
@@ -547,7 +697,9 @@ async function fetchJson(
     cancelUnusedBody(response);
     throw new GitHubSnapshotError(
       "GITHUB_REQUEST_FAILED",
-      `Anonymous GitHub API request failed with HTTP ${response.status}.`,
+      authorization === undefined
+        ? `Anonymous GitHub API request failed with HTTP ${response.status}.`
+        : `GitHub API request failed with HTTP ${response.status}.`,
     );
   }
   return parseJsonObject(
@@ -570,6 +722,7 @@ async function fetchArchive(
     url,
     "application/zip",
     signal,
+    undefined,
   );
   if (response.status !== 200) {
     cancelUnusedBody(response);
@@ -584,6 +737,101 @@ async function fetchArchive(
     "repository archive",
     signal,
   );
+}
+
+function validatedCodeloadLocation(
+  value: string | null,
+  repository: CanonicalRepository,
+  commitSha: string,
+): URL {
+  if (
+    value === null ||
+    value.length === 0 ||
+    value.trim() !== value
+  ) {
+    throw new GitHubSnapshotError(
+      "GITHUB_INVALID_RESPONSE",
+      "GitHub archive redirect target was invalid.",
+    );
+  }
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new GitHubSnapshotError(
+      "GITHUB_INVALID_RESPONSE",
+      "GitHub archive redirect target was invalid.",
+    );
+  }
+  const rawLocation =
+    /^https:\/\/codeload\.github\.com(\/[^?#]*)(?:\?[^#]*)?$/iu.exec(
+      value,
+    );
+  const path = rawLocation?.[1];
+  const components = path?.split("/");
+  if (
+    path === undefined ||
+    components === undefined ||
+    components.length !== 5 ||
+    components[0] !== "" ||
+    !OWNER.test(components[1] ?? "") ||
+    !REPOSITORY.test(components[2] ?? "") ||
+    components[1]?.toLocaleLowerCase("en-US") !==
+      repository.owner.toLocaleLowerCase("en-US") ||
+    components[2]?.toLocaleLowerCase("en-US") !==
+      repository.repository.toLocaleLowerCase("en-US") ||
+    components[3] !== "legacy.zip" ||
+    components[4] !== commitSha ||
+    url.protocol !== "https:" ||
+    url.hostname !== "codeload.github.com" ||
+    url.port !== "" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.hash !== ""
+  ) {
+    throw new GitHubSnapshotError(
+      "GITHUB_INVALID_RESPONSE",
+      "GitHub archive redirect target was invalid.",
+    );
+  }
+  return url;
+}
+
+async function fetchAuthenticatedArchive(
+  fetchImplementation: GitHubSnapshotFetch,
+  url: URL,
+  signal: AbortSignal,
+  authorization: string,
+  repository: CanonicalRepository,
+  commitSha: string,
+): Promise<Uint8Array> {
+  const response = await fetchResponse(
+    fetchImplementation,
+    url,
+    GITHUB_API_ACCEPT,
+    signal,
+    authorization,
+    "manual",
+  );
+  let location: URL;
+  try {
+    validateExactResponseUrl(response, url);
+    if (response.status !== 302) {
+      throw new GitHubSnapshotError(
+        "GITHUB_REQUEST_FAILED",
+        `GitHub archive request failed with HTTP ${response.status}.`,
+      );
+    }
+    location = validatedCodeloadLocation(
+      response.headers.get("location"),
+      repository,
+      commitSha,
+    );
+  } finally {
+    await cancelUnusedBodyBeforeFollowup(response, signal);
+  }
+  throwIfAborted(signal);
+  return await fetchArchive(fetchImplementation, location, signal);
 }
 
 function apiUrl(path: string): URL {
@@ -714,6 +962,115 @@ function materializationOptions(
   };
 }
 
+interface GitHubNetworkSnapshot {
+  readonly canonicalRepository: CanonicalRepository;
+  readonly commitSha: string;
+  readonly archive: Uint8Array;
+}
+
+async function fetchGitHubNetworkSnapshot(
+  repository: CanonicalRepository,
+  requestedRef: string | undefined,
+  fetchImplementation: GitHubSnapshotFetch,
+  signal: AbortSignal,
+  authorization: string | undefined,
+): Promise<GitHubNetworkSnapshot> {
+  const metadataUrl = apiUrl(
+    `/repos/${repository.owner}/${repository.repository}`,
+  );
+  const metadata = await fetchJson(
+    fetchImplementation,
+    metadataUrl,
+    signal,
+    "GITHUB_REPOSITORY_UNAVAILABLE",
+    authorization,
+  );
+  const canonicalRepository = canonicalRepositoryFromFullName(
+    metadata["full_name"],
+    repository,
+  );
+  const publicRepository =
+    metadata["private"] === false &&
+    metadata["visibility"] === "public";
+  const privateRepository =
+    metadata["private"] === true &&
+    metadata["visibility"] === "private";
+  const internalRepository =
+    typeof metadata["private"] === "boolean" &&
+    metadata["visibility"] === "internal";
+  const authenticatedRestrictedRepository =
+    authorization !== undefined &&
+    (privateRepository || internalRepository);
+  if (
+    canonicalRepository === undefined ||
+    (!publicRepository && !authenticatedRestrictedRepository)
+  ) {
+    throw new GitHubSnapshotError(
+      "GITHUB_REPOSITORY_UNAVAILABLE",
+      authorization === undefined
+        ? "Public GitHub repository is unavailable."
+        : "GitHub repository is unavailable.",
+    );
+  }
+
+  const selectedRef =
+    requestedRef ??
+    (typeof metadata["default_branch"] === "string"
+      ? validateResponseRef(metadata["default_branch"])
+      : undefined);
+  if (selectedRef === undefined) {
+    throw new GitHubSnapshotError(
+      "GITHUB_INVALID_RESPONSE",
+      "GitHub repository metadata did not provide a valid default branch.",
+    );
+  }
+
+  const commitUrl = apiUrl(
+    `/repos/${canonicalRepository.owner}/${canonicalRepository.repository}/commits/${encodeURIComponent(
+      selectedRef,
+    )}`,
+  );
+  const commit = await fetchJson(
+    fetchImplementation,
+    commitUrl,
+    signal,
+    "GITHUB_REF_UNAVAILABLE",
+    authorization,
+  );
+  const commitValue = commit["sha"];
+  if (
+    typeof commitValue !== "string" ||
+    !COMMIT_SHA.test(commitValue)
+  ) {
+    throw new GitHubSnapshotError(
+      "GITHUB_INVALID_RESPONSE",
+      "GitHub API did not return an exact commit SHA.",
+    );
+  }
+  const commitSha = commitValue.toLowerCase();
+
+  const archive =
+    authorization === undefined
+      ? await fetchArchive(
+          fetchImplementation,
+          codeloadUrl(
+            `/${canonicalRepository.owner}/${canonicalRepository.repository}/zip/${commitSha}`,
+          ),
+          signal,
+        )
+      : await fetchAuthenticatedArchive(
+          fetchImplementation,
+          apiUrl(
+            `/repos/${canonicalRepository.owner}/${canonicalRepository.repository}/zipball/${commitSha}`,
+          ),
+          signal,
+          authorization,
+          canonicalRepository,
+          commitSha,
+        );
+  return { canonicalRepository, commitSha, archive };
+}
+
 export async function snapshotPublicGitHubRepository(
   request: GitHubSnapshotRequest,
   dependencies: GitHubSnapshotDependencies = {},
@@ -725,79 +1082,51 @@ export async function snapshotPublicGitHubRepository(
   const fetchImplementation =
     dependencies.fetch ??
     ((input, init) => globalThis.fetch(input, init));
+  const credentialProvider = dependencies.credentialProvider;
+  if (
+    credentialProvider !== undefined &&
+    (credentialProvider.provider !== "github" ||
+      typeof credentialProvider.use !== "function")
+  ) {
+    throw new GitHubSnapshotError(
+      "GITHUB_INVALID_REQUEST",
+      "GitHub credential provider is invalid.",
+    );
+  }
 
   try {
     return await withCombinedDeadline(
       timeoutMs,
       [request.signal, request.snapshotOptions?.signal],
       async (deadline) => {
-        const metadataUrl = apiUrl(
-          `/repos/${repository.owner}/${repository.repository}`,
-        );
-        const metadata = await fetchJson(
-          fetchImplementation,
-          metadataUrl,
-          deadline.signal,
-          "GITHUB_REPOSITORY_UNAVAILABLE",
-        );
-        const canonicalRepository = canonicalRepositoryFromFullName(
-          metadata["full_name"],
-          repository,
-        );
-        if (
-          metadata["private"] !== false ||
-          metadata["visibility"] !== "public" ||
-          canonicalRepository === undefined
-        ) {
-          throw new GitHubSnapshotError(
-            "GITHUB_REPOSITORY_UNAVAILABLE",
-            "Public GitHub repository is unavailable.",
-          );
-        }
-
-        const selectedRef =
-          requestedRef ??
-          (typeof metadata["default_branch"] === "string"
-            ? validateResponseRef(metadata["default_branch"])
-            : undefined);
-        if (selectedRef === undefined) {
-          throw new GitHubSnapshotError(
-            "GITHUB_INVALID_RESPONSE",
-            "GitHub repository metadata did not provide a valid default branch.",
-          );
-        }
-
-        const commitUrl = apiUrl(
-          `/repos/${canonicalRepository.owner}/${canonicalRepository.repository}/commits/${encodeURIComponent(
-            selectedRef,
-          )}`,
-        );
-        const commit = await fetchJson(
-          fetchImplementation,
-          commitUrl,
-          deadline.signal,
-          "GITHUB_REF_UNAVAILABLE",
-        );
-        const commitValue = commit["sha"];
-        if (
-          typeof commitValue !== "string" ||
-          !COMMIT_SHA.test(commitValue)
-        ) {
-          throw new GitHubSnapshotError(
-            "GITHUB_INVALID_RESPONSE",
-            "GitHub API did not return an exact commit SHA.",
-          );
-        }
-        const commitSha = commitValue.toLowerCase();
-
-        const archiveUrl = codeloadUrl(
-          `/${canonicalRepository.owner}/${canonicalRepository.repository}/zip/${commitSha}`,
-        );
-        const archive = await fetchArchive(
-          fetchImplementation,
-          archiveUrl,
-          deadline.signal,
-        );
+        const network =
+          credentialProvider === undefined
+            ? await fetchGitHubNetworkSnapshot(
+                repository,
+                requestedRef,
+                fetchImplementation,
+                deadline.signal,
+                undefined,
+              )
+            : await credentialProvider.use(
+                deadline.signal,
+                async (credential) => {
+                  let authorization: string | undefined =
+                    authorizationHeader(credential);
+                  try {
+                    return await fetchGitHubNetworkSnapshot(
+                      repository,
+                      requestedRef,
+                      fetchImplementation,
+                      deadline.signal,
+                      authorization,
+                    );
+                  } finally {
+                    authorization = undefined;
+                  }
+                },
+              );
+        const { canonicalRepository, commitSha, archive } = network;
         const source = openZipSnapshotSource(
           archive,
           canonicalRepository.repository,
