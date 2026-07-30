@@ -334,6 +334,13 @@ async function openAuthenticatedWizard(page: Page): Promise<void> {
 
 async function openNextImport(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Import project" }).click();
+  const restart = page.getByRole("button", {
+    name: "Start another import",
+    exact: true,
+  });
+  if (await restart.isVisible()) {
+    await restart.click();
+  }
   await expect(page.locator("#project-import-source-title")).toBeVisible();
 }
 

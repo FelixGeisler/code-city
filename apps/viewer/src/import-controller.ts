@@ -48,6 +48,7 @@ export interface ViewerImportApi {
   ): Promise<void>;
   getJob(id: string, signal?: AbortSignal): Promise<ImportJob>;
   cancelJob(id: string, signal?: AbortSignal): Promise<ImportJob>;
+  deleteCompletedJob(id: string, signal?: AbortSignal): Promise<void>;
 }
 
 export interface ImportJobStorage {
@@ -196,6 +197,21 @@ export type ImportControllerState =
       readonly job: ImportJob & {
         readonly state: "completed";
       };
+      readonly persistenceAvailable: boolean;
+    }
+  | {
+      readonly status: "removing-completed";
+      readonly job: ImportJob & {
+        readonly state: "completed";
+      };
+      readonly persistenceAvailable: boolean;
+    }
+  | {
+      readonly status: "removal-failed";
+      readonly job: ImportJob & {
+        readonly state: "completed";
+      };
+      readonly message: string;
       readonly persistenceAvailable: boolean;
     }
   | {
@@ -633,6 +649,51 @@ export class ImportController {
       throw new Error("An active import job cannot be forgotten.");
     }
     this.beginOperation();
+    this.activeJob = undefined;
+    this.cancellationRequestedJobId = undefined;
+    this.storage.clear();
+    this.updateIdle();
+  }
+
+  public removeCompleted(): void {
+    this.assertUsable();
+    const job = this.activeJob;
+    if (job === undefined || !isCompletedJob(job)) {
+      throw new Error("A completed import job is required for removal.");
+    }
+    const { controller, generation } = this.beginOperation();
+    this.retryAction = undefined;
+    this.updateState({
+      status: "removing-completed",
+      job,
+      persistenceAvailable: this.persistenceAvailable,
+    });
+    void this.api.deleteCompletedJob(job.id, controller.signal).then(
+      () => {
+        if (!this.isCurrent(controller, generation)) return;
+        this.finishCompletedRemoval();
+      },
+      (error: unknown) => {
+        if (!this.isCurrent(controller, generation)) return;
+        if (isMissingJob(error)) {
+          this.finishCompletedRemoval();
+          return;
+        }
+        if (isAuthorizationFailure(error)) {
+          this.enterAuthorizationRequired(messageOf(error), job.id);
+          return;
+        }
+        this.updateState({
+          status: "removal-failed",
+          job,
+          message: messageOf(error),
+          persistenceAvailable: this.persistenceAvailable,
+        });
+      },
+    );
+  }
+
+  private finishCompletedRemoval(): void {
     this.activeJob = undefined;
     this.cancellationRequestedJobId = undefined;
     this.storage.clear();

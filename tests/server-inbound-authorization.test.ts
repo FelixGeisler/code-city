@@ -589,6 +589,7 @@ describe("shared-secret authorization", () => {
       ["GET", "/api"],
       ["GET", "/api/v1/jobs"],
       ["GET", `/api/v1/jobs/${uuid}`],
+      ["DELETE", `/api/v1/jobs/${uuid}`],
       ["GET", `/api/v1/artifacts/${uuid}/city-model.json`],
       ["GET", `/api/v1/artifacts/${uuid}/evolution.json`],
       ["POST", "/api/v1/imports"],

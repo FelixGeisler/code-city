@@ -1089,6 +1089,35 @@ export class ViewerImportApiClient {
     return parseImportJobResponse(response.value, id);
   }
 
+  public async deleteCompletedJob(
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    this.requireJobId(id);
+    const response = await this.jsonRequest(
+      `/api/v1/jobs/${id}`,
+      {
+        method: "DELETE",
+        headers: { "X-Code-City-Request": "1" },
+      },
+      signal,
+      this.uploadDeadlineMs,
+    );
+    if (response.response.status !== 200) {
+      throw protocolError(
+        "Completed job deletion returned an unexpected success status.",
+      );
+    }
+    const root = exactObject(
+      response.value,
+      ["deleted"],
+      "Completed job deletion response",
+    );
+    if (root["deleted"] !== true) {
+      throw protocolError("Completed job deletion response is invalid.");
+    }
+  }
+
   private requireJobId(id: string): void {
     if (!IMPORT_JOB_ID_PATTERN.test(id)) {
       throw new ImportApiError("protocol", "Import job id is invalid.");
