@@ -207,6 +207,21 @@ function validateRef(value: string): string {
   return normalized;
 }
 
+/**
+ * Validates and canonicalizes an anonymous public GitHub repository URL
+ * without performing network or filesystem work.
+ */
+export function validatePublicGitHubRepositoryUrl(value: string): string {
+  return parseCanonicalRepositoryUrl(value).canonicalUrl;
+}
+
+/**
+ * Validates a caller-supplied GitHub ref without resolving it remotely.
+ */
+export function validatePublicGitHubRef(value: string): string {
+  return validateRef(value);
+}
+
 function validateResponseRef(value: string): string {
   try {
     return validateRef(value);

@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 
 import {
+  JobTaskFailure,
   PersistentJobQueue,
   type JobRecord,
   type JobResult,
@@ -44,6 +45,75 @@ function cityModelResult(token: string = randomUUID()): JobResult {
     artifactUrl: `/api/v1/artifacts/${token}/city-model.json`,
   });
 }
+
+it("validates, persists, and reloads structured task failures", async () => {
+  expect(
+    () =>
+      new JobTaskFailure(
+        "not-a-failure-code" as unknown as ConstructorParameters<
+          typeof JobTaskFailure
+        >[0],
+      ),
+  ).toThrow("Job task failure code is invalid.");
+
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  const queued = await queue.enqueue("analysis", async () => {
+    throw new JobTaskFailure("repository-unavailable");
+  });
+  const failed = await waitFor(
+    queue,
+    queued.id,
+    ({ state }) => state === "failed",
+  );
+  expect(failed.error).toEqual({
+    code: "repository-unavailable",
+    message: "The repository is unavailable to the server identity.",
+  });
+  await queue.close();
+
+  const reopened = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(reopened);
+  expect(reopened.get(queued.id)).toEqual(failed);
+  await reopened.close();
+
+  const persistedPath = path.join(
+    dataDirectory,
+    "jobs",
+    `${queued.id}.json`,
+  );
+  const malformed = {
+    ...failed,
+    error: {
+      code: "repository-unavailable",
+      message: "untrusted remote diagnostics",
+    },
+  };
+  await fs.writeFile(
+    persistedPath,
+    `${JSON.stringify(malformed)}\n`,
+    "utf8",
+  );
+  await expect(
+    PersistentJobQueue.open({ dataDirectory }),
+  ).rejects.toThrow("Invalid persisted job error.");
+
+  await fs.writeFile(
+    persistedPath,
+    `${JSON.stringify({
+      ...failed,
+      error: {
+        ...failed.error,
+        credential: "never-load-this-secret",
+      },
+    })}\n`,
+    "utf8",
+  );
+  await expect(
+    PersistentJobQueue.open({ dataDirectory }),
+  ).rejects.toThrow("Invalid persisted job error.");
+});
 
 afterEach(async () => {
   vi.restoreAllMocks();

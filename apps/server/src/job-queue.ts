@@ -19,8 +19,71 @@ export interface JobProgress {
 }
 
 export interface JobError {
-  readonly code: "cancelled" | "failed" | "interrupted";
+  readonly code:
+    | "analysis-failed"
+    | "cancelled"
+    | "deadline-exceeded"
+    | "failed"
+    | "import-limit-exceeded"
+    | "interrupted"
+    | "repository-content-rejected"
+    | "repository-unavailable"
+    | "revision-unavailable";
   readonly message: string;
+}
+
+export type JobTaskFailureCode =
+  | "analysis-failed"
+  | "deadline-exceeded"
+  | "import-limit-exceeded"
+  | "repository-content-rejected"
+  | "repository-unavailable"
+  | "revision-unavailable";
+
+const JOB_TASK_FAILURE_MESSAGES: Readonly<
+  Record<JobTaskFailureCode, string>
+> = Object.freeze({
+  "analysis-failed": "Repository analysis failed.",
+  "deadline-exceeded":
+    "The repository import exceeded its time limit.",
+  "import-limit-exceeded":
+    "The repository import exceeded a configured limit.",
+  "repository-content-rejected":
+    "Repository content violates the import safety policy.",
+  "repository-unavailable":
+    "The repository is unavailable to the server identity.",
+  "revision-unavailable":
+    "The requested repository revision is unavailable.",
+});
+
+function isJobTaskFailureCode(
+  value: unknown,
+): value is JobTaskFailureCode {
+  return (
+    value === "analysis-failed" ||
+    value === "deadline-exceeded" ||
+    value === "import-limit-exceeded" ||
+    value === "repository-content-rejected" ||
+    value === "repository-unavailable" ||
+    value === "revision-unavailable"
+  );
+}
+
+function jobTaskFailureMessage(code: JobTaskFailureCode): string {
+  if (!isJobTaskFailureCode(code)) {
+    throw new Error("Job task failure code is invalid.");
+  }
+  return JOB_TASK_FAILURE_MESSAGES[code];
+}
+
+export class JobTaskFailure extends Error {
+  public override readonly name = "JobTaskFailure";
+  public readonly code: JobTaskFailureCode;
+
+  public constructor(code: JobTaskFailureCode) {
+    super(jobTaskFailureMessage(code));
+    this.code = code;
+  }
 }
 
 export interface JobResult {
@@ -169,15 +232,24 @@ function readProgress(value: unknown): JobProgress | undefined {
 function validError(value: unknown): value is JobError {
   if (typeof value !== "object" || value === null) return false;
   const candidate = value as Record<string, unknown>;
+  const keys = Object.keys(candidate).sort(compareText);
   const code = candidate["code"];
   const message = candidate["message"];
+  const recognizedCode =
+    isJobTaskFailureCode(code) ||
+    code === "cancelled" ||
+    code === "failed" ||
+    code === "interrupted";
   return (
-    (code === "cancelled" ||
-      code === "failed" ||
-      code === "interrupted") &&
+    keys.length === 2 &&
+    keys[0] === "code" &&
+    keys[1] === "message" &&
+    recognizedCode &&
     typeof message === "string" &&
     message.length > 0 &&
-    message.length <= 1_024
+    message.length <= 1_024 &&
+    (!isJobTaskFailureCode(code) ||
+      message === JOB_TASK_FAILURE_MESSAGES[code])
   );
 }
 
@@ -329,6 +401,22 @@ function safeMessage(error: unknown): string {
   } catch {
     return "The job failed.";
   }
+}
+
+function safeJobError(error: unknown): JobError {
+  if (
+    error instanceof JobTaskFailure &&
+    isJobTaskFailureCode(error.code)
+  ) {
+    return Object.freeze({
+      code: error.code,
+      message: JOB_TASK_FAILURE_MESSAGES[error.code],
+    });
+  }
+  return Object.freeze({
+    code: "failed",
+    message: safeMessage(error),
+  });
 }
 
 function activeCancellationIntent(): JobTerminalIntent {
@@ -680,7 +768,7 @@ export class PersistentJobQueue {
         : {
             state: "failed",
             change: {
-              error: { code: "failed", message: safeMessage(error) },
+              error: safeJobError(error),
             },
           };
     }

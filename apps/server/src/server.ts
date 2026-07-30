@@ -15,10 +15,19 @@ import {
   type JobRecord,
 } from "./job-queue.js";
 import { ImportArtifactStore } from "./import-artifacts.js";
+import {
+  enqueueRemoteImport,
+  parseRemoteImportJson,
+  RemoteImportPolicy,
+  RemoteImportRequestError,
+  type RemoteImportDependencies,
+} from "./remote-import.js";
 
 const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_PORT = 3_000;
 const MAXIMUM_REQUEST_TARGET_CHARACTERS = 2_048;
+export const REMOTE_IMPORT_REQUEST_MAX_BYTES = 32 * 1024;
+export const REMOTE_IMPORT_REQUEST_DEADLINE_MS = 5_000;
 const JOB_PATH_PATTERN =
   /^\/api\/v1\/jobs\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/u;
 const CITY_MODEL_ARTIFACT_PATH_PATTERN =
@@ -46,6 +55,9 @@ export interface CodeCityServerOptions {
   readonly dataDirectory: string;
   readonly viewerRoot?: string;
   readonly allowedHosts?: readonly string[];
+  readonly allowedGitOrigins?: readonly string[];
+  readonly trustWindowsGitWorkspace?: boolean;
+  readonly importDependencies?: RemoteImportDependencies;
   readonly signal?: AbortSignal;
 }
 
@@ -62,6 +74,16 @@ export interface CodeCityServerHandle {
 interface ParsedTarget {
   readonly path: string;
 }
+
+type RequestBodyResult =
+  | { readonly kind: "ok"; readonly text: string }
+  | {
+      readonly kind:
+        | "disconnected"
+        | "invalid-utf8"
+        | "timed-out"
+        | "too-large";
+    };
 
 function productionViewerRoot(): string {
   return resolveProductionViewerRoot(import.meta.url);
@@ -290,6 +312,128 @@ function completedJobOwnsCityModelArtifact(
   );
 }
 
+function rawHeaderValues(
+  request: IncomingMessage,
+  name: string,
+): readonly string[] {
+  const normalizedName = name.toLowerCase();
+  const values: string[] = [];
+  for (let index = 0; index < request.rawHeaders.length; index += 2) {
+    if (
+      request.rawHeaders[index]?.toLowerCase() === normalizedName
+    ) {
+      values.push(request.rawHeaders[index + 1] ?? "");
+    }
+  }
+  return values;
+}
+
+function validJsonContentType(value: string): boolean {
+  return /^application\/json(?:\s*;\s*charset\s*=\s*(?:"utf-8"|utf-8))?$/iu.test(
+    value,
+  );
+}
+
+function declaredRequestBytes(
+  request: IncomingMessage,
+): number | "invalid" | undefined {
+  const values = rawHeaderValues(request, "content-length");
+  if (values.length === 0) return undefined;
+  if (values.length !== 1 || !/^(?:0|[1-9][0-9]*)$/u.test(values[0]!)) {
+    return "invalid";
+  }
+  const value = Number(values[0]);
+  return Number.isSafeInteger(value) ? value : "invalid";
+}
+
+function readBoundedRequestBody(
+  request: IncomingMessage,
+): Promise<RequestBodyResult> {
+  if (request.destroyed || request.readableAborted) {
+    return Promise.resolve({ kind: "disconnected" });
+  }
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let received = 0;
+    let settled = false;
+    const timer = setTimeout(
+      () => finish({ kind: "timed-out" }, true),
+      REMOTE_IMPORT_REQUEST_DEADLINE_MS,
+    );
+    timer.unref();
+
+    const cleanup = (): void => {
+      clearTimeout(timer);
+      request.off("data", onData);
+      request.off("end", onEnd);
+      request.off("aborted", onAborted);
+      request.off("close", onClose);
+      request.off("error", onError);
+    };
+    const finish = (
+      result: RequestBodyResult,
+      drain = false,
+    ): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (drain && !request.destroyed) request.resume();
+      resolve(result);
+    };
+    const onData = (chunk: Buffer): void => {
+      received += chunk.byteLength;
+      if (received > REMOTE_IMPORT_REQUEST_MAX_BYTES) {
+        finish({ kind: "too-large" }, true);
+        return;
+      }
+      chunks.push(chunk);
+    };
+    const onEnd = (): void => {
+      let text: string;
+      try {
+        text = new TextDecoder("utf-8", { fatal: true }).decode(
+          Buffer.concat(chunks, received),
+        );
+      } catch {
+        finish({ kind: "invalid-utf8" });
+        return;
+      }
+      finish({ kind: "ok", text });
+    };
+    const onAborted = (): void => {
+      finish({ kind: "disconnected" });
+    };
+    const onClose = (): void => {
+      if (!request.complete) finish({ kind: "disconnected" });
+    };
+    const onError = (): void => {
+      finish({ kind: "disconnected" });
+    };
+    request.on("data", onData);
+    request.once("end", onEnd);
+    request.once("aborted", onAborted);
+    request.once("close", onClose);
+    request.once("error", onError);
+  });
+}
+
+class ImportRequestOperations {
+  readonly #active = new Set<Promise<void>>();
+
+  public start(operation: Promise<void>): void {
+    this.#active.add(operation);
+    void operation.finally(() => this.#active.delete(operation)).catch(
+      () => undefined,
+    );
+  }
+
+  public async waitForIdle(): Promise<void> {
+    while (this.#active.size > 0) {
+      await Promise.allSettled([...this.#active]);
+    }
+  }
+}
+
 class ArtifactResponseGate {
   #active = false;
   #idle: Promise<void> = Promise.resolve();
@@ -333,6 +477,211 @@ class ArtifactResponseGate {
   }
 }
 
+async function remoteImportHandler(
+  request: IncomingMessage,
+  response: ServerResponse,
+  jobs: PersistentJobQueue,
+  artifacts: ImportArtifactStore,
+  policy: RemoteImportPolicy,
+  dependencies: RemoteImportDependencies | undefined,
+): Promise<void> {
+  if (request.method !== "POST") {
+    response.setHeader("Connection", "close");
+    request.resume();
+    sendMethodNotAllowed(request, response, ["POST"]);
+    return;
+  }
+
+  const csrfValues = rawHeaderValues(
+    request,
+    "x-code-city-request",
+  );
+  if (csrfValues.length !== 1 || csrfValues[0] !== "1") {
+    response.setHeader("Connection", "close");
+    request.resume();
+    sendJson(request, response, 403, {
+      error: {
+        code: "request-header-required",
+        message: "X-Code-City-Request: 1 is required.",
+      },
+    });
+    return;
+  }
+
+  const contentTypes = rawHeaderValues(request, "content-type");
+  const contentEncodings = rawHeaderValues(
+    request,
+    "content-encoding",
+  );
+  if (
+    contentTypes.length !== 1 ||
+    !validJsonContentType(contentTypes[0]!) ||
+    contentEncodings.length !== 0
+  ) {
+    response.setHeader("Connection", "close");
+    request.resume();
+    sendJson(request, response, 415, {
+      error: {
+        code: "unsupported-media-type",
+        message: "The import request must be unencoded application/json using UTF-8.",
+      },
+    });
+    return;
+  }
+
+  const transferEncodings = rawHeaderValues(
+    request,
+    "transfer-encoding",
+  );
+  const declaredBytes = declaredRequestBytes(request);
+  if (
+    transferEncodings.length > 1 ||
+    (transferEncodings.length === 1 &&
+      transferEncodings[0]!.toLowerCase() !== "chunked") ||
+    (transferEncodings.length > 0 &&
+      declaredBytes !== undefined)
+  ) {
+    response.setHeader("Connection", "close");
+    request.resume();
+    sendJson(request, response, 400, {
+      error: {
+        code: "invalid-request-framing",
+        message: "The import request framing is invalid.",
+      },
+    });
+    return;
+  }
+
+  if (declaredBytes === "invalid") {
+    response.setHeader("Connection", "close");
+    request.resume();
+    sendJson(request, response, 400, {
+      error: {
+        code: "invalid-request-framing",
+        message: "The import request framing is invalid.",
+      },
+    });
+    return;
+  }
+  if (declaredBytes !== undefined && declaredBytes > REMOTE_IMPORT_REQUEST_MAX_BYTES) {
+    response.setHeader("Connection", "close");
+    request.resume();
+    sendJson(request, response, 413, {
+      error: {
+        code: "request-too-large",
+        message: `The import request must not exceed ${REMOTE_IMPORT_REQUEST_MAX_BYTES} bytes.`,
+      },
+    });
+    return;
+  }
+
+  let clientDisconnected = false;
+  const onResponseClose = (): void => {
+    if (!response.writableEnded) clientDisconnected = true;
+  };
+  response.once("close", onResponseClose);
+  try {
+    const body = await readBoundedRequestBody(request);
+    if (body.kind === "disconnected" || clientDisconnected) return;
+    if (body.kind === "too-large") {
+      response.setHeader("Connection", "close");
+      sendJson(request, response, 413, {
+        error: {
+          code: "request-too-large",
+          message: `The import request must not exceed ${REMOTE_IMPORT_REQUEST_MAX_BYTES} bytes.`,
+        },
+      });
+      return;
+    }
+    if (body.kind === "timed-out") {
+      response.setHeader("Connection", "close");
+      sendJson(request, response, 408, {
+        error: {
+          code: "request-timeout",
+          message: "The import request body was not received in time.",
+        },
+      });
+      return;
+    }
+    if (body.kind === "invalid-utf8") {
+      sendJson(request, response, 400, {
+        error: {
+          code: "invalid-import-request",
+          message: "The import request is invalid.",
+          fields: [
+            {
+              code: "invalid-json",
+              path: "$",
+              message: "Must be valid UTF-8 JSON.",
+            },
+          ],
+        },
+      });
+      return;
+    }
+    if (body.kind !== "ok") return;
+
+    let parsed;
+    try {
+      parsed = parseRemoteImportJson(body.text);
+    } catch (error) {
+      if (!(error instanceof RemoteImportRequestError)) throw error;
+      sendJson(request, response, 400, {
+        error: {
+          code: "invalid-import-request",
+          message: error.message,
+          fields: error.fields,
+        },
+      });
+      return;
+    }
+    try {
+      policy.assertAllowed(parsed);
+    } catch (error) {
+      if (!(error instanceof RemoteImportRequestError)) throw error;
+      sendJson(request, response, error.status, {
+        error: {
+          code: "invalid-import-request",
+          message: error.message,
+          fields: error.fields,
+        },
+      });
+      return;
+    }
+    if (clientDisconnected || response.destroyed) return;
+
+    let queued: JobRecord;
+    try {
+      queued = await enqueueRemoteImport(parsed, {
+        jobs,
+        artifacts,
+        policy,
+        ...(dependencies === undefined ? {} : { dependencies }),
+      });
+    } catch {
+      if (!clientDisconnected && !response.destroyed) {
+        sendJson(request, response, 500, {
+          error: {
+            code: "import-enqueue-failed",
+            message: "The repository import could not be queued.",
+          },
+        });
+      }
+      return;
+    }
+    if (clientDisconnected || response.destroyed) {
+      await jobs.cancel(queued.id).catch(() => undefined);
+      return;
+    }
+    response.setHeader("Location", `/api/v1/jobs/${queued.id}`);
+    sendJson(request, response, 202, {
+      job: publicJob(queued),
+    });
+  } finally {
+    response.off("close", onResponseClose);
+  }
+}
+
 function apiHandler(
   request: IncomingMessage,
   response: ServerResponse,
@@ -340,6 +689,9 @@ function apiHandler(
   jobs: PersistentJobQueue,
   artifacts: ImportArtifactStore,
   artifactResponses: ArtifactResponseGate,
+  importRequests: ImportRequestOperations,
+  importPolicy: RemoteImportPolicy,
+  importDependencies: RemoteImportDependencies | undefined,
 ): boolean {
   if (target.path === "/api/v1/health") {
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -361,6 +713,19 @@ function apiHandler(
     sendJson(request, response, 200, {
       jobs: jobs.list().map(publicJob),
     });
+    return true;
+  }
+  if (target.path === "/api/v1/imports") {
+    importRequests.start(
+      remoteImportHandler(
+        request,
+        response,
+        jobs,
+        artifacts,
+        importPolicy,
+        importDependencies,
+      ),
+    );
     return true;
   }
   const artifactMatch = CITY_MODEL_ARTIFACT_PATH_PATTERN.exec(target.path);
@@ -561,6 +926,9 @@ function requestHandler(
   jobs: PersistentJobQueue,
   artifacts: ImportArtifactStore,
   artifactResponses: ArtifactResponseGate,
+  importRequests: ImportRequestOperations,
+  importPolicy: RemoteImportPolicy,
+  importDependencies: RemoteImportDependencies | undefined,
   allowedHosts: ReadonlySet<string>,
 ): (request: IncomingMessage, response: ServerResponse) => void {
   return (request, response) => {
@@ -582,6 +950,9 @@ function requestHandler(
           jobs,
           artifacts,
           artifactResponses,
+          importRequests,
+          importPolicy,
+          importDependencies,
         )
       ) {
         sendJson(request, response, 404, {
@@ -648,6 +1019,13 @@ export async function startCodeCityServer(
 ): Promise<CodeCityServerHandle> {
   const host = validHost(options.host);
   const requestedPort = validPort(options.port);
+  const importPolicy = new RemoteImportPolicy(
+    options.allowedGitOrigins,
+    {
+      trustWindowsGitWorkspace:
+        options.trustWindowsGitWorkspace ?? false,
+    },
+  );
   if (options.signal?.aborted) throw new Error("Server startup was aborted.");
   const assets = await collectViewerAssets(
     options.viewerRoot ?? productionViewerRoot(),
@@ -669,12 +1047,16 @@ export async function startCodeCityServer(
   }
   const allowedHosts = allowedHostnames(host, options.allowedHosts);
   const artifactResponses = new ArtifactResponseGate();
+  const importRequests = new ImportRequestOperations();
   const server = http.createServer(
     requestHandler(
       assets,
       jobs,
       artifacts,
       artifactResponses,
+      importRequests,
+      importPolicy,
+      options.importDependencies,
       allowedHosts,
     ),
   );
@@ -705,6 +1087,7 @@ export async function startCodeCityServer(
         if (!serverWasNotRunning(error)) throw error;
       }
       await artifactResponses.waitForIdle();
+      await importRequests.waitForIdle();
       resolveClosed?.();
       await closedPromise;
     })();
