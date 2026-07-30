@@ -47,6 +47,12 @@ export const GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY =
 
 export type GenericGitTransport = "https" | "ssh";
 
+export interface GenericGitRemoteOrigin {
+  readonly scheme: GenericGitTransport;
+  readonly hostname: string;
+  readonly port: number;
+}
+
 export interface GenericGitSnapshotRequest {
   readonly repositoryUrl: string;
   readonly ref?: string;
@@ -161,6 +167,7 @@ interface ParsedRemote {
   readonly value: string;
   readonly repository: string;
   readonly transport: GenericGitTransport;
+  readonly origin: GenericGitRemoteOrigin;
 }
 
 interface RefRecord {
@@ -237,6 +244,8 @@ function parseUrlRemote(value: string): ParsedRemote | undefined {
     parsed.password.length > 0 ||
     parsed.search.length > 0 ||
     parsed.hash.length > 0 ||
+    value.includes("?") ||
+    value.includes("#") ||
     value.includes("\\")
   ) {
     throw invalidRemote();
@@ -272,10 +281,24 @@ function parseUrlRemote(value: string): ParsedRemote | undefined {
   ) {
     throw invalidRemote();
   }
+  const port = Number(
+    parsed.port ||
+      (parsed.protocol === "https:" ? "443" : "22"),
+  );
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+    throw invalidRemote();
+  }
   return Object.freeze({
     value,
     repository: repositoryName(parsed.pathname),
     transport: parsed.protocol === "https:" ? "https" : "ssh",
+    origin: Object.freeze({
+      scheme: parsed.protocol === "https:" ? "https" : "ssh",
+      hostname: parsed.hostname
+        .replace(/^\[|\]$/gu, "")
+        .toLocaleLowerCase("en-US"),
+      port,
+    }),
   });
 }
 
@@ -314,6 +337,13 @@ function parseRemote(value: string): ParsedRemote {
     value: normalized,
     repository: repositoryName(remotePath),
     transport: "ssh",
+    origin: Object.freeze({
+      scheme: "ssh",
+      hostname: (scp[2] ?? "")
+        .replace(/^\[|\]$/gu, "")
+        .toLocaleLowerCase("en-US"),
+      port: 22,
+    }),
   });
 }
 
@@ -355,6 +385,31 @@ function validateRef(value: string): string {
     );
   }
   return normalized;
+}
+
+/**
+ * Validates and normalizes a credential-free Generic Git remote without
+ * starting Git or touching the filesystem.
+ */
+export function validateGenericGitRepositoryUrl(value: string): string {
+  return parseRemote(value).value;
+}
+
+/**
+ * Returns the exact outbound origin of an already-valid Generic Git remote.
+ * scp-style remotes are represented as SSH on port 22.
+ */
+export function genericGitRepositoryOrigin(
+  value: string,
+): GenericGitRemoteOrigin {
+  return parseRemote(value).origin;
+}
+
+/**
+ * Validates a Generic Git ref without contacting the remote.
+ */
+export function validateGenericGitRef(value: string): string {
+  return validateRef(value);
 }
 
 function resolveTimeout(value: number | undefined): number {

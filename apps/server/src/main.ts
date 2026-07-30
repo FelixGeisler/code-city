@@ -25,6 +25,29 @@ function environmentAllowedHosts(
   return hosts;
 }
 
+export function environmentAllowedGitOrigins(
+  value: string | undefined,
+): readonly string[] | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const origins = value.split(",").map((origin) => origin.trim());
+  if (origins.some((origin) => origin === "")) {
+    throw new Error(
+      "CODECITY_ALLOWED_GIT_ORIGINS must be a comma-separated list of exact HTTPS or SSH origins.",
+    );
+  }
+  return origins;
+}
+
+export function environmentWindowsGitWorkspaceTrust(
+  value: string | undefined,
+): boolean {
+  if (value === undefined || value === "") return false;
+  if (value === "1") return true;
+  throw new Error(
+    "CODECITY_TRUST_WINDOWS_GIT_WORKSPACE must be exactly 1 when enabled.",
+  );
+}
+
 export async function runServer(): Promise<void> {
   const controller = new AbortController();
   const stop = (): void => controller.abort();
@@ -36,10 +59,18 @@ export async function runServer(): Promise<void> {
     const allowedHosts = environmentAllowedHosts(
       process.env["CODECITY_ALLOWED_HOSTS"],
     );
+    const allowedGitOrigins = environmentAllowedGitOrigins(
+      process.env["CODECITY_ALLOWED_GIT_ORIGINS"],
+    );
+    const trustWindowsGitWorkspace = environmentWindowsGitWorkspaceTrust(
+      process.env["CODECITY_TRUST_WINDOWS_GIT_WORKSPACE"],
+    );
     const server = await startCodeCityServer({
       ...(host === undefined ? {} : { host }),
       ...(port === undefined ? {} : { port }),
       ...(allowedHosts === undefined ? {} : { allowedHosts }),
+      ...(allowedGitOrigins === undefined ? {} : { allowedGitOrigins }),
+      trustWindowsGitWorkspace,
       dataDirectory: path.resolve(
         process.env["CODECITY_DATA_DIR"] ?? "data",
       ),

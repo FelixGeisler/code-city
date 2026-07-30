@@ -11,8 +11,19 @@ interrupted reason instead of remaining permanently active.
 
 `GET /api/v1/health` provides a cache-free health check. `GET /api/v1/jobs` and
 `GET` or `DELETE /api/v1/jobs/\{id\}` expose bounded job state and cancellation.
-Import endpoints will enqueue actual analysis work and expose its artifacts in
-the next implementation slice.
+`POST /api/v1/imports` accepts one exact-shape JSON request for an anonymous
+public GitHub repository or an operator-allowed Generic Git remote. It requires
+`X-Code-City-Request: 1`, accepts at most 32 KiB within five seconds, creates a
+private server-owned staging directory, and returns `202 Accepted` plus the
+persisted job under `Location`. Branches and tags are discriminated from exact
+commit SHAs. A completed job owns
+`/api/v1/artifacts/\{id\}/city-model.json`.
+
+The job reports only fixed progress phases and fixed, non-reflective failure
+codes. Cancellation, analysis failure, publication failure, finalizer failure,
+and terminal-state persistence failure all run idempotent staging and artifact
+cleanup. Job files never contain the remote URL, revision, credentials, source
+bytes, host paths, or raw analyzer diagnostics.
 
 == Local
 
@@ -80,6 +91,16 @@ temporary `snapshot/` ZIP, reads it, atomically quarantines and removes the
 complete workspace, then uses the shared snapshot and analyzer pipeline. It
 never checks out files, runs hooks, filters, submodules, or LFS, or stores a
 derived cache.
+
+The server endpoint adds an outbound policy above this adapter. Generic Git is
+disabled unless the operator lists an exact HTTPS or SSH origin; scheme,
+normalized hostname or IP, and effective port must all match. scp-style
+remotes map to SSH port 22. This prevents a network caller from choosing an
+arbitrary destination for the server identity. It does not authorize individual
+repositories or callers: every unauthenticated Code City client can request any
+repository/user at an enabled origin with the service account's ambient
+credentials. Deploy with only authorized trusted clients and a least-privileged
+service identity.
 
 == Print
 

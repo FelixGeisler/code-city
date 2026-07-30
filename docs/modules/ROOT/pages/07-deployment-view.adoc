@@ -33,6 +33,19 @@ exposing the service. IP-literal requests and `localhost` are accepted by
 default. Set `CODECITY_ALLOWED_HOSTS` to a comma-separated list when clients use
 DNS names; other hostnames are rejected to prevent DNS-rebinding access.
 
+Generic Git imports are default-denied. Set `CODECITY_ALLOWED_GIT_ORIGINS` to a
+comma-separated list of exact origin-only URLs such as
+`https://dev.azure.example,ssh://git.example:22`. There are no wildcards;
+scheme and effective port are part of the match. The Compose file forwards this
+variable with an empty default.
+
+This allowlist is egress control, not per-repository or inbound authorization.
+Every unauthenticated Code City network client can request any repository/user
+at an enabled origin and invoke the service identity's ambient Git credential
+helper, SSH agent/configuration, and trusted CAs. Enable Generic Git only when
+every network client is authorized, and grant the service identity only the
+minimum repository access it needs.
+
 For Azure Pipelines, prefer the already authorized local checkout:
 
 [source,yaml]
@@ -62,6 +75,13 @@ ACL. Ancestors may remain readable or traversable; their protected child entries
 must not be replaceable or removable by untrusted identities. Do not point the
 option at a generally writable `%TEMP%`, shared build directory, or upload
 directory.
+
+For the Windows/IIS server endpoint, set
+`CODECITY_TRUST_WINDOWS_GIT_WORKSPACE=1` only after applying the same controls
+to `CODECITY_DATA_DIR`, its `tmp/imports` descendants and inherited child ACLs,
+and protected canonical ancestors. A non-empty Git-origin allowlist makes
+Windows startup fail unless this explicit attestation is present.
+Outbound-origin approval does not imply filesystem trust.
 
 On POSIX, an explicit workspace parent must already exist, be owned by the
 effective process user, and have exact mode `0700`. The implicit OS temporary

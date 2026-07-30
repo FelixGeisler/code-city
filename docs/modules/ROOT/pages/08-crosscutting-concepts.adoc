@@ -138,6 +138,22 @@ allows 100,000 visited entries, 50,000 retained files, 25,000 source buildings,
 2 MiB per file, 256 MiB total, 1,000 diagnostics plus one omission summary, and
 300 seconds for snapshot plus analysis.
 
+The self-hosted import endpoint accepts only strict, duplicate-free JSON with
+exact object keys. It requires `X-Code-City-Request: 1`, rejects encoded
+bodies, caps the body at 32 KiB and five seconds, and closes early rejections
+instead of retaining a slow body on a keep-alive connection. Inputs are
+validated before private staging or job persistence. Jobs retain fixed progress,
+fixed safe error codes, and owned artifact URLs only.
+
+Generic Git is default-denied at the server boundary. An exact
+operator-configured scheme, normalized hostname/IP, and effective port must
+match before staging. This origin list is egress control, not per-repository or
+inbound authorization: every unauthenticated client can invoke the
+least-privileged service identity's ambient Git/SSH credentials for any
+repository/user at an enabled origin. Windows additionally requires an explicit
+attestation that the data/import ACLs, inherited child ACLs, and protected
+canonical ancestry satisfy the private-workspace contract.
+
 The GitHub adapter accepts only canonical HTTPS `github.com/owner/repository`
 URLs. It performs anonymous, no-store requests to `api.github.com`, resolves an
 exact 40-digit commit, and fetches only that commit from `codeload.github.com`.

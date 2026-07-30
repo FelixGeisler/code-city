@@ -26,6 +26,32 @@ Internet. Numeric IP addresses and `localhost` are accepted by default. To use
 a DNS name, set `CODECITY_ALLOWED_HOSTS` to a comma-separated allowlist before
 starting Compose, for example `raspberrypi.local,codecity.lan`.
 
+`POST /api/v1/imports` queues anonymous public-GitHub or Generic Git analysis
+directly through the server API. Requests are bounded JSON and must include
+`X-Code-City-Request: 1`; they return a persistent job URL, and a completed job
+owns one immutable `city-model.json` artifact. Repository URLs, refs,
+credentials, source bytes, diagnostics, and temporary paths are not written to
+job records.
+
+Generic Git is disabled by default because it runs Git as the server identity.
+Enable only exact outbound origins with `CODECITY_ALLOWED_GIT_ORIGINS`, for
+example `https://dev.azure.example,ssh://git.example:22`. Scheme and effective
+port are significant; wildcards are not accepted. scp-style remotes use the
+matching `ssh://host:22` origin. Explicitly allow a private or loopback origin
+only when reaching it is intended.
+
+The origin list is egress control, not per-repository or inbound authorization:
+every unauthenticated Code City network client can request any repository/user
+at an enabled origin and invoke the service account's ambient credential
+helper, SSH agent/configuration, and enterprise CAs. Enable it only on a network
+where every client is authorized, and use a least-privileged service identity.
+On Windows/IIS, enabled origins also require
+`CODECITY_TRUST_WINDOWS_GIT_WORKSPACE=1`. That flag attests that the data/import
+workspace ACL and inherited child ACLs are limited to the service identity and
+trusted administrators and that canonical ancestors prevent untrusted rename,
+delete, and delete-child access; Code City cannot verify or establish those ACL
+properties.
+
 ## Product idea
 
 | Code concept | City representation |
@@ -164,6 +190,9 @@ $env:CODECITY_DATA_DIR = "C:\CodeCityData"
 $env:CODECITY_HOST = "0.0.0.0"
 $env:CODECITY_PORT = "3000"
 $env:CODECITY_ALLOWED_HOSTS = "codecity.lan"
+$env:CODECITY_ALLOWED_GIT_ORIGINS = "https://dev.azure.example"
+# Windows only, after provisioning and auditing the data-directory ACL:
+$env:CODECITY_TRUST_WINDOWS_GIT_WORKSPACE = "1"
 npm run server:start
 ```
 

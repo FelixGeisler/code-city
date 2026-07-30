@@ -11,6 +11,7 @@ services:
       CODECITY_PORT: "3000"
       CODECITY_DATA_DIR: "/data"
       CODECITY_ALLOWED_HOSTS: "${CODECITY_ALLOWED_HOSTS:-}"
+      CODECITY_ALLOWED_GIT_ORIGINS: "${CODECITY_ALLOWED_GIT_ORIGINS:-}"
     volumes:
       - code-city-data:/data
 
