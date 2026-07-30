@@ -1,0 +1,93 @@
+import { describe, expect, it } from "vitest";
+
+import { createSingleChannelProfile } from "../packages/core/src/printer-profiles.js";
+import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
+import {
+  createViewerVisualization,
+  describeBuildingMetrics,
+} from "../apps/viewer/src/visualization-mode.js";
+
+describe("viewer visualization modes", () => {
+  it("uses persisted risk metadata without reclassifying metrics", () => {
+    const model = {
+      ...DEMO_MODEL,
+      buildings: DEMO_MODEL.buildings.map((building, index) =>
+        index === 0
+          ? {
+              ...building,
+              risk: "low" as const,
+              metrics: { ...building.metrics, maximumComplexity: 999 },
+            }
+          : building,
+      ),
+    };
+
+    const view = createViewerVisualization(model, "complexity");
+
+    expect(view.colorsByBuildingId.get(model.buildings[0]!.id)).toBe(
+      "#4ade80",
+    );
+    expect(view.status).toMatch(/persisted risk band/iu);
+    expect(view.legend.map(({ label }) => label)).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/0–5/u),
+        expect.stringMatching(/21\+/u),
+      ]),
+    );
+  });
+
+  it("previews assignments and explicitly reports fallback colors", () => {
+    const profile = createSingleChannelProfile();
+
+    const view = createViewerVisualization(DEMO_MODEL, "print", profile);
+
+    expect(view.available).toBe(true);
+    expect(new Set(view.colorsByBuildingId.values()).size).toBe(1);
+    expect(view.status).toMatch(/does not claim printability/iu);
+    expect(view.status).toMatch(/fallback colors/iu);
+  });
+
+  it("makes an invalid or pending print profile unavailable", () => {
+    const view = createViewerVisualization(DEMO_MODEL, "print");
+
+    expect(view.available).toBe(false);
+    expect(view.status).toMatch(/choose a valid printer profile/iu);
+  });
+
+  it("explains raw facts, formula provenance, caps, and states", () => {
+    const explanation = describeBuildingMetrics(
+      DEMO_MODEL,
+      DEMO_MODEL.buildings[0]!,
+    );
+
+    expect(explanation).toMatch(/Raw SLOC/iu);
+    expect(explanation).toMatch(/executable units/iu);
+    expect(explanation).toMatch(/Formula IDs/iu);
+    expect(explanation).toMatch(/Normalization caps/iu);
+    expect(explanation).toMatch(/Normalization state/iu);
+    expect(explanation).toMatch(/Mapping provenance/iu);
+  });
+
+  it("labels legacy normalization states as schema-default derivations", () => {
+    const {
+      metricNormalization: _normalization,
+      ...building
+    } = DEMO_MODEL.buildings[0]!;
+    const {
+      metricMapping: _mapping,
+      buildings: _buildings,
+      ...modelWithoutMetricExtensions
+    } = DEMO_MODEL;
+    const model = {
+      ...modelWithoutMetricExtensions,
+      buildings: [building],
+    };
+
+    const explanation = describeBuildingMetrics(model, building);
+
+    expect(explanation).toMatch(
+      /(?:available|clamped) \(derived from the schema-default mapping\)/iu,
+    );
+    expect(explanation).not.toMatch(/unavailable \(legacy derivation\)/iu);
+  });
+});
