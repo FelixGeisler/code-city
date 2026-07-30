@@ -93,6 +93,33 @@ reuse the bounded ZIP snapshot source and the same snapshot-analysis pipeline
 as other sources. Explicit `single-directory` and `archive-root` modes avoid
 guessing which path prefix represents the project root.
 
+The viewer's *Import project* wizard drives those same-origin APIs. Public and
+credentialed GitHub, Azure DevOps, and Generic Git inputs submit a remote job
+directly. A local directory is normalized, filtered to analyzer inputs and
+ignore controls, and packed into a deterministic bounded ZIP in a cancellable
+module worker before reservation. Existing ZIP and city-model selections are
+uploaded as raw fixed-size bodies. The browser never sends an absolute local
+path and cannot observe empty directories or reliable symlink metadata; users
+choose ZIP or server-side Git when those details matter.
+
+After a validated `202`, the browser retains only the opaque job UUID and polls
+one request at a time. Refresh resumes an active job or reopens a completed
+artifact; explicit query-model and performance-fixture loads take precedence.
+Closing the dialog cancels unfinished local-directory packaging; otherwise it
+only hides the wizard while submission, upload, or polling continues, and
+reopening shows the current state. Closing or navigating away from the page
+stops browser requests and polling without issuing server cancellation. An
+already accepted job keeps running and is resumed from its opaque stored UUID
+on return. The explicit *Cancel import* action abandons a live reservation or,
+once acceptance is known, deletes the job. Completion validates the fixed
+job/artifact relationship, fetches the artifact through the credentialed
+same-origin gateway, runs the established model validator, and applies the city
+once. The root access token is cleared immediately after the one-time session
+exchange and never enters controller state or browser storage. In shared-secret
+mode, the wizard's explicit *Sign out* action revokes the HttpOnly browser
+session, clears the saved import-job UUID, cancels a known live job, and restores
+the built-in demo city.
+
 The job reports only fixed progress phases and fixed, non-reflective failure
 codes. Cancellation, analysis failure, publication failure, finalizer failure,
 and terminal-state persistence failure all run idempotent staging and artifact

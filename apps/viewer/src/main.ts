@@ -65,6 +65,7 @@ import {
 } from "./dependency-route-layout.js";
 import { DEMO_MODEL } from "./demo-model.js";
 import { presentExternalDependency } from "./external-dependency-inspector.js";
+import { installProjectImportDialog } from "./project-import-dialog.js";
 import { installPrintExportDialog } from "./print-export-dialog.js";
 import {
   createLargeCityFixture,
@@ -1635,6 +1636,24 @@ const viewerLoadGateway = new ViewerLoadGateway();
 const automaticModelLoadGate = new AutomaticModelLoadGate();
 const logoLoadGate = new AutomaticModelLoadGate();
 let loadedModelLogo: LoadedViewerImage | undefined;
+const importParameters = new URL(window.location.href).searchParams;
+const projectImportDialog = installProjectImportDialog({
+  loadGateway: viewerLoadGateway,
+  autoResume:
+    importParameters.get("fixture") !== LARGE_CITY_FIXTURE_NAME &&
+    importParameters.get("model") === null,
+  onModelReady: (model, source) => {
+    automaticModelLoadGate.invalidate();
+    applyModel(model, {
+      label: source.label,
+      assetRoot: source.assetRoot,
+    });
+  },
+  onSignedOut: () => {
+    automaticModelLoadGate.invalidate();
+    applyModel(DEMO_MODEL, { label: "Built-in demo" });
+  },
+});
 const printExportDialog = installPrintExportDialog({
   getModel: () => activeModel,
   loadGateway: viewerLoadGateway,
@@ -1855,6 +1874,7 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("beforeunload", () => {
   viewerWorkspace.dispose();
   printPlateToolbar.dispose();
+  projectImportDialog.dispose();
   logoLoadGate.invalidate();
   loadedModelLogo?.dispose();
   loadedModelLogo = undefined;

@@ -334,7 +334,11 @@ describe("GitHub snapshots", () => {
   it.each(["caller abort", "deadline"] as const)(
     "bounds a never-settling redirect cleanup by the %s",
     async (boundary) => {
-      if (boundary === "deadline") vi.useFakeTimers();
+      if (boundary === "deadline") {
+        vi.useFakeTimers({
+          toFake: ["Date", "setTimeout", "clearTimeout"],
+        });
+      }
       try {
         const controller = new AbortController();
         const calls: string[] = [];
@@ -399,12 +403,7 @@ describe("GitHub snapshots", () => {
             ),
           },
         );
-        const rejection = expect(pending).rejects.toMatchObject({
-          code:
-            boundary === "caller abort"
-              ? "GITHUB_ABORTED"
-              : "GITHUB_DEADLINE_EXCEEDED",
-        });
+        const rejection = pending.catch((error: unknown) => error);
 
         await cleanup;
         if (boundary === "caller abort") {
@@ -412,7 +411,12 @@ describe("GitHub snapshots", () => {
         } else {
           await vi.advanceTimersByTimeAsync(25);
         }
-        await rejection;
+        expect(await rejection).toMatchObject({
+          code:
+            boundary === "caller abort"
+              ? "GITHUB_ABORTED"
+              : "GITHUB_DEADLINE_EXCEEDED",
+        });
 
         expect(calls).toEqual([
           METADATA_URL,
@@ -1167,7 +1171,9 @@ describe("GitHub snapshots", () => {
   });
 
   it("enforces one combined deadline and clears its timer", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout"],
+    });
     try {
       const pending = snapshotPublicGitHubRepository(
         {
@@ -1181,12 +1187,12 @@ describe("GitHub snapshots", () => {
             }),
         },
       );
-      const rejection = expect(pending).rejects.toMatchObject({
-        code: "GITHUB_DEADLINE_EXCEEDED",
-      });
+      const rejection = pending.catch((error: unknown) => error);
 
       await vi.advanceTimersByTimeAsync(25);
-      await rejection;
+      expect(await rejection).toMatchObject({
+        code: "GITHUB_DEADLINE_EXCEEDED",
+      });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();

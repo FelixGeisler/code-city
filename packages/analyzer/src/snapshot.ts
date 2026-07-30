@@ -270,7 +270,7 @@ function portablePathKey(value: string): string {
   return value.toLocaleLowerCase("en-US");
 }
 
-function normalizeRepositoryName(value: string): string {
+export function normalizeSnapshotRepositoryName(value: string): string {
   const normalized = value.normalize("NFC");
   if (
     normalized.length === 0 ||
@@ -345,7 +345,7 @@ export function isHardExcludedSnapshotPath(value: string): boolean {
   return GENERATED_CSHARP.test(segments.at(-1) ?? value);
 }
 
-function isIgnoreControlPath(value: string): boolean {
+export function isSnapshotIgnoreControlPath(value: string): boolean {
   const name = value.slice(value.lastIndexOf("/") + 1);
   return name === ".gitignore" || value === ".codecityignore";
 }
@@ -672,7 +672,7 @@ async function buildIgnoreContexts(
         readonly entry: SnapshotFileSourceEntry;
       } =>
         candidate.entry.kind === "file" &&
-        isIgnoreControlPath(candidate.path) &&
+        isSnapshotIgnoreControlPath(candidate.path) &&
         !isHardExcludedSnapshotPath(candidate.path),
     )
     .sort(
@@ -804,7 +804,7 @@ export async function materializeRepositorySnapshots(
 
   const repositories = sources
     .map((source, sourceIndex) => ({
-      name: normalizeRepositoryName(source.repositoryName),
+      name: normalizeSnapshotRepositoryName(source.repositoryName),
       sourceIndex,
       entries: [] as CollectedEntry[],
       files: [] as SnapshotFile[],
@@ -838,7 +838,7 @@ export async function materializeRepositorySnapshots(
       const { entry, path } = collected;
       const policyPath =
         path !== "." &&
-        isIgnoreControlPath(path) &&
+        isSnapshotIgnoreControlPath(path) &&
         !isHardExcludedSnapshotPath(path);
       const ignoredPolicyPath =
         policyPath &&
@@ -872,7 +872,7 @@ export async function materializeRepositorySnapshots(
       if (
         entry.kind !== "file" ||
         isHardExcludedSnapshotPath(path) ||
-        isIgnoreControlPath(path) ||
+        isSnapshotIgnoreControlPath(path) ||
         !isAnalyzerInputPath(path)
       ) {
         continue;
@@ -967,7 +967,7 @@ export function assertRepositorySnapshots(
   let omissionSummaries = 0;
 
   for (const snapshot of snapshots) {
-    normalizeRepositoryName(snapshot.name);
+    normalizeSnapshotRepositoryName(snapshot.name);
     const paths = new Map<string, string>();
     for (const file of snapshot.files) {
       const normalized = normalizeSnapshotPath(file.path);
