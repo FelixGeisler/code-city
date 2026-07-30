@@ -1,6 +1,7 @@
 const API_RESPONSE_MAX_BYTES = 256 * 1024;
 const API_REQUEST_DEADLINE_MS = 30_000;
 const API_UPLOAD_DEADLINE_MS = 11 * 60_000;
+const API_RESULT_REMOVAL_DEADLINE_MS = 31 * 60_000;
 const MAXIMUM_ERROR_FIELDS = 64;
 const MAXIMUM_TEXT_CHARACTERS = 2_048;
 const MAXIMUM_EVOLUTION_ARTIFACT_BYTES = 512 * 1024 * 1024;
@@ -226,6 +227,7 @@ export interface ViewerImportApiClientOptions {
   readonly fetch?: ImportApiFetch;
   readonly requestDeadlineMs?: number;
   readonly uploadDeadlineMs?: number;
+  readonly removalDeadlineMs?: number;
   readonly scheduleDeadline?: (
     callback: () => void,
     milliseconds: number,
@@ -808,6 +810,7 @@ export class ViewerImportApiClient {
   private readonly fetchImplementation: ImportApiFetch;
   private readonly requestDeadlineMs: number;
   private readonly uploadDeadlineMs: number;
+  private readonly removalDeadlineMs: number;
   private readonly scheduleDeadline: (
     callback: () => void,
     milliseconds: number,
@@ -836,9 +839,12 @@ export class ViewerImportApiClient {
       options.requestDeadlineMs ?? API_REQUEST_DEADLINE_MS;
     this.uploadDeadlineMs =
       options.uploadDeadlineMs ?? API_UPLOAD_DEADLINE_MS;
+    this.removalDeadlineMs =
+      options.removalDeadlineMs ?? API_RESULT_REMOVAL_DEADLINE_MS;
     for (const [name, value] of [
       ["request", this.requestDeadlineMs],
       ["upload", this.uploadDeadlineMs],
+      ["removal", this.removalDeadlineMs],
     ] as const) {
       if (!Number.isSafeInteger(value) || value <= 0) {
         throw new TypeError(
@@ -1089,33 +1095,42 @@ export class ViewerImportApiClient {
     return parseImportJobResponse(response.value, id);
   }
 
-  public async deleteCompletedJob(
+  public async removeCompletedJob(
     id: string,
     signal?: AbortSignal,
-  ): Promise<void> {
+  ): Promise<ImportJob & { readonly state: "completed" }> {
     this.requireJobId(id);
     const response = await this.jsonRequest(
-      `/api/v1/jobs/${id}`,
+      `/api/v1/imports/${id}/result`,
       {
         method: "DELETE",
         headers: { "X-Code-City-Request": "1" },
       },
       signal,
-      this.uploadDeadlineMs,
+      this.removalDeadlineMs,
     );
     if (response.response.status !== 200) {
       throw protocolError(
-        "Completed job deletion returned an unexpected success status.",
+        "Completed import removal returned an unexpected success status.",
       );
     }
     const root = exactObject(
       response.value,
-      ["deleted"],
-      "Completed job deletion response",
+      ["deleted", "job"],
+      "Completed import removal response",
     );
     if (root["deleted"] !== true) {
-      throw protocolError("Completed job deletion response is invalid.");
+      throw protocolError(
+        "Completed import removal was not confirmed.",
+      );
     }
+    const job = parseImportJob(root["job"], id);
+    if (job.state !== "completed") {
+      throw protocolError(
+        "Completed import removal returned a non-completed job.",
+      );
+    }
+    return job as ImportJob & { readonly state: "completed" };
   }
 
   private requireJobId(id: string): void {

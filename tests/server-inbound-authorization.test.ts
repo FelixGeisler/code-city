@@ -589,10 +589,10 @@ describe("shared-secret authorization", () => {
       ["GET", "/api"],
       ["GET", "/api/v1/jobs"],
       ["GET", `/api/v1/jobs/${uuid}`],
-      ["DELETE", `/api/v1/jobs/${uuid}`],
       ["GET", `/api/v1/artifacts/${uuid}/city-model.json`],
       ["GET", `/api/v1/artifacts/${uuid}/evolution.json`],
       ["POST", "/api/v1/imports"],
+      ["DELETE", `/api/v1/imports/${uuid}/result`],
       ["POST", "/api/v1/imports/uploads"],
       ["PUT", `/api/v1/imports/uploads/${uuid}`],
       ["DELETE", `/api/v1/imports/uploads/${uuid}`],
@@ -743,6 +743,31 @@ describe("shared-secret authorization", () => {
       },
     });
     expect(duplicateMutationHeader.status).toBe(403);
+
+    const resultUrl = new URL(
+      `/api/v1/imports/${job.id}/result`,
+      server.url,
+    );
+    const wrongResultOrigin = await request(resultUrl, {
+      method: "DELETE",
+      host: AUTHORITY,
+      headers: {
+        Cookie: cookie,
+        "X-Code-City-Request": "1",
+        Origin: "https://attacker.example",
+      },
+    });
+    expect(wrongResultOrigin.status).toBe(403);
+    const missingResultMutationHeader = await request(resultUrl, {
+      method: "DELETE",
+      host: AUTHORITY,
+      headers: {
+        Cookie: cookie,
+        Origin: PUBLIC_ORIGIN,
+      },
+    });
+    expect(missingResultMutationHeader.status).toBe(403);
+    expect(server.jobs.get(job.id)?.state).not.toBe("cancelled");
   });
 
   it("exchanges the bearer for an opaque secure session and revokes it", async () => {

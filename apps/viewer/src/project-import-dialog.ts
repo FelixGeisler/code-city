@@ -219,7 +219,7 @@ export function projectImportNavigationLocked(
     status === "completed" ||
     status === "opening-artifact" ||
     status === "removal-failed" ||
-    status === "removing-completed" ||
+    status === "removing-result" ||
     status === "sign-out-failed" ||
     status === "terminal" ||
     status === "unavailable"
@@ -1167,8 +1167,8 @@ export function installProjectImportDialog(
   const restartButton = requiredElement<HTMLButtonElement>(
     "project-import-restart",
   );
-  const removeButton = requiredElement<HTMLButtonElement>(
-    "project-import-remove",
+  const removeResultButton = requiredElement<HTMLButtonElement>(
+    "project-import-remove-result",
   );
   const cancelButton = requiredElement<HTMLButtonElement>(
     "project-import-cancel",
@@ -1422,7 +1422,7 @@ export function installProjectImportDialog(
       currentState.status === "job" ||
       currentState.status === "recovering" ||
       currentState.status === "opening-artifact" ||
-      currentState.status === "removing-completed" ||
+      currentState.status === "removing-result" ||
       currentState.status === "signing-out"
     );
   }
@@ -1459,29 +1459,32 @@ export function installProjectImportDialog(
     cancelButton.hidden =
       !busy ||
       currentState.status === "opening-artifact" ||
-      currentState.status === "removing-completed" ||
+      currentState.status === "removing-result" ||
       currentState.status === "signing-out" ||
       (currentState.status === "preparing" &&
         currentState.cancelling) ||
       (currentState.status === "job" && currentState.cancelling);
     signOutButton.hidden =
-      !sessionCanSignOut || currentState.status === "signing-out";
+      !sessionCanSignOut ||
+      currentState.status === "signing-out" ||
+      currentState.status === "removing-result";
     restartButton.hidden =
       currentStep !== "progress" ||
       (currentState.status !== "artifact-failed" &&
         currentState.status !== "completed");
-    removeButton.hidden =
+    removeResultButton.hidden =
       currentStep !== "progress" ||
       (currentState.status !== "artifact-failed" &&
         currentState.status !== "completed" &&
         currentState.status !== "removal-failed");
-    removeButton.textContent =
+    removeResultButton.textContent =
       currentState.status === "removal-failed"
         ? "Retry removal"
-        : "Remove saved import";
+        : "Remove stored import";
     if (
       currentStep !== "progress" ||
       currentState.status !== "artifact-failed" &&
+      currentState.status !== "removal-failed" &&
       currentState.status !== "terminal" &&
       currentState.status !== "unavailable" &&
       currentState.status !== "sign-out-failed" &&
@@ -1682,8 +1685,6 @@ export function installProjectImportDialog(
     retryButton.hidden = true;
     retryButton.textContent = "Retry";
     restartButton.hidden = true;
-    removeButton.hidden = true;
-    removeButton.textContent = "Remove saved import";
     renderSourcePanels();
     renderRevision();
     renderHistory();
@@ -1805,10 +1806,10 @@ export function installProjectImportDialog(
           liveStatus.textContent =
             "Import cancelled before server acceptance.";
         }
-        if (previousState?.status === "removing-completed") {
+        if (previousState?.status === "removing-result") {
           resetWizard();
           liveStatus.textContent =
-            "The saved import was removed. Any interrupted server artifact cleanup will be reconciled safely on restart.";
+            "Stored import and its server artifacts were removed.";
         }
         if (!state.persistenceAvailable) {
           liveStatus.textContent =
@@ -1867,25 +1868,6 @@ export function installProjectImportDialog(
         scrubAcceptedSubmission(state.job.id);
         setIndeterminateProgress("Opening generated city…");
         break;
-      case "removing-completed":
-        setStep("progress");
-        scrubAcceptedSubmission(state.job.id);
-        setIndeterminateProgress(
-          "Removing saved import…",
-          "Waiting for active downloads before deleting its stored artifacts.",
-        );
-        break;
-      case "removal-failed":
-        setStep("progress");
-        scrubAcceptedSubmission(state.job.id);
-        setMeasuredProgress(
-          "Saved import removal needs attention",
-          1,
-          1,
-          state.message,
-        );
-        showSummaryErrors([state.message]);
-        break;
       case "request-failed": {
         const mapped = showServerFieldErrors(state.fields);
         if (!mapped) {
@@ -1937,11 +1919,33 @@ export function installProjectImportDialog(
         setMeasuredProgress("City opened", 1, 1);
         liveStatus.textContent = "Project import completed and opened.";
         if (
-          dialog.open &&
-          previousState?.status === "opening-artifact"
+          previousState?.status === "opening-artifact" &&
+          dialog.open
         ) {
           dialog.close();
         }
+        break;
+      case "removing-result":
+        setStep("progress");
+        scrubAcceptedSubmission(state.job.id);
+        setIndeterminateProgress(
+          "Removing stored import...",
+          "Waiting for any open artifact response to finish.",
+        );
+        liveStatus.textContent =
+          "Removing the completed import from the Code City server.";
+        break;
+      case "removal-failed":
+        setStep("progress");
+        scrubAcceptedSubmission(state.job.id);
+        setMeasuredProgress(
+          "Stored import could not be removed",
+          1,
+          1,
+          state.message,
+        );
+        showSummaryErrors([state.message]);
+        retryButton.hidden = true;
         break;
       case "unavailable":
         setStep("progress");
@@ -2502,7 +2506,7 @@ export function installProjectImportDialog(
     resetWizard();
     setStep("source", true);
   });
-  removeButton.addEventListener("click", () => {
+  removeResultButton.addEventListener("click", () => {
     if (
       currentState.status !== "artifact-failed" &&
       currentState.status !== "completed" &&

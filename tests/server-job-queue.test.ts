@@ -151,6 +151,204 @@ it("does not expose a job whose initial record could not be persisted", async ()
   expect(queue.list()).toEqual([]);
 });
 
+it("durably tombstones completed records and preserves live jobs", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  const completedJob = await queue.enqueue(
+    "analysis",
+    async () => undefined,
+  );
+  const completed = await waitFor(
+    queue,
+    completedJob.id,
+    ({ state }) => state === "completed",
+  );
+
+  await expect(queue.removeCompleted(completed.id)).resolves.toEqual(
+    completed,
+  );
+  expect(queue.get(completed.id)).toBeUndefined();
+  await expect(queue.removeCompleted(completed.id)).resolves.toEqual(
+    completed,
+  );
+  const tombstonePath = path.join(
+    dataDirectory,
+    "jobs",
+    `${completed.id}.json.delete`,
+  );
+  await expect(fs.lstat(tombstonePath)).resolves.toMatchObject({
+    size: expect.any(Number),
+  });
+  await expect(
+    fs.lstat(
+      path.join(dataDirectory, "jobs", `${completed.id}.json`),
+    ),
+  ).rejects.toMatchObject({ code: "ENOENT" });
+
+  const live = await queue.enqueue(
+    "analysis",
+    ({ signal }) =>
+      new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => resolve(), {
+          once: true,
+        });
+      }),
+  );
+  const running = await waitFor(
+    queue,
+    live.id,
+    ({ state }) => state === "running",
+  );
+  await expect(queue.removeCompleted(live.id)).resolves.toEqual(
+    running,
+  );
+  expect(queue.get(live.id)?.state).toBe("running");
+  await queue.cancel(live.id);
+  await queue.finishRemoval(completed.id);
+  await queue.finishRemoval(completed.id);
+  await expect(fs.lstat(tombstonePath)).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  await queue.close();
+
+  const reopened = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(reopened);
+  expect(reopened.get(completed.id)).toBeUndefined();
+  expect(reopened.get(live.id)?.state).toBe("cancelled");
+});
+
+it("finishes a committed record deletion tombstone on restart", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  const queued = await queue.enqueue("analysis", async () => undefined);
+  const completed = await waitFor(
+    queue,
+    queued.id,
+    ({ state }) => state === "completed",
+  );
+  await queue.close();
+
+  const recordPath = path.join(
+    dataDirectory,
+    "jobs",
+    `${completed.id}.json`,
+  );
+  const tombstonePath = `${recordPath}.delete`;
+  await fs.rename(recordPath, tombstonePath);
+  await fs.copyFile(tombstonePath, recordPath);
+  await fs.copyFile(tombstonePath, `${recordPath}.bak`);
+
+  const reopened = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(reopened);
+  expect(reopened.get(completed.id)).toBeUndefined();
+  await expect(fs.lstat(recordPath)).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  await expect(fs.lstat(`${recordPath}.bak`)).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  await expect(fs.lstat(tombstonePath)).resolves.toBeDefined();
+  await reopened.finishPendingRemovals();
+  await expect(fs.lstat(tombstonePath)).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+});
+
+it("validates a deletion tombstone before suppressing record shadows", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  const queued = await queue.enqueue("analysis", async () => undefined);
+  const completed = await waitFor(
+    queue,
+    queued.id,
+    ({ state }) => state === "completed",
+  );
+  await queue.close();
+
+  const recordPath = path.join(
+    dataDirectory,
+    "jobs",
+    `${completed.id}.json`,
+  );
+  const backupPath = `${recordPath}.bak`;
+  await fs.copyFile(recordPath, backupPath);
+  await fs.writeFile(`${recordPath}.delete`, "{}\n", "utf8");
+
+  await expect(
+    PersistentJobQueue.open({ dataDirectory }),
+  ).rejects.toThrow(/deletion tombstone/iu);
+  await expect(fs.lstat(recordPath)).resolves.toBeDefined();
+  await expect(fs.lstat(backupPath)).resolves.toBeDefined();
+});
+
+it("restores a live record when its persisted bytes changed before deletion", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  const queued = await queue.enqueue("analysis", async () => undefined);
+  const completed = await waitFor(
+    queue,
+    queued.id,
+    ({ state }) => state === "completed",
+  );
+  const recordPath = path.join(
+    dataDirectory,
+    "jobs",
+    `${completed.id}.json`,
+  );
+  await fs.writeFile(
+    recordPath,
+    `${JSON.stringify({ ...completed, kind: "replaced" })}\n`,
+    "utf8",
+  );
+
+  await expect(queue.removeCompleted(completed.id)).rejects.toThrow(
+    /changed before deletion/u,
+  );
+  expect(queue.get(completed.id)).toEqual(completed);
+  await expect(fs.lstat(recordPath)).resolves.toBeDefined();
+  await expect(
+    fs.lstat(`${recordPath}.delete`),
+  ).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("retries finalization after the tombstone was unlinked but completion failed", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  const queued = await queue.enqueue("analysis", async () => undefined);
+  const completed = await waitFor(
+    queue,
+    queued.id,
+    ({ state }) => state === "completed",
+  );
+  await queue.removeCompleted(completed.id);
+  const tombstone = path.join(
+    dataDirectory,
+    "jobs",
+    `${completed.id}.json.delete`,
+  );
+  vi.spyOn(fs, "rm").mockImplementationOnce(async (file) => {
+    await fs.unlink(file);
+    throw new Error("Simulated post-unlink completion failure.");
+  });
+
+  await expect(queue.finishRemoval(completed.id)).rejects.toThrow(
+    /post-unlink/u,
+  );
+  await expect(fs.lstat(tombstone)).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  await expect(queue.removeCompleted(completed.id)).resolves.toEqual(
+    completed,
+  );
+  await expect(queue.finishRemoval(completed.id)).resolves.toBeUndefined();
+  await expect(queue.removeCompleted(completed.id)).resolves.toBeUndefined();
+});
+
 it("waits for an in-flight enqueue before closing the queue", async () => {
   const queue = await PersistentJobQueue.open({
     dataDirectory: await temporaryDirectory(),
@@ -272,100 +470,6 @@ it("persists bounded job progress and completion", async () => {
     ),
   ) as JobRecord;
   expect(persisted).toEqual(completed);
-});
-
-it("tombstones a completed job before deleting its owned artifacts and waits on close", async () => {
-  const dataDirectory = await temporaryDirectory();
-  const queue = await PersistentJobQueue.open({ dataDirectory });
-  queues.push(queue);
-  const queued = await queue.enqueue(
-    "analysis",
-    async ({ id }) => cityModelResult(id),
-  );
-  const completed = await waitFor(
-    queue,
-    queued.id,
-    ({ state }) => state === "completed",
-  );
-  let releaseCleanup!: () => void;
-  const cleanupReleased = new Promise<void>((resolve) => {
-    releaseCleanup = resolve;
-  });
-  let announceCleanup!: () => void;
-  const cleanupStarted = new Promise<void>((resolve) => {
-    announceCleanup = resolve;
-  });
-
-  const deletion = queue.deleteCompleted(queued.id, async (record) => {
-    expect(record).toEqual(completed);
-    expect(queue.get(queued.id)).toBeUndefined();
-    expect(await fs.readdir(path.join(dataDirectory, "jobs"))).toContain(
-      `${queued.id}.json.deleting`,
-    );
-    announceCleanup();
-    await cleanupReleased;
-  });
-  await cleanupStarted;
-  const close = queue.close();
-  let closed = false;
-  void close.then(() => {
-    closed = true;
-  });
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  expect(closed).toBe(false);
-
-  releaseCleanup();
-  expect(await deletion).toEqual(completed);
-  await close;
-  expect(queue.get(queued.id)).toBeUndefined();
-  expect(await fs.readdir(path.join(dataDirectory, "jobs"))).toEqual([]);
-});
-
-it("recovers a failed completed-job deletion from its durable tombstone", async () => {
-  const dataDirectory = await temporaryDirectory();
-  const queue = await PersistentJobQueue.open({ dataDirectory });
-  queues.push(queue);
-  const queued = await queue.enqueue(
-    "history-analysis",
-    async ({ id }) => historyResult(id),
-  );
-  await waitFor(queue, queued.id, ({ state }) => state === "completed");
-
-  await expect(
-    queue.deleteCompleted(queued.id, async () => {
-      throw new Error("simulated artifact cleanup failure");
-    }),
-  ).rejects.toThrow("simulated artifact cleanup failure");
-  expect(queue.get(queued.id)).toBeUndefined();
-  expect(await fs.readdir(path.join(dataDirectory, "jobs"))).toContain(
-    `${queued.id}.json.deleting`,
-  );
-  await queue.close();
-
-  const reopened = await PersistentJobQueue.open({ dataDirectory });
-  queues.push(reopened);
-  expect(reopened.get(queued.id)).toBeUndefined();
-  expect(await fs.readdir(path.join(dataDirectory, "jobs"))).toEqual([]);
-});
-
-it("never treats an unrelated deletion-suffixed file as a job tombstone", async () => {
-  const dataDirectory = await temporaryDirectory();
-  const queue = await PersistentJobQueue.open({ dataDirectory });
-  queues.push(queue);
-  await queue.close();
-  const unrelated = path.join(
-    dataDirectory,
-    "jobs",
-    "operator-note.json.deleting",
-  );
-  await fs.writeFile(unrelated, "preserve this file\n", "utf8");
-
-  const reopened = await PersistentJobQueue.open({ dataDirectory });
-  queues.push(reopened);
-  expect(reopened.list()).toEqual([]);
-  expect(await fs.readFile(unrelated, "utf8")).toBe(
-    "preserve this file\n",
-  );
 });
 
 it("captures progress primitives once before persistence", async () => {
