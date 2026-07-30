@@ -999,8 +999,8 @@ describe("one-shot .NET credential broker launcher", () => {
       "codecity-git-" + "a".repeat(64),
     );
     expect(command).toBe(
-      "!'C:/Program Files/dotnet.exe' " +
-        "'C:/Trusted App/helper.dll' helper " +
+      "!'C:\\Program Files\\dotnet.exe' " +
+        "'C:\\Trusted App\\helper.dll' helper " +
         `'codecity-git-${"a".repeat(64)}'`,
     );
     expect(() =>

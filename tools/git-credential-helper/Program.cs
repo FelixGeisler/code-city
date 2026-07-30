@@ -613,7 +613,12 @@ internal static class Program
                 ".",
                 pipeName,
                 PipeDirection.InOut,
-                PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
+                PipeOptions.Asynchronous);
+            // The broker creates the unpredictable pipe first and retains
+            // CurrentUserOnly on its server ACL. Avoid the client's separate
+            // owner-token comparison: Git for Windows launches `!` helpers
+            // through MSYS, whose token owner can differ from the parent even
+            // though both processes run as the same Windows user.
             await pipe.ConnectAsync(
                     HelperTimeoutMilliseconds,
                     cancellationToken)

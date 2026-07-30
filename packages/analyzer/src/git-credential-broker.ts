@@ -369,27 +369,14 @@ export function quoteGitCredentialHelperArgument(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-function gitCredentialHelperShellPath(value: string): string {
-  // Git for Windows runs `!` helpers through its MSYS shell. Forward-slash
-  // drive paths remain native .NET paths while avoiding backslash conversion
-  // differences when the repository lives on a hosted runner's D: volume.
-  return /^[A-Za-z]:[\\/]/u.test(value)
-    ? value.replaceAll("\\", "/")
-    : value;
-}
-
 export function gitCredentialHelperCommand(
   launch: GenericGitCredentialBrokerLaunch,
   pipeName: string,
 ): string {
   if (!PIPE_NAME.test(pipeName)) throw brokerFailure();
   return [
-    `!${quoteGitCredentialHelperArgument(
-      gitCredentialHelperShellPath(launch.executable),
-    )}`,
-    quoteGitCredentialHelperArgument(
-      gitCredentialHelperShellPath(launch.assembly),
-    ),
+    `!${quoteGitCredentialHelperArgument(launch.executable)}`,
+    quoteGitCredentialHelperArgument(launch.assembly),
     "helper",
     quoteGitCredentialHelperArgument(pipeName),
   ].join(" ");
