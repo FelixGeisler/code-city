@@ -311,6 +311,51 @@ describe("viewer import API protocol", () => {
     expect(calls[1]!.body).toBe(body);
   });
 
+  it("deletes a completed job through the protected same-origin endpoint", async () => {
+    const calls: Array<{
+      readonly input: string | URL;
+      readonly init: RequestInit;
+    }> = [];
+    const client = new ViewerImportApiClient(
+      new URL("https://city.example.test/"),
+      {
+        fetch: async (input, init) => {
+          calls.push({ input, init });
+          return jsonResponse({ deleted: true });
+        },
+      },
+    );
+
+    await client.deleteCompletedJob(JOB_ID);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.input.toString()).toBe(
+      `https://city.example.test/api/v1/jobs/${JOB_ID}`,
+    );
+    expect(calls[0]!.init.method).toBe("DELETE");
+    expect(headersOf(calls[0]!.init)).toEqual({
+      "x-code-city-request": "1",
+    });
+  });
+
+  it("rejects malformed completed-job deletion acknowledgements", async () => {
+    const responses = [
+      jsonResponse({ deleted: false }),
+      jsonResponse({ deleted: true, job: completedJob() }),
+    ];
+    const client = new ViewerImportApiClient(
+      new URL("https://city.example.test/"),
+      { fetch: async () => responses.shift()! },
+    );
+
+    await expect(client.deleteCompletedJob(JOB_ID)).rejects.toThrow(
+      /invalid/u,
+    );
+    await expect(client.deleteCompletedJob(JOB_ID)).rejects.toThrow(
+      /invalid shape/u,
+    );
+  });
+
   it("preserves bounded field errors without reflecting malformed error bodies", async () => {
     const validError = jsonResponse(
       {

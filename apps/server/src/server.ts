@@ -691,6 +691,8 @@ class ArtifactResponseGate {
   #active = false;
   #idle: Promise<void> = Promise.resolve();
   #resolveIdle: (() => void) | undefined;
+  #exclusiveRequests = 0;
+  #exclusiveTail: Promise<void> = Promise.resolve();
 
   public constructor(
     private readonly timeouts: {
@@ -702,7 +704,7 @@ class ArtifactResponseGate {
   public tryAcquire(
     response: ServerResponse,
   ): ArtifactResponseLease | undefined {
-    if (this.#active) return undefined;
+    if (this.#active || this.#exclusiveRequests > 0) return undefined;
     this.#active = true;
     this.#idle = new Promise<void>((resolve) => {
       this.#resolveIdle = resolve;
@@ -779,6 +781,26 @@ class ArtifactResponseGate {
 
   public waitForIdle(): Promise<void> {
     return this.#idle;
+  }
+
+  public async runExclusive<T>(
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    this.#exclusiveRequests += 1;
+    const previous = this.#exclusiveTail.catch(() => undefined);
+    let release!: () => void;
+    const turn = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.#exclusiveTail = previous.then(() => turn);
+    await previous;
+    try {
+      await this.#idle;
+      return await operation();
+    } finally {
+      this.#exclusiveRequests -= 1;
+      release();
+    }
   }
 }
 
@@ -1890,6 +1912,58 @@ function apiHandler(
   if (request.method === "DELETE") {
     if (!hasMutationHeader(request)) {
       rejectMissingMutationHeader(request, response);
+      return true;
+    }
+    const current = jobs.get(id);
+    if (!current) {
+      sendJson(request, response, 404, {
+        error: { code: "job-not-found", message: "Job not found." },
+      });
+      return true;
+    }
+    if (current.state === "completed") {
+      if (!completedJobOwnsCityModelArtifact(jobs, id)) {
+        sendJson(request, response, 409, {
+          error: {
+            code: "job-delete-rejected",
+            message:
+              "The completed job does not own a removable import artifact.",
+          },
+        });
+        return true;
+      }
+      void jobs
+        .deleteCompleted(id, async () => {
+          await artifactResponses.runExclusive(() =>
+            artifacts.cleanupCityModelArtifact(id),
+          );
+        })
+        .then(
+          (job) => {
+            if (response.destroyed) return;
+            if (!job) {
+              sendJson(request, response, 404, {
+                error: {
+                  code: "job-not-found",
+                  message: "Job not found.",
+                },
+              });
+              return;
+            }
+            sendJson(request, response, 200, { deleted: true });
+          },
+          () => {
+            if (!response.destroyed) {
+              sendJson(request, response, 500, {
+                error: {
+                  code: "job-delete-incomplete",
+                  message:
+                    "The import was removed, but artifact cleanup did not complete. Restart reconciliation will retry safely.",
+                },
+              });
+            }
+          },
+        );
       return true;
     }
     void jobs.cancel(id).then(

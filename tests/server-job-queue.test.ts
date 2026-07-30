@@ -274,6 +274,80 @@ it("persists bounded job progress and completion", async () => {
   expect(persisted).toEqual(completed);
 });
 
+it("tombstones a completed job before deleting its owned artifacts and waits on close", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  const queued = await queue.enqueue(
+    "analysis",
+    async ({ id }) => cityModelResult(id),
+  );
+  const completed = await waitFor(
+    queue,
+    queued.id,
+    ({ state }) => state === "completed",
+  );
+  let releaseCleanup!: () => void;
+  const cleanupReleased = new Promise<void>((resolve) => {
+    releaseCleanup = resolve;
+  });
+  let announceCleanup!: () => void;
+  const cleanupStarted = new Promise<void>((resolve) => {
+    announceCleanup = resolve;
+  });
+
+  const deletion = queue.deleteCompleted(queued.id, async (record) => {
+    expect(record).toEqual(completed);
+    expect(queue.get(queued.id)).toBeUndefined();
+    expect(await fs.readdir(path.join(dataDirectory, "jobs"))).toContain(
+      `${queued.id}.json.deleting`,
+    );
+    announceCleanup();
+    await cleanupReleased;
+  });
+  await cleanupStarted;
+  const close = queue.close();
+  let closed = false;
+  void close.then(() => {
+    closed = true;
+  });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(closed).toBe(false);
+
+  releaseCleanup();
+  expect(await deletion).toEqual(completed);
+  await close;
+  expect(queue.get(queued.id)).toBeUndefined();
+  expect(await fs.readdir(path.join(dataDirectory, "jobs"))).toEqual([]);
+});
+
+it("recovers a failed completed-job deletion from its durable tombstone", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  const queued = await queue.enqueue(
+    "history-analysis",
+    async ({ id }) => historyResult(id),
+  );
+  await waitFor(queue, queued.id, ({ state }) => state === "completed");
+
+  await expect(
+    queue.deleteCompleted(queued.id, async () => {
+      throw new Error("simulated artifact cleanup failure");
+    }),
+  ).rejects.toThrow("simulated artifact cleanup failure");
+  expect(queue.get(queued.id)).toBeUndefined();
+  expect(await fs.readdir(path.join(dataDirectory, "jobs"))).toContain(
+    `${queued.id}.json.deleting`,
+  );
+  await queue.close();
+
+  const reopened = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(reopened);
+  expect(reopened.get(queued.id)).toBeUndefined();
+  expect(await fs.readdir(path.join(dataDirectory, "jobs"))).toEqual([]);
+});
+
 it("captures progress primitives once before persistence", async () => {
   const dataDirectory = await temporaryDirectory();
   const queue = await PersistentJobQueue.open({ dataDirectory });

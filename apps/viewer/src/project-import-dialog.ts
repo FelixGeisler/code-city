@@ -218,6 +218,8 @@ export function projectImportNavigationLocked(
     status === "artifact-failed" ||
     status === "completed" ||
     status === "opening-artifact" ||
+    status === "removal-failed" ||
+    status === "removing-completed" ||
     status === "sign-out-failed" ||
     status === "terminal" ||
     status === "unavailable"
@@ -225,9 +227,9 @@ export function projectImportNavigationLocked(
 }
 
 export function projectImportShouldResetOnOpen(
-  status: ImportControllerState["status"],
+  _status: ImportControllerState["status"],
 ): boolean {
-  return status === "completed";
+  return false;
 }
 
 export function projectImportPersistenceWarning(
@@ -1165,6 +1167,9 @@ export function installProjectImportDialog(
   const restartButton = requiredElement<HTMLButtonElement>(
     "project-import-restart",
   );
+  const removeButton = requiredElement<HTMLButtonElement>(
+    "project-import-remove",
+  );
   const cancelButton = requiredElement<HTMLButtonElement>(
     "project-import-cancel",
   );
@@ -1417,6 +1422,7 @@ export function installProjectImportDialog(
       currentState.status === "job" ||
       currentState.status === "recovering" ||
       currentState.status === "opening-artifact" ||
+      currentState.status === "removing-completed" ||
       currentState.status === "signing-out"
     );
   }
@@ -1446,12 +1452,14 @@ export function installProjectImportDialog(
       currentState.status === "initializing" ||
       currentState.status === "unavailable" ||
       currentState.status === "artifact-failed" ||
+      currentState.status === "removal-failed" ||
       currentState.status === "sign-out-failed" ||
       currentState.status === "terminal" ||
       currentState.status === "completed";
     cancelButton.hidden =
       !busy ||
       currentState.status === "opening-artifact" ||
+      currentState.status === "removing-completed" ||
       currentState.status === "signing-out" ||
       (currentState.status === "preparing" &&
         currentState.cancelling) ||
@@ -1460,7 +1468,17 @@ export function installProjectImportDialog(
       !sessionCanSignOut || currentState.status === "signing-out";
     restartButton.hidden =
       currentStep !== "progress" ||
-      currentState.status !== "artifact-failed";
+      (currentState.status !== "artifact-failed" &&
+        currentState.status !== "completed");
+    removeButton.hidden =
+      currentStep !== "progress" ||
+      (currentState.status !== "artifact-failed" &&
+        currentState.status !== "completed" &&
+        currentState.status !== "removal-failed");
+    removeButton.textContent =
+      currentState.status === "removal-failed"
+        ? "Retry removal"
+        : "Remove saved import";
     if (
       currentStep !== "progress" ||
       currentState.status !== "artifact-failed" &&
@@ -1664,6 +1682,8 @@ export function installProjectImportDialog(
     retryButton.hidden = true;
     retryButton.textContent = "Retry";
     restartButton.hidden = true;
+    removeButton.hidden = true;
+    removeButton.textContent = "Remove saved import";
     renderSourcePanels();
     renderRevision();
     renderHistory();
@@ -1785,6 +1805,11 @@ export function installProjectImportDialog(
           liveStatus.textContent =
             "Import cancelled before server acceptance.";
         }
+        if (previousState?.status === "removing-completed") {
+          resetWizard();
+          liveStatus.textContent =
+            "The saved import was removed. Any interrupted server artifact cleanup will be reconciled safely on restart.";
+        }
         if (!state.persistenceAvailable) {
           liveStatus.textContent =
             "Import jobs work, but this browser cannot save recovery state.";
@@ -1842,6 +1867,25 @@ export function installProjectImportDialog(
         scrubAcceptedSubmission(state.job.id);
         setIndeterminateProgress("Opening generated city…");
         break;
+      case "removing-completed":
+        setStep("progress");
+        scrubAcceptedSubmission(state.job.id);
+        setIndeterminateProgress(
+          "Removing saved import…",
+          "Waiting for active downloads before deleting its stored artifacts.",
+        );
+        break;
+      case "removal-failed":
+        setStep("progress");
+        scrubAcceptedSubmission(state.job.id);
+        setMeasuredProgress(
+          "Saved import removal needs attention",
+          1,
+          1,
+          state.message,
+        );
+        showSummaryErrors([state.message]);
+        break;
       case "request-failed": {
         const mapped = showServerFieldErrors(state.fields);
         if (!mapped) {
@@ -1892,7 +1936,12 @@ export function installProjectImportDialog(
         scrubAcceptedSubmission(state.job.id);
         setMeasuredProgress("City opened", 1, 1);
         liveStatus.textContent = "Project import completed and opened.";
-        if (dialog.open) dialog.close();
+        if (
+          dialog.open &&
+          previousState?.status === "opening-artifact"
+        ) {
+          dialog.close();
+        }
         break;
       case "unavailable":
         setStep("progress");
@@ -2442,11 +2491,27 @@ export function installProjectImportDialog(
     controller.retry();
   });
   restartButton.addEventListener("click", () => {
-    if (currentState.status !== "artifact-failed") return;
+    if (
+      currentState.status !== "artifact-failed" &&
+      currentState.status !== "completed"
+    ) {
+      return;
+    }
     clearErrors();
     controller.forgetCompleted();
     resetWizard();
     setStep("source", true);
+  });
+  removeButton.addEventListener("click", () => {
+    if (
+      currentState.status !== "artifact-failed" &&
+      currentState.status !== "completed" &&
+      currentState.status !== "removal-failed"
+    ) {
+      return;
+    }
+    clearErrors();
+    controller.removeCompleted();
   });
 
   renderSourcePanels();

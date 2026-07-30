@@ -124,6 +124,7 @@ export type JobTask = (
 
 export type JobFinalizer = (record: JobRecord) => Promise<void>;
 export type JobRollback = (record: JobRecord) => Promise<void>;
+export type JobDeletion = (record: JobRecord) => Promise<void>;
 
 export interface JobEnqueueOptions {
   readonly finalize?: JobFinalizer;
@@ -162,6 +163,7 @@ interface JobTerminalIntent {
 
 const MAXIMUM_JOB_RECORDS = 10_000;
 const MAXIMUM_JOB_FILE_BYTES = 64 * 1024;
+const JOB_DELETION_SUFFIX = ".json.deleting";
 const JOB_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const JOB_KIND_PATTERN = /^[a-z][a-z0-9-]{0,63}$/u;
@@ -514,6 +516,10 @@ export class PersistentJobQueue {
   readonly #runs = new Set<Promise<void>>();
   readonly #transitions = new Map<string, Promise<JobRecord>>();
   readonly #writes = new Map<string, Promise<void>>();
+  readonly #deletions = new Map<
+    string,
+    Promise<JobRecord | undefined>
+  >();
   #disposed = false;
   #closePromise: Promise<void> | undefined;
 
@@ -644,6 +650,37 @@ export class PersistentJobQueue {
     return this.cancelJob(id);
   }
 
+  public deleteCompleted(
+    id: string,
+    removeOwnedArtifacts: JobDeletion,
+  ): Promise<JobRecord | undefined> {
+    if (this.#disposed) {
+      return Promise.reject(new Error("Job queue is closed."));
+    }
+    if (typeof removeOwnedArtifacts !== "function") {
+      return Promise.reject(
+        new Error("Job deletion cleanup must be a function."),
+      );
+    }
+    const active = this.#deletions.get(id);
+    if (active !== undefined) return active;
+    const operation = this.deleteCompletedJob(id, removeOwnedArtifacts);
+    this.#deletions.set(id, operation);
+    void operation.then(
+      () => {
+        if (this.#deletions.get(id) === operation) {
+          this.#deletions.delete(id);
+        }
+      },
+      () => {
+        if (this.#deletions.get(id) === operation) {
+          this.#deletions.delete(id);
+        }
+      },
+    );
+    return operation;
+  }
+
   private cancelJob(
     id: string,
   ): Promise<JobRecord | undefined> {
@@ -684,6 +721,7 @@ export class PersistentJobQueue {
     );
     await Promise.allSettled([...this.#runs]);
     await Promise.allSettled([...this.#writes.values()]);
+    await Promise.allSettled([...this.#deletions.values()]);
   }
 
   private async load(): Promise<void> {
@@ -701,6 +739,15 @@ export class PersistentJobQueue {
         !entry.isSymbolicLink()
       ) {
         await fs.rm(candidate, { force: true });
+        continue;
+      }
+      if (
+        entry.name.endsWith(JOB_DELETION_SUFFIX) &&
+        entry.isFile() &&
+        !entry.isSymbolicLink()
+      ) {
+        await fs.rm(candidate, { force: true });
+        await this.syncJobsDirectory();
         continue;
       }
       if (
@@ -1090,6 +1137,44 @@ export class PersistentJobQueue {
       if (handle) await handle.close().catch(() => undefined);
       await fs.rm(temporary, { force: true }).catch(() => undefined);
     }
+  }
+
+  private async deleteCompletedJob(
+    id: string,
+    removeOwnedArtifacts: JobDeletion,
+  ): Promise<JobRecord | undefined> {
+    const record = this.#records.get(id);
+    if (record === undefined) return undefined;
+    if (record.state !== "completed") {
+      throw new Error("Only completed jobs can be deleted.");
+    }
+    await this.#transitions.get(id)?.catch(() => undefined);
+    await this.#writes.get(id)?.catch(() => undefined);
+    const current = this.#records.get(id);
+    if (current === undefined) return undefined;
+    if (current.state !== "completed") {
+      throw new Error("Only completed jobs can be deleted.");
+    }
+    const destination = path.join(this.#jobsDirectory, `${id}.json`);
+    const deletion = path.join(
+      this.#jobsDirectory,
+      `${id}${JOB_DELETION_SUFFIX}`,
+    );
+    await fs.rename(destination, deletion);
+    try {
+      await this.syncJobsDirectory();
+    } catch (error) {
+      await fs
+        .rename(deletion, destination)
+        .then(() => this.syncJobsDirectory())
+        .catch(() => undefined);
+      throw error;
+    }
+    this.#records.delete(id);
+    await removeOwnedArtifacts(current);
+    await fs.rm(deletion, { force: true });
+    await this.syncJobsDirectory();
+    return current;
   }
 
   private async restoreBackup(

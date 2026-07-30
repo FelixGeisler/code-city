@@ -105,6 +105,7 @@ function fakeApi(
     abandonUpload: async () => undefined,
     getJob: async () => job("running"),
     cancelJob: async () => job("cancelled"),
+    deleteCompletedJob: async () => undefined,
     ...overrides,
   };
 }
@@ -619,6 +620,98 @@ describe("viewer import controller", () => {
     );
     expect(fixture.modelReady).toHaveBeenCalledTimes(1);
     expect(fixture.controller.state.status).toBe("completed");
+  });
+
+  it("removes a completed saved import and clears recovery state", async () => {
+    const storage = new MemoryJobStorage(JOB_ID);
+    let finishDeletion!: () => void;
+    const deletion = new Promise<void>((resolve) => {
+      finishDeletion = resolve;
+    });
+    const deleteCompletedJob = vi.fn(async () => deletion);
+    const fixture = controllerFixture({
+      storage,
+      api: fakeApi({
+        getJob: async () => job("completed"),
+        deleteCompletedJob,
+      }),
+    });
+    fixture.controller.initialize();
+    await settle(16);
+    expect(fixture.controller.state.status).toBe("completed");
+
+    fixture.controller.removeCompleted();
+    expect(fixture.controller.state).toMatchObject({
+      status: "removing-completed",
+      job: { id: JOB_ID, state: "completed" },
+    });
+    expect(storage.value).toBe(JOB_ID);
+    finishDeletion();
+    await settle();
+
+    expect(deleteCompletedJob).toHaveBeenCalledWith(
+      JOB_ID,
+      expect.any(AbortSignal),
+    );
+    expect(storage.value).toBeUndefined();
+    expect(fixture.controller.state.status).toBe("idle");
+  });
+
+  it("retains a completed job after deletion failure and retries safely", async () => {
+    const storage = new MemoryJobStorage(JOB_ID);
+    const deleteCompletedJob = vi
+      .fn<ViewerImportApi["deleteCompletedJob"]>()
+      .mockRejectedValueOnce(
+        new ImportApiError("network", "Removal is temporarily unavailable."),
+      )
+      .mockResolvedValueOnce(undefined);
+    const fixture = controllerFixture({
+      storage,
+      api: fakeApi({
+        getJob: async () => job("completed"),
+        deleteCompletedJob,
+      }),
+    });
+    fixture.controller.initialize();
+    await settle(16);
+
+    fixture.controller.removeCompleted();
+    await settle();
+    expect(fixture.controller.state).toMatchObject({
+      status: "removal-failed",
+      job: { id: JOB_ID },
+      message: "Removal is temporarily unavailable.",
+    });
+    expect(storage.value).toBe(JOB_ID);
+
+    fixture.controller.removeCompleted();
+    await settle();
+    expect(deleteCompletedJob).toHaveBeenCalledTimes(2);
+    expect(storage.value).toBeUndefined();
+    expect(fixture.controller.state.status).toBe("idle");
+  });
+
+  it("treats an already missing completed job as a successful removal", async () => {
+    const storage = new MemoryJobStorage(JOB_ID);
+    const fixture = controllerFixture({
+      storage,
+      api: fakeApi({
+        getJob: async () => job("completed"),
+        deleteCompletedJob: async () => {
+          throw new ImportApiError("http", "Job not found.", {
+            status: 404,
+            code: "job-not-found",
+          });
+        },
+      }),
+    });
+    fixture.controller.initialize();
+    await settle(16);
+
+    fixture.controller.removeCompleted();
+    await settle();
+    expect(storage.value).toBeUndefined();
+    expect(fixture.controller.state.status).toBe("idle");
   });
 
   it("keeps a saved job through authorization expiry and resumes after login", async () => {

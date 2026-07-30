@@ -175,6 +175,18 @@ async function waitForJob(
   throw new Error(`Timed out waiting for job ${id}.`);
 }
 
+async function waitForJobRemoval(
+  server: CodeCityServerHandle,
+  id: string,
+): Promise<void> {
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    if (server.jobs.get(id) === undefined) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for job ${id} deletion.`);
+}
+
 async function publishCompletedCityModel(
   server: CodeCityServerHandle,
   model = cityModelFixture(),
@@ -412,8 +424,190 @@ it("exposes persisted job state and supports cancellation", async () => {
       JSON.parse(cancelled.body) as {
         job: { state: string };
       }
-    ).job.state,
+  ).job.state,
   ).toBe("cancelled");
+});
+
+it.each([
+  ["snapshot", false],
+  ["history", true],
+] as const)(
+  "deletes a completed %s import and all owned artifacts across restart",
+  async (_label, history) => {
+    const roots = await fixture();
+    const server = await startCodeCityServer({
+      host: "127.0.0.1",
+      port: 0,
+      ...roots,
+    });
+    servers.push(server);
+    const completed = history
+      ? await publishCompletedHistory(server)
+      : await publishCompletedCityModel(server);
+    const result = completed.result!;
+    const jobUrl = new URL(`/api/v1/jobs/${completed.id}`, server.url);
+    const cityUrl = new URL(result.artifactUrl, server.url);
+    const evolutionUrl =
+      result.evolution === undefined
+        ? undefined
+        : new URL(
+            result.evolution.artifactUrl,
+            server.url,
+          );
+
+    expect((await request(jobUrl, { method: "DELETE" })).status).toBe(
+      403,
+    );
+    const deleted = await request(jobUrl, {
+      method: "DELETE",
+      headers: { "X-Code-City-Request": "1" },
+    });
+    expect(deleted.status).toBe(200);
+    expect(JSON.parse(deleted.body)).toEqual({ deleted: true });
+    expect(server.jobs.get(completed.id)).toBeUndefined();
+    expect(await server.artifacts.statCityModel(completed.id)).toBeUndefined();
+    expect(await server.artifacts.statEvolution(completed.id)).toBeUndefined();
+    expect((await request(jobUrl)).status).toBe(404);
+    expect((await request(cityUrl)).status).toBe(404);
+    if (evolutionUrl !== undefined) {
+      expect((await request(evolutionUrl)).status).toBe(404);
+    }
+
+    await server.close();
+    const restarted = await startCodeCityServer({
+      host: "127.0.0.1",
+      port: 0,
+      ...roots,
+    });
+    servers.push(restarted);
+    expect(restarted.jobs.get(completed.id)).toBeUndefined();
+    expect(
+      await restarted.artifacts.statCityModel(completed.id),
+    ).toBeUndefined();
+    expect((await request(new URL(jobUrl.pathname, restarted.url))).status)
+      .toBe(404);
+  },
+);
+
+it("waits for an active artifact response before deleting a completed import", async () => {
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...(await fixture()),
+  });
+  servers.push(server);
+  const completed = await publishCompletedHistory(server);
+  const artifactUrl = new URL(
+    completed.result!.evolution!.artifactUrl,
+    server.url,
+  );
+  const originalRead = server.artifacts.readEvolution.bind(
+    server.artifacts,
+  );
+  let announceStreaming!: () => void;
+  const streaming = new Promise<void>((resolve) => {
+    announceStreaming = resolve;
+  });
+  let releaseStreaming!: () => void;
+  const streamingReleased = new Promise<void>((resolve) => {
+    releaseStreaming = resolve;
+  });
+  vi.spyOn(server.artifacts, "readEvolution").mockImplementation(
+    async (token, expected, signal) => {
+      const artifact = await originalRead(token, expected, signal);
+      if (artifact === undefined) return undefined;
+      return {
+        ...artifact,
+        chunks: async function* (chunkSignal?: AbortSignal) {
+          announceStreaming();
+          await streamingReleased;
+          yield* artifact.chunks(chunkSignal);
+        },
+      };
+    },
+  );
+  const originalDeleteCompleted = server.jobs.deleteCompleted.bind(
+    server.jobs,
+  );
+  let announceDeletion!: () => void;
+  const deletionStarted = new Promise<void>((resolve) => {
+    announceDeletion = resolve;
+  });
+  vi.spyOn(server.jobs, "deleteCompleted").mockImplementation(
+    (id, removeOwnedArtifacts) => {
+      announceDeletion();
+      return originalDeleteCompleted(id, removeOwnedArtifacts);
+    },
+  );
+
+  const download = request(artifactUrl);
+  await streaming;
+  let deletionFinished = false;
+  const deletion = request(
+    new URL(`/api/v1/jobs/${completed.id}`, server.url),
+    {
+      method: "DELETE",
+      headers: { "X-Code-City-Request": "1" },
+    },
+  ).then((response) => {
+    deletionFinished = true;
+    return response;
+  });
+  await deletionStarted;
+  try {
+    await waitForJobRemoval(server, completed.id);
+    expect(deletionFinished).toBe(false);
+    expect((await request(artifactUrl)).status).toBe(404);
+  } finally {
+    releaseStreaming();
+  }
+  expect((await download).status).toBe(200);
+  expect((await deletion).status).toBe(200);
+  expect(await server.artifacts.statCityModel(completed.id)).toBeUndefined();
+  expect(await server.artifacts.statEvolution(completed.id)).toBeUndefined();
+});
+
+it("reports partial deletion and lets restart reconciliation remove orphan artifacts", async () => {
+  const roots = await fixture();
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...roots,
+  });
+  servers.push(server);
+  const completed = await publishCompletedHistory(server);
+  const cleanup = vi
+    .spyOn(server.artifacts, "cleanupCityModelArtifact")
+    .mockRejectedValueOnce(new Error("simulated cleanup failure"));
+  const deleted = await request(
+    new URL(`/api/v1/jobs/${completed.id}`, server.url),
+    {
+      method: "DELETE",
+      headers: { "X-Code-City-Request": "1" },
+    },
+  );
+  expect(deleted.status).toBe(500);
+  expect(JSON.parse(deleted.body)).toMatchObject({
+    error: { code: "job-delete-incomplete" },
+  });
+  expect(server.jobs.get(completed.id)).toBeUndefined();
+  expect(await server.artifacts.statCityModel(completed.id)).toBeDefined();
+  cleanup.mockRestore();
+
+  await server.close();
+  const restarted = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...roots,
+  });
+  servers.push(restarted);
+  expect(restarted.jobs.get(completed.id)).toBeUndefined();
+  expect(
+    await restarted.artifacts.statCityModel(completed.id),
+  ).toBeUndefined();
+  expect(
+    await restarted.artifacts.statEvolution(completed.id),
+  ).toBeUndefined();
 });
 
 it("serves immutable city-model job artifacts from fixed UUID paths", async () => {

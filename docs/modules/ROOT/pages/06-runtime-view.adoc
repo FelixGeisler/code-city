@@ -10,7 +10,12 @@ If the process restarts, unfinished records become explicitly failed with an
 interrupted reason instead of remaining permanently active.
 
 `GET /api/v1/health` provides a cache-free health check. `GET /api/v1/jobs` and
-`GET` or `DELETE /api/v1/jobs/\{id\}` expose bounded job state and cancellation.
+`GET` or `DELETE /api/v1/jobs/\{id\}` expose bounded job state and lifecycle
+control. `DELETE` retains cancellation semantics for queued and running jobs;
+for a completed import it durably tombstones the job, waits for an active
+artifact response, and removes the city model plus optional evolution
+companion. A partial filesystem failure is reported and startup reconciliation
+safely retries any orphan cleanup.
 `POST /api/v1/imports` accepts one exact-shape JSON request for an anonymous
 public or exact-scope credentialed GitHub repository, or an operator-allowed
 Generic Git remote with optional exact-scope HTTPS credentials. It requires
@@ -114,8 +119,10 @@ on return. The explicit *Cancel import* action abandons a live reservation or,
 once acceptance is known, deletes the job. Completion validates the fixed
 job/artifact relationship, fetches the artifact through the credentialed
 same-origin gateway, runs the established model validator, and applies the city
-once. The root access token is cleared immediately after the one-time session
-exchange and never enters controller state or browser storage. In shared-secret
+once. Reopening a completed recent import exposes *Remove saved import*, which
+deletes its server-side record and owned artifacts while leaving the already
+opened city visible. The root access token is cleared immediately after the
+one-time session exchange and never enters controller state or browser storage. In shared-secret
 mode, the wizard's explicit *Sign out* action revokes the HttpOnly browser
 session, clears the saved import-job UUID, cancels a known live job, and restores
 the built-in demo city.
