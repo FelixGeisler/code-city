@@ -27,13 +27,43 @@ container port 3000 as host port 8080, and mounts the `code-city-data` volume at
 `/data`. It has no mandatory database, message queue, reverse proxy, or cloud
 dependency.
 
-The initial API has no authentication. Publish it only on a trusted private
-network. An Internet-facing deployment must add an authenticated ingress before
-exposing the service. IP-literal requests and `localhost` are accepted by
-default. Set `CODECITY_ALLOWED_HOSTS` to a comma-separated list when clients use
-DNS names; other hostnames are rejected to prevent DNS-rebinding access.
+Authorization is disabled by default. Publish that trusted-network mode only
+on a private network. IP-literal requests and `localhost` are accepted by
+default. Set `CODECITY_ALLOWED_HOSTS` to a comma-separated list when clients
+use DNS names; other hostnames are rejected to prevent DNS-rebinding access.
 
-Upload reservations share the same unauthenticated trusted-network boundary.
+Application-owned authorization uses no database or identity provider. Set
+`CODECITY_AUTH_TOKEN_FILE` to an absolute private file containing one canonical
+32-byte base64url token and set `CODECITY_PUBLIC_ORIGIN` to the one externally
+visible HTTPS origin. The configured origin hostname is admitted by the Host
+policy; a non-default public port must also occur explicitly in the Host
+header. The server then protects the complete versioned API except health reads
+and the session bootstrap. The long-lived bearer can authorize automation or
+be exchanged for one bounded opaque browser session. Repository credential
+profiles must not be configured unless this mode is active.
+
+On POSIX, the token file must be process-owned, mode `0400` or `0600`, regular,
+non-symlinked, and have one link. Its identity is checked around a bounded
+read. Docker mounts must make the file readable only by the runtime UID 10001;
+the Compose environment value names the path inside the container and does not
+mount a host secret automatically. On Windows/IIS, apply a service-private ACL
+to the file and protected canonical ancestry, then set
+`CODECITY_TRUST_WINDOWS_AUTH_TOKEN_FILE=1`. Portable Node APIs cannot verify
+that ACL. Raw secrets are not accepted in environment variables. Rotate the
+file through a restart, which also revokes all sessions.
+
+The Node server remains HTTP internally. Azure Web App and IIS normally
+terminate external TLS. A credential-enabled Raspberry Pi deployment likewise
+needs an HTTPS terminator; unauthenticated trusted-LAN mode does not. Bind or
+firewall the backend so only the terminator can reach it, preserve the external
+Host, and do not treat `Forwarded`, `X-Forwarded-*`,
+`X-MS-CLIENT-PRINCIPAL`, or Windows identity headers as authorization. Any
+future trusted-proxy identity mode needs a separate backend-isolation trust
+boundary. Redact `Authorization`, `Cookie`, and `Set-Cookie` from ingress and
+platform logs.
+
+Upload reservations share the same trusted-network or configured authorization
+boundary as the rest of the API.
 The server admits at most four reservations and 256 MiB of staged data across
 reserved, receiving, queued, and running uploads. Individual city-model and
 ZIP bodies are limited to 128 MiB and 64 MiB respectively. Unused reservations
@@ -57,12 +87,13 @@ comma-separated list of exact origin-only URLs such as
 scheme and effective port are part of the match. The Compose file forwards this
 variable with an empty default.
 
-This allowlist is egress control, not per-repository or inbound authorization.
-Every unauthenticated Code City network client can request any repository/user
-at an enabled origin and invoke the service identity's ambient Git credential
-helper, SSH agent/configuration, and trusted CAs. Enable Generic Git only when
-every network client is authorized, and grant the service identity only the
-minimum repository access it needs.
+This allowlist is egress control, not per-repository authorization. In default
+trusted-network mode, every Code City network client can request any
+repository/user at an enabled origin and invoke the service identity's ambient
+Git credential helper, SSH agent/configuration, and trusted CAs. Enable Generic
+Git only when every network client is authorized, or enable the application
+authorization boundary, and grant the service identity only the minimum
+repository access it needs.
 
 For Azure Pipelines, prefer the already authorized local checkout:
 

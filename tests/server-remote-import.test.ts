@@ -1226,7 +1226,10 @@ describe("remote import HTTP API", () => {
     await started;
     const cancelled = await request(
       new URL(`/api/v1/jobs/${queued.id}`, server.url),
-      { method: "DELETE" },
+      {
+        method: "DELETE",
+        headers: { "X-Code-City-Request": "1" },
+      },
     );
     expect(cancelled.status).toBe(200);
     const terminal = await waitForTerminal(server, queued.id);

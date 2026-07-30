@@ -19,6 +19,25 @@ persisted job under `Location`. Branches and tags are discriminated from exact
 commit SHAs. A completed job owns
 `/api/v1/artifacts/\{id\}/city-model.json`.
 
+The default trusted-network mode preserves this unauthenticated API. When an
+operator supplies one private authorization-token file and exact public
+origin, the request dispatcher authorizes every API route before its body or
+route-specific processing. Only `GET` or `HEAD /api/v1/health` and
+`/api/v1/auth/session` remain public; viewer assets are not private data.
+Automation presents the root bearer directly. A browser presents it once to
+`POST /api/v1/auth/session`, receives an opaque in-memory-backed session cookie,
+and then polls the same-origin job and artifact routes without retaining the
+root token. Sessions are bounded, expire after eight hours, and disappear on
+logout or restart.
+
+All credential failures use one fixed `401` response. Token comparison decodes
+to fixed 32-byte values and uses a constant-time comparison. The session cookie
+is `HttpOnly`, `SameSite=Strict`, scoped to `/api/v1`, and `Secure` outside an
+explicit loopback-only development origin. Mutations retain the non-simple
+`X-Code-City-Request: 1` header. Cookie mutations also require an exact
+configured `Origin`; a supplied Origin on bearer automation must match.
+Health remains anonymous and unchanged for container and platform probes.
+
 Raw browser uploads use a two-step protocol without multipart parsing.
 `POST /api/v1/imports/uploads` validates exact-shape metadata and allocates a
 short-lived, one-use reservation. `PUT /api/v1/imports/uploads/\{token\}`
@@ -109,10 +128,10 @@ disabled unless the operator lists an exact HTTPS or SSH origin; scheme,
 normalized hostname or IP, and effective port must all match. scp-style
 remotes map to SSH port 22. This prevents a network caller from choosing an
 arbitrary destination for the server identity. It does not authorize individual
-repositories or callers: every unauthenticated Code City client can request any
-repository/user at an enabled origin with the service account's ambient
-credentials. Deploy with only authorized trusted clients and a least-privileged
-service identity.
+repositories or callers: in default trusted-network mode every Code City client
+can request any repository/user at an enabled origin with the service account's
+ambient credentials. Deploy with only authorized trusted clients or enable
+inbound authorization, and use a least-privileged service identity.
 
 == Print
 

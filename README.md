@@ -20,8 +20,8 @@ docker compose up --build
 Then open `http://<server-address>:8080`. The container serves the viewer and
 versioned API from one process, runs as a non-root user, and keeps persistent
 job state in the `code-city-data` Docker volume. No external database, queue,
-or cloud service is required. This first deployment has no authentication, so
-expose it only on a trusted private network, not directly on the public
+or cloud service is required. Authorization is disabled by default, so expose
+that trusted-network mode only on a private network, not directly on the public
 Internet. Numeric IP addresses and `localhost` are accepted by default. To use
 a DNS name, set `CODECITY_ALLOWED_HOSTS` to a comma-separated allowlist before
 starting Compose, for example `raspberrypi.local,codecity.lan`.
@@ -49,8 +49,44 @@ once. City models are capped at 128 MiB, ZIPs at 64 MiB, unused reservations
 expire after five minutes, and each upload has 30-second idle and ten-minute
 total deadlines. Reservation expiry, disconnect, cancellation, job failure,
 shutdown, and restart remove private staging data. Upload endpoints are also
-unauthenticated in this initial deployment, so the trusted-network requirement
-applies to them.
+open in default trusted-network mode and protected with the rest of the API
+when inbound authorization is enabled.
+
+Inbound authorization can be enabled without changing the public viewer or
+health check. Put one machine-generated 32-byte base64url token in a private
+file, configure its absolute in-container path as
+`CODECITY_AUTH_TOKEN_FILE`, and set one exact `CODECITY_PUBLIC_ORIGIN`, for
+example `https://codecity.lan`. When enabled, every `/api/v1` route except
+`GET` or `HEAD /api/v1/health` and the session bootstrap is protected. API
+automation may send the token as one `Authorization: Bearer` header. A
+same-origin browser exchanges it once at `POST /api/v1/auth/session` for an
+opaque eight-hour `HttpOnly`, `SameSite=Strict` session cookie; the long-lived
+token and repository credentials are never stored in the browser. Login,
+logout, imports, uploads, and job cancellation still require the exact
+`X-Code-City-Request: 1` header. Cookie-authenticated mutations additionally
+require the configured same-origin `Origin`.
+
+The token file is read once before the server opens its data directory. On
+POSIX it must be a non-linked regular file owned by the service identity with
+mode `0400` or `0600`. Mount Docker secrets so UID 10001 owns the file and no
+group or other identity can read it. On Windows, protect the file and its
+canonical ancestry with an ACL limited to the service identity and trusted
+administrators, then set
+`CODECITY_TRUST_WINDOWS_AUTH_TOKEN_FILE=1` as an explicit attestation. Do not
+put the token itself in an environment variable, command line, URL, repository,
+job data, or browser storage. Token replacement takes effect only after a
+server restart and invalidates all sessions.
+
+Authorization protects credential use but does not encrypt the bearer or
+session capability in transit. `CODECITY_PUBLIC_ORIGIN` therefore requires
+HTTPS; plain HTTP is accepted only when the server itself is bound to
+loopback. Azure Web App and IIS can terminate TLS at their normal ingress. A
+Raspberry Pi credential-enabled deployment needs TLS termination (for example
+at a private Caddy ingress); the original no-auth trusted-LAN mode does not.
+Keep the Node backend reachable only from that ingress, preserve the external
+`Host`, and never trust client-supplied forwarded identity headers. Configure
+proxy and platform access logs to omit `Authorization`, `Cookie`, and
+`Set-Cookie`.
 
 On Windows/IIS, uploads and published artifacts require a service-private
 `CODECITY_DATA_DIR` even when Generic Git remains disabled. Restrict the data
@@ -67,11 +103,12 @@ port are significant; wildcards are not accepted. scp-style remotes use the
 matching `ssh://host:22` origin. Explicitly allow a private or loopback origin
 only when reaching it is intended.
 
-The origin list is egress control, not per-repository or inbound authorization:
-every unauthenticated Code City network client can request any repository/user
-at an enabled origin and invoke the service account's ambient credential
-helper, SSH agent/configuration, and enterprise CAs. Enable it only on a network
-where every client is authorized, and use a least-privileged service identity.
+The origin list is egress control, not per-repository authorization. In default
+trusted-network mode, every Code City network client can request any
+repository/user at an enabled origin and invoke the service account's ambient
+credential helper, SSH agent/configuration, and enterprise CAs. Enable it only
+on a network where every client is authorized, or enable inbound authorization,
+and use a least-privileged service identity.
 On Windows/IIS, enabled origins also require
 `CODECITY_TRUST_WINDOWS_GIT_WORKSPACE=1`. That flag attests that the data/import
 workspace ACL and inherited child ACLs are limited to the service identity and
@@ -218,8 +255,13 @@ $env:CODECITY_HOST = "0.0.0.0"
 $env:CODECITY_PORT = "3000"
 $env:CODECITY_ALLOWED_HOSTS = "codecity.lan"
 $env:CODECITY_ALLOWED_GIT_ORIGINS = "https://dev.azure.example"
+# Optional application-owned authorization:
+$env:CODECITY_AUTH_TOKEN_FILE = "C:\CodeCitySecrets\authorization-token"
+$env:CODECITY_PUBLIC_ORIGIN = "https://codecity.lan"
 # Windows only, after provisioning and auditing the data-directory ACL:
 $env:CODECITY_TRUST_WINDOWS_GIT_WORKSPACE = "1"
+# Windows only, after provisioning and auditing the token-file ACL:
+$env:CODECITY_TRUST_WINDOWS_AUTH_TOKEN_FILE = "1"
 npm run server:start
 ```
 

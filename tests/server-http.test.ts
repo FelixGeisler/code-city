@@ -130,6 +130,7 @@ function request(
   options: {
     readonly method?: string;
     readonly host?: string;
+    readonly headers?: http.OutgoingHttpHeaders;
     readonly signal?: AbortSignal;
   } = {},
 ): Promise<ResponseSnapshot> {
@@ -145,8 +146,10 @@ function request(
         port: Number(url.port),
         path: `${url.pathname}${url.search}`,
         method: options.method ?? "GET",
-        headers:
-          options.host === undefined ? undefined : { Host: options.host },
+        headers: {
+          ...options.headers,
+          ...(options.host === undefined ? {} : { Host: options.host }),
+        },
         agent: false,
         signal: options.signal,
       },
@@ -242,7 +245,10 @@ it("exposes persisted job state and supports cancellation", async () => {
 
   const cancelled = await request(
     new URL(`/api/v1/jobs/${queued.id}`, server.url),
-    { method: "DELETE" },
+    {
+      method: "DELETE",
+      headers: { "X-Code-City-Request": "1" },
+    },
   );
   expect(cancelled.status).toBe(200);
   expect(
