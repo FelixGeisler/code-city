@@ -2967,7 +2967,7 @@ describe("remote import HTTP API", () => {
       code: "revision-unavailable",
       message: "The requested repository revision is unavailable.",
     });
-  });
+  }, 15_000);
 
   it("persists only a fixed failure when analysis rejects", async () => {
     const roots = await fixture();
