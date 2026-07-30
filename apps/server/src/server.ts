@@ -21,6 +21,10 @@ import {
   type InboundAuthorizationOptions,
 } from "./inbound-authorization.js";
 import {
+  CredentialProfileRegistry,
+  type CredentialProfileRegistryOptions,
+} from "./credential-profiles.js";
+import {
   enqueueRemoteImport,
   parseRemoteImportJson,
   RemoteImportPolicy,
@@ -74,6 +78,7 @@ export interface CodeCityServerOptions {
   readonly allowedGitOrigins?: readonly string[];
   readonly trustWindowsGitWorkspace?: boolean;
   readonly authorization?: InboundAuthorizationOptions;
+  readonly credentialProfiles?: CredentialProfileRegistryOptions;
   readonly importDependencies?: RemoteImportDependencies;
   readonly signal?: AbortSignal;
 }
@@ -1458,6 +1463,7 @@ function apiHandler(
   importRequests: ImportRequestOperations,
   uploads: UploadReservationRegistry,
   importPolicy: RemoteImportPolicy,
+  credentialProfiles: CredentialProfileRegistry,
   importDependencies: RemoteImportDependencies | undefined,
 ): boolean {
   if (target.path === "/api/v1/health") {
@@ -1469,6 +1475,16 @@ function apiHandler(
       status: "ok",
       service: "code-city",
       apiVersion: "v1",
+    });
+    return true;
+  }
+  if (target.path === "/api/v1/imports/capabilities") {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      sendMethodNotAllowed(request, response, ["GET", "HEAD"]);
+      return true;
+    }
+    sendJson(request, response, 200, {
+      credentialProfiles: credentialProfiles.capabilities(),
     });
     return true;
   }
@@ -1720,6 +1736,7 @@ function requestHandler(
   importRequests: ImportRequestOperations,
   uploads: UploadReservationRegistry,
   importPolicy: RemoteImportPolicy,
+  credentialProfiles: CredentialProfileRegistry,
   importDependencies: RemoteImportDependencies | undefined,
   allowedHosts: ReadonlySet<string>,
   authorization: InboundAuthorization,
@@ -1806,6 +1823,7 @@ function requestHandler(
           importRequests,
           uploads,
           importPolicy,
+          credentialProfiles,
           importDependencies,
         )
       ) {
@@ -1893,12 +1911,44 @@ export async function startCodeCityServer(
     authorization.close();
     throw new Error("Server startup was aborted.");
   }
+  if (
+    options.credentialProfiles?.profilesFile !== undefined &&
+    authorization.mode !== "shared-secret"
+  ) {
+    authorization.close();
+    throw new Error(
+      "CODECITY_CREDENTIAL_PROFILES_FILE requires configured inbound authorization.",
+    );
+  }
+  let credentialProfiles: CredentialProfileRegistry;
+  try {
+    credentialProfiles = await CredentialProfileRegistry.open(
+      options.credentialProfiles ?? {},
+    );
+  } catch (error) {
+    authorization.close();
+    throw error;
+  }
+  if (options.signal?.aborted) {
+    credentialProfiles.close();
+    authorization.close();
+    throw new Error("Server startup was aborted.");
+  }
   let assets: ReadonlyMap<string, ViewerAsset>;
   let artifacts: ImportArtifactStore;
   let jobs: PersistentJobQueue;
+  const viewerRoot =
+    options.viewerRoot ?? productionViewerRoot();
   try {
+    await credentialProfiles.assertViewerRootIsSeparate(viewerRoot);
     assets = await collectViewerAssets(
-      options.viewerRoot ?? productionViewerRoot(),
+      viewerRoot,
+      credentialProfiles.configured
+        ? {
+            guard: (entry) =>
+              credentialProfiles.assertViewerAssetEntryIsSeparate(entry),
+          }
+        : {},
     );
     artifacts = await ImportArtifactStore.open({
       dataDirectory: options.dataDirectory,
@@ -1908,6 +1958,7 @@ export async function startCodeCityServer(
       concurrency: 1,
     });
   } catch (error) {
+    credentialProfiles.close();
     authorization.close();
     throw error;
   }
@@ -1917,6 +1968,7 @@ export async function startCodeCityServer(
     );
   } catch (error) {
     await jobs.close().catch(() => undefined);
+    credentialProfiles.close();
     authorization.close();
     throw error;
   }
@@ -1941,6 +1993,7 @@ export async function startCodeCityServer(
         importRequests,
         uploads,
         importPolicy,
+        credentialProfiles,
         options.importDependencies,
         allowedHosts,
         authorization,
@@ -1953,6 +2006,7 @@ export async function startCodeCityServer(
     server.maxHeadersCount = 64;
   } catch (error) {
     await jobs.close().catch(() => undefined);
+    credentialProfiles.close();
     authorization.close();
     throw error;
   }
@@ -1988,6 +2042,7 @@ export async function startCodeCityServer(
         const uploadCloseResult = await uploadClose;
         if (!uploadCloseResult.ok) throw uploadCloseResult.error;
       } finally {
+        credentialProfiles.close();
         authorization.close();
         resolveClosed?.();
         await closedPromise;

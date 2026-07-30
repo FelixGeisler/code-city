@@ -38,6 +38,14 @@ explicit loopback-only development origin. Mutations retain the non-simple
 configured `Origin`; a supplied Origin on bearer automation must match.
 Health remains anonymous and unchanged for container and platform probes.
 
+An authenticated `GET` or `HEAD /api/v1/imports/capabilities` returns only
+configured credential-profile `id`, `label`, and `provider` values with
+`Cache-Control: no-store`. Repository scopes, authentication usernames,
+secret filenames, and secret contents remain server-private. This endpoint is
+discovery-only in the current slice: import requests still reject a
+credential-profile selector, and remote import execution does not read or
+inject profile secrets.
+
 Raw browser uploads use a two-step protocol without multipart parsing.
 `POST /api/v1/imports/uploads` validates exact-shape metadata and allocates a
 short-lived, one-use reservation. `PUT /api/v1/imports/uploads/\{token\}`
