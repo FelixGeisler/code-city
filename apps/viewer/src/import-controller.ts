@@ -7,6 +7,7 @@ import {
   type ImportCredentialProfile,
   type ImportFieldError,
   type ImportJob,
+  type ImportJobResult,
   type ImportUploadReservation,
   type RemoteImportSubmission,
   type UploadImportSubmission,
@@ -126,6 +127,9 @@ export interface ImportedCityModelSource {
   readonly responseUrl: URL;
   readonly assetRoot: URL;
   readonly jobId: string;
+  readonly sourceAvailability:
+    | NonNullable<ImportJobResult["source"]>["availability"]
+    | "unavailable";
 }
 
 export type ImportPreparationPhase =
@@ -1105,6 +1109,8 @@ export class ImportController {
         responseUrl: loaded.responseUrl,
         assetRoot: assetRootFromResponseUrl(loaded.responseUrl.href),
         jobId: job.id,
+        sourceAvailability:
+          job.result.source?.availability ?? "unavailable",
       });
       if (!this.isCurrent(controller, generation)) return;
       this.updateState({

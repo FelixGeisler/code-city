@@ -269,15 +269,34 @@ flows are not supported by this profile type. Installed Git, the resolved .NET
 runtime, and configured proxy and certificate environment settings remain
 trusted local dependencies.
 
-The selector, secret, remote URL, requested symbolic ref, and source bytes are
-never written to a job or artifact. The resolved immutable commit SHA may be
-stored as the generated model's default version. Anonymous GitHub snapshot
+The selector, secret, remote URL, and requested symbolic ref are never written
+to a job or artifact. The resolved immutable commit SHA may be stored as the
+generated model's default version. When `CODECITY_SOURCE_RETENTION=retain`
+(the production entrypoint default), bounded analyzed source files are
+published separately under the service-private
+`CODECITY_DATA_DIR/sources/<job-id>` tree. They are never embedded in the city
+model, evolution bundle, printable output, or public legend. Every source read
+uses the normal inbound API authorization and must match the completed job,
+repository, building ID, path, and language. Set
+`CODECITY_SOURCE_RETENTION=disabled` to retain only immutable provenance; the
+viewer then shows an explicit reduced-capability state.
+
+The read-only inspector opens the selected building's exact retained file and
+lets executable-unit rows jump to their recorded line range. GitHub and Azure
+DevOps links are commit-pinned. An optional local adapter is disabled unless
+`CODECITY_EDITOR_URL_TEMPLATE` is configured with `{path}` and optional
+`{line}` placeholders, for example
+`vscode://file/C:/work/example/{path}:{line}`. Only `https`, `vscode`, and
+`vscode-insiders` templates without embedded credentials are accepted.
+
+Anonymous GitHub snapshot
 imports remain archive-based; history imports use the installed Git backend so
 its pinned rename behavior and version can be recorded in provenance. The
-Compose file forwards the two configuration values but deliberately does not
-mount a host manifest or secret; operators must provide a private mount
-explicitly. Never place profile secrets in Compose environment values, Git
-configuration, a remote URL, or the repository.
+Compose file forwards the source-retention and editor-adapter settings. It also
+forwards credential-manifest configuration but deliberately does not mount a
+host manifest or secret; operators must provide a private mount explicitly.
+Never place profile secrets in Compose environment values, Git configuration,
+a remote URL, or the repository.
 
 Authorization protects credential use but does not encrypt the bearer or
 session capability in transit. `CODECITY_PUBLIC_ORIGIN` therefore requires

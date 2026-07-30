@@ -89,6 +89,12 @@ import {
   ViewerLoadGateway,
 } from "./model-source.js";
 import { validateCityModel } from "./model-validation.js";
+import { ViewerImportApiClient } from "./import-api.js";
+import {
+  loadBuildingSource,
+  sourceLineTokens,
+  type BuildingSource,
+} from "./source-navigation.js";
 import {
   createRepositoryExplorerIndex,
   DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT,
@@ -180,6 +186,11 @@ interface CameraTransition {
 interface ModelSource {
   readonly label: string;
   readonly assetRoot?: URL;
+  readonly jobId?: string;
+  readonly sourceAvailability?:
+    | "disabled"
+    | "retained"
+    | "unavailable";
 }
 
 interface ViewerPerformanceDiagnostics {
@@ -386,6 +397,15 @@ const inspectorFields = {
   unitsCaption: element<HTMLTableCaptionElement>("building-units-caption"),
   units: element<HTMLTableSectionElement>("building-units"),
   unitsShowMore: element<HTMLButtonElement>("building-units-show-more"),
+  sourceDetails: element<HTMLDetailsElement>("building-source-details"),
+  sourceSummary: element<HTMLElement>("building-source-summary"),
+  sourceStatus: element<HTMLParagraphElement>("building-source-status"),
+  sourceContent: element<HTMLDivElement>("building-source-content"),
+  sourcePath: element<HTMLElement>("building-source-path"),
+  sourceRevision: element<HTMLElement>("building-source-revision"),
+  sourceExternal: element<HTMLAnchorElement>("building-source-external"),
+  sourceEditor: element<HTMLAnchorElement>("building-source-editor"),
+  sourceCode: element<HTMLPreElement>("building-source-code"),
 };
 
 const districtInspectorFields = {
@@ -1607,6 +1627,10 @@ class CityScene {
 
 let activeModel: CityModel = DEMO_MODEL;
 let activeModelSource: ModelSource = { label: "Built-in demo" };
+let sourceRequest: AbortController | undefined;
+let loadedBuildingSource:
+  | { readonly buildingId: string; readonly source: BuildingSource }
+  | undefined;
 let visualizationMode: ViewerVisualizationMode = "semantic";
 let previewPrinterProfile: PrinterProfile | undefined;
 let activeBuildingsById = new Map(
@@ -1666,6 +1690,9 @@ const printPlateToolbar = installPrintPlateToolbar(
 );
 requestCityPresentation = (): void => printPlateToolbar.show("city");
 const viewerLoadGateway = new ViewerLoadGateway();
+const sourceApi = new ViewerImportApiClient(
+  new URL(window.location.href),
+);
 const automaticModelLoadGate = new AutomaticModelLoadGate();
 const logoLoadGate = new AutomaticModelLoadGate();
 let loadedModelLogo: LoadedViewerImage | undefined;
@@ -1680,6 +1707,8 @@ const projectImportDialog = installProjectImportDialog({
     activateImportedModel(model, {
       label: source.label,
       assetRoot: source.assetRoot,
+      jobId: source.jobId,
+      sourceAvailability: source.sourceAvailability,
     });
   },
   onSignedOut: () => {
@@ -2026,6 +2055,10 @@ function applyModel(model: CityModel, source: ModelSource): void {
   cityScene.assertBuildingCapability(model.buildings.length);
 
   activeModel = model;
+  activeModelSource = source;
+  sourceRequest?.abort();
+  sourceRequest = undefined;
+  loadedBuildingSource = undefined;
   activeBuildingsById = buildingsById;
   activeDistrictsById = districtsById;
   dependencyExplorerIndex = nextDependencyExplorerIndex;
@@ -3482,6 +3515,133 @@ function renderViewerOverview(): void {
   }
 }
 
+function sourceAvailabilityMessage(): string {
+  if (activeModelSource.sourceAvailability === "disabled") {
+    return "Source retention is disabled for this deployment; provenance and metrics remain available.";
+  }
+  if (activeModelSource.sourceAvailability === "unavailable") {
+    return "This imported result predates retained source navigation.";
+  }
+  return "Source is unavailable for models opened directly in the viewer.";
+}
+
+function renderSourceCode(
+  source: BuildingSource,
+  startLine?: number,
+  endLine = startLine,
+): void {
+  inspectorFields.sourceCode.replaceChildren();
+  const lines = source.text.split(/\r\n?|\n/u);
+  for (const [index, text] of lines.entries()) {
+    const lineNumber = index + 1;
+    const line = document.createElement("span");
+    line.className = "source-line";
+    line.dataset["line"] = String(lineNumber);
+    if (
+      startLine !== undefined &&
+      lineNumber >= startLine &&
+      lineNumber <= (endLine ?? startLine)
+    ) {
+      line.classList.add("source-line-highlight");
+    }
+    for (const token of sourceLineTokens(text)) {
+      const span = document.createElement("span");
+      if (token.kind !== "text") {
+        span.className = `source-token-${token.kind}`;
+      }
+      span.textContent = token.text;
+      line.append(span);
+    }
+    if (text === "") line.append("\u200b");
+    inspectorFields.sourceCode.append(line);
+  }
+  if (startLine !== undefined) {
+    const target = inspectorFields.sourceCode.children.item(startLine - 1);
+    target?.scrollIntoView({ block: "center" });
+  }
+}
+
+function revealBuildingSource(
+  building: CityBuilding,
+  startLine?: number,
+  endLine?: number,
+): void {
+  inspectorFields.sourceDetails.open = true;
+  if (
+    loadedBuildingSource?.buildingId === building.id
+  ) {
+    renderSourceCode(
+      loadedBuildingSource.source,
+      startLine,
+      endLine,
+    );
+    return;
+  }
+  sourceRequest?.abort();
+  loadedBuildingSource = undefined;
+  inspectorFields.sourceContent.hidden = true;
+  inspectorFields.sourceExternal.hidden = true;
+  inspectorFields.sourceEditor.hidden = true;
+  const jobId = activeModelSource.jobId;
+  if (
+    jobId === undefined ||
+    activeModelSource.sourceAvailability !== "retained"
+  ) {
+    inspectorFields.sourceSummary.textContent = "Unavailable";
+    inspectorFields.sourceStatus.textContent =
+      sourceAvailabilityMessage();
+    return;
+  }
+  const controller = new AbortController();
+  sourceRequest = controller;
+  inspectorFields.sourceSummary.textContent = "Loading";
+  inspectorFields.sourceStatus.textContent =
+    `Loading ${building.path}…`;
+  void loadBuildingSource(
+    jobId,
+    building.id,
+    (requestedJobId, requestedBuildingId, signal) =>
+      sourceApi.buildingSource(
+        requestedJobId,
+        requestedBuildingId,
+        signal,
+      ),
+    controller.signal,
+  )
+    .then((source) => {
+      if (controller.signal.aborted || sourceRequest !== controller) {
+        return;
+      }
+      loadedBuildingSource = { buildingId: building.id, source };
+      inspectorFields.sourceSummary.textContent = "Read only";
+      inspectorFields.sourceStatus.textContent =
+        `Showing the exact retained file for ${source.path}.`;
+      inspectorFields.sourcePath.textContent = source.path;
+      inspectorFields.sourceRevision.textContent =
+        `${source.provenance.provider} · ${source.provenance.revision.value}`;
+      inspectorFields.sourceExternal.hidden =
+        source.externalUrl === undefined;
+      if (source.externalUrl !== undefined) {
+        inspectorFields.sourceExternal.href = source.externalUrl;
+      }
+      inspectorFields.sourceEditor.hidden =
+        source.editorUrl === undefined;
+      if (source.editorUrl !== undefined) {
+        inspectorFields.sourceEditor.href = source.editorUrl;
+      }
+      inspectorFields.sourceContent.hidden = false;
+      renderSourceCode(source, startLine, endLine);
+    })
+    .catch((error: unknown) => {
+      if (controller.signal.aborted) return;
+      inspectorFields.sourceSummary.textContent = "Unavailable";
+      inspectorFields.sourceStatus.textContent =
+        error instanceof Error
+          ? error.message
+          : "Source code could not be loaded.";
+    });
+}
+
 function showInspector(context: BuildingContext | null): void {
   inspectorEmpty.hidden = context !== null;
   inspectorContent.hidden = context === null;
@@ -3490,6 +3650,7 @@ function showInspector(context: BuildingContext | null): void {
   clearSelectionButton.hidden = context === null;
   dependencySection.open = false;
   if (!context) {
+    sourceRequest?.abort();
     selectionKind.textContent = "Details";
     selectionName.textContent = "Nothing selected";
     selectionStatus.textContent = "Selection cleared.";
@@ -3513,6 +3674,11 @@ function showInspector(context: BuildingContext | null): void {
     building.metricMethod ?? "Not recorded";
   inspectorFields.metricExplanation.textContent =
     describeBuildingMetrics(activeModel, building);
+  inspectorFields.sourceDetails.open = false;
+  revealBuildingSource(
+    building,
+    building.sourceLocation?.startLine,
+  );
   executableUnitVisibleLimit =
     INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;
   inspectorFields.unitsDetails.open = false;
@@ -3697,7 +3863,19 @@ function renderExecutableUnits(building: CityBuilding): void {
 
     const line = document.createElement("td");
     line.className = "unit-number";
-    line.textContent = unit.line.toLocaleString();
+    const jump = document.createElement("button");
+    jump.className = "unit-source-jump";
+    jump.type = "button";
+    jump.textContent = unit.line.toLocaleString();
+    jump.title = `Open ${unit.name} at line ${unit.line.toLocaleString()}`;
+    jump.addEventListener("click", () => {
+      revealBuildingSource(
+        building,
+        unit.line,
+        unit.endLine ?? unit.line,
+      );
+    });
+    line.append(jump);
 
     row.append(name, complexity, line);
     inspectorFields.units.append(row);

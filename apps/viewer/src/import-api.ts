@@ -5,6 +5,7 @@ const API_RESULT_REMOVAL_DEADLINE_MS = 31 * 60_000;
 const MAXIMUM_ERROR_FIELDS = 64;
 const MAXIMUM_TEXT_CHARACTERS = 2_048;
 const MAXIMUM_EVOLUTION_ARTIFACT_BYTES = 512 * 1024 * 1024;
+const MAXIMUM_SOURCE_ARTIFACT_BYTES = 128 * 1024 * 1024;
 
 export const IMPORT_JOB_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -157,6 +158,16 @@ export interface ImportJobResult {
     readonly size: number;
     readonly sha256: string;
   };
+  readonly source?:
+    | {
+        readonly availability: "disabled";
+      }
+    | {
+        readonly availability: "retained";
+        readonly artifactUrl: string;
+        readonly size: number;
+        readonly sha256: string;
+      };
 }
 
 export interface ImportJob {
@@ -447,6 +458,7 @@ function parseJobResult(value: unknown, jobId: string): ImportJobResult {
   }
   const candidate = value as Record<string, unknown>;
   const evolutionPresent = Object.hasOwn(candidate, "evolution");
+  const sourcePresent = Object.hasOwn(candidate, "source");
   const object = exactObject(
     value,
     [
@@ -454,6 +466,7 @@ function parseJobResult(value: unknown, jobId: string): ImportJobResult {
       "artifactUrl",
       "kind",
       ...(evolutionPresent ? ["evolution"] : []),
+      ...(sourcePresent ? ["source"] : []),
     ],
     "Import job result",
   );
@@ -492,11 +505,57 @@ function parseJobResult(value: unknown, jobId: string): ImportJobResult {
       sha256,
     });
   }
+  let source: ImportJobResult["source"];
+  if (sourcePresent) {
+    if (
+      typeof object["source"] !== "object" ||
+      object["source"] === null ||
+      Array.isArray(object["source"])
+    ) {
+      throw protocolError("Import source result is invalid.");
+    }
+    const sourceCandidate = object["source"] as Record<string, unknown>;
+    if (sourceCandidate["availability"] === "disabled") {
+      exactObject(
+        sourceCandidate,
+        ["availability"],
+        "Import source result",
+      );
+      source = Object.freeze({ availability: "disabled" });
+    } else {
+      const sourceObject = exactObject(
+        sourceCandidate,
+        ["artifactUrl", "availability", "sha256", "size"],
+        "Import source result",
+      );
+      const size = sourceObject["size"];
+      const sha256 = sourceObject["sha256"];
+      if (
+        sourceObject["availability"] !== "retained" ||
+        sourceObject["artifactUrl"] !==
+          `/api/v1/artifacts/${jobId}/source` ||
+        !Number.isSafeInteger(size) ||
+        (size as number) < 1 ||
+        (size as number) > MAXIMUM_SOURCE_ARTIFACT_BYTES ||
+        typeof sha256 !== "string" ||
+        !/^[0-9a-f]{64}$/u.test(sha256)
+      ) {
+        throw protocolError("Import source result is invalid.");
+      }
+      source = Object.freeze({
+        availability: "retained",
+        artifactUrl: sourceObject["artifactUrl"],
+        size: size as number,
+        sha256,
+      });
+    }
+  }
   return Object.freeze({
     kind: "city-model",
     artifactToken: jobId,
     artifactUrl,
     ...(evolution === undefined ? {} : { evolution }),
+    ...(source === undefined ? {} : { source }),
   });
 }
 
@@ -931,6 +990,28 @@ export class ViewerImportApiClient {
       );
     }
     return parseCapabilitiesResponse(response.value);
+  }
+
+  public async buildingSource(
+    jobId: string,
+    buildingId: string,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const response = await this.jsonRequest(
+      `/api/v1/artifacts/${jobId}/sources/${buildingId}`,
+      { method: "GET" },
+      signal,
+    );
+    if (response.response.status === 409) {
+      throw new ImportApiError(
+        "protocol",
+        "Source retention is disabled for this imported model.",
+      );
+    }
+    if (response.response.status !== 200) {
+      throw protocolError("Source code could not be loaded.");
+    }
+    return response.value;
   }
 
   public async createRemoteImport(

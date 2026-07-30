@@ -160,14 +160,15 @@ internal static class Program
 
         var units = new List<UnitMetric>(unitCount)
         {
-            new("<top-level>", 1, 1 + CountDecisions(root)),
+            new("<top-level>", 1, EndLine(root), 1 + CountDecisions(root)),
         };
         units.AddRange(callableNodes.Select(node =>
-            new UnitMetric(
-                SanitizeName(UnitName(node)),
-                Line(node),
-                1 + CountDecisions(CallableBody(node))
-            )
+                new UnitMetric(
+                    SanitizeName(UnitName(node)),
+                    Line(node),
+                    EndLine(node),
+                    1 + CountDecisions(CallableBody(node))
+                )
         ));
         var orderedUnits = units
             .OrderBy(unit => unit.Line)
@@ -283,6 +284,9 @@ internal static class Program
     private static int Line(SyntaxNode node) =>
         node.GetLocation().GetLineSpan().StartLinePosition.Line + 1;
 
+    private static int EndLine(SyntaxNode node) =>
+        node.GetLocation().GetLineSpan().EndLinePosition.Line + 1;
+
     private static string UnitName(SyntaxNode node) =>
         node switch
         {
@@ -350,7 +354,7 @@ internal static class Program
     private sealed record AnalysisRequest(string ProtocolVersion, RequestFile[] Files);
     private sealed record RequestFile(string Id, string Source);
     private sealed record AnalysisResponse(string ProtocolVersion, FileResponse[] Files);
-    private sealed record UnitMetric(string Name, int Line, int Complexity);
+    private sealed record UnitMetric(string Name, int Line, int EndLine, int Complexity);
 
     private sealed record FileResponse(
         string Id,

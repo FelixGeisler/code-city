@@ -17,6 +17,15 @@ import {
 } from "./job-queue.js";
 import { ImportArtifactStore } from "./import-artifacts.js";
 import type { RetainedImportArtifactSet } from "./import-artifacts.js";
+import {
+  sourceArtifactFile,
+  type SourceRetentionPolicy,
+} from "./source-artifact.js";
+import {
+  SourceArtifactStore,
+  type SourceArtifactMetadata,
+} from "./source-artifact-store.js";
+import { validateCityModel } from "../../../packages/core/src/index.js";
 import { HistorySemanticCache } from "./history-cache.js";
 import {
   InboundAuthorization,
@@ -58,6 +67,8 @@ const CITY_MODEL_ARTIFACT_PATH_PATTERN =
   /^\/api\/v1\/artifacts\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/city-model\.json$/u;
 const EVOLUTION_ARTIFACT_PATH_PATTERN =
   /^\/api\/v1\/artifacts\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/evolution\.json$/u;
+const SOURCE_ARTIFACT_PATH_PATTERN =
+  /^\/api\/v1\/artifacts\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/sources\/([a-z0-9-]+:[0-9a-f]{16})$/u;
 const UPLOAD_IMPORT_PATH_PATTERN =
   /^\/api\/v1\/imports\/uploads\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/u;
 const AUTHORIZATION_SESSION_PATH = "/api/v1/auth/session";
@@ -89,6 +100,8 @@ export interface CodeCityServerOptions {
   readonly authorization?: InboundAuthorizationOptions;
   readonly credentialProfiles?: CredentialProfileRegistryOptions;
   readonly importDependencies?: RemoteImportDependencies;
+  readonly sourceRetention?: SourceRetentionPolicy;
+  readonly editorUrlTemplate?: string;
   /** Test seam; production callers should omit it. */
   readonly artifactResponseTimeouts?: {
     readonly idleMs: number;
@@ -103,6 +116,7 @@ export interface CodeCityServerHandle {
   readonly url: URL;
   readonly jobs: PersistentJobQueue;
   readonly artifacts: ImportArtifactStore;
+  readonly sources: SourceArtifactStore;
   readonly closed: Promise<void>;
   close(): Promise<void>;
 }
@@ -384,6 +398,37 @@ function completedImportArtifactSets(
   return artifacts;
 }
 
+function completedSourceArtifactSets(
+  jobs: PersistentJobQueue,
+): ReadonlyMap<string, SourceArtifactMetadata | undefined> {
+  const artifacts = new Map<
+    string,
+    SourceArtifactMetadata | undefined
+  >();
+  for (const job of jobs.list()) {
+    if (
+      job.state !== "completed" ||
+      job.result?.kind !== "city-model" ||
+      job.result.artifactToken !== job.id
+    ) {
+      continue;
+    }
+    const source = job.result.source;
+    artifacts.set(
+      job.id,
+      source?.availability !== "retained"
+        ? undefined
+        : Object.freeze({
+            token: job.id,
+            size: source.size,
+            sha256: source.sha256,
+            lastModified: "",
+          }),
+    );
+  }
+  return artifacts;
+}
+
 function completedJobOwnsCityModelArtifact(
   jobs: PersistentJobQueue,
   token: string,
@@ -412,6 +457,86 @@ function completedJobOwnsEvolutionArtifact(
     job.result.evolution?.artifactUrl ===
       `/api/v1/artifacts/${token}/evolution.json`
   );
+}
+
+function immutableSourceUrl(
+  provider: string,
+  repositoryUrl: string | undefined,
+  revision: string,
+  sourcePath: string,
+  line: number,
+): string | undefined {
+  if (repositoryUrl === undefined) return undefined;
+  const encodedPath = sourcePath
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  if (provider === "github") {
+    return `${repositoryUrl.replace(/\.git\/?$/u, "").replace(/\/$/u, "")}/blob/${revision}/${encodedPath}#L${line}`;
+  }
+  if (provider === "azure-devops") {
+    const result = new URL(repositoryUrl);
+    result.search = "";
+    result.hash = "";
+    result.searchParams.set("path", `/${sourcePath}`);
+    result.searchParams.set("version", `GC${revision}`);
+    result.searchParams.set("line", String(line));
+    result.searchParams.set("_a", "contents");
+    return result.toString();
+  }
+  return undefined;
+}
+
+function configuredEditorUrl(
+  template: string | undefined,
+  sourcePath: string,
+  line: number,
+): string | undefined {
+  if (template === undefined) return undefined;
+  const encodedPath = sourcePath
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  return template
+    .replaceAll("{path}", encodedPath)
+    .replaceAll("{line}", String(line));
+}
+
+function validateEditorUrlTemplate(
+  template: string | undefined,
+): void {
+  if (template === undefined) return;
+  if (
+    template !== template.trim() ||
+    !template.includes("{path}") ||
+    /[\u0000-\u001F\u007F]/u.test(template) ||
+    /\{(?!path\}|line\})/u.test(template)
+  ) {
+    throw new Error(
+      "The editor URL template must be trimmed and contain {path}; only {path} and {line} placeholders are supported.",
+    );
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(
+      template
+        .replaceAll("{path}", "src/example.ts")
+        .replaceAll("{line}", "1"),
+    );
+  } catch {
+    throw new Error("The editor URL template must be an absolute URL.");
+  }
+  if (
+    !["https:", "vscode:", "vscode-insiders:"].includes(
+      parsed.protocol,
+    ) ||
+    parsed.username !== "" ||
+    parsed.password !== ""
+  ) {
+    throw new Error(
+      "The editor URL template must use HTTPS, vscode, or vscode-insiders and must not contain credentials.",
+    );
+  }
 }
 
 function rawHeaderValues(
@@ -813,6 +938,8 @@ async function remoteImportHandler(
   response: ServerResponse,
   jobs: PersistentJobQueue,
   artifacts: ImportArtifactStore,
+  sources: SourceArtifactStore,
+  sourceRetention: SourceRetentionPolicy,
   policy: RemoteImportPolicy,
   credentialProfiles: CredentialProfileRegistry,
   dependencies: RemoteImportDependencies | undefined,
@@ -974,6 +1101,8 @@ async function remoteImportHandler(
       queued = await enqueueRemoteImport(parsed, {
         jobs,
         artifacts,
+        sources,
+        sourceRetention,
         policy,
         credentialProfiles,
         ...(dependencies === undefined ? {} : { dependencies }),
@@ -1388,6 +1517,8 @@ async function uploadContentHandler(
   token: string,
   jobs: PersistentJobQueue,
   artifacts: ImportArtifactStore,
+  sources: SourceArtifactStore,
+  sourceRetention: SourceRetentionPolicy,
   uploads: UploadReservationRegistry,
 ): Promise<void> {
   if (request.method === "DELETE") {
@@ -1574,6 +1705,8 @@ async function uploadContentHandler(
       queued = await enqueueUploadedImport(lease, {
         jobs,
         artifacts,
+        sources,
+        sourceRetention,
       });
     } catch {
       if (!response.destroyed && !clientDisconnected) {
@@ -1608,6 +1741,7 @@ async function deleteCompletedImportResult(
   id: string,
   jobs: PersistentJobQueue,
   artifacts: ImportArtifactStore,
+  sources: SourceArtifactStore,
   artifactResponses: ArtifactResponseGate,
 ): Promise<void> {
   const current = jobs.get(id);
@@ -1677,6 +1811,7 @@ async function deleteCompletedImportResult(
   try {
     await artifactResponses.runExclusiveMutation(async () => {
       await artifacts.cleanupCityModelArtifact(removed!.id);
+      await sources.cleanup(removed!.id);
       await jobs.finishRemoval(removed!.id);
     });
   } catch {
@@ -1736,6 +1871,9 @@ function apiHandler(
   target: ParsedTarget,
   jobs: PersistentJobQueue,
   artifacts: ImportArtifactStore,
+  sources: SourceArtifactStore,
+  sourceRetention: SourceRetentionPolicy,
+  editorUrlTemplate: string | undefined,
   artifactResponses: ArtifactResponseGate,
   importRequests: ImportRequestOperations,
   uploads: UploadReservationRegistry,
@@ -1782,6 +1920,8 @@ function apiHandler(
         response,
         jobs,
         artifacts,
+        sources,
+        sourceRetention,
         importPolicy,
         credentialProfiles,
         importDependencies,
@@ -1804,9 +1944,159 @@ function apiHandler(
         uploadMatch[1]!,
         jobs,
         artifacts,
+        sources,
+        sourceRetention,
         uploads,
       ),
     );
+    return true;
+  }
+  const sourceMatch = SOURCE_ARTIFACT_PATH_PATTERN.exec(target.path);
+  if (sourceMatch) {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      sendMethodNotAllowed(request, response, ["GET", "HEAD"]);
+      return true;
+    }
+    const token = sourceMatch[1]!;
+    const buildingId = sourceMatch[2]!;
+    const job = jobs.get(token);
+    const expected =
+      job?.state === "completed" &&
+      job.result?.kind === "city-model" &&
+      job.result.artifactToken === token
+        ? job.result.source
+        : undefined;
+    if (expected?.availability === "disabled") {
+      sendJson(request, response, 409, {
+        error: {
+          code: "source-retention-disabled",
+          message:
+            "Source retention is disabled for this imported model.",
+        },
+      });
+      return true;
+    }
+    if (
+      expected?.availability !== "retained" ||
+      !completedJobOwnsCityModelArtifact(jobs, token)
+    ) {
+      sendJson(request, response, 404, {
+        error: {
+          code: "source-not-found",
+          message: "Source file not found.",
+        },
+      });
+      return true;
+    }
+    const artifactResponse =
+      artifactResponses.tryAcquire(response);
+    if (!artifactResponse) {
+      response.setHeader("Retry-After", "1");
+      sendJson(request, response, 503, {
+        error: {
+          code: "artifact-busy",
+          message: "Another import artifact response is in progress.",
+        },
+      });
+      return true;
+    }
+    void Promise.all([
+      artifacts.readCityModel(token, artifactResponse.signal),
+      sources.read(token, artifactResponse.signal),
+    ])
+      .then(([cityArtifact, sourceArtifact]) => {
+        if (response.destroyed) return;
+        if (
+          cityArtifact === undefined ||
+          sourceArtifact === undefined ||
+          sourceArtifact.size !== expected.size ||
+          sourceArtifact.sha256 !== expected.sha256
+        ) {
+          sendJson(request, response, 404, {
+            error: {
+              code: "source-not-found",
+              message: "Source file not found.",
+            },
+          });
+          return;
+        }
+        const model = validateCityModel(
+          JSON.parse(
+            new TextDecoder("utf-8", { fatal: true }).decode(
+              cityArtifact.bytes,
+            ),
+          ),
+        );
+        const file = sourceArtifactFile(
+          sourceArtifact.artifact,
+          model,
+          buildingId,
+        );
+        const building = model.buildings.find(
+          ({ id }) => id === buildingId,
+        );
+        const provenance =
+          building === undefined
+            ? undefined
+            : model.sourceProvenance?.repositories.find(
+                ({ repositoryId }) =>
+                  repositoryId === building.repositoryId,
+              );
+        if (
+          file === undefined ||
+          building === undefined ||
+          provenance === undefined
+        ) {
+          sendJson(request, response, 404, {
+            error: {
+              code: "source-not-found",
+              message: "Source file not found.",
+            },
+          });
+          return;
+        }
+        const line = building.sourceLocation?.startLine ?? 1;
+        sendJson(request, response, 200, {
+          source: {
+            buildingId: building.id,
+            repositoryId: building.repositoryId,
+            path: file.path,
+            language: file.language,
+            text: file.text,
+            location: building.sourceLocation ?? {
+              startLine: 1,
+              endLine: Math.max(
+                1,
+                file.text.split(/\r\n?|\n/u).length,
+              ),
+            },
+            provenance,
+            externalUrl: immutableSourceUrl(
+              provenance.provider,
+              provenance.repositoryUrl,
+              provenance.revision.value,
+              file.path,
+              line,
+            ),
+            editorUrl: configuredEditorUrl(
+              editorUrlTemplate,
+              file.path,
+              line,
+            ),
+          },
+        });
+      })
+      .catch(() => {
+        if (!response.destroyed) {
+          sendJson(request, response, 500, {
+            error: {
+              code: "source-read-failed",
+              message: "The source file could not be verified.",
+            },
+          });
+        }
+      })
+      .finally(() => artifactResponse.settle());
     return true;
   }
   const evolutionMatch = EVOLUTION_ARTIFACT_PATH_PATTERN.exec(
@@ -2056,6 +2346,7 @@ function apiHandler(
         completedImportResultMatch[1]!,
         jobs,
         artifacts,
+        sources,
         artifactResponses,
       ),
     );
@@ -2133,6 +2424,9 @@ function requestHandler(
   assets: ReadonlyMap<string, ViewerAsset>,
   jobs: PersistentJobQueue,
   artifacts: ImportArtifactStore,
+  sources: SourceArtifactStore,
+  sourceRetention: SourceRetentionPolicy,
+  editorUrlTemplate: string | undefined,
   artifactResponses: ArtifactResponseGate,
   importRequests: ImportRequestOperations,
   uploads: UploadReservationRegistry,
@@ -2220,6 +2514,9 @@ function requestHandler(
           target,
           jobs,
           artifacts,
+          sources,
+          sourceRetention,
+          editorUrlTemplate,
           artifactResponses,
           importRequests,
           uploads,
@@ -2292,6 +2589,7 @@ export async function startCodeCityServer(
 ): Promise<CodeCityServerHandle> {
   const host = validHost(options.host);
   const requestedPort = validPort(options.port);
+  validateEditorUrlTemplate(options.editorUrlTemplate);
   const responseTimeouts = artifactResponseTimeouts(
     options.artifactResponseTimeouts,
   );
@@ -2340,6 +2638,7 @@ export async function startCodeCityServer(
   }
   let assets: ReadonlyMap<string, ViewerAsset>;
   let artifacts: ImportArtifactStore;
+  let sources: SourceArtifactStore;
   let historyCache: HistorySemanticCache;
   let jobs: PersistentJobQueue;
   const viewerRoot =
@@ -2358,6 +2657,9 @@ export async function startCodeCityServer(
     artifacts = await ImportArtifactStore.open({
       dataDirectory: options.dataDirectory,
     });
+    sources = await SourceArtifactStore.open({
+      dataDirectory: options.dataDirectory,
+    });
     historyCache = await HistorySemanticCache.open({
       dataDirectory: options.dataDirectory,
     });
@@ -2374,6 +2676,7 @@ export async function startCodeCityServer(
     await artifacts.reconcileImportArtifacts(
       completedImportArtifactSets(jobs),
     );
+    await sources.reconcile(completedSourceArtifactSets(jobs));
     await jobs.finishPendingRemovals();
   } catch (error) {
     await jobs.close().catch(() => undefined);
@@ -2403,6 +2706,9 @@ export async function startCodeCityServer(
         assets,
         jobs,
         artifacts,
+        sources,
+        options.sourceRetention ?? "disabled",
+        options.editorUrlTemplate,
         artifactResponses,
         importRequests,
         uploads,
@@ -2486,6 +2792,7 @@ export async function startCodeCityServer(
       url: new URL(`http://${urlHost}:${port}/`),
       jobs,
       artifacts,
+      sources,
       closed: closedPromise,
       close: async () => {
         options.signal?.removeEventListener("abort", onAbort);

@@ -72,6 +72,9 @@ export function cityModelFromFacts(
           metrics: source.metrics,
           metricMethod: source.metricMethod,
           units: source.units,
+          ...(source.sourceLocation === undefined
+            ? {}
+            : { sourceLocation: source.sourceLocation }),
           semanticGroupId:
             projection?.semanticGroupId ?? source.semanticGroupId,
           ...(metricNormalization === undefined

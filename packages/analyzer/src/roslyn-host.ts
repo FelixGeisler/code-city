@@ -395,6 +395,9 @@ function parseUnit(value: unknown): ExecutableUnitMetric {
   return {
     name: safeText(unit.name, CITY_MODEL_LIMITS.displayTextCharacters),
     line: integer(unit.line, "unit line", 1),
+    ...(unit.endLine === undefined
+      ? {}
+      : { endLine: integer(unit.endLine, "unit end line", 1) }),
     complexity: integer(unit.complexity, "unit complexity", 1),
   };
 }

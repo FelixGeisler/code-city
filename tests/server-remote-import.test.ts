@@ -1447,7 +1447,20 @@ describe("remote import HTTP API", () => {
       new URL(terminal.result!.artifactUrl, server.url),
     );
     expect(cityArtifact.status).toBe(200);
-    expect(JSON.parse(cityArtifact.body)).toEqual(model);
+    expect(JSON.parse(cityArtifact.body)).toMatchObject({
+      ...model,
+      sourceProvenance: {
+        version: "codecity.source-navigation/1",
+        repositories: [
+          {
+            repositoryId: "repository:one",
+            provider: "github",
+            revision: { kind: "commit", value: COMMIT },
+            repositoryUrl: "https://github.com/openai/example",
+          },
+        ],
+      },
+    });
 
     const evolutionUrl = terminal.result!.evolution!.artifactUrl;
     const evolutionArtifact = await request(

@@ -295,6 +295,7 @@ export function validateCityModel(
     validateMetricMappingContract(model.metricMapping, "metricMapping");
   }
   validateAnalysis(model.analysis, work);
+  validateSourceProvenance(model.sourceProvenance, repositoryIds, work);
   validateIdentity(model.identity, repositoryIds, work);
   const identityPanel = validateIdentityPanel(model.identityPanel, groupIds);
   const base = validateCityBase(model.base, groupIds);
@@ -377,12 +378,17 @@ export function validateCityModel(
       metrics.executableUnitCount,
       `${prefix}.metrics.executableUnitCount`,
     );
+    const sourceEndLine = validateSourceLocation(
+      building.sourceLocation,
+      prefix,
+    );
     validateBuildingMetricDetails(
       building.metricMethod,
       building.units,
       metrics,
       prefix,
       work,
+      sourceEndLine,
     );
     validateBuildingMetricNormalization(
       building.metricNormalization,
@@ -574,6 +580,7 @@ function validateBuildingMetricDetails(
   aggregate: JsonObject,
   prefix: string,
   work: ValidationCheckpoint,
+  sourceEndLine?: number,
 ): void {
   if (methodValue === undefined && unitsValue === undefined) return;
   if (methodValue === undefined || unitsValue === undefined) {
@@ -595,7 +602,17 @@ function validateBuildingMetricDetails(
       `${unitPrefix}.name`,
       CITY_MODEL_LIMITS.displayTextCharacters,
     );
-    positiveInteger(unit.line, `${unitPrefix}.line`);
+    const line = positiveInteger(unit.line, `${unitPrefix}.line`);
+    const endLine =
+      unit.endLine === undefined
+        ? line
+        : positiveInteger(unit.endLine, `${unitPrefix}.endLine`);
+    if (endLine < line) {
+      fail(`${unitPrefix}.endLine must not precede line`);
+    }
+    if (sourceEndLine !== undefined && endLine > sourceEndLine) {
+      fail(`${unitPrefix} must remain inside the building source location`);
+    }
     positiveInteger(unit.complexity, `${unitPrefix}.complexity`);
   });
   if (units.length !== aggregate.executableUnitCount) {
@@ -695,6 +712,153 @@ function validateLogo(value: unknown, path: string): void {
       );
     }
   }
+}
+
+function validateSourceLocation(
+  value: unknown,
+  prefix: string,
+): number | undefined {
+  if (value === undefined) return undefined;
+  const location = objectAt(value, `${prefix}.sourceLocation`);
+  const startLine = positiveInteger(
+    location.startLine,
+    `${prefix}.sourceLocation.startLine`,
+  );
+  const endLine = positiveInteger(
+    location.endLine,
+    `${prefix}.sourceLocation.endLine`,
+  );
+  if (startLine !== 1) {
+    fail(`${prefix}.sourceLocation.startLine must be 1`);
+  }
+  if (endLine < startLine) {
+    fail(`${prefix}.sourceLocation.endLine must not precede startLine`);
+  }
+  return endLine;
+}
+
+function validateSourceProvenance(
+  value: unknown,
+  repositoryIds: Set<string>,
+  work: ValidationCheckpoint,
+): void {
+  if (value === undefined) return;
+  const provenance = objectAt(value, "sourceProvenance");
+  if (provenance.version !== "codecity.source-navigation/1") {
+    fail(
+      'sourceProvenance.version must be "codecity.source-navigation/1"',
+    );
+  }
+  const repositories = objectArray(
+    provenance.repositories,
+    "sourceProvenance.repositories",
+    CITY_MODEL_LIMITS.repositories,
+    work,
+  );
+  if (repositories.length === 0) {
+    fail("sourceProvenance.repositories must not be empty");
+  }
+  const seen = new Set<string>();
+  repositories.forEach((repository, index) => {
+    work.consume();
+    const prefix = `sourceProvenance.repositories[${index}]`;
+    const repositoryId = reference(
+      repository.repositoryId,
+      repositoryIds,
+      `${prefix}.repositoryId`,
+    );
+    if (seen.has(repositoryId)) {
+      fail(`${prefix}.repositoryId is duplicated`);
+    }
+    seen.add(repositoryId);
+    const provider = enumValue(
+      repository.provider,
+      new Set([
+        "azure-devops",
+        "generic-git",
+        "github",
+        "uploaded-archive",
+      ]),
+      `${prefix}.provider`,
+    );
+    const revision = objectAt(
+      repository.revision,
+      `${prefix}.revision`,
+    );
+    if (revision.kind === "commit") {
+      const commit = nonEmptyString(
+        revision.value,
+        `${prefix}.revision.value`,
+        64,
+      );
+      if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(commit)) {
+        fail(`${prefix}.revision.value must be an immutable commit SHA`);
+      }
+    } else if (revision.kind === "snapshot") {
+      const snapshot = nonEmptyString(
+        revision.value,
+        `${prefix}.revision.value`,
+        71,
+      );
+      if (!/^sha256:[0-9a-f]{64}$/u.test(snapshot)) {
+        fail(`${prefix}.revision.value must be a SHA-256 snapshot digest`);
+      }
+    } else {
+      fail(`${prefix}.revision.kind is invalid`);
+    }
+    if (
+      (provider === "uploaded-archive" &&
+        revision.kind !== "snapshot") ||
+      (provider !== "uploaded-archive" &&
+        revision.kind !== "commit")
+    ) {
+      fail(
+        `${prefix}.revision.kind does not match its source provider`,
+      );
+    }
+    if (repository.repositoryUrl === undefined) {
+      if (provider !== "uploaded-archive") {
+        fail(`${prefix}.repositoryUrl is required for remote provenance`);
+      }
+      return;
+    }
+    if (provider === "uploaded-archive") {
+      fail(`${prefix}.repositoryUrl must be omitted for uploaded archives`);
+    }
+    const repositoryUrl = nonEmptyString(
+      repository.repositoryUrl,
+      `${prefix}.repositoryUrl`,
+      2_048,
+    );
+    let parsed: URL;
+    try {
+      parsed = new URL(repositoryUrl);
+    } catch {
+      fail(`${prefix}.repositoryUrl must be an absolute URL`);
+    }
+    if (
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.hash !== "" ||
+      parsed.search !== ""
+    ) {
+      fail(`${prefix}.repositoryUrl must be credential-free`);
+    }
+    if (
+      (provider === "github" &&
+        (parsed.protocol !== "https:" ||
+          parsed.hostname.toLowerCase() !== "github.com")) ||
+      (provider === "azure-devops" &&
+        parsed.protocol !== "https:") ||
+      (provider === "generic-git" &&
+        parsed.protocol !== "https:" &&
+        parsed.protocol !== "ssh:")
+    ) {
+      fail(
+        `${prefix}.repositoryUrl scheme or host does not match its provider`,
+      );
+    }
+  });
 }
 
 function validateIdentityPanel(

@@ -52,6 +52,8 @@ export interface PublicGitHubAnalysisResult {
   readonly repository: string;
   readonly canonicalRepositoryUrl: string;
   readonly commitSha: string;
+  /** Bounded current-revision source retained only for authorized deployments. */
+  readonly sourceSnapshot?: RepositorySnapshot;
   readonly model: CityModel;
 }
 
@@ -64,6 +66,8 @@ export interface GenericGitAnalysisResult {
   readonly repository: string;
   readonly commitSha: string;
   readonly transport: GenericGitTransport;
+  /** Bounded current-revision source retained only for authorized deployments. */
+  readonly sourceSnapshot?: RepositorySnapshot;
   readonly model: CityModel;
 }
 
@@ -114,6 +118,7 @@ export async function analyzePublicGitHubRepository(
     repository: result.repository,
     canonicalRepositoryUrl: result.canonicalRepositoryUrl,
     commitSha,
+    sourceSnapshot: result.snapshot,
     model,
   });
 }
@@ -147,6 +152,7 @@ export async function analyzeGenericGitRepository(
     repository: result.repository,
     commitSha: result.commitSha,
     transport: result.transport,
+    sourceSnapshot: result.snapshot,
     model,
   });
 }
