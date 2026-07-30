@@ -22,6 +22,7 @@ export interface JobError {
   readonly code:
     | "analysis-failed"
     | "cancelled"
+    | "city-model-invalid"
     | "deadline-exceeded"
     | "failed"
     | "import-limit-exceeded"
@@ -34,6 +35,7 @@ export interface JobError {
 
 export type JobTaskFailureCode =
   | "analysis-failed"
+  | "city-model-invalid"
   | "deadline-exceeded"
   | "import-limit-exceeded"
   | "repository-content-rejected"
@@ -44,6 +46,7 @@ const JOB_TASK_FAILURE_MESSAGES: Readonly<
   Record<JobTaskFailureCode, string>
 > = Object.freeze({
   "analysis-failed": "Repository analysis failed.",
+  "city-model-invalid": "The uploaded city model is invalid.",
   "deadline-exceeded":
     "The repository import exceeded its time limit.",
   "import-limit-exceeded":
@@ -61,6 +64,7 @@ function isJobTaskFailureCode(
 ): value is JobTaskFailureCode {
   return (
     value === "analysis-failed" ||
+    value === "city-model-invalid" ||
     value === "deadline-exceeded" ||
     value === "import-limit-exceeded" ||
     value === "repository-content-rejected" ||

@@ -33,6 +33,33 @@ owns one immutable `city-model.json` artifact. Repository URLs, refs,
 credentials, source bytes, diagnostics, and temporary paths are not written to
 job records.
 
+Browser clients can also reserve a one-use raw upload with
+`POST /api/v1/imports/uploads`, then `PUT` either an existing
+`city-model.json` (`application/json`) or one repository ZIP
+(`application/zip`) to the returned URL. The reservation declares the exact
+byte length; the PUT requires the same `Content-Length`, rejects transfer and
+content encoding, and becomes a persistent import job only after the private
+staged file is complete. Repository ZIP metadata selects either one common
+top-level directory or paths already relative to the archive root. This is the
+server API for a later browser directory/ZIP wizard; multipart uploads and
+browser-supplied filenames are deliberately not accepted.
+
+At most four upload reservations and 256 MiB of staged upload data exist at
+once. City models are capped at 128 MiB, ZIPs at 64 MiB, unused reservations
+expire after five minutes, and each upload has 30-second idle and ten-minute
+total deadlines. Reservation expiry, disconnect, cancellation, job failure,
+shutdown, and restart remove private staging data. Upload endpoints are also
+unauthenticated in this initial deployment, so the trusted-network requirement
+applies to them.
+
+On Windows/IIS, uploads and published artifacts require a service-private
+`CODECITY_DATA_DIR` even when Generic Git remains disabled. Restrict the data
+directory and inherited children to the service identity and trusted
+administrators, and protect its directory entry and canonical ancestors from
+untrusted rename, delete, and delete-child access. Create-exclusive files and
+portable fixed-path/handle identity checks remain enforced, but Node cannot
+establish or prove those Windows ACL properties.
+
 Generic Git is disabled by default because it runs Git as the server identity.
 Enable only exact outbound origins with `CODECITY_ALLOWED_GIT_ORIGINS`, for
 example `https://dev.azure.example,ssh://git.example:22`. Scheme and effective

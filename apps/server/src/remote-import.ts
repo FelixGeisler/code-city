@@ -471,9 +471,13 @@ class ExactJsonScanner {
 export function parseRemoteImportJson(
   text: string,
 ): RemoteImportRequest {
+  return parseRemoteImportRequest(parseExactImportJsonValue(text));
+}
+
+export function parseExactImportJsonValue(text: string): unknown {
   try {
     new ExactJsonScanner(text).scan();
-    return parseRemoteImportRequest(JSON.parse(text) as unknown);
+    return JSON.parse(text) as unknown;
   } catch (error) {
     if (error instanceof RemoteImportRequestError) throw error;
     fail("$", "Must contain one valid JSON value.", "invalid-json");
@@ -590,7 +594,9 @@ function optionalBoundedText(
   return boundedText(object[key], path, maximumCharacters);
 }
 
-function parseIdentity(value: unknown): RemoteImportIdentity {
+export function parseImportIdentity(
+  value: unknown,
+): RemoteImportIdentity {
   const object = jsonObject(value, "$.identity", IDENTITY_KEYS);
   const title = optionalBoundedText(
     object,
@@ -656,7 +662,9 @@ function analysisLimit(
   return value;
 }
 
-function parseAnalysis(value: unknown): RemoteImportAnalysis {
+export function parseImportAnalysis(
+  value: unknown,
+): RemoteImportAnalysis {
   const object = jsonObject(value, "$.analysis", ANALYSIS_KEYS);
   const maxRetainedFiles = analysisLimit(
     object,
@@ -828,10 +836,10 @@ export function parseRemoteImportRequest(
       required(object, "source", "$.source"),
     );
     const identity = Object.hasOwn(object, "identity")
-      ? parseIdentity(object["identity"])
+      ? parseImportIdentity(object["identity"])
       : undefined;
     const analysis = Object.hasOwn(object, "analysis")
-      ? parseAnalysis(object["analysis"])
+      ? parseImportAnalysis(object["analysis"])
       : undefined;
     return Object.freeze({
       source,
