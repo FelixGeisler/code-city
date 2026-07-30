@@ -81,7 +81,11 @@ async function directory(
     throw new Error(`${description} must be a private regular directory.`);
   }
   const canonical = await fs.realpath(resolved);
-  if (!samePath(canonical, resolved)) {
+  // Windows realpath expands legitimate 8.3 path components (including the
+  // runner's temporary directory). The direct lstat above still rejects a
+  // reparse point at this directory entry, while the server's shared data
+  // directory guard is responsible for its trusted ancestry.
+  if (process.platform !== "win32" && !samePath(canonical, resolved)) {
     throw new Error(`${description} must not resolve through a link.`);
   }
   return canonical;
