@@ -268,7 +268,13 @@ async function openTrustedDirectory(
       "the credential directory could not be opened safely.",
     );
   }
-  if (!samePath(directoryPath, canonicalPath, platform)) {
+  // Windows realpath expands legitimate 8.3 aliases; its explicit trust
+  // attestation covers canonical ancestry while lstat still rejects the
+  // directory entry itself when it is a reparse point.
+  if (
+    platform !== "win32" &&
+    !samePath(directoryPath, canonicalPath, platform)
+  ) {
     throw configurationError(
       "the credential directory must not use symbolic-link or reparse-point ancestry.",
     );
@@ -371,8 +377,13 @@ async function readProtectedFile(
       "a credential file could not be inspected safely.",
     );
   }
+  // The Windows trust attestation likewise permits a short-name file path,
+  // but its canonical parent must still be the verified credential directory.
   if (
-    !samePath(filePath, canonicalBefore, platform) ||
+    (
+      platform !== "win32" &&
+      !samePath(filePath, canonicalBefore, platform)
+    ) ||
     !samePath(
       path.dirname(canonicalBefore),
       directory.canonicalPath,
