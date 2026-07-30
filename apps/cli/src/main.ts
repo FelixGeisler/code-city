@@ -7,6 +7,8 @@ import {
   analyzeGenericGitRepository,
   analyzeLocalRepositories,
   analyzePublicGitHubRepository,
+  GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY,
+  GENERIC_GIT_PRESECURED_WINDOWS_ACL,
   type LocalAnalysisOptions,
 } from "../../../packages/analyzer/src/index.js";
 import {
@@ -45,7 +47,8 @@ Usage:
   codecity analyze-github <https://github.com/owner/repository> \\
     --output <city-model.json> [--ref <branch|tag|commit>] [options]
   codecity analyze-git <https|ssh|scp-remote> \\
-    --output <city-model.json> [--ref <branch|tag|commit>] [options]
+    --output <city-model.json> [--ref <branch|tag|commit>] \\
+    [--trusted-workspace-parent <pre-secured-directory>] [options]
   codecity open <root...> [--port <port>] [options]
   codecity plan --model <city-model.json> --profile <profile.json> \\
     --format <stl|3mf> --output <print-plan.json> [--scale <factor>] \\
@@ -70,6 +73,13 @@ Analyze options:
   --max-file-bytes <bytes>   Bytes per retained file (default: 2097152)
   --max-total-bytes <bytes>  Retained content bytes (default: 268435456)
   --timeout-ms <ms>          Snapshot + analysis deadline (default: 300000)
+
+Generic Git workspace option:
+  --trusted-workspace-parent <directory>
+      Trust assertion for an existing private Generic Git workspace parent.
+      Parent/child ACLs protect content; ancestry protects path entries from
+      untrusted rename, delete, and delete-child operations.
+      Required for Generic Git on Windows.
 
 Open options:
   --port <port>              Loopback port; 0 selects a free port (default: 0)
@@ -296,7 +306,11 @@ async function analyzeGenericGitCommand(
 ): Promise<void> {
   const parsed = parseArguments(
     args,
-    new Set([...ANALYSIS_OPTIONS, "ref"]),
+    new Set([
+      ...ANALYSIS_OPTIONS,
+      "ref",
+      "trusted-workspace-parent",
+    ]),
   );
   if (parsed.positionals.length !== 1) {
     throw new Error(
@@ -304,15 +318,39 @@ async function analyzeGenericGitCommand(
     );
   }
   const output = requiredOption(parsed.options, "output");
-  const result = await analyze(
-    {
-      repositoryUrl: parsed.positionals[0]!,
-      ...(parsed.options.get("ref") === undefined
-        ? {}
-        : { ref: parsed.options.get("ref")! }),
-    },
-    analysisOptions(parsed.options),
+  const request = {
+    repositoryUrl: parsed.positionals[0]!,
+    ...(parsed.options.get("ref") === undefined
+      ? {}
+      : { ref: parsed.options.get("ref")! }),
+  };
+  const options = analysisOptions(parsed.options);
+  const configuredParent = parsed.options.get(
+    "trusted-workspace-parent",
   );
+  if (
+    configuredParent !== undefined &&
+    (configuredParent.length === 0 ||
+      configuredParent.includes("\0"))
+  ) {
+    throw new Error(
+      "--trusted-workspace-parent must name an existing pre-secured private directory.",
+    );
+  }
+  const result =
+    configuredParent === undefined
+      ? await analyze(request, options)
+      : await analyze(request, options, {
+          temporaryWorkspaceOptions: {
+            trustedPrivateParent: {
+              directory: path.resolve(configuredParent),
+              windowsAclProtection:
+                GENERIC_GIT_PRESECURED_WINDOWS_ACL,
+              canonicalAncestryProtection:
+                GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY,
+            },
+          },
+        });
   await publishPrivateJson(output, result.model, "city model");
   io.stdout(
     `Analyzed remote repository ${result.repository} at ${result.commitSha} with ${result.model.modules.length} module(s) and ${result.model.buildings.length} source file(s).\nWrote ${path.resolve(output)}\n`,

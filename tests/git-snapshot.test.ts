@@ -1396,6 +1396,7 @@ describe("generic Git cancellation and diagnostics", () => {
     "bounds a runner that ignores AbortSignal",
     { timeout: 1_000 },
     async () => {
+      const workspace = await workspaceHarness();
       const runGit: NonNullable<
         GenericGitSnapshotDependencies["runGit"]
       > = async () => new Promise(() => undefined);
@@ -1408,10 +1409,15 @@ describe("generic Git cancellation and diagnostics", () => {
               "https://dev.azure.example/Collection/Project/_git/Repo",
             timeoutMs: 25,
           },
-          { runGit },
+          {
+            runGit,
+            createTemporaryWorkspace: async () =>
+              workspace.workspace,
+          },
         ),
       ).rejects.toThrow(/deadline|time/iu);
       expect(Date.now() - startedAt).toBeLessThan(750);
+      expect(workspace.dispose).toHaveBeenCalledOnce();
     },
   );
 

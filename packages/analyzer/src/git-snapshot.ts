@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { promises as fs } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { promises as fs, type BigIntStats } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -39,6 +40,10 @@ export const GENERIC_GIT_SNAPSHOT_TIMEOUT_MS =
   DEFAULT_SNAPSHOT_LIMITS.timeoutMs;
 export const GENERIC_GIT_ARCHIVE_MAX_BYTES = MAX_ARCHIVE_BYTES;
 export const GENERIC_GIT_TEMPORARY_MAX_BYTES = MAX_TEMPORARY_BYTES;
+export const GENERIC_GIT_PRESECURED_WINDOWS_ACL =
+  "pre-secured-private-directory" as const;
+export const GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY =
+  "pre-secured-canonical-entry-and-ancestry-against-rename-delete" as const;
 
 export type GenericGitTransport = "https" | "ssh";
 
@@ -76,6 +81,11 @@ export interface GenericGitTemporaryWorkspace {
   readonly root: string;
   readonly repositoryDirectory: string;
   readonly templateDirectory: string;
+  /**
+   * Revalidates the filesystem objects backing the workspace. The built-in
+   * implementation uses this immediately before path-based Git operations.
+   */
+  readonly validateSecurityBoundary?: () => Promise<void>;
   measureBytes(
     maximumBytes: number,
     signal: AbortSignal,
@@ -83,9 +93,30 @@ export interface GenericGitTemporaryWorkspace {
   dispose(): Promise<void>;
 }
 
+/**
+ * A custom parent is a security boundary, not merely a location hint.
+ *
+ * On POSIX the implementation verifies the existing, process-owned mode-0700
+ * directory and every canonical ancestor. Node cannot prove Windows ACL
+ * privacy or delete-child rights, so a Windows deployment must pre-secure the
+ * parent and inherited child ACLs against untrusted content access. It must
+ * separately protect the canonical path entries against untrusted rename,
+ * delete, and delete-child access, then explicitly attest those preconditions.
+ */
+export interface GenericGitTrustedPrivateParent {
+  readonly directory: string;
+  readonly windowsAclProtection: typeof GENERIC_GIT_PRESECURED_WINDOWS_ACL;
+  readonly canonicalAncestryProtection: typeof GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY;
+}
+
+export interface GenericGitTemporaryWorkspaceOptions {
+  readonly trustedPrivateParent: GenericGitTrustedPrivateParent;
+}
+
 export interface GenericGitSnapshotDependencies {
   readonly runGit?: GenericGitRunGit;
   readonly createTemporaryWorkspace?: () => Promise<GenericGitTemporaryWorkspace>;
+  readonly temporaryWorkspaceOptions?: GenericGitTemporaryWorkspaceOptions;
   readonly openZipSnapshotSource?: typeof openZipSnapshotSource;
   readonly materializeRepositorySnapshot?: typeof materializeRepositorySnapshot;
   readonly environment?: Readonly<Record<string, string | undefined>>;
@@ -113,7 +144,8 @@ export type GenericGitSnapshotErrorCode =
   | "GIT_REF_CHANGED"
   | "GIT_REF_UNAVAILABLE"
   | "GIT_SNAPSHOT_FAILED"
-  | "GIT_TEMPORARY_LIMIT";
+  | "GIT_TEMPORARY_LIMIT"
+  | "GIT_TEMPORARY_WORKSPACE_INVALID";
 
 export class GenericGitSnapshotError extends Error {
   public constructor(
@@ -647,37 +679,559 @@ async function measureDirectory(
   return total;
 }
 
-export async function createGenericGitTemporaryWorkspace(): Promise<GenericGitTemporaryWorkspace> {
-  const root = await fs.mkdtemp(
-    path.join(os.tmpdir(), "code-city-git-"),
+function invalidTemporaryWorkspace(): GenericGitSnapshotError {
+  return new GenericGitSnapshotError(
+    "GIT_TEMPORARY_WORKSPACE_INVALID",
+    "Temporary Git workspace could not be created safely.",
   );
+}
+
+function windowsTemporaryWorkspaceParentRequired(): GenericGitSnapshotError {
+  return new GenericGitSnapshotError(
+    "GIT_TEMPORARY_WORKSPACE_INVALID",
+    "Generic Git on Windows requires an explicitly pre-secured private workspace parent; configure temporaryWorkspaceOptions or use --trusted-workspace-parent.",
+  );
+}
+
+function isPathContained(parent: string, candidate: string): boolean {
+  const relative = path.relative(parent, candidate);
+  return (
+    relative.length > 0 &&
+    relative !== ".." &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  );
+}
+
+function pathsMatch(left: string, right: string): boolean {
+  return (
+    path.relative(left, right).length === 0 &&
+    path.relative(right, left).length === 0
+  );
+}
+
+interface FileIdentity {
+  readonly device: bigint;
+  readonly inode: bigint;
+}
+
+interface ValidatedDirectory {
+  readonly canonicalPath: string;
+  readonly identity: FileIdentity;
+  readonly owner: bigint;
+  readonly group: bigint;
+  readonly permissionBits: bigint;
+  readonly requireUsableIdentity: boolean;
+  readonly requirePrivateMode: boolean;
+}
+
+interface ValidatedParentBoundary {
+  readonly directory: ValidatedDirectory;
+  readonly posixCanonicalChain: readonly ValidatedDirectory[];
+}
+
+interface TemporaryWorkspaceCleanupState {
+  quarantine?: ValidatedDirectory;
+  removalAttempted?: boolean;
+}
+
+function fileIdentity(status: BigIntStats): FileIdentity {
+  return Object.freeze({
+    device: status.dev,
+    inode: status.ino,
+  });
+}
+
+function identitiesMatch(
+  left: FileIdentity,
+  right: FileIdentity,
+): boolean {
+  return (
+    left.device === right.device && left.inode === right.inode
+  );
+}
+
+function hasUsableIdentity(identity: FileIdentity): boolean {
+  return identity.device !== 0n || identity.inode !== 0n;
+}
+
+function statusMatchesDirectory(
+  status: BigIntStats,
+  directory: ValidatedDirectory,
+): boolean {
+  if (status.isSymbolicLink() || !status.isDirectory()) return false;
+  const identity = fileIdentity(status);
+  if (
+    !identitiesMatch(identity, directory.identity) ||
+    status.uid !== directory.owner ||
+    status.gid !== directory.group ||
+    (status.mode & 0o7777n) !== directory.permissionBits ||
+    (directory.requireUsableIdentity &&
+      !hasUsableIdentity(identity))
+  ) {
+    return false;
+  }
+  if (
+    directory.requirePrivateMode &&
+    (status.mode & 0o7777n) !== 0o700n
+  ) {
+    return false;
+  }
+  if (
+    directory.requirePrivateMode &&
+    process.geteuid !== undefined &&
+    status.uid !== BigInt(process.geteuid())
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function validateTemporaryWorkspaceOptions(
+  options: GenericGitTemporaryWorkspaceOptions | undefined,
+): string | undefined {
+  if (options === undefined) return undefined;
+  if (
+    typeof options !== "object" ||
+    options === null ||
+    Array.isArray(options) ||
+    Object.keys(options).length !== 1 ||
+    !Object.hasOwn(options, "trustedPrivateParent")
+  ) {
+    throw invalidTemporaryWorkspace();
+  }
+  const boundary = options.trustedPrivateParent;
+  if (
+    typeof boundary !== "object" ||
+    boundary === null ||
+    Array.isArray(boundary) ||
+    Object.keys(boundary).length !== 3 ||
+    !Object.hasOwn(boundary, "directory") ||
+    !Object.hasOwn(boundary, "windowsAclProtection") ||
+    !Object.hasOwn(
+      boundary,
+      "canonicalAncestryProtection",
+    ) ||
+    typeof boundary.directory !== "string" ||
+    boundary.directory.length === 0 ||
+    boundary.directory.includes("\0") ||
+    boundary.windowsAclProtection !==
+      GENERIC_GIT_PRESECURED_WINDOWS_ACL ||
+    boundary.canonicalAncestryProtection !==
+      GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY
+  ) {
+    throw invalidTemporaryWorkspace();
+  }
+  return boundary.directory;
+}
+
+async function captureDirectory(
+  requestedPath: string,
+  requireUsableIdentity: boolean,
+  requirePrivateMode: boolean,
+): Promise<ValidatedDirectory> {
+  const first = await fs.lstat(requestedPath, { bigint: true });
+  const canonicalPath = await fs.realpath(requestedPath);
+  // Both the requested path and its canonical target are checked after
+  // realpath so a rename/replacement cannot silently change our boundary.
+  const afterRealpath = await fs.lstat(requestedPath, {
+    bigint: true,
+  });
+  const canonicalStatus = await fs.lstat(canonicalPath, {
+    bigint: true,
+  });
+  const canonicalAfter = await fs.realpath(requestedPath);
+  const directory: ValidatedDirectory = Object.freeze({
+    canonicalPath,
+    identity: fileIdentity(first),
+    owner: first.uid,
+    group: first.gid,
+    permissionBits: first.mode & 0o7777n,
+    requireUsableIdentity,
+    requirePrivateMode,
+  });
+  if (
+    !statusMatchesDirectory(first, directory) ||
+    !statusMatchesDirectory(afterRealpath, directory) ||
+    !statusMatchesDirectory(canonicalStatus, directory) ||
+    !pathsMatch(canonicalPath, canonicalAfter)
+  ) {
+    throw invalidTemporaryWorkspace();
+  }
+  return directory;
+}
+
+async function revalidateDirectory(
+  directory: ValidatedDirectory,
+): Promise<void> {
   try {
-    try {
-      await fs.chmod(root, 0o700);
-    } catch {
-      // Windows applies the current user's temporary-directory ACL.
+    const before = await fs.lstat(directory.canonicalPath, {
+      bigint: true,
+    });
+    const canonical = await fs.realpath(directory.canonicalPath);
+    const afterRealpath = await fs.lstat(directory.canonicalPath, {
+      bigint: true,
+    });
+    const canonicalStatus = await fs.lstat(canonical, {
+      bigint: true,
+    });
+    const canonicalAfter = await fs.realpath(
+      directory.canonicalPath,
+    );
+    if (
+      !statusMatchesDirectory(before, directory) ||
+      !statusMatchesDirectory(afterRealpath, directory) ||
+      !statusMatchesDirectory(canonicalStatus, directory) ||
+      !pathsMatch(directory.canonicalPath, canonical) ||
+      !pathsMatch(canonical, canonicalAfter)
+    ) {
+      throw invalidTemporaryWorkspace();
     }
-    const repositoryDirectory = path.join(root, "repository.git");
-    const templateDirectory = path.join(root, "empty-template");
+  } catch (error) {
+    if (error instanceof GenericGitSnapshotError) throw error;
+    throw invalidTemporaryWorkspace();
+  }
+}
+
+function canonicalDirectoryPaths(candidate: string): readonly string[] {
+  const result: string[] = [];
+  let current = candidate;
+  while (true) {
+    result.push(current);
+    const parent = path.dirname(current);
+    if (pathsMatch(parent, current)) break;
+    current = parent;
+  }
+  return Object.freeze(result.reverse());
+}
+
+function assertTrustedPosixOwner(
+  directory: ValidatedDirectory,
+): void {
+  const effectiveUser =
+    process.geteuid === undefined
+      ? undefined
+      : BigInt(process.geteuid());
+  if (
+    effectiveUser === undefined ||
+    (directory.owner !== 0n &&
+      directory.owner !== effectiveUser)
+  ) {
+    throw invalidTemporaryWorkspace();
+  }
+}
+
+function assertProtectedPosixEntry(
+  container: ValidatedDirectory,
+  entry: ValidatedDirectory,
+): void {
+  assertTrustedPosixOwner(container);
+  assertTrustedPosixOwner(entry);
+  if (
+    !pathsMatch(
+      path.dirname(entry.canonicalPath),
+      container.canonicalPath,
+    )
+  ) {
+    throw invalidTemporaryWorkspace();
+  }
+  assertProtectedPosixContainer(container);
+}
+
+function assertProtectedPosixContainer(
+  container: ValidatedDirectory,
+): void {
+  assertTrustedPosixOwner(container);
+  const writableByUntrusted =
+    (container.permissionBits & 0o022n) !== 0n;
+  const hasStickyDeletionProtection =
+    (container.permissionBits & 0o1000n) !== 0n;
+  if (
+    writableByUntrusted &&
+    !hasStickyDeletionProtection
+  ) {
+    throw invalidTemporaryWorkspace();
+  }
+}
+
+function assertProtectedPosixChain(
+  chain: readonly ValidatedDirectory[],
+): void {
+  if (chain.length === 0) throw invalidTemporaryWorkspace();
+  for (const directory of chain) {
+    assertTrustedPosixOwner(directory);
+    if (!hasUsableIdentity(directory.identity)) {
+      throw invalidTemporaryWorkspace();
+    }
+  }
+  for (let index = 1; index < chain.length; index += 1) {
+    const container = chain[index - 1];
+    const entry = chain[index];
+    if (container === undefined || entry === undefined) {
+      throw invalidTemporaryWorkspace();
+    }
+    assertProtectedPosixEntry(container, entry);
+  }
+  const leaf = chain.at(-1);
+  if (leaf === undefined) throw invalidTemporaryWorkspace();
+  assertProtectedPosixContainer(leaf);
+}
+
+async function capturePosixCanonicalChain(
+  parent: ValidatedDirectory,
+): Promise<readonly ValidatedDirectory[]> {
+  const chain: ValidatedDirectory[] = [];
+  for (const candidate of canonicalDirectoryPaths(
+    parent.canonicalPath,
+  )) {
+    chain.push(
+      pathsMatch(candidate, parent.canonicalPath)
+        ? parent
+        : await captureDirectory(candidate, true, false),
+    );
+  }
+  assertProtectedPosixChain(chain);
+  return Object.freeze(chain);
+}
+
+async function revalidateParentBoundary(
+  parent: ValidatedParentBoundary,
+): Promise<void> {
+  if (process.platform === "win32") {
+    await revalidateDirectory(parent.directory);
+    return;
+  }
+  for (const directory of parent.posixCanonicalChain) {
+    await revalidateDirectory(directory);
+  }
+  for (
+    let index = parent.posixCanonicalChain.length - 1;
+    index >= 0;
+    index -= 1
+  ) {
+    const directory = parent.posixCanonicalChain[index];
+    if (directory === undefined) {
+      throw invalidTemporaryWorkspace();
+    }
+    await revalidateDirectory(directory);
+  }
+  assertProtectedPosixChain(parent.posixCanonicalChain);
+}
+
+async function prepareTemporaryWorkspaceParent(
+  options: GenericGitTemporaryWorkspaceOptions | undefined,
+): Promise<ValidatedParentBoundary> {
+  const configuredParent =
+    validateTemporaryWorkspaceOptions(options);
+  // Portable Node APIs cannot inspect Windows ACL inheritance or
+  // FILE_DELETE_CHILD rights. An implicit environment-derived Windows temp
+  // directory therefore has no defensible trust contract.
+  if (
+    configuredParent === undefined &&
+    process.platform === "win32"
+  ) {
+    throw windowsTemporaryWorkspaceParentRequired();
+  }
+  const parent = path.resolve(configuredParent ?? os.tmpdir());
+  try {
+    // A configured private boundary must already exist. In particular, this
+    // API never turns an arbitrary user-supplied path into a trust boundary.
+    const directory = await captureDirectory(
+      parent,
+      true,
+      configuredParent !== undefined &&
+        process.platform !== "win32",
+    );
+    const posixCanonicalChain =
+      process.platform === "win32"
+        ? Object.freeze([] as ValidatedDirectory[])
+        : await capturePosixCanonicalChain(directory);
+    const boundary: ValidatedParentBoundary = Object.freeze({
+      directory,
+      posixCanonicalChain,
+    });
+    await revalidateParentBoundary(boundary);
+    return boundary;
+  } catch (error) {
+    if (error instanceof GenericGitSnapshotError) throw error;
+    throw invalidTemporaryWorkspace();
+  }
+}
+
+async function validateWorkspaceDirectories(
+  parent: ValidatedParentBoundary,
+  root: ValidatedDirectory,
+): Promise<void> {
+  await revalidateParentBoundary(parent);
+  await revalidateDirectory(root);
+  await revalidateParentBoundary(parent);
+  if (
+    !isPathContained(
+      parent.directory.canonicalPath,
+      root.canonicalPath,
+    ) ||
+    !pathsMatch(
+      path.dirname(root.canonicalPath),
+      parent.directory.canonicalPath,
+    )
+  ) {
+    throw invalidTemporaryWorkspace();
+  }
+  if (process.platform !== "win32") {
+    assertProtectedPosixEntry(parent.directory, root);
+  }
+}
+
+async function isMissingPath(candidate: string): Promise<boolean> {
+  try {
+    await fs.lstat(candidate);
+  } catch (error) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return true;
+    }
+    throw error;
+  }
+  return false;
+}
+
+async function requireMissingPath(candidate: string): Promise<void> {
+  if (await isMissingPath(candidate)) return;
+  throw invalidTemporaryWorkspace();
+}
+
+async function removeTemporaryWorkspaceRoot(
+  parent: ValidatedParentBoundary,
+  root: ValidatedDirectory,
+  state: TemporaryWorkspaceCleanupState,
+): Promise<void> {
+  let quarantine = state.quarantine;
+  if (quarantine === undefined) {
+    await validateWorkspaceDirectories(parent, root);
+    const quarantinePath = path.join(
+      parent.directory.canonicalPath,
+      `.code-city-git-cleanup-${randomUUID()}`,
+    );
+    if (
+      !isPathContained(
+        parent.directory.canonicalPath,
+        quarantinePath,
+      )
+    ) {
+      throw invalidTemporaryWorkspace();
+    }
+    await fs.rename(root.canonicalPath, quarantinePath);
+    quarantine = Object.freeze({
+      ...root,
+      canonicalPath: quarantinePath,
+    });
+    // Persist the expected identity and new path immediately. A later retry
+    // can revalidate this same object after a transient filesystem failure;
+    // a moved replacement will not match and is therefore preserved.
+    state.quarantine = quarantine;
+    // If an unexpected object was moved, preserve it at the quarantine path
+    // and fail closed instead of recursively deleting it.
+    await revalidateDirectory(quarantine);
+  }
+  await revalidateParentBoundary(parent);
+  if (
+    state.removalAttempted === true &&
+    (await isMissingPath(quarantine.canonicalPath))
+  ) {
+    // The trusted object is gone. A later object at the public root name is
+    // not ours; preserve it and finish the interrupted disposal.
+    return;
+  }
+  await revalidateDirectory(quarantine);
+  // A replacement appearing at the public workspace name is not ours. Keep
+  // both objects and report failure rather than claiming the name is clean.
+  await requireMissingPath(root.canonicalPath);
+  state.removalAttempted = true;
+  await fs.rm(quarantine.canonicalPath, {
+    recursive: true,
+    force: false,
+    maxRetries: 10,
+    retryDelay: 100,
+  });
+  await requireMissingPath(quarantine.canonicalPath);
+  await requireMissingPath(root.canonicalPath);
+}
+
+export async function createGenericGitTemporaryWorkspace(
+  options?: GenericGitTemporaryWorkspaceOptions,
+): Promise<GenericGitTemporaryWorkspace> {
+  const parent = await prepareTemporaryWorkspaceParent(options);
+  let root: string | undefined;
+  let rootDirectory: ValidatedDirectory | undefined;
+  const cleanupState: TemporaryWorkspaceCleanupState = {};
+  try {
+    await revalidateParentBoundary(parent);
+    root = await fs.mkdtemp(
+      path.join(
+        parent.directory.canonicalPath,
+        "code-city-git-",
+      ),
+    );
+    const workspaceRoot = root;
+    if (
+      !isPathContained(
+        parent.directory.canonicalPath,
+        path.resolve(workspaceRoot),
+      )
+    ) {
+      throw invalidTemporaryWorkspace();
+    }
+    if (process.platform !== "win32") {
+      await fs.chmod(workspaceRoot, 0o700);
+    }
+    rootDirectory = await captureDirectory(
+      workspaceRoot,
+      true,
+      process.platform !== "win32",
+    );
+    const validatedRoot = rootDirectory;
+    await validateWorkspaceDirectories(parent, validatedRoot);
+    const repositoryDirectory = path.join(
+      workspaceRoot,
+      "repository.git",
+    );
+    const templateDirectory = path.join(
+      workspaceRoot,
+      "empty-template",
+    );
     await fs.mkdir(templateDirectory, { recursive: false, mode: 0o700 });
+    await validateWorkspaceDirectories(parent, validatedRoot);
     let disposed = false;
     let disposing: Promise<void> | undefined;
     return {
-      root,
+      root: workspaceRoot,
       repositoryDirectory,
       templateDirectory,
-      measureBytes: (maximumBytes, signal) =>
-        measureDirectory(root, maximumBytes, signal),
+      validateSecurityBoundary: () =>
+        validateWorkspaceDirectories(parent, validatedRoot),
+      measureBytes: async (maximumBytes, signal) => {
+        await validateWorkspaceDirectories(parent, validatedRoot);
+        const measured = await measureDirectory(
+          workspaceRoot,
+          maximumBytes,
+          signal,
+        );
+        await validateWorkspaceDirectories(parent, validatedRoot);
+        return measured;
+      },
       dispose: async () => {
         if (disposed) return;
         disposing ??= (async () => {
           try {
-            await fs.rm(root, {
-              recursive: true,
-              force: true,
-              maxRetries: 10,
-              retryDelay: 100,
-            });
+            await removeTemporaryWorkspaceRoot(
+              parent,
+              validatedRoot,
+              cleanupState,
+            );
             disposed = true;
           } catch {
             throw new GenericGitSnapshotError(
@@ -692,13 +1246,22 @@ export async function createGenericGitTemporaryWorkspace(): Promise<GenericGitTe
       },
     };
   } catch (error) {
-    await fs.rm(root, {
-      recursive: true,
-      force: true,
-      maxRetries: 10,
-      retryDelay: 100,
-    });
-    throw error;
+    if (root !== undefined && rootDirectory !== undefined) {
+      try {
+        await removeTemporaryWorkspaceRoot(
+          parent,
+          rootDirectory,
+          cleanupState,
+        );
+      } catch {
+        throw new GenericGitSnapshotError(
+          "GIT_CLEANUP_FAILED",
+          "Temporary Git data could not be removed safely.",
+        );
+      }
+    }
+    if (error instanceof GenericGitSnapshotError) throw error;
+    throw invalidTemporaryWorkspace();
   }
 }
 
@@ -1153,6 +1716,12 @@ async function invokeGit(
   let diskFailure: GenericGitSnapshotError | undefined;
   let run: Promise<GitProcessResult> | undefined;
   try {
+    if (workspace.validateSecurityBoundary !== undefined) {
+      await withinDeadline(
+        workspace.validateSecurityBoundary(),
+        deadline,
+      );
+    }
     if (monitorDisk) {
       await enforceTemporaryLimit(workspace, deadline);
     }
@@ -1330,7 +1899,10 @@ export async function snapshotGenericGitRepository(
   const runGit = dependencies.runGit ?? runInstalledGit;
   const createWorkspace =
     dependencies.createTemporaryWorkspace ??
-    createGenericGitTemporaryWorkspace;
+    (() =>
+      createGenericGitTemporaryWorkspace(
+        dependencies.temporaryWorkspaceOptions,
+      ));
   const openZip =
     dependencies.openZipSnapshotSource ?? openZipSnapshotSource;
   const materialize =

@@ -60,13 +60,26 @@ the archive. No checkout, temporary directory, credential, or cache is created.
 
 == Generic Git
 
-`codecity analyze-git <remote> --ref <ref> --output <model>` validates an HTTPS,
-SSH, or scp-style remote, resolves one advertised branch, tag, or exact commit,
-and shallow fetches it into a private temporary bare repository. It verifies
-the advertised object and commit, creates a bounded temporary `snapshot/` ZIP,
-reads it, removes the complete workspace, then uses the shared snapshot and
-analyzer pipeline. It never checks out files, runs hooks, filters, submodules,
-or LFS, or stores a derived cache.
+`codecity analyze-git <remote> --ref <ref> --output <model>
+--trusted-workspace-parent <directory>` validates an HTTPS, SSH, or scp-style
+remote, resolves one advertised branch, tag, or exact commit, and shallow
+fetches it into a private temporary bare repository. The trusted-parent option
+is required on Windows. It is an explicit assertion that an existing directory
+has a private inherited ACL and that its canonical entry and ancestry prevent
+untrusted rename, delete, and delete-child operations; the command does not
+create or secure that boundary.
+
+On POSIX, a configured parent must be process-owned mode `0700`. Without the
+option, the OS temporary directory is used only after stable device/inode,
+ownership, permission, sticky-directory, and complete canonical-ancestry checks
+succeed. Windows has no implicit temporary-directory fallback because portable
+Node APIs cannot verify those ACL guarantees.
+
+The adapter verifies the advertised object and commit, creates a bounded
+temporary `snapshot/` ZIP, reads it, atomically quarantines and removes the
+complete workspace, then uses the shared snapshot and analyzer pipeline. It
+never checks out files, runs hooks, filters, submodules, or LFS, or stores a
+derived cache.
 
 == Print
 

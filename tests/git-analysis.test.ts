@@ -1,16 +1,30 @@
 import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { strToU8, zipSync } from "fflate";
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 
 import {
   analyzeGenericGitRepository,
+  GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY,
+  GENERIC_GIT_PRESECURED_WINDOWS_ACL,
   type GenericGitRunGit,
+  type GenericGitSnapshotDependencies,
 } from "../packages/analyzer/src/index.js";
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const REMOTE =
   "https://dev.azure.example/Collection/Project/_git/Repo";
+const temporaryRoots: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryRoots.splice(0).map((root) =>
+      fs.rm(root, { recursive: true, force: true }),
+    ),
+  );
+});
 
 function text(value: string): Uint8Array {
   return new TextEncoder().encode(value);
@@ -63,6 +77,28 @@ function fakeGit(): GenericGitRunGit {
   };
 }
 
+async function fakeDependencies(): Promise<GenericGitSnapshotDependencies> {
+  const trustedParent = await fs.mkdtemp(
+    path.join(os.tmpdir(), "code-city-git-analysis-test-"),
+  );
+  temporaryRoots.push(trustedParent);
+  if (process.platform !== "win32") {
+    await fs.chmod(trustedParent, 0o700);
+  }
+  return {
+    runGit: fakeGit(),
+    temporaryWorkspaceOptions: {
+      trustedPrivateParent: {
+        directory: trustedParent,
+        windowsAclProtection:
+          GENERIC_GIT_PRESECURED_WINDOWS_ACL,
+        canonicalAncestryProtection:
+          GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY,
+      },
+    },
+  };
+}
+
 it(
   "builds a city from a generic remote with deterministic provenance",
   { timeout: 5_000 },
@@ -70,7 +106,7 @@ it(
     const result = await analyzeGenericGitRepository(
       { repositoryUrl: REMOTE },
       { timeoutMs: 5_000 },
-      { runGit: fakeGit() },
+      await fakeDependencies(),
     );
 
     expect(result).toMatchObject({
@@ -104,7 +140,7 @@ it(
         logo: "assets/logo.svg",
         timeoutMs: 5_000,
       },
-      { runGit: fakeGit() },
+      await fakeDependencies(),
     );
 
     expect(result.model.identity).toEqual({

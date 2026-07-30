@@ -8,6 +8,10 @@ import {
   runCli,
   type CliDependencies,
 } from "../apps/cli/src/main.js";
+import {
+  GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY,
+  GENERIC_GIT_PRESECURED_WINDOWS_ACL,
+} from "../packages/analyzer/src/index.js";
 import { validateCityModel } from "../packages/core/src/index.js";
 
 const temporaryDirectories: string[] = [];
@@ -142,6 +146,56 @@ it(
 );
 
 it(
+  "forwards an explicit pre-secured Generic Git workspace parent",
+  { timeout: 5_000 },
+  async () => {
+    const directory = await temporaryDirectory();
+    const trustedParent = path.join(directory, "trusted git temp");
+    await fs.mkdir(trustedParent);
+    const output = path.join(directory, "remote-city.json");
+    const analyze = vi.fn<
+      NonNullable<CliDependencies["analyzeGenericGitRepository"]>
+    >(async () => ({
+      repository: "Repo",
+      commitSha: COMMIT,
+      transport: "https",
+      model: await demoModel(),
+    }));
+
+    expect(
+      await runCli(
+        [
+          "analyze-git",
+          "https://example.test/repository",
+          "--output",
+          output,
+          "--trusted-workspace-parent",
+          path.relative(process.cwd(), trustedParent),
+        ],
+        { stdout: () => undefined, stderr: () => undefined },
+        { analyzeGenericGitRepository: analyze },
+      ),
+    ).toBe(0);
+
+    expect(analyze).toHaveBeenCalledWith(
+      { repositoryUrl: "https://example.test/repository" },
+      {},
+      {
+        temporaryWorkspaceOptions: {
+          trustedPrivateParent: {
+            directory: path.resolve(trustedParent),
+            windowsAclProtection:
+              GENERIC_GIT_PRESECURED_WINDOWS_ACL,
+            canonicalAncestryProtection:
+              GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY,
+          },
+        },
+      },
+    );
+  },
+);
+
+it(
   "keeps local analysis independent from generic Git",
   { timeout: 5_000 },
   async () => {
@@ -186,6 +240,15 @@ it(
       "codecity analyze-git <https|ssh|scp-remote>",
     );
     expect(stdout.join("")).toContain("--ref <branch|tag|commit>");
+    expect(stdout.join("")).toContain(
+      "--trusted-workspace-parent <directory>",
+    );
+    expect(stdout.join("")).toContain(
+      "Parent/child ACLs protect content",
+    );
+    expect(stdout.join("")).toContain(
+      "ancestry protects path entries",
+    );
 
     const analyze = vi.fn<
       NonNullable<CliDependencies["analyzeGenericGitRepository"]>
