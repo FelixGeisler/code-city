@@ -119,11 +119,13 @@ sets use bounded shelves. Configured gaps remain visible streets.
 
 == Privacy
 
-Do not persist source text, absolute roots, credential URLs, or adapter error
-details. Default discovery hard-skips `.git`, `.angular`, `node_modules`, `bin`,
-`obj`, `dist`, `build`, and `coverage` segments plus generated C# suffixes.
-Nested `.gitignore` rules apply; root `.codecityignore` may override them but
-cannot override hard skips.
+Do not persist source text, absolute roots, credential-profile selectors,
+credentials, remote URLs, requested symbolic refs, or adapter error details.
+Default discovery hard-skips `.git`, `.angular`, `node_modules`, `bin`, `obj`,
+`dist`, `build`, and `coverage` segments plus generated C# suffixes. Nested
+`.gitignore` rules apply; root `.codecityignore` may override them but cannot
+override hard skips. A resolved immutable commit SHA may be stored as the
+generated model's default version.
 
 == Threat model
 
@@ -176,18 +178,38 @@ manifest path is accessed. Exact-shape, duplicate-free JSON binds a stable ID
 and display label to one provider, exact repository scopes, and a direct-child
 secret basename. Protected directory, canonical path, stable file identity,
 ownership/mode or explicit Windows ACL-attestation, link-count, UTF-8,
-single-line, count, and byte limits all fail closed. Secret buffers are
-overwritten after validation. Canonical credential and public viewer roots
-must be disjoint; overlap fails before the viewer asset collector can retain
-or expose credential files. The collector additionally guards the canonical
-path and filesystem identity it actually opens, revalidates the traversal
-roots, and rejects directory, manifest, or secret aliases before body reads.
+single-line, count, and byte limits all fail closed. GitHub profiles are
+bearer-only and accept one ASCII RFC 6750 `b64token` secret line. Azure DevOps
+and Generic HTTPS profiles are Basic-only; the visible-ASCII username cannot
+contain a colon, and they require a one-line UTF-8 secret.
+
+Startup records each secret's protected path and security-relevant startup
+snapshot: file identity, mode and ownership, link count, size, and modification
+and change times. It then overwrites the validation buffer. Canonical credential
+and public viewer roots must be disjoint; overlap fails before the viewer asset
+collector can retain or expose credential files. The collector additionally
+guards the canonical path and filesystem identity it actually opens,
+revalidates the traversal roots, and rejects directory, manifest, or secret
+aliases before body reads.
 
 The import capability response is an authenticated, no-store redacted
 projection, not a credential oracle: only ID, label, and provider cross the
-boundary. Scope URLs, usernames, filenames, and secret bytes do not. The
-current slice intentionally stops before credential selection and Git
-injection, so strict import JSON continues to reject `credentialProfileId`.
+boundary. Scope URLs, usernames, filenames, and secret bytes do not. An
+authenticated GitHub source may contain one optional, strict
+`credentialProfileId`. Before staging, the registry requires that ID to select
+a GitHub provider with an exact canonical repository-scope match. Unknown,
+wrong-provider, and out-of-scope selections share one fixed rejection.
+
+Each credentialed job reopens its secret and revalidates the startup path and
+security-relevant startup snapshot: file identity, mode and ownership, link
+count, size, and modification and change times. It exposes the material to one
+bounded callback. Protected-read, validation, and callback-scoped mutable
+credential buffers are overwritten after use, including failure, abort, or
+registry close. The selector remains only in the in-memory request closure, and
+at execution credential material is reread only for that bound use operation.
+Neither the selector nor that material enters job or artifact persistence; nor
+do the remote URL, requested symbolic ref, or source bytes. The resolved
+immutable commit SHA may be stored as the generated model's default version.
 
 Raw uploads avoid multipart parsing and never trust a filename. Exact-shape
 metadata reserves one opaque UUID and its declared bytes before the server
@@ -230,14 +252,26 @@ inherited child ACLs, and protected canonical ancestry satisfy the
 private-workspace contract.
 
 The GitHub adapter accepts only canonical HTTPS `github.com/owner/repository`
-URLs. It performs anonymous, no-store requests to `api.github.com`, resolves an
-exact 40-digit commit, and fetches only that commit from `codeload.github.com`.
-Redirects, credentials, encrypted or ZIP64 archives, unsafe or colliding paths,
-and inconsistent ZIP metadata are rejected. API responses are capped at 1 MiB,
-archives at 64 MiB, individual ZIP entries at 256 MiB, expanded archive data at
-1 GiB, and refs at 256 UTF-8 bytes. All remote work shares the 300-second
-default analysis deadline. Ignored content is never inflated. Archives and
-source bytes are not persisted or cached.
+URLs. Anonymous imports remain available. An exact-scope GitHub profile permits
+private and internal repository metadata while retaining exact repository
+identity validation. Bearer authorization is attached only to exact HTTPS
+`api.github.com` requests. A token used for private or internal archive access
+needs repository `Contents: read` permission. No credential is placed in a URL.
+
+The adapter resolves an exact 40-digit commit and requests that commit through
+GitHub's documented zipball API with redirect following disabled. It accepts
+only one `302` to `codeload.github.com` with the exact path
+`/\{owner\}/\{repo\}/legacy.zip/\{sha\}`. An opaque query string is accepted,
+and the second request sends no `Authorization` header. All other redirects are
+rejected. Selected-profile injection for Azure DevOps and Generic HTTPS remains
+pending, and Generic Git continues to use its existing ambient credentials.
+
+API responses are capped at 1 MiB, archives at 64 MiB, individual ZIP entries
+at 256 MiB, expanded archive data at 1 GiB, and refs at 256 UTF-8 bytes. All
+remote work shares the 300-second default analysis deadline. Encrypted or ZIP64
+archives, unsafe or colliding paths, and inconsistent ZIP metadata are
+rejected. Ignored content is never inflated. Archives and source bytes are not
+persisted or cached.
 
 The generic Git adapter accepts validated HTTPS, `ssh://`, and scp-style
 remotes without embedded passwords, query data, fragments, or leading options.

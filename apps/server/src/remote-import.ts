@@ -17,6 +17,8 @@ import {
   validateGenericGitRepositoryUrl,
   validatePublicGitHubRef,
   validatePublicGitHubRepositoryUrl,
+  type GitHubSnapshotCredential,
+  type GitHubSnapshotCredentialProvider,
   type LocalAnalysisOptions,
 } from "../../../packages/analyzer/src/index.js";
 import { normalizeAssetRelativePath } from "../../../packages/core/src/index.js";
@@ -32,9 +34,14 @@ import {
   ImportArtifactStore,
   type ImportStagingDirectory,
 } from "./import-artifacts.js";
+import type {
+  CredentialProfileBinding,
+  CredentialProfileRegistry,
+} from "./credential-profiles.js";
 
 const ROOT_KEYS = ["analysis", "identity", "source"] as const;
 const SOURCE_KEYS = [
+  "credentialProfileId",
   "kind",
   "repositoryUrl",
   "revision",
@@ -53,6 +60,7 @@ const PROTOTYPE_LIKE_KEYS = new Set([
   "prototype",
 ]);
 const COMMIT_SHA = /^[0-9a-f]{40}$/iu;
+const CREDENTIAL_PROFILE_ID = /^[a-z][a-z0-9-]{0,63}$/u;
 const UNSAFE_TEXT = /[\p{Cc}\p{Cf}\p{Cs}]/u;
 const MAXIMUM_TITLE_CHARACTERS = 160;
 const MAXIMUM_VERSION_CHARACTERS = 80;
@@ -105,6 +113,7 @@ export type RemoteImportRevision =
 export interface RemoteImportSource {
   readonly kind: "github" | "git";
   readonly repositoryUrl: string;
+  readonly credentialProfileId?: string;
   readonly revision?: RemoteImportRevision;
   /** Provider-qualified analyzer selector or exact lowercase commit SHA. */
   readonly ref?: string;
@@ -277,6 +286,7 @@ interface RemoteImportRuntime {
   readonly jobs: PersistentJobQueue;
   readonly artifacts: ImportArtifactStore;
   readonly policy: RemoteImportPolicy;
+  readonly credentialProfiles: CredentialProfileRegistry;
   readonly dependencies?: RemoteImportDependencies;
 }
 
@@ -815,9 +825,26 @@ function parseSource(value: unknown): RemoteImportSource {
   const parsedRevision = Object.hasOwn(object, "revision")
     ? revisionRef(object["revision"], kind)
     : undefined;
+  let credentialProfileId: string | undefined;
+  if (Object.hasOwn(object, "credentialProfileId")) {
+    credentialProfileId = boundedExactText(
+      object["credentialProfileId"],
+      "$.source.credentialProfileId",
+      64,
+    );
+    if (!CREDENTIAL_PROFILE_ID.test(credentialProfileId)) {
+      fail(
+        "$.source.credentialProfileId",
+        "Must start with a lowercase letter and contain at most 64 lowercase letters, digits, or hyphens.",
+      );
+    }
+  }
   return Object.freeze({
     kind,
     repositoryUrl,
+    ...(credentialProfileId === undefined
+      ? {}
+      : { credentialProfileId }),
     ...(parsedRevision === undefined
       ? {}
       : {
@@ -869,6 +896,27 @@ function analyzerOptions(
 
 function fixedTaskFailure(): Error {
   return new Error("Repository import failed.");
+}
+
+function githubCredentialProvider(
+  binding: CredentialProfileBinding<"github">,
+): GitHubSnapshotCredentialProvider {
+  return Object.freeze({
+    provider: "github" as const,
+    use<T>(
+      signal: AbortSignal,
+      operation: (
+        credential: GitHubSnapshotCredential,
+      ) => T | Promise<T>,
+    ): Promise<T> {
+      return binding.use(signal, (credential) => {
+        if (credential.kind !== "bearer") {
+          throw fixedTaskFailure();
+        }
+        return operation(credential);
+      });
+    },
+  });
 }
 
 function analysisTaskFailure(error: unknown): JobTaskFailure {
@@ -960,6 +1008,7 @@ async function analyze(
   request: RemoteImportRequest,
   context: JobTaskContext,
   staging: ImportStagingDirectory,
+  credentialBinding: CredentialProfileBinding<"github"> | undefined,
   dependencies: RemoteImportDependencies | undefined,
 ): Promise<CityModel> {
   const options = analyzerOptions(request, context.signal);
@@ -973,7 +1022,18 @@ async function analyze(
     const implementation =
       dependencies?.analyzePublicGitHubRepository ??
       analyzePublicGitHubRepository;
-    return (await implementation(repositoryRequest, options)).model;
+    if (credentialBinding === undefined) {
+      return (await implementation(repositoryRequest, options)).model;
+    }
+    if (credentialBinding.provider !== "github") {
+      throw fixedTaskFailure();
+    }
+    return (
+      await implementation(repositoryRequest, options, {
+        credentialProvider:
+          githubCredentialProvider(credentialBinding),
+      })
+    ).model;
   }
   const implementation =
     dependencies?.analyzeGenericGitRepository ??
@@ -993,11 +1053,59 @@ async function analyze(
   ).model;
 }
 
+function unavailableCredentialProfile(): RemoteImportRequestError {
+  return new RemoteImportRequestError(
+    [
+      Object.freeze({
+        code: "source-not-allowed",
+        path: "$.source.credentialProfileId",
+        message:
+          "This credential profile is not available for the requested source.",
+      }),
+    ],
+    403,
+  );
+}
+
+function credentialBinding(
+  request: RemoteImportRequest,
+  profiles: CredentialProfileRegistry,
+): CredentialProfileBinding<"github"> | undefined {
+  const profileId = request.source.credentialProfileId;
+  if (profileId === undefined) return undefined;
+  if (request.source.kind !== "github") {
+    throw unavailableCredentialProfile();
+  }
+  const binding = profiles.bind(
+    profileId,
+    "github",
+    request.source.repositoryUrl,
+  );
+  if (binding === undefined || binding.provider !== "github") {
+    throw unavailableCredentialProfile();
+  }
+  return binding;
+}
+
 export async function enqueueRemoteImport(
   request: RemoteImportRequest,
   runtime: RemoteImportRuntime,
 ): Promise<JobRecord> {
-  runtime.policy.assertAllowed(request);
+  try {
+    runtime.policy.assertAllowed(request);
+  } catch (error) {
+    if (
+      error instanceof RemoteImportRequestError &&
+      request.source.credentialProfileId !== undefined
+    ) {
+      throw unavailableCredentialProfile();
+    }
+    throw error;
+  }
+  const boundCredential = credentialBinding(
+    request,
+    runtime.credentialProfiles,
+  );
   let staging: ImportStagingDirectory;
   try {
     staging = await runtime.artifacts.createStagingDirectory();
@@ -1023,6 +1131,7 @@ export async function enqueueRemoteImport(
               request,
               context,
               staging,
+              boundCredential,
               runtime.dependencies,
             );
           } catch (error) {

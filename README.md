@@ -26,12 +26,14 @@ Internet. Numeric IP addresses and `localhost` are accepted by default. To use
 a DNS name, set `CODECITY_ALLOWED_HOSTS` to a comma-separated allowlist before
 starting Compose, for example `raspberrypi.local,codecity.lan`.
 
-`POST /api/v1/imports` queues anonymous public-GitHub or Generic Git analysis
-directly through the server API. Requests are bounded JSON and must include
-`X-Code-City-Request: 1`; they return a persistent job URL, and a completed job
-owns one immutable `city-model.json` artifact. Repository URLs, refs,
-credentials, source bytes, diagnostics, and temporary paths are not written to
-job records.
+`POST /api/v1/imports` queues anonymous public-GitHub, exact-scope credentialed
+GitHub, or Generic Git analysis directly through the server API. Requests are
+bounded JSON and must include `X-Code-City-Request: 1`; they return a persistent
+job URL, and a completed job owns one immutable `city-model.json` artifact.
+Repository URLs, credential-profile selectors, secrets, requested symbolic
+refs, source bytes, diagnostics, and temporary paths are not written to job
+records. The resolved immutable commit SHA may become the generated model's
+default version.
 
 Browser clients can also reserve a one-use raw upload with
 `POST /api/v1/imports/uploads`, then `PUT` either an existing
@@ -77,10 +79,10 @@ put the token itself in an environment variable, command line, URL, repository,
 job data, or browser storage. Token replacement takes effect only after a
 server restart and invalidates all sessions.
 
-Credential-profile discovery is available only when that inbound authorization
-mode is configured. Set `CODECITY_CREDENTIAL_PROFILES_FILE` to an absolute
-manifest path. The version-1 manifest names bounded, exact repository scopes
-and direct-child secret files:
+Credential-profile discovery and GitHub-profile selection are available only
+when that inbound authorization mode is configured. Set
+`CODECITY_CREDENTIAL_PROFILES_FILE` to an absolute manifest path. The version-1
+manifest names bounded, exact repository scopes and direct-child secret files:
 
 ```json
 {
@@ -122,7 +124,10 @@ or rename aliases to the credential directory, manifest, or secrets before
 reading file bodies.
 On POSIX the directory must be owned by the service identity with mode `0700`;
 every file must be owned by it, regular, non-linked, and mode `0400` or `0600`.
-Canonical paths and file identities are checked around bounded reads. On
+Canonical paths and file identities are checked around bounded reads. Code City
+records each secret's protected path and security-relevant startup snapshot:
+file identity, mode and ownership, link count, size, and modification and change
+times. It validates the contents and overwrites the validation buffer. On
 Windows, apply equivalent private ACL and protected-ancestry controls and set
 `CODECITY_TRUST_WINDOWS_CREDENTIAL_FILES=1` to attest them. IDs, labels, and
 providers are the only fields returned by authenticated
@@ -134,14 +139,39 @@ case-insensitive repository identity. Azure DevOps accepts its exact cloud,
 legacy `visualstudio.com`, and on-premises HTTPS `_git` paths. Generic HTTPS
 scopes normalize only the authority and otherwise match the authorized raw
 path exactly, including case, percent encoding, and a terminal `.git`.
+GitHub profiles are bearer-only; their secret file contains one ASCII RFC 6750
+`b64token` line. Azure DevOps and Generic HTTPS profiles are Basic-only; their
+visible-ASCII username cannot contain a colon, and they require a one-line UTF-8
+secret.
 
-This is a discovery-only slice: import JSON does not accept
-`credentialProfileId`, and the server does not inject these secrets into Git
-yet. Existing anonymous and ambient-credential import behavior is unchanged.
-The Compose file forwards the two configuration values but deliberately does
-not mount a host manifest or secret; operators must provide a private mount
-explicitly. Never place profile secrets in Compose environment values, Git
-configuration, a remote URL, or the repository.
+An authenticated GitHub import may add the optional, strictly validated
+`source.credentialProfileId` field. Before staging or queue persistence, the
+server requires the selected profile's provider and exact repository scope to
+match the request. Each job reopens the secret through its protected startup
+path and revalidates that path and security-relevant startup snapshot, including
+file identity, mode and ownership, link count, size, and modification and change
+times. The credential is exposed only to one callback; all callback-scoped
+mutable credential buffers are overwritten after success, failure, abort, or
+registry close.
+
+The bearer credential is sent only as an `Authorization` header on exact HTTPS
+requests to `api.github.com`. A token used for private or internal archive
+access needs repository `Contents: read` permission. Redirect following remains
+disabled. The documented zipball API response must be one `302` whose path is
+exactly `/{owner}/{repo}/legacy.zip/{sha}` on `codeload.github.com`; an opaque
+query string is accepted, and the second fetch sends no `Authorization` header.
+This permits exact-scope private and internal GitHub imports without exposing
+the token to the archive host.
+
+The selector, secret, remote URL, requested symbolic ref, and source bytes are
+never written to a job or artifact. The resolved immutable commit SHA may be
+stored as the generated model's default version. Selected-profile injection for
+Azure DevOps and Generic HTTPS remains pending. Existing anonymous GitHub
+imports and ambient-credential Generic Git behavior are unchanged. The Compose
+file forwards the two configuration values but deliberately does not mount a
+host manifest or secret; operators must provide a private mount explicitly.
+Never place profile secrets in Compose environment values, Git configuration, a
+remote URL, or the repository.
 
 Authorization protects credential use but does not encrypt the bearer or
 session capability in transit. `CODECITY_PUBLIC_ORIGIN` therefore requires

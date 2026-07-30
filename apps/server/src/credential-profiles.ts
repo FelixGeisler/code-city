@@ -59,6 +59,32 @@ export interface CredentialProfileCapability {
   readonly provider: CredentialProfileProvider;
 }
 
+export type CredentialProfileSourceKind = "github" | "git";
+
+export type CredentialProfileMaterial =
+  | {
+      readonly kind: "bearer";
+      readonly secret: Uint8Array;
+    }
+  | {
+      readonly kind: "basic";
+      readonly username: string;
+      readonly secret: Uint8Array;
+    };
+
+export interface CredentialProfileBinding<
+  Provider extends CredentialProfileProvider =
+    CredentialProfileProvider,
+> {
+  readonly provider: Provider;
+  use<T>(
+    signal: AbortSignal,
+    operation: (
+      credential: CredentialProfileMaterial,
+    ) => T | Promise<T>,
+  ): Promise<T>;
+}
+
 export interface CredentialProfileRegistryOptions {
   readonly profilesFile?: string;
   readonly trustWindowsCredentialFiles?: boolean;
@@ -94,9 +120,20 @@ interface RegisteredCredentialProfile {
   readonly label: string;
   readonly provider: CredentialProfileProvider;
   readonly repositories: ReadonlySet<string>;
-  readonly authentication: ProfileAuthentication & {
-    readonly secretPath: string;
-  };
+  readonly authentication:
+    | {
+        readonly kind: "bearer";
+        readonly secret: RegisteredSecretFile;
+      }
+    | {
+        readonly kind: "basic";
+        readonly username: string;
+        readonly secret: RegisteredSecretFile;
+      };
+}
+
+interface RegisteredSecretFile extends ProtectedFileIdentity {
+  readonly path: string;
 }
 
 interface TrustedDirectory {
@@ -114,6 +151,11 @@ interface ProtectedFileContents {
 interface ProtectedFileIdentity {
   readonly canonicalPath: string;
   readonly status: BigIntStats;
+}
+
+interface ActiveSecret {
+  readonly bytes: Buffer;
+  reject(reason: unknown): void;
 }
 
 interface CanonicalRepository {
@@ -138,6 +180,22 @@ function manifestError(location: string, message: string): never {
 
 function sameIdentity(left: BigIntStats, right: BigIntStats): boolean {
   return left.dev === right.dev && left.ino === right.ino;
+}
+
+function sameFileSnapshot(
+  left: BigIntStats,
+  right: BigIntStats,
+): boolean {
+  return (
+    sameIdentity(left, right) &&
+    left.mode === right.mode &&
+    left.nlink === right.nlink &&
+    left.uid === right.uid &&
+    left.gid === right.gid &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
 }
 
 function samePath(
@@ -404,7 +462,7 @@ async function readProtectedFile(
       minimumBytes,
       maximumBytes,
     );
-    if (!sameIdentity(before, opened)) {
+    if (!sameFileSnapshot(before, opened)) {
       throw configurationError(
         "a credential file changed while it was being opened.",
       );
@@ -435,7 +493,7 @@ async function readProtectedFile(
       maximumBytes,
     );
     if (
-      !sameIdentity(opened, after) ||
+      !sameFileSnapshot(opened, after) ||
       !samePath(canonicalBefore, canonicalAfter, platform)
     ) {
       throw configurationError(
@@ -999,6 +1057,18 @@ function parseProfile(
     ),
     `${location}.authentication`,
   );
+  if (provider === "github" && authentication.kind !== "bearer") {
+    manifestError(
+      `${location}.authentication.kind`,
+      'must be "bearer" for GitHub profiles.',
+    );
+  }
+  if (provider !== "github" && authentication.kind === "bearer") {
+    manifestError(
+      `${location}.authentication.kind`,
+      'must be "basic" for Azure DevOps and Generic HTTPS profiles.',
+    );
+  }
   return Object.freeze({
     id,
     label,
@@ -1059,7 +1129,35 @@ function parseManifest(bytes: Buffer): readonly ParsedCredentialProfile[] {
   return Object.freeze(profiles);
 }
 
-function validateSecretBytes(bytes: Buffer): void {
+function bearerSecretIsValid(bytes: Uint8Array): boolean {
+  let sawTokenCharacter = false;
+  let sawPadding = false;
+  for (const value of bytes) {
+    if (value === 0x3d) {
+      sawPadding = true;
+      continue;
+    }
+    if (sawPadding) return false;
+    const allowed =
+      (value >= 0x41 && value <= 0x5a) ||
+      (value >= 0x61 && value <= 0x7a) ||
+      (value >= 0x30 && value <= 0x39) ||
+      value === 0x2d ||
+      value === 0x2e ||
+      value === 0x5f ||
+      value === 0x7e ||
+      value === 0x2b ||
+      value === 0x2f;
+    if (!allowed) return false;
+    sawTokenCharacter = true;
+  }
+  return sawTokenCharacter;
+}
+
+function validateSecretBytes(
+  bytes: Buffer,
+  kind: ProfileAuthentication["kind"],
+): number {
   let end = bytes.byteLength;
   if (end > 0 && bytes[end - 1] === 0x0a) {
     end -= 1;
@@ -1083,6 +1181,12 @@ function validateSecretBytes(bytes: Buffer): void {
       "credential secret files must contain one nonempty UTF-8 line.",
     );
   }
+  if (kind === "bearer" && !bearerSecretIsValid(content)) {
+    throw configurationError(
+      "GitHub bearer secrets must contain one ASCII b64token.",
+    );
+  }
+  return end;
 }
 
 function compareText(left: string, right: string): number {
@@ -1096,6 +1200,7 @@ export class CredentialProfileRegistry {
   readonly #directory: TrustedDirectory | undefined;
   readonly #protectedFiles: readonly ProtectedFileIdentity[];
   readonly #platform: NodeJS.Platform;
+  readonly #activeSecrets = new Set<ActiveSecret>();
   #closed = false;
 
   private constructor(
@@ -1178,7 +1283,7 @@ export class CredentialProfileRegistry {
       }),
     ];
     const manifestName = path.basename(profilesFile);
-    const validatedSecrets = new Set<string>();
+    const validatedSecrets = new Map<string, RegisteredSecretFile>();
     for (const profile of parsedProfiles) {
       const secretFile = profile.authentication.secretFile;
       if (
@@ -1196,7 +1301,7 @@ export class CredentialProfileRegistry {
         platform === "win32"
           ? secretPath.toLocaleLowerCase("en-US")
           : secretPath;
-      if (validatedSecrets.has(secretKey)) continue;
+      const previouslyValidated = validatedSecrets.get(secretKey);
       const secretFileContents = await readProtectedFile(
         secretPath,
         directory,
@@ -1220,15 +1325,41 @@ export class CredentialProfileRegistry {
             "a credential secret file must not be the manifest file.",
           );
         }
-        validateSecretBytes(secretFileContents.bytes);
-        protectedFiles.push(Object.freeze({
+        validateSecretBytes(
+          secretFileContents.bytes,
+          profile.authentication.kind,
+        );
+        const registeredSecret = Object.freeze({
+          path: secretPath,
           canonicalPath: secretFileContents.canonicalPath,
           status: secretFileContents.status,
-        }));
+        });
+        if (previouslyValidated === undefined) {
+          validatedSecrets.set(secretKey, registeredSecret);
+          protectedFiles.push(registeredSecret);
+        } else if (
+          !samePath(
+            previouslyValidated.path,
+            registeredSecret.path,
+            platform,
+          ) ||
+          !samePath(
+            previouslyValidated.canonicalPath,
+            registeredSecret.canonicalPath,
+            platform,
+          ) ||
+          !sameFileSnapshot(
+            previouslyValidated.status,
+            registeredSecret.status,
+          )
+        ) {
+          throw configurationError(
+            "a shared credential secret changed during startup.",
+          );
+        }
       } finally {
         secretFileContents.bytes.fill(0);
       }
-      validatedSecrets.add(secretKey);
     }
     const registered = new Map<string, RegisteredCredentialProfile>();
     for (const profile of parsedProfiles) {
@@ -1236,6 +1367,16 @@ export class CredentialProfileRegistry {
         directory.canonicalPath,
         profile.authentication.secretFile,
       );
+      const secretKey =
+        platform === "win32"
+          ? secretPath.toLocaleLowerCase("en-US")
+          : secretPath;
+      const secret = validatedSecrets.get(secretKey);
+      if (secret === undefined) {
+        throw configurationError(
+          "a validated credential secret could not be registered.",
+        );
+      }
       registered.set(
         profile.id,
         Object.freeze({
@@ -1245,10 +1386,17 @@ export class CredentialProfileRegistry {
           repositories: new Set(
             profile.repositories.map((repository) => repository.key),
           ),
-          authentication: Object.freeze({
-            ...profile.authentication,
-            secretPath,
-          }),
+          authentication:
+            profile.authentication.kind === "bearer"
+              ? Object.freeze({
+                  kind: "bearer" as const,
+                  secret,
+                })
+              : Object.freeze({
+                  kind: "basic" as const,
+                  username: profile.authentication.username,
+                  secret,
+                }),
         }),
       );
     }
@@ -1351,6 +1499,196 @@ export class CredentialProfileRegistry {
     }
   }
 
+  async #runWithActiveSecret<T>(
+    profile: RegisteredCredentialProfile,
+    bytes: Buffer,
+    signal: AbortSignal,
+    operation: (
+      credential: CredentialProfileMaterial,
+    ) => T | Promise<T>,
+  ): Promise<T> {
+    let rejectCancellation!: (reason: unknown) => void;
+    const cancellation = new Promise<never>((_resolve, reject) => {
+      rejectCancellation = reject;
+    });
+    const active = Object.freeze({
+      bytes,
+      reject: rejectCancellation,
+    });
+    const abort = (): void => {
+      bytes.fill(0);
+      rejectCancellation(
+        signal.reason ??
+          new DOMException("The operation was aborted.", "AbortError"),
+      );
+    };
+    this.#activeSecrets.add(active);
+    try {
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) {
+        abort();
+        return await cancellation;
+      }
+      if (this.#closed) {
+        rejectCancellation(
+          configurationError(
+            "the credential profile registry was closed.",
+          ),
+        );
+        return await cancellation;
+      }
+      const credential: CredentialProfileMaterial =
+        profile.authentication.kind === "bearer"
+          ? Object.freeze({
+              kind: "bearer" as const,
+              secret: bytes,
+            })
+          : Object.freeze({
+              kind: "basic" as const,
+              username: profile.authentication.username,
+              secret: bytes,
+            });
+      let result: Promise<T>;
+      try {
+        result = Promise.resolve(operation(credential));
+      } catch (error) {
+        result = Promise.reject(error);
+      }
+      return await Promise.race([cancellation, result]);
+    } finally {
+      signal.removeEventListener("abort", abort);
+      this.#activeSecrets.delete(active);
+      bytes.fill(0);
+    }
+  }
+
+  async #useProfile<T>(
+    profile: RegisteredCredentialProfile,
+    signal: AbortSignal,
+    operation: (
+      credential: CredentialProfileMaterial,
+    ) => T | Promise<T>,
+  ): Promise<T> {
+    signal.throwIfAborted();
+    const directory = this.#directory;
+    if (this.#closed || directory === undefined) {
+      throw configurationError(
+        "the credential profile registry was closed.",
+      );
+    }
+    const authentication = profile.authentication;
+    const secretFile = await readProtectedFile(
+      authentication.secret.path,
+      directory,
+      this.#platform,
+      1,
+      MAXIMUM_SECRET_BYTES,
+    );
+    let activeBytes: Buffer | undefined;
+    try {
+      signal.throwIfAborted();
+      if (this.#closed) {
+        throw configurationError(
+          "the credential profile registry was closed.",
+        );
+      }
+      if (
+        !samePath(
+          authentication.secret.canonicalPath,
+          secretFile.canonicalPath,
+          this.#platform,
+        ) ||
+        !sameFileSnapshot(
+          authentication.secret.status,
+          secretFile.status,
+        )
+      ) {
+        throw configurationError(
+          "a credential secret changed after server startup.",
+        );
+      }
+      const contentLength = validateSecretBytes(
+        secretFile.bytes,
+        authentication.kind,
+      );
+      activeBytes = Buffer.from(
+        secretFile.bytes.subarray(0, contentLength),
+      );
+    } finally {
+      secretFile.bytes.fill(0);
+    }
+    return await this.#runWithActiveSecret(
+      profile,
+      activeBytes,
+      signal,
+      operation,
+    );
+  }
+
+  public bind(
+    profileId: string,
+    sourceKind: "github",
+    repositoryUrl: string,
+  ): CredentialProfileBinding<"github"> | undefined;
+  public bind(
+    profileId: string,
+    sourceKind: "git",
+    repositoryUrl: string,
+  ):
+    | CredentialProfileBinding<
+        "azure-devops" | "generic-https"
+      >
+    | undefined;
+  public bind(
+    profileId: string,
+    sourceKind: CredentialProfileSourceKind,
+    repositoryUrl: string,
+  ): CredentialProfileBinding | undefined;
+  public bind(
+    profileId: string,
+    sourceKind: CredentialProfileSourceKind,
+    repositoryUrl: string,
+  ): CredentialProfileBinding | undefined {
+    if (this.#closed) return undefined;
+    const profile = this.#profiles.get(profileId);
+    if (
+      profile === undefined ||
+      (
+        sourceKind === "github"
+          ? profile.provider !== "github"
+          : (
+              sourceKind !== "git" ||
+              profile.provider === "github"
+            )
+      )
+    ) {
+      return undefined;
+    }
+    try {
+      const repository = canonicalRepository(
+        repositoryUrl,
+        profile.provider,
+        "$.repositoryUrl",
+        true,
+      );
+      if (!profile.repositories.has(repository.key)) {
+        return undefined;
+      }
+    } catch {
+      return undefined;
+    }
+    return Object.freeze({
+      provider: profile.provider,
+      use: <T>(
+        signal: AbortSignal,
+        operation: (
+          credential: CredentialProfileMaterial,
+        ) => T | Promise<T>,
+      ): Promise<T> =>
+        this.#useProfile(profile, signal, operation),
+    });
+  }
+
   public permits(
     profileId: string,
     provider: CredentialProfileProvider,
@@ -1376,6 +1714,16 @@ export class CredentialProfileRegistry {
   }
 
   public close(): void {
+    if (this.#closed) return;
     this.#closed = true;
+    for (const active of this.#activeSecrets) {
+      active.bytes.fill(0);
+      active.reject(
+        configurationError(
+          "the credential profile registry was closed.",
+        ),
+      );
+    }
+    this.#activeSecrets.clear();
   }
 }

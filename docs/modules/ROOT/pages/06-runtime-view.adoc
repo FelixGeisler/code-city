@@ -12,11 +12,11 @@ interrupted reason instead of remaining permanently active.
 `GET /api/v1/health` provides a cache-free health check. `GET /api/v1/jobs` and
 `GET` or `DELETE /api/v1/jobs/\{id\}` expose bounded job state and cancellation.
 `POST /api/v1/imports` accepts one exact-shape JSON request for an anonymous
-public GitHub repository or an operator-allowed Generic Git remote. It requires
-`X-Code-City-Request: 1`, accepts at most 32 KiB within five seconds, creates a
-private server-owned staging directory, and returns `202 Accepted` plus the
-persisted job under `Location`. Branches and tags are discriminated from exact
-commit SHAs. A completed job owns
+public or exact-scope credentialed GitHub repository, or an operator-allowed
+Generic Git remote. It requires `X-Code-City-Request: 1`, accepts at most 32 KiB
+within five seconds, creates a private server-owned staging directory, and
+returns `202 Accepted` plus the persisted job under `Location`. Branches and
+tags are discriminated from exact commit SHAs. A completed job owns
 `/api/v1/artifacts/\{id\}/city-model.json`.
 
 The default trusted-network mode preserves this unauthenticated API. When an
@@ -41,10 +41,35 @@ Health remains anonymous and unchanged for container and platform probes.
 An authenticated `GET` or `HEAD /api/v1/imports/capabilities` returns only
 configured credential-profile `id`, `label`, and `provider` values with
 `Cache-Control: no-store`. Repository scopes, authentication usernames,
-secret filenames, and secret contents remain server-private. This endpoint is
-discovery-only in the current slice: import requests still reject a
-credential-profile selector, and remote import execution does not read or
-inject profile secrets.
+secret filenames, and secret contents remain server-private. An authenticated
+GitHub source may include one optional, strictly validated
+`credentialProfileId`. The selected profile must be a GitHub profile scoped to
+that exact repository; this check completes before staging or job persistence.
+Private and internal repositories are supported when that credential grants
+access.
+
+GitHub profiles are bearer-only and require one ASCII RFC 6750 `b64token`
+secret line. Azure DevOps and Generic HTTPS profiles are Basic-only, with a
+visible-ASCII username that contains no colon and a one-line UTF-8 secret.
+Selected-profile injection for those two providers remains pending.
+
+Execution reopens the selected secret per job and revalidates its protected
+path and security-relevant startup snapshot: file identity, mode and ownership,
+link count, size, and modification and change times. A callback owns the
+credential only for the bounded network operation. Callback-scoped mutable
+credential buffers are overwritten on success, failure, abort, or registry
+close.
+
+Bearer authorization is attached only to exact HTTPS `api.github.com` requests.
+A token used for private or internal archive access needs repository
+`Contents: read` permission. Redirect following is disabled. The documented
+zipball endpoint must return one `302` whose path is exactly
+`/\{owner\}/\{repo\}/legacy.zip/\{sha\}` on `codeload.github.com`; an opaque
+query string is accepted, and that second fetch carries no `Authorization`
+header.
+
+Anonymous GitHub imports and Generic Git's ambient credential behavior remain
+unchanged.
 
 Raw browser uploads use a two-step protocol without multipart parsing.
 `POST /api/v1/imports/uploads` validates exact-shape metadata and allocates a
@@ -61,8 +86,10 @@ guessing which path prefix represents the project root.
 The job reports only fixed progress phases and fixed, non-reflective failure
 codes. Cancellation, analysis failure, publication failure, finalizer failure,
 and terminal-state persistence failure all run idempotent staging and artifact
-cleanup. Job files never contain the remote URL, revision, credentials, source
-bytes, host paths, or raw analyzer diagnostics.
+cleanup. Job files never contain a credential-profile selector, remote URL,
+requested symbolic ref, credential, source byte, host path, or raw analyzer
+diagnostic. The resolved immutable commit SHA may be stored as the generated
+model's default version.
 
 == Local
 

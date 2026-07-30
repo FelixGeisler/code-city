@@ -666,6 +666,7 @@ async function remoteImportHandler(
   jobs: PersistentJobQueue,
   artifacts: ImportArtifactStore,
   policy: RemoteImportPolicy,
+  credentialProfiles: CredentialProfileRegistry,
   dependencies: RemoteImportDependencies | undefined,
 ): Promise<void> {
   if (request.method !== "POST") {
@@ -818,19 +819,6 @@ async function remoteImportHandler(
       });
       return;
     }
-    try {
-      policy.assertAllowed(parsed);
-    } catch (error) {
-      if (!(error instanceof RemoteImportRequestError)) throw error;
-      sendJson(request, response, error.status, {
-        error: {
-          code: "invalid-import-request",
-          message: error.message,
-          fields: error.fields,
-        },
-      });
-      return;
-    }
     if (clientDisconnected || response.destroyed) return;
 
     let queued: JobRecord;
@@ -839,9 +827,22 @@ async function remoteImportHandler(
         jobs,
         artifacts,
         policy,
+        credentialProfiles,
         ...(dependencies === undefined ? {} : { dependencies }),
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof RemoteImportRequestError) {
+        if (!clientDisconnected && !response.destroyed) {
+          sendJson(request, response, error.status, {
+            error: {
+              code: "invalid-import-request",
+              message: error.message,
+              fields: error.fields,
+            },
+          });
+        }
+        return;
+      }
       if (!clientDisconnected && !response.destroyed) {
         sendJson(request, response, 500, {
           error: {
@@ -1506,6 +1507,7 @@ function apiHandler(
         jobs,
         artifacts,
         importPolicy,
+        credentialProfiles,
         importDependencies,
       ),
     );
