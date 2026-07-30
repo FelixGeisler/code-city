@@ -17,7 +17,9 @@ import type {
   CityModule,
   CityRepository,
   DependencyKind,
+  SemanticGroup,
 } from "../../../packages/core/src/model.js";
+import type { PrinterProfile } from "../../../packages/core/src/print.js";
 import {
   canRevealMoreExecutableUnits,
   INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT,
@@ -138,6 +140,11 @@ import {
 } from "./viewer-building-layer.js";
 import { ViewerFramePicker } from "./viewer-frame-picker.js";
 import { supportsViewerInstancing } from "./viewer-render-capability.js";
+import {
+  createViewerVisualization,
+  describeBuildingMetrics,
+  type ViewerVisualizationMode,
+} from "./visualization-mode.js";
 import "./styles.css";
 
 interface BuildingContext {
@@ -229,6 +236,10 @@ const viewerScopeName = element<HTMLElement>("viewer-scope-name");
 const viewerScopeReset =
   element<HTMLButtonElement>("viewer-scope-reset");
 const legend = element<HTMLUListElement>("legend");
+const visualizationModeSelect =
+  element<HTMLSelectElement>("visualization-mode");
+const visualizationModeStatus =
+  element<HTMLParagraphElement>("visualization-mode-status");
 const externalZone = element<HTMLElement>("external-zone");
 const externalList = element<HTMLUListElement>("external-list");
 const overviewFields = {
@@ -360,6 +371,9 @@ const inspectorFields = {
   load: element<HTMLElement>("building-load"),
   cc: element<HTMLElement>("building-cc"),
   metricMethod: element<HTMLElement>("building-metric-method"),
+  metricExplanation: element<HTMLParagraphElement>(
+    "building-metric-explanation",
+  ),
   unitCount: element<HTMLElement>("building-unit-count"),
   unitsEmpty: element<HTMLParagraphElement>("building-units-empty"),
   unitsDetails: element<HTMLDetailsElement>("building-units-details"),
@@ -448,6 +462,7 @@ class CityScene {
   private fullCityFar = 100;
   private pointerStart: PointerPosition | null = null;
   private presentationMode: ScenePresentationMode = "city";
+  private visualizationModeLabel = "Semantic groups";
   private semanticColors = new Map<string, string>();
   private prePrintOverlayVisibility:
     | {
@@ -772,6 +787,15 @@ class CityScene {
       this.replaceGrid(this.bounds(), this.cityBaseBottom());
       this.frameObject(this.city, true);
     }
+  }
+
+  public setVisualization(
+    colorsByBuildingId: ReadonlyMap<string, string>,
+    label: string,
+  ): void {
+    this.visualizationModeLabel = label;
+    this.buildingLayer?.setColors(colorsByBuildingId);
+    this.refreshSceneLabels();
   }
 
   public showPrintPlate(plate: ProjectedPrintPlate): void {
@@ -1495,9 +1519,10 @@ class CityScene {
       hovered: this.sceneLabel(this.hoveredEntity),
     };
     this.sceneLabelOverlay.replace(labels);
+    const entityName = sceneLabelAccessibleName(labels);
     this.renderer.domElement.setAttribute(
       "aria-label",
-      sceneLabelAccessibleName(labels),
+      `${entityName}${entityName ? " " : ""}Visualization mode: ${this.visualizationModeLabel}.`,
     );
     this.renderer.domElement.title =
       labels.hovered?.text ?? labels.selected?.text ?? "";
@@ -1576,6 +1601,8 @@ class CityScene {
 }
 
 let activeModel: CityModel = DEMO_MODEL;
+let visualizationMode: ViewerVisualizationMode = "semantic";
+let previewPrinterProfile: PrinterProfile | undefined;
 let activeBuildingsById = new Map(
   DEMO_MODEL.buildings.map((building) => [building.id, building]),
 );
@@ -1663,6 +1690,24 @@ const printExportDialog = installPrintExportDialog({
       printPlateToolbar.show("plates");
     }
   },
+  onProfilePreviewChange: (profile) => {
+    previewPrinterProfile = profile;
+    if (visualizationMode === "print") applyVisualization();
+  },
+});
+
+visualizationModeSelect.addEventListener("change", () => {
+  const selected = visualizationModeSelect.value;
+  if (
+    selected !== "semantic" &&
+    selected !== "complexity" &&
+    selected !== "print"
+  ) {
+    visualizationModeSelect.value = visualizationMode;
+    return;
+  }
+  visualizationMode = selected;
+  applyVisualization();
 });
 
 fileOpenButton.addEventListener("click", () => {
@@ -1988,7 +2033,7 @@ function applyModel(model: CityModel, source: ModelSource): void {
   setStatus(
     `${version}${model.districts.length.toLocaleString()} districts · ${model.buildings.length.toLocaleString()} buildings`,
   );
-  renderLegend(model);
+  applyVisualization();
   hideError();
   schedulePerformanceDiagnostics();
 }
@@ -3294,14 +3339,17 @@ function initials(title: string): string {
   return letters || "CC";
 }
 
-function renderLegend(model: CityModel): void {
+function renderLegend(
+  model: CityModel,
+  semanticGroups: readonly SemanticGroup[] = model.semanticGroups,
+): void {
   legend.replaceChildren();
-  const semanticGroups = [...model.semanticGroups];
+  const displayGroups = [...semanticGroups];
   if (
     activeExternalNodes.length > 0 &&
-    !semanticGroups.some(({ id }) => id === "external")
+    !displayGroups.some(({ id }) => id === "external")
   ) {
-    semanticGroups.push({
+    displayGroups.push({
       id: "external",
       label: "External dependencies",
       color: EXTERNAL_DEPENDENCY_COLOR,
@@ -3309,7 +3357,7 @@ function renderLegend(model: CityModel): void {
       mergeInto: "base",
     });
   }
-  const groups = sortLegendGroups(semanticGroups);
+  const groups = sortLegendGroups(displayGroups);
 
   for (const group of groups) {
     const item = document.createElement("li");
@@ -3325,6 +3373,28 @@ function renderLegend(model: CityModel): void {
     item.append(swatch, label);
     legend.append(item);
   }
+}
+
+function applyVisualization(): void {
+  const visualization = createViewerVisualization(
+    activeModel,
+    visualizationMode,
+    previewPrinterProfile,
+  );
+  cityScene.setVisualization(
+    visualization.colorsByBuildingId,
+    visualization.label,
+  );
+  visualizationModeStatus.textContent = visualization.status;
+  visualizationModeSelect.setAttribute(
+    "aria-invalid",
+    visualization.available ? "false" : "true",
+  );
+  legend.setAttribute(
+    "aria-label",
+    `${visualization.label} legend`,
+  );
+  renderLegend(activeModel, visualization.legend);
 }
 
 function renderViewerOverview(): void {
@@ -3409,6 +3479,8 @@ function showInspector(context: BuildingContext | null): void {
     building.metrics.maximumComplexity.toLocaleString();
   inspectorFields.metricMethod.textContent =
     building.metricMethod ?? "Not recorded";
+  inspectorFields.metricExplanation.textContent =
+    describeBuildingMetrics(activeModel, building);
   executableUnitVisibleLimit =
     INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;
   inspectorFields.unitsDetails.open = false;

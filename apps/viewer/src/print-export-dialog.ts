@@ -40,6 +40,9 @@ export interface PrintExportDialogOptions {
   readonly onPrintLayoutPlan?: (
     plan: PrintLayoutPreviewPlan | undefined,
   ) => void;
+  readonly onProfilePreviewChange?: (
+    profile: PrinterProfile | undefined,
+  ) => void;
 }
 
 export interface PrintExportDialogHandle {
@@ -629,10 +632,14 @@ export function installPrintExportDialog(
     let fitPolicyValid = false;
     let maximumPlateCountValid = false;
     try {
-      formatSupported = resolveProfile()
-        .supportedFormats.includes(selectedFormat());
+      const profile = resolveProfile();
+      formatSupported = profile.supportedFormats.includes(selectedFormat());
+      options.onProfilePreviewChange?.(
+        customProfilePending ? undefined : profile,
+      );
     } catch {
       formatSupported = false;
+      options.onProfilePreviewChange?.(undefined);
     }
     try {
       const fitPolicy = selectedFitPolicy();

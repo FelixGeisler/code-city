@@ -193,9 +193,10 @@ describe("viewer building layer", () => {
 
     expect(layer.setColor("a", "#ff00ff")).toBe(true);
     expect(layer.setColor("missing", "#ff00ff")).toBe(false);
+    layer.setColors(new Map([["a", "#00ffaa"]]));
     const color = new THREE.Color();
     batch.getColorAt(0, color);
-    expect(color.getHexString()).toBe("ff00ff");
+    expect(color.getHexString()).toBe("00ffaa");
 
     layer.dispose();
     layer.dispose();

@@ -35,6 +35,14 @@ describe("viewer print export UI", () => {
       /<option value="tile">\s+Split complete districts \(tiled multi-plate export\)\s+<\/option>/u,
     );
     expect(html).toContain('id="print-legend-download-enabled"');
+    expect(html).toContain('id="visualization-mode"');
+    expect(html).toContain(
+      '<option value="complexity">Complexity risk</option>',
+    );
+    expect(html).toContain(
+      '<option value="print">Printer-profile assignment preview</option>',
+    );
+    expect(html).toContain('id="building-metric-explanation"');
     expect(html).toContain('id="print-export-cancel"');
     expect(html).toContain('id="print-calibration-submit"');
     expect(html).toContain('id="print-export-preflight"');
