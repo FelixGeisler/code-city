@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { types as nodeUtilTypes } from "node:util";
 
 import {
+  DEFAULT_VERSIONED_METRIC_MAPPING,
   normalizeAssetRelativePath,
   normalizeCityIdentity,
   type CityIdentity,
@@ -54,7 +55,7 @@ export const HISTORY_SEMANTIC_ANALYZER_FINGERPRINT =
 export const HISTORY_SEMANTIC_ANALYZER_FINGERPRINT_MAX_CHARACTERS =
   160;
 const DEFAULT_METRIC_CONFIGURATION = Object.freeze({
-  metricMapping: "default-v1",
+  metricMapping: DEFAULT_VERSIONED_METRIC_MAPPING,
 });
 export const HISTORY_SEMANTIC_CONFIGURATION_LIMITS = Object.freeze({
   maxDepth: 64,

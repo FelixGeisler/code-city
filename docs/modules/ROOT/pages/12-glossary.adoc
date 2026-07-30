@@ -7,6 +7,14 @@
 |City model
 |Versioned data shared by viewer and exporters
 
+|Metric mapping
+|Versioned definition that maps analyzer facts independently to footprint,
+height, and color, including complete evaluation provenance
+
+|Visualization preset
+|Curated metric mapping with a stable identity and an explicit availability
+status
+
 |District
 |Visual representation of a directory or package
 

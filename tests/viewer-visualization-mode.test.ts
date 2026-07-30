@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { createSingleChannelProfile } from "../packages/core/src/printer-profiles.js";
+import {
+  applyMetricMapping,
+  DEFAULT_VERSIONED_METRIC_MAPPING,
+} from "../packages/core/src/index.js";
 import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
 import {
   createViewerVisualization,
@@ -89,5 +93,28 @@ describe("viewer visualization modes", () => {
       /(?:available|clamped) \(derived from the schema-default mapping\)/iu,
     );
     expect(explanation).not.toMatch(/unavailable \(legacy derivation\)/iu);
+  });
+
+  it("explains selected versioned channels, normalized values, geometry, color scale, and provenance", () => {
+    const model = applyMetricMapping(
+      DEMO_MODEL,
+      DEFAULT_VERSIONED_METRIC_MAPPING,
+    );
+    const building = model.buildings[0]!;
+    const explanation = describeBuildingMetrics(model, building);
+    const semantic = createViewerVisualization(model, "semantic");
+
+    expect(explanation).toMatch(/footprint sloc raw \d+/iu);
+    expect(explanation).toMatch(/normalized \d+\.\d{4}/iu);
+    expect(explanation).toMatch(/(?:available|clamped)/iu);
+    expect(explanation).toMatch(/log1p-cap-v1/iu);
+    expect(explanation).toMatch(/missing error/iu);
+    expect(explanation).toMatch(/normalized-side-range-v1/iu);
+    expect(explanation).toMatch(/normalized-height-range-v1/iu);
+    expect(explanation).toMatch(/normalized-threshold-palette-v1/iu);
+    expect(explanation).toMatch(/Mapping provenance: Complexity/iu);
+    expect(
+      semantic.colorsByBuildingId.get(building.id),
+    ).not.toBe("#94a3b8");
   });
 });

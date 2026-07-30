@@ -348,6 +348,21 @@ derived from a single bounded logo file beneath an explicitly analyzed root.
 Both 3MF and STL consume that same relief geometry; unsupported or unsafe logos
 fall back to the fixed Code City icon with one sanitized preflight warning.
 
+Metric mappings are versioned data inside that shared model. Footprint, height,
+and color can independently use SLOC, decision load, maximum complexity, or
+executable-unit count. Each channel records its formula, normalization, cap,
+missing-value policy, geometry range or color scale, and provenance. The
+available Complexity, Maintenance, and Print presets are complete mapping
+definitions. Dependencies, Ownership, and Evolution remain visible but
+unavailable until their required per-building facts exist.
+
+The viewer previews mapping changes in a cancellable worker before applying
+them. Geometry changes atomically rebuild layout, routes, bounds, picking data,
+and print state; print export always consumes the mapping applied on screen.
+Named custom configurations stay in browser storage scoped to the loaded
+project. The exact original fixed mapping remains compatible, and one resolved
+mapping is applied consistently across all frames of a history analysis.
+
 ## Current development slice
 
 ```powershell

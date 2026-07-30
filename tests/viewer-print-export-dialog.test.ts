@@ -23,6 +23,18 @@ describe("viewer print export dialog state", () => {
   it("never enables export while busy or required profile data is absent", () => {
     expect(
       printExportSubmitDisabled({
+        enabled: false,
+        busy: false,
+        formatSupported: true,
+        profileKind: "generic",
+        hasCustomProfile: true,
+        prusaToolCount: 5,
+        fitPolicyValid: true,
+        maximumPlateCountValid: true,
+      }),
+    ).toBe(true);
+    expect(
+      printExportSubmitDisabled({
         busy: true,
         formatSupported: true,
         profileKind: "generic",

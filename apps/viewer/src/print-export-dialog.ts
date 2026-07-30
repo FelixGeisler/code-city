@@ -47,6 +47,7 @@ export interface PrintExportDialogOptions {
 
 export interface PrintExportDialogHandle {
   invalidate(): void;
+  setEnabled(enabled: boolean): void;
   dispose(): void;
 }
 
@@ -70,6 +71,7 @@ export class LatestPrintProfileRead {
 }
 
 export interface PrintExportSubmitAvailability {
+  readonly enabled?: boolean;
   readonly busy: boolean;
   readonly formatSupported: boolean;
   readonly profileKind: ProfileKind;
@@ -83,6 +85,7 @@ export function printExportSubmitDisabled(
   availability: PrintExportSubmitAvailability,
 ): boolean {
   return (
+    availability.enabled === false ||
     availability.busy ||
     !availability.formatSupported ||
     !availability.fitPolicyValid ||
@@ -243,6 +246,7 @@ export function installPrintExportDialog(
   const customProfileReads = new LatestPrintProfileRead();
   let customProfile: PrinterProfile | undefined;
   let customProfilePending = false;
+  let enabled = true;
   let publishedLayout:
     | {
         readonly jobId: number;
@@ -652,6 +656,7 @@ export function installPrintExportDialog(
       maximumPlateCountValid = false;
     }
     const disabled = printExportSubmitDisabled({
+      enabled,
       busy: controller.state.status === "busy",
       formatSupported,
       profileKind: selectedProfileKind(),
@@ -835,6 +840,7 @@ export function installPrintExportDialog(
   }
 
   openButton.addEventListener("click", () => {
+    if (!enabled) return;
     if (!shouldRetainPrintLayoutOnDialogClose(controller.state.status)) {
       invalidateOutput();
     }
@@ -872,6 +878,7 @@ export function installPrintExportDialog(
   legendInput.addEventListener("change", invalidateOutput);
   function startExport(event: Event): void {
     event.preventDefault();
+    if (!enabled) return;
     clearResultPanels();
     let profile: PrinterProfile;
     let format: PrintFormat;
@@ -906,6 +913,7 @@ export function installPrintExportDialog(
     });
   }
   function startCalibration(): void {
+    if (!enabled) return;
     clearResultPanels();
     let profile: PrinterProfile;
     let format: PrintFormat;
@@ -933,6 +941,20 @@ export function installPrintExportDialog(
     invalidate(): void {
       invalidateCustomProfileRead();
       invalidateOutput();
+    },
+    setEnabled(nextEnabled: boolean): void {
+      enabled = nextEnabled;
+      openButton.disabled = !enabled;
+      openButton.title = enabled
+        ? ""
+        : "Apply or cancel the metric mapping preview before exporting.";
+      if (!enabled) {
+        invalidateCustomProfileRead();
+        invalidateOutput();
+        if (dialog.open) dialog.close();
+        return;
+      }
+      updateSubmitAvailability();
     },
     dispose(): void {
       invalidateCustomProfileRead();

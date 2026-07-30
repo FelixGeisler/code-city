@@ -10,8 +10,12 @@
 |Analyzer
 |Emit shared facts through pinned TypeScript and syntax-only Roslyn front ends
 
+|Metric mapping
+|Validate a versioned mapping, evaluate independent geometry and color
+channels, and emit inspectable provenance
+
 |Layout
-|Place districts and buildings deterministically
+|Place districts and buildings deterministically from the evaluated geometry
 
 |City model
 |Versioned contract between all blocks

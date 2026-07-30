@@ -10,6 +10,10 @@
 |Versioned city model
 |Decouple analysis from rendering and printing
 
+|Versioned metric mapping
+|Keep independent geometry and color choices deterministic, inspectable, and
+portable between browser, history, and print
+
 |Static analysis only
 |Make untrusted repositories safe by default
 
@@ -49,6 +53,26 @@ and `external` from `externalTarget`; explicit `unresolved` edges retain their
 `externalTarget`. Dependencies point from consumer to provider. Formula IDs,
 normalization caps, normalized values, and clamped or unavailable states remain
 part of the model.
+
+The exact original fixed metric mapping remains valid. Readers do not broaden
+its formula IDs or caps; a different mapping must use mapping-definition
+version `1.0`. New analysis writes the complete built-in Complexity definition
+instead of relying on an implicit default. Thus an old model renders as before,
+while new and custom mappings are self-describing.
+
+== Mapping and history
+
+Metric mapping consumes analyzer facts and produces geometry, semantic groups,
+and provenance before layout. The viewer and print planner consume that same
+derived model. They do not maintain independent formula or palette
+implementations.
+
+A history analysis resolves one complete mapping before sampling commits and
+uses it for every frame. The canonical mapping contributes to the
+metric-configuration fingerprint. The legacy history token
+`metricMapping: "default-v1"` resolves only to the exact fixed mapping; direct
+and wrapped versioned definitions are accepted, and other claims fail closed.
+Browser previews do not rewrite immutable history provenance.
 
 == Dependency and label grammar v1
 

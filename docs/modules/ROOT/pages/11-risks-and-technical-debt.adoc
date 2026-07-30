@@ -5,7 +5,10 @@
 |Risk |Response
 
 |Metrics imply false precision
-|Expose formulas and raw values
+|Expose formulas, raw and normalized values, caps, scales, and provenance
+
+|A custom mapping hides or distorts missing data
+|Record and enforce its missing-value policy; preview before an atomic apply
 
 |Large repositories exhaust resources
 |Apply file, time, memory, and archive limits

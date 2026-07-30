@@ -13,6 +13,7 @@ import type {
   CityIdentityPanel,
   CityModule,
   CityRepository,
+  BuildingMetricNormalization,
   ExecutableUnitMetric,
   MetricMethod,
   SourceLanguage,
@@ -42,6 +43,12 @@ export interface UnpositionedBuilding {
   readonly metricMethod?: MetricMethod;
   readonly units?: readonly ExecutableUnitMetric[];
   readonly semanticGroupId?: string;
+  readonly metricNormalization?: BuildingMetricNormalization;
+  /**
+   * Optional deterministic projection supplied by a validated metric mapping.
+   * When absent, the exact legacy fixed geometry is used.
+   */
+  readonly size?: Vector3;
 }
 
 export interface CityLayoutInput {
@@ -239,12 +246,19 @@ function createLocalDistrict(
     validateSourceMetrics(fact.metrics);
     const path = normalizePath(fact.path);
     const risk = classifyRisk(fact.metrics.maximumComplexity);
-    const geometry = calculateBuildingGeometry(fact.metrics);
+    const geometry =
+      fact.size === undefined
+        ? calculateBuildingGeometry(fact.metrics)
+        : undefined;
+    const size =
+      fact.size === undefined
+        ? geometry!.size
+        : validatePrecomputedBuildingSize(fact.size, path);
     return {
       fact,
       path,
       geometry,
-      size: geometry.size,
+      size,
       risk,
       id:
         fact.id ??
@@ -312,7 +326,14 @@ function createLocalDistrict(
         path: item.path,
         language: item.fact.language,
         metrics: item.fact.metrics,
-        metricNormalization: metricNormalizationForGeometry(item.geometry),
+        ...(item.fact.metricNormalization === undefined &&
+        item.geometry === undefined
+          ? {}
+          : {
+              metricNormalization:
+                item.fact.metricNormalization ??
+                metricNormalizationForGeometry(item.geometry!),
+            }),
         ...(item.fact.metricMethod === undefined
           ? {}
           : { metricMethod: item.fact.metricMethod }),
@@ -344,6 +365,20 @@ function createLocalDistrict(
     width,
     depth,
   };
+}
+
+function validatePrecomputedBuildingSize(
+  value: Vector3,
+  path: string,
+): Vector3 {
+  for (const axis of ["x", "y", "z"] as const) {
+    if (!Number.isFinite(value[axis]) || value[axis] <= 0) {
+      throw new RangeError(
+        `Building '${path}' precomputed size.${axis} must be a positive finite number.`,
+      );
+    }
+  }
+  return Object.freeze({ x: value.x, y: value.y, z: value.z });
 }
 
 function packDistricts(

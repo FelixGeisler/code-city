@@ -179,6 +179,18 @@
             >
               Overview
             </button>
+            <button
+              id="viewer-tab-metrics"
+              class="viewer-workspace-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="viewer-view-metrics"
+              data-workspace-view="metrics"
+              tabindex="-1"
+            >
+              Metrics
+            </button>
           </div>
             <button
               id="viewer-workspace-toggle"
@@ -836,8 +848,267 @@
           </div>
         </section>
             </div>
+            <div
+              id="viewer-view-metrics"
+              class="viewer-workspace-view"
+              role="tabpanel"
+              aria-labelledby="viewer-tab-metrics"
+              data-workspace-panel="metrics"
+              hidden
+            >
+              <section
+                id="metric-mapping-panel"
+                class="panel metric-mapping-panel"
+                aria-labelledby="metric-mapping-title"
+              >
+                <div class="panel-heading">
+                  <div>
+                    <p class="eyebrow">Project geometry</p>
+                    <h2 id="metric-mapping-title">Metric mapping</h2>
+                  </div>
+                  <span
+                    id="metric-mapping-preview-badge"
+                    class="metric-mapping-preview-badge"
+                    hidden
+                  >
+                    Preview
+                  </span>
+                </div>
+                <div class="metric-mapping-content">
+                  <p class="metric-mapping-help">
+                    Project raw source metrics into building footprint, height,
+                    and color. Preview always starts from the immutable imported
+                    model.
+                  </p>
+
+                  <label class="metric-mapping-field" for="metric-mapping-preset">
+                    <span>Preset</span>
+                    <select id="metric-mapping-preset"></select>
+                  </label>
+                  <p
+                    id="metric-mapping-preset-help"
+                    class="metric-mapping-help"
+                  ></p>
+                  <details class="metric-mapping-unavailable">
+                    <summary>Why some presets are unavailable</summary>
+                    <ul id="metric-mapping-unavailable-reasons"></ul>
+                  </details>
+
+                  <fieldset
+                    id="metric-mapping-footprint"
+                    class="metric-mapping-channel"
+                  >
+                    <legend>Building footprint</legend>
+                    <label for="metric-footprint-metric">
+                      <span>Raw metric</span>
+                      <select id="metric-footprint-metric"></select>
+                    </label>
+                    <label for="metric-footprint-normalization">
+                      <span>Normalization</span>
+                      <select id="metric-footprint-normalization">
+                        <option value="log1p-cap-v1">Logarithmic, capped</option>
+                        <option value="linear-cap-v1">Linear, capped</option>
+                      </select>
+                    </label>
+                    <label for="metric-footprint-cap">
+                      <span>Cap</span>
+                      <input
+                        id="metric-footprint-cap"
+                        type="number"
+                        min="0.000001"
+                        max="1000000000"
+                        step="any"
+                        required
+                      />
+                    </label>
+                    <p
+                      id="metric-footprint-formula"
+                      class="metric-mapping-formula"
+                    ></p>
+                  </fieldset>
+
+                  <fieldset
+                    id="metric-mapping-height"
+                    class="metric-mapping-channel"
+                  >
+                    <legend>Building height</legend>
+                    <label for="metric-height-metric">
+                      <span>Raw metric</span>
+                      <select id="metric-height-metric"></select>
+                    </label>
+                    <label for="metric-height-normalization">
+                      <span>Normalization</span>
+                      <select id="metric-height-normalization">
+                        <option value="log1p-cap-v1">Logarithmic, capped</option>
+                        <option value="linear-cap-v1">Linear, capped</option>
+                      </select>
+                    </label>
+                    <label for="metric-height-cap">
+                      <span>Cap</span>
+                      <input
+                        id="metric-height-cap"
+                        type="number"
+                        min="0.000001"
+                        max="1000000000"
+                        step="any"
+                        required
+                      />
+                    </label>
+                    <p
+                      id="metric-height-formula"
+                      class="metric-mapping-formula"
+                    ></p>
+                  </fieldset>
+
+                  <fieldset
+                    id="metric-mapping-color"
+                    class="metric-mapping-channel"
+                  >
+                    <legend>Building color</legend>
+                    <label for="metric-color-metric">
+                      <span>Raw metric</span>
+                      <select id="metric-color-metric"></select>
+                    </label>
+                    <label for="metric-color-normalization">
+                      <span>Normalization</span>
+                      <select id="metric-color-normalization">
+                        <option value="log1p-cap-v1">Logarithmic, capped</option>
+                        <option value="linear-cap-v1">Linear, capped</option>
+                      </select>
+                    </label>
+                    <label for="metric-color-cap">
+                      <span>Cap</span>
+                      <input
+                        id="metric-color-cap"
+                        type="number"
+                        min="0.000001"
+                        max="1000000000"
+                        step="any"
+                        required
+                      />
+                    </label>
+                    <label for="metric-color-palette">
+                      <span>Bounded palette</span>
+                      <select id="metric-color-palette"></select>
+                    </label>
+                    <p
+                      id="metric-color-formula"
+                      class="metric-mapping-formula"
+                    ></p>
+                    <ul
+                      id="metric-color-legend"
+                      class="metric-color-legend"
+                      aria-label="Metric color thresholds"
+                    ></ul>
+                  </fieldset>
+
+                  <section
+                    class="metric-mapping-provenance"
+                    aria-labelledby="metric-mapping-provenance-title"
+                  >
+                    <h3 id="metric-mapping-provenance-title">Provenance</h3>
+                    <p id="metric-mapping-provenance"></p>
+                  </section>
+
+                  <section
+                    class="metric-mapping-saved"
+                    aria-labelledby="metric-mapping-saved-title"
+                  >
+                    <h3 id="metric-mapping-saved-title">
+                      Project configurations
+                    </h3>
+                    <label for="metric-configuration-name">
+                      <span>Name</span>
+                      <input
+                        id="metric-configuration-name"
+                        type="text"
+                        maxlength="64"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <label for="metric-configuration-select">
+                      <span>Saved configuration</span>
+                      <select id="metric-configuration-select">
+                        <option value="">None saved</option>
+                      </select>
+                    </label>
+                    <div class="metric-mapping-saved-actions">
+                      <button
+                        id="metric-configuration-save"
+                        class="button button-compact"
+                        type="button"
+                      >
+                        Save
+                      </button>
+                      <button
+                        id="metric-configuration-load"
+                        class="button button-compact"
+                        type="button"
+                        disabled
+                      >
+                        Load
+                      </button>
+                      <button
+                        id="metric-configuration-delete"
+                        class="button button-compact"
+                        type="button"
+                        disabled
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </section>
+
+                  <p
+                    id="metric-mapping-status"
+                    class="metric-mapping-status"
+                    role="status"
+                    aria-live="polite"
+                    aria-atomic="true"
+                  >
+                    Imported mapping committed.
+                  </p>
+                  <div class="metric-mapping-actions">
+                    <button
+                      id="metric-mapping-preview"
+                      class="button button-primary"
+                      type="button"
+                    >
+                      Preview
+                    </button>
+                    <button
+                      id="metric-mapping-apply"
+                      class="button"
+                      type="button"
+                      disabled
+                    >
+                      Apply preview
+                    </button>
+                    <button
+                      id="metric-mapping-cancel"
+                      class="button"
+                      type="button"
+                      disabled
+                    >
+                      Cancel preview
+                    </button>
+                  </div>
+                </div>
+              </section>
+            </div>
           </div>
         </aside>
+
+        <p
+          id="metric-preview-banner"
+          class="metric-preview-banner"
+          role="status"
+          aria-live="polite"
+          hidden
+        >
+          Metric mapping preview — print export is unavailable until you apply
+          or cancel.
+        </p>
 
         <p
           id="selection-status"

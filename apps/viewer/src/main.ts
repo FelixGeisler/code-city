@@ -73,6 +73,7 @@ import {
   createLargeCityFixture,
   LARGE_CITY_FIXTURE_NAME,
 } from "./large-city-fixture.js";
+import { installMetricMappingPanel } from "./metric-mapping-panel.js";
 import {
   type ProjectedPrintPlate,
   viewerPrintMeshBatches,
@@ -212,6 +213,10 @@ const viewerWorkspace = installViewerWorkspace(
 const fileInput = element<HTMLInputElement>("model-file");
 const fileOpenButton = element<HTMLButtonElement>("model-file-open");
 const demoButton = element<HTMLButtonElement>("demo-button");
+const printExportOpenButton =
+  element<HTMLButtonElement>("print-export-open");
+const metricPreviewBanner =
+  element<HTMLParagraphElement>("metric-preview-banner");
 const statusElement = element<HTMLParagraphElement>("status");
 const modelNameElement = element<HTMLParagraphElement>("model-name");
 const modelLogo = element<HTMLImageElement>("model-logo");
@@ -1601,6 +1606,7 @@ class CityScene {
 }
 
 let activeModel: CityModel = DEMO_MODEL;
+let activeModelSource: ModelSource = { label: "Built-in demo" };
 let visualizationMode: ViewerVisualizationMode = "semantic";
 let previewPrinterProfile: PrinterProfile | undefined;
 let activeBuildingsById = new Map(
@@ -1671,14 +1677,14 @@ const projectImportDialog = installProjectImportDialog({
     importParameters.get("model") === null,
   onModelReady: (model, source) => {
     automaticModelLoadGate.invalidate();
-    applyModel(model, {
+    activateImportedModel(model, {
       label: source.label,
       assetRoot: source.assetRoot,
     });
   },
   onSignedOut: () => {
     automaticModelLoadGate.invalidate();
-    applyModel(DEMO_MODEL, { label: "Built-in demo" });
+    activateImportedModel(DEMO_MODEL, { label: "Built-in demo" });
   },
 });
 const printExportDialog = installPrintExportDialog({
@@ -1695,6 +1701,22 @@ const printExportDialog = installPrintExportDialog({
     if (visualizationMode === "print") applyVisualization();
   },
 });
+const metricMappingPanel = installMetricMappingPanel(
+  element<HTMLElement>("metric-mapping-panel"),
+  {
+    onModelChange: (model) => {
+      applyModel(model, activeModelSource);
+    },
+    onPreviewStateChange: (active) => {
+      printExportDialog.setEnabled(!active);
+      printExportOpenButton.disabled = active;
+      printExportOpenButton.title = active
+        ? "Apply or cancel the metric mapping preview before exporting."
+        : "";
+      metricPreviewBanner.hidden = !active;
+    },
+  },
+);
 
 visualizationModeSelect.addEventListener("change", () => {
   const selected = visualizationModeSelect.value;
@@ -1725,7 +1747,7 @@ fileInput.addEventListener("change", async () => {
   setStatus(`Reading ${file.name}…`);
   try {
     const parsed = await viewerLoadGateway.loadLocalJson(file, "model");
-    applyModel(validateCityModel(parsed), { label: file.name });
+    activateImportedModel(validateCityModel(parsed), { label: file.name });
   } catch (error) {
     showError(messageOf(error));
   }
@@ -1733,7 +1755,7 @@ fileInput.addEventListener("change", async () => {
 
 demoButton.addEventListener("click", () => {
   automaticModelLoadGate.invalidate();
-  applyModel(DEMO_MODEL, { label: "Built-in demo" });
+  activateImportedModel(DEMO_MODEL, { label: "Built-in demo" });
 });
 
 clearSelectionButton.addEventListener("click", () => {
@@ -1920,6 +1942,7 @@ window.addEventListener("beforeunload", () => {
   viewerWorkspace.dispose();
   printPlateToolbar.dispose();
   projectImportDialog.dispose();
+  metricMappingPanel.dispose();
   logoLoadGate.invalidate();
   loadedModelLogo?.dispose();
   loadedModelLogo = undefined;
@@ -1929,15 +1952,15 @@ let performanceDiagnosticsGeneration = 0;
 const initialParameters = new URL(window.location.href).searchParams;
 if (initialParameters.get("fixture") === LARGE_CITY_FIXTURE_NAME) {
   try {
-    applyModel(createLargeCityFixture(), {
+    activateImportedModel(createLargeCityFixture(), {
       label: "Built-in 25k performance fixture",
     });
   } catch (error) {
-    applyModel(DEMO_MODEL, { label: "Built-in demo" });
+    activateImportedModel(DEMO_MODEL, { label: "Built-in demo" });
     showError(messageOf(error));
   }
 } else {
-  applyModel(DEMO_MODEL, { label: "Built-in demo" });
+  activateImportedModel(DEMO_MODEL, { label: "Built-in demo" });
   void loadModelFromQuery();
 }
 
@@ -1960,7 +1983,7 @@ async function loadModelFromQuery(): Promise<void> {
     if (!attempt.isCurrent()) {
       return;
     }
-    applyModel(validateCityModel(loaded.model), {
+    activateImportedModel(validateCityModel(loaded.model), {
       label: remoteViewerDisplayUrl(loaded.responseUrl),
       assetRoot: assetRootFromResponseUrl(loaded.responseUrl.href),
     });
@@ -1971,6 +1994,15 @@ async function loadModelFromQuery(): Promise<void> {
   } finally {
     attempt.finish();
   }
+}
+
+function activateImportedModel(
+  model: CityModel,
+  source: ModelSource,
+): void {
+  activeModelSource = source;
+  metricMappingPanel.setProject(model);
+  applyModel(model, source);
 }
 
 function applyModel(model: CityModel, source: ModelSource): void {

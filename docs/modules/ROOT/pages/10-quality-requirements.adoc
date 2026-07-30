@@ -5,18 +5,24 @@
 |Quality |Acceptance
 
 |Determinism
-|Same revision, config, and input order variants produce identical layout and
-bundle bytes
+|Same revision, canonical metric mapping, and input order variants produce
+identical semantic groups, layout, legend, and bundle bytes
 
 |Privacy
 |Local analysis succeeds with networking disabled
 
 |Explainability
-|Every visual dimension links to a documented metric
+|Every visual dimension links to its metric, formula, normalization, cap,
+missing-value policy, scale, and mapping provenance
 
 |Printability
 |Every artifact fits the usable profile volume; scaling stays profile-safe and
-tiling keeps districts whole
+tiling keeps districts whole; print consumes the mapping applied in the viewer
+
+|Atomic reconfiguration
+|Cancellation or invalid input preserves the active city; an applied
+geometry change cannot retain stale routes, bounds, picking data, or print
+previews
 
 |Performance
 |Viewer input is bounded; instancing is required before raising the limits
