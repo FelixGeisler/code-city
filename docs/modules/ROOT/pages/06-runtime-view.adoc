@@ -13,10 +13,11 @@ interrupted reason instead of remaining permanently active.
 `GET` or `DELETE /api/v1/jobs/\{id\}` expose bounded job state and cancellation.
 `POST /api/v1/imports` accepts one exact-shape JSON request for an anonymous
 public or exact-scope credentialed GitHub repository, or an operator-allowed
-Generic Git remote. It requires `X-Code-City-Request: 1`, accepts at most 32 KiB
-within five seconds, creates a private server-owned staging directory, and
-returns `202 Accepted` plus the persisted job under `Location`. Branches and
-tags are discriminated from exact commit SHAs. A completed job owns
+Generic Git remote with optional exact-scope HTTPS credentials. It requires
+`X-Code-City-Request: 1`, accepts at most 32 KiB within five seconds, creates a
+private server-owned staging directory, and returns `202 Accepted` plus the
+persisted job under `Location`. Branches and tags are discriminated from exact
+commit SHAs. A completed job owns
 `/api/v1/artifacts/\{id\}/city-model.json`.
 
 The default trusted-network mode preserves this unauthenticated API. When an
@@ -42,16 +43,16 @@ An authenticated `GET` or `HEAD /api/v1/imports/capabilities` returns only
 configured credential-profile `id`, `label`, and `provider` values with
 `Cache-Control: no-store`. Repository scopes, authentication usernames,
 secret filenames, and secret contents remain server-private. An authenticated
-GitHub source may include one optional, strictly validated
-`credentialProfileId`. The selected profile must be a GitHub profile scoped to
-that exact repository; this check completes before staging or job persistence.
-Private and internal repositories are supported when that credential grants
-access.
+GitHub or canonical HTTPS Generic Git source may include one optional, strictly
+validated `credentialProfileId`. GitHub requires a GitHub profile; HTTPS Git
+requires an Azure DevOps or Generic HTTPS profile. The selected profile must be
+scoped to that exact repository; this check completes before staging or job
+persistence. Private and internal repositories are supported when that
+credential grants access.
 
 GitHub profiles are bearer-only and require one ASCII RFC 6750 `b64token`
 secret line. Azure DevOps and Generic HTTPS profiles are Basic-only, with a
 visible-ASCII username that contains no colon and a one-line UTF-8 secret.
-Selected-profile injection for those two providers remains pending.
 
 Execution reopens the selected secret per job and revalidates its protected
 path and security-relevant startup snapshot: file identity, mode and ownership,
@@ -69,7 +70,16 @@ query string is accepted, and that second fetch carries no `Authorization`
 header.
 
 Anonymous GitHub imports and Generic Git's ambient credential behavior remain
-unchanged.
+unchanged. A selected HTTPS Git import instead isolates system, global, and
+user Git configuration, clears ambient repository credential helpers, and uses
+the chosen profile as its only repository credential helper through an
+ephemeral owner-restricted broker. The helper command line contains trusted
+executable paths, a random pipe name, and Git's operation; credential queries
+and responses cross bounded process pipes and never enter a URL, process
+argument, environment variable, Git configuration, or file. Broker cleanup is
+awaited before the credential callback returns; failure to confirm closure
+fails the import after a bounded force-termination attempt. Configured proxy
+and certificate environment settings remain in effect.
 
 Raw browser uploads use a two-step protocol without multipart parsing.
 `POST /api/v1/imports/uploads` validates exact-shape metadata and allocates a
@@ -158,14 +168,19 @@ complete workspace, then uses the shared snapshot and analyzer pipeline. It
 never checks out files, runs hooks, filters, submodules, or LFS, or stores a
 derived cache.
 
-The server endpoint adds an outbound policy above this adapter. Generic Git is
-disabled unless the operator lists an exact HTTPS or SSH origin; scheme,
+The server endpoint adds two independent gates above this adapter. Generic Git
+is disabled unless the operator lists an exact HTTPS or SSH origin; scheme,
 normalized hostname or IP, and effective port must all match. scp-style
-remotes map to SSH port 22. This prevents a network caller from choosing an
-arbitrary destination for the server identity. It does not authorize individual
-repositories or callers: in default trusted-network mode every Code City client
-can request any repository/user at an enabled origin with the service account's
-ambient credentials. Deploy with only authorized trusted clients or enable
+remotes map to SSH port 22. A selected HTTPS profile must independently match
+the provider and exact repository scope. The origin list prevents a network
+caller from choosing an arbitrary destination for the server identity; it does
+not authorize individual repositories or callers. In default trusted-network
+mode every Code City client can request any repository/user at an enabled
+origin. Unselected HTTPS and SSH/scp imports may use the service account's
+ambient credentials, while selected HTTPS imports isolate repository
+credential helpers and use the chosen Basic profile for repository
+authentication. Configured proxy and certificate environment settings remain
+trusted dependencies. Deploy with only authorized trusted clients or enable
 inbound authorization, and use a least-privileged service identity.
 
 == Print

@@ -4,3 +4,5 @@ node_modules/
 .npm-cache/
 tools/roslyn-helper/bin/
 tools/roslyn-helper/obj/
+tools/git-credential-helper/bin/
+tools/git-credential-helper/obj/

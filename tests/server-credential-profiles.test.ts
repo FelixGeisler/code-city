@@ -850,6 +850,27 @@ describe("credential profile registry", () => {
         ),
       ).rejects.toThrow(/one nonempty UTF-8 line/iu);
     }
+
+    for (const separator of ["\u2028", "\u2029"]) {
+      const multiline = await credentialFixture(
+        [
+          basicProfile(
+            "multiline-basic-profile",
+            "generic-https",
+            ["https://git.example.test/group/repository.git"],
+          ),
+        ],
+        {
+          "shared.secret":
+            `first${separator}second\n`,
+        },
+      );
+      await expect(
+        CredentialProfileRegistry.open(
+          registryOptions(multiline.profilesFile),
+        ),
+      ).rejects.toThrow(/one nonempty UTF-8 line/iu);
+    }
   });
 
   it("is disabled by default and requires explicit Windows file trust", async () => {

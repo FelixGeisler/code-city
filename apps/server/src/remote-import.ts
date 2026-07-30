@@ -17,6 +17,8 @@ import {
   validateGenericGitRepositoryUrl,
   validatePublicGitHubRef,
   validatePublicGitHubRepositoryUrl,
+  type GenericGitSnapshotCredential,
+  type GenericGitSnapshotCredentialProvider,
   type GitHubSnapshotCredential,
   type GitHubSnapshotCredentialProvider,
   type LocalAnalysisOptions,
@@ -919,6 +921,35 @@ function githubCredentialProvider(
   });
 }
 
+function genericGitCredentialProvider(
+  binding: CredentialProfileBinding<
+    "azure-devops" | "generic-https"
+  >,
+): GenericGitSnapshotCredentialProvider {
+  return Object.freeze({
+    provider: "basic" as const,
+    use<T>(
+      signal: AbortSignal,
+      operation: (
+        credential: GenericGitSnapshotCredential,
+      ) => T | Promise<T>,
+    ): Promise<T> {
+      return binding.use(signal, (credential) => {
+        if (credential.kind !== "basic") {
+          throw fixedTaskFailure();
+        }
+        return operation(credential);
+      });
+    },
+  });
+}
+
+type BoundCredentialProfile =
+  | CredentialProfileBinding<"github">
+  | CredentialProfileBinding<
+      "azure-devops" | "generic-https"
+    >;
+
 function analysisTaskFailure(error: unknown): JobTaskFailure {
   if (error instanceof SnapshotDeadlineError) {
     return new JobTaskFailure("deadline-exceeded");
@@ -1008,7 +1039,7 @@ async function analyze(
   request: RemoteImportRequest,
   context: JobTaskContext,
   staging: ImportStagingDirectory,
-  credentialBinding: CredentialProfileBinding<"github"> | undefined,
+  credentialBinding: BoundCredentialProfile | undefined,
   dependencies: RemoteImportDependencies | undefined,
 ): Promise<CityModel> {
   const options = analyzerOptions(request, context.signal);
@@ -1038,8 +1069,17 @@ async function analyze(
   const implementation =
     dependencies?.analyzeGenericGitRepository ??
     analyzeGenericGitRepository;
+  if (credentialBinding?.provider === "github") {
+    throw fixedTaskFailure();
+  }
   return (
     await implementation(repositoryRequest, options, {
+      ...(credentialBinding === undefined
+        ? {}
+        : {
+            credentialProvider:
+              genericGitCredentialProvider(credentialBinding),
+          }),
       temporaryWorkspaceOptions: {
         trustedPrivateParent: {
           directory: staging.directory,
@@ -1070,18 +1110,43 @@ function unavailableCredentialProfile(): RemoteImportRequestError {
 function credentialBinding(
   request: RemoteImportRequest,
   profiles: CredentialProfileRegistry,
-): CredentialProfileBinding<"github"> | undefined {
+): BoundCredentialProfile | undefined {
   const profileId = request.source.credentialProfileId;
   if (profileId === undefined) return undefined;
-  if (request.source.kind !== "github") {
+  if (request.source.kind === "github") {
+    const binding = profiles.bind(
+      profileId,
+      "github",
+      request.source.repositoryUrl,
+    );
+    if (binding === undefined || binding.provider !== "github") {
+      throw unavailableCredentialProfile();
+    }
+    return binding;
+  }
+  let scheme: "https" | "ssh";
+  try {
+    scheme = genericGitRepositoryOrigin(
+      request.source.repositoryUrl,
+    ).scheme;
+  } catch {
+    throw unavailableCredentialProfile();
+  }
+  if (scheme !== "https") {
     throw unavailableCredentialProfile();
   }
   const binding = profiles.bind(
     profileId,
-    "github",
+    "git",
     request.source.repositoryUrl,
   );
-  if (binding === undefined || binding.provider !== "github") {
+  if (
+    binding === undefined ||
+    (
+      binding.provider !== "azure-devops" &&
+      binding.provider !== "generic-https"
+    )
+  ) {
     throw unavailableCredentialProfile();
   }
   return binding;

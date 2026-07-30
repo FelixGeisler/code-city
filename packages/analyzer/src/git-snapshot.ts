@@ -11,6 +11,12 @@ import {
   type SnapshotOptions,
 } from "./snapshot.js";
 import {
+  createGenericGitCredentialBroker,
+  isSafeGenericGitCredentialLine,
+  type GenericGitCredentialBroker,
+  type GenericGitCredentialBrokerFactory,
+} from "./git-credential-broker.js";
+import {
   openZipSnapshotSource,
   type DisposableSnapshotSource,
   type ZipSnapshotSourceOptions,
@@ -59,6 +65,22 @@ export interface GenericGitSnapshotRequest {
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
   readonly snapshotOptions?: SnapshotOptions;
+}
+
+export interface GenericGitSnapshotCredential {
+  readonly kind: "basic";
+  readonly username: string;
+  readonly secret: Uint8Array;
+}
+
+export interface GenericGitSnapshotCredentialProvider {
+  readonly provider: "basic";
+  use<T>(
+    signal: AbortSignal,
+    operation: (
+      credential: GenericGitSnapshotCredential,
+    ) => T | Promise<T>,
+  ): Promise<T>;
 }
 
 export interface GitProcessRequest {
@@ -123,6 +145,9 @@ export interface GenericGitSnapshotDependencies {
   readonly runGit?: GenericGitRunGit;
   readonly createTemporaryWorkspace?: () => Promise<GenericGitTemporaryWorkspace>;
   readonly temporaryWorkspaceOptions?: GenericGitTemporaryWorkspaceOptions;
+  readonly credentialProvider?: GenericGitSnapshotCredentialProvider;
+  /** Test seam; production callers use the bundled one-shot .NET broker. */
+  readonly createCredentialBroker?: GenericGitCredentialBrokerFactory;
   readonly openZipSnapshotSource?: typeof openZipSnapshotSource;
   readonly materializeRepositorySnapshot?: typeof materializeRepositorySnapshot;
   readonly environment?: Readonly<Record<string, string | undefined>>;
@@ -142,6 +167,7 @@ export type GenericGitSnapshotErrorCode =
   | "GIT_CLEANUP_FAILED"
   | "GIT_COMMAND_FAILED"
   | "GIT_DEADLINE_EXCEEDED"
+  | "GIT_INVALID_REQUEST"
   | "GIT_INVALID_REF"
   | "GIT_INVALID_REMOTE"
   | "GIT_INVALID_RESPONSE"
@@ -168,6 +194,11 @@ interface ParsedRemote {
   readonly repository: string;
   readonly transport: GenericGitTransport;
   readonly origin: GenericGitRemoteOrigin;
+}
+
+interface GitCredentialTarget {
+  readonly host: string;
+  readonly path: string;
 }
 
 interface RefRecord {
@@ -412,6 +443,127 @@ export function validateGenericGitRef(value: string): string {
   return validateRef(value);
 }
 
+function invalidCredentialProvider(): GenericGitSnapshotError {
+  return new GenericGitSnapshotError(
+    "GIT_INVALID_REQUEST",
+    "Generic Git credential provider is invalid.",
+  );
+}
+
+function credentialTarget(remote: ParsedRemote): GitCredentialTarget {
+  if (remote.transport !== "https") throw invalidCredentialProvider();
+  const parsed = new URL(remote.value);
+  const rawSegments = parsed.pathname.slice(1).split("/");
+  let canonicalSegments = true;
+  for (const segment of rawSegments) {
+    if (
+      segment.length === 0 ||
+      !/^[\u0021-\u007e]+$/u.test(segment)
+    ) {
+      canonicalSegments = false;
+      break;
+    }
+    for (let index = 0; index < segment.length; index += 1) {
+      if (segment[index] !== "%") continue;
+      if (
+        !/^[0-9A-F]{2}$/u.test(segment.slice(index + 1, index + 3))
+      ) {
+        canonicalSegments = false;
+        break;
+      }
+      index += 2;
+    }
+    if (!canonicalSegments) break;
+    const decodedSegment = decodeURIComponent(segment);
+    if (
+      decodedSegment === "." ||
+      decodedSegment === ".." ||
+      decodedSegment.includes("/") ||
+      decodedSegment.includes("\\") ||
+      INVALID_INPUT_CHARACTERS.test(decodedSegment)
+    ) {
+      canonicalSegments = false;
+      break;
+    }
+  }
+  const decodedPath = decodeURIComponent(parsed.pathname).replace(
+    /^\/+/u,
+    "",
+  );
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.host.length === 0 ||
+    decodedPath.length === 0 ||
+    remote.value !== parsed.href ||
+    !canonicalSegments ||
+    utf8Length(decodedPath) > 4 * 1024
+  ) {
+    throw invalidCredentialProvider();
+  }
+  return Object.freeze({
+    host: parsed.host,
+    path: decodedPath,
+  });
+}
+
+function validateCredentialProvider(
+  provider: GenericGitSnapshotCredentialProvider | undefined,
+  remote: ParsedRemote,
+): GenericGitSnapshotCredentialProvider | undefined {
+  if (provider === undefined) return undefined;
+  try {
+    if (
+      remote.transport !== "https" ||
+      provider === null ||
+      typeof provider !== "object" ||
+      provider.provider !== "basic" ||
+      typeof provider.use !== "function"
+    ) {
+      throw invalidCredentialProvider();
+    }
+  } catch {
+    throw invalidCredentialProvider();
+  }
+  return provider;
+}
+
+function copyCredential(
+  value: GenericGitSnapshotCredential,
+): {
+  readonly username: string;
+  readonly secret: Uint8Array;
+} {
+  let kind: unknown;
+  let username: unknown;
+  let secret: unknown;
+  try {
+    kind = value?.kind;
+    username = value?.username;
+    secret = value?.secret;
+  } catch {
+    throw invalidCredentialProvider();
+  }
+  if (
+    kind !== "basic" ||
+    typeof username !== "string" ||
+    username.length === 0 ||
+    username.length > 256 ||
+    username !== username.trim() ||
+    username !== username.normalize("NFC") ||
+    !/^[\u0020-\u007e]+$/u.test(username) ||
+    username.includes(":") ||
+    !(secret instanceof Uint8Array) ||
+    secret.byteLength === 0 ||
+    secret.byteLength > 8 * 1024 ||
+    !isSafeGenericGitCredentialLine(secret)
+  ) {
+    throw invalidCredentialProvider();
+  }
+  const copy = new Uint8Array(secret.byteLength);
+  copy.set(secret);
+  return { username, secret: copy };
+}
+
 function resolveTimeout(value: number | undefined): number {
   const timeout = value ?? GENERIC_GIT_SNAPSHOT_TIMEOUT_MS;
   if (
@@ -468,10 +620,73 @@ function safeEnvironment(
   return Object.freeze(result);
 }
 
+async function selectedCredentialEnvironment(
+  environment: Readonly<Record<string, string>>,
+  workspace: GenericGitTemporaryWorkspace,
+  deadline: CombinedDeadline,
+): Promise<Readonly<Record<string, string>>> {
+  if (workspace.validateSecurityBoundary !== undefined) {
+    await withinDeadline(
+      workspace.validateSecurityBoundary(),
+      deadline,
+    );
+  }
+  const isolationRoot = path.join(
+    workspace.root,
+    `.codecity-selected-git-${randomUUID()}`,
+  );
+  const globalConfig = path.join(isolationRoot, "global.gitconfig");
+  const directories = Object.freeze({
+    home: path.join(isolationRoot, "home"),
+    xdg: path.join(isolationRoot, "xdg"),
+    userProfile: path.join(isolationRoot, "user-profile"),
+    appData: path.join(isolationRoot, "app-data"),
+    localAppData: path.join(isolationRoot, "local-app-data"),
+  });
+  try {
+    await withinDeadline(
+      (async () => {
+        await fs.mkdir(isolationRoot, { mode: 0o700 });
+        await Promise.all(
+          Object.values(directories).map((directory) =>
+            fs.mkdir(directory, { mode: 0o700 }),
+          ),
+        );
+        await fs.writeFile(globalConfig, "", {
+          encoding: "utf8",
+          flag: "wx",
+          mode: 0o600,
+        });
+      })(),
+      deadline,
+    );
+  } catch (error) {
+    if (error === INTERNAL_ABORT) throw error;
+    throw new GenericGitSnapshotError(
+      "GIT_TEMPORARY_WORKSPACE_INVALID",
+      "Temporary Git workspace failed its security policy.",
+    );
+  }
+  const selected = { ...environment };
+  delete selected["HOMEDRIVE"];
+  delete selected["HOMEPATH"];
+  delete selected["SSH_AGENT_PID"];
+  delete selected["SSH_AUTH_SOCK"];
+  selected["GIT_CONFIG_NOSYSTEM"] = "1";
+  selected["GIT_CONFIG_GLOBAL"] = globalConfig;
+  selected["HOME"] = directories.home;
+  selected["XDG_CONFIG_HOME"] = directories.xdg;
+  selected["USERPROFILE"] = directories.userProfile;
+  selected["APPDATA"] = directories.appData;
+  selected["LOCALAPPDATA"] = directories.localAppData;
+  return Object.freeze(selected);
+}
+
 function hardenedArguments(
   transport: GenericGitTransport,
   hooksPath: string,
   operation: readonly string[],
+  credentialHelper?: string,
 ): readonly string[] {
   return Object.freeze([
     "-c",
@@ -506,6 +721,24 @@ function hardenedArguments(
     "filter.lfs.smudge=",
     "-c",
     "filter.lfs.process=",
+    ...(credentialHelper === undefined
+      ? []
+      : [
+          "-c",
+          "credential.helper=",
+          "-c",
+          `credential.helper=${credentialHelper}`,
+          "-c",
+          "credential.useHttpPath=true",
+          "-c",
+          "credential.protectProtocol=true",
+          "-c",
+          "http.extraHeader=",
+          "-c",
+          "http.cookieFile=",
+          "-c",
+          "core.askPass=",
+        ]),
     ...(transport === "ssh"
       ? ["-c", "core.sshCommand=ssh -oBatchMode=yes"]
       : []),
@@ -1760,6 +1993,7 @@ async function invokeGit(
   deadline: CombinedDeadline,
   operation: readonly string[],
   monitorDisk = false,
+  credentialHelper?: string,
 ): Promise<Uint8Array> {
   const commandController = new AbortController();
   const abortCommand = (): void => commandController.abort();
@@ -1787,6 +2021,7 @@ async function invokeGit(
           remote.transport,
           workspace.templateDirectory,
           operation,
+          credentialHelper,
         ),
         cwd: workspace.root,
         env: environment,
@@ -1862,6 +2097,235 @@ async function invokeGit(
     completed = true;
     commandController.abort();
     deadline.signal.removeEventListener("abort", abortCommand);
+  }
+}
+
+function validCredentialBroker(
+  value: unknown,
+): value is GenericGitCredentialBroker {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Partial<GenericGitCredentialBroker>;
+  return (
+    typeof candidate.helperCommand === "string" &&
+    candidate.helperCommand.startsWith("!") &&
+    candidate.helperCommand.length <= 16_384 &&
+    !/[\0\r\n]/u.test(candidate.helperCommand) &&
+    typeof candidate.dispose === "function"
+  );
+}
+
+async function createBrokerWithinDeadline(
+  factory: GenericGitCredentialBrokerFactory,
+  request: Parameters<GenericGitCredentialBrokerFactory>[0],
+  deadline: CombinedDeadline,
+): Promise<GenericGitCredentialBroker> {
+  let pendingSettled = false;
+  const pending = Promise.resolve()
+    .then(() => factory(request))
+    .then(
+      (broker) => {
+        pendingSettled = true;
+        return broker;
+      },
+      (error: unknown) => {
+        pendingSettled = true;
+        throw error;
+      },
+    );
+  void pending.catch(() => undefined);
+  let candidate: unknown;
+  try {
+    candidate = await withinDeadline(
+      pending,
+      deadline,
+    );
+  } catch (error) {
+    request.secret.fill(0);
+    const lateCleanup = pending
+      .then((lateCandidate: unknown) =>
+        validCredentialBroker(lateCandidate)
+          ? lateCandidate.dispose()
+          : undefined,
+      )
+      .catch(() => undefined);
+    if (pendingSettled) await lateCleanup;
+    else void lateCleanup;
+    throw error;
+  }
+  if (!validCredentialBroker(candidate)) {
+    if (
+      typeof candidate === "object" &&
+      candidate !== null &&
+      "dispose" in candidate &&
+      typeof candidate.dispose === "function"
+    ) {
+      await Promise.resolve(candidate.dispose()).catch(
+        () => undefined,
+      );
+    }
+    throw invalidCredentialProvider();
+  }
+  return candidate;
+}
+
+async function invokeGitWithCredential(
+  provider: GenericGitSnapshotCredentialProvider,
+  brokerFactory: GenericGitCredentialBrokerFactory,
+  target: GitCredentialTarget,
+  runGit: GenericGitRunGit,
+  executable: string,
+  environment: Readonly<Record<string, string>>,
+  workspace: GenericGitTemporaryWorkspace,
+  remote: ParsedRemote,
+  deadline: CombinedDeadline,
+  operation: readonly string[],
+  monitorDisk = false,
+): Promise<Uint8Array> {
+  const operationController = new AbortController();
+  const abortOperation = (): void => operationController.abort();
+  deadline.signal.addEventListener("abort", abortOperation, {
+    once: true,
+  });
+  if (deadline.signal.aborted) abortOperation();
+  const operationDeadline: CombinedDeadline = {
+    signal: operationController.signal,
+    remainingMilliseconds: () => deadline.remainingMilliseconds(),
+  };
+  let acceptingCallbacks = true;
+  let callbackCount = 0;
+  let callbackViolation = false;
+  let operationPromise: Promise<Uint8Array> | undefined;
+  let operationFailure: unknown;
+  const providerRun = Promise.resolve().then(() =>
+    provider.use(deadline.signal, (credential) => {
+      if (!acceptingCallbacks || callbackCount !== 0) {
+        callbackViolation = true;
+        abortOperation();
+        const rejected = Promise.reject<never>(
+          invalidCredentialProvider(),
+        );
+        void rejected.catch(() => undefined);
+        return rejected;
+      }
+      callbackCount = 1;
+      operationPromise = (async () => {
+        const material = copyCredential(credential);
+        let broker: GenericGitCredentialBroker | undefined;
+        let output: Uint8Array | undefined;
+        let failure: unknown;
+        try {
+          broker = await createBrokerWithinDeadline(
+            brokerFactory,
+            {
+              host: target.host,
+              path: target.path,
+              username: material.username,
+              secret: material.secret,
+              timeoutMs:
+                operationDeadline.remainingMilliseconds(),
+              signal: operationDeadline.signal,
+            },
+            operationDeadline,
+          );
+          output = await invokeGit(
+            runGit,
+            executable,
+            environment,
+            workspace,
+            remote,
+            operationDeadline,
+            operation,
+            monitorDisk,
+            broker.helperCommand,
+          );
+        } catch (error) {
+          failure = error;
+        } finally {
+          try {
+            await broker?.dispose();
+          } catch {
+            failure ??= new GenericGitSnapshotError(
+              "GIT_COMMAND_FAILED",
+              "Installed Git operation failed safely.",
+            );
+          } finally {
+            material.secret.fill(0);
+          }
+        }
+        if (failure !== undefined) throw failure;
+        if (output === undefined) {
+          throw new GenericGitSnapshotError(
+            "GIT_COMMAND_FAILED",
+            "Installed Git operation failed safely.",
+          );
+        }
+        return output;
+      })().catch((error: unknown) => {
+        operationFailure = error;
+        throw error;
+      });
+      void operationPromise.catch(() => undefined);
+      return operationPromise;
+    }),
+  );
+  void providerRun.catch(() => undefined);
+
+  let providerFailure: unknown;
+  try {
+    await withinDeadline(providerRun, deadline);
+  } catch (error) {
+    providerFailure = error;
+  } finally {
+    acceptingCallbacks = false;
+  }
+  try {
+    if (
+      providerFailure !== undefined ||
+      callbackViolation ||
+      callbackCount !== 1 ||
+      operationPromise === undefined
+    ) {
+      abortOperation();
+      if (operationPromise !== undefined) {
+        try {
+          await operationPromise;
+        } catch {
+          // The fixed decision below owns the provider boundary failure.
+        }
+      }
+      if (callbackViolation) throw invalidCredentialProvider();
+      if (providerFailure === INTERNAL_ABORT) throw INTERNAL_ABORT;
+      if (
+        !callbackViolation &&
+        providerFailure === operationFailure &&
+        providerFailure instanceof GenericGitSnapshotError
+      ) {
+        throw providerFailure;
+      }
+      if (callbackCount !== 1) {
+        throw invalidCredentialProvider();
+      }
+      throw new GenericGitSnapshotError(
+        "GIT_COMMAND_FAILED",
+        "Installed Git operation failed safely.",
+      );
+    }
+    try {
+      return await operationPromise;
+    } catch (error) {
+      if (
+        error === INTERNAL_ABORT ||
+        error instanceof GenericGitSnapshotError
+      ) {
+        throw error;
+      }
+      throw new GenericGitSnapshotError(
+        "GIT_COMMAND_FAILED",
+        "Installed Git operation failed safely.",
+      );
+    }
+  } finally {
+    deadline.signal.removeEventListener("abort", abortOperation);
   }
 }
 
@@ -1967,6 +2431,23 @@ export async function snapshotGenericGitRepository(
   const environment = safeEnvironment(
     dependencies.environment ?? process.env,
   );
+  const credentialProvider = validateCredentialProvider(
+    dependencies.credentialProvider,
+    remote,
+  );
+  const brokerFactory =
+    dependencies.createCredentialBroker ??
+    createGenericGitCredentialBroker;
+  if (
+    credentialProvider !== undefined &&
+    typeof brokerFactory !== "function"
+  ) {
+    throw invalidCredentialProvider();
+  }
+  const target =
+    credentialProvider === undefined
+      ? undefined
+      : credentialTarget(remote);
 
   try {
     return await withCombinedDeadline(
@@ -1980,21 +2461,47 @@ export async function snapshotGenericGitRepository(
         let workspaceDisposed = false;
         let source: DisposableSnapshotSource | undefined;
         try {
-          const firstOutput = await invokeGit(
-            runGit,
-            executable,
-            environment,
-            workspace,
+          const commandEnvironment =
+            credentialProvider === undefined
+              ? environment
+              : await selectedCredentialEnvironment(
+                  environment,
+                  workspace,
+                  deadline,
+                );
+          const firstOperation = lsRemoteOperation(
             remote,
-            deadline,
-            lsRemoteOperation(remote, requestedRef),
+            requestedRef,
           );
+          const firstOutput =
+            credentialProvider === undefined || target === undefined
+              ? await invokeGit(
+                  runGit,
+                  executable,
+                  commandEnvironment,
+                  workspace,
+                  remote,
+                  deadline,
+                  firstOperation,
+                )
+              : await invokeGitWithCredential(
+                  credentialProvider,
+                  brokerFactory,
+                  target,
+                  runGit,
+                  executable,
+                  commandEnvironment,
+                  workspace,
+                  remote,
+                  deadline,
+                  firstOperation,
+                );
           const selection = selectRef(requestedRef, firstOutput);
 
           await invokeGit(
             runGit,
             executable,
-            environment,
+            commandEnvironment,
             workspace,
             remote,
             deadline,
@@ -2005,36 +2512,56 @@ export async function snapshotGenericGitRepository(
               workspace.repositoryDirectory,
             ],
           );
-          await invokeGit(
-            runGit,
-            executable,
-            environment,
-            workspace,
-            remote,
-            deadline,
-            [
-              "-C",
-              workspace.repositoryDirectory,
-              "fetch",
-              "--quiet",
-              "--depth=1",
-              "--no-tags",
-              "--no-recurse-submodules",
-              "--no-write-fetch-head",
-              "--no-auto-maintenance",
-              "--no-auto-gc",
-              "--no-write-commit-graph",
-              remote.value,
-              selection.commitSha,
-            ],
-            true,
-          );
+          const fetchOperation = [
+            "-C",
+            workspace.repositoryDirectory,
+            "fetch",
+            "--quiet",
+            "--depth=1",
+            "--no-tags",
+            "--no-recurse-submodules",
+            "--no-write-fetch-head",
+            "--no-auto-maintenance",
+            "--no-auto-gc",
+            "--no-write-commit-graph",
+            remote.value,
+            selection.commitSha,
+          ];
+          if (
+            credentialProvider === undefined ||
+            target === undefined
+          ) {
+            await invokeGit(
+              runGit,
+              executable,
+              commandEnvironment,
+              workspace,
+              remote,
+              deadline,
+              fetchOperation,
+              true,
+            );
+          } else {
+            await invokeGitWithCredential(
+              credentialProvider,
+              brokerFactory,
+              target,
+              runGit,
+              executable,
+              commandEnvironment,
+              workspace,
+              remote,
+              deadline,
+              fetchOperation,
+              true,
+            );
+          }
           await enforceTemporaryLimit(workspace, deadline);
           const verified = decodeGitOutput(
             await invokeGit(
               runGit,
               executable,
-              environment,
+              commandEnvironment,
               workspace,
               remote,
               deadline,
@@ -2059,17 +2586,36 @@ export async function snapshotGenericGitRepository(
             );
           }
 
+          const secondOperation = lsRemoteOperation(
+            remote,
+            requestedRef,
+          );
+          const secondOutput =
+            credentialProvider === undefined || target === undefined
+              ? await invokeGit(
+                  runGit,
+                  executable,
+                  commandEnvironment,
+                  workspace,
+                  remote,
+                  deadline,
+                  secondOperation,
+                )
+              : await invokeGitWithCredential(
+                  credentialProvider,
+                  brokerFactory,
+                  target,
+                  runGit,
+                  executable,
+                  commandEnvironment,
+                  workspace,
+                  remote,
+                  deadline,
+                  secondOperation,
+                );
           const secondSelection = selectRef(
             requestedRef,
-            await invokeGit(
-              runGit,
-              executable,
-              environment,
-              workspace,
-              remote,
-              deadline,
-              lsRemoteOperation(remote, requestedRef),
-            ),
+            secondOutput,
           );
           if (!sameSelection(selection, secondSelection)) {
             throw new GenericGitSnapshotError(
@@ -2085,7 +2631,7 @@ export async function snapshotGenericGitRepository(
           await invokeGit(
             runGit,
             executable,
-            environment,
+            commandEnvironment,
             workspace,
             remote,
             deadline,

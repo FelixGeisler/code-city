@@ -972,6 +972,407 @@ describe("remote import HTTP API", () => {
     ).toEqual([]);
   });
 
+  it.each(
+    [
+      {
+        name: "Generic HTTPS",
+        profileId: "generic-private",
+        provider: "generic-https",
+        repositoryUrl:
+          "https://git.example.test/group/repository.git",
+        allowedOrigin: "https://git.example.test",
+        username: "generic-build-user",
+      },
+      {
+        name: "Azure DevOps cloud",
+        profileId: "azure-cloud-private",
+        provider: "azure-devops",
+        repositoryUrl:
+          "https://dev.azure.com/Org/Project/_git/Repository",
+        allowedOrigin: "https://dev.azure.com",
+        username: "azure-cloud-user",
+      },
+      {
+        name: "Azure DevOps Server",
+        profileId: "azure-server-private",
+        provider: "azure-devops",
+        repositoryUrl:
+          "https://azure.example.test/prefix/Project/_git/OnPremRepository.git",
+        allowedOrigin: "https://azure.example.test",
+        username: "azure-server-user",
+      },
+    ] as const,
+  )(
+    "uses an exact $name Basic binding only through the analyzer callback",
+    async ({
+      profileId,
+      provider,
+      repositoryUrl,
+      allowedOrigin,
+      username,
+    }) => {
+      const roots = await fixture();
+      const serverOptions = await credentialServerOptions(roots, [
+        {
+          id: profileId,
+          label: `${provider} private repository`,
+          provider,
+          repositories: [repositoryUrl],
+          authentication: {
+            kind: "basic",
+            username,
+            secretFile: "repository.secret",
+          },
+        },
+      ]);
+      let retainedSecret: Uint8Array | undefined;
+      let credentialUseCount = 0;
+      let sawExpectedMaterial = false;
+      const gitImplementation: NonNullable<
+        RemoteImportDependencies["analyzeGenericGitRepository"]
+      > = async (
+        analyzerRequest,
+        analyzerOptions,
+        analyzerDependencies,
+      ): Promise<GenericGitAnalysisResult> => {
+        expect(analyzerRequest).toEqual({ repositoryUrl });
+        const credentialProvider =
+          analyzerDependencies?.credentialProvider;
+        const signal = analyzerOptions?.signal;
+        if (credentialProvider === undefined || signal === undefined) {
+          throw new Error("The credential provider was not supplied.");
+        }
+        expect(credentialProvider).toMatchObject({
+          provider: "basic",
+          use: expect.any(Function),
+        });
+        expect(Object.keys(credentialProvider).sort()).toEqual([
+          "provider",
+          "use",
+        ]);
+        expect(Object.isFrozen(credentialProvider)).toBe(true);
+        const stagingDirectory =
+          analyzerDependencies?.temporaryWorkspaceOptions
+            ?.trustedPrivateParent?.directory;
+        expect(stagingDirectory).toBeDefined();
+        expect(await fs.readdir(stagingDirectory!)).toEqual([]);
+        await credentialProvider.use(
+          signal,
+          async (credential) => {
+            credentialUseCount += 1;
+            retainedSecret = credential.secret;
+            expect(credential.kind).toBe("basic");
+            sawExpectedMaterial =
+              credential.username === username &&
+              Buffer.from(credential.secret).toString("utf8") ===
+                PROFILE_SECRET;
+            expect(await fs.readdir(stagingDirectory!)).toEqual([]);
+          },
+        );
+        return {
+          repository: "private",
+          commitSha: COMMIT,
+          transport: "https",
+          model: cityModelFixture(),
+        };
+      };
+      const git = vi.fn(gitImplementation);
+      const server = await startCodeCityServer({
+        host: "127.0.0.1",
+        port: 0,
+        ...roots,
+        ...serverOptions,
+        allowedGitOrigins: [allowedOrigin],
+        trustWindowsGitWorkspace: true,
+        importDependencies: {
+          analyzeGenericGitRepository: git,
+        },
+      });
+      servers.push(server);
+
+      const response = await request(
+        new URL("/api/v1/imports", server.url),
+        {
+          method: "POST",
+          headers: authorizedImportHeaders(),
+          body: importBody({
+            kind: "git",
+            repositoryUrl,
+            credentialProfileId: profileId,
+          }),
+        },
+      );
+      expect(response.status).toBe(202);
+      const queued = (
+        JSON.parse(response.body) as { job: JobRecord }
+      ).job;
+      const terminal = await waitForTerminal(server, queued.id);
+      expect(terminal.state).toBe("completed");
+      expect(git).toHaveBeenCalledTimes(1);
+      expect(credentialUseCount).toBe(1);
+      expect(sawExpectedMaterial).toBe(true);
+      expect(retainedSecret).toBeDefined();
+      expect(retainedSecret?.every((byte) => byte === 0)).toBe(true);
+
+      const artifact = await request(
+        new URL(terminal.result!.artifactUrl, server.url),
+        { headers: authorizedImportHeaders() },
+      );
+      expect(artifact.status).toBe(200);
+      const persisted = await fs.readFile(
+        path.join(
+          roots.dataDirectory,
+          "jobs",
+          `${queued.id}.json`,
+        ),
+        "utf8",
+      );
+      for (const representation of [
+        response.body,
+        JSON.stringify(terminal),
+        JSON.stringify(git.mock.calls[0]),
+        persisted,
+        artifact.body,
+      ]) {
+        expect(representation).not.toContain(profileId);
+        expect(representation).not.toContain(username);
+        expect(representation).not.toContain(PROFILE_SECRET);
+      }
+      expect(
+        await fs.readdir(
+          path.join(roots.dataDirectory, "tmp", "imports"),
+        ),
+      ).toEqual([]);
+    },
+  );
+
+  it("zeros selected Generic Git credential bytes when the analyzer callback fails", async () => {
+    const roots = await fixture();
+    const profileId = "generic-failing";
+    const repositoryUrl =
+      "https://git.example.test/group/failing.git";
+    const username = "failing-build-user";
+    const serverOptions = await credentialServerOptions(roots, [
+      {
+        id: profileId,
+        label: "Failing private repository",
+        provider: "generic-https",
+        repositories: [repositoryUrl],
+        authentication: {
+          kind: "basic",
+          username,
+          secretFile: "repository.secret",
+        },
+      },
+    ]);
+    let retainedSecret: Uint8Array | undefined;
+    let sawExpectedMaterial = false;
+    const gitImplementation: NonNullable<
+      RemoteImportDependencies["analyzeGenericGitRepository"]
+    > = async (
+      _analyzerRequest,
+      analyzerOptions,
+      analyzerDependencies,
+    ): Promise<GenericGitAnalysisResult> => {
+      const credentialProvider =
+        analyzerDependencies?.credentialProvider;
+      const signal = analyzerOptions?.signal;
+      if (credentialProvider === undefined || signal === undefined) {
+        throw new Error("The credential provider was not supplied.");
+      }
+      await credentialProvider.use(signal, async (credential) => {
+        retainedSecret = credential.secret;
+        sawExpectedMaterial =
+          credential.kind === "basic" &&
+          credential.username === username &&
+          Buffer.from(credential.secret).toString("utf8") ===
+            PROFILE_SECRET;
+        throw new Error("The analyzer callback failed.");
+      });
+      throw new Error("The credential callback unexpectedly returned.");
+    };
+    const git = vi.fn(gitImplementation);
+    const server = await startCodeCityServer({
+      host: "127.0.0.1",
+      port: 0,
+      ...roots,
+      ...serverOptions,
+      allowedGitOrigins: ["https://git.example.test"],
+      trustWindowsGitWorkspace: true,
+      importDependencies: {
+        analyzeGenericGitRepository: git,
+      },
+    });
+    servers.push(server);
+
+    const response = await request(
+      new URL("/api/v1/imports", server.url),
+      {
+        method: "POST",
+        headers: authorizedImportHeaders(),
+        body: importBody({
+          kind: "git",
+          repositoryUrl,
+          credentialProfileId: profileId,
+        }),
+      },
+    );
+    expect(response.status).toBe(202);
+    const queued = (
+      JSON.parse(response.body) as { job: JobRecord }
+    ).job;
+    const terminal = await waitForTerminal(server, queued.id);
+    expect(terminal.state).toBe("failed");
+    expect(git).toHaveBeenCalledTimes(1);
+    expect(retainedSecret).toBeDefined();
+    expect(sawExpectedMaterial).toBe(true);
+    expect(retainedSecret?.every((byte) => byte === 0)).toBe(true);
+
+    const persisted = await fs.readFile(
+      path.join(roots.dataDirectory, "jobs", `${queued.id}.json`),
+      "utf8",
+    );
+    for (const representation of [
+      response.body,
+      JSON.stringify(terminal),
+      JSON.stringify(git.mock.calls[0]),
+      persisted,
+    ]) {
+      expect(representation).not.toContain(profileId);
+      expect(representation).not.toContain(username);
+      expect(representation).not.toContain(PROFILE_SECRET);
+    }
+    expect(
+      await fs.readdir(
+        path.join(roots.dataDirectory, "tmp", "imports"),
+      ),
+    ).toEqual([]);
+    expect(
+      await fs.readdir(path.join(roots.dataDirectory, "artifacts")),
+    ).toEqual([]);
+  });
+
+  it("zeros selected Generic Git credential bytes when active analysis is cancelled", async () => {
+    const roots = await fixture();
+    const profileId = "generic-cancelled";
+    const repositoryUrl =
+      "https://git.example.test/group/cancelled.git";
+    const username = "cancelled-build-user";
+    const serverOptions = await credentialServerOptions(roots, [
+      {
+        id: profileId,
+        label: "Cancelled private repository",
+        provider: "generic-https",
+        repositories: [repositoryUrl],
+        authentication: {
+          kind: "basic",
+          username,
+          secretFile: "repository.secret",
+        },
+      },
+    ]);
+    let signalCallbackStarted: (() => void) | undefined;
+    const callbackStarted = new Promise<void>((resolve) => {
+      signalCallbackStarted = resolve;
+    });
+    let retainedSecret: Uint8Array | undefined;
+    let sawExpectedMaterial = false;
+    const gitImplementation: NonNullable<
+      RemoteImportDependencies["analyzeGenericGitRepository"]
+    > = async (
+      _analyzerRequest,
+      analyzerOptions,
+      analyzerDependencies,
+    ): Promise<GenericGitAnalysisResult> => {
+      const credentialProvider =
+        analyzerDependencies?.credentialProvider;
+      const signal = analyzerOptions?.signal;
+      if (credentialProvider === undefined || signal === undefined) {
+        throw new Error("The credential provider was not supplied.");
+      }
+      await credentialProvider.use(signal, async (credential) => {
+        retainedSecret = credential.secret;
+        sawExpectedMaterial =
+          credential.kind === "basic" &&
+          credential.username === username &&
+          Buffer.from(credential.secret).toString("utf8") ===
+            PROFILE_SECRET;
+        signalCallbackStarted?.();
+        await new Promise<never>(() => undefined);
+      });
+      throw new Error("The credential callback unexpectedly returned.");
+    };
+    const git = vi.fn(gitImplementation);
+    const server = await startCodeCityServer({
+      host: "127.0.0.1",
+      port: 0,
+      ...roots,
+      ...serverOptions,
+      allowedGitOrigins: ["https://git.example.test"],
+      trustWindowsGitWorkspace: true,
+      importDependencies: {
+        analyzeGenericGitRepository: git,
+      },
+    });
+    servers.push(server);
+
+    const response = await request(
+      new URL("/api/v1/imports", server.url),
+      {
+        method: "POST",
+        headers: authorizedImportHeaders(),
+        body: importBody({
+          kind: "git",
+          repositoryUrl,
+          credentialProfileId: profileId,
+        }),
+      },
+    );
+    expect(response.status).toBe(202);
+    const queued = (
+      JSON.parse(response.body) as { job: JobRecord }
+    ).job;
+    await callbackStarted;
+    const cancelled = await request(
+      new URL(`/api/v1/jobs/${queued.id}`, server.url),
+      {
+        method: "DELETE",
+        headers: authorizedImportHeaders(),
+      },
+    );
+    expect(cancelled.status).toBe(200);
+    const terminal = await waitForTerminal(server, queued.id);
+    expect(terminal.state).toBe("cancelled");
+    expect(git).toHaveBeenCalledTimes(1);
+    expect(retainedSecret).toBeDefined();
+    expect(sawExpectedMaterial).toBe(true);
+    expect(retainedSecret?.every((byte) => byte === 0)).toBe(true);
+
+    const persisted = await fs.readFile(
+      path.join(roots.dataDirectory, "jobs", `${queued.id}.json`),
+      "utf8",
+    );
+    for (const representation of [
+      response.body,
+      cancelled.body,
+      JSON.stringify(terminal),
+      JSON.stringify(git.mock.calls[0]),
+      persisted,
+    ]) {
+      expect(representation).not.toContain(profileId);
+      expect(representation).not.toContain(username);
+      expect(representation).not.toContain(PROFILE_SECRET);
+    }
+    expect(
+      await fs.readdir(
+        path.join(roots.dataDirectory, "tmp", "imports"),
+      ),
+    ).toEqual([]);
+    expect(
+      await fs.readdir(path.join(roots.dataDirectory, "artifacts")),
+    ).toEqual([]);
+  });
+
   it("rejects unavailable credential selections uniformly before staging or analyzer work", async () => {
     const roots = await fixture();
     const githubRepository = "https://github.com/openai/private";
@@ -1006,7 +1407,10 @@ describe("remote import HTTP API", () => {
       port: 0,
       ...roots,
       ...serverOptions,
-      allowedGitOrigins: ["https://git.example.test"],
+      allowedGitOrigins: [
+        "https://git.example.test",
+        "ssh://git.example.test",
+      ],
       trustWindowsGitWorkspace: true,
       importDependencies: fakes.dependencies,
     });
@@ -1058,13 +1462,19 @@ describe("remote import HTTP API", () => {
       },
       {
         kind: "git",
-        repositoryUrl: genericRepository,
+        repositoryUrl:
+          "https://git.example.test/group/other.git",
         credentialProfileId: "generic-private",
       },
       {
         kind: "git",
         repositoryUrl: "https://denied.example.test/repository.git",
         credentialProfileId: "github-private",
+      },
+      {
+        kind: "git",
+        repositoryUrl: "git@git.example.test:group/repository.git",
+        credentialProfileId: "generic-private",
       },
     ] as const;
 
@@ -1121,6 +1531,7 @@ describe("remote import HTTP API", () => {
       repositoryUrl: "https://example.test/example.git",
       ref: "refs/heads/main",
     });
+    expect(dependencies.credentialProvider).toBeUndefined();
     expect(
       dependencies.temporaryWorkspaceOptions.trustedPrivateParent,
     ).toEqual({

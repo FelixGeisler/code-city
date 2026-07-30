@@ -69,15 +69,17 @@ line. Azure DevOps and Generic HTTPS profiles are Basic-only; the
 visible-ASCII username cannot contain a colon, and they require a one-line UTF-8
 secret.
 
-An authenticated GitHub import may select one profile through the optional,
-strict `source.credentialProfileId` field. Provider and exact repository scope
-must match before staging. At execution, the server reopens the secret and
-revalidates its protected path and security-relevant startup snapshot: file
-identity, mode and ownership, link count, size, and modification and change
-times. The operation callback receives only a callback-scoped mutable
-credential buffer; protected-read, validation, and callback-scoped buffers are
-overwritten after use, including failure, abort, or registry close. Profile
-secret replacement therefore requires a server restart.
+An authenticated GitHub or canonical HTTPS Generic Git import may select one
+profile through the optional, strict `source.credentialProfileId` field.
+GitHub sources require a GitHub profile; HTTPS Git sources require an Azure
+DevOps or Generic HTTPS profile. Provider and exact repository scope must match
+before staging. At execution, the server reopens the secret and revalidates its
+protected path and security-relevant startup snapshot: file identity, mode and
+ownership, link count, size, and modification and change times. The operation
+callback receives only a callback-scoped mutable credential buffer;
+protected-read, validation, and callback-scoped buffers are overwritten after
+use, including failure, abort, or registry close. Profile secret replacement
+therefore requires a server restart.
 
 Bearer authorization is sent only to exact HTTPS `api.github.com` requests. A
 token used for private or internal archive access needs repository
@@ -89,8 +91,14 @@ the second request sends no `Authorization` header. All other redirects are
 rejected. This supports private and internal GitHub repositories without
 disclosing a profile credential to the archive host.
 
-Selected-profile injection for Azure DevOps and Generic HTTPS remains pending.
-Anonymous GitHub behavior and Generic Git's ambient credentials are unchanged.
+Selected Azure DevOps and Generic HTTPS imports clear inherited Git
+configuration and ambient credential helpers, then expose the chosen Basic
+credential only through an ephemeral owner-restricted process pipe for each
+remote command. The selected username and secret never enter URLs, arguments,
+environment values, Git configuration, jobs, artifacts, or temporary files.
+Anonymous GitHub and unselected Generic Git behavior are unchanged. Installed
+Git, the resolved .NET runtime, and configured proxy and certificate
+environment settings remain trusted local dependencies.
 The Compose file forwards the manifest path and Windows attestation only; it
 does not mount secrets. Supply an explicit read-only private mount owned by
 runtime UID 10001 and never use environment values, remote URLs, repository
@@ -144,13 +152,15 @@ comma-separated list of exact origin-only URLs such as
 scheme and effective port are part of the match. The Compose file forwards this
 variable with an empty default.
 
-This allowlist is egress control, not per-repository authorization. In default
-trusted-network mode, every Code City network client can request any
-repository/user at an enabled origin and invoke the service identity's ambient
-Git credential helper, SSH agent/configuration, and trusted CAs. Enable Generic
-Git only when every network client is authorized, or enable the application
-authorization boundary, and grant the service identity only the minimum
-repository access it needs.
+This allowlist is egress control, not per-repository authorization, and selected
+profiles do not replace it. In default trusted-network mode, every Code City
+network client can request any repository/user at an enabled origin.
+Unselected HTTPS and SSH/scp imports may invoke the service identity's ambient
+Git credential helper, SSH agent/configuration, and trusted CAs. Selected HTTPS
+imports additionally require an exact profile scope and isolate ambient Git
+configuration. Enable Generic Git only when every network client is authorized,
+or enable the application authorization boundary, and grant each service or
+profile identity only the minimum repository access it needs.
 
 For Azure Pipelines, prefer the already authorized local checkout:
 

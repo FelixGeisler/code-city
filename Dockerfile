@@ -22,13 +22,16 @@ RUN apt-get update \
     && groupadd --system --gid 10001 codecity \
     && useradd --system --uid 10001 --gid codecity --home-dir /app codecity \
     && mkdir --parents /app /data \
-    && chown codecity:codecity /app /data
+    && chown codecity:codecity /data
 
 WORKDIR /app
-COPY --from=build --chown=codecity:codecity /app/build ./build
-COPY --from=build --chown=codecity:codecity /app/node_modules ./node_modules
-COPY --from=build --chown=codecity:codecity /app/package.json ./package.json
-COPY --from=build --chown=codecity:codecity /app/tools/roslyn-helper/bin/Release/net10.0 ./tools/roslyn-helper/bin/Release/net10.0
+COPY --from=build /app/build ./build
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/tools/roslyn-helper/bin/Release/net10.0 ./tools/roslyn-helper/bin/Release/net10.0
+COPY --from=build /app/tools/git-credential-helper/bin/Release/net10.0 ./tools/git-credential-helper/bin/Release/net10.0
+RUN chown --recursive root:root /app \
+    && chmod --recursive go-w /app
 
 ENV CODECITY_HOST=0.0.0.0 \
     CODECITY_PORT=3000 \

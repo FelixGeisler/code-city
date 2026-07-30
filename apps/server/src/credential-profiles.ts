@@ -644,6 +644,8 @@ function isUnsafeCodePoint(value: number): boolean {
     value <= 0x001f ||
     (value >= 0x007f && value <= 0x009f) ||
     (value >= 0xd800 && value <= 0xdfff) ||
+    value === 0x2028 ||
+    value === 0x2029 ||
     isFormatCodePoint(value)
   );
 }

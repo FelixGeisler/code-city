@@ -27,9 +27,10 @@ a DNS name, set `CODECITY_ALLOWED_HOSTS` to a comma-separated allowlist before
 starting Compose, for example `raspberrypi.local,codecity.lan`.
 
 `POST /api/v1/imports` queues anonymous public-GitHub, exact-scope credentialed
-GitHub, or Generic Git analysis directly through the server API. Requests are
-bounded JSON and must include `X-Code-City-Request: 1`; they return a persistent
-job URL, and a completed job owns one immutable `city-model.json` artifact.
+GitHub or HTTPS Git, or unselected Generic Git analysis directly through the
+server API. Requests are bounded JSON and must include
+`X-Code-City-Request: 1`; they return a persistent job URL, and a completed job
+owns one immutable `city-model.json` artifact.
 Repository URLs, credential-profile selectors, secrets, requested symbolic
 refs, source bytes, diagnostics, and temporary paths are not written to job
 records. The resolved immutable commit SHA may become the generated model's
@@ -79,8 +80,8 @@ put the token itself in an environment variable, command line, URL, repository,
 job data, or browser storage. Token replacement takes effect only after a
 server restart and invalidates all sessions.
 
-Credential-profile discovery and GitHub-profile selection are available only
-when that inbound authorization mode is configured. Set
+Credential-profile discovery and selection are available only when that
+inbound authorization mode is configured. Set
 `CODECITY_CREDENTIAL_PROFILES_FILE` to an absolute manifest path. The version-1
 manifest names bounded, exact repository scopes and direct-child secret files:
 
@@ -144,15 +145,17 @@ GitHub profiles are bearer-only; their secret file contains one ASCII RFC 6750
 visible-ASCII username cannot contain a colon, and they require a one-line UTF-8
 secret.
 
-An authenticated GitHub import may add the optional, strictly validated
-`source.credentialProfileId` field. Before staging or queue persistence, the
-server requires the selected profile's provider and exact repository scope to
-match the request. Each job reopens the secret through its protected startup
-path and revalidates that path and security-relevant startup snapshot, including
-file identity, mode and ownership, link count, size, and modification and change
-times. The credential is exposed only to one callback; all callback-scoped
-mutable credential buffers are overwritten after success, failure, abort, or
-registry close.
+An authenticated GitHub or canonical HTTPS `kind: "git"` import may add the
+optional, strictly validated `source.credentialProfileId` field. GitHub sources
+require a `github` profile; HTTPS Git sources require an `azure-devops` or
+`generic-https` profile. Before staging or queue persistence, the server
+requires the selected provider and exact repository scope to match the request.
+Each job reopens the secret through its protected startup path and revalidates
+that path and security-relevant startup snapshot, including file identity, mode
+and ownership, link count, size, and modification and change times. The
+credential is exposed only to one callback; all callback-scoped mutable
+credential buffers are overwritten after success, failure, abort, or registry
+close.
 
 The bearer credential is sent only as an `Authorization` header on exact HTTPS
 requests to `api.github.com`. A token used for private or internal archive
@@ -163,15 +166,28 @@ query string is accepted, and the second fetch sends no `Authorization` header.
 This permits exact-scope private and internal GitHub imports without exposing
 the token to the archive host.
 
+For selected Azure DevOps or Generic HTTPS imports, Code City disables inherited
+system, global, and user Git configuration for the bounded Git commands and
+uses the chosen Basic profile as its only repository credential helper through
+an ephemeral owner-restricted broker. Redirects remain disabled. The username
+and secret never enter the remote URL, process arguments, environment, Git
+configuration, job, artifact, or temporary file. Each broker and helper
+exchange is bounded and tied to the Git command. Broker cleanup is awaited
+before the profile callback returns; failure to confirm closure fails the
+import after a bounded force-termination attempt. Azure DevOps profiles are
+intended for least-privileged PATs with Code Read access; Entra or OAuth bearer
+flows are not supported by this profile type. Installed Git, the resolved .NET
+runtime, and configured proxy and certificate environment settings remain
+trusted local dependencies.
+
 The selector, secret, remote URL, requested symbolic ref, and source bytes are
 never written to a job or artifact. The resolved immutable commit SHA may be
-stored as the generated model's default version. Selected-profile injection for
-Azure DevOps and Generic HTTPS remains pending. Existing anonymous GitHub
-imports and ambient-credential Generic Git behavior are unchanged. The Compose
-file forwards the two configuration values but deliberately does not mount a
-host manifest or secret; operators must provide a private mount explicitly.
-Never place profile secrets in Compose environment values, Git configuration, a
-remote URL, or the repository.
+stored as the generated model's default version. Existing anonymous GitHub and
+unselected Generic Git behavior are unchanged. The Compose file forwards the
+two configuration values but deliberately does not mount a host manifest or
+secret; operators must provide a private mount explicitly. Never place profile
+secrets in Compose environment values, Git configuration, a remote URL, or the
+repository.
 
 Authorization protects credential use but does not encrypt the bearer or
 session capability in transit. `CODECITY_PUBLIC_ORIGIN` therefore requires
@@ -199,12 +215,17 @@ port are significant; wildcards are not accepted. scp-style remotes use the
 matching `ssh://host:22` origin. Explicitly allow a private or loopback origin
 only when reaching it is intended.
 
-The origin list is egress control, not per-repository authorization. In default
-trusted-network mode, every Code City network client can request any
-repository/user at an enabled origin and invoke the service account's ambient
-credential helper, SSH agent/configuration, and enterprise CAs. Enable it only
-on a network where every client is authorized, or enable inbound authorization,
-and use a least-privileged service identity.
+The origin list is egress control, not per-repository authorization, and a
+selected profile never replaces this gate. In default trusted-network mode,
+every Code City network client can request any repository/user at an enabled
+origin. Unselected HTTPS and SSH/scp imports may invoke the service account's
+ambient credential helper, SSH agent/configuration, and enterprise CAs;
+selected HTTPS imports isolate ambient Git configuration and repository
+credential helpers and use the exact chosen profile for repository
+authentication. Configured proxy and certificate environment settings remain
+in effect. Enable Generic Git only on a network where every client is
+authorized, or enable inbound authorization, and use a least-privileged
+service identity.
 On Windows/IIS, enabled origins also require
 `CODECITY_TRUST_WINDOWS_GIT_WORKSPACE=1`. That flag attests that the data/import
 workspace ACL and inherited child ACLs are limited to the service identity and
@@ -332,8 +353,9 @@ published at
 ## Development
 
 The supported local toolchain is **Node.js 24.x**, **npm 11.6.2**, and the
-**.NET SDK 10.0.302** used to build the trusted Roslyn helper. The repository
-pins these versions; use the committed `package-lock.json` through `npm ci`.
+**.NET SDK 10.0.302** used to build the trusted Roslyn and Git credential
+helpers. The repository pins these versions; use the committed
+`package-lock.json` through `npm ci`.
 
 ```powershell
 node --version # must be v24.x
@@ -354,10 +376,13 @@ $env:CODECITY_ALLOWED_GIT_ORIGINS = "https://dev.azure.example"
 # Optional application-owned authorization:
 $env:CODECITY_AUTH_TOKEN_FILE = "C:\CodeCitySecrets\authorization-token"
 $env:CODECITY_PUBLIC_ORIGIN = "https://codecity.lan"
+$env:CODECITY_CREDENTIAL_PROFILES_FILE = "C:\CodeCitySecrets\credential-profiles.json"
 # Windows only, after provisioning and auditing the data-directory ACL:
 $env:CODECITY_TRUST_WINDOWS_GIT_WORKSPACE = "1"
 # Windows only, after provisioning and auditing the token-file ACL:
 $env:CODECITY_TRUST_WINDOWS_AUTH_TOKEN_FILE = "1"
+# Windows only, after provisioning and auditing the credential-directory ACL:
+$env:CODECITY_TRUST_WINDOWS_CREDENTIAL_FILES = "1"
 npm run server:start
 ```
 
