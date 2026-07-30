@@ -77,6 +77,66 @@ put the token itself in an environment variable, command line, URL, repository,
 job data, or browser storage. Token replacement takes effect only after a
 server restart and invalidates all sessions.
 
+Credential-profile discovery is available only when that inbound authorization
+mode is configured. Set `CODECITY_CREDENTIAL_PROFILES_FILE` to an absolute
+manifest path. The version-1 manifest names bounded, exact repository scopes
+and direct-child secret files:
+
+```json
+{
+  "version": 1,
+  "profiles": [
+    {
+      "id": "github-read",
+      "label": "GitHub read token",
+      "provider": "github",
+      "repositories": ["https://github.com/acme/example"],
+      "authentication": {
+        "kind": "bearer",
+        "secretFile": "github-read.secret"
+      }
+    },
+    {
+      "id": "azure-build",
+      "label": "Azure DevOps build identity",
+      "provider": "azure-devops",
+      "repositories": [
+        "https://dev.azure.com/acme/project/_git/example"
+      ],
+      "authentication": {
+        "kind": "basic",
+        "username": "build-user",
+        "secretFile": "azure-build.secret"
+      }
+    }
+  ]
+}
+```
+
+The manifest and one-line UTF-8 secret files must share one private directory.
+On POSIX the directory must be owned by the service identity with mode `0700`;
+every file must be owned by it, regular, non-linked, and mode `0400` or `0600`.
+Canonical paths and file identities are checked around bounded reads. On
+Windows, apply equivalent private ACL and protected-ancestry controls and set
+`CODECITY_TRUST_WINDOWS_CREDENTIAL_FILES=1` to attest them. IDs, labels, and
+providers are the only fields returned by authenticated
+`GET` or `HEAD /api/v1/imports/capabilities`; repository scopes, usernames,
+secret filenames, and secret contents are never returned.
+
+GitHub scopes use canonical `https://github.com/owner/repository` URLs and
+case-insensitive repository identity. Azure DevOps accepts its exact cloud,
+legacy `visualstudio.com`, and on-premises HTTPS `_git` paths. Generic HTTPS
+scopes normalize only the authority and otherwise match the authorized raw
+path exactly, including case, percent encoding, and a terminal `.git`.
+
+This is a discovery-only slice: import JSON does not accept
+`credentialProfileId`, and the server does not inject these secrets into Git
+yet. Existing anonymous and ambient-credential import behavior is unchanged.
+The Compose file forwards the two configuration values but deliberately does
+not mount a host manifest or secret; operators must provide a private mount
+explicitly. Never place profile secrets in Compose environment values, Git
+configuration, a remote URL, or the repository.
+
 Authorization protects credential use but does not encrypt the bearer or
 session capability in transit. `CODECITY_PUBLIC_ORIGIN` therefore requires
 HTTPS; plain HTTP is accepted only when the server itself is bound to

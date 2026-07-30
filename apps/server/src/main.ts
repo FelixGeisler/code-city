@@ -82,6 +82,28 @@ export function environmentWindowsAuthTokenFileTrust(
   );
 }
 
+export function environmentCredentialProfilesFile(
+  value: string | undefined,
+): string | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (value !== value.trim()) {
+    throw new Error(
+      "CODECITY_CREDENTIAL_PROFILES_FILE must not contain surrounding whitespace.",
+    );
+  }
+  return value;
+}
+
+export function environmentWindowsCredentialFilesTrust(
+  value: string | undefined,
+): boolean {
+  if (value === undefined || value === "") return false;
+  if (value === "1") return true;
+  throw new Error(
+    "CODECITY_TRUST_WINDOWS_CREDENTIAL_FILES must be exactly 1 when enabled.",
+  );
+}
+
 export async function runServer(): Promise<void> {
   const controller = new AbortController();
   const stop = (): void => controller.abort();
@@ -109,6 +131,13 @@ export async function runServer(): Promise<void> {
       environmentWindowsAuthTokenFileTrust(
         process.env["CODECITY_TRUST_WINDOWS_AUTH_TOKEN_FILE"],
       );
+    const credentialProfilesFile = environmentCredentialProfilesFile(
+      process.env["CODECITY_CREDENTIAL_PROFILES_FILE"],
+    );
+    const trustWindowsCredentialFiles =
+      environmentWindowsCredentialFilesTrust(
+        process.env["CODECITY_TRUST_WINDOWS_CREDENTIAL_FILES"],
+      );
     const server = await startCodeCityServer({
       ...(host === undefined ? {} : { host }),
       ...(port === undefined ? {} : { port }),
@@ -121,6 +150,12 @@ export async function runServer(): Promise<void> {
           : { tokenFile: authorizationTokenFile }),
         ...(publicOrigin === undefined ? {} : { publicOrigin }),
         trustWindowsTokenFile: trustWindowsAuthTokenFile,
+      },
+      credentialProfiles: {
+        ...(credentialProfilesFile === undefined
+          ? {}
+          : { profilesFile: credentialProfilesFile }),
+        trustWindowsCredentialFiles,
       },
       dataDirectory: path.resolve(
         process.env["CODECITY_DATA_DIR"] ?? "data",

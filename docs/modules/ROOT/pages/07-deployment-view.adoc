@@ -42,6 +42,31 @@ and the session bootstrap. The long-lived bearer can authorize automation or
 be exchanged for one bounded opaque browser session. Repository credential
 profiles must not be configured unless this mode is active.
 
+Set `CODECITY_CREDENTIAL_PROFILES_FILE` to one absolute version-1 manifest path
+only after inbound authorization is enabled. The manifest and all referenced
+one-line UTF-8 secret files must be direct children of the same private
+directory. POSIX requires a process-owned mode-`0700` directory and
+process-owned, single-link regular files with mode `0400` or `0600`. Windows
+requires equivalent private ACLs and protected canonical ancestry plus
+`CODECITY_TRUST_WINDOWS_CREDENTIAL_FILES=1`. Reads are size-bounded and verify
+canonical path and file identity before, during, and after opening.
+
+Profiles allow only `github`, `azure-devops`, or `generic-https` and enumerate
+exact repositories. GitHub repository identity is case-insensitive after its
+canonical public URL is validated. Azure cloud, legacy `visualstudio.com`, and
+on-premises forms require one literal penultimate `_git`. Generic HTTPS
+normalizes only a valid canonical authority; its raw path, case, uppercase
+percent encoding, and terminal `.git` remain exact. The authenticated
+`/api/v1/imports/capabilities` projection contains only ID, display label, and
+provider.
+
+The current implementation validates and advertises profiles but does not
+accept `credentialProfileId` or inject credentials into Git. The Compose file
+forwards the manifest path and Windows attestation only; it does not mount
+secrets. Supply an explicit read-only private mount owned by runtime UID 10001
+and never use environment values, remote URLs, repository files, or Git config
+for secret material.
+
 On POSIX, the token file must be process-owned, mode `0400` or `0600`, regular,
 non-symlinked, and have one link. Its identity is checked around a bounded
 read. Docker mounts must make the file readable only by the runtime UID 10001;

@@ -170,6 +170,21 @@ job cancellation; cookie mutations additionally require the exact configured
 same-origin Origin. CORS remains disabled. Health is deliberately anonymous,
 cache-free, and contains no authorization or credential-profile state.
 
+Credential profiles form a separate, bounded startup registry. Enabling the
+manifest without application-owned inbound authorization fails before the
+manifest path is accessed. Exact-shape, duplicate-free JSON binds a stable ID
+and display label to one provider, exact repository scopes, and a direct-child
+secret basename. Protected directory, canonical path, stable file identity,
+ownership/mode or explicit Windows ACL-attestation, link-count, UTF-8,
+single-line, count, and byte limits all fail closed. Secret buffers are
+overwritten after validation.
+
+The import capability response is an authenticated, no-store redacted
+projection, not a credential oracle: only ID, label, and provider cross the
+boundary. Scope URLs, usernames, filenames, and secret bytes do not. The
+current slice intentionally stops before credential selection and Git
+injection, so strict import JSON continues to reject `credentialProfileId`.
+
 Raw uploads avoid multipart parsing and never trust a filename. Exact-shape
 metadata reserves one opaque UUID and its declared bytes before the server
 creates a private staging directory. The PUT admits exactly one unencoded
