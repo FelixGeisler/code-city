@@ -348,6 +348,26 @@ it("recovers a failed completed-job deletion from its durable tombstone", async 
   expect(await fs.readdir(path.join(dataDirectory, "jobs"))).toEqual([]);
 });
 
+it("never treats an unrelated deletion-suffixed file as a job tombstone", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  await queue.close();
+  const unrelated = path.join(
+    dataDirectory,
+    "jobs",
+    "operator-note.json.deleting",
+  );
+  await fs.writeFile(unrelated, "preserve this file\n", "utf8");
+
+  const reopened = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(reopened);
+  expect(reopened.list()).toEqual([]);
+  expect(await fs.readFile(unrelated, "utf8")).toBe(
+    "preserve this file\n",
+  );
+});
+
 it("captures progress primitives once before persistence", async () => {
   const dataDirectory = await temporaryDirectory();
   const queue = await PersistentJobQueue.open({ dataDirectory });

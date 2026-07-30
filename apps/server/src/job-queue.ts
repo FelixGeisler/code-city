@@ -743,6 +743,9 @@ export class PersistentJobQueue {
       }
       if (
         entry.name.endsWith(JOB_DELETION_SUFFIX) &&
+        JOB_ID_PATTERN.test(
+          entry.name.slice(0, -JOB_DELETION_SUFFIX.length),
+        ) &&
         entry.isFile() &&
         !entry.isSymbolicLink()
       ) {

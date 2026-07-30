@@ -424,7 +424,7 @@ it("exposes persisted job state and supports cancellation", async () => {
       JSON.parse(cancelled.body) as {
         job: { state: string };
       }
-  ).job.state,
+    ).job.state,
   ).toBe("cancelled");
 });
 
