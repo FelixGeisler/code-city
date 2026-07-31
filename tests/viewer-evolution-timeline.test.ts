@@ -9,9 +9,20 @@ import {
   analyzeEvolutionBuildingHistory,
   analyzeEvolutionFrame,
   compareEvolutionFrames,
+  EvolutionDeferredSeekController,
   EvolutionSeekGate,
   summarizeEvolutionFrames,
 } from "../apps/viewer/src/evolution-timeline.js";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((accept, fail) => {
+    resolve = accept;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
 
 function commit(index: number) {
   return {
@@ -109,6 +120,123 @@ describe("viewer evolution timeline analysis", () => {
     const recovered = gate.begin();
     expect(gate.failure).toBeUndefined();
     expect(gate.settle(recovered)).toBe(true);
+  });
+
+  it("executes pause and A to B to A through the deferred render seam", async () => {
+    let currentIndex = 0;
+    let cancelled = 0;
+    const first = deferred<number>();
+    const second = deferred<number>();
+    const requests = [first, second];
+    const statuses: string[] = [];
+    let controller!: EvolutionDeferredSeekController<number>;
+    controller = new EvolutionDeferredSeekController({
+      currentIndex: () => currentIndex,
+      request: () => requests.shift()!.promise,
+      cancelRequest: () => {
+        cancelled += 1;
+      },
+      render: () => {
+        statuses.push(
+          controller.busy
+            ? `Seeking ${controller.targetIndex}\u2026`
+            : controller.failure ?? `Frame ${currentIndex}`,
+        );
+      },
+    });
+    const apply = ({ result }: { readonly result: number }): void => {
+      currentIndex = result;
+    };
+
+    const paused = controller.seek(1, apply);
+    expect(statuses.at(-1)).toBe("Seeking 1\u2026");
+    expect(controller.cancel()).toBe(true);
+    expect(statuses.at(-1)).toBe("Frame 0");
+    first.resolve(1);
+    await expect(paused).resolves.toBe(false);
+    expect(currentIndex).toBe(0);
+
+    const toB = controller.seek(1, apply);
+    expect(statuses.at(-1)).toBe("Seeking 1\u2026");
+    await expect(controller.seek(0, apply)).resolves.toBe(true);
+    expect(statuses.at(-1)).toBe("Frame 0");
+    second.resolve(1);
+    await expect(toB).resolves.toBe(false);
+    expect(currentIndex).toBe(0);
+    expect(cancelled).toBe(2);
+  });
+
+  it("retains C while stale B completes in A to B to C navigation", async () => {
+    let currentIndex = 0;
+    const toB = deferred<number>();
+    const toC = deferred<number>();
+    const requests = [toB, toC];
+    const renderedTargets: (number | undefined)[] = [];
+    let controller!: EvolutionDeferredSeekController<number>;
+    controller = new EvolutionDeferredSeekController({
+      currentIndex: () => currentIndex,
+      request: () => requests.shift()!.promise,
+      cancelRequest: () => undefined,
+      render: () => renderedTargets.push(controller.targetIndex),
+    });
+    const apply = ({ result }: { readonly result: number }): void => {
+      currentIndex = result;
+    };
+
+    const first = controller.seek(1, apply);
+    const newest = controller.seek(2, apply);
+    expect(controller.busy).toBe(true);
+    expect(renderedTargets.at(-1)).toBe(2);
+
+    toB.resolve(1);
+    await expect(first).resolves.toBe(false);
+    expect(currentIndex).toBe(0);
+    expect(controller.busy).toBe(true);
+    expect(controller.targetIndex).toBe(2);
+
+    toC.resolve(2);
+    await expect(newest).resolves.toBe(true);
+    expect(currentIndex).toBe(2);
+    expect(controller.busy).toBe(false);
+    expect(controller.targetIndex).toBeUndefined();
+  });
+
+  it("keeps failure visible and shows Seeking until recovery settles", async () => {
+    let currentIndex = 0;
+    const failed = deferred<number>();
+    const recovered = deferred<number>();
+    const requests = [failed, recovered];
+    const statuses: string[] = [];
+    let controller!: EvolutionDeferredSeekController<number>;
+    controller = new EvolutionDeferredSeekController({
+      currentIndex: () => currentIndex,
+      request: () => requests.shift()!.promise,
+      cancelRequest: () => undefined,
+      render: () => {
+        statuses.push(
+          controller.busy
+            ? "Seeking\u2026"
+            : controller.failure ?? `Frame ${currentIndex}`,
+        );
+      },
+    });
+    const apply = ({ result }: { readonly result: number }): void => {
+      currentIndex = result;
+    };
+
+    const first = controller.seek(1, apply);
+    expect(statuses.at(-1)).toBe("Seeking\u2026");
+    failed.reject(new Error("Frame replay failed."));
+    await expect(first).resolves.toBe(false);
+    expect(statuses.at(-1)).toBe("Frame replay failed.");
+    expect(controller.failure).toBe("Frame replay failed.");
+
+    const second = controller.seek(2, apply);
+    expect(statuses.at(-1)).toBe("Seeking\u2026");
+    recovered.resolve(2);
+    await expect(second).resolves.toBe(true);
+    expect(statuses.at(-1)).toBe("Frame 2");
+    expect(controller.failure).toBeUndefined();
   });
 
   it("summarizes frames and stable-lineage history deterministically", () => {

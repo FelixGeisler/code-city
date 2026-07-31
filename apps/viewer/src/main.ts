@@ -163,7 +163,7 @@ import {
   type ViewerVisualizationMode,
 } from "./visualization-mode.js";
 import {
-  EvolutionSeekGate,
+  EvolutionDeferredSeekController,
   type EvolutionBuildingHistory,
   type EvolutionFrameSummary,
   type EvolutionTransition,
@@ -1802,7 +1802,13 @@ let previewPrinterProfile: PrinterProfile | undefined;
 let evolutionWorker = new EvolutionTimelineWorkerClient();
 let evolutionLoadController: AbortController | undefined;
 let evolutionGeneration = 0;
-const evolutionSeekGate = new EvolutionSeekGate();
+const evolutionSeekController = new EvolutionDeferredSeekController({
+  currentIndex: () => activeEvolutionIndex,
+  request: (fromIndex, targetIndex) =>
+    evolutionWorker.seek(fromIndex, targetIndex),
+  cancelRequest: () => evolutionWorker.cancel(),
+  render: () => renderEvolutionTimeline(),
+});
 let evolutionPlaybackTimer: number | undefined;
 let evolutionTransitionTimer: number | undefined;
 let activeEvolutionFrames: readonly EvolutionFrameSummary[] = [];
@@ -1974,8 +1980,9 @@ evolutionLast.addEventListener("click", () => {
   void seekEvolution(activeEvolutionFrames.length - 1);
 });
 evolutionRange.addEventListener("input", () => {
-  stopEvolutionPlayback();
-  void seekEvolution(Number(evolutionRange.value));
+  const targetIndex = Number(evolutionRange.value);
+  stopEvolutionPlayback(false);
+  void seekEvolution(targetIndex);
 });
 
 fileOpenButton.addEventListener("click", () => {
@@ -2502,93 +2509,62 @@ async function seekEvolution(
   ) {
     return false;
   }
-  if (targetIndex === activeEvolutionIndex && !initial) {
-    renderEvolutionTimeline();
-    return true;
-  }
   const generation = evolutionGeneration;
-  const seekGeneration = evolutionSeekGate.begin();
-  const fromIndex = activeEvolutionIndex;
   const selected = explorerState.selectedEntity;
   const deletedBuilding =
     selected?.kind === "building"
       ? activeBuildingsById.get(selected.id)
       : undefined;
-  evolutionRange.value = String(targetIndex);
-  evolutionStatus.textContent = "Seeking\u2026";
-  renderEvolutionTimeline();
-  try {
-    const result = await evolutionWorker.seek(fromIndex, targetIndex);
-    if (
-      generation !== evolutionGeneration ||
-      !evolutionSeekGate.isCurrent(seekGeneration)
-    ) {
-      return false;
-    }
-    activeEvolutionIndex = targetIndex;
-    activeEvolutionAnalysis = evolutionVisualizationData(result.analysis);
-    activeEvolutionTransition = initial ? undefined : result.transition;
-    applyModel(result.model, activeModelSource, {
-      preserveView: true,
-      preserveSelection: true,
-    });
-    if (!initial) {
-      if (evolutionTransitionTimer !== undefined) {
-        window.clearTimeout(evolutionTransitionTimer);
-      }
-      cityScene.showEvolutionTransition(
-        result.transition,
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-      );
-      evolutionTransitionTimer = window.setTimeout(() => {
-        if (
-          generation !== evolutionGeneration ||
-          targetIndex !== activeEvolutionIndex
-        ) {
-          return;
+  return evolutionSeekController.seek(
+    targetIndex,
+    ({ result }) => {
+      if (generation !== evolutionGeneration) return;
+      activeEvolutionIndex = targetIndex;
+      activeEvolutionAnalysis = evolutionVisualizationData(result.analysis);
+      activeEvolutionTransition = initial ? undefined : result.transition;
+      applyModel(result.model, activeModelSource, {
+        preserveView: true,
+        preserveSelection: true,
+      });
+      if (!initial) {
+        if (evolutionTransitionTimer !== undefined) {
+          window.clearTimeout(evolutionTransitionTimer);
         }
-        activeEvolutionTransition = undefined;
-        evolutionTransitionTimer = undefined;
-        cityScene.finishEvolutionTransition();
-        applyVisualization();
-      }, 1_200);
-    }
-    if (
-      selected?.kind === "building" &&
-      !activeBuildingsById.has(selected.id) &&
-      deletedBuilding !== undefined
-    ) {
-      showDeletedEvolutionBuilding(deletedBuilding);
-    }
-    evolutionSeekGate.settle(seekGeneration);
-    renderEvolutionTimeline();
-    return true;
-  } catch (error) {
-    if (
-      generation !== evolutionGeneration ||
-      !evolutionSeekGate.isCurrent(seekGeneration)
-    ) {
-      return false;
-    }
-    if (error instanceof DOMException && error.name === "AbortError") {
-      evolutionSeekGate.settle(seekGeneration);
-      renderEvolutionTimeline();
-      return false;
-    }
-    evolutionSeekGate.fail(
-      seekGeneration,
-      error instanceof Error ? error.message : "The frame could not be shown.",
-    );
-    renderEvolutionTimeline();
-    return false;
-  }
+        cityScene.showEvolutionTransition(
+          result.transition,
+          window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+        );
+        evolutionTransitionTimer = window.setTimeout(() => {
+          if (
+            generation !== evolutionGeneration ||
+            targetIndex !== activeEvolutionIndex
+          ) {
+            return;
+          }
+          activeEvolutionTransition = undefined;
+          evolutionTransitionTimer = undefined;
+          cityScene.finishEvolutionTransition();
+          applyVisualization();
+        }, 1_200);
+      }
+      if (
+        selected?.kind === "building" &&
+        !activeBuildingsById.has(selected.id) &&
+        deletedBuilding !== undefined
+      ) {
+        showDeletedEvolutionBuilding(deletedBuilding);
+      }
+    },
+  );
 }
 
 function renderEvolutionTimeline(): void {
   const frame = activeEvolutionFrames[activeEvolutionIndex];
   const lastIndex = Math.max(0, activeEvolutionFrames.length - 1);
-  const busy = evolutionLoading || evolutionSeekGate.busy;
-  evolutionRange.value = String(activeEvolutionIndex);
+  const busy = evolutionLoading || evolutionSeekController.busy;
+  evolutionRange.value = String(
+    evolutionSeekController.targetIndex ?? activeEvolutionIndex,
+  );
   evolutionFirst.disabled = busy || activeEvolutionIndex === 0;
   evolutionPrevious.disabled = busy || activeEvolutionIndex === 0;
   evolutionNext.disabled =
@@ -2620,15 +2596,17 @@ function renderEvolutionTimeline(): void {
           `${transition.resizedBuildingIds.length} resized`,
         ].join(" \u00b7 ");
   evolutionStatus.textContent =
-    evolutionSeekGate.failure ??
-    `${new Date(frame.committedAt).toLocaleString()}${changeText ? ` \u00b7 ${changeText}` : ""}`;
+    evolutionSeekController.busy
+      ? "Seeking\u2026"
+      : evolutionSeekController.failure ??
+        `${new Date(frame.committedAt).toLocaleString()}${changeText ? ` \u00b7 ${changeText}` : ""}`;
 }
 
 function startEvolutionPlayback(): void {
   if (
     activeEvolutionFrames.length < 2 ||
     evolutionLoading ||
-    evolutionSeekGate.busy
+    evolutionSeekController.busy
   ) return;
   evolutionPlaying = true;
   evolutionPlay.setAttribute("aria-pressed", "true");
@@ -2652,17 +2630,15 @@ async function advanceEvolutionPlayback(): Promise<void> {
   );
 }
 
-function stopEvolutionPlayback(): void {
+function stopEvolutionPlayback(cancelSeek = true): void {
   evolutionPlaying = false;
-  const cancelledSeek = evolutionSeekGate.cancel();
-  evolutionWorker.cancel();
+  if (cancelSeek) evolutionSeekController.cancel();
   if (evolutionPlaybackTimer !== undefined) {
     window.clearTimeout(evolutionPlaybackTimer);
     evolutionPlaybackTimer = undefined;
   }
   evolutionPlay?.setAttribute("aria-pressed", "false");
   if (evolutionPlay) evolutionPlay.textContent = "\u25b6";
-  if (cancelledSeek) renderEvolutionTimeline();
 }
 
 function showDeletedEvolutionBuilding(building: CityBuilding): void {
