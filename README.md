@@ -160,6 +160,16 @@ entries, then attached to the published city frames. Evolution author policy
 `/api/v1/artifacts/<job-id>/evolution.json` use the same inbound authorization
 policy as the city-model artifact and send `Cache-Control: no-store`.
 
+The viewer worker reuses its last successfully validated evolution frame and
+retains every tenth replayed frame as a structurally shared checkpoint.
+Sequential playback therefore applies each delta once. Arbitrary seeks start
+each uncached endpoint at the newest preceding checkpoint, applying at most
+nine deltas per warm endpoint. A first cold endpoint can fall back to the
+current frame or baseline, but the validated 100-frame artifact limit caps
+that fallback at 99 delta applications. Checkpoints discovered by a seek stay
+request-local until its final cancellation check, so superseded work cannot
+alter later playback state.
+
 At most four upload reservations and 256 MiB of staged upload data exist at
 once. City models are capped at 128 MiB, ZIPs at 64 MiB, unused reservations
 expire after five minutes, and each upload has 30-second idle and ten-minute
