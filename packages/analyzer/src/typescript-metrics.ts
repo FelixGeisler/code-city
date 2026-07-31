@@ -48,66 +48,14 @@ function sourceCallableKind(node: ts.Node): SourceCallableFact["kind"] {
   if (ts.isConstructorDeclaration(node)) return "constructor";
   if (ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) return "accessor";
   if (ts.isArrowFunction(node)) return "lambda";
-  return ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node)
-    ? "function"
-    : "method";
-}
-
-function executableComplexity(node: ts.FunctionLikeDeclaration): number {
-  if (node.body === undefined) return 1;
-  let decisions = 0;
-  function visit(current: ts.Node): void {
-    if (
-      current !== node.body &&
-      isExecutableUnit(current) &&
-      current.body !== undefined
-    ) {
-      return;
-    }
-    decisions += decisionIncrement(current);
-    ts.forEachChild(current, visit);
+  if (
+    ts.isFunctionDeclaration(node) &&
+    !ts.isSourceFile(node.parent) &&
+    !ts.isModuleBlock(node.parent)
+  ) {
+    return "local-function";
   }
-  visit(node.body);
-  return 1 + decisions;
-}
-
-function declarationPath(node: ts.Node, source: ts.SourceFile): string {
-  const parts: string[] = [];
-  for (let parent = node.parent; parent !== undefined; parent = parent.parent) {
-    const kind = sourceTypeKind(parent);
-    if (kind !== undefined) {
-      const named = (parent as ts.Declaration & {
-        name?: ts.DeclarationName;
-      }).name;
-      parts.push(`${kind}:${named?.getText(source) || "<anonymous>"}`);
-    } else if (isExecutableUnit(parent)) {
-      parts.push(
-        `callable:${sourceCallableKind(parent)}:${unitName(parent, source)}(${callableSignature(parent, source)})`,
-      );
-    }
-  }
-  return parts.reverse().join("/");
-}
-
-function callableSignature(
-  node: ts.FunctionLikeDeclaration,
-  source: ts.SourceFile,
-): string {
-  return node.parameters
-    .map((parameter) => parameter.type?.getText(source) ?? "_")
-    .join(",");
-}
-
-function stableLocalIds(
-  scope: "source-type" | "source-callable",
-  keys: readonly string[],
-): readonly string[] {
-  const occurrences = new Map<string, number>();
-  return keys.map((key) => {
-    const occurrence = (occurrences.get(key) ?? 0) + 1;
-    occurrences.set(key, occurrence);
-    return stableId(scope, key, String(occurrence));
-  });
+  return ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) ? "function" : "method";
 }
 
 /**
@@ -116,53 +64,46 @@ function stableLocalIds(
  * context is not reliably available for arbitrary snapshots.
  */
 function collectSourceStructure(source: ts.SourceFile): SourceStructure {
-  const rawTypes: Array<Omit<SourceTypeFact, "id" | "parentTypeId"> & { node: ts.Node }> = [];
-  const rawCallables: Array<
-    Omit<SourceCallableFact, "id" | "enclosingTypeId" | "complexity"> & {
-      node: ts.FunctionLikeDeclaration;
-      complexity: number;
-    }
-  > = [];
+  const rawTypes: Array<Omit<SourceTypeFact, "id" | "parentTypeId" | "provenance"> & { node: ts.Node }> = [];
+  const rawCallables: Array<Omit<SourceCallableFact, "id" | "enclosingTypeId" | "complexity" | "provenance"> & { node: ts.Node }> = [];
   const typeByNode = new Map<ts.Node, string>();
 
   function visit(node: ts.Node): void {
     const typeKind = sourceTypeKind(node);
     if (typeKind !== undefined) {
       const named = (node as ts.Declaration & { name?: ts.DeclarationName }).name;
-      rawTypes.push({ node, name: named?.getText(source) || "<anonymous>", kind: typeKind, range: sourceRange(node, source) });
+      rawTypes.push({ node, name: sanitizeSourceName(named?.getText(source), "<anonymous>"), kind: typeKind, range: sourceRange(node, source) });
     }
     if (isExecutableUnit(node) && !ts.isSourceFile(node) && node.body) {
-      rawCallables.push({ node, name: unitName(node, source), kind: sourceCallableKind(node), range: sourceRange(node, source), complexity: executableComplexity(node) });
+      rawCallables.push({ node, name: sanitizeSourceName(unitName(node, source), "<callable>"), kind: sourceCallableKind(node), range: sourceRange(node, source) });
     }
     ts.forEachChild(node, visit);
   }
   visit(source);
-  rawTypes.sort((a, b) => a.range.startLine - b.range.startLine || a.range.startColumn - b.range.startColumn || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
-  const typeIds = stableLocalIds(
-    "source-type",
-    rawTypes.map((item) =>
-      `${declarationPath(item.node, source)}|${item.kind}:${item.name}`
-    ),
-  );
-  rawTypes.forEach((item, index) => typeByNode.set(item.node, typeIds[index]!));
-  const types = rawTypes.map((item, index) => {
+  const compareDeclaration = <T extends { readonly range: { readonly startLine: number; readonly startColumn: number }; readonly kind: string; readonly name: string }>(a: T, b: T) =>
+    a.range.startLine - b.range.startLine || a.range.startColumn - b.range.startColumn || compareText(a.kind, b.kind) || compareText(a.name, b.name);
+  rawTypes.sort(compareDeclaration);
+  const uniqueId = (scope: string, item: { readonly node: ts.Node; readonly kind: string; readonly name: string }, used: Set<string>): string => {
+    const base = `${scope}:${stableId(scope, declarationScope(item.node, source), item.kind, item.name, declarationIdentity(item.node, source))}`;
+    let id = base; let collision = 1;
+    while (used.has(id)) id = `${base}:${collision++}`;
+    used.add(id); return id;
+  };
+  const usedIds = new Set<string>();
+  rawTypes.forEach((item) => typeByNode.set(item.node, uniqueId("type", item, usedIds)));
+  const types = rawTypes.map((item) => {
     let parent = item.node.parent;
     while (parent && !typeByNode.has(parent)) parent = parent.parent;
     const parentTypeId = parent === undefined ? undefined : typeByNode.get(parent);
-    return Object.freeze({ id: typeIds[index]!, name: item.name, kind: item.kind, range: item.range, ...(parentTypeId === undefined ? {} : { parentTypeId }) });
+    return Object.freeze({ id: typeByNode.get(item.node)!, name: item.name, kind: item.kind, range: item.range, provenance: "syntax" as const, ...(parentTypeId === undefined ? {} : { parentTypeId }) });
   });
-  rawCallables.sort((a, b) => a.range.startLine - b.range.startLine || a.range.startColumn - b.range.startColumn || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
-  const callableIds = stableLocalIds(
-    "source-callable",
-    rawCallables.map((item) =>
-      `${declarationPath(item.node, source)}|${item.kind}:${item.name}(${callableSignature(item.node, source)})`
-    ),
-  );
-  const callables = rawCallables.map((item, index) => {
+  rawCallables.sort(compareDeclaration);
+  const callables = rawCallables.map((item) => {
     let parent = item.node.parent;
     while (parent && !typeByNode.has(parent)) parent = parent.parent;
     const enclosingTypeId = parent === undefined ? undefined : typeByNode.get(parent);
-    return Object.freeze({ id: callableIds[index]!, name: item.name, kind: item.kind, range: item.range, complexity: item.complexity, ...(enclosingTypeId === undefined ? {} : { enclosingTypeId }) });
+    const complexity = callableComplexity(item.node);
+    return Object.freeze({ id: uniqueId("callable", item, usedIds), name: item.name, kind: item.kind, range: item.range, provenance: "syntax" as const, complexity, ...(enclosingTypeId === undefined ? {} : { enclosingTypeId }) });
   });
   return Object.freeze({
     version: "codecity.source-structure/1",
@@ -176,21 +117,104 @@ function collectSourceStructure(source: ts.SourceFile): SourceStructure {
   });
 }
 
+function declarationScope(node: ts.Node, source: ts.SourceFile): string {
+  const parts: string[] = [];
+  for (let current = node.parent; current !== undefined; current = current.parent) {
+    if (ts.isModuleDeclaration(current) || sourceTypeKind(current) !== undefined) {
+      const name = (current as ts.Declaration & { name?: ts.DeclarationName }).name?.getText(source);
+      if (name) parts.push(`${ts.SyntaxKind[current.kind]}:${sanitizeSourceName(name, "<scope>")}`);
+    } else if (isExecutableUnit(current) && !ts.isSourceFile(current)) {
+      parts.push(`callable:${declarationIdentity(current, source)}`);
+    }
+  }
+  return parts.reverse().join(".");
+}
+
+function declarationIdentity(node: ts.Node, source: ts.SourceFile): string {
+  const typeKind = sourceTypeKind(node);
+  if (typeKind !== undefined) {
+    const declaration = node as ts.Declaration & { name?: ts.DeclarationName; typeParameters?: ts.NodeArray<ts.TypeParameterDeclaration> };
+    return `${typeKind}:${sanitizeSourceName(declaration.name?.getText(source), "<anonymous>")}:type-parameters:${declaration.typeParameters?.length ?? 0}`;
+  }
+  if (isExecutableUnit(node)) {
+    const parameters = node.parameters.map((parameter) => {
+      const optional = parameter.questionToken === undefined && parameter.initializer === undefined ? "required" : "optional";
+      const rest = parameter.dotDotDotToken === undefined ? "single" : "rest";
+      const type = canonicalTokens(parameter.type, source);
+      return `${rest}:${optional}:${type}`;
+    }).join(",");
+    return `${sourceCallableKind(node)}:${sanitizeSourceName(unitName(node, source), "<callable>")}:type-parameters:${node.typeParameters?.length ?? 0}:parameters:${parameters}`;
+  }
+  return ts.SyntaxKind[node.kind] ?? "declaration";
+}
+
+function canonicalTokens(node: ts.Node | undefined, source: ts.SourceFile): string {
+  if (node === undefined) return "unknown";
+  const scanner = ts.createScanner(
+    source.languageVersion,
+    true,
+    source.languageVariant,
+    node.getText(source),
+  );
+  const tokens: string[] = [];
+  for (
+    let kind = scanner.scan();
+    kind !== ts.SyntaxKind.EndOfFileToken;
+    kind = scanner.scan()
+  ) {
+    const semanticToken =
+      scanner.isIdentifier() ||
+      (kind >= ts.SyntaxKind.FirstLiteralToken &&
+        kind <= ts.SyntaxKind.LastLiteralToken);
+    const text = (
+      semanticToken ? scanner.getTokenValue() : scanner.getTokenText()
+    ).normalize("NFC");
+    tokens.push(`${kind}:${text.length}:${text}`);
+  }
+  return tokens.join("|");
+}
+
+function sanitizeSourceName(value: string | undefined, fallback: string): string {
+  const normalized = (value ?? "").normalize("NFC");
+  let result = "";
+  let pendingSpace = false;
+  for (const character of normalized) {
+    if (/[\p{Cc}\p{Cf}\p{Cs}]/u.test(character)) continue;
+    if (/\s/u.test(character)) { pendingSpace = result.length > 0; continue; }
+    if (pendingSpace && result.length < 256) result += " ";
+    pendingSpace = false;
+    if (result.length + character.length > 256) break;
+    result += character;
+  }
+  return result.trim() || fallback;
+}
+
+function callableComplexity(node: ts.Node): number {
+  const body = (node as ts.FunctionLikeDeclarationBase).body;
+  if (!body) return 1;
+  let decisions = 0;
+  const visit = (current: ts.Node): void => {
+    if (current !== body && isExecutableUnit(current) && current.body) return;
+    decisions += decisionIncrement(current);
+    ts.forEachChild(current, visit);
+  };
+  visit(body);
+  return 1 + decisions;
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function unitName(node: ts.FunctionLikeDeclaration, source: ts.SourceFile): string {
   const explicitName = node.name?.getText(source);
-  if (explicitName) return explicitName;
-
+  let name = explicitName;
   const parent = node.parent;
-  if (
-    (ts.isVariableDeclaration(parent) ||
-      ts.isPropertyDeclaration(parent) ||
-      ts.isPropertyAssignment(parent)) &&
-    parent.name
-  ) {
-    return parent.name.getText(source);
+  if (!name && (ts.isVariableDeclaration(parent) || ts.isPropertyDeclaration(parent) || ts.isPropertyAssignment(parent)) && parent.name) {
+    name = parent.name.getText(source);
   }
-  if (ts.isCallExpression(parent)) return "<callback>";
-  return ts.isArrowFunction(node) ? "<arrow>" : "<anonymous>";
+  if (!name && ts.isCallExpression(parent)) name = "<callback>";
+  return sanitizeSourceName(name, ts.isArrowFunction(node) ? "<arrow>" : "<anonymous>");
 }
 
 function isExecutableUnit(

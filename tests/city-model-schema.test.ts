@@ -206,6 +206,72 @@ describe("CityModel JSON Schema", () => {
     ).toThrow(/scheme or host/u);
   });
 
+  it("keeps source-structure v1 compatible while validating typed relationships", () => {
+    const template = DEMO_MODEL.buildings[0]!;
+    const sourceStructure = {
+      version: "codecity.source-structure/1" as const,
+      availability: "available" as const,
+      types: [{
+        id: "type:C",
+        name: "C",
+        kind: "class" as const,
+        range: { startLine: 1, startColumn: 1, endLine: 4, endColumn: 1 },
+      }],
+      callables: [{
+        id: "callable:m",
+        name: "m",
+        kind: "method" as const,
+        range: { startLine: 2, startColumn: 3, endLine: 3, endColumn: 3 },
+        enclosingTypeId: "type:C",
+        complexity: 1,
+      }],
+      relations: [{
+        id: "relation:reference",
+        kind: "type-reference" as const,
+        sourceId: "callable:m",
+        targetId: "type:C",
+        provenance: "syntax" as const,
+      }],
+      unavailable: [],
+    };
+    const model = {
+      ...DEMO_MODEL,
+      buildings: DEMO_MODEL.buildings.map((building) =>
+        building.id === template.id
+          ? {
+              ...building,
+              sourceLocation: { startLine: 1 as const, endLine: 4 },
+              sourceStructure,
+            }
+          : building,
+      ),
+    };
+
+    expect(validateSchema(model), errors()).toBe(true);
+    expect(validateCityModel(model)).toBe(model);
+
+    const duplicateRelationId = {
+      ...model,
+      buildings: model.buildings.map((building) =>
+        building.id === template.id
+          ? {
+              ...building,
+              sourceStructure: {
+                ...sourceStructure,
+                relations: [{
+                  ...sourceStructure.relations[0]!,
+                  id: "type:C",
+                }],
+              },
+            }
+          : building,
+      ),
+    };
+    expect(() => validateCityModel(duplicateRelationId)).toThrow(
+      /id must be unique within sourceStructure/u,
+    );
+  });
+
   it("rejects unknown versions and incoherent additive fields", () => {
     expect(
       validateSchema({ ...DEMO_MODEL, schemaVersion: "2.0" }),

@@ -61,6 +61,7 @@ import {
   FINE_DETAIL_INITIAL_LIMIT,
   FINE_DETAIL_MAXIMUM_LIMIT,
   projectFineDetail,
+  type FineDetailNode,
 } from "./progressive-granularity.js";
 import { cityBaseForModel } from "./city-surface.js";
 import {
@@ -330,6 +331,10 @@ interface ViewerPerformanceDiagnostics {
   readonly buildingVisibilityMaskActive: boolean;
   readonly objectCount: number;
   readonly renderCalls: number;
+  readonly camera: {
+    readonly position: readonly [number, number, number];
+    readonly target: readonly [number, number, number];
+  };
   readonly evolutionRemovals: EvolutionRemovalDiagnostics | null;
   readonly evolutionRemovalAnimated: boolean;
   readonly dependencyRoutes: DependencyRouteOverlayDiagnostics;
@@ -760,6 +765,7 @@ class CityScene {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.setAttribute("role", "img");
+    this.renderer.domElement.tabIndex = 0;
     this.renderer.domElement.setAttribute(
       "aria-label",
       "Interactive 3D code city",
@@ -1725,6 +1731,10 @@ class CityScene {
         this.buildingVisibilityMask !== null,
       objectCount,
       renderCalls: this.renderer.info.render.calls,
+      camera: {
+        position: [this.camera.position.x, this.camera.position.y, this.camera.position.z] as const,
+        target: [this.controls.target.x, this.controls.target.y, this.controls.target.z] as const,
+      },
       evolutionRemovals:
         this.evolutionAnimation?.removals.diagnostics() ?? null,
       evolutionRemovalAnimated:
@@ -2955,6 +2965,10 @@ class UnavailableCityScene {
       buildingVisibilityMaskActive: false,
       objectCount: 0,
       renderCalls: 0,
+      camera: Object.freeze({
+        position: Object.freeze([0, 0, 0] as const),
+        target: Object.freeze([0, 0, 0] as const),
+      }),
       evolutionRemovals: null,
       evolutionRemovalAnimated: false,
       dependencyRoutes: EMPTY_DEPENDENCY_ROUTE_DIAGNOSTICS,
@@ -3070,7 +3084,14 @@ let repositoryExplorerIndex = createRepositoryExplorerIndex(DEMO_MODEL);
 let searchResultLimit = DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT;
 let executableUnitVisibleLimit =
   INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;
-let sourceStructureVisibleLimit = FINE_DETAIL_INITIAL_LIMIT;
+// Kept separate from the legacy executable-unit table: opening more source
+// declarations must never change the normal file metrics presentation.
+let fineDetailVisibleLimit = FINE_DETAIL_INITIAL_LIMIT;
+let fineDetailDrilledBuildingId: string | undefined;
+let expandedFineDetailTypeIds = new Set<string>();
+let selectedSourceDeclaration:
+  | { readonly buildingId: string; readonly node: FineDetailNode }
+  | undefined;
 let explorerState = resetExplorerState();
 let activeExternalLayout = createExternalDependencyLayout(DEMO_MODEL);
 let activeExternalNodes: readonly ExternalSceneNode[] =
@@ -3499,8 +3520,8 @@ inspectorFields.sourceStructureShowMore.addEventListener("click", () => {
     ? activeBuildingsById.get(selectedExplorerBuildingId(explorerState)!)
     : undefined;
   if (!building) return;
-  sourceStructureVisibleLimit = nextBoundedResultLimit(
-    sourceStructureVisibleLimit,
+  fineDetailVisibleLimit = nextBoundedResultLimit(
+    fineDetailVisibleLimit,
     FINE_DETAIL_MAXIMUM_LIMIT,
     FINE_DETAIL_INITIAL_LIMIT,
   );
@@ -3509,9 +3530,26 @@ inspectorFields.sourceStructureShowMore.addEventListener("click", () => {
 inspectorFields.sourceStructureReturn.addEventListener("click", () => {
   // The city scene, selected building and OrbitControls were never replaced;
   // closing the drill-down therefore restores the exact prior camera/selection.
+  const selectedBuildingId = selectedExplorerBuildingId(explorerState);
+  const building = selectedBuildingId === null
+    ? undefined
+    : activeBuildingsById.get(selectedBuildingId);
+  sourceRequest?.abort();
+  sourceRequest = undefined;
   inspectorFields.sourceStructureDetails.open = false;
   inspectorFields.sourceStructureReturn.hidden = true;
+  fineDetailDrilledBuildingId = undefined;
+  selectedSourceDeclaration = undefined;
   inspectorFields.sourceDetails.open = false;
+  if (
+    building !== undefined &&
+    loadedBuildingSource?.buildingId === building.id
+  ) {
+    prepareAiGuidance(building);
+  } else {
+    resetAiGuidancePresentation();
+  }
+  sceneHost.querySelector<HTMLCanvasElement>("canvas")?.focus();
   setStatus("Returned to the selected building in the city.");
 });
 buildingSearch.addEventListener("keydown", (event) => {
@@ -6432,8 +6470,6 @@ function sourceAvailabilityMessage(): string {
 function scrubBuildingSource(closeDetails = true): void {
   sourceRequest?.abort();
   sourceRequest = undefined;
-  aiGuidanceRequest?.abort();
-  aiGuidanceRequest = undefined;
   loadedBuildingSource = undefined;
   if (closeDetails) inspectorFields.sourceDetails.open = false;
   inspectorFields.sourceSummary.textContent =
@@ -6443,15 +6479,10 @@ function scrubBuildingSource(closeDetails = true): void {
   inspectorFields.sourceStatus.textContent =
     sourceAvailabilityMessage();
   inspectorFields.sourceCode.replaceChildren();
-  inspectorFields.aiDetails.open = false;
-  inspectorFields.aiSummary.textContent = "Not requested";
-  inspectorFields.aiStatus.textContent = "Suggestions are optional and deterministic findings remain separate.";
-  inspectorFields.aiPreview.hidden = true;
-  inspectorFields.aiPreview.textContent = "";
-  inspectorFields.aiRequest.hidden = true;
-  inspectorFields.aiRequest.disabled = false;
-  inspectorFields.aiSuggestions.hidden = true;
-  inspectorFields.aiSuggestions.replaceChildren();
+  resetAiGuidancePresentation();
+  selectedSourceDeclaration = undefined;
+  fineDetailDrilledBuildingId = undefined;
+  inspectorFields.sourceStructureReturn.hidden = true;
   inspectorFields.sourcePath.textContent = "";
   inspectorFields.sourceRevision.textContent = "";
   inspectorFields.sourceExternal.removeAttribute("href");
@@ -6459,6 +6490,21 @@ function scrubBuildingSource(closeDetails = true): void {
   inspectorFields.sourceExternal.hidden = true;
   inspectorFields.sourceEditor.hidden = true;
   inspectorFields.sourceContent.hidden = true;
+}
+
+function resetAiGuidancePresentation(): void {
+  aiGuidanceRequest?.abort();
+  aiGuidanceRequest = undefined;
+  inspectorFields.aiDetails.open = false;
+  inspectorFields.aiSummary.textContent = "Not requested";
+  inspectorFields.aiStatus.textContent = "Suggestions are optional and deterministic findings remain separate.";
+  inspectorFields.aiPreview.hidden = true;
+  inspectorFields.aiPreview.textContent = "";
+  inspectorFields.aiRequest.hidden = true;
+  inspectorFields.aiRequest.disabled = false;
+  inspectorFields.aiRequest.onclick = null;
+  inspectorFields.aiSuggestions.hidden = true;
+  inspectorFields.aiSuggestions.replaceChildren();
 }
 
 function markActiveSourceResultRemoved(jobId: string): void {
@@ -6475,6 +6521,8 @@ function renderSourceCode(
   source: BuildingSource,
   startLine?: number,
   endLine = startLine,
+  startColumn?: number,
+  endColumn?: number,
 ): void {
   inspectorFields.sourceCode.replaceChildren();
   const {
@@ -6518,19 +6566,39 @@ function renderSourceCode(
       lineNumber <= (endLine ?? startLine)
     ) {
       line.classList.add("source-line-highlight");
+      if (startColumn !== undefined && endColumn !== undefined) {
+        line.classList.add("source-column-aware");
+      }
     }
     const presentation = presentSourceLine(
       text,
       remainingCharacters,
       remainingTokens,
     );
+    let tokenOffset = 0;
+    const highlightStart = startLine === undefined || startColumn === undefined
+      ? -1
+      : lineNumber === startLine ? startColumn - 1 : lineNumber > startLine && lineNumber <= (endLine ?? startLine) ? 0 : -1;
+    const highlightEnd = highlightStart < 0 || endColumn === undefined
+      ? -1
+      : lineNumber === (endLine ?? startLine) ? endColumn : text.length;
     for (const token of presentation.tokens) {
-      const span = document.createElement("span");
-      if (token.kind !== "text") {
-        span.className = `source-token-${token.kind}`;
+      const tokenStart = tokenOffset;
+      const tokenEnd = tokenStart + token.text.length;
+      const cuts = [...new Set([tokenStart, tokenEnd, Math.max(tokenStart, highlightStart), Math.min(tokenEnd, highlightEnd)])]
+        .filter((offset) => offset >= tokenStart && offset <= tokenEnd)
+        .sort((left, right) => left - right);
+      for (let index = 0; index + 1 < cuts.length; index += 1) {
+        const from = cuts[index]!;
+        const to = cuts[index + 1]!;
+        if (to <= from) continue;
+        const span = document.createElement("span");
+        if (token.kind !== "text") span.classList.add(`source-token-${token.kind}`);
+        if (highlightStart >= 0 && from < highlightEnd && to > highlightStart) span.classList.add("source-range-highlight");
+        span.textContent = token.text.slice(from - tokenStart, to - tokenStart);
+        line.append(span);
       }
-      span.textContent = token.text;
-      line.append(span);
+      tokenOffset = tokenEnd;
     }
     remainingCharacters -= presentation.text.length;
     remainingTokens -= presentation.tokens.length;
@@ -6560,11 +6628,21 @@ function renderSourceCode(
 
 function prepareAiGuidance(
   building: CityBuilding,
+  declaration?: FineDetailNode,
 ): void {
+  resetAiGuidancePresentation();
+  if (declaration !== undefined) {
+    inspectorFields.aiSummary.textContent = "Declaration selected";
+    inspectorFields.aiStatus.textContent =
+      `AI guidance for ${sourceStructureKindLabel(declaration.kind)} ${declaration.name} ` +
+      `(${declaration.id}, lines ${declaration.startLine}–${declaration.endLine}) ` +
+      "requires scoped server review support. No source was sent to an AI provider.";
+    inspectorFields.aiRequest.disabled = true;
+    return;
+  }
   const jobId = activeModelSource.jobId;
   if (jobId === undefined) return;
   const controller = new AbortController();
-  aiGuidanceRequest?.abort();
   aiGuidanceRequest = controller;
   inspectorFields.aiSummary.textContent = "Preparing preview";
   inspectorFields.aiStatus.textContent = "No source has been sent to an AI provider.";
@@ -6624,19 +6702,39 @@ function revealBuildingSource(
   building: CityBuilding,
   startLine?: number,
   endLine?: number,
+  startColumn?: number,
+  endColumn?: number,
+  declaration?: FineDetailNode,
 ): void {
+  const declarationSelection =
+    declaration === undefined
+      ? undefined
+      : { buildingId: building.id, node: declaration };
   if (
     loadedBuildingSource?.buildingId === building.id
   ) {
+    selectedSourceDeclaration = declarationSelection;
+    fineDetailDrilledBuildingId = declaration === undefined
+      ? undefined
+      : building.id;
+    inspectorFields.sourceStructureReturn.hidden = declaration === undefined;
     inspectorFields.sourceDetails.open = true;
     renderSourceCode(
       loadedBuildingSource.source,
       startLine,
       endLine,
+      startColumn,
+      endColumn,
     );
+    prepareAiGuidance(building, declaration);
     return;
   }
   scrubBuildingSource(false);
+  selectedSourceDeclaration = declarationSelection;
+  fineDetailDrilledBuildingId = declaration === undefined
+    ? undefined
+    : building.id;
+  inspectorFields.sourceStructureReturn.hidden = declaration === undefined;
   inspectorFields.sourceDetails.open = true;
   const jobId = activeModelSource.jobId;
   if (
@@ -6706,8 +6804,8 @@ function revealBuildingSource(
         inspectorFields.sourceEditor.href = source.editorUrl;
       }
       inspectorFields.sourceContent.hidden = false;
-      renderSourceCode(source, startLine, endLine);
-      prepareAiGuidance(building);
+      renderSourceCode(source, startLine, endLine, startColumn, endColumn);
+      prepareAiGuidance(building, declaration);
     })
     .catch((error: unknown) => {
       if (
@@ -6762,13 +6860,16 @@ function showInspector(context: BuildingContext | null): void {
     describeBuildingMetrics(activeModel, building);
   renderBuildingEvolutionHistory(building.id);
   inspectorFields.sourceDetails.open = false;
+  selectedSourceDeclaration = undefined;
+  fineDetailDrilledBuildingId = undefined;
   revealBuildingSource(
     building,
     building.sourceLocation?.startLine,
   );
   executableUnitVisibleLimit =
     INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;
-  sourceStructureVisibleLimit = FINE_DETAIL_INITIAL_LIMIT;
+  fineDetailVisibleLimit = FINE_DETAIL_INITIAL_LIMIT;
+  expandedFineDetailTypeIds = new Set();
   inspectorFields.unitsDetails.open = false;
   inspectorFields.sourceStructureDetails.open = false;
   inspectorFields.sourceStructureReturn.hidden = true;
@@ -7016,45 +7117,120 @@ function renderExecutableUnits(building: CityBuilding): void {
 }
 
 function renderSourceStructure(building: CityBuilding): void {
-  const detail = projectFineDetail(building, sourceStructureVisibleLimit);
+  const detail = projectFineDetail(building, fineDetailVisibleLimit);
   const wasOpen = inspectorFields.sourceStructureDetails.open;
-  const returnWasVisible =
-    !inspectorFields.sourceStructureReturn.hidden;
+  const drilled = fineDetailDrilledBuildingId === building.id;
   inspectorFields.sourceStructure.replaceChildren();
-  inspectorFields.sourceStructureDetails.hidden = detail.state === "unavailable";
-  inspectorFields.sourceStructureDetails.open =
-    detail.state !== "unavailable" && wasOpen;
-  inspectorFields.sourceStructureReturn.hidden =
-    detail.state === "unavailable" || !returnWasVisible;
-  inspectorFields.sourceStructureShowMore.hidden = detail.omittedCount === 0;
+  // Unavailability is useful, user-facing analyzer provenance. Keep the
+  // section mounted and accessible instead of silently removing it.
+  inspectorFields.sourceStructureDetails.hidden = false;
+  inspectorFields.sourceStructureDetails.open = wasOpen;
+  inspectorFields.sourceStructureReturn.hidden = !drilled;
+  inspectorFields.sourceStructureShowMore.hidden = !detail.canLoadMore;
   inspectorFields.sourceStructureStatus.textContent =
     detail.state === "unavailable"
       ? detail.unavailable.join(" ")
       : detail.unavailable.length === 0
-        ? "Ranges are persisted analyzer facts; no call or type edge is inferred."
-        : detail.unavailable.join(" ");
+        ? `${building.sourceStructure?.relations.length ?? 0} syntax-provenance relationships recorded; no unsupported edge is inferred.`
+        : `${building.sourceStructure?.relations.length ?? 0} syntax-provenance relationships recorded. ${detail.unavailable.join(" ")}`;
+  if (detail.terminalReason !== undefined) {
+    inspectorFields.sourceStructureStatus.textContent += ` ${detail.terminalReason}`;
+  }
   inspectorFields.sourceStructureSummary.textContent =
     detail.state === "unavailable"
       ? "Unavailable"
       : `${detail.totalCount.toLocaleString()} declarations${detail.omittedCount > 0 ? ` · ${detail.omittedCount.toLocaleString()} not loaded` : ""}`;
-  inspectorFields.sourceStructureShowMore.textContent =
+  if (detail.canLoadMore) inspectorFields.sourceStructureShowMore.textContent =
     `Show ${Math.min(FINE_DETAIL_INITIAL_LIMIT, detail.omittedCount).toLocaleString()} more declarations`;
+  const byParent = new Map<string | undefined, typeof detail.nodes[number][]>();
+  const visibleIds = new Set(detail.nodes.map(({ id }) => id));
   for (const node of detail.nodes) {
-    const item = document.createElement("li");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "unit-source-jump";
-    const nesting = node.parentId === undefined ? "" : "↳ ";
-    const columns = node.startColumn === undefined ? "" : `:${node.startColumn}`;
-    button.textContent = `${nesting}${node.kind === "type" ? "Type" : "Function"} ${node.name} · ${node.startLine}${columns}`;
-    button.title = `Open the exact persisted range for ${node.name}`;
-    button.addEventListener("click", () => {
-      revealBuildingSource(building, node.startLine, node.endLine);
-      inspectorFields.sourceStructureReturn.hidden = false;
-    });
-    item.append(button);
-    inspectorFields.sourceStructure.append(item);
+    const parentId = node.parentId !== undefined && visibleIds.has(node.parentId) ? node.parentId : undefined;
+    const siblings = byParent.get(parentId) ?? [];
+    siblings.push(node);
+    byParent.set(parentId, siblings);
   }
+  const appendNodes = (container: HTMLOListElement, parentId?: string): void => {
+    for (const node of byParent.get(parentId) ?? []) {
+      const item = document.createElement("li");
+      item.className = `source-structure-node source-structure-${node.category}`;
+      const children = byParent.get(node.id) ?? [];
+      const createSourceJump = (label?: string): HTMLButtonElement => {
+        const jump = document.createElement("button");
+        jump.type = "button";
+        jump.className = "unit-source-jump source-structure-source-jump";
+        jump.dataset["sourceDeclarationId"] = node.id;
+        jump.dataset["sourceDeclarationCategory"] = node.category;
+        jump.dataset["sourceDeclarationKind"] = node.kind;
+        jump.dataset["sourceDeclarationStartLine"] = String(node.startLine);
+        jump.dataset["sourceDeclarationEndLine"] = String(node.endLine);
+        if (node.startColumn !== undefined) {
+          jump.dataset["sourceDeclarationStartColumn"] = String(node.startColumn);
+        }
+        if (node.endColumn !== undefined) {
+          jump.dataset["sourceDeclarationEndColumn"] = String(node.endColumn);
+        }
+        if (
+          selectedSourceDeclaration?.buildingId === building.id &&
+          selectedSourceDeclaration.node.id === node.id
+        ) {
+          jump.setAttribute("aria-current", "location");
+        }
+        const columns = node.startColumn === undefined ? "" : `:${node.startColumn}`;
+        jump.textContent = label ?? `${sourceStructureKindLabel(node.kind)} ${node.name} · ${node.startLine}${columns}`;
+        jump.title = `${node.explanation} Open its exact persisted source range.`;
+        jump.setAttribute("aria-label", `${sourceStructureKindLabel(node.kind)} ${node.name}. ${node.explanation} Starts line ${node.startLine}${columns}. Open its exact persisted source range.`);
+        jump.addEventListener("click", () => {
+          for (const current of inspectorFields.sourceStructure.querySelectorAll(
+            '[aria-current="location"]',
+          )) {
+            current.removeAttribute("aria-current");
+          }
+          revealBuildingSource(
+            building,
+            node.startLine,
+            node.endLine,
+            node.startColumn,
+            node.endColumn,
+            node,
+          );
+          jump.setAttribute("aria-current", "location");
+        });
+        return jump;
+      };
+      if (node.category === "type" && children.length > 0) {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "unit-source-jump source-structure-toggle";
+        toggle.dataset["sourceStructureId"] = node.id;
+        const expanded = expandedFineDetailTypeIds.has(node.id);
+        toggle.setAttribute("aria-expanded", String(expanded));
+        toggle.textContent = `${sourceStructureKindLabel(node.kind)} ${node.name} (${children.length.toLocaleString()})`;
+        toggle.title = `${expanded ? "Collapse" : "Expand"} ${node.kind} ${node.name}. ${node.explanation}`;
+        toggle.addEventListener("click", () => {
+          if (expandedFineDetailTypeIds.has(node.id)) expandedFineDetailTypeIds.delete(node.id);
+          else expandedFineDetailTypeIds.add(node.id);
+          renderSourceStructure(building);
+          inspectorFields.sourceStructure.querySelector<HTMLButtonElement>(`[data-source-structure-id="${CSS.escape(node.id)}"]`)?.focus();
+        });
+        item.append(toggle, createSourceJump(`Open ${node.kind} source · ${node.startLine}${node.startColumn === undefined ? "" : `:${node.startColumn}`}`));
+        const childList = document.createElement("ol");
+        childList.className = "source-structure-children";
+        childList.hidden = !expanded;
+        childList.setAttribute("aria-label", `${node.name} members`);
+        appendNodes(childList, node.id);
+        item.append(childList);
+      } else {
+        item.append(createSourceJump());
+      }
+      container.append(item);
+    }
+  };
+  appendNodes(inspectorFields.sourceStructure);
+}
+
+function sourceStructureKindLabel(kind: import("../../../packages/core/src/model.js").SourceTypeFact["kind"] | import("../../../packages/core/src/model.js").SourceCallableFact["kind"] | "executable-unit"): string {
+  return kind === "local-function" ? "Local function" : kind === "executable-unit" ? "Executable unit" : kind.charAt(0).toLocaleUpperCase("en-US") + kind.slice(1);
 }
 
 function languageLabel(language: CityBuilding["language"]): string {

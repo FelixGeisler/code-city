@@ -461,6 +461,17 @@ describe("history evolution analysis", () => {
     for (const frame of frames) {
       expect(frame.metricMapping).toEqual(mapping);
       const building = frame.buildings[0]!;
+      expect(building.sourceLocation).toEqual({
+        startLine: 1,
+        endLine: 2,
+      });
+      expect(building.sourceStructure?.availability).toBe("available");
+      expect(
+        building.sourceStructure?.callables.some(
+          ({ name, provenance }) =>
+            name === "choose" && provenance === "syntax",
+        ),
+      ).toBe(true);
       expect(building.size.y).toBeCloseTo(
         2 + 20 * Math.min(1, building.metrics.maximumComplexity / 10),
         12,

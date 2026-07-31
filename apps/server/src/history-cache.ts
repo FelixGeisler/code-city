@@ -454,6 +454,17 @@ function sourceFact(
     metrics: building.metrics,
     metricMethod: building.metricMethod,
     units: Object.freeze([...(building.units ?? [])]),
+    ...(building.sourceLocation === undefined
+      ? {}
+      : {
+          sourceLocation: {
+            startLine: 1 as const,
+            endLine: building.sourceLocation.endLine,
+          },
+        }),
+    ...(building.sourceStructure === undefined
+      ? {}
+      : { sourceStructure: building.sourceStructure }),
     risk: building.risk,
     semanticGroupId: building.semanticGroupId,
     imports: Object.freeze(imports),

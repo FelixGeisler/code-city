@@ -29,7 +29,9 @@ jobs:
     - run: npm run verify
 
   viewer-performance:
-    timeout-minutes: 8
+    # The protected browser suite runs close to eight minutes on a cold,
+    # single-worker hosted runner; retain full coverage with bounded headroom.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v6

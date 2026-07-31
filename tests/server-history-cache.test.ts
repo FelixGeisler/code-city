@@ -134,6 +134,8 @@ describe("persistent history semantic cache", () => {
     expect(coldFacts.sources.map(({ path }) => path)).toEqual([
       "src/main.ts",
     ]);
+    expect(coldFacts.sources[0]?.sourceStructure?.availability).toBe("available");
+    expect(coldFacts.sources[0]?.sourceStructure?.callables.some(({ name }) => name === "answer")).toBe(true);
     cold.release();
 
     const warm = await cache.acquire(request(), compute);
