@@ -416,6 +416,30 @@ inbound authorization, and use a least-privileged service identity.
 
 == Print
 
+== Progressive source detail
+
+The file-level city remains the startup level of detail.  Analyzer-produced
+models may add the backwards-compatible
+`codecity.source-structure/1` building extension, containing deterministic
+class/type and callable identities plus exact one-based line/column ranges.
+Semantic IDs are derived from declaration ancestry, kind, name, signature, and
+same-key occurrence rather than source order, so unrelated insertions do not
+renumber existing declarations. Callable complexity remains an analyzer fact
+with the declaration instead of being recomputed by the viewer.
+The viewer requests a bounded data projection only after a file is selected;
+it creates no fine-detail meshes while the city starts. The declaration list is
+keyboard accessible, opens the retained exact source range, and **Return to
+city** closes the drill-down without replacing the selected building or camera.
+Fine detail is explicitly `not-printable`; print exports retain file/district
+geometry only.
+
+For C#, TypeScript, and JavaScript, declarations are syntax-derived. Cross-file
+type references and call targets are not guessed: the model persists a
+per-language `unavailable` explanation whenever a compilation/binding context
+is absent. Older schema-1.0 models and older Roslyn helper responses remain
+readable and show that same explicit unavailability rather than fabricated
+facts.
+
 `npm run print:demo` writes a labelled 3MF with aggregated dependency traces
 and a private JSON legend. PrusaSlicer imports it as one object with five
 aligned tool parts; the command reports its profile-derived size.

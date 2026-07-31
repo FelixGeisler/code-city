@@ -10,6 +10,7 @@ import type {
   IdentityLogo,
   SourceLanguage,
   SourceMetrics,
+  SourceStructure,
 } from "../../core/src/model.js";
 import { normalizeCityIdentity } from "../../core/src/identity.js";
 import { classifyRisk } from "../../core/src/metrics.js";
@@ -838,6 +839,7 @@ function pendingSource(
   metricMethod: SourceFileFact["metricMethod"],
   units: SourceFileFact["units"],
   imports: readonly StaticImportFact[],
+  sourceStructure?: SourceStructure,
 ): PendingSource {
   const directory = safeRepositoryRelativePath(path.posix.dirname(relativePath));
   const districtId = stableId(
@@ -846,16 +848,17 @@ function pendingSource(
     selected.module.id,
   );
   const risk = classifyRisk(metrics.maximumComplexity);
+  const buildingId = stableId(
+    "building",
+    context.repository.id,
+    selected.module.id,
+    relativePath,
+  );
   return {
     virtualPath: sourcePath,
     repositoryRoot: context.virtualRoot,
     fact: {
-      id: stableId(
-        "building",
-        context.repository.id,
-        selected.module.id,
-        relativePath,
-      ),
+      id: buildingId,
       repositoryId: context.repository.id,
       moduleId: selected.module.id,
       districtId,
@@ -883,11 +886,48 @@ function pendingSource(
         startLine: 1,
         endLine: Math.max(1, sourceText.split(/\r\n?|\n/u).length),
       },
+      ...(sourceStructure === undefined
+        ? {}
+        : { sourceStructure: bindSourceStructure(buildingId, sourceStructure) }),
       risk,
       semanticGroupId: semanticGroupForRisk(risk),
       imports,
     },
     imports,
+  };
+}
+
+/** Prefix file-local analyzer keys so every persisted fine identity is global. */
+function bindSourceStructure(
+  buildingId: string,
+  structure: SourceStructure,
+): SourceStructure {
+  const localToGlobal = new Map<string, string>();
+  for (const item of [...structure.types, ...structure.callables]) {
+    localToGlobal.set(item.id, `${buildingId}:${item.id}`);
+  }
+  return {
+    ...structure,
+    types: structure.types.map((item) => ({
+      ...item,
+      id: localToGlobal.get(item.id)!,
+      ...(item.parentTypeId === undefined || localToGlobal.get(item.parentTypeId) === undefined
+        ? {}
+        : { parentTypeId: localToGlobal.get(item.parentTypeId)! }),
+    })),
+    callables: structure.callables.map((item) => ({
+      ...item,
+      id: localToGlobal.get(item.id)!,
+      ...(item.enclosingTypeId === undefined || localToGlobal.get(item.enclosingTypeId) === undefined
+        ? {}
+        : { enclosingTypeId: localToGlobal.get(item.enclosingTypeId)! }),
+    })),
+    relations: structure.relations.map((item) => ({
+      ...item,
+      id: `${buildingId}:${item.id}`,
+      sourceId: localToGlobal.get(item.sourceId)!,
+      targetId: localToGlobal.get(item.targetId)!,
+    })),
   };
 }
 
@@ -982,6 +1022,7 @@ async function analyzeSources(
           "typescript-compiler-api-v1",
           analysis.units,
           imports,
+          analysis.sourceStructure,
         ),
       );
     }
@@ -1038,6 +1079,7 @@ async function analyzeSources(
           result.metricMethod,
           result.units,
           [],
+          result.sourceStructure,
         ),
       );
     }

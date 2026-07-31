@@ -167,6 +167,55 @@ export interface SourceLocation {
   readonly endLine: number;
 }
 
+/** An exact, one-based, inclusive source range for a declared code entity. */
+export interface SourceRange extends SourceLocation {
+  readonly startColumn: number;
+  readonly endColumn: number;
+}
+
+export type SourceTypeKind = "class" | "interface" | "enum" | "type" | "struct" | "record" | "delegate";
+export type SourceCallableKind = "function" | "method" | "constructor" | "accessor" | "lambda" | "local-function";
+
+/**
+ * Source-level facts are deliberately syntactic. A relation is emitted only
+ * where the analyzer can identify both endpoints without guessing; everything
+ * else is explained in `unavailable`.
+ */
+export interface SourceTypeFact {
+  readonly id: string;
+  readonly name: string;
+  readonly kind: SourceTypeKind;
+  readonly range: SourceRange;
+  readonly parentTypeId?: string;
+}
+
+export interface SourceCallableFact {
+  readonly id: string;
+  readonly name: string;
+  readonly kind: SourceCallableKind;
+  readonly range: SourceRange;
+  readonly enclosingTypeId?: string;
+  readonly complexity?: number;
+}
+
+export interface SourceRelationFact {
+  readonly id: string;
+  readonly kind: "extends" | "implements" | "calls" | "type-reference";
+  readonly sourceId: string;
+  readonly targetId: string;
+  readonly provenance: "syntax";
+}
+
+export interface SourceStructure {
+  readonly version: "codecity.source-structure/1";
+  readonly availability: "available" | "unavailable";
+  readonly types: readonly SourceTypeFact[];
+  readonly callables: readonly SourceCallableFact[];
+  readonly relations: readonly SourceRelationFact[];
+  /** Per-language, feature-specific facts intentionally not inferred. */
+  readonly unavailable: readonly string[];
+}
+
 export type SourceRevision =
   | {
       readonly kind: "commit";
@@ -297,6 +346,8 @@ export interface CityBuilding {
   readonly metricNormalization?: BuildingMetricNormalization;
   readonly units?: readonly ExecutableUnitMetric[];
   readonly sourceLocation?: SourceLocation;
+  /** Optional additive detail contract. Older schema-1.0 models remain valid. */
+  readonly sourceStructure?: SourceStructure;
   readonly risk: RiskBand;
   readonly semanticGroupId: string;
   readonly position: Vector3;

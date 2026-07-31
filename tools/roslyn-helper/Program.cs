@@ -175,6 +175,7 @@ internal static class Program
             .ThenBy(unit => unit.Name, StringComparer.Ordinal)
             .ThenBy(unit => unit.Complexity)
             .ToArray();
+        var sourceStructure = SourceStructure(root, callableNodes);
         var warnings = tree
             .GetDiagnostics()
             .Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
@@ -188,6 +189,7 @@ internal static class Program
             decisionLoad,
             orderedUnits.Max(unit => unit.Complexity),
             orderedUnits,
+            sourceStructure,
             warnings
         );
     }
@@ -287,6 +289,179 @@ internal static class Program
     private static int EndLine(SyntaxNode node) =>
         node.GetLocation().GetLineSpan().EndLinePosition.Line + 1;
 
+    private static SourceStructureFact SourceStructure(
+        CompilationUnitSyntax root,
+        SyntaxNode[] callableNodes
+    )
+    {
+        var declarations = root.DescendantNodes()
+            .Where(IsTypeDeclaration)
+            .OrderBy(node => node.SpanStart)
+            .ThenBy(TypeKind, StringComparer.Ordinal)
+            .ThenBy(TypeName, StringComparer.Ordinal)
+            .ToArray();
+        var typeIds = StableDeclarationIds(
+            declarations,
+            "source-type",
+            node => $"{DeclarationPath(node)}|{TypeKind(node)}:{TypeName(node)}"
+        );
+        var types = declarations.Select(node => new TypeFact(
+            typeIds[node], SanitizeName(TypeName(node)), TypeKind(node), Range(node),
+            ParentTypeId(node, typeIds)
+        )).ToArray();
+        var orderedCallables = callableNodes
+            .OrderBy(node => node.SpanStart)
+            .ThenBy(UnitName, StringComparer.Ordinal)
+            .ToArray();
+        var callableIds = StableDeclarationIds(
+            orderedCallables,
+            "source-callable",
+            node => $"{DeclarationPath(node)}|{CallableKind(node)}:{UnitName(node)}({CallableSignature(node)})"
+        );
+        var callables = orderedCallables.Select(node => new CallableFact(
+            callableIds[node], SanitizeName(UnitName(node)), CallableKind(node), Range(node),
+            ParentTypeId(node, typeIds), 1 + CountDecisions(CallableBody(node))
+        )).ToArray();
+        return new SourceStructureFact(
+            "codecity.source-structure/1", "available", types, callables,
+            Array.Empty<RelationFact>(),
+            new[] { "C# call targets and cross-file type references are unavailable: Roslyn syntax analysis does not load compilation references and does not infer semantic bindings." }
+        );
+    }
+
+    private static bool IsTypeDeclaration(SyntaxNode node) => node is
+        ClassDeclarationSyntax or StructDeclarationSyntax or InterfaceDeclarationSyntax or
+        RecordDeclarationSyntax or EnumDeclarationSyntax or DelegateDeclarationSyntax;
+
+    private static string TypeKind(SyntaxNode node) => node switch
+    {
+        ClassDeclarationSyntax => "class",
+        InterfaceDeclarationSyntax => "interface",
+        EnumDeclarationSyntax => "enum",
+        StructDeclarationSyntax => "struct",
+        RecordDeclarationSyntax => "record",
+        DelegateDeclarationSyntax => "delegate",
+        _ => "type",
+    };
+
+    private static string TypeName(SyntaxNode node) => node switch
+    {
+        BaseTypeDeclarationSyntax declaration => declaration.Identifier.ValueText,
+        DelegateDeclarationSyntax declaration => declaration.Identifier.ValueText,
+        _ => "<type>",
+    };
+
+    private static string CallableKind(SyntaxNode node) => node switch
+    {
+        ConstructorDeclarationSyntax => "constructor",
+        AccessorDeclarationSyntax => "accessor",
+        LocalFunctionStatementSyntax => "local-function",
+        AnonymousFunctionExpressionSyntax => "lambda",
+        _ => "method",
+    };
+
+    private static Dictionary<SyntaxNode, string> StableDeclarationIds(
+        IEnumerable<SyntaxNode> nodes,
+        string scope,
+        Func<SyntaxNode, string> key
+    )
+    {
+        var occurrences = new Dictionary<string, int>(StringComparer.Ordinal);
+        var result = new Dictionary<SyntaxNode, string>();
+        foreach (var node in nodes)
+        {
+            var identity = key(node).Normalize(NormalizationForm.FormC);
+            var occurrence = occurrences.GetValueOrDefault(identity) + 1;
+            occurrences[identity] = occurrence;
+            result[node] = StableLocalId(
+                scope,
+                identity,
+                occurrence.ToString(CultureInfo.InvariantCulture)
+            );
+        }
+        return result;
+    }
+
+    private static string StableLocalId(
+        string scope,
+        params string[] components
+    )
+    {
+        var payload = string.Join(
+            "|",
+            components.Select(component =>
+                $"{component.Length.ToString(CultureInfo.InvariantCulture)}:{component}"
+            )
+        );
+        var bytes = Encoding.UTF8.GetBytes($"{scope}|{payload}");
+        var hash = 14695981039346656037UL;
+        foreach (var value in bytes)
+        {
+            hash ^= value;
+            hash = unchecked(hash * 1099511628211UL);
+        }
+        return $"{scope}:{hash:x16}";
+    }
+
+    private static string DeclarationPath(SyntaxNode node)
+    {
+        var parts = new List<string>();
+        for (var parent = node.Parent; parent is not null; parent = parent.Parent)
+        {
+            if (IsTypeDeclaration(parent))
+            {
+                parts.Add($"{TypeKind(parent)}:{TypeName(parent)}");
+            }
+            else if (IsCallable(parent))
+            {
+                parts.Add(
+                    $"callable:{CallableKind(parent)}:{UnitName(parent)}({CallableSignature(parent)})"
+                );
+            }
+        }
+        parts.Reverse();
+        return string.Join("/", parts);
+    }
+
+    private static string CallableSignature(SyntaxNode node)
+    {
+        IEnumerable<ParameterSyntax> parameters = node switch
+        {
+            BaseMethodDeclarationSyntax method => method.ParameterList.Parameters,
+            LocalFunctionStatementSyntax local => local.ParameterList.Parameters,
+            ParenthesizedLambdaExpressionSyntax lambda => lambda.ParameterList.Parameters,
+            SimpleLambdaExpressionSyntax lambda => new[] { lambda.Parameter },
+            AnonymousMethodExpressionSyntax anonymous =>
+                anonymous.ParameterList?.Parameters ?? [],
+            _ => [],
+        };
+        return string.Join(
+            ",",
+            parameters.Select(parameter => parameter.Type?.ToString() ?? "_")
+        );
+    }
+
+    private static SourceRangeFact Range(SyntaxNode node)
+    {
+        var span = node.GetLocation().GetLineSpan();
+        return new SourceRangeFact(
+            span.StartLinePosition.Line + 1, span.StartLinePosition.Character + 1,
+            span.EndLinePosition.Line + 1, Math.Max(1, span.EndLinePosition.Character)
+        );
+    }
+
+    private static string? ParentTypeId(
+        SyntaxNode node,
+        IReadOnlyDictionary<SyntaxNode, string> typeIds
+    )
+    {
+        for (var parent = node.Parent; parent is not null; parent = parent.Parent)
+        {
+            if (typeIds.TryGetValue(parent, out var id)) return id;
+        }
+        return null;
+    }
+
     private static string UnitName(SyntaxNode node) =>
         node switch
         {
@@ -355,6 +530,11 @@ internal static class Program
     private sealed record RequestFile(string Id, string Source);
     private sealed record AnalysisResponse(string ProtocolVersion, FileResponse[] Files);
     private sealed record UnitMetric(string Name, int Line, int EndLine, int Complexity);
+    private sealed record SourceRangeFact(int StartLine, int StartColumn, int EndLine, int EndColumn);
+    private sealed record TypeFact(string Id, string Name, string Kind, SourceRangeFact Range, string? ParentTypeId);
+    private sealed record CallableFact(string Id, string Name, string Kind, SourceRangeFact Range, string? EnclosingTypeId, int Complexity);
+    private sealed record RelationFact(string Id, string Kind, string SourceId, string TargetId, string Provenance);
+    private sealed record SourceStructureFact(string Version, string Availability, TypeFact[] Types, CallableFact[] Callables, RelationFact[] Relations, string[] Unavailable);
 
     private sealed record FileResponse(
         string Id,
@@ -365,6 +545,7 @@ internal static class Program
         int? MaximumComplexity,
         int? ExecutableUnitCount,
         UnitMetric[]? Units,
+        SourceStructureFact? SourceStructure,
         string[]? Warnings,
         string? Warning
     )
@@ -375,6 +556,7 @@ internal static class Program
             int decisionLoad,
             int maximumComplexity,
             UnitMetric[] units,
+            SourceStructureFact sourceStructure,
             string[] warnings
         ) => new(
             id,
@@ -385,11 +567,12 @@ internal static class Program
             maximumComplexity,
             units.Length,
             units,
+            sourceStructure,
             warnings,
             null
         );
 
         internal static FileResponse Skipped(string id, string warning) =>
-            new(id, "skipped", null, null, null, null, null, null, null, warning);
+            new(id, "skipped", null, null, null, null, null, null, null, null, warning);
     }
 }

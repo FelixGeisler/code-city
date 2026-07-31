@@ -5,6 +5,12 @@ import type {
   ExecutableUnitMetric,
   StaticImportFact,
 } from "./types.js";
+import type {
+  SourceCallableFact,
+  SourceStructure,
+  SourceTypeFact,
+} from "../../core/src/model.js";
+import { stableId } from "../../core/src/path.js";
 
 export interface TypeScriptMetricsResult {
   readonly sloc: number;
@@ -14,6 +20,160 @@ export interface TypeScriptMetricsResult {
   readonly units: readonly ExecutableUnitMetric[];
   readonly imports: readonly StaticImportFact[];
   readonly hasSyntaxErrors: boolean;
+  readonly sourceStructure: SourceStructure;
+}
+
+function sourceRange(node: ts.Node, source: ts.SourceFile) {
+  const start = source.getLineAndCharacterOfPosition(node.getStart(source));
+  const end = source.getLineAndCharacterOfPosition(
+    Math.max(node.getStart(source), node.getEnd() - 1),
+  );
+  return Object.freeze({
+    startLine: start.line + 1,
+    startColumn: start.character + 1,
+    endLine: end.line + 1,
+    endColumn: end.character + 1,
+  });
+}
+
+function sourceTypeKind(node: ts.Node): SourceTypeFact["kind"] | undefined {
+  if (ts.isClassDeclaration(node) || ts.isClassExpression(node)) return "class";
+  if (ts.isInterfaceDeclaration(node)) return "interface";
+  if (ts.isEnumDeclaration(node)) return "enum";
+  if (ts.isTypeAliasDeclaration(node)) return "type";
+  return undefined;
+}
+
+function sourceCallableKind(node: ts.Node): SourceCallableFact["kind"] {
+  if (ts.isConstructorDeclaration(node)) return "constructor";
+  if (ts.isGetAccessorDeclaration(node) || ts.isSetAccessorDeclaration(node)) return "accessor";
+  if (ts.isArrowFunction(node)) return "lambda";
+  return ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node)
+    ? "function"
+    : "method";
+}
+
+function executableComplexity(node: ts.FunctionLikeDeclaration): number {
+  if (node.body === undefined) return 1;
+  let decisions = 0;
+  function visit(current: ts.Node): void {
+    if (
+      current !== node.body &&
+      isExecutableUnit(current) &&
+      current.body !== undefined
+    ) {
+      return;
+    }
+    decisions += decisionIncrement(current);
+    ts.forEachChild(current, visit);
+  }
+  visit(node.body);
+  return 1 + decisions;
+}
+
+function declarationPath(node: ts.Node, source: ts.SourceFile): string {
+  const parts: string[] = [];
+  for (let parent = node.parent; parent !== undefined; parent = parent.parent) {
+    const kind = sourceTypeKind(parent);
+    if (kind !== undefined) {
+      const named = (parent as ts.Declaration & {
+        name?: ts.DeclarationName;
+      }).name;
+      parts.push(`${kind}:${named?.getText(source) || "<anonymous>"}`);
+    } else if (isExecutableUnit(parent)) {
+      parts.push(
+        `callable:${sourceCallableKind(parent)}:${unitName(parent, source)}(${callableSignature(parent, source)})`,
+      );
+    }
+  }
+  return parts.reverse().join("/");
+}
+
+function callableSignature(
+  node: ts.FunctionLikeDeclaration,
+  source: ts.SourceFile,
+): string {
+  return node.parameters
+    .map((parameter) => parameter.type?.getText(source) ?? "_")
+    .join(",");
+}
+
+function stableLocalIds(
+  scope: "source-type" | "source-callable",
+  keys: readonly string[],
+): readonly string[] {
+  const occurrences = new Map<string, number>();
+  return keys.map((key) => {
+    const occurrence = (occurrences.get(key) ?? 0) + 1;
+    occurrences.set(key, occurrence);
+    return stableId(scope, key, String(occurrence));
+  });
+}
+
+/**
+ * Collects declarations directly from the parsed syntax tree. It intentionally
+ * does not resolve names across files or invent call edges: program/type-checker
+ * context is not reliably available for arbitrary snapshots.
+ */
+function collectSourceStructure(source: ts.SourceFile): SourceStructure {
+  const rawTypes: Array<Omit<SourceTypeFact, "id" | "parentTypeId"> & { node: ts.Node }> = [];
+  const rawCallables: Array<
+    Omit<SourceCallableFact, "id" | "enclosingTypeId" | "complexity"> & {
+      node: ts.FunctionLikeDeclaration;
+      complexity: number;
+    }
+  > = [];
+  const typeByNode = new Map<ts.Node, string>();
+
+  function visit(node: ts.Node): void {
+    const typeKind = sourceTypeKind(node);
+    if (typeKind !== undefined) {
+      const named = (node as ts.Declaration & { name?: ts.DeclarationName }).name;
+      rawTypes.push({ node, name: named?.getText(source) || "<anonymous>", kind: typeKind, range: sourceRange(node, source) });
+    }
+    if (isExecutableUnit(node) && !ts.isSourceFile(node) && node.body) {
+      rawCallables.push({ node, name: unitName(node, source), kind: sourceCallableKind(node), range: sourceRange(node, source), complexity: executableComplexity(node) });
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(source);
+  rawTypes.sort((a, b) => a.range.startLine - b.range.startLine || a.range.startColumn - b.range.startColumn || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
+  const typeIds = stableLocalIds(
+    "source-type",
+    rawTypes.map((item) =>
+      `${declarationPath(item.node, source)}|${item.kind}:${item.name}`
+    ),
+  );
+  rawTypes.forEach((item, index) => typeByNode.set(item.node, typeIds[index]!));
+  const types = rawTypes.map((item, index) => {
+    let parent = item.node.parent;
+    while (parent && !typeByNode.has(parent)) parent = parent.parent;
+    const parentTypeId = parent === undefined ? undefined : typeByNode.get(parent);
+    return Object.freeze({ id: typeIds[index]!, name: item.name, kind: item.kind, range: item.range, ...(parentTypeId === undefined ? {} : { parentTypeId }) });
+  });
+  rawCallables.sort((a, b) => a.range.startLine - b.range.startLine || a.range.startColumn - b.range.startColumn || a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
+  const callableIds = stableLocalIds(
+    "source-callable",
+    rawCallables.map((item) =>
+      `${declarationPath(item.node, source)}|${item.kind}:${item.name}(${callableSignature(item.node, source)})`
+    ),
+  );
+  const callables = rawCallables.map((item, index) => {
+    let parent = item.node.parent;
+    while (parent && !typeByNode.has(parent)) parent = parent.parent;
+    const enclosingTypeId = parent === undefined ? undefined : typeByNode.get(parent);
+    return Object.freeze({ id: callableIds[index]!, name: item.name, kind: item.kind, range: item.range, complexity: item.complexity, ...(enclosingTypeId === undefined ? {} : { enclosingTypeId }) });
+  });
+  return Object.freeze({
+    version: "codecity.source-structure/1",
+    availability: "available",
+    types: Object.freeze(types),
+    callables: Object.freeze(callables),
+    relations: Object.freeze([]),
+    unavailable: Object.freeze([
+      "TypeScript/JavaScript cross-file type references and call targets are unavailable: the snapshot parser records only unambiguous declarations and does not infer semantic bindings.",
+    ]),
+  });
 }
 
 function unitName(node: ts.FunctionLikeDeclaration, source: ts.SourceFile): string {
@@ -242,5 +402,6 @@ export function analyzeTypeScriptSource(
     units,
     imports: collectStaticImports(source),
     hasSyntaxErrors: parseDiagnostics.length > 0,
+    sourceStructure: collectSourceStructure(source),
   };
 }

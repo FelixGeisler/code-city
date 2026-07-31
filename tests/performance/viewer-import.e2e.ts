@@ -2393,6 +2393,27 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   await expect
     .poll(() => page.locator(".source-line").count())
     .toBeLessThanOrEqual(500);
+  const structureDetails = page.locator(
+    "#building-source-structure-details",
+  );
+  await expect(structureDetails).toBeVisible();
+  await structureDetails.locator("summary").click();
+  const structureJump = structureDetails.getByRole("button", {
+    name: /Function retainedComplexity/u,
+  });
+  await expect(structureJump).toBeVisible();
+  await structureJump.click();
+  await expect(page.locator(".source-line-highlight").first()).toContainText(
+    "export function retainedComplexity",
+  );
+  await structureDetails.getByRole("button", {
+    name: "Return to city",
+  }).click();
+  await expect(structureDetails).not.toHaveAttribute("open", "");
+  await expect(page.locator("#building-source-details")).not.toHaveAttribute(
+    "open",
+    "",
+  );
   await page.locator("#building-ai-guidance-details summary").click();
   await expect(page.locator("#building-ai-guidance-preview")).toContainText(
     '"maximumComplexity": 17',
