@@ -3313,6 +3313,13 @@ safeExtensionPanel = installSafeExtensionPanel(
         review.application,
       );
       activeSafeExtensionEvaluation = review.evaluation;
+      if (projected === activeModel) {
+        printExportDialog.invalidate();
+        imageExportDialog.invalidate();
+        printPlateToolbar.setPlan(undefined);
+        applyVisualization();
+        return;
+      }
       applyModel(projected, activeModelSource, {
         preserveView: true,
         preserveSelection: true,

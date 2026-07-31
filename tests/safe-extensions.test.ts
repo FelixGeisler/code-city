@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
 import { validateCityModel } from "../packages/core/src/model-validation.js";
 import type { CityModel } from "../packages/core/src/model.js";
@@ -161,6 +161,28 @@ function applicationReceipt(
   };
 }
 
+function horizontallyDisjoint(
+  left: {
+    readonly position: { readonly x: number; readonly z: number };
+    readonly size: { readonly x: number; readonly z: number };
+  },
+  right: {
+    readonly position: { readonly x: number; readonly z: number };
+    readonly size: { readonly x: number; readonly z: number };
+  },
+): boolean {
+  return (
+    left.position.x + left.size.x / 2 <=
+      right.position.x - right.size.x / 2 ||
+    right.position.x + right.size.x / 2 <=
+      left.position.x - left.size.x / 2 ||
+    left.position.z + left.size.z / 2 <=
+      right.position.z - right.size.z / 2 ||
+    right.position.z + right.size.z / 2 <=
+      left.position.z - left.size.z / 2
+  );
+}
+
 describe("safe declarative extensions", () => {
   it("publishes a strict schema that accepts the preset", () => {
     expect(
@@ -176,6 +198,20 @@ describe("safe declarative extensions", () => {
     expect(
       validateSchema({ ...SAFE_EXTENSION_PRESETS[0], id: "constructor" }),
     ).toBe(false);
+    const shadowingMetric = {
+      ...SAFE_EXTENSION_PRESETS[0],
+      derivedMetrics: [
+        {
+          id: "sloc",
+          label: "Shadowed SLOC",
+          expression: { op: "constant", value: 1 },
+        },
+      ],
+    };
+    expect(validateSchema(shadowingMetric)).toBe(false);
+    expect(() => validateSafeExtensionConfiguration(shadowingMetric)).toThrow(
+      /must not shadow a built-in metric/,
+    );
     expect(() =>
       validateSafeExtensionConfiguration({
         ...SAFE_EXTENSION_PRESETS[0],
@@ -329,6 +365,203 @@ describe("safe declarative extensions", () => {
     ).toThrow(/different project model/);
   });
 
+  it("preserves horizontal city geometry for a height-only mapping", () => {
+    const configuration = validateSafeExtensionConfiguration({
+      version: EXTENSION_CONFIGURATION_VERSION,
+      id: "height-only",
+      name: "Height only",
+      compatibility: {
+        cityModel: "1.x",
+        capabilities: ["mappings"],
+      },
+      scope: { kind: "project" },
+      mappings: [
+        {
+          id: "height",
+          metric: "sloc",
+          target: "height",
+          minimum: 0,
+          maximum: 1,
+        },
+      ],
+    });
+    const evaluation = evaluateSafeExtension(DEMO_MODEL, configuration);
+    const projected = applySafeExtensionEvaluation(
+      DEMO_MODEL,
+      evaluation,
+      applicationReceipt(DEMO_MODEL, evaluation),
+    );
+
+    expect(projected.districts).toBe(DEMO_MODEL.districts);
+    expect(projected.base).toBe(DEMO_MODEL.base);
+    expect(projected.bounds.x).toBe(DEMO_MODEL.bounds.x);
+    expect(projected.bounds.z).toBe(DEMO_MODEL.bounds.z);
+    expect(projected.bounds.y).toBeGreaterThan(DEMO_MODEL.bounds.y);
+    expect(
+      projected.buildings.map(({ position, size }) => ({
+        position: { x: position.x, z: position.z },
+        size: { x: size.x, z: size.z },
+      })),
+    ).toEqual(
+      DEMO_MODEL.buildings.map(({ position, size }) => ({
+        position: { x: position.x, z: position.z },
+        size: { x: size.x, z: size.z },
+      })),
+    );
+    expect(validateCityModel(projected)).toBe(projected);
+  });
+
+  it("keeps buildings and districts collision-safe, anchored, and explicit", () => {
+    const candidate = structuredClone(DEMO_MODEL);
+    const coreDistrict = candidate.districts.find(
+      ({ id }) => id === "district:core",
+    )!;
+    (coreDistrict as { moduleId: string }).moduleId = "module:viewer";
+    for (const building of candidate.buildings) {
+      if (building.districtId === coreDistrict.id) {
+        (building as { moduleId: string }).moduleId = "module:viewer";
+      }
+    }
+    const emptyDistrict = structuredClone(candidate.districts[0]!);
+    (emptyDistrict as { id: string }).id = "district:empty";
+    (emptyDistrict as { name: string }).name = "Empty district";
+    (candidate.districts as typeof emptyDistrict[]).push(emptyDistrict);
+    const model = validateCityModel(candidate);
+    const moduleConfiguration = validateSafeExtensionConfiguration({
+      version: EXTENSION_CONFIGURATION_VERSION,
+      id: "module-layout",
+      name: "Module layout",
+      compatibility: {
+        cityModel: "1.x",
+        capabilities: ["layouts"],
+      },
+      scope: { kind: "project" },
+      layouts: [{ id: "modules", strategy: "group-by-module" }],
+    });
+    const evaluation = evaluateSafeExtension(model, moduleConfiguration);
+    const projected = applySafeExtensionEvaluation(
+      model,
+      evaluation,
+      applicationReceipt(model, evaluation),
+    );
+    for (const [index, district] of projected.districts.entries()) {
+      for (const other of projected.districts.slice(index + 1)) {
+        expect(horizontallyDisjoint(district, other)).toBe(true);
+      }
+    }
+    const originalMinimumZ = Math.min(
+      ...model.districts.map(
+        (district) => district.position.z - district.size.z / 2,
+      ),
+    );
+    const originalMinimumX = Math.min(
+      ...model.districts.map(
+        (district) => district.position.x - district.size.x / 2,
+      ),
+    );
+    const originalMaximumX = Math.max(
+      ...model.districts.map(
+        (district) => district.position.x + district.size.x / 2,
+      ),
+    );
+    const projectedMinimumZ = Math.min(
+      ...projected.districts.map(
+        (district) => district.position.z - district.size.z / 2,
+      ),
+    );
+    const projectedMinimumX = Math.min(
+      ...projected.districts.map(
+        (district) => district.position.x - district.size.x / 2,
+      ),
+    );
+    const projectedMaximumX = Math.max(
+      ...projected.districts.map(
+        (district) => district.position.x + district.size.x / 2,
+      ),
+    );
+    expect(projectedMinimumZ).toBeCloseTo(originalMinimumZ, 10);
+    expect((projectedMinimumX + projectedMaximumX) / 2).toBeCloseTo(
+      (originalMinimumX + originalMaximumX) / 2,
+      10,
+    );
+    expect(
+      model.identityPanel!.position.z + model.identityPanel!.size.z / 2,
+    ).toBeLessThan(projectedMinimumZ);
+    expect(validateCityModel(projected)).toBe(projected);
+
+    const footprintConfiguration = validateSafeExtensionConfiguration({
+      version: EXTENSION_CONFIGURATION_VERSION,
+      id: "footprint-layout",
+      name: "Footprint layout",
+      compatibility: {
+        cityModel: "1.x",
+        capabilities: ["mappings"],
+      },
+      scope: { kind: "project" },
+      mappings: [
+        {
+          id: "footprint",
+          metric: "sloc",
+          target: "footprint",
+          minimum: 0,
+          maximum: 1,
+        },
+      ],
+    });
+    const footprintEvaluation = evaluateSafeExtension(
+      model,
+      footprintConfiguration,
+    );
+    expect(footprintEvaluation.application.layouts).toHaveLength(0);
+    expect(footprintEvaluation.diagnostics).toContainEqual({
+      path: "mappings[0]",
+      message:
+        "Footprint changes applied a deterministic collision-safe module and district relayout.",
+    });
+    const footprintProjection = applySafeExtensionEvaluation(
+      model,
+      footprintEvaluation,
+      applicationReceipt(model, footprintEvaluation),
+    );
+    for (const [index, building] of footprintProjection.buildings.entries()) {
+      for (const other of footprintProjection.buildings.slice(index + 1)) {
+        expect(horizontallyDisjoint(building, other)).toBe(true);
+      }
+    }
+    for (const [index, district] of footprintProjection.districts.entries()) {
+      for (const other of footprintProjection.districts.slice(index + 1)) {
+        expect(horizontallyDisjoint(district, other)).toBe(true);
+      }
+    }
+    expect(validateCityModel(footprintProjection)).toBe(footprintProjection);
+
+    const preserveConfiguration = validateSafeExtensionConfiguration({
+      ...footprintConfiguration,
+      id: "preserved-footprint",
+      compatibility: {
+        cityModel: "1.x",
+        capabilities: ["mappings", "layouts"],
+      },
+      layouts: [{ id: "preserve", strategy: "preserve-city" }],
+    });
+    expect(() => evaluateSafeExtension(model, preserveConfiguration)).toThrow(
+      /cannot preserve city positions.*use group-by-module/,
+    );
+
+    const tiny = snapshot(2);
+    for (const building of tiny.buildings) {
+      (building as { moduleId: string }).moduleId = "module-a";
+      (building as { districtId: string }).districtId = "district-a";
+      (building.size as { x: number; z: number }).x = 0.000_001;
+      (building.size as { x: number; z: number }).z = 0.000_001;
+    }
+    const tinyEvaluation = evaluateSafeExtension(tiny, moduleConfiguration);
+    expect(
+      tinyEvaluation.application.buildings[1]!.position.x -
+        tinyEvaluation.application.buildings[0]!.position.x,
+    ).toBeCloseTo(1.000_001, 10);
+  });
+
   it("uses canonical SHA-256 model and configuration bindings", () => {
     const configuration = SAFE_EXTENSION_PRESETS[0]!;
     const canonical = migrateSafeExtensionConfiguration(configuration);
@@ -450,6 +683,22 @@ describe("safe declarative extensions", () => {
     expect(() => validateSafeExtensionConfiguration(hidden)).toThrow(
       /accessors|plain JSON objects/,
     );
+
+    const oversizedKey = "k".repeat(EXTENSION_LIMITS.bytes);
+    const stringify = vi.spyOn(JSON, "stringify").mockImplementation(() => {
+      throw new Error("serialization must not be reached");
+    });
+    let oversizedKeyError: unknown;
+    try {
+      validateSafeExtensionConfiguration({ [oversizedKey]: null });
+    } catch (error) {
+      oversizedKeyError = error;
+    } finally {
+      stringify.mockRestore();
+    }
+    expect(oversizedKeyError).toBeInstanceOf(RangeError);
+    expect((oversizedKeyError as Error).message).toMatch(/byte limit/);
+    expect(stringify).not.toHaveBeenCalled();
 
     const balanced = (depth: number): unknown =>
       depth === 0

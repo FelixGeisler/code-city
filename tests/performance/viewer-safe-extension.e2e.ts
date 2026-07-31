@@ -7,6 +7,20 @@ test.beforeAll(async () => { server = createServer((request, response) => void s
 test.afterAll(async () => { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); });
 test("safe extension preview applies every declarative result and export is digest-bound", async ({ page }) => {
   await page.goto(url, { waitUntil: "domcontentloaded" });
+  await page.evaluate(() => {
+    const sourceContent = document.querySelector<HTMLElement>(
+      "#building-source-content",
+    )!;
+    const sourceCode = document.querySelector<HTMLElement>(
+      "#building-source-code",
+    )!;
+    const aiStatus = document.querySelector<HTMLElement>(
+      "#building-ai-guidance-status",
+    )!;
+    sourceContent.hidden = false;
+    sourceCode.textContent = "RETAINED-SOURCE-STATE";
+    aiStatus.textContent = "RETAINED-AI-GUIDANCE-STATE";
+  });
   await page.getByRole("tab", { name: "Metrics" }).click();
   await page.getByLabel("Public preset").selectOption("complexity-focus");
   await expect(page.getByRole("button", { name: "Export JSON" })).toBeDisabled();
@@ -17,6 +31,16 @@ test("safe extension preview applies every declarative result and export is dige
   );
   await expect(page.locator("#legend")).toContainText("Complexity pressure");
   await expect(page.locator("#legend")).toContainText("high-pressure-overlay");
+  await expect(page.locator("#building-source-content")).not.toHaveAttribute(
+    "hidden",
+    "",
+  );
+  await expect(page.locator("#building-source-code")).toHaveText(
+    "RETAINED-SOURCE-STATE",
+  );
+  await expect(page.locator("#building-ai-guidance-status")).toHaveText(
+    "RETAINED-AI-GUIDANCE-STATE",
+  );
   await expect(page.getByRole("button", { name: "Export JSON" })).toBeEnabled();
 
   await page.locator("#safe-extension-json").evaluate((element) => {
