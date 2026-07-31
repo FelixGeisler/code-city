@@ -20,6 +20,8 @@ import type {
   CityDependency,
   CityDistrict,
   CityModel,
+  CityModule,
+  CitySolution,
 } from "../../packages/core/src/model.js";
 import {
   deriveEvolutionChangeKinds,
@@ -469,8 +471,36 @@ function createLineageEvolutionFixture(
     ...coreDistrictBefore,
     size: { ...coreDistrictBefore.size, x: 10 },
   };
+  const topologyModuleId = "module:lineage-added";
+  const topologySolutionId = "solution:lineage-added";
+  const topologySolution: CitySolution = {
+    id: topologySolutionId,
+    repositoryId: replacedBuilding.repositoryId,
+    name: "Lineage added solution",
+    path: "lineage-added",
+    moduleIds: [topologyModuleId],
+  };
+  const topologyModule: CityModule = {
+    id: topologyModuleId,
+    repositoryId: replacedBuilding.repositoryId,
+    kind: "npm-package",
+    name: "Lineage added module",
+    path: "packages/lineage-added",
+    solutionIds: [topologySolutionId],
+    packageId: "@code-city/lineage-added",
+  };
   const turnoverChanges: EvolutionChanges = {
     ...emptyLineageChanges(),
+    solutions: {
+      added: [topologySolution],
+      removed: [],
+      changed: [],
+    },
+    modules: {
+      added: [topologyModule],
+      removed: [],
+      changed: [],
+    },
     districts: {
       added: [],
       removed: [],
@@ -1691,6 +1721,188 @@ test("preserves filtered selected dependency routes across evolution seeks", asy
   await expect(page.locator("#advanced-query-status")).toHaveText(
     "0 matches",
   );
+});
+
+test("retains an exact building mask across evolution and intersects removed identities", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const initialSavedName = "Topology continuity initial";
+  const changedSavedName = "Topology continuity changed";
+  const savedOption = (
+    selectId: "#advanced-query-saved" | "#advanced-selection-saved",
+    name: string,
+  ) => page.locator(`${selectId} option`).filter({ hasText: name });
+  const fixture = await openLineageEvolutionFixture(page, {
+    performanceDiagnostics: true,
+  });
+  await expect(page.locator("#overview-solutions")).toHaveText("2");
+  await expect(page.locator("#overview-modules")).toHaveText("3");
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await page.locator("#advanced-query-preset").selectOption("custom");
+  await page.locator("#advanced-query-text").fill(".ts");
+  await page.locator("#advanced-query-limit").selectOption("25");
+  await page.locator("#advanced-query-run").click();
+  await expect(page.locator("#advanced-query-status")).toContainText(
+    "4 matches",
+    { timeout: 30_000 },
+  );
+  await page
+    .locator(
+      '.advanced-query-result[data-building-id="building:main"]',
+    )
+    .click();
+  await page
+    .locator(
+      `.advanced-query-result[data-building-id="${fixture.futureBuilding.id}"]`,
+    )
+    .click({ modifiers: ["Control"] });
+  await expect(page.locator("#selection-status")).toContainText(
+    "2 buildings selected",
+  );
+  await page
+    .locator("#advanced-query-save-name")
+    .fill(initialSavedName);
+  await page.locator("#advanced-query-save").click();
+  await page.locator("#advanced-selection-save").click();
+  await expect(
+    savedOption("#advanced-query-saved", initialSavedName),
+  ).toHaveText(initialSavedName);
+  await expect(
+    savedOption("#advanced-selection-saved", initialSavedName),
+  ).toHaveText(initialSavedName);
+  await page.locator("#advanced-query-isolate").click();
+
+  const selectionSnapshot = () =>
+    page.evaluate(() => {
+      const diagnostics = (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: {
+            readonly evolutionFrameIndex: number;
+            readonly buildingRenderMode: "instanced" | "legacy" | null;
+            readonly buildingVisibilityMaskActive: boolean;
+            readonly visibleBuildingCount: number;
+          };
+        }
+      ).__CODE_CITY_PERFORMANCE__;
+      return diagnostics === undefined
+        ? undefined
+        : {
+            evolutionFrameIndex: diagnostics.evolutionFrameIndex,
+            buildingRenderMode: diagnostics.buildingRenderMode,
+            buildingVisibilityMaskActive:
+              diagnostics.buildingVisibilityMaskActive,
+            visibleBuildingCount: diagnostics.visibleBuildingCount,
+          };
+    });
+  await expect.poll(selectionSnapshot).toMatchObject({
+    evolutionFrameIndex: 3,
+    buildingRenderMode: "instanced",
+    buildingVisibilityMaskActive: true,
+    visibleBuildingCount: 2,
+  });
+
+  await seekEvolutionFrame(page, 1);
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await expect
+    .poll(selectionSnapshot, { timeout: 30_000 })
+    .toMatchObject({
+      evolutionFrameIndex: 1,
+      buildingRenderMode: "instanced",
+      buildingVisibilityMaskActive: true,
+      visibleBuildingCount: 1,
+    });
+  await expect(page.locator("#overview-solutions")).toHaveText("1");
+  await expect(page.locator("#overview-modules")).toHaveText("2");
+  await expect(page.locator("#advanced-query-preset")).toHaveValue(
+    "custom",
+  );
+  await expect(page.locator("#advanced-query-text")).toHaveValue(".ts");
+  await expect(page.locator("#advanced-query-limit")).toHaveValue("25");
+  await expect(page.locator("#advanced-query-status")).toContainText(
+    "4 matches",
+    { timeout: 30_000 },
+  );
+  await expect(
+    savedOption("#advanced-query-saved", initialSavedName),
+  ).toHaveText(initialSavedName);
+  await expect(
+    savedOption("#advanced-selection-saved", initialSavedName),
+  ).toHaveText(initialSavedName);
+  await expect(
+    page.locator('.advanced-query-result[aria-selected="true"]'),
+  ).toHaveCount(1, { timeout: 30_000 });
+  await expect(
+    page.locator(
+      '.advanced-query-result[data-building-id="building:main"]',
+    ),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#selection-name")).toHaveText("main.ts");
+  await expect(
+    page.locator(
+      `.advanced-query-result[data-building-id="${fixture.futureBuilding.id}"]`,
+    ),
+  ).toHaveCount(0);
+  await expect(
+    page.locator(
+      `.advanced-query-result[data-building-id="${fixture.removedBuilding.id}"]`,
+    ),
+  ).toHaveCount(1);
+  await page
+    .locator("#advanced-query-save-name")
+    .fill(changedSavedName);
+  await page.locator("#advanced-query-save").click();
+  await page.locator("#advanced-selection-save").click();
+  await expect(
+    savedOption("#advanced-query-saved", changedSavedName),
+  ).toHaveText(changedSavedName);
+  await expect(
+    savedOption("#advanced-selection-saved", changedSavedName),
+  ).toHaveText(changedSavedName);
+
+  await seekEvolutionFrame(page, 3);
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await expect
+    .poll(selectionSnapshot, { timeout: 30_000 })
+    .toMatchObject({
+      evolutionFrameIndex: 3,
+      buildingRenderMode: "instanced",
+      buildingVisibilityMaskActive: true,
+      visibleBuildingCount: 1,
+    });
+  await expect(page.locator("#overview-solutions")).toHaveText("2");
+  await expect(page.locator("#overview-modules")).toHaveText("3");
+  await expect(page.locator("#advanced-query-preset")).toHaveValue(
+    "custom",
+  );
+  await expect(page.locator("#advanced-query-text")).toHaveValue(".ts");
+  await expect(page.locator("#advanced-query-limit")).toHaveValue("25");
+  await expect(page.locator("#advanced-query-status")).toContainText(
+    "4 matches",
+    { timeout: 30_000 },
+  );
+  await expect(
+    savedOption("#advanced-query-saved", initialSavedName),
+  ).toHaveText(initialSavedName);
+  await expect(
+    savedOption("#advanced-selection-saved", initialSavedName),
+  ).toHaveText(initialSavedName);
+  await expect(
+    savedOption("#advanced-query-saved", changedSavedName),
+  ).toHaveText(changedSavedName);
+  await expect(
+    savedOption("#advanced-selection-saved", changedSavedName),
+  ).toHaveText(changedSavedName);
+  await expect(
+    page.locator(
+      '.advanced-query-result[data-building-id="building:main"]',
+    ),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(
+    page.locator(
+      `.advanced-query-result[data-building-id="${fixture.futureBuilding.id}"]`,
+    ),
+  ).toHaveAttribute("aria-selected", "false");
 });
 
 test("rejects an oversized legacy evolution artifact before downloading it", async ({

@@ -81,6 +81,7 @@ export class EvolutionRemovalLayer {
   private readonly position = new THREE.Vector3();
   private readonly scale = new THREE.Vector3();
   private isolatedDistrictId: string | null | undefined;
+  private visibleBuildingIds: ReadonlySet<string> | null = null;
   private disposed = false;
   private visibleCount = 0;
 
@@ -119,11 +120,34 @@ export class EvolutionRemovalLayer {
     this.assertActive();
     if (districtId === this.isolatedDistrictId) return;
     this.isolatedDistrictId = districtId;
+    this.refreshVisibleDefinitions();
+  }
+
+  /**
+   * Applies the same exact building mask as the live city layer.
+   *
+   * Removal cues that no longer belong to the retained selection stay hidden
+   * during an evolution seek, instead of leaking unrelated buildings through
+   * an otherwise isolated view.
+   */
+  public setVisibleBuildingIds(ids: readonly string[] | null): void {
+    this.assertActive();
+    this.visibleBuildingIds = ids === null ? null : new Set(ids);
+    this.refreshVisibleDefinitions();
+  }
+
+  private refreshVisibleDefinitions(): void {
     const visibleDefinitions =
-      districtId === null
+      this.isolatedDistrictId === null &&
+      this.visibleBuildingIds === null
         ? this.definitions
         : this.definitions.filter(
-            (definition) => definition.districtId === districtId,
+            (definition) =>
+              (this.isolatedDistrictId === null ||
+                definition.districtId ===
+                  this.isolatedDistrictId) &&
+              (this.visibleBuildingIds === null ||
+                this.visibleBuildingIds.has(definition.id)),
           );
     this.visibleCount = visibleDefinitions.length;
     if (this.object instanceof THREE.InstancedMesh) {

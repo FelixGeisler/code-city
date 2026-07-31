@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   boundedAdvancedComparisonBuildings,
   MAXIMUM_ADVANCED_COMPARISON_ROWS,
+  retainsAdvancedQueryProjectContext,
 } from "../apps/viewer/src/advanced-query-panel.js";
+import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
+import { metricMappingProjectIdentity } from "../apps/viewer/src/metric-mapping-storage.js";
 import type { CityBuilding } from "../packages/core/src/model.js";
 
 describe("advanced-query comparison", () => {
@@ -28,5 +31,36 @@ describe("advanced-query comparison", () => {
     expect(buildings).toHaveLength(
       MAXIMUM_ADVANCED_COMPARISON_ROWS + 25,
     );
+  });
+
+  it("retains explicit evolution continuity across topology changes", () => {
+    const currentIdentity =
+      metricMappingProjectIdentity(DEMO_MODEL);
+    const topologyChanged = {
+      ...DEMO_MODEL,
+      modules: DEMO_MODEL.modules.slice(0, -1),
+    };
+    const changedIdentity =
+      metricMappingProjectIdentity(topologyChanged);
+
+    expect(
+      retainsAdvancedQueryProjectContext(
+        currentIdentity,
+        currentIdentity,
+      ),
+    ).toBe(true);
+    expect(
+      retainsAdvancedQueryProjectContext(
+        currentIdentity,
+        changedIdentity,
+      ),
+    ).toBe(false);
+    expect(
+      retainsAdvancedQueryProjectContext(
+        currentIdentity,
+        changedIdentity,
+        true,
+      ),
+    ).toBe(true);
   });
 });

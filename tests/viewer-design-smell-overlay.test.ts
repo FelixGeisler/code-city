@@ -103,6 +103,13 @@ describe("design smell 3D overlay", () => {
     expect(overlay.diagnostics().visibleMarkers).toBe(1);
     overlay.setIsolatedDistrict(null);
     expect(overlay.diagnostics().visibleMarkers).toBe(2);
+
+    overlay.setVisibleBuildingIds(["building-1"]);
+    expect(overlay.diagnostics().visibleMarkers).toBe(1);
+    overlay.setIsolatedDistrict("district-a");
+    expect(overlay.diagnostics().visibleMarkers).toBe(0);
+    overlay.setVisibleBuildingIds(null);
+    expect(overlay.diagnostics().visibleMarkers).toBe(1);
     overlay.dispose();
   });
 
