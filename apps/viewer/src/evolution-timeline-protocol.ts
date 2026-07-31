@@ -2,6 +2,7 @@ import {
   CITY_MODEL_LIMITS,
   type CityModel,
 } from "../../../packages/core/src/index.js";
+import { normalizeExternalDependencyTarget } from "../../../packages/core/src/external-dependencies.js";
 import {
   evolutionDependencyEndpointKey,
   evolutionDependencyRouteKey,
@@ -251,6 +252,8 @@ function dependencyEndpoint(
       exactKeys(candidate, ["kind", "target", "key"]) &&
       typeof candidate["target"] === "string" &&
       candidate["target"].length > 0 &&
+      candidate["target"] ===
+        normalizeExternalDependencyTarget(candidate["target"]) &&
       candidate["key"] ===
         evolutionDependencyEndpointKey({
           kind: "external",
@@ -394,20 +397,47 @@ function dependencyChanges(value: unknown): boolean {
   const endpointKeys = affectedEndpoints.map(
     (endpoint) => endpoint.key,
   );
-  const expectedEndpointKeys = new Set<string>();
-  const expectedRouteKeys = new Set<string>();
+  const expectedEndpointKeys: string[] = [];
+  const expectedRouteKeys: string[] = [];
+  const expectedEndpointKeySet = new Set<string>();
+  const expectedRouteKeySet = new Set<string>();
   const affect = (route: EvolutionDependencyRouteIdentity): void => {
-    expectedEndpointKeys.add(route.source.key);
-    expectedEndpointKeys.add(route.target.key);
-    expectedRouteKeys.add(route.routeKey);
+    for (const endpoint of [route.source, route.target]) {
+      if (!expectedEndpointKeySet.has(endpoint.key)) {
+        expectedEndpointKeySet.add(endpoint.key);
+        expectedEndpointKeys.push(endpoint.key);
+      }
+    }
+    if (!expectedRouteKeySet.has(route.routeKey)) {
+      expectedRouteKeySet.add(route.routeKey);
+      expectedRouteKeys.push(route.routeKey);
+    }
   };
-  for (const changes of [added, removed, changed]) {
-    changes.forEach(affect);
-  }
-  retargeted.forEach((change) => {
-    affect(change.before);
-    affect(change.after);
-  });
+  const orderedChanges = [
+    ...added.map((change) => ({
+      dependencyId: change.dependencyId,
+      routes: [change] as const,
+    })),
+    ...removed.map((change) => ({
+      dependencyId: change.dependencyId,
+      routes: [change] as const,
+    })),
+    ...changed.map((change) => ({
+      dependencyId: change.dependencyId,
+      routes: [change] as const,
+    })),
+    ...retargeted.map((change) => ({
+      dependencyId: change.dependencyId,
+      routes: [change.before, change.after] as const,
+    })),
+  ].sort((left, right) =>
+    left.dependencyId < right.dependencyId
+      ? -1
+      : left.dependencyId > right.dependencyId
+        ? 1
+        : 0,
+  );
+  orderedChanges.forEach(({ routes }) => routes.forEach(affect));
   return (
     ascendingDependencyIds(added) &&
     ascendingDependencyIds(removed) &&
@@ -416,10 +446,12 @@ function dependencyChanges(value: unknown): boolean {
     new Set(dependencyIds).size === dependencyIds.length &&
     new Set(endpointKeys).size === endpointKeys.length &&
     new Set(affectedRouteKeys).size === affectedRouteKeys.length &&
-    expectedEndpointKeys.size === endpointKeys.length &&
-    endpointKeys.every((key) => expectedEndpointKeys.has(key)) &&
-    expectedRouteKeys.size === affectedRouteKeys.length &&
-    affectedRouteKeys.every((key) => expectedRouteKeys.has(key))
+    expectedEndpointKeys.length === endpointKeys.length &&
+    endpointKeys.every((key, index) => expectedEndpointKeys[index] === key) &&
+    expectedRouteKeys.length === affectedRouteKeys.length &&
+    affectedRouteKeys.every(
+      (key, index) => expectedRouteKeys[index] === key,
+    )
   );
 }
 

@@ -210,6 +210,98 @@ describe("evolution timeline worker client", () => {
         },
       }),
     ).toBe(false);
+
+    const externalDependency = DEMO_MODEL.dependencies.find(
+      ({ externalTarget }) => externalTarget !== undefined,
+    )!;
+    const externalTarget = {
+      ...DEMO_MODEL,
+      dependencies: DEMO_MODEL.dependencies.map((dependency) =>
+        dependency.id === externalDependency.id
+          ? { ...dependency, weight: dependency.weight + 1 }
+          : dependency,
+      ),
+    };
+    const externalResponse = {
+      ...response,
+      model: externalTarget,
+      transition: compareEvolutionFrames(
+        DEMO_MODEL,
+        externalTarget,
+        0,
+        1,
+      ),
+    };
+    const externalRoute =
+      externalResponse.transition.dependencyChanges.changed[0]!;
+    expect(externalRoute.target.kind).toBe("external");
+    if (externalRoute.target.kind !== "external") {
+      throw new Error("Expected an external dependency route.");
+    }
+    expect(
+      isEvolutionWorkerResponse({
+        ...externalResponse,
+        transition: {
+          ...externalResponse.transition,
+          dependencyChanges: {
+            ...externalResponse.transition.dependencyChanges,
+            changed: [
+              {
+                ...externalRoute,
+                target: {
+                  ...externalRoute.target,
+                  target: ` ${externalRoute.target.target} `,
+                },
+              },
+            ],
+          },
+        },
+      }),
+    ).toBe(false);
+
+    const changedIds = new Set(
+      DEMO_MODEL.dependencies
+        .slice(0, 2)
+        .map((dependency) => dependency.id),
+    );
+    const multiTarget = {
+      ...DEMO_MODEL,
+      dependencies: DEMO_MODEL.dependencies.map((dependency) =>
+        changedIds.has(dependency.id)
+          ? { ...dependency, weight: dependency.weight + 1 }
+          : dependency,
+      ),
+    };
+    const multiResponse = {
+      ...response,
+      model: multiTarget,
+      transition: compareEvolutionFrames(
+        DEMO_MODEL,
+        multiTarget,
+        0,
+        1,
+      ),
+    };
+    const multiChanges = multiResponse.transition.dependencyChanges;
+    expect(multiChanges.affectedEndpoints.length).toBeGreaterThan(1);
+    expect(multiChanges.affectedRouteKeys.length).toBeGreaterThan(1);
+    for (const key of [
+      "affectedEndpoints",
+      "affectedRouteKeys",
+    ] as const) {
+      expect(
+        isEvolutionWorkerResponse({
+          ...multiResponse,
+          transition: {
+            ...multiResponse.transition,
+            dependencyChanges: {
+              ...multiChanges,
+              [key]: [...multiChanges[key]].reverse(),
+            },
+          },
+        }),
+      ).toBe(false);
+    }
   });
 
   it("loads once, keeps the worker, and validates returned models", async () => {
