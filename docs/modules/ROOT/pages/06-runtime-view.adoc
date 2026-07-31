@@ -166,6 +166,18 @@ bottom sheet. Selecting geometry only peeks at details, while explicit search
 opens them. A persistent scope chip resets district isolation and scopes the
 overview metrics.
 
+**Explore** contains a deterministic repository, solution, module, district,
+and file tree synchronized with the 3D scene and search results. A scene or
+search selection expands only its ancestor path and reveals the matching row;
+tree activation selects and frames the same district or building while
+remaining in Explore. Isolation marks the in-scope and out-of-scope rows.
+Arrow keys navigate or expand the hierarchy, Home and End jump to its bounds,
+and Enter or Space activates the current row. The flat ARIA tree reports level,
+set position, expansion, selection, and active-descendant state. Fixed
+32-pixel rows are virtualized with a hard limit of 160 mounted rows, and the
+viewer retains expansion, active row, and scroll state for the eight most
+recent project identities.
+
 == Metric configuration
 
 The metric-mapping workspace lists the curated presets and saved custom

@@ -363,6 +363,37 @@ describe("viewer workspace state", () => {
     expect(controller.sheetState).toBe("expanded");
   });
 
+  it("reports initial, view, sheet, and responsive state changes", () => {
+    const fixture = workspaceFixture(1300);
+    const states: {
+      readonly activeView: string;
+      readonly sheetState: string;
+    }[] = [];
+    const controller = installViewerWorkspace(
+      fixture.root as unknown as HTMLElement,
+      fixture.scrollOwner as unknown as HTMLElement,
+      {
+        window: fixture.hostWindow as unknown as Window,
+        storage: fixture.hostWindow.localStorage,
+        onStateChange: (state) => states.push(state),
+      },
+    );
+
+    expect(states).toEqual([
+      { activeView: "overview", sheetState: "expanded" },
+    ]);
+    expect(Object.isFrozen(states[0])).toBe(true);
+    controller.show("explore");
+    controller.setSheetState("collapsed");
+    fixture.hostWindow.innerWidth = 900;
+    fixture.hostWindow.dispatchEvent(fakeEvent("resize"));
+    expect(states.slice(1)).toEqual([
+      { activeView: "explore", sheetState: "expanded" },
+      { activeView: "explore", sheetState: "collapsed" },
+      { activeView: "explore", sheetState: "collapsed" },
+    ]);
+  });
+
   it("exposes visible peek content truthfully and relocates owned focus", () => {
     const fixture = workspaceFixture(900);
     const controller = installViewerWorkspace(
