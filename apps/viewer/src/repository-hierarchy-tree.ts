@@ -665,14 +665,23 @@ class RepositoryHierarchyTree
       this.#renderRevision += 1;
     }
     if (selected !== undefined) {
+      let rowsChanged = false;
       for (const ancestor of repositoryHierarchyAncestorIds(
         this.#index,
         selected,
       )) {
-        this.#expandedIds.add(ancestor);
+        if (!this.#expandedIds.has(ancestor)) {
+          this.#expandedIds.add(ancestor);
+          rowsChanged = true;
+        }
       }
+      const activeChanged = this.#activeId !== selected;
       this.#activeId = selected;
-      this.#rebuildRows();
+      if (rowsChanged) {
+        this.#rebuildRows();
+      } else if (activeChanged) {
+        this.#renderRevision += 1;
+      }
       this.#pendingActiveReveal = true;
       this.#render();
       this.#ensureActiveVisible();

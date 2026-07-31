@@ -95,7 +95,9 @@ test("25k production viewer stays within the rendering budget", async ({
 test("25k hierarchy stays virtualized and synchronized with city state", async ({
   page,
 }) => {
-  test.setTimeout(90_000);
+  // Rendering has its own strict budget above; leave enough headroom for
+  // interaction-heavy locator work on slower single-worker CI hosts.
+  test.setTimeout(120_000);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto(`${viewerUrl}/?fixture=large-city-25k`, {
     waitUntil: "domcontentloaded",

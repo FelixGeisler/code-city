@@ -2660,10 +2660,14 @@ test("cancels an accepted remote import and removes its private staging data", a
   await expect.poll(
     () => lastRemoteInvocation(CANCELLATION_GIT_URL),
   ).toBeDefined();
+  await expect.poll(() =>
+    page.evaluate(() =>
+      localStorage.getItem("code-city.last-import-job.v1"),
+    ),
+  ).not.toBeNull();
   const jobId = await page.evaluate(() =>
     localStorage.getItem("code-city.last-import-job.v1"),
   );
-  expect(jobId).not.toBeNull();
   await expect(
     page.locator("#project-import-repository-url"),
   ).toHaveValue("");
