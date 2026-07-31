@@ -24,6 +24,10 @@ import {
   type DesignSmellEvaluation,
   type DesignSmellFinding,
 } from "../../../packages/core/src/design-smells.js";
+import {
+  applySafeExtensionEvaluation,
+  type ExtensionEvaluation,
+} from "../../../packages/core/src/extensions.js";
 import type { PrinterProfile } from "../../../packages/core/src/print.js";
 import {
   installAdvancedQueryPanel,
@@ -134,7 +138,10 @@ import {
   type DesignSmellOverlayDiagnostics,
   type DesignSmellOverlayMarker,
 } from "./design-smell-overlay.js";
-import { installSafeExtensionPanel } from "./safe-extension-panel.js";
+import {
+  installSafeExtensionPanel,
+  type SafeExtensionPanelController,
+} from "./safe-extension-panel.js";
 import {
   type ProjectedPrintPlate,
   viewerPrintMeshBatches,
@@ -499,22 +506,6 @@ const dependencyShowMore =
   element<HTMLButtonElement>("dependency-show-more");
 const findPanel = element<HTMLElement>("find-panel");
 const buildingSearch = element<HTMLInputElement>("building-search");
-const advancedQueryPreset = element<HTMLSelectElement>("advanced-query-preset");
-const advancedQuerySaved = element<HTMLSelectElement>("advanced-query-saved");
-const advancedQuerySave = element<HTMLButtonElement>("advanced-query-save");
-const advancedQueryField = element<HTMLSelectElement>("advanced-query-field");
-const advancedQueryOperator = element<HTMLSelectElement>("advanced-query-operator");
-const advancedQueryValue = element<HTMLInputElement>("advanced-query-value");
-const advancedQueryAdd = element<HTMLButtonElement>("advanced-query-add");
-const advancedQueryFilters = element<HTMLParagraphElement>("advanced-query-filters");
-const advancedQueryStatus = element<HTMLParagraphElement>("advanced-query-status");
-const advancedQueryResults = element<HTMLUListElement>("advanced-query-results");
-const advancedQueryShowMore = element<HTMLButtonElement>("advanced-query-show-more");
-const advancedQueryFocus = element<HTMLButtonElement>("advanced-query-focus");
-const advancedQueryIsolate = element<HTMLButtonElement>("advanced-query-isolate");
-const advancedQueryOverlay = element<HTMLButtonElement>("advanced-query-overlay");
-const advancedQueryExport = element<HTMLButtonElement>("advanced-query-export");
-const advancedQueryCompare = element<HTMLButtonElement>("advanced-query-compare");
 const searchStatus = element<HTMLParagraphElement>("search-status");
 const searchResults = element<HTMLUListElement>("search-results");
 const searchShowMore = element<HTMLButtonElement>("search-show-more");
@@ -3008,6 +2999,9 @@ function createCityScene(): CityScene | UnavailableCityScene {
 
 let activeModel: CityModel = DEMO_MODEL;
 let activeModelSource: ModelSource = { label: "Built-in demo" };
+let safeExtensionBaseModel: CityModel = activeModel;
+let activeSafeExtensionEvaluation: ExtensionEvaluation | undefined;
+let suppressSafeExtensionRestore = false;
 let sourceRequest: AbortController | undefined;
 let aiGuidanceRequest: AbortController | undefined;
 let loadedBuildingSource:
@@ -3074,20 +3068,6 @@ let districtDependencyFootprintsById =
   createDistrictDependencyFootprints(DEMO_MODEL);
 let repositoryExplorerIndex = createRepositoryExplorerIndex(DEMO_MODEL);
 let searchResultLimit = DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT;
-const advancedQueryWorker = new AdvancedQueryWorkerClient();
-let advancedQuery: AdvancedQuery = {
-  version: ADVANCED_QUERY_VERSION,
-  ruleSchema: ADVANCED_QUERY_RULE_SCHEMA,
-  all: [],
-};
-let advancedQueryResult: AdvancedQueryResult | undefined;
-let advancedQuerySelection = new Set<string>();
-let advancedQueryAnchorId: string | null = null;
-let advancedQueryVisibleLimit = ADVANCED_QUERY_DEFAULT_LIMIT;
-let advancedQueryGeneration = 0;
-const advancedQueryStorage = (() => { try { return window.localStorage; } catch { return undefined; } })();
-let savedAdvancedQueries = loadSavedAdvancedQueries(advancedQueryStorage);
-renderSavedAdvancedQueries();
 let executableUnitVisibleLimit =
   INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;
 let sourceStructureVisibleLimit = FINE_DETAIL_INITIAL_LIMIT;
@@ -3097,6 +3077,7 @@ let activeExternalNodes: readonly ExternalSceneNode[] =
   activeExternalLayout.nodes;
 let requestCityPresentation = (): void => {};
 let advancedQueryPanel: AdvancedQueryPanelController | undefined;
+let safeExtensionPanel: SafeExtensionPanelController | undefined;
 let activeDesignSmellQueryFacts:
   | {
       readonly ruleIdsByBuildingId: ReadonlyMap<
@@ -3242,6 +3223,7 @@ const metricMappingPanel = installMetricMappingPanel(
   element<HTMLElement>("metric-mapping-panel"),
   {
     onModelChange: (model) => {
+      setSafeExtensionProject(model);
       applyModel(model, activeModelSource);
     },
     onPreviewStateChange: (active) => {
@@ -3298,22 +3280,35 @@ const designSmellPanel = installDesignSmellPanel(
     onQueryFactsChange: updateAdvancedQueryDesignSmells,
   },
 );
-const safeExtensionPanel = installSafeExtensionPanel(
+safeExtensionPanel = installSafeExtensionPanel(
   element<HTMLElement>("safe-extension-panel"),
   {
     onPreview: (evaluation) => {
-      const overlay = evaluation.configuration.overlays?.[0];
-      if (overlay !== undefined) {
-        cityScene.setBuildingGroupHighlight(
-          evaluation.matches[overlay.filterId] ?? [],
-          true,
-          overlay.color,
-        );
+      const projected = applySafeExtensionEvaluation(
+        safeExtensionBaseModel,
+        evaluation,
+      );
+      activeSafeExtensionEvaluation = evaluation;
+      applyModel(projected, activeModelSource, {
+        preserveView: true,
+        preserveSelection: true,
+      });
+    },
+    onInvalidate: () => {
+      activeSafeExtensionEvaluation = undefined;
+      if (
+        !suppressSafeExtensionRestore &&
+        activeModel !== safeExtensionBaseModel
+      ) {
+        applyModel(safeExtensionBaseModel, activeModelSource, {
+          preserveView: true,
+          preserveSelection: true,
+        });
       }
     },
   },
 );
-safeExtensionPanel.setProject(activeModel);
+setSafeExtensionProject(activeModel);
 
 visualizationModeSelect.addEventListener("change", () => {
   const selected = visualizationModeSelect.value;
@@ -3476,66 +3471,6 @@ districtRouteIsolateProvider.addEventListener("click", () => {
 buildingSearch.addEventListener("input", () => {
   searchResultLimit = DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT;
   renderBuildingSearch();
-});
-advancedQueryPreset.addEventListener("change", () => {
-  const preset = ADVANCED_QUERY_PRESETS[advancedQueryPreset.value as keyof typeof ADVANCED_QUERY_PRESETS];
-  if (!preset) return;
-  advancedQuery = preset;
-  advancedQueryVisibleLimit = ADVANCED_QUERY_DEFAULT_LIMIT;
-  void runAdvancedQuery();
-});
-advancedQuerySave.addEventListener("click", () => {
-  const savedAt = new Date().toISOString();
-  const id = `query-${Date.now().toString(36)}`;
-  savedAdvancedQueries = [...savedAdvancedQueries, { id, savedAt, query: advancedQuery, selectedBuildingIds: [...advancedQuerySelection].sort() }];
-  if (saveAdvancedQueries(advancedQueryStorage, savedAdvancedQueries)) {
-    renderSavedAdvancedQueries(id);
-    advancedQueryStatus.textContent = "Saved the versioned query and its current result-set selection on this device.";
-  } else {
-    advancedQueryStatus.textContent = "Saving is unavailable because browser storage is not available.";
-  }
-});
-advancedQuerySaved.addEventListener("change", () => {
-  const saved = savedAdvancedQueries.find(({ id }) => id === advancedQuerySaved.value);
-  if (!saved) return;
-  advancedQuery = saved.query;
-  advancedQuerySelection = new Set(saved.selectedBuildingIds ?? []);
-  advancedQueryAnchorId = null;
-  advancedQueryVisibleLimit = ADVANCED_QUERY_DEFAULT_LIMIT;
-  advancedQueryPreset.value = "";
-  void runAdvancedQuery();
-});
-advancedQueryAdd.addEventListener("click", () => {
-  const field = advancedQueryField.value as AdvancedQueryClause["field"];
-  let operator = advancedQueryOperator.value as AdvancedQueryClause["operator"];
-  const numeric = ["sloc", "decisionLoad", "maximumComplexity", "incomingDependencies", "outgoingDependencies"].includes(field);
-  const value = numeric ? Number(advancedQueryValue.value) : advancedQueryValue.value.trim();
-  if ((numeric && !Number.isFinite(value)) || (!numeric && value === "")) {
-    advancedQueryStatus.textContent = "Enter a valid filter value.";
-    return;
-  }
-  if (numeric && (operator === "contains")) operator = "atLeast";
-  if (!numeric && (operator === "atLeast" || operator === "atMost")) operator = "equals";
-  advancedQuery = { ...advancedQuery, all: [...advancedQuery.all, { field, operator, value }] };
-  advancedQueryPreset.value = "";
-  advancedQueryVisibleLimit = ADVANCED_QUERY_DEFAULT_LIMIT;
-  void runAdvancedQuery();
-});
-advancedQueryShowMore.addEventListener("click", () => {
-  advancedQueryVisibleLimit = Math.min(ADVANCED_QUERY_MAXIMUM_LIMIT, advancedQueryVisibleLimit + ADVANCED_QUERY_DEFAULT_LIMIT);
-  void runAdvancedQuery();
-});
-advancedQueryFocus.addEventListener("click", () => focusAdvancedQueryResult(false));
-advancedQueryOverlay.addEventListener("click", () => focusAdvancedQueryResult(true));
-advancedQueryIsolate.addEventListener("click", () => {
-  const first = firstSelectedAdvancedQueryBuilding();
-  if (!first) return;
-  cityScene.selectBuilding(first.id, true);
-  cityScene.isolateDistrict(first.districtId);
-});
-advancedQueryExport.addEventListener("click", exportAdvancedQueryResults);
-advancedQueryCompare.addEventListener("click", () => {
-  advancedQueryStatus.textContent = "Compare is unavailable: the current inspector presents one building at a time.";
 });
 searchShowMore.addEventListener("click", () => {
   searchResultLimit = nextBoundedResultLimit(
@@ -3706,7 +3641,7 @@ window.addEventListener("beforeunload", () => {
   imageExportDialog.dispose();
   designSmellPanel.dispose();
   cityScene.disposeDesignSmellOverlay();
-  safeExtensionPanel.dispose();
+  safeExtensionPanel?.dispose();
   logoLoadGate.invalidate();
   loadedModelLogo?.dispose();
   loadedModelLogo = undefined;
@@ -3812,9 +3747,20 @@ function activateImportedModel(
   resetEvolutionTimeline();
   activeModelSource = source;
   metricMappingPanel.setProject(model);
-  safeExtensionPanel.setProject(model);
+  setSafeExtensionProject(model);
   applyModel(model, source);
   void startEvolutionTimeline(source);
+}
+
+function setSafeExtensionProject(model: CityModel): void {
+  activeSafeExtensionEvaluation = undefined;
+  safeExtensionBaseModel = model;
+  suppressSafeExtensionRestore = true;
+  try {
+    safeExtensionPanel?.setProject(model);
+  } finally {
+    suppressSafeExtensionRestore = false;
+  }
 }
 
 function applyModel(
@@ -3897,16 +3843,12 @@ function applyModel(
     ),
   );
   explorerState = resetExplorerState();
-  advancedQuerySelection = new Set();
-  advancedQueryAnchorId = null;
-  advancedQueryResult = undefined;
   activeExternalLayout = nextExternalLayout;
   activeExternalNodes = nextExternalLayout.nodes;
   buildingSearch.value = preservedBuildingSearch;
   searchResultLimit = preservedSearchResultLimit;
   synchronizeExplorerState(explorerState);
   renderBuildingSearch();
-  void runAdvancedQuery();
   cityScene.load(
     model,
     nextExternalLayout.base,
@@ -4146,6 +4088,7 @@ async function seekEvolution(
       activeEvolutionTargetDependencyIds = evolutionTargetDependencyIds(
         activeEvolutionDependencyChanges,
       );
+      setSafeExtensionProject(result.model);
       applyModel(result.model, activeModelSource, {
         preserveView: true,
         preserveSelection: true,
@@ -4674,140 +4617,6 @@ function renderBuildingSearch(): void {
     item.append(button);
     searchResults.append(item);
   }
-}
-
-async function runAdvancedQuery(): Promise<void> {
-  const generation = ++advancedQueryGeneration;
-  advancedQueryStatus.textContent = "Evaluating query in a worker…";
-  advancedQueryResults.replaceChildren();
-  try {
-    const result = await advancedQueryWorker.evaluate(
-      activeModel,
-      advancedQuery,
-      advancedQuerySelection,
-      advancedQueryVisibleLimit,
-    );
-    if (generation !== advancedQueryGeneration) return;
-    advancedQueryResult = result;
-    const available = new Set(result.matches.map(({ buildingId }) => buildingId));
-    advancedQuerySelection = new Set(
-      [...advancedQuerySelection].filter((id) => available.has(id)),
-    );
-    renderAdvancedQueryResult(result);
-  } catch (error) {
-    if (generation !== advancedQueryGeneration) return;
-    advancedQueryResult = undefined;
-    advancedQueryStatus.textContent =
-      error instanceof DOMException && error.name === "AbortError"
-        ? "Query cancelled."
-        : `Query unavailable: ${messageOf(error)}`;
-    renderAdvancedQueryActions();
-  }
-}
-
-function renderAdvancedQueryResult(result: AdvancedQueryResult): void {
-  advancedQueryFilters.textContent = advancedQuery.all.length === 0
-    ? "No filters: all buildings."
-    : advancedQuery.all.map((clause) => `${clause.field} ${clause.operator} ${clause.value}`).join(" · ");
-  advancedQueryResults.replaceChildren();
-  const unavailable = result.unavailable.map(({ reason }) => reason).join(" ");
-  advancedQueryStatus.textContent = result.state === "empty"
-    ? "No matching buildings."
-    : `${result.totalCount.toLocaleString()} matching building${result.totalCount === 1 ? "" : "s"}; ${result.matches.length.toLocaleString()} shown.` +
-      (result.omittedCount > 0 ? ` ${result.omittedCount.toLocaleString()} omitted by the result limit.` : "") +
-      (unavailable ? ` Partial result: ${unavailable}` : "") +
-      " Result-list selection supports Ctrl/⌘ additive and Shift range selection; city picking remains single-item.";
-  advancedQueryShowMore.hidden = result.omittedCount === 0 || advancedQueryVisibleLimit >= ADVANCED_QUERY_MAXIMUM_LIMIT;
-  const orderedIds = result.matches.map(({ buildingId }) => buildingId);
-  for (const match of result.matches) {
-    const item = document.createElement("li");
-    item.className = "search-result";
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "search-result-button";
-    button.dataset["advancedQueryBuildingId"] = match.buildingId;
-    button.setAttribute("aria-pressed", String(advancedQuerySelection.has(match.buildingId)));
-    button.setAttribute("aria-label", `${match.name}, ${match.path}. ${match.explanations.join("; ")}`);
-    button.addEventListener("click", (event) => {
-      advancedQuerySelection = new Set(selectQueryRange(
-        advancedQuerySelection,
-        orderedIds,
-        match.buildingId,
-        advancedQueryAnchorId,
-        event.ctrlKey || event.metaKey,
-        event.shiftKey,
-      ));
-      advancedQueryAnchorId = match.buildingId;
-      renderAdvancedQueryResult(result);
-    });
-    const name = document.createElement("span");
-    name.className = "search-result-name";
-    name.textContent = match.name;
-    const path = document.createElement("span");
-    path.className = "search-result-path";
-    path.textContent = match.path;
-    const explanation = document.createElement("span");
-    explanation.className = "search-result-meta";
-    explanation.textContent = match.explanations.join(" · ") || "No filter constraints.";
-    button.append(name, path, explanation);
-    item.append(button);
-    advancedQueryResults.append(item);
-  }
-  renderAdvancedQueryActions();
-}
-
-function renderSavedAdvancedQueries(selectedId = advancedQuerySaved.value): void {
-  advancedQuerySaved.replaceChildren();
-  const placeholder = document.createElement("option");
-  placeholder.value = "";
-  placeholder.textContent = "Saved queries";
-  advancedQuerySaved.append(placeholder);
-  for (const saved of savedAdvancedQueries) {
-    const option = document.createElement("option");
-    option.value = saved.id;
-    option.textContent = saved.query.name ?? saved.id;
-    advancedQuerySaved.append(option);
-  }
-  advancedQuerySaved.value = selectedId;
-}
-
-function firstSelectedAdvancedQueryBuilding(): CityBuilding | undefined {
-  const id = [...advancedQuerySelection].sort()[0];
-  return id === undefined ? undefined : activeBuildingsById.get(id);
-}
-
-function renderAdvancedQueryActions(): void {
-  const first = firstSelectedAdvancedQueryBuilding();
-  const selected = [...advancedQuerySelection]
-    .map((id) => activeBuildingsById.get(id))
-    .filter((building): building is CityBuilding => building !== undefined);
-  const canIsolate = selected.length > 0 && selected.every(({ districtId }) => districtId === first?.districtId);
-  advancedQueryFocus.disabled = first === undefined;
-  advancedQueryOverlay.disabled = first === undefined;
-  advancedQueryIsolate.disabled = !canIsolate;
-  advancedQueryExport.disabled = advancedQueryResult === undefined || advancedQueryResult.matches.length === 0;
-  advancedQueryCompare.disabled = selected.length < 2;
-}
-
-function focusAdvancedQueryResult(withOverlay: boolean): void {
-  const building = firstSelectedAdvancedQueryBuilding();
-  if (!building) return;
-  viewerWorkspace.show("details", { intent: "explicit", focusTab: true });
-  cityScene.selectBuilding(building.id, true);
-  advancedQueryStatus.textContent = withOverlay
-    ? "Focused the first selected building; its dependency overlay is shown when dependency facts are available."
-    : "Focused the first selected building.";
-}
-
-function exportAdvancedQueryResults(): void {
-  if (!advancedQueryResult) return;
-  const payload = JSON.stringify({ query: advancedQuery, selection: [...advancedQuerySelection].sort(), result: advancedQueryResult }, undefined, 2);
-  const url = URL.createObjectURL(new Blob([payload], { type: "application/json" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "code-city-query-results.json";
-  link.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function searchResultButtons(): HTMLButtonElement[] {
@@ -6425,24 +6234,40 @@ function applyVisualization(): void {
     transition.renamedBuildingIds.forEach((id) => colors.set(id, "#22d3ee"));
     transition.addedBuildingIds.forEach((id) => colors.set(id, "#4ade80"));
   }
+  const extension = activeSafeExtensionEvaluation;
+  extension?.application.buildings.forEach((building) => {
+    if (building.color !== undefined) colors.set(building.id, building.color);
+  });
+  const visualizationLabel =
+    extension === undefined
+      ? visualization.label
+      : `Extension: ${extension.configuration.name}`;
   cityScene.setVisualization(
     colors,
-    visualization.label,
+    visualizationLabel,
   );
-  activeVisualizationLabel = visualization.label;
+  activeVisualizationLabel = visualizationLabel;
   const transitionStatus =
     transition === undefined && dependencyChangeCount === 0
       ? ""
       : " Current-frame changes override the mode colors.";
+  const extensionStatus =
+    extension === undefined
+      ? ""
+      :
+        ` Declarative extension preview applied ` +
+        `(${extension.application.mappings.length} mappings, ` +
+        `${extension.application.layouts.length} layouts, ` +
+        `${extension.application.overlays.length} overlays).`;
   visualizationModeStatus.textContent =
-    visualization.status + transitionStatus;
+    visualization.status + transitionStatus + extensionStatus;
   visualizationModeSelect.setAttribute(
     "aria-invalid",
     visualization.available ? "false" : "true",
   );
   legend.setAttribute(
     "aria-label",
-    `${visualization.label} legend`,
+    `${visualizationLabel} legend`,
   );
   const changeGroups: SemanticGroup[] = [];
   if (transition?.addedBuildingIds.length) {
@@ -6497,7 +6322,38 @@ function applyVisualization(): void {
       priority: 100,
     });
   }
-  renderLegend(activeModel, [...changeGroups, ...visualization.legend]);
+  const extensionGroups: SemanticGroup[] = [];
+  extension?.application.legends.forEach((entry, index) => {
+    extensionGroups.push(
+      {
+        id: `extension-${entry.id}-minimum`,
+        label: `${entry.label}: ${entry.minimum.toLocaleString("en-US")} (minimum)`,
+        color: entry.minimumColor,
+        priority: 130 - index * 2,
+      },
+      {
+        id: `extension-${entry.id}-maximum`,
+        label: `${entry.label}: ${entry.maximum.toLocaleString("en-US")} (maximum)`,
+        color: entry.maximumColor,
+        priority: 129 - index * 2,
+      },
+    );
+  });
+  extension?.application.overlays.forEach((entry, index) => {
+    extensionGroups.push({
+      id: `extension-${entry.id}-overlay`,
+      label:
+        `${entry.id} overlay · ` +
+        `${entry.buildingIds.length.toLocaleString("en-US")} matches`,
+      color: entry.color,
+      priority: 160 - index,
+    });
+  });
+  renderLegend(activeModel, [
+    ...extensionGroups,
+    ...changeGroups,
+    ...visualization.legend,
+  ]);
 }
 
 function renderViewerOverview(): void {

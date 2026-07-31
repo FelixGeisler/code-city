@@ -74,7 +74,7 @@
     },
     "layouts": {
       "type": "array",
-      "maxItems": 32,
+      "maxItems": 1,
       "items": { "$ref": "#/$defs/layout" }
     },
     "queries": {
@@ -102,6 +102,19 @@
       "type": "number",
       "minimum": -1000000000,
       "maximum": 1000000000
+    },
+    "metricReference": {
+      "anyOf": [
+        {
+          "enum": [
+            "sloc",
+            "decisionLoad",
+            "maximumComplexity",
+            "executableUnitCount"
+          ]
+        },
+        { "$ref": "#/$defs/identifier" }
+      ]
     },
     "expression": {
       "oneOf": [
@@ -176,7 +189,7 @@
       "required": ["id", "metric", "target", "minimum", "maximum"],
       "properties": {
         "id": { "$ref": "#/$defs/identifier" },
-        "metric": { "$ref": "#/$defs/identifier" },
+        "metric": { "$ref": "#/$defs/metricReference" },
         "target": { "enum": ["color", "height", "footprint"] },
         "minimum": { "$ref": "#/$defs/number" },
         "maximum": { "$ref": "#/$defs/number" }
@@ -188,7 +201,7 @@
       "required": ["id", "metric", "operator", "value"],
       "properties": {
         "id": { "$ref": "#/$defs/identifier" },
-        "metric": { "$ref": "#/$defs/identifier" },
+        "metric": { "$ref": "#/$defs/metricReference" },
         "operator": { "enum": ["atLeast", "atMost"] },
         "value": { "$ref": "#/$defs/number" }
       }

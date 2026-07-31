@@ -444,7 +444,7 @@ const configurationJsonBounds: JsonBounds = Object.freeze({
 const modelJsonBounds: JsonBounds = Object.freeze({
   bytes: EXTENSION_LIMITS.modelBytes,
   depth: 8,
-  nodes: EXTENSION_LIMITS.modelBuildings * 8 + 8,
+  nodes: EXTENSION_LIMITS.modelBuildings * 20 + 8,
   arrayEntries: EXTENSION_LIMITS.modelBuildings,
   objectKeys: EXTENSION_LIMITS.modelBuildings,
 });
@@ -452,7 +452,10 @@ const modelJsonBounds: JsonBounds = Object.freeze({
 const resultJsonBounds: JsonBounds = Object.freeze({
   bytes: EXTENSION_LIMITS.resultBytes,
   depth: EXTENSION_LIMITS.jsonDepth + 4,
-  nodes: EXTENSION_LIMITS.modelBuildings * 16 + EXTENSION_LIMITS.jsonNodes,
+  nodes:
+    EXTENSION_LIMITS.modelBuildings * 20 +
+    EXTENSION_LIMITS.operations * 2 +
+    EXTENSION_LIMITS.jsonNodes,
   arrayEntries: EXTENSION_LIMITS.modelBuildings,
   objectKeys: EXTENSION_LIMITS.modelBuildings,
 });
@@ -471,12 +474,14 @@ function expression(
   state.nodes += 1;
   state.aggregate.nodes += 1;
   state.depth += 1;
-  if (
-    state.nodes > EXTENSION_LIMITS.expressionNodes ||
-    state.aggregate.nodes > EXTENSION_LIMITS.aggregateExpressionNodes ||
-    state.depth > EXTENSION_LIMITS.expressionDepth
-  ) {
-    throw new RangeError(`${path} exceeds expression limits.`);
+  if (state.nodes > EXTENSION_LIMITS.expressionNodes) {
+    throw new RangeError(`${path} exceeds the per-expression node limit.`);
+  }
+  if (state.aggregate.nodes > EXTENSION_LIMITS.aggregateExpressionNodes) {
+    throw new RangeError("configuration exceeds the aggregate expression limit.");
+  }
+  if (state.depth > EXTENSION_LIMITS.expressionDepth) {
+    throw new RangeError(`${path} exceeds the expression depth limit.`);
   }
   try {
     const candidate = plain(value) ? value : undefined;
@@ -628,11 +633,14 @@ export function validateSafeExtensionConfiguration(
     },
   );
   const metricExists = (metric: unknown, path: string): string => {
-    const id = identifier(metric, path);
     if (
-      !metricKeys.includes(id as keyof SourceMetrics) &&
-      !derivedMetrics.some((entry) => entry.id === id)
+      typeof metric === "string" &&
+      metricKeys.includes(metric as keyof SourceMetrics)
     ) {
+      return metric;
+    }
+    const id = identifier(metric, path);
+    if (!derivedMetrics.some((entry) => entry.id === id)) {
       throw new TypeError(
         `${path} must reference a built-in or derived metric.`,
       );
@@ -1509,11 +1517,11 @@ export function evaluateSafeExtension(
   const queryApplications = (configuration.queries ?? []).map((query) =>
     Object.freeze({
       id: query.id,
-      buildingIds: matches[query.filterId] ?? Object.freeze([]),
+      buildingIds: Object.freeze([...(matches[query.filterId] ?? [])]),
     }),
   );
   const overlayApplications = (configuration.overlays ?? []).map((overlay) => {
-    const buildingIds = matches[overlay.filterId] ?? Object.freeze([]);
+    const buildingIds = Object.freeze([...(matches[overlay.filterId] ?? [])]);
     for (const buildingId of buildingIds) {
       checkpoint(1);
       const building = mutableById.get(buildingId);
