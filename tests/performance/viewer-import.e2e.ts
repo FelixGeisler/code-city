@@ -751,6 +751,9 @@ test.beforeAll(async () => {
         ? "// retained-source-sentinel"
         : `// retained filler line ${index + 1}`,
   );
+  retainedSourceLines.unshift(
+    'import { siblingMustNotBeFetched } from "./sibling";',
+  );
   retainedSourceLines.push(
     "export function retainedComplexity(value: number): number {",
     "  let score = 0;",
@@ -2648,6 +2651,7 @@ test("imports a browser directory and repository ZIP with identity and analysis 
 test("scrubs retained ZIP source across selection, stale response, refetch, and removal", async ({
   page,
 }) => {
+  test.setTimeout(75_000);
   const sourceRequests: string[] = [];
   let releaseRemotePreview!: () => void;
   let announceRemotePreview!: () => void;
@@ -2655,11 +2659,16 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   const remotePreviewStarted = new Promise<void>((resolve) => { announceRemotePreview = resolve; });
   let localPreviewCalls = 0;
   let guidanceRequests = 0;
+  const guidanceBodies: unknown[] = [];
+  const previewContexts: Record<string, unknown>[] = [];
+  const approved = new Map<string, { providerId: string; context: Record<string, unknown>; contextDigest: string; findingDigest?: string; source: { path: string; lines: { startLine: number; endLine: number } } }>();
   await page.route("**/api/v1/ai/providers", async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ enabled: true, providers: [{ id: "remote", label: "Remote review" }, { id: "local", label: "Local model" }] }) });
   });
   await page.route("**/api/v1/ai/preview/**", async (route) => {
     const providerId = new URL(route.request().url()).pathname.split("/").at(-1)!;
+    const selected = route.request().postDataJSON() as Record<string, unknown>;
+    previewContexts.push(selected);
     if (providerId === "remote") {
       announceRemotePreview();
       await remotePreviewReleased;
@@ -2667,14 +2676,39 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
       localPreviewCalls += 1;
     }
     const marker = providerId === "remote" ? "REMOTE-PAYLOAD" : `LOCAL-PAYLOAD-${localPreviewCalls}`;
+    if (selected["kind"] === "dependency") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ preview: {
+        enabled: true,
+        availability: "unavailable",
+        provider: { id: providerId, label: providerId === "remote" ? "Remote review" : "Local model" },
+        context: selected,
+        reason: "This dependency has no analyzer-recorded exact source range.",
+        limits: { timeoutMs: 20_000, maximumSourceBytes: 131_072 },
+        privacy: "no-prompt-storage",
+      } }) });
+      return;
+    }
+    const range = selected["kind"] === "type" || selected["kind"] === "callable"
+      ? { startLine: 1, startColumn: 1, endLine: 1, endColumn: marker.length + 1 }
+      : { startLine: 1, endLine: 1 };
+    const context = selected["kind"] === "file"
+      ? { ...selected, label: "retained-large.ts source file", range }
+      : selected["kind"] === "smell"
+        ? { ...selected, label: "High-complexity method", range, evidence: { kind: "executable-unit", label: "Cyclomatic complexity", value: 17, threshold: 15, subject: "retainedComplexity", line: 1, endLine: 1 } }
+        : { ...selected, name: "selected declaration", constructKind: selected["kind"] === "type" ? "class" : "function", label: "selected declaration", range };
+    const contextDigest = (providerId === "remote" ? "a" : String(Math.min(9, localPreviewCalls + 1))).repeat(64);
+    const findingDigest = selected["kind"] === "smell" ? "f".repeat(64) : undefined;
+    const grant = (providerId === "remote" ? "R" : "L").repeat(42) + String(Math.min(9, localPreviewCalls + 1));
+    approved.set(grant, { providerId, context, contextDigest, ...(findingDigest === undefined ? {} : { findingDigest }), source: { path: "src/retained-large.ts", lines: range } });
     try {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ preview: {
         enabled: true,
+        availability: "available",
         provider: { id: providerId, label: providerId === "remote" ? "Remote review" : "Local model" },
-        transmission: { version: 1, task: "source-guidance", source: { path: "src/retained-large.ts", language: "typescript", text: marker, lines: { startLine: 1, endLine: 1 } }, findings: { sloc: 1, maximumComplexity: 1, decisionLoad: 0 } },
+        transmission: { version: 1, task: "source-guidance", providerId, context, contextDigest, ...(findingDigest === undefined ? {} : { findingDigest }), source: { path: "src/retained-large.ts", language: "typescript", text: marker, lines: range }, findings: { sloc: 1, maximumComplexity: 1, decisionLoad: 0 } },
         limits: { timeoutMs: 20_000, maximumSourceBytes: 131_072 },
         privacy: "no-prompt-storage",
-        grant: (providerId === "remote" ? "R" : "L").repeat(43),
+        grant,
       } }) });
     } catch {
       // Switching providers is expected to abort the stale remote preview.
@@ -2682,11 +2716,15 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   });
   await page.route("**/api/v1/ai/requests", async (route) => {
     guidanceRequests += 1;
+    const requestBody = route.request().postDataJSON() as { grant: string };
+    guidanceBodies.push(requestBody);
+    const grant = requestBody.grant;
+    const accepted = approved.get(grant)!;
     if (guidanceRequests === 1) {
       await route.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ error: { code: "provider-unavailable", message: "Unavailable" } }) });
       return;
     }
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ result: { provider: { id: "local", label: "Local model" }, suggestions: [{ title: "Keep it small", detail: "Extract the branch.", citation: { path: "src/retained-large.ts", startLine: 1, endLine: 1 } }] } }) });
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ result: { provider: { id: accepted.providerId, label: accepted.providerId === "local" ? "Local model" : "Remote review" }, context: accepted.context, contextDigest: accepted.contextDigest, ...(accepted.findingDigest === undefined ? {} : { findingDigest: accepted.findingDigest }), suggestions: [{ title: "Keep it small", detail: "Extract the branch.", citation: { path: accepted.source.path, startLine: accepted.source.lines.startLine, endLine: accepted.source.lines.endLine } }] } }) });
   });
   page.on("request", (request) => {
     const url = new URL(request.url());
@@ -2735,6 +2773,12 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   );
   expect(retainedBuilding).toBeDefined();
   expect(siblingBuilding).toBeDefined();
+  const retainedDependency = importedModel.dependencies.find(
+    ({ sourceId, targetId }) =>
+      sourceId === retainedBuilding!.id &&
+      targetId === siblingBuilding!.id,
+  );
+  expect(retainedDependency).toBeDefined();
 
   await page.getByRole("tab", { name: "Explore" }).click();
   await page.locator("#building-search").fill("retained-large");
@@ -2757,6 +2801,34 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   await page.locator("#building-ai-guidance-request").click();
   await expect.poll(() => guidanceRequests).toBe(2);
   await expect(page.locator("#building-ai-guidance-suggestions")).toContainText("Keep it small");
+
+  await page.locator("#dependency-section summary").click();
+  await page.locator("#dependency-outgoing-toggle").click();
+  const dependencyItem = page
+    .locator(".dependency-item")
+    .filter({ hasText: "sibling.ts" });
+  await expect(dependencyItem).toHaveCount(1);
+  await dependencyItem.getByRole("button", {
+    name: `Preview AI guidance for dependency ${retainedDependency!.id}`,
+  }).click();
+  await expect(page.locator("#building-ai-guidance-details")).toHaveAttribute(
+    "open",
+    "",
+  );
+  await expect(page.locator("#building-ai-guidance-summary")).toHaveText(
+    "Context unavailable",
+  );
+  await expect(page.locator("#building-ai-guidance-status")).toContainText(
+    "no analyzer-recorded exact source range",
+  );
+  await expect(page.locator("#building-ai-guidance-request")).toBeHidden();
+  expect(previewContexts.at(-1)).toEqual({
+    version: "codecity.ai-context/1",
+    kind: "dependency",
+    buildingId: retainedBuilding!.id,
+    dependencyId: retainedDependency!.id,
+  });
+  expect(guidanceRequests).toBe(2);
 
   await expect(page.locator("#building-source-status")).toContainText(
     "Showing the exact retained file",
@@ -2807,6 +2879,9 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
     "data-source-declaration-start-column",
     /\d+/u,
   );
+  const exactFunctionId = await exactFunction.getAttribute(
+    "data-source-declaration-id",
+  );
   await exactFunction.click();
   const highlightedLine = page.locator(".source-line-highlight").first();
   await expect(highlightedLine).toContainText("sameLinePrefix");
@@ -2815,15 +2890,22 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
     (await highlightedLine.locator(".source-range-highlight").allTextContents()).join("")
   ).toBe("export function sameLineExact(): number { return 7; }");
   await expect(page.locator("#building-ai-guidance-summary")).toHaveText(
-    "Declaration selected",
+    "Preview ready",
   );
   await expect(page.locator("#building-ai-guidance-status")).toContainText(
-    "requires scoped server review support",
+    "exact server-verified source and findings",
   );
-  await expect(page.locator("#building-ai-guidance-status")).toContainText(
-    "No source was sent",
+  await expect(page.locator("#building-ai-guidance-preview")).toContainText(
+    exactFunctionId!,
   );
-  await expect(page.locator("#building-ai-guidance-request")).toBeHidden();
+  await page.locator("#building-ai-guidance-details summary").click();
+  await expect(page.locator("#building-ai-guidance-request")).toBeVisible();
+  expect(previewContexts.at(-1)).toMatchObject({
+    version: "codecity.ai-context/1",
+    kind: "callable",
+    buildingId: retainedBuilding!.id,
+    stableId: exactFunctionId,
+  });
   expect(guidanceRequests).toBe(2);
   await expect(page.locator("#building-source-structure-return")).toBeVisible();
   await page.locator("#building-source-structure-show-more").click();
@@ -2871,7 +2953,20 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
     "open",
     "",
   );
+  await page.locator("#building-ai-guidance-details summary").click();
+  await expect(page.locator("#building-ai-guidance-preview")).toContainText(
+    "REMOTE-PAYLOAD",
+  );
   expect(guidanceRequests).toBe(2);
+  await page.getByRole("button", {
+    name: "Send this exact preview once",
+  }).click();
+  await expect(page.locator("#building-ai-guidance-suggestions")).toContainText(
+    "Keep it small",
+  );
+  expect(guidanceRequests).toBe(3);
+  expect(guidanceBodies.at(-1)).toMatchObject({ approval: "once", grant: expect.any(String) });
+  expect(JSON.stringify(guidanceBodies.at(-1))).not.toMatch(/source|metrics|context/iu);
   await expect.poll(() => sourceRequests).toEqual([
     `/api/v1/artifacts/${jobId}/sources/${retainedBuilding!.id}`,
   ]);
@@ -2894,6 +2989,42 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   expect(sourceRequests).not.toContain(
     `/api/v1/artifacts/${jobId}/sources/${siblingBuilding!.id}`,
   );
+
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await page.locator("#building-search").fill("sibling");
+  const siblingResult = page
+    .locator(".search-result-button")
+    .filter({ hasText: "sibling.ts" });
+  await expect(siblingResult).toHaveCount(1);
+  await siblingResult.click();
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Showing the exact retained file",
+  );
+  await page.locator("#dependency-section summary").click();
+  await page.locator("#dependency-incoming-toggle").click();
+  const incomingDependencyItem = page
+    .locator(".dependency-item")
+    .filter({ hasText: "retained-large.ts" });
+  await expect(incomingDependencyItem).toHaveCount(1);
+  await incomingDependencyItem.getByRole("button", {
+    name: `Preview AI guidance for dependency ${retainedDependency!.id}`,
+  }).click();
+  await expect(page.locator("#selection-name")).toHaveText(
+    "retained-large.ts",
+  );
+  await expect(page.locator("#building-ai-guidance-summary")).toHaveText(
+    "Context unavailable",
+  );
+  expect(previewContexts.at(-1)).toEqual({
+    version: "codecity.ai-context/1",
+    kind: "dependency",
+    buildingId: retainedBuilding!.id,
+    dependencyId: retainedDependency!.id,
+  });
+  expect(guidanceRequests).toBe(3);
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await page.locator("#building-search").fill("retained-large");
+  await expect(retainedResult).toHaveCount(1);
 
   const retainedUnit = retainedBuilding!.units?.find(
     ({ name }) => name === "retainedComplexity",
@@ -2927,6 +3058,18 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
     "data-line",
     String(retainedUnit!.endLine),
   );
+  await expect(page.locator("#building-ai-guidance-summary")).toHaveText(
+    "Preview ready",
+  );
+  await expect(page.locator("#building-ai-guidance-preview")).toContainText(
+    '"findingDigest"',
+  );
+  expect(previewContexts.at(-1)).toMatchObject({
+    version: "codecity.ai-context/1",
+    kind: "smell",
+    buildingId: retainedBuilding!.id,
+    ruleId: "high-complexity-method",
+  });
 
   const sourcePath =
     `/api/v1/artifacts/${jobId}/sources/${retainedBuilding!.id}`;
@@ -3007,7 +3150,10 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   await expect
     .poll(() => sourceRequests.length)
     .toBeGreaterThan(requestsBeforeRefetch);
-  expect(new Set(sourceRequests)).toEqual(new Set([sourcePath]));
+  expect(new Set(sourceRequests)).toEqual(new Set([
+    sourcePath,
+    `/api/v1/artifacts/${jobId}/sources/${siblingBuilding!.id}`,
+  ]));
 
   await page.getByRole("button", { name: "Import project" }).click();
   expect(

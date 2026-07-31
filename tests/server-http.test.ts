@@ -1803,7 +1803,18 @@ it("does not load retained source for a disabled AI preview", async () => {
       "/api/v1/ai/preview/00000000-0000-4000-8000-000000000000/typescript:0123456789abcdef/local",
       server.url,
     ),
-    { method: "POST", headers: { "X-Code-City-Request": "1" } },
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Code-City-Request": "1",
+      },
+      body: JSON.stringify({
+        version: "codecity.ai-context/1",
+        kind: "file",
+        buildingId: "typescript:0123456789abcdef",
+      }),
+    },
   );
   expect(response.status).toBe(200);
   expect(JSON.parse(response.body)).toEqual({

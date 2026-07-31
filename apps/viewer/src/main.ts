@@ -158,7 +158,10 @@ import {
   ViewerLoadGateway,
 } from "./model-source.js";
 import { validateCityModel } from "./model-validation.js";
-import { ViewerImportApiClient } from "./import-api.js";
+import {
+  ViewerImportApiClient,
+  type ViewerAiGuidanceContext,
+} from "./import-api.js";
 import {
   extractSourceLineWindow,
   loadBuildingSource,
@@ -3020,6 +3023,12 @@ let activeSafeExtensionEvaluation: ExtensionEvaluation | undefined;
 let suppressSafeExtensionRestore = false;
 let sourceRequest: AbortController | undefined;
 let aiGuidanceRequest: AbortController | undefined;
+let pendingAiGuidanceNavigation:
+  | Readonly<{
+      buildingId: string;
+      context: ViewerAiGuidanceContext;
+    }>
+  | undefined;
 let loadedBuildingSource:
   | { readonly buildingId: string; readonly source: BuildingSource }
   | undefined;
@@ -3288,11 +3297,21 @@ const designSmellPanel = installDesignSmellPanel(
       });
       selectBuildingFromExplorer(finding.buildingId);
       const building = activeBuildingsById.get(finding.buildingId);
-      if (building !== undefined && finding.evidence.line !== undefined) {
+      if (building !== undefined) {
         revealBuildingSource(
           building,
           finding.evidence.line,
           finding.evidence.endLine,
+          undefined,
+          undefined,
+          undefined,
+          {
+            version: "codecity.ai-context/1",
+            kind: "smell",
+            buildingId: finding.buildingId,
+            findingId: finding.id,
+            ruleId: finding.ruleId,
+          },
         );
       }
     },
@@ -5724,6 +5743,7 @@ function dependencyListItem(
 ): HTMLLIElement {
   const item = document.createElement("li");
   item.className = "dependency-item";
+  const sourceBuilding = activeBuildingsById.get(route.sourceBuildingId);
 
   const isExternal = route.counterpart.kind === "external";
   const row = document.createElement("button");
@@ -5796,7 +5816,57 @@ function dependencyListItem(
   );
   content.append(name, path, meta);
   row.append(direction, content);
-  item.append(row);
+  const guidance = document.createElement("button");
+  guidance.type = "button";
+  guidance.className = "button button-compact dependency-guidance-button";
+  guidance.textContent = "Preview AI guidance";
+  guidance.disabled =
+    sourceBuilding === undefined ||
+    activeModelSource.jobId === undefined ||
+    activeModelSource.sourceAvailability !== "retained";
+  guidance.title = sourceBuilding === undefined || guidance.disabled
+    ? "AI dependency guidance requires retained source."
+    : `Preview the exact dependency context from ${sourceBuilding.path}; no source is sent without confirmation.`;
+  guidance.setAttribute(
+    "aria-label",
+    `Preview AI guidance for dependency ${route.dependencyId}`,
+  );
+  guidance.addEventListener("click", () => {
+    if (sourceBuilding === undefined) return;
+    const context: ViewerAiGuidanceContext = Object.freeze({
+      version: "codecity.ai-context/1",
+      kind: "dependency",
+      buildingId: sourceBuilding.id,
+      dependencyId: route.dependencyId,
+    });
+    viewerWorkspace.show("details", {
+      intent: "explicit",
+      focusTab: true,
+    });
+    if (selectedExplorerBuildingId(explorerState) === sourceBuilding.id) {
+      revealBuildingSource(
+        sourceBuilding,
+        sourceBuilding.sourceLocation?.startLine,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        context,
+        true,
+      );
+      return;
+    }
+    const navigation = Object.freeze({
+      buildingId: sourceBuilding.id,
+      context,
+    });
+    pendingAiGuidanceNavigation = navigation;
+    selectBuildingFromExplorer(sourceBuilding.id);
+    if (pendingAiGuidanceNavigation === navigation) {
+      pendingAiGuidanceNavigation = undefined;
+    }
+  });
+  item.append(row, guidance);
   return item;
 }
 
@@ -6483,6 +6553,7 @@ function sourceAvailabilityMessage(): string {
 }
 
 function scrubBuildingSource(closeDetails = true): void {
+  pendingAiGuidanceNavigation = undefined;
   sourceRequest?.abort();
   sourceRequest = undefined;
   loadedBuildingSource = undefined;
@@ -6648,17 +6719,16 @@ function renderSourceCode(
 function prepareAiGuidance(
   building: CityBuilding,
   declaration?: FineDetailNode,
+  requestedContext?: ViewerAiGuidanceContext,
+  openDetails = false,
 ): void {
   resetAiGuidancePresentation();
-  if (declaration !== undefined) {
-    inspectorFields.aiSummary.textContent = "Declaration selected";
-    inspectorFields.aiStatus.textContent =
-      `AI guidance for ${sourceStructureKindLabel(declaration.kind)} ${declaration.name} ` +
-      `(${declaration.id}, lines ${declaration.startLine}–${declaration.endLine}) ` +
-      "requires scoped server review support. No source was sent to an AI provider.";
-    inspectorFields.aiRequest.disabled = true;
-    return;
-  }
+  inspectorFields.aiDetails.open = openDetails;
+  const context: ViewerAiGuidanceContext = requestedContext ?? (
+    declaration === undefined
+      ? { version: "codecity.ai-context/1", kind: "file", buildingId: building.id }
+      : { version: "codecity.ai-context/1", kind: declaration.category === "type" ? "type" : "callable", buildingId: building.id, stableId: declaration.id }
+  );
   const jobId = activeModelSource.jobId;
   if (jobId === undefined) return;
   const controller = new AbortController();
@@ -6678,12 +6748,25 @@ function prepareAiGuidance(
     inspectorFields.aiRequest.onclick = null;
     inspectorFields.aiPreview.hidden = true;
     inspectorFields.aiStatus.textContent = "Preparing exact server-verified preview…";
-    void sourceApi.aiGuidancePreview(jobId, building.id, providerId, previewController.signal)
+    void sourceApi.aiGuidancePreview(jobId, context, providerId, previewController.signal)
       .then((value) => {
         if (controller.signal.aborted || previewController.signal.aborted || aiGuidanceRequest !== controller || generation !== previewGeneration || inspectorFields.aiProvider.value !== providerId) return;
-        const preview = (value as { preview?: { enabled?: boolean; provider?: { id?: string; label?: string }; transmission?: unknown; grant?: unknown } }).preview;
-        if (preview?.enabled !== true || preview.provider?.id !== providerId || typeof preview.provider.label !== "string" || preview.transmission === undefined || typeof preview.grant !== "string") throw new Error("AI guidance preview was invalid.");
+        const preview = value.preview;
+        if (!preview.enabled) {
+          inspectorFields.aiSummary.textContent = "Disabled";
+          inspectorFields.aiStatus.textContent = "AI guidance is disabled by the administrator. No source was sent.";
+          return;
+        }
+        if (preview.provider.id !== providerId) throw new Error("AI guidance preview was invalid.");
+        if (preview.availability === "unavailable") {
+          inspectorFields.aiSummary.textContent = "Context unavailable";
+          inspectorFields.aiStatus.textContent = `${preview.reason} No source was sent to an AI provider.`;
+          inspectorFields.aiPreview.textContent = JSON.stringify({ context: preview.context, availability: preview.availability, reason: preview.reason }, null, 2);
+          inspectorFields.aiPreview.hidden = false;
+          return;
+        }
         const grant = preview.grant;
+        if (preview.transmission.providerId !== providerId) throw new Error("AI guidance transmission did not match its provider.");
         inspectorFields.aiSummary.textContent = "Preview ready";
         inspectorFields.aiStatus.textContent = `This exact server-verified source and findings will be sent once to ${preview.provider.label} after you confirm.`;
         inspectorFields.aiPreview.textContent = JSON.stringify(preview.transmission, null, 2);
@@ -6696,11 +6779,18 @@ function prepareAiGuidance(
           inspectorFields.aiRequest.disabled = true;
           inspectorFields.aiProvider.disabled = true;
           inspectorFields.aiStatus.textContent = "Requesting optional suggestions…";
+          const expectedTransmission = preview.transmission;
           void sourceApi.aiGuidanceRequest(grant, controller.signal)
           .then((result) => {
             if (controller.signal.aborted || aiGuidanceRequest !== controller || generation !== previewGeneration) return;
-            const suggestions = (result as { result?: { suggestions?: readonly { title?: string; detail?: string; citation?: { path?: string; startLine?: number; endLine?: number } }[] } }).result?.suggestions;
-            if (suggestions === undefined) throw new Error("AI provider response was invalid.");
+            if (
+              result.result.provider.id !== providerId ||
+              result.result.contextDigest !== expectedTransmission.contextDigest ||
+              result.result.findingDigest !== expectedTransmission.findingDigest ||
+              JSON.stringify(result.result.context) !== JSON.stringify(expectedTransmission.context) ||
+              result.result.suggestions.some(({ citation }) => citation.path !== expectedTransmission.source.path || citation.startLine !== expectedTransmission.context.range.startLine || citation.endLine !== expectedTransmission.context.range.endLine)
+            ) throw new Error("AI provider response did not match the selected context.");
+            const suggestions = result.result.suggestions;
             inspectorFields.aiSuggestions.replaceChildren();
             for (const suggestion of suggestions) {
               if (typeof suggestion.title !== "string" || typeof suggestion.detail !== "string") continue;
@@ -6767,6 +6857,8 @@ function revealBuildingSource(
   startColumn?: number,
   endColumn?: number,
   declaration?: FineDetailNode,
+  guidanceContext?: ViewerAiGuidanceContext,
+  openAiGuidance = false,
 ): void {
   const declarationSelection =
     declaration === undefined
@@ -6788,7 +6880,12 @@ function revealBuildingSource(
       startColumn,
       endColumn,
     );
-    prepareAiGuidance(building, declaration);
+    prepareAiGuidance(
+      building,
+      declaration,
+      guidanceContext,
+      openAiGuidance,
+    );
     return;
   }
   scrubBuildingSource(false);
@@ -6867,7 +6964,12 @@ function revealBuildingSource(
       }
       inspectorFields.sourceContent.hidden = false;
       renderSourceCode(source, startLine, endLine, startColumn, endColumn);
-      prepareAiGuidance(building, declaration);
+      prepareAiGuidance(
+        building,
+        declaration,
+        guidanceContext,
+        openAiGuidance,
+      );
     })
     .catch((error: unknown) => {
       if (
@@ -6902,6 +7004,13 @@ function showInspector(context: BuildingContext | null): void {
   }
 
   const { building, repository, module } = context;
+  const pendingGuidance =
+    pendingAiGuidanceNavigation?.buildingId === building.id
+      ? pendingAiGuidanceNavigation
+      : undefined;
+  if (pendingGuidance !== undefined) {
+    pendingAiGuidanceNavigation = undefined;
+  }
   inspectorFields.unitsDetails.hidden = false;
   inspectorFields.sourceDetails.hidden = false;
   selectionKind.textContent = "Building";
@@ -6927,6 +7036,12 @@ function showInspector(context: BuildingContext | null): void {
   revealBuildingSource(
     building,
     building.sourceLocation?.startLine,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    pendingGuidance?.context,
+    pendingGuidance !== undefined,
   );
   executableUnitVisibleLimit =
     INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;

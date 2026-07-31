@@ -49,18 +49,32 @@ At most 64 providers may be configured.
 Each call has a bounded timeout, source and streamed-response size limits,
 cancellation on browser disconnect, and a strict provider response contract.
 
-For a selected retained building the viewer first displays the exact bounded
-source range and server-derived metrics that would be transmitted. The server
-issues a short-lived, opaque, session-bound grant that is bound to the selected
-provider, job, building, source digest, and findings. Clicking **Send this exact
-preview once** consumes that grant atomically; the browser sends neither source
-nor metrics. Suggestions are labelled as optional and cite the selected source
-line range. Provider failures leave deterministic findings and source navigation
-available.
+For a selected retained file, type, callable, dependency, or design-smell
+finding, the browser posts only a versioned descriptor containing stable IDs.
+It never supplies source, ranges, metrics, or evidence. The server validates the
+descriptor against the retained city model, re-evaluates smell findings, slices
+the recorded exact source range, and derives the transmitted metrics. A valid
+dependency or finding without an analyzer-recorded exact range produces an
+explicit unavailable preview and no grant; Code City never substitutes guessed
+source.
+Dependency routes expose this check through **Preview AI guidance**; incoming
+routes first bind the context to their actual source building rather than the
+currently selected target building.
 
-Declaration-level source navigation remains isolated from this file-level
-guidance flow: selecting a class or callable shows its stable descriptor and
-exact range but does not request a preview or transmit source to a provider.
+The server issues a short-lived, opaque, session-bound grant bound to the
+provider, import, selected descriptor, exact source, metrics, context digest,
+and (for smells) finding digest. Clicking **Send this exact preview once**
+consumes that grant atomically; the browser sends neither source nor metrics.
+The provider request includes the selected provider ID, and the provider must
+echo that ID together with the context and finding digests. Both server and
+viewer reject stale, cross-provider, or otherwise mismatched output.
+Suggestions are labelled as optional and cite the selected source line range.
+Provider failures leave deterministic findings and source navigation available.
+
+Declaration-level source navigation prepares a preview for the selected type or
+callable descriptor. The approval shows and sends only that exact declaration
+range; changing the declaration or provider invalidates the displayed grant and
+requires a new preview.
 
 Preview creation is an origin-protected `POST`, not a cacheable read. In
 trusted-network deployments the server creates a short-lived, `HttpOnly`,

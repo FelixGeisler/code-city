@@ -7,7 +7,13 @@ import http, {
 import net from "node:net";
 import path from "node:path";
 
-import { validateCityModel } from "../../../packages/core/src/index.js";
+import {
+  evaluateDesignSmells,
+  validateCityModel,
+  type CityBuilding,
+  type CityModel,
+  type DesignSmellFinding,
+} from "../../../packages/core/src/index.js";
 import {
   collectViewerAssets,
   resolveProductionViewerRoot,
@@ -57,7 +63,10 @@ import {
   type AiGuidanceAuditEvent,
   type AiGuidanceAdapterOptions,
   type AiGuidanceConfiguration,
+  type AiGuidanceContextDescriptor,
   type AiGuidanceMetrics,
+  type AiGuidanceResolvedContext,
+  type AiGuidanceSelection,
   type AiGuidanceSource,
 } from "./ai-guidance.js";
 
@@ -714,6 +723,7 @@ function routeConsumesRequestBody(
   return (
     (method === "POST" && path === "/api/v1/imports") ||
     (method === "POST" && path === AI_GUIDANCE_REQUEST_PATH) ||
+    (method === "POST" && AI_GUIDANCE_PREVIEW_PATH_PATTERN.test(path)) ||
     (method === "POST" &&
       path === "/api/v1/imports/uploads") ||
     (method === "PUT" &&
@@ -2092,19 +2102,25 @@ function cancelJobHandler(
   );
 }
 
-interface AiGuidanceSelection {
-  readonly source: AiGuidanceSource;
-  readonly metrics: AiGuidanceMetrics;
+interface PreparedAiGuidanceSelection {
+  readonly descriptor: AiGuidanceContextDescriptor;
+  readonly selection: AiGuidanceSelection;
   readonly digest: string;
 }
+
+type AiGuidanceContextResolution =
+  | Readonly<{ kind: "available"; prepared: PreparedAiGuidanceSelection }>
+  | Readonly<{ kind: "unavailable"; descriptor: AiGuidanceContextDescriptor; reason: string }>;
 
 interface AiGuidanceGrant {
   readonly binding: string;
   readonly providerId: string;
   readonly jobId: string;
   readonly buildingId: string;
+  readonly descriptor: AiGuidanceContextDescriptor;
   readonly selectionDigest: string;
-  readonly metrics: AiGuidanceMetrics;
+  readonly contextDigest: string;
+  readonly findingDigest?: string;
   readonly expiresAt: number;
 }
 
@@ -2115,11 +2131,11 @@ class AiGuidanceGrantRegistry {
     for (const [grant, value] of this.#grants) if (value.expiresAt <= now) this.#grants.delete(grant);
   }
 
-  public issue(binding: string, providerId: string, selection: AiGuidanceSelection): string {
+  public issue(binding: string, providerId: string, prepared: PreparedAiGuidanceSelection): string {
     this.#removeExpired();
     while (this.#grants.size >= AI_GUIDANCE_MAXIMUM_GRANTS) this.#grants.delete(this.#grants.keys().next().value!);
     const grant = randomBytes(AI_GUIDANCE_GRANT_BYTES).toString("base64url");
-    this.#grants.set(grant, Object.freeze({ binding, providerId, jobId: selection.source.jobId, buildingId: selection.source.buildingId, selectionDigest: selection.digest, metrics: selection.metrics, expiresAt: Date.now() + AI_GUIDANCE_GRANT_TTL_MS }));
+    this.#grants.set(grant, Object.freeze({ binding, providerId, jobId: prepared.selection.source.jobId, buildingId: prepared.selection.source.buildingId, descriptor: prepared.descriptor, selectionDigest: prepared.digest, contextDigest: prepared.selection.contextDigest, ...(prepared.selection.findingDigest === undefined ? {} : { findingDigest: prepared.selection.findingDigest }), expiresAt: Date.now() + AI_GUIDANCE_GRANT_TTL_MS }));
     return grant;
   }
 
@@ -2129,11 +2145,11 @@ class AiGuidanceGrantRegistry {
     return value !== undefined && value.binding === binding ? value : undefined;
   }
 
-  public consume(grant: string, binding: string, selection: AiGuidanceSelection): AiGuidanceGrant | undefined {
+  public consume(grant: string, binding: string, prepared: PreparedAiGuidanceSelection): AiGuidanceGrant | undefined {
     this.#removeExpired();
     const value = this.#grants.get(grant);
     this.#grants.delete(grant); // Consume before comparison so failed attempts cannot be replayed.
-    if (value === undefined || value.binding !== binding || value.jobId !== selection.source.jobId || value.buildingId !== selection.source.buildingId || value.selectionDigest !== selection.digest || value.metrics.sloc !== selection.metrics.sloc || value.metrics.maximumComplexity !== selection.metrics.maximumComplexity || value.metrics.decisionLoad !== selection.metrics.decisionLoad) return undefined;
+    if (value === undefined || value.binding !== binding || value.jobId !== prepared.selection.source.jobId || value.buildingId !== prepared.selection.source.buildingId || JSON.stringify(value.descriptor) !== JSON.stringify(prepared.descriptor) || value.selectionDigest !== prepared.digest || value.contextDigest !== prepared.selection.contextDigest || value.findingDigest !== prepared.selection.findingDigest) return undefined;
     return value;
   }
 }
@@ -2162,8 +2178,123 @@ async function deleteCompletedImportResult(
   );
 }
 
-function aiGuidanceDigest(source: AiGuidanceSource, metrics: AiGuidanceMetrics): string {
-  return createHash("sha256").update(JSON.stringify({ path: source.path, language: source.language, text: source.text, location: source.location, metrics })).digest("hex");
+function aiGuidanceDigest(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function aiGuidanceContext(value: unknown): AiGuidanceContextDescriptor | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const object = value as Record<string, unknown>;
+  const version = object["version"];
+  const kind = object["kind"];
+  const buildingId = object["buildingId"];
+  if (version !== "codecity.ai-context/1" || typeof buildingId !== "string" || !/^[a-z0-9-]+:[0-9a-f]{16}$/u.test(buildingId)) return undefined;
+  const safeIdentifier = (candidate: unknown): candidate is string => typeof candidate === "string" && candidate.length > 0 && candidate.length <= 512 && !/[\p{Cc}\p{Cf}\p{Cs}]/u.test(candidate);
+  if (kind === "file" && Object.keys(object).length === 3) return Object.freeze({ version, kind, buildingId });
+  if ((kind === "type" || kind === "callable") && Object.keys(object).length === 4 && safeIdentifier(object["stableId"])) return Object.freeze({ version, kind, buildingId, stableId: object["stableId"] });
+  if (kind === "dependency" && Object.keys(object).length === 4 && safeIdentifier(object["dependencyId"])) return Object.freeze({ version, kind, buildingId, dependencyId: object["dependencyId"] });
+  if (kind === "smell" && Object.keys(object).length === 5 && safeIdentifier(object["findingId"]) && safeIdentifier(object["ruleId"])) return Object.freeze({ version, kind, buildingId, findingId: object["findingId"], ruleId: object["ruleId"] });
+  return undefined;
+}
+
+function sourceSegments(text: string): readonly { readonly content: string; readonly delimiter: string }[] {
+  const segments: { content: string; delimiter: string }[] = [];
+  let start = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code !== 0x0a && code !== 0x0d) continue;
+    const delimiter = code === 0x0d && text.charCodeAt(index + 1) === 0x0a ? "\r\n" : text[index]!;
+    segments.push({ content: text.slice(start, index), delimiter });
+    if (delimiter.length === 2) index += 1;
+    start = index + 1;
+  }
+  segments.push({ content: text.slice(start), delimiter: "" });
+  return segments;
+}
+
+function exactSourceText(text: string, range: AiGuidanceSource["location"]): string {
+  const selected = sourceTextLineRange(text, range.startLine, range.endLine);
+  if (range.startColumn === undefined && range.endColumn === undefined) return selected;
+  if (range.startColumn === undefined || range.endColumn === undefined) throw new Error("Source columns are incomplete.");
+  const segments = sourceSegments(selected);
+  const first = segments[0];
+  const last = segments[range.endLine - range.startLine];
+  if (first === undefined || last === undefined || range.startColumn > first.content.length + 1 || range.endColumn > last.content.length + 1) throw new Error("Source columns are outside retained text.");
+  if (segments.length === 1 || range.startLine === range.endLine) return first.content.slice(range.startColumn - 1, range.endColumn - 1);
+  const output = [`${first.content.slice(range.startColumn - 1)}${first.delimiter}`];
+  for (let index = 1; index < range.endLine - range.startLine; index += 1) output.push(`${segments[index]!.content}${segments[index]!.delimiter}`);
+  output.push(last.content.slice(0, range.endColumn - 1));
+  return output.join("");
+}
+
+function sourceSloc(text: string): number {
+  return sourceSegments(text).reduce((count, segment) => count + (segment.content.trim().length === 0 ? 0 : 1), 0);
+}
+
+function contextMetrics(
+  building: CityBuilding,
+  context: AiGuidanceResolvedContext,
+  selectedText: string,
+): AiGuidanceMetrics {
+  if (context.kind === "file") return Object.freeze({ sloc: building.metrics.sloc, maximumComplexity: building.metrics.maximumComplexity, decisionLoad: building.metrics.decisionLoad });
+  if (context.kind === "smell") {
+    const complexity = context.evidence["kind"] === "executable-unit" && Number.isSafeInteger(context.evidence["value"])
+      ? context.evidence["value"] as number
+      : undefined;
+    return complexity === undefined
+      ? Object.freeze({ sloc: building.metrics.sloc, maximumComplexity: building.metrics.maximumComplexity, decisionLoad: building.metrics.decisionLoad })
+      : Object.freeze({ sloc: sourceSloc(selectedText), maximumComplexity: complexity, decisionLoad: Math.max(0, complexity - 1) });
+  }
+  const structure = building.sourceStructure!;
+  if (context.kind === "callable") {
+    const callable = structure.callables.find(({ id }) => id === context.stableId)!;
+    const complexity = callable.complexity ?? 0;
+    return Object.freeze({ sloc: sourceSloc(selectedText), maximumComplexity: complexity, decisionLoad: Math.max(0, complexity - 1) });
+  }
+  const childrenByParent = new Map<string, string[]>();
+  for (const type of structure.types) if (type.parentTypeId !== undefined) {
+    const children = childrenByParent.get(type.parentTypeId) ?? [];
+    children.push(type.id);
+    childrenByParent.set(type.parentTypeId, children);
+  }
+  const typeIds = new Set<string>();
+  const pending = [context.stableId];
+  while (pending.length > 0) {
+    const typeId = pending.pop()!;
+    if (typeIds.has(typeId)) continue;
+    typeIds.add(typeId);
+    pending.push(...(childrenByParent.get(typeId) ?? []));
+  }
+  const complexities = structure.callables.filter(({ enclosingTypeId }) => enclosingTypeId !== undefined && typeIds.has(enclosingTypeId)).map(({ complexity }) => complexity ?? 0);
+  return Object.freeze({ sloc: sourceSloc(selectedText), maximumComplexity: Math.max(0, ...complexities), decisionLoad: complexities.reduce((sum, complexity) => sum + Math.max(0, complexity - 1), 0) });
+}
+
+function resolvedContext(
+  model: CityModel,
+  building: CityBuilding,
+  descriptor: AiGuidanceContextDescriptor,
+): { readonly kind: "available"; readonly context: AiGuidanceResolvedContext; readonly finding?: DesignSmellFinding } | { readonly kind: "unavailable"; readonly reason: string } | undefined {
+  const fileRange = Object.freeze({ startLine: building.sourceLocation!.startLine, endLine: building.sourceLocation!.endLine });
+  if (descriptor.kind === "file") return { kind: "available", context: Object.freeze({ version: descriptor.version, kind: "file", buildingId: building.id, label: `${building.name} source file`, range: fileRange }) };
+  if (descriptor.kind === "dependency") {
+    const dependency = model.dependencies.find(({ id, sourceId }) => id === descriptor.dependencyId && sourceId === building.id);
+    if (dependency === undefined) return undefined;
+    return { kind: "unavailable", reason: `Dependency ${dependency.id} has no analyzer-recorded exact source range, so no source can be sent safely.` };
+  }
+  if (descriptor.kind === "smell") {
+    const finding = evaluateDesignSmells(model).findings.find(({ id, ruleId, buildingId }) => id === descriptor.findingId && ruleId === descriptor.ruleId && buildingId === building.id);
+    if (finding === undefined) return undefined;
+    if (finding.evidence.line === undefined) return { kind: "unavailable", reason: `Design-smell finding ${finding.id} has no analyzer-recorded exact source range, so no source can be sent safely.` };
+    const range = Object.freeze({ startLine: finding.evidence.line, endLine: finding.evidence.endLine ?? finding.evidence.line });
+    if (range.startLine < fileRange.startLine || range.endLine > fileRange.endLine) return undefined;
+    const evidence = Object.freeze({ ...finding.evidence, ...(finding.evidence.relatedBuildingIds === undefined ? {} : { relatedBuildingIds: Object.freeze([...finding.evidence.relatedBuildingIds]) }) }) as Readonly<Record<string, unknown>>;
+    return { kind: "available", finding, context: Object.freeze({ version: descriptor.version, kind: "smell", buildingId: building.id, findingId: finding.id, ruleId: finding.ruleId, label: finding.ruleName, range, evidence }) };
+  }
+  if (building.sourceStructure?.availability !== "available") return { kind: "unavailable", reason: `Exact ${descriptor.kind} source structure is unavailable for ${building.path}.` };
+  const fact = descriptor.kind === "type" ? building.sourceStructure.types.find(({ id }) => id === descriptor.stableId) : building.sourceStructure.callables.find(({ id }) => id === descriptor.stableId);
+  if (fact === undefined) return undefined;
+  if (fact.range.startLine < fileRange.startLine || fact.range.endLine > fileRange.endLine) return undefined;
+  return { kind: "available", context: Object.freeze({ version: descriptor.version, kind: descriptor.kind, buildingId: building.id, stableId: fact.id, name: fact.name, constructKind: fact.kind, label: `${fact.kind} ${fact.name}`, range: fact.range }) };
 }
 
 async function aiGuidanceSource(
@@ -2171,9 +2302,10 @@ async function aiGuidanceSource(
   artifacts: ImportArtifactStore,
   sources: SourceArtifactStore,
   jobId: string,
-  buildingId: string,
+  descriptor: AiGuidanceContextDescriptor,
   signal?: AbortSignal,
-): Promise<AiGuidanceSelection | undefined> {
+): Promise<AiGuidanceContextResolution | undefined> {
+  const buildingId = descriptor.buildingId;
   const job = jobs.get(jobId);
   const expected =
     job?.state === "completed" &&
@@ -2199,17 +2331,25 @@ async function aiGuidanceSource(
   let model: ReturnType<typeof validateCityModel>;
   try { model = validateCityModel(JSON.parse(modelArtifact.bytes.toString("utf8")) as unknown); } catch { return undefined; }
   const building = model.buildings.find((candidate) => candidate.id === buildingId);
-  if (building === undefined || building.path !== stored.file.path || building.language !== stored.file.language) return undefined;
+  if (building === undefined || building.sourceLocation === undefined || building.path !== stored.file.path || building.language !== stored.file.language || building.sourceLocation.startLine !== stored.file.location.startLine || building.sourceLocation.endLine !== stored.file.location.endLine) return undefined;
+  const resolution = resolvedContext(model, building, descriptor);
+  if (resolution === undefined) return undefined;
+  if (resolution.kind === "unavailable") return Object.freeze({ kind: "unavailable", descriptor, reason: resolution.reason });
+  let text: string;
+  try { text = exactSourceText(stored.file.text, resolution.context.range); } catch { return Object.freeze({ kind: "unavailable", descriptor, reason: "The recorded exact source range is outside the retained source snapshot." }); }
   const source = Object.freeze({
     jobId,
     buildingId,
     path: stored.file.path,
     language: stored.file.language,
-    text: sourceTextLineRange(stored.file.text, stored.file.location.startLine, stored.file.location.endLine),
-    location: stored.file.location,
+    text,
+    location: resolution.context.range,
   });
-  const metrics = Object.freeze({ sloc: building.metrics.sloc, maximumComplexity: building.metrics.maximumComplexity, decisionLoad: building.metrics.decisionLoad });
-  return Object.freeze({ source, metrics, digest: aiGuidanceDigest(source, metrics) });
+  const metrics = contextMetrics(building, resolution.context, text);
+  const contextDigest = aiGuidanceDigest({ descriptor, context: resolution.context, source: { path: source.path, language: source.language, text: source.text, location: source.location }, metrics });
+  const findingDigest = resolution.finding === undefined ? undefined : aiGuidanceDigest(resolution.finding);
+  const selection = Object.freeze({ source, metrics, context: resolution.context, contextDigest, ...(findingDigest === undefined ? {} : { findingDigest }) });
+  return Object.freeze({ kind: "available", prepared: Object.freeze({ descriptor, selection, digest: aiGuidanceDigest(selection) }) });
 }
 
 function aiGuidanceRequest(value: unknown): { readonly grant: string } | undefined {
@@ -2254,10 +2394,10 @@ function aiGuidanceHandler(
     const lease = guidanceJobs.tryAcquire(issued.jobId, response);
     if (lease === undefined) { sendJson(request, response, 409, { error: { code: "source-deleting", message: "The selected retained import is being deleted." } }); return; }
     try {
-      const selection = await aiGuidanceSource(jobs, artifacts, sources, issued.jobId, issued.buildingId, lease.signal).catch(() => undefined);
-      if (selection === undefined) { if (!response.destroyed) sendJson(request, response, 404, { error: { code: "source-not-found", message: "Selected retained source was not found." } }); return; }
-      if (grants.consume(parsed.grant, binding!, selection) === undefined) { if (!response.destroyed) sendJson(request, response, 409, { error: { code: "ai-guidance-approval-invalid", message: "AI guidance approval is missing, expired, or already used." } }); return; }
-      const result = await guidance.request(selection.source, selection.metrics, issued.providerId, lease.signal);
+      const resolution = await aiGuidanceSource(jobs, artifacts, sources, issued.jobId, issued.descriptor, lease.signal).catch(() => undefined);
+      if (resolution === undefined) { if (!response.destroyed) sendJson(request, response, 404, { error: { code: "source-not-found", message: "Selected retained source was not found." } }); return; }
+      if (resolution.kind !== "available" || grants.consume(parsed.grant, binding!, resolution.prepared) === undefined) { if (!response.destroyed) sendJson(request, response, 409, { error: { code: "ai-guidance-approval-invalid", message: "AI guidance approval is stale, missing, expired, or already used." } }); return; }
+      const result = await guidance.request(resolution.prepared.selection, issued.providerId, lease.signal);
       if (!response.destroyed) sendJson(request, response, 200, { result });
     } catch {
       if (!response.destroyed) sendJson(request, response, 502, { error: { code: "provider-unavailable", message: "AI suggestions are unavailable; deterministic analysis remains available." } });
@@ -2319,19 +2459,35 @@ function apiHandler(
     if (request.method !== "POST") { sendMethodNotAllowed(request, response, ["POST"]); return true; }
     const csrfValues = rawHeaderValues(request, "x-code-city-request");
     if (csrfValues.length !== 1 || csrfValues[0] !== "1") { sendJson(request, response, 403, { error: { code: "request-header-required", message: "X-Code-City-Request: 1 is required." } }); return true; }
-    if (!aiGuidance.enabled) { sendJson(request, response, 200, { preview: aiGuidance.disabledPreview() }); return true; }
-    const approval = authorization.ensureApprovalBinding(request);
-    if (approval === undefined) { sendJson(request, response, 401, { error: { code: "unauthorized", message: "Authorization is required." } }); return true; }
-    if (approval.setCookie !== undefined) response.setHeader("Set-Cookie", approval.setCookie);
-    const lease = guidanceJobs.tryAcquire(aiPreview[1]!, response);
-    if (lease === undefined) { sendJson(request, response, 409, { error: { code: "source-deleting", message: "The selected retained import is being deleted." } }); return true; }
-    void aiGuidanceSource(jobs, artifacts, sources, aiPreview[1]!, aiPreview[2]!, lease.signal).then((selection) => {
-      if (response.destroyed) return;
-      if (selection === undefined) { sendJson(request, response, 404, { error: { code: "source-not-found", message: "Selected retained source was not found." } }); return; }
-      const preview = aiGuidance.preview(selection.source, selection.metrics, aiPreview[3]!);
-      if (!preview.enabled) { sendJson(request, response, 404, { error: { code: "provider-not-found", message: "Selected AI provider is unavailable." } }); return; }
-      sendJson(request, response, 200, { preview: Object.freeze({ ...preview, grant: grants.issue(approval.binding, aiPreview[3]!, selection) }) });
-    }).catch(() => { if (!response.destroyed) sendJson(request, response, 500, { error: { code: "ai-preview-failed", message: "AI guidance preview could not be prepared." } }); }).finally(() => lease.settle());
+    if (!validJsonContentType(request.headers["content-type"] ?? "")) { sendJson(request, response, 415, { error: { code: "unsupported-media-type", message: "AI guidance previews require a JSON context descriptor." } }); return true; }
+    void readBoundedRequestBody(request).then(async (body) => {
+      if (body.kind !== "ok" || response.destroyed) { if (body.kind !== "disconnected" && !response.destroyed) sendJson(request, response, 400, { error: { code: "invalid-request", message: "AI guidance context could not be read." } }); return; }
+      let descriptor: AiGuidanceContextDescriptor | undefined;
+      try { descriptor = aiGuidanceContext(JSON.parse(body.text)); } catch { descriptor = undefined; }
+      if (descriptor === undefined || descriptor.buildingId !== aiPreview[2]) { sendJson(request, response, 400, { error: { code: "invalid-context", message: "AI guidance requires a valid versioned selected-context descriptor." } }); return; }
+      if (!aiGuidance.enabled) { sendJson(request, response, 200, { preview: aiGuidance.disabledPreview() }); return; }
+      const approval = authorization.ensureApprovalBinding(request);
+      if (approval === undefined) { sendJson(request, response, 401, { error: { code: "unauthorized", message: "Authorization is required." } }); return; }
+      if (approval.setCookie !== undefined) response.setHeader("Set-Cookie", approval.setCookie);
+      const lease = guidanceJobs.tryAcquire(aiPreview[1]!, response);
+      if (lease === undefined) { sendJson(request, response, 409, { error: { code: "source-deleting", message: "The selected retained import is being deleted." } }); return; }
+      try {
+        const resolution = await aiGuidanceSource(jobs, artifacts, sources, aiPreview[1]!, descriptor, lease.signal);
+        if (response.destroyed) return;
+        if (resolution === undefined) { sendJson(request, response, 404, { error: { code: "context-not-found", message: "The selected context is not present in the retained model and source." } }); return; }
+        if (resolution.kind === "unavailable") {
+          const preview = aiGuidance.unavailablePreview(resolution.descriptor, resolution.reason, aiPreview[3]!);
+          if (!preview.enabled) { sendJson(request, response, 404, { error: { code: "provider-not-found", message: "Selected AI provider is unavailable." } }); return; }
+          sendJson(request, response, 200, { preview });
+          return;
+        }
+        const preview = aiGuidance.preview(resolution.prepared.selection, aiPreview[3]!);
+        if (!preview.enabled || preview.availability !== "available") { sendJson(request, response, 404, { error: { code: "provider-not-found", message: "Selected AI provider is unavailable." } }); return; }
+        sendJson(request, response, 200, { preview: Object.freeze({ ...preview, grant: grants.issue(approval.binding, aiPreview[3]!, resolution.prepared) }) });
+      } catch {
+        if (!response.destroyed) sendJson(request, response, 500, { error: { code: "ai-preview-failed", message: "AI guidance preview could not be prepared." } });
+      } finally { lease.settle(); }
+    }).catch(() => { if (!response.destroyed) sendJson(request, response, 500, { error: { code: "ai-preview-failed", message: "AI guidance preview could not be prepared." } }); });
     return true;
   }
   if (target.path === AI_GUIDANCE_REQUEST_PATH) { aiGuidanceHandler(request, response, jobs, artifacts, sources, aiGuidance, grants, authorization, guidanceJobs); return true; }

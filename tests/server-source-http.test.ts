@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { analyzeRepositorySnapshots } from "../packages/analyzer/src/index.js";
 import type { RepositorySnapshot } from "../packages/analyzer/src/snapshot.js";
 import type { SourceRepositoryProvenance } from "../packages/core/src/model.js";
+import { evaluateDesignSmells } from "../packages/core/src/design-smells.js";
 import {
   attachSourceProvenance,
   createSourceArtifact,
@@ -80,6 +81,41 @@ function snapshot(name: string): RepositorySnapshot {
     ],
     diagnostics: [],
   };
+}
+
+function contextualSnapshot(): RepositorySnapshot {
+  const branches = Array.from({ length: 16 }, (_value, index) => `    if (value === ${index}) return ${index};`).join("\n");
+  const text = `import { helper } from "./helper";\nexport class ContextDemo {\n  run(value: number) {\n${branches}\n    return helper(value);\n  }\n}\n`;
+  const helper = "export function helper(value: number) { return value; }\n";
+  return {
+    name: "contextual",
+    files: [
+      { path: "src/context.ts", text, byteLength: Buffer.byteLength(text) },
+      { path: "src/helper.ts", text: helper, byteLength: Buffer.byteLength(helper) },
+    ],
+    diagnostics: [],
+  };
+}
+
+function guidanceContext(buildingId: string) {
+  return { version: "codecity.ai-context/1", kind: "file", buildingId } as const;
+}
+
+function guidancePreviewOptions(buildingId: string, cookie?: string): RequestInit {
+  return {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "X-Code-City-Request": "1",
+      ...(cookie === undefined ? {} : { cookie }),
+    },
+    body: JSON.stringify(guidanceContext(buildingId)),
+  };
+}
+
+function successfulProviderResponse(init: RequestInit): Response {
+  const payload = JSON.parse(String(init.body)) as { providerId: string; contextDigest: string; findingDigest?: string };
+  return new Response(JSON.stringify({ providerId: payload.providerId, contextDigest: payload.contextDigest, ...(payload.findingDigest === undefined ? {} : { findingDigest: payload.findingDigest }), suggestions: [] }), { headers: { "content-type": "application/json" } });
 }
 
 async function publish(
@@ -501,7 +537,7 @@ describe("source navigation HTTP API", () => {
         fetch: async (_url, init) => {
           providerCalls += 1;
           providerBody = String(init.body);
-          return new Response(JSON.stringify({ suggestions: [] }), { headers: { "content-type": "application/json" } });
+          return successfulProviderResponse(init);
         },
       },
     });
@@ -512,7 +548,7 @@ describe("source navigation HTTP API", () => {
     expect((await fetch(previewUrl)).status).toBe(405);
     expect((await fetch(previewUrl, { method: "HEAD" })).status).toBe(405);
     expect((await fetch(previewUrl, { method: "POST" })).status).toBe(403);
-    const previewResponse = await fetch(previewUrl, { method: "POST", headers: { "X-Code-City-Request": "1" } });
+    const previewResponse = await fetch(previewUrl, guidancePreviewOptions(imported.building.id));
     expect(previewResponse.status).toBe(200);
     const preview = (await previewResponse.json() as { preview: { grant: string; transmission: { source: { text: string }; findings: unknown } } }).preview;
     expect(preview.transmission.findings).toEqual({ sloc: imported.building.metrics.sloc, maximumComplexity: imported.building.metrics.maximumComplexity, decisionLoad: imported.building.metrics.decisionLoad });
@@ -527,7 +563,7 @@ describe("source navigation HTTP API", () => {
     expect((await fetch(new URL("/api/v1/ai/requests", server.url), requestOptions)).status).toBe(409);
     expect(providerCalls).toBe(1);
 
-    const concurrentPreview = await fetch(previewUrl, { method: "POST", headers: { "X-Code-City-Request": "1", cookie } });
+    const concurrentPreview = await fetch(previewUrl, guidancePreviewOptions(imported.building.id, cookie));
     const concurrentGrant = (await concurrentPreview.json() as { preview: { grant: string } }).preview.grant;
     const concurrentOptions = { ...requestOptions, body: JSON.stringify({ approval: "once", grant: concurrentGrant }) };
     const concurrent = await Promise.all([
@@ -541,21 +577,94 @@ describe("source navigation HTTP API", () => {
     expect(providerCalls).toBe(2);
   });
 
+  it("derives file, type, callable, dependency, and smell contexts from retained artifacts", async () => {
+    const providerPayloads: Record<string, unknown>[] = [];
+    const server = await fixture({
+      aiGuidance: { version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: "http://localhost:11434/guidance" }] },
+      aiGuidanceAdapterOptions: {
+        fetch: async (_url, init) => {
+          providerPayloads.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+          return successfulProviderResponse(init);
+        },
+      },
+    });
+    const imported = await publish(server, "contextual", contextualSnapshot());
+    const building = imported.model.buildings.find(({ path }) => path === "src/context.ts")!;
+    const type = building.sourceStructure?.types.find(({ name }) => name === "ContextDemo")!;
+    const callable = building.sourceStructure?.callables.find(({ name }) => name === "run")!;
+    const dependency = imported.model.dependencies.find(({ sourceId }) => sourceId === building.id)!;
+    const smell = evaluateDesignSmells(imported.model).findings.find(({ buildingId, ruleId }) => buildingId === building.id && ruleId === "high-complexity-method")!;
+    expect(type).toBeDefined();
+    expect(callable).toBeDefined();
+    expect(dependency).toBeDefined();
+    expect(smell.evidence.line).toBeDefined();
+
+    const previewUrl = new URL(`/api/v1/ai/preview/${imported.job.id}/${building.id}/local`, server.url);
+    let cookie: string | undefined;
+    const preview = async (context: Record<string, unknown>) => {
+      const response = await fetch(previewUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json", "X-Code-City-Request": "1", ...(cookie === undefined ? {} : { cookie }) },
+        body: JSON.stringify(context),
+      });
+      cookie = response.headers.get("set-cookie")?.split(";", 1)[0] ?? cookie;
+      return { response, body: await response.json() as { preview: Record<string, unknown> } };
+    };
+    const fileDescriptor = guidanceContext(building.id);
+    const typeDescriptor = { version: "codecity.ai-context/1", kind: "type", buildingId: building.id, stableId: type.id } as const;
+    const callableDescriptor = { version: "codecity.ai-context/1", kind: "callable", buildingId: building.id, stableId: callable.id } as const;
+    const previews = await Promise.all([fileDescriptor, typeDescriptor, callableDescriptor].map(async (descriptor) => (await preview(descriptor)).body.preview));
+    expect(previews.map(({ availability }) => availability)).toEqual(["available", "available", "available"]);
+    const typeTransmission = previews[1]!["transmission"] as { context: { stableId: string; range: unknown }; source: { text: string; lines: unknown } };
+    expect(typeTransmission.context).toMatchObject({ stableId: type.id, range: type.range });
+    expect(typeTransmission.source.lines).toEqual(type.range);
+    expect(typeTransmission.source.text).toContain("class ContextDemo");
+    expect(typeTransmission.source.text).not.toContain("import { helper }");
+    const callableTransmission = previews[2]!["transmission"] as { context: { stableId: string; range: unknown }; source: { text: string; lines: unknown }; findings: { maximumComplexity: number } };
+    expect(callableTransmission.context).toMatchObject({ stableId: callable.id, range: callable.range });
+    expect(callableTransmission.source.lines).toEqual(callable.range);
+    expect(callableTransmission.source.text).toContain("run(value: number)");
+    expect(callableTransmission.source.text).not.toContain("class ContextDemo");
+    expect(callableTransmission.findings.maximumComplexity).toBe(callable.complexity);
+
+    const unavailable = await preview({ version: "codecity.ai-context/1", kind: "dependency", buildingId: building.id, dependencyId: dependency.id });
+    expect(unavailable.response.status).toBe(200);
+    expect(unavailable.body.preview).toMatchObject({ enabled: true, availability: "unavailable", context: { dependencyId: dependency.id }, reason: expect.stringMatching(/exact source range/) });
+    expect(unavailable.body.preview).not.toHaveProperty("grant");
+
+    const smellPreview = await preview({ version: "codecity.ai-context/1", kind: "smell", buildingId: building.id, findingId: smell.id, ruleId: smell.ruleId });
+    expect(smellPreview.response.status).toBe(200);
+    const smellTransmission = smellPreview.body.preview["transmission"] as { context: { findingId: string; evidence: unknown; range: unknown }; contextDigest: string; findingDigest: string; source: { text: string } };
+    expect(smellTransmission.context).toMatchObject({ findingId: smell.id, evidence: smell.evidence, range: { startLine: smell.evidence.line, endLine: smell.evidence.endLine } });
+    expect(smellTransmission.source.text).toContain("run(value: number)");
+    expect(smellTransmission.contextDigest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(smellTransmission.findingDigest).toMatch(/^[0-9a-f]{64}$/u);
+    const grant = smellPreview.body.preview["grant"] as string;
+    const guidance = await fetch(new URL("/api/v1/ai/requests", server.url), { method: "POST", headers: { "content-type": "application/json", "X-Code-City-Request": "1", cookie: cookie! }, body: JSON.stringify({ approval: "once", grant }) });
+    expect(guidance.status).toBe(200);
+    expect(await guidance.json()).toMatchObject({ result: { context: { findingId: smell.id }, contextDigest: smellTransmission.contextDigest, findingDigest: smellTransmission.findingDigest } });
+    expect(providerPayloads).toHaveLength(1);
+
+    const forged = await preview({ ...typeDescriptor, range: { startLine: 1, endLine: 999 }, metrics: { sloc: 999 } });
+    expect(forged.response.status).toBe(400);
+    expect(providerPayloads).toHaveLength(1);
+  });
+
   it("binds grants to distinct trusted-network browser sessions and expires them", async () => {
     let providerCalls = 0;
     const server = await fixture({
       aiGuidance: { version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: "http://localhost:11434/guidance" }] },
       aiGuidanceAdapterOptions: {
-        fetch: async () => {
+        fetch: async (_url, init) => {
           providerCalls += 1;
-          return new Response('{"suggestions":[]}', { headers: { "content-type": "application/json" } });
+          return successfulProviderResponse(init);
         },
       },
     });
     const imported = await publish(server, "sessionBound");
     const previewUrl = new URL(`/api/v1/ai/preview/${imported.job.id}/${imported.building.id}/local`, server.url);
     const preview = async (cookie?: string) => {
-      const response = await fetch(previewUrl, { method: "POST", headers: { "X-Code-City-Request": "1", ...(cookie === undefined ? {} : { cookie }) } });
+      const response = await fetch(previewUrl, guidancePreviewOptions(imported.building.id, cookie));
       const grant = (await response.json() as { preview: { grant: string } }).preview.grant;
       return { grant, cookie: response.headers.get("set-cookie")?.split(";", 1)[0] ?? cookie! };
     };
@@ -611,14 +720,14 @@ describe("source navigation HTTP API", () => {
               }, { once: true });
             });
           }
-          return new Response('{"suggestions":[]}', { headers: { "content-type": "application/json" } });
+          return successfulProviderResponse(init);
         },
       },
     });
     const first = await publish(server, "stalledA");
     const second = await publish(server, "independentB");
     const preview = async (imported: typeof first) => {
-      const response = await fetch(new URL(`/api/v1/ai/preview/${imported.job.id}/${imported.building.id}/local`, server.url), { method: "POST", headers: { "X-Code-City-Request": "1" } });
+      const response = await fetch(new URL(`/api/v1/ai/preview/${imported.job.id}/${imported.building.id}/local`, server.url), guidancePreviewOptions(imported.building.id));
       return {
         cookie: response.headers.get("set-cookie")!.split(";", 1)[0]!,
         grant: (await response.json() as { preview: { grant: string } }).preview.grant,
@@ -654,7 +763,7 @@ describe("source navigation HTTP API", () => {
     });
     await aborted;
     expect(deletionSettled).toBe(false);
-    expect((await fetch(new URL(`/api/v1/ai/preview/${first.job.id}/${first.building.id}/local`, server.url), { method: "POST", headers: { "X-Code-City-Request": "1", cookie: firstApproval.cookie } })).status).toBe(409);
+    expect((await fetch(new URL(`/api/v1/ai/preview/${first.job.id}/${first.building.id}/local`, server.url), guidancePreviewOptions(first.building.id, firstApproval.cookie))).status).toBe(409);
     releaseAbortedProvider();
     expect((await guidance).status).toBe(502);
     expect((await deletion).status).toBe(200);
@@ -679,7 +788,7 @@ describe("source navigation HTTP API", () => {
       }, { once: true }));
     });
     const controller = new AbortController();
-    const pending = fetch(new URL(`/api/v1/ai/preview/${imported.job.id}/${imported.building.id}/local`, server.url), { method: "POST", headers: { "X-Code-City-Request": "1" }, signal: controller.signal }).catch(() => undefined);
+    const pending = fetch(new URL(`/api/v1/ai/preview/${imported.job.id}/${imported.building.id}/local`, server.url), { ...guidancePreviewOptions(imported.building.id), signal: controller.signal }).catch(() => undefined);
     await started;
     controller.abort();
     await pending;
@@ -692,7 +801,7 @@ describe("source navigation HTTP API", () => {
       aiGuidanceAdapterOptions: { fetch: async () => { throw new Error("provider failed"); } },
     });
     const imported = await publish(server, "providerFailure");
-    const preview = await fetch(new URL(`/api/v1/ai/preview/${imported.job.id}/${imported.building.id}/local`, server.url), { method: "POST", headers: { "X-Code-City-Request": "1" } });
+    const preview = await fetch(new URL(`/api/v1/ai/preview/${imported.job.id}/${imported.building.id}/local`, server.url), guidancePreviewOptions(imported.building.id));
     const cookie = preview.headers.get("set-cookie")!.split(";", 1)[0]!;
     const grant = (await preview.json() as { preview: { grant: string } }).preview.grant;
     expect((await fetch(new URL("/api/v1/ai/requests", server.url), {
@@ -721,7 +830,7 @@ describe("source navigation HTTP API", () => {
       },
     });
     const imported = await publish(server, "guidanceDisconnect");
-    const preview = await fetch(new URL(`/api/v1/ai/preview/${imported.job.id}/${imported.building.id}/local`, server.url), { method: "POST", headers: { "X-Code-City-Request": "1" } });
+    const preview = await fetch(new URL(`/api/v1/ai/preview/${imported.job.id}/${imported.building.id}/local`, server.url), guidancePreviewOptions(imported.building.id));
     const cookie = preview.headers.get("set-cookie")!.split(";", 1)[0]!;
     const grant = (await preview.json() as { preview: { grant: string } }).preview.grant;
     const controller = new AbortController();
