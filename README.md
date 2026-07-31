@@ -85,8 +85,14 @@ declared size and SHA-256 digest in a dedicated worker and opens a repository
 timeline. First/previous/play/next/last controls, a direct scrubber, and four
 playback speeds seek deterministic commit frames without moving the camera.
 Added buildings rise in green, removals fade as red ghosts, renames are cyan,
-and moved or resized buildings are amber. Reduced-motion mode publishes each
-frame directly with no spatial interpolation. The **Building age** and
+and moved or resized buildings are amber. Dependency additions, removals,
+  metadata changes, and retargets identify their affected target-frame
+  endpoints and visible routes in pink and report exact relationship counts in
+  the timeline status and legend until the next seek. Enabled
+building-route directions and limits, plus cross-district visibility, kind
+filters, limits, and a still-valid selected route survive every seek; their
+content and geometry are rebuilt from the target frame. Reduced-motion mode
+publishes each frame directly with no spatial interpolation. The **Building age** and
 **Historical churn** visualization modes, commit metadata, and selected
 building history are available only while a verified timeline is loaded.
 
@@ -170,6 +176,16 @@ entries, then attached to the published city frames. Evolution author policy
 `omit-v1` persists no author name, email, ID, or avatar. `GET` and `HEAD`
 `/api/v1/artifacts/<job-id>/evolution.json` use the same inbound authorization
 policy as the city-model artifact and send `Cache-Control: no-store`.
+
+The viewer worker reuses its last successfully validated evolution frame and
+retains every tenth replayed frame as a structurally shared checkpoint.
+Sequential playback therefore applies each delta once. Arbitrary seeks start
+each uncached endpoint at the newest preceding checkpoint, applying at most
+nine deltas per warm endpoint. A first cold endpoint can fall back to the
+current frame or baseline, but the validated 100-frame artifact limit caps
+that fallback at 99 delta applications. Checkpoints discovered by a seek stay
+request-local until its final cancellation check, so superseded work cannot
+alter later playback state.
 
 At most four upload reservations and 256 MiB of staged upload data exist at
 once. City models are capped at 128 MiB, ZIPs at 64 MiB, unused reservations

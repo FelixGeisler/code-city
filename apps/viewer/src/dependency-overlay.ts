@@ -30,6 +30,22 @@ export interface DependencyRouteOverlayOptions {
   readonly instancingSupported?: boolean;
 }
 
+export interface DependencyOverlayRouteDiagnostics {
+  readonly id: string;
+  readonly consumer: RouteEndpointGeometry;
+  readonly provider: RouteEndpointGeometry;
+  readonly direction: DependencyOverlayDirection;
+  readonly weight: number;
+  readonly color?: string;
+  readonly emphasized?: boolean;
+}
+
+export interface DependencyRouteOverlayDiagnostics {
+  readonly routeCount: number;
+  readonly gatewayCount: number;
+  readonly routes: readonly DependencyOverlayRouteDiagnostics[];
+}
+
 export interface DependencyWeightCue {
   readonly normalized: number;
   readonly lineIntensity: number;
@@ -162,6 +178,8 @@ export class DependencyRouteOverlay {
   private disposed = false;
   private currentRouteCount = 0;
   private currentGatewayCount = 0;
+  private currentRoutes: readonly DependencyOverlayRouteDiagnostics[] =
+    Object.freeze([]);
 
   public constructor(
     private readonly scene: THREE.Scene,
@@ -182,6 +200,14 @@ export class DependencyRouteOverlay {
 
   public get gatewayCount(): number {
     return this.currentGatewayCount;
+  }
+
+  public diagnostics(): DependencyRouteOverlayDiagnostics {
+    return Object.freeze({
+      routeCount: this.currentRouteCount,
+      gatewayCount: this.currentGatewayCount,
+      routes: this.currentRoutes,
+    });
   }
 
   public replace(routes: readonly DependencyOverlayRoute[]): void {
@@ -233,6 +259,9 @@ export class DependencyRouteOverlay {
     this.object.add(...replacement);
     this.currentRouteCount = visuals.length;
     this.currentGatewayCount = gatewayVisuals.length;
+    this.currentRoutes = Object.freeze(
+      ordered.map((route) => routeDiagnostics(route)),
+    );
   }
 
   public clear(): void {
@@ -258,6 +287,7 @@ export class DependencyRouteOverlay {
     }
     this.currentRouteCount = 0;
     this.currentGatewayCount = 0;
+    this.currentRoutes = Object.freeze([]);
   }
 
   private assertActive(): void {
@@ -265,6 +295,31 @@ export class DependencyRouteOverlay {
       throw new Error("Dependency route overlay has been disposed.");
     }
   }
+}
+
+function routeDiagnostics(
+  route: DependencyOverlayRoute,
+): DependencyOverlayRouteDiagnostics {
+  return Object.freeze({
+    id: route.id,
+    consumer: endpointDiagnostics(route.consumer),
+    provider: endpointDiagnostics(route.provider),
+    direction: route.direction,
+    weight: route.weight,
+    ...(route.color === undefined ? {} : { color: route.color }),
+    ...(route.emphasized === undefined
+      ? {}
+      : { emphasized: route.emphasized }),
+  });
+}
+
+function endpointDiagnostics(
+  endpoint: RouteEndpointGeometry,
+): RouteEndpointGeometry {
+  return Object.freeze({
+    contact: Object.freeze({ ...endpoint.contact }),
+    anchor: Object.freeze({ ...endpoint.anchor }),
+  });
 }
 
 interface RouteVisual {

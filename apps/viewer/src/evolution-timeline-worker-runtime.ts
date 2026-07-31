@@ -10,6 +10,7 @@ import {
 } from "../../../packages/core/src/index.js";
 import {
   analyzeEvolutionBuildingHistory,
+  EvolutionDependencyChangeCollector,
   summarizeEvolutionFrames,
   type EvolutionFrameAnalysis,
   type EvolutionTransition,
@@ -29,8 +30,15 @@ import {
  */
 export const EVOLUTION_WORK_CHECKPOINT_INTERVAL = 256;
 
+/**
+ * Retain every tenth successfully replayed frame. Validated artifacts contain
+ * at most 100 frames, so this keeps at most nine intermediate models while
+ * bounding each warm frame reconstruction to nine delta applications. A
+ * request with two uncached endpoints can reconstruct both.
+ */
+export const EVOLUTION_REPLAY_CHECKPOINT_INTERVAL = 10;
+
 export type EvolutionWorkerWorkPhase =
-  | "cached-frame-clone"
   | "delta-replay"
   | "load-model-clone"
   | "post-replay-analysis"
@@ -41,10 +49,16 @@ export interface EvolutionTimelineWorkerRuntimeOptions {
   readonly postMessage: (response: EvolutionWorkerResponse) => void;
   readonly yieldControl?: (phase: EvolutionWorkerWorkPhase) => Promise<void>;
   readonly checkpointInterval?: number;
+  readonly replayCheckpointInterval?: number;
+  readonly onReplayDeltaApplied?: (frameIndex: number) => void;
 }
 
 type Identified = Readonly<{ id: string }>;
 type JsonContainer = Record<string, unknown> | unknown[];
+type ReplaySource = Readonly<{
+  index: number;
+  model: CityModel;
+}>;
 
 const MODEL_CHANGE_KEYS = Object.freeze([
   "metricMapping",
@@ -327,26 +341,61 @@ async function replayAt(
   index: number,
   activeFrameIndex: number,
   activeFrameModel: CityModel | undefined,
+  replayCheckpoints: ReadonlyMap<number, CityModel>,
+  pendingCheckpoints: Map<number, CityModel>,
+  requestSource: ReplaySource | undefined,
+  replayCheckpointInterval: number,
+  onReplayDeltaApplied: ((frameIndex: number) => void) | undefined,
   work: CooperativeCheckpoint,
 ): Promise<CityModel> {
   if (index < 0 || index > bundle.deltas.length) {
     throw new Error("The requested evolution frame is out of range.");
   }
-  if (activeFrameIndex === index && activeFrameModel !== undefined) {
-    return cooperativeCloneJson(
-      activeFrameModel,
-      work,
-      "cached-frame-clone",
-    );
+
+  let source: ReplaySource = { index: 0, model: baselineModel };
+  const consider = (
+    candidateIndex: number,
+    candidateModel: CityModel | undefined,
+  ): void => {
+    if (
+      candidateModel !== undefined &&
+      candidateIndex <= index &&
+      candidateIndex > source.index
+    ) {
+      source = { index: candidateIndex, model: candidateModel };
+    }
+  };
+  consider(activeFrameIndex, activeFrameModel);
+  for (const [checkpointIndex, checkpointModel] of replayCheckpoints) {
+    consider(checkpointIndex, checkpointModel);
+  }
+  for (const [checkpointIndex, checkpointModel] of pendingCheckpoints) {
+    consider(checkpointIndex, checkpointModel);
+  }
+  if (requestSource !== undefined) {
+    consider(requestSource.index, requestSource.model);
   }
 
-  let model = await cooperativeCloneJson(
-    baselineModel,
-    work,
-    "delta-replay",
-  );
-  for (let offset = 0; offset < index; offset += 1) {
+  if (source.index === index) {
+    work.assertCurrent();
+    return source.model;
+  }
+
+  // applyDelta is persistent: it builds new roots and collection arrays and
+  // never mutates its source model. A cold direct seek may still start at the
+  // baseline, but the validated 100-frame limit caps each fallback endpoint at
+  // 99 applications and the seek records crossed checkpoints for later use.
+  let model = source.model;
+  for (let offset = source.index; offset < index; offset += 1) {
     model = await applyDelta(model, bundle.deltas[offset]!.changes, work);
+    const frameIndex = offset + 1;
+    onReplayDeltaApplied?.(frameIndex);
+    if (
+      frameIndex % replayCheckpointInterval === 0 &&
+      !replayCheckpoints.has(frameIndex)
+    ) {
+      pendingCheckpoints.set(frameIndex, model);
+    }
   }
   work.assertCurrent();
   return model;
@@ -440,7 +489,6 @@ async function compareFrames(
   const changedBuildingIds: string[] = [];
   const interpolatedBuildings: EvolutionTransition["interpolatedBuildings"][number][] =
     [];
-
   for (const building of to.buildings) {
     targetIds.add(building.id);
     const previous = source.get(building.id);
@@ -486,6 +534,34 @@ async function compareFrames(
     }
     await work.consume("post-replay-transition");
   }
+  const dependencyChanges = new EvolutionDependencyChangeCollector();
+  let sourceDependencyIndex = 0;
+  let targetDependencyIndex = 0;
+  while (
+    sourceDependencyIndex < from.dependencies.length ||
+    targetDependencyIndex < to.dependencies.length
+  ) {
+    const previous = from.dependencies[sourceDependencyIndex];
+    const current = to.dependencies[targetDependencyIndex];
+    if (
+      previous !== undefined &&
+      (current === undefined || previous.id < current.id)
+    ) {
+      dependencyChanges.add(previous, undefined);
+      sourceDependencyIndex += 1;
+    } else if (
+      current !== undefined &&
+      (previous === undefined || current.id < previous.id)
+    ) {
+      dependencyChanges.add(undefined, current);
+      targetDependencyIndex += 1;
+    } else {
+      dependencyChanges.add(previous, current);
+      sourceDependencyIndex += 1;
+      targetDependencyIndex += 1;
+    }
+    await work.consume("post-replay-transition");
+  }
   work.assertCurrent();
   return {
     fromIndex,
@@ -496,6 +572,7 @@ async function compareFrames(
     resizedBuildingIds,
     changedBuildingIds,
     interpolatedBuildings,
+    dependencyChanges: dependencyChanges.finish(),
   };
 }
 
@@ -511,10 +588,13 @@ export class EvolutionTimelineWorkerRuntime {
     phase: EvolutionWorkerWorkPhase,
   ) => Promise<void>;
   readonly #checkpointInterval: number;
+  readonly #replayCheckpointInterval: number;
+  readonly #onReplayDeltaApplied: ((frameIndex: number) => void) | undefined;
   #activeBundle: EvolutionBundle | undefined;
   #baselineModel: CityModel | undefined;
   #activeFrameIndex = 0;
   #activeFrameModel: CityModel | undefined;
+  #replayCheckpoints = new Map<number, CityModel>();
   #latestRequestId = 0;
 
   public constructor(options: EvolutionTimelineWorkerRuntimeOptions) {
@@ -526,11 +606,23 @@ export class EvolutionTimelineWorkerRuntime {
       });
     this.#checkpointInterval =
       options.checkpointInterval ?? EVOLUTION_WORK_CHECKPOINT_INTERVAL;
+    this.#replayCheckpointInterval =
+      options.replayCheckpointInterval ??
+      EVOLUTION_REPLAY_CHECKPOINT_INTERVAL;
+    this.#onReplayDeltaApplied = options.onReplayDeltaApplied;
     if (
       !Number.isSafeInteger(this.#checkpointInterval) ||
       this.#checkpointInterval < 1
     ) {
       throw new RangeError("Evolution checkpoint interval must be positive.");
+    }
+    if (
+      !Number.isSafeInteger(this.#replayCheckpointInterval) ||
+      this.#replayCheckpointInterval < 1
+    ) {
+      throw new RangeError(
+        "Evolution replay checkpoint interval must be positive.",
+      );
     }
   }
 
@@ -600,6 +692,7 @@ export class EvolutionTimelineWorkerRuntime {
     this.#baselineModel = baselineModel;
     this.#activeFrameIndex = 0;
     this.#activeFrameModel = cachedModel;
+    this.#replayCheckpoints = new Map();
     return {
       type: "loaded",
       requestId: request.requestId,
@@ -619,12 +712,19 @@ export class EvolutionTimelineWorkerRuntime {
     if (bundle === undefined || baselineModel === undefined) {
       throw new Error("Repository evolution is not loaded.");
     }
+    const replayCheckpoints = this.#replayCheckpoints;
+    const pendingCheckpoints = new Map<number, CityModel>();
     const from = await replayAt(
       bundle,
       baselineModel,
       request.fromIndex,
       this.#activeFrameIndex,
       this.#activeFrameModel,
+      replayCheckpoints,
+      pendingCheckpoints,
+      undefined,
+      this.#replayCheckpointInterval,
+      this.#onReplayDeltaApplied,
       work,
     );
     const model = await replayAt(
@@ -633,9 +733,14 @@ export class EvolutionTimelineWorkerRuntime {
       request.toIndex,
       this.#activeFrameIndex,
       this.#activeFrameModel,
+      replayCheckpoints,
+      pendingCheckpoints,
+      { index: request.fromIndex, model: from },
+      this.#replayCheckpointInterval,
+      this.#onReplayDeltaApplied,
       work,
     );
-    const cachedModel = await cooperativeCloneJson(
+    const responseModel = await cooperativeCloneJson(
       model,
       work,
       "post-replay-clone",
@@ -654,13 +759,17 @@ export class EvolutionTimelineWorkerRuntime {
       work,
     );
     work.assertCurrent();
+    this.#replayCheckpoints = new Map([
+      ...replayCheckpoints,
+      ...pendingCheckpoints,
+    ]);
     this.#activeFrameIndex = request.toIndex;
-    this.#activeFrameModel = cachedModel;
+    this.#activeFrameModel = model;
     return {
       type: "frame",
       requestId: request.requestId,
       frame: summarizeEvolutionFrames(bundle)[request.toIndex]!,
-      model,
+      model: responseModel,
       analysis,
       transition,
     };

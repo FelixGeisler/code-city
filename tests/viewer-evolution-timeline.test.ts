@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type {
+  CityDependency,
   EvolutionBundle,
   EvolutionChanges,
 } from "../packages/core/src/index.js";
@@ -8,10 +9,15 @@ import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
 import {
   analyzeEvolutionBuildingHistory,
   analyzeEvolutionFrame,
+  compareEvolutionDependencies,
   compareEvolutionFrames,
+  createEvolutionBuildingLineageSelection,
+  evolutionDependencyEndpointKey,
   EvolutionDeferredSeekController,
   EvolutionSeekGate,
+  resolveEvolutionBuildingLineage,
   summarizeEvolutionFrames,
+  type EvolutionBuildingHistory,
 } from "../apps/viewer/src/evolution-timeline.js";
 
 function deferred<T>() {
@@ -261,6 +267,118 @@ describe("viewer evolution timeline analysis", () => {
     expect(added).toMatchObject({ firstFrame: 1, lastFrame: 2 });
   });
 
+  it("retains an introduced-later lineage before creation and restores its actual building", () => {
+    const future = {
+      ...DEMO_MODEL.buildings[0]!,
+      id: "building:future-lineage",
+      name: "future-lineage.ts",
+      path: "src/future-lineage.ts",
+    };
+    const history: EvolutionBuildingHistory = {
+      id: future.id,
+      firstFrame: 2,
+      lastFrame: 3,
+      changeCount: 1,
+      changeKinds: [],
+    };
+    const selected =
+      createEvolutionBuildingLineageSelection(future);
+
+    const beforeCreation = resolveEvolutionBuildingLineage(
+      selected,
+      history,
+      1,
+    );
+    expect(beforeCreation).toMatchObject({
+      selection: selected,
+      state: { kind: "not-yet-created", creationFrame: 2 },
+    });
+    const stillBeforeCreation = resolveEvolutionBuildingLineage(
+      beforeCreation!.selection,
+      history,
+      0,
+    );
+    expect(stillBeforeCreation).toMatchObject({
+      selection: selected,
+      state: { kind: "not-yet-created", creationFrame: 2 },
+    });
+
+    const actualAtCreation = {
+      ...future,
+      metrics: { ...future.metrics, sloc: future.metrics.sloc + 1 },
+    };
+    const restored = resolveEvolutionBuildingLineage(
+      stillBeforeCreation!.selection,
+      history,
+      2,
+      actualAtCreation,
+    );
+    expect(restored).toMatchObject({
+      building: actualAtCreation,
+      state: { kind: "present" },
+      selection: {
+        id: future.id,
+        lastKnownBuilding: actualAtCreation,
+      },
+    });
+  });
+
+  it("retains a removed-lineage tombstone and restores its actual earlier building", () => {
+    const original = DEMO_MODEL.buildings[2]!;
+    const history: EvolutionBuildingHistory = {
+      id: original.id,
+      firstFrame: 0,
+      lastFrame: 1,
+      removedAtFrame: 2,
+      changeCount: 1,
+      changeKinds: [],
+    };
+    const selected =
+      createEvolutionBuildingLineageSelection(original);
+
+    const removed = resolveEvolutionBuildingLineage(
+      selected,
+      history,
+      2,
+    );
+    expect(removed).toMatchObject({
+      selection: selected,
+      state: { kind: "removed", removalFrame: 2 },
+    });
+    const stillRemoved = resolveEvolutionBuildingLineage(
+      removed!.selection,
+      history,
+      3,
+    );
+    expect(stillRemoved).toMatchObject({
+      selection: selected,
+      state: { kind: "removed", removalFrame: 2 },
+    });
+
+    const actualBeforeRemoval = {
+      ...original,
+      metrics: {
+        ...original.metrics,
+        maximumComplexity:
+          original.metrics.maximumComplexity + 1,
+      },
+    };
+    const restored = resolveEvolutionBuildingLineage(
+      stillRemoved!.selection,
+      history,
+      1,
+      actualBeforeRemoval,
+    );
+    expect(restored).toMatchObject({
+      building: actualBeforeRemoval,
+      state: { kind: "present" },
+      selection: {
+        id: original.id,
+        lastKnownBuilding: actualBeforeRemoval,
+      },
+    });
+  });
+
   it("computes age and churn only for buildings present at the target", () => {
     const analysis = analyzeEvolutionFrame(fixture(), 2);
     const ages = new Map(analysis.ageByBuildingId);
@@ -310,5 +428,244 @@ describe("viewer evolution timeline analysis", () => {
             ?.districtId,
       ),
     ).toBe(true);
+  });
+
+  it("compares dependency-only transitions deterministically in either direction", () => {
+    const dependency = (id: string): CityDependency =>
+      DEMO_MODEL.dependencies.find((candidate) => candidate.id === id)!;
+    const added: CityDependency = {
+      id: "dependency:added-package",
+      repositoryId: "repository:demo",
+      sourceId: "module:viewer",
+      externalTarget: "  @scope/new-package  ",
+      resolution: "external",
+      kind: "package-reference",
+      version: "1.0.0",
+      weight: 2,
+    };
+    const changed = {
+      ...dependency("dependency:main-model"),
+      resolution: "internal" as const,
+      weight: 3,
+    };
+    const retargeted = {
+      ...dependency("dependency:validation-model"),
+      targetId: "building:schema",
+    };
+    const targetDependencies = [
+      ...DEMO_MODEL.dependencies.filter(
+        ({ id }) =>
+          id !== "dependency:core-typescript-package" &&
+          id !== changed.id &&
+          id !== retargeted.id,
+      ),
+      added,
+      changed,
+      retargeted,
+    ];
+    const target = {
+      ...DEMO_MODEL,
+      dependencies: [...targetDependencies].reverse(),
+    };
+
+    const forward = compareEvolutionFrames(DEMO_MODEL, target, 0, 9);
+    expect(forward.addedBuildingIds).toEqual([]);
+    expect(forward.removedBuildings).toEqual([]);
+    expect(forward.changedBuildingIds).toEqual([]);
+    expect(
+      forward.dependencyChanges.added.map(({ dependencyId }) => dependencyId),
+    ).toEqual(["dependency:added-package"]);
+    expect(
+      forward.dependencyChanges.removed.map(
+        ({ dependencyId }) => dependencyId,
+      ),
+    ).toEqual(["dependency:core-typescript-package"]);
+    expect(
+      forward.dependencyChanges.changed.map(
+        ({ dependencyId }) => dependencyId,
+      ),
+    ).toEqual(["dependency:main-model"]);
+    expect(
+      forward.dependencyChanges.retargeted.map(
+        ({ dependencyId }) => dependencyId,
+      ),
+    ).toEqual(["dependency:validation-model"]);
+    expect(
+      forward.dependencyChanges.retargeted[0],
+    ).toMatchObject({
+      before: {
+        source: {
+          kind: "entity",
+          entityKind: "building",
+          id: "building:validation",
+        },
+        target: {
+          kind: "entity",
+          entityKind: "building",
+          id: "building:model",
+        },
+      },
+      after: {
+        source: {
+          kind: "entity",
+          entityKind: "building",
+          id: "building:validation",
+        },
+        target: {
+          kind: "entity",
+          entityKind: "building",
+          id: "building:schema",
+        },
+      },
+    });
+    expect(
+      forward.dependencyChanges.added[0]?.target,
+    ).toEqual({
+      kind: "external",
+      target: "@scope/new-package",
+      key: evolutionDependencyEndpointKey({
+        kind: "external",
+        target: "@scope/new-package",
+      }),
+    });
+    expect(
+      forward.dependencyChanges.affectedEndpoints.map(({ key }) => key),
+    ).toEqual([
+      evolutionDependencyEndpointKey({
+        kind: "entity",
+        entityKind: "module",
+        id: "module:viewer",
+      }),
+      evolutionDependencyEndpointKey({
+        kind: "external",
+        target: "@scope/new-package",
+      }),
+      evolutionDependencyEndpointKey({
+        kind: "entity",
+        entityKind: "module",
+        id: "module:core",
+      }),
+      evolutionDependencyEndpointKey({
+        kind: "external",
+        target: "typescript",
+      }),
+      evolutionDependencyEndpointKey({
+        kind: "entity",
+        entityKind: "building",
+        id: "building:main",
+      }),
+      evolutionDependencyEndpointKey({
+        kind: "entity",
+        entityKind: "building",
+        id: "building:model",
+      }),
+      evolutionDependencyEndpointKey({
+        kind: "entity",
+        entityKind: "building",
+        id: "building:validation",
+      }),
+      evolutionDependencyEndpointKey({
+        kind: "entity",
+        entityKind: "building",
+        id: "building:schema",
+      }),
+    ]);
+    expect(forward.dependencyChanges.affectedRouteKeys).toHaveLength(5);
+    expect(
+      new Set(forward.dependencyChanges.affectedRouteKeys).size,
+    ).toBe(5);
+
+    const reorderedBaseline = {
+      ...DEMO_MODEL,
+      dependencies: [...DEMO_MODEL.dependencies].reverse(),
+    };
+    const reorderedTarget = {
+      ...target,
+      dependencies: [...targetDependencies].sort(
+        (left, right) => left.id.localeCompare(right.id),
+      ),
+    };
+    const reordered = compareEvolutionFrames(
+      reorderedBaseline,
+      reorderedTarget,
+      0,
+      9,
+    );
+    expect(reordered).toEqual(forward);
+
+    const backward = compareEvolutionFrames(target, DEMO_MODEL, 9, 0);
+    expect(
+      backward.dependencyChanges.added.map(({ dependencyId }) => dependencyId),
+    ).toEqual(["dependency:core-typescript-package"]);
+    expect(
+      backward.dependencyChanges.removed.map(
+        ({ dependencyId }) => dependencyId,
+      ),
+    ).toEqual(["dependency:added-package"]);
+    expect(backward.dependencyChanges.changed).toEqual(
+      forward.dependencyChanges.changed,
+    );
+    expect(backward.dependencyChanges.retargeted[0]).toMatchObject({
+      before: {
+        target: {
+          kind: "entity",
+          entityKind: "building",
+          id: "building:schema",
+        },
+      },
+      after: {
+        target: {
+          kind: "entity",
+          entityKind: "building",
+          id: "building:model",
+        },
+      },
+    });
+  });
+
+  it("keeps building and module endpoint namespaces distinct", () => {
+    const before: CityDependency = {
+      id: "dependency:shared-ids",
+      repositoryId: "repository:demo",
+      sourceId: "shared:source",
+      targetId: "shared:target",
+      resolution: "internal",
+      kind: "typescript-import",
+      weight: 1,
+    };
+    const after: CityDependency = {
+      ...before,
+      kind: "project-reference",
+    };
+
+    const changes = compareEvolutionDependencies([before], [after]);
+
+    expect(changes.changed).toEqual([]);
+    expect(changes.retargeted).toHaveLength(1);
+    expect(changes.retargeted[0]).toMatchObject({
+      before: {
+        source: {
+          entityKind: "building",
+          id: "shared:source",
+        },
+        target: {
+          entityKind: "building",
+          id: "shared:target",
+        },
+      },
+      after: {
+        source: {
+          entityKind: "module",
+          id: "shared:source",
+        },
+        target: {
+          entityKind: "module",
+          id: "shared:target",
+        },
+      },
+    });
+    expect(changes.retargeted[0]!.before.routeKey).not.toBe(
+      changes.retargeted[0]!.after.routeKey,
+    );
   });
 });

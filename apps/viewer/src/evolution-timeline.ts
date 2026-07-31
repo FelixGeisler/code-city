@@ -1,9 +1,11 @@
-import type {
-  CityBuilding,
-  CityModel,
-  EvolutionBundle,
-  EvolutionChangeKind,
-  EvolutionCommitMetadata,
+import {
+  normalizeExternalDependencyTarget,
+  type CityBuilding,
+  type CityDependency,
+  type CityModel,
+  type EvolutionBundle,
+  type EvolutionChangeKind,
+  type EvolutionCommitMetadata,
 } from "../../../packages/core/src/index.js";
 
 export interface EvolutionFrameSummary {
@@ -19,6 +21,79 @@ export interface EvolutionBuildingHistory {
   readonly removedAtFrame?: number;
   readonly changeCount: number;
   readonly changeKinds: readonly EvolutionChangeKind[];
+}
+
+export interface EvolutionBuildingLineageSelection {
+  readonly id: string;
+  readonly lastKnownBuilding: CityBuilding;
+}
+
+export type EvolutionBuildingLineageState =
+  | {
+      readonly kind: "not-yet-created";
+      readonly creationFrame: number;
+    }
+  | {
+      readonly kind: "present";
+    }
+  | {
+      readonly kind: "removed";
+      readonly removalFrame: number;
+    };
+
+export type EvolutionBuildingLineageResolution =
+  | {
+      readonly selection: EvolutionBuildingLineageSelection;
+      readonly state: Extract<
+        EvolutionBuildingLineageState,
+        { readonly kind: "not-yet-created" | "removed" }
+      >;
+    }
+  | {
+      readonly building: CityBuilding;
+      readonly selection: EvolutionBuildingLineageSelection;
+      readonly state: Extract<
+        EvolutionBuildingLineageState,
+        { readonly kind: "present" }
+      >;
+    };
+
+export type EvolutionDependencyEndpointIdentity =
+  | {
+      readonly kind: "entity";
+      readonly entityKind: "building" | "module";
+      readonly id: string;
+      readonly key: string;
+    }
+  | {
+      readonly kind: "external";
+      readonly target: string;
+      readonly key: string;
+    };
+
+export interface EvolutionDependencyRouteIdentity {
+  readonly dependencyId: string;
+  readonly routeKey: string;
+  readonly source: Extract<
+    EvolutionDependencyEndpointIdentity,
+    { readonly kind: "entity" }
+  >;
+  readonly target: EvolutionDependencyEndpointIdentity;
+}
+
+export interface EvolutionRetargetedDependency {
+  readonly dependencyId: string;
+  readonly before: EvolutionDependencyRouteIdentity;
+  readonly after: EvolutionDependencyRouteIdentity;
+}
+
+export interface EvolutionDependencyChanges {
+  readonly added: readonly EvolutionDependencyRouteIdentity[];
+  readonly removed: readonly EvolutionDependencyRouteIdentity[];
+  readonly changed: readonly EvolutionDependencyRouteIdentity[];
+  readonly retargeted: readonly EvolutionRetargetedDependency[];
+  readonly affectedEndpoints: readonly EvolutionDependencyEndpointIdentity[];
+  readonly affectedRouteKeys: readonly string[];
 }
 
 export interface EvolutionTransition {
@@ -37,6 +112,7 @@ export interface EvolutionTransition {
     readonly position: CityBuilding["position"];
     readonly size: CityBuilding["size"];
   }[];
+  readonly dependencyChanges: EvolutionDependencyChanges;
 }
 
 export interface EvolutionFrameAnalysis {
@@ -202,6 +278,239 @@ function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
+function identityKey(kind: string, value: string): string {
+  return `${kind}:${value.length}:${value}`;
+}
+
+export function evolutionDependencyEndpointKey(
+  endpoint:
+    | {
+        readonly kind: "entity";
+        readonly entityKind: "building" | "module";
+        readonly id: string;
+      }
+    | { readonly kind: "external"; readonly target: string },
+): string {
+  return endpoint.kind === "entity"
+    ? identityKey(
+        "entity",
+        identityKey(endpoint.entityKind, endpoint.id),
+      )
+    : identityKey(
+        "external",
+        normalizeExternalDependencyTarget(endpoint.target),
+      );
+}
+
+export function evolutionDependencyRouteKey(
+  source: EvolutionDependencyEndpointIdentity,
+  target: EvolutionDependencyEndpointIdentity,
+): string {
+  return (
+    identityKey("source", source.key) +
+    identityKey("target", target.key)
+  );
+}
+
+function dependencyEntityEndpoint(
+  entityKind: "building" | "module",
+  id: string,
+): Extract<
+  EvolutionDependencyEndpointIdentity,
+  { readonly kind: "entity" }
+> {
+  const endpoint = { kind: "entity", entityKind, id } as const;
+  return Object.freeze({
+    ...endpoint,
+    key: evolutionDependencyEndpointKey(endpoint),
+  });
+}
+
+function dependencyExternalEndpoint(
+  value: string,
+): Extract<
+  EvolutionDependencyEndpointIdentity,
+  { readonly kind: "external" }
+> {
+  const target = normalizeExternalDependencyTarget(value);
+  const endpoint = { kind: "external", target } as const;
+  return Object.freeze({
+    ...endpoint,
+    key: evolutionDependencyEndpointKey(endpoint),
+  });
+}
+
+function dependencyRouteIdentity(
+  dependency: CityDependency,
+): EvolutionDependencyRouteIdentity {
+  const entityKind =
+    dependency.kind === "typescript-import"
+      ? "building"
+      : "module";
+  const source = dependencyEntityEndpoint(
+    entityKind,
+    dependency.sourceId,
+  );
+  const target =
+    dependency.targetId === undefined
+      ? dependencyExternalEndpoint(dependency.externalTarget!)
+      : dependencyEntityEndpoint(entityKind, dependency.targetId);
+  return Object.freeze({
+    dependencyId: dependency.id,
+    routeKey: evolutionDependencyRouteKey(source, target),
+    source,
+    target,
+  });
+}
+
+function effectiveDependencyResolution(
+  dependency: CityDependency,
+): NonNullable<CityDependency["resolution"]> {
+  return (
+    dependency.resolution ??
+    (dependency.targetId === undefined ? "external" : "internal")
+  );
+}
+
+function dependencyMetadataChanged(
+  before: CityDependency,
+  after: CityDependency,
+): boolean {
+  return (
+    before.repositoryId !== after.repositoryId ||
+    before.kind !== after.kind ||
+    before.version !== after.version ||
+    before.weight !== after.weight ||
+    effectiveDependencyResolution(before) !==
+      effectiveDependencyResolution(after)
+  );
+}
+
+/**
+ * Accumulates dependency comparisons visited in ascending dependency-id order.
+ * Both the pure comparator and the worker use this path, keeping categorization
+ * and stable route identity exactly aligned without a large, non-yielding sort
+ * at the end of worker work.
+ */
+export class EvolutionDependencyChangeCollector {
+  readonly #added: EvolutionDependencyRouteIdentity[] = [];
+  readonly #removed: EvolutionDependencyRouteIdentity[] = [];
+  readonly #changed: EvolutionDependencyRouteIdentity[] = [];
+  readonly #retargeted: EvolutionRetargetedDependency[] = [];
+  readonly #affectedEndpoints: EvolutionDependencyEndpointIdentity[] = [];
+  readonly #affectedEndpointKeys = new Set<string>();
+  readonly #affectedRouteKeys: string[] = [];
+  readonly #affectedRouteKeySet = new Set<string>();
+  #lastDependencyId: string | undefined;
+  #finished = false;
+
+  public add(
+    before: CityDependency | undefined,
+    after: CityDependency | undefined,
+  ): void {
+    if (this.#finished) {
+      throw new Error("Dependency change collection has already finished.");
+    }
+    if (
+      (before === undefined && after === undefined) ||
+      (before !== undefined &&
+        after !== undefined &&
+        before.id !== after.id)
+    ) {
+      throw new TypeError(
+        "Dependency comparison requires one stable dependency identity.",
+      );
+    }
+    const dependencyId = (after ?? before)!.id;
+    if (
+      this.#lastDependencyId !== undefined &&
+      compareText(this.#lastDependencyId, dependencyId) >= 0
+    ) {
+      throw new TypeError(
+        "Dependency comparisons must use ascending unique dependency ids.",
+      );
+    }
+    this.#lastDependencyId = dependencyId;
+
+    if (before === undefined) {
+      const route = dependencyRouteIdentity(after!);
+      this.#added.push(route);
+      this.#affect(route);
+      return;
+    }
+    if (after === undefined) {
+      const route = dependencyRouteIdentity(before);
+      this.#removed.push(route);
+      this.#affect(route);
+      return;
+    }
+    const beforeRoute = dependencyRouteIdentity(before);
+    const afterRoute = dependencyRouteIdentity(after);
+    if (beforeRoute.routeKey !== afterRoute.routeKey) {
+      this.#retargeted.push(
+        Object.freeze({
+          dependencyId,
+          before: beforeRoute,
+          after: afterRoute,
+        }),
+      );
+      this.#affect(beforeRoute);
+      this.#affect(afterRoute);
+      return;
+    }
+    if (dependencyMetadataChanged(before, after)) {
+      this.#changed.push(afterRoute);
+      this.#affect(afterRoute);
+    }
+  }
+
+  public finish(): EvolutionDependencyChanges {
+    if (this.#finished) {
+      throw new Error("Dependency change collection has already finished.");
+    }
+    this.#finished = true;
+    return Object.freeze({
+      added: Object.freeze(this.#added),
+      removed: Object.freeze(this.#removed),
+      changed: Object.freeze(this.#changed),
+      retargeted: Object.freeze(this.#retargeted),
+      affectedEndpoints: Object.freeze(this.#affectedEndpoints),
+      affectedRouteKeys: Object.freeze(this.#affectedRouteKeys),
+    });
+  }
+
+  #affect(route: EvolutionDependencyRouteIdentity): void {
+    this.#affectEndpoint(route.source);
+    this.#affectEndpoint(route.target);
+    if (!this.#affectedRouteKeySet.has(route.routeKey)) {
+      this.#affectedRouteKeySet.add(route.routeKey);
+      this.#affectedRouteKeys.push(route.routeKey);
+    }
+  }
+
+  #affectEndpoint(endpoint: EvolutionDependencyEndpointIdentity): void {
+    if (this.#affectedEndpointKeys.has(endpoint.key)) return;
+    this.#affectedEndpointKeys.add(endpoint.key);
+    this.#affectedEndpoints.push(endpoint);
+  }
+}
+
+export function compareEvolutionDependencies(
+  from: readonly CityDependency[],
+  to: readonly CityDependency[],
+): EvolutionDependencyChanges {
+  const source = new Map(from.map((dependency) => [dependency.id, dependency]));
+  const target = new Map(to.map((dependency) => [dependency.id, dependency]));
+  const dependencyIds = [...new Set([...source.keys(), ...target.keys()])].sort(
+    compareText,
+  );
+  const collector = new EvolutionDependencyChangeCollector();
+  for (const id of dependencyIds) {
+    collector.add(source.get(id), target.get(id));
+  }
+  return collector.finish();
+}
+
 export function summarizeEvolutionFrames(
   bundle: EvolutionBundle,
 ): readonly EvolutionFrameSummary[] {
@@ -282,6 +591,79 @@ export function analyzeEvolutionBuildingHistory(
         changeKinds: Object.freeze([...history.changeKinds].sort()),
       }),
     );
+}
+
+export function createEvolutionBuildingLineageSelection(
+  building: CityBuilding,
+): EvolutionBuildingLineageSelection {
+  return Object.freeze({
+    id: building.id,
+    lastKnownBuilding: building,
+  });
+}
+
+/**
+ * Resolves one remembered stable lineage against a replayed frame.
+ *
+ * Evolution validation guarantees a lineage is present continuously from its
+ * first frame until its optional removal frame and cannot be resurrected.
+ * Checking the replayed model as well makes inconsistent worker/history data
+ * fail closed instead of showing historically false tombstone wording.
+ */
+export function resolveEvolutionBuildingLineage(
+  selection: EvolutionBuildingLineageSelection,
+  history: EvolutionBuildingHistory,
+  targetFrame: number,
+  presentBuilding?: CityBuilding,
+): EvolutionBuildingLineageResolution | undefined {
+  if (
+    history.id !== selection.id ||
+    !Number.isSafeInteger(targetFrame) ||
+    targetFrame < 0 ||
+    (presentBuilding !== undefined &&
+      presentBuilding.id !== selection.id)
+  ) {
+    return undefined;
+  }
+
+  let state: EvolutionBuildingLineageState;
+  if (targetFrame < history.firstFrame) {
+    if (presentBuilding !== undefined) return undefined;
+    state = Object.freeze({
+      kind: "not-yet-created",
+      creationFrame: history.firstFrame,
+    });
+  } else if (
+    history.removedAtFrame !== undefined &&
+    targetFrame >= history.removedAtFrame
+  ) {
+    if (presentBuilding !== undefined) return undefined;
+    state = Object.freeze({
+      kind: "removed",
+      removalFrame: history.removedAtFrame,
+    });
+  } else {
+    if (
+      presentBuilding === undefined ||
+      targetFrame > history.lastFrame
+    ) {
+      return undefined;
+    }
+    state = Object.freeze({ kind: "present" });
+  }
+
+  const nextSelection =
+    presentBuilding === undefined ||
+    presentBuilding === selection.lastKnownBuilding
+      ? selection
+      : createEvolutionBuildingLineageSelection(presentBuilding);
+  return state.kind === "present"
+    ? Object.freeze({
+        building: presentBuilding!,
+        selection: nextSelection,
+        state,
+      })
+    : Object.freeze({ selection: nextSelection, state });
 }
 
 export function analyzeEvolutionFrame(
@@ -399,6 +781,10 @@ export function compareEvolutionFrames(
       interpolatedBuildings.sort((left, right) =>
         compareText(left.id, right.id),
       ),
+    ),
+    dependencyChanges: compareEvolutionDependencies(
+      from.dependencies,
+      to.dependencies,
     ),
   });
 }

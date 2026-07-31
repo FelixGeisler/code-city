@@ -15,11 +15,19 @@ import {
   type LocalAnalysisOptions,
   type PublicGitHubAnalysisResult,
 } from "../../packages/analyzer/src/index.js";
-import type { CityModel } from "../../packages/core/src/model.js";
+import type {
+  CityBuilding,
+  CityDependency,
+  CityDistrict,
+  CityModel,
+} from "../../packages/core/src/model.js";
 import {
+  deriveEvolutionChangeKinds,
   prepareEvolutionSerialization,
+  replayValidatedEvolutionBundle,
   serializeEvolutionBundle,
   type EvolutionBundle,
+  type EvolutionChanges,
 } from "../../packages/core/src/index.js";
 import type {
   RemoteImportDependencies,
@@ -39,6 +47,8 @@ let sourceNavigationZipFixture: string;
 let cityModelFixture: CityModel;
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
+const HISTORY_LATEST_COMMIT =
+  "1123456789abcdef0123456789abcdef01234567";
 const PUBLIC_GITHUB_URL = "https://github.com/code-city-e2e/public";
 const PRIVATE_GITHUB_URL = "https://github.com/code-city-e2e/private";
 const AZURE_DEVOPS_URL =
@@ -52,6 +62,14 @@ const HISTORY_SAMPLE_EVERY = 4;
 const HISTORY_TIMEOUT_MS = 23_000;
 const HISTORY_TITLE = "History import E2E";
 const HISTORY_VERSION = "history-v1";
+const LINEAGE_JOB_ID = "25800000-0000-4000-8000-000000000258";
+const LINEAGE_TITLE = "Lineage time travel E2E";
+const LINEAGE_COMMITS = Object.freeze([
+  "a".repeat(40),
+  "b".repeat(40),
+  "c".repeat(40),
+  "d".repeat(40),
+]);
 
 interface RemoteInvocation {
   readonly kind: "github" | "git";
@@ -81,6 +99,17 @@ interface HistoryInvocation {
 const historyInvocations: HistoryInvocation[] = [];
 let historyResultFixture: GenericGitHistoryAnalysisResult;
 let canonicalEvolutionFixture: Uint8Array;
+let lineageEvolutionFixture: LineageEvolutionFixture;
+
+interface LineageEvolutionFixture {
+  readonly jobId: string;
+  readonly model: CityModel;
+  readonly bundle: EvolutionBundle;
+  readonly bytes: Uint8Array;
+  readonly sha256: string;
+  readonly futureBuilding: CityBuilding;
+  readonly removedBuilding: CityBuilding;
+}
 
 async function privateFile(
   file: string,
@@ -116,6 +145,18 @@ function createHistoryAnalysisResult(
     version: "2.47.1.windows.2",
     renamePolicyRevision: "diff-tree-renames-50-myers-v1" as const,
   };
+  const addedDependency = model.dependencies.find(
+    ({ id }) => id === "dependency:validation-model",
+  );
+  if (addedDependency === undefined) {
+    throw new Error("The history E2E fixture requires a route addition.");
+  }
+  const baselineModel: CityModel = {
+    ...model,
+    dependencies: model.dependencies.filter(
+      ({ id }) => id !== addedDependency.id,
+    ),
+  };
   const bundle: EvolutionBundle = {
     schemaVersion: "1.0",
     generator: model.generator,
@@ -126,12 +167,12 @@ function createHistoryAnalysisResult(
       order: "oldest-first",
       sampleEvery: HISTORY_SAMPLE_EVERY,
       requestedCommitCount: HISTORY_COMMIT_COUNT,
-      selectedCommitCount: 1,
-      sampledCommitCount: 1,
-      traversedCommitCount: 1,
+      selectedCommitCount: 2,
+      sampledCommitCount: 2,
+      traversedCommitCount: 2,
       resolvedOldestSha: COMMIT,
-      resolvedNewestSha: COMMIT,
-      sampledCommitShas: [COMMIT],
+      resolvedNewestSha: HISTORY_LATEST_COMMIT,
+      sampledCommitShas: [COMMIT, HISTORY_LATEST_COMMIT],
     },
     provenance: {
       repositoryId,
@@ -154,16 +195,46 @@ function createHistoryAnalysisResult(
         analyzerVersion: model.generator.version,
         analysisFingerprint: fingerprint,
       },
-      model,
+      model: baselineModel,
     },
-    deltas: [],
+    deltas: [
+      {
+        commit: {
+          index: 1,
+          sha: HISTORY_LATEST_COMMIT,
+          committedAt: "2026-01-02T00:00:00.000Z",
+          parentShas: [COMMIT],
+          analyzerVersion: model.generator.version,
+          analysisFingerprint: `sha256:${"2".repeat(64)}`,
+        },
+        changes: {
+          model: {},
+          repositories: { added: [], removed: [], changed: [] },
+          solutions: { added: [], removed: [], changed: [] },
+          modules: { added: [], removed: [], changed: [] },
+          semanticGroups: { added: [], removed: [], changed: [] },
+          districts: { added: [], removed: [], changed: [] },
+          buildings: { added: [], removed: [], changed: [] },
+          dependencies: {
+            added: [addedDependency],
+            removed: [],
+            changed: [],
+          },
+        },
+      },
+    ],
   };
   const preparedSerialization =
     prepareEvolutionSerialization(bundle);
-  const commit = {
+  const baselineCommit = {
     sha: COMMIT,
     parents: [] as const,
     committedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const latestCommit = {
+    sha: HISTORY_LATEST_COMMIT,
+    parents: [COMMIT] as const,
+    committedAt: "2026-01-02T00:00:00.000Z",
   };
   const analysisBounds = {
     totalDeadlineMs: HISTORY_TIMEOUT_MS,
@@ -177,12 +248,12 @@ function createHistoryAnalysisResult(
   };
   return {
     repository: "public",
-    tipSha: COMMIT,
+    tipSha: HISTORY_LATEST_COMMIT,
     transport: "https",
     historyBackend,
     selection: {
-      selectedCommits: [commit],
-      sampledCommits: [commit],
+      selectedCommits: [baselineCommit, latestCommit],
+      sampledCommits: [baselineCommit, latestCommit],
       summary: preparedSerialization.bundle.selection,
       analysisBounds,
       requestedTagCount: 0,
@@ -195,9 +266,9 @@ function createHistoryAnalysisResult(
       preparedSerialization,
     },
     costEstimate: {
-      traversedCommitCount: 1,
-      selectedCommitCount: 1,
-      sampledFrameCount: 1,
+      traversedCommitCount: 2,
+      selectedCommitCount: 2,
+      sampledFrameCount: 2,
       maximumChangedPathEntries:
         analysisBounds.maxAggregateChangedPaths,
       maximumChangedPathBytes:
@@ -210,7 +281,279 @@ function createHistoryAnalysisResult(
       totalDeadlineMs: analysisBounds.totalDeadlineMs,
     },
     cacheHits: 0,
-    cacheMisses: 1,
+    cacheMisses: 2,
+  };
+}
+
+function emptyLineageChanges(): EvolutionChanges {
+  const empty = () => ({ added: [], removed: [], changed: [] });
+  return {
+    model: {},
+    repositories: empty(),
+    solutions: empty(),
+    modules: empty(),
+    semanticGroups: empty(),
+    districts: empty(),
+    buildings: empty(),
+    dependencies: empty(),
+  };
+}
+
+function createLineageEvolutionFixture(
+  demo: CityModel,
+): LineageEvolutionFixture {
+  const replacedBuilding = demo.buildings.find(
+    ({ id }) => id === "building:demo-model",
+  );
+  if (replacedBuilding === undefined) {
+    throw new Error("The lineage E2E fixture requires demo-model.ts.");
+  }
+  const removedBuilding: CityBuilding = {
+    ...replacedBuilding,
+    id: "building:1111111111111111",
+    name: "removed-lineage.ts",
+    path: "apps/viewer/src/removed-lineage.ts",
+    sourceLocation: { startLine: 1, endLine: 2 },
+  };
+  const futureBuilding: CityBuilding = {
+    ...replacedBuilding,
+    id: "building:2222222222222222",
+    name: "future-lineage.ts",
+    path: "apps/viewer/src/future-lineage.ts",
+    sourceLocation: { startLine: 1, endLine: 2 },
+  };
+  const persistentBuildingDependencies: CityDependency[] =
+    Array.from({ length: 10 }, (_, index) => ({
+      id: `dependency:lineage-building:${index.toString().padStart(2, "0")}`,
+      repositoryId: replacedBuilding.repositoryId,
+      sourceId: "building:main",
+      targetId: "building:model",
+      resolution: "internal",
+      kind: "typescript-import",
+      weight: index + 1,
+    }));
+  const persistentExternalDependencies: CityDependency[] =
+    Array.from({ length: 20 }, (_, index) => ({
+      id: `dependency:lineage-package:${index.toString().padStart(2, "0")}`,
+      repositoryId: replacedBuilding.repositoryId,
+      sourceId: "module:viewer",
+      externalTarget: `lineage-package-${index.toString().padStart(2, "0")}`,
+      resolution: "external",
+      kind: "package-reference",
+      version: "1.0.0",
+      weight: index + 1,
+    }));
+  const persistentIncomingDependency: CityDependency = {
+    id: "dependency:lineage-incoming",
+    repositoryId: replacedBuilding.repositoryId,
+    sourceId: "building:validation",
+    targetId: "building:main",
+    resolution: "internal",
+    kind: "typescript-import",
+    weight: 1,
+  };
+  const baselineModel: CityModel = {
+    ...demo,
+    identity: {
+      title: LINEAGE_TITLE,
+      version: "lineage-v1",
+    },
+    sourceProvenance: {
+      version: "codecity.source-navigation/1",
+      repositories: [
+        {
+          repositoryId: removedBuilding.repositoryId,
+          provider: "github",
+          revision: {
+            kind: "commit",
+            value: LINEAGE_COMMITS[3]!,
+          },
+          repositoryUrl: "https://github.com/example/repository",
+        },
+      ],
+    },
+    buildings: demo.buildings.map((building) =>
+      building.id === replacedBuilding.id
+        ? removedBuilding
+        : building,
+    ),
+    dependencies: [
+      ...demo.dependencies,
+      ...persistentBuildingDependencies,
+      ...persistentExternalDependencies,
+      persistentIncomingDependency,
+    ],
+  };
+  const template =
+    createHistoryAnalysisResult(baselineModel).evolution.bundle;
+  const commit = (index: number) => ({
+    index,
+    sha: LINEAGE_COMMITS[index]!,
+    committedAt: new Date(
+      Date.UTC(2026, 0, index + 1),
+    ).toISOString(),
+    parentShas:
+      index === 0 ? [] : [LINEAGE_COMMITS[index - 1]!],
+    analyzerVersion: baselineModel.generator.version,
+    analysisFingerprint:
+      `sha256:${String(index + 1).repeat(64)}` as const,
+  });
+  const dependency = (id: string): CityDependency => {
+    const value = baselineModel.dependencies.find(
+      (candidate) => candidate.id === id,
+    );
+    if (value === undefined) {
+      throw new Error(`Missing lineage dependency '${id}'.`);
+    }
+    return value;
+  };
+  const replacement = (
+    before: CityDependency,
+    entity: CityDependency,
+  ) => ({
+    id: before.id,
+    changeKinds: deriveEvolutionChangeKinds(
+      "dependencies",
+      before,
+      entity,
+    ),
+    entity,
+  });
+  const projectBefore = dependency(
+    "dependency:viewer-core-project",
+  );
+  const projectAfter: CityDependency = {
+    ...projectBefore,
+    weight: 30,
+  };
+  const frameOneChanges: EvolutionChanges = {
+    ...emptyLineageChanges(),
+    dependencies: {
+      added: [],
+      removed: [],
+      changed: [replacement(projectBefore, projectAfter)],
+    },
+  };
+  const removedDependency = dependency(
+    "dependency:core-typescript-package",
+  );
+  const changedBefore = dependency("dependency:main-model");
+  const changedAfter: CityDependency = {
+    ...changedBefore,
+    weight: 4,
+  };
+  const retargetedBefore = dependency(
+    "dependency:validation-model",
+  );
+  const retargetedAfter: CityDependency = {
+    ...retargetedBefore,
+    targetId: "building:schema",
+  };
+  const addedDependency: CityDependency = {
+    id: "dependency:lineage-added",
+    repositoryId: replacedBuilding.repositoryId,
+    sourceId: "module:viewer",
+    externalTarget: "lineage-added-package",
+    resolution: "external",
+    kind: "package-reference",
+    version: "2.0.0",
+    weight: 40,
+  };
+  const coreDistrictBefore = baselineModel.districts.find(
+    ({ id }) => id === "district:core",
+  );
+  if (coreDistrictBefore === undefined) {
+    throw new Error("The lineage E2E fixture requires the core district.");
+  }
+  const coreDistrictAfter: CityDistrict = {
+    ...coreDistrictBefore,
+    size: { ...coreDistrictBefore.size, x: 10 },
+  };
+  const turnoverChanges: EvolutionChanges = {
+    ...emptyLineageChanges(),
+    districts: {
+      added: [],
+      removed: [],
+      changed: [
+        {
+          id: coreDistrictBefore.id,
+          changeKinds: deriveEvolutionChangeKinds(
+            "districts",
+            coreDistrictBefore,
+            coreDistrictAfter,
+          ),
+          entity: coreDistrictAfter,
+        },
+      ],
+    },
+    dependencies: {
+      added: [addedDependency],
+      removed: [removedDependency.id],
+      changed: [
+        replacement(changedBefore, changedAfter),
+        replacement(retargetedBefore, retargetedAfter),
+      ],
+    },
+  };
+  const frameThreeChanges = emptyLineageChanges();
+  const bundle: EvolutionBundle = {
+    ...template,
+    selection: {
+      mode: "commit-count",
+      traversal: "first-parent",
+      order: "oldest-first",
+      sampleEvery: 1,
+      requestedCommitCount: LINEAGE_COMMITS.length,
+      selectedCommitCount: LINEAGE_COMMITS.length,
+      sampledCommitCount: LINEAGE_COMMITS.length,
+      traversedCommitCount: LINEAGE_COMMITS.length,
+      resolvedOldestSha: LINEAGE_COMMITS[0]!,
+      resolvedNewestSha: LINEAGE_COMMITS[3]!,
+      sampledCommitShas: LINEAGE_COMMITS,
+    },
+    baseline: {
+      commit: commit(0),
+      model: baselineModel,
+    },
+    deltas: [
+      {
+        commit: commit(1),
+        changes: frameOneChanges,
+      },
+      {
+        commit: commit(2),
+        changes: {
+          ...turnoverChanges,
+          buildings: {
+            added: [futureBuilding],
+            removed: [removedBuilding.id],
+            changed: [],
+          },
+        },
+      },
+      {
+        commit: commit(3),
+        changes: frameThreeChanges,
+      },
+    ],
+  };
+  const prepared = prepareEvolutionSerialization(bundle);
+  const frames = [
+    ...replayValidatedEvolutionBundle(prepared.bundle),
+  ];
+  const model = frames.at(-1)?.model;
+  if (model === undefined) {
+    throw new Error("The lineage E2E fixture did not replay.");
+  }
+  const bytes = serializeEvolutionBundle(prepared.bundle);
+  return {
+    jobId: LINEAGE_JOB_ID,
+    model,
+    bundle: prepared.bundle,
+    bytes,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    futureBuilding,
+    removedBuilding,
   };
 }
 
@@ -411,6 +754,8 @@ test.beforeAll(async () => {
       "utf8",
     ),
   ) as CityModel;
+  lineageEvolutionFixture =
+    createLineageEvolutionFixture(cityModelFixture);
   historyResultFixture = createHistoryAnalysisResult(
     modelForOptions({
       title: HISTORY_TITLE,
@@ -584,6 +929,294 @@ async function startAndWaitForImportedCity(page: Page): Promise<string> {
   );
   expect(server.jobs.get(jobId!)?.state).toBe("completed");
   return jobId!;
+}
+
+async function openLineageEvolutionFixture(
+  page: Page,
+  options: {
+    readonly performanceDiagnostics?: boolean;
+    readonly seekDelayMs?: number;
+  } = {},
+): Promise<LineageEvolutionFixture> {
+  await openAuthenticatedWizard(page);
+  await page
+    .getByRole("button", { name: "Close project import" })
+    .click();
+  if (options.seekDelayMs !== undefined) {
+    if (
+      !Number.isSafeInteger(options.seekDelayMs) ||
+      options.seekDelayMs < 1
+    ) {
+      throw new Error("The evolution seek delay must be positive.");
+    }
+    await page.addInitScript({
+      content: `(() => {
+        const nativePostMessage = Worker.prototype.postMessage;
+        Worker.prototype.postMessage = function(message, transfer) {
+          const send = () => transfer === undefined
+            ? nativePostMessage.call(this, message)
+            : nativePostMessage.call(this, message, transfer);
+          if (message?.type === "seek") {
+            setTimeout(send, ${options.seekDelayMs});
+          } else {
+            send();
+          }
+        };
+      })();`,
+    });
+  }
+
+  const fixture = lineageEvolutionFixture;
+  const cityPath =
+    `/api/v1/artifacts/${fixture.jobId}/city-model.json`;
+  const evolutionPath =
+    `/api/v1/artifacts/${fixture.jobId}/evolution.json`;
+  const sourcePath =
+    `/api/v1/artifacts/${fixture.jobId}/source`;
+  const buildingsById = new Map(
+    [fixture.futureBuilding, fixture.removedBuilding].map(
+      (building) => [building.id, building] as const,
+    ),
+  );
+  await page.route(`**${cityPath}`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify(fixture.model),
+    });
+  });
+  await page.route(`**${evolutionPath}`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: {
+        "cache-control": "no-store",
+        "content-length": String(fixture.bytes.byteLength),
+        "content-type": "application/json; charset=utf-8",
+      },
+      body: Buffer.from(fixture.bytes),
+    });
+  });
+  await page.route(
+    `**/api/v1/artifacts/${fixture.jobId}/sources/*`,
+    async (route) => {
+      const buildingId = decodeURIComponent(
+        new URL(route.request().url()).pathname.split("/").at(-1) ??
+          "",
+      );
+      const building = buildingsById.get(buildingId);
+      if (building === undefined) {
+        await route.fulfill({
+          status: 404,
+          contentType: "application/json; charset=utf-8",
+          body: JSON.stringify({
+            error: {
+              code: "source-not-found",
+              message: "Source file not found.",
+            },
+          }),
+        });
+        return;
+      }
+      const future = building.id === fixture.futureBuilding.id;
+      const identifier = future ? "futureLineage" : "removedLineage";
+      const sentinel = future
+        ? "future-lineage-source-sentinel"
+        : "removed-lineage-source-sentinel";
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json; charset=utf-8",
+        body: JSON.stringify({
+          source: {
+            buildingId: building.id,
+            repositoryId: building.repositoryId,
+            path: building.path,
+            language: building.language,
+            text:
+              `export const ${identifier} = true;\n` +
+              `// ${sentinel}`,
+            location: building.sourceLocation,
+            provenance:
+              fixture.model.sourceProvenance!.repositories[0]!,
+            externalUrl:
+              `https://github.com/example/repository/blob/` +
+              `${LINEAGE_COMMITS[3]}/${building.path}#L1`,
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    `**/api/v1/jobs/${fixture.jobId}`,
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json; charset=utf-8",
+        body: JSON.stringify({
+          job: {
+            id: fixture.jobId,
+            kind: "project-import",
+            state: "completed",
+            createdAt: "2026-01-04T00:00:00.000Z",
+            updatedAt: "2026-01-04T00:00:00.000Z",
+            result: {
+              kind: "city-model",
+              artifactToken: fixture.jobId,
+              artifactUrl: cityPath,
+              evolution: {
+                artifactUrl: evolutionPath,
+                size: fixture.bytes.byteLength,
+                sha256: fixture.sha256,
+              },
+              source: {
+                availability: "retained",
+                artifactUrl: sourcePath,
+                size: 1,
+                sha256: "e".repeat(64),
+                indexSha256: "f".repeat(64),
+              },
+            },
+          },
+        }),
+      });
+    },
+  );
+  await page.evaluate(
+    ({ jobId }) => {
+      localStorage.setItem("code-city.last-import-job.v1", jobId);
+    },
+    { jobId: fixture.jobId },
+  );
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator("#model-name")).toHaveText(LINEAGE_TITLE, {
+    timeout: 30_000,
+  });
+  await expect(page.locator("#evolution-commit")).toContainText(
+    `4/4 \u00b7 ${LINEAGE_COMMITS[3]!.slice(0, 10)}`,
+    { timeout: 30_000 },
+  );
+  if (options.performanceDiagnostics === true) {
+    // The hardened production server rejects query-bearing request targets.
+    // Enable the viewer's read-only diagnostics after navigation; subsequent
+    // route renders publish the snapshot without another request.
+    await page.evaluate(() => {
+      const url = new URL(window.location.href);
+      url.searchParams.set("performance", "1");
+      window.history.replaceState(null, "", url);
+    });
+  }
+  return fixture;
+}
+
+async function seekEvolutionFrame(
+  page: Page,
+  frameIndex: number,
+): Promise<void> {
+  const range = page.locator("#evolution-range");
+  await range.fill(String(frameIndex));
+  await expect(range).toHaveValue(String(frameIndex));
+  await expect(page.locator("#evolution-commit")).toContainText(
+    `${frameIndex + 1}/${LINEAGE_COMMITS.length} \u00b7 ` +
+      LINEAGE_COMMITS[frameIndex]!.slice(0, 10),
+    { timeout: 15_000 },
+  );
+  await expect(page.locator("#evolution-status")).not.toHaveText(
+    "Seeking\u2026",
+  );
+}
+
+interface BrowserRoutePoint {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+interface BrowserRouteGeometry {
+  readonly consumer: {
+    readonly contact: BrowserRoutePoint;
+    readonly anchor: BrowserRoutePoint;
+  };
+  readonly provider: {
+    readonly contact: BrowserRoutePoint;
+    readonly anchor: BrowserRoutePoint;
+  };
+}
+
+async function districtRouteGeometry(
+  page: Page,
+  frameIndex: number,
+  routeId: string,
+): Promise<BrowserRouteGeometry> {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ expectedFrame, expectedRoute }) => {
+          const diagnostics = window.__CODE_CITY_PERFORMANCE__;
+          if (
+            diagnostics?.evolutionFrameIndex !== expectedFrame
+          ) {
+            return null;
+          }
+          const route =
+            diagnostics.districtDependencyRoutes.routes.find(
+              ({ id }) => id === expectedRoute,
+            );
+          return route === undefined
+            ? null
+            : {
+                consumer: route.consumer,
+                provider: route.provider,
+              };
+        },
+        {
+          expectedFrame: frameIndex,
+          expectedRoute: routeId,
+        },
+      ),
+    )
+    .not.toBeNull();
+  const geometry = await page.evaluate(
+    ({ expectedFrame, expectedRoute }) => {
+      const diagnostics = window.__CODE_CITY_PERFORMANCE__;
+      if (
+        diagnostics?.evolutionFrameIndex !== expectedFrame
+      ) {
+        return null;
+      }
+      const route =
+        diagnostics.districtDependencyRoutes.routes.find(
+          ({ id }) => id === expectedRoute,
+        );
+      return route === undefined
+        ? null
+        : {
+            consumer: route.consumer,
+            provider: route.provider,
+          };
+    },
+    {
+      expectedFrame: frameIndex,
+      expectedRoute: routeId,
+    },
+  );
+  if (geometry === null) {
+    throw new Error("Expected district route diagnostics.");
+  }
+  return geometry;
+}
+
+async function selectLineageBuilding(
+  page: Page,
+  building: CityBuilding,
+): Promise<void> {
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await page.locator("#building-search").fill(building.name);
+  const result = page
+    .locator(".search-result-button")
+    .filter({ hasText: building.name });
+  await expect(result).toHaveCount(1);
+  await result.click();
+  await expect(page.locator("#inspector-title")).toHaveText("Building");
+  await expect(page.locator("#selection-name")).toHaveText(building.name);
 }
 
 function lastRemoteInvocation(
@@ -984,6 +1617,69 @@ test("submits bounded history, validates both artifacts, and restores its recent
   await expect(page.locator("#status")).toContainText(HISTORY_VERSION);
 });
 
+test("preserves filtered selected dependency routes across evolution seeks", async ({
+  page,
+}) => {
+  await openAuthenticatedWizard(page);
+  await chooseSource(page, "github-public");
+  await page
+    .locator("#project-import-repository-url")
+    .fill(PUBLIC_GITHUB_URL);
+  await page.locator("#project-import-history-enabled").check();
+  await continueToOptions(page);
+  await continueToReview(page);
+  await startAndWaitForImportedCity(page);
+
+  await expect(page.locator("#evolution-timeline")).toBeVisible();
+  await expect(page.locator("#evolution-commit")).toContainText("2/2");
+  await page.getByRole("tab", { name: "Routes" }).click();
+  await page.locator("#district-routes-toggle").click();
+  await page.locator("#district-route-filter-project").click();
+  await page.locator("#district-route-filter-package").click();
+
+  const route = page.locator(
+    '.district-route-button[data-bundle-id="district-dependency:district%3Aviewer:district:district%3Acore"]',
+  );
+  await expect(route).toHaveAttribute("aria-label", /2 edges, 2 references/u);
+  await route.click();
+  await expect(route).toHaveAttribute("aria-current", "true");
+  await expect(
+    page.locator("#district-route-detail-summary"),
+  ).toHaveText(/2 edges.*2 references/u);
+
+  await page.locator("#evolution-previous").click();
+  await expect(page.locator("#evolution-commit")).toContainText("1/2");
+  await expect(page.locator("#district-routes-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(
+    page.locator("#district-route-filter-typescript"),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.locator("#district-route-filter-project"),
+  ).toHaveAttribute("aria-pressed", "false");
+  await expect(
+    page.locator("#district-route-filter-package"),
+  ).toHaveAttribute("aria-pressed", "false");
+  await expect(route).toHaveAttribute("aria-current", "true");
+  await expect(route).toHaveAttribute("aria-label", /1 edge, 1 reference/u);
+  await expect(
+    page.locator("#district-route-detail-summary"),
+  ).toHaveText(/1 edge.*1 reference/u);
+  await expect(page.locator("#evolution-status")).toContainText(
+    "1 dependency removed",
+  );
+  await expect(page.locator("#legend")).toContainText(
+    "1 dependency route change (0 added, 1 removed, 0 changed, 0 retargeted)",
+  );
+
+  await page.locator("#evolution-next").click();
+  await expect(page.locator("#evolution-commit")).toContainText("2/2");
+  await expect(route).toHaveAttribute("aria-current", "true");
+  await expect(route).toHaveAttribute("aria-label", /2 edges, 2 references/u);
+});
+
 test("rejects an oversized legacy evolution artifact before downloading it", async ({
   page,
 }) => {
@@ -1044,6 +1740,444 @@ test("rejects an oversized legacy evolution artifact before downloading it", asy
     .getByRole("button", { name: "Close project import" })
     .click();
   await expect(page.locator("#project-import-dialog")).toBeHidden();
+});
+
+test("keeps a future lineage selected before creation and restores its source at creation", async ({
+  page,
+}) => {
+  const fixture = await openLineageEvolutionFixture(page);
+  const building = fixture.futureBuilding;
+  const shortCreationCommit = LINEAGE_COMMITS[2]!.slice(0, 10);
+
+  await selectLineageBuilding(page, building);
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Showing the exact retained file",
+  );
+  await expect(page.locator("#building-source-code")).toContainText(
+    "future-lineage-source-sentinel",
+  );
+  await expect(page.locator("#building-evolution")).toContainText(
+    `First seen ${shortCreationCommit} at frame 3`,
+  );
+
+  await seekEvolutionFrame(page, 1);
+  await expect(page.locator("#inspector-title")).toHaveText(
+    "Not yet created",
+  );
+  await expect(page.locator("#selection-name")).toHaveText(building.name);
+  await expect(page.locator("#building-repository")).toHaveText(
+    `Introduced by ${shortCreationCommit}`,
+  );
+  await expect(
+    page.locator("#building-metric-explanation"),
+  ).toContainText(
+    `not present at this commit. It is introduced by commit ` +
+      `${shortCreationCommit} at frame 3`,
+  );
+  await expect(page.locator("#selection-status")).toContainText(
+    `is not yet created at this commit; it is introduced by commit ` +
+      shortCreationCommit,
+  );
+  await expect(page.locator("#selection-status")).not.toContainText(
+    "removed",
+  );
+  await expect(page.locator("#building-source-details")).toBeHidden();
+
+  await seekEvolutionFrame(page, 0);
+  await expect(page.locator("#inspector-title")).toHaveText(
+    "Not yet created",
+  );
+  await expect(page.locator("#selection-name")).toHaveText(building.name);
+  await expect(page.locator("#building-repository")).toHaveText(
+    `Introduced by ${shortCreationCommit}`,
+  );
+  await expect(page.locator("#selection-status")).not.toContainText(
+    "removed",
+  );
+
+  await seekEvolutionFrame(page, 2);
+  await expect(page.locator("#inspector-title")).toHaveText("Building");
+  await expect(page.locator("#selection-name")).toHaveText(building.name);
+  await expect(page.locator("#building-repository")).toHaveText(
+    "Code City Demo",
+  );
+  await expect(page.locator("#building-source-details")).toBeVisible();
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Showing the exact retained file",
+  );
+  await expect(page.locator("#building-source-code")).toContainText(
+    "future-lineage-source-sentinel",
+  );
+  await expect(page.locator("#building-evolution")).toContainText(
+    `First seen ${shortCreationCommit} at frame 3`,
+  );
+});
+
+test("keeps a removed lineage tombstone and restores its source before removal", async ({
+  page,
+}) => {
+  const fixture = await openLineageEvolutionFixture(page);
+  const building = fixture.removedBuilding;
+  const shortCreationCommit = LINEAGE_COMMITS[0]!.slice(0, 10);
+  const shortRemovalCommit = LINEAGE_COMMITS[2]!.slice(0, 10);
+  const shortNewestCommit = LINEAGE_COMMITS[3]!.slice(0, 10);
+
+  await seekEvolutionFrame(page, 1);
+  await selectLineageBuilding(page, building);
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Showing the exact retained file",
+  );
+  await expect(page.locator("#building-source-code")).toContainText(
+    "removed-lineage-source-sentinel",
+  );
+
+  await seekEvolutionFrame(page, 2);
+  await expect(page.locator("#inspector-title")).toHaveText(
+    "Removed building",
+  );
+  await expect(page.locator("#selection-name")).toHaveText(building.name);
+  await expect(page.locator("#building-repository")).toHaveText(
+    `Removed by ${shortRemovalCommit}`,
+  );
+  await expect(
+    page.locator("#building-metric-explanation"),
+  ).toContainText(
+    `removed by commit ${shortRemovalCommit} at frame 3`,
+  );
+  await expect(page.locator("#selection-status")).toContainText(
+    `was removed by commit ${shortRemovalCommit}`,
+  );
+  await expect(page.locator("#building-evolution")).toContainText(
+    `Removed by ${shortRemovalCommit} at frame 3`,
+  );
+  await expect(page.locator("#building-source-details")).toBeHidden();
+
+  await seekEvolutionFrame(page, 3);
+  await expect(page.locator("#inspector-title")).toHaveText(
+    "Removed building",
+  );
+  await expect(page.locator("#selection-name")).toHaveText(building.name);
+  await expect(page.locator("#building-repository")).toHaveText(
+    `Removed by ${shortRemovalCommit}`,
+  );
+  await expect(page.locator("#building-repository")).not.toContainText(
+    shortNewestCommit,
+  );
+  await expect(
+    page.locator("#building-metric-explanation"),
+  ).toContainText(
+    `removed by commit ${shortRemovalCommit} at frame 3`,
+  );
+
+  await seekEvolutionFrame(page, 1);
+  await expect(page.locator("#inspector-title")).toHaveText("Building");
+  await expect(page.locator("#selection-name")).toHaveText(building.name);
+  await expect(page.locator("#building-repository")).toHaveText(
+    "Code City Demo",
+  );
+  await expect(page.locator("#building-source-details")).toBeVisible();
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Showing the exact retained file",
+  );
+  await expect(page.locator("#building-source-code")).toContainText(
+    "removed-lineage-source-sentinel",
+  );
+  await expect(page.locator("#building-evolution")).toContainText(
+    `First seen ${shortCreationCommit} at frame 1`,
+  );
+  await expect(page.locator("#building-evolution")).toContainText(
+    `Removed by ${shortRemovalCommit} at frame 3`,
+  );
+});
+
+test("does not overwrite a newer clear or replacement selection during a seek", async ({
+  page,
+}) => {
+  const fixture = await openLineageEvolutionFixture(page, {
+    seekDelayMs: 2_000,
+  });
+  await selectLineageBuilding(page, fixture.futureBuilding);
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Showing the exact retained file",
+  );
+
+  await page.locator("#evolution-range").fill("1");
+  await expect(page.locator("#evolution-status")).toHaveText(
+    "Seeking\u2026",
+  );
+  await page.getByRole("button", { name: "Clear selection" }).click();
+  await expect(page.locator("#inspector-title")).toHaveText("Details");
+  await expect(page.locator("#selection-name")).toHaveText(
+    "Nothing selected",
+  );
+
+  await expect(page.locator("#evolution-commit")).toContainText(
+    `2/4 \u00b7 ${LINEAGE_COMMITS[1]!.slice(0, 10)}`,
+    { timeout: 15_000 },
+  );
+  await expect(page.locator("#evolution-status")).not.toHaveText(
+    "Seeking\u2026",
+  );
+  await expect(page.locator("#inspector-title")).toHaveText("Details");
+  await expect(page.locator("#selection-name")).toHaveText(
+    "Nothing selected",
+  );
+  await expect(page.locator("#selection-status")).toHaveText(
+    "Selection cleared.",
+  );
+  await expect(page.locator("#building-source-code")).toHaveText("");
+
+  const stableReplacement = fixture.model.buildings.find(
+    ({ id }) => id === "building:main",
+  );
+  expect(stableReplacement).toBeDefined();
+  await selectLineageBuilding(page, fixture.removedBuilding);
+  await page.locator("#evolution-range").fill("2");
+  await expect(page.locator("#evolution-status")).toHaveText(
+    "Seeking\u2026",
+  );
+  await selectLineageBuilding(page, stableReplacement!);
+
+  await expect(page.locator("#evolution-commit")).toContainText(
+    `3/4 \u00b7 ${LINEAGE_COMMITS[2]!.slice(0, 10)}`,
+    { timeout: 15_000 },
+  );
+  await expect(page.locator("#evolution-status")).not.toHaveText(
+    "Seeking\u2026",
+  );
+  await expect(page.locator("#inspector-title")).toHaveText("Building");
+  await expect(page.locator("#selection-name")).toHaveText(
+    stableReplacement!.name,
+  );
+  await expect(page.locator("#building-repository")).toHaveText(
+    "Code City Demo",
+  );
+});
+
+test("preserves filtered route overlays and rebuilds their geometry across arbitrary seeks", async ({
+  page,
+}) => {
+  test.setTimeout(75_000);
+  const fixture = await openLineageEvolutionFixture(page, {
+    performanceDiagnostics: true,
+  });
+  const selectedBuilding = fixture.model.buildings.find(
+    ({ id }) => id === "building:main",
+  );
+  if (selectedBuilding === undefined) {
+    throw new Error("The route E2E fixture requires building:main.");
+  }
+  await selectLineageBuilding(page, selectedBuilding);
+  await page.locator("#dependency-section > summary").click();
+  await page.locator("#dependency-incoming-toggle").click();
+  await page.locator("#dependency-outgoing-toggle").click();
+  await expect(
+    page.locator("#dependency-incoming-toggle"),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.locator("#dependency-outgoing-toggle"),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.locator("#dependency-list .dependency-result-button"),
+  ).toHaveCount(9);
+  await page.locator("#dependency-show-more").click();
+  await expect(
+    page.locator("#dependency-list .dependency-result-button"),
+  ).toHaveCount(12);
+
+  await page.getByRole("tab", { name: "Routes" }).click();
+  await page.locator("#district-route-filter-typescript").click();
+  await expect(
+    page.locator("#district-route-filter-typescript"),
+  ).toHaveAttribute("aria-pressed", "false");
+  await page.locator("#district-routes-toggle").click();
+  await expect(page.locator("#district-routes-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(
+    page.locator("#district-routes-list .district-route-button"),
+  ).toHaveCount(8);
+  await page.locator("#district-routes-show-more").click();
+  await expect(
+    page.locator("#district-routes-list .district-route-button"),
+  ).toHaveCount(16);
+
+  const selectedRoute = page
+    .locator("#district-routes-list .district-route-button")
+    .filter({ hasText: "Viewer" })
+    .filter({ hasText: "Core" })
+    .filter({ hasText: "Project" });
+  await expect(selectedRoute).toHaveCount(1);
+  const routeId = await selectedRoute.getAttribute("data-bundle-id");
+  if (routeId === null) {
+    throw new Error("The selected district route requires a stable id.");
+  }
+  await selectedRoute.click();
+  await expect(selectedRoute).toHaveAttribute("aria-current", "true");
+  await expect(selectedRoute).toContainText("30 references");
+  const newestGeometry = await districtRouteGeometry(
+    page,
+    3,
+    routeId,
+  );
+
+  const assertPreservedRouteState = async (
+    frameIndex: number,
+  ): Promise<void> => {
+    await expect(
+      page.locator("#dependency-incoming-toggle"),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.locator("#dependency-outgoing-toggle"),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.locator("#dependency-list .dependency-result-button"),
+    ).toHaveCount(12);
+    await expect(
+      page.locator("#district-route-filter-typescript"),
+    ).toHaveAttribute("aria-pressed", "false");
+    await expect(
+      page.locator("#district-route-filter-project"),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.locator("#district-route-filter-package"),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator("#district-routes-toggle")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    await expect(
+      page.locator("#district-routes-list .district-route-button"),
+    ).toHaveCount(16);
+    await expect(selectedRoute).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+    await expect
+      .poll(() =>
+        page.evaluate((expectedFrame) => {
+          const diagnostics = window.__CODE_CITY_PERFORMANCE__;
+          return diagnostics?.evolutionFrameIndex === expectedFrame
+            ? [
+                diagnostics.dependencyRoutes.routeCount,
+                diagnostics.districtDependencyRoutes.routeCount,
+              ]
+            : null;
+        }, frameIndex),
+      )
+      .toEqual([12, 16]);
+  };
+
+  await seekEvolutionFrame(page, 1);
+  await expect(page.locator("#legend")).toContainText(
+    "4 dependency route changes",
+  );
+  await expect(page.locator("#evolution-status")).toContainText(
+    "1 dependency added",
+  );
+  await expect(page.locator("#evolution-status")).toContainText(
+    "1 dependency removed",
+  );
+  await expect(page.locator("#evolution-status")).toContainText(
+    "1 dependency changed",
+  );
+  await expect(page.locator("#evolution-status")).toContainText(
+    "1 dependency retargeted",
+  );
+  await assertPreservedRouteState(1);
+  const olderGeometry = await districtRouteGeometry(
+    page,
+    1,
+    routeId,
+  );
+  expect(olderGeometry).not.toEqual(newestGeometry);
+
+  await seekEvolutionFrame(page, 2);
+  await assertPreservedRouteState(2);
+  await expect(selectedRoute).toContainText("30 references");
+  expect(
+    await districtRouteGeometry(page, 2, routeId),
+  ).toEqual(newestGeometry);
+  const addedPackageRoute = page
+    .locator("#district-routes-list .district-route-button")
+    .filter({ hasText: "lineage-added-package" });
+  await expect(addedPackageRoute).toHaveCount(1);
+  const addedPackageRouteId =
+    await addedPackageRoute.getAttribute("data-bundle-id");
+  if (addedPackageRouteId === null) {
+    throw new Error(
+      "The changed package route requires a stable bundle id.",
+    );
+  }
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ expectedFrame, expectedRoute }) => {
+          const diagnostics = window.__CODE_CITY_PERFORMANCE__;
+          if (
+            diagnostics?.evolutionFrameIndex !== expectedFrame
+          ) {
+            return null;
+          }
+          const route =
+            diagnostics.districtDependencyRoutes.routes.find(
+              ({ id }) => id === expectedRoute,
+            );
+          return route === undefined
+            ? null
+            : {
+                color: route.color,
+                emphasized: route.emphasized,
+              };
+        },
+        {
+          expectedFrame: 2,
+          expectedRoute: addedPackageRouteId,
+        },
+      ),
+    )
+    .toEqual({
+      color: "#f472b6",
+      emphasized: true,
+    });
+
+  await seekEvolutionFrame(page, 0);
+  await assertPreservedRouteState(0);
+  await expect(selectedRoute).toContainText("1 reference");
+  await expect(page.locator("#district-routes-status")).toContainText(
+    /\d+ not shown/u,
+  );
+  expect(
+    await districtRouteGeometry(page, 0, routeId),
+  ).toEqual(olderGeometry);
+
+  await seekEvolutionFrame(page, 2);
+  await page.getByRole("tab", { name: "Routes" }).click();
+  const transientRoute = page
+    .locator("#district-routes-list .district-route-button")
+    .filter({ hasText: "lineage-added-package" });
+  await expect(transientRoute).toHaveCount(1);
+  await transientRoute.click();
+  await expect(transientRoute).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await seekEvolutionFrame(page, 1);
+  await expect(transientRoute).toHaveCount(0);
+  await expect(
+    page.locator(
+      "#district-routes-list .district-route-button[aria-current='true']",
+    ),
+  ).toHaveCount(0);
+  await expect(page.locator("#district-route-details")).toBeHidden();
+  await expect(page.locator("#district-routes-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(
+    page.locator("#district-routes-list .district-route-button"),
+  ).toHaveCount(16);
 });
 
 test("imports a browser directory and repository ZIP with identity and analysis options", async ({
