@@ -53,6 +53,7 @@ import {
   type CameraPreset,
   type CameraProjection,
 } from "./camera-presets.js";
+import { projectFineDetail } from "./progressive-granularity.js";
 import { cityBaseForModel } from "./city-surface.js";
 import {
   createDependencyExplorerIndex,
@@ -6707,6 +6708,10 @@ function externalConsumerIdentity(
 }
 
 function renderExecutableUnits(building: CityBuilding): void {
+  const fineDetail = projectFineDetail(
+    building,
+    executableUnitVisibleLimit,
+  );
   const presentation = presentExecutableUnits(building.units, {
     visibleLimit: executableUnitVisibleLimit,
   });
@@ -6745,6 +6750,10 @@ function renderExecutableUnits(building: CityBuilding): void {
           ` · ${presentation.hiddenCount.toLocaleString()} omitted at viewer limit`
         : ` · showing ${presentation.visibleCount.toLocaleString()}`
       : "");
+  inspectorFields.unitsSummary.title =
+    fineDetail.state === "unavailable"
+      ? fineDetail.unavailable.join(" ")
+      : `Progressive detail: ${fineDetail.nodes.length.toLocaleString()} of ${fineDetail.totalCount.toLocaleString()} functions projected. ${fineDetail.printable.reason}`;
   inspectorFields.unitsCaption.textContent =
     `Executable units for ${building.name}`;
   const nextRevealCount = Math.min(
