@@ -92,6 +92,7 @@ import {
   LARGE_CITY_FIXTURE_NAME,
 } from "./large-city-fixture.js";
 import { installMetricMappingPanel } from "./metric-mapping-panel.js";
+import { installSafeExtensionPanel } from "./safe-extension-panel.js";
 import {
   type ProjectedPrintPlate,
   viewerPrintMeshBatches,
@@ -1989,6 +1990,9 @@ const metricMappingPanel = installMetricMappingPanel(
     },
   },
 );
+const safeExtensionPanel = installSafeExtensionPanel(
+  element<HTMLElement>("safe-extension-panel"),
+);
 
 visualizationModeSelect.addEventListener("change", () => {
   const selected = visualizationModeSelect.value;
@@ -2309,6 +2313,7 @@ window.addEventListener("beforeunload", () => {
   printPlateToolbar.dispose();
   projectImportDialog.dispose();
   metricMappingPanel.dispose();
+  safeExtensionPanel.dispose();
   advancedQueryWorker.dispose();
   logoLoadGate.invalidate();
   loadedModelLogo?.dispose();
@@ -2413,6 +2418,7 @@ function activateImportedModel(
   resetEvolutionTimeline();
   activeModelSource = source;
   metricMappingPanel.setProject(model);
+  safeExtensionPanel.setProject(model);
   applyModel(model, source);
   void startEvolutionTimeline(source);
 }

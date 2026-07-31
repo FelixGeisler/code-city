@@ -2,6 +2,7 @@ export * from "./color.js";
 export * from "./district-dependencies.js";
 export * from "./evolution.js";
 export * from "./evolution-validation.js";
+export * from "./extensions.js";
 export * from "./external-dependencies.js";
 export * from "./identity.js";
 export * from "./layout.js";

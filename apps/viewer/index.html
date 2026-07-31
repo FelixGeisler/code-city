@@ -1217,6 +1217,39 @@
                   </div>
                 </div>
               </section>
+              <section
+                id="safe-extension-panel"
+                class="panel metric-mapping-panel"
+                aria-labelledby="safe-extension-title"
+              >
+                <div class="panel-heading">
+                  <div>
+                    <p class="eyebrow">Data-only customization</p>
+                    <h2 id="safe-extension-title">Safe extensions</h2>
+                  </div>
+                </div>
+                <div class="metric-mapping-content">
+                  <p class="metric-mapping-help">
+                    Use versioned declarative metrics, mappings, filters,
+                    legends, layouts, queries, and overlays. Scripts and server
+                    access are intentionally not supported.
+                  </p>
+                  <label class="metric-mapping-field" for="safe-extension-preset">
+                    <span>Public preset</span>
+                    <select id="safe-extension-preset"></select>
+                  </label>
+                  <label class="metric-mapping-field" for="safe-extension-json">
+                    <span>Extension configuration (JSON)</span>
+                    <textarea id="safe-extension-json" rows="12" spellcheck="false" aria-describedby="safe-extension-diagnostics"></textarea>
+                  </label>
+                  <p id="safe-extension-status" role="status" aria-live="polite" aria-atomic="true"></p>
+                  <p id="safe-extension-diagnostics" class="metric-mapping-help"></p>
+                  <div class="metric-mapping-actions">
+                    <button id="safe-extension-preview" class="button button-primary" type="button">Preview safely</button>
+                    <button id="safe-extension-export" class="button" type="button">Export JSON</button>
+                  </div>
+                </div>
+              </section>
             </div>
           </div>
         </aside>
