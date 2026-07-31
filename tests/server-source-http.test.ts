@@ -17,6 +17,10 @@ import {
   startCodeCityServer,
   type CodeCityServerHandle,
 } from "../apps/server/src/server.js";
+import type {
+  AiGuidanceAdapterOptions,
+  AiGuidanceConfiguration,
+} from "../apps/server/src/ai-guidance.js";
 
 const roots: string[] = [];
 const servers: CodeCityServerHandle[] = [];
@@ -28,6 +32,8 @@ async function fixture(
       readonly idleMs: number;
       readonly totalMs: number;
     };
+    readonly aiGuidance?: AiGuidanceConfiguration;
+    readonly aiGuidanceAdapterOptions?: Omit<AiGuidanceAdapterOptions, "audit">;
   } = {},
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "code-city-source-http-"));
@@ -54,6 +60,8 @@ async function fixture(
           artifactResponseTimeouts:
             options.artifactResponseTimeouts,
         }),
+    ...(options.aiGuidance === undefined ? {} : { aiGuidance: options.aiGuidance }),
+    ...(options.aiGuidanceAdapterOptions === undefined ? {} : { aiGuidanceAdapterOptions: options.aiGuidanceAdapterOptions }),
   });
   servers.push(server);
   return server;
@@ -482,5 +490,251 @@ describe("source navigation HTTP API", () => {
     expectedExternal.searchParams.set("line", "1");
     expectedExternal.searchParams.set("_a", "contents");
     expect(source.externalUrl).toBe(expectedExternal.toString());
+  });
+
+  it("issues a server-bound one-time AI grant and derives findings without browser metrics", async () => {
+    let providerBody = "";
+    let providerCalls = 0;
+    const server = await fixture({
+      aiGuidance: { version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: "http://localhost:11434/guidance" }] },
+      aiGuidanceAdapterOptions: {
+        fetch: async (_url, init) => {
+          providerCalls += 1;
+          providerBody = String(init.body);
+          return new Response(JSON.stringify({ suggestions: [] }), { headers: { "content-type": "application/json" } });
+        },
+      },
+    });
+    const imported = await publish(server, "guided");
+    const providers = await fetch(new URL("/api/v1/ai/providers", server.url));
+    expect(await providers.json()).toEqual({ enabled: true, providers: [{ id: "local", label: "Local" }] });
+    const previewUrl = new URL(`/api/v1/ai/preview/${imported.job.id}/${imported.building.id}/local`, server.url);
+    expect((await fetch(previewUrl)).status).toBe(405);
+    expect((await fetch(previewUrl, { method: "HEAD" })).status).toBe(405);
+    expect((await fetch(previewUrl, { method: "POST" })).status).toBe(403);
+    const previewResponse = await fetch(previewUrl, { method: "POST", headers: { "X-Code-City-Request": "1" } });
+    expect(previewResponse.status).toBe(200);
+    const preview = (await previewResponse.json() as { preview: { grant: string; transmission: { source: { text: string }; findings: unknown } } }).preview;
+    expect(preview.transmission.findings).toEqual({ sloc: imported.building.metrics.sloc, maximumComplexity: imported.building.metrics.maximumComplexity, decisionLoad: imported.building.metrics.decisionLoad });
+    const cookie = previewResponse.headers.get("set-cookie")!.split(";", 1)[0]!;
+    expect(previewResponse.headers.get("set-cookie")).toMatch(/HttpOnly.*SameSite=Strict/);
+    const requestOptions = { method: "POST", headers: { "content-type": "application/json", "X-Code-City-Request": "1", cookie }, body: JSON.stringify({ approval: "once", grant: preview.grant }) };
+    expect((await fetch(new URL("/api/v1/ai/requests", server.url), { ...requestOptions, headers: { "content-type": "application/json", cookie } })).status).toBe(403);
+    expect((await fetch(new URL("/api/v1/ai/requests", server.url), { ...requestOptions, headers: { "content-type": "application/json", "X-Code-City-Request": "1" } })).status).toBe(409);
+    expect((await fetch(new URL("/api/v1/ai/requests", server.url), requestOptions)).status).toBe(200);
+    expect(JSON.parse(providerBody)).toEqual(preview.transmission);
+    expect(providerBody).not.toContain("grant");
+    expect((await fetch(new URL("/api/v1/ai/requests", server.url), requestOptions)).status).toBe(409);
+    expect(providerCalls).toBe(1);
+
+    const concurrentPreview = await fetch(previewUrl, { method: "POST", headers: { "X-Code-City-Request": "1", cookie } });
+    const concurrentGrant = (await concurrentPreview.json() as { preview: { grant: string } }).preview.grant;
+    const concurrentOptions = { ...requestOptions, body: JSON.stringify({ approval: "once", grant: concurrentGrant }) };
+    const concurrent = await Promise.all([
+      fetch(new URL("/api/v1/ai/requests", server.url), concurrentOptions),
+      fetch(new URL("/api/v1/ai/requests", server.url), concurrentOptions),
+    ]);
+    const concurrentStatuses = concurrent.map(({ status }) => status);
+    expect(concurrentStatuses.filter((status) => status === 200)).toHaveLength(1);
+    expect(concurrentStatuses.every((status) => status === 200 || status === 409 || status === 503)).toBe(true);
+    expect((await fetch(new URL("/api/v1/ai/requests", server.url), concurrentOptions)).status).toBe(409);
+    expect(providerCalls).toBe(2);
+  });
+
+  it("binds grants to distinct trusted-network browser sessions and expires them", async () => {
+    let providerCalls = 0;
+    const server = await fixture({
+      aiGuidance: { version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: "http://localhost:11434/guidance" }] },
+      aiGuidanceAdapterOptions: {
+        fetch: async () => {
+          providerCalls += 1;
+          return new Response('{"suggestions":[]}', { headers: { "content-type": "application/json" } });
+        },
+      },
+    });
+    const imported = await publish(server, "sessionBound");
+    const previewUrl = new URL(`/api/v1/ai/preview/${imported.job.id}/${imported.building.id}/local`, server.url);
+    const preview = async (cookie?: string) => {
+      const response = await fetch(previewUrl, { method: "POST", headers: { "X-Code-City-Request": "1", ...(cookie === undefined ? {} : { cookie }) } });
+      const grant = (await response.json() as { preview: { grant: string } }).preview.grant;
+      return { grant, cookie: response.headers.get("set-cookie")?.split(";", 1)[0] ?? cookie! };
+    };
+    const first = await preview();
+    const second = await preview();
+    const send = (grant: string, cookie: string) => fetch(new URL("/api/v1/ai/requests", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Code-City-Request": "1", cookie },
+      body: JSON.stringify({ approval: "once", grant }),
+    });
+    expect((await send(first.grant, second.cookie)).status).toBe(409);
+    expect((await send(first.grant, first.cookie)).status).toBe(200);
+    const changed = await preview(first.cookie);
+    const originalReadFile = server.sources.readFile.bind(server.sources);
+    const changedRead = vi.spyOn(server.sources, "readFile").mockImplementationOnce(async (...arguments_) => {
+      const stored = await originalReadFile(...arguments_);
+      return stored === undefined ? undefined : {
+        ...stored,
+        file: { ...stored.file, text: stored.file.text.replace("sessionBound", "changedSource") },
+      };
+    });
+    expect((await send(changed.grant, first.cookie)).status).toBe(409);
+    changedRead.mockRestore();
+    const expiring = await preview(first.cookie);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.now() + 2 * 60_000 + 1);
+      expect((await send(expiring.grant, first.cookie)).status).toBe(409);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(providerCalls).toBe(1);
+  });
+
+  it("isolates stalled guidance per job and aborts it before deleting that job", async () => {
+    let providerStarted!: () => void;
+    let providerAborted!: () => void;
+    let releaseAbortedProvider!: () => void;
+    const started = new Promise<void>((resolve) => { providerStarted = resolve; });
+    const aborted = new Promise<void>((resolve) => { providerAborted = resolve; });
+    const abortReleased = new Promise<void>((resolve) => { releaseAbortedProvider = resolve; });
+    const server = await fixture({
+      aiGuidance: { version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: "http://localhost:11434/guidance" }] },
+      aiGuidanceAdapterOptions: {
+        fetch: async (_url, init) => {
+          const payload = JSON.parse(String(init.body)) as { source: { path: string } };
+          if (payload.source.path.endsWith("stalledA.ts")) {
+            providerStarted();
+            return await new Promise<Response>((_resolve, reject) => {
+              init.signal?.addEventListener("abort", () => {
+                providerAborted();
+                void abortReleased.then(() => reject(new Error("aborted")));
+              }, { once: true });
+            });
+          }
+          return new Response('{"suggestions":[]}', { headers: { "content-type": "application/json" } });
+        },
+      },
+    });
+    const first = await publish(server, "stalledA");
+    const second = await publish(server, "independentB");
+    const preview = async (imported: typeof first) => {
+      const response = await fetch(new URL(`/api/v1/ai/preview/${imported.job.id}/${imported.building.id}/local`, server.url), { method: "POST", headers: { "X-Code-City-Request": "1" } });
+      return {
+        cookie: response.headers.get("set-cookie")!.split(";", 1)[0]!,
+        grant: (await response.json() as { preview: { grant: string } }).preview.grant,
+      };
+    };
+    const firstApproval = await preview(first);
+    const secondApproval = await preview(second);
+    const guidanceRequest = (approval: { cookie: string; grant: string }) => fetch(new URL("/api/v1/ai/requests", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Code-City-Request": "1", cookie: approval.cookie },
+      body: JSON.stringify({ approval: "once", grant: approval.grant }),
+    });
+    let firstGuidanceSettled = false;
+    const guidance = guidanceRequest(firstApproval).then((response) => {
+      firstGuidanceSettled = true;
+      return response;
+    });
+    await started;
+    for (const imported of [first, second]) {
+      expect((await fetch(new URL(`/api/v1/artifacts/${imported.job.id}/sources/${imported.building.id}`, server.url))).status).toBe(200);
+    }
+    expect((await guidanceRequest(secondApproval)).status).toBe(200);
+    expect(firstGuidanceSettled).toBe(false);
+    expect((await fetch(new URL(`/api/v1/imports/${second.job.id}/result`, server.url), { method: "DELETE", headers: { "X-Code-City-Request": "1" } })).status).toBe(200);
+    expect(firstGuidanceSettled).toBe(false);
+    expect(await server.sources.read(second.job.id)).toBeUndefined();
+    let deletionObservedAbort = false;
+    void aborted.then(() => { deletionObservedAbort = true; });
+    let deletionSettled = false;
+    const deletion = fetch(new URL(`/api/v1/imports/${first.job.id}/result`, server.url), { method: "DELETE", headers: { "X-Code-City-Request": "1" } }).then((response) => {
+      deletionSettled = true;
+      return response;
+    });
+    await aborted;
+    expect(deletionSettled).toBe(false);
+    expect((await fetch(new URL(`/api/v1/ai/preview/${first.job.id}/${first.building.id}/local`, server.url), { method: "POST", headers: { "X-Code-City-Request": "1", cookie: firstApproval.cookie } })).status).toBe(409);
+    releaseAbortedProvider();
+    expect((await guidance).status).toBe(502);
+    expect((await deletion).status).toBe(200);
+    expect(deletionObservedAbort).toBe(true);
+    expect(await server.sources.read(first.job.id)).toBeUndefined();
+  });
+
+  it("cancels retained-source work when an AI preview disconnects", async () => {
+    const server = await fixture({
+      aiGuidance: { version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: "http://localhost:11434/guidance" }] },
+    });
+    const imported = await publish(server, "previewDisconnect");
+    let readStarted!: () => void;
+    let readAborted!: () => void;
+    const started = new Promise<void>((resolve) => { readStarted = resolve; });
+    const aborted = new Promise<void>((resolve) => { readAborted = resolve; });
+    vi.spyOn(server.sources, "readFile").mockImplementation(async (_job, _building, _expected, signal) => {
+      readStarted();
+      return await new Promise<never>((_resolve, reject) => signal?.addEventListener("abort", () => {
+        readAborted();
+        reject(new Error("aborted"));
+      }, { once: true }));
+    });
+    const controller = new AbortController();
+    const pending = fetch(new URL(`/api/v1/ai/preview/${imported.job.id}/${imported.building.id}/local`, server.url), { method: "POST", headers: { "X-Code-City-Request": "1" }, signal: controller.signal }).catch(() => undefined);
+    await started;
+    controller.abort();
+    await pending;
+    await aborted;
+  });
+
+  it("releases the per-job lease after provider failure", async () => {
+    const server = await fixture({
+      aiGuidance: { version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: "http://localhost:11434/guidance" }] },
+      aiGuidanceAdapterOptions: { fetch: async () => { throw new Error("provider failed"); } },
+    });
+    const imported = await publish(server, "providerFailure");
+    const preview = await fetch(new URL(`/api/v1/ai/preview/${imported.job.id}/${imported.building.id}/local`, server.url), { method: "POST", headers: { "X-Code-City-Request": "1" } });
+    const cookie = preview.headers.get("set-cookie")!.split(";", 1)[0]!;
+    const grant = (await preview.json() as { preview: { grant: string } }).preview.grant;
+    expect((await fetch(new URL("/api/v1/ai/requests", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Code-City-Request": "1", cookie },
+      body: JSON.stringify({ approval: "once", grant }),
+    })).status).toBe(502);
+    expect((await fetch(new URL(`/api/v1/imports/${imported.job.id}/result`, server.url), { method: "DELETE", headers: { "X-Code-City-Request": "1" } })).status).toBe(200);
+  });
+
+  it("aborts provider I/O and releases the job lease when the guidance client disconnects", async () => {
+    let providerStarted!: () => void;
+    let providerAborted!: () => void;
+    const started = new Promise<void>((resolve) => { providerStarted = resolve; });
+    const aborted = new Promise<void>((resolve) => { providerAborted = resolve; });
+    const server = await fixture({
+      aiGuidance: { version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: "http://localhost:11434/guidance" }] },
+      aiGuidanceAdapterOptions: {
+        fetch: async (_url, init) => {
+          providerStarted();
+          return await new Promise<Response>((_resolve, reject) => init.signal?.addEventListener("abort", () => {
+            providerAborted();
+            reject(new Error("aborted"));
+          }, { once: true }));
+        },
+      },
+    });
+    const imported = await publish(server, "guidanceDisconnect");
+    const preview = await fetch(new URL(`/api/v1/ai/preview/${imported.job.id}/${imported.building.id}/local`, server.url), { method: "POST", headers: { "X-Code-City-Request": "1" } });
+    const cookie = preview.headers.get("set-cookie")!.split(";", 1)[0]!;
+    const grant = (await preview.json() as { preview: { grant: string } }).preview.grant;
+    const controller = new AbortController();
+    const pending = fetch(new URL("/api/v1/ai/requests", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Code-City-Request": "1", cookie },
+      body: JSON.stringify({ approval: "once", grant }),
+      signal: controller.signal,
+    }).catch(() => undefined);
+    await started;
+    controller.abort();
+    await pending;
+    await aborted;
+    expect((await fetch(new URL(`/api/v1/imports/${imported.job.id}/result`, server.url), { method: "DELETE", headers: { "X-Code-City-Request": "1" } })).status).toBe(200);
   });
 });

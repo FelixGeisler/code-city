@@ -609,6 +609,8 @@ const inspectorFields = {
   aiDetails: element<HTMLDetailsElement>("building-ai-guidance-details"),
   aiSummary: element<HTMLElement>("building-ai-guidance-summary"),
   aiStatus: element<HTMLParagraphElement>("building-ai-guidance-status"),
+  aiProviderLabel: element<HTMLLabelElement>("building-ai-guidance-provider-label"),
+  aiProvider: element<HTMLSelectElement>("building-ai-guidance-provider"),
   aiPreview: element<HTMLPreElement>("building-ai-guidance-preview"),
   aiRequest: element<HTMLButtonElement>("building-ai-guidance-request"),
   aiSuggestions: element<HTMLUListElement>("building-ai-guidance-suggestions"),
@@ -6509,6 +6511,10 @@ function resetAiGuidancePresentation(): void {
   inspectorFields.aiRequest.hidden = true;
   inspectorFields.aiRequest.disabled = false;
   inspectorFields.aiRequest.onclick = null;
+  inspectorFields.aiProviderLabel.hidden = true;
+  inspectorFields.aiProvider.disabled = false;
+  inspectorFields.aiProvider.onchange = null;
+  inspectorFields.aiProvider.replaceChildren();
   inspectorFields.aiSuggestions.hidden = true;
   inspectorFields.aiSuggestions.replaceChildren();
 }
@@ -6650,30 +6656,42 @@ function prepareAiGuidance(
   if (jobId === undefined) return;
   const controller = new AbortController();
   aiGuidanceRequest = controller;
+  let previewRequest: AbortController | undefined;
+  let previewGeneration = 0;
+  controller.signal.addEventListener("abort", () => previewRequest?.abort(), { once: true });
   inspectorFields.aiSummary.textContent = "Preparing preview";
   inspectorFields.aiStatus.textContent = "No source has been sent to an AI provider.";
-  void sourceApi.aiGuidancePreview(jobId, building.id, controller.signal)
-    .then((value) => {
-      if (controller.signal.aborted || aiGuidanceRequest !== controller) return;
-      const preview = (value as { preview?: { enabled?: boolean; provider?: { label?: string }; source?: unknown; metrics?: unknown; limits?: unknown } }).preview;
-      if (preview?.enabled !== true || preview.provider?.label === undefined || preview.source === undefined || preview.metrics === undefined) {
-        inspectorFields.aiSummary.textContent = "Disabled";
-        inspectorFields.aiStatus.textContent = "AI guidance is disabled by the administrator. No source was sent.";
-        return;
-      }
-      const transmission = { source: preview.source, findings: preview.metrics };
-      inspectorFields.aiSummary.textContent = "Preview ready";
-      inspectorFields.aiStatus.textContent = `This exact source and measured findings will be sent once to ${preview.provider.label} after you confirm.`;
-      inspectorFields.aiPreview.textContent = JSON.stringify(transmission, null, 2);
-      inspectorFields.aiPreview.hidden = false;
-      inspectorFields.aiRequest.hidden = false;
-      inspectorFields.aiRequest.onclick = () => {
-        if (aiGuidanceRequest !== controller || controller.signal.aborted) return;
-        inspectorFields.aiRequest.disabled = true;
-        inspectorFields.aiStatus.textContent = "Requesting optional suggestions…";
-        void sourceApi.aiGuidanceRequest(jobId, building.id, controller.signal)
+  const loadPreview = (providerId: string): void => {
+    previewRequest?.abort();
+    const generation = ++previewGeneration;
+    const previewController = new AbortController();
+    previewRequest = previewController;
+    if (controller.signal.aborted) previewController.abort();
+    inspectorFields.aiRequest.hidden = true;
+    inspectorFields.aiRequest.onclick = null;
+    inspectorFields.aiPreview.hidden = true;
+    inspectorFields.aiStatus.textContent = "Preparing exact server-verified preview…";
+    void sourceApi.aiGuidancePreview(jobId, building.id, providerId, previewController.signal)
+      .then((value) => {
+        if (controller.signal.aborted || previewController.signal.aborted || aiGuidanceRequest !== controller || generation !== previewGeneration || inspectorFields.aiProvider.value !== providerId) return;
+        const preview = (value as { preview?: { enabled?: boolean; provider?: { id?: string; label?: string }; transmission?: unknown; grant?: unknown } }).preview;
+        if (preview?.enabled !== true || preview.provider?.id !== providerId || typeof preview.provider.label !== "string" || preview.transmission === undefined || typeof preview.grant !== "string") throw new Error("AI guidance preview was invalid.");
+        const grant = preview.grant;
+        inspectorFields.aiSummary.textContent = "Preview ready";
+        inspectorFields.aiStatus.textContent = `This exact server-verified source and findings will be sent once to ${preview.provider.label} after you confirm.`;
+        inspectorFields.aiPreview.textContent = JSON.stringify(preview.transmission, null, 2);
+        inspectorFields.aiPreview.hidden = false;
+        inspectorFields.aiRequest.hidden = false;
+        inspectorFields.aiRequest.disabled = false;
+        inspectorFields.aiRequest.onclick = () => {
+          if (aiGuidanceRequest !== controller || controller.signal.aborted || generation !== previewGeneration || inspectorFields.aiProvider.value !== providerId) return;
+          inspectorFields.aiRequest.onclick = null;
+          inspectorFields.aiRequest.disabled = true;
+          inspectorFields.aiProvider.disabled = true;
+          inspectorFields.aiStatus.textContent = "Requesting optional suggestions…";
+          void sourceApi.aiGuidanceRequest(grant, controller.signal)
           .then((result) => {
-            if (controller.signal.aborted || aiGuidanceRequest !== controller) return;
+            if (controller.signal.aborted || aiGuidanceRequest !== controller || generation !== previewGeneration) return;
             const suggestions = (result as { result?: { suggestions?: readonly { title?: string; detail?: string; citation?: { path?: string; startLine?: number; endLine?: number } }[] } }).result?.suggestions;
             if (suggestions === undefined) throw new Error("AI provider response was invalid.");
             inspectorFields.aiSuggestions.replaceChildren();
@@ -6691,10 +6709,41 @@ function prepareAiGuidance(
           .catch(() => {
             if (!controller.signal.aborted && aiGuidanceRequest === controller) {
               inspectorFields.aiStatus.textContent = "AI suggestions are unavailable; deterministic analysis and source navigation remain available.";
-              inspectorFields.aiRequest.disabled = false;
+              inspectorFields.aiProvider.disabled = false;
+              inspectorFields.aiRequest.hidden = true;
+              inspectorFields.aiRequest.onclick = null;
+              loadPreview(inspectorFields.aiProvider.value);
             }
           });
-      };
+        };
+      })
+      .catch(() => {
+        if (!controller.signal.aborted && !previewController.signal.aborted && aiGuidanceRequest === controller && generation === previewGeneration) {
+          inspectorFields.aiSummary.textContent = "Unavailable";
+          inspectorFields.aiStatus.textContent = "AI guidance preview is unavailable; deterministic analysis remains available.";
+        }
+      });
+  };
+  void sourceApi.aiGuidanceProviders(controller.signal)
+    .then((value) => {
+      if (controller.signal.aborted || aiGuidanceRequest !== controller) return;
+      const providers = (value as { enabled?: unknown; providers?: readonly { id?: unknown; label?: unknown }[] }).providers;
+      if ((value as { enabled?: unknown }).enabled !== true || providers === undefined || providers.length === 0 || providers.some((provider) => typeof provider.id !== "string" || typeof provider.label !== "string")) {
+        inspectorFields.aiSummary.textContent = "Disabled";
+        inspectorFields.aiStatus.textContent = "AI guidance is disabled by the administrator. No source was sent.";
+        return;
+      }
+      inspectorFields.aiProvider.replaceChildren();
+      for (const provider of providers) {
+        const option = document.createElement("option");
+        option.value = provider.id as string;
+        option.textContent = provider.label as string;
+        inspectorFields.aiProvider.append(option);
+      }
+      inspectorFields.aiProviderLabel.hidden = false;
+      inspectorFields.aiProvider.disabled = false;
+      inspectorFields.aiProvider.onchange = () => loadPreview(inspectorFields.aiProvider.value);
+      loadPreview(inspectorFields.aiProvider.value);
     })
     .catch(() => {
       if (!controller.signal.aborted && aiGuidanceRequest === controller) {

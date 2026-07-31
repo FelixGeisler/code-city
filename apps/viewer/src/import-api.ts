@@ -19,6 +19,7 @@ export const IMPORT_JOB_ID_PATTERN =
 const PROFILE_ID_PATTERN = /^[a-z][a-z0-9-]{0,63}$/u;
 const ERROR_CODE_PATTERN = /^[a-z][a-z0-9-]{0,63}$/u;
 const AUTHORIZATION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
+const AI_PROVIDER_ID_PATTERN = /^[a-z][a-z0-9-]{0,63}$/u;
 const FIELD_PATH_PATTERN =
   /^\$(?:\.[A-Za-z][A-Za-z0-9]*|\[[0-9]+\])*$/u;
 const UNSAFE_TEXT = /[\p{Cc}\p{Cf}\p{Cs}]/u;
@@ -31,6 +32,52 @@ export interface ImportAuthorizationStatus {
   readonly mode: ImportAuthorizationMode;
   readonly required: boolean;
   readonly authenticated: boolean;
+}
+
+export interface ViewerAiGuidanceProvider {
+  readonly id: string;
+  readonly label: string;
+}
+
+export interface ViewerAiGuidanceProviders {
+  readonly enabled: boolean;
+  readonly providers: readonly ViewerAiGuidanceProvider[];
+}
+
+export interface ViewerAiGuidancePreview {
+  readonly preview: {
+    readonly enabled: true;
+    readonly provider: ViewerAiGuidanceProvider;
+    readonly transmission: {
+      readonly version: 1;
+      readonly task: "source-guidance";
+      readonly source: {
+        readonly path: string;
+        readonly language: string;
+        readonly text: string;
+        readonly lines: { readonly startLine: number; readonly endLine: number };
+      };
+      readonly findings: {
+        readonly sloc: number;
+        readonly maximumComplexity: number;
+        readonly decisionLoad: number;
+      };
+    };
+    readonly limits: { readonly timeoutMs: number; readonly maximumSourceBytes: number };
+    readonly privacy: "no-prompt-storage";
+    readonly grant: string;
+  };
+}
+
+export interface ViewerAiGuidanceResult {
+  readonly result: {
+    readonly provider: ViewerAiGuidanceProvider;
+    readonly suggestions: readonly {
+      readonly title: string;
+      readonly detail: string;
+      readonly citation: { readonly path: string; readonly startLine: number; readonly endLine: number };
+    }[];
+  };
 }
 
 export type ImportCredentialProvider =
@@ -312,6 +359,98 @@ function safeIsoDate(value: unknown, description: string): string {
 
 function protocolError(message: string): ImportApiError {
   return new ImportApiError("protocol", message);
+}
+
+function nonNegativeInteger(value: unknown, description: string): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw protocolError(`${description} is invalid.`);
+  }
+  return value as number;
+}
+
+function positiveInteger(value: unknown, description: string): number {
+  const parsed = nonNegativeInteger(value, description);
+  if (parsed === 0) throw protocolError(`${description} is invalid.`);
+  return parsed;
+}
+
+function parseAiProvider(value: unknown): ViewerAiGuidanceProvider {
+  const object = exactObject(value, ["id", "label"], "AI provider");
+  const id = safeText(object["id"], "AI provider ID", 64);
+  if (!AI_PROVIDER_ID_PATTERN.test(id)) throw protocolError("AI provider ID is invalid.");
+  return Object.freeze({ id, label: safeText(object["label"], "AI provider label", 120) });
+}
+
+function parseAiGuidanceProviders(value: unknown): ViewerAiGuidanceProviders {
+  const object = exactObject(value, ["enabled", "providers"], "AI provider response");
+  if (typeof object["enabled"] !== "boolean" || !Array.isArray(object["providers"]) || object["providers"].length > 64) {
+    throw protocolError("AI provider response is invalid.");
+  }
+  const providers = object["providers"].map(parseAiProvider);
+  if (!object["enabled"] && providers.length !== 0) throw protocolError("Disabled AI guidance must not expose providers.");
+  if (new Set(providers.map(({ id }) => id)).size !== providers.length) throw protocolError("AI provider IDs are duplicated.");
+  return Object.freeze({ enabled: object["enabled"], providers: Object.freeze(providers) });
+}
+
+function parseAiLineRange(value: unknown, description: string): { readonly startLine: number; readonly endLine: number } {
+  const object = exactObject(value, ["endLine", "startLine"], description);
+  const startLine = positiveInteger(object["startLine"], `${description} start`);
+  const endLine = positiveInteger(object["endLine"], `${description} end`);
+  if (endLine < startLine) throw protocolError(`${description} is invalid.`);
+  return Object.freeze({ startLine, endLine });
+}
+
+function parseAiGuidancePreview(value: unknown): ViewerAiGuidancePreview {
+  const root = exactObject(value, ["preview"], "AI preview response");
+  const preview = exactObject(root["preview"], ["enabled", "grant", "limits", "privacy", "provider", "transmission"], "AI preview");
+  if (preview["enabled"] !== true || preview["privacy"] !== "no-prompt-storage" || typeof preview["grant"] !== "string" || !AUTHORIZATION_TOKEN_PATTERN.test(preview["grant"])) throw protocolError("AI preview is invalid.");
+  const transmission = exactObject(preview["transmission"], ["findings", "source", "task", "version"], "AI transmission");
+  if (transmission["version"] !== 1 || transmission["task"] !== "source-guidance") throw protocolError("AI transmission version is invalid.");
+  const source = exactObject(transmission["source"], ["language", "lines", "path", "text"], "AI transmission source");
+  const findings = exactObject(transmission["findings"], ["decisionLoad", "maximumComplexity", "sloc"], "AI findings");
+  const limits = exactObject(preview["limits"], ["maximumSourceBytes", "timeoutMs"], "AI limits");
+  return Object.freeze({ preview: Object.freeze({
+    enabled: true,
+    provider: parseAiProvider(preview["provider"]),
+    transmission: Object.freeze({
+      version: 1,
+      task: "source-guidance",
+      source: Object.freeze({
+        path: safeText(source["path"], "AI source path", 4_096),
+        language: safeText(source["language"], "AI source language", 120),
+        text: typeof source["text"] === "string" ? source["text"] : (() => { throw protocolError("AI source text is invalid."); })(),
+        lines: parseAiLineRange(source["lines"], "AI source range"),
+      }),
+      findings: Object.freeze({
+        sloc: nonNegativeInteger(findings["sloc"], "AI SLOC"),
+        maximumComplexity: nonNegativeInteger(findings["maximumComplexity"], "AI maximum complexity"),
+        decisionLoad: nonNegativeInteger(findings["decisionLoad"], "AI decision load"),
+      }),
+    }),
+    limits: Object.freeze({
+      timeoutMs: positiveInteger(limits["timeoutMs"], "AI timeout"),
+      maximumSourceBytes: positiveInteger(limits["maximumSourceBytes"], "AI source limit"),
+    }),
+    privacy: "no-prompt-storage",
+    grant: preview["grant"],
+  }) });
+}
+
+function parseAiGuidanceResult(value: unknown): ViewerAiGuidanceResult {
+  const root = exactObject(value, ["result"], "AI guidance response");
+  const result = exactObject(root["result"], ["provider", "suggestions"], "AI guidance result");
+  if (!Array.isArray(result["suggestions"]) || result["suggestions"].length > 20) throw protocolError("AI suggestions are invalid.");
+  const suggestions = result["suggestions"].map((value) => {
+    const suggestion = exactObject(value, ["citation", "detail", "title"], "AI suggestion");
+    const citation = exactObject(suggestion["citation"], ["endLine", "path", "startLine"], "AI suggestion citation");
+    const range = parseAiLineRange({ startLine: citation["startLine"], endLine: citation["endLine"] }, "AI suggestion range");
+    return Object.freeze({
+      title: safeText(suggestion["title"], "AI suggestion title", 500),
+      detail: safeText(suggestion["detail"], "AI suggestion detail", 8_000),
+      citation: Object.freeze({ path: safeText(citation["path"], "AI citation path", 4_096), ...range }),
+    });
+  });
+  return Object.freeze({ result: Object.freeze({ provider: parseAiProvider(result["provider"]), suggestions: Object.freeze(suggestions) }) });
 }
 
 function evolutionArtifactTooLargeFailure(): ImportApiError {
@@ -1145,16 +1284,19 @@ export class ViewerImportApiClient {
   }
 
   /** The request names a retained unit only; source text is never posted by the browser. */
-  public async aiGuidancePreview(jobId: string, buildingId: string, signal?: AbortSignal): Promise<unknown> {
-    return (await this.jsonRequest(`/api/v1/ai/preview/${jobId}/${buildingId}`, { method: "GET" }, signal, this.requestDeadlineMs, SOURCE_RESPONSE_MAX_BYTES)).value;
+  public async aiGuidanceProviders(signal?: AbortSignal): Promise<ViewerAiGuidanceProviders> {
+    return parseAiGuidanceProviders((await this.jsonRequest("/api/v1/ai/providers", { method: "GET" }, signal, this.requestDeadlineMs, API_RESPONSE_MAX_BYTES)).value);
+  }
+
+  public async aiGuidancePreview(jobId: string, buildingId: string, providerId: string, signal?: AbortSignal): Promise<ViewerAiGuidancePreview> {
+    return parseAiGuidancePreview((await this.jsonRequest(`/api/v1/ai/preview/${jobId}/${buildingId}/${providerId}`, { method: "POST", headers: { "X-Code-City-Request": "1" } }, signal, this.requestDeadlineMs, SOURCE_RESPONSE_MAX_BYTES)).value);
   }
 
   public async aiGuidanceRequest(
-    jobId: string,
-    buildingId: string,
+    grant: string,
     signal?: AbortSignal,
-  ): Promise<unknown> {
-    return (await this.jsonRequest("/api/v1/ai/requests", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ approval: "once", jobId, buildingId }) }, signal, this.requestDeadlineMs, API_RESPONSE_MAX_BYTES)).value;
+  ): Promise<ViewerAiGuidanceResult> {
+    return parseAiGuidanceResult((await this.jsonRequest("/api/v1/ai/requests", { method: "POST", headers: { "content-type": "application/json", "X-Code-City-Request": "1" }, body: JSON.stringify({ approval: "once", grant }) }, signal, this.requestDeadlineMs, API_RESPONSE_MAX_BYTES)).value);
   }
 
   public async evolutionArtifact(
