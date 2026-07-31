@@ -2649,59 +2649,44 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   page,
 }) => {
   const sourceRequests: string[] = [];
-  const guidanceRequests: unknown[] = [];
+  let releaseRemotePreview!: () => void;
+  let announceRemotePreview!: () => void;
+  const remotePreviewReleased = new Promise<void>((resolve) => { releaseRemotePreview = resolve; });
+  const remotePreviewStarted = new Promise<void>((resolve) => { announceRemotePreview = resolve; });
+  let localPreviewCalls = 0;
+  let guidanceRequests = 0;
+  await page.route("**/api/v1/ai/providers", async (route) => {
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ enabled: true, providers: [{ id: "remote", label: "Remote review" }, { id: "local", label: "Local model" }] }) });
+  });
   await page.route("**/api/v1/ai/preview/**", async (route) => {
-    const buildingId = decodeURIComponent(
-      new URL(route.request().url()).pathname.split("/").at(-1) ?? "",
-    );
-    await route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        preview: {
-          enabled: true,
-          provider: { id: "review", label: "Review service" },
-          source: {
-            buildingId,
-            path: "src/retained-large.ts",
-            language: "typescript",
-            text: "export function retainedComplexity() { return 1; }\n",
-            location: { startLine: 1, endLine: 1 },
-          },
-          metrics: {
-            sloc: 91,
-            maximumComplexity: 17,
-            decisionLoad: 24,
-          },
-          limits: {
-            timeoutMs: 20_000,
-            maximumSourceBytes: 128 * 1024,
-          },
-          privacy: "no-prompt-storage",
-        },
-      }),
-    });
+    const providerId = new URL(route.request().url()).pathname.split("/").at(-1)!;
+    if (providerId === "remote") {
+      announceRemotePreview();
+      await remotePreviewReleased;
+    } else {
+      localPreviewCalls += 1;
+    }
+    const marker = providerId === "remote" ? "REMOTE-PAYLOAD" : `LOCAL-PAYLOAD-${localPreviewCalls}`;
+    try {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ preview: {
+        enabled: true,
+        provider: { id: providerId, label: providerId === "remote" ? "Remote review" : "Local model" },
+        transmission: { version: 1, task: "source-guidance", source: { path: "src/retained-large.ts", language: "typescript", text: marker, lines: { startLine: 1, endLine: 1 } }, findings: { sloc: 1, maximumComplexity: 1, decisionLoad: 0 } },
+        limits: { timeoutMs: 20_000, maximumSourceBytes: 131_072 },
+        privacy: "no-prompt-storage",
+        grant: (providerId === "remote" ? "R" : "L").repeat(43),
+      } }) });
+    } catch {
+      // Switching providers is expected to abort the stale remote preview.
+    }
   });
   await page.route("**/api/v1/ai/requests", async (route) => {
-    guidanceRequests.push(route.request().postDataJSON());
-    await route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        result: {
-          provider: { id: "review", label: "Review service" },
-          suggestions: [
-            {
-              title: "Extract branch",
-              detail: "This suggestion relates to maximum complexity 17.",
-              citation: {
-                path: "src/retained-large.ts",
-                startLine: 1,
-                endLine: 1,
-              },
-            },
-          ],
-        },
-      }),
-    });
+    guidanceRequests += 1;
+    if (guidanceRequests === 1) {
+      await route.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ error: { code: "provider-unavailable", message: "Unavailable" } }) });
+      return;
+    }
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ result: { provider: { id: "local", label: "Local model" }, suggestions: [{ title: "Keep it small", detail: "Extract the branch.", citation: { path: "src/retained-large.ts", startLine: 1, endLine: 1 } }] } }) });
   });
   page.on("request", (request) => {
     const url = new URL(request.url());
@@ -2758,6 +2743,20 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
     .filter({ hasText: "retained-large.ts" });
   await expect(retainedResult).toHaveCount(1);
   await retainedResult.click();
+  await remotePreviewStarted;
+  await page.locator("#building-ai-guidance-details summary").click();
+  await page.locator("#building-ai-guidance-provider").selectOption("local");
+  await expect(page.locator("#building-ai-guidance-preview")).toContainText("LOCAL-PAYLOAD-1");
+  releaseRemotePreview();
+  await expect(page.locator("#building-ai-guidance-provider")).toHaveValue("local");
+  await expect(page.locator("#building-ai-guidance-preview")).not.toContainText("REMOTE-PAYLOAD");
+  await page.locator("#building-ai-guidance-request").dblclick();
+  await expect.poll(() => guidanceRequests).toBe(1);
+  await expect.poll(() => localPreviewCalls).toBeGreaterThanOrEqual(2);
+  await expect(page.locator("#building-ai-guidance-preview")).toContainText("LOCAL-PAYLOAD-2");
+  await page.locator("#building-ai-guidance-request").click();
+  await expect.poll(() => guidanceRequests).toBe(2);
+  await expect(page.locator("#building-ai-guidance-suggestions")).toContainText("Keep it small");
 
   await expect(page.locator("#building-source-status")).toContainText(
     "Showing the exact retained file",
@@ -2825,7 +2824,7 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
     "No source was sent",
   );
   await expect(page.locator("#building-ai-guidance-request")).toBeHidden();
-  expect(guidanceRequests).toEqual([]);
+  expect(guidanceRequests).toBe(2);
   await expect(page.locator("#building-source-structure-return")).toBeVisible();
   await page.locator("#building-source-structure-show-more").click();
   await expect(page.locator("#building-source-structure-details")).toHaveAttribute("open", "");
@@ -2872,24 +2871,7 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
     "open",
     "",
   );
-  await page.locator("#building-ai-guidance-details summary").click();
-  await expect(page.locator("#building-ai-guidance-preview")).toContainText(
-    '"maximumComplexity": 17',
-  );
-  expect(guidanceRequests).toEqual([]);
-  await page.getByRole("button", {
-    name: "Send this exact preview once",
-  }).click();
-  await expect(page.locator("#building-ai-guidance-suggestions")).toContainText(
-    "Extract branch",
-  );
-  expect(guidanceRequests).toEqual([
-    {
-      approval: "once",
-      jobId,
-      buildingId: retainedBuilding!.id,
-    },
-  ]);
+  expect(guidanceRequests).toBe(2);
   await expect.poll(() => sourceRequests).toEqual([
     `/api/v1/artifacts/${jobId}/sources/${retainedBuilding!.id}`,
   ]);
@@ -2963,6 +2945,9 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   await expect(sourceContent).toBeHidden();
   await expect(sourcePathLabel).toHaveText("");
   await expect(sourceEditor).not.toHaveAttribute("href", /.+/u);
+  await expect(page.locator("#building-ai-guidance-preview")).toBeHidden();
+  await expect(page.locator("#building-ai-guidance-preview")).toHaveText("");
+  await expect(page.locator("#building-ai-guidance-suggestions")).toBeHidden();
 
   let releaseStaleResponse = (): void => undefined;
   let markStaleRequestStarted = (): void => undefined;

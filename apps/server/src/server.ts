@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import { once } from "node:events";
 import http, {
   type IncomingMessage,
@@ -18,7 +19,10 @@ import {
 } from "./job-queue.js";
 import { ImportArtifactStore } from "./import-artifacts.js";
 import type { RetainedImportArtifactSet } from "./import-artifacts.js";
-import type { SourceRetentionPolicy } from "./source-artifact.js";
+import {
+  sourceTextLineRange,
+  type SourceRetentionPolicy,
+} from "./source-artifact.js";
 import {
   SourceArtifactStore,
   type SourceArtifactMetadata,
@@ -50,6 +54,8 @@ import {
 } from "./upload-import.js";
 import {
   AiGuidanceAdapter,
+  type AiGuidanceAuditEvent,
+  type AiGuidanceAdapterOptions,
   type AiGuidanceConfiguration,
   type AiGuidanceMetrics,
   type AiGuidanceSource,
@@ -82,8 +88,12 @@ const UPLOAD_IMPORT_PATH_PATTERN =
   /^\/api\/v1\/imports\/uploads\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/u;
 const AUTHORIZATION_SESSION_PATH = "/api/v1/auth/session";
 const AI_GUIDANCE_PREVIEW_PATH_PATTERN =
-  /^\/api\/v1\/ai\/preview\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/([a-z0-9-]+:[0-9a-f]{16})$/u;
+  /^\/api\/v1\/ai\/preview\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/([a-z0-9-]+:[0-9a-f]{16})\/([a-z][a-z0-9-]{0,63})$/u;
 const AI_GUIDANCE_REQUEST_PATH = "/api/v1/ai/requests";
+const AI_GUIDANCE_PROVIDERS_PATH = "/api/v1/ai/providers";
+const AI_GUIDANCE_GRANT_BYTES = 32;
+const AI_GUIDANCE_GRANT_TTL_MS = 2 * 60_000;
+const AI_GUIDANCE_MAXIMUM_GRANTS = 256;
 
 const CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
@@ -116,6 +126,10 @@ export interface CodeCityServerOptions {
   readonly editorUrlTemplate?: string;
   /** Administrator-only configuration. Credentials never leave this process. */
   readonly aiGuidance?: AiGuidanceConfiguration;
+  /** Optional production-safe metadata sink. It must not retain prompts or output. */
+  readonly aiGuidanceAudit?: (event: AiGuidanceAuditEvent) => void;
+  /** Test seam for the pinned provider transport. Production callers should omit it. */
+  readonly aiGuidanceAdapterOptions?: Omit<AiGuidanceAdapterOptions, "audit">;
   /** Test seam; production callers should omit it. */
   readonly artifactResponseTimeouts?: {
     readonly idleMs: number;
@@ -1039,6 +1053,113 @@ class ArtifactResponseGate {
   }
 }
 
+interface AiGuidanceJobLease {
+  readonly signal: AbortSignal;
+  settle(): void;
+}
+
+interface AiGuidanceJobLeaseRecord {
+  readonly controller: AbortController;
+  readonly settled: Promise<void>;
+  readonly resolveSettled: () => void;
+}
+
+interface AiGuidanceJobEntry {
+  readonly active: Set<AiGuidanceJobLeaseRecord>;
+  deleting: boolean;
+  deletionReady: Promise<void>;
+  activeDeletions: number;
+}
+
+/**
+ * Coordinates guidance only with deletion of the same retained import.
+ * Provider I/O for job A never occupies the global artifact-response gate and
+ * therefore cannot block reads, previews, guidance, or deletion for job B.
+ */
+class AiGuidanceJobCoordinator {
+  readonly #entries = new Map<string, AiGuidanceJobEntry>();
+
+  #entry(jobId: string): AiGuidanceJobEntry {
+    let entry = this.#entries.get(jobId);
+    if (entry === undefined) {
+      entry = {
+        active: new Set(),
+        deleting: false,
+        deletionReady: Promise.resolve(),
+        activeDeletions: 0,
+      };
+      this.#entries.set(jobId, entry);
+    }
+    return entry;
+  }
+
+  public tryAcquire(
+    jobId: string,
+    response: ServerResponse,
+  ): AiGuidanceJobLease | undefined {
+    const entry = this.#entry(jobId);
+    if (entry.deleting) return undefined;
+    const controller = new AbortController();
+    let resolveSettled!: () => void;
+    const record: AiGuidanceJobLeaseRecord = {
+      controller,
+      settled: new Promise<void>((resolve) => { resolveSettled = resolve; }),
+      resolveSettled: () => resolveSettled(),
+    };
+    entry.active.add(record);
+    let settled = false;
+    const close = (): void => {
+      if (!controller.signal.aborted) {
+        controller.abort(new Error("AI guidance response closed."));
+      }
+    };
+    response.once("close", close);
+    if (response.destroyed) close();
+    return Object.freeze({
+      signal: controller.signal,
+      settle: () => {
+        if (settled) return;
+        settled = true;
+        response.off("close", close);
+        entry.active.delete(record);
+        record.resolveSettled();
+        if (!entry.deleting && entry.active.size === 0) {
+          this.#entries.delete(jobId);
+        }
+      },
+    });
+  }
+
+  public async runExclusiveDeletion<T>(
+    jobId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const entry = this.#entry(jobId);
+    if (!entry.deleting) {
+      entry.deleting = true;
+      for (const lease of entry.active) {
+        if (!lease.controller.signal.aborted) {
+          lease.controller.abort(new Error("The retained import is being deleted."));
+        }
+      }
+      entry.deletionReady = Promise.all(
+        [...entry.active].map(({ settled }) => settled),
+      ).then(() => undefined);
+    }
+    entry.activeDeletions += 1;
+    try {
+      await entry.deletionReady;
+      return await operation();
+    } finally {
+      entry.activeDeletions -= 1;
+      if (entry.activeDeletions === 0) {
+        entry.deleting = false;
+        if (entry.active.size === 0) this.#entries.delete(jobId);
+      }
+    }
+  }
+}
+
 async function remoteImportHandler(
   request: IncomingMessage,
   response: ServerResponse,
@@ -1841,7 +1962,7 @@ async function uploadContentHandler(
   }
 }
 
-async function deleteCompletedImportResult(
+async function deleteCompletedImportResultUnderLease(
   request: IncomingMessage,
   response: ServerResponse,
   id: string,
@@ -1971,13 +2092,88 @@ function cancelJobHandler(
   );
 }
 
+interface AiGuidanceSelection {
+  readonly source: AiGuidanceSource;
+  readonly metrics: AiGuidanceMetrics;
+  readonly digest: string;
+}
+
+interface AiGuidanceGrant {
+  readonly binding: string;
+  readonly providerId: string;
+  readonly jobId: string;
+  readonly buildingId: string;
+  readonly selectionDigest: string;
+  readonly metrics: AiGuidanceMetrics;
+  readonly expiresAt: number;
+}
+
+class AiGuidanceGrantRegistry {
+  readonly #grants = new Map<string, AiGuidanceGrant>();
+
+  #removeExpired(now = Date.now()): void {
+    for (const [grant, value] of this.#grants) if (value.expiresAt <= now) this.#grants.delete(grant);
+  }
+
+  public issue(binding: string, providerId: string, selection: AiGuidanceSelection): string {
+    this.#removeExpired();
+    while (this.#grants.size >= AI_GUIDANCE_MAXIMUM_GRANTS) this.#grants.delete(this.#grants.keys().next().value!);
+    const grant = randomBytes(AI_GUIDANCE_GRANT_BYTES).toString("base64url");
+    this.#grants.set(grant, Object.freeze({ binding, providerId, jobId: selection.source.jobId, buildingId: selection.source.buildingId, selectionDigest: selection.digest, metrics: selection.metrics, expiresAt: Date.now() + AI_GUIDANCE_GRANT_TTL_MS }));
+    return grant;
+  }
+
+  public inspect(grant: string, binding: string): AiGuidanceGrant | undefined {
+    this.#removeExpired();
+    const value = this.#grants.get(grant);
+    return value !== undefined && value.binding === binding ? value : undefined;
+  }
+
+  public consume(grant: string, binding: string, selection: AiGuidanceSelection): AiGuidanceGrant | undefined {
+    this.#removeExpired();
+    const value = this.#grants.get(grant);
+    this.#grants.delete(grant); // Consume before comparison so failed attempts cannot be replayed.
+    if (value === undefined || value.binding !== binding || value.jobId !== selection.source.jobId || value.buildingId !== selection.source.buildingId || value.selectionDigest !== selection.digest || value.metrics.sloc !== selection.metrics.sloc || value.metrics.maximumComplexity !== selection.metrics.maximumComplexity || value.metrics.decisionLoad !== selection.metrics.decisionLoad) return undefined;
+    return value;
+  }
+}
+
+async function deleteCompletedImportResult(
+  request: IncomingMessage,
+  response: ServerResponse,
+  id: string,
+  jobs: PersistentJobQueue,
+  artifacts: ImportArtifactStore,
+  sources: SourceArtifactStore,
+  artifactResponses: ArtifactResponseGate,
+  guidanceJobs: AiGuidanceJobCoordinator,
+): Promise<void> {
+  await guidanceJobs.runExclusiveDeletion(
+    id,
+    () => deleteCompletedImportResultUnderLease(
+      request,
+      response,
+      id,
+      jobs,
+      artifacts,
+      sources,
+      artifactResponses,
+    ),
+  );
+}
+
+function aiGuidanceDigest(source: AiGuidanceSource, metrics: AiGuidanceMetrics): string {
+  return createHash("sha256").update(JSON.stringify({ path: source.path, language: source.language, text: source.text, location: source.location, metrics })).digest("hex");
+}
+
 async function aiGuidanceSource(
   jobs: PersistentJobQueue,
+  artifacts: ImportArtifactStore,
   sources: SourceArtifactStore,
   jobId: string,
   buildingId: string,
   signal?: AbortSignal,
-): Promise<AiGuidanceSource | undefined> {
+): Promise<AiGuidanceSelection | undefined> {
   const job = jobs.get(jobId);
   const expected =
     job?.state === "completed" &&
@@ -1989,63 +2185,43 @@ async function aiGuidanceSource(
   if (expected === undefined || !completedJobOwnsCityModelArtifact(jobs, jobId)) {
     return undefined;
   }
-  const stored = await sources.readFile(jobId, buildingId, expected, signal);
+  const [stored, modelArtifact] = await Promise.all([
+    sources.readFile(jobId, buildingId, expected, signal),
+    artifacts.readCityModel(jobId, signal),
+  ]);
   if (
     stored === undefined ||
     stored.size !== expected.size ||
     stored.sha256 !== expected.sha256 ||
     stored.indexSha256 !== expected.indexSha256
   ) return undefined;
-  return Object.freeze({
+  if (modelArtifact === undefined) return undefined;
+  let model: ReturnType<typeof validateCityModel>;
+  try { model = validateCityModel(JSON.parse(modelArtifact.bytes.toString("utf8")) as unknown); } catch { return undefined; }
+  const building = model.buildings.find((candidate) => candidate.id === buildingId);
+  if (building === undefined || building.path !== stored.file.path || building.language !== stored.file.language) return undefined;
+  const source = Object.freeze({
     jobId,
     buildingId,
     path: stored.file.path,
     language: stored.file.language,
-    text: stored.file.text,
+    text: sourceTextLineRange(stored.file.text, stored.file.location.startLine, stored.file.location.endLine),
     location: stored.file.location,
   });
+  const metrics = Object.freeze({ sloc: building.metrics.sloc, maximumComplexity: building.metrics.maximumComplexity, decisionLoad: building.metrics.decisionLoad });
+  return Object.freeze({ source, metrics, digest: aiGuidanceDigest(source, metrics) });
 }
 
-async function aiGuidanceMetrics(
-  artifacts: ImportArtifactStore,
-  jobId: string,
-  buildingId: string,
-  signal?: AbortSignal,
-): Promise<AiGuidanceMetrics | undefined> {
-  const artifact = await artifacts.readCityModel(jobId, signal);
-  if (artifact === undefined) return undefined;
-  signal?.throwIfAborted();
-  const text = new TextDecoder("utf-8", { fatal: true }).decode(
-    artifact.bytes,
-  );
-  const model = validateCityModel(JSON.parse(text) as unknown, {
-    checkpoint: () => signal?.throwIfAborted(),
-  });
-  const building = model.buildings.find((candidate) =>
-    candidate.id === buildingId
-  );
-  if (building === undefined) return undefined;
-  return Object.freeze({
-    sloc: building.metrics.sloc,
-    maximumComplexity: building.metrics.maximumComplexity,
-    decisionLoad: building.metrics.decisionLoad,
-  });
-}
-
-function aiGuidanceRequest(
-  value: unknown,
-): { readonly jobId: string; readonly buildingId: string } | undefined {
+function aiGuidanceRequest(value: unknown): { readonly grant: string } | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const object = value as Record<string, unknown>;
   if (
-    Object.keys(object).length !== 3 ||
+    Object.keys(object).length !== 2 ||
     object["approval"] !== "once" ||
-    typeof object["jobId"] !== "string" ||
-    typeof object["buildingId"] !== "string"
+    typeof object["grant"] !== "string" ||
+    !/^[A-Za-z0-9_-]{43}$/u.test(object["grant"])
   ) return undefined;
-  return Object.freeze({
-    jobId: object["jobId"], buildingId: object["buildingId"],
-  });
+  return Object.freeze({ grant: object["grant"] });
 }
 
 function aiGuidanceHandler(
@@ -2055,9 +2231,14 @@ function aiGuidanceHandler(
   artifacts: ImportArtifactStore,
   sources: SourceArtifactStore,
   guidance: AiGuidanceAdapter,
+  grants: AiGuidanceGrantRegistry,
+  authorization: InboundAuthorization,
+  guidanceJobs: AiGuidanceJobCoordinator,
 ): void {
   if (request.method !== "POST") { sendMethodNotAllowed(request, response, ["POST"]); return; }
   if (!guidance.enabled) { sendJson(request, response, 409, { error: { code: "ai-guidance-disabled", message: "AI guidance is disabled by the administrator." } }); return; }
+  const csrfValues = rawHeaderValues(request, "x-code-city-request");
+  if (csrfValues.length !== 1 || csrfValues[0] !== "1") { sendJson(request, response, 403, { error: { code: "request-header-required", message: "X-Code-City-Request: 1 is required." } }); return; }
   if (!validJsonContentType(request.headers["content-type"] ?? "")) { sendJson(request, response, 415, { error: { code: "unsupported-media-type", message: "AI guidance requests must be JSON." } }); return; }
   void readBoundedRequestBody(request).then(async (body) => {
     if (body.kind !== "ok" || response.destroyed) {
@@ -2066,33 +2247,22 @@ function aiGuidanceHandler(
     }
     let parsed: ReturnType<typeof aiGuidanceRequest>;
     try { parsed = aiGuidanceRequest(JSON.parse(body.text)); } catch { parsed = undefined; }
-    if (parsed === undefined) { sendJson(request, response, 400, { error: { code: "invalid-request", message: "AI guidance requires explicit one-time approval and a valid selection." } }); return; }
-    const controller = new AbortController();
-    response.once("close", () => controller.abort());
+    if (parsed === undefined) { sendJson(request, response, 400, { error: { code: "invalid-request", message: "AI guidance requires explicit one-time approval and a valid grant." } }); return; }
+    const binding = authorization.approvalBinding(request);
+    const issued = binding === undefined ? undefined : grants.inspect(parsed.grant, binding);
+    if (issued === undefined) { sendJson(request, response, 409, { error: { code: "ai-guidance-approval-invalid", message: "AI guidance approval is missing, expired, or already used." } }); return; }
+    const lease = guidanceJobs.tryAcquire(issued.jobId, response);
+    if (lease === undefined) { sendJson(request, response, 409, { error: { code: "source-deleting", message: "The selected retained import is being deleted." } }); return; }
     try {
-      const [source, metrics] = await Promise.all([
-        aiGuidanceSource(
-          jobs,
-          sources,
-          parsed.jobId,
-          parsed.buildingId,
-          controller.signal,
-        ),
-        aiGuidanceMetrics(
-          artifacts,
-          parsed.jobId,
-          parsed.buildingId,
-          controller.signal,
-        ),
-      ]);
-      if (source === undefined || metrics === undefined) {
-        if (!response.destroyed) sendJson(request, response, 404, { error: { code: "source-not-found", message: "Selected retained source was not found." } });
-        return;
-      }
-      const result = await guidance.request(source, metrics, controller.signal);
+      const selection = await aiGuidanceSource(jobs, artifacts, sources, issued.jobId, issued.buildingId, lease.signal).catch(() => undefined);
+      if (selection === undefined) { if (!response.destroyed) sendJson(request, response, 404, { error: { code: "source-not-found", message: "Selected retained source was not found." } }); return; }
+      if (grants.consume(parsed.grant, binding!, selection) === undefined) { if (!response.destroyed) sendJson(request, response, 409, { error: { code: "ai-guidance-approval-invalid", message: "AI guidance approval is missing, expired, or already used." } }); return; }
+      const result = await guidance.request(selection.source, selection.metrics, issued.providerId, lease.signal);
       if (!response.destroyed) sendJson(request, response, 200, { result });
     } catch {
       if (!response.destroyed) sendJson(request, response, 502, { error: { code: "provider-unavailable", message: "AI suggestions are unavailable; deterministic analysis remains available." } });
+    } finally {
+      lease.settle();
     }
   }).catch(() => { if (!response.destroyed) sendJson(request, response, 500, { error: { code: "ai-guidance-failed", message: "AI guidance could not be prepared." } }); });
 }
@@ -2113,6 +2283,9 @@ function apiHandler(
   credentialProfiles: CredentialProfileRegistry,
   importDependencies: RemoteImportDependencies | undefined,
   aiGuidance: AiGuidanceAdapter,
+  grants: AiGuidanceGrantRegistry,
+  guidanceJobs: AiGuidanceJobCoordinator,
+  authorization: InboundAuthorization,
 ): boolean {
   if (target.path === "/api/v1/health") {
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -2136,21 +2309,32 @@ function apiHandler(
     });
     return true;
   }
-  const aiPreview = AI_GUIDANCE_PREVIEW_PATH_PATTERN.exec(target.path);
-  if (aiPreview) {
+  if (target.path === AI_GUIDANCE_PROVIDERS_PATH) {
     if (request.method !== "GET" && request.method !== "HEAD") { sendMethodNotAllowed(request, response, ["GET", "HEAD"]); return true; }
-    if (!aiGuidance.enabled) { sendJson(request, response, 200, { preview: aiGuidance.disabledPreview() }); return true; }
-    void Promise.all([
-      aiGuidanceSource(jobs, sources, aiPreview[1]!, aiPreview[2]!),
-      aiGuidanceMetrics(artifacts, aiPreview[1]!, aiPreview[2]!),
-    ]).then(([source, metrics]) => {
-      if (response.destroyed) return;
-      if (source === undefined || metrics === undefined) { sendJson(request, response, 404, { error: { code: "source-not-found", message: "Selected retained source was not found." } }); return; }
-      sendJson(request, response, 200, { preview: aiGuidance.preview(source, metrics) });
-    }).catch(() => { if (!response.destroyed) sendJson(request, response, 500, { error: { code: "ai-preview-failed", message: "AI guidance preview could not be prepared." } }); });
+    sendJson(request, response, 200, { enabled: aiGuidance.enabled, providers: aiGuidance.providers() });
     return true;
   }
-  if (target.path === AI_GUIDANCE_REQUEST_PATH) { aiGuidanceHandler(request, response, jobs, artifacts, sources, aiGuidance); return true; }
+  const aiPreview = AI_GUIDANCE_PREVIEW_PATH_PATTERN.exec(target.path);
+  if (aiPreview) {
+    if (request.method !== "POST") { sendMethodNotAllowed(request, response, ["POST"]); return true; }
+    const csrfValues = rawHeaderValues(request, "x-code-city-request");
+    if (csrfValues.length !== 1 || csrfValues[0] !== "1") { sendJson(request, response, 403, { error: { code: "request-header-required", message: "X-Code-City-Request: 1 is required." } }); return true; }
+    if (!aiGuidance.enabled) { sendJson(request, response, 200, { preview: aiGuidance.disabledPreview() }); return true; }
+    const approval = authorization.ensureApprovalBinding(request);
+    if (approval === undefined) { sendJson(request, response, 401, { error: { code: "unauthorized", message: "Authorization is required." } }); return true; }
+    if (approval.setCookie !== undefined) response.setHeader("Set-Cookie", approval.setCookie);
+    const lease = guidanceJobs.tryAcquire(aiPreview[1]!, response);
+    if (lease === undefined) { sendJson(request, response, 409, { error: { code: "source-deleting", message: "The selected retained import is being deleted." } }); return true; }
+    void aiGuidanceSource(jobs, artifacts, sources, aiPreview[1]!, aiPreview[2]!, lease.signal).then((selection) => {
+      if (response.destroyed) return;
+      if (selection === undefined) { sendJson(request, response, 404, { error: { code: "source-not-found", message: "Selected retained source was not found." } }); return; }
+      const preview = aiGuidance.preview(selection.source, selection.metrics, aiPreview[3]!);
+      if (!preview.enabled) { sendJson(request, response, 404, { error: { code: "provider-not-found", message: "Selected AI provider is unavailable." } }); return; }
+      sendJson(request, response, 200, { preview: Object.freeze({ ...preview, grant: grants.issue(approval.binding, aiPreview[3]!, selection) }) });
+    }).catch(() => { if (!response.destroyed) sendJson(request, response, 500, { error: { code: "ai-preview-failed", message: "AI guidance preview could not be prepared." } }); }).finally(() => lease.settle());
+    return true;
+  }
+  if (target.path === AI_GUIDANCE_REQUEST_PATH) { aiGuidanceHandler(request, response, jobs, artifacts, sources, aiGuidance, grants, authorization, guidanceJobs); return true; }
   if (target.path === "/api/v1/jobs") {
     if (request.method !== "GET" && request.method !== "HEAD") {
       sendMethodNotAllowed(request, response, ["GET", "HEAD"]);
@@ -2573,6 +2757,7 @@ function apiHandler(
         artifacts,
         sources,
         artifactResponses,
+        guidanceJobs,
       ),
     );
     return true;
@@ -2659,6 +2844,8 @@ function requestHandler(
   credentialProfiles: CredentialProfileRegistry,
   importDependencies: RemoteImportDependencies | undefined,
   aiGuidance: AiGuidanceAdapter,
+  grants: AiGuidanceGrantRegistry,
+  guidanceJobs: AiGuidanceJobCoordinator,
   allowedHosts: ReadonlySet<string>,
   authorization: InboundAuthorization,
 ): (request: IncomingMessage, response: ServerResponse) => void {
@@ -2750,6 +2937,9 @@ function requestHandler(
           credentialProfiles,
           importDependencies,
           aiGuidance,
+          grants,
+          guidanceJobs,
+          authorization,
         )
       ) {
         sendJson(request, response, 404, {
@@ -2820,7 +3010,12 @@ export async function startCodeCityServer(
   const responseTimeouts = artifactResponseTimeouts(
     options.artifactResponseTimeouts,
   );
-  const aiGuidance = new AiGuidanceAdapter(options.aiGuidance);
+  const aiGuidance = new AiGuidanceAdapter(options.aiGuidance, {
+    ...(options.aiGuidanceAdapterOptions ?? {}),
+    ...(options.aiGuidanceAudit === undefined ? {} : { audit: options.aiGuidanceAudit }),
+  });
+  const aiGuidanceGrants = new AiGuidanceGrantRegistry();
+  const aiGuidanceJobs = new AiGuidanceJobCoordinator();
   const importPolicy = new RemoteImportPolicy(
     options.allowedGitOrigins,
     {
@@ -2944,6 +3139,8 @@ export async function startCodeCityServer(
         credentialProfiles,
         importDependencies,
         aiGuidance,
+        aiGuidanceGrants,
+        aiGuidanceJobs,
         allowedHosts,
         authorization,
       ),

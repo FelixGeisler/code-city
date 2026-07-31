@@ -125,6 +125,43 @@ function lineCount(
   return count;
 }
 
+/** Returns an inclusive, one-based line range for LF, CRLF, and CR text. */
+export function sourceTextLineRange(
+  text: string,
+  startLine: number,
+  endLine: number,
+): string {
+  if (
+    !Number.isSafeInteger(startLine) ||
+    !Number.isSafeInteger(endLine) ||
+    startLine < 1 ||
+    endLine < startLine
+  ) {
+    throw new Error("Source line range is invalid.");
+  }
+  let line = 1;
+  let start = startLine === 1 ? 0 : -1;
+  for (let index = 0; index < text.length; index += 1) {
+    const codeUnit = text.charCodeAt(index);
+    if (codeUnit !== 0x0d && codeUnit !== 0x0a) continue;
+    const delimiterEnd =
+      codeUnit === 0x0d && text.charCodeAt(index + 1) === 0x0a
+        ? index + 2
+        : index + 1;
+    if (line === endLine) {
+      if (start < 0) throw new Error("Source line range is outside the file.");
+      return text.slice(start, delimiterEnd);
+    }
+    line += 1;
+    if (line === startLine) start = delimiterEnd;
+    if (delimiterEnd === index + 2) index += 1;
+  }
+  if (start < 0 || line < endLine) {
+    throw new Error("Source line range is outside the file.");
+  }
+  return text.slice(start);
+}
+
 function updateDigest(
   digest: Hash,
   bytes: Uint8Array,
