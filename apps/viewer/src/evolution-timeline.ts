@@ -44,6 +44,53 @@ export interface EvolutionFrameAnalysis {
   readonly churnByBuildingId: readonly (readonly [string, number])[];
 }
 
+export class EvolutionSeekGate {
+  #generation = 0;
+  #busy = false;
+  #failure: string | undefined;
+
+  public get busy(): boolean {
+    return this.#busy;
+  }
+
+  public get failure(): string | undefined {
+    return this.#failure;
+  }
+
+  public begin(): number {
+    this.#busy = true;
+    this.#failure = undefined;
+    this.#generation += 1;
+    return this.#generation;
+  }
+
+  public isCurrent(generation: number): boolean {
+    return generation === this.#generation;
+  }
+
+  public settle(generation: number): boolean {
+    if (!this.isCurrent(generation)) return false;
+    this.#busy = false;
+    this.#failure = undefined;
+    return true;
+  }
+
+  public fail(generation: number, message: string): boolean {
+    if (!this.isCurrent(generation)) return false;
+    this.#busy = false;
+    this.#failure = message;
+    return true;
+  }
+
+  public cancel(): boolean {
+    const wasBusy = this.#busy;
+    this.#generation += 1;
+    this.#busy = false;
+    this.#failure = undefined;
+    return wasBusy;
+  }
+}
+
 function commits(bundle: EvolutionBundle): readonly EvolutionCommitMetadata[] {
   return [bundle.baseline.commit, ...bundle.deltas.map(({ commit }) => commit)];
 }

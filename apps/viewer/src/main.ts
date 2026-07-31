@@ -155,10 +155,11 @@ import {
   type EvolutionVisualizationData,
   type ViewerVisualizationMode,
 } from "./visualization-mode.js";
-import type {
-  EvolutionBuildingHistory,
-  EvolutionFrameSummary,
-  EvolutionTransition,
+import {
+  EvolutionSeekGate,
+  type EvolutionBuildingHistory,
+  type EvolutionFrameSummary,
+  type EvolutionTransition,
 } from "./evolution-timeline.js";
 import { EvolutionTimelineWorkerClient } from "./evolution-timeline-worker-client.js";
 import "./styles.css";
@@ -1809,7 +1810,7 @@ let previewPrinterProfile: PrinterProfile | undefined;
 let evolutionWorker = new EvolutionTimelineWorkerClient();
 let evolutionLoadController: AbortController | undefined;
 let evolutionGeneration = 0;
-let evolutionSeekGeneration = 0;
+const evolutionSeekGate = new EvolutionSeekGate();
 let evolutionPlaybackTimer: number | undefined;
 let evolutionTransitionTimer: number | undefined;
 let activeEvolutionFrames: readonly EvolutionFrameSummary[] = [];
@@ -1818,7 +1819,7 @@ let activeEvolutionAnalysis: EvolutionVisualizationData | undefined;
 let activeEvolutionTransition: EvolutionTransition | undefined;
 let activeEvolutionIndex = 0;
 let evolutionPlaying = false;
-let evolutionBusy = false;
+let evolutionLoading = false;
 let activeBuildingsById = new Map(
   DEMO_MODEL.buildings.map((building) => [building.id, building]),
 );
@@ -2367,7 +2368,6 @@ function applyModel(
 
 function resetEvolutionTimeline(recreateWorker = true): void {
   evolutionGeneration += 1;
-  evolutionSeekGeneration += 1;
   evolutionLoadController?.abort();
   evolutionLoadController = undefined;
   stopEvolutionPlayback();
@@ -2382,7 +2382,7 @@ function resetEvolutionTimeline(recreateWorker = true): void {
   activeEvolutionAnalysis = undefined;
   activeEvolutionTransition = undefined;
   activeEvolutionIndex = 0;
-  evolutionBusy = false;
+  evolutionLoading = false;
   evolutionTimeline.hidden = true;
   evolutionRange.max = "0";
   evolutionRange.value = "0";
@@ -2401,7 +2401,7 @@ async function startEvolutionTimeline(source: ModelSource): Promise<void> {
   const controller = new AbortController();
   evolutionLoadController = controller;
   evolutionTimeline.hidden = false;
-  evolutionBusy = true;
+  evolutionLoading = true;
   evolutionCommit.textContent = "Loading repository history";
   evolutionStatus.textContent =
     "Verifying and preparing deterministic timeline frames\u2026";
@@ -2422,7 +2422,7 @@ async function startEvolutionTimeline(source: ModelSource): Promise<void> {
     activeEvolutionAnalysis = evolutionVisualizationData(loaded.analysis);
     activeEvolutionIndex = 0;
     evolutionRange.max = String(Math.max(0, loaded.frames.length - 1));
-    evolutionBusy = false;
+    evolutionLoading = false;
     renderEvolutionTimeline();
     if (loaded.frames.length > 1) {
       await seekEvolution(loaded.frames.length - 1, true);
@@ -2437,7 +2437,7 @@ async function startEvolutionTimeline(source: ModelSource): Promise<void> {
     ) {
       return;
     }
-    evolutionBusy = false;
+    evolutionLoading = false;
     evolutionCommit.textContent = "Repository history unavailable";
     evolutionStatus.textContent =
       error instanceof Error ? error.message : "Evolution could not be loaded.";
@@ -2478,14 +2478,13 @@ async function seekEvolution(
     return true;
   }
   const generation = evolutionGeneration;
-  const seekGeneration = ++evolutionSeekGeneration;
+  const seekGeneration = evolutionSeekGate.begin();
   const fromIndex = activeEvolutionIndex;
   const selected = explorerState.selectedEntity;
   const deletedBuilding =
     selected?.kind === "building"
       ? activeBuildingsById.get(selected.id)
       : undefined;
-  evolutionBusy = true;
   evolutionRange.value = String(targetIndex);
   evolutionStatus.textContent = "Seeking\u2026";
   renderEvolutionTimeline();
@@ -2493,7 +2492,7 @@ async function seekEvolution(
     const result = await evolutionWorker.seek(fromIndex, targetIndex);
     if (
       generation !== evolutionGeneration ||
-      seekGeneration !== evolutionSeekGeneration
+      !evolutionSeekGate.isCurrent(seekGeneration)
     ) {
       return false;
     }
@@ -2532,20 +2531,25 @@ async function seekEvolution(
     ) {
       showDeletedEvolutionBuilding(deletedBuilding);
     }
-    evolutionBusy = false;
+    evolutionSeekGate.settle(seekGeneration);
     renderEvolutionTimeline();
     return true;
   } catch (error) {
     if (
       generation !== evolutionGeneration ||
-      seekGeneration !== evolutionSeekGeneration ||
-      (error instanceof DOMException && error.name === "AbortError")
+      !evolutionSeekGate.isCurrent(seekGeneration)
     ) {
       return false;
     }
-    evolutionBusy = false;
-    evolutionStatus.textContent =
-      error instanceof Error ? error.message : "The frame could not be shown.";
+    if (error instanceof DOMException && error.name === "AbortError") {
+      evolutionSeekGate.settle(seekGeneration);
+      renderEvolutionTimeline();
+      return false;
+    }
+    evolutionSeekGate.fail(
+      seekGeneration,
+      error instanceof Error ? error.message : "The frame could not be shown.",
+    );
     renderEvolutionTimeline();
     return false;
   }
@@ -2554,13 +2558,14 @@ async function seekEvolution(
 function renderEvolutionTimeline(): void {
   const frame = activeEvolutionFrames[activeEvolutionIndex];
   const lastIndex = Math.max(0, activeEvolutionFrames.length - 1);
+  const busy = evolutionLoading || evolutionSeekGate.busy;
   evolutionRange.value = String(activeEvolutionIndex);
-  evolutionFirst.disabled = evolutionBusy || activeEvolutionIndex === 0;
-  evolutionPrevious.disabled = evolutionBusy || activeEvolutionIndex === 0;
+  evolutionFirst.disabled = busy || activeEvolutionIndex === 0;
+  evolutionPrevious.disabled = busy || activeEvolutionIndex === 0;
   evolutionNext.disabled =
-    evolutionBusy || activeEvolutionIndex >= lastIndex;
+    busy || activeEvolutionIndex >= lastIndex;
   evolutionLast.disabled =
-    evolutionBusy || activeEvolutionIndex >= lastIndex;
+    busy || activeEvolutionIndex >= lastIndex;
   evolutionRange.disabled = lastIndex === 0;
   evolutionPlay.disabled = lastIndex === 0;
   evolutionPlay.setAttribute("aria-pressed", String(evolutionPlaying));
@@ -2586,11 +2591,16 @@ function renderEvolutionTimeline(): void {
           `${transition.resizedBuildingIds.length} resized`,
         ].join(" \u00b7 ");
   evolutionStatus.textContent =
+    evolutionSeekGate.failure ??
     `${new Date(frame.committedAt).toLocaleString()}${changeText ? ` \u00b7 ${changeText}` : ""}`;
 }
 
 function startEvolutionPlayback(): void {
-  if (activeEvolutionFrames.length < 2 || evolutionBusy) return;
+  if (
+    activeEvolutionFrames.length < 2 ||
+    evolutionLoading ||
+    evolutionSeekGate.busy
+  ) return;
   evolutionPlaying = true;
   evolutionPlay.setAttribute("aria-pressed", "true");
   renderEvolutionTimeline();
@@ -2615,6 +2625,7 @@ async function advanceEvolutionPlayback(): Promise<void> {
 
 function stopEvolutionPlayback(): void {
   evolutionPlaying = false;
+  const cancelledSeek = evolutionSeekGate.cancel();
   evolutionWorker.cancel();
   if (evolutionPlaybackTimer !== undefined) {
     window.clearTimeout(evolutionPlaybackTimer);
@@ -2622,6 +2633,7 @@ function stopEvolutionPlayback(): void {
   }
   evolutionPlay?.setAttribute("aria-pressed", "false");
   if (evolutionPlay) evolutionPlay.textContent = "\u25b6";
+  if (cancelledSeek) renderEvolutionTimeline();
 }
 
 function showDeletedEvolutionBuilding(building: CityBuilding): void {

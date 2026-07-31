@@ -61,6 +61,7 @@ workerScope.addEventListener(
     const request = event.data;
     if (!isEvolutionWorkerRequest(request)) return;
     latestRequestId = request.requestId;
+    if (request.type === "cancel") return;
     let response: EvolutionWorkerResponse;
     try {
       if (request.type === "load") {

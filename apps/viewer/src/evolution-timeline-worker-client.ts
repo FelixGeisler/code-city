@@ -85,7 +85,20 @@ export class EvolutionTimelineWorkerClient {
   }
 
   public cancel(): void {
-    this.cancelPending();
+    const pending = this.cancelPending();
+    const worker = this.worker;
+    if (pending?.kind !== "seek" || worker === undefined || !this.loaded) {
+      return;
+    }
+    const request: EvolutionWorkerRequest = {
+      type: "cancel",
+      requestId: ++this.nextRequestId,
+    };
+    try {
+      worker.postMessage(request);
+    } catch {
+      this.fail(new Error("The evolution cancellation could not be sent."));
+    }
   }
 
   public dispose(): void {
@@ -152,11 +165,12 @@ export class EvolutionTimelineWorkerClient {
     this.fail(new Error("The evolution worker stopped unexpectedly."));
   };
 
-  private cancelPending(): void {
+  private cancelPending(): PendingRequest | undefined {
     const pending = this.pending;
-    if (!pending) return;
+    if (!pending) return undefined;
     this.pending = undefined;
     pending.reject(cancelledError());
+    return pending;
   }
 
   private fail(error: unknown): void {
