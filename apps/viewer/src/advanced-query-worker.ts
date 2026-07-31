@@ -6,17 +6,32 @@ import {
   type AdvancedQueryContext,
 } from "./advanced-query.js";
 import {
+  advancedQueryFailureForInvalidRequest,
   advancedQueryFailureMessage,
   isAdvancedQueryEvaluateRequest,
+  type AdvancedQueryEvaluateRequest,
   type AdvancedQueryWorkerResponse,
 } from "./advanced-query-protocol.js";
 import { validateCityModel } from "./model-validation.js";
 
-const workerScope = self as unknown as DedicatedWorkerGlobalScope;
+export interface AdvancedQueryWorkerScope {
+  readonly importScripts: (...urls: string[]) => void;
+  readonly postMessage: (
+    response: AdvancedQueryWorkerResponse,
+  ) => void;
+  readonly addEventListener: (
+    type: "message",
+    listener: (event: { readonly data: unknown }) => void,
+  ) => void;
+  readonly removeEventListener: (
+    type: "message",
+    listener: (event: { readonly data: unknown }) => void,
+  ) => void;
+}
 
-workerScope.addEventListener("message", (event: MessageEvent<unknown>) => {
-  const request = event.data;
-  if (!isAdvancedQueryEvaluateRequest(request)) return;
+function evaluateRequest(
+  request: AdvancedQueryEvaluateRequest,
+): AdvancedQueryWorkerResponse {
   let response: AdvancedQueryWorkerResponse;
   try {
     const model = validateCityModel(request.model);
@@ -71,7 +86,46 @@ workerScope.addEventListener("message", (event: MessageEvent<unknown>) => {
       message: advancedQueryFailureMessage(error),
     };
   }
-  workerScope.postMessage(response);
-});
+  return response;
+}
 
-export {};
+export function isDedicatedAdvancedQueryWorkerScope(
+  value: unknown,
+): value is AdvancedQueryWorkerScope {
+  if (typeof value !== "object" || value === null) return false;
+  const scope = value as Record<string, unknown>;
+  return (
+    typeof scope["importScripts"] === "function" &&
+    typeof scope["postMessage"] === "function" &&
+    typeof scope["addEventListener"] === "function" &&
+    typeof scope["removeEventListener"] === "function" &&
+    !("document" in scope) &&
+    !("clients" in scope) &&
+    !("onconnect" in scope)
+  );
+}
+
+export function installAdvancedQueryWorker(
+  scope: AdvancedQueryWorkerScope,
+): () => void {
+  const listener = (event: { readonly data: unknown }): void => {
+    const request = event.data;
+    if (!isAdvancedQueryEvaluateRequest(request)) {
+      const failure =
+        advancedQueryFailureForInvalidRequest(request);
+      if (failure !== undefined) scope.postMessage(failure);
+      return;
+    }
+    scope.postMessage(evaluateRequest(request));
+  };
+  scope.addEventListener("message", listener);
+  return () => {
+    scope.removeEventListener("message", listener);
+  };
+}
+
+if (isDedicatedAdvancedQueryWorkerScope(globalThis)) {
+  installAdvancedQueryWorker(
+    globalThis as unknown as AdvancedQueryWorkerScope,
+  );
+}

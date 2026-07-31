@@ -1309,7 +1309,12 @@ class CityScene {
     this.designSmellOverlay.setIsolatedDistrict(null);
     this.isolatedDistrictId = null;
     this.buildingVisibilityMask = valid;
-    this.buildingLayer?.setVisibleBuildingIds([...valid]);
+    const visibleBuildingIds = [...valid];
+    this.buildingLayer?.setVisibleBuildingIds(visibleBuildingIds);
+    this.evolutionAnimation?.removals.setVisibleBuildingIds(
+      visibleBuildingIds,
+    );
+    this.designSmellOverlay.setVisibleBuildingIds(visibleBuildingIds);
     const selection = this.selectedEntity;
     if (
       selection?.kind === "building" &&
@@ -1365,6 +1370,11 @@ class CityScene {
       transition.removedBuildings,
       this.isolatedDistrictId,
       { instancingSupported: this.instancingSupported },
+    );
+    removals.setVisibleBuildingIds(
+      this.buildingVisibilityMask === null
+        ? null
+        : [...this.buildingVisibilityMask],
     );
     this.city.add(removals.object);
     const addedIds = new Set(transition.addedBuildingIds);
@@ -1691,6 +1701,8 @@ class CityScene {
     if (this.buildingVisibilityMask === null) return;
     this.buildingVisibilityMask = null;
     this.buildingLayer?.setVisibleBuildingIds(null);
+    this.evolutionAnimation?.removals.setVisibleBuildingIds(null);
+    this.designSmellOverlay.setVisibleBuildingIds(null);
   }
 
   public assertBuildingCapability(buildingCount: number): void {
@@ -1769,6 +1781,8 @@ class CityScene {
     this.sceneLabelOverlay.clear();
     this.dependencyOverlay.clear();
     this.districtDependencyOverlay.clear();
+    this.designSmellOverlay.setIsolatedDistrict(null);
+    this.designSmellOverlay.setVisibleBuildingIds(null);
     this.designSmellOverlay.clear();
     this.city.remove(this.designSmellOverlay.object);
     this.isolatedDistrictId = null;
@@ -1914,7 +1928,9 @@ class CityScene {
     this.buildingLayer?.setIsolatedDistrict(null);
     this.buildingLayer?.setVisibleBuildingIds(null);
     this.evolutionAnimation?.removals.setIsolatedDistrict(null);
+    this.evolutionAnimation?.removals.setVisibleBuildingIds(null);
     this.designSmellOverlay.setIsolatedDistrict(null);
+    this.designSmellOverlay.setVisibleBuildingIds(null);
     let restored = false;
     return () => {
       if (restored) return;
@@ -1929,7 +1945,13 @@ class CityScene {
       this.evolutionAnimation?.removals.setIsolatedDistrict(
         previousIsolation,
       );
+      this.evolutionAnimation?.removals.setVisibleBuildingIds(
+        previousBuildingVisibilityMask,
+      );
       this.designSmellOverlay.setIsolatedDistrict(previousIsolation);
+      this.designSmellOverlay.setVisibleBuildingIds(
+        previousBuildingVisibilityMask,
+      );
     };
   }
 
@@ -2965,15 +2987,15 @@ function createCityScene(): CityScene | UnavailableCityScene {
       (entity, intent) => {
         if (advancedQueryPanel === undefined) return false;
         if (entity?.kind === "building") {
-          if (
+          advancedQueryPanel.selectFromScene(entity.id, {
+            ...intent,
+            orderedBuildingIds: activeBuildingSelectionOrder,
+          });
+          return (
             intent.additive ||
             intent.range ||
             viewerWorkspace.activeView === "queries"
-          ) {
-            advancedQueryPanel.selectFromScene(entity.id, intent);
-            return true;
-          }
-          return false;
+          );
         }
         advancedQueryPanel.clearSelection();
         return false;
@@ -3026,6 +3048,9 @@ let evolutionPlaying = false;
 let evolutionLoading = false;
 let activeBuildingsById = new Map(
   DEMO_MODEL.buildings.map((building) => [building.id, building]),
+);
+let activeBuildingSelectionOrder = Object.freeze(
+  DEMO_MODEL.buildings.map(({ id }) => id),
 );
 let activeDistrictsById = new Map(
   DEMO_MODEL.districts.map((district) => [district.id, district]),
@@ -3806,6 +3831,9 @@ function applyModel(
   const preservedIsolation = options.preserveSelection
     ? explorerState.isolatedDistrictId
     : null;
+  const preservedBuildingSelectionIsolation =
+    options.preserveSelection &&
+    cityScene.buildingSelectionIsolated;
   const preservedDependencyRouteState = dependencyRouteState;
   const preservedDependencyRouteVisibleLimit = dependencyRouteVisibleLimit;
   const preservedDistrictDependencyFilters = districtDependencyFilters;
@@ -3844,6 +3872,9 @@ function applyModel(
   activeModelSource = source;
   scrubBuildingSource();
   activeBuildingsById = buildingsById;
+  activeBuildingSelectionOrder = Object.freeze(
+    model.buildings.map(({ id }) => id),
+  );
   activeDistrictsById = districtsById;
   dependencyExplorerIndex = nextDependencyExplorerIndex;
   dependencyRouteState = resetDependencyRouteState();
@@ -3920,7 +3951,23 @@ function applyModel(
   } finally {
     applyingAdvancedSelection = false;
   }
-  advancedQueryPanel?.setProject(model);
+  advancedQueryPanel?.setProject(model, {
+    preserveContext: options.preserveSelection === true,
+  });
+  if (
+    preservedBuildingSelectionIsolation &&
+    advancedQueryPanel !== undefined
+  ) {
+    const retainedBuildingIds =
+      advancedQueryPanel.selection.buildingIds.filter((id) =>
+        activeBuildingsById.has(id),
+      );
+    if (retainedBuildingIds.length === 0) {
+      cityScene.showWholeCity(false);
+    } else {
+      cityScene.isolateBuildings(retainedBuildingIds, false);
+    }
+  }
   if (options.preserveSelection) {
     if (
       preservedSelection?.kind === "building" &&
@@ -4103,6 +4150,8 @@ async function seekEvolution(
         preserveView: true,
         preserveSelection: true,
       });
+      const retainedAdvancedPrimaryBuildingId =
+        advancedQueryPanel?.selection.primaryBuildingId ?? null;
       if (!initial) {
         if (evolutionTransitionTimer !== undefined) {
           window.clearTimeout(evolutionTransitionTimer);
@@ -4124,7 +4173,11 @@ async function seekEvolution(
           applyVisualization();
         }, 1_200);
       }
-      if (lineageSelection !== undefined) {
+      if (
+        lineageSelection !== undefined &&
+        (retainedAdvancedPrimaryBuildingId === null ||
+          retainedAdvancedPrimaryBuildingId === lineageSelection.id)
+      ) {
         const history = activeEvolutionHistories.get(
           lineageSelection.id,
         );
@@ -4152,6 +4205,12 @@ async function seekEvolution(
         } else {
           activeEvolutionLineageSelection = undefined;
         }
+      } else if (retainedAdvancedPrimaryBuildingId !== null) {
+        // setProject() may promote a surviving member when the previous
+        // primary does not exist in the target frame. Keep that shared
+        // selection authoritative instead of restoring a stale tombstone
+        // over its inspector/source context.
+        activeEvolutionLineageSelection = undefined;
       }
     },
   );
@@ -4558,16 +4617,13 @@ function renderBuildingSearch(): void {
       button.addEventListener("click", (event) => {
         const additive = event.ctrlKey || event.metaKey;
         const range = event.shiftKey;
-        if (
-          advancedQueryPanel !== undefined &&
-          (additive || range)
-        ) {
+        if (advancedQueryPanel !== undefined) {
           advancedQueryPanel.selectFromScene(result.buildingId, {
             additive,
             range,
             orderedBuildingIds: visibleBuildingOrder,
           });
-          return;
+          if (additive || range) return;
         }
         viewerWorkspace.show("details", {
           intent: "explicit",
@@ -4789,12 +4845,13 @@ function activateRepositoryTreeEntity(
   intent: AdvancedSelectionIntent,
 ): void {
   if (entity.kind === "building") {
-    if (
-      advancedQueryPanel !== undefined &&
-      (intent.additive || intent.range)
-    ) {
-      advancedQueryPanel.selectFromScene(entity.id, intent);
-      return;
+    if (advancedQueryPanel !== undefined) {
+      advancedQueryPanel.selectFromScene(entity.id, {
+        ...intent,
+        orderedBuildingIds:
+          intent.orderedBuildingIds ?? activeBuildingSelectionOrder,
+      });
+      if (intent.additive || intent.range) return;
     }
     const next = selectExplorerBuilding(
       explorerState,
@@ -5058,6 +5115,7 @@ function applyAdvancedSelection(
   } finally {
     applyingAdvancedSelection = false;
   }
+  synchronizeAdvancedSelectionMembership(selection.buildingIds);
   renderDependencyExplorer();
   selectionStatus.textContent =
     selection.buildingIds.length === 0
@@ -5065,6 +5123,22 @@ function applyAdvancedSelection(
       : `${selection.buildingIds.length.toLocaleString()} ${
           selection.buildingIds.length === 1 ? "building" : "buildings"
         } selected.`;
+}
+
+function synchronizeAdvancedSelectionMembership(
+  buildingIds: readonly string[],
+): void {
+  const selected = new Set(buildingIds);
+  for (const button of searchResultButtons()) {
+    const buildingId = button.dataset["buildingId"];
+    if (buildingId !== undefined) {
+      button.setAttribute(
+        "aria-pressed",
+        String(selected.has(buildingId)),
+      );
+    }
+  }
+  repositoryHierarchyTree.synchronize(explorerState, buildingIds);
 }
 
 function synchronizeExplorerState(state: ExplorerState): void {
@@ -5076,7 +5150,10 @@ function synchronizeExplorerState(state: ExplorerState): void {
   if (state.selectedEntity !== null) {
     activeEvolutionLineageSelection = undefined;
   }
-  repositoryHierarchyTree.synchronize(state);
+  repositoryHierarchyTree.synchronize(
+    state,
+    advancedQueryPanel?.selection.buildingIds,
+  );
   const selectedBuildingId = selectedExplorerBuildingId(state);
   const selectedDistrictId = selectedExplorerDistrictId(state);
   const selectedExternalNodeId = selectedExplorerExternalId(state);

@@ -86,6 +86,28 @@ describe("advanced query worker client", () => {
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   });
 
+  it("rejects an over-limit serialized context before creating a worker", async () => {
+    let workerCreated = false;
+    const client = new AdvancedQueryWorkerClient({
+      createWorker: () => {
+        workerCreated = true;
+        return new FakeAdvancedQueryWorker() as unknown as Worker;
+      },
+    });
+    const ruleIds = new Set(
+      Array.from({ length: 65 }, (_, index) => `rule:${index}`),
+    );
+
+    await expect(
+      client.evaluate(DEMO_MODEL, query(), {
+        smellRuleIdsByBuildingId: new Map([
+          ["building:test", ruleIds],
+        ]),
+      }),
+    ).rejects.toThrow(/request is invalid/iu);
+    expect(workerCreated).toBe(false);
+  });
+
   it("accepts bounded duplicate explanations from distinct conditions", async () => {
     const worker = new FakeAdvancedQueryWorker();
     const client = new AdvancedQueryWorkerClient({

@@ -5,6 +5,7 @@ import type {
   AdvancedQueryEvaluation,
 } from "./advanced-query.js";
 import {
+  isAdvancedQueryEvaluateRequest,
   isAdvancedQueryWorkerResponse,
   type AdvancedQueryEvaluateRequest,
   type AdvancedQueryWorkerContext,
@@ -59,7 +60,6 @@ export class AdvancedQueryWorkerClient {
     }
     this.cancel();
     const jobId = ++this.nextJobId;
-    const worker = this.createWorker();
     const request: AdvancedQueryEvaluateRequest = {
       type: "evaluate",
       jobId,
@@ -67,6 +67,12 @@ export class AdvancedQueryWorkerClient {
       definition,
       context: serializeContext(context),
     };
+    if (!isAdvancedQueryEvaluateRequest(request)) {
+      return Promise.reject(
+        new Error("The advanced query request is invalid."),
+      );
+    }
+    const worker = this.createWorker();
     return new Promise<AdvancedQueryEvaluation>((resolve, reject) => {
       let settled = false;
       const finish = (action: () => void): void => {

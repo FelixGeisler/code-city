@@ -82,6 +82,21 @@ export function isAdvancedQueryEvaluateRequest(
   );
 }
 
+export function advancedQueryFailureForInvalidRequest(
+  value: unknown,
+): AdvancedQueryEvaluateFailure | undefined {
+  const candidate = record(value);
+  if (candidate === undefined || !jobId(candidate["jobId"])) {
+    return undefined;
+  }
+  return {
+    type: "failure",
+    jobId: candidate["jobId"],
+    message:
+      "The advanced query worker received an invalid request.",
+  };
+}
+
 export function isAdvancedQueryWorkerResponse(
   value: unknown,
 ): value is AdvancedQueryWorkerResponse {

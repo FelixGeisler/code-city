@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
@@ -698,6 +699,12 @@ test("isolates and focuses exact cross-district selections and uses visible sear
 
   await page.locator("#advanced-query-focus").click();
   await page.locator("#advanced-query-isolate").click();
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await expect(
+    page.locator(
+      '#repository-tree [role="treeitem"][aria-selected="true"]',
+    ),
+  ).toHaveCount(3);
   await expect
     .poll(async () =>
       page.evaluate(
@@ -714,7 +721,6 @@ test("isolates and focuses exact cross-district selections and uses visible sear
       visibleBuildingCount: 3,
       dependencyRoutes: { routeCount: 2 },
     });
-  await page.getByRole("tab", { name: "Explore" }).click();
   await expect(page.locator("#show-whole-city")).toBeEnabled();
   await page.locator("#show-whole-city").click();
   await expect
@@ -778,7 +784,300 @@ test("isolates and focuses exact cross-district selections and uses visible sear
   await expect(page.locator("#selection-status")).toContainText(
     "3 buildings selected",
   );
+  await searchBuildings.nth(1).click({ modifiers: ["Control"] });
+  await expect(
+    page.locator(
+      '#search-results .search-result-button[aria-pressed="true"]',
+    ),
+  ).toHaveCount(2);
+  await expect(searchBuildings.nth(1)).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await expect(
+    page.locator(
+      '#repository-tree [role="treeitem"][aria-selected="true"]',
+    ),
+  ).toHaveCount(2);
+  await expect(page.locator("#selection-status")).toContainText(
+    "2 buildings selected",
+  );
 });
+
+test("canvas plain, additive, and range activation use the central city order", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await page.goto(viewerUrl, {
+    waitUntil: "domcontentloaded",
+    timeout: 45_000,
+  });
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await page.locator("#advanced-query-preset").selectOption("custom");
+  await page.locator("#advanced-query-text").fill("main.ts");
+  await page.locator("#advanced-query-run").click();
+  await expect(page.locator("#advanced-query-status")).toContainText(
+    "1 match",
+  );
+
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await page.locator("#building-search").fill("main.ts");
+  await page
+    .locator(
+      '#search-results [data-building-id="building:main"]',
+    )
+    .click();
+  await page.waitForTimeout(750);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#selection-status")).toHaveText(
+    "Selection cleared.",
+  );
+
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await page.locator("#building-search").fill("model.ts");
+  await page
+    .locator(
+      '#search-results [data-building-id="building:model"]',
+    )
+    .click({ modifiers: ["Control"] });
+  await page.locator("#building-search").fill("main.ts");
+  await page
+    .locator(
+      '#search-results [data-building-id="building:main"]',
+    )
+    .click({ modifiers: ["Control"] });
+  await expect(page.locator("#selection-status")).toContainText(
+    "2 buildings selected",
+  );
+
+  const mainPoint = await sceneCanvasCenter(page);
+  await page.mouse.click(mainPoint.x, mainPoint.y);
+  await expect(page.locator("#selection-status")).toContainText(
+    "1 building selected",
+  );
+  await expect(page.locator("#selection-name")).toHaveText("main.ts");
+
+  await clickSceneCanvas(page, mainPoint, "Control");
+  await expect(page.locator("#selection-status")).toHaveText(
+    "Selection cleared.",
+  );
+  await clickSceneCanvas(page, mainPoint, "Control");
+  await expect(page.locator("#selection-status")).toContainText(
+    "1 building selected",
+  );
+
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await page.locator("#building-search").fill("model.ts");
+  await page
+    .locator(
+      '#search-results [data-building-id="building:model"]',
+    )
+    .click();
+  await page.waitForTimeout(750);
+  const modelPoint = await sceneCanvasCenter(page);
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await page
+    .locator(
+      '.advanced-query-result[data-building-id="building:main"]',
+    )
+    .click();
+  await clickSceneCanvas(page, modelPoint, "Shift");
+  await expect(page.locator("#selection-status")).toContainText(
+    "5 buildings selected",
+  );
+  await expect(
+    page.locator('.advanced-query-result[aria-selected="true"]'),
+  ).toHaveCount(1);
+});
+
+test("whole-city PNG temporarily removes and then restores a building mask", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  await page.goto(`${viewerUrl}/?performance=1`, {
+    waitUntil: "domcontentloaded",
+    timeout: 45_000,
+  });
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await page.locator("#advanced-query-run").click();
+  await expect(page.locator("#advanced-query-status")).toContainText(
+    "5 matches",
+  );
+  await page
+    .locator(
+      '.advanced-query-result[data-building-id="building:main"]',
+    )
+    .click();
+
+  const wholeCityHash = await prepareWholeCityPngHash(page);
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await page.locator("#advanced-query-isolate").click();
+  await expect
+    .poll(() => selectionPerformanceSnapshot(page))
+    .toMatchObject({
+      buildingRenderMode: "instanced",
+      buildingVisibilityMaskActive: true,
+      visibleBuildingCount: 1,
+    });
+
+  const isolatedWholeCityHash = await prepareWholeCityPngHash(page);
+  expect(isolatedWholeCityHash).toBe(wholeCityHash);
+  await expect
+    .poll(() => selectionPerformanceSnapshot(page))
+    .toMatchObject({
+      buildingRenderMode: "instanced",
+      buildingVisibilityMaskActive: true,
+      visibleBuildingCount: 1,
+    });
+});
+
+test("25k exact selection mask stays instanced and constrains canvas BVH picking", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await page.goto(
+    `${viewerUrl}/?fixture=large-city-25k&performance=1`,
+    { waitUntil: "domcontentloaded", timeout: 45_000 },
+  );
+  await page.getByRole("tab", { name: "Explore" }).click();
+  const selectFromSearch = async (
+    name: string,
+    buildingId: string,
+  ): Promise<void> => {
+    await page.locator("#building-search").fill(name);
+    await page
+      .locator(
+        `#search-results [data-building-id="${buildingId}"]`,
+      )
+      .click({ modifiers: ["Control"] });
+  };
+  await selectFromSearch("file-00000.ts", "building:00000");
+  await selectFromSearch("file-12499.ts", "building:12499");
+  await selectFromSearch("file-24999.ts", "building:24999");
+  await expect(page.locator("#selection-status")).toContainText(
+    "3 buildings selected",
+  );
+
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await page.locator("#advanced-query-isolate").click();
+  await expect
+    .poll(() => selectionPerformanceSnapshot(page))
+    .toMatchObject({
+      buildingRenderMode: "instanced",
+      buildingVisibilityMaskActive: true,
+      visibleBuildingCount: 3,
+    });
+
+  await page.locator("#camera-selected").click();
+  await page.waitForTimeout(750);
+  const selectedPoint = await sceneCanvasCenter(page);
+  await page.mouse.click(selectedPoint.x, selectedPoint.y);
+  await expect(page.locator("#selection-name")).toHaveText(
+    "file-24999.ts",
+  );
+  await expect(page.locator("#selection-status")).toContainText(
+    "1 building selected",
+  );
+  await expect
+    .poll(() => selectionPerformanceSnapshot(page))
+    .toMatchObject({
+      buildingRenderMode: "instanced",
+      buildingVisibilityMaskActive: true,
+      visibleBuildingCount: 1,
+    });
+});
+
+interface SceneCanvasPoint {
+  readonly x: number;
+  readonly y: number;
+}
+
+async function sceneCanvasCenter(
+  page: import("@playwright/test").Page,
+): Promise<SceneCanvasPoint> {
+  const bounds = await page.locator("#scene canvas").boundingBox();
+  if (bounds === null) {
+    throw new Error("The scene canvas is unavailable.");
+  }
+  return {
+    x: bounds.x + bounds.width / 2,
+    y: bounds.y + bounds.height / 2,
+  };
+}
+
+async function clickSceneCanvas(
+  page: import("@playwright/test").Page,
+  point: SceneCanvasPoint,
+  modifier: "Control" | "Shift",
+): Promise<void> {
+  await page.keyboard.down(modifier);
+  try {
+    await page.mouse.click(point.x, point.y);
+  } finally {
+    await page.keyboard.up(modifier);
+  }
+}
+
+async function prepareWholeCityPngHash(
+  page: import("@playwright/test").Page,
+): Promise<string> {
+  await page.locator("#image-export-open").click();
+  await expect(page.locator("#image-export-dialog")).toBeVisible();
+  await page.locator("#image-export-width").fill("640");
+  await page.locator("#image-export-height").fill("400");
+  await page
+    .locator("#image-export-projection")
+    .selectOption("orthographic");
+  await page.locator("#image-export-preset").selectOption("whole-city");
+  await page
+    .locator("#image-export-background")
+    .selectOption("transparent");
+  await page.locator("#image-export-labels").uncheck();
+  await page.locator("#image-export-legend").uncheck();
+  await page.locator("#image-export-submit").click();
+  const download = page.locator("#image-export-download");
+  await expect(download).toBeVisible({ timeout: 30_000 });
+  const [preparedDownload] = await Promise.all([
+    page.waitForEvent("download"),
+    download.click(),
+  ]);
+  const stream = await preparedDownload.createReadStream();
+  const hash = createHash("sha256");
+  for await (const chunk of stream) {
+    hash.update(chunk);
+  }
+  const digest = hash.digest("hex");
+  await page.locator("#image-export-close").click();
+  await expect(page.locator("#image-export-dialog")).toBeHidden();
+  return digest;
+}
+
+async function selectionPerformanceSnapshot(
+  page: import("@playwright/test").Page,
+): Promise<
+  | Pick<
+      PerformanceSnapshot,
+      | "buildingRenderMode"
+      | "buildingVisibilityMaskActive"
+      | "visibleBuildingCount"
+    >
+  | undefined
+> {
+  return page.evaluate(() => {
+    const snapshot = (
+      window as Window & {
+        __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+      }
+    ).__CODE_CITY_PERFORMANCE__;
+    if (snapshot === undefined) return undefined;
+    return {
+      buildingRenderMode: snapshot.buildingRenderMode,
+      buildingVisibilityMaskActive:
+        snapshot.buildingVisibilityMaskActive,
+      visibleBuildingCount: snapshot.visibleBuildingCount,
+    };
+  });
+}
 
 async function disableBrowserInstancing(
   page: import("@playwright/test").Page,
