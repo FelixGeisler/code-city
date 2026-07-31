@@ -86,6 +86,7 @@ export interface ViewerWorkspaceController {
 export interface ViewerWorkspaceInstallOptions {
   readonly window?: Window;
   readonly storage?: Pick<Storage, "getItem" | "setItem">;
+  readonly onStateChange?: (state: ViewerWorkspaceState) => void;
 }
 
 export function initialViewerWorkspaceState(
@@ -308,6 +309,13 @@ export function installViewerWorkspace(
   let state = initialViewerWorkspaceState(compact);
   let preferredWidth = readPreferredWidth(storage);
   let activePointerCleanup: (() => void) | undefined;
+  const notifyState = (): void =>
+    options.onStateChange?.(
+      Object.freeze({
+        activeView: state.activeView,
+        sheetState: state.sheetState,
+      }),
+    );
 
   const renderWidth = (): void => {
     const maximum = viewerWorkspaceMaximumWidth(hostWindow.innerWidth);
@@ -381,6 +389,7 @@ export function installViewerWorkspace(
     ) {
       toggle.focus();
     }
+    notifyState();
   };
 
   const show = (
@@ -406,6 +415,7 @@ export function installViewerWorkspace(
     if (showOptions.focusTab && !passive) {
       tabsByView.get(view)!.focus();
     }
+    notifyState();
   };
 
   const setPreferredWidth = (
@@ -541,6 +551,7 @@ export function installViewerWorkspace(
     }
     renderSheetState();
     renderWidth();
+    notifyState();
   };
   hostWindow.addEventListener("resize", onWindowResize);
   cleanups.push(() =>
@@ -550,6 +561,7 @@ export function installViewerWorkspace(
   renderView();
   renderSheetState();
   renderWidth();
+  notifyState();
 
   return {
     get activeView() {
