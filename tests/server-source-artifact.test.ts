@@ -363,8 +363,12 @@ describe("source artifacts", () => {
 
   it("rejects a child-directory swap during final canonical resolution", async () => {
     const root = await temporaryRoot();
-    const sources = path.join(root, "sources");
-    const displaced = path.join(root, "sources-during-realpath");
+    const canonicalRoot = await fs.realpath(root);
+    const sources = path.join(canonicalRoot, "sources");
+    const displaced = path.join(
+      canonicalRoot,
+      "sources-during-realpath",
+    );
     const realpath = fs.realpath.bind(fs);
     let sourceResolutions = 0;
     let swapped = false;
@@ -401,7 +405,7 @@ describe("source artifacts", () => {
     "rejects an unavailable child-directory file ID on Windows",
     async () => {
       const root = await temporaryRoot();
-      const sources = path.join(root, "sources");
+      const sources = path.join(await fs.realpath(root), "sources");
       const lstat = fs.lstat.bind(fs);
       let sourceStats = 0;
       vi.spyOn(fs, "lstat").mockImplementation(
@@ -429,7 +433,7 @@ describe("source artifacts", () => {
     "compares exact 64-bit child-directory identities on Windows",
     async () => {
       const root = await temporaryRoot();
-      const sources = path.join(root, "sources");
+      const sources = path.join(await fs.realpath(root), "sources");
       const lstat = fs.lstat.bind(fs);
       const firstInode = 2n ** 54n;
       const secondInode = firstInode + 1n;
@@ -847,6 +851,51 @@ describe("source artifacts", () => {
 
     await expect(store.publish(TOKEN, artifact)).rejects.toBe(sentinel);
     expect(sourceHandleClosed).toBe(true);
+    expect(existsSync(path.join(root, "sources", TOKEN))).toBe(false);
+  });
+
+  it("removes the stage when its initial identity read fails", async () => {
+    const root = await temporaryRoot();
+    const store = await SourceArtifactStore.open({
+      dataDirectory: root,
+    });
+    const { artifact } = await fixture();
+    const open = fs.open.bind(fs);
+    const sentinel = new Error("injected staged source identity failure");
+    let stageHandleClosed = false;
+    vi.spyOn(fs, "open").mockImplementation(
+      async (candidate, flags, mode) => {
+        const handle =
+          mode === undefined
+            ? await open(candidate, flags)
+            : await open(candidate, flags, mode);
+        if (!/^\.source-.*\.tmp$/u.test(path.basename(String(candidate)))) {
+          return handle;
+        }
+        return new Proxy(handle, {
+          get(target, property) {
+            if (property === "stat") {
+              return async () => {
+                throw sentinel;
+              };
+            }
+            if (property === "close") {
+              return async () => {
+                stageHandleClosed = true;
+                await target.close();
+              };
+            }
+            const value = Reflect.get(target, property, target) as unknown;
+            return typeof value === "function"
+              ? value.bind(target)
+              : value;
+          },
+        });
+      },
+    );
+
+    await expect(store.publish(TOKEN, artifact)).rejects.toBe(sentinel);
+    expect(stageHandleClosed).toBe(true);
     expect(existsSync(path.join(root, "sources", TOKEN))).toBe(false);
   });
 

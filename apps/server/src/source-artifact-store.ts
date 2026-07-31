@@ -763,15 +763,22 @@ export class SourceArtifactStore {
       throw error;
     } finally {
       await handle?.close().catch(() => undefined);
-      if (stagePath !== undefined && stageIdentity !== undefined) {
-        const status = await exactLstat(stagePath).catch(
-          () => undefined,
-        );
-        if (
-          status?.dev === stageIdentity.device &&
-          status.ino === stageIdentity.inode
-        ) {
+      if (stagePath !== undefined) {
+        if (stageIdentity === undefined) {
+          // The path was created exclusively inside the private token
+          // directory. If its first handle stat failed, unlinking this exact
+          // entry is the only way to avoid leaking the stage and token.
           await fs.unlink(stagePath).catch(() => undefined);
+        } else {
+          const status = await exactLstat(stagePath).catch(
+            () => undefined,
+          );
+          if (
+            status?.dev === stageIdentity.device &&
+            status.ino === stageIdentity.inode
+          ) {
+            await fs.unlink(stagePath).catch(() => undefined);
+          }
         }
       }
       if (
