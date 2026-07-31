@@ -70,6 +70,7 @@ import {
 } from "./district-dependency-layout.js";
 import {
   type DependencyOverlayRoute,
+  type DependencyRouteOverlayDiagnostics,
   DependencyRouteOverlay,
 } from "./dependency-overlay.js";
 import {
@@ -181,6 +182,7 @@ import {
   type EvolutionBuildingHistory,
   type EvolutionBuildingLineageSelection,
   type EvolutionBuildingLineageState,
+  type EvolutionDependencyChanges,
   type EvolutionFrameSummary,
   type EvolutionTransition,
 } from "./evolution-timeline.js";
@@ -255,6 +257,8 @@ interface ViewerPerformanceDiagnostics {
   readonly renderCalls: number;
   readonly evolutionRemovals: EvolutionRemovalDiagnostics | null;
   readonly evolutionRemovalAnimated: boolean;
+  readonly dependencyRoutes: DependencyRouteOverlayDiagnostics;
+  readonly districtDependencyRoutes: DependencyRouteOverlayDiagnostics;
   readonly pickBenchmark: {
     readonly count: number;
     readonly p95Milliseconds: number;
@@ -267,11 +271,13 @@ declare global {
     __CODE_CITY_PERFORMANCE__?: ViewerPerformanceDiagnostics & {
       readonly ready: true;
       readonly firstInteractiveMilliseconds: number;
+      readonly evolutionFrameIndex: number;
     };
   }
 }
 
 const INITIAL_ROUTE_RESULT_LIMIT = 8;
+const EVOLUTION_DEPENDENCY_ROUTE_COLOR = "#f472b6";
 
 const sceneHost = element<HTMLDivElement>("scene");
 const viewerWorkspace = installViewerWorkspace(
@@ -1105,6 +1111,7 @@ class CityScene {
     if (this.prePrintOverlayVisibility !== undefined) {
       this.prePrintOverlayVisibility.dependencies = routes.length > 0;
     }
+    schedulePerformanceDiagnostics();
   }
 
   public replaceDistrictDependencyRoutes(
@@ -1115,6 +1122,7 @@ class CityScene {
       this.prePrintOverlayVisibility.districtDependencies =
         routes.length > 0;
     }
+    schedulePerformanceDiagnostics();
   }
 
   public selectBuilding(
@@ -1249,6 +1257,9 @@ class CityScene {
       evolutionRemovalAnimated:
         this.evolutionAnimation !== null &&
         Number.isFinite(this.evolutionAnimation.durationMs),
+      dependencyRoutes: this.dependencyOverlay.diagnostics(),
+      districtDependencyRoutes:
+        this.districtDependencyOverlay.diagnostics(),
       pickBenchmark:
         this.buildingLayer?.benchmarkPicks(50) ??
         Object.freeze({
@@ -1859,6 +1870,10 @@ let activeEvolutionLineageSelection:
   | undefined;
 let activeEvolutionAnalysis: EvolutionVisualizationData | undefined;
 let activeEvolutionTransition: EvolutionTransition | undefined;
+let activeEvolutionDependencyChanges:
+  | EvolutionDependencyChanges
+  | undefined;
+let activeEvolutionTargetDependencyIds: ReadonlySet<string> = new Set();
 let activeEvolutionIndex = 0;
 let evolutionPlaying = false;
 let evolutionLoading = false;
@@ -2328,13 +2343,15 @@ function largeCityRemovalTransition(
     renamedBuildingIds: Object.freeze([]),
     resizedBuildingIds: Object.freeze([]),
     changedBuildingIds: Object.freeze([]),
-    addedDependencyIds: Object.freeze([]),
-    removedDependencyIds: Object.freeze([]),
-    changedDependencyIds: Object.freeze([]),
-    retargetedDependencyIds: Object.freeze([]),
-    affectedDependencyRouteIds: Object.freeze([]),
-    affectedDependencyEndpointKeys: Object.freeze([]),
     interpolatedBuildings: Object.freeze([]),
+    dependencyChanges: Object.freeze({
+      added: Object.freeze([]),
+      removed: Object.freeze([]),
+      changed: Object.freeze([]),
+      retargeted: Object.freeze([]),
+      affectedEndpoints: Object.freeze([]),
+      affectedRouteKeys: Object.freeze([]),
+    }),
   });
 }
 
@@ -2496,14 +2513,24 @@ function applyModel(
   }
   advancedQueryPanel?.setProject(model);
   if (options.preserveSelection) {
-    dependencyRouteState = preservedDependencyRouteState;
-    dependencyRouteVisibleLimit = preservedDependencyRouteVisibleLimit;
+    if (
+      preservedSelection?.kind === "building" &&
+      selectedExplorerBuildingId(explorerState) ===
+        preservedSelection.id
+    ) {
+      dependencyRouteState = preservedDependencyRouteState;
+      dependencyRouteVisibleLimit =
+        preservedDependencyRouteVisibleLimit;
+    }
     districtDependencyFilters = preservedDistrictDependencyFilters;
     districtDependencyRoutesVisible =
       preservedDistrictDependencyRoutesVisible;
     districtRouteVisibleLimit = preservedDistrictRouteVisibleLimit;
     selectedDistrictDependencyBundleId =
       preservedDistrictDependencyBundleId;
+    // Scene loading clears both overlay objects. Re-render only after the
+    // target model, isolation, and selection have settled so route geometry
+    // is rebuilt from the target frame without losing user controls.
     renderDependencyExplorer();
     renderDistrictDependencyExplorer();
   }
@@ -2527,6 +2554,8 @@ function resetEvolutionTimeline(recreateWorker = true): void {
   activeEvolutionLineageSelection = undefined;
   activeEvolutionAnalysis = undefined;
   activeEvolutionTransition = undefined;
+  activeEvolutionDependencyChanges = undefined;
+  activeEvolutionTargetDependencyIds = new Set();
   activeEvolutionIndex = 0;
   evolutionLoading = false;
   evolutionTimeline.hidden = true;
@@ -2607,6 +2636,18 @@ function evolutionVisualizationData(
   };
 }
 
+function evolutionTargetDependencyIds(
+  changes: EvolutionDependencyChanges | undefined,
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  changes?.added.forEach(({ dependencyId }) => ids.add(dependencyId));
+  changes?.changed.forEach(({ dependencyId }) => ids.add(dependencyId));
+  changes?.retargeted.forEach(({ dependencyId }) =>
+    ids.add(dependencyId),
+  );
+  return ids;
+}
+
 async function seekEvolution(
   targetIndex: number,
   initial = false,
@@ -2636,6 +2677,12 @@ async function seekEvolution(
       activeEvolutionIndex = targetIndex;
       activeEvolutionAnalysis = evolutionVisualizationData(result.analysis);
       activeEvolutionTransition = initial ? undefined : result.transition;
+      activeEvolutionDependencyChanges = initial
+        ? undefined
+        : result.transition.dependencyChanges;
+      activeEvolutionTargetDependencyIds = evolutionTargetDependencyIds(
+        activeEvolutionDependencyChanges,
+      );
       applyModel(result.model, activeModelSource, {
         preserveView: true,
         preserveSelection: true,
@@ -2722,25 +2769,54 @@ function renderEvolutionTimeline(): void {
     `${activeEvolutionIndex + 1}/${activeEvolutionFrames.length} \u00b7 ` +
     frame.sha.slice(0, 10);
   const transition = activeEvolutionTransition;
-  const changeText =
+  const dependencyChanges = activeEvolutionDependencyChanges;
+  const dependencyChangeText =
+    dependencyChanges === undefined
+      ? []
+      : [
+          dependencyTransitionCount(
+            dependencyChanges.added.length,
+            "added",
+          ),
+          dependencyTransitionCount(
+            dependencyChanges.removed.length,
+            "removed",
+          ),
+          dependencyTransitionCount(
+            dependencyChanges.changed.length,
+            "changed",
+          ),
+          dependencyTransitionCount(
+            dependencyChanges.retargeted.length,
+            "retargeted",
+          ),
+        ].filter((value): value is string => value !== undefined);
+  const buildingChangeText =
     transition === undefined
-      ? ""
+      ? []
       : [
           `${transition.addedBuildingIds.length} added`,
           `${transition.removedBuildings.length} removed`,
           `${transition.renamedBuildingIds.length} renamed`,
           `${transition.resizedBuildingIds.length} resized`,
-          `${transition.affectedDependencyRouteIds.length} dependency ${
-            transition.affectedDependencyRouteIds.length === 1
-              ? "route"
-              : "routes"
-          } changed`,
-        ].join(" \u00b7 ");
+        ];
+  const changeText = [
+    ...buildingChangeText,
+    ...dependencyChangeText,
+  ].join(" \u00b7 ");
   evolutionStatus.textContent =
     evolutionSeekController.busy
       ? "Seeking\u2026"
       : evolutionSeekController.failure ??
         `${new Date(frame.committedAt).toLocaleString()}${changeText ? ` \u00b7 ${changeText}` : ""}`;
+}
+
+function dependencyTransitionCount(
+  count: number,
+  action: "added" | "changed" | "removed" | "retargeted",
+): string | undefined {
+  if (count === 0) return undefined;
+  return `${count} ${count === 1 ? "dependency" : "dependencies"} ${action}`;
 }
 
 function startEvolutionPlayback(): void {
@@ -2853,6 +2929,7 @@ function schedulePerformanceDiagnostics(): void {
     const snapshot = Object.freeze({
       ready: true as const,
       firstInteractiveMilliseconds: performance.now(),
+      evolutionFrameIndex: activeEvolutionIndex,
       ...diagnostics,
     });
     window.__CODE_CITY_PERFORMANCE__ = snapshot;
@@ -3268,16 +3345,27 @@ function renderDistrictDependencyExplorer(): void {
     districtDependencyFilters,
     explorerState.isolatedDistrictId,
   );
-  const selectedBundleIndex =
+  const initiallyVisibleBundles = summary.bundles.slice(
+    0,
+    districtRouteVisibleLimit,
+  );
+  const selectedBundle =
     selectedDistrictDependencyBundleId === null
-      ? -1
-      : summary.bundles.findIndex(
+      ? undefined
+      : summary.bundles.find(
           ({ id }) => id === selectedDistrictDependencyBundleId,
         );
-  const visibleBundles = summary.bundles.slice(
-    0,
-    Math.max(districtRouteVisibleLimit, selectedBundleIndex + 1),
-  );
+  const visibleBundles =
+    selectedBundle !== undefined &&
+    initiallyVisibleBundles.length > 0 &&
+    !initiallyVisibleBundles.some(
+      ({ id }) => id === selectedBundle.id,
+    )
+      ? [
+          ...initiallyVisibleBundles.slice(0, -1),
+          selectedBundle,
+        ]
+      : initiallyVisibleBundles;
   const visibleReferenceWeight = visibleBundles.reduce(
     (total, bundle) => total + bundle.weight,
     0,
@@ -3877,6 +3965,8 @@ function dependencyOverlayRoute(
   route: SelectedDependencyRoute,
   projection: DependencyRouteProjection,
 ): DependencyOverlayRoute {
+  const changedInEvolution =
+    activeEvolutionTargetDependencyIds.has(route.dependencyId);
   return {
     id: `${route.dependencyId}:${route.direction}`,
     consumer: dependencyEndpointGeometry(projection.source),
@@ -3884,6 +3974,12 @@ function dependencyOverlayRoute(
     direction: route.direction,
     weight: route.weight,
     externalProvider: route.counterpart.kind === "external",
+    ...(changedInEvolution
+      ? {
+          color: EVOLUTION_DEPENDENCY_ROUTE_COLOR,
+          emphasized: true,
+        }
+      : {}),
   };
 }
 
@@ -3917,6 +4013,9 @@ function districtDependencyOverlayRoute(
 ): DependencyOverlayRoute {
   const geometry = districtDependencyRouteGeometry(bundle);
   const externalProvider = bundle.target.kind === "external";
+  const changedInEvolution = bundle.dependencyIds.some((dependencyId) =>
+    activeEvolutionTargetDependencyIds.has(dependencyId),
+  );
   return {
     id: bundle.id,
     consumer: geometry.consumer,
@@ -3924,8 +4023,12 @@ function districtDependencyOverlayRoute(
     direction: "outgoing",
     weight: bundle.weight,
     externalProvider,
-    color: districtDependencyRouteColor(bundle),
-    emphasized: bundle.id === selectedDistrictDependencyBundleId,
+    color: changedInEvolution
+      ? EVOLUTION_DEPENDENCY_ROUTE_COLOR
+      : districtDependencyRouteColor(bundle),
+    emphasized:
+      changedInEvolution ||
+      bundle.id === selectedDistrictDependencyBundleId,
   };
 }
 
@@ -4296,6 +4399,26 @@ function applyVisualization(): void {
   );
   const colors = new Map(visualization.colorsByBuildingId);
   const transition = activeEvolutionTransition;
+  const dependencyChanges =
+    transition?.dependencyChanges ??
+    activeEvolutionDependencyChanges;
+  const dependencyChangeCount =
+    dependencyChanges === undefined
+      ? 0
+      : dependencyChanges.added.length +
+        dependencyChanges.removed.length +
+        dependencyChanges.changed.length +
+        dependencyChanges.retargeted.length;
+  if (dependencyChanges !== undefined && dependencyChangeCount > 0) {
+    dependencyChanges.affectedEndpoints.forEach((endpoint) => {
+      if (
+        endpoint.kind === "entity" &&
+        endpoint.entityKind === "building"
+      ) {
+        colors.set(endpoint.id, EVOLUTION_DEPENDENCY_ROUTE_COLOR);
+      }
+    });
+  }
   if (transition !== undefined) {
     transition.changedBuildingIds.forEach((id) => colors.set(id, "#a78bfa"));
     transition.resizedBuildingIds.forEach((id) => colors.set(id, "#fbbf24"));
@@ -4307,7 +4430,7 @@ function applyVisualization(): void {
     visualization.label,
   );
   const transitionStatus =
-    transition === undefined
+    transition === undefined && dependencyChangeCount === 0
       ? ""
       : " Current-frame changes override the mode colors.";
   visualizationModeStatus.textContent =
@@ -4354,16 +4477,22 @@ function applyVisualization(): void {
   ) {
     changeGroups.push({
       id: "evolution-changed",
-      label: "Metrics or relationships changed",
+      label: "Building data changed",
       color: "#a78bfa",
       priority: 101,
     });
   }
-  if (transition?.affectedDependencyRouteIds.length) {
+  if (dependencyChanges !== undefined && dependencyChangeCount > 0) {
     changeGroups.push({
-      id: "evolution-dependencies",
-      label: "Dependency routes changed",
-      color: "#c084fc",
+      id: "evolution-dependency-changed",
+      label:
+        `${dependencyChangeCount.toLocaleString()} dependency route ` +
+        `${dependencyChangeCount === 1 ? "change" : "changes"} ` +
+        `(${dependencyChanges.added.length} added, ` +
+        `${dependencyChanges.removed.length} removed, ` +
+        `${dependencyChanges.changed.length} changed, ` +
+        `${dependencyChanges.retargeted.length} retargeted)`,
+      color: EVOLUTION_DEPENDENCY_ROUTE_COLOR,
       priority: 100,
     });
   }

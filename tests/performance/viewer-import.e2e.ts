@@ -17,9 +17,12 @@ import {
 } from "../../packages/analyzer/src/index.js";
 import type {
   CityBuilding,
+  CityDependency,
+  CityDistrict,
   CityModel,
 } from "../../packages/core/src/model.js";
 import {
+  deriveEvolutionChangeKinds,
   prepareEvolutionSerialization,
   replayValidatedEvolutionBundle,
   serializeEvolutionBundle,
@@ -319,6 +322,36 @@ function createLineageEvolutionFixture(
     path: "apps/viewer/src/future-lineage.ts",
     sourceLocation: { startLine: 1, endLine: 2 },
   };
+  const persistentBuildingDependencies: CityDependency[] =
+    Array.from({ length: 10 }, (_, index) => ({
+      id: `dependency:lineage-building:${index.toString().padStart(2, "0")}`,
+      repositoryId: replacedBuilding.repositoryId,
+      sourceId: "building:main",
+      targetId: "building:model",
+      resolution: "internal",
+      kind: "typescript-import",
+      weight: index + 1,
+    }));
+  const persistentExternalDependencies: CityDependency[] =
+    Array.from({ length: 20 }, (_, index) => ({
+      id: `dependency:lineage-package:${index.toString().padStart(2, "0")}`,
+      repositoryId: replacedBuilding.repositoryId,
+      sourceId: "module:viewer",
+      externalTarget: `lineage-package-${index.toString().padStart(2, "0")}`,
+      resolution: "external",
+      kind: "package-reference",
+      version: "1.0.0",
+      weight: index + 1,
+    }));
+  const persistentIncomingDependency: CityDependency = {
+    id: "dependency:lineage-incoming",
+    repositoryId: replacedBuilding.repositoryId,
+    sourceId: "building:validation",
+    targetId: "building:main",
+    resolution: "internal",
+    kind: "typescript-import",
+    weight: 1,
+  };
   const baselineModel: CityModel = {
     ...demo,
     identity: {
@@ -344,6 +377,12 @@ function createLineageEvolutionFixture(
         ? removedBuilding
         : building,
     ),
+    dependencies: [
+      ...demo.dependencies,
+      ...persistentBuildingDependencies,
+      ...persistentExternalDependencies,
+      persistentIncomingDependency,
+    ],
   };
   const template =
     createHistoryAnalysisResult(baselineModel).evolution.bundle;
@@ -359,8 +398,103 @@ function createLineageEvolutionFixture(
     analysisFingerprint:
       `sha256:${String(index + 1).repeat(64)}` as const,
   });
-  const frameOneChanges = emptyLineageChanges();
-  const turnoverChanges = emptyLineageChanges();
+  const dependency = (id: string): CityDependency => {
+    const value = baselineModel.dependencies.find(
+      (candidate) => candidate.id === id,
+    );
+    if (value === undefined) {
+      throw new Error(`Missing lineage dependency '${id}'.`);
+    }
+    return value;
+  };
+  const replacement = (
+    before: CityDependency,
+    entity: CityDependency,
+  ) => ({
+    id: before.id,
+    changeKinds: deriveEvolutionChangeKinds(
+      "dependencies",
+      before,
+      entity,
+    ),
+    entity,
+  });
+  const projectBefore = dependency(
+    "dependency:viewer-core-project",
+  );
+  const projectAfter: CityDependency = {
+    ...projectBefore,
+    weight: 30,
+  };
+  const frameOneChanges: EvolutionChanges = {
+    ...emptyLineageChanges(),
+    dependencies: {
+      added: [],
+      removed: [],
+      changed: [replacement(projectBefore, projectAfter)],
+    },
+  };
+  const removedDependency = dependency(
+    "dependency:core-typescript-package",
+  );
+  const changedBefore = dependency("dependency:main-model");
+  const changedAfter: CityDependency = {
+    ...changedBefore,
+    weight: 4,
+  };
+  const retargetedBefore = dependency(
+    "dependency:validation-model",
+  );
+  const retargetedAfter: CityDependency = {
+    ...retargetedBefore,
+    targetId: "building:schema",
+  };
+  const addedDependency: CityDependency = {
+    id: "dependency:lineage-added",
+    repositoryId: replacedBuilding.repositoryId,
+    sourceId: "module:viewer",
+    externalTarget: "lineage-added-package",
+    resolution: "external",
+    kind: "package-reference",
+    version: "2.0.0",
+    weight: 40,
+  };
+  const coreDistrictBefore = baselineModel.districts.find(
+    ({ id }) => id === "district:core",
+  );
+  if (coreDistrictBefore === undefined) {
+    throw new Error("The lineage E2E fixture requires the core district.");
+  }
+  const coreDistrictAfter: CityDistrict = {
+    ...coreDistrictBefore,
+    size: { ...coreDistrictBefore.size, x: 10 },
+  };
+  const turnoverChanges: EvolutionChanges = {
+    ...emptyLineageChanges(),
+    districts: {
+      added: [],
+      removed: [],
+      changed: [
+        {
+          id: coreDistrictBefore.id,
+          changeKinds: deriveEvolutionChangeKinds(
+            "districts",
+            coreDistrictBefore,
+            coreDistrictAfter,
+          ),
+          entity: coreDistrictAfter,
+        },
+      ],
+    },
+    dependencies: {
+      added: [addedDependency],
+      removed: [removedDependency.id],
+      changed: [
+        replacement(changedBefore, changedAfter),
+        replacement(retargetedBefore, retargetedAfter),
+      ],
+    },
+  };
   const frameThreeChanges = emptyLineageChanges();
   const bundle: EvolutionBundle = {
     ...template,
@@ -799,7 +933,10 @@ async function startAndWaitForImportedCity(page: Page): Promise<string> {
 
 async function openLineageEvolutionFixture(
   page: Page,
-  options: { readonly seekDelayMs?: number } = {},
+  options: {
+    readonly performanceDiagnostics?: boolean;
+    readonly seekDelayMs?: number;
+  } = {},
 ): Promise<LineageEvolutionFixture> {
   await openAuthenticatedWizard(page);
   await page
@@ -957,6 +1094,16 @@ async function openLineageEvolutionFixture(
     `4/4 \u00b7 ${LINEAGE_COMMITS[3]!.slice(0, 10)}`,
     { timeout: 30_000 },
   );
+  if (options.performanceDiagnostics === true) {
+    // The hardened production server rejects query-bearing request targets.
+    // Enable the viewer's read-only diagnostics after navigation; subsequent
+    // route renders publish the snapshot without another request.
+    await page.evaluate(() => {
+      const url = new URL(window.location.href);
+      url.searchParams.set("performance", "1");
+      window.history.replaceState(null, "", url);
+    });
+  }
   return fixture;
 }
 
@@ -975,6 +1122,86 @@ async function seekEvolutionFrame(
   await expect(page.locator("#evolution-status")).not.toHaveText(
     "Seeking\u2026",
   );
+}
+
+interface BrowserRoutePoint {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+interface BrowserRouteGeometry {
+  readonly consumer: {
+    readonly contact: BrowserRoutePoint;
+    readonly anchor: BrowserRoutePoint;
+  };
+  readonly provider: {
+    readonly contact: BrowserRoutePoint;
+    readonly anchor: BrowserRoutePoint;
+  };
+}
+
+async function districtRouteGeometry(
+  page: Page,
+  frameIndex: number,
+  routeId: string,
+): Promise<BrowserRouteGeometry> {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ expectedFrame, expectedRoute }) => {
+          const diagnostics = window.__CODE_CITY_PERFORMANCE__;
+          if (
+            diagnostics?.evolutionFrameIndex !== expectedFrame
+          ) {
+            return null;
+          }
+          const route =
+            diagnostics.districtDependencyRoutes.routes.find(
+              ({ id }) => id === expectedRoute,
+            );
+          return route === undefined
+            ? null
+            : {
+                consumer: route.consumer,
+                provider: route.provider,
+              };
+        },
+        {
+          expectedFrame: frameIndex,
+          expectedRoute: routeId,
+        },
+      ),
+    )
+    .not.toBeNull();
+  const geometry = await page.evaluate(
+    ({ expectedFrame, expectedRoute }) => {
+      const diagnostics = window.__CODE_CITY_PERFORMANCE__;
+      if (
+        diagnostics?.evolutionFrameIndex !== expectedFrame
+      ) {
+        return null;
+      }
+      const route =
+        diagnostics.districtDependencyRoutes.routes.find(
+          ({ id }) => id === expectedRoute,
+        );
+      return route === undefined
+        ? null
+        : {
+            consumer: route.consumer,
+            provider: route.provider,
+          };
+    },
+    {
+      expectedFrame: frameIndex,
+      expectedRoute: routeId,
+    },
+  );
+  if (geometry === null) {
+    throw new Error("Expected district route diagnostics.");
+  }
+  return geometry;
 }
 
 async function selectLineageBuilding(
@@ -1441,10 +1668,10 @@ test("preserves filtered selected dependency routes across evolution seeks", asy
     page.locator("#district-route-detail-summary"),
   ).toHaveText(/1 edge.*1 reference/u);
   await expect(page.locator("#evolution-status")).toContainText(
-    "1 dependency route changed",
+    "1 dependency removed",
   );
   await expect(page.locator("#legend")).toContainText(
-    "Dependency routes changed",
+    "1 dependency route change (0 added, 1 removed, 0 changed, 0 retargeted)",
   );
 
   await page.locator("#evolution-next").click();
@@ -1725,6 +1952,232 @@ test("does not overwrite a newer clear or replacement selection during a seek", 
   await expect(page.locator("#building-repository")).toHaveText(
     "Code City Demo",
   );
+});
+
+test("preserves filtered route overlays and rebuilds their geometry across arbitrary seeks", async ({
+  page,
+}) => {
+  test.setTimeout(75_000);
+  const fixture = await openLineageEvolutionFixture(page, {
+    performanceDiagnostics: true,
+  });
+  const selectedBuilding = fixture.model.buildings.find(
+    ({ id }) => id === "building:main",
+  );
+  if (selectedBuilding === undefined) {
+    throw new Error("The route E2E fixture requires building:main.");
+  }
+  await selectLineageBuilding(page, selectedBuilding);
+  await page.locator("#dependency-section > summary").click();
+  await page.locator("#dependency-incoming-toggle").click();
+  await page.locator("#dependency-outgoing-toggle").click();
+  await expect(
+    page.locator("#dependency-incoming-toggle"),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.locator("#dependency-outgoing-toggle"),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.locator("#dependency-list .dependency-result-button"),
+  ).toHaveCount(9);
+  await page.locator("#dependency-show-more").click();
+  await expect(
+    page.locator("#dependency-list .dependency-result-button"),
+  ).toHaveCount(12);
+
+  await page.getByRole("tab", { name: "Routes" }).click();
+  await page.locator("#district-route-filter-typescript").click();
+  await expect(
+    page.locator("#district-route-filter-typescript"),
+  ).toHaveAttribute("aria-pressed", "false");
+  await page.locator("#district-routes-toggle").click();
+  await expect(page.locator("#district-routes-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(
+    page.locator("#district-routes-list .district-route-button"),
+  ).toHaveCount(8);
+  await page.locator("#district-routes-show-more").click();
+  await expect(
+    page.locator("#district-routes-list .district-route-button"),
+  ).toHaveCount(16);
+
+  const selectedRoute = page
+    .locator("#district-routes-list .district-route-button")
+    .filter({ hasText: "Viewer" })
+    .filter({ hasText: "Core" })
+    .filter({ hasText: "Project" });
+  await expect(selectedRoute).toHaveCount(1);
+  const routeId = await selectedRoute.getAttribute("data-bundle-id");
+  if (routeId === null) {
+    throw new Error("The selected district route requires a stable id.");
+  }
+  await selectedRoute.click();
+  await expect(selectedRoute).toHaveAttribute("aria-current", "true");
+  await expect(selectedRoute).toContainText("30 references");
+  const newestGeometry = await districtRouteGeometry(
+    page,
+    3,
+    routeId,
+  );
+
+  const assertPreservedRouteState = async (
+    frameIndex: number,
+  ): Promise<void> => {
+    await expect(
+      page.locator("#dependency-incoming-toggle"),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.locator("#dependency-outgoing-toggle"),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.locator("#dependency-list .dependency-result-button"),
+    ).toHaveCount(12);
+    await expect(
+      page.locator("#district-route-filter-typescript"),
+    ).toHaveAttribute("aria-pressed", "false");
+    await expect(
+      page.locator("#district-route-filter-project"),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.locator("#district-route-filter-package"),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator("#district-routes-toggle")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    await expect(
+      page.locator("#district-routes-list .district-route-button"),
+    ).toHaveCount(16);
+    await expect(selectedRoute).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+    await expect
+      .poll(() =>
+        page.evaluate((expectedFrame) => {
+          const diagnostics = window.__CODE_CITY_PERFORMANCE__;
+          return diagnostics?.evolutionFrameIndex === expectedFrame
+            ? [
+                diagnostics.dependencyRoutes.routeCount,
+                diagnostics.districtDependencyRoutes.routeCount,
+              ]
+            : null;
+        }, frameIndex),
+      )
+      .toEqual([12, 16]);
+  };
+
+  await seekEvolutionFrame(page, 1);
+  await expect(page.locator("#legend")).toContainText(
+    "4 dependency route changes",
+  );
+  await expect(page.locator("#evolution-status")).toContainText(
+    "1 dependency added",
+  );
+  await expect(page.locator("#evolution-status")).toContainText(
+    "1 dependency removed",
+  );
+  await expect(page.locator("#evolution-status")).toContainText(
+    "1 dependency changed",
+  );
+  await expect(page.locator("#evolution-status")).toContainText(
+    "1 dependency retargeted",
+  );
+  await assertPreservedRouteState(1);
+  const olderGeometry = await districtRouteGeometry(
+    page,
+    1,
+    routeId,
+  );
+  expect(olderGeometry).not.toEqual(newestGeometry);
+
+  await seekEvolutionFrame(page, 2);
+  await assertPreservedRouteState(2);
+  await expect(selectedRoute).toContainText("30 references");
+  expect(
+    await districtRouteGeometry(page, 2, routeId),
+  ).toEqual(newestGeometry);
+  const addedPackageRoute = page
+    .locator("#district-routes-list .district-route-button")
+    .filter({ hasText: "lineage-added-package" });
+  await expect(addedPackageRoute).toHaveCount(1);
+  const addedPackageRouteId =
+    await addedPackageRoute.getAttribute("data-bundle-id");
+  if (addedPackageRouteId === null) {
+    throw new Error(
+      "The changed package route requires a stable bundle id.",
+    );
+  }
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ expectedFrame, expectedRoute }) => {
+          const diagnostics = window.__CODE_CITY_PERFORMANCE__;
+          if (
+            diagnostics?.evolutionFrameIndex !== expectedFrame
+          ) {
+            return null;
+          }
+          const route =
+            diagnostics.districtDependencyRoutes.routes.find(
+              ({ id }) => id === expectedRoute,
+            );
+          return route === undefined
+            ? null
+            : {
+                color: route.color,
+                emphasized: route.emphasized,
+              };
+        },
+        {
+          expectedFrame: 2,
+          expectedRoute: addedPackageRouteId,
+        },
+      ),
+    )
+    .toEqual({
+      color: "#f472b6",
+      emphasized: true,
+    });
+
+  await seekEvolutionFrame(page, 0);
+  await assertPreservedRouteState(0);
+  await expect(selectedRoute).toContainText("1 reference");
+  await expect(page.locator("#district-routes-status")).toContainText(
+    /\d+ not shown/u,
+  );
+  expect(
+    await districtRouteGeometry(page, 0, routeId),
+  ).toEqual(olderGeometry);
+
+  await seekEvolutionFrame(page, 2);
+  await page.getByRole("tab", { name: "Routes" }).click();
+  const transientRoute = page
+    .locator("#district-routes-list .district-route-button")
+    .filter({ hasText: "lineage-added-package" });
+  await expect(transientRoute).toHaveCount(1);
+  await transientRoute.click();
+  await expect(transientRoute).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await seekEvolutionFrame(page, 1);
+  await expect(transientRoute).toHaveCount(0);
+  await expect(
+    page.locator(
+      "#district-routes-list .district-route-button[aria-current='true']",
+    ),
+  ).toHaveCount(0);
+  await expect(page.locator("#district-route-details")).toBeHidden();
+  await expect(page.locator("#district-routes-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(
+    page.locator("#district-routes-list .district-route-button"),
+  ).toHaveCount(16);
 });
 
 test("imports a browser directory and repository ZIP with identity and analysis options", async ({
