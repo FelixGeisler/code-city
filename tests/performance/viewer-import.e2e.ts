@@ -44,6 +44,8 @@ let sourceNavigationZipFixture: string;
 let cityModelFixture: CityModel;
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
+const HISTORY_LATEST_COMMIT =
+  "1123456789abcdef0123456789abcdef01234567";
 const PUBLIC_GITHUB_URL = "https://github.com/code-city-e2e/public";
 const PRIVATE_GITHUB_URL = "https://github.com/code-city-e2e/private";
 const AZURE_DEVOPS_URL =
@@ -140,6 +142,18 @@ function createHistoryAnalysisResult(
     version: "2.47.1.windows.2",
     renamePolicyRevision: "diff-tree-renames-50-myers-v1" as const,
   };
+  const addedDependency = model.dependencies.find(
+    ({ id }) => id === "dependency:validation-model",
+  );
+  if (addedDependency === undefined) {
+    throw new Error("The history E2E fixture requires a route addition.");
+  }
+  const baselineModel: CityModel = {
+    ...model,
+    dependencies: model.dependencies.filter(
+      ({ id }) => id !== addedDependency.id,
+    ),
+  };
   const bundle: EvolutionBundle = {
     schemaVersion: "1.0",
     generator: model.generator,
@@ -150,12 +164,12 @@ function createHistoryAnalysisResult(
       order: "oldest-first",
       sampleEvery: HISTORY_SAMPLE_EVERY,
       requestedCommitCount: HISTORY_COMMIT_COUNT,
-      selectedCommitCount: 1,
-      sampledCommitCount: 1,
-      traversedCommitCount: 1,
+      selectedCommitCount: 2,
+      sampledCommitCount: 2,
+      traversedCommitCount: 2,
       resolvedOldestSha: COMMIT,
-      resolvedNewestSha: COMMIT,
-      sampledCommitShas: [COMMIT],
+      resolvedNewestSha: HISTORY_LATEST_COMMIT,
+      sampledCommitShas: [COMMIT, HISTORY_LATEST_COMMIT],
     },
     provenance: {
       repositoryId,
@@ -178,16 +192,46 @@ function createHistoryAnalysisResult(
         analyzerVersion: model.generator.version,
         analysisFingerprint: fingerprint,
       },
-      model,
+      model: baselineModel,
     },
-    deltas: [],
+    deltas: [
+      {
+        commit: {
+          index: 1,
+          sha: HISTORY_LATEST_COMMIT,
+          committedAt: "2026-01-02T00:00:00.000Z",
+          parentShas: [COMMIT],
+          analyzerVersion: model.generator.version,
+          analysisFingerprint: `sha256:${"2".repeat(64)}`,
+        },
+        changes: {
+          model: {},
+          repositories: { added: [], removed: [], changed: [] },
+          solutions: { added: [], removed: [], changed: [] },
+          modules: { added: [], removed: [], changed: [] },
+          semanticGroups: { added: [], removed: [], changed: [] },
+          districts: { added: [], removed: [], changed: [] },
+          buildings: { added: [], removed: [], changed: [] },
+          dependencies: {
+            added: [addedDependency],
+            removed: [],
+            changed: [],
+          },
+        },
+      },
+    ],
   };
   const preparedSerialization =
     prepareEvolutionSerialization(bundle);
-  const commit = {
+  const baselineCommit = {
     sha: COMMIT,
     parents: [] as const,
     committedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const latestCommit = {
+    sha: HISTORY_LATEST_COMMIT,
+    parents: [COMMIT] as const,
+    committedAt: "2026-01-02T00:00:00.000Z",
   };
   const analysisBounds = {
     totalDeadlineMs: HISTORY_TIMEOUT_MS,
@@ -201,12 +245,12 @@ function createHistoryAnalysisResult(
   };
   return {
     repository: "public",
-    tipSha: COMMIT,
+    tipSha: HISTORY_LATEST_COMMIT,
     transport: "https",
     historyBackend,
     selection: {
-      selectedCommits: [commit],
-      sampledCommits: [commit],
+      selectedCommits: [baselineCommit, latestCommit],
+      sampledCommits: [baselineCommit, latestCommit],
       summary: preparedSerialization.bundle.selection,
       analysisBounds,
       requestedTagCount: 0,
@@ -219,9 +263,9 @@ function createHistoryAnalysisResult(
       preparedSerialization,
     },
     costEstimate: {
-      traversedCommitCount: 1,
-      selectedCommitCount: 1,
-      sampledFrameCount: 1,
+      traversedCommitCount: 2,
+      selectedCommitCount: 2,
+      sampledFrameCount: 2,
       maximumChangedPathEntries:
         analysisBounds.maxAggregateChangedPaths,
       maximumChangedPathBytes:
@@ -234,7 +278,7 @@ function createHistoryAnalysisResult(
       totalDeadlineMs: analysisBounds.totalDeadlineMs,
     },
     cacheHits: 0,
-    cacheMisses: 1,
+    cacheMisses: 2,
   };
 }
 
@@ -1344,6 +1388,69 @@ test("submits bounded history, validates both artifacts, and restores its recent
   expect(removedResponses).toEqual([404, 404, 404]);
   await expect(page.locator("#model-name")).toHaveText(HISTORY_TITLE);
   await expect(page.locator("#status")).toContainText(HISTORY_VERSION);
+});
+
+test("preserves filtered selected dependency routes across evolution seeks", async ({
+  page,
+}) => {
+  await openAuthenticatedWizard(page);
+  await chooseSource(page, "github-public");
+  await page
+    .locator("#project-import-repository-url")
+    .fill(PUBLIC_GITHUB_URL);
+  await page.locator("#project-import-history-enabled").check();
+  await continueToOptions(page);
+  await continueToReview(page);
+  await startAndWaitForImportedCity(page);
+
+  await expect(page.locator("#evolution-timeline")).toBeVisible();
+  await expect(page.locator("#evolution-commit")).toContainText("2/2");
+  await page.getByRole("tab", { name: "Routes" }).click();
+  await page.locator("#district-routes-toggle").click();
+  await page.locator("#district-route-filter-project").click();
+  await page.locator("#district-route-filter-package").click();
+
+  const route = page.locator(
+    '.district-route-button[data-bundle-id="district-dependency:district%3Aviewer:district:district%3Acore"]',
+  );
+  await expect(route).toHaveAttribute("aria-label", /2 edges, 2 references/u);
+  await route.click();
+  await expect(route).toHaveAttribute("aria-current", "true");
+  await expect(
+    page.locator("#district-route-detail-summary"),
+  ).toHaveText(/2 edges.*2 references/u);
+
+  await page.locator("#evolution-previous").click();
+  await expect(page.locator("#evolution-commit")).toContainText("1/2");
+  await expect(page.locator("#district-routes-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(
+    page.locator("#district-route-filter-typescript"),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.locator("#district-route-filter-project"),
+  ).toHaveAttribute("aria-pressed", "false");
+  await expect(
+    page.locator("#district-route-filter-package"),
+  ).toHaveAttribute("aria-pressed", "false");
+  await expect(route).toHaveAttribute("aria-current", "true");
+  await expect(route).toHaveAttribute("aria-label", /1 edge, 1 reference/u);
+  await expect(
+    page.locator("#district-route-detail-summary"),
+  ).toHaveText(/1 edge.*1 reference/u);
+  await expect(page.locator("#evolution-status")).toContainText(
+    "1 dependency route changed",
+  );
+  await expect(page.locator("#legend")).toContainText(
+    "Dependency routes changed",
+  );
+
+  await page.locator("#evolution-next").click();
+  await expect(page.locator("#evolution-commit")).toContainText("2/2");
+  await expect(route).toHaveAttribute("aria-current", "true");
+  await expect(route).toHaveAttribute("aria-label", /2 edges, 2 references/u);
 });
 
 test("rejects an oversized legacy evolution artifact before downloading it", async ({

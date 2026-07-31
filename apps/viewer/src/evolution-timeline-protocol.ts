@@ -211,6 +211,12 @@ function transition(value: unknown): boolean {
       "renamedBuildingIds",
       "resizedBuildingIds",
       "changedBuildingIds",
+      "addedDependencyIds",
+      "removedDependencyIds",
+      "changedDependencyIds",
+      "retargetedDependencyIds",
+      "affectedDependencyRouteIds",
+      "affectedDependencyEndpointKeys",
       "interpolatedBuildings",
     ]) ||
     !frameIndex(candidate["fromIndex"]) ||
@@ -219,6 +225,12 @@ function transition(value: unknown): boolean {
     !stringArray(candidate["renamedBuildingIds"]) ||
     !stringArray(candidate["resizedBuildingIds"]) ||
     !stringArray(candidate["changedBuildingIds"]) ||
+    !stringArray(candidate["addedDependencyIds"]) ||
+    !stringArray(candidate["removedDependencyIds"]) ||
+    !stringArray(candidate["changedDependencyIds"]) ||
+    !stringArray(candidate["retargetedDependencyIds"]) ||
+    !stringArray(candidate["affectedDependencyRouteIds"]) ||
+    !stringArray(candidate["affectedDependencyEndpointKeys"]) ||
     !Array.isArray(candidate["interpolatedBuildings"]) ||
     candidate["interpolatedBuildings"].length > MAXIMUM_BUILDINGS ||
     !Array.isArray(candidate["removedBuildings"]) ||
