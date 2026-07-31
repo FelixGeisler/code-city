@@ -182,6 +182,8 @@ test("closing image export with Escape preserves the selected entity", async ({
 test("initial WebGL failure leaves the rest of the viewer accessible", async ({
   page,
 }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.addInitScript(() => {
     const original = HTMLCanvasElement.prototype.getContext;
     Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
@@ -210,6 +212,20 @@ test("initial WebGL failure leaves the rest of the viewer accessible", async ({
   await expect(page.locator("#image-export-open")).toBeDisabled();
   await expect(page.locator("#model-name")).not.toBeEmpty();
   await expect(page.getByRole("tab", { name: "Overview" })).toBeEnabled();
+
+  // The drill-down return path must remain safe when no scene canvas exists.
+  // Expose the normally contextual action to emulate a capability loss while
+  // source detail was open, then verify the accessible fallback survives.
+  await page.locator("#building-source-structure-return").evaluate((button) => {
+    const returnButton = button as HTMLButtonElement;
+    returnButton.hidden = false;
+    returnButton.click();
+  });
+  await expect(fallback).toBeVisible();
+  await expect(page.locator("#status")).toHaveText(
+    "Returned to the selected building in the city.",
+  );
+  expect(pageErrors).toEqual([]);
 });
 
 async function serveViewerFile(

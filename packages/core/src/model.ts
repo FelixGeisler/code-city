@@ -186,6 +186,8 @@ export interface SourceTypeFact {
   readonly name: string;
   readonly kind: SourceTypeKind;
   readonly range: SourceRange;
+  /** Added after the v1 structure shipped; absent v1 values also mean syntax. */
+  readonly provenance?: "syntax";
   readonly parentTypeId?: string;
 }
 
@@ -194,6 +196,8 @@ export interface SourceCallableFact {
   readonly name: string;
   readonly kind: SourceCallableKind;
   readonly range: SourceRange;
+  /** Added after the v1 structure shipped; absent v1 values also mean syntax. */
+  readonly provenance?: "syntax";
   readonly enclosingTypeId?: string;
   readonly complexity?: number;
 }

@@ -179,3 +179,34 @@ it("rejects unsafe inputs before starting the helper", async () => {
     ),
   ).rejects.toThrow("opaque portable");
 });
+
+it("keeps Roslyn declaration IDs stable across body, member, and formatting edits", async () => {
+  const launch = await resolveBundledRoslynLaunch();
+  const analyze = async (source: string) => {
+    const [result] = await analyzeCSharpWithRoslyn([{ id: "source.cs", source }], launch);
+    if (result?.status !== "ok") throw new Error("Roslyn fixture was skipped.");
+    return result.sourceStructure;
+  };
+  const before = await analyze("namespace N { class C { int M(Dictionary<string, int> value) { if (value.Count > 0) return 1; return 0; } } class Scope { void Outer(){ int Local(string x){ return x.Length; } } } }");
+  const after = await analyze("namespace N\n{\n class C { void Added() {} int M( Dictionary < string , /* stable formatting */ int > renamed ) => renamed.Count + 10; } class Scope { void Outer( ) { var added = 1; int Local( string renamed ) { return renamed.Length + added; } } } }");
+  for (const name of ["C", "M", "Scope", "Outer", "Local"]) {
+    const original = [...before.types, ...before.callables].find((item) => item.name === name)?.id;
+    expect([...after.types, ...after.callables].find((item) => item.name === name)?.id, name).toBe(original);
+  }
+});
+
+it("scopes duplicate Roslyn declarations by namespace, type, and enclosing callable", async () => {
+  const launch = await resolveBundledRoslynLaunch();
+  const [result] = await analyzeCSharpWithRoslyn([{
+    id: "source.cs",
+    source: "namespace A { class C { void M() {} } class Host { void First(){ int Local(){ return 1; } } void Second(){ int Local(){ return 2; } } } } namespace B { class C { void M() {} } }",
+  }], launch);
+  if (result?.status !== "ok") throw new Error("Roslyn fixture was skipped.");
+  for (const [name, count] of [["C", 2], ["M", 2], ["Local", 2]] as const) {
+    const ids = [...result.sourceStructure.types, ...result.sourceStructure.callables]
+      .filter((item) => item.name === name)
+      .map(({ id }) => id);
+    expect(ids).toHaveLength(count);
+    expect(new Set(ids).size).toBe(count);
+  }
+});

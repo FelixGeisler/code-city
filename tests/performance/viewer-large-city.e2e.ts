@@ -339,6 +339,28 @@ test("design-smell overlay is accessible, paginated, suppressible, and isolated"
   expect(diagnostics.omittedMarkers).toBeGreaterThan(0);
 });
 
+test("25k startup does not materialize fine detail for every file", async ({
+  page,
+}) => {
+  await page.goto(`${viewerUrl}/?fixture=large-city-25k&performance=1`, {
+    waitUntil: "domcontentloaded",
+    timeout: 45_000,
+  });
+  await page.waitForFunction(
+    () => (window as Window & { __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot }).__CODE_CITY_PERFORMANCE__?.ready === true,
+    undefined,
+    { timeout: 45_000 },
+  );
+  const snapshot = await page.evaluate(
+    () => (window as Window & { __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot }).__CODE_CITY_PERFORMANCE__!,
+  );
+  // Fine detail is a selected-file inspector projection, never a city-startup
+  // mesh/DOM layer. The normal 25k scene budgets must therefore remain intact.
+  expect(await page.locator("#building-source-structure li").count()).toBe(0);
+  expect(snapshot.objectCount).toBeLessThanOrEqual(384);
+  expect(snapshot.renderCalls).toBeLessThanOrEqual(256);
+});
+
 test("25k removal cues stay bounded and respect isolation in reduced motion", async ({
   page,
 }) => {

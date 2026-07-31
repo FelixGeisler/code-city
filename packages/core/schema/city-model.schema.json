@@ -999,6 +999,7 @@
         "name": { "$ref": "#/$defs/nonEmptyString" },
         "kind": { "enum": ["class", "interface", "enum", "type", "struct", "record", "delegate"] },
         "range": { "$ref": "#/$defs/sourceRange" },
+        "provenance": { "const": "syntax" },
         "parentTypeId": { "$ref": "#/$defs/nonEmptyString" }
       },
       "additionalProperties": false
@@ -1011,6 +1012,7 @@
         "name": { "$ref": "#/$defs/nonEmptyString" },
         "kind": { "enum": ["function", "method", "constructor", "accessor", "lambda", "local-function"] },
         "range": { "$ref": "#/$defs/sourceRange" },
+        "provenance": { "const": "syntax" },
         "enclosingTypeId": { "$ref": "#/$defs/nonEmptyString" },
         "complexity": { "type": "integer", "minimum": 1 }
       },

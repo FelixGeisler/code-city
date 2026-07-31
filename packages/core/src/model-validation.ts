@@ -646,6 +646,9 @@ function validateSourceStructure(
   work: ValidationCheckpoint,
 ): void {
   if (value === undefined) return;
+  if (sourceEndLine === undefined) {
+    fail(`${prefix}.sourceStructure requires building.sourceLocation for exact ranges`);
+  }
   const structure = objectAt(value, `${prefix}.sourceStructure`);
   if (structure.version !== "codecity.source-structure/1") {
     fail(`${prefix}.sourceStructure.version must be "codecity.source-structure/1"`);
@@ -664,7 +667,9 @@ function validateSourceStructure(
   }
   const ids = new Set<string>();
   const typeIds = new Set<string>();
+  const callableIds = new Set<string>();
   const relationIds = new Set<string>();
+  const parentByTypeId = new Map<string, string>();
   const range = (item: JsonObject, itemPrefix: string): void => {
     const location = objectAt(item.range, `${itemPrefix}.range`);
     const startLine = positiveInteger(location.startLine, `${itemPrefix}.range.startLine`);
@@ -680,27 +685,55 @@ function validateSourceStructure(
     if (ids.has(id)) fail(`${itemPrefix}.id must be unique within sourceStructure`); ids.add(id); typeIds.add(id);
     nonEmptyString(item.name, `${itemPrefix}.name`, CITY_MODEL_LIMITS.displayTextCharacters);
     enumValue(item.kind, new Set(["class", "interface", "enum", "type", "struct", "record", "delegate"]), `${itemPrefix}.kind`);
+    if (item.provenance !== undefined && item.provenance !== "syntax") fail(`${itemPrefix}.provenance must be "syntax" when present`);
     range(item, itemPrefix);
   });
   callables.forEach((item, index) => {
     const itemPrefix = `${prefix}.sourceStructure.callables[${index}]`;
     const id = nonEmptyString(item.id, `${itemPrefix}.id`, CITY_MODEL_LIMITS.identifierCharacters);
-    if (ids.has(id)) fail(`${itemPrefix}.id must be unique within sourceStructure`); ids.add(id);
+    if (ids.has(id)) fail(`${itemPrefix}.id must be unique within sourceStructure`); ids.add(id); callableIds.add(id);
     nonEmptyString(item.name, `${itemPrefix}.name`, CITY_MODEL_LIMITS.displayTextCharacters);
     enumValue(item.kind, new Set(["function", "method", "constructor", "accessor", "lambda", "local-function"]), `${itemPrefix}.kind`);
+    if (item.provenance !== undefined && item.provenance !== "syntax") fail(`${itemPrefix}.provenance must be "syntax" when present`);
     range(item, itemPrefix);
     if (item.complexity !== undefined) positiveInteger(item.complexity, `${itemPrefix}.complexity`);
   });
-  types.forEach((item, index) => { if (item.parentTypeId !== undefined && !typeIds.has(nonEmptyString(item.parentTypeId, `${prefix}.sourceStructure.types[${index}].parentTypeId`, CITY_MODEL_LIMITS.identifierCharacters))) fail(`${prefix}.sourceStructure.types[${index}].parentTypeId must reference a type`); });
+  types.forEach((item, index) => { if (item.parentTypeId !== undefined) { const parent = nonEmptyString(item.parentTypeId, `${prefix}.sourceStructure.types[${index}].parentTypeId`, CITY_MODEL_LIMITS.identifierCharacters); if (!typeIds.has(parent)) fail(`${prefix}.sourceStructure.types[${index}].parentTypeId must reference a type`); parentByTypeId.set(item.id as string, parent); } });
   callables.forEach((item, index) => { if (item.enclosingTypeId !== undefined && !typeIds.has(nonEmptyString(item.enclosingTypeId, `${prefix}.sourceStructure.callables[${index}].enclosingTypeId`, CITY_MODEL_LIMITS.identifierCharacters))) fail(`${prefix}.sourceStructure.callables[${index}].enclosingTypeId must reference a type`); });
+  // Iterative three-color traversal is linear in types + parent edges. The
+  // previous per-node ancestry walk was quadratic for a deeply nested file.
+  const ancestryState = new Map<string, 1 | 2>();
+  for (const typeId of typeIds) {
+    work.consume();
+    if (ancestryState.get(typeId) === 2) continue;
+    const pending: string[] = [];
+    let current: string | undefined = typeId;
+    while (current !== undefined && ancestryState.get(current) !== 2) {
+      work.consume();
+      if (ancestryState.get(current) === 1) {
+        fail(`${prefix}.sourceStructure type nesting must be acyclic`);
+      }
+      ancestryState.set(current, 1);
+      pending.push(current);
+      current = parentByTypeId.get(current);
+    }
+    for (const visited of pending) {
+      work.consume();
+      ancestryState.set(visited, 2);
+    }
+  }
   relations.forEach((item, index) => {
     const itemPrefix = `${prefix}.sourceStructure.relations[${index}]`;
     const id = nonEmptyString(item.id, `${itemPrefix}.id`, CITY_MODEL_LIMITS.identifierCharacters);
-    if (relationIds.has(id)) fail(`${itemPrefix}.id must be unique within sourceStructure.relations`);
-    relationIds.add(id);
-    enumValue(item.kind, new Set(["extends", "implements", "calls", "type-reference"]), `${itemPrefix}.kind`);
+    if (ids.has(id) || relationIds.has(id)) fail(`${itemPrefix}.id must be unique within sourceStructure`); relationIds.add(id);
+    const kind = enumValue(item.kind, new Set(["extends", "implements", "calls", "type-reference"]), `${itemPrefix}.kind`);
     if (item.provenance !== "syntax") fail(`${itemPrefix}.provenance must be "syntax"`);
-    if (!ids.has(nonEmptyString(item.sourceId, `${itemPrefix}.sourceId`, CITY_MODEL_LIMITS.identifierCharacters)) || !ids.has(nonEmptyString(item.targetId, `${itemPrefix}.targetId`, CITY_MODEL_LIMITS.identifierCharacters))) fail(`${itemPrefix} must reference known sourceStructure entities`);
+    const sourceId = nonEmptyString(item.sourceId, `${itemPrefix}.sourceId`, CITY_MODEL_LIMITS.identifierCharacters);
+    const targetId = nonEmptyString(item.targetId, `${itemPrefix}.targetId`, CITY_MODEL_LIMITS.identifierCharacters);
+    if (!ids.has(sourceId) || !ids.has(targetId)) fail(`${itemPrefix} must reference known sourceStructure entities`);
+    if ((kind === "extends" || kind === "implements") && (!typeIds.has(sourceId) || !typeIds.has(targetId))) fail(`${itemPrefix}.${kind} must connect type declarations`);
+    if (kind === "calls" && (!callableIds.has(sourceId) || !callableIds.has(targetId))) fail(`${itemPrefix}.calls must connect callable declarations`);
+    if (kind === "type-reference" && !typeIds.has(targetId)) fail(`${itemPrefix}.type-reference target must be a type declaration`);
   });
   if (unavailable.length === 0 && availability === "unavailable") fail(`${prefix}.sourceStructure.unavailable must explain unavailable detail`);
 }

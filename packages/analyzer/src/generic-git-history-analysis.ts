@@ -51,7 +51,7 @@ import type {
 } from "./types.js";
 
 export const HISTORY_SEMANTIC_ANALYZER_FINGERPRINT =
-  "code-city-semantic-facts-v1";
+  "code-city-semantic-facts-v2";
 export const HISTORY_SEMANTIC_ANALYZER_FINGERPRINT_MAX_CHARACTERS =
   160;
 const DEFAULT_METRIC_CONFIGURATION = Object.freeze({

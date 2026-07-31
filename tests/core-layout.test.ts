@@ -64,6 +64,30 @@ const input: CityLayoutInput = {
         maximumComplexity: 1,
         executableUnitCount: 1,
       },
+      sourceLocation: {
+        startLine: 1,
+        endLine: 20,
+      },
+      sourceStructure: {
+        version: "codecity.source-structure/1",
+        availability: "available",
+        types: [],
+        callables: [{
+          id: "callable:main",
+          name: "main",
+          kind: "function",
+          range: {
+            startLine: 2,
+            startColumn: 1,
+            endLine: 4,
+            endColumn: 1,
+          },
+          provenance: "syntax",
+          complexity: 1,
+        }],
+        relations: [],
+        unavailable: [],
+      },
     },
   ],
   identity: {
@@ -126,6 +150,13 @@ describe("deterministic city layout", () => {
     ]);
     expect(result.buildings[0]?.path).toBe("src/app/main.ts");
     expect(result.buildings[0]?.semanticGroupId).toBe("risk-low");
+    expect(result.buildings[0]?.sourceLocation).toEqual({
+      startLine: 1,
+      endLine: 20,
+    });
+    expect(result.buildings[0]?.sourceStructure).toEqual(
+      input.buildings[1]!.sourceStructure,
+    );
     expect(result.buildings[1]?.risk).toBe("moderate");
     const baseTop =
       result.base!.position.y + result.base!.size.y / 2;
