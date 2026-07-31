@@ -2212,18 +2212,22 @@ function sourceSegments(text: string): readonly { readonly content: string; read
   return segments;
 }
 
-function exactSourceText(text: string, range: AiGuidanceSource["location"]): string {
+/**
+ * Slices a one-based declaration range. Columns count UTF-16 code units, and
+ * both endpoints are inclusive, so equal columns select exactly one character.
+ */
+export function exactSourceText(text: string, range: AiGuidanceSource["location"]): string {
   const selected = sourceTextLineRange(text, range.startLine, range.endLine);
   if (range.startColumn === undefined && range.endColumn === undefined) return selected;
   if (range.startColumn === undefined || range.endColumn === undefined) throw new Error("Source columns are incomplete.");
   const segments = sourceSegments(selected);
   const first = segments[0];
   const last = segments[range.endLine - range.startLine];
-  if (first === undefined || last === undefined || range.startColumn > first.content.length + 1 || range.endColumn > last.content.length + 1) throw new Error("Source columns are outside retained text.");
-  if (segments.length === 1 || range.startLine === range.endLine) return first.content.slice(range.startColumn - 1, range.endColumn - 1);
+  if (first === undefined || last === undefined || range.startColumn > first.content.length || range.endColumn > last.content.length) throw new Error("Source columns are outside retained text.");
+  if (segments.length === 1 || range.startLine === range.endLine) return first.content.slice(range.startColumn - 1, range.endColumn);
   const output = [`${first.content.slice(range.startColumn - 1)}${first.delimiter}`];
   for (let index = 1; index < range.endLine - range.startLine; index += 1) output.push(`${segments[index]!.content}${segments[index]!.delimiter}`);
-  output.push(last.content.slice(0, range.endColumn - 1));
+  output.push(last.content.slice(0, range.endColumn));
   return output.join("");
 }
 
@@ -2290,8 +2294,20 @@ function resolvedContext(
     const evidence = Object.freeze({ ...finding.evidence, ...(finding.evidence.relatedBuildingIds === undefined ? {} : { relatedBuildingIds: Object.freeze([...finding.evidence.relatedBuildingIds]) }) }) as Readonly<Record<string, unknown>>;
     return { kind: "available", finding, context: Object.freeze({ version: descriptor.version, kind: "smell", buildingId: building.id, findingId: finding.id, ruleId: finding.ruleId, label: finding.ruleName, range, evidence }) };
   }
-  if (building.sourceStructure?.availability !== "available") return { kind: "unavailable", reason: `Exact ${descriptor.kind} source structure is unavailable for ${building.path}.` };
-  const fact = descriptor.kind === "type" ? building.sourceStructure.types.find(({ id }) => id === descriptor.stableId) : building.sourceStructure.callables.find(({ id }) => id === descriptor.stableId);
+  const structure = building.sourceStructure;
+  if (structure === undefined) {
+    if (descriptor.kind === "type") return undefined;
+    const legacyCallableExists = building.units?.some(
+      (_unit, index) =>
+        descriptor.stableId ===
+        `${building.id}:function:${String(index).padStart(4, "0")}`,
+    ) ?? false;
+    return legacyCallableExists
+      ? { kind: "unavailable", reason: `Exact callable source structure is unavailable for ${building.path}.` }
+      : undefined;
+  }
+  if (structure.availability !== "available") return undefined;
+  const fact = descriptor.kind === "type" ? structure.types.find(({ id }) => id === descriptor.stableId) : structure.callables.find(({ id }) => id === descriptor.stableId);
   if (fact === undefined) return undefined;
   if (fact.range.startLine < fileRange.startLine || fact.range.endLine > fileRange.endLine) return undefined;
   return { kind: "available", context: Object.freeze({ version: descriptor.version, kind: descriptor.kind, buildingId: building.id, stableId: fact.id, name: fact.name, constructKind: fact.kind, label: `${fact.kind} ${fact.name}`, range: fact.range }) };

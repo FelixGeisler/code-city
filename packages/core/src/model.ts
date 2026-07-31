@@ -167,7 +167,11 @@ export interface SourceLocation {
   readonly endLine: number;
 }
 
-/** An exact, one-based, inclusive source range for a declared code entity. */
+/**
+ * An exact, one-based source range for a declared code entity. Columns count
+ * UTF-16 code units, and both endpoints are inclusive; equal columns select
+ * exactly one character.
+ */
 export interface SourceRange extends SourceLocation {
   readonly startColumn: number;
   readonly endColumn: number;

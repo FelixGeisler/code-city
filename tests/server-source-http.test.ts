@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { analyzeRepositorySnapshots } from "../packages/analyzer/src/index.js";
 import type { RepositorySnapshot } from "../packages/analyzer/src/snapshot.js";
-import type { SourceRepositoryProvenance } from "../packages/core/src/model.js";
+import type { CityModel, SourceRepositoryProvenance } from "../packages/core/src/model.js";
 import { evaluateDesignSmells } from "../packages/core/src/design-smells.js";
 import {
   attachSourceProvenance,
@@ -15,6 +15,7 @@ import {
   uploadedSnapshotProvenance,
 } from "../apps/server/src/source-artifact.js";
 import {
+  exactSourceText,
   startCodeCityServer,
   type CodeCityServerHandle,
 } from "../apps/server/src/server.js";
@@ -97,6 +98,35 @@ function contextualSnapshot(): RepositorySnapshot {
   };
 }
 
+function withoutAvailableSourceStructure(
+  mode: "absent" | "unavailable",
+): (model: CityModel) => CityModel {
+  return (model) => {
+    const building = model.buildings[0]!;
+    const { sourceStructure: omittedSourceStructure, ...legacyBuilding } = building;
+    void omittedSourceStructure;
+    return {
+      ...model,
+      buildings: [
+        mode === "absent"
+          ? legacyBuilding
+          : {
+              ...legacyBuilding,
+              sourceStructure: {
+                version: "codecity.source-structure/1",
+                availability: "unavailable",
+                types: [],
+                callables: [],
+                relations: [],
+                unavailable: ["Declaration structure was not retained."],
+              },
+            },
+        ...model.buildings.slice(1),
+      ],
+    };
+  };
+}
+
 function guidanceContext(buildingId: string) {
   return { version: "codecity.ai-context/1", kind: "file", buildingId } as const;
 }
@@ -125,13 +155,15 @@ async function publish(
   provenance?: (
     repositoryId: string,
   ) => SourceRepositoryProvenance,
+  transformModel?: (model: CityModel) => CityModel,
 ) {
   const analyzed = await analyzeRepositorySnapshots([retained]);
   const repository = analyzed.repositories[0]!;
-  const model = attachSourceProvenance(analyzed, [
+  const modelWithProvenance = attachSourceProvenance(analyzed, [
     provenance?.(repository.id) ??
       uploadedSnapshotProvenance(repository.id, retained),
   ]);
+  const model = transformModel?.(modelWithProvenance) ?? modelWithProvenance;
   const queued = await server.jobs.enqueue(
     "project-import",
     async ({ id }) => {
@@ -316,6 +348,21 @@ afterEach(async () => {
 });
 
 describe("source navigation HTTP API", () => {
+  it("slices inclusive declaration columns on one and multiple lines", () => {
+    expect(exactSourceText("abc\n", {
+      startLine: 1,
+      startColumn: 2,
+      endLine: 1,
+      endColumn: 2,
+    })).toBe("b");
+    expect(exactSourceText("abc\r\ndef\r\nghi\r\n", {
+      startLine: 1,
+      startColumn: 2,
+      endLine: 3,
+      endColumn: 2,
+    })).toBe("bc\r\ndef\r\ngh");
+  });
+
   it("serves only the selected job's exact building and removes source with the job", async () => {
     const server = await fixture();
     const first = await publish(server, "alpha");
@@ -649,6 +696,78 @@ describe("source navigation HTTP API", () => {
     expect(forged.response.status).toBe(400);
     expect(providerPayloads).toHaveLength(1);
   });
+
+  it.each(["absent", "unavailable"] as const)(
+    "rejects forged declaration IDs when source structure is %s",
+    async (mode) => {
+      const providerFetch = vi.fn(async (_url: string | URL, init: RequestInit) =>
+        successfulProviderResponse(init));
+      const server = await fixture({
+        aiGuidance: {
+          version: 1,
+          enabled: true,
+          providers: [{
+            id: "local",
+            label: "Local",
+            endpoint: "http://localhost:11434/guidance",
+          }],
+        },
+        aiGuidanceAdapterOptions: { fetch: providerFetch },
+      });
+      const name = `legacy${mode}`;
+      const imported = await publish(
+        server,
+        name,
+        snapshot(name),
+        undefined,
+        withoutAvailableSourceStructure(mode),
+      );
+      expect(imported.building.units).not.toHaveLength(0);
+      const preview = async (kind: "type" | "callable", stableId: string) => {
+        const response = await fetch(
+          new URL(`/api/v1/ai/preview/${imported.job.id}/${imported.building.id}/local`, server.url),
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "X-Code-City-Request": "1",
+            },
+            body: JSON.stringify({
+              version: "codecity.ai-context/1",
+              kind,
+              buildingId: imported.building.id,
+              stableId,
+            }),
+          },
+        );
+        return { status: response.status, body: await response.json() as { preview?: Record<string, unknown> } };
+      };
+
+      const forgedType = await preview("type", `${imported.building.id}:type:forged`);
+      const forgedCallable = await preview("callable", `${imported.building.id}:function:9999`);
+      expect(forgedType.status).toBe(404);
+      expect(forgedCallable.status).toBe(404);
+      expect(forgedType.body.preview).toBeUndefined();
+      expect(forgedCallable.body.preview).toBeUndefined();
+
+      const validLegacyId = `${imported.building.id}:function:0000`;
+      const validLegacy = await preview("callable", validLegacyId);
+      if (mode === "absent") {
+        expect(validLegacy.status).toBe(200);
+        expect(validLegacy.body.preview).toMatchObject({
+          enabled: true,
+          availability: "unavailable",
+          context: { kind: "callable", stableId: validLegacyId },
+          reason: expect.stringMatching(/source structure is unavailable/iu),
+        });
+        expect(validLegacy.body.preview).not.toHaveProperty("grant");
+      } else {
+        expect(validLegacy.status).toBe(404);
+        expect(validLegacy.body.preview).toBeUndefined();
+      }
+      expect(providerFetch).not.toHaveBeenCalled();
+    },
+  );
 
   it("binds grants to distinct trusted-network browser sessions and expires them", async () => {
     let providerCalls = 0;

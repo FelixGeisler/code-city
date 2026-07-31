@@ -53,8 +53,10 @@ For a selected retained file, type, callable, dependency, or design-smell
 finding, the browser posts only a versioned descriptor containing stable IDs.
 It never supplies source, ranges, metrics, or evidence. The server validates the
 descriptor against the retained city model, re-evaluates smell findings, slices
-the recorded exact source range, and derives the transmitted metrics. A valid
-dependency or finding without an analyzer-recorded exact range produces an
+the recorded exact source range, and derives the transmitted metrics. Declaration
+columns count UTF-16 code units, and both endpoints are inclusive, including on
+the final line of a multi-line declaration. A valid dependency or finding
+without an analyzer-recorded exact range produces an
 explicit unavailable preview and no grant; Code City never substitutes guessed
 source.
 Dependency routes expose this check through **Preview AI guidance**; incoming
@@ -65,6 +67,11 @@ The server issues a short-lived, opaque, session-bound grant bound to the
 provider, import, selected descriptor, exact source, metrics, context digest,
 and (for smells) finding digest. Clicking **Send this exact preview once**
 consumes that grant atomically; the browser sends neither source nor metrics.
+The one-time browser request deadline is the strictly validated provider timeout
+plus a fixed ten-second server-preparation and response allowance; even its
+70-second maximum remains
+below the two-minute grant lifetime. An explicit browser cancellation always
+wins immediately.
 The provider request includes the selected provider ID, and the provider must
 echo that ID together with the context and finding digests. Both server and
 viewer reject stale, cross-provider, or otherwise mismatched output.
