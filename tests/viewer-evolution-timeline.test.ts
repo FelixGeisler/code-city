@@ -9,8 +9,10 @@ import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
 import {
   analyzeEvolutionBuildingHistory,
   analyzeEvolutionFrame,
+  compareEvolutionDependencies,
   compareEvolutionFrames,
   createEvolutionBuildingLineageSelection,
+  evolutionDependencyEndpointKey,
   EvolutionDeferredSeekController,
   EvolutionSeekGate,
   resolveEvolutionBuildingLineage,
@@ -428,81 +430,242 @@ describe("viewer evolution timeline analysis", () => {
     ).toBe(true);
   });
 
-  it("reports dependency-only route and endpoint changes deterministically", () => {
-    const dependency = (
-      id: string,
-      overrides: Partial<CityDependency> = {},
-    ): CityDependency => ({
-      id,
-      repositoryId: "repository:demo",
-      sourceId: "building:main",
-      targetId: "building:model",
-      kind: "typescript-import",
-      weight: 1,
-      ...overrides,
-    });
-    const removed = dependency("dependency:removed");
-    const changed: CityDependency = {
-      id: "dependency:changed",
+  it("compares dependency-only transitions deterministically in either direction", () => {
+    const dependency = (id: string): CityDependency =>
+      DEMO_MODEL.dependencies.find((candidate) => candidate.id === id)!;
+    const added: CityDependency = {
+      id: "dependency:added-package",
       repositoryId: "repository:demo",
       sourceId: "module:viewer",
-      externalTarget: "three",
+      externalTarget: "  @scope/new-package  ",
+      resolution: "external",
       kind: "package-reference",
-      weight: 1,
+      version: "1.0.0",
+      weight: 2,
     };
-    const retargeted = dependency("dependency:retargeted");
-    const added: CityDependency = {
-      id: "dependency:added",
+    const changed = {
+      ...dependency("dependency:main-model"),
+      resolution: "internal" as const,
+      weight: 3,
+    };
+    const retargeted = {
+      ...dependency("dependency:validation-model"),
+      targetId: "building:schema",
+    };
+    const targetDependencies = [
+      ...DEMO_MODEL.dependencies.filter(
+        ({ id }) =>
+          id !== "dependency:core-typescript-package" &&
+          id !== changed.id &&
+          id !== retargeted.id,
+      ),
+      added,
+      changed,
+      retargeted,
+    ];
+    const target = {
+      ...DEMO_MODEL,
+      dependencies: [...targetDependencies].reverse(),
+    };
+
+    const forward = compareEvolutionFrames(DEMO_MODEL, target, 0, 9);
+    expect(forward.addedBuildingIds).toEqual([]);
+    expect(forward.removedBuildings).toEqual([]);
+    expect(forward.changedBuildingIds).toEqual([]);
+    expect(
+      forward.dependencyChanges.added.map(({ dependencyId }) => dependencyId),
+    ).toEqual(["dependency:added-package"]);
+    expect(
+      forward.dependencyChanges.removed.map(
+        ({ dependencyId }) => dependencyId,
+      ),
+    ).toEqual(["dependency:core-typescript-package"]);
+    expect(
+      forward.dependencyChanges.changed.map(
+        ({ dependencyId }) => dependencyId,
+      ),
+    ).toEqual(["dependency:main-model"]);
+    expect(
+      forward.dependencyChanges.retargeted.map(
+        ({ dependencyId }) => dependencyId,
+      ),
+    ).toEqual(["dependency:validation-model"]);
+    expect(
+      forward.dependencyChanges.retargeted[0],
+    ).toMatchObject({
+      before: {
+        source: {
+          kind: "entity",
+          entityKind: "building",
+          id: "building:validation",
+        },
+        target: {
+          kind: "entity",
+          entityKind: "building",
+          id: "building:model",
+        },
+      },
+      after: {
+        source: {
+          kind: "entity",
+          entityKind: "building",
+          id: "building:validation",
+        },
+        target: {
+          kind: "entity",
+          entityKind: "building",
+          id: "building:schema",
+        },
+      },
+    });
+    expect(
+      forward.dependencyChanges.added[0]?.target,
+    ).toEqual({
+      kind: "external",
+      target: "@scope/new-package",
+      key: evolutionDependencyEndpointKey({
+        kind: "external",
+        target: "@scope/new-package",
+      }),
+    });
+    expect(
+      forward.dependencyChanges.affectedEndpoints.map(({ key }) => key),
+    ).toEqual([
+      evolutionDependencyEndpointKey({
+        kind: "entity",
+        entityKind: "module",
+        id: "module:viewer",
+      }),
+      evolutionDependencyEndpointKey({
+        kind: "external",
+        target: "@scope/new-package",
+      }),
+      evolutionDependencyEndpointKey({
+        kind: "entity",
+        entityKind: "module",
+        id: "module:core",
+      }),
+      evolutionDependencyEndpointKey({
+        kind: "external",
+        target: "typescript",
+      }),
+      evolutionDependencyEndpointKey({
+        kind: "entity",
+        entityKind: "building",
+        id: "building:main",
+      }),
+      evolutionDependencyEndpointKey({
+        kind: "entity",
+        entityKind: "building",
+        id: "building:model",
+      }),
+      evolutionDependencyEndpointKey({
+        kind: "entity",
+        entityKind: "building",
+        id: "building:validation",
+      }),
+      evolutionDependencyEndpointKey({
+        kind: "entity",
+        entityKind: "building",
+        id: "building:schema",
+      }),
+    ]);
+    expect(forward.dependencyChanges.affectedRouteKeys).toHaveLength(5);
+    expect(
+      new Set(forward.dependencyChanges.affectedRouteKeys).size,
+    ).toBe(5);
+
+    const reorderedBaseline = {
+      ...DEMO_MODEL,
+      dependencies: [...DEMO_MODEL.dependencies].reverse(),
+    };
+    const reorderedTarget = {
+      ...target,
+      dependencies: [...targetDependencies].sort(
+        (left, right) => left.id.localeCompare(right.id),
+      ),
+    };
+    const reordered = compareEvolutionFrames(
+      reorderedBaseline,
+      reorderedTarget,
+      0,
+      9,
+    );
+    expect(reordered).toEqual(forward);
+
+    const backward = compareEvolutionFrames(target, DEMO_MODEL, 9, 0);
+    expect(
+      backward.dependencyChanges.added.map(({ dependencyId }) => dependencyId),
+    ).toEqual(["dependency:core-typescript-package"]);
+    expect(
+      backward.dependencyChanges.removed.map(
+        ({ dependencyId }) => dependencyId,
+      ),
+    ).toEqual(["dependency:added-package"]);
+    expect(backward.dependencyChanges.changed).toEqual(
+      forward.dependencyChanges.changed,
+    );
+    expect(backward.dependencyChanges.retargeted[0]).toMatchObject({
+      before: {
+        target: {
+          kind: "entity",
+          entityKind: "building",
+          id: "building:schema",
+        },
+      },
+      after: {
+        target: {
+          kind: "entity",
+          entityKind: "building",
+          id: "building:model",
+        },
+      },
+    });
+  });
+
+  it("keeps building and module endpoint namespaces distinct", () => {
+    const before: CityDependency = {
+      id: "dependency:shared-ids",
       repositoryId: "repository:demo",
-      sourceId: "module:core",
-      externalTarget: "vitest",
-      kind: "package-reference",
+      sourceId: "shared:source",
+      targetId: "shared:target",
+      resolution: "internal",
+      kind: "typescript-import",
       weight: 1,
     };
-    const from = {
-      ...DEMO_MODEL,
-      dependencies: [removed, changed, retargeted],
-    };
-    const to = {
-      ...DEMO_MODEL,
-      dependencies: [
-        added,
-        { ...retargeted, targetId: "building:schema" },
-        { ...changed, weight: 2 },
-      ].toReversed(),
+    const after: CityDependency = {
+      ...before,
+      kind: "project-reference",
     };
 
-    const transition = compareEvolutionFrames(from, to, 4, 5);
+    const changes = compareEvolutionDependencies([before], [after]);
 
-    expect(transition.addedBuildingIds).toEqual([]);
-    expect(transition.changedBuildingIds).toEqual([]);
-    expect(transition.addedDependencyIds).toEqual([
-      "dependency:added",
-    ]);
-    expect(transition.removedDependencyIds).toEqual([
-      "dependency:removed",
-    ]);
-    expect(transition.changedDependencyIds).toEqual([
-      "dependency:changed",
-      "dependency:retargeted",
-    ]);
-    expect(transition.retargetedDependencyIds).toEqual([
-      "dependency:retargeted",
-    ]);
-    expect(transition.affectedDependencyRouteIds).toEqual([
-      "dependency:added",
-      "dependency:changed",
-      "dependency:removed",
-      "dependency:retargeted",
-    ]);
-    expect(transition.affectedDependencyEndpointKeys).toEqual([
-      "entity:building:main",
-      "entity:building:model",
-      "entity:building:schema",
-      "entity:module:core",
-      "entity:module:viewer",
-      "external:three",
-      "external:vitest",
-    ]);
+    expect(changes.changed).toEqual([]);
+    expect(changes.retargeted).toHaveLength(1);
+    expect(changes.retargeted[0]).toMatchObject({
+      before: {
+        source: {
+          entityKind: "building",
+          id: "shared:source",
+        },
+        target: {
+          entityKind: "building",
+          id: "shared:target",
+        },
+      },
+      after: {
+        source: {
+          entityKind: "module",
+          id: "shared:source",
+        },
+        target: {
+          entityKind: "module",
+          id: "shared:target",
+        },
+      },
+    });
+    expect(changes.retargeted[0]!.before.routeKey).not.toBe(
+      changes.retargeted[0]!.after.routeKey,
+    );
   });
 });

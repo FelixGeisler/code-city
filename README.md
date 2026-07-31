@@ -74,8 +74,14 @@ declared size and SHA-256 digest in a dedicated worker and opens a repository
 timeline. First/previous/play/next/last controls, a direct scrubber, and four
 playback speeds seek deterministic commit frames without moving the camera.
 Added buildings rise in green, removals fade as red ghosts, renames are cyan,
-and moved or resized buildings are amber. Reduced-motion mode publishes each
-frame directly with no spatial interpolation. The **Building age** and
+and moved or resized buildings are amber. Dependency additions, removals,
+  metadata changes, and retargets identify their affected target-frame
+  endpoints and visible routes in pink and report exact relationship counts in
+  the timeline status and legend until the next seek. Enabled
+building-route directions and limits, plus cross-district visibility, kind
+filters, limits, and a still-valid selected route survive every seek; their
+content and geometry are rebuilt from the target frame. Reduced-motion mode
+publishes each frame directly with no spatial interpolation. The **Building age** and
 **Historical churn** visualization modes, commit metadata, and selected
 building history are available only while a verified timeline is loaded.
 

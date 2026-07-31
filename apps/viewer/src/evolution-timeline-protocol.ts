@@ -1,9 +1,16 @@
-import type { CityModel } from "../../../packages/core/src/index.js";
-import type {
-  EvolutionBuildingHistory,
-  EvolutionFrameAnalysis,
-  EvolutionFrameSummary,
-  EvolutionTransition,
+import {
+  CITY_MODEL_LIMITS,
+  type CityModel,
+} from "../../../packages/core/src/index.js";
+import {
+  evolutionDependencyEndpointKey,
+  evolutionDependencyRouteKey,
+  type EvolutionBuildingHistory,
+  type EvolutionDependencyEndpointIdentity,
+  type EvolutionDependencyRouteIdentity,
+  type EvolutionFrameAnalysis,
+  type EvolutionFrameSummary,
+  type EvolutionTransition,
 } from "./evolution-timeline.js";
 
 export interface EvolutionLoadRequest {
@@ -65,6 +72,11 @@ const GIT_SHA_PATTERN = /^[0-9a-f]{40,64}$/u;
 const MAXIMUM_ERROR_CHARACTERS = 512;
 const MAXIMUM_FRAMES = 100;
 const MAXIMUM_BUILDINGS = 100_000;
+const MAXIMUM_DEPENDENCIES = CITY_MODEL_LIMITS.dependencies;
+const MAXIMUM_AFFECTED_DEPENDENCY_ROUTES =
+  MAXIMUM_DEPENDENCIES * 2;
+const MAXIMUM_AFFECTED_DEPENDENCY_ENDPOINTS =
+  MAXIMUM_AFFECTED_DEPENDENCY_ROUTES * 2;
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -138,10 +150,13 @@ function frameSummary(value: unknown): boolean {
   );
 }
 
-function stringArray(value: unknown): value is readonly string[] {
+function stringArray(
+  value: unknown,
+  maximum = MAXIMUM_BUILDINGS,
+): value is readonly string[] {
   return (
     Array.isArray(value) &&
-    value.length <= MAXIMUM_BUILDINGS &&
+    value.length <= maximum &&
     value.every((item) => typeof item === "string" && item.length > 0)
   );
 }
@@ -199,6 +214,215 @@ function histories(value: unknown): boolean {
   );
 }
 
+function dependencyEndpoint(
+  value: unknown,
+): value is EvolutionDependencyEndpointIdentity {
+  const candidate = record(value);
+  if (
+    candidate === undefined ||
+    typeof candidate["key"] !== "string" ||
+    candidate["key"].length === 0
+  ) {
+    return false;
+  }
+  try {
+    if (candidate["kind"] === "entity") {
+      return (
+        exactKeys(candidate, [
+          "kind",
+          "entityKind",
+          "id",
+          "key",
+        ]) &&
+        (candidate["entityKind"] === "building" ||
+          candidate["entityKind"] === "module") &&
+        typeof candidate["id"] === "string" &&
+        candidate["id"].length > 0 &&
+        candidate["key"] ===
+          evolutionDependencyEndpointKey({
+            kind: "entity",
+            entityKind: candidate["entityKind"],
+            id: candidate["id"],
+          })
+      );
+    }
+    return (
+      candidate["kind"] === "external" &&
+      exactKeys(candidate, ["kind", "target", "key"]) &&
+      typeof candidate["target"] === "string" &&
+      candidate["target"].length > 0 &&
+      candidate["key"] ===
+        evolutionDependencyEndpointKey({
+          kind: "external",
+          target: candidate["target"],
+        })
+    );
+  } catch {
+    return false;
+  }
+}
+
+function dependencyRoute(
+  value: unknown,
+): value is EvolutionDependencyRouteIdentity {
+  const candidate = record(value);
+  if (
+    candidate === undefined ||
+    !exactKeys(candidate, [
+      "dependencyId",
+      "routeKey",
+      "source",
+      "target",
+    ]) ||
+    typeof candidate["dependencyId"] !== "string" ||
+    candidate["dependencyId"].length === 0 ||
+    typeof candidate["routeKey"] !== "string" ||
+    !dependencyEndpoint(candidate["source"]) ||
+    candidate["source"].kind !== "entity" ||
+    !dependencyEndpoint(candidate["target"])
+  ) {
+    return false;
+  }
+  return (
+    candidate["routeKey"] ===
+    evolutionDependencyRouteKey(
+      candidate["source"],
+      candidate["target"],
+    )
+  );
+}
+
+function dependencyRouteArray(
+  value: unknown,
+): value is readonly EvolutionDependencyRouteIdentity[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= MAXIMUM_DEPENDENCIES &&
+    value.every(dependencyRoute)
+  );
+}
+
+function ascendingDependencyIds(
+  changes: readonly { readonly dependencyId: string }[],
+): boolean {
+  let previous: string | undefined;
+  for (const change of changes) {
+    if (
+      previous !== undefined &&
+      previous >= change.dependencyId
+    ) {
+      return false;
+    }
+    previous = change.dependencyId;
+  }
+  return true;
+}
+
+function dependencyChanges(value: unknown): boolean {
+  const candidate = record(value);
+  if (
+    candidate === undefined ||
+    !exactKeys(candidate, [
+      "added",
+      "removed",
+      "changed",
+      "retargeted",
+      "affectedEndpoints",
+      "affectedRouteKeys",
+    ])
+  ) {
+    return false;
+  }
+  const added = candidate["added"];
+  const removed = candidate["removed"];
+  const changed = candidate["changed"];
+  const retargeted = candidate["retargeted"];
+  const affectedEndpoints = candidate["affectedEndpoints"];
+  const affectedRouteKeys = candidate["affectedRouteKeys"];
+  if (
+    !dependencyRouteArray(added) ||
+    !dependencyRouteArray(removed) ||
+    !dependencyRouteArray(changed) ||
+    !Array.isArray(retargeted) ||
+    retargeted.length > MAXIMUM_DEPENDENCIES ||
+    !retargeted.every((value) => {
+      const retargeted = record(value);
+      return (
+        retargeted !== undefined &&
+        exactKeys(retargeted, [
+          "dependencyId",
+          "before",
+          "after",
+        ]) &&
+        typeof retargeted["dependencyId"] === "string" &&
+        dependencyRoute(retargeted["before"]) &&
+        dependencyRoute(retargeted["after"]) &&
+        retargeted["before"].dependencyId ===
+          retargeted["dependencyId"] &&
+        retargeted["after"].dependencyId ===
+          retargeted["dependencyId"] &&
+        retargeted["before"].routeKey !==
+          retargeted["after"].routeKey
+      );
+    }) ||
+    !Array.isArray(affectedEndpoints) ||
+    affectedEndpoints.length >
+      MAXIMUM_AFFECTED_DEPENDENCY_ENDPOINTS ||
+    !affectedEndpoints.every(dependencyEndpoint) ||
+    !stringArray(
+      affectedRouteKeys,
+      MAXIMUM_AFFECTED_DEPENDENCY_ROUTES,
+    )
+  ) {
+    return false;
+  }
+
+  const changeCount =
+    added.length +
+    removed.length +
+    changed.length +
+    retargeted.length;
+  if (changeCount > MAXIMUM_AFFECTED_DEPENDENCY_ROUTES) {
+    return false;
+  }
+  const dependencyIds = [
+    ...added,
+    ...removed,
+    ...changed,
+    ...retargeted,
+  ].map((change) => change.dependencyId);
+  const endpointKeys = affectedEndpoints.map(
+    (endpoint) => endpoint.key,
+  );
+  const expectedEndpointKeys = new Set<string>();
+  const expectedRouteKeys = new Set<string>();
+  const affect = (route: EvolutionDependencyRouteIdentity): void => {
+    expectedEndpointKeys.add(route.source.key);
+    expectedEndpointKeys.add(route.target.key);
+    expectedRouteKeys.add(route.routeKey);
+  };
+  for (const changes of [added, removed, changed]) {
+    changes.forEach(affect);
+  }
+  retargeted.forEach((change) => {
+    affect(change.before);
+    affect(change.after);
+  });
+  return (
+    ascendingDependencyIds(added) &&
+    ascendingDependencyIds(removed) &&
+    ascendingDependencyIds(changed) &&
+    ascendingDependencyIds(retargeted) &&
+    new Set(dependencyIds).size === dependencyIds.length &&
+    new Set(endpointKeys).size === endpointKeys.length &&
+    new Set(affectedRouteKeys).size === affectedRouteKeys.length &&
+    expectedEndpointKeys.size === endpointKeys.length &&
+    endpointKeys.every((key) => expectedEndpointKeys.has(key)) &&
+    expectedRouteKeys.size === affectedRouteKeys.length &&
+    affectedRouteKeys.every((key) => expectedRouteKeys.has(key))
+  );
+}
+
 function transition(value: unknown): boolean {
   const candidate = record(value);
   if (
@@ -211,13 +435,8 @@ function transition(value: unknown): boolean {
       "renamedBuildingIds",
       "resizedBuildingIds",
       "changedBuildingIds",
-      "addedDependencyIds",
-      "removedDependencyIds",
-      "changedDependencyIds",
-      "retargetedDependencyIds",
-      "affectedDependencyRouteIds",
-      "affectedDependencyEndpointKeys",
       "interpolatedBuildings",
+      "dependencyChanges",
     ]) ||
     !frameIndex(candidate["fromIndex"]) ||
     !frameIndex(candidate["toIndex"]) ||
@@ -225,16 +444,11 @@ function transition(value: unknown): boolean {
     !stringArray(candidate["renamedBuildingIds"]) ||
     !stringArray(candidate["resizedBuildingIds"]) ||
     !stringArray(candidate["changedBuildingIds"]) ||
-    !stringArray(candidate["addedDependencyIds"]) ||
-    !stringArray(candidate["removedDependencyIds"]) ||
-    !stringArray(candidate["changedDependencyIds"]) ||
-    !stringArray(candidate["retargetedDependencyIds"]) ||
-    !stringArray(candidate["affectedDependencyRouteIds"]) ||
-    !stringArray(candidate["affectedDependencyEndpointKeys"]) ||
     !Array.isArray(candidate["interpolatedBuildings"]) ||
     candidate["interpolatedBuildings"].length > MAXIMUM_BUILDINGS ||
     !Array.isArray(candidate["removedBuildings"]) ||
-    candidate["removedBuildings"].length > MAXIMUM_BUILDINGS
+    candidate["removedBuildings"].length > MAXIMUM_BUILDINGS ||
+    !dependencyChanges(candidate["dependencyChanges"])
   ) {
     return false;
   }
