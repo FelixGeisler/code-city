@@ -344,19 +344,63 @@ interface JsonBounds {
   readonly objectKeys: number;
 }
 
-/** Rejects accessors, exotic prototypes, cycles, holes, and oversized graphs before serialization. */
+/** Rejects accessors, exotic prototypes, cycles, holes, and oversized graphs without serializing them. */
 function boundedJsonByteLength(
   value: unknown,
   bounds: JsonBounds,
   description: string,
 ): number {
   const seen = new WeakSet<object>();
-  const encoder = new TextEncoder();
   const stack: { readonly value: unknown; readonly depth: number }[] = [
     { value, depth: 0 },
   ];
   let nodes = 0;
-  let observedStringBytes = 0;
+  let serializedBytes = 0;
+  const observeBytes = (additional: number): void => {
+    if (additional > bounds.bytes - serializedBytes) {
+      throw new RangeError(`${description} exceeds the byte limit.`);
+    }
+    serializedBytes += additional;
+  };
+  const observeJsonString = (text: string): void => {
+    observeBytes(2); // Opening and closing quotation marks.
+    if (text.length > bounds.bytes - serializedBytes) {
+      throw new RangeError(`${description} exceeds the byte limit.`);
+    }
+    for (let index = 0; index < text.length; index += 1) {
+      const unit = text.charCodeAt(index);
+      if (unit === 0x22 || unit === 0x5c) {
+        observeBytes(2);
+      } else if (unit <= 0x1f) {
+        observeBytes(
+          unit === 0x08 ||
+            unit === 0x09 ||
+            unit === 0x0a ||
+            unit === 0x0c ||
+            unit === 0x0d
+            ? 2
+            : 6,
+        );
+      } else if (unit <= 0x7f) {
+        observeBytes(1);
+      } else if (unit <= 0x7ff) {
+        observeBytes(2);
+      } else if (unit >= 0xd800 && unit <= 0xdbff) {
+        const next = text.charCodeAt(index + 1);
+        if (next >= 0xdc00 && next <= 0xdfff) {
+          observeBytes(4);
+          index += 1;
+        } else {
+          // Well-formed JSON.stringify escapes lone surrogates as \uXXXX.
+          observeBytes(6);
+        }
+      } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+        observeBytes(6);
+      } else {
+        observeBytes(3);
+      }
+    }
+  };
   while (stack.length > 0) {
     const current = stack.pop()!;
     nodes += 1;
@@ -367,18 +411,23 @@ function boundedJsonByteLength(
       throw new RangeError(`${description} exceeds the nesting limit.`);
     }
     const item = current.value;
-    if (item === null || typeof item === "boolean") continue;
+    if (item === null) {
+      observeBytes(4);
+      continue;
+    }
+    if (typeof item === "boolean") {
+      observeBytes(item ? 4 : 5);
+      continue;
+    }
     if (typeof item === "number") {
       if (!Number.isFinite(item)) {
         throw new TypeError(`${description} must contain finite JSON numbers.`);
       }
+      observeBytes(String(Object.is(item, -0) ? 0 : item).length);
       continue;
     }
     if (typeof item === "string") {
-      observedStringBytes += encoder.encode(item).byteLength;
-      if (observedStringBytes > bounds.bytes) {
-        throw new RangeError(`${description} exceeds the byte limit.`);
-      }
+      observeJsonString(item);
       continue;
     }
     if (typeof item !== "object" || item === undefined) {
@@ -403,7 +452,6 @@ function boundedJsonByteLength(
       ) {
         throw new TypeError(`${description} must not contain accessors.`);
       }
-      observedStringBytes += encoder.encode(key).byteLength;
       stack.push({ value: descriptor.value, depth });
     };
     if (Array.isArray(item)) {
@@ -422,6 +470,7 @@ function boundedJsonByteLength(
           `${description} must not contain sparse arrays or extra properties.`,
         );
       }
+      observeBytes(2 + Math.max(0, item.length - 1));
       for (let index = item.length - 1; index >= 0; index -= 1) {
         pushDescriptor(String(index), current.depth + 1);
       }
@@ -434,24 +483,15 @@ function boundedJsonByteLength(
     if (keys.length > bounds.objectKeys) {
       throw new RangeError(`${description} exceeds the object-key limit.`);
     }
+    observeBytes(2 + Math.max(0, keys.length - 1));
     for (let index = keys.length - 1; index >= 0; index -= 1) {
-      pushDescriptor(keys[index]!, current.depth + 1);
+      const key = keys[index]!;
+      observeJsonString(key);
+      observeBytes(1); // Property-name separator.
+      pushDescriptor(key, current.depth + 1);
     }
   }
-  let serialized: string | undefined;
-  try {
-    serialized = JSON.stringify(value);
-  } catch {
-    throw new TypeError(`${description} must be serializable JSON.`);
-  }
-  if (serialized === undefined) {
-    throw new TypeError(`${description} must be serializable JSON.`);
-  }
-  const bytes = encoder.encode(serialized).byteLength;
-  if (bytes > bounds.bytes) {
-    throw new RangeError(`${description} exceeds the byte limit.`);
-  }
-  return bytes;
+  return serializedBytes;
 }
 
 const configurationJsonBounds: JsonBounds = Object.freeze({
@@ -639,9 +679,15 @@ export function validateSafeExtensionConfiguration(
         ["id", "label", "expression"],
         `derivedMetrics[${index}]`,
       );
+      const derivedId = identifier(entry.id, `derivedMetrics[${index}].id`);
+      if (metricKeys.includes(derivedId as keyof SourceMetrics)) {
+        throw new TypeError(
+          `derivedMetrics[${index}].id must not shadow a built-in metric.`,
+        );
+      }
       return Object.freeze({
         id: unique(
-          identifier(entry.id, `derivedMetrics[${index}].id`),
+          derivedId,
           `derivedMetrics[${index}].id`,
         ),
         label: label(entry.label, `derivedMetrics[${index}].label`),
@@ -1413,6 +1459,7 @@ function evaluateExpression(
 interface MutableBuildingApplication {
   readonly id: string;
   readonly moduleId: string;
+  readonly districtId: string;
   position: { x: number; y: number; z: number };
   size: { x: number; y: number; z: number };
   color?: string;
@@ -1472,45 +1519,84 @@ function applyGroupByModuleLayout(
   path: string,
 ): void {
   if (buildings.length === 0) return;
-  const groups = new Map<string, MutableBuildingApplication[]>();
-  let maximumGroupSize = 1;
-  let maximumFootprint = 0.02;
+  const moduleGroups = new Map<
+    string,
+    Map<string, MutableBuildingApplication[]>
+  >();
+  let maximumDistrictSize = 1;
+  let maximumDistrictCount = 1;
+  let maximumFootprint = 0;
   for (const building of buildings) {
     checkpoint(1);
-    const group = groups.get(building.moduleId) ?? [];
-    group.push(building);
-    groups.set(building.moduleId, group);
-    maximumGroupSize = Math.max(maximumGroupSize, group.length);
+    let moduleGroup = moduleGroups.get(building.moduleId);
+    if (moduleGroup === undefined) {
+      moduleGroup = new Map();
+      moduleGroups.set(building.moduleId, moduleGroup);
+    }
+    let districtGroup = moduleGroup.get(building.districtId);
+    if (districtGroup === undefined) {
+      districtGroup = [];
+      moduleGroup.set(building.districtId, districtGroup);
+    }
+    districtGroup.push(building);
+    maximumDistrictSize = Math.max(
+      maximumDistrictSize,
+      districtGroup.length,
+    );
+    maximumDistrictCount = Math.max(
+      maximumDistrictCount,
+      moduleGroup.size,
+    );
     maximumFootprint = Math.max(
       maximumFootprint,
       building.size.x,
       building.size.z,
     );
   }
-  const orderedGroups = [...groups.entries()].sort(([left], [right]) =>
+  const orderedModules = [...moduleGroups.entries()].sort(([left], [right]) =>
     left < right ? -1 : left > right ? 1 : 0,
   );
-  const groupColumns = Math.ceil(Math.sqrt(orderedGroups.length));
-  const localColumns = Math.ceil(Math.sqrt(maximumGroupSize));
+  const moduleColumns = Math.ceil(Math.sqrt(orderedModules.length));
+  const buildingColumns = Math.ceil(Math.sqrt(maximumDistrictSize));
+  const districtColumns = Math.ceil(Math.sqrt(maximumDistrictCount));
   const buildingStride = maximumFootprint + 1;
-  const groupStride = localColumns * buildingStride + maximumFootprint + 3;
-  const rows = Math.ceil(orderedGroups.length / groupColumns);
-  const totalX = Math.max(0, (groupColumns - 1) * groupStride);
-  const totalZ = Math.max(0, (rows - 1) * groupStride);
-  for (const [groupIndex, [, group]] of orderedGroups.entries()) {
-    const originX = (groupIndex % groupColumns) * groupStride - totalX / 2;
-    const originZ = Math.floor(groupIndex / groupColumns) * groupStride - totalZ / 2;
-    const columns = Math.ceil(Math.sqrt(group.length));
-    for (const [index, building] of group
-      .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
-      .entries()) {
-      checkpoint(1);
-      building.position = {
-        x: originX + (index % columns) * buildingStride,
-        y: building.position.y,
-        z: originZ + Math.floor(index / columns) * buildingStride,
-      };
-      assertPresentationBounds(building, `${path}.${building.id}`);
+  const districtStride =
+    buildingColumns * buildingStride + maximumFootprint + 3;
+  const moduleStride =
+    districtColumns * districtStride + maximumFootprint + 3;
+  const moduleRows = Math.ceil(orderedModules.length / moduleColumns);
+  const totalX = Math.max(0, (moduleColumns - 1) * moduleStride);
+  const totalZ = Math.max(0, (moduleRows - 1) * moduleStride);
+  for (const [moduleIndex, [, moduleGroup]] of orderedModules.entries()) {
+    const moduleOriginX =
+      (moduleIndex % moduleColumns) * moduleStride - totalX / 2;
+    const moduleOriginZ =
+      Math.floor(moduleIndex / moduleColumns) * moduleStride - totalZ / 2;
+    const orderedDistricts = [...moduleGroup.entries()].sort(([left], [right]) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    );
+    for (const [districtIndex, [, districtGroup]] of orderedDistricts.entries()) {
+      const districtOriginX =
+        moduleOriginX + (districtIndex % districtColumns) * districtStride;
+      const districtOriginZ =
+        moduleOriginZ +
+        Math.floor(districtIndex / districtColumns) * districtStride;
+      const columns = Math.ceil(Math.sqrt(districtGroup.length));
+      for (const [index, building] of districtGroup
+        .sort((left, right) =>
+          left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
+        )
+        .entries()) {
+        checkpoint(1);
+        building.position = {
+          x: districtOriginX + (index % columns) * buildingStride,
+          y: building.position.y,
+          z:
+            districtOriginZ +
+            Math.floor(index / columns) * buildingStride,
+        };
+        assertPresentationBounds(building, `${path}.${building.id}`);
+      }
     }
   }
 }
@@ -1605,6 +1691,7 @@ export function evaluateSafeExtension(
   const mutable = snapshot.buildings.map<MutableBuildingApplication>((building) => ({
     id: building.id,
     moduleId: building.moduleId,
+    districtId: building.districtId,
     position: { ...building.position },
     size: { ...building.size },
   }));
@@ -2270,10 +2357,6 @@ export function validateSafeExtensionEvaluation(
   });
 }
 
-function vectorsEqual(left: Vector3, right: Vector3): boolean {
-  return left.x === right.x && left.y === right.y && left.z === right.z;
-}
-
 interface HorizontalExtent {
   minimumX: number;
   maximumX: number;
@@ -2366,73 +2449,95 @@ export function applySafeExtensionEvaluation(
       });
     }),
   );
-  const geometryChanged = model.buildings.some((building, index) => {
+  const horizontalGeometryChanged = model.buildings.some((building, index) => {
     const projected = buildings[index]!;
     return (
-      !vectorsEqual(building.position, projected.position) ||
-      !vectorsEqual(building.size, projected.size)
+      building.position.x !== projected.position.x ||
+      building.position.z !== projected.position.z ||
+      building.size.x !== projected.size.x ||
+      building.size.z !== projected.size.z
     );
   });
-  if (!geometryChanged) return model;
+  const verticalGeometryChanged = model.buildings.some((building, index) => {
+    const projected = buildings[index]!;
+    return (
+      building.position.y !== projected.position.y ||
+      building.size.y !== projected.size.y
+    );
+  });
+  if (!horizontalGeometryChanged && !verticalGeometryChanged) return model;
 
-  const buildingsByDistrict = new Map<string, typeof buildings[number][]>();
-  for (const building of buildings) {
-    const group = buildingsByDistrict.get(building.districtId) ?? [];
-    group.push(building);
-    buildingsByDistrict.set(building.districtId, group);
-  }
-  const districtPadding = 0.5;
-  const districts = Object.freeze(
-    model.districts.map((district) => {
-      const members = buildingsByDistrict.get(district.id) ?? [];
-      if (members.length === 0) return district;
-      const extent: HorizontalExtent = {
+  const districts = horizontalGeometryChanged
+    ? (() => {
+        const buildingsByDistrict = new Map<
+          string,
+          typeof buildings[number][]
+        >();
+        for (const building of buildings) {
+          const group = buildingsByDistrict.get(building.districtId) ?? [];
+          group.push(building);
+          buildingsByDistrict.set(building.districtId, group);
+        }
+        const districtPadding = 0.5;
+        return Object.freeze(
+          model.districts.map((district) => {
+            const members = buildingsByDistrict.get(district.id) ?? [];
+            if (members.length === 0) return district;
+            const extent: HorizontalExtent = {
+              minimumX: Number.POSITIVE_INFINITY,
+              maximumX: Number.NEGATIVE_INFINITY,
+              minimumZ: Number.POSITIVE_INFINITY,
+              maximumZ: Number.NEGATIVE_INFINITY,
+            };
+            for (const building of members) {
+              includeHorizontal(extent, building.position, building.size);
+            }
+            if (!finiteHorizontalExtent(extent)) {
+              throw new RangeError(
+                `Extension geometry for district '${district.id}' is invalid.`,
+              );
+            }
+            const size = Object.freeze({
+              x: extent.maximumX - extent.minimumX + districtPadding * 2,
+              y: district.size.y,
+              z: extent.maximumZ - extent.minimumZ + districtPadding * 2,
+            });
+            const position = Object.freeze({
+              x: (extent.minimumX + extent.maximumX) / 2,
+              y: district.position.y,
+              z: (extent.minimumZ + extent.maximumZ) / 2,
+            });
+            return Object.freeze({ ...district, position, size });
+          }),
+        );
+      })()
+    : model.districts;
+
+  const cityExtent: HorizontalExtent | undefined = horizontalGeometryChanged
+    ? {
         minimumX: Number.POSITIVE_INFINITY,
         maximumX: Number.NEGATIVE_INFINITY,
         minimumZ: Number.POSITIVE_INFINITY,
         maximumZ: Number.NEGATIVE_INFINITY,
-      };
-      for (const building of members) {
-        includeHorizontal(extent, building.position, building.size);
       }
-      if (!finiteHorizontalExtent(extent)) {
-        throw new RangeError(
-          `Extension geometry for district '${district.id}' is invalid.`,
-        );
-      }
-      const size = Object.freeze({
-        x: extent.maximumX - extent.minimumX + districtPadding * 2,
-        y: district.size.y,
-        z: extent.maximumZ - extent.minimumZ + districtPadding * 2,
-      });
-      const position = Object.freeze({
-        x: (extent.minimumX + extent.maximumX) / 2,
-        y: district.position.y,
-        z: (extent.minimumZ + extent.maximumZ) / 2,
-      });
-      return Object.freeze({ ...district, position, size });
-    }),
-  );
-
-  const cityExtent: HorizontalExtent = {
-    minimumX: Number.POSITIVE_INFINITY,
-    maximumX: Number.NEGATIVE_INFINITY,
-    minimumZ: Number.POSITIVE_INFINITY,
-    maximumZ: Number.NEGATIVE_INFINITY,
-  };
-  for (const district of districts) {
-    includeHorizontal(cityExtent, district.position, district.size);
+    : undefined;
+  if (cityExtent !== undefined) {
+    for (const district of districts) {
+      includeHorizontal(cityExtent, district.position, district.size);
+    }
+    if (model.identityPanel !== undefined) {
+      includeHorizontal(
+        cityExtent,
+        model.identityPanel.position,
+        model.identityPanel.size,
+        model.identityPanel.reliefDepth,
+      );
+    }
   }
-  if (model.identityPanel !== undefined) {
-    includeHorizontal(
-      cityExtent,
-      model.identityPanel.position,
-      model.identityPanel.size,
-      model.identityPanel.reliefDepth,
-    );
-  }
+  const hasCityExtent =
+    cityExtent !== undefined && finiteHorizontalExtent(cityExtent);
   const base =
-    model.base === undefined || !finiteHorizontalExtent(cityExtent)
+    model.base === undefined || !hasCityExtent
       ? model.base
       : Object.freeze({
           ...model.base,
@@ -2447,33 +2552,34 @@ export function applySafeExtensionEvaluation(
             z: cityExtent.maximumZ - cityExtent.minimumZ,
           }),
         });
-  const maximumY = Math.max(
-    model.bounds.y,
-    ...buildings.map(
-      (building) => building.position.y + building.size.y / 2,
-    ),
-    ...districts.map(
-      (district) => district.position.y + district.size.y / 2,
-    ),
-    ...(model.identityPanel === undefined
-      ? []
-      : [
-          model.identityPanel.position.y +
-            model.identityPanel.size.y / 2,
-        ]),
-  );
+  const maximumY = verticalGeometryChanged
+    ? Math.max(
+        0,
+        ...buildings.map(
+          (building) => building.position.y + building.size.y / 2,
+        ),
+        ...districts.map(
+          (district) => district.position.y + district.size.y / 2,
+        ),
+        ...(base === undefined
+          ? []
+          : [base.position.y + base.size.y / 2]),
+        ...(model.identityPanel === undefined
+          ? []
+          : [
+              model.identityPanel.position.y +
+                model.identityPanel.size.y / 2,
+            ]),
+      )
+    : model.bounds.y;
   const bounds = Object.freeze({
-    x:
-      base?.size.x ??
-      (finiteHorizontalExtent(cityExtent)
-        ? cityExtent.maximumX - cityExtent.minimumX
-        : model.bounds.x),
+    x: hasCityExtent
+      ? (base?.size.x ?? cityExtent.maximumX - cityExtent.minimumX)
+      : model.bounds.x,
     y: maximumY,
-    z:
-      base?.size.z ??
-      (finiteHorizontalExtent(cityExtent)
-        ? cityExtent.maximumZ - cityExtent.minimumZ
-        : model.bounds.z),
+    z: hasCityExtent
+      ? (base?.size.z ?? cityExtent.maximumZ - cityExtent.minimumZ)
+      : model.bounds.z,
   });
   const projected = Object.freeze({
     ...model,

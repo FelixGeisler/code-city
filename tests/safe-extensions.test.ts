@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { Ajv2020 } from "ajv/dist/2020.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
 import { validateCityModel } from "../packages/core/src/model-validation.js";
 import type { CityModel } from "../packages/core/src/model.js";
@@ -176,6 +176,20 @@ describe("safe declarative extensions", () => {
     expect(
       validateSchema({ ...SAFE_EXTENSION_PRESETS[0], id: "constructor" }),
     ).toBe(false);
+    const shadowingMetric = {
+      ...SAFE_EXTENSION_PRESETS[0],
+      derivedMetrics: [
+        {
+          id: "sloc",
+          label: "Shadowed SLOC",
+          expression: { op: "constant", value: 1 },
+        },
+      ],
+    };
+    expect(validateSchema(shadowingMetric)).toBe(false);
+    expect(() => validateSafeExtensionConfiguration(shadowingMetric)).toThrow(
+      /must not shadow a built-in metric/,
+    );
     expect(() =>
       validateSafeExtensionConfiguration({
         ...SAFE_EXTENSION_PRESETS[0],
@@ -329,6 +343,108 @@ describe("safe declarative extensions", () => {
     ).toThrow(/different project model/);
   });
 
+  it("preserves horizontal city geometry for a height-only mapping", () => {
+    const configuration = validateSafeExtensionConfiguration({
+      version: EXTENSION_CONFIGURATION_VERSION,
+      id: "height-only",
+      name: "Height only",
+      compatibility: {
+        cityModel: "1.x",
+        capabilities: ["mappings"],
+      },
+      scope: { kind: "project" },
+      mappings: [
+        {
+          id: "height",
+          metric: "sloc",
+          target: "height",
+          minimum: 0,
+          maximum: 1,
+        },
+      ],
+    });
+    const evaluation = evaluateSafeExtension(DEMO_MODEL, configuration);
+    const projected = applySafeExtensionEvaluation(
+      DEMO_MODEL,
+      evaluation,
+      applicationReceipt(DEMO_MODEL, evaluation),
+    );
+
+    expect(projected.districts).toBe(DEMO_MODEL.districts);
+    expect(projected.base).toBe(DEMO_MODEL.base);
+    expect(projected.bounds.x).toBe(DEMO_MODEL.bounds.x);
+    expect(projected.bounds.z).toBe(DEMO_MODEL.bounds.z);
+    expect(projected.bounds.y).toBeGreaterThan(DEMO_MODEL.bounds.y);
+    expect(
+      projected.buildings.map(({ position, size }) => ({
+        position: { x: position.x, z: position.z },
+        size: { x: size.x, z: size.z },
+      })),
+    ).toEqual(
+      DEMO_MODEL.buildings.map(({ position, size }) => ({
+        position: { x: position.x, z: position.z },
+        size: { x: size.x, z: size.z },
+      })),
+    );
+    expect(validateCityModel(projected)).toBe(projected);
+  });
+
+  it("keeps districts disjoint when one module spans multiple districts", () => {
+    const candidate = structuredClone(DEMO_MODEL);
+    const coreDistrict = candidate.districts.find(
+      ({ id }) => id === "district:core",
+    )!;
+    (coreDistrict as { moduleId: string }).moduleId = "module:viewer";
+    for (const building of candidate.buildings) {
+      if (building.districtId === coreDistrict.id) {
+        (building as { moduleId: string }).moduleId = "module:viewer";
+      }
+    }
+    const model = validateCityModel(candidate);
+    const configuration = validateSafeExtensionConfiguration({
+      version: EXTENSION_CONFIGURATION_VERSION,
+      id: "module-layout",
+      name: "Module layout",
+      compatibility: {
+        cityModel: "1.x",
+        capabilities: ["layouts"],
+      },
+      scope: { kind: "project" },
+      layouts: [{ id: "modules", strategy: "group-by-module" }],
+    });
+    const evaluation = evaluateSafeExtension(model, configuration);
+    const projected = applySafeExtensionEvaluation(
+      model,
+      evaluation,
+      applicationReceipt(model, evaluation),
+    );
+    const [left, right] = projected.districts;
+    const districtsAreDisjoint =
+      left!.position.x + left!.size.x / 2 <=
+        right!.position.x - right!.size.x / 2 ||
+      right!.position.x + right!.size.x / 2 <=
+        left!.position.x - left!.size.x / 2 ||
+      left!.position.z + left!.size.z / 2 <=
+        right!.position.z - right!.size.z / 2 ||
+      right!.position.z + right!.size.z / 2 <=
+        left!.position.z - left!.size.z / 2;
+    expect(districtsAreDisjoint).toBe(true);
+    expect(validateCityModel(projected)).toBe(projected);
+
+    const tiny = snapshot(2);
+    for (const building of tiny.buildings) {
+      (building as { moduleId: string }).moduleId = "module-a";
+      (building as { districtId: string }).districtId = "district-a";
+      (building.size as { x: number; z: number }).x = 0.000_001;
+      (building.size as { x: number; z: number }).z = 0.000_001;
+    }
+    const tinyEvaluation = evaluateSafeExtension(tiny, configuration);
+    expect(
+      tinyEvaluation.application.buildings[1]!.position.x -
+        tinyEvaluation.application.buildings[0]!.position.x,
+    ).toBeCloseTo(1.000_001, 10);
+  });
+
   it("uses canonical SHA-256 model and configuration bindings", () => {
     const configuration = SAFE_EXTENSION_PRESETS[0]!;
     const canonical = migrateSafeExtensionConfiguration(configuration);
@@ -450,6 +566,22 @@ describe("safe declarative extensions", () => {
     expect(() => validateSafeExtensionConfiguration(hidden)).toThrow(
       /accessors|plain JSON objects/,
     );
+
+    const oversizedKey = "k".repeat(EXTENSION_LIMITS.bytes);
+    const stringify = vi.spyOn(JSON, "stringify").mockImplementation(() => {
+      throw new Error("serialization must not be reached");
+    });
+    let oversizedKeyError: unknown;
+    try {
+      validateSafeExtensionConfiguration({ [oversizedKey]: null });
+    } catch (error) {
+      oversizedKeyError = error;
+    } finally {
+      stringify.mockRestore();
+    }
+    expect(oversizedKeyError).toBeInstanceOf(RangeError);
+    expect((oversizedKeyError as Error).message).toMatch(/byte limit/);
+    expect(stringify).not.toHaveBeenCalled();
 
     const balanced = (depth: number): unknown =>
       depth === 0

@@ -17,6 +17,11 @@ the same building. Editing the JSON, changing projects, changing an evolution
 frame, or starting a metric-mapping projection invalidates the preview and
 restores the base city.
 
+The module layout keeps each district as a separate horizontal group, including
+when one module spans several districts. Height-only mappings preserve the
+existing district and base footprints. Derived metric identifiers cannot shadow
+built-in metric names.
+
 Mapping inputs outside their declared range are clamped and reported. Query
 and overlay result sets are sorted and capped at 500 building IDs, with an
 explicit omitted-row diagnostic. Invalid arithmetic is not coerced: division
