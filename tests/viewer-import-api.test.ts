@@ -87,6 +87,60 @@ function headersOf(init: RequestInit): Record<string, string> {
 }
 
 describe("viewer import API protocol", () => {
+  it("loads an exact same-origin evolution artifact with a strict size bound", async () => {
+    const bytes = new TextEncoder().encode('{"schemaVersion":"1.0"}');
+    const calls: string[] = [];
+    const client = new ViewerImportApiClient(
+      new URL("https://city.example.test/viewer"),
+      {
+        fetch: async (input) => {
+          calls.push(input.toString());
+          return new Response(bytes, {
+            status: 200,
+            headers: {
+              "content-type": "application/json; charset=utf-8",
+              "content-length": String(bytes.byteLength),
+            },
+          });
+        },
+      },
+    );
+    const result = await client.evolutionArtifact(JOB_ID, {
+      artifactUrl: `/api/v1/artifacts/${JOB_ID}/evolution.json`,
+      size: bytes.byteLength,
+      sha256: "a".repeat(64),
+    });
+
+    expect(new Uint8Array(result)).toEqual(bytes);
+    expect(calls).toEqual([
+      `https://city.example.test/api/v1/artifacts/${JOB_ID}/evolution.json`,
+    ]);
+  });
+
+  it("rejects truncated or misdeclared evolution artifacts", async () => {
+    const bytes = new TextEncoder().encode("{}");
+    const client = new ViewerImportApiClient(
+      new URL("https://city.example.test/"),
+      {
+        fetch: async () =>
+          new Response(bytes, {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+              "content-length": String(bytes.byteLength),
+            },
+          }),
+      },
+    );
+    await expect(
+      client.evolutionArtifact(JOB_ID, {
+        artifactUrl: `/api/v1/artifacts/${JOB_ID}/evolution.json`,
+        size: bytes.byteLength + 1,
+        sha256: "b".repeat(64),
+      }),
+    ).rejects.toThrow(/size does not match/iu);
+  });
+
   it("accepts a bounded retained source response above the generic API limit", async () => {
     const payload = {
       source: {

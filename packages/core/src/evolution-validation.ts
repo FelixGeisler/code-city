@@ -243,6 +243,7 @@ export interface PreparedEvolutionSerialization {
 
 const PREPARED_EVOLUTION_SERIALIZATIONS =
   new WeakSet<PreparedEvolutionSerialization>();
+const VALIDATED_EVOLUTION_BUNDLES = new WeakSet<EvolutionBundle>();
 
 function prepareEvolutionBundle(
   value: unknown,
@@ -251,8 +252,10 @@ function prepareEvolutionBundle(
   const work = new ValidationCheckpoint(checkpoint);
   work.checkpoint();
   const preparedJson = freezeJsonTree(value, work);
+  const bundle = validatePreparedEvolutionBundle(preparedJson.value, work);
+  VALIDATED_EVOLUTION_BUNDLES.add(bundle);
   const prepared = Object.freeze({
-    bundle: validatePreparedEvolutionBundle(preparedJson.value, work),
+    bundle,
     measuredBytes: preparedJson.measuredBytes,
   });
   work.checkpoint();
@@ -279,6 +282,22 @@ export function* replayEvolutionBundle(
   value: unknown,
 ): Generator<EvolutionReplayFrame, void, undefined> {
   const bundle = prepareEvolutionBundle(value).bundle;
+  yield* replayValidatedEvolutionBundle(bundle);
+}
+
+/**
+ * Replays a bundle returned by `validateEvolutionBundle` without repeating its
+ * bounded whole-bundle validation. This is intended for worker-owned playback
+ * loops that keep the exact validator-returned object identity.
+ */
+export function* replayValidatedEvolutionBundle(
+  bundle: EvolutionBundle,
+): Generator<EvolutionReplayFrame, void, undefined> {
+  if (!VALIDATED_EVOLUTION_BUNDLES.has(bundle)) {
+    throw new TypeError(
+      "Evolution bundle must be the exact result of validateEvolutionBundle.",
+    );
+  }
   const work = new ValidationCheckpoint(undefined);
   let model = normalizeCityModel(bundle.baseline.model, work);
   yield {

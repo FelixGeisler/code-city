@@ -24,6 +24,11 @@ tiling keeps districts whole; print consumes the mapping applied in the viewer
 geometry change cannot retain stale routes, bounds, picking data, or print
 previews
 
+|Evolution playback
+|Direct seeking is path-independent; a superseded seek cannot publish a stale
+frame; reduced-motion mode performs no spatial interpolation; stable
+selections survive while their lineage exists
+
 |Performance
 |Viewer input is bounded; instancing is required before raising the limits
 |===

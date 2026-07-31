@@ -130,6 +130,7 @@ export interface ImportedCityModelSource {
   readonly sourceAvailability:
     | NonNullable<ImportJobResult["source"]>["availability"]
     | "unavailable";
+  readonly evolution?: NonNullable<ImportJobResult["evolution"]>;
 }
 
 export type ImportPreparationPhase =
@@ -1117,6 +1118,9 @@ export class ImportController {
         jobId: job.id,
         sourceAvailability:
           job.result.source?.availability ?? "unavailable",
+        ...(job.result.evolution === undefined
+          ? {}
+          : { evolution: job.result.evolution }),
       });
       if (!this.isCurrent(controller, generation)) return;
       this.updateState({

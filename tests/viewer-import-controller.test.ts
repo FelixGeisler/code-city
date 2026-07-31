@@ -44,6 +44,9 @@ function job(
   state: ImportJob["state"],
   options: {
     readonly progress?: ImportJob["progress"];
+    readonly evolution?: NonNullable<
+      NonNullable<ImportJob["result"]>["evolution"]
+    >;
   } = {},
 ): ImportJob {
   const base = {
@@ -64,6 +67,9 @@ function job(
         kind: "city-model",
         artifactToken: JOB_ID,
         artifactUrl: `/api/v1/artifacts/${JOB_ID}/city-model.json`,
+        ...(options.evolution === undefined
+          ? {}
+          : { evolution: options.evolution }),
       },
     };
   }
@@ -531,7 +537,15 @@ describe("viewer import controller", () => {
           },
         }),
       )
-      .mockResolvedValueOnce(job("completed"));
+      .mockResolvedValueOnce(
+        job("completed", {
+          evolution: {
+            artifactUrl: `/api/v1/artifacts/${JOB_ID}/evolution.json`,
+            size: 12_345,
+            sha256: "a".repeat(64),
+          },
+        }),
+      );
     const fixture = controllerFixture({
       storage,
       api: fakeApi({ getJob }),
@@ -570,6 +584,11 @@ describe("viewer import controller", () => {
     expect(fixture.modelReady.mock.calls[0]![1]).toMatchObject({
       label: "Imported project",
       jobId: JOB_ID,
+      evolution: {
+        artifactUrl: `/api/v1/artifacts/${JOB_ID}/evolution.json`,
+        size: 12_345,
+        sha256: "a".repeat(64),
+      },
     });
     expect(fixture.controller.state).toMatchObject({
       status: "completed",
