@@ -4922,7 +4922,10 @@ function synchronizeExplorerState(state: ExplorerState): void {
   if (state.selectedEntity !== null) {
     activeEvolutionLineageSelection = undefined;
   }
-  repositoryHierarchyTree.synchronize(state);
+  repositoryHierarchyTree.synchronize(
+    state,
+    advancedQueryPanel?.selection.buildingIds,
+  );
   const selectedBuildingId = selectedExplorerBuildingId(state);
   const selectedDistrictId = selectedExplorerDistrictId(state);
   const selectedExternalNodeId = selectedExplorerExternalId(state);
