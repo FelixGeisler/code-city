@@ -200,15 +200,21 @@ describe("repository snapshot materialization", () => {
       },
     };
     const bom = new Uint8Array([0xef, 0xbb, 0xbf, 0x61]);
+    const bomOnly = new Uint8Array([0xef, 0xbb, 0xbf]);
 
     const snapshot = await materializeRepositorySnapshot(
-      source([growing, file("bom.ts", bom)]),
+      source([growing, file("bom-only.ts", bomOnly), file("bom.ts", bom)]),
       { maxFileBytes: 4 },
     );
 
     expect(yielded).toBe(2);
     expect(closed).toBe(true);
     expect(snapshot.files).toEqual([
+      expect.objectContaining({
+        path: "bom-only.ts",
+        text: "",
+        byteLength: 3,
+      }),
       expect.objectContaining({ path: "bom.ts", text: "a", byteLength: 4 }),
     ]);
     expect(snapshot.diagnostics).toContainEqual(

@@ -176,10 +176,12 @@ export function createSourceArtifact(
         normalizePath(building.path),
       );
       const lines = lineCount(file.text);
+      const retainedByteLength = Buffer.byteLength(file.text, "utf8");
       if (
-        file.byteLength < 1 ||
+        !Number.isSafeInteger(file.byteLength) ||
+        file.byteLength < retainedByteLength ||
         file.byteLength > SOURCE_ARTIFACT_MAX_FILE_BYTES ||
-        Buffer.byteLength(file.text, "utf8") !== file.byteLength
+        retainedByteLength > SOURCE_ARTIFACT_MAX_FILE_BYTES
       ) {
         throw new TypeError("A retained source file is outside its limits.");
       }
@@ -409,7 +411,6 @@ export function normalizeSourceArtifact(value: unknown): SourceArtifact {
       typeof text === "string" ? Buffer.byteLength(text, "utf8") : 0;
     if (
       typeof text !== "string" ||
-      size < 1 ||
       size > SOURCE_ARTIFACT_MAX_FILE_BYTES ||
       identity.location.endLine !== lineCount(text)
     ) {
@@ -491,7 +492,7 @@ export function normalizeSourceArtifactIndex(
         !Number.isSafeInteger(offset) ||
         (offset as number) !== nextOffset ||
         !Number.isSafeInteger(size) ||
-        (size as number) < 1 ||
+        (size as number) < 0 ||
         (size as number) > SOURCE_ARTIFACT_MAX_FILE_BYTES ||
         typeof sha256 !== "string" ||
         !/^[0-9a-f]{64}$/u.test(sha256)
