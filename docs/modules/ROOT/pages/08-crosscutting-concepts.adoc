@@ -22,6 +22,42 @@ data and worker messages use strict exact-key validation and bounded sizes;
 evaluation caps imported buildings, findings, and suppressions to keep
 large-city behavior predictable.
 
+== Optional AI guidance
+
+AI guidance is disabled unless an administrator supplies a version-1
+`CODECITY_AI_GUIDANCE_CONFIG` JSON value. It is a server-side adapter: browser
+responses expose only a provider ID and label, never an endpoint, credential,
+or authorization header. Provider credentials are referenced by an environment
+variable name, so the configuration JSON never contains a secret.
+
+[source,json]
+----
+{"version":1,"enabled":true,"providers":[
+  {"id":"local","label":"Local model","endpoint":"http://127.0.0.1:11434/guidance"},
+  {"id":"review","label":"Review service","endpoint":"https://ai.example.com/guidance","authorizationEnv":"CODECITY_AI_REVIEW_TOKEN"}
+]}
+----
+
+Remote endpoints must use HTTPS; HTTP is allowed only for `localhost` or an
+IPv4/IPv6 loopback endpoint. Endpoint URLs cannot contain credentials, queries,
+or fragments, and redirects are refused. Each call has a bounded timeout,
+source and response size limits, cancellation on browser disconnect, and a
+strict provider response contract.
+
+For a selected retained building the viewer first displays the exact source and
+measured metrics that would be transmitted. Clicking **Send this exact preview
+once** is the only path that invokes a provider. The browser sends no source
+text or metrics in that confirmation; it names only the retained job/building,
+and the server reads the verified retained source and derives metrics from the
+matching city-model artifact. Suggestions are labelled as optional and cite
+the selected source line range. Provider failures leave deterministic findings
+and source navigation available.
+
+Prompts and model output are not stored. An optional administrator audit sink
+can receive only provider ID, selected building ID, byte count, duration, and
+completed/cancelled/failed outcome. Do not put credentials in URLs, browser
+configuration, logs, or repository files.
+
 == Metric mapping
 
 Repository = borough; build module = district; source file = building. A

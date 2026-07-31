@@ -2267,6 +2267,60 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   page,
 }) => {
   const sourceRequests: string[] = [];
+  const guidanceRequests: unknown[] = [];
+  await page.route("**/api/v1/ai/preview/**", async (route) => {
+    const buildingId = decodeURIComponent(
+      new URL(route.request().url()).pathname.split("/").at(-1) ?? "",
+    );
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        preview: {
+          enabled: true,
+          provider: { id: "review", label: "Review service" },
+          source: {
+            buildingId,
+            path: "src/retained-large.ts",
+            language: "typescript",
+            text: "export function retainedComplexity() { return 1; }\n",
+            location: { startLine: 1, endLine: 1 },
+          },
+          metrics: {
+            sloc: 91,
+            maximumComplexity: 17,
+            decisionLoad: 24,
+          },
+          limits: {
+            timeoutMs: 20_000,
+            maximumSourceBytes: 128 * 1024,
+          },
+          privacy: "no-prompt-storage",
+        },
+      }),
+    });
+  });
+  await page.route("**/api/v1/ai/requests", async (route) => {
+    guidanceRequests.push(route.request().postDataJSON());
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        result: {
+          provider: { id: "review", label: "Review service" },
+          suggestions: [
+            {
+              title: "Extract branch",
+              detail: "This suggestion relates to maximum complexity 17.",
+              citation: {
+                path: "src/retained-large.ts",
+                startLine: 1,
+                endLine: 1,
+              },
+            },
+          ],
+        },
+      }),
+    });
+  });
   page.on("request", (request) => {
     const url = new URL(request.url());
     if (
@@ -2339,6 +2393,24 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   await expect
     .poll(() => page.locator(".source-line").count())
     .toBeLessThanOrEqual(500);
+  await page.locator("#building-ai-guidance-details summary").click();
+  await expect(page.locator("#building-ai-guidance-preview")).toContainText(
+    '"maximumComplexity": 17',
+  );
+  expect(guidanceRequests).toEqual([]);
+  await page.getByRole("button", {
+    name: "Send this exact preview once",
+  }).click();
+  await expect(page.locator("#building-ai-guidance-suggestions")).toContainText(
+    "Extract branch",
+  );
+  expect(guidanceRequests).toEqual([
+    {
+      approval: "once",
+      jobId,
+      buildingId: retainedBuilding!.id,
+    },
+  ]);
   await expect.poll(() => sourceRequests).toEqual([
     `/api/v1/artifacts/${jobId}/sources/${retainedBuilding!.id}`,
   ]);
