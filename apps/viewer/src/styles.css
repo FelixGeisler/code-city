@@ -1829,6 +1829,33 @@ button,
   box-shadow: inset 3px 0 #facc15;
 }
 
+.source-line-highlight.source-column-aware {
+  background: transparent;
+}
+
+.source-range-highlight {
+  background: rgba(250, 204, 21, 0.3);
+  border-radius: 2px;
+}
+
+.source-structure-children {
+  margin: 0.35rem 0 0.35rem 1.25rem;
+  padding-inline-start: 0.75rem;
+}
+
+.source-structure-node {
+  margin-block: 0.25rem;
+}
+
+.source-structure-source-jump + .source-structure-children {
+  margin-top: 0.35rem;
+}
+
+.source-structure-toggle + .source-structure-source-jump {
+  margin-inline-start: 0.4rem;
+  font-size: 0.75rem;
+}
+
 .source-line-truncated {
   color: #8a9aad;
   font-style: italic;

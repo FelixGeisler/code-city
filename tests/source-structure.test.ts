@@ -13,17 +13,14 @@ describe("persisted source structure", () => {
       "}",
       "export function top() { return new Outer(); }",
     ].join("\n"));
-    expect(result.sourceStructure.types.map(({ name, kind, range }) => ({ name, kind, startLine: range.startLine, startColumn: range.startColumn }))).toEqual([
-      { name: "Outer", kind: "class", startLine: 1, startColumn: 1 },
-      { name: "Inner", kind: "class", startLine: 3, startColumn: 3 },
+    const outer = result.sourceStructure.types.find(({ name }) => name === "Outer")!;
+    const inner = result.sourceStructure.types.find(({ name }) => name === "Inner")!;
+    expect([outer, inner].map(({ id, name, kind, range }) => ({ id, name, kind, startLine: range.startLine, startColumn: range.startColumn }))).toEqual([
+      expect.objectContaining({ id: expect.stringMatching(/^type:/u), name: "Outer", kind: "class", startLine: 1, startColumn: 1 }),
+      expect.objectContaining({ id: expect.stringMatching(/^type:/u), name: "Inner", kind: "class", startLine: 3, startColumn: 3 }),
     ]);
-    expect(result.sourceStructure.types[0]!.id).toMatch(
-      /^source-type:[0-9a-f]{16}$/u,
-    );
-    expect(result.sourceStructure.callables.map(({ name, enclosingTypeId }) => [name, enclosingTypeId])).toEqual([
-      ["method", result.sourceStructure.types[0]!.id],
-      ["run", result.sourceStructure.types[1]!.id],
-      ["top", undefined],
+    expect(result.sourceStructure.callables.map(({ name, enclosingTypeId, complexity }) => [name, enclosingTypeId, complexity])).toEqual([
+      ["method", outer.id, 1], ["run", inner.id, 1], ["top", undefined, 1],
     ]);
     expect(result.sourceStructure.unavailable[0]).toContain("does not infer semantic bindings");
   });
@@ -48,6 +45,66 @@ describe("persisted source structure", () => {
     );
   });
 
+  it("keeps declaration identities stable when unrelated declarations are inserted", () => {
+    const original = analyzeTypeScriptSource("x.ts", "class C { m() {} }").sourceStructure;
+    const inserted = analyzeTypeScriptSource("x.ts", "class Added {}\nclass C { m() {} }").sourceStructure;
+    expect(inserted.types.find(({ name }) => name === "C")?.id).toBe(
+      original.types.find(({ name }) => name === "C")?.id,
+    );
+    expect(inserted.callables.find(({ name }) => name === "m")?.id).toBe(
+      original.callables.find(({ name }) => name === "m")?.id,
+    );
+  });
+
+  it("keeps canonical IDs stable across bodies, formatting, members, namespaces, and enclosing callables", () => {
+    const before = analyzeTypeScriptSource("x.ts", `namespace N { class C { m(value:Array<string>) { if (value.length) return 1; return 0; } } function outer(){ function local(x:string){ return x; } return local("x"); } }`).sourceStructure;
+    const after = analyzeTypeScriptSource("x.ts", `namespace N {
+      class C {
+        added() {}
+        m( renamed : Array < /* stable formatting */ string > ) { return renamed.length + 10; }
+      }
+      function outer ( ) {
+        const inserted = 1;
+        function local( x : string ) { return x.toUpperCase(); }
+        return local("x") + inserted;
+      }
+    }`).sourceStructure;
+    for (const name of ["C", "m", "outer", "local"]) {
+      const original = [...before.types, ...before.callables].find((item) => item.name === name)?.id;
+      expect([...after.types, ...after.callables].find((item) => item.name === name)?.id, name).toBe(original);
+    }
+    expect(after.callables.find(({ name }) => name === "local")?.kind).toBe(
+      "local-function",
+    );
+  });
+
+  it("scopes duplicate declarations by namespace, type, and enclosing callable", () => {
+    const structure = analyzeTypeScriptSource("x.ts", `
+      namespace A {
+        class C { m() {} }
+        function first() { function local() {} return local; }
+        function second() { function local() {} return local; }
+      }
+      namespace B { class C { m() {} } }
+    `).sourceStructure;
+    for (const [name, count] of [["C", 2], ["m", 2], ["local", 2]] as const) {
+      const ids = [...structure.types, ...structure.callables]
+        .filter((item) => item.name === name)
+        .map(({ id }) => id);
+      expect(ids).toHaveLength(count);
+      expect(new Set(ids).size).toBe(count);
+    }
+  });
+
+  it("normalizes TypeScript display names to safe bounded NFC", () => {
+    const long = `Cafe\u0301${"x".repeat(400)}`;
+    const structure = analyzeTypeScriptSource("x.ts", `const ${long} = () => 1;`).sourceStructure;
+    const name = structure.callables[0]!.name;
+    expect(name).toBe(name.normalize("NFC"));
+    expect(name.length).toBeLessThanOrEqual(256);
+    expect(name).not.toMatch(/[\p{Cc}\p{Cf}\p{Cs}]/u);
+  });
+
   it("validates additive structure and exposes it lazily as types and functions", () => {
     const structure = analyzeTypeScriptSource("x.ts", "class C { m() {} }").sourceStructure;
     const building = {
@@ -61,8 +118,31 @@ describe("persisted source structure", () => {
       }, risk: "low" as const, semanticGroupId: "low", position: { x: 0, y: 0, z: 0 }, size: { x: 1, y: 1, z: 1 },
     };
     const detail = projectFineDetail(building);
-    expect(detail.nodes.map(({ kind, name }) => [kind, name])).toEqual([["type", "C"], ["function", "m"]]);
+    expect(detail.nodes.map(({ category, kind, name }) => [category, kind, name])).toEqual([["type", "class", "C"], ["callable", "method", "m"]]);
     expect(detail.printable.state).toBe("not-printable");
     expect(() => validateCityModel({ schemaVersion: "1.0", generator: { name: "code-city", version: "test" }, repositories: [{ id: "r", name: "R" }], solutions: [], modules: [{ id: "m", repositoryId: "r", kind: "unassigned", name: "M", path: ".", solutionIds: [] }], semanticGroups: [{ id: "low", label: "Low", color: "#000000", priority: 0 }], districts: [{ id: "d", repositoryId: "r", moduleId: "m", name: "D", path: ".", position: { x: 0, y: 0, z: 0 }, size: { x: 2, y: 1, z: 2 } }], buildings: [building], dependencies: [], bounds: { x: 2, y: 2, z: 2 } })).not.toThrow();
+  });
+
+  it("keeps explicit unavailability authoritative and exposes a terminal cap", () => {
+    const base = {
+      id: "b", repositoryId: "r", moduleId: "m", districtId: "d", name: "x.ts", path: "x.ts", language: "typescript" as const,
+      metrics: { sloc: 1, decisionLoad: 0, maximumComplexity: 1, executableUnitCount: 1 },
+      units: [{ name: "legacy", line: 1, complexity: 1 }], sourceLocation: { startLine: 1, endLine: 1 },
+      risk: "low" as const, semanticGroupId: "low", position: { x: 0, y: 0, z: 0 }, size: { x: 1, y: 1, z: 1 },
+    };
+    expect(projectFineDetail({ ...base, sourceStructure: { version: "codecity.source-structure/1", availability: "unavailable", types: [], callables: [], relations: [], unavailable: ["Analyzer explicitly unavailable."] } }).state).toBe("unavailable");
+    const callables = Array.from({ length: 250 }, (_, index) => ({ id: `c-${index}`, name: `m${index}`, kind: "method" as const, range: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 1 }, provenance: "syntax" as const, complexity: 1 }));
+    const capped = projectFineDetail({ ...base, sourceStructure: { version: "codecity.source-structure/1", availability: "available", types: [], callables, relations: [], unavailable: [] } }, 200);
+    expect(capped).toMatchObject({ state: "capped", canLoadMore: false, omittedCount: 50 });
+    expect(capped.terminalReason).toContain("capped at 200");
+  });
+
+  it("validates a 10k type chain linearly and checks cancellation cooperatively", () => {
+    const types = Array.from({ length: 10_000 }, (_, index) => ({ id: `t${index}`, name: `T${index}`, kind: "class" as const, range: { startLine: index + 1, startColumn: 1, endLine: index + 1, endColumn: 1 }, provenance: "syntax" as const, ...(index === 0 ? {} : { parentTypeId: `t${index - 1}` }) }));
+    const model = { schemaVersion: "1.0", generator: { name: "code-city", version: "test" }, repositories: [{ id: "r", name: "R" }], solutions: [], modules: [{ id: "m", repositoryId: "r", kind: "unassigned", name: "M", path: ".", solutionIds: [] }], semanticGroups: [{ id: "low", label: "Low", color: "#000000", priority: 0 }], districts: [{ id: "d", repositoryId: "r", moduleId: "m", name: "D", path: ".", position: { x: 0, y: 0, z: 0 }, size: { x: 2, y: 1, z: 2 } }], buildings: [{ id: "b", repositoryId: "r", moduleId: "m", districtId: "d", name: "x.ts", path: "x.ts", language: "typescript", metrics: { sloc: 10_000, decisionLoad: 0, maximumComplexity: 1, executableUnitCount: 0 }, sourceLocation: { startLine: 1, endLine: 10_000 }, sourceStructure: { version: "codecity.source-structure/1", availability: "available", types, callables: [], relations: [], unavailable: [] }, risk: "low", semanticGroupId: "low", position: { x: 0, y: 0, z: 0 }, size: { x: 1, y: 1, z: 1 } }], dependencies: [], bounds: { x: 2, y: 2, z: 2 } };
+    expect(() => validateCityModel(model)).not.toThrow();
+    const cancelled = new Error("cancel ancestry validation");
+    let checks = 0;
+    expect(() => validateCityModel(model, { checkpoint: () => { if (++checks === 8) throw cancelled; } })).toThrow(cancelled);
   });
 });

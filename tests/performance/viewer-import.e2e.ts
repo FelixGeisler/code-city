@@ -46,6 +46,9 @@ let accessToken: string;
 let directoryFixture: string;
 let zipFixture: string;
 let sourceNavigationZipFixture: string;
+let unavailableDetailFixture: string;
+let availableDetailFixture: string;
+let cappedDetailFixture: string;
 let cityModelFixture: CityModel;
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
@@ -758,6 +761,13 @@ test.beforeAll(async () => {
     ),
     "  return score;",
     "}",
+    "export const sameLinePrefix = 1; export function sameLineExact(): number { return 7; } export const sameLineSuffix = 2;",
+    "export class DetailClass {",
+    ...Array.from(
+      { length: 45 },
+      (_, index) => `  method${index}(): number { return ${index}; }`,
+    ),
+    "}",
     "",
   );
   sourceNavigationZipFixture = path.join(
@@ -787,6 +797,76 @@ test.beforeAll(async () => {
       "utf8",
     ),
   ) as CityModel;
+  unavailableDetailFixture = path.join(testRoot, "unavailable-detail.json");
+  const firstBuilding = cityModelFixture.buildings[0]!;
+  await fs.writeFile(
+    unavailableDetailFixture,
+    JSON.stringify({
+      ...cityModelFixture,
+      buildings: [{
+        ...firstBuilding,
+        sourceLocation: { startLine: 1, endLine: 1 },
+        sourceStructure: {
+          version: "codecity.source-structure/1",
+          availability: "unavailable",
+          types: [], callables: [], relations: [],
+          unavailable: ["JavaScript declaration facts were not captured for this model."],
+        },
+      }, ...cityModelFixture.buildings.slice(1)],
+    }),
+    "utf8",
+  );
+  availableDetailFixture = path.join(testRoot, "available-detail.json");
+  await fs.writeFile(
+    availableDetailFixture,
+    JSON.stringify({
+      ...cityModelFixture,
+      buildings: [{
+        ...firstBuilding,
+        sourceLocation: { startLine: 1, endLine: 10 },
+        sourceStructure: {
+          version: "codecity.source-structure/1",
+          availability: "available",
+          types: [{ id: "type:demo", name: "DemoType", kind: "class", provenance: "syntax", range: { startLine: 1, startColumn: 1, endLine: 10, endColumn: 1 } }],
+          callables: [{ id: "callable:demo", name: "run", kind: "method", provenance: "syntax", enclosingTypeId: "type:demo", complexity: 1, range: { startLine: 2, startColumn: 3, endLine: 3, endColumn: 3 } }],
+          relations: [], unavailable: ["Call targets are unavailable without semantic binding."],
+        },
+      }, ...cityModelFixture.buildings.slice(1)],
+    }),
+    "utf8",
+  );
+  cappedDetailFixture = path.join(testRoot, "capped-detail.json");
+  await fs.writeFile(
+    cappedDetailFixture,
+    JSON.stringify({
+      ...cityModelFixture,
+      buildings: [{
+        ...firstBuilding,
+        sourceLocation: { startLine: 1, endLine: 1 },
+        sourceStructure: {
+          version: "codecity.source-structure/1",
+          availability: "available",
+          types: [],
+          callables: Array.from({ length: 250 }, (_, index) => ({
+            id: `callable:cap:${index.toString().padStart(3, "0")}`,
+            name: `method${index.toString().padStart(3, "0")}`,
+            kind: "method",
+            provenance: "syntax",
+            complexity: 1,
+            range: {
+              startLine: 1,
+              startColumn: 1,
+              endLine: 1,
+              endColumn: 1,
+            },
+          })),
+          relations: [],
+          unavailable: [],
+        },
+      }, ...cityModelFixture.buildings.slice(1)],
+    }),
+    "utf8",
+  );
   lineageEvolutionFixture =
     createLineageEvolutionFixture(cityModelFixture);
   historyResultFixture = createHistoryAnalysisResult(
@@ -900,8 +980,14 @@ test.afterAll(async () => {
   await fs.rm(testRoot, { recursive: true, force: true });
 });
 
-async function openAuthenticatedWizard(page: Page): Promise<void> {
-  await page.goto(server.url.href, { waitUntil: "domcontentloaded" });
+async function openAuthenticatedWizard(
+  page: Page,
+  performance = false,
+): Promise<void> {
+  await page.goto(
+    performance ? `${server.url.href}?performance=1` : server.url.href,
+    { waitUntil: "domcontentloaded" },
+  );
   await page.getByRole("button", { name: "Import project" }).click();
   await page.locator("#project-import-token").fill(accessToken);
   await page.getByRole("button", { name: "Sign in" }).click();
@@ -1352,6 +1438,90 @@ test("uploads, opens, and restores a city model through the real browser API", a
       localStorage.getItem("code-city.last-import-job.v1"),
     ),
   ).toBeNull();
+});
+
+test("keeps explicit unavailable fine detail visible after initial selection", async ({
+  page,
+}) => {
+  await openAuthenticatedWizard(page);
+  await page.locator('input[name="project-import-source"][value="city-model"]').check();
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.locator("#project-import-model").setInputFiles(unavailableDetailFixture);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("button", { name: "Start import" })).toBeVisible();
+  await startAndWaitForImportedCity(page);
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await page.locator("#building-search").fill(cityModelFixture.buildings[0]!.name);
+  await page.locator("#search-results .search-result-button").first().click();
+  await expect(page.locator("#building-source-structure-details")).toBeVisible();
+  await page.locator("#building-source-structure-details summary").click();
+  await expect(page.locator("#building-source-structure-summary")).toHaveText("Unavailable");
+  await expect(page.locator("#building-source-structure-status")).toContainText(
+    "declaration facts were not captured",
+  );
+  await expect(page.locator("#building-source-structure")).not.toContainText(
+    "Executable unit",
+  );
+});
+
+test("initial selection exposes an accessible persisted type hierarchy", async ({
+  page,
+}) => {
+  await openAuthenticatedWizard(page);
+  await page.locator('input[name="project-import-source"][value="city-model"]').check();
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.locator("#project-import-model").setInputFiles(availableDetailFixture);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await startAndWaitForImportedCity(page);
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await page.locator("#building-search").fill(cityModelFixture.buildings[0]!.name);
+  await page.locator("#search-results .search-result-button").first().click();
+  await page.locator("#building-source-structure-details summary").click();
+  const typeToggle = page.getByRole("button", {
+    name: /Class DemoType \(1\)/u,
+  });
+  await expect(typeToggle).toHaveAttribute("aria-expanded", "false");
+  const method = page.getByRole("button", { name: /Method run\./u });
+  await expect(method).toBeHidden();
+  await typeToggle.press("Enter");
+  await expect(typeToggle).toHaveAttribute("aria-expanded", "true");
+  await expect(typeToggle).toBeFocused();
+  await expect(method).toBeVisible();
+  await expect(method).toHaveAttribute("title", /cyclomatic complexity 1/u);
+  await expect(page.getByRole("button", {
+    name: /Class DemoType\..*Open its exact persisted source range/u,
+  })).toBeVisible();
+  await expect(page.locator("#building-source-structure-status")).toContainText(
+    "syntax-provenance relationships",
+  );
+});
+
+test("fine detail reaches a terminal cap without a no-op Show more action", async ({
+  page,
+}) => {
+  await openAuthenticatedWizard(page);
+  await page.locator('input[name="project-import-source"][value="city-model"]').check();
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.locator("#project-import-model").setInputFiles(cappedDetailFixture);
+  await page.getByRole("button", { name: "Continue" }).click();
+  await startAndWaitForImportedCity(page);
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await page.locator("#building-search").fill(cityModelFixture.buildings[0]!.name);
+  await page.locator("#search-results .search-result-button").first().click();
+  await page.locator("#building-source-structure-details summary").click();
+  const showMore = page.locator("#building-source-structure-show-more");
+  for (let pageIndex = 0; pageIndex < 4; pageIndex += 1) {
+    await expect(showMore).toBeVisible();
+    await showMore.click();
+  }
+  await expect(showMore).toBeHidden();
+  await expect(page.locator("#building-source-structure-summary")).toHaveText(
+    "250 declarations · 50 not loaded",
+  );
+  await expect(page.locator("#building-source-structure-status")).toContainText(
+    "capped at 200 declarations",
+  );
+  await expect(page.locator("#building-source-structure > li")).toHaveCount(200);
 });
 
 test("submits bounded history, validates both artifacts, and restores its recent job", async ({
@@ -2595,6 +2765,49 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   await expect(page.locator("#building-source-code")).toContainText(
     "retained-source-sentinel",
   );
+  // Fine detail is projected only for this selected file. The initial drill is
+  // bounded, exposes both a type and a function, and keeps source navigation
+  // exact without requesting another source artifact.
+  await page.locator("#building-source-structure-details summary").click();
+  await expect(page.locator("#building-source-structure-details")).toBeVisible();
+  await expect(page.locator("#building-source-structure")).toContainText(
+    "Function retainedComplexity",
+  );
+  const typeToggle = page.getByRole("button", {
+    name: /Class DetailClass \(/u,
+  });
+  await expect(typeToggle).toHaveAttribute("aria-expanded", "false");
+  await typeToggle.press("Enter");
+  await expect(typeToggle).toHaveAttribute("aria-expanded", "true");
+  await expect(typeToggle).toBeFocused();
+  const firstMethod = page.getByRole("button", { name: /Method method0\./u });
+  await expect(firstMethod).toBeVisible();
+  await expect(firstMethod).toHaveAttribute(
+    "title",
+    /persisted syntax provenance; cyclomatic complexity 1/u,
+  );
+  const cameraBeforeDetail = await page.evaluate(() =>
+    document.querySelector<HTMLCanvasElement>("#scene canvas")?.getBoundingClientRect().toJSON(),
+  );
+  await page.getByRole("button", { name: /Function sameLineExact\./u }).click();
+  const highlightedLine = page.locator(".source-line-highlight").first();
+  await expect(highlightedLine).toContainText("sameLinePrefix");
+  await expect(highlightedLine).toContainText("sameLineSuffix");
+  await expect.poll(async () =>
+    (await highlightedLine.locator(".source-range-highlight").allTextContents()).join("")
+  ).toBe("export function sameLineExact(): number { return 7; }");
+  await expect(page.locator("#building-source-structure-return")).toBeVisible();
+  await page.locator("#building-source-structure-show-more").click();
+  await expect(page.locator("#building-source-structure-details")).toHaveAttribute("open", "");
+  await expect(page.locator("#building-source-structure-return")).toBeVisible();
+  await expect(page.locator("#building-source-structure-show-more")).toBeHidden();
+  await expect(page.getByRole("button", { name: /Method method44\./u })).toBeVisible();
+  await page.locator("#building-source-structure-return").click();
+  await expect(page.locator("#selection-name")).toHaveText("retained-large.ts");
+  await expect(page.locator("#scene canvas")).toBeFocused();
+  expect(await page.evaluate(() =>
+    document.querySelector<HTMLCanvasElement>("#scene canvas")?.getBoundingClientRect().toJSON(),
+  )).toEqual(cameraBeforeDetail);
   await expect(page.locator(".source-line-omitted")).toBeVisible();
   await expect(page.locator(".source-line-omitted").first()).toContainText(
     "…",

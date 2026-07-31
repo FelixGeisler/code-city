@@ -291,6 +291,62 @@ describe("versioned metric mapping contract", () => {
     expect(first.bounds.y).toBeGreaterThanOrEqual(projected.size.y);
   });
 
+  it("preserves source ranges and declaration detail while remapping geometry", () => {
+    const sourceStructure = {
+      version: "codecity.source-structure/1" as const,
+      availability: "available" as const,
+      types: [{
+        id: "type:stable",
+        name: "Stable",
+        kind: "class" as const,
+        range: {
+          startLine: 1,
+          startColumn: 1,
+          endLine: 5,
+          endColumn: 1,
+        },
+        provenance: "syntax" as const,
+      }],
+      callables: [{
+        id: "callable:stable",
+        name: "run",
+        kind: "method" as const,
+        range: {
+          startLine: 2,
+          startColumn: 3,
+          endLine: 4,
+          endColumn: 3,
+        },
+        provenance: "syntax" as const,
+        enclosingTypeId: "type:stable",
+        complexity: 2,
+      }],
+      relations: [],
+      unavailable: [],
+    };
+    const source = DEMO_MODEL.buildings[0]!;
+    const detailed = validateCityModel({
+      ...DEMO_MODEL,
+      buildings: DEMO_MODEL.buildings.map((building) =>
+        building.id === source.id
+          ? {
+              ...building,
+              sourceLocation: { startLine: 1, endLine: 5 },
+              sourceStructure,
+            }
+          : building,
+      ),
+    });
+
+    const projected = applyMetricMapping(detailed, customMapping());
+    const building = projected.buildings.find(({ id }) => id === source.id)!;
+    expect(building.sourceLocation).toEqual({
+      startLine: 1,
+      endLine: 5,
+    });
+    expect(building.sourceStructure).toEqual(sourceStructure);
+  });
+
   it("removes stale generated groups when applying another mapping", () => {
     const first = applyMetricMapping(DEMO_MODEL, customMapping());
     const maintenance = availablePreset("maintenance");

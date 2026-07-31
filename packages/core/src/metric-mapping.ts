@@ -451,6 +451,12 @@ export function applyMetricMapping(
         ? {}
         : { metricMethod: building.metricMethod }),
       ...(building.units === undefined ? {} : { units: building.units }),
+      ...(building.sourceLocation === undefined
+        ? {}
+        : { sourceLocation: building.sourceLocation }),
+      ...(building.sourceStructure === undefined
+        ? {}
+        : { sourceStructure: building.sourceStructure }),
       semanticGroupId: projection.semanticGroupId,
       ...(metricNormalization === undefined
         ? {}

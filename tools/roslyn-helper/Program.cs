@@ -300,28 +300,25 @@ internal static class Program
             .ThenBy(TypeKind, StringComparer.Ordinal)
             .ThenBy(TypeName, StringComparer.Ordinal)
             .ToArray();
-        var typeIds = StableDeclarationIds(
-            declarations,
-            "source-type",
-            node => $"{DeclarationPath(node)}|{TypeKind(node)}:{TypeName(node)}"
-        );
+        var usedIds = new HashSet<string>(StringComparer.Ordinal);
+        var typeIds = declarations.Select(node =>
+            new { Node = node, Id = UniqueDetailId("type", node, TypeKind(node), TypeName(node), usedIds) })
+            .ToDictionary(item => item.Node, item => item.Id);
         var types = declarations.Select(node => new TypeFact(
             typeIds[node], SanitizeName(TypeName(node)), TypeKind(node), Range(node),
-            ParentTypeId(node, typeIds)
+            "syntax", ParentTypeId(node, typeIds)
         )).ToArray();
         var orderedCallables = callableNodes
             .OrderBy(node => node.SpanStart)
             .ThenBy(UnitName, StringComparer.Ordinal)
-            .ToArray();
-        var callableIds = StableDeclarationIds(
-            orderedCallables,
-            "source-callable",
-            node => $"{DeclarationPath(node)}|{CallableKind(node)}:{UnitName(node)}({CallableSignature(node)})"
-        );
-        var callables = orderedCallables.Select(node => new CallableFact(
+            .Select(node => new { Node = node, Id = UniqueDetailId("callable", node, CallableKind(node), UnitName(node), usedIds) })
+            .ToDictionary(item => item.Node, item => item.Id);
+        var callables = callableNodes.Select(node => new CallableFact(
             callableIds[node], SanitizeName(UnitName(node)), CallableKind(node), Range(node),
-            ParentTypeId(node, typeIds), 1 + CountDecisions(CallableBody(node))
-        )).ToArray();
+            "syntax", ParentTypeId(node, typeIds), 1 + CountDecisions(CallableBody(node))
+        )).OrderBy(item => item.Range.StartLine).ThenBy(item => item.Range.StartColumn)
+          .ThenBy(item => item.Kind, StringComparer.Ordinal).ThenBy(item => item.Name, StringComparer.Ordinal)
+          .ToArray();
         return new SourceStructureFact(
             "codecity.source-structure/1", "available", types, callables,
             Array.Empty<RelationFact>(),
@@ -444,9 +441,17 @@ internal static class Program
     private static SourceRangeFact Range(SyntaxNode node)
     {
         var span = node.GetLocation().GetLineSpan();
+        // Roslyn's span end is exclusive. Resolve the final included UTF-16
+        // character so ranges point at source text rather than the next token
+        // (or column zero on the following line).
+        var final = node.Span.IsEmpty
+            ? span.StartLinePosition
+            : node.SyntaxTree.GetLineSpan(
+                new Microsoft.CodeAnalysis.Text.TextSpan(node.Span.End - 1, 0)
+            ).StartLinePosition;
         return new SourceRangeFact(
             span.StartLinePosition.Line + 1, span.StartLinePosition.Character + 1,
-            span.EndLinePosition.Line + 1, Math.Max(1, span.EndLinePosition.Character)
+            final.Line + 1, final.Character + 1
         );
     }
 
@@ -460,6 +465,83 @@ internal static class Program
             if (typeIds.TryGetValue(parent, out var id)) return id;
         }
         return null;
+    }
+
+    private static string UniqueDetailId(
+        string prefix, SyntaxNode node, string kind, string name, HashSet<string> used
+    )
+    {
+        var scope = string.Join(".", node.Ancestors()
+            .Where(ancestor => ancestor is BaseNamespaceDeclarationSyntax ||
+                IsTypeDeclaration(ancestor) || IsCallable(ancestor))
+            .Reverse()
+            .Select(ScopeIdentity));
+        var identity = DeclarationIdentity(node, kind, name);
+        var baseId = $"{prefix}:{Fnv64($"{scope.Length}:{scope}|{identity.Length}:{identity}")}";
+        var candidate = baseId;
+        var collision = 1;
+        while (!used.Add(candidate)) candidate = $"{baseId}:{collision++}";
+        return candidate;
+    }
+
+    private static string ScopeIdentity(SyntaxNode node) => node switch
+    {
+        BaseNamespaceDeclarationSyntax declaration =>
+            $"namespace:{CanonicalTokens(declaration.Name)}",
+        _ when IsTypeDeclaration(node) =>
+            $"type:{DeclarationIdentity(node, TypeKind(node), TypeName(node))}",
+        _ when IsCallable(node) =>
+            $"callable:{DeclarationIdentity(node, CallableKind(node), UnitName(node))}",
+        _ => node.Kind().ToString(),
+    };
+
+    private static string DeclarationIdentity(
+        SyntaxNode node, string kind, string name
+    )
+    {
+        var typeParameterCount = node switch
+        {
+            TypeDeclarationSyntax declaration => declaration.TypeParameterList?.Parameters.Count ?? 0,
+            DelegateDeclarationSyntax declaration => declaration.TypeParameterList?.Parameters.Count ?? 0,
+            MethodDeclarationSyntax declaration => declaration.TypeParameterList?.Parameters.Count ?? 0,
+            LocalFunctionStatementSyntax declaration => declaration.TypeParameterList?.Parameters.Count ?? 0,
+            _ => 0,
+        };
+        var parameters = node switch
+        {
+            BaseMethodDeclarationSyntax declaration => declaration.ParameterList.Parameters,
+            LocalFunctionStatementSyntax declaration => declaration.ParameterList.Parameters,
+            ParenthesizedLambdaExpressionSyntax declaration => declaration.ParameterList.Parameters,
+            SimpleLambdaExpressionSyntax declaration =>
+                SyntaxFactory.SingletonSeparatedList(declaration.Parameter),
+            AnonymousMethodExpressionSyntax declaration => declaration.ParameterList?.Parameters ?? default,
+            DelegateDeclarationSyntax declaration => declaration.ParameterList.Parameters,
+            _ => default,
+        };
+        var signature = string.Join(",", parameters.Select(parameter =>
+            $"{(parameter.Modifiers.Count == 0 ? "value" : string.Join("+", parameter.Modifiers.Select(modifier => modifier.ValueText)))}:" +
+            $"{(parameter.Default is null ? "required" : "optional")}:" +
+            CanonicalTokens(parameter.Type)));
+        return $"{kind}:{SanitizeName(name)}:type-parameters:{typeParameterCount}:parameters:{signature}";
+    }
+
+    private static string CanonicalTokens(SyntaxNode? node) => node is null
+        ? "unknown"
+        : string.Join(" ", node.DescendantTokens(descendIntoTrivia: false)
+            .Where(token => !token.IsMissing)
+            .Select(token => token.ValueText.Normalize(NormalizationForm.FormC)));
+
+    private static string Fnv64(string value)
+    {
+        const ulong offset = 14695981039346656037UL;
+        const ulong prime = 1099511628211UL;
+        var hash = offset;
+        foreach (var valueByte in Encoding.UTF8.GetBytes(value))
+        {
+            hash ^= valueByte;
+            hash *= prime;
+        }
+        return hash.ToString("x16", CultureInfo.InvariantCulture);
     }
 
     private static string UnitName(SyntaxNode node) =>
@@ -531,8 +613,8 @@ internal static class Program
     private sealed record AnalysisResponse(string ProtocolVersion, FileResponse[] Files);
     private sealed record UnitMetric(string Name, int Line, int EndLine, int Complexity);
     private sealed record SourceRangeFact(int StartLine, int StartColumn, int EndLine, int EndColumn);
-    private sealed record TypeFact(string Id, string Name, string Kind, SourceRangeFact Range, string? ParentTypeId);
-    private sealed record CallableFact(string Id, string Name, string Kind, SourceRangeFact Range, string? EnclosingTypeId, int Complexity);
+    private sealed record TypeFact(string Id, string Name, string Kind, SourceRangeFact Range, string Provenance, string? ParentTypeId);
+    private sealed record CallableFact(string Id, string Name, string Kind, SourceRangeFact Range, string Provenance, string? EnclosingTypeId, int Complexity);
     private sealed record RelationFact(string Id, string Kind, string SourceId, string TargetId, string Provenance);
     private sealed record SourceStructureFact(string Version, string Availability, TypeFact[] Types, CallableFact[] Callables, RelationFact[] Relations, string[] Unavailable);
 

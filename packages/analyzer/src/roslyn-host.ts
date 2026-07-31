@@ -406,36 +406,88 @@ function parseUnit(value: unknown): ExecutableUnitMetric {
 
 function parseSourceStructure(value: unknown): SourceStructure {
   const structure = objectValue(value);
-  if (structure.version !== "codecity.source-structure/1" || structure.availability !== "available" ||
+  if (structure.version !== "codecity.source-structure/1" ||
+    (structure.availability !== "available" && structure.availability !== "unavailable") ||
     !Array.isArray(structure.types) || !Array.isArray(structure.callables) ||
     !Array.isArray(structure.relations) || !Array.isArray(structure.unavailable)) {
     throw new RoslynHostError("The Roslyn helper returned invalid source structure.");
   }
+  if (
+    structure.types.length > CITY_MODEL_LIMITS.sourceTypesPerBuilding ||
+    structure.callables.length > CITY_MODEL_LIMITS.sourceCallablesPerBuilding ||
+    structure.relations.length > CITY_MODEL_LIMITS.sourceRelationsPerBuilding ||
+    structure.unavailable.length > CITY_MODEL_LIMITS.warnings
+  ) {
+    throw new RoslynHostError("The Roslyn helper returned oversized source structure.");
+  }
   const range = (value_: unknown) => {
     const item = objectValue(value_);
-    return {
+    const parsed = {
       startLine: integer(item.startLine, "source range start line", 1),
       startColumn: integer(item.startColumn, "source range start column", 1),
       endLine: integer(item.endLine, "source range end line", 1),
       endColumn: integer(item.endColumn, "source range end column", 1),
     };
+    if (
+      parsed.endLine < parsed.startLine ||
+      (parsed.endLine === parsed.startLine &&
+        parsed.endColumn < parsed.startColumn)
+    ) {
+      throw new RoslynHostError("The Roslyn helper returned an invalid source range.");
+    }
+    return parsed;
   };
   const typeKinds = new Set(["class", "interface", "enum", "type", "struct", "record", "delegate"]);
   const callableKinds = new Set(["function", "method", "constructor", "accessor", "lambda", "local-function"]);
   const ids = new Set<string>();
+  const typeIds = new Set<string>();
+  const callableIds = new Set<string>();
+  const relationIds = new Set<string>();
   const types = structure.types.map((value_) => {
     const item = objectValue(value_); const id = safeText(item.id, CITY_MODEL_LIMITS.identifierCharacters);
-    if (!typeKinds.has(item.kind as string) || ids.has(id)) throw new RoslynHostError("The Roslyn helper returned invalid source structure."); ids.add(id);
-    return { id, name: safeText(item.name, CITY_MODEL_LIMITS.displayTextCharacters), kind: item.kind as SourceStructure["types"][number]["kind"], range: range(item.range), ...(item.parentTypeId === undefined ? {} : { parentTypeId: safeText(item.parentTypeId, CITY_MODEL_LIMITS.identifierCharacters) }) };
+    if (!typeKinds.has(item.kind as string) || item.provenance !== "syntax" || ids.has(id)) throw new RoslynHostError("The Roslyn helper returned invalid source structure."); ids.add(id); typeIds.add(id);
+    return { id, name: safeText(item.name, CITY_MODEL_LIMITS.displayTextCharacters), kind: item.kind as SourceStructure["types"][number]["kind"], range: range(item.range), provenance: "syntax" as const, ...(item.parentTypeId === undefined ? {} : { parentTypeId: safeText(item.parentTypeId, CITY_MODEL_LIMITS.identifierCharacters) }) };
   });
   const callables = structure.callables.map((value_) => {
     const item = objectValue(value_); const id = safeText(item.id, CITY_MODEL_LIMITS.identifierCharacters);
-    if (!callableKinds.has(item.kind as string) || ids.has(id)) throw new RoslynHostError("The Roslyn helper returned invalid source structure."); ids.add(id);
-    return { id, name: safeText(item.name, CITY_MODEL_LIMITS.displayTextCharacters), kind: item.kind as SourceStructure["callables"][number]["kind"], range: range(item.range), ...(item.enclosingTypeId === undefined ? {} : { enclosingTypeId: safeText(item.enclosingTypeId, CITY_MODEL_LIMITS.identifierCharacters) }), complexity: integer(item.complexity, "source callable complexity", 1) };
+    if (!callableKinds.has(item.kind as string) || item.provenance !== "syntax" || ids.has(id)) throw new RoslynHostError("The Roslyn helper returned invalid source structure."); ids.add(id); callableIds.add(id);
+    return { id, name: safeText(item.name, CITY_MODEL_LIMITS.displayTextCharacters), kind: item.kind as SourceStructure["callables"][number]["kind"], range: range(item.range), provenance: "syntax" as const, ...(item.enclosingTypeId === undefined ? {} : { enclosingTypeId: safeText(item.enclosingTypeId, CITY_MODEL_LIMITS.identifierCharacters) }), complexity: integer(item.complexity, "source callable complexity", 1) };
   });
-  for (const type of types) if (type.parentTypeId !== undefined && !ids.has(type.parentTypeId)) throw new RoslynHostError("The Roslyn helper returned unresolved source structure reference.");
-  for (const callable of callables) if (callable.enclosingTypeId !== undefined && !ids.has(callable.enclosingTypeId)) throw new RoslynHostError("The Roslyn helper returned unresolved source structure reference.");
-  return { version: "codecity.source-structure/1", availability: "available", types, callables, relations: [], unavailable: structure.unavailable.map((item) => safeText(item, CITY_MODEL_LIMITS.warningCharacters)) };
+  for (const type of types) if (type.parentTypeId !== undefined && !typeIds.has(type.parentTypeId)) throw new RoslynHostError("The Roslyn helper returned unresolved source structure reference.");
+  for (const callable of callables) if (callable.enclosingTypeId !== undefined && !typeIds.has(callable.enclosingTypeId)) throw new RoslynHostError("The Roslyn helper returned unresolved source structure reference.");
+  const parentByType = new Map(types.flatMap((item) => item.parentTypeId === undefined ? [] : [[item.id, item.parentTypeId] as const]));
+  const ancestryState = new Map<string, 1 | 2>();
+  for (const type of types) {
+    if (ancestryState.get(type.id) === 2) continue;
+    const pending: string[] = [];
+    let current: string | undefined = type.id;
+    while (current !== undefined && ancestryState.get(current) !== 2) {
+      if (ancestryState.get(current) === 1) {
+        throw new RoslynHostError("The Roslyn helper returned cyclic source type nesting.");
+      }
+      ancestryState.set(current, 1);
+      pending.push(current);
+      current = parentByType.get(current);
+    }
+    for (const visited of pending) ancestryState.set(visited, 2);
+  }
+  const relationKinds = new Set(["extends", "implements", "calls", "type-reference"]);
+  const relations = structure.relations.map((value_) => {
+    const item = objectValue(value_);
+    const id = safeText(item.id, CITY_MODEL_LIMITS.identifierCharacters);
+    const kind = item.kind;
+    const sourceId = safeText(item.sourceId, CITY_MODEL_LIMITS.identifierCharacters);
+    const targetId = safeText(item.targetId, CITY_MODEL_LIMITS.identifierCharacters);
+    if (!relationKinds.has(kind as string) || item.provenance !== "syntax" || relationIds.has(id) || !ids.has(sourceId) || !ids.has(targetId)) throw new RoslynHostError("The Roslyn helper returned invalid source relation.");
+    relationIds.add(id);
+    if ((kind === "extends" || kind === "implements") && (!typeIds.has(sourceId) || !typeIds.has(targetId))) throw new RoslynHostError("The Roslyn helper returned invalid source relation.");
+    if (kind === "calls" && (!callableIds.has(sourceId) || !callableIds.has(targetId))) throw new RoslynHostError("The Roslyn helper returned invalid source relation.");
+    if (kind === "type-reference" && !typeIds.has(targetId)) throw new RoslynHostError("The Roslyn helper returned invalid source relation.");
+    return { id, kind: kind as SourceStructure["relations"][number]["kind"], sourceId, targetId, provenance: "syntax" as const };
+  });
+  const unavailable = structure.unavailable.map((item) => safeText(item, CITY_MODEL_LIMITS.warningCharacters));
+  if (structure.availability === "unavailable" && (types.length !== 0 || callables.length !== 0 || relations.length !== 0 || unavailable.length === 0)) throw new RoslynHostError("The Roslyn helper returned invalid unavailable source structure.");
+  return { version: "codecity.source-structure/1", availability: structure.availability, types, callables, relations, unavailable };
 }
 
 function parseOutcome(value: unknown): RoslynFileOutcome {
