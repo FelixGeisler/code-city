@@ -21,6 +21,7 @@ import type {
 } from "../../../packages/core/src/model.js";
 import {
   DESIGN_SMELL_PROTOCOL_VERSION,
+  type DesignSmellEvaluation,
   type DesignSmellFinding,
 } from "../../../packages/core/src/design-smells.js";
 import type { PrinterProfile } from "../../../packages/core/src/print.js";
@@ -2920,8 +2921,17 @@ let activeExternalNodes: readonly ExternalSceneNode[] =
   activeExternalLayout.nodes;
 let requestCityPresentation = (): void => {};
 let advancedQueryPanel: AdvancedQueryPanelController | undefined;
-let activeDesignSmellRuleIdsByBuildingId:
-  | ReadonlyMap<string, ReadonlySet<string>>
+let activeDesignSmellQueryFacts:
+  | {
+      readonly ruleIdsByBuildingId: ReadonlyMap<
+        string,
+        ReadonlySet<string>
+      >;
+      readonly availableRuleIdsByBuildingId: ReadonlyMap<
+        string,
+        ReadonlySet<string>
+      >;
+    }
   | undefined;
 let applyingAdvancedSelection = false;
 const cityScene = createCityScene();
@@ -4419,61 +4429,121 @@ function activeAdvancedQueryContext(): AdvancedQueryContext {
     ...(activeEvolutionQueryChanges === undefined
       ? {}
       : { changesByBuildingId: activeEvolutionQueryChanges }),
-    ...(activeDesignSmellRuleIdsByBuildingId === undefined
+    ...(activeDesignSmellQueryFacts === undefined
       ? {}
       : {
           smellRuleIdsByBuildingId:
-            activeDesignSmellRuleIdsByBuildingId,
+            activeDesignSmellQueryFacts.ruleIdsByBuildingId,
+          availableSmellRuleIdsByBuildingId:
+            activeDesignSmellQueryFacts.availableRuleIdsByBuildingId,
           ruleSchemaVersion: DESIGN_SMELL_PROTOCOL_VERSION,
         }),
   };
 }
 
 function updateAdvancedQueryDesignSmells(
-  findings: readonly DesignSmellFinding[] | undefined,
+  evaluation: DesignSmellEvaluation | undefined,
 ): void {
   const next =
-    findings === undefined
+    evaluation === undefined
       ? undefined
-      : new Map<string, Set<string>>();
-  if (findings !== undefined) {
-    for (const finding of findings) {
-      const ruleIds = next!.get(finding.buildingId);
+      : {
+          ruleIdsByBuildingId: new Map<string, Set<string>>(),
+          availableRuleIdsByBuildingId:
+            new Map<string, Set<string>>(),
+        };
+  if (evaluation !== undefined) {
+    for (const finding of evaluation.visibleFindings) {
+      const ruleIds = next!.ruleIdsByBuildingId.get(
+        finding.buildingId,
+      );
       if (ruleIds === undefined) {
-        next!.set(finding.buildingId, new Set([finding.ruleId]));
+        next!.ruleIdsByBuildingId.set(
+          finding.buildingId,
+          new Set([finding.ruleId]),
+        );
       } else {
         ruleIds.add(finding.ruleId);
       }
     }
+    for (const building of activeModel.buildings) {
+      const available = new Set<string>();
+      for (const result of evaluation.results) {
+        if (
+          result.enabled &&
+          result.languageAvailability[building.language]
+            .availability === "available" &&
+          !(
+            result.rule.id === "high-complexity-method" &&
+            building.units === undefined
+          )
+        ) {
+          available.add(result.rule.id);
+        }
+      }
+      next!.availableRuleIdsByBuildingId.set(
+        building.id,
+        available,
+      );
+    }
   }
   if (
-    equalDesignSmellRuleIdsByBuilding(
-      activeDesignSmellRuleIdsByBuildingId,
+    equalDesignSmellQueryFacts(
+      activeDesignSmellQueryFacts,
       next,
     )
   ) {
     return;
   }
-  activeDesignSmellRuleIdsByBuildingId = next;
+  activeDesignSmellQueryFacts = next;
   advancedQueryPanel?.setProject(activeModel);
 }
 
-function equalDesignSmellRuleIdsByBuilding(
+function equalDesignSmellQueryFacts(
   left:
-    | ReadonlyMap<string, ReadonlySet<string>>
-    | undefined,
+    | {
+        readonly ruleIdsByBuildingId: ReadonlyMap<
+          string,
+          ReadonlySet<string>
+        >;
+        readonly availableRuleIdsByBuildingId: ReadonlyMap<
+          string,
+          ReadonlySet<string>
+        >;
+      }
+      | undefined,
   right:
-    | ReadonlyMap<string, ReadonlySet<string>>
-    | undefined,
+    | {
+        readonly ruleIdsByBuildingId: ReadonlyMap<
+          string,
+          ReadonlySet<string>
+        >;
+        readonly availableRuleIdsByBuildingId: ReadonlyMap<
+          string,
+          ReadonlySet<string>
+        >;
+      }
+      | undefined,
 ): boolean {
   if (left === right) return true;
-  if (
-    left === undefined ||
-    right === undefined ||
-    left.size !== right.size
-  ) {
-    return false;
-  }
+  if (left === undefined || right === undefined) return false;
+  return (
+    equalRuleIdsByBuilding(
+      left.ruleIdsByBuildingId,
+      right.ruleIdsByBuildingId,
+    ) &&
+    equalRuleIdsByBuilding(
+      left.availableRuleIdsByBuildingId,
+      right.availableRuleIdsByBuildingId,
+    )
+  );
+}
+
+function equalRuleIdsByBuilding(
+  left: ReadonlyMap<string, ReadonlySet<string>>,
+  right: ReadonlyMap<string, ReadonlySet<string>>,
+): boolean {
+  if (left.size !== right.size) return false;
   for (const [buildingId, rightRuleIds] of right) {
     const leftRuleIds = left.get(buildingId);
     if (

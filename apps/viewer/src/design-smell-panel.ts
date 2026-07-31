@@ -37,7 +37,7 @@ export interface DesignSmellPanelOptions {
     findings: readonly DesignSmellFinding[],
   ) => void;
   readonly onQueryFactsChange?: (
-    findings: readonly DesignSmellFinding[] | undefined,
+    evaluation: DesignSmellEvaluation | undefined,
   ) => void;
   readonly storage?: MetricMappingStorage;
   readonly client?: DesignSmellEvaluationClient;
@@ -226,9 +226,6 @@ export function installDesignSmellPanel(
   const renderResults = (): void => {
     const shown = filteredFindings();
     options.onOverlayChange?.(shown);
-    options.onQueryFactsChange?.(
-      evaluation === undefined ? undefined : shown,
-    );
     const affected = new Set(
       shown.map(({ buildingId }) => buildingId),
     ).size;
@@ -384,6 +381,7 @@ export function installDesignSmellPanel(
         return;
       }
       evaluation = result;
+      options.onQueryFactsChange?.(result);
       page = 0;
       renderRuleAvailability(result);
       renderResults();
@@ -398,6 +396,7 @@ export function installDesignSmellPanel(
       }
       if (currentGeneration === generation) {
         evaluation = undefined;
+        options.onQueryFactsChange?.(undefined);
         visibleRules.clear();
         options.onOverlayChange?.([]);
         renderResults();
@@ -480,6 +479,7 @@ export function installDesignSmellPanel(
         model.buildings.map((building) => [building.id, building]),
       );
       evaluation = undefined;
+      options.onQueryFactsChange?.(undefined);
       page = 0;
       visibleRules.clear();
       for (const rule of DESIGN_SMELL_RULE_CATALOG) {

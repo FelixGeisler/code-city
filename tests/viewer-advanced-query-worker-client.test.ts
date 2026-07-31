@@ -53,6 +53,7 @@ describe("advanced query worker client", () => {
         ["building:z", ["added", "changed"]],
       ],
       smellRules: null,
+      availableSmellRules: null,
       ruleSchemaVersion: null,
     });
     const evaluation = evaluateAdvancedQuery(DEMO_MODEL, definition);
@@ -73,10 +74,12 @@ describe("advanced query worker client", () => {
     const pending = client.evaluate(DEMO_MODEL, query(), {
       changesByBuildingId: new Map(),
       smellRuleIdsByBuildingId: new Map(),
+      availableSmellRuleIdsByBuildingId: new Map(),
     });
     expect(worker.request?.context).toEqual({
       changes: [],
       smellRules: [],
+      availableSmellRules: [],
       ruleSchemaVersion: null,
     });
     client.cancel();

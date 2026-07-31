@@ -157,6 +157,12 @@ describe("viewer advanced queries", () => {
       smellRuleIdsByBuildingId: new Map([
         ["building:quiet", new Set(["complexity/high-v1"])],
       ]),
+      availableSmellRuleIdsByBuildingId: new Map([
+        ["building:client", new Set(["complexity/high-v1"])],
+        ["building:quiet", new Set(["complexity/high-v1"])],
+        ["building:server", new Set(["complexity/high-v1"])],
+        ["building:hub", new Set(["complexity/high-v1"])],
+      ]),
       ruleSchemaVersion: "codecity.design-smells/1",
     });
     expect(evaluated.state).toBe("results");
@@ -170,6 +176,12 @@ describe("viewer advanced queries", () => {
         smellRuleIdsByBuildingId: new Map([
           ["building:quiet", new Set(["complexity/high-v1"])],
         ]),
+        availableSmellRuleIdsByBuildingId: new Map([
+          ["building:client", new Set(["complexity/high-v1"])],
+          ["building:quiet", new Set(["complexity/high-v1"])],
+          ["building:server", new Set(["complexity/high-v1"])],
+          ["building:hub", new Set(["complexity/high-v1"])],
+        ]),
         ruleSchemaVersion: "codecity.design-smells/2",
       }),
     ).toMatchObject({
@@ -177,6 +189,22 @@ describe("viewer advanced queries", () => {
       unavailableReasons: [
         "Change data is unavailable for the current model snapshot.",
         'Design-smell schema "codecity.design-smells/1" is unavailable.',
+      ],
+    });
+
+    expect(
+      evaluateAdvancedQuery(model(), query, {
+        smellRuleIdsByBuildingId: new Map(),
+        availableSmellRuleIdsByBuildingId: new Map(
+          model().buildings.map(({ id }) => [id, new Set<string>()]),
+        ),
+        ruleSchemaVersion: "codecity.design-smells/1",
+      }),
+    ).toMatchObject({
+      state: "unavailable",
+      unavailableReasons: [
+        "Change data is unavailable for the current model snapshot.",
+        'Design-smell rule "complexity/high-v1" is unavailable.',
       ],
     });
   });
