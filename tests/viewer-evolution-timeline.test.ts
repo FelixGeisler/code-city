@@ -10,9 +10,12 @@ import {
   analyzeEvolutionBuildingHistory,
   analyzeEvolutionFrame,
   compareEvolutionFrames,
+  createEvolutionBuildingLineageSelection,
   EvolutionDeferredSeekController,
   EvolutionSeekGate,
+  resolveEvolutionBuildingLineage,
   summarizeEvolutionFrames,
+  type EvolutionBuildingHistory,
 } from "../apps/viewer/src/evolution-timeline.js";
 
 function deferred<T>() {
@@ -260,6 +263,118 @@ describe("viewer evolution timeline analysis", () => {
       changeKinds: ["geometry", "renamed"],
     });
     expect(added).toMatchObject({ firstFrame: 1, lastFrame: 2 });
+  });
+
+  it("retains an introduced-later lineage before creation and restores its actual building", () => {
+    const future = {
+      ...DEMO_MODEL.buildings[0]!,
+      id: "building:future-lineage",
+      name: "future-lineage.ts",
+      path: "src/future-lineage.ts",
+    };
+    const history: EvolutionBuildingHistory = {
+      id: future.id,
+      firstFrame: 2,
+      lastFrame: 3,
+      changeCount: 1,
+      changeKinds: [],
+    };
+    const selected =
+      createEvolutionBuildingLineageSelection(future);
+
+    const beforeCreation = resolveEvolutionBuildingLineage(
+      selected,
+      history,
+      1,
+    );
+    expect(beforeCreation).toMatchObject({
+      selection: selected,
+      state: { kind: "not-yet-created", creationFrame: 2 },
+    });
+    const stillBeforeCreation = resolveEvolutionBuildingLineage(
+      beforeCreation!.selection,
+      history,
+      0,
+    );
+    expect(stillBeforeCreation).toMatchObject({
+      selection: selected,
+      state: { kind: "not-yet-created", creationFrame: 2 },
+    });
+
+    const actualAtCreation = {
+      ...future,
+      metrics: { ...future.metrics, sloc: future.metrics.sloc + 1 },
+    };
+    const restored = resolveEvolutionBuildingLineage(
+      stillBeforeCreation!.selection,
+      history,
+      2,
+      actualAtCreation,
+    );
+    expect(restored).toMatchObject({
+      building: actualAtCreation,
+      state: { kind: "present" },
+      selection: {
+        id: future.id,
+        lastKnownBuilding: actualAtCreation,
+      },
+    });
+  });
+
+  it("retains a removed-lineage tombstone and restores its actual earlier building", () => {
+    const original = DEMO_MODEL.buildings[2]!;
+    const history: EvolutionBuildingHistory = {
+      id: original.id,
+      firstFrame: 0,
+      lastFrame: 1,
+      removedAtFrame: 2,
+      changeCount: 1,
+      changeKinds: [],
+    };
+    const selected =
+      createEvolutionBuildingLineageSelection(original);
+
+    const removed = resolveEvolutionBuildingLineage(
+      selected,
+      history,
+      2,
+    );
+    expect(removed).toMatchObject({
+      selection: selected,
+      state: { kind: "removed", removalFrame: 2 },
+    });
+    const stillRemoved = resolveEvolutionBuildingLineage(
+      removed!.selection,
+      history,
+      3,
+    );
+    expect(stillRemoved).toMatchObject({
+      selection: selected,
+      state: { kind: "removed", removalFrame: 2 },
+    });
+
+    const actualBeforeRemoval = {
+      ...original,
+      metrics: {
+        ...original.metrics,
+        maximumComplexity:
+          original.metrics.maximumComplexity + 1,
+      },
+    };
+    const restored = resolveEvolutionBuildingLineage(
+      stillRemoved!.selection,
+      history,
+      1,
+      actualBeforeRemoval,
+    );
+    expect(restored).toMatchObject({
+      building: actualBeforeRemoval,
+      state: { kind: "present" },
+      selection: {
+        id: original.id,
+        lastKnownBuilding: actualBeforeRemoval,
+      },
+    });
   });
 
   it("computes age and churn only for buildings present at the target", () => {

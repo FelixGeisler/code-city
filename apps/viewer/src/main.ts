@@ -163,8 +163,12 @@ import {
   type ViewerVisualizationMode,
 } from "./visualization-mode.js";
 import {
+  createEvolutionBuildingLineageSelection,
   EvolutionDeferredSeekController,
+  resolveEvolutionBuildingLineage,
   type EvolutionBuildingHistory,
+  type EvolutionBuildingLineageSelection,
+  type EvolutionBuildingLineageState,
   type EvolutionFrameSummary,
   type EvolutionTransition,
 } from "./evolution-timeline.js";
@@ -1814,6 +1818,9 @@ let evolutionPlaybackTimer: number | undefined;
 let evolutionTransitionTimer: number | undefined;
 let activeEvolutionFrames: readonly EvolutionFrameSummary[] = [];
 let activeEvolutionHistories = new Map<string, EvolutionBuildingHistory>();
+let activeEvolutionLineageSelection:
+  | EvolutionBuildingLineageSelection
+  | undefined;
 let activeEvolutionAnalysis: EvolutionVisualizationData | undefined;
 let activeEvolutionTransition: EvolutionTransition | undefined;
 let activeEvolutionIndex = 0;
@@ -2436,6 +2443,7 @@ function resetEvolutionTimeline(recreateWorker = true): void {
   if (recreateWorker) evolutionWorker = new EvolutionTimelineWorkerClient();
   activeEvolutionFrames = [];
   activeEvolutionHistories = new Map();
+  activeEvolutionLineageSelection = undefined;
   activeEvolutionAnalysis = undefined;
   activeEvolutionTransition = undefined;
   activeEvolutionIndex = 0;
@@ -2531,15 +2539,19 @@ async function seekEvolution(
     return false;
   }
   const generation = evolutionGeneration;
-  const selected = explorerState.selectedEntity;
-  const deletedBuilding =
-    selected?.kind === "building"
-      ? activeBuildingsById.get(selected.id)
-      : undefined;
   return evolutionSeekController.seek(
     targetIndex,
     ({ result }) => {
       if (generation !== evolutionGeneration) return;
+      const selected = explorerState.selectedEntity;
+      const selectedBuilding =
+        selected?.kind === "building"
+          ? activeBuildingsById.get(selected.id)
+          : undefined;
+      const lineageSelection =
+        selectedBuilding === undefined
+          ? activeEvolutionLineageSelection
+          : createEvolutionBuildingLineageSelection(selectedBuilding);
       activeEvolutionIndex = targetIndex;
       activeEvolutionAnalysis = evolutionVisualizationData(result.analysis);
       activeEvolutionTransition = initial ? undefined : result.transition;
@@ -2568,12 +2580,34 @@ async function seekEvolution(
           applyVisualization();
         }, 1_200);
       }
-      if (
-        selected?.kind === "building" &&
-        !activeBuildingsById.has(selected.id) &&
-        deletedBuilding !== undefined
-      ) {
-        showDeletedEvolutionBuilding(deletedBuilding);
+      if (lineageSelection !== undefined) {
+        const history = activeEvolutionHistories.get(
+          lineageSelection.id,
+        );
+        const resolution =
+          history === undefined
+            ? undefined
+            : resolveEvolutionBuildingLineage(
+                lineageSelection,
+                history,
+                targetIndex,
+                activeBuildingsById.get(lineageSelection.id),
+              );
+        if (
+          resolution !== undefined &&
+          "building" in resolution
+        ) {
+          activeEvolutionLineageSelection = undefined;
+          cityScene.selectBuilding(resolution.building.id);
+        } else if (resolution !== undefined) {
+          activeEvolutionLineageSelection = resolution.selection;
+          showUnavailableEvolutionBuilding(
+            resolution.selection.lastKnownBuilding,
+            resolution.state,
+          );
+        } else {
+          activeEvolutionLineageSelection = undefined;
+        }
       }
     },
   );
@@ -2667,17 +2701,40 @@ function stopEvolutionPlayback(cancelSeek = true): void {
   if (evolutionPlay) evolutionPlay.textContent = "\u25b6";
 }
 
-function showDeletedEvolutionBuilding(building: CityBuilding): void {
+function showUnavailableEvolutionBuilding(
+  building: CityBuilding,
+  state: Exclude<
+    EvolutionBuildingLineageState,
+    { readonly kind: "present" }
+  >,
+): void {
   scrubBuildingSource();
+  const referenceFrameIndex =
+    state.kind === "not-yet-created"
+      ? state.creationFrame
+      : state.removalFrame;
+  const referenceFrame = activeEvolutionFrames[referenceFrameIndex];
+  const referenceCommit =
+    referenceFrame?.sha.slice(0, 10) ??
+    `frame ${referenceFrameIndex + 1}`;
+  const referenceContext = evolutionFrameReference(
+    referenceFrameIndex,
+  );
   inspectorEmpty.hidden = true;
   inspectorContent.hidden = false;
   districtInspectorContent.hidden = true;
   externalInspectorContent.hidden = true;
   clearSelectionButton.hidden = false;
-  selectionKind.textContent = "Removed building";
+  selectionKind.textContent =
+    state.kind === "not-yet-created"
+      ? "Not yet created"
+      : "Removed building";
   selectionName.textContent = building.name;
   inspectorFields.name.textContent = building.name;
-  inspectorFields.repository.textContent = "Removed in this frame";
+  inspectorFields.repository.textContent =
+    state.kind === "not-yet-created"
+      ? `Introduced by ${referenceCommit}`
+      : `Removed by ${referenceCommit}`;
   inspectorFields.module.textContent = "Historical selection";
   inspectorFields.path.textContent = building.path;
   inspectorFields.language.textContent = languageLabel(building.language);
@@ -2689,12 +2746,16 @@ function showDeletedEvolutionBuilding(building: CityBuilding): void {
   inspectorFields.metricMethod.textContent =
     building.metricMethod ?? "Not recorded";
   inspectorFields.metricExplanation.textContent =
-    "The selected lineage no longer exists at this commit. Its last known facts remain visible.";
+    state.kind === "not-yet-created"
+      ? `The selected lineage is not present at this commit. It is introduced by commit ${referenceContext}.`
+      : `The selected lineage was removed by commit ${referenceContext}. Its last known facts remain visible.`;
   inspectorFields.unitsDetails.hidden = true;
   inspectorFields.sourceDetails.hidden = true;
   renderBuildingEvolutionHistory(building.id);
   selectionStatus.textContent =
-    `Selected lineage ${building.name} was removed by this commit.`;
+    state.kind === "not-yet-created"
+      ? `Selected lineage ${building.name} is not yet created at this commit; it is introduced by commit ${referenceCommit}.`
+      : `Selected lineage ${building.name} was removed by commit ${referenceCommit}.`;
 }
 
 function schedulePerformanceDiagnostics(): void {
@@ -2943,6 +3004,7 @@ function selectDistrictFromExplorer(districtId: string): void {
 }
 
 function clearBuildingSelection(): void {
+  activeEvolutionLineageSelection = undefined;
   cityScene.resetSelection();
   showInspector(null);
 }
@@ -2953,6 +3015,9 @@ function synchronizeExplorerState(state: ExplorerState): void {
   const previousIsolatedDistrictId =
     explorerState.isolatedDistrictId;
   explorerState = state;
+  if (state.selectedEntity !== null) {
+    activeEvolutionLineageSelection = undefined;
+  }
   const selectedBuildingId = selectedExplorerBuildingId(state);
   const selectedDistrictId = selectedExplorerDistrictId(state);
   const selectedExternalNodeId = selectedExplorerExternalId(state);
@@ -4476,21 +4541,29 @@ function renderBuildingEvolutionHistory(buildingId: string): void {
     inspectorFields.evolution.textContent = "";
     return;
   }
-  const first = activeEvolutionFrames[history.firstFrame];
   const removed =
     history.removedAtFrame === undefined
       ? ""
-      : ` Removed at frame ${history.removedAtFrame + 1}.`;
+      : ` Removed by ${evolutionFrameReference(
+          history.removedAtFrame,
+        )}.`;
   const kinds =
     history.changeKinds.length === 0
       ? ""
       : ` Changes: ${history.changeKinds.join(", ")}.`;
   inspectorFields.evolution.textContent =
-    `First seen ${first?.sha.slice(0, 10) ?? `frame ${history.firstFrame + 1}`}; ` +
+    `First seen ${evolutionFrameReference(history.firstFrame)}; ` +
     `${history.changeCount.toLocaleString()} historical ` +
     `${history.changeCount === 1 ? "change" : "changes"}.` +
     removed +
     kinds;
+}
+
+function evolutionFrameReference(frameIndex: number): string {
+  const frame = activeEvolutionFrames[frameIndex];
+  return frame === undefined
+    ? `frame ${frameIndex + 1}`
+    : `${frame.sha.slice(0, 10)} at frame ${frameIndex + 1}`;
 }
 
 function showDistrictInspector(context: DistrictContext): void {

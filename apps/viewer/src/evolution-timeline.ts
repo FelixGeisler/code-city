@@ -22,6 +22,41 @@ export interface EvolutionBuildingHistory {
   readonly changeKinds: readonly EvolutionChangeKind[];
 }
 
+export interface EvolutionBuildingLineageSelection {
+  readonly id: string;
+  readonly lastKnownBuilding: CityBuilding;
+}
+
+export type EvolutionBuildingLineageState =
+  | {
+      readonly kind: "not-yet-created";
+      readonly creationFrame: number;
+    }
+  | {
+      readonly kind: "present";
+    }
+  | {
+      readonly kind: "removed";
+      readonly removalFrame: number;
+    };
+
+export type EvolutionBuildingLineageResolution =
+  | {
+      readonly selection: EvolutionBuildingLineageSelection;
+      readonly state: Extract<
+        EvolutionBuildingLineageState,
+        { readonly kind: "not-yet-created" | "removed" }
+      >;
+    }
+  | {
+      readonly building: CityBuilding;
+      readonly selection: EvolutionBuildingLineageSelection;
+      readonly state: Extract<
+        EvolutionBuildingLineageState,
+        { readonly kind: "present" }
+      >;
+    };
+
 export interface EvolutionTransition {
   readonly fromIndex: number;
   readonly toIndex: number;
@@ -289,6 +324,79 @@ export function analyzeEvolutionBuildingHistory(
         changeKinds: Object.freeze([...history.changeKinds].sort()),
       }),
     );
+}
+
+export function createEvolutionBuildingLineageSelection(
+  building: CityBuilding,
+): EvolutionBuildingLineageSelection {
+  return Object.freeze({
+    id: building.id,
+    lastKnownBuilding: building,
+  });
+}
+
+/**
+ * Resolves one remembered stable lineage against a replayed frame.
+ *
+ * Evolution validation guarantees a lineage is present continuously from its
+ * first frame until its optional removal frame and cannot be resurrected.
+ * Checking the replayed model as well makes inconsistent worker/history data
+ * fail closed instead of showing historically false tombstone wording.
+ */
+export function resolveEvolutionBuildingLineage(
+  selection: EvolutionBuildingLineageSelection,
+  history: EvolutionBuildingHistory,
+  targetFrame: number,
+  presentBuilding?: CityBuilding,
+): EvolutionBuildingLineageResolution | undefined {
+  if (
+    history.id !== selection.id ||
+    !Number.isSafeInteger(targetFrame) ||
+    targetFrame < 0 ||
+    (presentBuilding !== undefined &&
+      presentBuilding.id !== selection.id)
+  ) {
+    return undefined;
+  }
+
+  let state: EvolutionBuildingLineageState;
+  if (targetFrame < history.firstFrame) {
+    if (presentBuilding !== undefined) return undefined;
+    state = Object.freeze({
+      kind: "not-yet-created",
+      creationFrame: history.firstFrame,
+    });
+  } else if (
+    history.removedAtFrame !== undefined &&
+    targetFrame >= history.removedAtFrame
+  ) {
+    if (presentBuilding !== undefined) return undefined;
+    state = Object.freeze({
+      kind: "removed",
+      removalFrame: history.removedAtFrame,
+    });
+  } else {
+    if (
+      presentBuilding === undefined ||
+      targetFrame > history.lastFrame
+    ) {
+      return undefined;
+    }
+    state = Object.freeze({ kind: "present" });
+  }
+
+  const nextSelection =
+    presentBuilding === undefined ||
+    presentBuilding === selection.lastKnownBuilding
+      ? selection
+      : createEvolutionBuildingLineageSelection(presentBuilding);
+  return state.kind === "present"
+    ? Object.freeze({
+        building: presentBuilding!,
+        selection: nextSelection,
+        state,
+      })
+    : Object.freeze({ selection: nextSelection, state });
 }
 
 export function analyzeEvolutionFrame(
