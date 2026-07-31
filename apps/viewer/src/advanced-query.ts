@@ -98,6 +98,10 @@ export interface AdvancedQueryContext {
     string,
     ReadonlySet<string>
   >;
+  readonly availableSmellRuleIdsByBuildingId?: ReadonlyMap<
+    string,
+    ReadonlySet<string>
+  >;
   readonly ruleSchemaVersion?: string;
 }
 
@@ -537,7 +541,10 @@ function matchCondition(
       };
     }
     case "smell": {
-      if (context.smellRuleIdsByBuildingId === undefined) {
+      if (
+        context.smellRuleIdsByBuildingId === undefined ||
+        context.availableSmellRuleIdsByBuildingId === undefined
+      ) {
         return {
           matched: false,
           unavailable:
@@ -549,6 +556,17 @@ function matchCondition(
           matched: false,
           unavailable:
             `Design-smell schema "${ruleSchemaVersion ?? "unspecified"}" is unavailable.`,
+        };
+      }
+      if (
+        context.availableSmellRuleIdsByBuildingId
+          .get(building.id)
+          ?.has(condition.ruleId) !== true
+      ) {
+        return {
+          matched: false,
+          unavailable:
+            `Design-smell rule "${condition.ruleId}" is unavailable.`,
         };
       }
       const matched =

@@ -195,6 +195,12 @@ function serializeContext(
       context.smellRuleIdsByBuildingId === undefined
         ? null
         : sortedMapEntries(context.smellRuleIdsByBuildingId),
+    availableSmellRules:
+      context.availableSmellRuleIdsByBuildingId === undefined
+        ? null
+        : sortedMapEntries(
+            context.availableSmellRuleIdsByBuildingId,
+          ),
     ruleSchemaVersion: context.ruleSchemaVersion ?? null,
   };
 }

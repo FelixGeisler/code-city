@@ -720,10 +720,13 @@ test.beforeAll(async () => {
   );
   retainedSourceLines.push(
     "export function retainedComplexity(value: number): number {",
-    "  if (value > 0 && value < 10) {",
-    "    return value;",
-    "  }",
-    "  return 0;",
+    "  let score = 0;",
+    ...Array.from(
+      { length: 14 },
+      (_, index) =>
+        `  if (value > ${index}) score += 1;`,
+    ),
+    "  return score;",
     "}",
     "",
   );
@@ -2357,6 +2360,39 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   ]);
   expect(sourceRequests).not.toContain(
     `/api/v1/artifacts/${jobId}/sources/${siblingBuilding!.id}`,
+  );
+
+  const retainedUnit = retainedBuilding!.units?.find(
+    ({ name }) => name === "retainedComplexity",
+  );
+  expect(retainedUnit).toBeDefined();
+  expect(retainedUnit!.complexity).toBeGreaterThanOrEqual(15);
+  expect(retainedUnit!.endLine).toBeDefined();
+
+  await page.getByRole("tab", { name: "Metrics" }).click();
+  const smellPanel = page.locator("#design-smell-panel");
+  await expect(smellPanel).toHaveAttribute("aria-busy", "false", {
+    timeout: 30_000,
+  });
+  await smellPanel
+    .getByRole("button", {
+      name: /High-complexity method.*retained-large\.ts/u,
+    })
+    .click();
+  await expect(
+    page.getByRole("tab", { name: "Details" }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#selection-name")).toHaveText(
+    "retained-large.ts",
+  );
+  const smellHighlights = page.locator(".source-line-highlight");
+  await expect(smellHighlights.first()).toHaveAttribute(
+    "data-line",
+    String(retainedUnit!.line),
+  );
+  await expect(smellHighlights.last()).toHaveAttribute(
+    "data-line",
+    String(retainedUnit!.endLine),
   );
 
   const sourcePath =

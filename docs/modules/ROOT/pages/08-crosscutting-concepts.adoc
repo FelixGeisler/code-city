@@ -1,5 +1,27 @@
 = 8. Cross-cutting Concepts
 
+== Explainable design-smell overlay
+
+The viewer evaluates the versioned `codecity.design-smells/1` protocol and
+rule catalog `1.1.0` in a cancellable worker. Findings are heuristic signals,
+never AI advice or quality verdicts: each is linked to its named rule, rule
+version, exact language-specific threshold, concrete measured evidence, and
+(when available) source line. Available rules cover high-complexity methods,
+oversized source files, attributable JavaScript/TypeScript coupling, and
+source-file dependency cycles. Per-class size, C# building-level dependencies,
+duplicate code, and feature envy remain explicitly unavailable until the
+CityModel contains facts that support those claims.
+
+The Design smells panel provides total and affected-building counts, a
+100-row paginated result window, rule filtering, keyboard-accessible navigation
+to the affected building, and text/symbol/shape/severity cues in addition to
+color. The 3D markers use at most four instanced batches and obey district
+isolation. A local, project-scoped browser store records false-positive
+suppressions without changing source code or the imported CityModel. Persisted
+data and worker messages use strict exact-key validation and bounded sizes;
+evaluation caps imported buildings, findings, and suppressions to keep
+large-city behavior predictable.
+
 == Metric mapping
 
 Repository = borough; build module = district; source file = building. A

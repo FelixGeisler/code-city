@@ -1873,6 +1873,76 @@ button,
   min-height: 54px;
 }
 
+.design-smell-panel {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.design-smell-count {
+  color: #ffb4bf;
+  font-variant-numeric: tabular-nums;
+}
+
+.design-smell-help,
+.design-smell-status,
+.design-smell-finding p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.design-smell-filters {
+  display: grid;
+  gap: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.45rem;
+}
+
+.design-smell-filters label {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.4rem;
+  cursor: pointer;
+}
+
+.design-smell-filters label:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.design-smell-filters small {
+  grid-column: 2;
+  color: var(--muted);
+}
+
+.design-smell-unavailable,
+.design-smell-results {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.design-smell-unavailable {
+  color: var(--muted);
+}
+
+.design-smell-finding {
+  border-inline-start: 0.35rem solid #fb7185;
+  padding-inline-start: 0.65rem;
+}
+
+.design-smell-finding.severity-moderate { border-color: #b45309; }
+.design-smell-finding.severity-critical { border-color: #7f1d1d; }
+.design-smell-finding button:first-child { text-align: start; font: inherit; color: inherit; text-decoration: underline; }
+.design-smell-suppress { margin-top: 0.35rem; }
+
+.design-smell-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
 .metric-mapping-panel .panel-heading .eyebrow {
   margin: 0 0 2px !important;
   font-size: 10px;

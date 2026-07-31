@@ -44,6 +44,15 @@ workerScope.addEventListener("message", (event: MessageEvent<unknown>) => {
               ]),
             ),
           }),
+      ...(request.context.availableSmellRules === null
+        ? {}
+        : {
+            availableSmellRuleIdsByBuildingId: new Map(
+              request.context.availableSmellRules.map(
+                ([id, ruleIds]) => [id, new Set(ruleIds)],
+              ),
+            ),
+          }),
       ...(request.context.ruleSchemaVersion === null
         ? {}
         : {

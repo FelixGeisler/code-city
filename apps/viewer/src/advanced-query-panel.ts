@@ -60,6 +60,7 @@ export interface AdvancedQueryPanelOptions {
 export interface AdvancedQueryPanelController {
   readonly selection: AdvancedSelectionState;
   setProject(model: CityModel): void;
+  refreshContext(): void;
   selectFromScene(
     buildingId: string,
     intent?: AdvancedSelectionIntent,
@@ -573,6 +574,15 @@ export function installAdvancedQueryPanel(
       if (sameProject && definition !== undefined) {
         void runDefinition(definition);
       }
+    },
+    refreshContext() {
+      generation += 1;
+      worker.cancel();
+      evaluation = undefined;
+      results.replaceChildren();
+      if (definition === undefined) return;
+      status.textContent = "Refreshing query contextâ€¦";
+      void runDefinition(definition);
     },
     selectFromScene(buildingId, intent = {}) {
       const ordered =
