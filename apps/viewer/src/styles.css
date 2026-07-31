@@ -3697,6 +3697,54 @@ button,
   font-size: 13px;
 }
 
+.advanced-query-comparison-table-region {
+  max-height: 360px;
+  overflow: auto;
+  border: 1px solid rgba(133, 166, 202, 0.18);
+  border-radius: 8px;
+}
+
+.advanced-query-comparison-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.advanced-query-comparison-table caption {
+  padding: 8px 10px;
+  color: var(--muted);
+  text-align: left;
+}
+
+.advanced-query-comparison-table th,
+.advanced-query-comparison-table td {
+  padding: 7px 9px;
+  border-top: 1px solid rgba(133, 166, 202, 0.14);
+  text-align: left;
+  vertical-align: top;
+}
+
+.advanced-query-comparison-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #0f2034;
+}
+
+.advanced-query-comparison-building {
+  display: grid;
+  gap: 2px;
+  min-width: 180px;
+}
+
+.advanced-query-comparison-path {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 600px) {
   .brand span {
     display: none;

@@ -583,7 +583,38 @@
                     <h3 id="advanced-query-comparison-title">
                       Selection comparison
                     </h3>
-                    <p id="advanced-query-comparison-summary"></p>
+                    <p
+                      id="advanced-query-comparison-summary"
+                      aria-live="polite"
+                    ></p>
+                    <div
+                      class="advanced-query-comparison-table-region"
+                      role="region"
+                      aria-labelledby="advanced-query-comparison-title"
+                      tabindex="0"
+                    >
+                      <table
+                        id="advanced-query-comparison-table"
+                        class="advanced-query-comparison-table"
+                      >
+                        <caption>
+                          Per-building source metrics for the selected
+                          buildings
+                        </caption>
+                        <thead>
+                          <tr>
+                            <th scope="col">Building</th>
+                            <th scope="col">Language</th>
+                            <th scope="col">Risk</th>
+                            <th scope="col">SLOC</th>
+                            <th scope="col">Decision load</th>
+                            <th scope="col">Maximum CC</th>
+                            <th scope="col">Units</th>
+                          </tr>
+                        </thead>
+                        <tbody id="advanced-query-comparison-body"></tbody>
+                      </table>
+                    </div>
                   </section>
                   <div
                     class="advanced-query-selection-actions"
@@ -596,7 +627,7 @@
                       type="button"
                       disabled
                     >
-                      Focus primary
+                      Focus selection
                     </button>
                     <button
                       id="advanced-query-isolate"
@@ -604,7 +635,7 @@
                       type="button"
                       disabled
                     >
-                      Isolate selection district
+                      Isolate selection
                     </button>
                     <button
                       id="advanced-query-compare"

@@ -178,6 +178,7 @@ export class ViewerBuildingLayer {
   private groupHighlightedIds: readonly string[] = Object.freeze([]);
 
   private isolatedDistrictId: string | null = null;
+  private visibleBuildingIds: ReadonlySet<string> | null = null;
   private disposed = false;
 
   public constructor(
@@ -289,6 +290,19 @@ export class ViewerBuildingLayer {
     return this.definitionsById.get(id)?.bounds.clone();
   }
 
+  public selectionBounds(ids: readonly string[]): THREE.Box3 | undefined {
+    this.assertActive();
+    const bounds = new THREE.Box3();
+    let found = false;
+    for (const id of new Set(ids)) {
+      const building = this.definitionsById.get(id);
+      if (building === undefined) continue;
+      bounds.union(building.bounds);
+      found = true;
+    }
+    return found ? bounds : undefined;
+  }
+
   public districtBounds(id: string): THREE.Box3 | undefined {
     return this.districtBoundsById.get(id)?.clone();
   }
@@ -297,7 +311,15 @@ export class ViewerBuildingLayer {
     ray: BuildingBvhRay,
     options: BuildingBvhPickOptions = {},
   ): BuildingBvhPickResult {
-    return this.bvh.pick(ray, options);
+    return this.bvh.pick(ray, {
+      ...options,
+      ...(this.isolatedDistrictId === null
+        ? {}
+        : { districtId: this.isolatedDistrictId }),
+      ...(this.visibleBuildingIds === null
+        ? {}
+        : { buildingIds: this.visibleBuildingIds }),
+    });
   }
 
   public benchmarkPicks(count = 50): ViewerBuildingPickBenchmark {
@@ -354,12 +376,30 @@ export class ViewerBuildingLayer {
   public setIsolatedDistrict(id: string | null): void {
     this.assertActive();
     this.isolatedDistrictId = id;
+    this.refreshVisibility();
+  }
+
+  public setVisibleBuildingIds(ids: readonly string[] | null): void {
+    this.assertActive();
+    if (ids === null) {
+      this.visibleBuildingIds = null;
+    } else {
+      const visible = new Set<string>();
+      for (const id of ids) {
+        if (this.definitionsById.has(id)) visible.add(id);
+      }
+      this.visibleBuildingIds = visible;
+    }
+    this.refreshVisibility();
+  }
+
+  private refreshVisibility(): void {
     if (this.mode === "instanced") {
       this.populateBatches();
     } else {
       for (const [buildingId, mesh] of this.legacyMeshes) {
         const building = this.definitionsById.get(buildingId)!;
-        mesh.visible = id === null || building.districtId === id;
+        mesh.visible = this.isBuildingVisible(building);
       }
     }
     this.refreshHighlight("hovered");
@@ -555,12 +595,7 @@ export class ViewerBuildingLayer {
       const visibleIds: string[] = [];
       let index = 0;
       for (const building of batch.buildings) {
-        if (
-          this.isolatedDistrictId !== null &&
-          building.districtId !== this.isolatedDistrictId
-        ) {
-          continue;
-        }
+        if (!this.isBuildingVisible(building)) continue;
         batch.mesh.setMatrixAt(index, building.matrix);
         batch.mesh.setColorAt(index, new THREE.Color(building.colorValue));
         visibleIds.push(building.id);
@@ -648,8 +683,7 @@ export class ViewerBuildingLayer {
       const building = this.definitionsById.get(id);
       if (
         building === undefined ||
-        (this.isolatedDistrictId !== null &&
-          building.districtId !== this.isolatedDistrictId)
+        !this.isBuildingVisible(building)
       ) {
         continue;
       }
@@ -672,8 +706,7 @@ export class ViewerBuildingLayer {
     const building = id === null ? undefined : this.definitionsById.get(id);
     if (
       building === undefined ||
-      (this.isolatedDistrictId !== null &&
-        building.districtId !== this.isolatedDistrictId)
+      !this.isBuildingVisible(building)
     ) {
       mesh.visible = false;
       return;
@@ -688,6 +721,15 @@ export class ViewerBuildingLayer {
     if (this.disposed) {
       throw new Error("The viewer building layer has been disposed.");
     }
+  }
+
+  private isBuildingVisible(building: CanonicalBuilding): boolean {
+    return (
+      (this.isolatedDistrictId === null ||
+        building.districtId === this.isolatedDistrictId) &&
+      (this.visibleBuildingIds === null ||
+        this.visibleBuildingIds.has(building.id))
+    );
   }
 }
 

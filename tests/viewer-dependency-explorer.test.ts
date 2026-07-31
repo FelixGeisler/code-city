@@ -4,11 +4,14 @@ import {
   createDependencyExplorerIndex,
   DEPENDENCY_ROUTES_PER_DIRECTION,
   dependencyRoutesForBuilding,
+  dependencyRoutesForBuildings,
   INITIAL_DEPENDENCY_ROUTE_STATE,
+  MAXIMUM_MULTI_SELECTION_DEPENDENCY_ROUTES,
   projectDependencyRoute,
   resetDependencyRouteState,
   toggleDependencyRouteDirection,
 } from "../apps/viewer/src/dependency-explorer.js";
+import { createLargeCityFixture } from "../apps/viewer/src/large-city-fixture.js";
 import type {
   CityBuilding,
   CityDependency,
@@ -296,6 +299,106 @@ describe("dependency explorer index", () => {
     expect(incomingResult.routes.map(({ weight }) => weight)).toEqual(
       result.routes.map(({ weight }) => weight),
     );
+  });
+
+  it("combines routes from selected endpoints across districts without duplicates", () => {
+    const index = routeProjectionIndex();
+
+    const summary = dependencyRoutesForBuildings(index, [
+      "building-a",
+      "missing",
+      "building-c",
+      "building-a",
+    ]);
+
+    expect(summary).toMatchObject({
+      totalCount: 4,
+      truncated: false,
+    });
+    expect(
+      summary.routes.map(({ selectedBuildingId, route }) => [
+        route.dependencyId,
+        selectedBuildingId,
+        route.direction,
+      ]),
+    ).toEqual([
+      ["a-to-rxjs", "building-a", "outgoing"],
+      ["a-to-c", "building-a", "outgoing"],
+      ["c-to-a", "building-c", "outgoing"],
+      ["a-to-b", "building-a", "outgoing"],
+    ]);
+  });
+
+  it("enforces one global bound for multi-selection routes", () => {
+    const dependencies = Array.from(
+      { length: MAXIMUM_MULTI_SELECTION_DEPENDENCY_ROUTES + 5 },
+      (_, index) =>
+        externalDependency(
+          `external-${index.toString().padStart(3, "0")}`,
+          "building-a",
+          `package-${index.toString().padStart(3, "0")}`,
+          index + 1,
+        ),
+    );
+    const index = createDependencyExplorerIndex(
+      fixtureModel({ dependencies }),
+    );
+
+    const summary = dependencyRoutesForBuildings(
+      index,
+      ["building-a"],
+      { incoming: true, outgoing: true },
+      10_000,
+    );
+
+    expect(summary.routes).toHaveLength(
+      MAXIMUM_MULTI_SELECTION_DEPENDENCY_ROUTES,
+    );
+    expect(summary.totalCount).toBe(
+      MAXIMUM_MULTI_SELECTION_DEPENDENCY_ROUTES + 5,
+    );
+    expect(summary.truncated).toBe(true);
+    expect(() =>
+      dependencyRoutesForBuildings(index, ["building-a"], undefined, 0),
+    ).toThrow(/positive safe integer/u);
+  });
+
+  it("stays deduplicated and globally bounded on the 25k fixture", () => {
+    const fixture = createLargeCityFixture();
+    const dependencyCount =
+      MAXIMUM_MULTI_SELECTION_DEPENDENCY_ROUTES + 40;
+    const dependencies = Array.from(
+      { length: dependencyCount },
+      (_, index) =>
+        internalDependency(
+          `large-route-${index.toString().padStart(3, "0")}`,
+          `building:${index.toString().padStart(5, "0")}`,
+          "building:24999",
+          index + 1,
+        ),
+    );
+    const index = createDependencyExplorerIndex({
+      ...fixture,
+      dependencies,
+    });
+    const selected = [
+      ...dependencies.map(({ sourceId }) => sourceId),
+      "building:24999",
+    ];
+
+    const summary = dependencyRoutesForBuildings(index, selected);
+
+    expect(index.buildingCount).toBe(25_000);
+    expect(summary.totalCount).toBe(dependencyCount);
+    expect(summary.routes).toHaveLength(
+      MAXIMUM_MULTI_SELECTION_DEPENDENCY_ROUTES,
+    );
+    expect(summary.truncated).toBe(true);
+    expect(
+      new Set(
+        summary.routes.map(({ route }) => route.dependencyId),
+      ).size,
+    ).toBe(summary.routes.length);
   });
 
   it("is an immutable snapshot of model presentation data", () => {

@@ -194,14 +194,20 @@ query results. The screen-reader result list exposes each membership through
 failures. Up to 500 buildings may be selected. Their instanced overlay remains
 one bounded draw object and can be disabled without losing membership.
 
-Focus targets the primary building. Isolation is available when every selected
-building belongs to one district. Compare summarizes the selected metrics, and
-export downloads the versioned query, selection set, and selected building
-facts as JSON. Named queries and selection sets use versioned project-local
-browser storage keyed by stable project identity. Each query records its model,
-metric, and optional rule schema capability; incompatible or malformed stored
-data is ignored. Evolution frames retain surviving identities and rerun the
-active query, while loading a different project clears the selection.
+Focus frames the combined bounds of every selected building. Isolation applies
+an exact building-ID mask, including selections that span districts, and the
+same mask governs instanced rendering, legacy rendering, highlighting, and
+picking. Enabled dependency directions gather routes from every selected
+endpoint, deduplicate internal relationships selected at both ends, and apply
+one global 80-route limit. Compare reports aggregate ranges and exposes an
+accessible per-building metric table capped at 100 rows with explicit omitted
+counts. Export downloads the versioned query, selection set, and selected
+building facts as JSON. Named queries and selection sets use versioned
+project-local browser storage keyed by stable project identity. Each query
+records its model, metric, and optional rule schema capability; incompatible or
+malformed stored data is ignored. Evolution frames retain surviving identities
+and rerun the active query, while loading a different project clears the
+selection.
 
 **Explore** contains a deterministic repository, solution, module, district,
 and file tree synchronized with the 3D scene and search results. A scene or

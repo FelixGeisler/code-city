@@ -58,6 +58,7 @@ import {
   createDependencyExplorerIndex,
   DEPENDENCY_ROUTES_PER_DIRECTION,
   dependencyRoutesForBuilding,
+  dependencyRoutesForBuildings,
   type DependencyRouteDirection,
   type DependencyRouteEndpoint,
   type DependencyRouteProjection,
@@ -312,6 +313,8 @@ interface SceneEvolutionAnimation {
 interface ViewerPerformanceDiagnostics {
   readonly buildingRenderMode: ViewerBuildingRenderMode | null;
   readonly buildingBatchCount: number;
+  readonly visibleBuildingCount: number;
+  readonly buildingVisibilityMaskActive: boolean;
   readonly objectCount: number;
   readonly renderCalls: number;
   readonly evolutionRemovals: EvolutionRemovalDiagnostics | null;
@@ -678,6 +681,7 @@ class CityScene {
   private hoveredEntity: SceneEntity | null = null;
   private selectedEntity: SceneEntity | null = null;
   private isolatedDistrictId: string | null = null;
+  private buildingVisibilityMask: ReadonlySet<string> | null = null;
   private cameraTransition: CameraTransition | null = null;
   private evolutionAnimation: SceneEvolutionAnimation | null = null;
   private orthographicViewHeight = 20;
@@ -1238,6 +1242,51 @@ class CityScene {
     );
   }
 
+  public get buildingSelectionIsolated(): boolean {
+    return this.buildingVisibilityMask !== null;
+  }
+
+  public focusBuildings(buildingIds: readonly string[]): boolean {
+    const bounds = this.buildingLayer?.selectionBounds(buildingIds);
+    if (bounds === undefined || bounds.isEmpty()) return false;
+    this.ensureCityPresentation();
+    this.frameBounds(bounds, true);
+    return true;
+  }
+
+  public isolateBuildings(
+    buildingIds: readonly string[],
+    focus = true,
+  ): boolean {
+    const valid = new Set<string>();
+    for (const id of buildingIds) {
+      if (this.buildingContexts.has(id)) valid.add(id);
+    }
+    if (valid.size === 0) return false;
+    this.ensureCityPresentation();
+    this.hover(null);
+    for (const group of this.districtGroups.values()) {
+      group.visible = true;
+    }
+    this.buildingLayer?.setIsolatedDistrict(null);
+    this.evolutionAnimation?.removals.setIsolatedDistrict(null);
+    this.designSmellOverlay.setIsolatedDistrict(null);
+    this.isolatedDistrictId = null;
+    this.buildingVisibilityMask = valid;
+    this.buildingLayer?.setVisibleBuildingIds([...valid]);
+    const selection = this.selectedEntity;
+    if (
+      selection?.kind === "building" &&
+      !valid.has(selection.id)
+    ) {
+      this.select(null);
+    }
+    if (focus) this.focusBuildings([...valid]);
+    this.emitState();
+    schedulePerformanceDiagnostics();
+    return true;
+  }
+
   /** Neutral buildings remain unchanged; markers are batched by shape. */
   public replaceDesignSmellOverlay(
     findings: readonly DesignSmellFinding[],
@@ -1489,6 +1538,12 @@ class CityScene {
     }
     this.ensureCityPresentation();
     if (
+      this.buildingVisibilityMask !== null &&
+      !this.buildingVisibilityMask.has(id)
+    ) {
+      this.clearBuildingVisibilityMask();
+    }
+    if (
       this.isolatedDistrictId !== null &&
       this.isolatedDistrictId !== context.building.districtId
     ) {
@@ -1511,6 +1566,7 @@ class CityScene {
       return false;
     }
     this.ensureCityPresentation();
+    this.clearBuildingVisibilityMask();
     if (
       this.isolatedDistrictId !== null &&
       this.isolatedDistrictId !== id
@@ -1530,6 +1586,7 @@ class CityScene {
       return false;
     }
     this.ensureCityPresentation();
+    this.clearBuildingVisibilityMask();
     this.select(createSceneEntity("external", id));
     if (focus) {
       this.frameObject(mesh, true);
@@ -1555,6 +1612,7 @@ class CityScene {
       return false;
     }
     this.hover(null);
+    this.clearBuildingVisibilityMask();
     for (const [districtId, group] of this.districtGroups) {
       group.visible = districtId === id;
     }
@@ -1578,17 +1636,25 @@ class CityScene {
     return true;
   }
 
-  public showWholeCity(): void {
+  public showWholeCity(frame = true): void {
     this.ensureCityPresentation();
     for (const group of this.districtGroups.values()) {
       group.visible = true;
     }
     this.buildingLayer?.setIsolatedDistrict(null);
+    this.clearBuildingVisibilityMask();
     this.evolutionAnimation?.removals.setIsolatedDistrict(null);
     this.designSmellOverlay.setIsolatedDistrict(null);
     this.isolatedDistrictId = null;
-    this.frameBounds(this.bounds(), true);
+    if (frame) this.frameBounds(this.bounds(), true);
     this.emitState();
+    schedulePerformanceDiagnostics();
+  }
+
+  private clearBuildingVisibilityMask(): void {
+    if (this.buildingVisibilityMask === null) return;
+    this.buildingVisibilityMask = null;
+    this.buildingLayer?.setVisibleBuildingIds(null);
   }
 
   public assertBuildingCapability(buildingCount: number): void {
@@ -1614,6 +1680,10 @@ class CityScene {
     return Object.freeze({
       buildingRenderMode: this.buildingLayer?.mode ?? null,
       buildingBatchCount: this.buildingLayer?.batchCount ?? 0,
+      visibleBuildingCount:
+        this.buildingLayer?.visibleBuildingCount ?? 0,
+      buildingVisibilityMaskActive:
+        this.buildingVisibilityMask !== null,
       objectCount,
       renderCalls: this.renderer.info.render.calls,
       evolutionRemovals:
@@ -1666,6 +1736,7 @@ class CityScene {
     this.designSmellOverlay.clear();
     this.city.remove(this.designSmellOverlay.object);
     this.isolatedDistrictId = null;
+    this.buildingVisibilityMask = null;
     this.cameraTransition = null;
     this.select(null);
     this.buildingContexts.clear();
@@ -1796,12 +1867,18 @@ class CityScene {
 
   private temporarilyShowWholeCity(): () => void {
     const previousIsolation = this.isolatedDistrictId;
+    const previousBuildingVisibilityMask =
+      this.buildingVisibilityMask === null
+        ? null
+        : [...this.buildingVisibilityMask];
     const visibility = new Map(
       [...this.districtGroups].map(([id, group]) => [id, group.visible]),
     );
     for (const group of this.districtGroups.values()) group.visible = true;
     this.buildingLayer?.setIsolatedDistrict(null);
+    this.buildingLayer?.setVisibleBuildingIds(null);
     this.evolutionAnimation?.removals.setIsolatedDistrict(null);
+    this.designSmellOverlay.setIsolatedDistrict(null);
     let restored = false;
     return () => {
       if (restored) return;
@@ -1810,9 +1887,13 @@ class CityScene {
         group.visible = visibility.get(id) ?? true;
       }
       this.buildingLayer?.setIsolatedDistrict(previousIsolation);
+      this.buildingLayer?.setVisibleBuildingIds(
+        previousBuildingVisibilityMask,
+      );
       this.evolutionAnimation?.removals.setIsolatedDistrict(
         previousIsolation,
       );
+      this.designSmellOverlay.setIsolatedDistrict(previousIsolation);
     };
   }
 
@@ -2759,6 +2840,21 @@ class UnavailableCityScene {
     _visible: boolean,
   ): void {}
 
+  public get buildingSelectionIsolated(): boolean {
+    return false;
+  }
+
+  public focusBuildings(_buildingIds: readonly string[]): boolean {
+    return false;
+  }
+
+  public isolateBuildings(
+    _buildingIds: readonly string[],
+    _focus = true,
+  ): boolean {
+    return false;
+  }
+
   public replaceDependencyRoutes(
     _routes: readonly DependencyOverlayRoute[],
   ): void {}
@@ -2797,7 +2893,7 @@ class UnavailableCityScene {
     return false;
   }
 
-  public showWholeCity(): void {}
+  public showWholeCity(_frame = true): void {}
 
   public assertBuildingCapability(_buildingCount: number): void {}
 
@@ -2805,6 +2901,8 @@ class UnavailableCityScene {
     return Object.freeze({
       buildingRenderMode: null,
       buildingBatchCount: 0,
+      visibleBuildingCount: 0,
+      buildingVisibilityMaskActive: false,
       objectCount: 0,
       renderCalls: 0,
       evolutionRemovals: null,
@@ -3083,11 +3181,16 @@ advancedQueryPanel = installAdvancedQueryPanel(
   {
     context: advancedQueryPanelContext,
     onSelectionChange: applyAdvancedSelection,
-    onFocus: (buildingId) => {
-      cityScene.selectBuilding(buildingId, true);
+    onFocus: (buildingIds) => {
+      cityScene.focusBuildings(buildingIds);
     },
-    onIsolate: (districtId) => {
-      cityScene.isolateDistrict(districtId);
+    onIsolate: (buildingIds) => {
+      applyingAdvancedSelection = true;
+      try {
+        cityScene.isolateBuildings(buildingIds);
+      } finally {
+        applyingAdvancedSelection = false;
+      }
     },
   },
 );
@@ -3333,7 +3436,14 @@ searchResults.addEventListener("keydown", (event) => {
     document.activeElement.classList.contains("search-result-button")
   ) {
     event.preventDefault();
-    document.activeElement.click();
+    document.activeElement.dispatchEvent(
+      new MouseEvent("click", {
+        bubbles: true,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey,
+      }),
+    );
     return;
   }
   if (event.key === "Escape") {
@@ -3383,12 +3493,18 @@ isolateDistrictButton.addEventListener("click", () => {
 });
 
 showWholeCityButton.addEventListener("click", () => {
-  if (showAllDistricts(explorerState) !== explorerState) {
+  if (
+    cityScene.buildingSelectionIsolated ||
+    showAllDistricts(explorerState) !== explorerState
+  ) {
     cityScene.showWholeCity();
   }
 });
 viewerScopeReset.addEventListener("click", () => {
-  if (explorerState.isolatedDistrictId !== null) {
+  if (
+    explorerState.isolatedDistrictId !== null ||
+    cityScene.buildingSelectionIsolated
+  ) {
     cityScene.showWholeCity();
   }
 });
@@ -4245,6 +4361,9 @@ function renderBuildingSearch(): void {
   }
 
   const results = matches.results.slice(0, searchResultLimit);
+  const visibleBuildingOrder = results.flatMap((entry) =>
+    entry.kind === "building" ? [entry.result.buildingId] : [],
+  );
   const visibleCount = results.length;
   findPanel.classList.add("has-results");
   searchStatus.textContent =
@@ -4267,12 +4386,33 @@ function renderBuildingSearch(): void {
     if (entry.kind === "building") {
       const { result } = entry;
       button.dataset["buildingId"] = result.buildingId;
+      button.setAttribute(
+        "aria-pressed",
+        String(
+          advancedQueryPanel?.selection.buildingIds.includes(
+            result.buildingId,
+          ) ?? false,
+        ),
+      );
       if (
         result.buildingId === selectedExplorerBuildingId(explorerState)
       ) {
         button.setAttribute("aria-current", "true");
       }
-      button.addEventListener("click", () => {
+      button.addEventListener("click", (event) => {
+        const additive = event.ctrlKey || event.metaKey;
+        const range = event.shiftKey;
+        if (
+          advancedQueryPanel !== undefined &&
+          (additive || range)
+        ) {
+          advancedQueryPanel.selectFromScene(result.buildingId, {
+            additive,
+            range,
+            orderedBuildingIds: visibleBuildingOrder,
+          });
+          return;
+        }
         viewerWorkspace.show("details", {
           intent: "explicit",
           focusTab: true,
@@ -4588,12 +4728,30 @@ function evolutionQueryChanges(
 function applyAdvancedSelection(
   selection: AdvancedSelectionState,
 ): void {
-  cityScene.setBuildingGroupHighlight(
-    selection.buildingIds,
-    selection.overlayVisible,
-  );
   applyingAdvancedSelection = true;
   try {
+    cityScene.setBuildingGroupHighlight(
+      selection.buildingIds,
+      selection.overlayVisible,
+    );
+    const selectedDistricts = new Set(
+      selection.buildingIds
+        .map((id) => activeBuildingsById.get(id)?.districtId)
+        .filter((id): id is string => id !== undefined),
+    );
+    if (
+      selectedDistricts.size > 1 &&
+      explorerState.isolatedDistrictId !== null
+    ) {
+      cityScene.showWholeCity(false);
+    }
+    if (cityScene.buildingSelectionIsolated) {
+      if (selection.buildingIds.length === 0) {
+        cityScene.showWholeCity(false);
+      } else {
+        cityScene.isolateBuildings(selection.buildingIds, false);
+      }
+    }
     if (
       selection.primaryBuildingId !== null &&
       activeBuildingsById.has(selection.primaryBuildingId)
@@ -4610,6 +4768,7 @@ function applyAdvancedSelection(
   } finally {
     applyingAdvancedSelection = false;
   }
+  renderDependencyExplorer();
   selectionStatus.textContent =
     selection.buildingIds.length === 0
       ? "Selection cleared."
@@ -4661,7 +4820,9 @@ function synchronizeExplorerState(state: ExplorerState): void {
   isolateDistrictButton.disabled =
     isolatableDistrictId === null ||
     state.isolatedDistrictId === isolatableDistrictId;
-  showWholeCityButton.disabled = state.isolatedDistrictId === null;
+  showWholeCityButton.disabled =
+    state.isolatedDistrictId === null &&
+    !cityScene.buildingSelectionIsolated;
   synchronizeCameraControls();
   imageExportDialog.invalidate();
   for (const button of searchResultButtons()) {
@@ -4673,13 +4834,23 @@ function synchronizeExplorerState(state: ExplorerState): void {
     } else {
       button.removeAttribute("aria-current");
     }
+    const buildingId = button.dataset["buildingId"];
+    if (buildingId !== undefined) {
+      button.setAttribute(
+        "aria-pressed",
+        String(
+          advancedQueryPanel?.selection.buildingIds.includes(
+            buildingId,
+          ) ?? false,
+        ),
+      );
+    }
   }
   if (
     !applyingAdvancedSelection &&
     selectedBuildingId !== null &&
     advancedQueryPanel !== undefined &&
-    (advancedQueryPanel.selection.primaryBuildingId !== selectedBuildingId ||
-      advancedQueryPanel.selection.buildingIds.length !== 1)
+    advancedQueryPanel.selection.primaryBuildingId !== selectedBuildingId
   ) {
     advancedQueryPanel.selectFromScene(selectedBuildingId);
   } else if (
@@ -5096,6 +5267,25 @@ function districtRouteButton(
 function toggleDependencyDirection(
   direction: DependencyRouteDirection,
 ): void {
+  const advancedIds =
+    advancedQueryPanel?.selection.buildingIds ?? [];
+  if (advancedIds.length > 1) {
+    const summary = dependencyRoutesForBuildings(
+      dependencyExplorerIndex,
+      advancedIds,
+    );
+    const count =
+      direction === "incoming"
+        ? summary.incomingCount
+        : summary.outgoingCount;
+    if (count === 0) return;
+    dependencyRouteState = toggleDependencyRouteDirection(
+      dependencyRouteState,
+      direction,
+    );
+    renderDependencyExplorer();
+    return;
+  }
   const selectedBuildingId = selectedExplorerBuildingId(explorerState);
   if (selectedBuildingId === null) {
     return;
@@ -5118,6 +5308,12 @@ function toggleDependencyDirection(
 function renderDependencyExplorer(): void {
   dependencyList.replaceChildren();
   dependencyShowMore.hidden = true;
+  const advancedIds =
+    advancedQueryPanel?.selection.buildingIds ?? [];
+  if (advancedIds.length > 1) {
+    renderMultiSelectionDependencyExplorer(advancedIds);
+    return;
+  }
   const selectedBuildingId = selectedExplorerBuildingId(explorerState);
   const summary =
     selectedBuildingId === null
@@ -5222,6 +5418,63 @@ function renderDependencyExplorer(): void {
     overlayRoutes.push(dependencyOverlayRoute(route, projection));
     dependencyList.append(dependencyListItem(route, projection));
   }
+  cityScene.replaceDependencyRoutes(overlayRoutes);
+}
+
+function renderMultiSelectionDependencyExplorer(
+  buildingIds: readonly string[],
+): void {
+  const summary = dependencyRoutesForBuildings(
+    dependencyExplorerIndex,
+    buildingIds,
+    dependencyRouteState,
+  );
+  updateDependencyToggle(
+    dependencyIncomingToggle,
+    dependencyIncomingCount,
+    summary.incomingCount,
+    dependencyRouteState.incoming,
+  );
+  updateDependencyToggle(
+    dependencyOutgoingToggle,
+    dependencyOutgoingCount,
+    summary.outgoingCount,
+    dependencyRouteState.outgoing,
+  );
+  dependencyEmpty.hidden =
+    summary.incomingCount + summary.outgoingCount > 0;
+  dependencyList.hidden = summary.routes.length === 0;
+
+  if (
+    !dependencyRouteState.incoming &&
+    !dependencyRouteState.outgoing
+  ) {
+    dependencyStatus.textContent =
+      `${buildingIds.length.toLocaleString()} selected buildings; ` +
+      `${summary.incomingCount.toLocaleString()} incoming and ` +
+      `${summary.outgoingCount.toLocaleString()} outgoing routes hidden.`;
+    cityScene.replaceDependencyRoutes([]);
+    return;
+  }
+
+  const overlayRoutes: DependencyOverlayRoute[] = [];
+  for (const { selectedBuildingId, route } of summary.routes) {
+    const projection = projectDependencyRoute(
+      dependencyExplorerIndex,
+      selectedBuildingId,
+      route,
+      explorerState.isolatedDistrictId,
+    );
+    overlayRoutes.push(dependencyOverlayRoute(route, projection));
+    dependencyList.append(dependencyListItem(route, projection));
+  }
+  const omittedCount = summary.totalCount - summary.routes.length;
+  dependencyStatus.textContent =
+    `Showing ${summary.routes.length.toLocaleString()} unique routes from ` +
+    `${buildingIds.length.toLocaleString()} selected buildings` +
+    (omittedCount > 0
+      ? `; ${omittedCount.toLocaleString()} omitted by the global route limit.`
+      : ".");
   cityScene.replaceDependencyRoutes(overlayRoutes);
 }
 

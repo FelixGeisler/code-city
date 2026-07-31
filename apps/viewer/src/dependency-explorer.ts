@@ -10,6 +10,7 @@ import {
 import { routeEndpointKey } from "./dependency-route-layout.js";
 
 export const DEPENDENCY_ROUTES_PER_DIRECTION = 20;
+export const MAXIMUM_MULTI_SELECTION_DEPENDENCY_ROUTES = 80;
 
 export type DependencyRouteDirection = "incoming" | "outgoing";
 
@@ -66,6 +67,19 @@ export interface BuildingDependencySummary {
   readonly buildingId: string;
   readonly incoming: DependencyDirectionSummary;
   readonly outgoing: DependencyDirectionSummary;
+}
+
+export interface SelectedEndpointDependencyRoute {
+  readonly selectedBuildingId: string;
+  readonly route: SelectedDependencyRoute;
+}
+
+export interface MultiSelectionDependencySummary {
+  readonly routes: readonly SelectedEndpointDependencyRoute[];
+  readonly incomingCount: number;
+  readonly outgoingCount: number;
+  readonly totalCount: number;
+  readonly truncated: boolean;
 }
 
 interface IndexedBuilding {
@@ -205,6 +219,94 @@ export function dependencyRoutesForBuilding(
       "outgoing",
       data.outgoing.get(buildingId) ?? EMPTY_ROUTES,
     ),
+  });
+}
+
+/**
+ * Resolves one bounded, deterministic route set from every selected endpoint.
+ * Internal edges whose source and target are both selected are represented
+ * once, using the outgoing source endpoint, so the overlay never draws the
+ * same relationship twice.
+ */
+export function dependencyRoutesForBuildings(
+  index: DependencyExplorerIndex,
+  buildingIds: readonly string[],
+  directions: DependencyRouteToggleState = {
+    incoming: true,
+    outgoing: true,
+  },
+  limit = MAXIMUM_MULTI_SELECTION_DEPENDENCY_ROUTES,
+): MultiSelectionDependencySummary {
+  if (!Number.isSafeInteger(limit) || limit < 1) {
+    throw new RangeError(
+      "The multi-selection dependency route limit must be a positive safe integer.",
+    );
+  }
+  const boundedLimit = Math.min(
+    limit,
+    MAXIMUM_MULTI_SELECTION_DEPENDENCY_ROUTES,
+  );
+  const data = index[dependencyExplorerData];
+  const selectedOrder = new Map<string, number>();
+  for (const id of buildingIds) {
+    if (selectedOrder.has(id) || !data.buildings.has(id)) continue;
+    selectedOrder.set(id, selectedOrder.size);
+  }
+
+  const incomingCandidates = new Map<
+    string,
+    SelectedEndpointDependencyRoute
+  >();
+  const outgoingCandidates = new Map<
+    string,
+    SelectedEndpointDependencyRoute
+  >();
+  const retain = (
+    candidates: Map<string, SelectedEndpointDependencyRoute>,
+    selectedBuildingId: string,
+    route: SelectedDependencyRoute,
+  ): void => {
+    if (!candidates.has(route.dependencyId)) {
+      candidates.set(
+        route.dependencyId,
+        Object.freeze({ selectedBuildingId, route }),
+      );
+    }
+  };
+
+  for (const buildingId of selectedOrder.keys()) {
+    for (const route of data.outgoing.get(buildingId) ?? EMPTY_ROUTES) {
+      retain(outgoingCandidates, buildingId, route);
+    }
+    for (const route of data.incoming.get(buildingId) ?? EMPTY_ROUTES) {
+      retain(incomingCandidates, buildingId, route);
+    }
+  }
+
+  const candidates = new Map<string, SelectedEndpointDependencyRoute>();
+  if (directions.incoming) {
+    for (const [id, candidate] of incomingCandidates) {
+      candidates.set(id, candidate);
+    }
+  }
+  if (directions.outgoing) {
+    for (const [id, candidate] of outgoingCandidates) {
+      candidates.set(id, candidate);
+    }
+  }
+  const ordered = [...candidates.values()].sort(
+    (left, right) =>
+      compareRoutes(left.route, right.route) ||
+      (selectedOrder.get(left.selectedBuildingId) ?? 0) -
+        (selectedOrder.get(right.selectedBuildingId) ?? 0) ||
+      compareText(left.selectedBuildingId, right.selectedBuildingId),
+  );
+  return Object.freeze({
+    routes: Object.freeze(ordered.slice(0, boundedLimit)),
+    incomingCount: incomingCandidates.size,
+    outgoingCount: outgoingCandidates.size,
+    totalCount: ordered.length,
+    truncated: ordered.length > boundedLimit,
   });
 }
 

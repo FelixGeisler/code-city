@@ -509,7 +509,12 @@ manifest.
 The **Queries** workspace provides explainable built-in rankings,
 dependency neighborhoods, change filters, and compound name, language, risk,
 metric, dependency, and design-smell filters. Results support additive and
-range selection plus focus, isolate, compare, overlay, and JSON export.
+range selection from query, tree, scene, and visible search order. Focus uses
+the combined selection bounds; isolate applies an exact cross-district
+building mask; compare exposes a summary plus at most 100 accessible
+per-building metric rows; and the dependency overlay deduplicates and caps
+routes gathered from every selected endpoint. Overlay and JSON export remain
+available for the same selection.
 Project-scoped saved queries and selection sets retain their versioned model,
 metric, and rule capabilities. Evaluation runs in a disposable worker and
 returns at most 500 of the deterministically ranked matches while reporting

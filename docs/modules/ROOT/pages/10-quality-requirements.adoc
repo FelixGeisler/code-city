@@ -33,7 +33,9 @@ dependency changes and rebuilt route geometry describe the target frame
 |Query interaction
 |Every match explains itself; deterministic ordering synchronizes one bounded
 selection across scene, hierarchy, and result views; unavailable capabilities
-and truncated totals remain explicit
+and truncated totals remain explicit; cross-district isolation is exact;
+multi-selection focus and dependency routes include every selected endpoint;
+and accessible per-building comparisons remain globally bounded
 
 |Image export
 |Semantic bounds make preset framing repeatable; output has the exact accepted
