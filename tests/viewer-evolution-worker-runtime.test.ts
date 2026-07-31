@@ -12,6 +12,7 @@ import {
 } from "../packages/core/src/index.js";
 import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
 import {
+  EVOLUTION_REPLAY_CHECKPOINT_INTERVAL,
   EVOLUTION_WORK_CHECKPOINT_INTERVAL,
   EvolutionTimelineWorkerRuntime,
   type EvolutionWorkerWorkPhase,
@@ -212,6 +213,83 @@ function nonCanonicalBundle(): EvolutionBundle {
   };
 }
 
+function sequentialBundle(frameCount = 100): EvolutionBundle {
+  const baseline = validateCityModel(DEMO_MODEL);
+  const sampledCommitShas = Array.from(
+    { length: frameCount },
+    (_, index) => sha(index + 1),
+  );
+  return {
+    schemaVersion: "1.0",
+    generator: baseline.generator,
+    authorPolicy: "omit-v1",
+    selection: {
+      mode: "commit-count",
+      traversal: "first-parent",
+      order: "oldest-first",
+      requestedCommitCount: frameCount,
+      sampleEvery: 1,
+      selectedCommitCount: frameCount,
+      sampledCommitCount: frameCount,
+      traversedCommitCount: frameCount,
+      resolvedOldestSha: sampledCommitShas[0]!,
+      resolvedNewestSha: sampledCommitShas.at(-1)!,
+      sampledCommitShas,
+    },
+    provenance: {
+      repositoryId: baseline.repositories[0]!.id,
+      repositoryFingerprint: fingerprint(1),
+      analyzer: {
+        name: "code-city",
+        version: baseline.generator.version,
+        fingerprint: fingerprint(2),
+      },
+      historyBackend: {
+        name: "git",
+        version: "2.47.1",
+        renamePolicyRevision: "diff-tree-renames-50-myers-v1",
+      },
+      metricConfigurationFingerprint: fingerprint(3),
+      selectionFingerprint: fingerprint(4),
+    },
+    baseline: {
+      commit: {
+        index: 0,
+        sha: sampledCommitShas[0]!,
+        committedAt: "2026-01-01T00:00:00.000Z",
+        parentShas: [],
+        analyzerVersion: baseline.generator.version,
+        analysisFingerprint: fingerprint(100),
+      },
+      model: baseline,
+    },
+    deltas: Array.from({ length: frameCount - 1 }, (_, offset) => {
+      const index = offset + 1;
+      return {
+        commit: {
+          index,
+          sha: sampledCommitShas[index]!,
+          committedAt: new Date(
+            Date.UTC(2026, 0, index + 1),
+          ).toISOString(),
+          parentShas: [sampledCommitShas[index - 1]!],
+          analyzerVersion: baseline.generator.version,
+          analysisFingerprint: fingerprint(100 + index),
+        },
+        changes: {
+          ...emptyChanges(),
+          model: {
+            identity: {
+              ...baseline.identity!,
+              title: `Sequential replay frame ${index}`,
+            },
+          },
+        },
+      };
+    }),
+  };
+}
+
 async function arrayBuffer(bytes: Uint8Array): Promise<ArrayBuffer> {
   return bytes.buffer.slice(
     bytes.byteOffset,
@@ -358,5 +436,237 @@ describe("evolution timeline worker runtime", () => {
 
   it("documents a bounded production checkpoint budget", () => {
     expect(EVOLUTION_WORK_CHECKPOINT_INTERVAL).toBe(256);
+    expect(EVOLUTION_REPLAY_CHECKPOINT_INTERVAL).toBe(10);
+  });
+
+  it("applies a 100-frame sequential playback in linear delta work", async () => {
+    const bundle = sequentialBundle();
+    const serialized = serializeEvolutionBundle(bundle);
+    const bytes = await arrayBuffer(serialized);
+    const responses: EvolutionWorkerResponse[] = [];
+    const applications: number[] = [];
+    const runtime = new EvolutionTimelineWorkerRuntime({
+      postMessage: (response) => responses.push(response),
+      yieldControl: async () => undefined,
+      checkpointInterval: 8,
+      onReplayDeltaApplied: (frameIndex) =>
+        applications.push(frameIndex),
+    });
+
+    await runtime.handle({
+      type: "load",
+      requestId: 1,
+      bytes: bytes.slice(0),
+      expectedSize: bytes.byteLength,
+      expectedSha256: await digest(bytes),
+    });
+    for (let toIndex = 1; toIndex < 100; toIndex += 1) {
+      await runtime.handle({
+        type: "seek",
+        requestId: toIndex + 1,
+        fromIndex: toIndex - 1,
+        toIndex,
+      });
+    }
+
+    expect(applications).toEqual(
+      Array.from({ length: 99 }, (_, index) => index + 1),
+    );
+    const response = responses.at(-1);
+    expect(response).toMatchObject({
+      type: "frame",
+      frame: { index: 99 },
+    });
+    if (response?.type !== "frame") {
+      throw new Error("Expected the final sequential replay frame.");
+    }
+    expect(response.model).toEqual(
+      [...replayEvolutionBundle(bundle)].at(-1)!.model,
+    );
+  }, 30_000);
+
+  it("uses bounded checkpoints for deterministic arbitrary seeks", async () => {
+    const bundle = sequentialBundle();
+    const serialized = serializeEvolutionBundle(bundle);
+    const bytes = await arrayBuffer(serialized);
+    const responses: EvolutionWorkerResponse[] = [];
+    const applications: number[] = [];
+    const runtime = new EvolutionTimelineWorkerRuntime({
+      postMessage: (response) => responses.push(response),
+      yieldControl: async () => undefined,
+      checkpointInterval: 8,
+      onReplayDeltaApplied: (frameIndex) =>
+        applications.push(frameIndex),
+    });
+    const expected = [...replayEvolutionBundle(bundle)];
+
+    await runtime.handle({
+      type: "load",
+      requestId: 1,
+      bytes: bytes.slice(0),
+      expectedSize: bytes.byteLength,
+      expectedSha256: await digest(bytes),
+    });
+    await runtime.handle({
+      type: "seek",
+      requestId: 2,
+      fromIndex: 0,
+      toIndex: 99,
+    });
+    expect(applications).toHaveLength(99);
+
+    applications.length = 0;
+    await runtime.handle({
+      type: "seek",
+      requestId: 3,
+      fromIndex: 99,
+      toIndex: 55,
+    });
+    expect(applications).toEqual([51, 52, 53, 54, 55]);
+    expect(responses.at(-1)).toMatchObject({
+      type: "frame",
+      requestId: 3,
+      model: expected[55]!.model,
+    });
+
+    applications.length = 0;
+    await runtime.handle({
+      type: "seek",
+      requestId: 4,
+      fromIndex: 55,
+      toIndex: 87,
+    });
+    expect(applications).toEqual([81, 82, 83, 84, 85, 86, 87]);
+    expect(responses.at(-1)).toMatchObject({
+      type: "frame",
+      requestId: 4,
+      model: expected[87]!.model,
+    });
+  }, 30_000);
+
+  it("keeps emitted models isolated from incremental replay state", async () => {
+    const bundle = sequentialBundle();
+    const serialized = serializeEvolutionBundle(bundle);
+    const bytes = await arrayBuffer(serialized);
+    const responses: EvolutionWorkerResponse[] = [];
+    const runtime = new EvolutionTimelineWorkerRuntime({
+      postMessage: (response) => responses.push(response),
+      yieldControl: async () => undefined,
+      checkpointInterval: 8,
+    });
+    const expected = [...replayEvolutionBundle(bundle)];
+
+    await runtime.handle({
+      type: "load",
+      requestId: 1,
+      bytes: bytes.slice(0),
+      expectedSize: bytes.byteLength,
+      expectedSha256: await digest(bytes),
+    });
+    await runtime.handle({
+      type: "seek",
+      requestId: 2,
+      fromIndex: 0,
+      toIndex: 99,
+    });
+    const emitted = responses.at(-1);
+    if (emitted?.type !== "frame") {
+      throw new Error("Expected the warmed evolution frame.");
+    }
+    (
+      emitted.model.buildings[0] as {
+        name: string;
+      }
+    ).name = "poisoned outside the worker";
+
+    await runtime.handle({
+      type: "seek",
+      requestId: 3,
+      fromIndex: 99,
+      toIndex: 55,
+    });
+    expect(responses.at(-1)).toMatchObject({
+      type: "frame",
+      requestId: 3,
+      model: expected[55]!.model,
+    });
+  }, 30_000);
+
+  it("does not publish checkpoints from a superseded incremental seek", async () => {
+    const bundle = sequentialBundle();
+    const serialized = serializeEvolutionBundle(bundle);
+    const bytes = await arrayBuffer(serialized);
+    const responses: EvolutionWorkerResponse[] = [];
+    const applications: number[] = [];
+    const reached = deferred();
+    const release = deferred();
+    let blockObsolete = false;
+    let blockConsumed = false;
+    const runtime = new EvolutionTimelineWorkerRuntime({
+      postMessage: (response) => responses.push(response),
+      checkpointInterval: 1,
+      onReplayDeltaApplied: (frameIndex) => {
+        applications.push(frameIndex);
+      },
+      yieldControl: async (phase) => {
+        if (
+          blockObsolete &&
+          !blockConsumed &&
+          phase === "delta-replay" &&
+          (applications.at(-1) ?? 0) >= 41
+        ) {
+          blockConsumed = true;
+          reached.resolve();
+          await release.promise;
+        }
+      },
+    });
+    const expected = [...replayEvolutionBundle(bundle)];
+
+    await runtime.handle({
+      type: "load",
+      requestId: 1,
+      bytes: bytes.slice(0),
+      expectedSize: bytes.byteLength,
+      expectedSha256: await digest(bytes),
+    });
+    await runtime.handle({
+      type: "seek",
+      requestId: 2,
+      fromIndex: 0,
+      toIndex: 30,
+    });
+    applications.length = 0;
+    responses.length = 0;
+
+    blockObsolete = true;
+    const obsolete = runtime.handle({
+      type: "seek",
+      requestId: 3,
+      fromIndex: 30,
+      toIndex: 80,
+    });
+    await reached.promise;
+    await runtime.handle({ type: "cancel", requestId: 4 });
+    release.resolve();
+    await obsolete;
+    expect(responses).toEqual([]);
+
+    blockObsolete = false;
+    applications.length = 0;
+    await runtime.handle({
+      type: "seek",
+      requestId: 5,
+      fromIndex: 30,
+      toIndex: 45,
+    });
+    expect(applications).toEqual(
+      Array.from({ length: 15 }, (_, index) => index + 31),
+    );
+    expect(responses.at(-1)).toMatchObject({
+      type: "frame",
+      requestId: 5,
+      model: expected[45]!.model,
+    });
   });
 });
