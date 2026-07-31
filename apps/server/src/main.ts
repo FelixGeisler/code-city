@@ -2,6 +2,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { startCodeCityServer } from "./server.js";
+import {
+  AI_GUIDANCE_CONFIG_VERSION,
+  type AiGuidanceConfiguration,
+} from "./ai-guidance.js";
 
 function environmentPort(value: string | undefined): number | undefined {
   if (value === undefined || value.trim() === "") return undefined;
@@ -128,6 +132,42 @@ export function environmentEditorUrlTemplate(
   return value;
 }
 
+/**
+ * Parses the deliberately small v1 administrator contract. A secret is named
+ * by `authorizationEnv`; the JSON itself never contains a credential.
+ */
+export function environmentAiGuidanceConfiguration(
+  value: string | undefined,
+  environment: NodeJS.ProcessEnv = process.env,
+): AiGuidanceConfiguration | undefined {
+  if (value === undefined || value === "") return undefined;
+  let raw: unknown;
+  try { raw = JSON.parse(value); } catch { throw new Error("CODECITY_AI_GUIDANCE_CONFIG must be valid JSON."); }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error("CODECITY_AI_GUIDANCE_CONFIG must be an object.");
+  const object = raw as Record<string, unknown>;
+  if (object["version"] !== AI_GUIDANCE_CONFIG_VERSION || typeof object["enabled"] !== "boolean" || !Array.isArray(object["providers"])) throw new Error("CODECITY_AI_GUIDANCE_CONFIG must use version 1.");
+  const allowed = new Set(["version", "enabled", "providers", "timeoutMs", "maximumSourceBytes"]);
+  if (Object.keys(object).some((key) => !allowed.has(key))) throw new Error("CODECITY_AI_GUIDANCE_CONFIG has an unknown field.");
+  const providers = object["providers"].map((rawProvider) => {
+    if (rawProvider === null || typeof rawProvider !== "object" || Array.isArray(rawProvider)) throw new Error("AI provider configuration is invalid.");
+    const provider = rawProvider as Record<string, unknown>;
+    const providerAllowed = new Set(["id", "label", "endpoint", "authorizationEnv", "authorizationHeader"]);
+    if (Object.keys(provider).some((key) => !providerAllowed.has(key)) || typeof provider["id"] !== "string" || typeof provider["label"] !== "string" || typeof provider["endpoint"] !== "string") throw new Error("AI provider configuration is invalid.");
+    if (provider["authorizationEnv"] === undefined) return { id: provider["id"], label: provider["label"], endpoint: provider["endpoint"] };
+    if (typeof provider["authorizationEnv"] !== "string" || !/^[A-Z][A-Z0-9_]{0,127}$/u.test(provider["authorizationEnv"]) || (provider["authorizationHeader"] !== undefined && typeof provider["authorizationHeader"] !== "string")) throw new Error("AI provider credential reference is invalid.");
+    const secret = environment[provider["authorizationEnv"]];
+    if (secret === undefined || secret.length === 0) throw new Error(`AI provider credential ${provider["authorizationEnv"]} is not configured.`);
+    return { id: provider["id"], label: provider["label"], endpoint: provider["endpoint"], authorization: { header: (provider["authorizationHeader"] as string | undefined) ?? "Authorization", value: secret } };
+  });
+  return {
+    version: AI_GUIDANCE_CONFIG_VERSION,
+    enabled: object["enabled"],
+    providers,
+    ...(object["timeoutMs"] === undefined ? {} : { timeoutMs: object["timeoutMs"] as number }),
+    ...(object["maximumSourceBytes"] === undefined ? {} : { maximumSourceBytes: object["maximumSourceBytes"] as number }),
+  };
+}
+
 export async function runServer(): Promise<void> {
   const controller = new AbortController();
   const stop = (): void => controller.abort();
@@ -168,6 +208,9 @@ export async function runServer(): Promise<void> {
     const editorUrlTemplate = environmentEditorUrlTemplate(
       process.env["CODECITY_EDITOR_URL_TEMPLATE"],
     );
+    const aiGuidance = environmentAiGuidanceConfiguration(
+      process.env["CODECITY_AI_GUIDANCE_CONFIG"],
+    );
     const server = await startCodeCityServer({
       ...(host === undefined ? {} : { host }),
       ...(port === undefined ? {} : { port }),
@@ -188,6 +231,7 @@ export async function runServer(): Promise<void> {
         trustWindowsCredentialFiles,
       },
       sourceRetention,
+      ...(aiGuidance === undefined ? {} : { aiGuidance }),
       ...(editorUrlTemplate === undefined
         ? {}
         : { editorUrlTemplate }),

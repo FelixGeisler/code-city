@@ -582,6 +582,12 @@ const inspectorFields = {
   sourceExternal: element<HTMLAnchorElement>("building-source-external"),
   sourceEditor: element<HTMLAnchorElement>("building-source-editor"),
   sourceCode: element<HTMLPreElement>("building-source-code"),
+  aiDetails: element<HTMLDetailsElement>("building-ai-guidance-details"),
+  aiSummary: element<HTMLElement>("building-ai-guidance-summary"),
+  aiStatus: element<HTMLParagraphElement>("building-ai-guidance-status"),
+  aiPreview: element<HTMLPreElement>("building-ai-guidance-preview"),
+  aiRequest: element<HTMLButtonElement>("building-ai-guidance-request"),
+  aiSuggestions: element<HTMLUListElement>("building-ai-guidance-suggestions"),
 };
 
 const districtInspectorFields = {
@@ -2950,6 +2956,7 @@ function createCityScene(): CityScene | UnavailableCityScene {
 let activeModel: CityModel = DEMO_MODEL;
 let activeModelSource: ModelSource = { label: "Built-in demo" };
 let sourceRequest: AbortController | undefined;
+let aiGuidanceRequest: AbortController | undefined;
 let loadedBuildingSource:
   | { readonly buildingId: string; readonly source: BuildingSource }
   | undefined;
@@ -6209,6 +6216,8 @@ function sourceAvailabilityMessage(): string {
 function scrubBuildingSource(closeDetails = true): void {
   sourceRequest?.abort();
   sourceRequest = undefined;
+  aiGuidanceRequest?.abort();
+  aiGuidanceRequest = undefined;
   loadedBuildingSource = undefined;
   if (closeDetails) inspectorFields.sourceDetails.open = false;
   inspectorFields.sourceSummary.textContent =
@@ -6218,6 +6227,14 @@ function scrubBuildingSource(closeDetails = true): void {
   inspectorFields.sourceStatus.textContent =
     sourceAvailabilityMessage();
   inspectorFields.sourceCode.replaceChildren();
+  inspectorFields.aiDetails.open = false;
+  inspectorFields.aiSummary.textContent = "Not requested";
+  inspectorFields.aiStatus.textContent = "Suggestions are optional and deterministic findings remain separate.";
+  inspectorFields.aiPreview.hidden = true;
+  inspectorFields.aiPreview.textContent = "";
+  inspectorFields.aiRequest.hidden = true;
+  inspectorFields.aiSuggestions.hidden = true;
+  inspectorFields.aiSuggestions.replaceChildren();
   inspectorFields.sourcePath.textContent = "";
   inspectorFields.sourceRevision.textContent = "";
   inspectorFields.sourceExternal.removeAttribute("href");
@@ -6324,6 +6341,69 @@ function renderSourceCode(
     ?.scrollIntoView({ block: "center" });
 }
 
+function prepareAiGuidance(
+  building: CityBuilding,
+  source: BuildingSource,
+): void {
+  const jobId = activeModelSource.jobId;
+  if (jobId === undefined) return;
+  const controller = new AbortController();
+  aiGuidanceRequest?.abort();
+  aiGuidanceRequest = controller;
+  inspectorFields.aiSummary.textContent = "Preparing preview";
+  inspectorFields.aiStatus.textContent = "No source has been sent to an AI provider.";
+  void sourceApi.aiGuidancePreview(jobId, building.id, controller.signal)
+    .then((value) => {
+      if (controller.signal.aborted || aiGuidanceRequest !== controller) return;
+      const preview = (value as { preview?: { enabled?: boolean; provider?: { label?: string }; source?: unknown; limits?: unknown } }).preview;
+      if (preview?.enabled !== true || preview.provider?.label === undefined || preview.source === undefined) {
+        inspectorFields.aiSummary.textContent = "Disabled";
+        inspectorFields.aiStatus.textContent = "AI guidance is disabled by the administrator. No source was sent.";
+        return;
+      }
+      const transmission = { source: preview.source, findings: { sloc: building.metrics.sloc, maximumComplexity: building.metrics.maximumComplexity, decisionLoad: building.metrics.decisionLoad } };
+      inspectorFields.aiSummary.textContent = "Preview ready";
+      inspectorFields.aiStatus.textContent = `This exact source and measured findings will be sent once to ${preview.provider.label} after you confirm.`;
+      inspectorFields.aiPreview.textContent = JSON.stringify(transmission, null, 2);
+      inspectorFields.aiPreview.hidden = false;
+      inspectorFields.aiRequest.hidden = false;
+      inspectorFields.aiRequest.onclick = () => {
+        if (aiGuidanceRequest !== controller || controller.signal.aborted) return;
+        inspectorFields.aiRequest.disabled = true;
+        inspectorFields.aiStatus.textContent = "Requesting optional suggestions…";
+        void sourceApi.aiGuidanceRequest(jobId, building.id, transmission.findings, controller.signal)
+          .then((result) => {
+            if (controller.signal.aborted || aiGuidanceRequest !== controller) return;
+            const suggestions = (result as { result?: { suggestions?: readonly { title?: string; detail?: string; citation?: { path?: string; startLine?: number; endLine?: number } }[] } }).result?.suggestions;
+            if (suggestions === undefined) throw new Error("AI provider response was invalid.");
+            inspectorFields.aiSuggestions.replaceChildren();
+            for (const suggestion of suggestions) {
+              if (typeof suggestion.title !== "string" || typeof suggestion.detail !== "string") continue;
+              const item = document.createElement("li");
+              const citation = suggestion.citation;
+              item.textContent = `${suggestion.title}: ${suggestion.detail}` + (citation?.path === undefined ? "" : ` (${citation.path}:${citation.startLine}–${citation.endLine})`);
+              inspectorFields.aiSuggestions.append(item);
+            }
+            inspectorFields.aiSuggestions.hidden = false;
+            inspectorFields.aiSummary.textContent = "Suggestions";
+            inspectorFields.aiStatus.textContent = "Suggestions are optional; deterministic findings above are unchanged.";
+          })
+          .catch(() => {
+            if (!controller.signal.aborted && aiGuidanceRequest === controller) {
+              inspectorFields.aiStatus.textContent = "AI suggestions are unavailable; deterministic analysis and source navigation remain available.";
+              inspectorFields.aiRequest.disabled = false;
+            }
+          });
+      };
+    })
+    .catch(() => {
+      if (!controller.signal.aborted && aiGuidanceRequest === controller) {
+        inspectorFields.aiSummary.textContent = "Unavailable";
+        inspectorFields.aiStatus.textContent = "AI guidance preview is unavailable; deterministic analysis remains available.";
+      }
+    });
+}
+
 function revealBuildingSource(
   building: CityBuilding,
   startLine?: number,
@@ -6411,6 +6491,7 @@ function revealBuildingSource(
       }
       inspectorFields.sourceContent.hidden = false;
       renderSourceCode(source, startLine, endLine);
+      prepareAiGuidance(building, source);
     })
     .catch((error: unknown) => {
       if (

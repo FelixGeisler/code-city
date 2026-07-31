@@ -1789,3 +1789,23 @@ it("formats a concrete IPv6 bind address as a valid URL", async () => {
   expect(server.url.hostname).toBe("[::1]");
   expect((await request(server.url)).status).toBe(200);
 });
+
+it("does not load retained source for a disabled AI preview", async () => {
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    aiGuidance: { version: 1, enabled: false, providers: [] },
+    ...(await fixture()),
+  });
+  servers.push(server);
+  const response = await request(
+    new URL(
+      "/api/v1/ai/preview/00000000-0000-4000-8000-000000000000/typescript:0123456789abcdef",
+      server.url,
+    ),
+  );
+  expect(response.status).toBe(200);
+  expect(JSON.parse(response.body)).toEqual({
+    preview: expect.objectContaining({ enabled: false }),
+  });
+});
