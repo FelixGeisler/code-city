@@ -15,11 +15,16 @@ import {
   type LocalAnalysisOptions,
   type PublicGitHubAnalysisResult,
 } from "../../packages/analyzer/src/index.js";
-import type { CityModel } from "../../packages/core/src/model.js";
+import type {
+  CityBuilding,
+  CityModel,
+} from "../../packages/core/src/model.js";
 import {
   prepareEvolutionSerialization,
+  replayValidatedEvolutionBundle,
   serializeEvolutionBundle,
   type EvolutionBundle,
+  type EvolutionChanges,
 } from "../../packages/core/src/index.js";
 import type {
   RemoteImportDependencies,
@@ -52,6 +57,14 @@ const HISTORY_SAMPLE_EVERY = 4;
 const HISTORY_TIMEOUT_MS = 23_000;
 const HISTORY_TITLE = "History import E2E";
 const HISTORY_VERSION = "history-v1";
+const LINEAGE_JOB_ID = "25800000-0000-4000-8000-000000000258";
+const LINEAGE_TITLE = "Lineage time travel E2E";
+const LINEAGE_COMMITS = Object.freeze([
+  "a".repeat(40),
+  "b".repeat(40),
+  "c".repeat(40),
+  "d".repeat(40),
+]);
 
 interface RemoteInvocation {
   readonly kind: "github" | "git";
@@ -81,6 +94,17 @@ interface HistoryInvocation {
 const historyInvocations: HistoryInvocation[] = [];
 let historyResultFixture: GenericGitHistoryAnalysisResult;
 let canonicalEvolutionFixture: Uint8Array;
+let lineageEvolutionFixture: LineageEvolutionFixture;
+
+interface LineageEvolutionFixture {
+  readonly jobId: string;
+  readonly model: CityModel;
+  readonly bundle: EvolutionBundle;
+  readonly bytes: Uint8Array;
+  readonly sha256: string;
+  readonly futureBuilding: CityBuilding;
+  readonly removedBuilding: CityBuilding;
+}
 
 async function privateFile(
   file: string,
@@ -211,6 +235,147 @@ function createHistoryAnalysisResult(
     },
     cacheHits: 0,
     cacheMisses: 1,
+  };
+}
+
+function emptyLineageChanges(): EvolutionChanges {
+  const empty = () => ({ added: [], removed: [], changed: [] });
+  return {
+    model: {},
+    repositories: empty(),
+    solutions: empty(),
+    modules: empty(),
+    semanticGroups: empty(),
+    districts: empty(),
+    buildings: empty(),
+    dependencies: empty(),
+  };
+}
+
+function createLineageEvolutionFixture(
+  demo: CityModel,
+): LineageEvolutionFixture {
+  const replacedBuilding = demo.buildings.find(
+    ({ id }) => id === "building:demo-model",
+  );
+  if (replacedBuilding === undefined) {
+    throw new Error("The lineage E2E fixture requires demo-model.ts.");
+  }
+  const removedBuilding: CityBuilding = {
+    ...replacedBuilding,
+    id: "building:1111111111111111",
+    name: "removed-lineage.ts",
+    path: "apps/viewer/src/removed-lineage.ts",
+    sourceLocation: { startLine: 1, endLine: 2 },
+  };
+  const futureBuilding: CityBuilding = {
+    ...replacedBuilding,
+    id: "building:2222222222222222",
+    name: "future-lineage.ts",
+    path: "apps/viewer/src/future-lineage.ts",
+    sourceLocation: { startLine: 1, endLine: 2 },
+  };
+  const baselineModel: CityModel = {
+    ...demo,
+    identity: {
+      title: LINEAGE_TITLE,
+      version: "lineage-v1",
+    },
+    sourceProvenance: {
+      version: "codecity.source-navigation/1",
+      repositories: [
+        {
+          repositoryId: removedBuilding.repositoryId,
+          provider: "github",
+          revision: {
+            kind: "commit",
+            value: LINEAGE_COMMITS[3]!,
+          },
+          repositoryUrl: "https://github.com/example/repository",
+        },
+      ],
+    },
+    buildings: demo.buildings.map((building) =>
+      building.id === replacedBuilding.id
+        ? removedBuilding
+        : building,
+    ),
+  };
+  const template =
+    createHistoryAnalysisResult(baselineModel).evolution.bundle;
+  const commit = (index: number) => ({
+    index,
+    sha: LINEAGE_COMMITS[index]!,
+    committedAt: new Date(
+      Date.UTC(2026, 0, index + 1),
+    ).toISOString(),
+    parentShas:
+      index === 0 ? [] : [LINEAGE_COMMITS[index - 1]!],
+    analyzerVersion: baselineModel.generator.version,
+    analysisFingerprint:
+      `sha256:${String(index + 1).repeat(64)}` as const,
+  });
+  const frameOneChanges = emptyLineageChanges();
+  const turnoverChanges = emptyLineageChanges();
+  const frameThreeChanges = emptyLineageChanges();
+  const bundle: EvolutionBundle = {
+    ...template,
+    selection: {
+      mode: "commit-count",
+      traversal: "first-parent",
+      order: "oldest-first",
+      sampleEvery: 1,
+      requestedCommitCount: LINEAGE_COMMITS.length,
+      selectedCommitCount: LINEAGE_COMMITS.length,
+      sampledCommitCount: LINEAGE_COMMITS.length,
+      traversedCommitCount: LINEAGE_COMMITS.length,
+      resolvedOldestSha: LINEAGE_COMMITS[0]!,
+      resolvedNewestSha: LINEAGE_COMMITS[3]!,
+      sampledCommitShas: LINEAGE_COMMITS,
+    },
+    baseline: {
+      commit: commit(0),
+      model: baselineModel,
+    },
+    deltas: [
+      {
+        commit: commit(1),
+        changes: frameOneChanges,
+      },
+      {
+        commit: commit(2),
+        changes: {
+          ...turnoverChanges,
+          buildings: {
+            added: [futureBuilding],
+            removed: [removedBuilding.id],
+            changed: [],
+          },
+        },
+      },
+      {
+        commit: commit(3),
+        changes: frameThreeChanges,
+      },
+    ],
+  };
+  const prepared = prepareEvolutionSerialization(bundle);
+  const frames = [
+    ...replayValidatedEvolutionBundle(prepared.bundle),
+  ];
+  const model = frames.at(-1)?.model;
+  if (model === undefined) {
+    throw new Error("The lineage E2E fixture did not replay.");
+  }
+  const bytes = serializeEvolutionBundle(prepared.bundle);
+  return {
+    jobId: LINEAGE_JOB_ID,
+    model,
+    bundle: prepared.bundle,
+    bytes,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    futureBuilding,
+    removedBuilding,
   };
 }
 
@@ -411,6 +576,8 @@ test.beforeAll(async () => {
       "utf8",
     ),
   ) as CityModel;
+  lineageEvolutionFixture =
+    createLineageEvolutionFixture(cityModelFixture);
   historyResultFixture = createHistoryAnalysisResult(
     modelForOptions({
       title: HISTORY_TITLE,
@@ -584,6 +751,201 @@ async function startAndWaitForImportedCity(page: Page): Promise<string> {
   );
   expect(server.jobs.get(jobId!)?.state).toBe("completed");
   return jobId!;
+}
+
+async function openLineageEvolutionFixture(
+  page: Page,
+  options: { readonly seekDelayMs?: number } = {},
+): Promise<LineageEvolutionFixture> {
+  await openAuthenticatedWizard(page);
+  await page
+    .getByRole("button", { name: "Close project import" })
+    .click();
+  if (options.seekDelayMs !== undefined) {
+    if (
+      !Number.isSafeInteger(options.seekDelayMs) ||
+      options.seekDelayMs < 1
+    ) {
+      throw new Error("The evolution seek delay must be positive.");
+    }
+    await page.addInitScript({
+      content: `(() => {
+        const nativePostMessage = Worker.prototype.postMessage;
+        Worker.prototype.postMessage = function(message, transfer) {
+          const send = () => transfer === undefined
+            ? nativePostMessage.call(this, message)
+            : nativePostMessage.call(this, message, transfer);
+          if (message?.type === "seek") {
+            setTimeout(send, ${options.seekDelayMs});
+          } else {
+            send();
+          }
+        };
+      })();`,
+    });
+  }
+
+  const fixture = lineageEvolutionFixture;
+  const cityPath =
+    `/api/v1/artifacts/${fixture.jobId}/city-model.json`;
+  const evolutionPath =
+    `/api/v1/artifacts/${fixture.jobId}/evolution.json`;
+  const sourcePath =
+    `/api/v1/artifacts/${fixture.jobId}/source`;
+  const buildingsById = new Map(
+    [fixture.futureBuilding, fixture.removedBuilding].map(
+      (building) => [building.id, building] as const,
+    ),
+  );
+  await page.route(`**${cityPath}`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify(fixture.model),
+    });
+  });
+  await page.route(`**${evolutionPath}`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      headers: {
+        "cache-control": "no-store",
+        "content-length": String(fixture.bytes.byteLength),
+        "content-type": "application/json; charset=utf-8",
+      },
+      body: Buffer.from(fixture.bytes),
+    });
+  });
+  await page.route(
+    `**/api/v1/artifacts/${fixture.jobId}/sources/*`,
+    async (route) => {
+      const buildingId = decodeURIComponent(
+        new URL(route.request().url()).pathname.split("/").at(-1) ??
+          "",
+      );
+      const building = buildingsById.get(buildingId);
+      if (building === undefined) {
+        await route.fulfill({
+          status: 404,
+          contentType: "application/json; charset=utf-8",
+          body: JSON.stringify({
+            error: {
+              code: "source-not-found",
+              message: "Source file not found.",
+            },
+          }),
+        });
+        return;
+      }
+      const future = building.id === fixture.futureBuilding.id;
+      const identifier = future ? "futureLineage" : "removedLineage";
+      const sentinel = future
+        ? "future-lineage-source-sentinel"
+        : "removed-lineage-source-sentinel";
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json; charset=utf-8",
+        body: JSON.stringify({
+          source: {
+            buildingId: building.id,
+            repositoryId: building.repositoryId,
+            path: building.path,
+            language: building.language,
+            text:
+              `export const ${identifier} = true;\n` +
+              `// ${sentinel}`,
+            location: building.sourceLocation,
+            provenance:
+              fixture.model.sourceProvenance!.repositories[0]!,
+            externalUrl:
+              `https://github.com/example/repository/blob/` +
+              `${LINEAGE_COMMITS[3]}/${building.path}#L1`,
+          },
+        }),
+      });
+    },
+  );
+  await page.route(
+    `**/api/v1/jobs/${fixture.jobId}`,
+    async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json; charset=utf-8",
+        body: JSON.stringify({
+          job: {
+            id: fixture.jobId,
+            kind: "project-import",
+            state: "completed",
+            createdAt: "2026-01-04T00:00:00.000Z",
+            updatedAt: "2026-01-04T00:00:00.000Z",
+            result: {
+              kind: "city-model",
+              artifactToken: fixture.jobId,
+              artifactUrl: cityPath,
+              evolution: {
+                artifactUrl: evolutionPath,
+                size: fixture.bytes.byteLength,
+                sha256: fixture.sha256,
+              },
+              source: {
+                availability: "retained",
+                artifactUrl: sourcePath,
+                size: 1,
+                sha256: "e".repeat(64),
+                indexSha256: "f".repeat(64),
+              },
+            },
+          },
+        }),
+      });
+    },
+  );
+  await page.evaluate(
+    ({ jobId }) => {
+      localStorage.setItem("code-city.last-import-job.v1", jobId);
+    },
+    { jobId: fixture.jobId },
+  );
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator("#model-name")).toHaveText(LINEAGE_TITLE, {
+    timeout: 30_000,
+  });
+  await expect(page.locator("#evolution-commit")).toContainText(
+    `4/4 \u00b7 ${LINEAGE_COMMITS[3]!.slice(0, 10)}`,
+    { timeout: 30_000 },
+  );
+  return fixture;
+}
+
+async function seekEvolutionFrame(
+  page: Page,
+  frameIndex: number,
+): Promise<void> {
+  const range = page.locator("#evolution-range");
+  await range.fill(String(frameIndex));
+  await expect(range).toHaveValue(String(frameIndex));
+  await expect(page.locator("#evolution-commit")).toContainText(
+    `${frameIndex + 1}/${LINEAGE_COMMITS.length} \u00b7 ` +
+      LINEAGE_COMMITS[frameIndex]!.slice(0, 10),
+    { timeout: 15_000 },
+  );
+  await expect(page.locator("#evolution-status")).not.toHaveText(
+    "Seeking\u2026",
+  );
+}
+
+async function selectLineageBuilding(
+  page: Page,
+  building: CityBuilding,
+): Promise<void> {
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await page.locator("#building-search").fill(building.name);
+  const result = page
+    .locator(".search-result-button")
+    .filter({ hasText: building.name });
+  await expect(result).toHaveCount(1);
+  await result.click();
+  await expect(page.locator("#inspector-title")).toHaveText("Building");
+  await expect(page.locator("#selection-name")).toHaveText(building.name);
 }
 
 function lastRemoteInvocation(
@@ -1044,6 +1406,218 @@ test("rejects an oversized legacy evolution artifact before downloading it", asy
     .getByRole("button", { name: "Close project import" })
     .click();
   await expect(page.locator("#project-import-dialog")).toBeHidden();
+});
+
+test("keeps a future lineage selected before creation and restores its source at creation", async ({
+  page,
+}) => {
+  const fixture = await openLineageEvolutionFixture(page);
+  const building = fixture.futureBuilding;
+  const shortCreationCommit = LINEAGE_COMMITS[2]!.slice(0, 10);
+
+  await selectLineageBuilding(page, building);
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Showing the exact retained file",
+  );
+  await expect(page.locator("#building-source-code")).toContainText(
+    "future-lineage-source-sentinel",
+  );
+  await expect(page.locator("#building-evolution")).toContainText(
+    `First seen ${shortCreationCommit} at frame 3`,
+  );
+
+  await seekEvolutionFrame(page, 1);
+  await expect(page.locator("#inspector-title")).toHaveText(
+    "Not yet created",
+  );
+  await expect(page.locator("#selection-name")).toHaveText(building.name);
+  await expect(page.locator("#building-repository")).toHaveText(
+    `Introduced by ${shortCreationCommit}`,
+  );
+  await expect(
+    page.locator("#building-metric-explanation"),
+  ).toContainText(
+    `not present at this commit. It is introduced by commit ` +
+      `${shortCreationCommit} at frame 3`,
+  );
+  await expect(page.locator("#selection-status")).toContainText(
+    `is not yet created at this commit; it is introduced by commit ` +
+      shortCreationCommit,
+  );
+  await expect(page.locator("#selection-status")).not.toContainText(
+    "removed",
+  );
+  await expect(page.locator("#building-source-details")).toBeHidden();
+
+  await seekEvolutionFrame(page, 0);
+  await expect(page.locator("#inspector-title")).toHaveText(
+    "Not yet created",
+  );
+  await expect(page.locator("#selection-name")).toHaveText(building.name);
+  await expect(page.locator("#building-repository")).toHaveText(
+    `Introduced by ${shortCreationCommit}`,
+  );
+  await expect(page.locator("#selection-status")).not.toContainText(
+    "removed",
+  );
+
+  await seekEvolutionFrame(page, 2);
+  await expect(page.locator("#inspector-title")).toHaveText("Building");
+  await expect(page.locator("#selection-name")).toHaveText(building.name);
+  await expect(page.locator("#building-repository")).toHaveText(
+    "Code City Demo",
+  );
+  await expect(page.locator("#building-source-details")).toBeVisible();
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Showing the exact retained file",
+  );
+  await expect(page.locator("#building-source-code")).toContainText(
+    "future-lineage-source-sentinel",
+  );
+  await expect(page.locator("#building-evolution")).toContainText(
+    `First seen ${shortCreationCommit} at frame 3`,
+  );
+});
+
+test("keeps a removed lineage tombstone and restores its source before removal", async ({
+  page,
+}) => {
+  const fixture = await openLineageEvolutionFixture(page);
+  const building = fixture.removedBuilding;
+  const shortCreationCommit = LINEAGE_COMMITS[0]!.slice(0, 10);
+  const shortRemovalCommit = LINEAGE_COMMITS[2]!.slice(0, 10);
+  const shortNewestCommit = LINEAGE_COMMITS[3]!.slice(0, 10);
+
+  await seekEvolutionFrame(page, 1);
+  await selectLineageBuilding(page, building);
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Showing the exact retained file",
+  );
+  await expect(page.locator("#building-source-code")).toContainText(
+    "removed-lineage-source-sentinel",
+  );
+
+  await seekEvolutionFrame(page, 2);
+  await expect(page.locator("#inspector-title")).toHaveText(
+    "Removed building",
+  );
+  await expect(page.locator("#selection-name")).toHaveText(building.name);
+  await expect(page.locator("#building-repository")).toHaveText(
+    `Removed by ${shortRemovalCommit}`,
+  );
+  await expect(
+    page.locator("#building-metric-explanation"),
+  ).toContainText(
+    `removed by commit ${shortRemovalCommit} at frame 3`,
+  );
+  await expect(page.locator("#selection-status")).toContainText(
+    `was removed by commit ${shortRemovalCommit}`,
+  );
+  await expect(page.locator("#building-evolution")).toContainText(
+    `Removed by ${shortRemovalCommit} at frame 3`,
+  );
+  await expect(page.locator("#building-source-details")).toBeHidden();
+
+  await seekEvolutionFrame(page, 3);
+  await expect(page.locator("#inspector-title")).toHaveText(
+    "Removed building",
+  );
+  await expect(page.locator("#selection-name")).toHaveText(building.name);
+  await expect(page.locator("#building-repository")).toHaveText(
+    `Removed by ${shortRemovalCommit}`,
+  );
+  await expect(page.locator("#building-repository")).not.toContainText(
+    shortNewestCommit,
+  );
+  await expect(
+    page.locator("#building-metric-explanation"),
+  ).toContainText(
+    `removed by commit ${shortRemovalCommit} at frame 3`,
+  );
+
+  await seekEvolutionFrame(page, 1);
+  await expect(page.locator("#inspector-title")).toHaveText("Building");
+  await expect(page.locator("#selection-name")).toHaveText(building.name);
+  await expect(page.locator("#building-repository")).toHaveText(
+    "Code City Demo",
+  );
+  await expect(page.locator("#building-source-details")).toBeVisible();
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Showing the exact retained file",
+  );
+  await expect(page.locator("#building-source-code")).toContainText(
+    "removed-lineage-source-sentinel",
+  );
+  await expect(page.locator("#building-evolution")).toContainText(
+    `First seen ${shortCreationCommit} at frame 1`,
+  );
+  await expect(page.locator("#building-evolution")).toContainText(
+    `Removed by ${shortRemovalCommit} at frame 3`,
+  );
+});
+
+test("does not overwrite a newer clear or replacement selection during a seek", async ({
+  page,
+}) => {
+  const fixture = await openLineageEvolutionFixture(page, {
+    seekDelayMs: 2_000,
+  });
+  await selectLineageBuilding(page, fixture.futureBuilding);
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Showing the exact retained file",
+  );
+
+  await page.locator("#evolution-range").fill("1");
+  await expect(page.locator("#evolution-status")).toHaveText(
+    "Seeking\u2026",
+  );
+  await page.getByRole("button", { name: "Clear selection" }).click();
+  await expect(page.locator("#inspector-title")).toHaveText("Details");
+  await expect(page.locator("#selection-name")).toHaveText(
+    "Nothing selected",
+  );
+
+  await expect(page.locator("#evolution-commit")).toContainText(
+    `2/4 \u00b7 ${LINEAGE_COMMITS[1]!.slice(0, 10)}`,
+    { timeout: 15_000 },
+  );
+  await expect(page.locator("#evolution-status")).not.toHaveText(
+    "Seeking\u2026",
+  );
+  await expect(page.locator("#inspector-title")).toHaveText("Details");
+  await expect(page.locator("#selection-name")).toHaveText(
+    "Nothing selected",
+  );
+  await expect(page.locator("#selection-status")).toHaveText(
+    "Selection cleared.",
+  );
+  await expect(page.locator("#building-source-code")).toHaveText("");
+
+  const stableReplacement = fixture.model.buildings.find(
+    ({ id }) => id === "building:main",
+  );
+  expect(stableReplacement).toBeDefined();
+  await selectLineageBuilding(page, fixture.removedBuilding);
+  await page.locator("#evolution-range").fill("2");
+  await expect(page.locator("#evolution-status")).toHaveText(
+    "Seeking\u2026",
+  );
+  await selectLineageBuilding(page, stableReplacement!);
+
+  await expect(page.locator("#evolution-commit")).toContainText(
+    `3/4 \u00b7 ${LINEAGE_COMMITS[2]!.slice(0, 10)}`,
+    { timeout: 15_000 },
+  );
+  await expect(page.locator("#evolution-status")).not.toHaveText(
+    "Seeking\u2026",
+  );
+  await expect(page.locator("#inspector-title")).toHaveText("Building");
+  await expect(page.locator("#selection-name")).toHaveText(
+    stableReplacement!.name,
+  );
+  await expect(page.locator("#building-repository")).toHaveText(
+    "Code City Demo",
+  );
 });
 
 test("imports a browser directory and repository ZIP with identity and analysis options", async ({
