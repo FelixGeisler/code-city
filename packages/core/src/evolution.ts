@@ -214,7 +214,13 @@ export const EVOLUTION_BUNDLE_LIMITS = Object.freeze({
   parentsPerCommit: 64,
   uniqueEntityLineages: 100_000,
   deltaOperations: 500_000,
-  serializedBytes: 512 * 1024 * 1024,
+  /**
+   * Browser-facing artifacts are deliberately capped below the format's
+   * theoretical capacity. Loading also needs the UTF-8 text, parsed graph,
+   * validation indexes, and replay state, so a 64 MiB artifact is the largest
+   * practical input within the documented 512 MiB transient-memory budget.
+   */
+  serializedBytes: 64 * 1024 * 1024,
   jsonStringBytes: 64 * 1024,
   jsonValues: 2_000_000,
   jsonDepth: 64,

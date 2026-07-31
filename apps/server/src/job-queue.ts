@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+import { EVOLUTION_BUNDLE_LIMITS } from "../../../packages/core/src/evolution.js";
+
 export const JOB_STATES = [
   "queued",
   "running",
@@ -200,7 +202,8 @@ const RETAINED_SOURCE_KEYS = [
   "sha256",
   "size",
 ] as const;
-const EVOLUTION_ARTIFACT_MAX_BYTES = 512 * 1024 * 1024;
+const EVOLUTION_ARTIFACT_MAX_BYTES =
+  EVOLUTION_BUNDLE_LIMITS.serializedBytes;
 const SOURCE_ARTIFACT_MAX_BYTES = 128 * 1024 * 1024;
 
 function compareText(left: string, right: string): number {

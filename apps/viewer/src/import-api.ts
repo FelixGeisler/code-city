@@ -1,3 +1,5 @@
+import { EVOLUTION_BUNDLE_LIMITS } from "../../../packages/core/src/evolution.js";
+
 const API_RESPONSE_MAX_BYTES = 256 * 1024;
 const SOURCE_RESPONSE_MAX_BYTES = 16 * 1024 * 1024 * 6 + 64 * 1024;
 const API_REQUEST_DEADLINE_MS = 30_000;
@@ -6,7 +8,10 @@ const API_RESULT_REMOVAL_DEADLINE_MS = 31 * 60_000;
 const EVOLUTION_ARTIFACT_DEADLINE_MS = 31 * 60_000;
 const MAXIMUM_ERROR_FIELDS = 64;
 const MAXIMUM_TEXT_CHARACTERS = 2_048;
-const MAXIMUM_EVOLUTION_ARTIFACT_BYTES = 512 * 1024 * 1024;
+const MAXIMUM_EVOLUTION_ARTIFACT_BYTES =
+  EVOLUTION_BUNDLE_LIMITS.serializedBytes;
+const MAXIMUM_EVOLUTION_ARTIFACT_MEBIBYTES =
+  MAXIMUM_EVOLUTION_ARTIFACT_BYTES / (1024 * 1024);
 const MAXIMUM_SOURCE_ARTIFACT_BYTES = 128 * 1024 * 1024;
 
 export const IMPORT_JOB_ID_PATTERN =
@@ -309,6 +314,12 @@ function protocolError(message: string): ImportApiError {
   return new ImportApiError("protocol", message);
 }
 
+function evolutionArtifactTooLargeFailure(): ImportApiError {
+  return protocolError(
+    `Evolution artifact exceeds the browser-safe ${MAXIMUM_EVOLUTION_ARTIFACT_MEBIBYTES} MiB limit. Re-import with fewer history frames or a lower maxEvolutionOutputBytes.`,
+  );
+}
+
 function parseAuthorizationStatus(value: unknown): ImportAuthorizationStatus {
   const object = exactObject(
     value,
@@ -495,11 +506,16 @@ function parseJobResult(value: unknown, jobId: string): ImportJobResult {
     const size = evolutionObject["size"];
     const sha256 = evolutionObject["sha256"];
     if (
+      Number.isSafeInteger(size) &&
+      (size as number) > MAXIMUM_EVOLUTION_ARTIFACT_BYTES
+    ) {
+      throw evolutionArtifactTooLargeFailure();
+    }
+    if (
       evolutionObject["artifactUrl"] !==
         `/api/v1/artifacts/${jobId}/evolution.json` ||
       !Number.isSafeInteger(size) ||
       (size as number) < 1 ||
-      (size as number) > MAXIMUM_EVOLUTION_ARTIFACT_BYTES ||
       typeof sha256 !== "string" ||
       !/^[0-9a-f]{64}$/u.test(sha256)
     ) {
@@ -861,6 +877,88 @@ async function readBoundedBytes(
   return bytes;
 }
 
+export type EvolutionArtifactBufferAllocator = (
+  byteLength: number,
+) => ArrayBuffer;
+
+/**
+ * Reads an evolution response into its one final, owned transfer buffer.
+ *
+ * The declared length is authenticated metadata from the completed job. A
+ * single exact allocation means the number of response chunks cannot multiply
+ * retained binary memory, while copying each chunk protects the result from
+ * response-owned storage before the buffer is transferred to the worker.
+ */
+export async function readExactEvolutionArtifact(
+  response: Response,
+  signal: AbortSignal,
+  expectedBytes: number,
+  allocate: EvolutionArtifactBufferAllocator = (byteLength) =>
+    new ArrayBuffer(byteLength),
+): Promise<ArrayBuffer> {
+  if (
+    !Number.isSafeInteger(expectedBytes) ||
+    expectedBytes < 1
+  ) {
+    throw protocolError("Evolution artifact size is invalid.");
+  }
+  if (expectedBytes > MAXIMUM_EVOLUTION_ARTIFACT_BYTES) {
+    throw evolutionArtifactTooLargeFailure();
+  }
+  if (
+    response.headers.get("content-length") !== String(expectedBytes) ||
+    response.body === null
+  ) {
+    throw protocolError("Evolution artifact size does not match.");
+  }
+  if (signal.aborted) throw abortFailure();
+
+  let buffer: ArrayBuffer;
+  try {
+    buffer = allocate(expectedBytes);
+    if (
+      !(buffer instanceof ArrayBuffer) ||
+      buffer.byteLength !== expectedBytes
+    ) {
+      throw new TypeError("The artifact allocator returned an invalid buffer.");
+    }
+  } catch {
+    void response.body.cancel().catch(() => undefined);
+    throw protocolError(
+      `The evolution artifact could not fit in browser memory. Re-import with fewer history frames or a lower maxEvolutionOutputBytes (maximum ${MAXIMUM_EVOLUTION_ARTIFACT_MEBIBYTES} MiB).`,
+    );
+  }
+
+  const destination = new Uint8Array(buffer);
+  const reader = response.body.getReader();
+  let offset = 0;
+  let complete = false;
+  try {
+    for (;;) {
+      const item = await waitForAbort(reader.read(), signal);
+      if (item.done) {
+        complete = true;
+        break;
+      }
+      if (item.value.byteLength > expectedBytes - offset) {
+        throw protocolError("Evolution artifact size does not match.");
+      }
+      destination.set(item.value, offset);
+      offset += item.value.byteLength;
+    }
+  } finally {
+    if (!complete) {
+      void reader.cancel().catch(() => undefined);
+    } else {
+      reader.releaseLock();
+    }
+  }
+  if (offset !== expectedBytes) {
+    throw protocolError("Evolution artifact size does not match.");
+  }
+  return buffer;
+}
+
 async function readJsonResponse(
   response: Response,
   signal: AbortSignal,
@@ -1047,10 +1145,15 @@ export class ViewerImportApiClient {
     this.requireJobId(jobId);
     const expectedPath = `/api/v1/artifacts/${jobId}/evolution.json`;
     if (
+      Number.isSafeInteger(artifact.size) &&
+      artifact.size > MAXIMUM_EVOLUTION_ARTIFACT_BYTES
+    ) {
+      throw evolutionArtifactTooLargeFailure();
+    }
+    if (
       artifact.artifactUrl !== expectedPath ||
       !Number.isSafeInteger(artifact.size) ||
       artifact.size < 1 ||
-      artifact.size > MAXIMUM_EVOLUTION_ARTIFACT_BYTES ||
       !/^[0-9a-f]{64}$/u.test(artifact.sha256)
     ) {
       throw protocolError("Evolution artifact metadata is invalid.");
@@ -1081,19 +1184,11 @@ export class ViewerImportApiClient {
         ) {
           throw protocolError("Evolution artifact is not UTF-8 JSON.");
         }
-        const declaredLength = response.headers.get("content-length");
-        if (declaredLength !== String(artifact.size)) {
-          throw protocolError("Evolution artifact size does not match.");
-        }
-        const bytes = await readBoundedBytes(
+        return await readExactEvolutionArtifact(
           response,
           requestSignal,
           artifact.size,
         );
-        if (bytes.byteLength !== artifact.size) {
-          throw protocolError("Evolution artifact size does not match.");
-        }
-        return Uint8Array.from(bytes).buffer as ArrayBuffer;
       },
     );
   }
