@@ -68,7 +68,7 @@ describe("viewer metric mapping UI", () => {
     expect(main).toContain("metricPreviewBanner.hidden = !active");
     expect(main).toContain("metricMappingPanel.setProject(model)");
     expect(main).toMatch(
-      /onModelChange: \(model\) => \{\s*applyModel\(model, activeModelSource\);/u,
+      /onModelChange: \(model\) => \{\s*setSafeExtensionProject\(model\);\s*applyModel\(model, activeModelSource\);/u,
     );
     expect(panel).toContain("void controller.preview()");
     expect(panel).toContain("controller.apply()");

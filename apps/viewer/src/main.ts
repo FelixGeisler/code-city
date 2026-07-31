@@ -24,6 +24,10 @@ import {
   type DesignSmellEvaluation,
   type DesignSmellFinding,
 } from "../../../packages/core/src/design-smells.js";
+import {
+  applySafeExtensionEvaluation,
+  type ExtensionEvaluation,
+} from "../../../packages/core/src/extensions.js";
 import type { PrinterProfile } from "../../../packages/core/src/print.js";
 import {
   installAdvancedQueryPanel,
@@ -135,7 +139,10 @@ import {
   type DesignSmellOverlayDiagnostics,
   type DesignSmellOverlayMarker,
 } from "./design-smell-overlay.js";
-import { installSafeExtensionPanel } from "./safe-extension-panel.js";
+import {
+  installSafeExtensionPanel,
+  type SafeExtensionPanelController,
+} from "./safe-extension-panel.js";
 import {
   type ProjectedPrintPlate,
   viewerPrintMeshBatches,
@@ -3008,6 +3015,9 @@ function createCityScene(): CityScene | UnavailableCityScene {
 
 let activeModel: CityModel = DEMO_MODEL;
 let activeModelSource: ModelSource = { label: "Built-in demo" };
+let safeExtensionBaseModel: CityModel = activeModel;
+let activeSafeExtensionEvaluation: ExtensionEvaluation | undefined;
+let suppressSafeExtensionRestore = false;
 let sourceRequest: AbortController | undefined;
 let aiGuidanceRequest: AbortController | undefined;
 let loadedBuildingSource:
@@ -3090,6 +3100,7 @@ let activeExternalNodes: readonly ExternalSceneNode[] =
   activeExternalLayout.nodes;
 let requestCityPresentation = (): void => {};
 let advancedQueryPanel: AdvancedQueryPanelController | undefined;
+let safeExtensionPanel: SafeExtensionPanelController | undefined;
 let activeDesignSmellQueryFacts:
   | {
       readonly ruleIdsByBuildingId: ReadonlyMap<
@@ -3235,6 +3246,7 @@ const metricMappingPanel = installMetricMappingPanel(
   element<HTMLElement>("metric-mapping-panel"),
   {
     onModelChange: (model) => {
+      setSafeExtensionProject(model);
       applyModel(model, activeModelSource);
     },
     onPreviewStateChange: (active) => {
@@ -3291,22 +3303,41 @@ const designSmellPanel = installDesignSmellPanel(
     onQueryFactsChange: updateAdvancedQueryDesignSmells,
   },
 );
-const safeExtensionPanel = installSafeExtensionPanel(
+safeExtensionPanel = installSafeExtensionPanel(
   element<HTMLElement>("safe-extension-panel"),
   {
-    onPreview: (evaluation) => {
-      const overlay = evaluation.configuration.overlays?.[0];
-      if (overlay !== undefined) {
-        cityScene.setBuildingGroupHighlight(
-          evaluation.matches[overlay.filterId] ?? [],
-          true,
-          overlay.color,
-        );
+    onPreview: (review) => {
+      const projected = applySafeExtensionEvaluation(
+        safeExtensionBaseModel,
+        review.evaluation,
+        review.application,
+      );
+      activeSafeExtensionEvaluation = review.evaluation;
+      applyModel(projected, activeModelSource, {
+        preserveView: true,
+        preserveSelection: true,
+      });
+    },
+    onInvalidate: () => {
+      activeSafeExtensionEvaluation = undefined;
+      if (
+        !suppressSafeExtensionRestore &&
+        activeModel !== safeExtensionBaseModel
+      ) {
+        applyModel(safeExtensionBaseModel, activeModelSource, {
+          preserveView: true,
+          preserveSelection: true,
+        });
+      } else if (!suppressSafeExtensionRestore) {
+        printExportDialog.invalidate();
+        imageExportDialog.invalidate();
+        printPlateToolbar.setPlan(undefined);
+        applyVisualization();
       }
     },
   },
 );
-safeExtensionPanel.setProject(activeModel);
+setSafeExtensionProject(activeModel);
 
 visualizationModeSelect.addEventListener("change", () => {
   const selected = visualizationModeSelect.value;
@@ -3656,7 +3687,7 @@ window.addEventListener("beforeunload", () => {
   imageExportDialog.dispose();
   designSmellPanel.dispose();
   cityScene.disposeDesignSmellOverlay();
-  safeExtensionPanel.dispose();
+  safeExtensionPanel?.dispose();
   logoLoadGate.invalidate();
   loadedModelLogo?.dispose();
   loadedModelLogo = undefined;
@@ -3762,9 +3793,20 @@ function activateImportedModel(
   resetEvolutionTimeline();
   activeModelSource = source;
   metricMappingPanel.setProject(model);
-  safeExtensionPanel.setProject(model);
+  setSafeExtensionProject(model);
   applyModel(model, source);
   void startEvolutionTimeline(source);
+}
+
+function setSafeExtensionProject(model: CityModel): void {
+  activeSafeExtensionEvaluation = undefined;
+  safeExtensionBaseModel = model;
+  suppressSafeExtensionRestore = true;
+  try {
+    safeExtensionPanel?.setProject(model);
+  } finally {
+    suppressSafeExtensionRestore = false;
+  }
 }
 
 function applyModel(
@@ -4092,6 +4134,7 @@ async function seekEvolution(
       activeEvolutionTargetDependencyIds = evolutionTargetDependencyIds(
         activeEvolutionDependencyChanges,
       );
+      setSafeExtensionProject(result.model);
       applyModel(result.model, activeModelSource, {
         preserveView: true,
         preserveSelection: true,
@@ -6237,24 +6280,40 @@ function applyVisualization(): void {
     transition.renamedBuildingIds.forEach((id) => colors.set(id, "#22d3ee"));
     transition.addedBuildingIds.forEach((id) => colors.set(id, "#4ade80"));
   }
+  const extension = activeSafeExtensionEvaluation;
+  extension?.application.buildings.forEach((building) => {
+    if (building.color !== undefined) colors.set(building.id, building.color);
+  });
+  const visualizationLabel =
+    extension === undefined
+      ? visualization.label
+      : `Extension: ${extension.configuration.name}`;
   cityScene.setVisualization(
     colors,
-    visualization.label,
+    visualizationLabel,
   );
-  activeVisualizationLabel = visualization.label;
+  activeVisualizationLabel = visualizationLabel;
   const transitionStatus =
     transition === undefined && dependencyChangeCount === 0
       ? ""
       : " Current-frame changes override the mode colors.";
+  const extensionStatus =
+    extension === undefined
+      ? ""
+      :
+        ` Declarative extension preview applied ` +
+        `(${extension.application.mappings.length} mappings, ` +
+        `${extension.application.layouts.length} layouts, ` +
+        `${extension.application.overlays.length} overlays).`;
   visualizationModeStatus.textContent =
-    visualization.status + transitionStatus;
+    visualization.status + transitionStatus + extensionStatus;
   visualizationModeSelect.setAttribute(
     "aria-invalid",
     visualization.available ? "false" : "true",
   );
   legend.setAttribute(
     "aria-label",
-    `${visualization.label} legend`,
+    `${visualizationLabel} legend`,
   );
   const changeGroups: SemanticGroup[] = [];
   if (transition?.addedBuildingIds.length) {
@@ -6309,7 +6368,38 @@ function applyVisualization(): void {
       priority: 100,
     });
   }
-  renderLegend(activeModel, [...changeGroups, ...visualization.legend]);
+  const extensionGroups: SemanticGroup[] = [];
+  extension?.application.legends.forEach((entry, index) => {
+    extensionGroups.push(
+      {
+        id: `extension-${entry.id}-minimum`,
+        label: `${entry.label}: ${entry.minimum.toLocaleString("en-US")} (minimum)`,
+        color: entry.minimumColor,
+        priority: 130 - index * 2,
+      },
+      {
+        id: `extension-${entry.id}-maximum`,
+        label: `${entry.label}: ${entry.maximum.toLocaleString("en-US")} (maximum)`,
+        color: entry.maximumColor,
+        priority: 129 - index * 2,
+      },
+    );
+  });
+  extension?.application.overlays.forEach((entry, index) => {
+    extensionGroups.push({
+      id: `extension-${entry.id}-overlay`,
+      label:
+        `${entry.id} overlay · ` +
+        `${entry.buildingIds.length.toLocaleString("en-US")} matches`,
+      color: entry.color,
+      priority: 160 - index,
+    });
+  });
+  renderLegend(activeModel, [
+    ...extensionGroups,
+    ...changeGroups,
+    ...visualization.legend,
+  ]);
 }
 
 function renderViewerOverview(): void {
