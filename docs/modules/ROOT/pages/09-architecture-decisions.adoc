@@ -32,6 +32,13 @@ portable between browser, history, and print
 |Bounded labels
 |Show full browser details, but print stable short codes with a private legend
 
+|Semantic camera bounds
+|Make camera presets and image framing independent of transient render objects
+
+|Direct scene PNG export
+|Render at an independently bounded GPU resolution and compose only requested
+scene annotations, never DOM chrome
+
 |Local directory as canonical input
 |Keep offline and remote paths identical after materialization
 

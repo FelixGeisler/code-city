@@ -252,6 +252,35 @@ The **Building age** mode counts frames since a lineage first appeared.
 the selected commit. Both modes are unavailable, with an explicit explanation,
 for model-only imports.
 
+== Camera and image export
+
+The camera toolbar switches between perspective and orthographic projection
+without changing the current look direction or apparent vertical span.
+Isometric and top-down presets apply stable orientations. Selected-entity and
+whole-city presets keep the current orientation while framing the corresponding
+semantic bounds. A selected-entity action is disabled until a building,
+district, or external dependency is selected.
+
+**Export PNG** creates a new scene render whose resolution, projection, and
+framing are independent of the browser viewport and current camera projection.
+The user chooses an isometric, top-down, selected-entity, or whole-city frame,
+the scene or a transparent background, and optional selected/hover labels and
+visualization legend. Optional evolution metadata adds the current frame
+ordinal, commit SHA, and timestamp. Export pauses playback, finishes an active
+transition at its stable target frame, and does not capture panels, controls,
+the timeline, or other DOM chrome.
+
+Framing uses cached bounds derived only from the base, districts, buildings,
+external nodes, and identity panel. Hover and selection overlays, dependency
+routes, hidden render helpers, and evolution-removal ghosts cannot change the
+frame. Each dimension must be a whole number from 256 through 8192 pixels.
+Preflight may lower that maximum to the active WebGL texture, renderbuffer, or
+viewport capability and rejects an estimated working set above 512 MiB. The
+estimate includes the actual framebuffer sample count. A lost context disables
+the camera and image controls until restoration; failure to create WebGL at
+startup shows an accessible fallback while project data and non-visual exports
+remain available.
+
 == Viewer performance
 
 Buildings render as deterministic, color-per-instance batches over one shared
