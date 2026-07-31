@@ -44,6 +44,38 @@ export interface EvolutionFrameAnalysis {
   readonly churnByBuildingId: readonly (readonly [string, number])[];
 }
 
+export class EvolutionSeekGate {
+  #generation = 0;
+  #busy = false;
+
+  public get busy(): boolean {
+    return this.#busy;
+  }
+
+  public begin(): number {
+    this.#busy = true;
+    this.#generation += 1;
+    return this.#generation;
+  }
+
+  public isCurrent(generation: number): boolean {
+    return generation === this.#generation;
+  }
+
+  public settle(generation: number): boolean {
+    if (!this.isCurrent(generation)) return false;
+    this.#busy = false;
+    return true;
+  }
+
+  public cancel(): boolean {
+    const wasBusy = this.#busy;
+    this.#generation += 1;
+    this.#busy = false;
+    return wasBusy;
+  }
+}
+
 function commits(bundle: EvolutionBundle): readonly EvolutionCommitMetadata[] {
   return [bundle.baseline.commit, ...bundle.deltas.map(({ commit }) => commit)];
 }

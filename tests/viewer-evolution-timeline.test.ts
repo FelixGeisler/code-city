@@ -9,6 +9,7 @@ import {
   analyzeEvolutionBuildingHistory,
   analyzeEvolutionFrame,
   compareEvolutionFrames,
+  EvolutionSeekGate,
   summarizeEvolutionFrames,
 } from "../apps/viewer/src/evolution-timeline.js";
 
@@ -87,6 +88,22 @@ function fixture(): EvolutionBundle {
 }
 
 describe("viewer evolution timeline analysis", () => {
+  it("returns to idle after cancelling a seek and accepts the next navigation", () => {
+    const gate = new EvolutionSeekGate();
+    const cancelled = gate.begin();
+    expect(gate.busy).toBe(true);
+
+    expect(gate.cancel()).toBe(true);
+    expect(gate.busy).toBe(false);
+    expect(gate.isCurrent(cancelled)).toBe(false);
+
+    const next = gate.begin();
+    expect(gate.settle(cancelled)).toBe(false);
+    expect(gate.busy).toBe(true);
+    expect(gate.settle(next)).toBe(true);
+    expect(gate.busy).toBe(false);
+  });
+
   it("summarizes frames and stable-lineage history deterministically", () => {
     const bundle = fixture();
     const frames = summarizeEvolutionFrames(bundle);
