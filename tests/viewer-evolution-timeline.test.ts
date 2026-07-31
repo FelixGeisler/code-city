@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type {
+  CityDependency,
   EvolutionBundle,
   EvolutionChanges,
 } from "../packages/core/src/index.js";
@@ -310,5 +311,83 @@ describe("viewer evolution timeline analysis", () => {
             ?.districtId,
       ),
     ).toBe(true);
+  });
+
+  it("reports dependency-only route and endpoint changes deterministically", () => {
+    const dependency = (
+      id: string,
+      overrides: Partial<CityDependency> = {},
+    ): CityDependency => ({
+      id,
+      repositoryId: "repository:demo",
+      sourceId: "building:main",
+      targetId: "building:model",
+      kind: "typescript-import",
+      weight: 1,
+      ...overrides,
+    });
+    const removed = dependency("dependency:removed");
+    const changed: CityDependency = {
+      id: "dependency:changed",
+      repositoryId: "repository:demo",
+      sourceId: "module:viewer",
+      externalTarget: "three",
+      kind: "package-reference",
+      weight: 1,
+    };
+    const retargeted = dependency("dependency:retargeted");
+    const added: CityDependency = {
+      id: "dependency:added",
+      repositoryId: "repository:demo",
+      sourceId: "module:core",
+      externalTarget: "vitest",
+      kind: "package-reference",
+      weight: 1,
+    };
+    const from = {
+      ...DEMO_MODEL,
+      dependencies: [removed, changed, retargeted],
+    };
+    const to = {
+      ...DEMO_MODEL,
+      dependencies: [
+        added,
+        { ...retargeted, targetId: "building:schema" },
+        { ...changed, weight: 2 },
+      ].toReversed(),
+    };
+
+    const transition = compareEvolutionFrames(from, to, 4, 5);
+
+    expect(transition.addedBuildingIds).toEqual([]);
+    expect(transition.changedBuildingIds).toEqual([]);
+    expect(transition.addedDependencyIds).toEqual([
+      "dependency:added",
+    ]);
+    expect(transition.removedDependencyIds).toEqual([
+      "dependency:removed",
+    ]);
+    expect(transition.changedDependencyIds).toEqual([
+      "dependency:changed",
+      "dependency:retargeted",
+    ]);
+    expect(transition.retargetedDependencyIds).toEqual([
+      "dependency:retargeted",
+    ]);
+    expect(transition.affectedDependencyRouteIds).toEqual([
+      "dependency:added",
+      "dependency:changed",
+      "dependency:removed",
+      "dependency:retargeted",
+    ]);
+    expect(transition.affectedDependencyEndpointKeys).toEqual([
+      "entity:building:main",
+      "entity:building:model",
+      "entity:building:schema",
+      "entity:module:core",
+      "entity:module:viewer",
+      "external:three",
+      "external:vitest",
+    ]);
   });
 });

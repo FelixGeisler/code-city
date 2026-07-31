@@ -2252,6 +2252,12 @@ function largeCityRemovalTransition(
     renamedBuildingIds: Object.freeze([]),
     resizedBuildingIds: Object.freeze([]),
     changedBuildingIds: Object.freeze([]),
+    addedDependencyIds: Object.freeze([]),
+    removedDependencyIds: Object.freeze([]),
+    changedDependencyIds: Object.freeze([]),
+    retargetedDependencyIds: Object.freeze([]),
+    affectedDependencyRouteIds: Object.freeze([]),
+    affectedDependencyEndpointKeys: Object.freeze([]),
     interpolatedBuildings: Object.freeze([]),
   });
 }
@@ -2315,6 +2321,12 @@ function applyModel(
     : null;
   const preservedDependencyRouteState = dependencyRouteState;
   const preservedDependencyRouteVisibleLimit = dependencyRouteVisibleLimit;
+  const preservedDistrictDependencyFilters = districtDependencyFilters;
+  const preservedDistrictDependencyRoutesVisible =
+    districtDependencyRoutesVisible;
+  const preservedDistrictRouteVisibleLimit = districtRouteVisibleLimit;
+  const preservedDistrictDependencyBundleId =
+    selectedDistrictDependencyBundleId;
   printExportDialog.invalidate();
   printPlateToolbar.setPlan(undefined);
   const buildingsById = new Map(
@@ -2388,16 +2400,24 @@ function applyModel(
   ) {
     cityScene.isolateDistrict(preservedIsolation, false);
   }
-  if (options.preserveSelection) {
-    dependencyRouteState = preservedDependencyRouteState;
-    dependencyRouteVisibleLimit = preservedDependencyRouteVisibleLimit;
-  }
   if (preservedSelection?.kind === "building") {
     cityScene.selectBuilding(preservedSelection.id);
   } else if (preservedSelection?.kind === "district") {
     cityScene.selectDistrict(preservedSelection.id);
   } else if (preservedSelection?.kind === "external") {
     cityScene.selectExternalNode(preservedSelection.id);
+  }
+  if (options.preserveSelection) {
+    dependencyRouteState = preservedDependencyRouteState;
+    dependencyRouteVisibleLimit = preservedDependencyRouteVisibleLimit;
+    districtDependencyFilters = preservedDistrictDependencyFilters;
+    districtDependencyRoutesVisible =
+      preservedDistrictDependencyRoutesVisible;
+    districtRouteVisibleLimit = preservedDistrictRouteVisibleLimit;
+    selectedDistrictDependencyBundleId =
+      preservedDistrictDependencyBundleId;
+    renderDependencyExplorer();
+    renderDistrictDependencyExplorer();
   }
   hideError();
   schedulePerformanceDiagnostics();
@@ -2595,6 +2615,11 @@ function renderEvolutionTimeline(): void {
           `${transition.removedBuildings.length} removed`,
           `${transition.renamedBuildingIds.length} renamed`,
           `${transition.resizedBuildingIds.length} resized`,
+          `${transition.affectedDependencyRouteIds.length} dependency ${
+            transition.affectedDependencyRouteIds.length === 1
+              ? "route"
+              : "routes"
+          } changed`,
         ].join(" \u00b7 ");
   evolutionStatus.textContent =
     evolutionSeekController.busy
@@ -2997,9 +3022,15 @@ function renderDistrictDependencyExplorer(): void {
     districtDependencyFilters,
     explorerState.isolatedDistrictId,
   );
+  const selectedBundleIndex =
+    selectedDistrictDependencyBundleId === null
+      ? -1
+      : summary.bundles.findIndex(
+          ({ id }) => id === selectedDistrictDependencyBundleId,
+        );
   const visibleBundles = summary.bundles.slice(
     0,
-    districtRouteVisibleLimit,
+    Math.max(districtRouteVisibleLimit, selectedBundleIndex + 1),
   );
   const visibleReferenceWeight = visibleBundles.reduce(
     (total, bundle) => total + bundle.weight,
@@ -4080,6 +4111,14 @@ function applyVisualization(): void {
       label: "Metrics or relationships changed",
       color: "#a78bfa",
       priority: 101,
+    });
+  }
+  if (transition?.affectedDependencyRouteIds.length) {
+    changeGroups.push({
+      id: "evolution-dependencies",
+      label: "Dependency routes changed",
+      color: "#c084fc",
+      priority: 100,
     });
   }
   renderLegend(activeModel, [...changeGroups, ...visualization.legend]);

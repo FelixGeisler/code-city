@@ -1,5 +1,6 @@
 import type {
   CityBuilding,
+  CityDependency,
   CityModel,
   EvolutionBundle,
   EvolutionChangeKind,
@@ -32,6 +33,12 @@ export interface EvolutionTransition {
   readonly renamedBuildingIds: readonly string[];
   readonly resizedBuildingIds: readonly string[];
   readonly changedBuildingIds: readonly string[];
+  readonly addedDependencyIds: readonly string[];
+  readonly removedDependencyIds: readonly string[];
+  readonly changedDependencyIds: readonly string[];
+  readonly retargetedDependencyIds: readonly string[];
+  readonly affectedDependencyRouteIds: readonly string[];
+  readonly affectedDependencyEndpointKeys: readonly string[];
   readonly interpolatedBuildings: readonly {
     readonly id: string;
     readonly position: CityBuilding["position"];
@@ -330,6 +337,60 @@ function vectorChanged(
   return left.x !== right.x || left.y !== right.y || left.z !== right.z;
 }
 
+function dependencyResolution(
+  dependency: CityDependency,
+): "internal" | "external" | "unresolved" {
+  return (
+    dependency.resolution ??
+    (dependency.targetId !== undefined
+      ? "internal"
+      : dependency.externalTarget !== undefined
+        ? "external"
+        : "unresolved")
+  );
+}
+
+export function evolutionDependencyChanged(
+  left: CityDependency,
+  right: CityDependency,
+): boolean {
+  return (
+    left.repositoryId !== right.repositoryId ||
+    left.sourceId !== right.sourceId ||
+    left.targetId !== right.targetId ||
+    left.externalTarget !== right.externalTarget ||
+    dependencyResolution(left) !== dependencyResolution(right) ||
+    left.kind !== right.kind ||
+    left.version !== right.version ||
+    left.weight !== right.weight
+  );
+}
+
+export function evolutionDependencyRetargeted(
+  left: CityDependency,
+  right: CityDependency,
+): boolean {
+  return (
+    left.targetId !== right.targetId ||
+    left.externalTarget !== right.externalTarget ||
+    dependencyResolution(left) !== dependencyResolution(right)
+  );
+}
+
+export function evolutionDependencyEndpointKeys(
+  dependency: CityDependency,
+): readonly string[] {
+  return Object.freeze([
+    `entity:${dependency.sourceId}`,
+    ...(dependency.targetId === undefined
+      ? []
+      : [`entity:${dependency.targetId}`]),
+    ...(dependency.externalTarget === undefined
+      ? []
+      : [`external:${dependency.externalTarget}`]),
+  ]);
+}
+
 export function compareEvolutionFrames(
   from: CityModel,
   to: CityModel,
@@ -345,6 +406,16 @@ export function compareEvolutionFrames(
   const changedBuildingIds: string[] = [];
   const interpolatedBuildings: EvolutionTransition["interpolatedBuildings"][number][] =
     [];
+  const sourceDependencies = new Map(
+    from.dependencies.map((dependency) => [dependency.id, dependency]),
+  );
+  const targetDependencyIds = new Set<string>();
+  const addedDependencyIds: string[] = [];
+  const removedDependencyIds: string[] = [];
+  const changedDependencyIds: string[] = [];
+  const retargetedDependencyIds: string[] = [];
+  const affectedDependencyRouteIds = new Set<string>();
+  const affectedDependencyEndpointKeys = new Set<string>();
   for (const [id, building] of target) {
     const previous = source.get(id);
     if (!previous) {
@@ -385,6 +456,36 @@ export function compareEvolutionFrames(
       size: building.size,
     });
   }
+  for (const dependency of to.dependencies) {
+    targetDependencyIds.add(dependency.id);
+    const previous = sourceDependencies.get(dependency.id);
+    if (previous === undefined) {
+      addedDependencyIds.push(dependency.id);
+      affectedDependencyRouteIds.add(dependency.id);
+      evolutionDependencyEndpointKeys(dependency).forEach((key) =>
+        affectedDependencyEndpointKeys.add(key),
+      );
+      continue;
+    }
+    if (!evolutionDependencyChanged(previous, dependency)) continue;
+    changedDependencyIds.push(dependency.id);
+    affectedDependencyRouteIds.add(dependency.id);
+    if (evolutionDependencyRetargeted(previous, dependency)) {
+      retargetedDependencyIds.push(dependency.id);
+    }
+    [
+      ...evolutionDependencyEndpointKeys(previous),
+      ...evolutionDependencyEndpointKeys(dependency),
+    ].forEach((key) => affectedDependencyEndpointKeys.add(key));
+  }
+  for (const dependency of from.dependencies) {
+    if (targetDependencyIds.has(dependency.id)) continue;
+    removedDependencyIds.push(dependency.id);
+    affectedDependencyRouteIds.add(dependency.id);
+    evolutionDependencyEndpointKeys(dependency).forEach((key) =>
+      affectedDependencyEndpointKeys.add(key),
+    );
+  }
   return Object.freeze({
     fromIndex,
     toIndex,
@@ -395,6 +496,16 @@ export function compareEvolutionFrames(
     renamedBuildingIds: Object.freeze(renamedBuildingIds.sort()),
     resizedBuildingIds: Object.freeze(resizedBuildingIds.sort()),
     changedBuildingIds: Object.freeze(changedBuildingIds.sort()),
+    addedDependencyIds: Object.freeze(addedDependencyIds.sort()),
+    removedDependencyIds: Object.freeze(removedDependencyIds.sort()),
+    changedDependencyIds: Object.freeze(changedDependencyIds.sort()),
+    retargetedDependencyIds: Object.freeze(retargetedDependencyIds.sort()),
+    affectedDependencyRouteIds: Object.freeze(
+      [...affectedDependencyRouteIds].sort(),
+    ),
+    affectedDependencyEndpointKeys: Object.freeze(
+      [...affectedDependencyEndpointKeys].sort(),
+    ),
     interpolatedBuildings: Object.freeze(
       interpolatedBuildings.sort((left, right) =>
         compareText(left.id, right.id),

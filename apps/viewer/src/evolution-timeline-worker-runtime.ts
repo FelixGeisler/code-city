@@ -3,6 +3,7 @@ import {
   replayValidatedEvolutionBundle,
   validateEvolutionBundle,
   type CityBuilding,
+  type CityDependency,
   type CityModel,
   type EvolutionBundle,
   type EvolutionChanges,
@@ -10,6 +11,9 @@ import {
 } from "../../../packages/core/src/index.js";
 import {
   analyzeEvolutionBuildingHistory,
+  evolutionDependencyChanged,
+  evolutionDependencyEndpointKeys,
+  evolutionDependencyRetargeted,
   summarizeEvolutionFrames,
   type EvolutionFrameAnalysis,
   type EvolutionTransition,
@@ -488,6 +492,18 @@ async function compareFrames(
   const changedBuildingIds: string[] = [];
   const interpolatedBuildings: EvolutionTransition["interpolatedBuildings"][number][] =
     [];
+  const sourceDependencies = new Map<string, CityDependency>();
+  for (const dependency of from.dependencies) {
+    sourceDependencies.set(dependency.id, dependency);
+    await work.consume("post-replay-transition");
+  }
+  const targetDependencyIds = new Set<string>();
+  const addedDependencyIds: string[] = [];
+  const removedDependencyIds: string[] = [];
+  const changedDependencyIds: string[] = [];
+  const retargetedDependencyIds: string[] = [];
+  const affectedDependencyRouteIds = new Set<string>();
+  const affectedDependencyEndpointKeys = new Set<string>();
 
   for (const building of to.buildings) {
     targetIds.add(building.id);
@@ -534,6 +550,38 @@ async function compareFrames(
     }
     await work.consume("post-replay-transition");
   }
+  for (const dependency of to.dependencies) {
+    targetDependencyIds.add(dependency.id);
+    const previous = sourceDependencies.get(dependency.id);
+    if (previous === undefined) {
+      addedDependencyIds.push(dependency.id);
+      affectedDependencyRouteIds.add(dependency.id);
+      evolutionDependencyEndpointKeys(dependency).forEach((key) =>
+        affectedDependencyEndpointKeys.add(key),
+      );
+    } else if (evolutionDependencyChanged(previous, dependency)) {
+      changedDependencyIds.push(dependency.id);
+      affectedDependencyRouteIds.add(dependency.id);
+      if (evolutionDependencyRetargeted(previous, dependency)) {
+        retargetedDependencyIds.push(dependency.id);
+      }
+      [
+        ...evolutionDependencyEndpointKeys(previous),
+        ...evolutionDependencyEndpointKeys(dependency),
+      ].forEach((key) => affectedDependencyEndpointKeys.add(key));
+    }
+    await work.consume("post-replay-transition");
+  }
+  for (const dependency of from.dependencies) {
+    if (!targetDependencyIds.has(dependency.id)) {
+      removedDependencyIds.push(dependency.id);
+      affectedDependencyRouteIds.add(dependency.id);
+      evolutionDependencyEndpointKeys(dependency).forEach((key) =>
+        affectedDependencyEndpointKeys.add(key),
+      );
+    }
+    await work.consume("post-replay-transition");
+  }
   work.assertCurrent();
   return {
     fromIndex,
@@ -543,6 +591,14 @@ async function compareFrames(
     renamedBuildingIds,
     resizedBuildingIds,
     changedBuildingIds,
+    addedDependencyIds: addedDependencyIds.sort(),
+    removedDependencyIds: removedDependencyIds.sort(),
+    changedDependencyIds: changedDependencyIds.sort(),
+    retargetedDependencyIds: retargetedDependencyIds.sort(),
+    affectedDependencyRouteIds: [...affectedDependencyRouteIds].sort(),
+    affectedDependencyEndpointKeys: [
+      ...affectedDependencyEndpointKeys,
+    ].sort(),
     interpolatedBuildings,
   };
 }
