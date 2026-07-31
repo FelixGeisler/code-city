@@ -38,7 +38,6 @@ export const EVOLUTION_WORK_CHECKPOINT_INTERVAL = 256;
 export const EVOLUTION_REPLAY_CHECKPOINT_INTERVAL = 10;
 
 export type EvolutionWorkerWorkPhase =
-  | "cached-frame-clone"
   | "delta-replay"
   | "load-model-clone"
   | "post-replay-analysis"
@@ -377,11 +376,8 @@ async function replayAt(
   }
 
   if (source.index === index) {
-    return cooperativeCloneJson(
-      source.model,
-      work,
-      "cached-frame-clone",
-    );
+    work.assertCurrent();
+    return source.model;
   }
 
   // applyDelta is persistent: it builds new roots and collection arrays and

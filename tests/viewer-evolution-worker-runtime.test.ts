@@ -305,7 +305,6 @@ async function digest(bytes: ArrayBuffer): Promise<string> {
 }
 
 const cancellablePhases: readonly EvolutionWorkerWorkPhase[] = [
-  "cached-frame-clone",
   "delta-replay",
   "post-replay-clone",
   "post-replay-analysis",
