@@ -99,6 +99,17 @@ export class DesignSmellWorkerClient {
             response.evaluation,
             configuration,
           );
+          if (
+            !evaluationMatchesRequest(
+              response.evaluation,
+              model,
+              suppressions,
+            )
+          ) {
+            throw new TypeError(
+              "The evaluation does not match the requested city.",
+            );
+          }
           finish(() => resolve(response.evaluation));
         } catch {
           finish(() =>
@@ -147,4 +158,85 @@ export class DesignSmellWorkerClient {
     this.disposed = true;
     this.cancel();
   }
+}
+
+function evaluationMatchesRequest(
+  evaluation: DesignSmellEvaluation,
+  model: CityModel,
+  suppressions: readonly DesignSmellSuppression[],
+): boolean {
+  const buildings = new Map(
+    model.buildings.map((building) => [building.id, building]),
+  );
+  const suppressionByIdentity = new Map(
+    suppressions.map((suppression) => [
+      `${suppression.buildingId}\u0000${suppression.ruleId}`,
+      suppression,
+    ]),
+  );
+  const outgoingByBuilding = new Map<string, Set<string>>();
+  for (const dependency of model.dependencies) {
+    const source = buildings.get(dependency.sourceId);
+    if (
+      dependency.kind !== "typescript-import" ||
+      source === undefined ||
+      source.language === "csharp"
+    ) {
+      continue;
+    }
+    const target =
+      dependency.targetId ??
+      dependency.externalTarget ??
+      dependency.id;
+    const outgoing =
+      outgoingByBuilding.get(source.id) ?? new Set<string>();
+    outgoing.add(target);
+    outgoingByBuilding.set(source.id, outgoing);
+  }
+
+  return evaluation.findings.every((finding) => {
+    const building = buildings.get(finding.buildingId);
+    if (
+      building === undefined ||
+      finding.language !== building.language
+    ) {
+      return false;
+    }
+    const suppression = suppressionByIdentity.get(
+      `${finding.buildingId}\u0000${finding.ruleId}`,
+    );
+    if (
+      finding.suppressed !== (suppression !== undefined) ||
+      finding.suppressionReason !== suppression?.reason
+    ) {
+      return false;
+    }
+    switch (finding.ruleId) {
+      case "high-complexity-method":
+        return (building.units ?? []).some(
+          (unit) =>
+            unit.name === finding.evidence.subject &&
+            unit.line === finding.evidence.line &&
+            unit.endLine === finding.evidence.endLine &&
+            unit.complexity === finding.evidence.value,
+        );
+      case "oversized-file":
+        return building.metrics.sloc === finding.evidence.value;
+      case "excessive-coupling":
+        return (
+          (outgoingByBuilding.get(building.id)?.size ?? 0) ===
+          finding.evidence.value
+        );
+      case "dependency-cycle":
+        return (
+          finding.evidence.relatedBuildingIds?.every((id) =>
+            buildings.has(id),
+          ) === true
+        );
+      case "oversized-class":
+      case "duplicate-code":
+      case "feature-envy":
+        return false;
+    }
+  });
 }

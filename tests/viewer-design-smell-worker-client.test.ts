@@ -107,4 +107,45 @@ describe("design smell worker client", () => {
     await expect(pending).rejects.toThrow(/invalid evaluation/iu);
     expect(worker.terminated).toBe(true);
   });
+
+  it("rejects findings that are not bound to the requested city", async () => {
+    const worker = new FakeDesignSmellWorker();
+    const client = new DesignSmellWorkerClient(
+      () => worker as unknown as Worker,
+    );
+    const model = {
+      ...DEMO_MODEL,
+      buildings: DEMO_MODEL.buildings.map((building, index) =>
+        index === 0
+          ? {
+              ...building,
+              metrics: {
+                ...building.metrics,
+                sloc: 1_000,
+              },
+            }
+          : building,
+      ),
+    };
+    const pending = client.evaluate(
+      model,
+      DEFAULT_DESIGN_SMELL_CONFIGURATION,
+      [],
+    );
+    const evaluation = structuredClone(evaluateDesignSmells(model));
+    const result = evaluation.results.find(
+      ({ rule }) => rule.id === "oversized-file",
+    )!;
+    (
+      result.findings[0] as { buildingId: string }
+    ).buildingId = "building:forged";
+    worker.respond({
+      type: "result",
+      jobId: worker.requests[0]!.jobId,
+      evaluation,
+    });
+
+    await expect(pending).rejects.toThrow(/invalid evaluation/iu);
+    expect(worker.terminated).toBe(true);
+  });
 });
