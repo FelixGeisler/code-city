@@ -30,6 +30,11 @@ frame; reduced-motion mode performs no spatial interpolation; stable
 selections and route controls survive while their lineage or route exists;
 dependency changes and rebuilt route geometry describe the target frame
 
+|Image export
+|Semantic bounds make preset framing repeatable; output has the exact accepted
+pixel dimensions and requested scene annotations but no viewer chrome; GPU,
+memory, legend-fit, and WebGL failures are explicit
+
 |Performance
 |Viewer input is bounded; instancing is required before raising the limits
 |===

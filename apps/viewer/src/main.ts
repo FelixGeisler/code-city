@@ -26,6 +26,16 @@ import {
   MAXIMUM_EXECUTABLE_UNIT_VISIBLE_LIMIT,
   presentExecutableUnits,
 } from "./building-inspector.js";
+import {
+  cameraOrientationForPreset,
+  orthographicCameraDistanceForBounds,
+  orthographicViewHeightForOrientedBounds,
+  perspectiveDistanceForViewHeight,
+  perspectiveViewHeightAtDistance,
+  type CameraOrientation,
+  type CameraPreset,
+  type CameraProjection,
+} from "./camera-presets.js";
 import { cityBaseForModel } from "./city-surface.js";
 import {
   createDependencyExplorerIndex,
@@ -72,6 +82,22 @@ import {
   type EvolutionRemovalDiagnostics,
 } from "./evolution-removal-layer.js";
 import { presentExternalDependency } from "./external-dependency-inspector.js";
+import {
+  drawImageExportOverlay,
+  flipRgbaRows,
+  imageExportFileName,
+  validateImageExportLegend,
+  validateImageExportResolution,
+  type ImageExportLegendEntry,
+  type ImageExportOverlay,
+  type ImageExportProjectedLabel,
+  type ImageExportRequest,
+  type ValidatedImageExportResolution,
+} from "./image-export.js";
+import {
+  installImageExportDialog,
+  type PreparedImageExport,
+} from "./image-export-dialog.js";
 import { installProjectImportDialog } from "./project-import-dialog.js";
 import { installPrintExportDialog } from "./print-export-dialog.js";
 import {
@@ -133,6 +159,10 @@ import {
   SceneLabelOverlay,
 } from "./scene-label-overlay.js";
 import {
+  boxBounds,
+  createSemanticSceneBounds,
+} from "./semantic-scene-bounds.js";
+import {
   DEFAULT_FOG_DENSITY,
   fogDensityForCameraDistance,
 } from "./scene-environment.js";
@@ -140,7 +170,6 @@ import { groundGridLayout } from "./scene-grid.js";
 import {
   cameraDistanceForBounds,
   cameraMaximumDistanceForFrame,
-  focusedDistrictBounds,
   semanticPickingEnabled,
   type ScenePresentationMode,
 } from "./scene-navigation.js";
@@ -202,8 +231,22 @@ interface CameraTransition {
   readonly durationMs: number;
   readonly fromPosition: THREE.Vector3;
   readonly fromTarget: THREE.Vector3;
+  readonly fromUp: THREE.Vector3;
   readonly toPosition: THREE.Vector3;
   readonly toTarget: THREE.Vector3;
+  readonly toUp: THREE.Vector3;
+  readonly fromOrthographicViewHeight?: number;
+  readonly toOrthographicViewHeight?: number;
+}
+
+interface SceneImageExport {
+  readonly blob: Blob;
+  readonly resolution: ValidatedImageExportResolution;
+}
+
+interface ExportCameraFrame {
+  readonly camera: THREE.OrthographicCamera | THREE.PerspectiveCamera;
+  readonly target: THREE.Vector3;
 }
 
 interface ModelSource {
@@ -254,6 +297,13 @@ interface ViewerPerformanceDiagnostics {
   };
 }
 
+const EMPTY_DEPENDENCY_ROUTE_DIAGNOSTICS: DependencyRouteOverlayDiagnostics =
+  Object.freeze({
+    routeCount: 0,
+    gatewayCount: 0,
+    routes: Object.freeze([]),
+  });
+
 declare global {
   interface Window {
     __CODE_CITY_PERFORMANCE__?: ViewerPerformanceDiagnostics & {
@@ -275,8 +325,20 @@ const viewerWorkspace = installViewerWorkspace(
 const fileInput = element<HTMLInputElement>("model-file");
 const fileOpenButton = element<HTMLButtonElement>("model-file-open");
 const demoButton = element<HTMLButtonElement>("demo-button");
+const imageExportOpenButton =
+  element<HTMLButtonElement>("image-export-open");
 const printExportOpenButton =
   element<HTMLButtonElement>("print-export-open");
+const cameraProjectionSelect =
+  element<HTMLSelectElement>("camera-projection");
+const cameraIsometricButton =
+  element<HTMLButtonElement>("camera-isometric");
+const cameraTopDownButton =
+  element<HTMLButtonElement>("camera-top-down");
+const cameraSelectedButton =
+  element<HTMLButtonElement>("camera-selected");
+const cameraWholeCityButton =
+  element<HTMLButtonElement>("camera-whole-city");
 const metricPreviewBanner =
   element<HTMLParagraphElement>("metric-preview-banner");
 const statusElement = element<HTMLParagraphElement>("status");
@@ -498,9 +560,27 @@ class CityScene {
     "#07111f",
     DEFAULT_FOG_DENSITY,
   );
-  private readonly camera = new THREE.PerspectiveCamera(45, 1, 0.1, 5_000);
+  private readonly perspectiveCamera = new THREE.PerspectiveCamera(
+    45,
+    1,
+    0.1,
+    5_000,
+  );
+  private readonly orthographicCamera = new THREE.OrthographicCamera(
+    -10,
+    10,
+    10,
+    -10,
+    0.1,
+    5_000,
+  );
+  private camera:
+    | THREE.OrthographicCamera
+    | THREE.PerspectiveCamera = this.perspectiveCamera;
   private readonly renderer = new THREE.WebGLRenderer({
+    alpha: true,
     antialias: true,
+    premultipliedAlpha: false,
     powerPreference: "high-performance",
   });
   private readonly instancingSupported = supportsViewerInstancing(
@@ -524,6 +604,7 @@ class CityScene {
     { instancingSupported: this.instancingSupported },
   );
   private readonly sceneLabelOverlay = new SceneLabelOverlay(this.scene);
+  private readonly webglRuntimeStatus = document.createElement("p");
   private readonly districtMeshes = new Map<
     string,
     THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>
@@ -536,6 +617,9 @@ class CityScene {
   private readonly buildingContexts = new Map<string, BuildingContext>();
   private readonly districtContexts = new Map<string, DistrictContext>();
   private readonly districtGroups = new Map<string, THREE.Group>();
+  private readonly semanticCityBounds = new THREE.Box3();
+  private readonly semanticDistrictBounds = new Map<string, THREE.Box3>();
+  private readonly semanticExternalBounds = new THREE.Box3();
   private readonly resizeObserver: ResizeObserver;
   private readonly pointerPicker: ViewerFramePicker<
     PointerPosition,
@@ -548,6 +632,8 @@ class CityScene {
   private isolatedDistrictId: string | null = null;
   private cameraTransition: CameraTransition | null = null;
   private evolutionAnimation: SceneEvolutionAnimation | null = null;
+  private orthographicViewHeight = 20;
+  private webglContextAvailable = true;
   private fullCityMaxDistance = 20;
   private fullCityFar = 100;
   private pointerStart: PointerPosition | null = null;
@@ -597,9 +683,58 @@ class CityScene {
       "aria-label",
       "Interactive 3D code city",
     );
-    this.host.append(this.renderer.domElement);
+    this.webglRuntimeStatus.className = "webgl-runtime-status";
+    this.webglRuntimeStatus.setAttribute("role", "alert");
+    this.webglRuntimeStatus.setAttribute("aria-atomic", "true");
+    this.webglRuntimeStatus.hidden = true;
+    this.renderer.domElement.addEventListener(
+      "webglcontextlost",
+      (event) => {
+        event.preventDefault();
+        this.webglContextAvailable = false;
+        this.host.dataset["webglAvailable"] = "false";
+        imageExportOpenButton.disabled = true;
+        imageExportOpenButton.title =
+          "Image export is unavailable while the WebGL context is lost.";
+        cameraProjectionSelect.disabled = true;
+        cameraIsometricButton.disabled = true;
+        cameraTopDownButton.disabled = true;
+        cameraSelectedButton.disabled = true;
+        cameraWholeCityButton.disabled = true;
+        this.renderer.domElement.setAttribute(
+          "aria-label",
+          "Interactive 3D code city unavailable because the WebGL context was lost",
+        );
+        this.webglRuntimeStatus.hidden = false;
+        this.webglRuntimeStatus.textContent =
+          "The WebGL context was lost. Restore hardware acceleration or reload the page before using the 3D viewer or image export.";
+      },
+    );
+    this.renderer.domElement.addEventListener(
+      "webglcontextrestored",
+      () => {
+        this.webglContextAvailable = true;
+        this.host.dataset["webglAvailable"] = "true";
+        imageExportOpenButton.disabled = false;
+        imageExportOpenButton.title = "";
+        cameraProjectionSelect.disabled = false;
+        cameraIsometricButton.disabled = false;
+        cameraTopDownButton.disabled = false;
+        cameraWholeCityButton.disabled = false;
+        cameraSelectedButton.disabled = !this.selectedEntityAvailable;
+        this.renderer.domElement.setAttribute(
+          "aria-label",
+          "Interactive 3D code city",
+        );
+        this.webglRuntimeStatus.textContent = "";
+        this.webglRuntimeStatus.hidden = true;
+      },
+    );
+    this.host.dataset["webglAvailable"] = "true";
+    this.host.append(this.renderer.domElement, this.webglRuntimeStatus);
 
     this.camera.position.set(25, 22, 28);
+    this.orthographicCamera.position.copy(this.camera.position);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.07;
     this.controls.screenSpacePanning = false;
@@ -708,6 +843,7 @@ class CityScene {
       );
     }
     const base = effectiveBase ?? cityBaseForModel(model);
+    this.updateSemanticBounds(model, base, externalNodes);
     let gridY = 0;
     if (base !== undefined) {
       const geometry = new THREE.BoxGeometry(
@@ -865,6 +1001,154 @@ class CityScene {
     }
   }
 
+  public get projection(): CameraProjection {
+    return this.camera === this.orthographicCamera
+      ? "orthographic"
+      : "perspective";
+  }
+
+  public get selectedEntityAvailable(): boolean {
+    return this.selectedEntity !== null;
+  }
+
+  public setProjection(projection: CameraProjection): void {
+    if (projection === this.projection) return;
+    this.cameraTransition = null;
+    const target = this.controls.target.clone();
+    const direction = this.camera.position.clone().sub(target);
+    if (direction.lengthSq() < 1e-12) direction.set(1, 1, 1);
+    direction.normalize();
+    const currentDistance = Math.max(
+      this.camera.position.distanceTo(target),
+      0.01,
+    );
+
+    if (projection === "orthographic") {
+      this.orthographicViewHeight = perspectiveViewHeightAtDistance(
+        currentDistance,
+        this.perspectiveCamera.fov,
+      );
+      this.orthographicCamera.position.copy(this.camera.position);
+      this.orthographicCamera.up.copy(this.camera.up);
+      this.orthographicCamera.near = this.camera.near;
+      this.orthographicCamera.far = this.camera.far;
+      this.orthographicCamera.zoom = 1;
+      this.camera = this.orthographicCamera;
+    } else {
+      const effectiveViewHeight =
+        this.orthographicViewHeight /
+        Math.max(this.orthographicCamera.zoom, 1e-6);
+      const distance = perspectiveDistanceForViewHeight(
+        effectiveViewHeight,
+        this.perspectiveCamera.fov,
+      );
+      this.perspectiveCamera.position
+        .copy(target)
+        .addScaledVector(direction, distance);
+      this.perspectiveCamera.up.copy(this.camera.up);
+      this.perspectiveCamera.near = Math.max(distance / 1_000, 0.01);
+      this.perspectiveCamera.far = Math.max(
+        distance * 20,
+        this.fullCityFar,
+      );
+      this.controls.maxDistance = cameraMaximumDistanceForFrame(
+        this.fullCityMaxDistance,
+        distance,
+      );
+      this.camera = this.perspectiveCamera;
+    }
+    this.controls.object = this.camera;
+    this.updateCameraProjection(
+      Math.max(1, this.host.clientWidth),
+      Math.max(1, this.host.clientHeight),
+    );
+    this.controls.update();
+    this.updateFog();
+  }
+
+  public applyCameraPreset(
+    preset: CameraPreset,
+    animate = true,
+  ): boolean {
+    this.ensureCityPresentation();
+    if (preset === "whole-city") {
+      this.showWholeCity();
+      return true;
+    }
+    const bounds = this.boundsForPreset(preset);
+    if (bounds === undefined || bounds.isEmpty()) return false;
+    const orientation = cameraOrientationForPreset(
+      preset,
+      this.camera.position.clone().sub(this.controls.target),
+      this.camera.up,
+    );
+    this.frameBounds(bounds, animate, false, orientation);
+    return true;
+  }
+
+  public async exportPng(
+    request: ImageExportRequest,
+    overlay: Omit<ImageExportOverlay, "labels" | "legend"> & {
+      readonly legend: readonly ImageExportLegendEntry[];
+    },
+  ): Promise<SceneImageExport> {
+    const resolution = validateImageExportResolution(
+      request.width,
+      request.height,
+      this.imageExportCapabilities(),
+    );
+    const legend = request.includeLegend ? overlay.legend : [];
+    validateImageExportLegend(
+      legend,
+      resolution.width,
+      resolution.height,
+    );
+    this.ensureCityPresentation();
+    this.clearEvolutionAnimation();
+    const restoreScope =
+      request.preset === "whole-city"
+        ? this.temporarilyShowWholeCity()
+        : () => undefined;
+    let pixels: Uint8Array;
+    let labels: readonly ImageExportProjectedLabel[];
+    try {
+      const bounds = this.boundsForPreset(request.preset);
+      if (bounds === undefined || bounds.isEmpty()) {
+        throw new Error(
+          request.preset === "selected-entity"
+            ? "Select a building, district, or external dependency before using the selected-entity preset."
+            : "The requested camera frame is unavailable.",
+        );
+      }
+      const frame = this.createExportCamera(
+        request,
+        bounds,
+        resolution.width / resolution.height,
+      );
+      labels = request.includeLabels
+        ? this.projectExportLabels(
+            frame.camera,
+            resolution.width,
+            resolution.height,
+          )
+        : [];
+      pixels = this.renderExportPixels(
+        frame.camera,
+        frame.target,
+        resolution,
+        request.background,
+      );
+    } finally {
+      restoreScope();
+    }
+    const blob = await this.composeExportPng(pixels, resolution, {
+      ...overlay,
+      labels,
+      legend,
+    });
+    return { blob, resolution };
+  }
+
   public showCityLayout(frame = true): void {
     this.presentationMode = "city";
     this.city.visible = true;
@@ -880,7 +1164,7 @@ class CityScene {
     }
     if (frame && this.city.children.length > 0) {
       this.replaceGrid(this.bounds(), this.cityBaseBottom());
-      this.frameObject(this.city, true);
+      this.frameBounds(this.bounds(), true);
     }
   }
 
@@ -1019,7 +1303,7 @@ class CityScene {
   }
 
   private cityBaseBottom(): number {
-    const bounds = new THREE.Box3().setFromObject(this.city);
+    const bounds = this.bounds();
     return bounds.isEmpty() ? 0 : bounds.min.y - 0.01;
   }
 
@@ -1133,7 +1417,7 @@ class CityScene {
     }
     this.select(createSceneEntity("district", id));
     if (focus) {
-      this.frameDistrict(id, group, true);
+      this.frameDistrict(id, true);
     }
     return true;
   }
@@ -1186,7 +1470,7 @@ class CityScene {
       this.select(null);
     }
     if (focus) {
-      this.frameDistrict(id, selectedGroup, true);
+      this.frameDistrict(id, true);
     }
     return true;
   }
@@ -1199,7 +1483,7 @@ class CityScene {
     this.buildingLayer?.setIsolatedDistrict(null);
     this.evolutionAnimation?.removals.setIsolatedDistrict(null);
     this.isolatedDistrictId = null;
-    this.frameObject(this.city, true);
+    this.frameBounds(this.bounds(), true);
     this.emitState();
   }
 
@@ -1258,8 +1542,7 @@ class CityScene {
   private resize(): void {
     const width = Math.max(1, this.host.clientWidth);
     const height = Math.max(1, this.host.clientHeight);
-    this.camera.aspect = width / height;
-    this.camera.updateProjectionMatrix();
+    this.updateCameraProjection(width, height);
     this.renderer.setSize(width, height, false);
   }
 
@@ -1279,6 +1562,9 @@ class CityScene {
     this.externalMeshes.clear();
     this.externalNodes.clear();
     this.districtGroups.clear();
+    this.semanticCityBounds.makeEmpty();
+    this.semanticDistrictBounds.clear();
+    this.semanticExternalBounds.makeEmpty();
     this.clearPrintPlate();
     if (this.buildingLayer !== null) {
       this.city.remove(this.buildingLayer.object);
@@ -1333,7 +1619,7 @@ class CityScene {
   }
 
   private bounds(): THREE.Box3 {
-    const bounds = new THREE.Box3().setFromObject(this.city);
+    const bounds = this.semanticCityBounds.clone();
     if (bounds.isEmpty()) {
       bounds.set(
         new THREE.Vector3(-5, 0, -5),
@@ -1341,6 +1627,382 @@ class CityScene {
       );
     }
     return bounds;
+  }
+
+  private updateSemanticBounds(
+    model: CityModel,
+    base: CityBase | undefined,
+    externalNodes: readonly ExternalSceneNode[],
+  ): void {
+    const bounds = createSemanticSceneBounds(
+      model,
+      base,
+      externalNodes,
+    );
+    this.semanticCityBounds.copy(bounds.city);
+    this.semanticDistrictBounds.clear();
+    this.semanticExternalBounds.makeEmpty();
+    for (const [id, districtBounds] of bounds.districts) {
+      this.semanticDistrictBounds.set(id, districtBounds.clone());
+    }
+    for (const node of externalNodes) {
+      this.semanticExternalBounds.union(
+        boxBounds(node.position, node.size),
+      );
+    }
+  }
+
+  private boundsForPreset(preset: CameraPreset): THREE.Box3 | undefined {
+    if (preset === "selected-entity") {
+      return this.selectedEntityBounds();
+    }
+    if (
+      preset !== "whole-city" &&
+      this.isolatedDistrictId !== null
+    ) {
+      return this.districtFrameBounds(this.isolatedDistrictId);
+    }
+    return this.bounds();
+  }
+
+  private selectedEntityBounds(): THREE.Box3 | undefined {
+    const selected = this.selectedEntity;
+    if (selected === null) return undefined;
+    switch (selected.kind) {
+      case "building":
+        return this.buildingLayer?.bounds(selected.id);
+      case "district":
+        return this.districtFrameBounds(selected.id);
+      case "external": {
+        const node = this.externalNodes.get(selected.id);
+        return node === undefined
+          ? undefined
+          : boxBounds(node.position, node.size);
+      }
+    }
+  }
+
+  private temporarilyShowWholeCity(): () => void {
+    const previousIsolation = this.isolatedDistrictId;
+    const visibility = new Map(
+      [...this.districtGroups].map(([id, group]) => [id, group.visible]),
+    );
+    for (const group of this.districtGroups.values()) group.visible = true;
+    this.buildingLayer?.setIsolatedDistrict(null);
+    this.evolutionAnimation?.removals.setIsolatedDistrict(null);
+    let restored = false;
+    return () => {
+      if (restored) return;
+      restored = true;
+      for (const [id, group] of this.districtGroups) {
+        group.visible = visibility.get(id) ?? true;
+      }
+      this.buildingLayer?.setIsolatedDistrict(previousIsolation);
+      this.evolutionAnimation?.removals.setIsolatedDistrict(
+        previousIsolation,
+      );
+    };
+  }
+
+  private imageExportCapabilities(): {
+    readonly maxRenderbufferSize: number;
+    readonly maxTextureSize: number;
+    readonly maxViewportWidth: number;
+    readonly maxViewportHeight: number;
+    readonly samples: number;
+    readonly contextAvailable: boolean;
+  } {
+    const context = this.renderer.getContext();
+    const contextAvailable =
+      this.webglContextAvailable && !context.isContextLost();
+    if (!contextAvailable) {
+      return {
+        maxRenderbufferSize: 0,
+        maxTextureSize: 0,
+        maxViewportWidth: 0,
+        maxViewportHeight: 0,
+        samples: 0,
+        contextAvailable: false,
+      };
+    }
+    const viewport = context.getParameter(
+      context.MAX_VIEWPORT_DIMS,
+    ) as Int32Array | number[] | null;
+    return {
+      maxRenderbufferSize: Number(
+        context.getParameter(context.MAX_RENDERBUFFER_SIZE),
+      ),
+      maxTextureSize: Number(
+        context.getParameter(context.MAX_TEXTURE_SIZE),
+      ),
+      maxViewportWidth: Number(viewport?.[0]),
+      maxViewportHeight: Number(viewport?.[1]),
+      samples: Number(context.getParameter(context.SAMPLES)),
+      contextAvailable: true,
+    };
+  }
+
+  private createExportCamera(
+    request: ImageExportRequest,
+    bounds: THREE.Box3,
+    aspect: number,
+  ): ExportCameraFrame {
+    const center = bounds.getCenter(new THREE.Vector3());
+    const size = bounds.getSize(new THREE.Vector3());
+    const maximumDimension = Math.max(size.x, size.y, size.z, 1);
+    const orientation = cameraOrientationForPreset(
+      request.preset,
+      this.camera.position.clone().sub(this.controls.target),
+      this.camera.up,
+    );
+    const distance =
+      request.projection === "perspective"
+        ? cameraDistanceForBounds(
+            size,
+            this.perspectiveCamera.fov,
+            aspect,
+          )
+        : orthographicCameraDistanceForBounds(size);
+    const near = Math.max(distance / 1_000, 0.01);
+    const far = Math.max(distance * 20, maximumDimension * 20);
+    const position = center
+      .clone()
+      .addScaledVector(orientation.direction, distance);
+    const camera =
+      request.projection === "perspective"
+        ? new THREE.PerspectiveCamera(
+            this.perspectiveCamera.fov,
+            aspect,
+            near,
+            far,
+          )
+        : exportOrthographicCamera(
+            size,
+            aspect,
+            near,
+            far,
+            orientation,
+          );
+    camera.position.copy(position);
+    camera.up.copy(orientation.up);
+    camera.lookAt(center);
+    camera.updateProjectionMatrix();
+    camera.updateMatrixWorld(true);
+    return { camera, target: center };
+  }
+
+  private projectExportLabels(
+    camera: THREE.Camera,
+    width: number,
+    height: number,
+  ): readonly ImageExportProjectedLabel[] {
+    const state = this.sceneLabelOverlay.snapshot();
+    const labels = [state.selected, state.hovered].filter(
+      (label, index, values): label is SceneLabel =>
+        label !== null &&
+        values.findIndex((candidate) => candidate?.id === label.id) ===
+          index,
+    );
+    const projected: ImageExportProjectedLabel[] = [];
+    for (const label of labels) {
+      const world = new THREE.Vector3(
+        label.position.x,
+        label.position.y,
+        label.position.z,
+      );
+      const cameraSpace = world
+        .clone()
+        .applyMatrix4(camera.matrixWorldInverse);
+      if (cameraSpace.z >= 0) continue;
+      const clip = world.project(camera);
+      if (
+        ![clip.x, clip.y, clip.z].every(Number.isFinite) ||
+        clip.x < -1 ||
+        clip.x > 1 ||
+        clip.y < -1 ||
+        clip.y > 1 ||
+        clip.z < -1 ||
+        clip.z > 1
+      ) {
+        continue;
+      }
+      projected.push({
+        text: label.text,
+        x: (clip.x * 0.5 + 0.5) * width,
+        y: (-clip.y * 0.5 + 0.5) * height,
+      });
+    }
+    return projected;
+  }
+
+  private renderExportPixels(
+    camera: THREE.Camera,
+    target: THREE.Vector3,
+    resolution: ValidatedImageExportResolution,
+    background: ImageExportRequest["background"],
+  ): Uint8Array {
+    const context = this.renderer.getContext();
+    if (
+      !this.webglContextAvailable ||
+      context.isContextLost()
+    ) {
+      throw new Error(
+        "Image export is unavailable because the WebGL context is lost.",
+      );
+    }
+    for (let index = 0; index < 8; index += 1) {
+      if (context.getError() === context.NO_ERROR) break;
+    }
+
+    const rendererSize = this.renderer.getSize(new THREE.Vector2());
+    const pixelRatio = this.renderer.getPixelRatio();
+    const renderTarget = this.renderer.getRenderTarget();
+    const viewport = this.renderer.getViewport(new THREE.Vector4());
+    const scissor = this.renderer.getScissor(new THREE.Vector4());
+    const scissorTest = this.renderer.getScissorTest();
+    const autoClear = this.renderer.autoClear;
+    const clearColor = this.renderer.getClearColor(new THREE.Color());
+    const clearAlpha = this.renderer.getClearAlpha();
+    const sceneBackground = this.scene.background;
+    const labelsVisible = this.sceneLabelOverlay.object.visible;
+    const fogDensity = this.fog.density;
+    const pixels = new Uint8Array(
+      resolution.width * resolution.height * 4,
+    );
+
+    try {
+      this.renderer.setPixelRatio(1);
+      this.renderer.setSize(
+        resolution.width,
+        resolution.height,
+        false,
+      );
+      const drawingBuffer = this.renderer.getDrawingBufferSize(
+        new THREE.Vector2(),
+      );
+      if (
+        drawingBuffer.x !== resolution.width ||
+        drawingBuffer.y !== resolution.height
+      ) {
+        throw new Error(
+          `The browser could not create a ${resolution.width.toLocaleString()}\u00d7${resolution.height.toLocaleString()} drawing buffer. Try a smaller resolution.`,
+        );
+      }
+      this.renderer.setRenderTarget(null);
+      this.renderer.setViewport(
+        0,
+        0,
+        resolution.width,
+        resolution.height,
+      );
+      this.renderer.setScissorTest(false);
+      this.renderer.autoClear = true;
+      this.sceneLabelOverlay.object.visible = false;
+      this.fog.density = fogDensityForCameraDistance(
+        camera.position.distanceTo(target),
+      );
+      if (background === "transparent") {
+        this.scene.background = null;
+        this.renderer.setClearColor(0x000000, 0);
+      } else {
+        this.renderer.setClearAlpha(1);
+      }
+      this.renderer.clear(true, true, true);
+      this.renderer.render(this.scene, camera);
+      context.readPixels(
+        0,
+        0,
+        resolution.width,
+        resolution.height,
+        context.RGBA,
+        context.UNSIGNED_BYTE,
+        pixels,
+      );
+      if (
+        context.isContextLost() ||
+        context.getError() !== context.NO_ERROR
+      ) {
+        throw new Error(
+          "The GPU could not read the rendered image. Try a smaller resolution or restore WebGL.",
+        );
+      }
+      flipRgbaRows(pixels, resolution.width, resolution.height);
+      return pixels;
+    } finally {
+      this.scene.background = sceneBackground;
+      this.sceneLabelOverlay.object.visible = labelsVisible;
+      this.fog.density = fogDensity;
+      this.renderer.setClearColor(clearColor, clearAlpha);
+      this.renderer.autoClear = autoClear;
+      this.renderer.setSize(rendererSize.x, rendererSize.y, false);
+      this.renderer.setPixelRatio(pixelRatio);
+      this.renderer.setRenderTarget(renderTarget);
+      this.renderer.setViewport(viewport);
+      this.renderer.setScissor(scissor);
+      this.renderer.setScissorTest(scissorTest);
+    }
+  }
+
+  private async composeExportPng(
+    pixels: Uint8Array,
+    resolution: ValidatedImageExportResolution,
+    overlay: ImageExportOverlay,
+  ): Promise<Blob> {
+    const canvas = document.createElement("canvas");
+    canvas.width = resolution.width;
+    canvas.height = resolution.height;
+    const context = canvas.getContext("2d", { alpha: true });
+    if (context === null) {
+      throw new Error(
+        "Image export is unavailable because Canvas2D could not be created.",
+      );
+    }
+    try {
+      context.putImageData(
+        new ImageData(
+          new Uint8ClampedArray(pixels),
+          resolution.width,
+          resolution.height,
+        ),
+        0,
+        0,
+      );
+      drawImageExportOverlay(
+        context,
+        resolution.width,
+        resolution.height,
+        overlay,
+      );
+      return await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((blob) => {
+          if (blob === null) {
+            reject(
+              new Error(
+                "The browser could not encode the rendered image as PNG.",
+              ),
+            );
+          } else {
+            resolve(blob);
+          }
+        }, "image/png");
+      });
+    } finally {
+      canvas.width = 1;
+      canvas.height = 1;
+    }
+  }
+
+  private updateCameraProjection(width: number, height: number): void {
+    const aspect = width / height;
+    this.perspectiveCamera.aspect = aspect;
+    this.perspectiveCamera.updateProjectionMatrix();
+    const halfHeight = this.orthographicViewHeight / 2;
+    const halfWidth = halfHeight * aspect;
+    this.orthographicCamera.left = -halfWidth;
+    this.orthographicCamera.right = halfWidth;
+    this.orthographicCamera.top = halfHeight;
+    this.orthographicCamera.bottom = -halfHeight;
+    this.orthographicCamera.updateProjectionMatrix();
   }
 
   private frame(): void {
@@ -1356,18 +2018,21 @@ class CityScene {
 
   private frameDistrict(
     districtId: string,
-    district: THREE.Object3D,
     animate: boolean,
   ): void {
-    const bounds = focusedDistrictBounds(
-      districtId,
-      district,
-      (id) => this.buildingLayer?.districtBounds(id),
-      this.externalMeshes.values(),
-    );
-    if (!bounds.isEmpty()) {
+    const bounds = this.districtFrameBounds(districtId);
+    if (bounds !== undefined && !bounds.isEmpty()) {
       this.frameBounds(bounds, animate);
     }
+  }
+
+  private districtFrameBounds(districtId: string): THREE.Box3 | undefined {
+    const bounds = this.semanticDistrictBounds.get(districtId)?.clone();
+    if (bounds === undefined) return undefined;
+    if (!this.semanticExternalBounds.isEmpty()) {
+      bounds.union(this.semanticExternalBounds);
+    }
+    return bounds;
   }
 
   private focusBuilding(id: string): void {
@@ -1381,22 +2046,39 @@ class CityScene {
     bounds: THREE.Box3,
     animate: boolean,
     setFullCityRange = false,
+    orientation?: CameraOrientation,
   ): void {
     const center = bounds.getCenter(new THREE.Vector3());
     const size = bounds.getSize(new THREE.Vector3());
     const maximumDimension = Math.max(size.x, size.y, size.z, 1);
-    const distance = cameraDistanceForBounds(
-      size,
-      this.camera.fov,
-      this.camera.aspect,
-    );
-    const direction = this.camera.position
-      .clone()
-      .sub(this.controls.target);
+    const aspect =
+      Math.max(1, this.host.clientWidth) /
+      Math.max(1, this.host.clientHeight);
+    const direction =
+      orientation?.direction.clone() ??
+      this.camera.position.clone().sub(this.controls.target);
     if (direction.lengthSq() < 1e-8) {
       direction.set(1, 0.78, -1);
     }
     direction.normalize();
+    const up = orientation?.up.clone() ?? this.camera.up.clone();
+    const distance =
+      this.camera === this.perspectiveCamera
+        ? cameraDistanceForBounds(
+            size,
+            this.perspectiveCamera.fov,
+            aspect,
+          )
+        : orthographicCameraDistanceForBounds(size);
+    const targetOrthographicViewHeight =
+      this.camera === this.orthographicCamera
+        ? orthographicViewHeightForOrientedBounds(
+            size,
+            aspect,
+            direction,
+            up,
+          )
+        : undefined;
     const position = center
       .clone()
       .addScaledVector(direction, distance);
@@ -1421,7 +2103,16 @@ class CityScene {
     ) {
       this.cameraTransition = null;
       this.camera.position.copy(position);
+      this.camera.up.copy(up);
       this.controls.target.copy(center);
+      if (targetOrthographicViewHeight !== undefined) {
+        this.orthographicViewHeight = targetOrthographicViewHeight;
+        this.orthographicCamera.zoom = 1;
+        this.updateCameraProjection(
+          Math.max(1, this.host.clientWidth),
+          Math.max(1, this.host.clientHeight),
+        );
+      }
       this.controls.update();
       this.updateFog();
       return;
@@ -1431,19 +2122,35 @@ class CityScene {
       durationMs: 520,
       fromPosition: this.camera.position.clone(),
       fromTarget: this.controls.target.clone(),
+      fromUp: this.camera.up.clone(),
       toPosition: position,
       toTarget: center,
+      toUp: up,
+      ...(targetOrthographicViewHeight === undefined
+        ? {}
+        : {
+            fromOrthographicViewHeight:
+              this.orthographicViewHeight /
+              Math.max(this.orthographicCamera.zoom, 1e-6),
+            toOrthographicViewHeight: targetOrthographicViewHeight,
+          }),
     };
+    if (targetOrthographicViewHeight !== undefined) {
+      this.orthographicCamera.zoom = 1;
+    }
   }
 
   private preserveCameraForBounds(bounds: THREE.Box3): void {
     const size = bounds.getSize(new THREE.Vector3());
     const maximumDimension = Math.max(size.x, size.y, size.z, 1);
-    const requiredDistance = cameraDistanceForBounds(
-      size,
-      this.camera.fov,
-      this.camera.aspect,
-    );
+    const requiredDistance =
+      this.camera === this.perspectiveCamera
+        ? cameraDistanceForBounds(
+            size,
+            this.perspectiveCamera.fov,
+            this.perspectiveCamera.aspect,
+          )
+        : orthographicCameraDistanceForBounds(size);
     const currentDistance = Math.max(
       this.camera.position.distanceTo(this.controls.target),
       1,
@@ -1484,11 +2191,28 @@ class CityScene {
       transition.toPosition,
       eased,
     );
+    this.camera.up
+      .lerpVectors(transition.fromUp, transition.toUp, eased)
+      .normalize();
     this.controls.target.lerpVectors(
       transition.fromTarget,
       transition.toTarget,
       eased,
     );
+    if (
+      transition.fromOrthographicViewHeight !== undefined &&
+      transition.toOrthographicViewHeight !== undefined
+    ) {
+      this.orthographicViewHeight =
+        transition.fromOrthographicViewHeight +
+        (transition.toOrthographicViewHeight -
+          transition.fromOrthographicViewHeight) *
+          eased;
+      this.updateCameraProjection(
+        Math.max(1, this.host.clientWidth),
+        Math.max(1, this.host.clientHeight),
+      );
+    }
     if (progress === 1) {
       this.cameraTransition = null;
     }
@@ -1807,6 +2531,169 @@ class CityScene {
   }
 }
 
+function exportOrthographicCamera(
+  size: THREE.Vector3,
+  aspect: number,
+  near: number,
+  far: number,
+  orientation: CameraOrientation,
+): THREE.OrthographicCamera {
+  const viewHeight = orthographicViewHeightForOrientedBounds(
+    size,
+    aspect,
+    orientation.direction,
+    orientation.up,
+  );
+  const halfHeight = viewHeight / 2;
+  const halfWidth = halfHeight * aspect;
+  return new THREE.OrthographicCamera(
+    -halfWidth,
+    halfWidth,
+    halfHeight,
+    -halfHeight,
+    near,
+    far,
+  );
+}
+
+class UnavailableCityScene {
+  public constructor(host: HTMLDivElement, reason: string) {
+    host.dataset["webglAvailable"] = "false";
+    host.setAttribute("role", "alert");
+    const fallback = document.createElement("section");
+    fallback.className = "webgl-unavailable";
+    const title = document.createElement("h2");
+    title.textContent = "3D viewer unavailable";
+    const description = document.createElement("p");
+    description.textContent =
+      "This browser could not start WebGL. Hardware acceleration or WebGL support may be disabled. Project data and non-visual exports remain available.";
+    const detail = document.createElement("p");
+    detail.className = "webgl-unavailable-detail";
+    detail.textContent = reason;
+    fallback.append(title, description, detail);
+    host.replaceChildren(fallback);
+    imageExportOpenButton.disabled = true;
+    imageExportOpenButton.title =
+      "Image export requires an available WebGL context.";
+    cameraProjectionSelect.disabled = true;
+    cameraIsometricButton.disabled = true;
+    cameraTopDownButton.disabled = true;
+    cameraSelectedButton.disabled = true;
+    cameraWholeCityButton.disabled = true;
+  }
+
+  public get projection(): CameraProjection {
+    return "perspective";
+  }
+
+  public get selectedEntityAvailable(): boolean {
+    return false;
+  }
+
+  public load(
+    _model: CityModel,
+    _effectiveBase: CityBase | undefined,
+    _externalNodes: readonly ExternalSceneNode[],
+    _frame = true,
+  ): void {}
+
+  public setProjection(_projection: CameraProjection): void {}
+
+  public applyCameraPreset(
+    _preset: CameraPreset,
+    _animate = true,
+  ): boolean {
+    return false;
+  }
+
+  public async exportPng(
+    _request: ImageExportRequest,
+    _overlay: Omit<ImageExportOverlay, "labels" | "legend"> & {
+      readonly legend: readonly ImageExportLegendEntry[];
+    },
+  ): Promise<SceneImageExport> {
+    throw new Error(
+      "Image export is unavailable because WebGL could not be started.",
+    );
+  }
+
+  public showCityLayout(_frame = true): void {}
+
+  public setVisualization(
+    _colorsByBuildingId: ReadonlyMap<string, string>,
+    _label: string,
+  ): void {}
+
+  public showEvolutionTransition(
+    _transition: EvolutionTransition,
+    _reducedMotion: boolean,
+  ): void {}
+
+  public finishEvolutionTransition(): void {}
+
+  public showPrintPlate(_plate: ProjectedPrintPlate): void {}
+
+  public resetSelection(): void {}
+
+  public replaceDependencyRoutes(
+    _routes: readonly DependencyOverlayRoute[],
+  ): void {}
+
+  public replaceDistrictDependencyRoutes(
+    _routes: readonly DependencyOverlayRoute[],
+  ): void {}
+
+  public selectBuilding(_id: string, _focus = false): boolean {
+    return false;
+  }
+
+  public selectDistrict(_id: string, _focus = false): boolean {
+    return false;
+  }
+
+  public selectExternalNode(_id: string, _focus = false): boolean {
+    return false;
+  }
+
+  public isolateDistrict(_id: string, _focus = true): boolean {
+    return false;
+  }
+
+  public showWholeCity(): void {}
+
+  public assertBuildingCapability(_buildingCount: number): void {}
+
+  public performanceDiagnostics(): ViewerPerformanceDiagnostics {
+    return Object.freeze({
+      buildingRenderMode: null,
+      buildingBatchCount: 0,
+      objectCount: 0,
+      renderCalls: 0,
+      evolutionRemovals: null,
+      evolutionRemovalAnimated: false,
+      dependencyRoutes: EMPTY_DEPENDENCY_ROUTE_DIAGNOSTICS,
+      districtDependencyRoutes: EMPTY_DEPENDENCY_ROUTE_DIAGNOSTICS,
+      pickBenchmark: Object.freeze({
+        count: 0,
+        p95Milliseconds: 0,
+        maximumAabbTests: 0,
+      }),
+    });
+  }
+}
+
+function createCityScene(): CityScene | UnavailableCityScene {
+  try {
+    return new CityScene(
+      sceneHost,
+      synchronizeExplorerState,
+      () => requestCityPresentation(),
+    );
+  } catch (error) {
+    return new UnavailableCityScene(sceneHost, messageOf(error));
+  }
+}
+
 let activeModel: CityModel = DEMO_MODEL;
 let activeModelSource: ModelSource = { label: "Built-in demo" };
 let sourceRequest: AbortController | undefined;
@@ -1814,6 +2701,8 @@ let loadedBuildingSource:
   | { readonly buildingId: string; readonly source: BuildingSource }
   | undefined;
 let visualizationMode: ViewerVisualizationMode = "semantic";
+let activeVisualizationLabel = "Semantic groups";
+let activeLegendEntries: readonly ImageExportLegendEntry[] = [];
 let previewPrinterProfile: PrinterProfile | undefined;
 let evolutionWorker = new EvolutionTimelineWorkerClient();
 let evolutionLoadController: AbortController | undefined;
@@ -1873,11 +2762,7 @@ let activeExternalLayout = createExternalDependencyLayout(DEMO_MODEL);
 let activeExternalNodes: readonly ExternalSceneNode[] =
   activeExternalLayout.nodes;
 let requestCityPresentation = (): void => {};
-const cityScene = new CityScene(
-  sceneHost,
-  synchronizeExplorerState,
-  () => requestCityPresentation(),
-);
+const cityScene = createCityScene();
 const printPlateToolbar = installPrintPlateToolbar(
   {
     root: element<HTMLElement>("print-plate-toolbar"),
@@ -1944,6 +2829,49 @@ const printExportDialog = installPrintExportDialog({
     if (visualizationMode === "print") applyVisualization();
   },
 });
+const imageExportDialog = installImageExportDialog({
+  context: () => {
+    const frame = currentEvolutionExportFrame();
+    return {
+      projection: cityScene.projection,
+      selectedEntityAvailable: cityScene.selectedEntityAvailable,
+      ...(frame === undefined ? {} : { evolutionFrame: frame }),
+    };
+  },
+  exportImage: async (request): Promise<PreparedImageExport> => {
+    if (evolutionLoading || evolutionSeekController.busy) {
+      throw new Error(
+        "Wait for the active evolution frame to finish loading before exporting.",
+      );
+    }
+    stopEvolutionPlayback();
+    settleEvolutionTransition();
+    const frame = request.includeEvolutionFrame
+      ? currentEvolutionExportFrame()
+      : undefined;
+    const title =
+      activeModel.identity?.title ??
+      activeModel.repositories[0]?.name ??
+      "Code City";
+    const rendered = await cityScene.exportPng(request, {
+      title,
+      ...(frame === undefined
+        ? {}
+        : { subtitle: frame.label }),
+      legendTitle: activeVisualizationLabel,
+      legend: activeLegendEntries,
+    });
+    return {
+      blob: rendered.blob,
+      resolution: rendered.resolution,
+      fileName: imageExportFileName(
+        title,
+        request,
+        frame?.sha,
+      ),
+    };
+  },
+});
 const metricMappingPanel = installMetricMappingPanel(
   element<HTMLElement>("metric-mapping-panel"),
   {
@@ -1975,6 +2903,36 @@ visualizationModeSelect.addEventListener("change", () => {
   }
   visualizationMode = selected;
   applyVisualization();
+  imageExportDialog.invalidate();
+});
+
+cameraProjectionSelect.addEventListener("change", () => {
+  cityScene.setProjection(
+    cameraProjectionSelect.value === "orthographic"
+      ? "orthographic"
+      : "perspective",
+  );
+  synchronizeCameraControls();
+  imageExportDialog.invalidate();
+});
+cameraIsometricButton.addEventListener("click", () => {
+  applyCameraPresetFromToolbar("isometric");
+});
+cameraTopDownButton.addEventListener("click", () => {
+  applyCameraPresetFromToolbar("top-down");
+});
+cameraSelectedButton.addEventListener("click", () => {
+  applyCameraPresetFromToolbar("selected-entity");
+});
+cameraWholeCityButton.addEventListener("click", () => {
+  applyCameraPresetFromToolbar("whole-city");
+});
+imageExportOpenButton.addEventListener("click", () => {
+  stopEvolutionPlayback(false);
+  if (!evolutionLoading && !evolutionSeekController.busy) {
+    settleEvolutionTransition();
+  }
+  imageExportDialog.open();
 });
 
 evolutionFirst.addEventListener("click", () => {
@@ -2209,7 +3167,11 @@ viewerScopeReset.addEventListener("click", () => {
 dismissErrorButton.addEventListener("click", hideError);
 
 window.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
+  if (
+    event.key === "Escape" &&
+    !event.defaultPrevented &&
+    document.querySelector("dialog[open]") === null
+  ) {
     clearBuildingSelection();
     hideError();
   }
@@ -2220,6 +3182,7 @@ window.addEventListener("beforeunload", () => {
   printPlateToolbar.dispose();
   projectImportDialog.dispose();
   metricMappingPanel.dispose();
+  imageExportDialog.dispose();
   logoLoadGate.invalidate();
   loadedModelLogo?.dispose();
   loadedModelLogo = undefined;
@@ -2358,6 +3321,7 @@ function applyModel(
     ? searchResultLimit
     : DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT;
   printExportDialog.invalidate();
+  imageExportDialog.invalidate();
   printPlateToolbar.setPlan(undefined);
   const buildingsById = new Map(
     model.buildings.map((building) => [building.id, building]),
@@ -2483,6 +3447,7 @@ function resetEvolutionTimeline(recreateWorker = true): void {
   activeEvolutionTargetDependencyIds = new Set();
   activeEvolutionIndex = 0;
   evolutionLoading = false;
+  imageExportDialog.invalidate();
   evolutionTimeline.hidden = true;
   evolutionRange.max = "0";
   evolutionRange.value = "0";
@@ -2523,6 +3488,7 @@ async function startEvolutionTimeline(source: ModelSource): Promise<void> {
     activeEvolutionIndex = 0;
     evolutionRange.max = String(Math.max(0, loaded.frames.length - 1));
     evolutionLoading = false;
+    imageExportDialog.invalidate();
     renderEvolutionTimeline();
     if (loaded.frames.length > 1) {
       await seekEvolution(loaded.frames.length - 1, true);
@@ -2538,6 +3504,7 @@ async function startEvolutionTimeline(source: ModelSource): Promise<void> {
       return;
     }
     evolutionLoading = false;
+    imageExportDialog.invalidate();
     evolutionCommit.textContent = "Repository history unavailable";
     evolutionStatus.textContent =
       error instanceof Error ? error.message : "Evolution could not be loaded.";
@@ -2781,6 +3748,54 @@ function stopEvolutionPlayback(cancelSeek = true): void {
   }
   evolutionPlay?.setAttribute("aria-pressed", "false");
   if (evolutionPlay) evolutionPlay.textContent = "\u25b6";
+}
+
+function settleEvolutionTransition(): void {
+  const hadTransition =
+    activeEvolutionTransition !== undefined ||
+    evolutionTransitionTimer !== undefined;
+  if (evolutionTransitionTimer !== undefined) {
+    window.clearTimeout(evolutionTransitionTimer);
+    evolutionTransitionTimer = undefined;
+  }
+  activeEvolutionTransition = undefined;
+  cityScene.finishEvolutionTransition();
+  if (hadTransition) {
+    applyVisualization();
+    renderEvolutionTimeline();
+  }
+}
+
+function currentEvolutionExportFrame():
+  | {
+      readonly label: string;
+      readonly sha: string;
+    }
+  | undefined {
+  const frame = activeEvolutionFrames[activeEvolutionIndex];
+  if (frame === undefined) return undefined;
+  return {
+    sha: frame.sha,
+    label:
+      `Frame ${activeEvolutionIndex + 1}/${activeEvolutionFrames.length}` +
+      ` \u00b7 ${frame.sha.slice(0, 10)} \u00b7 ${frame.committedAt}`,
+  };
+}
+
+function applyCameraPresetFromToolbar(preset: CameraPreset): void {
+  if (!cityScene.applyCameraPreset(preset)) {
+    showError(
+      "Select a building, district, or external dependency before using the selected-entity camera preset.",
+    );
+    return;
+  }
+  synchronizeCameraControls();
+  imageExportDialog.invalidate();
+}
+
+function synchronizeCameraControls(): void {
+  cameraProjectionSelect.value = cityScene.projection;
+  cameraSelectedButton.disabled = !cityScene.selectedEntityAvailable;
 }
 
 function showUnavailableEvolutionBuilding(
@@ -3135,6 +4150,8 @@ function synchronizeExplorerState(state: ExplorerState): void {
     isolatableDistrictId === null ||
     state.isolatedDistrictId === isolatableDistrictId;
   showWholeCityButton.disabled = state.isolatedDistrictId === null;
+  synchronizeCameraControls();
+  imageExportDialog.invalidate();
   for (const button of searchResultButtons()) {
     if (
       button.dataset["buildingId"] === selectedBuildingId ||
@@ -4198,6 +5215,11 @@ function renderLegend(
     });
   }
   const groups = sortLegendGroups(displayGroups);
+  activeLegendEntries = Object.freeze(
+    groups.map(({ color, label }) =>
+      Object.freeze({ color, label }),
+    ),
+  );
 
   for (const group of groups) {
     const item = document.createElement("li");
@@ -4254,6 +5276,7 @@ function applyVisualization(): void {
     colors,
     visualization.label,
   );
+  activeVisualizationLabel = visualization.label;
   const transitionStatus =
     transition === undefined && dependencyChangeCount === 0
       ? ""

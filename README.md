@@ -85,6 +85,23 @@ publishes each frame directly with no spatial interpolation. The **Building age*
 **Historical churn** visualization modes, commit metadata, and selected
 building history are available only while a verified timeline is loaded.
 
+The camera toolbar switches between perspective and orthographic projection
+while preserving the current orientation and visible scale. Isometric and
+top-down presets use stable orientations; selected-entity and whole-city
+presets frame deterministic model-derived bounds without letting labels,
+highlights, routes, or evolution ghosts change the result.
+
+**Export PNG** renders the scene directly at a resolution independent of the
+browser viewport. It supports isometric, top-down, selected-entity, and
+whole-city framing; perspective or orthographic projection; the scene or a
+transparent background; and optional selected/hover labels, visualization
+legend, and current evolution-frame metadata. The image contains no viewer UI
+chrome. Width and height are each bounded from 256 through 8192 pixels, subject
+to the active GPU's texture, renderbuffer, and viewport limits and a 512 MiB
+sample-aware estimated working-memory ceiling. A lost or unavailable WebGL
+context disables image export with an accessible explanation; startup failure
+shows a dedicated fallback, and context restoration re-enables the controls.
+
 Completed imports remain on the server until explicitly removed. An
 authenticated `GET /api/v1/jobs` enumerates all retained jobs; for each
 completed `project-import`, send
