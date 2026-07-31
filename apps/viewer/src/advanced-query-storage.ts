@@ -1,0 +1,5 @@
+import { parseSavedAdvancedQuery, serializeSavedAdvancedQuery, type SavedAdvancedQuery } from "./advanced-query.js";
+export const ADVANCED_QUERY_STORAGE_KEY = "code-city.advanced-queries/v1";
+export interface QueryStorage { getItem(key: string): string | null; setItem(key: string, value: string): void; }
+export function loadSavedAdvancedQueries(storage: QueryStorage | undefined): readonly SavedAdvancedQuery[] { if (!storage) return []; try { const raw = storage.getItem(ADVANCED_QUERY_STORAGE_KEY); if (!raw) return []; const values: unknown = JSON.parse(raw); return Array.isArray(values) ? Object.freeze(values.map((value) => parseSavedAdvancedQuery(JSON.stringify(value))).sort((a, b) => a.id.localeCompare(b.id))) : []; } catch { return []; } }
+export function saveAdvancedQueries(storage: QueryStorage | undefined, saved: readonly SavedAdvancedQuery[]): boolean { if (!storage) return false; try { storage.setItem(ADVANCED_QUERY_STORAGE_KEY, JSON.stringify(saved.map((entry) => JSON.parse(serializeSavedAdvancedQuery(entry))))); return true; } catch { return false; } }

@@ -166,6 +166,34 @@ bottom sheet. Selecting geometry only peeks at details, while explicit search
 opens them. A persistent scope chip resets district isolation and scopes the
 overview metrics.
 
+== Advanced queries and result sets
+
+The Explore view evaluates versioned `codecity.advanced-query/1` filters in a
+dedicated module worker. Queries use an AND list over persisted name, path,
+language, risk, metric, and dependency-degree facts. Results are ordered by
+stable building ID, carry the exact clause/actual-value explanation for each
+match, and retain at most 500 rows. The UI reports an empty set, a partial set,
+or omitted rows explicitly; it never silently treats missing data as a match.
+
+The common presets cover complexity, dependency hubs, incoming/outgoing
+neighborhoods, and the current selected set. A query asking for recent changes
+or smells remains visible but is marked *unavailable* unless a future model
+extension persists those facts. Saved queries include both the query version
+and its `codecity.query-rules/1` rule schema, so incompatible definitions are
+rejected rather than reinterpreted. A saved entry also preserves its current
+selection set by stable building IDs; stale IDs are ignored after a model
+change.
+
+Query-result rows support Ctrl/Command additive selection and Shift range
+selection with keyboard-operable buttons and screen-reader labels containing
+the match explanation. The current renderer can focus a selected building,
+show its dependency overlay, isolate a single-district result set, and export
+the result JSON. The existing details inspector is deliberately single-building,
+so compare is presented as unavailable instead of simulating a comparison.
+The city canvas itself also remains single-item picking; no hierarchy-tree view
+exists in this viewer build, and those limitations are stated in the query
+status text.
+
 == Metric configuration
 
 The metric-mapping workspace lists the curated presets and saved custom

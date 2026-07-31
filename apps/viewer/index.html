@@ -274,6 +274,45 @@
             <h2 id="find-title">Find</h2>
           </div>
           <div class="find-panel-body">
+            <details id="advanced-query-panel" class="advanced-query-panel">
+              <summary>Advanced query</summary>
+              <p class="search-status">Filters use persisted model facts only. History and smell filters report unavailable when the model does not contain those facts.</p>
+              <label class="search-label" for="advanced-query-preset">Common query</label>
+              <select id="advanced-query-preset" class="search-input">
+                <option value="">Custom query</option>
+                <option value="highest-complexity">Highest complexity</option>
+                <option value="dependency-hubs">Dependency hubs</option>
+                <option value="incoming-neighborhood">Incoming neighborhood</option>
+                <option value="outgoing-neighborhood">Outgoing neighborhood</option>
+                <option value="changed-recently">Changed recently</option>
+                <option value="selected-district">Selected result set</option>
+              </select>
+              <div class="advanced-query-controls" role="group" aria-label="Saved queries and selections">
+                <label class="sr-only" for="advanced-query-saved">Saved query</label>
+                <select id="advanced-query-saved"><option value="">Saved queries</option></select>
+                <button id="advanced-query-save" class="button button-compact" type="button">Save query and selection</button>
+              </div>
+              <div class="advanced-query-controls" role="group" aria-label="Add an advanced query filter">
+                <label class="sr-only" for="advanced-query-field">Fact</label>
+                <select id="advanced-query-field"><option value="name">Name</option><option value="path">Path</option><option value="language">Language</option><option value="risk">Risk</option><option value="sloc">SLOC</option><option value="decisionLoad">Decision load</option><option value="maximumComplexity">Maximum complexity</option><option value="incomingDependencies">Incoming dependencies</option><option value="outgoingDependencies">Outgoing dependencies</option><option value="changedRecently">Changed recently</option><option value="smell">Smell</option></select>
+                <label class="sr-only" for="advanced-query-operator">Operator</label>
+                <select id="advanced-query-operator"><option value="contains">contains</option><option value="equals">equals</option><option value="atLeast">at least</option><option value="atMost">at most</option></select>
+                <label class="sr-only" for="advanced-query-value">Value</label>
+                <input id="advanced-query-value" type="text" placeholder="Value" />
+                <button id="advanced-query-add" class="button button-compact" type="button">Add filter</button>
+              </div>
+              <p id="advanced-query-filters" class="search-status">No filters: all buildings.</p>
+              <p id="advanced-query-status" class="search-status" role="status" aria-live="polite"></p>
+              <ul id="advanced-query-results" class="search-results" aria-label="Advanced query results"></ul>
+              <button id="advanced-query-show-more" class="button button-compact" type="button" hidden>Show more results</button>
+              <div class="isolation-actions" role="group" aria-label="Query result actions">
+                <button id="advanced-query-focus" class="button button-compact" type="button" disabled>Focus result</button>
+                <button id="advanced-query-isolate" class="button button-compact" type="button" disabled>Isolate district</button>
+                <button id="advanced-query-overlay" class="button button-compact" type="button" disabled>Dependency overlay</button>
+                <button id="advanced-query-export" class="button button-compact" type="button" disabled>Export JSON</button>
+                <button id="advanced-query-compare" class="button button-compact" type="button" disabled aria-describedby="advanced-query-status">Compare unavailable</button>
+              </div>
+            </details>
             <label class="search-label" for="building-search">
               Building or district name/path
             </label>
