@@ -160,11 +160,78 @@ SIGINT, SIGTERM, or explicit close stops it.
 == Viewer workspace
 
 The workspace opens on **Overview** and provides **Explore**, **Routes**,
-**Details**, and **Overview** in one scrolling surface. On desktop it is a
-resizable side dock; below 1100 px it becomes a collapsed, peek, or expanded
-bottom sheet. Selecting geometry only peeks at details, while explicit search
-opens them. A persistent scope chip resets district isolation and scopes the
-overview metrics.
+**Queries**, **Details**, **Overview**, and **Metrics** in one scrolling
+surface. On desktop it is a resizable side dock; below 1100 px it becomes a
+collapsed, peek, or expanded bottom sheet. Selecting geometry only peeks at
+details, while explicit search opens them. A persistent scope chip resets
+district isolation and scopes the overview metrics.
+
+== Advanced queries and selections
+
+The Queries workspace defines versioned, exact query data over building names,
+paths, languages, risk bands, source metrics, dependency counts and
+neighborhoods, the active evolution transition, and available design-smell
+rules. Built-in queries rank highest complexity and dependency hubs, inspect
+the incoming or outgoing neighborhood of the primary building, show recent
+changes, or scope results to the selected district. Stable path and building
+identity tie-breakers keep every result order deterministic. Each result lists
+the conditions that matched; missing transition or rule data produces an
+explicit unavailable or partial state instead of silently returning no match.
+
+Query evaluation is isolated in a fresh, cancellable worker. A query has at
+most 16 conditions, inspects at most 25,000 buildings and 250,000 dependency
+facts, and returns at most 500 results. The response reports the evaluated and
+total counts plus truncation. The main thread validates exact response fields,
+bounds, state/count consistency, unique result identities, and explanation
+limits before publishing it. Starting another query or model frame terminates
+the obsolete worker.
+
+Pointer, query-result, search, and hierarchy selection share one primary
+building and one bounded selection set. Ctrl/Command toggles membership; Shift
+selects the range in the current deterministic list; arrow keys move through
+query results. The screen-reader result list exposes each membership through
+`aria-selected`, while the live status announces counts and capability
+failures. Up to 500 buildings may be selected. Their instanced overlay remains
+one bounded draw object and can be disabled without losing membership.
+
+Focus frames the combined bounds of every selected building. Isolation applies
+an exact building-ID mask, including selections that span districts, and the
+same mask governs instanced rendering, legacy rendering, highlighting, and
+picking. Enabled dependency directions gather routes from every selected
+endpoint, deduplicate internal relationships selected at both ends, and apply
+one global 80-route limit. Compare reports aggregate ranges and exposes an
+accessible per-building metric table capped at 100 rows with explicit omitted
+counts. Export downloads the versioned query, selection set, and selected
+building facts as JSON. Named queries and selection sets use versioned
+project-local browser storage keyed by stable project identity. Each query
+records its model, metric, and optional rule schema capability; incompatible or
+malformed stored data is ignored. Evolution frames retain surviving identities
+and rerun the active query, while loading a different project clears the
+selection.
+
+**Explore** contains a deterministic repository, solution, module, district,
+and file tree synchronized with the 3D scene and search results. A scene or
+search selection expands only its ancestor path and reveals the matching row;
+tree activation selects and frames the same district or building while
+remaining in Explore. Isolation marks the in-scope and out-of-scope rows.
+Arrow keys navigate or expand the hierarchy, Home and End jump to its bounds,
+and Enter or Space activates the current row. The flat ARIA tree reports level,
+set position, expansion, selection, and active-descendant state. Fixed
+32-pixel rows are virtualized with a hard limit of 160 mounted rows, and the
+viewer retains expansion, active row, and scroll state for the eight most
+recent project identities.
+
+**Explore** contains a deterministic repository, solution, module, district,
+and file tree synchronized with the 3D scene and search results. A scene or
+search selection expands only its ancestor path and reveals the matching row;
+tree activation selects and frames the same district or building while
+remaining in Explore. Isolation marks the in-scope and out-of-scope rows.
+Arrow keys navigate or expand the hierarchy, Home and End jump to its bounds,
+and Enter or Space activates the current row. The flat ARIA tree reports level,
+set position, expansion, selection, and active-descendant state. Fixed
+32-pixel rows are virtualized with a hard limit of 160 mounted rows, and the
+viewer retains expansion, active row, and scroll state for the eight most
+recent project identities.
 
 == Advanced queries and result sets
 
@@ -263,10 +330,51 @@ to the frame's path-independent visualization. With `prefers-reduced-motion`,
 the full target geometry is published immediately and only static change cues
 are shown.
 
+Dependency comparison uses stable endpoint and route identities to distinguish
+additions, removals, metadata changes, and retargets in either seek direction.
+  The timeline reports the actual relationship counts and marks affected
+  target-frame endpoints and visible routes in pink until the next seek
+  replaces that transition context.
+Building-route direction toggles and limits, together with
+cross-district visibility, kind filters, limits, and a still-valid selected
+route, survive direct and arbitrary seeks. Both overlays are rebuilt from the
+target model, so preserved controls never retain stale route content or
+geometry; only a route selection that no longer matches the target frame is
+dropped.
+
 The **Building age** mode counts frames since a lineage first appeared.
 **Historical churn** counts its additions, replacements, and removals through
 the selected commit. Both modes are unavailable, with an explicit explanation,
 for model-only imports.
+
+== Camera and image export
+
+The camera toolbar switches between perspective and orthographic projection
+without changing the current look direction or apparent vertical span.
+Isometric and top-down presets apply stable orientations. Selected-entity and
+whole-city presets keep the current orientation while framing the corresponding
+semantic bounds. A selected-entity action is disabled until a building,
+district, or external dependency is selected.
+
+**Export PNG** creates a new scene render whose resolution, projection, and
+framing are independent of the browser viewport and current camera projection.
+The user chooses an isometric, top-down, selected-entity, or whole-city frame,
+the scene or a transparent background, and optional selected/hover labels and
+visualization legend. Optional evolution metadata adds the current frame
+ordinal, commit SHA, and timestamp. Export pauses playback, finishes an active
+transition at its stable target frame, and does not capture panels, controls,
+the timeline, or other DOM chrome.
+
+Framing uses cached bounds derived only from the base, districts, buildings,
+external nodes, and identity panel. Hover and selection overlays, dependency
+routes, hidden render helpers, and evolution-removal ghosts cannot change the
+frame. Each dimension must be a whole number from 256 through 8192 pixels.
+Preflight may lower that maximum to the active WebGL texture, renderbuffer, or
+viewport capability and rejects an estimated working set above 512 MiB. The
+estimate includes the actual framebuffer sample count. A lost context disables
+the camera and image controls until restoration; failure to create WebGL at
+startup shows an accessible fallback while project data and non-visual exports
+remain available.
 
 == Viewer performance
 
@@ -335,6 +443,30 @@ trusted dependencies. Deploy with only authorized trusted clients or enable
 inbound authorization, and use a least-privileged service identity.
 
 == Print
+
+== Progressive source detail
+
+The file-level city remains the startup level of detail.  Analyzer-produced
+models may add the backwards-compatible
+`codecity.source-structure/1` building extension, containing deterministic
+class/type and callable identities plus exact one-based line/column ranges.
+Semantic IDs are derived from declaration ancestry, kind, name, signature, and
+same-key occurrence rather than source order, so unrelated insertions do not
+renumber existing declarations. Callable complexity remains an analyzer fact
+with the declaration instead of being recomputed by the viewer.
+The viewer requests a bounded data projection only after a file is selected;
+it creates no fine-detail meshes while the city starts. The declaration list is
+keyboard accessible, opens the retained exact source range, and **Return to
+city** closes the drill-down without replacing the selected building or camera.
+Fine detail is explicitly `not-printable`; print exports retain file/district
+geometry only.
+
+For C#, TypeScript, and JavaScript, declarations are syntax-derived. Cross-file
+type references and call targets are not guessed: the model persists a
+per-language `unavailable` explanation whenever a compilation/binding context
+is absent. Older schema-1.0 models and older Roslyn helper responses remain
+readable and show that same explicit unavailability rather than fabricated
+facts.
 
 `npm run print:demo` writes a labelled 3MF with aggregated dependency traces
 and a private JSON legend. PrusaSlicer imports it as one object with five

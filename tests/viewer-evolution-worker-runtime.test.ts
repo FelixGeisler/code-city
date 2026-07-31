@@ -348,6 +348,14 @@ describe("evolution timeline worker runtime", () => {
       requestId: 2,
       model: expected[1]!.model,
     });
+    const frame = responses.at(-1);
+    if (frame?.type !== "frame") {
+      throw new Error("Expected an evolution frame.");
+    }
+    expect(frame.transition.dependencyChanges.changed).toHaveLength(640);
+    expect(frame.transition.dependencyChanges.added).toEqual([]);
+    expect(frame.transition.dependencyChanges.removed).toEqual([]);
+    expect(frame.transition.dependencyChanges.retargeted).toEqual([]);
   });
 
   it.each(cancellablePhases)(
@@ -427,8 +435,16 @@ describe("evolution timeline worker runtime", () => {
         [...replayEvolutionBundle(bundle)][1]!.model,
       );
       expect(
+        recovered.transition.dependencyChanges.changed,
+      ).toHaveLength(640);
+      expect(
         observed.filter((value) => value === "delta-replay").length,
       ).toBeGreaterThan(2);
+      if (phase === "post-replay-transition") {
+        expect(
+          observed.filter((value) => value === phase).length,
+        ).toBeGreaterThan(2);
+      }
     },
     30_000,
   );

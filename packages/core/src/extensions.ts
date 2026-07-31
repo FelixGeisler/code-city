@@ -46,6 +46,13 @@ function number(value: unknown, path: string): number { if (typeof value !== "nu
 function array(value: unknown, path: string): readonly unknown[] { if (!Array.isArray(value) || value.length > EXTENSION_LIMITS.definitions) throw new TypeError(`${path} must be a bounded array.`); return value; }
 function optionalArray(value: Record<string, unknown>, key: string): readonly unknown[] { return value[key] === undefined ? [] : array(value[key], key); }
 function capability(value: unknown, path: string): ExtensionCapability { if (typeof value !== "string" || !(EXTENSION_CAPABILITIES as readonly string[]).includes(value)) throw new TypeError(`${path} is unsupported.`); return value as ExtensionCapability; }
+function serializedByteLength(value: unknown): number {
+  let serialized: string | undefined;
+  try { serialized = JSON.stringify(value); }
+  catch { throw new TypeError("configuration must be serializable JSON."); }
+  if (serialized === undefined) throw new TypeError("configuration must be serializable JSON.");
+  return new TextEncoder().encode(serialized).byteLength;
+}
 
 function expression(value: unknown, path: string, state: { nodes: number; depth: number }): ExtensionExpression {
   state.nodes++; state.depth++;
@@ -63,6 +70,7 @@ function expression(value: unknown, path: string, state: { nodes: number; depth:
 
 /** Strictly validates and deep-copies a configuration; unsupported versions fail closed. */
 export function validateSafeExtensionConfiguration(value: unknown): SafeExtensionConfigurationV1 {
+  if (serializedByteLength(value) > EXTENSION_LIMITS.bytes) throw new RangeError("configuration exceeds the byte limit.");
   if (!plain(value)) throw new TypeError("configuration must be an object.");
   const candidate = value;
   const allowed = new Set(["version", "id", "name", "compatibility", "scope", "derivedMetrics", "mappings", "filters", "legends", "layouts", "queries", "overlays"]);
@@ -85,7 +93,9 @@ export function validateSafeExtensionConfiguration(value: unknown): SafeExtensio
   const queries = optionalArray(candidate, "queries").map((item, index) => { const entry = exact(item, ["id", "filterId"], `queries[${index}]`); return Object.freeze({ id: unique(identifier(entry.id, `queries[${index}].id`), `queries[${index}].id`), filterId: filterExists(entry.filterId, `queries[${index}].filterId`) }); });
   const overlays = optionalArray(candidate, "overlays").map((item, index) => { const entry = exact(item, ["id", "filterId", "color"], `overlays[${index}]`); if (typeof entry.color !== "string" || !/^#[0-9a-fA-F]{6}$/u.test(entry.color)) throw new TypeError(`overlays[${index}].color must be a color.`); return Object.freeze({ id: unique(identifier(entry.id, `overlays[${index}].id`), `overlays[${index}].id`), filterId: filterExists(entry.filterId, `overlays[${index}].filterId`), color: entry.color.toUpperCase() }); });
   const present: Record<string, number> = { "derived-metrics": derivedMetrics.length, mappings: mappings.length, filters: filters.length, legends: legends.length, layouts: layouts.length, queries: queries.length, overlays: overlays.length };
+  if (Object.values(present).reduce((sum, count) => sum + count, 0) > EXTENSION_LIMITS.definitions) throw new RangeError("configuration exceeds the total definition limit.");
   for (const item of capabilities) if (present[item] === 0) throw new TypeError(`Capability '${item}' is declared without a definition.`);
+  for (const [item, count] of Object.entries(present)) if (count > 0 && !capabilities.includes(item as ExtensionCapability)) throw new TypeError(`Definitions for capability '${item}' must be declared.`);
   return Object.freeze({ version: EXTENSION_CONFIGURATION_VERSION, id: identifier(candidate.id, "id"), name: label(candidate.name, "name"), compatibility: Object.freeze({ cityModel: "1.x" as const, capabilities: Object.freeze(capabilities) }), scope, ...(derivedMetrics.length ? { derivedMetrics: Object.freeze(derivedMetrics) } : {}), ...(mappings.length ? { mappings: Object.freeze(mappings) } : {}), ...(filters.length ? { filters: Object.freeze(filters) } : {}), ...(legends.length ? { legends: Object.freeze(legends) } : {}), ...(layouts.length ? { layouts: Object.freeze(layouts) } : {}), ...(queries.length ? { queries: Object.freeze(queries) } : {}), ...(overlays.length ? { overlays: Object.freeze(overlays) } : {}) });
 }
 
@@ -114,9 +124,10 @@ function evaluateExpression(expression: ExtensionExpression, metrics: SourceMetr
 }
 
 /** Evaluates only bounded AST nodes against the already-loaded model. No I/O APIs are accepted or reachable. */
-export function evaluateSafeExtension(model: Pick<CityModel, "schemaVersion" | "buildings">, candidate: unknown, options: { readonly checkpoint?: (operations: number) => void } = {}): ExtensionEvaluation {
+export function evaluateSafeExtension(model: Pick<CityModel, "schemaVersion" | "buildings">, candidate: unknown, options: { readonly checkpoint?: (operations: number) => void; readonly administratorApprovalIds?: readonly string[] } = {}): ExtensionEvaluation {
   const configuration = migrateSafeExtensionConfiguration(candidate);
   if (!model.schemaVersion.startsWith("1.")) throw new TypeError("The loaded city model is not compatible with this extension.");
+  if (configuration.scope.kind === "administrator" && !options.administratorApprovalIds?.includes(configuration.scope.approvalId)) throw new TypeError(`Administrator approval '${configuration.scope.approvalId}' is not available in this deployment.`);
   let operations = 0; const checkpoint = (increment: number) => { operations += increment; if (operations > EXTENSION_LIMITS.operations) throw new RangeError("Extension evaluation exceeded its operation budget."); options.checkpoint?.(increment); };
   const derived: Record<string, Record<string, number>> = Object.create(null); const matches: Record<string, readonly string[]> = Object.create(null);
   for (const building of model.buildings) { checkpoint(1); const values: Record<string, number> = Object.create(null); for (const entry of configuration.derivedMetrics ?? []) values[entry.id] = evaluateExpression(entry.expression, building.metrics, checkpoint); derived[building.id] = Object.freeze(values); }

@@ -169,6 +169,15 @@ export class SceneLabelOverlay {
       : this.hovered?.text ?? null;
   }
 
+  public snapshot(): SceneLabelOverlayState {
+    return {
+      selected:
+        this.selected === null ? null : snapshotLabel(this.selected),
+      hovered:
+        this.hovered === null ? null : snapshotLabel(this.hovered),
+    };
+  }
+
   public replace(state: SceneLabelOverlayState): void {
     this.assertActive();
     this.selected =

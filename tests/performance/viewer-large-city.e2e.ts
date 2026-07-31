@@ -8,6 +8,8 @@ interface PerformanceSnapshot {
   readonly firstInteractiveMilliseconds: number;
   readonly buildingRenderMode: "instanced" | "legacy" | null;
   readonly buildingBatchCount: number;
+  readonly visibleBuildingCount: number;
+  readonly buildingVisibilityMaskActive: boolean;
   readonly objectCount: number;
   readonly renderCalls: number;
   readonly evolutionRemovals: {
@@ -20,6 +22,16 @@ interface PerformanceSnapshot {
     readonly drawCalls: number;
   } | null;
   readonly evolutionRemovalAnimated: boolean;
+  readonly dependencyRoutes: {
+    readonly routeCount: number;
+  };
+  readonly designSmells: {
+    readonly requestedFindings: number;
+    readonly candidateMarkers: number;
+    readonly visibleMarkers: number;
+    readonly omittedMarkers: number;
+    readonly batchCount: number;
+  };
   readonly pickBenchmark: {
     readonly count: number;
     readonly p95Milliseconds: number;
@@ -90,6 +102,240 @@ test("25k production viewer stays within the rendering budget", async ({
   expect(snapshot.pickBenchmark.count).toBe(50);
   expect(snapshot.pickBenchmark.p95Milliseconds).toBeLessThanOrEqual(32);
   expect(snapshot.pickBenchmark.maximumAabbTests).toBeLessThanOrEqual(512);
+});
+
+test("25k hierarchy stays virtualized and synchronized with city state", async ({
+  page,
+}) => {
+  // Rendering has its own strict budget above; leave enough headroom for
+  // interaction-heavy locator work on slower single-worker CI hosts.
+  test.setTimeout(120_000);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`${viewerUrl}/?fixture=large-city-25k`, {
+    waitUntil: "domcontentloaded",
+    timeout: 45_000,
+  });
+  await page.locator("#viewer-tab-explore").click();
+  const tree = page.locator("#repository-tree");
+  const initialActiveId = await tree.getAttribute(
+    "aria-activedescendant",
+  );
+  expect(initialActiveId).not.toBeNull();
+  await expect(page.locator(`#${initialActiveId!}`)).toHaveAttribute(
+    "data-node-kind",
+    "repository",
+  );
+  await page.locator("#building-search").fill("file-24999.ts");
+  await page
+    .locator("#search-results .search-result-button")
+    .filter({ hasText: "file-24999.ts" })
+    .click();
+
+  await expect(page.locator("#selection-name")).toHaveText(
+    "file-24999.ts",
+  );
+  await page.locator("#viewer-tab-explore").click();
+  const selected = tree.locator(
+    '[role="treeitem"][aria-selected="true"]',
+  );
+  await expect(selected).toHaveText(/file-24999\.ts/u);
+  await expect(selected).toHaveAttribute("aria-level", "5");
+  expect(await tree.locator('[role="treeitem"]').count()).toBeLessThan(
+    80,
+  );
+  const selectedScrollTop = await tree.evaluate(
+    (element) => element.scrollTop,
+  );
+  expect(selectedScrollTop).toBeGreaterThan(0);
+  const activeDescendant = await tree.getAttribute(
+    "aria-activedescendant",
+  );
+  expect(activeDescendant).toBe(await selected.getAttribute("id"));
+
+  await tree.hover();
+  await page.mouse.wheel(0, -1_024);
+  await expect
+    .poll(() => tree.evaluate((element) => element.scrollTop))
+    .toBeLessThan(selectedScrollTop);
+  expect(await tree.locator('[role="treeitem"]').count()).toBeLessThan(
+    80,
+  );
+  const renderedIndexes = await tree
+    .locator('[role="treeitem"]')
+    .evaluateAll((rows) =>
+      rows.map((row) => Number((row as HTMLElement).dataset.treeRowIndex)),
+    );
+  expect(renderedIndexes).toEqual(
+    [...renderedIndexes].sort((left, right) => left - right),
+  );
+
+  await tree.press("ArrowUp");
+  const alternativeId = await tree.getAttribute(
+    "aria-activedescendant",
+  );
+  expect(alternativeId).not.toBeNull();
+  const alternative = page.locator(`#${alternativeId!}`);
+  await expect(alternative).toHaveAttribute(
+    "data-node-kind",
+    "building",
+  );
+  const alternativeName = (await alternative
+    .locator(".repository-tree-label")
+    .textContent())!;
+  await tree.press("Enter");
+  await expect(page.locator("#selection-name")).toHaveText(
+    alternativeName,
+  );
+  await page.locator("#isolate-district").click();
+  await expect(
+    tree.locator('[role="treeitem"][aria-selected="true"]'),
+  ).toHaveAttribute("data-isolated", "true");
+  await page.locator("#show-whole-city").click();
+  await expect(
+    tree.locator('[role="treeitem"][aria-selected="true"]'),
+  ).not.toHaveAttribute("data-isolated", "true");
+
+  await tree.press("ArrowLeft");
+  const parentId = await tree.getAttribute("aria-activedescendant");
+  expect(parentId).not.toBeNull();
+  await expect(page.locator(`#${parentId!}`)).toHaveAttribute(
+    "data-node-kind",
+    "district",
+  );
+  await tree.press("ArrowLeft");
+  await expect(page.locator(`#${parentId!}`)).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+});
+
+test("design-smell overlay is accessible, paginated, suppressible, and isolated", async ({
+  page,
+}) => {
+  // Rendering has a separate strict budget; this scenario also waits for two
+  // worker evaluations and exercises cross-panel query synchronization.
+  test.setTimeout(90_000);
+  await page.goto(
+    `${viewerUrl}/?fixture=large-city-25k&` +
+      `isolate-district=district%3A007&performance=1`,
+    { waitUntil: "domcontentloaded", timeout: 45_000 },
+  );
+  await page.getByRole("tab", { name: "Metrics" }).click();
+  const panel = page.locator("#design-smell-panel");
+  await expect(panel).toHaveAttribute("aria-busy", "false", {
+    timeout: 45_000,
+  });
+  await expect(panel.locator(".design-smell-status")).toContainText(
+    "unsuppressed findings",
+    { timeout: 45_000 },
+  );
+
+  await expect(
+    panel.getByLabel("High-complexity method design-smell overlay"),
+  ).toBeDisabled();
+  await expect(panel.locator(".design-smell-unavailable")).toContainText(
+    "Executable-unit complexity facts are not recorded",
+  );
+  await expect(
+    panel.getByLabel("Oversized class design-smell overlay"),
+  ).toBeDisabled();
+  await expect(panel.locator(".design-smell-unavailable")).toContainText(
+    "Per-class size facts are not present",
+  );
+  await expect(
+    panel.getByLabel("Excessive coupling design-smell overlay"),
+  ).toBeEnabled();
+  await expect(panel.locator(".design-smell-filters")).toContainText(
+    "C# 10; TypeScript 10; JavaScript 10",
+  );
+
+  const resultRows = panel.locator(".design-smell-finding");
+  await expect(resultRows).toHaveCount(100);
+  await expect(panel.locator(".design-smell-pagination")).toBeVisible();
+  await expect(
+    panel.locator(".design-smell-pagination span"),
+  ).toContainText("Showing 1–100 of");
+  const firstFinding = resultRows.first().locator("button").first();
+  await expect(firstFinding).toContainText("⚠ Oversized file");
+  expect(await firstFinding.textContent()).not.toMatch(/â|Â|Ã/u);
+
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await page
+    .locator("#advanced-query-preset")
+    .selectOption("custom");
+  await page
+    .locator("#advanced-query-smell")
+    .fill("oversized-file");
+  await page.locator("#advanced-query-run").click();
+  const queryStatus = page.locator("#advanced-query-status");
+  await expect(queryStatus).toContainText("matches", {
+    timeout: 45_000,
+  });
+  const queryStatusBeforeSuppression =
+    await queryStatus.textContent();
+  await page.getByRole("tab", { name: "Metrics" }).click();
+
+  const before = await panel.locator(".design-smell-count").textContent();
+  await resultRows.first().getByRole("button", {
+    name: "Suppress rule for building",
+  }).click();
+  await expect(panel.locator(".design-smell-count")).not.toHaveText(
+    before ?? "",
+    { timeout: 45_000 },
+  );
+  expect(
+    await page.evaluate(() =>
+      Object.keys(localStorage).some((key) =>
+        key.startsWith(
+          "code-city-design-smell-suppressions-v1:",
+        ),
+      ),
+    ),
+  ).toBe(true);
+
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await expect(queryStatus).not.toHaveText(
+    queryStatusBeforeSuppression ?? "",
+    { timeout: 45_000 },
+  );
+  await expect(queryStatus).toContainText("matches");
+  await page.getByRole("tab", { name: "Metrics" }).click();
+
+  await panel.getByRole("button", { name: "Next" }).click();
+  await expect(
+    panel.locator(".design-smell-pagination span"),
+  ).toContainText("Showing 101–200 of");
+  await expect(resultRows).toHaveCount(100);
+
+  await page.waitForFunction(
+    () => {
+      const diagnostics = (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+        }
+      ).__CODE_CITY_PERFORMANCE__?.designSmells;
+      return (
+        diagnostics !== undefined &&
+        diagnostics.requestedFindings > 2_000 &&
+        diagnostics.visibleMarkers > 0
+      );
+    },
+    undefined,
+    { timeout: 45_000 },
+  );
+  const diagnostics = await page.evaluate(
+    () =>
+      (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+        }
+      ).__CODE_CITY_PERFORMANCE__!.designSmells,
+  );
+  expect(diagnostics.batchCount).toBeLessThanOrEqual(4);
+  expect(diagnostics.candidateMarkers).toBeGreaterThan(2_000);
+  expect(diagnostics.visibleMarkers).toBeGreaterThan(0);
+  expect(diagnostics.visibleMarkers).toBeLessThanOrEqual(250);
+  expect(diagnostics.omittedMarkers).toBeGreaterThan(0);
 });
 
 test("25k removal cues stay bounded and respect isolation in reduced motion", async ({
@@ -286,6 +532,252 @@ test("metric mappings require an explicit preview and preserve named project con
   await expect(
     page.locator("#metric-configuration-select option"),
   ).toContainText(["Choose configuration", "Team print"]);
+});
+
+test("runs explainable queries and synchronizes bounded multiple selections", async ({
+  page,
+}) => {
+  await page.goto(viewerUrl, {
+    waitUntil: "domcontentloaded",
+    timeout: 45_000,
+  });
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await page.locator("#advanced-query-run").click();
+  await expect(page.locator("#advanced-query-status")).toContainText(
+    "5 matches",
+  );
+
+  const resultButtons = page.locator(".advanced-query-result");
+  await expect(resultButtons).toHaveCount(5);
+  await expect(resultButtons.first()).toContainText("main.ts");
+  await resultButtons.first().click();
+  await expect(
+    page.locator("#advanced-query-panel"),
+  ).toBeVisible();
+  await expect(resultButtons.first()).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await resultButtons.nth(1).click({ modifiers: ["Control"] });
+  await expect(
+    page.locator('.advanced-query-result[aria-selected="true"]'),
+  ).toHaveCount(2);
+  await resultButtons.nth(2).click({ modifiers: ["Shift"] });
+  await expect(
+    page.locator('.advanced-query-result[aria-selected="true"]'),
+  ).toHaveCount(2);
+
+  await page.getByRole("tab", { name: "Explore" }).click();
+  const treeBuildings = page.locator(
+    '#repository-tree [role="treeitem"][data-node-kind="building"]',
+  );
+  await expect(treeBuildings).toHaveCount(3);
+  await treeBuildings.first().click();
+  await treeBuildings.nth(1).click({ modifiers: ["Control"] });
+  await treeBuildings.nth(2).click({ modifiers: ["Shift"] });
+  await expect(
+    page.locator(
+      '#repository-tree [role="treeitem"][aria-selected="true"]',
+    ),
+  ).toHaveCount(2);
+  await expect(page.locator("#selection-status")).toContainText(
+    "2 buildings selected",
+  );
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await expect(
+    page.locator('.advanced-query-result[aria-selected="true"]'),
+  ).toHaveCount(2);
+
+  await expect(page.locator("#advanced-query-isolate")).toBeEnabled();
+  await page.locator("#advanced-query-compare").click();
+  await expect(
+    page.locator("#advanced-query-comparison-summary"),
+  ).toContainText("2 buildings");
+  await page.locator("#advanced-query-overlay").click();
+  await expect(page.locator("#advanced-query-overlay")).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await page.locator("#advanced-query-overlay").click();
+
+  await page.locator("#advanced-query-select-all").click();
+  await expect(
+    page.locator('.advanced-query-result[aria-selected="true"]'),
+  ).toHaveCount(5);
+  await page.locator("#advanced-query-save-name").fill("Review set");
+  await page.locator("#advanced-query-save").click();
+  await page.locator("#advanced-selection-save").click();
+  await expect(page.locator("#advanced-query-saved")).toContainText(
+    "Review set",
+  );
+  await expect(page.locator("#advanced-selection-saved")).toContainText(
+    "Review set",
+  );
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.locator("#advanced-query-export").click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe("code-city-selection.json");
+  const downloadPath = await download.path();
+  expect(downloadPath).not.toBeNull();
+  await expect
+    .poll(async () =>
+      fs.readFile(downloadPath!, "utf8"),
+    )
+    .toContain('"version": "codecity.query-export/1"');
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await expect(page.locator("#advanced-query-saved")).toContainText(
+    "Review set",
+  );
+  await page
+    .locator("#advanced-selection-saved")
+    .selectOption("Review set");
+  await expect(page.locator("#advanced-query-status")).toContainText(
+    "5 saved buildings selected",
+  );
+});
+
+test("isolates and focuses exact cross-district selections and uses visible search order", async ({
+  page,
+}) => {
+  await page.goto(`${viewerUrl}/?performance=1`, {
+    waitUntil: "domcontentloaded",
+    timeout: 45_000,
+  });
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await page.locator("#advanced-query-run").click();
+  await expect(page.locator("#advanced-query-status")).toContainText(
+    "5 matches",
+  );
+
+  const main = page.locator(
+    '.advanced-query-result[data-building-id="building:main"]',
+  );
+  const validation = page.locator(
+    '.advanced-query-result[data-building-id="building:validation"]',
+  );
+  const model = page.locator(
+    '.advanced-query-result[data-building-id="building:model"]',
+  );
+  await main.click();
+  await validation.click({ modifiers: ["Control"] });
+  await model.click({ modifiers: ["Control"] });
+  await expect(
+    page.locator('.advanced-query-result[aria-selected="true"]'),
+  ).toHaveCount(3);
+  await expect(page.locator("#selection-status")).toContainText(
+    "3 buildings selected",
+  );
+
+  await page.getByRole("tab", { name: "Details" }).click();
+  await page.locator("#dependency-section summary").click();
+  await expect(page.locator("#dependency-outgoing-count")).toHaveText(
+    "2",
+  );
+  await page.locator("#dependency-outgoing-toggle").click();
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await page.locator("#advanced-query-compare").click();
+  await expect(
+    page.locator("#advanced-query-comparison-summary"),
+  ).toContainText("Table shows all 3 selected buildings");
+  await expect(
+    page.locator("#advanced-query-comparison-body tr"),
+  ).toHaveCount(3);
+  await expect(
+    page.locator(
+      '#advanced-query-comparison-table th[scope="col"]',
+    ),
+  ).toHaveCount(7);
+  await expect(
+    page.locator(
+      '#advanced-query-comparison-body th[scope="row"]',
+    ),
+  ).toHaveCount(3);
+
+  await page.locator("#advanced-query-focus").click();
+  await page.locator("#advanced-query-isolate").click();
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () =>
+          (
+            window as Window & {
+              __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+            }
+          ).__CODE_CITY_PERFORMANCE__,
+      ),
+    )
+    .toMatchObject({
+      buildingVisibilityMaskActive: true,
+      visibleBuildingCount: 3,
+      dependencyRoutes: { routeCount: 2 },
+    });
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await expect(page.locator("#show-whole-city")).toBeEnabled();
+  await page.locator("#show-whole-city").click();
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () =>
+          (
+            window as Window & {
+              __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+            }
+          ).__CODE_CITY_PERFORMANCE__,
+      ),
+    )
+    .toMatchObject({
+      buildingVisibilityMaskActive: false,
+      visibleBuildingCount: 5,
+    });
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await page.locator("#advanced-query-isolate").click();
+
+  await page.locator("#advanced-query-clear").click();
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () =>
+          (
+            window as Window & {
+              __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+            }
+          ).__CODE_CITY_PERFORMANCE__,
+      ),
+    )
+    .toMatchObject({
+      buildingVisibilityMaskActive: false,
+      visibleBuildingCount: 5,
+    });
+
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await page.locator("#building-search").fill("src");
+  const searchBuildings = page.locator(
+    '#search-results .search-result-button[data-building-id]',
+  );
+  await expect(searchBuildings).toHaveCount(4);
+  await searchBuildings.nth(0).click({ modifiers: ["Control"] });
+  await searchBuildings.nth(1).click({ modifiers: ["Control"] });
+  await expect(
+    page.locator(
+      '#search-results .search-result-button[aria-pressed="true"]',
+    ),
+  ).toHaveCount(2);
+  await searchBuildings.nth(3).click({ modifiers: ["Shift"] });
+  await expect(
+    page.locator(
+      '#search-results .search-result-button[aria-pressed="true"]',
+    ),
+  ).toHaveCount(3);
+  await expect(searchBuildings.nth(0)).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await expect(page.locator("#selection-status")).toContainText(
+    "3 buildings selected",
+  );
 });
 
 async function disableBrowserInstancing(

@@ -1,17 +1,77 @@
 /// <reference lib="webworker" />
-import { evaluateAdvancedQuery } from "./advanced-query.js";
-import { advancedQueryFailureMessage, isAdvancedQueryWorkerMessage, type AdvancedQueryWorkerResponse } from "./advanced-query-protocol.js";
+
+import {
+  evaluateAdvancedQuery,
+  validateAdvancedQueryDefinition,
+  type AdvancedQueryContext,
+} from "./advanced-query.js";
+import {
+  advancedQueryFailureMessage,
+  isAdvancedQueryEvaluateRequest,
+  type AdvancedQueryWorkerResponse,
+} from "./advanced-query-protocol.js";
 import { validateCityModel } from "./model-validation.js";
-const scope = self as unknown as DedicatedWorkerGlobalScope;
-const cancelled = new Set<number>();
-scope.addEventListener("message", (event: MessageEvent<unknown>) => {
-  if (!isAdvancedQueryWorkerMessage(event.data)) return;
-  if (event.data.type === "cancel") { cancelled.add(event.data.jobId); return; }
+
+const workerScope = self as unknown as DedicatedWorkerGlobalScope;
+
+workerScope.addEventListener("message", (event: MessageEvent<unknown>) => {
   const request = event.data;
-  cancelled.delete(request.jobId);
+  if (!isAdvancedQueryEvaluateRequest(request)) return;
   let response: AdvancedQueryWorkerResponse;
-  try { response = { type: "result", jobId: request.jobId, result: evaluateAdvancedQuery(validateCityModel(request.model), request.query, new Set(request.selectedBuildingIds), request.limit) }; }
-  catch (error) { response = { type: "failure", jobId: request.jobId, message: advancedQueryFailureMessage(error) }; }
-  if (!cancelled.has(request.jobId)) scope.postMessage(response);
+  try {
+    const model = validateCityModel(request.model);
+    const definition = validateAdvancedQueryDefinition(
+      request.definition,
+    );
+    const context: AdvancedQueryContext = {
+      ...(request.context.changes === null
+        ? {}
+        : {
+            changesByBuildingId: new Map(
+              request.context.changes.map(([id, changes]) => [
+                id,
+                new Set(changes),
+              ]),
+            ),
+          }),
+      ...(request.context.smellRules === null
+        ? {}
+        : {
+            smellRuleIdsByBuildingId: new Map(
+              request.context.smellRules.map(([id, ruleIds]) => [
+                id,
+                new Set(ruleIds),
+              ]),
+            ),
+          }),
+      ...(request.context.availableSmellRules === null
+        ? {}
+        : {
+            availableSmellRuleIdsByBuildingId: new Map(
+              request.context.availableSmellRules.map(
+                ([id, ruleIds]) => [id, new Set(ruleIds)],
+              ),
+            ),
+          }),
+      ...(request.context.ruleSchemaVersion === null
+        ? {}
+        : {
+            ruleSchemaVersion: request.context.ruleSchemaVersion,
+          }),
+    };
+    response = {
+      type: "result",
+      jobId: request.jobId,
+      evaluation: evaluateAdvancedQuery(model, definition, context),
+    };
+  } catch (error) {
+    response = {
+      type: "failure",
+      jobId: request.jobId,
+      message: advancedQueryFailureMessage(error),
+    };
+  }
+  workerScope.postMessage(response);
 });
+
 export {};

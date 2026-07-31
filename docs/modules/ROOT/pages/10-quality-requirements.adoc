@@ -27,7 +27,20 @@ previews
 |Evolution playback
 |Direct seeking is path-independent; a superseded seek cannot publish a stale
 frame; reduced-motion mode performs no spatial interpolation; stable
-selections survive while their lineage exists
+selections and route controls survive while their lineage or route exists;
+dependency changes and rebuilt route geometry describe the target frame
+
+|Query interaction
+|Every match explains itself; deterministic ordering synchronizes one bounded
+selection across scene, hierarchy, and result views; unavailable capabilities
+and truncated totals remain explicit; cross-district isolation is exact;
+multi-selection focus and dependency routes include every selected endpoint;
+and accessible per-building comparisons remain globally bounded
+
+|Image export
+|Semantic bounds make preset framing repeatable; output has the exact accepted
+pixel dimensions and requested scene annotations but no viewer chrome; GPU,
+memory, legend-fit, and WebGL failures are explicit
 
 |Performance
 |Viewer input is bounded; instancing is required before raising the limits

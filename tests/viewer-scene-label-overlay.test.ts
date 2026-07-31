@@ -98,6 +98,7 @@ describe("SceneLabelOverlay", () => {
       selected: label("selected-id", "Selected", { x: 1, y: 8, z: 3 }),
       hovered: label("hovered-id", "Hovered", { x: -2, y: 4, z: 7 }),
     });
+    const snapshot = overlay.snapshot();
 
     expect(overlay.object.parent).toBe(scene);
     expect(overlay.object.children).toHaveLength(2);
@@ -105,6 +106,13 @@ describe("SceneLabelOverlay", () => {
       overlay.object.children.every((child) => child instanceof THREE.Sprite),
     ).toBe(true);
     expect(overlay.visibleLabelCount).toBe(2);
+    expect(snapshot).toEqual({
+      selected: label("selected-id", "Selected", { x: 1, y: 8, z: 3 }),
+      hovered: label("hovered-id", "Hovered", { x: -2, y: 4, z: 7 }),
+    });
+    expect(snapshot.selected).not.toBe(
+      overlay.snapshot().selected,
+    );
     expect(originalSlots[0]?.position).toEqual(new THREE.Vector3(1, 8, 3));
     expect(originalSlots[1]?.position).toEqual(new THREE.Vector3(-2, 4, 7));
     const expectedHeight = 2.4 * SCENE_LABEL_SCREEN_SCALE_PER_UNIT;
@@ -158,9 +166,11 @@ describe("SceneLabelOverlay", () => {
     overlay.setSelected(
       label("same", "Selected wins", { x: 1, y: 3, z: 3 }),
     );
+    const snapshot = overlay.snapshot();
     expect(selected?.visible).toBe(true);
     expect(hovered?.visible).toBe(false);
     expect(overlay.visibleLabelCount).toBe(1);
+    expect(snapshot.hovered?.text).toBe("Same entity");
 
     overlay.setSelected(null);
     expect(selected?.visible).toBe(false);

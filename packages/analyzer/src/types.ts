@@ -9,6 +9,7 @@ import type {
   RiskBand,
   SourceLanguage,
   SourceMetrics,
+  SourceStructure,
 } from "../../core/src/model.js";
 import type { SnapshotOptions } from "./snapshot.js";
 
@@ -39,6 +40,7 @@ export interface SourceFileFact {
     readonly startLine: 1;
     readonly endLine: number;
   };
+  readonly sourceStructure?: SourceStructure;
   readonly risk: RiskBand;
   readonly semanticGroupId: string;
   readonly imports: readonly StaticImportFact[];

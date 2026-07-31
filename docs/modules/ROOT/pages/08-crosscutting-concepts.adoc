@@ -1,5 +1,63 @@
 = 8. Cross-cutting Concepts
 
+== Explainable design-smell overlay
+
+The viewer evaluates the versioned `codecity.design-smells/1` protocol and
+rule catalog `1.1.0` in a cancellable worker. Findings are heuristic signals,
+never AI advice or quality verdicts: each is linked to its named rule, rule
+version, exact language-specific threshold, concrete measured evidence, and
+(when available) source line. Available rules cover high-complexity methods,
+oversized source files, attributable JavaScript/TypeScript coupling, and
+source-file dependency cycles. Per-class size, C# building-level dependencies,
+duplicate code, and feature envy remain explicitly unavailable until the
+CityModel contains facts that support those claims.
+
+The Design smells panel provides total and affected-building counts, a
+100-row paginated result window, rule filtering, keyboard-accessible navigation
+to the affected building, and text/symbol/shape/severity cues in addition to
+color. The 3D markers use at most four instanced batches and obey district
+isolation. A local, project-scoped browser store records false-positive
+suppressions without changing source code or the imported CityModel. Persisted
+data and worker messages use strict exact-key validation and bounded sizes;
+evaluation caps imported buildings, findings, and suppressions to keep
+large-city behavior predictable.
+
+== Optional AI guidance
+
+AI guidance is disabled unless an administrator supplies a version-1
+`CODECITY_AI_GUIDANCE_CONFIG` JSON value. It is a server-side adapter: browser
+responses expose only a provider ID and label, never an endpoint, credential,
+or authorization header. Provider credentials are referenced by an environment
+variable name, so the configuration JSON never contains a secret.
+
+[source,json]
+----
+{"version":1,"enabled":true,"providers":[
+  {"id":"local","label":"Local model","endpoint":"http://127.0.0.1:11434/guidance"},
+  {"id":"review","label":"Review service","endpoint":"https://ai.example.com/guidance","authorizationEnv":"CODECITY_AI_REVIEW_TOKEN"}
+]}
+----
+
+Remote endpoints must use HTTPS; HTTP is allowed only for `localhost` or an
+IPv4/IPv6 loopback endpoint. Endpoint URLs cannot contain credentials, queries,
+or fragments, and redirects are refused. Each call has a bounded timeout,
+source and response size limits, cancellation on browser disconnect, and a
+strict provider response contract.
+
+For a selected retained building the viewer first displays the exact source and
+measured metrics that would be transmitted. Clicking **Send this exact preview
+once** is the only path that invokes a provider. The browser sends no source
+text or metrics in that confirmation; it names only the retained job/building,
+and the server reads the verified retained source and derives metrics from the
+matching city-model artifact. Suggestions are labelled as optional and cite
+the selected source line range. Provider failures leave deterministic findings
+and source navigation available.
+
+Prompts and model output are not stored. An optional administrator audit sink
+can receive only provider ID, selected building ID, byte count, duration, and
+completed/cancelled/failed outcome. Do not put credentials in URLs, browser
+configuration, logs, or repository files.
+
 == Metric mapping
 
 Repository = borough; build module = district; source file = building. A
@@ -223,6 +281,44 @@ Labels never intercept raycasting or affect scene bounds. Reload and clear reuse
 or dispose the two textures; no building, district, or external node owns a
 texture. Pointer, keyboard, search, and dependency-list selection use the same
 details content.
+
+== Camera framing and image export
+
+Camera framing consumes semantic bounds, not the render graph. Whole-city
+bounds are the union of the effective base, districts, buildings, external
+nodes, and identity panel. District focus contains its stable district and
+building geometry plus the external nodes that remain visible; a selected
+building or external node uses its own model box. Transient highlights, routes,
+labels, hidden helpers, and animated removal meshes are excluded, so fixed
+orientations produce the same frame and preserved orientations remain stable.
+
+Perspective and orthographic cameras share a target, normalized view direction,
+and up vector. Projection switching converts perspective distance to the
+equivalent orthographic view height, or back again, so it preserves orientation
+and apparent vertical span. Isometric and top-down presets supply canonical
+direction and up vectors. Selected-entity and whole-city presets preserve the
+current orientation and replace only the target and fitted distance or view
+height.
+
+PNG export creates a camera from the requested semantic bounds and aspect ratio,
+renders the Three.js scene at the requested pixel dimensions, reads the resolved
+default framebuffer, and restores the live renderer state. A transparent export
+uses an alpha-capable, non-premultiplied framebuffer. Selected and hover labels
+are projected into image coordinates, and the optional caption and semantic
+legend are drawn afterward with Canvas2D. This path never rasterizes DOM
+controls or panels. A current evolution frame may contribute its ordinal,
+commit SHA, and timestamp after playback has stopped and its transition has
+settled.
+
+Width and height are integers in `[256, 8192]`, further bounded by
+`MAX_TEXTURE_SIZE`, `MAX_RENDERBUFFER_SIZE`, and `MAX_VIEWPORT_DIMS`. Estimated
+working memory per pixel is `16 + 8 * max(1, samples)` bytes, where `samples` is
+the active framebuffer's reported sample count; the complete estimate may not
+exceed 512 MiB. Legends support all 256 model semantic groups plus the bounded
+viewer-owned evolution and external entries, and must fit the requested image
+at a readable column width. Capability, memory, legend-fit, context-loss,
+readback, and PNG-encoding failures are reported without publishing a partial
+download.
 
 == Repository exploration
 

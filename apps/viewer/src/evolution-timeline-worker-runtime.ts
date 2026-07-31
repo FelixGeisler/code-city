@@ -3,7 +3,6 @@ import {
   replayValidatedEvolutionBundle,
   validateEvolutionBundle,
   type CityBuilding,
-  type CityDependency,
   type CityModel,
   type EvolutionBundle,
   type EvolutionChanges,
@@ -11,9 +10,7 @@ import {
 } from "../../../packages/core/src/index.js";
 import {
   analyzeEvolutionBuildingHistory,
-  evolutionDependencyChanged,
-  evolutionDependencyEndpointKeys,
-  evolutionDependencyRetargeted,
+  EvolutionDependencyChangeCollector,
   summarizeEvolutionFrames,
   type EvolutionFrameAnalysis,
   type EvolutionTransition,
@@ -492,19 +489,6 @@ async function compareFrames(
   const changedBuildingIds: string[] = [];
   const interpolatedBuildings: EvolutionTransition["interpolatedBuildings"][number][] =
     [];
-  const sourceDependencies = new Map<string, CityDependency>();
-  for (const dependency of from.dependencies) {
-    sourceDependencies.set(dependency.id, dependency);
-    await work.consume("post-replay-transition");
-  }
-  const targetDependencyIds = new Set<string>();
-  const addedDependencyIds: string[] = [];
-  const removedDependencyIds: string[] = [];
-  const changedDependencyIds: string[] = [];
-  const retargetedDependencyIds: string[] = [];
-  const affectedDependencyRouteIds = new Set<string>();
-  const affectedDependencyEndpointKeys = new Set<string>();
-
   for (const building of to.buildings) {
     targetIds.add(building.id);
     const previous = source.get(building.id);
@@ -550,35 +534,31 @@ async function compareFrames(
     }
     await work.consume("post-replay-transition");
   }
-  for (const dependency of to.dependencies) {
-    targetDependencyIds.add(dependency.id);
-    const previous = sourceDependencies.get(dependency.id);
-    if (previous === undefined) {
-      addedDependencyIds.push(dependency.id);
-      affectedDependencyRouteIds.add(dependency.id);
-      evolutionDependencyEndpointKeys(dependency).forEach((key) =>
-        affectedDependencyEndpointKeys.add(key),
-      );
-    } else if (evolutionDependencyChanged(previous, dependency)) {
-      changedDependencyIds.push(dependency.id);
-      affectedDependencyRouteIds.add(dependency.id);
-      if (evolutionDependencyRetargeted(previous, dependency)) {
-        retargetedDependencyIds.push(dependency.id);
-      }
-      [
-        ...evolutionDependencyEndpointKeys(previous),
-        ...evolutionDependencyEndpointKeys(dependency),
-      ].forEach((key) => affectedDependencyEndpointKeys.add(key));
-    }
-    await work.consume("post-replay-transition");
-  }
-  for (const dependency of from.dependencies) {
-    if (!targetDependencyIds.has(dependency.id)) {
-      removedDependencyIds.push(dependency.id);
-      affectedDependencyRouteIds.add(dependency.id);
-      evolutionDependencyEndpointKeys(dependency).forEach((key) =>
-        affectedDependencyEndpointKeys.add(key),
-      );
+  const dependencyChanges = new EvolutionDependencyChangeCollector();
+  let sourceDependencyIndex = 0;
+  let targetDependencyIndex = 0;
+  while (
+    sourceDependencyIndex < from.dependencies.length ||
+    targetDependencyIndex < to.dependencies.length
+  ) {
+    const previous = from.dependencies[sourceDependencyIndex];
+    const current = to.dependencies[targetDependencyIndex];
+    if (
+      previous !== undefined &&
+      (current === undefined || previous.id < current.id)
+    ) {
+      dependencyChanges.add(previous, undefined);
+      sourceDependencyIndex += 1;
+    } else if (
+      current !== undefined &&
+      (previous === undefined || current.id < previous.id)
+    ) {
+      dependencyChanges.add(undefined, current);
+      targetDependencyIndex += 1;
+    } else {
+      dependencyChanges.add(previous, current);
+      sourceDependencyIndex += 1;
+      targetDependencyIndex += 1;
     }
     await work.consume("post-replay-transition");
   }
@@ -591,15 +571,8 @@ async function compareFrames(
     renamedBuildingIds,
     resizedBuildingIds,
     changedBuildingIds,
-    addedDependencyIds: addedDependencyIds.sort(),
-    removedDependencyIds: removedDependencyIds.sort(),
-    changedDependencyIds: changedDependencyIds.sort(),
-    retargetedDependencyIds: retargetedDependencyIds.sort(),
-    affectedDependencyRouteIds: [...affectedDependencyRouteIds].sort(),
-    affectedDependencyEndpointKeys: [
-      ...affectedDependencyEndpointKeys,
-    ].sort(),
     interpolatedBuildings,
+    dependencyChanges: dependencyChanges.finish(),
   };
 }
 

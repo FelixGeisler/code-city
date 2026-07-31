@@ -6,6 +6,7 @@ import http, {
 import net from "node:net";
 import path from "node:path";
 
+import { validateCityModel } from "../../../packages/core/src/index.js";
 import {
   collectViewerAssets,
   resolveProductionViewerRoot,
@@ -47,6 +48,12 @@ import {
   UploadReservationRegistry,
   type UploadReception,
 } from "./upload-import.js";
+import {
+  AiGuidanceAdapter,
+  type AiGuidanceConfiguration,
+  type AiGuidanceMetrics,
+  type AiGuidanceSource,
+} from "./ai-guidance.js";
 
 const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_PORT = 3_000;
@@ -74,6 +81,9 @@ const SOURCE_ARTIFACT_PATH_PATTERN =
 const UPLOAD_IMPORT_PATH_PATTERN =
   /^\/api\/v1\/imports\/uploads\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/u;
 const AUTHORIZATION_SESSION_PATH = "/api/v1/auth/session";
+const AI_GUIDANCE_PREVIEW_PATH_PATTERN =
+  /^\/api\/v1\/ai\/preview\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/([a-z0-9-]+:[0-9a-f]{16})$/u;
+const AI_GUIDANCE_REQUEST_PATH = "/api/v1/ai/requests";
 
 const CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
@@ -104,6 +114,8 @@ export interface CodeCityServerOptions {
   readonly importDependencies?: RemoteImportDependencies;
   readonly sourceRetention?: SourceRetentionPolicy;
   readonly editorUrlTemplate?: string;
+  /** Administrator-only configuration. Credentials never leave this process. */
+  readonly aiGuidance?: AiGuidanceConfiguration;
   /** Test seam; production callers should omit it. */
   readonly artifactResponseTimeouts?: {
     readonly idleMs: number;
@@ -687,6 +699,7 @@ function routeConsumesRequestBody(
 ): boolean {
   return (
     (method === "POST" && path === "/api/v1/imports") ||
+    (method === "POST" && path === AI_GUIDANCE_REQUEST_PATH) ||
     (method === "POST" &&
       path === "/api/v1/imports/uploads") ||
     (method === "PUT" &&
@@ -1958,6 +1971,132 @@ function cancelJobHandler(
   );
 }
 
+async function aiGuidanceSource(
+  jobs: PersistentJobQueue,
+  sources: SourceArtifactStore,
+  jobId: string,
+  buildingId: string,
+  signal?: AbortSignal,
+): Promise<AiGuidanceSource | undefined> {
+  const job = jobs.get(jobId);
+  const expected =
+    job?.state === "completed" &&
+    job.result?.kind === "city-model" &&
+    job.result.artifactToken === jobId &&
+    job.result.source?.availability === "retained"
+      ? job.result.source
+      : undefined;
+  if (expected === undefined || !completedJobOwnsCityModelArtifact(jobs, jobId)) {
+    return undefined;
+  }
+  const stored = await sources.readFile(jobId, buildingId, expected, signal);
+  if (
+    stored === undefined ||
+    stored.size !== expected.size ||
+    stored.sha256 !== expected.sha256 ||
+    stored.indexSha256 !== expected.indexSha256
+  ) return undefined;
+  return Object.freeze({
+    jobId,
+    buildingId,
+    path: stored.file.path,
+    language: stored.file.language,
+    text: stored.file.text,
+    location: stored.file.location,
+  });
+}
+
+async function aiGuidanceMetrics(
+  artifacts: ImportArtifactStore,
+  jobId: string,
+  buildingId: string,
+  signal?: AbortSignal,
+): Promise<AiGuidanceMetrics | undefined> {
+  const artifact = await artifacts.readCityModel(jobId, signal);
+  if (artifact === undefined) return undefined;
+  signal?.throwIfAborted();
+  const text = new TextDecoder("utf-8", { fatal: true }).decode(
+    artifact.bytes,
+  );
+  const model = validateCityModel(JSON.parse(text) as unknown, {
+    checkpoint: () => signal?.throwIfAborted(),
+  });
+  const building = model.buildings.find((candidate) =>
+    candidate.id === buildingId
+  );
+  if (building === undefined) return undefined;
+  return Object.freeze({
+    sloc: building.metrics.sloc,
+    maximumComplexity: building.metrics.maximumComplexity,
+    decisionLoad: building.metrics.decisionLoad,
+  });
+}
+
+function aiGuidanceRequest(
+  value: unknown,
+): { readonly jobId: string; readonly buildingId: string } | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const object = value as Record<string, unknown>;
+  if (
+    Object.keys(object).length !== 3 ||
+    object["approval"] !== "once" ||
+    typeof object["jobId"] !== "string" ||
+    typeof object["buildingId"] !== "string"
+  ) return undefined;
+  return Object.freeze({
+    jobId: object["jobId"], buildingId: object["buildingId"],
+  });
+}
+
+function aiGuidanceHandler(
+  request: IncomingMessage,
+  response: ServerResponse,
+  jobs: PersistentJobQueue,
+  artifacts: ImportArtifactStore,
+  sources: SourceArtifactStore,
+  guidance: AiGuidanceAdapter,
+): void {
+  if (request.method !== "POST") { sendMethodNotAllowed(request, response, ["POST"]); return; }
+  if (!guidance.enabled) { sendJson(request, response, 409, { error: { code: "ai-guidance-disabled", message: "AI guidance is disabled by the administrator." } }); return; }
+  if (!validJsonContentType(request.headers["content-type"] ?? "")) { sendJson(request, response, 415, { error: { code: "unsupported-media-type", message: "AI guidance requests must be JSON." } }); return; }
+  void readBoundedRequestBody(request).then(async (body) => {
+    if (body.kind !== "ok" || response.destroyed) {
+      if (body.kind !== "disconnected" && !response.destroyed) sendJson(request, response, 400, { error: { code: "invalid-request", message: "AI guidance request could not be read." } });
+      return;
+    }
+    let parsed: ReturnType<typeof aiGuidanceRequest>;
+    try { parsed = aiGuidanceRequest(JSON.parse(body.text)); } catch { parsed = undefined; }
+    if (parsed === undefined) { sendJson(request, response, 400, { error: { code: "invalid-request", message: "AI guidance requires explicit one-time approval and a valid selection." } }); return; }
+    const controller = new AbortController();
+    response.once("close", () => controller.abort());
+    try {
+      const [source, metrics] = await Promise.all([
+        aiGuidanceSource(
+          jobs,
+          sources,
+          parsed.jobId,
+          parsed.buildingId,
+          controller.signal,
+        ),
+        aiGuidanceMetrics(
+          artifacts,
+          parsed.jobId,
+          parsed.buildingId,
+          controller.signal,
+        ),
+      ]);
+      if (source === undefined || metrics === undefined) {
+        if (!response.destroyed) sendJson(request, response, 404, { error: { code: "source-not-found", message: "Selected retained source was not found." } });
+        return;
+      }
+      const result = await guidance.request(source, metrics, controller.signal);
+      if (!response.destroyed) sendJson(request, response, 200, { result });
+    } catch {
+      if (!response.destroyed) sendJson(request, response, 502, { error: { code: "provider-unavailable", message: "AI suggestions are unavailable; deterministic analysis remains available." } });
+    }
+  }).catch(() => { if (!response.destroyed) sendJson(request, response, 500, { error: { code: "ai-guidance-failed", message: "AI guidance could not be prepared." } }); });
+}
+
 function apiHandler(
   request: IncomingMessage,
   response: ServerResponse,
@@ -1973,6 +2112,7 @@ function apiHandler(
   importPolicy: RemoteImportPolicy,
   credentialProfiles: CredentialProfileRegistry,
   importDependencies: RemoteImportDependencies | undefined,
+  aiGuidance: AiGuidanceAdapter,
 ): boolean {
   if (target.path === "/api/v1/health") {
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -1996,6 +2136,21 @@ function apiHandler(
     });
     return true;
   }
+  const aiPreview = AI_GUIDANCE_PREVIEW_PATH_PATTERN.exec(target.path);
+  if (aiPreview) {
+    if (request.method !== "GET" && request.method !== "HEAD") { sendMethodNotAllowed(request, response, ["GET", "HEAD"]); return true; }
+    if (!aiGuidance.enabled) { sendJson(request, response, 200, { preview: aiGuidance.disabledPreview() }); return true; }
+    void Promise.all([
+      aiGuidanceSource(jobs, sources, aiPreview[1]!, aiPreview[2]!),
+      aiGuidanceMetrics(artifacts, aiPreview[1]!, aiPreview[2]!),
+    ]).then(([source, metrics]) => {
+      if (response.destroyed) return;
+      if (source === undefined || metrics === undefined) { sendJson(request, response, 404, { error: { code: "source-not-found", message: "Selected retained source was not found." } }); return; }
+      sendJson(request, response, 200, { preview: aiGuidance.preview(source, metrics) });
+    }).catch(() => { if (!response.destroyed) sendJson(request, response, 500, { error: { code: "ai-preview-failed", message: "AI guidance preview could not be prepared." } }); });
+    return true;
+  }
+  if (target.path === AI_GUIDANCE_REQUEST_PATH) { aiGuidanceHandler(request, response, jobs, artifacts, sources, aiGuidance); return true; }
   if (target.path === "/api/v1/jobs") {
     if (request.method !== "GET" && request.method !== "HEAD") {
       sendMethodNotAllowed(request, response, ["GET", "HEAD"]);
@@ -2503,6 +2658,7 @@ function requestHandler(
   importPolicy: RemoteImportPolicy,
   credentialProfiles: CredentialProfileRegistry,
   importDependencies: RemoteImportDependencies | undefined,
+  aiGuidance: AiGuidanceAdapter,
   allowedHosts: ReadonlySet<string>,
   authorization: InboundAuthorization,
 ): (request: IncomingMessage, response: ServerResponse) => void {
@@ -2593,6 +2749,7 @@ function requestHandler(
           importPolicy,
           credentialProfiles,
           importDependencies,
+          aiGuidance,
         )
       ) {
         sendJson(request, response, 404, {
@@ -2663,6 +2820,7 @@ export async function startCodeCityServer(
   const responseTimeouts = artifactResponseTimeouts(
     options.artifactResponseTimeouts,
   );
+  const aiGuidance = new AiGuidanceAdapter(options.aiGuidance);
   const importPolicy = new RemoteImportPolicy(
     options.allowedGitOrigins,
     {
@@ -2785,6 +2943,7 @@ export async function startCodeCityServer(
         importPolicy,
         credentialProfiles,
         importDependencies,
+        aiGuidance,
         allowedHosts,
         authorization,
       ),

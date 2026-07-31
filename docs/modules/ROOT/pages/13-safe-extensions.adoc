@@ -4,15 +4,15 @@ Code City extensions are versioned JSON documents, not server-side plugins. They
 
 == Safety boundary
 
-An extension has no JavaScript, TypeScript, WASM, command, URL, package, filesystem, network, credential, or environment capability. Derived metrics use a small typed expression tree (`constant`, built-in metric, arithmetic, min/max, `log1p`, absolute value) with finite numeric ranges, depth/node limits, and an operation budget. Evaluation runs in a cancellable browser module worker. The worker receives an already loaded city model and configuration only; it has no server-side filesystem, credential, or network access.
+An extension has no JavaScript, TypeScript, WASM, command, URL, package, filesystem, network, credential, or environment capability. Derived metrics use a small typed expression tree (`constant`, built-in metric, arithmetic, min/max, `log1p`, absolute value) with finite numeric ranges, depth/node limits, and an operation budget. Evaluation runs in a cancellable, time-bounded browser module worker. Browser workers have platform network APIs, but extension data is never executed and the evaluator performs no I/O: it receives an already loaded city model and configuration and only interprets the bounded expression tree.
 
 Import rejects unknown properties, unsupported versions, incompatible city-model versions, duplicate IDs, prototype-pollution keys, invalid cross references, and unbounded data. Invalid imports leave the city unchanged and present a diagnostic. Scripting is deliberately deferred: the declarative model is sufficient for the currently supported metrics and visual hooks, and a sandboxed scripting proposal would require a separate security design.
 
 == Sharing, scope, and reproducibility
 
-`scope.kind: project` configurations are portable project settings. `scope.kind: administrator` requires a bounded `approvalId`, allowing a deployment to approve a shared policy without embedding identities or credentials. Configurations state their exact format version and city-model compatibility (`1.x`). Only compatible deployments evaluate them; otherwise they fail closed. Built-in extension presets use this same public format.
+`scope.kind: project` configurations are portable project settings. `scope.kind: administrator` requires a bounded `approvalId` that must also appear in the deployment's explicit approval allowlist; the stock viewer supplies no administrator approvals and therefore fails closed. Configurations state their exact format version and city-model compatibility (`1.x`). Only compatible deployments evaluate them; otherwise they fail closed. Built-in extension presets use this same public format.
 
-The viewer's Metrics tab provides a labelled JSON import/preview/export flow. Preview evaluates without mutating the city; export writes exactly the reviewed JSON. Results are deterministic: building/filter IDs are sorted and numeric results are clamped to finite bounds.
+The viewer's Metrics tab provides a labelled JSON import/preview/export flow. Preview evaluates the bounded configuration and can apply its declared overlay to the loaded city; invalid input leaves the city unchanged. Export remains disabled until preview succeeds and writes the canonical configuration that was actually reviewed. Results are deterministic: building/filter IDs are sorted and numeric results are clamped to finite bounds.
 
 == Migration
 

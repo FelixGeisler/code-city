@@ -72,6 +72,9 @@ export function cityModelFromFacts(
           metrics: source.metrics,
           metricMethod: source.metricMethod,
           units: source.units,
+          ...(source.sourceStructure === undefined
+            ? {}
+            : { sourceStructure: source.sourceStructure }),
           ...(source.sourceLocation === undefined
             ? {}
             : { sourceLocation: source.sourceLocation }),

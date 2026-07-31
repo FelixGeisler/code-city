@@ -1,10 +1,128 @@
-import type { CityModel, ExtensionEvaluation } from "../../../packages/core/src/index.js";
+import type {
+  CityModel,
+  ExtensionEvaluation,
+} from "../../../packages/core/src/index.js";
 import { isSafeExtensionWorkerResponse } from "./safe-extension-protocol.js";
-export interface SafeExtensionWorkerClientOptions { readonly createWorker?: () => Worker; }
+
+export interface SafeExtensionWorkerClientOptions {
+  readonly createWorker?: () => Worker;
+  readonly timeoutMilliseconds?: number;
+}
+
 export class SafeExtensionWorkerClient {
-  private readonly createWorker: () => Worker; private active: { readonly worker: Worker; readonly reject: (error: unknown) => void; readonly cleanup: () => void } | undefined; private nextJob = 0; private disposed = false;
-  public constructor(options: SafeExtensionWorkerClientOptions = {}) { this.createWorker = options.createWorker ?? (() => new Worker(new URL("./safe-extension-worker.ts", import.meta.url), { type: "module", name: "code-city-safe-extension" })); }
-  public evaluate(model: CityModel, configuration: unknown): Promise<ExtensionEvaluation> { if (this.disposed) return Promise.reject(new Error("The extension worker client has been disposed.")); this.cancel(); const jobId = ++this.nextJob, worker = this.createWorker(); return new Promise((resolve, reject) => { let settled = false; const cleanup = () => { worker.removeEventListener("message", onMessage); worker.removeEventListener("error", onError); worker.removeEventListener("messageerror", onError); }; const finish = (action: () => void) => { if (settled) return; settled = true; cleanup(); worker.terminate(); if (this.active?.worker === worker) this.active = undefined; action(); }; const onMessage = (event: MessageEvent<unknown>) => { if (!isSafeExtensionWorkerResponse(event.data)) return finish(() => reject(new Error("The extension worker returned an invalid response."))); const response = event.data; if (response.jobId !== jobId) return finish(() => reject(new Error("The extension worker returned an invalid response."))); if (response.type === "failure") return finish(() => reject(new Error(response.message))); finish(() => resolve(response.evaluation)); }; const onError = () => finish(() => reject(new Error("The extension worker stopped unexpectedly."))); worker.addEventListener("message", onMessage); worker.addEventListener("error", onError); worker.addEventListener("messageerror", onError); this.active = { worker, reject, cleanup }; try { worker.postMessage({ type: "evaluate", jobId, model, configuration }); } catch { finish(() => reject(new Error("The extension could not be sent to the worker."))); } }); }
-  public cancel(): void { const active = this.active; if (!active) return; this.active = undefined; active.cleanup(); active.worker.terminate(); active.reject(new DOMException("The extension evaluation was cancelled.", "AbortError")); }
-  public dispose(): void { this.disposed = true; this.cancel(); }
+  private readonly createWorker: () => Worker;
+  private readonly timeoutMilliseconds: number;
+  private active:
+    | {
+        readonly worker: Worker;
+        readonly reject: (error: unknown) => void;
+        readonly cleanup: () => void;
+      }
+    | undefined;
+  private nextJob = 0;
+  private disposed = false;
+
+  public constructor(options: SafeExtensionWorkerClientOptions = {}) {
+    this.createWorker =
+      options.createWorker ??
+      (() =>
+        new Worker(new URL("./safe-extension-worker.ts", import.meta.url), {
+          type: "module",
+          name: "code-city-safe-extension",
+        }));
+    this.timeoutMilliseconds = options.timeoutMilliseconds ?? 10_000;
+    if (
+      !Number.isFinite(this.timeoutMilliseconds) ||
+      this.timeoutMilliseconds <= 0
+    ) {
+      throw new RangeError("Extension worker timeout must be positive.");
+    }
+  }
+
+  public evaluate(
+    model: CityModel,
+    configuration: unknown,
+  ): Promise<ExtensionEvaluation> {
+    if (this.disposed) {
+      return Promise.reject(
+        new Error("The extension worker client has been disposed."),
+      );
+    }
+    this.cancel();
+    const jobId = ++this.nextJob;
+    const worker = this.createWorker();
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const cleanup = () => {
+        if (timeout !== undefined) clearTimeout(timeout);
+        worker.removeEventListener("message", onMessage);
+        worker.removeEventListener("error", onError);
+        worker.removeEventListener("messageerror", onError);
+      };
+      const finish = (action: () => void) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        worker.terminate();
+        if (this.active?.worker === worker) this.active = undefined;
+        action();
+      };
+      const onMessage = (event: MessageEvent<unknown>) => {
+        if (!isSafeExtensionWorkerResponse(event.data)) {
+          return finish(() =>
+            reject(new Error("The extension worker returned an invalid response.")),
+          );
+        }
+        const response = event.data;
+        if (response.jobId !== jobId) {
+          return finish(() =>
+            reject(new Error("The extension worker returned an invalid response.")),
+          );
+        }
+        if (response.type === "failure") {
+          return finish(() => reject(new Error(response.message)));
+        }
+        finish(() => resolve(response.evaluation));
+      };
+      const onError = () =>
+        finish(() =>
+          reject(new Error("The extension worker stopped unexpectedly.")),
+        );
+      worker.addEventListener("message", onMessage);
+      worker.addEventListener("error", onError);
+      worker.addEventListener("messageerror", onError);
+      this.active = { worker, reject, cleanup };
+      timeout = setTimeout(
+        () =>
+          finish(() =>
+            reject(new Error("The extension worker exceeded its time limit.")),
+          ),
+        this.timeoutMilliseconds,
+      );
+      try {
+        worker.postMessage({ type: "evaluate", jobId, model, configuration });
+      } catch {
+        finish(() =>
+          reject(new Error("The extension could not be sent to the worker.")),
+        );
+      }
+    });
+  }
+
+  public cancel(): void {
+    const active = this.active;
+    if (!active) return;
+    this.active = undefined;
+    active.cleanup();
+    active.worker.terminate();
+    active.reject(
+      new DOMException("The extension evaluation was cancelled.", "AbortError"),
+    );
+  }
+
+  public dispose(): void {
+    this.disposed = true;
+    this.cancel();
+  }
 }

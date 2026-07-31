@@ -8,6 +8,7 @@ import {
 } from "../../core/src/index.js";
 import type {
   ExecutableUnitMetric,
+  SourceStructure,
   SourceMetrics,
 } from "../../core/src/index.js";
 
@@ -50,6 +51,7 @@ export interface RoslynFileFact {
   readonly metricMethod: "csharp-roslyn-v1";
   readonly metrics: SourceMetrics;
   readonly units: readonly ExecutableUnitMetric[];
+  readonly sourceStructure: SourceStructure;
   readonly warnings: readonly string[];
 }
 
@@ -402,6 +404,40 @@ function parseUnit(value: unknown): ExecutableUnitMetric {
   };
 }
 
+function parseSourceStructure(value: unknown): SourceStructure {
+  const structure = objectValue(value);
+  if (structure.version !== "codecity.source-structure/1" || structure.availability !== "available" ||
+    !Array.isArray(structure.types) || !Array.isArray(structure.callables) ||
+    !Array.isArray(structure.relations) || !Array.isArray(structure.unavailable)) {
+    throw new RoslynHostError("The Roslyn helper returned invalid source structure.");
+  }
+  const range = (value_: unknown) => {
+    const item = objectValue(value_);
+    return {
+      startLine: integer(item.startLine, "source range start line", 1),
+      startColumn: integer(item.startColumn, "source range start column", 1),
+      endLine: integer(item.endLine, "source range end line", 1),
+      endColumn: integer(item.endColumn, "source range end column", 1),
+    };
+  };
+  const typeKinds = new Set(["class", "interface", "enum", "type", "struct", "record", "delegate"]);
+  const callableKinds = new Set(["function", "method", "constructor", "accessor", "lambda", "local-function"]);
+  const ids = new Set<string>();
+  const types = structure.types.map((value_) => {
+    const item = objectValue(value_); const id = safeText(item.id, CITY_MODEL_LIMITS.identifierCharacters);
+    if (!typeKinds.has(item.kind as string) || ids.has(id)) throw new RoslynHostError("The Roslyn helper returned invalid source structure."); ids.add(id);
+    return { id, name: safeText(item.name, CITY_MODEL_LIMITS.displayTextCharacters), kind: item.kind as SourceStructure["types"][number]["kind"], range: range(item.range), ...(item.parentTypeId === undefined ? {} : { parentTypeId: safeText(item.parentTypeId, CITY_MODEL_LIMITS.identifierCharacters) }) };
+  });
+  const callables = structure.callables.map((value_) => {
+    const item = objectValue(value_); const id = safeText(item.id, CITY_MODEL_LIMITS.identifierCharacters);
+    if (!callableKinds.has(item.kind as string) || ids.has(id)) throw new RoslynHostError("The Roslyn helper returned invalid source structure."); ids.add(id);
+    return { id, name: safeText(item.name, CITY_MODEL_LIMITS.displayTextCharacters), kind: item.kind as SourceStructure["callables"][number]["kind"], range: range(item.range), ...(item.enclosingTypeId === undefined ? {} : { enclosingTypeId: safeText(item.enclosingTypeId, CITY_MODEL_LIMITS.identifierCharacters) }), complexity: integer(item.complexity, "source callable complexity", 1) };
+  });
+  for (const type of types) if (type.parentTypeId !== undefined && !ids.has(type.parentTypeId)) throw new RoslynHostError("The Roslyn helper returned unresolved source structure reference.");
+  for (const callable of callables) if (callable.enclosingTypeId !== undefined && !ids.has(callable.enclosingTypeId)) throw new RoslynHostError("The Roslyn helper returned unresolved source structure reference.");
+  return { version: "codecity.source-structure/1", availability: "available", types, callables, relations: [], unavailable: structure.unavailable.map((item) => safeText(item, CITY_MODEL_LIMITS.warningCharacters)) };
+}
+
 function parseOutcome(value: unknown): RoslynFileOutcome {
   const item = objectValue(value);
   const id = safeText(item.id, ROSLYN_HOST_LIMITS.idCharacters);
@@ -423,6 +459,17 @@ function parseOutcome(value: unknown): RoslynFileOutcome {
     throw new RoslynHostError("The Roslyn helper returned too many units.");
   }
   const units = item.units.map(parseUnit);
+  // Protocol-1 helpers from already-installed analyzer bundles did not carry
+  // declaration facts. Preserve their metrics and surface the exact absence
+  // instead of fabricating types, methods, or relationships.
+  const sourceStructure = item.sourceStructure === undefined
+    ? {
+        version: "codecity.source-structure/1" as const,
+        availability: "unavailable" as const,
+        types: [], callables: [], relations: [],
+        unavailable: ["C# declaration detail is unavailable because this Roslyn helper predates codecity.source-structure/1."],
+      }
+    : parseSourceStructure(item.sourceStructure);
   const executableUnitCount = integer(
     item.executableUnitCount,
     "unit count",
@@ -456,6 +503,7 @@ function parseOutcome(value: unknown): RoslynFileOutcome {
       executableUnitCount,
     },
     units,
+    sourceStructure,
     warnings,
   };
 }

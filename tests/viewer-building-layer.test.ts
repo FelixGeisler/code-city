@@ -115,6 +115,69 @@ describe("viewer building layer", () => {
     ).toEqual(["a", "b", "c", "d"]);
   });
 
+  it("applies an exact cross-district visibility mask to rendering and picking", () => {
+    const layer = new ViewerBuildingLayer([
+      building("district-a-hidden", 2, "district-a"),
+      building("district-a-visible", 6, "district-a"),
+      building("district-b-visible", 10, "district-b"),
+      building("district-b-hidden", 14, "district-b"),
+    ]);
+    const batch = layer.batchObjects[0]!;
+
+    layer.setVisibleBuildingIds([
+      "district-b-visible",
+      "missing",
+      "district-a-visible",
+      "district-a-visible",
+    ]);
+
+    expect(layer.visibleBuildingCount).toBe(2);
+    expect([
+      layer.instanceBuildingId(batch, 0),
+      layer.instanceBuildingId(batch, 1),
+    ]).toEqual(["district-a-visible", "district-b-visible"]);
+    expect(
+      layer.pick({
+        origin: { x: 0, y: 2, z: 0 },
+        direction: { x: 1, y: 0, z: 0 },
+      }).hit?.id,
+    ).toBe("district-a-visible");
+
+    layer.setIsolatedDistrict("district-b");
+    expect(layer.visibleBuildingCount).toBe(1);
+    expect(layer.instanceBuildingId(batch, 0)).toBe(
+      "district-b-visible",
+    );
+
+    layer.setIsolatedDistrict(null);
+    layer.setVisibleBuildingIds(null);
+    expect(layer.visibleBuildingCount).toBe(4);
+    expect(
+      layer.pick({
+        origin: { x: 0, y: 2, z: 0 },
+        direction: { x: 1, y: 0, z: 0 },
+      }).hit?.id,
+    ).toBe("district-a-hidden");
+  });
+
+  it("unions the exact bounds of every known selected building", () => {
+    const layer = new ViewerBuildingLayer([
+      building("left", -10, "district-a"),
+      building("middle", 0, "district-a"),
+      building("right", 14, "district-b"),
+    ]);
+
+    const bounds = layer.selectionBounds([
+      "right",
+      "missing",
+      "left",
+      "right",
+    ]);
+    expect(bounds?.min.x).toBe(-11);
+    expect(bounds?.max.x).toBe(15);
+    expect(layer.selectionBounds(["missing"])).toBeUndefined();
+  });
+
   it("uses two reusable non-raycast highlights and hides scoped-out slots", () => {
     const layer = new ViewerBuildingLayer([
       building("a", 2, "district-a"),
@@ -140,6 +203,36 @@ describe("viewer building layer", () => {
     expect(hovered?.visible).toBe(false);
   });
 
+  it("renders a non-raycast group selection and respects isolation", () => {
+    const layer = new ViewerBuildingLayer([
+      building("a", 2, "district-a"),
+      building("b", 4, "district-b"),
+      building("c", 6, "district-a"),
+    ]);
+
+    layer.setGroupHighlight(["c", "missing", "a", "a"]);
+    expect(layer.groupHighlightObject.count).toBe(2);
+    expect(layer.groupHighlightObject.visible).toBe(true);
+    expect(layer.groupHighlightObject.material.color.getHexString()).toBe("63e6ff");
+    layer.setGroupHighlight(["a"], "#DC2626");
+    expect(layer.groupHighlightObject.material.color.getHexString()).toBe("dc2626");
+    layer.setGroupHighlight(["c", "a"]);
+    expect(layer.groupHighlightObject.material.color.getHexString()).toBe("63e6ff");
+    expect(
+      new THREE.Raycaster(
+        new THREE.Vector3(2, 20, 0),
+        new THREE.Vector3(0, -1, 0),
+      ).intersectObject(layer.groupHighlightObject),
+    ).toEqual([]);
+
+    layer.setIsolatedDistrict("district-b");
+    expect(layer.groupHighlightObject.visible).toBe(false);
+    layer.setIsolatedDistrict("district-a");
+    expect(layer.groupHighlightObject.count).toBe(2);
+    layer.setGroupHighlight([]);
+    expect(layer.groupHighlightObject.visible).toBe(false);
+  });
+
   it("supports bounded legacy meshes and rejects oversized fallback models", () => {
     const fallback = new ViewerBuildingLayer(
       [building("b", 4), building("a", 2)],
@@ -148,6 +241,23 @@ describe("viewer building layer", () => {
     expect(fallback.mode).toBe("legacy");
     expect(fallback.batchCount).toBe(0);
     expect(fallback.visibleBuildingCount).toBe(2);
+    fallback.setVisibleBuildingIds(["b"]);
+    expect(fallback.visibleBuildingCount).toBe(1);
+    expect(
+      fallback.pick({
+        origin: { x: 0, y: 2, z: 0 },
+        direction: { x: 1, y: 0, z: 0 },
+      }).hit?.id,
+    ).toBe("b");
+    fallback.setVisibleBuildingIds([]);
+    expect(fallback.visibleBuildingCount).toBe(0);
+    expect(
+      fallback.pick({
+        origin: { x: 0, y: 2, z: 0 },
+        direction: { x: 1, y: 0, z: 0 },
+      }).hit,
+    ).toBeNull();
+    fallback.setVisibleBuildingIds(null);
     fallback.setIsolatedDistrict("missing");
     expect(fallback.visibleBuildingCount).toBe(0);
 
@@ -204,6 +314,8 @@ describe("viewer building layer", () => {
     expect(materialDispose).toHaveBeenCalledTimes(1);
     expect(instanceDispose).toHaveBeenCalledTimes(1);
     expect(() => layer.setIsolatedDistrict(null)).toThrow(/disposed/u);
+    expect(() => layer.setVisibleBuildingIds(null)).toThrow(/disposed/u);
+    expect(() => layer.selectionBounds(["a"])).toThrow(/disposed/u);
   });
 
   it("validates duplicate identifiers, dimensions, styles, and benchmark counts", () => {

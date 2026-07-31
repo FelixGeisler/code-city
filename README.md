@@ -69,15 +69,49 @@ file metadata, repository bytes, or generated model. Closing the dialog or
 browser leaves an accepted server job running; **Cancel import** requests
 server cancellation.
 
+The **Explore** view includes a synchronized repository tree from repository
+through solution, module, district, and file. City or search selection expands
+only the selected path and scrolls it into view; selecting a district or file
+in the tree focuses the same 3D entity without leaving Explore. Isolation is
+reflected on mounted district and file rows. Arrow keys, Home, End, Enter, and
+Space provide complete keyboard navigation with ARIA tree semantics. A
+fixed-row virtual window keeps at most 160 rows in the DOM for large
+repositories, while
+expansion, active-row, and scroll state are retained independently for the
+eight most recently viewed projects.
+
 When a completed import has an evolution companion, the viewer verifies its
 declared size and SHA-256 digest in a dedicated worker and opens a repository
 timeline. First/previous/play/next/last controls, a direct scrubber, and four
 playback speeds seek deterministic commit frames without moving the camera.
 Added buildings rise in green, removals fade as red ghosts, renames are cyan,
-and moved or resized buildings are amber. Reduced-motion mode publishes each
-frame directly with no spatial interpolation. The **Building age** and
+and moved or resized buildings are amber. Dependency additions, removals,
+  metadata changes, and retargets identify their affected target-frame
+  endpoints and visible routes in pink and report exact relationship counts in
+  the timeline status and legend until the next seek. Enabled
+building-route directions and limits, plus cross-district visibility, kind
+filters, limits, and a still-valid selected route survive every seek; their
+content and geometry are rebuilt from the target frame. Reduced-motion mode
+publishes each frame directly with no spatial interpolation. The **Building age** and
 **Historical churn** visualization modes, commit metadata, and selected
 building history are available only while a verified timeline is loaded.
+
+The camera toolbar switches between perspective and orthographic projection
+while preserving the current orientation and visible scale. Isometric and
+top-down presets use stable orientations; selected-entity and whole-city
+presets frame deterministic model-derived bounds without letting labels,
+highlights, routes, or evolution ghosts change the result.
+
+**Export PNG** renders the scene directly at a resolution independent of the
+browser viewport. It supports isometric, top-down, selected-entity, and
+whole-city framing; perspective or orthographic projection; the scene or a
+transparent background; and optional selected/hover labels, visualization
+legend, and current evolution-frame metadata. The image contains no viewer UI
+chrome. Width and height are each bounded from 256 through 8192 pixels, subject
+to the active GPU's texture, renderbuffer, and viewport limits and a 512 MiB
+sample-aware estimated working-memory ceiling. A lost or unavailable WebGL
+context disables image export with an accessible explanation; startup failure
+shows a dedicated fallback, and context restoration re-enables the controls.
 
 Completed imports remain on the server until explicitly removed. An
 authenticated `GET /api/v1/jobs` enumerates all retained jobs; for each
@@ -471,6 +505,20 @@ exporter layout, and downloads direct 3MF/STL or a deterministic multi-plate ZIP
 Generation runs locally in a cancellable worker; no model or profile is uploaded.
 **Prepare calibration** downloads a profile-only test plate and measurement
 manifest.
+
+The **Queries** workspace provides explainable built-in rankings,
+dependency neighborhoods, change filters, and compound name, language, risk,
+metric, dependency, and design-smell filters. Results support additive and
+range selection from query, tree, scene, and visible search order. Focus uses
+the combined selection bounds; isolate applies an exact cross-district
+building mask; compare exposes a summary plus at most 100 accessible
+per-building metric rows; and the dependency overlay deduplicates and caps
+routes gathered from every selected endpoint. Overlay and JSON export remain
+available for the same selection.
+Project-scoped saved queries and selection sets retain their versioned model,
+metric, and rule capabilities. Evaluation runs in a disposable worker and
+returns at most 500 of the deterministically ranked matches while reporting
+the full total and any unavailable capability.
 
 C# is analyzed by the bundled, syntax-only Roslyn helper. TypeScript and
 JavaScript use the pinned compiler API. Neither analyzer restores, builds, runs

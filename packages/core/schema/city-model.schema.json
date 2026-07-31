@@ -980,6 +980,67 @@
       },
       "additionalProperties": false
     },
+    "sourceRange": {
+      "type": "object",
+      "required": ["startLine", "startColumn", "endLine", "endColumn"],
+      "properties": {
+        "startLine": { "type": "integer", "minimum": 1 },
+        "startColumn": { "type": "integer", "minimum": 1 },
+        "endLine": { "type": "integer", "minimum": 1 },
+        "endColumn": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "sourceTypeFact": {
+      "type": "object",
+      "required": ["id", "name", "kind", "range"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "kind": { "enum": ["class", "interface", "enum", "type", "struct", "record", "delegate"] },
+        "range": { "$ref": "#/$defs/sourceRange" },
+        "parentTypeId": { "$ref": "#/$defs/nonEmptyString" }
+      },
+      "additionalProperties": false
+    },
+    "sourceCallableFact": {
+      "type": "object",
+      "required": ["id", "name", "kind", "range"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "kind": { "enum": ["function", "method", "constructor", "accessor", "lambda", "local-function"] },
+        "range": { "$ref": "#/$defs/sourceRange" },
+        "enclosingTypeId": { "$ref": "#/$defs/nonEmptyString" },
+        "complexity": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "sourceRelationFact": {
+      "type": "object",
+      "required": ["id", "kind", "sourceId", "targetId", "provenance"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nonEmptyString" },
+        "kind": { "enum": ["extends", "implements", "calls", "type-reference"] },
+        "sourceId": { "$ref": "#/$defs/nonEmptyString" },
+        "targetId": { "$ref": "#/$defs/nonEmptyString" },
+        "provenance": { "const": "syntax" }
+      },
+      "additionalProperties": false
+    },
+    "sourceStructure": {
+      "type": "object",
+      "required": ["version", "availability", "types", "callables", "relations", "unavailable"],
+      "properties": {
+        "version": { "const": "codecity.source-structure/1" },
+        "availability": { "enum": ["available", "unavailable"] },
+        "types": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/sourceTypeFact" } },
+        "callables": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/sourceCallableFact" } },
+        "relations": { "type": "array", "maxItems": 50000, "items": { "$ref": "#/$defs/sourceRelationFact" } },
+        "unavailable": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/nonEmptyString" } }
+      },
+      "additionalProperties": false
+    },
     "sourceProvenance": {
       "type": "object",
       "required": [
@@ -1206,6 +1267,9 @@
         },
         "sourceLocation": {
           "$ref": "#/$defs/sourceLocation"
+        },
+        "sourceStructure": {
+          "$ref": "#/$defs/sourceStructure"
         },
         "risk": {
           "enum": [

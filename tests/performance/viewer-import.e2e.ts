@@ -17,9 +17,12 @@ import {
 } from "../../packages/analyzer/src/index.js";
 import type {
   CityBuilding,
+  CityDependency,
+  CityDistrict,
   CityModel,
 } from "../../packages/core/src/model.js";
 import {
+  deriveEvolutionChangeKinds,
   prepareEvolutionSerialization,
   replayValidatedEvolutionBundle,
   serializeEvolutionBundle,
@@ -319,6 +322,36 @@ function createLineageEvolutionFixture(
     path: "apps/viewer/src/future-lineage.ts",
     sourceLocation: { startLine: 1, endLine: 2 },
   };
+  const persistentBuildingDependencies: CityDependency[] =
+    Array.from({ length: 10 }, (_, index) => ({
+      id: `dependency:lineage-building:${index.toString().padStart(2, "0")}`,
+      repositoryId: replacedBuilding.repositoryId,
+      sourceId: "building:main",
+      targetId: "building:model",
+      resolution: "internal",
+      kind: "typescript-import",
+      weight: index + 1,
+    }));
+  const persistentExternalDependencies: CityDependency[] =
+    Array.from({ length: 20 }, (_, index) => ({
+      id: `dependency:lineage-package:${index.toString().padStart(2, "0")}`,
+      repositoryId: replacedBuilding.repositoryId,
+      sourceId: "module:viewer",
+      externalTarget: `lineage-package-${index.toString().padStart(2, "0")}`,
+      resolution: "external",
+      kind: "package-reference",
+      version: "1.0.0",
+      weight: index + 1,
+    }));
+  const persistentIncomingDependency: CityDependency = {
+    id: "dependency:lineage-incoming",
+    repositoryId: replacedBuilding.repositoryId,
+    sourceId: "building:validation",
+    targetId: "building:main",
+    resolution: "internal",
+    kind: "typescript-import",
+    weight: 1,
+  };
   const baselineModel: CityModel = {
     ...demo,
     identity: {
@@ -344,6 +377,12 @@ function createLineageEvolutionFixture(
         ? removedBuilding
         : building,
     ),
+    dependencies: [
+      ...demo.dependencies,
+      ...persistentBuildingDependencies,
+      ...persistentExternalDependencies,
+      persistentIncomingDependency,
+    ],
   };
   const template =
     createHistoryAnalysisResult(baselineModel).evolution.bundle;
@@ -359,8 +398,103 @@ function createLineageEvolutionFixture(
     analysisFingerprint:
       `sha256:${String(index + 1).repeat(64)}` as const,
   });
-  const frameOneChanges = emptyLineageChanges();
-  const turnoverChanges = emptyLineageChanges();
+  const dependency = (id: string): CityDependency => {
+    const value = baselineModel.dependencies.find(
+      (candidate) => candidate.id === id,
+    );
+    if (value === undefined) {
+      throw new Error(`Missing lineage dependency '${id}'.`);
+    }
+    return value;
+  };
+  const replacement = (
+    before: CityDependency,
+    entity: CityDependency,
+  ) => ({
+    id: before.id,
+    changeKinds: deriveEvolutionChangeKinds(
+      "dependencies",
+      before,
+      entity,
+    ),
+    entity,
+  });
+  const projectBefore = dependency(
+    "dependency:viewer-core-project",
+  );
+  const projectAfter: CityDependency = {
+    ...projectBefore,
+    weight: 30,
+  };
+  const frameOneChanges: EvolutionChanges = {
+    ...emptyLineageChanges(),
+    dependencies: {
+      added: [],
+      removed: [],
+      changed: [replacement(projectBefore, projectAfter)],
+    },
+  };
+  const removedDependency = dependency(
+    "dependency:core-typescript-package",
+  );
+  const changedBefore = dependency("dependency:main-model");
+  const changedAfter: CityDependency = {
+    ...changedBefore,
+    weight: 4,
+  };
+  const retargetedBefore = dependency(
+    "dependency:validation-model",
+  );
+  const retargetedAfter: CityDependency = {
+    ...retargetedBefore,
+    targetId: "building:schema",
+  };
+  const addedDependency: CityDependency = {
+    id: "dependency:lineage-added",
+    repositoryId: replacedBuilding.repositoryId,
+    sourceId: "module:viewer",
+    externalTarget: "lineage-added-package",
+    resolution: "external",
+    kind: "package-reference",
+    version: "2.0.0",
+    weight: 40,
+  };
+  const coreDistrictBefore = baselineModel.districts.find(
+    ({ id }) => id === "district:core",
+  );
+  if (coreDistrictBefore === undefined) {
+    throw new Error("The lineage E2E fixture requires the core district.");
+  }
+  const coreDistrictAfter: CityDistrict = {
+    ...coreDistrictBefore,
+    size: { ...coreDistrictBefore.size, x: 10 },
+  };
+  const turnoverChanges: EvolutionChanges = {
+    ...emptyLineageChanges(),
+    districts: {
+      added: [],
+      removed: [],
+      changed: [
+        {
+          id: coreDistrictBefore.id,
+          changeKinds: deriveEvolutionChangeKinds(
+            "districts",
+            coreDistrictBefore,
+            coreDistrictAfter,
+          ),
+          entity: coreDistrictAfter,
+        },
+      ],
+    },
+    dependencies: {
+      added: [addedDependency],
+      removed: [removedDependency.id],
+      changed: [
+        replacement(changedBefore, changedAfter),
+        replacement(retargetedBefore, retargetedAfter),
+      ],
+    },
+  };
   const frameThreeChanges = emptyLineageChanges();
   const bundle: EvolutionBundle = {
     ...template,
@@ -586,10 +720,13 @@ test.beforeAll(async () => {
   );
   retainedSourceLines.push(
     "export function retainedComplexity(value: number): number {",
-    "  if (value > 0 && value < 10) {",
-    "    return value;",
-    "  }",
-    "  return 0;",
+    "  let score = 0;",
+    ...Array.from(
+      { length: 14 },
+      (_, index) =>
+        `  if (value > ${index}) score += 1;`,
+    ),
+    "  return score;",
     "}",
     "",
   );
@@ -799,7 +936,10 @@ async function startAndWaitForImportedCity(page: Page): Promise<string> {
 
 async function openLineageEvolutionFixture(
   page: Page,
-  options: { readonly seekDelayMs?: number } = {},
+  options: {
+    readonly performanceDiagnostics?: boolean;
+    readonly seekDelayMs?: number;
+  } = {},
 ): Promise<LineageEvolutionFixture> {
   await openAuthenticatedWizard(page);
   await page
@@ -957,6 +1097,16 @@ async function openLineageEvolutionFixture(
     `4/4 \u00b7 ${LINEAGE_COMMITS[3]!.slice(0, 10)}`,
     { timeout: 30_000 },
   );
+  if (options.performanceDiagnostics === true) {
+    // The hardened production server rejects query-bearing request targets.
+    // Enable the viewer's read-only diagnostics after navigation; subsequent
+    // route renders publish the snapshot without another request.
+    await page.evaluate(() => {
+      const url = new URL(window.location.href);
+      url.searchParams.set("performance", "1");
+      window.history.replaceState(null, "", url);
+    });
+  }
   return fixture;
 }
 
@@ -975,6 +1125,86 @@ async function seekEvolutionFrame(
   await expect(page.locator("#evolution-status")).not.toHaveText(
     "Seeking\u2026",
   );
+}
+
+interface BrowserRoutePoint {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+interface BrowserRouteGeometry {
+  readonly consumer: {
+    readonly contact: BrowserRoutePoint;
+    readonly anchor: BrowserRoutePoint;
+  };
+  readonly provider: {
+    readonly contact: BrowserRoutePoint;
+    readonly anchor: BrowserRoutePoint;
+  };
+}
+
+async function districtRouteGeometry(
+  page: Page,
+  frameIndex: number,
+  routeId: string,
+): Promise<BrowserRouteGeometry> {
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ expectedFrame, expectedRoute }) => {
+          const diagnostics = window.__CODE_CITY_PERFORMANCE__;
+          if (
+            diagnostics?.evolutionFrameIndex !== expectedFrame
+          ) {
+            return null;
+          }
+          const route =
+            diagnostics.districtDependencyRoutes.routes.find(
+              ({ id }) => id === expectedRoute,
+            );
+          return route === undefined
+            ? null
+            : {
+                consumer: route.consumer,
+                provider: route.provider,
+              };
+        },
+        {
+          expectedFrame: frameIndex,
+          expectedRoute: routeId,
+        },
+      ),
+    )
+    .not.toBeNull();
+  const geometry = await page.evaluate(
+    ({ expectedFrame, expectedRoute }) => {
+      const diagnostics = window.__CODE_CITY_PERFORMANCE__;
+      if (
+        diagnostics?.evolutionFrameIndex !== expectedFrame
+      ) {
+        return null;
+      }
+      const route =
+        diagnostics.districtDependencyRoutes.routes.find(
+          ({ id }) => id === expectedRoute,
+        );
+      return route === undefined
+        ? null
+        : {
+            consumer: route.consumer,
+            provider: route.provider,
+          };
+    },
+    {
+      expectedFrame: frameIndex,
+      expectedRoute: routeId,
+    },
+  );
+  if (geometry === null) {
+    throw new Error("Expected district route diagnostics.");
+  }
+  return geometry;
 }
 
 async function selectLineageBuilding(
@@ -1441,16 +1671,26 @@ test("preserves filtered selected dependency routes across evolution seeks", asy
     page.locator("#district-route-detail-summary"),
   ).toHaveText(/1 edge.*1 reference/u);
   await expect(page.locator("#evolution-status")).toContainText(
-    "1 dependency route changed",
+    "1 dependency removed",
   );
   await expect(page.locator("#legend")).toContainText(
-    "Dependency routes changed",
+    "1 dependency route change (0 added, 1 removed, 0 changed, 0 retargeted)",
   );
 
   await page.locator("#evolution-next").click();
   await expect(page.locator("#evolution-commit")).toContainText("2/2");
   await expect(route).toHaveAttribute("aria-current", "true");
   await expect(route).toHaveAttribute("aria-label", /2 edges, 2 references/u);
+
+  await page.waitForTimeout(1_300);
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await page
+    .locator("#advanced-query-preset")
+    .selectOption("changed-recently");
+  await page.locator("#advanced-query-run").click();
+  await expect(page.locator("#advanced-query-status")).toHaveText(
+    "0 matches",
+  );
 });
 
 test("rejects an oversized legacy evolution artifact before downloading it", async ({
@@ -1727,6 +1967,232 @@ test("does not overwrite a newer clear or replacement selection during a seek", 
   );
 });
 
+test("preserves filtered route overlays and rebuilds their geometry across arbitrary seeks", async ({
+  page,
+}) => {
+  test.setTimeout(75_000);
+  const fixture = await openLineageEvolutionFixture(page, {
+    performanceDiagnostics: true,
+  });
+  const selectedBuilding = fixture.model.buildings.find(
+    ({ id }) => id === "building:main",
+  );
+  if (selectedBuilding === undefined) {
+    throw new Error("The route E2E fixture requires building:main.");
+  }
+  await selectLineageBuilding(page, selectedBuilding);
+  await page.locator("#dependency-section > summary").click();
+  await page.locator("#dependency-incoming-toggle").click();
+  await page.locator("#dependency-outgoing-toggle").click();
+  await expect(
+    page.locator("#dependency-incoming-toggle"),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.locator("#dependency-outgoing-toggle"),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.locator("#dependency-list .dependency-result-button"),
+  ).toHaveCount(9);
+  await page.locator("#dependency-show-more").click();
+  await expect(
+    page.locator("#dependency-list .dependency-result-button"),
+  ).toHaveCount(12);
+
+  await page.getByRole("tab", { name: "Routes" }).click();
+  await page.locator("#district-route-filter-typescript").click();
+  await expect(
+    page.locator("#district-route-filter-typescript"),
+  ).toHaveAttribute("aria-pressed", "false");
+  await page.locator("#district-routes-toggle").click();
+  await expect(page.locator("#district-routes-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(
+    page.locator("#district-routes-list .district-route-button"),
+  ).toHaveCount(8);
+  await page.locator("#district-routes-show-more").click();
+  await expect(
+    page.locator("#district-routes-list .district-route-button"),
+  ).toHaveCount(16);
+
+  const selectedRoute = page
+    .locator("#district-routes-list .district-route-button")
+    .filter({ hasText: "Viewer" })
+    .filter({ hasText: "Core" })
+    .filter({ hasText: "Project" });
+  await expect(selectedRoute).toHaveCount(1);
+  const routeId = await selectedRoute.getAttribute("data-bundle-id");
+  if (routeId === null) {
+    throw new Error("The selected district route requires a stable id.");
+  }
+  await selectedRoute.click();
+  await expect(selectedRoute).toHaveAttribute("aria-current", "true");
+  await expect(selectedRoute).toContainText("30 references");
+  const newestGeometry = await districtRouteGeometry(
+    page,
+    3,
+    routeId,
+  );
+
+  const assertPreservedRouteState = async (
+    frameIndex: number,
+  ): Promise<void> => {
+    await expect(
+      page.locator("#dependency-incoming-toggle"),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.locator("#dependency-outgoing-toggle"),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.locator("#dependency-list .dependency-result-button"),
+    ).toHaveCount(12);
+    await expect(
+      page.locator("#district-route-filter-typescript"),
+    ).toHaveAttribute("aria-pressed", "false");
+    await expect(
+      page.locator("#district-route-filter-project"),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.locator("#district-route-filter-package"),
+    ).toHaveAttribute("aria-pressed", "true");
+    await expect(page.locator("#district-routes-toggle")).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    await expect(
+      page.locator("#district-routes-list .district-route-button"),
+    ).toHaveCount(16);
+    await expect(selectedRoute).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+    await expect
+      .poll(() =>
+        page.evaluate((expectedFrame) => {
+          const diagnostics = window.__CODE_CITY_PERFORMANCE__;
+          return diagnostics?.evolutionFrameIndex === expectedFrame
+            ? [
+                diagnostics.dependencyRoutes.routeCount,
+                diagnostics.districtDependencyRoutes.routeCount,
+              ]
+            : null;
+        }, frameIndex),
+      )
+      .toEqual([12, 16]);
+  };
+
+  await seekEvolutionFrame(page, 1);
+  await expect(page.locator("#legend")).toContainText(
+    "4 dependency route changes",
+  );
+  await expect(page.locator("#evolution-status")).toContainText(
+    "1 dependency added",
+  );
+  await expect(page.locator("#evolution-status")).toContainText(
+    "1 dependency removed",
+  );
+  await expect(page.locator("#evolution-status")).toContainText(
+    "1 dependency changed",
+  );
+  await expect(page.locator("#evolution-status")).toContainText(
+    "1 dependency retargeted",
+  );
+  await assertPreservedRouteState(1);
+  const olderGeometry = await districtRouteGeometry(
+    page,
+    1,
+    routeId,
+  );
+  expect(olderGeometry).not.toEqual(newestGeometry);
+
+  await seekEvolutionFrame(page, 2);
+  await assertPreservedRouteState(2);
+  await expect(selectedRoute).toContainText("30 references");
+  expect(
+    await districtRouteGeometry(page, 2, routeId),
+  ).toEqual(newestGeometry);
+  const addedPackageRoute = page
+    .locator("#district-routes-list .district-route-button")
+    .filter({ hasText: "lineage-added-package" });
+  await expect(addedPackageRoute).toHaveCount(1);
+  const addedPackageRouteId =
+    await addedPackageRoute.getAttribute("data-bundle-id");
+  if (addedPackageRouteId === null) {
+    throw new Error(
+      "The changed package route requires a stable bundle id.",
+    );
+  }
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ expectedFrame, expectedRoute }) => {
+          const diagnostics = window.__CODE_CITY_PERFORMANCE__;
+          if (
+            diagnostics?.evolutionFrameIndex !== expectedFrame
+          ) {
+            return null;
+          }
+          const route =
+            diagnostics.districtDependencyRoutes.routes.find(
+              ({ id }) => id === expectedRoute,
+            );
+          return route === undefined
+            ? null
+            : {
+                color: route.color,
+                emphasized: route.emphasized,
+              };
+        },
+        {
+          expectedFrame: 2,
+          expectedRoute: addedPackageRouteId,
+        },
+      ),
+    )
+    .toEqual({
+      color: "#f472b6",
+      emphasized: true,
+    });
+
+  await seekEvolutionFrame(page, 0);
+  await assertPreservedRouteState(0);
+  await expect(selectedRoute).toContainText("1 reference");
+  await expect(page.locator("#district-routes-status")).toContainText(
+    /\d+ not shown/u,
+  );
+  expect(
+    await districtRouteGeometry(page, 0, routeId),
+  ).toEqual(olderGeometry);
+
+  await seekEvolutionFrame(page, 2);
+  await page.getByRole("tab", { name: "Routes" }).click();
+  const transientRoute = page
+    .locator("#district-routes-list .district-route-button")
+    .filter({ hasText: "lineage-added-package" });
+  await expect(transientRoute).toHaveCount(1);
+  await transientRoute.click();
+  await expect(transientRoute).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+  await seekEvolutionFrame(page, 1);
+  await expect(transientRoute).toHaveCount(0);
+  await expect(
+    page.locator(
+      "#district-routes-list .district-route-button[aria-current='true']",
+    ),
+  ).toHaveCount(0);
+  await expect(page.locator("#district-route-details")).toBeHidden();
+  await expect(page.locator("#district-routes-toggle")).toHaveAttribute(
+    "aria-expanded",
+    "true",
+  );
+  await expect(
+    page.locator("#district-routes-list .district-route-button"),
+  ).toHaveCount(16);
+});
+
 test("imports a browser directory and repository ZIP with identity and analysis options", async ({
   page,
 }) => {
@@ -1801,6 +2267,60 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   page,
 }) => {
   const sourceRequests: string[] = [];
+  const guidanceRequests: unknown[] = [];
+  await page.route("**/api/v1/ai/preview/**", async (route) => {
+    const buildingId = decodeURIComponent(
+      new URL(route.request().url()).pathname.split("/").at(-1) ?? "",
+    );
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        preview: {
+          enabled: true,
+          provider: { id: "review", label: "Review service" },
+          source: {
+            buildingId,
+            path: "src/retained-large.ts",
+            language: "typescript",
+            text: "export function retainedComplexity() { return 1; }\n",
+            location: { startLine: 1, endLine: 1 },
+          },
+          metrics: {
+            sloc: 91,
+            maximumComplexity: 17,
+            decisionLoad: 24,
+          },
+          limits: {
+            timeoutMs: 20_000,
+            maximumSourceBytes: 128 * 1024,
+          },
+          privacy: "no-prompt-storage",
+        },
+      }),
+    });
+  });
+  await page.route("**/api/v1/ai/requests", async (route) => {
+    guidanceRequests.push(route.request().postDataJSON());
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        result: {
+          provider: { id: "review", label: "Review service" },
+          suggestions: [
+            {
+              title: "Extract branch",
+              detail: "This suggestion relates to maximum complexity 17.",
+              citation: {
+                path: "src/retained-large.ts",
+                startLine: 1,
+                endLine: 1,
+              },
+            },
+          ],
+        },
+      }),
+    });
+  });
   page.on("request", (request) => {
     const url = new URL(request.url());
     if (
@@ -1873,6 +2393,45 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   await expect
     .poll(() => page.locator(".source-line").count())
     .toBeLessThanOrEqual(500);
+  const structureDetails = page.locator(
+    "#building-source-structure-details",
+  );
+  await expect(structureDetails).toBeVisible();
+  await structureDetails.locator("summary").click();
+  const structureJump = structureDetails.getByRole("button", {
+    name: /Function retainedComplexity/u,
+  });
+  await expect(structureJump).toBeVisible();
+  await structureJump.click();
+  await expect(page.locator(".source-line-highlight").first()).toContainText(
+    "export function retainedComplexity",
+  );
+  await structureDetails.getByRole("button", {
+    name: "Return to city",
+  }).click();
+  await expect(structureDetails).not.toHaveAttribute("open", "");
+  await expect(page.locator("#building-source-details")).not.toHaveAttribute(
+    "open",
+    "",
+  );
+  await page.locator("#building-ai-guidance-details summary").click();
+  await expect(page.locator("#building-ai-guidance-preview")).toContainText(
+    '"maximumComplexity": 17',
+  );
+  expect(guidanceRequests).toEqual([]);
+  await page.getByRole("button", {
+    name: "Send this exact preview once",
+  }).click();
+  await expect(page.locator("#building-ai-guidance-suggestions")).toContainText(
+    "Extract branch",
+  );
+  expect(guidanceRequests).toEqual([
+    {
+      approval: "once",
+      jobId,
+      buildingId: retainedBuilding!.id,
+    },
+  ]);
   await expect.poll(() => sourceRequests).toEqual([
     `/api/v1/artifacts/${jobId}/sources/${retainedBuilding!.id}`,
   ]);
@@ -1894,6 +2453,39 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   ]);
   expect(sourceRequests).not.toContain(
     `/api/v1/artifacts/${jobId}/sources/${siblingBuilding!.id}`,
+  );
+
+  const retainedUnit = retainedBuilding!.units?.find(
+    ({ name }) => name === "retainedComplexity",
+  );
+  expect(retainedUnit).toBeDefined();
+  expect(retainedUnit!.complexity).toBeGreaterThanOrEqual(15);
+  expect(retainedUnit!.endLine).toBeDefined();
+
+  await page.getByRole("tab", { name: "Metrics" }).click();
+  const smellPanel = page.locator("#design-smell-panel");
+  await expect(smellPanel).toHaveAttribute("aria-busy", "false", {
+    timeout: 30_000,
+  });
+  await smellPanel
+    .getByRole("button", {
+      name: /High-complexity method.*retained-large\.ts/u,
+    })
+    .click();
+  await expect(
+    page.getByRole("tab", { name: "Details" }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#selection-name")).toHaveText(
+    "retained-large.ts",
+  );
+  const smellHighlights = page.locator(".source-line-highlight");
+  await expect(smellHighlights.first()).toHaveAttribute(
+    "data-line",
+    String(retainedUnit!.line),
+  );
+  await expect(smellHighlights.last()).toHaveAttribute(
+    "data-line",
+    String(retainedUnit!.endLine),
   );
 
   const sourcePath =
@@ -2197,10 +2789,14 @@ test("cancels an accepted remote import and removes its private staging data", a
   await expect.poll(
     () => lastRemoteInvocation(CANCELLATION_GIT_URL),
   ).toBeDefined();
+  await expect.poll(() =>
+    page.evaluate(() =>
+      localStorage.getItem("code-city.last-import-job.v1"),
+    ),
+  ).not.toBeNull();
   const jobId = await page.evaluate(() =>
     localStorage.getItem("code-city.last-import-job.v1"),
   );
-  expect(jobId).not.toBeNull();
   await expect(
     page.locator("#project-import-repository-url"),
   ).toHaveValue("");

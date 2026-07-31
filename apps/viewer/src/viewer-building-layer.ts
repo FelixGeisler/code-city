@@ -171,8 +171,14 @@ export class ViewerBuildingLayer {
     hovered: null,
     selected: null,
   };
+  private readonly groupHighlight: THREE.InstancedMesh<
+    THREE.BoxGeometry,
+    THREE.MeshBasicMaterial
+  >;
+  private groupHighlightedIds: readonly string[] = Object.freeze([]);
 
   private isolatedDistrictId: string | null = null;
+  private visibleBuildingIds: ReadonlySet<string> | null = null;
   private disposed = false;
 
   public constructor(
@@ -218,7 +224,12 @@ export class ViewerBuildingLayer {
       hovered: this.createHighlight("#ffffff", 0.18),
       selected: this.createHighlight("#ffffff", 0.34),
     };
-    this.object.add(this.highlights.hovered, this.highlights.selected);
+    this.groupHighlight = this.createGroupHighlight();
+    this.object.add(
+      this.groupHighlight,
+      this.highlights.hovered,
+      this.highlights.selected,
+    );
   }
 
   public get size(): number {
@@ -254,6 +265,13 @@ export class ViewerBuildingLayer {
     ]);
   }
 
+  public get groupHighlightObject(): THREE.InstancedMesh<
+    THREE.BoxGeometry,
+    THREE.MeshBasicMaterial
+  > {
+    return this.groupHighlight;
+  }
+
   public instanceBuildingId(
     mesh: THREE.InstancedMesh,
     instanceId: number,
@@ -272,6 +290,19 @@ export class ViewerBuildingLayer {
     return this.definitionsById.get(id)?.bounds.clone();
   }
 
+  public selectionBounds(ids: readonly string[]): THREE.Box3 | undefined {
+    this.assertActive();
+    const bounds = new THREE.Box3();
+    let found = false;
+    for (const id of new Set(ids)) {
+      const building = this.definitionsById.get(id);
+      if (building === undefined) continue;
+      bounds.union(building.bounds);
+      found = true;
+    }
+    return found ? bounds : undefined;
+  }
+
   public districtBounds(id: string): THREE.Box3 | undefined {
     return this.districtBoundsById.get(id)?.clone();
   }
@@ -280,7 +311,15 @@ export class ViewerBuildingLayer {
     ray: BuildingBvhRay,
     options: BuildingBvhPickOptions = {},
   ): BuildingBvhPickResult {
-    return this.bvh.pick(ray, options);
+    return this.bvh.pick(ray, {
+      ...options,
+      ...(this.isolatedDistrictId === null
+        ? {}
+        : { districtId: this.isolatedDistrictId }),
+      ...(this.visibleBuildingIds === null
+        ? {}
+        : { buildingIds: this.visibleBuildingIds }),
+    });
   }
 
   public benchmarkPicks(count = 50): ViewerBuildingPickBenchmark {
@@ -337,16 +376,35 @@ export class ViewerBuildingLayer {
   public setIsolatedDistrict(id: string | null): void {
     this.assertActive();
     this.isolatedDistrictId = id;
+    this.refreshVisibility();
+  }
+
+  public setVisibleBuildingIds(ids: readonly string[] | null): void {
+    this.assertActive();
+    if (ids === null) {
+      this.visibleBuildingIds = null;
+    } else {
+      const visible = new Set<string>();
+      for (const id of ids) {
+        if (this.definitionsById.has(id)) visible.add(id);
+      }
+      this.visibleBuildingIds = visible;
+    }
+    this.refreshVisibility();
+  }
+
+  private refreshVisibility(): void {
     if (this.mode === "instanced") {
       this.populateBatches();
     } else {
       for (const [buildingId, mesh] of this.legacyMeshes) {
         const building = this.definitionsById.get(buildingId)!;
-        mesh.visible = id === null || building.districtId === id;
+        mesh.visible = this.isBuildingVisible(building);
       }
     }
     this.refreshHighlight("hovered");
     this.refreshHighlight("selected");
+    this.refreshGroupHighlight();
   }
 
   public setHighlight(
@@ -356,6 +414,23 @@ export class ViewerBuildingLayer {
     this.assertActive();
     this.highlightedIds[slot] = id;
     this.refreshHighlight(slot);
+  }
+
+  public setGroupHighlight(
+    ids: readonly string[],
+    color = "#63e6ff",
+  ): void {
+    this.assertActive();
+    this.groupHighlight.material.color.set(color);
+    const seen = new Set<string>();
+    const valid: string[] = [];
+    for (const id of ids) {
+      if (seen.has(id) || !this.definitionsById.has(id)) continue;
+      seen.add(id);
+      valid.push(id);
+    }
+    this.groupHighlightedIds = Object.freeze(valid);
+    this.refreshGroupHighlight();
   }
 
   public setColor(id: string, color: string): boolean {
@@ -462,6 +537,7 @@ export class ViewerBuildingLayer {
     }
     this.refreshHighlight("hovered");
     this.refreshHighlight("selected");
+    this.refreshGroupHighlight();
   }
 
   public dispose(): void {
@@ -477,6 +553,8 @@ export class ViewerBuildingLayer {
     }
     this.highlights.hovered.material.dispose();
     this.highlights.selected.material.dispose();
+    this.groupHighlight.dispose();
+    this.groupHighlight.material.dispose();
     this.geometry.dispose();
     this.batches.length = 0;
     this.batchByMesh.clear();
@@ -521,12 +599,7 @@ export class ViewerBuildingLayer {
       const visibleIds: string[] = [];
       let index = 0;
       for (const building of batch.buildings) {
-        if (
-          this.isolatedDistrictId !== null &&
-          building.districtId !== this.isolatedDistrictId
-        ) {
-          continue;
-        }
+        if (!this.isBuildingVisible(building)) continue;
         batch.mesh.setMatrixAt(index, building.matrix);
         batch.mesh.setColorAt(index, new THREE.Color(building.colorValue));
         visibleIds.push(building.id);
@@ -584,14 +657,60 @@ export class ViewerBuildingLayer {
     return mesh;
   }
 
+  private createGroupHighlight(): THREE.InstancedMesh<
+    THREE.BoxGeometry,
+    THREE.MeshBasicMaterial
+  > {
+    const material = new THREE.MeshBasicMaterial({
+      color: "#63e6ff",
+      transparent: true,
+      opacity: 0.28,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const mesh = new THREE.InstancedMesh(
+      this.geometry,
+      material,
+      Math.max(1, this.definitions.length),
+    );
+    mesh.name = "code-city:building-group-highlight";
+    mesh.count = 0;
+    mesh.visible = false;
+    mesh.renderOrder = 2;
+    mesh.raycast = () => undefined;
+    return mesh;
+  }
+
+  private refreshGroupHighlight(): void {
+    let index = 0;
+    for (const id of this.groupHighlightedIds) {
+      const building = this.definitionsById.get(id);
+      if (
+        building === undefined ||
+        !this.isBuildingVisible(building)
+      ) {
+        continue;
+      }
+      this.groupHighlight.setMatrixAt(
+        index,
+        building.matrix.clone().multiply(HIGHLIGHT_SCALE),
+      );
+      index += 1;
+    }
+    this.groupHighlight.count = index;
+    this.groupHighlight.visible = index > 0;
+    this.groupHighlight.instanceMatrix.needsUpdate = true;
+    this.groupHighlight.computeBoundingBox();
+    this.groupHighlight.computeBoundingSphere();
+  }
+
   private refreshHighlight(slot: ViewerBuildingHighlightSlot): void {
     const mesh = this.highlights[slot];
     const id = this.highlightedIds[slot];
     const building = id === null ? undefined : this.definitionsById.get(id);
     if (
       building === undefined ||
-      (this.isolatedDistrictId !== null &&
-        building.districtId !== this.isolatedDistrictId)
+      !this.isBuildingVisible(building)
     ) {
       mesh.visible = false;
       return;
@@ -606,6 +725,15 @@ export class ViewerBuildingLayer {
     if (this.disposed) {
       throw new Error("The viewer building layer has been disposed.");
     }
+  }
+
+  private isBuildingVisible(building: CanonicalBuilding): boolean {
+    return (
+      (this.isolatedDistrictId === null ||
+        building.districtId === this.isolatedDistrictId) &&
+      (this.visibleBuildingIds === null ||
+        this.visibleBuildingIds.has(building.id))
+    );
   }
 }
 

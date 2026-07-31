@@ -1144,6 +1144,19 @@ export class ViewerImportApiClient {
     return response.value;
   }
 
+  /** The request names a retained unit only; source text is never posted by the browser. */
+  public async aiGuidancePreview(jobId: string, buildingId: string, signal?: AbortSignal): Promise<unknown> {
+    return (await this.jsonRequest(`/api/v1/ai/preview/${jobId}/${buildingId}`, { method: "GET" }, signal, this.requestDeadlineMs, SOURCE_RESPONSE_MAX_BYTES)).value;
+  }
+
+  public async aiGuidanceRequest(
+    jobId: string,
+    buildingId: string,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return (await this.jsonRequest("/api/v1/ai/requests", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ approval: "once", jobId, buildingId }) }, signal, this.requestDeadlineMs, API_RESPONSE_MAX_BYTES)).value;
+  }
+
   public async evolutionArtifact(
     jobId: string,
     artifact: NonNullable<ImportJobResult["evolution"]>,

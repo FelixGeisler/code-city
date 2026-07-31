@@ -55,6 +55,9 @@
             hidden
           />
           <button id="demo-button" class="button" type="button">Demo</button>
+          <button id="image-export-open" class="button" type="button">
+            Export image
+          </button>
           <button id="print-export-open" class="button" type="button">
             Export print file
           </button>
@@ -63,6 +66,28 @@
 
       <main id="viewport">
         <div id="scene" aria-label="Interactive 3D code city"></div>
+
+        <div
+          id="camera-toolbar"
+          class="camera-toolbar"
+          aria-label="Camera controls"
+        >
+          <label>
+            <span>Projection</span>
+            <select id="camera-projection">
+              <option value="perspective">Perspective</option>
+              <option value="orthographic">Orthographic</option>
+            </select>
+          </label>
+          <div role="group" aria-label="Camera presets">
+            <button id="camera-isometric" type="button">Isometric</button>
+            <button id="camera-top-down" type="button">Top-down</button>
+            <button id="camera-selected" type="button" disabled>
+              Selected
+            </button>
+            <button id="camera-whole-city" type="button">Whole city</button>
+          </div>
+        </div>
 
         <div class="scene-meta">
           <img id="model-logo" alt="" hidden />
@@ -187,6 +212,18 @@
               tabindex="-1"
             >
               Routes
+            </button>
+            <button
+              id="viewer-tab-queries"
+              class="viewer-workspace-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="viewer-view-queries"
+              data-workspace-view="queries"
+              tabindex="-1"
+            >
+              Queries
             </button>
             <button
               id="viewer-tab-details"
@@ -372,6 +409,337 @@
             </div>
           </div>
         </section>
+        <section
+          id="repository-tree-panel"
+          class="panel repository-tree-panel"
+          aria-labelledby="repository-tree-title"
+        >
+          <div class="panel-heading">
+            <h2 id="repository-tree-title">Repository tree</h2>
+            <span
+              id="repository-tree-status"
+              class="repository-tree-status"
+            ></span>
+          </div>
+          <div
+            id="repository-tree"
+            class="repository-tree"
+            role="tree"
+            tabindex="0"
+            aria-describedby="repository-tree-help repository-tree-status"
+          ></div>
+          <p id="repository-tree-help" class="repository-tree-help">
+            Arrow keys navigate or expand. Home and End jump to the
+            first or last visible row. Enter or Space activates a row.
+          </p>
+        </section>
+            </div>
+
+            <div
+              id="viewer-view-queries"
+              class="viewer-workspace-view"
+              role="tabpanel"
+              aria-labelledby="viewer-tab-queries"
+              data-workspace-panel="queries"
+              hidden
+            >
+              <section
+                id="advanced-query-panel"
+                class="panel advanced-query-panel"
+                aria-labelledby="advanced-query-title"
+              >
+                <div class="panel-heading">
+                  <div>
+                    <h2 id="advanced-query-title">Query city</h2>
+                    <p>
+                      Run bounded structural queries and build a reusable
+                      building selection.
+                    </p>
+                  </div>
+                </div>
+                <div class="advanced-query-body">
+                  <label for="advanced-query-preset">
+                    <span>Common query</span>
+                    <select id="advanced-query-preset">
+                      <option value="highest-complexity">
+                        Highest complexity
+                      </option>
+                      <option value="dependency-hubs">
+                        Dependency hubs
+                      </option>
+                      <option value="incoming-neighborhood">
+                        Incoming neighborhood
+                      </option>
+                      <option value="outgoing-neighborhood">
+                        Outgoing neighborhood
+                      </option>
+                      <option value="changed-recently">
+                        Changed recently
+                      </option>
+                      <option value="selected-district">
+                        Selected district
+                      </option>
+                      <option value="custom">Custom filters</option>
+                    </select>
+                  </label>
+                  <fieldset id="advanced-query-filters">
+                    <legend>Custom filters</legend>
+                    <label for="advanced-query-text">
+                      <span>Name or path contains</span>
+                      <input
+                        id="advanced-query-text"
+                        type="search"
+                        maxlength="128"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <label for="advanced-query-language">
+                      <span>Language</span>
+                      <select id="advanced-query-language">
+                        <option value="">Any language</option>
+                        <option value="typescript">TypeScript</option>
+                        <option value="javascript">JavaScript</option>
+                        <option value="csharp">C#</option>
+                      </select>
+                    </label>
+                    <label for="advanced-query-risk">
+                      <span>Risk</span>
+                      <select id="advanced-query-risk">
+                        <option value="">Any risk</option>
+                        <option value="low">Low</option>
+                        <option value="moderate">Moderate</option>
+                        <option value="high">High</option>
+                        <option value="very-high">Very high</option>
+                      </select>
+                    </label>
+                    <label for="advanced-query-complexity">
+                      <span>Minimum complexity</span>
+                      <input
+                        id="advanced-query-complexity"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value="0"
+                      />
+                    </label>
+                    <label for="advanced-query-dependencies">
+                      <span>Minimum dependencies</span>
+                      <input
+                        id="advanced-query-dependencies"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value="0"
+                      />
+                    </label>
+                    <label for="advanced-query-smell">
+                      <span>Design-smell rule ID</span>
+                      <input
+                        id="advanced-query-smell"
+                        type="text"
+                        maxlength="128"
+                        autocomplete="off"
+                        placeholder="Optional"
+                      />
+                    </label>
+                    <label class="advanced-query-check">
+                      <input id="advanced-query-changed" type="checkbox" />
+                      <span>Changed in the active timeline step</span>
+                    </label>
+                  </fieldset>
+                  <div class="advanced-query-run-row">
+                    <label for="advanced-query-limit">
+                      <span>Maximum results</span>
+                      <select id="advanced-query-limit">
+                        <option value="25">25</option>
+                        <option value="50" selected>50</option>
+                        <option value="100">100</option>
+                        <option value="250">250</option>
+                        <option value="500">500</option>
+                      </select>
+                    </label>
+                    <button
+                      id="advanced-query-run"
+                      class="button button-primary"
+                      type="button"
+                    >
+                      Run query
+                    </button>
+                  </div>
+                  <p
+                    id="advanced-query-status"
+                    class="search-status"
+                    role="status"
+                    aria-live="polite"
+                    aria-atomic="true"
+                  >
+                    Choose a query to inspect this city.
+                  </p>
+                  <div
+                    class="advanced-query-result-actions"
+                    role="group"
+                    aria-label="Query selection"
+                  >
+                    <button
+                      id="advanced-query-select-all"
+                      class="button button-compact"
+                      type="button"
+                      disabled
+                    >
+                      Select results
+                    </button>
+                    <button
+                      id="advanced-query-clear"
+                      class="button button-compact"
+                      type="button"
+                      disabled
+                    >
+                      Clear selection
+                    </button>
+                    <button
+                      id="advanced-query-overlay"
+                      class="button button-compact"
+                      type="button"
+                      aria-pressed="true"
+                      disabled
+                    >
+                      Overlay on
+                    </button>
+                  </div>
+                  <ul
+                    id="advanced-query-results"
+                    class="advanced-query-results"
+                    role="listbox"
+                    aria-label="Advanced query results"
+                    aria-multiselectable="true"
+                  ></ul>
+                  <section
+                    id="advanced-query-comparison"
+                    class="advanced-query-comparison"
+                    aria-labelledby="advanced-query-comparison-title"
+                    hidden
+                  >
+                    <h3 id="advanced-query-comparison-title">
+                      Selection comparison
+                    </h3>
+                    <p
+                      id="advanced-query-comparison-summary"
+                      aria-live="polite"
+                    ></p>
+                    <div
+                      class="advanced-query-comparison-table-region"
+                      role="region"
+                      aria-labelledby="advanced-query-comparison-title"
+                      tabindex="0"
+                    >
+                      <table
+                        id="advanced-query-comparison-table"
+                        class="advanced-query-comparison-table"
+                      >
+                        <caption>
+                          Per-building source metrics for the selected
+                          buildings
+                        </caption>
+                        <thead>
+                          <tr>
+                            <th scope="col">Building</th>
+                            <th scope="col">Language</th>
+                            <th scope="col">Risk</th>
+                            <th scope="col">SLOC</th>
+                            <th scope="col">Decision load</th>
+                            <th scope="col">Maximum CC</th>
+                            <th scope="col">Units</th>
+                          </tr>
+                        </thead>
+                        <tbody id="advanced-query-comparison-body"></tbody>
+                      </table>
+                    </div>
+                  </section>
+                  <div
+                    class="advanced-query-selection-actions"
+                    role="group"
+                    aria-label="Actions for selected buildings"
+                  >
+                    <button
+                      id="advanced-query-focus"
+                      class="button button-compact"
+                      type="button"
+                      disabled
+                    >
+                      Focus selection
+                    </button>
+                    <button
+                      id="advanced-query-isolate"
+                      class="button button-compact"
+                      type="button"
+                      disabled
+                    >
+                      Isolate selection
+                    </button>
+                    <button
+                      id="advanced-query-compare"
+                      class="button button-compact"
+                      type="button"
+                      disabled
+                    >
+                      Compare
+                    </button>
+                    <button
+                      id="advanced-query-export"
+                      class="button button-compact"
+                      type="button"
+                      disabled
+                    >
+                      Export JSON
+                    </button>
+                  </div>
+                  <section
+                    class="advanced-query-saved"
+                    aria-labelledby="advanced-query-saved-title"
+                  >
+                    <h3 id="advanced-query-saved-title">Saved for project</h3>
+                    <label for="advanced-query-save-name">
+                      <span>Name</span>
+                      <input
+                        id="advanced-query-save-name"
+                        type="text"
+                        maxlength="64"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <div class="advanced-query-saved-actions">
+                      <button
+                        id="advanced-query-save"
+                        class="button button-compact"
+                        type="button"
+                        disabled
+                      >
+                        Save query
+                      </button>
+                      <button
+                        id="advanced-selection-save"
+                        class="button button-compact"
+                        type="button"
+                        disabled
+                      >
+                        Save selection
+                      </button>
+                    </div>
+                    <label for="advanced-query-saved">
+                      <span>Saved query</span>
+                      <select id="advanced-query-saved">
+                        <option value="">None saved</option>
+                      </select>
+                    </label>
+                    <label for="advanced-selection-saved">
+                      <span>Saved selection</span>
+                      <select id="advanced-selection-saved">
+                        <option value="">None saved</option>
+                      </select>
+                    </label>
+                  </section>
+                </div>
+              </section>
             </div>
 
             <div
@@ -730,6 +1098,14 @@
                 </div>
               </details>
 
+              <details id="building-ai-guidance-details" class="source-section">
+                <summary><span>AI guidance (opt-in)</span><span id="building-ai-guidance-summary" class="details-summary-meta">Not requested</span></summary>
+                <p id="building-ai-guidance-status" class="source-status" role="status" aria-live="polite">Suggestions are optional and deterministic findings remain separate.</p>
+                <pre id="building-ai-guidance-preview" class="source-code" hidden aria-label="Exact AI guidance transmission preview"></pre>
+                <button id="building-ai-guidance-request" type="button" hidden>Send this exact preview once</button>
+                <ul id="building-ai-guidance-suggestions" hidden aria-label="AI suggestions"></ul>
+              </details>
+
             <p id="building-units-empty" class="units-empty">
               Executable units not recorded.
             </p>
@@ -771,6 +1147,16 @@
                     Show more units
                   </button>
                 </div>
+              </details>
+              <details id="building-source-structure-details" class="units-section" hidden>
+                <summary>
+                  <span>File structure</span>
+                  <span id="building-source-structure-summary" class="details-summary-meta"></span>
+                </summary>
+                <p id="building-source-structure-status" class="dependency-status"></p>
+                <ol id="building-source-structure" class="external-consumers" aria-label="Nested file declarations"></ol>
+                <button id="building-source-structure-show-more" class="button button-compact units-show-more" type="button" aria-controls="building-source-structure" hidden>Show more declarations</button>
+                <button id="building-source-structure-return" class="button button-compact units-show-more" type="button" hidden>Return to city</button>
               </details>
           </div>
           <div
@@ -1218,6 +1604,11 @@
                 </div>
               </section>
               <section
+                id="design-smell-panel"
+                class="panel design-smell-panel"
+                aria-labelledby="design-smell-title"
+              ></section>
+              <section
                 id="safe-extension-panel"
                 class="panel metric-mapping-panel"
                 aria-labelledby="safe-extension-title"
@@ -1240,13 +1631,13 @@
                   </label>
                   <label class="metric-mapping-field" for="safe-extension-json">
                     <span>Extension configuration (JSON)</span>
-                    <textarea id="safe-extension-json" rows="12" spellcheck="false" aria-describedby="safe-extension-diagnostics"></textarea>
+                    <textarea id="safe-extension-json" rows="12" maxlength="131072" spellcheck="false" aria-describedby="safe-extension-diagnostics"></textarea>
                   </label>
                   <p id="safe-extension-status" role="status" aria-live="polite" aria-atomic="true"></p>
                   <p id="safe-extension-diagnostics" class="metric-mapping-help"></p>
                   <div class="metric-mapping-actions">
                     <button id="safe-extension-preview" class="button button-primary" type="button">Preview safely</button>
-                    <button id="safe-extension-export" class="button" type="button">Export JSON</button>
+                    <button id="safe-extension-export" class="button" type="button" disabled>Export JSON</button>
                   </div>
                 </div>
               </section>
@@ -1974,6 +2365,160 @@
             aria-live="polite"
             aria-atomic="true"
           ></p>
+        </form>
+      </dialog>
+
+      <dialog
+        id="image-export-dialog"
+        class="image-export-dialog"
+        aria-labelledby="image-export-title"
+        aria-describedby="image-export-description"
+      >
+        <form id="image-export-form">
+          <header class="image-export-heading">
+            <div>
+              <p class="eyebrow">Documentation image</p>
+              <h2 id="image-export-title">Export PNG image</h2>
+            </div>
+            <button
+              id="image-export-close"
+              class="icon-button"
+              type="button"
+              aria-label="Close image export"
+            >
+              &times;
+            </button>
+          </header>
+
+          <p id="image-export-description" class="image-export-help">
+            Render the current city directly at an independent resolution.
+            Viewer buttons, timelines, panels, and other UI chrome are never
+            included.
+          </p>
+
+          <fieldset class="image-export-options">
+            <legend class="visually-hidden">Image export options</legend>
+
+            <label class="image-export-field" for="image-export-resolution">
+              <span>Resolution</span>
+              <select id="image-export-resolution">
+                <option value="full-hd">Full HD (1920 × 1080)</option>
+                <option value="qhd">QHD (2560 × 1440)</option>
+                <option value="4k" selected>4K UHD (3840 × 2160)</option>
+                <option value="square">Square (2048 × 2048)</option>
+                <option value="custom">Custom</option>
+              </select>
+            </label>
+
+            <div class="image-export-grid">
+              <label class="image-export-field" for="image-export-width">
+                <span>Width</span>
+                <input
+                  id="image-export-width"
+                  type="number"
+                  min="256"
+                  max="8192"
+                  step="1"
+                  value="3840"
+                  required
+                />
+              </label>
+              <label class="image-export-field" for="image-export-height">
+                <span>Height</span>
+                <input
+                  id="image-export-height"
+                  type="number"
+                  min="256"
+                  max="8192"
+                  step="1"
+                  value="2160"
+                  required
+                />
+              </label>
+            </div>
+
+            <div class="image-export-grid">
+              <label class="image-export-field" for="image-export-projection">
+                <span>Projection</span>
+                <select id="image-export-projection">
+                  <option value="perspective">Perspective</option>
+                  <option value="orthographic">Orthographic</option>
+                </select>
+              </label>
+              <label class="image-export-field" for="image-export-preset">
+                <span>Framing</span>
+                <select id="image-export-preset">
+                  <option value="isometric">Isometric</option>
+                  <option value="top-down">Top-down</option>
+                  <option value="selected-entity">Selected entity</option>
+                  <option value="whole-city" selected>Whole city</option>
+                </select>
+              </label>
+            </div>
+
+            <label class="image-export-field" for="image-export-background">
+              <span>Background</span>
+              <select id="image-export-background">
+                <option value="scene">Scene background</option>
+                <option value="transparent">Transparent</option>
+              </select>
+            </label>
+
+            <div class="image-export-checks">
+              <label>
+                <input id="image-export-labels" type="checkbox" checked />
+                <span>Selected and hovered labels</span>
+              </label>
+              <label>
+                <input id="image-export-legend" type="checkbox" checked />
+                <span>Readable visualization legend</span>
+              </label>
+              <label>
+                <input id="image-export-evolution" type="checkbox" />
+                <span id="image-export-evolution-text">
+                  No repository evolution frame is active
+                </span>
+              </label>
+            </div>
+          </fieldset>
+
+          <p id="image-export-limits" class="image-export-help"></p>
+
+          <div class="image-export-actions">
+            <button
+              id="image-export-submit"
+              class="button button-primary"
+              type="submit"
+            >
+              Prepare PNG
+            </button>
+            <a
+              id="image-export-download"
+              class="button button-primary"
+              href="#"
+              download
+              hidden
+            >
+              Download PNG
+            </a>
+          </div>
+
+          <p
+            id="image-export-status"
+            class="image-export-status"
+            role="status"
+            aria-live="polite"
+          ></p>
+
+          <section
+            id="image-export-errors"
+            class="image-export-errors"
+            role="alert"
+            hidden
+          >
+            <h3>Image cannot be generated</h3>
+            <ul id="image-export-error-list"></ul>
+          </section>
         </form>
       </dialog>
 
