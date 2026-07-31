@@ -1,5 +1,6 @@
 export * from "./color.js";
 export * from "./district-dependencies.js";
+export * from "./design-smells.js";
 export * from "./evolution.js";
 export * from "./evolution-validation.js";
 export * from "./external-dependencies.js";

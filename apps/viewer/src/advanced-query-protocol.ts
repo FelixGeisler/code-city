@@ -23,6 +23,12 @@ export interface AdvancedQueryWorkerContext {
         ruleIds: readonly string[],
       ][]
     | null;
+  readonly availableSmellRules:
+    | readonly [
+        buildingId: string,
+        ruleIds: readonly string[],
+      ][]
+    | null;
   readonly ruleSchemaVersion: string | null;
 }
 
@@ -117,6 +123,7 @@ function isWorkerContext(value: unknown): value is AdvancedQueryWorkerContext {
     hasExactKeys(candidate, [
       "changes",
       "smellRules",
+      "availableSmellRules",
       "ruleSchemaVersion",
     ]) &&
     nullableStringArrayTuples(
@@ -126,6 +133,10 @@ function isWorkerContext(value: unknown): value is AdvancedQueryWorkerContext {
     ) &&
     nullableStringArrayTuples(
       candidate["smellRules"],
+      MAXIMUM_RULE_IDS_PER_BUILDING,
+    ) &&
+    nullableStringArrayTuples(
+      candidate["availableSmellRules"],
       MAXIMUM_RULE_IDS_PER_BUILDING,
     ) &&
     (candidate["ruleSchemaVersion"] === null ||
