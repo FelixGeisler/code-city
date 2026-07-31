@@ -134,6 +134,7 @@ import {
   type DesignSmellOverlayDiagnostics,
   type DesignSmellOverlayMarker,
 } from "./design-smell-overlay.js";
+import { installSafeExtensionPanel } from "./safe-extension-panel.js";
 import {
   type ProjectedPrintPlate,
   viewerPrintMeshBatches,
@@ -1253,9 +1254,11 @@ class CityScene {
   public setBuildingGroupHighlight(
     buildingIds: readonly string[],
     visible = true,
+    color?: string,
   ): void {
     this.buildingLayer?.setGroupHighlight(
       visible ? buildingIds : [],
+      color,
     );
   }
 
@@ -2855,6 +2858,7 @@ class UnavailableCityScene {
   public setBuildingGroupHighlight(
     _buildingIds: readonly string[],
     _visible: boolean,
+    _color?: string,
   ): void {}
 
   public get buildingSelectionIsolated(): boolean {
@@ -3239,6 +3243,22 @@ const designSmellPanel = installDesignSmellPanel(
     onQueryFactsChange: updateAdvancedQueryDesignSmells,
   },
 );
+const safeExtensionPanel = installSafeExtensionPanel(
+  element<HTMLElement>("safe-extension-panel"),
+  {
+    onPreview: (evaluation) => {
+      const overlay = evaluation.configuration.overlays?.[0];
+      if (overlay !== undefined) {
+        cityScene.setBuildingGroupHighlight(
+          evaluation.matches[overlay.filterId] ?? [],
+          true,
+          overlay.color,
+        );
+      }
+    },
+  },
+);
+safeExtensionPanel.setProject(activeModel);
 
 visualizationModeSelect.addEventListener("change", () => {
   const selected = visualizationModeSelect.value;
@@ -3571,6 +3591,7 @@ window.addEventListener("beforeunload", () => {
   imageExportDialog.dispose();
   designSmellPanel.dispose();
   cityScene.disposeDesignSmellOverlay();
+  safeExtensionPanel.dispose();
   logoLoadGate.invalidate();
   loadedModelLogo?.dispose();
   loadedModelLogo = undefined;
@@ -3676,6 +3697,7 @@ function activateImportedModel(
   resetEvolutionTimeline();
   activeModelSource = source;
   metricMappingPanel.setProject(model);
+  safeExtensionPanel.setProject(model);
   applyModel(model, source);
   void startEvolutionTimeline(source);
 }
