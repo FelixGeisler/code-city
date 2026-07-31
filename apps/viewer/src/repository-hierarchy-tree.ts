@@ -84,7 +84,10 @@ export interface RepositoryHierarchyTreeController {
     >,
     projectKey: string,
   ): void;
-  synchronize(state: ExplorerState): void;
+  synchronize(
+    state: ExplorerState,
+    selectedBuildingIds?: readonly string[],
+  ): void;
   reveal(): void;
   dispose(): void;
 }
@@ -101,8 +104,17 @@ export interface RepositoryHierarchyTreeInstallOptions {
     | "buildings"
   >;
   readonly projectKey: string;
-  readonly onActivate: (entity: SceneEntity) => void;
+  readonly onActivate: (
+    entity: SceneEntity,
+    intent: RepositoryHierarchyActivationIntent,
+  ) => void;
   readonly window?: Window;
+}
+
+export interface RepositoryHierarchyActivationIntent {
+  readonly additive: boolean;
+  readonly range: boolean;
+  readonly orderedBuildingIds?: readonly string[];
 }
 
 interface MutableNode {
@@ -521,7 +533,10 @@ class RepositoryHierarchyTree
   readonly #tree: HTMLElement;
   readonly #status: HTMLElement;
   readonly #content: HTMLElement;
-  readonly #onActivate: (entity: SceneEntity) => void;
+  readonly #onActivate: (
+    entity: SceneEntity,
+    intent: RepositoryHierarchyActivationIntent,
+  ) => void;
   readonly #window: Window;
   readonly #projectStates = new Map<string, RepositoryTreeProjectState>();
   readonly #abort = new AbortController();
@@ -529,7 +544,7 @@ class RepositoryHierarchyTree
   #projectKey: string;
   #expandedIds = new Set<string>();
   #activeId: string | undefined;
-  #selectedNodeId: string | undefined;
+  #selectedNodeIds = new Set<string>();
   #isolatedDistrictId: string | null = null;
   #rows: readonly RepositoryHierarchyRow[] = [];
   #renderFrame: number | undefined;
@@ -556,6 +571,7 @@ class RepositoryHierarchyTree
     );
     this.#activeId = this.#rows[0]?.node.id;
     this.#tree.setAttribute("role", "tree");
+    this.#tree.setAttribute("aria-multiselectable", "true");
     this.#tree.setAttribute("tabindex", "0");
     this.#tree.addEventListener(
       "scroll",
@@ -616,36 +632,56 @@ class RepositoryHierarchyTree
     this.#activeId = stored?.activeId;
     this.#rebuildRows();
     this.#activeId ??= this.#rows[0]?.node.id;
-    this.#selectedNodeId = undefined;
+    this.#selectedNodeIds = new Set();
     this.#render();
     this.#setScrollTopWhenVisible(stored?.scrollTop ?? 0);
     this.#render();
   }
 
-  public synchronize(state: ExplorerState): void {
+  public synchronize(
+    state: ExplorerState,
+    selectedBuildingIds?: readonly string[],
+  ): void {
     const previousIsolation = this.#isolatedDistrictId;
-    const previousSelection = this.#selectedNodeId;
+    const previousSelection = [...this.#selectedNodeIds];
     this.#isolatedDistrictId = state.isolatedDistrictId;
     const selected =
       state.selectedEntity === null
         ? undefined
         : this.#index.nodeIdForEntity(state.selectedEntity);
-    this.#selectedNodeId = selected;
+    const selectedNodeIds = new Set<string>();
+    if (selected !== undefined) selectedNodeIds.add(selected);
+    for (const buildingId of selectedBuildingIds ?? []) {
+      const nodeId = this.#index.nodeIdForEntity(
+        createSceneEntity("building", buildingId),
+      );
+      if (nodeId !== undefined) selectedNodeIds.add(nodeId);
+    }
+    this.#selectedNodeIds = selectedNodeIds;
     if (
       previousIsolation !== this.#isolatedDistrictId ||
-      previousSelection !== this.#selectedNodeId
+      !sameStringSet(previousSelection, this.#selectedNodeIds)
     ) {
       this.#renderRevision += 1;
     }
     if (selected !== undefined) {
+      let rowsChanged = false;
       for (const ancestor of repositoryHierarchyAncestorIds(
         this.#index,
         selected,
       )) {
-        this.#expandedIds.add(ancestor);
+        if (!this.#expandedIds.has(ancestor)) {
+          this.#expandedIds.add(ancestor);
+          rowsChanged = true;
+        }
       }
+      const activeChanged = this.#activeId !== selected;
       this.#activeId = selected;
-      this.#rebuildRows();
+      if (rowsChanged) {
+        this.#rebuildRows();
+      } else if (activeChanged) {
+        this.#renderRevision += 1;
+      }
       this.#pendingActiveReveal = true;
       this.#render();
       this.#ensureActiveVisible();
@@ -698,7 +734,13 @@ class RepositoryHierarchyTree
         ? undefined
         : this.#index.nodes.get(this.#activeId);
     if (node === undefined) return;
-    this.#activate(node);
+    this.#activate(node, {
+      additive: event.ctrlKey || event.metaKey,
+      range: event.shiftKey,
+      ...(event.shiftKey
+        ? { orderedBuildingIds: this.#visibleBuildingIds() }
+        : {}),
+    });
   }
 
   #handleScroll(): void {
@@ -731,18 +773,35 @@ class RepositoryHierarchyTree
       this.#render();
       return;
     }
-    this.#activate(node);
+    this.#activate(node, {
+      additive: event.ctrlKey || event.metaKey,
+      range: event.shiftKey,
+      ...(event.shiftKey
+        ? { orderedBuildingIds: this.#visibleBuildingIds() }
+        : {}),
+    });
   }
 
-  #activate(node: RepositoryHierarchyNode): void {
+  #activate(
+    node: RepositoryHierarchyNode,
+    intent: RepositoryHierarchyActivationIntent,
+  ): void {
     if (node.sceneEntity !== undefined) {
-      this.#onActivate(node.sceneEntity);
+      this.#onActivate(node.sceneEntity, intent);
       return;
     }
     if (node.childIds.length > 0) {
       this.#setExpanded(node.id, !this.#expandedIds.has(node.id));
       this.#render();
     }
+  }
+
+  #visibleBuildingIds(): readonly string[] {
+    return Object.freeze(
+      this.#rows
+        .filter(({ node }) => node.kind === "building")
+        .map(({ node }) => node.entityId),
+    );
   }
 
   #setExpanded(nodeId: string, expanded: boolean): void {
@@ -946,7 +1005,7 @@ class RepositoryHierarchyTree
     element.setAttribute("aria-setsize", String(row.setSize));
     element.setAttribute(
       "aria-selected",
-      String(node.id === this.#selectedNodeId),
+      String(this.#selectedNodeIds.has(node.id)),
     );
     if (node.id === this.#activeId) {
       element.dataset["active"] = "true";
@@ -1229,6 +1288,16 @@ function finiteNumber(value: number): number {
 
 function safeWholeNumber(value: number): number {
   return Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+function sameStringSet(
+  left: readonly string[],
+  right: ReadonlySet<string>,
+): boolean {
+  return (
+    left.length === right.size &&
+    left.every((value) => right.has(value))
+  );
 }
 
 function positiveWholeNumber(

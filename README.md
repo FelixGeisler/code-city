@@ -506,6 +506,15 @@ Generation runs locally in a cancellable worker; no model or profile is uploaded
 **Prepare calibration** downloads a profile-only test plate and measurement
 manifest.
 
+The **Queries** workspace provides explainable built-in rankings,
+dependency neighborhoods, change filters, and compound name, language, risk,
+metric, dependency, and design-smell filters. Results support additive and
+range selection plus focus, isolate, compare, overlay, and JSON export.
+Project-scoped saved queries and selection sets retain their versioned model,
+metric, and rule capabilities. Evaluation runs in a disposable worker and
+returns at most 500 of the deterministically ranked matches while reporting
+the full total and any unavailable capability.
+
 C# is analyzed by the bundled, syntax-only Roslyn helper. TypeScript and
 JavaScript use the pinned compiler API. Neither analyzer restores, builds, runs
 plugins, or executes repository content.

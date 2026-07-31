@@ -171,6 +171,11 @@ export class ViewerBuildingLayer {
     hovered: null,
     selected: null,
   };
+  private readonly groupHighlight: THREE.InstancedMesh<
+    THREE.BoxGeometry,
+    THREE.MeshBasicMaterial
+  >;
+  private groupHighlightedIds: readonly string[] = Object.freeze([]);
 
   private isolatedDistrictId: string | null = null;
   private disposed = false;
@@ -218,7 +223,12 @@ export class ViewerBuildingLayer {
       hovered: this.createHighlight("#ffffff", 0.18),
       selected: this.createHighlight("#ffffff", 0.34),
     };
-    this.object.add(this.highlights.hovered, this.highlights.selected);
+    this.groupHighlight = this.createGroupHighlight();
+    this.object.add(
+      this.groupHighlight,
+      this.highlights.hovered,
+      this.highlights.selected,
+    );
   }
 
   public get size(): number {
@@ -252,6 +262,13 @@ export class ViewerBuildingLayer {
       this.highlights.hovered,
       this.highlights.selected,
     ]);
+  }
+
+  public get groupHighlightObject(): THREE.InstancedMesh<
+    THREE.BoxGeometry,
+    THREE.MeshBasicMaterial
+  > {
+    return this.groupHighlight;
   }
 
   public instanceBuildingId(
@@ -347,6 +364,7 @@ export class ViewerBuildingLayer {
     }
     this.refreshHighlight("hovered");
     this.refreshHighlight("selected");
+    this.refreshGroupHighlight();
   }
 
   public setHighlight(
@@ -356,6 +374,19 @@ export class ViewerBuildingLayer {
     this.assertActive();
     this.highlightedIds[slot] = id;
     this.refreshHighlight(slot);
+  }
+
+  public setGroupHighlight(ids: readonly string[]): void {
+    this.assertActive();
+    const seen = new Set<string>();
+    const valid: string[] = [];
+    for (const id of ids) {
+      if (seen.has(id) || !this.definitionsById.has(id)) continue;
+      seen.add(id);
+      valid.push(id);
+    }
+    this.groupHighlightedIds = Object.freeze(valid);
+    this.refreshGroupHighlight();
   }
 
   public setColor(id: string, color: string): boolean {
@@ -462,6 +493,7 @@ export class ViewerBuildingLayer {
     }
     this.refreshHighlight("hovered");
     this.refreshHighlight("selected");
+    this.refreshGroupHighlight();
   }
 
   public dispose(): void {
@@ -477,6 +509,8 @@ export class ViewerBuildingLayer {
     }
     this.highlights.hovered.material.dispose();
     this.highlights.selected.material.dispose();
+    this.groupHighlight.dispose();
+    this.groupHighlight.material.dispose();
     this.geometry.dispose();
     this.batches.length = 0;
     this.batchByMesh.clear();
@@ -582,6 +616,54 @@ export class ViewerBuildingLayer {
     mesh.renderOrder = 3;
     mesh.raycast = () => undefined;
     return mesh;
+  }
+
+  private createGroupHighlight(): THREE.InstancedMesh<
+    THREE.BoxGeometry,
+    THREE.MeshBasicMaterial
+  > {
+    const material = new THREE.MeshBasicMaterial({
+      color: "#63e6ff",
+      transparent: true,
+      opacity: 0.28,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const mesh = new THREE.InstancedMesh(
+      this.geometry,
+      material,
+      Math.max(1, this.definitions.length),
+    );
+    mesh.name = "code-city:building-group-highlight";
+    mesh.count = 0;
+    mesh.visible = false;
+    mesh.renderOrder = 2;
+    mesh.raycast = () => undefined;
+    return mesh;
+  }
+
+  private refreshGroupHighlight(): void {
+    let index = 0;
+    for (const id of this.groupHighlightedIds) {
+      const building = this.definitionsById.get(id);
+      if (
+        building === undefined ||
+        (this.isolatedDistrictId !== null &&
+          building.districtId !== this.isolatedDistrictId)
+      ) {
+        continue;
+      }
+      this.groupHighlight.setMatrixAt(
+        index,
+        building.matrix.clone().multiply(HIGHLIGHT_SCALE),
+      );
+      index += 1;
+    }
+    this.groupHighlight.count = index;
+    this.groupHighlight.visible = index > 0;
+    this.groupHighlight.instanceMatrix.needsUpdate = true;
+    this.groupHighlight.computeBoundingBox();
+    this.groupHighlight.computeBoundingSphere();
   }
 
   private refreshHighlight(slot: ViewerBuildingHighlightSlot): void {

@@ -30,6 +30,11 @@ frame; reduced-motion mode performs no spatial interpolation; stable
 selections and route controls survive while their lineage or route exists;
 dependency changes and rebuilt route geometry describe the target frame
 
+|Query interaction
+|Every match explains itself; deterministic ordering synchronizes one bounded
+selection across scene, hierarchy, and result views; unavailable capabilities
+and truncated totals remain explicit
+
 |Image export
 |Semantic bounds make preset framing repeatable; output has the exact accepted
 pixel dimensions and requested scene annotations but no viewer chrome; GPU,

@@ -1678,6 +1678,16 @@ test("preserves filtered selected dependency routes across evolution seeks", asy
   await expect(page.locator("#evolution-commit")).toContainText("2/2");
   await expect(route).toHaveAttribute("aria-current", "true");
   await expect(route).toHaveAttribute("aria-label", /2 edges, 2 references/u);
+
+  await page.waitForTimeout(1_300);
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await page
+    .locator("#advanced-query-preset")
+    .selectOption("changed-recently");
+  await page.locator("#advanced-query-run").click();
+  await expect(page.locator("#advanced-query-status")).toHaveText(
+    "0 matches",
+  );
 });
 
 test("rejects an oversized legacy evolution artifact before downloading it", async ({
@@ -2650,10 +2660,14 @@ test("cancels an accepted remote import and removes its private staging data", a
   await expect.poll(
     () => lastRemoteInvocation(CANCELLATION_GIT_URL),
   ).toBeDefined();
+  await expect.poll(() =>
+    page.evaluate(() =>
+      localStorage.getItem("code-city.last-import-job.v1"),
+    ),
+  ).not.toBeNull();
   const jobId = await page.evaluate(() =>
     localStorage.getItem("code-city.last-import-job.v1"),
   );
-  expect(jobId).not.toBeNull();
   await expect(
     page.locator("#project-import-repository-url"),
   ).toHaveValue("");

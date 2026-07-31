@@ -194,6 +194,7 @@ describe("viewer workspace navigation", () => {
     expect(VIEWER_WORKSPACE_VIEWS).toEqual([
       "explore",
       "routes",
+      "queries",
       "details",
       "overview",
       "metrics",

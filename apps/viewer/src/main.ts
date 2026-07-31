@@ -21,6 +21,18 @@ import type {
 } from "../../../packages/core/src/model.js";
 import type { PrinterProfile } from "../../../packages/core/src/print.js";
 import {
+  installAdvancedQueryPanel,
+  type AdvancedQueryPanelController,
+} from "./advanced-query-panel.js";
+import type {
+  AdvancedQueryChangeKind,
+  AdvancedQueryContext,
+} from "./advanced-query.js";
+import type {
+  AdvancedSelectionIntent,
+  AdvancedSelectionState,
+} from "./advanced-selection.js";
+import {
   canRevealMoreExecutableUnits,
   INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT,
   MAXIMUM_EXECUTABLE_UNIT_VISIBLE_LIMIT,
@@ -667,6 +679,10 @@ class CityScene {
     private readonly host: HTMLDivElement,
     private readonly onStateChange: (state: ExplorerState) => void,
     private readonly requestCityPresentation: () => void,
+    private readonly onPointerSelection?: (
+      entity: SceneEntity | null,
+      intent: AdvancedSelectionIntent,
+    ) => boolean,
   ) {
     this.scene.background = new THREE.Color("#07111f");
     this.scene.fog = this.fog;
@@ -1190,6 +1206,15 @@ class CityScene {
     this.visualizationModeLabel = label;
     this.buildingLayer?.setColors(colorsByBuildingId);
     this.refreshSceneLabels();
+  }
+
+  public setBuildingGroupHighlight(
+    buildingIds: readonly string[],
+    visible = true,
+  ): void {
+    this.buildingLayer?.setGroupHighlight(
+      visible ? buildingIds : [],
+    );
   }
 
   public showEvolutionTransition(
@@ -2297,12 +2322,16 @@ class CityScene {
       return;
     }
     this.pointerPicker.cancel();
-    this.select(
-      this.pick({
-        x: event.clientX,
-        y: event.clientY,
-      }),
-    );
+    const entity = this.pick({
+      x: event.clientX,
+      y: event.clientY,
+    });
+    const handled =
+      this.onPointerSelection?.(entity, {
+        additive: event.ctrlKey || event.metaKey,
+        range: event.shiftKey,
+      }) ?? false;
+    if (!handled) this.select(entity);
   };
 
   private readonly onPointerLeave = (): void => {
@@ -2661,6 +2690,11 @@ class UnavailableCityScene {
 
   public resetSelection(): void {}
 
+  public setBuildingGroupHighlight(
+    _buildingIds: readonly string[],
+    _visible: boolean,
+  ): void {}
+
   public replaceDependencyRoutes(
     _routes: readonly DependencyOverlayRoute[],
   ): void {}
@@ -2669,11 +2703,19 @@ class UnavailableCityScene {
     _routes: readonly DependencyOverlayRoute[],
   ): void {}
 
-  public selectBuilding(_id: string, _focus = false): boolean {
+  public selectBuilding(
+    _id: string,
+    _focus = false,
+    _showDetails = true,
+  ): boolean {
     return false;
   }
 
-  public selectDistrict(_id: string, _focus = false): boolean {
+  public selectDistrict(
+    _id: string,
+    _focus = false,
+    _showDetails = true,
+  ): boolean {
     return false;
   }
 
@@ -2714,6 +2756,22 @@ function createCityScene(): CityScene | UnavailableCityScene {
       sceneHost,
       synchronizeExplorerState,
       () => requestCityPresentation(),
+      (entity, intent) => {
+        if (advancedQueryPanel === undefined) return false;
+        if (entity?.kind === "building") {
+          if (
+            intent.additive ||
+            intent.range ||
+            viewerWorkspace.activeView === "queries"
+          ) {
+            advancedQueryPanel.selectFromScene(entity.id, intent);
+            return true;
+          }
+          return false;
+        }
+        advancedQueryPanel.clearSelection();
+        return false;
+      },
     );
   } catch (error) {
     return new UnavailableCityScene(sceneHost, messageOf(error));
@@ -2749,6 +2807,9 @@ let activeEvolutionLineageSelection:
   | undefined;
 let activeEvolutionAnalysis: EvolutionVisualizationData | undefined;
 let activeEvolutionTransition: EvolutionTransition | undefined;
+let activeEvolutionQueryChanges:
+  | ReadonlyMap<string, ReadonlySet<AdvancedQueryChangeKind>>
+  | undefined;
 let activeEvolutionDependencyChanges:
   | EvolutionDependencyChanges
   | undefined;
@@ -2788,6 +2849,8 @@ let activeExternalLayout = createExternalDependencyLayout(DEMO_MODEL);
 let activeExternalNodes: readonly ExternalSceneNode[] =
   activeExternalLayout.nodes;
 let requestCityPresentation = (): void => {};
+let advancedQueryPanel: AdvancedQueryPanelController | undefined;
+let applyingAdvancedSelection = false;
 const cityScene = createCityScene();
 const repositoryHierarchyTree = installRepositoryHierarchyTree({
   tree: repositoryTree,
@@ -2932,6 +2995,20 @@ const metricMappingPanel = installMetricMappingPanel(
     },
   },
 );
+advancedQueryPanel = installAdvancedQueryPanel(
+  element<HTMLElement>("advanced-query-panel"),
+  {
+    context: advancedQueryPanelContext,
+    onSelectionChange: applyAdvancedSelection,
+    onFocus: (buildingId) => {
+      cityScene.selectBuilding(buildingId, true);
+    },
+    onIsolate: (districtId) => {
+      cityScene.isolateDistrict(districtId);
+    },
+  },
+);
+advancedQueryPanel.setProject(activeModel);
 
 visualizationModeSelect.addEventListener("change", () => {
   const selected = visualizationModeSelect.value;
@@ -3227,6 +3304,7 @@ window.addEventListener("beforeunload", () => {
   printPlateToolbar.dispose();
   projectImportDialog.dispose();
   metricMappingPanel.dispose();
+  advancedQueryPanel?.dispose();
   imageExportDialog.dispose();
   logoLoadGate.invalidate();
   loadedModelLogo?.dispose();
@@ -3440,19 +3518,25 @@ function applyModel(
     `${version}${model.districts.length.toLocaleString()} districts · ${model.buildings.length.toLocaleString()} buildings`,
   );
   applyVisualization();
-  if (
-    preservedIsolation !== null &&
-    activeDistrictsById.has(preservedIsolation)
-  ) {
-    cityScene.isolateDistrict(preservedIsolation, false);
+  applyingAdvancedSelection = true;
+  try {
+    if (
+      preservedIsolation !== null &&
+      activeDistrictsById.has(preservedIsolation)
+    ) {
+      cityScene.isolateDistrict(preservedIsolation, false);
+    }
+    if (preservedSelection?.kind === "building") {
+      cityScene.selectBuilding(preservedSelection.id);
+    } else if (preservedSelection?.kind === "district") {
+      cityScene.selectDistrict(preservedSelection.id);
+    } else if (preservedSelection?.kind === "external") {
+      cityScene.selectExternalNode(preservedSelection.id);
+    }
+  } finally {
+    applyingAdvancedSelection = false;
   }
-  if (preservedSelection?.kind === "building") {
-    cityScene.selectBuilding(preservedSelection.id);
-  } else if (preservedSelection?.kind === "district") {
-    cityScene.selectDistrict(preservedSelection.id);
-  } else if (preservedSelection?.kind === "external") {
-    cityScene.selectExternalNode(preservedSelection.id);
-  }
+  advancedQueryPanel?.setProject(model);
   if (options.preserveSelection) {
     if (
       preservedSelection?.kind === "building" &&
@@ -3495,6 +3579,7 @@ function resetEvolutionTimeline(recreateWorker = true): void {
   activeEvolutionLineageSelection = undefined;
   activeEvolutionAnalysis = undefined;
   activeEvolutionTransition = undefined;
+  activeEvolutionQueryChanges = undefined;
   activeEvolutionDependencyChanges = undefined;
   activeEvolutionTargetDependencyIds = new Set();
   activeEvolutionIndex = 0;
@@ -3621,6 +3706,9 @@ async function seekEvolution(
       activeEvolutionIndex = targetIndex;
       activeEvolutionAnalysis = evolutionVisualizationData(result.analysis);
       activeEvolutionTransition = initial ? undefined : result.transition;
+      activeEvolutionQueryChanges = initial
+        ? undefined
+        : evolutionQueryChanges(result.transition);
       activeEvolutionDependencyChanges = initial
         ? undefined
         : result.transition.dependencyChanges;
@@ -4153,8 +4241,18 @@ function selectDistrictFromExplorer(districtId: string): void {
   }
 }
 
-function activateRepositoryTreeEntity(entity: SceneEntity): void {
+function activateRepositoryTreeEntity(
+  entity: SceneEntity,
+  intent: AdvancedSelectionIntent,
+): void {
   if (entity.kind === "building") {
+    if (
+      advancedQueryPanel !== undefined &&
+      (intent.additive || intent.range)
+    ) {
+      advancedQueryPanel.selectFromScene(entity.id, intent);
+      return;
+    }
     const next = selectExplorerBuilding(
       explorerState,
       activeModel,
@@ -4177,8 +4275,105 @@ function activateRepositoryTreeEntity(entity: SceneEntity): void {
 
 function clearBuildingSelection(): void {
   activeEvolutionLineageSelection = undefined;
+  if (
+    advancedQueryPanel !== undefined &&
+    advancedQueryPanel.selection.buildingIds.length > 0
+  ) {
+    advancedQueryPanel.clearSelection();
+    return;
+  }
   cityScene.resetSelection();
   showInspector(null);
+}
+
+function advancedQueryPanelContext() {
+  const primaryBuildingId =
+    advancedQueryPanel?.selection.primaryBuildingId ??
+    selectedExplorerBuildingId(explorerState) ??
+    undefined;
+  const primaryDistrictId =
+    primaryBuildingId === undefined
+      ? undefined
+      : activeBuildingsById.get(primaryBuildingId)?.districtId;
+  const selectedDistrictId =
+    primaryDistrictId ??
+    selectedExplorerDistrictId(explorerState) ??
+    explorerState.isolatedDistrictId ??
+    undefined;
+  return {
+    ...(primaryBuildingId === undefined
+      ? {}
+      : { selectedBuildingId: primaryBuildingId }),
+    ...(selectedDistrictId === undefined
+      ? {}
+      : { selectedDistrictId }),
+    queryContext: activeAdvancedQueryContext(),
+  };
+}
+
+function activeAdvancedQueryContext(): AdvancedQueryContext {
+  return activeEvolutionQueryChanges === undefined
+    ? {}
+    : { changesByBuildingId: activeEvolutionQueryChanges };
+}
+
+function evolutionQueryChanges(
+  transition: EvolutionTransition,
+): ReadonlyMap<string, ReadonlySet<AdvancedQueryChangeKind>> {
+  const changes = new Map<
+    string,
+    Set<AdvancedQueryChangeKind>
+  >();
+  const add = (
+    ids: readonly string[],
+    kind: AdvancedQueryChangeKind,
+  ): void => {
+    for (const id of ids) {
+      const existing = changes.get(id);
+      if (existing === undefined) changes.set(id, new Set([kind]));
+      else existing.add(kind);
+    }
+  };
+  add(transition.addedBuildingIds, "added");
+  add(transition.changedBuildingIds, "changed");
+  add(
+    transition.removedBuildings.map(({ id }) => id),
+    "removed",
+  );
+  return changes;
+}
+
+function applyAdvancedSelection(
+  selection: AdvancedSelectionState,
+): void {
+  cityScene.setBuildingGroupHighlight(
+    selection.buildingIds,
+    selection.overlayVisible,
+  );
+  applyingAdvancedSelection = true;
+  try {
+    if (
+      selection.primaryBuildingId !== null &&
+      activeBuildingsById.has(selection.primaryBuildingId)
+    ) {
+      cityScene.selectBuilding(
+        selection.primaryBuildingId,
+        false,
+        false,
+      );
+    } else if (selectedExplorerBuildingId(explorerState) !== null) {
+      cityScene.resetSelection();
+      showInspector(null);
+    }
+  } finally {
+    applyingAdvancedSelection = false;
+  }
+  selectionStatus.textContent =
+    selection.buildingIds.length === 0
+      ? "Selection cleared."
+      : `${selection.buildingIds.length.toLocaleString()} ${
+          selection.buildingIds.length === 1 ? "building" : "buildings"
+        } selected.`;
 }
 
 function synchronizeExplorerState(state: ExplorerState): void {
@@ -4237,6 +4432,27 @@ function synchronizeExplorerState(state: ExplorerState): void {
       button.removeAttribute("aria-current");
     }
   }
+  if (
+    !applyingAdvancedSelection &&
+    selectedBuildingId !== null &&
+    advancedQueryPanel !== undefined &&
+    (advancedQueryPanel.selection.primaryBuildingId !== selectedBuildingId ||
+      advancedQueryPanel.selection.buildingIds.length !== 1)
+  ) {
+    advancedQueryPanel.selectFromScene(selectedBuildingId);
+  } else if (
+    !applyingAdvancedSelection &&
+    selectedBuildingId === null &&
+    state.selectedEntity !== null &&
+    advancedQueryPanel !== undefined &&
+    advancedQueryPanel.selection.buildingIds.length > 0
+  ) {
+    advancedQueryPanel.clearSelection();
+  }
+  repositoryHierarchyTree.synchronize(
+    state,
+    advancedQueryPanel?.selection.buildingIds,
+  );
   renderExternalNodeList();
   renderDependencyExplorer();
   renderDistrictDependencyExplorer();
