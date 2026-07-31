@@ -15,7 +15,14 @@ import type { PrinterProfile } from "../../../packages/core/src/print.js";
 export type ViewerVisualizationMode =
   | "semantic"
   | "complexity"
+  | "age"
+  | "churn"
   | "print";
+
+export interface EvolutionVisualizationData {
+  readonly ageByBuildingId: ReadonlyMap<string, number>;
+  readonly churnByBuildingId: ReadonlyMap<string, number>;
+}
 
 export interface ViewerVisualization {
   readonly mode: ViewerVisualizationMode;
@@ -64,6 +71,20 @@ const FALLBACK_CHANNEL_COLORS = Object.freeze([
   "#4f46e5",
 ]);
 
+const AGE_GROUPS = Object.freeze([
+  { id: "age-new", label: "Newest", color: "#38bdf8", priority: 4 },
+  { id: "age-young", label: "Younger", color: "#34d399", priority: 3 },
+  { id: "age-mature", label: "Established", color: "#facc15", priority: 2 },
+  { id: "age-old", label: "Oldest", color: "#f97316", priority: 1 },
+] satisfies readonly SemanticGroup[]);
+
+const CHURN_GROUPS = Object.freeze([
+  { id: "churn-none", label: "No historical changes", color: "#64748b", priority: 4 },
+  { id: "churn-low", label: "Low churn", color: "#4ade80", priority: 3 },
+  { id: "churn-medium", label: "Moderate churn", color: "#facc15", priority: 2 },
+  { id: "churn-high", label: "High churn", color: "#f43f5e", priority: 1 },
+] satisfies readonly SemanticGroup[]);
+
 function semanticVisualization(model: CityModel): ViewerVisualization {
   const colors = new Map(
     model.semanticGroups.map(({ id, color }) => [id, color]),
@@ -99,6 +120,64 @@ function complexityVisualization(model: CityModel): ViewerVisualization {
       "Colors use each building's persisted risk band; analyzer facts are not reclassified.",
     available: true,
   };
+}
+
+function unavailableEvolutionVisualization(
+  model: CityModel,
+  mode: "age" | "churn",
+): ViewerVisualization {
+  return {
+    ...semanticVisualization(model),
+    mode,
+    label: mode === "age" ? "Building age" : "Historical churn",
+    status:
+      "This mode requires a repository import with evolution history.",
+    available: false,
+  };
+}
+
+function bucketVisualization(
+  model: CityModel,
+  mode: "age" | "churn",
+  values: ReadonlyMap<string, number>,
+  groups: readonly SemanticGroup[],
+): ViewerVisualization {
+  let maximum = 0;
+  for (const value of values.values()) {
+    maximum = Math.max(maximum, value);
+  }
+  const groupFor = (value: number): SemanticGroup => {
+    if (mode === "churn" && value === 0) return groups[0]!;
+    if (maximum === 0) return groups[0]!;
+    const ratio = value / maximum;
+    if (ratio <= 0.25) return groups[mode === "age" ? 0 : 1]!;
+    if (ratio <= 0.6) return groups[mode === "age" ? 1 : 2]!;
+    if (ratio < 1) return groups[mode === "age" ? 2 : 3]!;
+    return groups[3]!;
+  };
+  return {
+    mode,
+    label: mode === "age" ? "Building age" : "Historical churn",
+    colorsByBuildingId: new Map(
+      model.buildings.map(({ id }) => [
+        id,
+        bucketVisualizationColor(values.get(id), groupFor),
+      ]),
+    ),
+    legend: groups,
+    status:
+      mode === "age"
+        ? "Colors show frames elapsed since each building first appeared."
+        : "Colors show additions, removals, and replacements through this commit.",
+    available: true,
+  };
+}
+
+function bucketVisualizationColor(
+  value: number | undefined,
+  groupFor: (value: number) => SemanticGroup,
+): string {
+  return value === undefined ? "#94a3b8" : groupFor(value).color;
 }
 
 function unavailablePrintVisualization(
@@ -186,12 +265,31 @@ export function createViewerVisualization(
   model: CityModel,
   mode: ViewerVisualizationMode,
   profile?: PrinterProfile,
+  evolution?: EvolutionVisualizationData,
 ): ViewerVisualization {
   switch (mode) {
     case "semantic":
       return semanticVisualization(model);
     case "complexity":
       return complexityVisualization(model);
+    case "age":
+      return evolution === undefined
+        ? unavailableEvolutionVisualization(model, mode)
+        : bucketVisualization(
+            model,
+            mode,
+            evolution.ageByBuildingId,
+            AGE_GROUPS,
+          );
+    case "churn":
+      return evolution === undefined
+        ? unavailableEvolutionVisualization(model, mode)
+        : bucketVisualization(
+            model,
+            mode,
+            evolution.churnByBuildingId,
+            CHURN_GROUPS,
+          );
     case "print":
       return printVisualization(model, profile);
   }

@@ -395,6 +395,75 @@ export class ViewerBuildingLayer {
     this.refreshHighlight("selected");
   }
 
+  public setEvolutionProgress(
+    addedBuildingIds: ReadonlySet<string>,
+    fromByBuildingId: ReadonlyMap<
+      string,
+      {
+        readonly position: ViewerBuildingVector;
+        readonly size: ViewerBuildingVector;
+      }
+    >,
+    progress: number,
+  ): void {
+    this.assertActive();
+    const bounded = Math.min(1, Math.max(0.02, progress));
+    const matrixFor = (building: CanonicalBuilding): THREE.Matrix4 => {
+      const from = fromByBuildingId.get(building.id);
+      if (
+        (!addedBuildingIds.has(building.id) && from === undefined) ||
+        bounded === 1
+      ) {
+        return building.matrix;
+      }
+      const startPosition = from?.position ?? {
+        x: building.position.x,
+        y: building.position.y - building.size.y / 2,
+        z: building.position.z,
+      };
+      const startSize = from?.size ?? {
+        x: building.size.x,
+        y: 0,
+        z: building.size.z,
+      };
+      const lerp = (start: number, end: number): number =>
+        start + (end - start) * bounded;
+      return new THREE.Matrix4().compose(
+        new THREE.Vector3(
+          lerp(startPosition.x, building.position.x),
+          lerp(startPosition.y, building.position.y),
+          lerp(startPosition.z, building.position.z),
+        ),
+        new THREE.Quaternion(),
+        new THREE.Vector3(
+          lerp(startSize.x, building.size.x),
+          Math.max(0.02, lerp(startSize.y, building.size.y)),
+          lerp(startSize.z, building.size.z),
+        ),
+      );
+    };
+    if (this.mode === "instanced") {
+      for (const batch of this.batches) {
+        for (const [index, id] of batch.visibleBuildingIds.entries()) {
+          const building = this.definitionsById.get(id);
+          if (building) batch.mesh.setMatrixAt(index, matrixFor(building));
+        }
+        batch.mesh.instanceMatrix.needsUpdate = true;
+        batch.mesh.computeBoundingBox();
+        batch.mesh.computeBoundingSphere();
+      }
+    } else {
+      for (const [id, mesh] of this.legacyMeshes) {
+        const building = this.definitionsById.get(id);
+        if (!building) continue;
+        mesh.matrix.copy(matrixFor(building));
+        mesh.matrixWorldNeedsUpdate = true;
+      }
+    }
+    this.refreshHighlight("hovered");
+    this.refreshHighlight("selected");
+  }
+
   public dispose(): void {
     if (this.disposed) return;
     this.disposed = true;

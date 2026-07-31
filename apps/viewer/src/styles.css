@@ -208,6 +208,91 @@ button,
   pointer-events: none;
 }
 
+.evolution-timeline {
+  position: absolute;
+  z-index: 3;
+  top: 82px;
+  left: 20px;
+  width: min(720px, calc(100% - 480px));
+  display: grid;
+  grid-template-columns: auto minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(10, 23, 39, 0.92);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(14px);
+}
+
+.evolution-timeline[hidden] {
+  display: none;
+}
+
+.evolution-controls {
+  display: flex;
+  gap: 3px;
+}
+
+.evolution-controls button,
+.evolution-speed select {
+  min-width: 32px;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: #dcecff;
+  background: #0d1d30;
+}
+
+.evolution-controls button {
+  cursor: pointer;
+}
+
+.evolution-controls button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.evolution-scrubber,
+.evolution-scrubber input {
+  width: 100%;
+  min-width: 0;
+}
+
+.evolution-speed {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.evolution-copy {
+  grid-column: 1 / -1;
+  display: flex;
+  min-width: 0;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.evolution-copy strong {
+  flex: 0 0 auto;
+  color: #f5fbff;
+}
+
+.evolution-copy span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evolution-timeline:not([hidden]) + .print-plate-toolbar {
+  top: 172px;
+}
+
 .print-plate-toolbar {
   position: absolute;
   z-index: 3;
@@ -2874,6 +2959,30 @@ button,
     width: calc(100% - 24px);
     max-width: none;
     flex-wrap: wrap;
+  }
+
+  .evolution-timeline {
+    top: 68px;
+    right: 12px;
+    left: 12px;
+    width: calc(100% - 24px);
+    grid-template-columns: 1fr;
+  }
+
+  .evolution-controls {
+    justify-content: center;
+  }
+
+  .evolution-speed {
+    justify-content: center;
+  }
+
+  .evolution-copy {
+    grid-column: 1;
+  }
+
+  .evolution-timeline:not([hidden]) + .print-plate-toolbar {
+    top: 250px;
   }
 
   .print-plate-mode {

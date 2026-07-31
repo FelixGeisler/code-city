@@ -207,8 +207,38 @@ During evolution analysis, one selected mapping is evaluated for every frame
 against that frame's raw facts, including its per-frame missing-value behavior.
 The resulting bundle therefore never mixes layouts or legends from different
 configurations. The bundle's analysis-time metric-configuration fingerprint
-remains provenance and is not rewritten by a browser-only preview. The
-time-travel workspace will consume this invariant when its controls are added.
+remains provenance and is not rewritten by a browser-only preview.
+
+== Repository evolution playback
+
+After a history import opens, the viewer reads the evolution companion through
+the same-origin artifact API. The response must have the exact declared byte
+length and JSON media type. A dedicated persistent worker verifies the SHA-256
+digest, validates the bounded bundle, owns its replay state, and returns only
+the requested full frame plus bounded transition and visualization facts.
+
+First, previous, play/pause, next, last, speed, and range controls all use the
+same direct-seek path. Each seek replays from the validated baseline, so the
+stable scene for a commit is independent of prior playback. Request IDs make a
+new scrub cancel the pending UI result; late worker frames cannot become
+current. The worker retains one bundle and materializes only the source and
+target replay frames needed for a transition rather than retaining all full
+models.
+
+Scene reloads preserve the orbit camera and reselect a stable building,
+district, or external-dependency ID when it still exists. A removed selected
+building becomes a historical tombstone with its last known metrics, path,
+first frame, change count, and removal frame. Additions rise from their base,
+removals shrink and fade as red ghosts, renames are cyan, moved or resized
+buildings are amber, and other changes are violet. These temporary cues expire
+to the frame's path-independent visualization. With `prefers-reduced-motion`,
+the full target geometry is published immediately and only static change cues
+are shown.
+
+The **Building age** mode counts frames since a lineage first appeared.
+**Historical churn** counts its additions, replacements, and removals through
+the selected commit. Both modes are unavailable, with an explicit explanation,
+for model-only imports.
 
 == Viewer performance
 

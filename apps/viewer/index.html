@@ -73,6 +73,38 @@
           </div>
         </div>
 
+        <section
+          id="evolution-timeline"
+          class="evolution-timeline"
+          aria-label="Repository evolution timeline"
+          hidden
+        >
+          <div class="evolution-controls" role="group" aria-label="Timeline controls">
+            <button id="evolution-first" type="button" aria-label="First commit">|&larr;</button>
+            <button id="evolution-previous" type="button" aria-label="Previous commit">&larr;</button>
+            <button id="evolution-play" type="button" aria-label="Play repository evolution" aria-pressed="false">&#9654;</button>
+            <button id="evolution-next" type="button" aria-label="Next commit">&rarr;</button>
+            <button id="evolution-last" type="button" aria-label="Last commit">&rarr;|</button>
+          </div>
+          <label class="evolution-scrubber">
+            <span class="sr-only">Repository evolution frame</span>
+            <input id="evolution-range" type="range" min="0" max="0" value="0" step="1" />
+          </label>
+          <label class="evolution-speed">
+            <span>Speed</span>
+            <select id="evolution-speed">
+              <option value="2000">0.5&times;</option>
+              <option value="1000" selected>1&times;</option>
+              <option value="500">2&times;</option>
+              <option value="250">4&times;</option>
+            </select>
+          </label>
+          <div class="evolution-copy">
+            <strong id="evolution-commit">History unavailable</strong>
+            <span id="evolution-status" role="status" aria-live="polite"></span>
+          </div>
+        </section>
+
         <div
           id="print-plate-toolbar"
           class="print-plate-toolbar"
@@ -524,6 +556,10 @@
                 <dt>Metric method</dt>
                 <dd id="building-metric-method"></dd>
               </div>
+              <div id="building-evolution-row" class="wide" hidden>
+                <dt>Repository history</dt>
+                <dd id="building-evolution"></dd>
+              </div>
             </dl>
             <p id="building-metric-explanation" class="dependency-status"></p>
 
@@ -800,6 +836,8 @@
               <select id="visualization-mode">
                 <option value="semantic">Semantic groups</option>
                 <option value="complexity">Complexity risk</option>
+                <option value="age">Building age</option>
+                <option value="churn">Historical churn</option>
                 <option value="print">Printer-profile assignment preview</option>
               </select>
             </label>

@@ -151,8 +151,15 @@ import { supportsViewerInstancing } from "./viewer-render-capability.js";
 import {
   createViewerVisualization,
   describeBuildingMetrics,
+  type EvolutionVisualizationData,
   type ViewerVisualizationMode,
 } from "./visualization-mode.js";
+import type {
+  EvolutionBuildingHistory,
+  EvolutionFrameSummary,
+  EvolutionTransition,
+} from "./evolution-timeline.js";
+import { EvolutionTimelineWorkerClient } from "./evolution-timeline-worker-client.js";
 import "./styles.css";
 
 interface BuildingContext {
@@ -193,6 +200,25 @@ interface ModelSource {
     | "not-captured"
     | "retained"
     | "unavailable";
+  readonly evolution?: {
+    readonly artifactUrl: string;
+    readonly size: number;
+    readonly sha256: string;
+  };
+}
+
+interface SceneEvolutionAnimation {
+  readonly startedAt: number;
+  readonly durationMs: number;
+  readonly addedIds: ReadonlySet<string>;
+  readonly fromById: ReadonlyMap<
+    string,
+    {
+      readonly position: CityBuilding["position"];
+      readonly size: CityBuilding["size"];
+    }
+  >;
+  readonly ghosts: THREE.Group;
 }
 
 interface ViewerPerformanceDiagnostics {
@@ -258,6 +284,17 @@ const visualizationModeSelect =
   element<HTMLSelectElement>("visualization-mode");
 const visualizationModeStatus =
   element<HTMLParagraphElement>("visualization-mode-status");
+const evolutionTimeline = element<HTMLElement>("evolution-timeline");
+const evolutionFirst = element<HTMLButtonElement>("evolution-first");
+const evolutionPrevious =
+  element<HTMLButtonElement>("evolution-previous");
+const evolutionPlay = element<HTMLButtonElement>("evolution-play");
+const evolutionNext = element<HTMLButtonElement>("evolution-next");
+const evolutionLast = element<HTMLButtonElement>("evolution-last");
+const evolutionRange = element<HTMLInputElement>("evolution-range");
+const evolutionSpeed = element<HTMLSelectElement>("evolution-speed");
+const evolutionCommit = element<HTMLElement>("evolution-commit");
+const evolutionStatus = element<HTMLElement>("evolution-status");
 const externalZone = element<HTMLElement>("external-zone");
 const externalList = element<HTMLUListElement>("external-list");
 const overviewFields = {
@@ -392,6 +429,8 @@ const inspectorFields = {
   metricExplanation: element<HTMLParagraphElement>(
     "building-metric-explanation",
   ),
+  evolutionRow: element<HTMLElement>("building-evolution-row"),
+  evolution: element<HTMLElement>("building-evolution"),
   unitCount: element<HTMLElement>("building-unit-count"),
   unitsEmpty: element<HTMLParagraphElement>("building-units-empty"),
   unitsDetails: element<HTMLDetailsElement>("building-units-details"),
@@ -485,6 +524,7 @@ class CityScene {
   private selectedEntity: SceneEntity | null = null;
   private isolatedDistrictId: string | null = null;
   private cameraTransition: CameraTransition | null = null;
+  private evolutionAnimation: SceneEvolutionAnimation | null = null;
   private fullCityMaxDistance = 20;
   private fullCityFar = 100;
   private pointerStart: PointerPosition | null = null;
@@ -578,6 +618,7 @@ class CityScene {
     model: CityModel,
     effectiveBase: CityBase | undefined,
     externalNodes: readonly ExternalSceneNode[],
+    frame = true,
   ): void {
     this.assertBuildingCapability(model.buildings.length);
     const repositories = new Map(
@@ -794,7 +835,11 @@ class CityScene {
     }
 
     this.replaceGrid(this.bounds(), gridY);
-    this.frame();
+    if (frame) {
+      this.frame();
+    } else {
+      this.preserveCameraForBounds(this.bounds());
+    }
   }
 
   public showCityLayout(frame = true): void {
@@ -823,6 +868,59 @@ class CityScene {
     this.visualizationModeLabel = label;
     this.buildingLayer?.setColors(colorsByBuildingId);
     this.refreshSceneLabels();
+  }
+
+  public showEvolutionTransition(
+    transition: EvolutionTransition,
+    reducedMotion: boolean,
+  ): void {
+    this.clearEvolutionAnimation();
+    const ghosts = new THREE.Group();
+    ghosts.name = "code-city:evolution-removals";
+    for (const building of transition.removedBuildings) {
+      const geometry = new THREE.BoxGeometry(
+        building.size.x,
+        building.size.y,
+        building.size.z,
+      );
+      const material = new THREE.MeshBasicMaterial({
+        color: "#fb7185",
+        transparent: true,
+        opacity: 0.48,
+        depthWrite: false,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.set(
+        building.position.x,
+        building.position.y,
+        building.position.z,
+      );
+      ghosts.add(mesh);
+    }
+    this.city.add(ghosts);
+    const addedIds = new Set(transition.addedBuildingIds);
+    const fromById = new Map(
+      transition.interpolatedBuildings.map((building) => [
+        building.id,
+        building,
+      ]),
+    );
+    this.buildingLayer?.setEvolutionProgress(
+      addedIds,
+      fromById,
+      reducedMotion ? 1 : 0,
+    );
+    this.evolutionAnimation = {
+      startedAt: performance.now(),
+      durationMs: reducedMotion ? Number.POSITIVE_INFINITY : 700,
+      addedIds,
+      fromById,
+      ghosts,
+    };
+  }
+
+  public finishEvolutionTransition(): void {
+    this.clearEvolutionAnimation();
   }
 
   public showPrintPlate(plate: ProjectedPrintPlate): void {
@@ -1127,6 +1225,7 @@ class CityScene {
 
   private readonly render = (): void => {
     this.updateCameraTransition();
+    this.updateEvolutionAnimation();
     this.controls.update();
     this.updateFog();
     this.renderer.render(this.scene, this.camera);
@@ -1147,6 +1246,7 @@ class CityScene {
   }
 
   private clear(): void {
+    this.clearEvolutionAnimation();
     this.hover(null);
     this.pointerPicker.cancel();
     this.sceneLabelOverlay.clear();
@@ -1172,6 +1272,47 @@ class CityScene {
       this.city.remove(child);
       disposeObject(child);
     }
+  }
+
+  private updateEvolutionAnimation(): void {
+    const animation = this.evolutionAnimation;
+    if (!animation || !Number.isFinite(animation.durationMs)) return;
+    const progress = Math.min(
+      1,
+      Math.max(
+        0,
+        (performance.now() - animation.startedAt) / animation.durationMs,
+      ),
+    );
+    const eased = progress * progress * (3 - 2 * progress);
+    this.buildingLayer?.setEvolutionProgress(
+      animation.addedIds,
+      animation.fromById,
+      eased,
+    );
+    for (const child of animation.ghosts.children) {
+      if (child instanceof THREE.Mesh) {
+        const material = child.material;
+        if (material instanceof THREE.MeshBasicMaterial) {
+          material.opacity = 0.48 * (1 - eased);
+        }
+        child.scale.y = Math.max(0.02, 1 - eased);
+      }
+    }
+    if (progress === 1) this.clearEvolutionAnimation();
+  }
+
+  private clearEvolutionAnimation(): void {
+    const animation = this.evolutionAnimation;
+    this.evolutionAnimation = null;
+    if (!animation) return;
+    this.buildingLayer?.setEvolutionProgress(
+      animation.addedIds,
+      animation.fromById,
+      1,
+    );
+    this.city.remove(animation.ghosts);
+    disposeObject(animation.ghosts);
   }
 
   private clearPrintPlate(): void {
@@ -1283,6 +1424,35 @@ class CityScene {
       toPosition: position,
       toTarget: center,
     };
+  }
+
+  private preserveCameraForBounds(bounds: THREE.Box3): void {
+    const size = bounds.getSize(new THREE.Vector3());
+    const maximumDimension = Math.max(size.x, size.y, size.z, 1);
+    const requiredDistance = cameraDistanceForBounds(
+      size,
+      this.camera.fov,
+      this.camera.aspect,
+    );
+    const currentDistance = Math.max(
+      this.camera.position.distanceTo(this.controls.target),
+      1,
+    );
+    this.fullCityMaxDistance = Math.max(requiredDistance * 5, 20);
+    this.fullCityFar = Math.max(
+      requiredDistance * 20,
+      maximumDimension * 20,
+      currentDistance * 2,
+    );
+    this.camera.near = Math.max(currentDistance / 1_000, 0.01);
+    this.camera.far = this.fullCityFar;
+    this.camera.updateProjectionMatrix();
+    this.controls.maxDistance = cameraMaximumDistanceForFrame(
+      this.fullCityMaxDistance,
+      currentDistance,
+    );
+    this.controls.update();
+    this.updateFog();
   }
 
   private updateCameraTransition(): void {
@@ -1635,6 +1805,19 @@ let loadedBuildingSource:
   | undefined;
 let visualizationMode: ViewerVisualizationMode = "semantic";
 let previewPrinterProfile: PrinterProfile | undefined;
+let evolutionWorker = new EvolutionTimelineWorkerClient();
+let evolutionLoadController: AbortController | undefined;
+let evolutionGeneration = 0;
+let evolutionSeekGeneration = 0;
+let evolutionPlaybackTimer: number | undefined;
+let evolutionTransitionTimer: number | undefined;
+let activeEvolutionFrames: readonly EvolutionFrameSummary[] = [];
+let activeEvolutionHistories = new Map<string, EvolutionBuildingHistory>();
+let activeEvolutionAnalysis: EvolutionVisualizationData | undefined;
+let activeEvolutionTransition: EvolutionTransition | undefined;
+let activeEvolutionIndex = 0;
+let evolutionPlaying = false;
+let evolutionBusy = false;
 let activeBuildingsById = new Map(
   DEMO_MODEL.buildings.map((building) => [building.id, building]),
 );
@@ -1711,6 +1894,9 @@ const projectImportDialog = installProjectImportDialog({
       assetRoot: source.assetRoot,
       jobId: source.jobId,
       sourceAvailability: source.sourceAvailability,
+      ...(source.evolution === undefined
+        ? {}
+        : { evolution: source.evolution }),
     });
   },
   onSignedOut: () => {
@@ -1757,6 +1943,8 @@ visualizationModeSelect.addEventListener("change", () => {
   if (
     selected !== "semantic" &&
     selected !== "complexity" &&
+    selected !== "age" &&
+    selected !== "churn" &&
     selected !== "print"
   ) {
     visualizationModeSelect.value = visualizationMode;
@@ -1764,6 +1952,36 @@ visualizationModeSelect.addEventListener("change", () => {
   }
   visualizationMode = selected;
   applyVisualization();
+});
+
+evolutionFirst.addEventListener("click", () => {
+  stopEvolutionPlayback();
+  void seekEvolution(0);
+});
+evolutionPrevious.addEventListener("click", () => {
+  stopEvolutionPlayback();
+  void seekEvolution(Math.max(0, activeEvolutionIndex - 1));
+});
+evolutionPlay.addEventListener("click", () => {
+  if (evolutionPlaying) {
+    stopEvolutionPlayback();
+  } else {
+    startEvolutionPlayback();
+  }
+});
+evolutionNext.addEventListener("click", () => {
+  stopEvolutionPlayback();
+  void seekEvolution(
+    Math.min(activeEvolutionFrames.length - 1, activeEvolutionIndex + 1),
+  );
+});
+evolutionLast.addEventListener("click", () => {
+  stopEvolutionPlayback();
+  void seekEvolution(activeEvolutionFrames.length - 1);
+});
+evolutionRange.addEventListener("input", () => {
+  stopEvolutionPlayback();
+  void seekEvolution(Number(evolutionRange.value));
 });
 
 fileOpenButton.addEventListener("click", () => {
@@ -1973,6 +2191,7 @@ window.addEventListener("keydown", (event) => {
   }
 });
 window.addEventListener("beforeunload", () => {
+  resetEvolutionTimeline(false);
   viewerWorkspace.dispose();
   printPlateToolbar.dispose();
   projectImportDialog.dispose();
@@ -2034,12 +2253,29 @@ function activateImportedModel(
   model: CityModel,
   source: ModelSource,
 ): void {
+  resetEvolutionTimeline();
   activeModelSource = source;
   metricMappingPanel.setProject(model);
   applyModel(model, source);
+  void startEvolutionTimeline(source);
 }
 
-function applyModel(model: CityModel, source: ModelSource): void {
+function applyModel(
+  model: CityModel,
+  source: ModelSource,
+  options: {
+    readonly preserveView?: boolean;
+    readonly preserveSelection?: boolean;
+  } = {},
+): void {
+  const preservedSelection = options.preserveSelection
+    ? explorerState.selectedEntity
+    : null;
+  const preservedIsolation = options.preserveSelection
+    ? explorerState.isolatedDistrictId
+    : null;
+  const preservedDependencyRouteState = dependencyRouteState;
+  const preservedDependencyRouteVisibleLimit = dependencyRouteVisibleLimit;
   printExportDialog.invalidate();
   printPlateToolbar.setPlan(undefined);
   const buildingsById = new Map(
@@ -2084,7 +2320,12 @@ function applyModel(model: CityModel, source: ModelSource): void {
   searchResultLimit = DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT;
   synchronizeExplorerState(explorerState);
   renderBuildingSearch();
-  cityScene.load(model, nextExternalLayout.base, nextExternalLayout.nodes);
+  cityScene.load(
+    model,
+    nextExternalLayout.base,
+    nextExternalLayout.nodes,
+    !options.preserveView,
+  );
   renderExternalNodeList();
   const title =
     model.identity?.title ??
@@ -2102,8 +2343,314 @@ function applyModel(model: CityModel, source: ModelSource): void {
     `${version}${model.districts.length.toLocaleString()} districts · ${model.buildings.length.toLocaleString()} buildings`,
   );
   applyVisualization();
+  if (
+    preservedIsolation !== null &&
+    activeDistrictsById.has(preservedIsolation)
+  ) {
+    cityScene.isolateDistrict(preservedIsolation, false);
+  }
+  if (options.preserveSelection) {
+    dependencyRouteState = preservedDependencyRouteState;
+    dependencyRouteVisibleLimit = preservedDependencyRouteVisibleLimit;
+  }
+  if (preservedSelection?.kind === "building") {
+    cityScene.selectBuilding(preservedSelection.id);
+  } else if (preservedSelection?.kind === "district") {
+    cityScene.selectDistrict(preservedSelection.id);
+  } else if (preservedSelection?.kind === "external") {
+    cityScene.selectExternalNode(preservedSelection.id);
+  }
   hideError();
   schedulePerformanceDiagnostics();
+}
+
+function resetEvolutionTimeline(recreateWorker = true): void {
+  evolutionGeneration += 1;
+  evolutionSeekGeneration += 1;
+  evolutionLoadController?.abort();
+  evolutionLoadController = undefined;
+  stopEvolutionPlayback();
+  if (evolutionTransitionTimer !== undefined) {
+    window.clearTimeout(evolutionTransitionTimer);
+    evolutionTransitionTimer = undefined;
+  }
+  evolutionWorker.dispose();
+  if (recreateWorker) evolutionWorker = new EvolutionTimelineWorkerClient();
+  activeEvolutionFrames = [];
+  activeEvolutionHistories = new Map();
+  activeEvolutionAnalysis = undefined;
+  activeEvolutionTransition = undefined;
+  activeEvolutionIndex = 0;
+  evolutionBusy = false;
+  evolutionTimeline.hidden = true;
+  evolutionRange.max = "0";
+  evolutionRange.value = "0";
+  if (
+    visualizationMode === "age" ||
+    visualizationMode === "churn"
+  ) {
+    applyVisualization();
+  }
+}
+
+async function startEvolutionTimeline(source: ModelSource): Promise<void> {
+  const artifact = source.evolution;
+  if (artifact === undefined || source.jobId === undefined) return;
+  const generation = evolutionGeneration;
+  const controller = new AbortController();
+  evolutionLoadController = controller;
+  evolutionTimeline.hidden = false;
+  evolutionBusy = true;
+  evolutionCommit.textContent = "Loading repository history";
+  evolutionStatus.textContent =
+    "Verifying and preparing deterministic timeline framesâ€¦";
+  renderEvolutionTimeline();
+  try {
+    const bytes = await sourceApi.evolutionArtifact(
+      source.jobId,
+      artifact,
+      controller.signal,
+    );
+    if (generation !== evolutionGeneration) return;
+    const loaded = await evolutionWorker.load(bytes, artifact);
+    if (generation !== evolutionGeneration) return;
+    activeEvolutionFrames = loaded.frames;
+    activeEvolutionHistories = new Map(
+      loaded.histories.map((history) => [history.id, history]),
+    );
+    activeEvolutionAnalysis = evolutionVisualizationData(loaded.analysis);
+    activeEvolutionIndex = 0;
+    evolutionRange.max = String(Math.max(0, loaded.frames.length - 1));
+    evolutionBusy = false;
+    renderEvolutionTimeline();
+    if (loaded.frames.length > 1) {
+      await seekEvolution(loaded.frames.length - 1, true);
+    } else {
+      applyVisualization();
+    }
+  } catch (error) {
+    if (
+      generation !== evolutionGeneration ||
+      controller.signal.aborted ||
+      (error instanceof DOMException && error.name === "AbortError")
+    ) {
+      return;
+    }
+    evolutionBusy = false;
+    evolutionCommit.textContent = "Repository history unavailable";
+    evolutionStatus.textContent =
+      error instanceof Error ? error.message : "Evolution could not be loaded.";
+    renderEvolutionTimeline();
+  } finally {
+    if (evolutionLoadController === controller) {
+      evolutionLoadController = undefined;
+    }
+  }
+}
+
+function evolutionVisualizationData(
+  analysis: {
+    readonly ageByBuildingId: readonly (readonly [string, number])[];
+    readonly churnByBuildingId: readonly (readonly [string, number])[];
+  },
+): EvolutionVisualizationData {
+  return {
+    ageByBuildingId: new Map(analysis.ageByBuildingId),
+    churnByBuildingId: new Map(analysis.churnByBuildingId),
+  };
+}
+
+async function seekEvolution(
+  targetIndex: number,
+  initial = false,
+): Promise<boolean> {
+  if (
+    activeEvolutionFrames.length === 0 ||
+    !Number.isSafeInteger(targetIndex) ||
+    targetIndex < 0 ||
+    targetIndex >= activeEvolutionFrames.length
+  ) {
+    return false;
+  }
+  if (targetIndex === activeEvolutionIndex && !initial) {
+    renderEvolutionTimeline();
+    return true;
+  }
+  const generation = evolutionGeneration;
+  const seekGeneration = ++evolutionSeekGeneration;
+  const fromIndex = activeEvolutionIndex;
+  const selected = explorerState.selectedEntity;
+  const deletedBuilding =
+    selected?.kind === "building"
+      ? activeBuildingsById.get(selected.id)
+      : undefined;
+  evolutionBusy = true;
+  evolutionRange.value = String(targetIndex);
+  evolutionStatus.textContent = "Seekingâ€¦";
+  renderEvolutionTimeline();
+  try {
+    const result = await evolutionWorker.seek(fromIndex, targetIndex);
+    if (
+      generation !== evolutionGeneration ||
+      seekGeneration !== evolutionSeekGeneration
+    ) {
+      return false;
+    }
+    activeEvolutionIndex = targetIndex;
+    activeEvolutionAnalysis = evolutionVisualizationData(result.analysis);
+    activeEvolutionTransition = initial ? undefined : result.transition;
+    applyModel(result.model, activeModelSource, {
+      preserveView: true,
+      preserveSelection: true,
+    });
+    if (!initial) {
+      if (evolutionTransitionTimer !== undefined) {
+        window.clearTimeout(evolutionTransitionTimer);
+      }
+      cityScene.showEvolutionTransition(
+        result.transition,
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+      );
+      evolutionTransitionTimer = window.setTimeout(() => {
+        if (
+          generation !== evolutionGeneration ||
+          targetIndex !== activeEvolutionIndex
+        ) {
+          return;
+        }
+        activeEvolutionTransition = undefined;
+        evolutionTransitionTimer = undefined;
+        cityScene.finishEvolutionTransition();
+        applyVisualization();
+      }, 1_200);
+    }
+    if (
+      selected?.kind === "building" &&
+      !activeBuildingsById.has(selected.id) &&
+      deletedBuilding !== undefined
+    ) {
+      showDeletedEvolutionBuilding(deletedBuilding);
+    }
+    evolutionBusy = false;
+    renderEvolutionTimeline();
+    return true;
+  } catch (error) {
+    if (
+      generation !== evolutionGeneration ||
+      seekGeneration !== evolutionSeekGeneration ||
+      (error instanceof DOMException && error.name === "AbortError")
+    ) {
+      return false;
+    }
+    evolutionBusy = false;
+    evolutionStatus.textContent =
+      error instanceof Error ? error.message : "The frame could not be shown.";
+    renderEvolutionTimeline();
+    return false;
+  }
+}
+
+function renderEvolutionTimeline(): void {
+  const frame = activeEvolutionFrames[activeEvolutionIndex];
+  const lastIndex = Math.max(0, activeEvolutionFrames.length - 1);
+  evolutionRange.value = String(activeEvolutionIndex);
+  evolutionFirst.disabled = evolutionBusy || activeEvolutionIndex === 0;
+  evolutionPrevious.disabled = evolutionBusy || activeEvolutionIndex === 0;
+  evolutionNext.disabled =
+    evolutionBusy || activeEvolutionIndex >= lastIndex;
+  evolutionLast.disabled =
+    evolutionBusy || activeEvolutionIndex >= lastIndex;
+  evolutionRange.disabled = lastIndex === 0;
+  evolutionPlay.disabled = lastIndex === 0;
+  evolutionPlay.setAttribute("aria-pressed", String(evolutionPlaying));
+  evolutionPlay.textContent = evolutionPlaying ? "â¸" : "â¶";
+  evolutionPlay.setAttribute(
+    "aria-label",
+    evolutionPlaying
+      ? "Pause repository evolution"
+      : "Play repository evolution",
+  );
+  if (!frame) return;
+  evolutionCommit.textContent =
+    `${activeEvolutionIndex + 1}/${activeEvolutionFrames.length} Â· ` +
+    frame.sha.slice(0, 10);
+  const transition = activeEvolutionTransition;
+  const changeText =
+    transition === undefined
+      ? ""
+      : [
+          `${transition.addedBuildingIds.length} added`,
+          `${transition.removedBuildings.length} removed`,
+          `${transition.renamedBuildingIds.length} renamed`,
+          `${transition.resizedBuildingIds.length} resized`,
+        ].join(" Â· ");
+  evolutionStatus.textContent =
+    `${new Date(frame.committedAt).toLocaleString()}${changeText ? ` Â· ${changeText}` : ""}`;
+}
+
+function startEvolutionPlayback(): void {
+  if (activeEvolutionFrames.length < 2 || evolutionBusy) return;
+  evolutionPlaying = true;
+  evolutionPlay.setAttribute("aria-pressed", "true");
+  renderEvolutionTimeline();
+  void advanceEvolutionPlayback();
+}
+
+async function advanceEvolutionPlayback(): Promise<void> {
+  if (!evolutionPlaying) return;
+  if (activeEvolutionIndex >= activeEvolutionFrames.length - 1) {
+    const reset = await seekEvolution(0);
+    if (!reset || !evolutionPlaying) return;
+  } else {
+    const advanced = await seekEvolution(activeEvolutionIndex + 1);
+    if (!advanced || !evolutionPlaying) return;
+  }
+  const delay = Number(evolutionSpeed.value);
+  evolutionPlaybackTimer = window.setTimeout(
+    () => void advanceEvolutionPlayback(),
+    Number.isFinite(delay) ? delay : 1_000,
+  );
+}
+
+function stopEvolutionPlayback(): void {
+  evolutionPlaying = false;
+  evolutionWorker.cancel();
+  if (evolutionPlaybackTimer !== undefined) {
+    window.clearTimeout(evolutionPlaybackTimer);
+    evolutionPlaybackTimer = undefined;
+  }
+  evolutionPlay?.setAttribute("aria-pressed", "false");
+  if (evolutionPlay) evolutionPlay.textContent = "â¶";
+}
+
+function showDeletedEvolutionBuilding(building: CityBuilding): void {
+  scrubBuildingSource();
+  inspectorEmpty.hidden = true;
+  inspectorContent.hidden = false;
+  districtInspectorContent.hidden = true;
+  externalInspectorContent.hidden = true;
+  clearSelectionButton.hidden = false;
+  selectionKind.textContent = "Removed building";
+  selectionName.textContent = building.name;
+  inspectorFields.name.textContent = building.name;
+  inspectorFields.repository.textContent = "Removed in this frame";
+  inspectorFields.module.textContent = "Historical selection";
+  inspectorFields.path.textContent = building.path;
+  inspectorFields.language.textContent = languageLabel(building.language);
+  inspectorFields.sloc.textContent = building.metrics.sloc.toLocaleString();
+  inspectorFields.load.textContent =
+    building.metrics.decisionLoad.toLocaleString();
+  inspectorFields.cc.textContent =
+    building.metrics.maximumComplexity.toLocaleString();
+  inspectorFields.metricMethod.textContent =
+    building.metricMethod ?? "Not recorded";
+  inspectorFields.metricExplanation.textContent =
+    "The selected lineage no longer exists at this commit. Its last known facts remain visible.";
+  inspectorFields.unitsDetails.hidden = true;
+  inspectorFields.sourceDetails.hidden = true;
+  renderBuildingEvolutionHistory(building.id);
+  selectionStatus.textContent =
+    `Selected lineage ${building.name} was removed by this commit.`;
 }
 
 function schedulePerformanceDiagnostics(): void {
@@ -2353,6 +2900,7 @@ function selectDistrictFromExplorer(districtId: string): void {
 
 function clearBuildingSelection(): void {
   cityScene.resetSelection();
+  showInspector(null);
 }
 
 function synchronizeExplorerState(state: ExplorerState): void {
@@ -3448,12 +3996,26 @@ function applyVisualization(): void {
     activeModel,
     visualizationMode,
     previewPrinterProfile,
+    activeEvolutionAnalysis,
   );
+  const colors = new Map(visualization.colorsByBuildingId);
+  const transition = activeEvolutionTransition;
+  if (transition !== undefined) {
+    transition.changedBuildingIds.forEach((id) => colors.set(id, "#a78bfa"));
+    transition.resizedBuildingIds.forEach((id) => colors.set(id, "#fbbf24"));
+    transition.renamedBuildingIds.forEach((id) => colors.set(id, "#22d3ee"));
+    transition.addedBuildingIds.forEach((id) => colors.set(id, "#4ade80"));
+  }
   cityScene.setVisualization(
-    visualization.colorsByBuildingId,
+    colors,
     visualization.label,
   );
-  visualizationModeStatus.textContent = visualization.status;
+  const transitionStatus =
+    transition === undefined
+      ? ""
+      : " Current-frame changes override the mode colors.";
+  visualizationModeStatus.textContent =
+    visualization.status + transitionStatus;
   visualizationModeSelect.setAttribute(
     "aria-invalid",
     visualization.available ? "false" : "true",
@@ -3462,7 +4024,46 @@ function applyVisualization(): void {
     "aria-label",
     `${visualization.label} legend`,
   );
-  renderLegend(activeModel, visualization.legend);
+  const changeGroups: SemanticGroup[] = [];
+  if (transition?.addedBuildingIds.length) {
+    changeGroups.push({
+      id: "evolution-added",
+      label: "Added in this transition",
+      color: "#4ade80",
+      priority: 104,
+    });
+  }
+  if (transition?.renamedBuildingIds.length) {
+    changeGroups.push({
+      id: "evolution-renamed",
+      label: "Renamed in this transition",
+      color: "#22d3ee",
+      priority: 103,
+    });
+  }
+  if (transition?.resizedBuildingIds.length) {
+    changeGroups.push({
+      id: "evolution-resized",
+      label: "Moved or resized in this transition",
+      color: "#fbbf24",
+      priority: 102,
+    });
+  }
+  if (
+    transition?.changedBuildingIds.some(
+      (id) =>
+        !transition.renamedBuildingIds.includes(id) &&
+        !transition.resizedBuildingIds.includes(id),
+    )
+  ) {
+    changeGroups.push({
+      id: "evolution-changed",
+      label: "Metrics or relationships changed",
+      color: "#a78bfa",
+      priority: 101,
+    });
+  }
+  renderLegend(activeModel, [...changeGroups, ...visualization.legend]);
 }
 
 function renderViewerOverview(): void {
@@ -3525,6 +4126,7 @@ function sourceAvailabilityMessage(): string {
   if (activeModelSource.sourceAvailability === "unavailable") {
     return "This imported result predates retained source navigation.";
   }
+
   if (activeModelSource.sourceAvailability === "not-captured") {
     return "This model-only import did not capture source files; import a repository archive or remote repository to enable navigation.";
   }
@@ -3720,6 +4322,7 @@ function showInspector(context: BuildingContext | null): void {
   dependencySection.open = false;
   if (!context) {
     scrubBuildingSource();
+    inspectorFields.evolutionRow.hidden = true;
     selectionKind.textContent = "Details";
     selectionName.textContent = "Nothing selected";
     selectionStatus.textContent = "Selection cleared.";
@@ -3727,6 +4330,8 @@ function showInspector(context: BuildingContext | null): void {
   }
 
   const { building, repository, module } = context;
+  inspectorFields.unitsDetails.hidden = false;
+  inspectorFields.sourceDetails.hidden = false;
   selectionKind.textContent = "Building";
   selectionName.textContent = building.name;
   inspectorFields.name.textContent = building.name;
@@ -3743,6 +4348,7 @@ function showInspector(context: BuildingContext | null): void {
     building.metricMethod ?? "Not recorded";
   inspectorFields.metricExplanation.textContent =
     describeBuildingMetrics(activeModel, building);
+  renderBuildingEvolutionHistory(building.id);
   inspectorFields.sourceDetails.open = false;
   revealBuildingSource(
     building,
@@ -3755,6 +4361,30 @@ function showInspector(context: BuildingContext | null): void {
   selectionStatus.textContent =
     `Selected ${building.name}. Maximum cyclomatic complexity ` +
     `${building.metrics.maximumComplexity.toLocaleString()}.`;
+}
+
+function renderBuildingEvolutionHistory(buildingId: string): void {
+  const history = activeEvolutionHistories.get(buildingId);
+  inspectorFields.evolutionRow.hidden = history === undefined;
+  if (!history) {
+    inspectorFields.evolution.textContent = "";
+    return;
+  }
+  const first = activeEvolutionFrames[history.firstFrame];
+  const removed =
+    history.removedAtFrame === undefined
+      ? ""
+      : ` Removed at frame ${history.removedAtFrame + 1}.`;
+  const kinds =
+    history.changeKinds.length === 0
+      ? ""
+      : ` Changes: ${history.changeKinds.join(", ")}.`;
+  inspectorFields.evolution.textContent =
+    `First seen ${first?.sha.slice(0, 10) ?? `frame ${history.firstFrame + 1}`}; ` +
+    `${history.changeCount.toLocaleString()} historical ` +
+    `${history.changeCount === 1 ? "change" : "changes"}.` +
+    removed +
+    kinds;
 }
 
 function showDistrictInspector(context: DistrictContext): void {

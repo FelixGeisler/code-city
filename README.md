@@ -69,6 +69,16 @@ file metadata, repository bytes, or generated model. Closing the dialog or
 browser leaves an accepted server job running; **Cancel import** requests
 server cancellation.
 
+When a completed import has an evolution companion, the viewer verifies its
+declared size and SHA-256 digest in a dedicated worker and opens a repository
+timeline. First/previous/play/next/last controls, a direct scrubber, and four
+playback speeds seek deterministic commit frames without moving the camera.
+Added buildings rise in green, removals fade as red ghosts, renames are cyan,
+and moved or resized buildings are amber. Reduced-motion mode publishes each
+frame directly with no spatial interpolation. The **Building age** and
+**Historical churn** visualization modes, commit metadata, and selected
+building history are available only while a verified timeline is loaded.
+
 Completed imports remain on the server until explicitly removed. An
 authenticated `GET /api/v1/jobs` enumerates all retained jobs; for each
 completed `project-import`, send

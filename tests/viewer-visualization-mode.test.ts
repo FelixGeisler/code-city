@@ -58,6 +58,33 @@ describe("viewer visualization modes", () => {
     expect(view.status).toMatch(/choose a valid printer profile/iu);
   });
 
+  it("renders repository age and churn only when evolution facts exist", () => {
+    const firstId = DEMO_MODEL.buildings[0]!.id;
+    const unavailable = createViewerVisualization(DEMO_MODEL, "age");
+    const data = {
+      ageByBuildingId: new Map([[firstId, 9]]),
+      churnByBuildingId: new Map([[firstId, 4]]),
+    };
+    const age = createViewerVisualization(
+      DEMO_MODEL,
+      "age",
+      undefined,
+      data,
+    );
+    const churn = createViewerVisualization(
+      DEMO_MODEL,
+      "churn",
+      undefined,
+      data,
+    );
+
+    expect(unavailable.available).toBe(false);
+    expect(age.available).toBe(true);
+    expect(churn.available).toBe(true);
+    expect(age.colorsByBuildingId.get(firstId)).not.toBe("#94a3b8");
+    expect(churn.colorsByBuildingId.get(firstId)).not.toBe("#94a3b8");
+  });
+
   it("explains raw facts, formula provenance, caps, and states", () => {
     const explanation = describeBuildingMetrics(
       DEMO_MODEL,

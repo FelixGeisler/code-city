@@ -3,6 +3,7 @@ const SOURCE_RESPONSE_MAX_BYTES = 16 * 1024 * 1024 * 6 + 64 * 1024;
 const API_REQUEST_DEADLINE_MS = 30_000;
 const API_UPLOAD_DEADLINE_MS = 11 * 60_000;
 const API_RESULT_REMOVAL_DEADLINE_MS = 31 * 60_000;
+const EVOLUTION_ARTIFACT_DEADLINE_MS = 31 * 60_000;
 const MAXIMUM_ERROR_FIELDS = 64;
 const MAXIMUM_TEXT_CHARACTERS = 2_048;
 const MAXIMUM_EVOLUTION_ARTIFACT_BYTES = 512 * 1024 * 1024;
@@ -1036,6 +1037,65 @@ export class ViewerImportApiClient {
       throw protocolError("Source code could not be loaded.");
     }
     return response.value;
+  }
+
+  public async evolutionArtifact(
+    jobId: string,
+    artifact: NonNullable<ImportJobResult["evolution"]>,
+    signal?: AbortSignal,
+  ): Promise<ArrayBuffer> {
+    this.requireJobId(jobId);
+    const expectedPath = `/api/v1/artifacts/${jobId}/evolution.json`;
+    if (
+      artifact.artifactUrl !== expectedPath ||
+      !Number.isSafeInteger(artifact.size) ||
+      artifact.size < 1 ||
+      artifact.size > MAXIMUM_EVOLUTION_ARTIFACT_BYTES ||
+      !/^[0-9a-f]{64}$/u.test(artifact.sha256)
+    ) {
+      throw protocolError("Evolution artifact metadata is invalid.");
+    }
+    return await this.withDeadline(
+      signal,
+      EVOLUTION_ARTIFACT_DEADLINE_MS,
+      async (requestSignal) => {
+        const response = await this.fetchResponse(
+          expectedPath,
+          { method: "GET" },
+          requestSignal,
+        );
+        if (response.status !== 200) {
+          if (response.body !== null) {
+            await readBoundedBytes(
+              response,
+              requestSignal,
+              API_RESPONSE_MAX_BYTES,
+            );
+          }
+          throw protocolError("Evolution artifact could not be loaded.");
+        }
+        const contentType = response.headers.get("content-type");
+        if (
+          contentType === null ||
+          !/^application\/json(?:\s*;\s*charset=utf-8)?$/iu.test(contentType)
+        ) {
+          throw protocolError("Evolution artifact is not UTF-8 JSON.");
+        }
+        const declaredLength = response.headers.get("content-length");
+        if (declaredLength !== String(artifact.size)) {
+          throw protocolError("Evolution artifact size does not match.");
+        }
+        const bytes = await readBoundedBytes(
+          response,
+          requestSignal,
+          artifact.size,
+        );
+        if (bytes.byteLength !== artifact.size) {
+          throw protocolError("Evolution artifact size does not match.");
+        }
+        return Uint8Array.from(bytes).buffer as ArrayBuffer;
+      },
+    );
   }
 
   public async createRemoteImport(

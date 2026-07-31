@@ -9,6 +9,7 @@ import {
   measureEvolutionBundleBytes,
   prepareEvolutionSerialization,
   replayEvolutionBundle,
+  replayValidatedEvolutionBundle,
   serializeEvolutionBundle,
   validateCityModel,
   validateEvolutionBundle,
@@ -341,6 +342,20 @@ describe("EvolutionBundle 1.0", () => {
       "mutated";
     expect(frames[1]!.model.repositories[0]!.name).toBe("One");
     expect(value.baseline.model.repositories[0]!.name).toBe("One");
+  });
+
+  it("replays the exact validator-owned bundle without accepting an unvalidated lookalike", () => {
+    const unvalidated = bundle();
+    expect(() => [...replayValidatedEvolutionBundle(unvalidated)]).toThrow(
+      /exact result/iu,
+    );
+
+    const validated = validateEvolutionBundle(unvalidated);
+    expect(
+      [...replayValidatedEvolutionBundle(validated)].map(
+        ({ commit: value }) => value.index,
+      ),
+    ).toEqual([0, 1, 2]);
   });
 
   it("accepts all normalized selection modes without persisting mutable tag names", () => {
