@@ -1465,6 +1465,36 @@ interface MutableBuildingApplication {
   color?: string;
 }
 
+interface HorizontalLayoutAnchor {
+  readonly centerX: number;
+  readonly minimumZ: number;
+}
+
+function horizontalLayoutAnchor(
+  buildings: readonly MutableBuildingApplication[],
+): HorizontalLayoutAnchor | undefined {
+  if (buildings.length === 0) return undefined;
+  let minimumX = Number.POSITIVE_INFINITY;
+  let maximumX = Number.NEGATIVE_INFINITY;
+  let minimumZ = Number.POSITIVE_INFINITY;
+  for (const building of buildings) {
+    minimumX = Math.min(minimumX, building.position.x - building.size.x / 2);
+    maximumX = Math.max(maximumX, building.position.x + building.size.x / 2);
+    minimumZ = Math.min(minimumZ, building.position.z - building.size.z / 2);
+  }
+  if (
+    !Number.isFinite(minimumX) ||
+    !Number.isFinite(maximumX) ||
+    !Number.isFinite(minimumZ)
+  ) {
+    throw new RangeError("Extension layout anchor is invalid.");
+  }
+  return Object.freeze({
+    centerX: (minimumX + maximumX) / 2,
+    minimumZ,
+  });
+}
+
 function metricValue(
   building: SafeExtensionModelBuilding,
   derived: Readonly<Record<string, Readonly<Record<string, number>>>>,
@@ -1498,15 +1528,23 @@ function assertPresentationBounds(
   building: MutableBuildingApplication,
   path: string,
 ): void {
+  assertGeometryBounds(building.position, building.size, path);
+}
+
+function assertGeometryBounds(
+  position: Vector3,
+  size: Vector3,
+  path: string,
+): void {
   for (const axis of ["x", "y", "z"] as const) {
-    const position = building.position[axis];
-    const size = building.size[axis];
+    const coordinate = position[axis];
+    const dimension = size[axis];
     if (
-      !Number.isFinite(position) ||
-      Math.abs(position) > coordinateMagnitude ||
-      !Number.isFinite(size) ||
-      size <= 0 ||
-      size > coordinateMagnitude
+      !Number.isFinite(coordinate) ||
+      Math.abs(coordinate) > coordinateMagnitude ||
+      !Number.isFinite(dimension) ||
+      dimension <= 0 ||
+      dimension > coordinateMagnitude
     ) {
       throw new RangeError(`${path}.${axis} exceeds the geometry bounds.`);
     }
@@ -1515,6 +1553,7 @@ function assertPresentationBounds(
 
 function applyGroupByModuleLayout(
   buildings: readonly MutableBuildingApplication[],
+  anchor: HorizontalLayoutAnchor | undefined,
   checkpoint: (operations: number) => void,
   path: string,
 ): void {
@@ -1597,6 +1636,20 @@ function applyGroupByModuleLayout(
         };
         assertPresentationBounds(building, `${path}.${building.id}`);
       }
+    }
+  }
+  if (anchor !== undefined) {
+    const projectedAnchor = horizontalLayoutAnchor(buildings)!;
+    const offsetX = anchor.centerX - projectedAnchor.centerX;
+    const offsetZ = anchor.minimumZ - projectedAnchor.minimumZ;
+    for (const building of buildings) {
+      checkpoint(1);
+      building.position = {
+        x: building.position.x + offsetX,
+        y: building.position.y,
+        z: building.position.z + offsetZ,
+      };
+      assertPresentationBounds(building, `${path}.${building.id}`);
     }
   }
 }
@@ -1695,6 +1748,7 @@ export function evaluateSafeExtension(
     position: { ...building.position },
     size: { ...building.size },
   }));
+  const layoutAnchor = horizontalLayoutAnchor(mutable);
   const mutableById = new Map(mutable.map((building) => [building.id, building]));
   const sourceById = new Map(snapshot.buildings.map((building) => [building.id, building]));
   const mappingApplications: ExtensionMappingApplication[] = [];
@@ -1746,9 +1800,48 @@ export function evaluateSafeExtension(
       );
     }
   }
+  const groupByModuleLayout = (configuration.layouts ?? []).some(
+    ({ strategy }) => strategy === "group-by-module",
+  );
+  const preserveCityLayoutIndex = (configuration.layouts ?? []).findIndex(
+    ({ strategy }) => strategy === "preserve-city",
+  );
+  const firstFootprintMappingIndex = (configuration.mappings ?? []).findIndex(
+    ({ target }) => target === "footprint",
+  );
+  const footprintGeometryChanged = mutable.some((building) => {
+    const source = sourceById.get(building.id)!;
+    return building.size.x !== source.size.x || building.size.z !== source.size.z;
+  });
+  if (footprintGeometryChanged && preserveCityLayoutIndex >= 0) {
+    throw new RangeError(
+      `layouts[${preserveCityLayoutIndex}].strategy cannot preserve city positions ` +
+        "when footprint mappings change horizontal geometry; use group-by-module.",
+    );
+  }
+  if (footprintGeometryChanged && !groupByModuleLayout) {
+    applyGroupByModuleLayout(
+      mutable,
+      layoutAnchor,
+      checkpoint,
+      "mappings.footprint-layout",
+    );
+    diagnostics.push(
+      Object.freeze({
+        path: `mappings[${firstFootprintMappingIndex}]`,
+        message:
+          "Footprint changes applied a deterministic collision-safe module and district relayout.",
+      }),
+    );
+  }
   const layoutApplications = (configuration.layouts ?? []).map((layout, index) => {
     if (layout.strategy === "group-by-module") {
-      applyGroupByModuleLayout(mutable, checkpoint, `layouts[${index}]`);
+      applyGroupByModuleLayout(
+        mutable,
+        layoutAnchor,
+        checkpoint,
+        `layouts[${index}]`,
+      );
     }
     return Object.freeze({ id: layout.id, strategy: layout.strategy });
   });
@@ -2364,6 +2457,8 @@ interface HorizontalExtent {
   maximumZ: number;
 }
 
+const extensionDistrictPadding = 0.5;
+
 function includeHorizontal(
   extent: HorizontalExtent,
   position: Vector3,
@@ -2386,6 +2481,142 @@ function finiteHorizontalExtent(extent: HorizontalExtent): boolean {
     Number.isFinite(extent.minimumZ) &&
     Number.isFinite(extent.maximumZ)
   );
+}
+
+interface MutableDistrictApplication {
+  readonly id: string;
+  readonly moduleId: string;
+  position: { x: number; y: number; z: number };
+  size: { x: number; y: number; z: number };
+}
+
+function applyCollisionSafeDistrictLayout(
+  model: CityModel,
+  buildings: readonly MutableBuildingApplication[],
+  districts: readonly MutableDistrictApplication[],
+): void {
+  if (districts.length === 0) return;
+  const buildingsByDistrict = new Map<
+    string,
+    MutableBuildingApplication[]
+  >();
+  for (const building of buildings) {
+    const group = buildingsByDistrict.get(building.districtId) ?? [];
+    group.push(building);
+    buildingsByDistrict.set(building.districtId, group);
+  }
+  const moduleGroups = new Map<string, MutableDistrictApplication[]>();
+  let maximumDistrictCount = 1;
+  let maximumWidth = 0;
+  let maximumDepth = 0;
+  for (const district of districts) {
+    const group = moduleGroups.get(district.moduleId) ?? [];
+    group.push(district);
+    moduleGroups.set(district.moduleId, group);
+    maximumDistrictCount = Math.max(maximumDistrictCount, group.length);
+    maximumWidth = Math.max(maximumWidth, district.size.x);
+    maximumDepth = Math.max(maximumDepth, district.size.z);
+  }
+  const orderedModules = [...moduleGroups.entries()].sort(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+  const moduleColumns = Math.ceil(Math.sqrt(orderedModules.length));
+  const districtColumns = Math.ceil(Math.sqrt(maximumDistrictCount));
+  const districtStrideX = maximumWidth + 1;
+  const districtStrideZ = maximumDepth + 1;
+  const moduleStrideX =
+    districtColumns * districtStrideX + maximumWidth + 3;
+  const moduleStrideZ =
+    districtColumns * districtStrideZ + maximumDepth + 3;
+  const moduleRows = Math.ceil(orderedModules.length / moduleColumns);
+  const totalX = Math.max(0, (moduleColumns - 1) * moduleStrideX);
+  const totalZ = Math.max(0, (moduleRows - 1) * moduleStrideZ);
+  for (const [moduleIndex, [, group]] of orderedModules.entries()) {
+    const moduleOriginX =
+      (moduleIndex % moduleColumns) * moduleStrideX - totalX / 2;
+    const moduleOriginZ =
+      Math.floor(moduleIndex / moduleColumns) * moduleStrideZ - totalZ / 2;
+    const orderedDistricts = [...group].sort((left, right) =>
+      left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
+    );
+    for (const [districtIndex, district] of orderedDistricts.entries()) {
+      const targetX =
+        moduleOriginX +
+        (districtIndex % districtColumns) * districtStrideX;
+      const targetZ =
+        moduleOriginZ +
+        Math.floor(districtIndex / districtColumns) * districtStrideZ;
+      const offsetX = targetX - district.position.x;
+      const offsetZ = targetZ - district.position.z;
+      district.position = {
+        x: targetX,
+        y: district.position.y,
+        z: targetZ,
+      };
+      assertGeometryBounds(
+        district.position,
+        district.size,
+        `application.districts.${district.id}`,
+      );
+      for (const building of buildingsByDistrict.get(district.id) ?? []) {
+        building.position = {
+          x: building.position.x + offsetX,
+          y: building.position.y,
+          z: building.position.z + offsetZ,
+        };
+        assertPresentationBounds(building, `application.${building.id}`);
+      }
+    }
+  }
+
+  const originalExtent: HorizontalExtent = {
+    minimumX: Number.POSITIVE_INFINITY,
+    maximumX: Number.NEGATIVE_INFINITY,
+    minimumZ: Number.POSITIVE_INFINITY,
+    maximumZ: Number.NEGATIVE_INFINITY,
+  };
+  for (const district of model.districts) {
+    includeHorizontal(originalExtent, district.position, district.size);
+  }
+  const projectedExtent: HorizontalExtent = {
+    minimumX: Number.POSITIVE_INFINITY,
+    maximumX: Number.NEGATIVE_INFINITY,
+    minimumZ: Number.POSITIVE_INFINITY,
+    maximumZ: Number.NEGATIVE_INFINITY,
+  };
+  for (const district of districts) {
+    includeHorizontal(projectedExtent, district.position, district.size);
+  }
+  if (
+    !finiteHorizontalExtent(originalExtent) ||
+    !finiteHorizontalExtent(projectedExtent)
+  ) {
+    throw new RangeError("Extension layout cannot be anchored to the city.");
+  }
+  const offsetX =
+    (originalExtent.minimumX + originalExtent.maximumX) / 2 -
+    (projectedExtent.minimumX + projectedExtent.maximumX) / 2;
+  const offsetZ = originalExtent.minimumZ - projectedExtent.minimumZ;
+  for (const district of districts) {
+    district.position = {
+      x: district.position.x + offsetX,
+      y: district.position.y,
+      z: district.position.z + offsetZ,
+    };
+    assertGeometryBounds(
+      district.position,
+      district.size,
+      `application.districts.${district.id}`,
+    );
+    for (const building of buildingsByDistrict.get(district.id) ?? []) {
+      building.position = {
+        x: building.position.x + offsetX,
+        y: building.position.y,
+        z: building.position.z + offsetZ,
+      };
+      assertPresentationBounds(building, `application.${building.id}`);
+    }
+  }
 }
 
 /** Verifies every result, its digest binding, and applies coherent geometry. */
@@ -2439,18 +2670,17 @@ export function applySafeExtensionEvaluation(
   ) {
     throw new TypeError("Extension preview does not match the project buildings.");
   }
-  const buildings = Object.freeze(
+  const mutableBuildings =
     model.buildings.map((building) => {
       const presentation = presentations.get(building.id)!;
-      return Object.freeze({
+      return {
         ...building,
-        position: Object.freeze({ ...presentation.position }),
-        size: Object.freeze({ ...presentation.size }),
-      });
-    }),
-  );
+        position: { ...presentation.position },
+        size: { ...presentation.size },
+      };
+    });
   const horizontalGeometryChanged = model.buildings.some((building, index) => {
-    const projected = buildings[index]!;
+    const projected = mutableBuildings[index]!;
     return (
       building.position.x !== projected.position.x ||
       building.position.z !== projected.position.z ||
@@ -2459,13 +2689,25 @@ export function applySafeExtensionEvaluation(
     );
   });
   const verticalGeometryChanged = model.buildings.some((building, index) => {
-    const projected = buildings[index]!;
+    const projected = mutableBuildings[index]!;
     return (
       building.position.y !== projected.position.y ||
       building.size.y !== projected.size.y
     );
   });
   if (!horizontalGeometryChanged && !verticalGeometryChanged) return model;
+  if (horizontalGeometryChanged) {
+    reanchorHorizontalExtensionLayout(model, mutableBuildings);
+  }
+  const buildings = Object.freeze(
+    mutableBuildings.map((building) =>
+      Object.freeze({
+        ...building,
+        position: Object.freeze({ ...building.position }),
+        size: Object.freeze({ ...building.size }),
+      }),
+    ),
+  );
 
   const districts = horizontalGeometryChanged
     ? (() => {
@@ -2478,7 +2720,6 @@ export function applySafeExtensionEvaluation(
           group.push(building);
           buildingsByDistrict.set(building.districtId, group);
         }
-        const districtPadding = 0.5;
         return Object.freeze(
           model.districts.map((district) => {
             const members = buildingsByDistrict.get(district.id) ?? [];
@@ -2498,9 +2739,15 @@ export function applySafeExtensionEvaluation(
               );
             }
             const size = Object.freeze({
-              x: extent.maximumX - extent.minimumX + districtPadding * 2,
+              x:
+                extent.maximumX -
+                extent.minimumX +
+                extensionDistrictPadding * 2,
               y: district.size.y,
-              z: extent.maximumZ - extent.minimumZ + districtPadding * 2,
+              z:
+                extent.maximumZ -
+                extent.minimumZ +
+                extensionDistrictPadding * 2,
             });
             const position = Object.freeze({
               x: (extent.minimumX + extent.maximumX) / 2,
