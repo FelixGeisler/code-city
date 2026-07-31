@@ -69,6 +69,17 @@ file metadata, repository bytes, or generated model. Closing the dialog or
 browser leaves an accepted server job running; **Cancel import** requests
 server cancellation.
 
+The **Explore** view includes a synchronized repository tree from repository
+through solution, module, district, and file. City or search selection expands
+only the selected path and scrolls it into view; selecting a district or file
+in the tree focuses the same 3D entity without leaving Explore. Isolation is
+reflected on mounted district and file rows. Arrow keys, Home, End, Enter, and
+Space provide complete keyboard navigation with ARIA tree semantics. A
+fixed-row virtual window keeps at most 160 rows in the DOM for large
+repositories, while
+expansion, active-row, and scroll state are retained independently for the
+eight most recently viewed projects.
+
 When a completed import has an evolution companion, the viewer verifies its
 declared size and SHA-256 digest in a dedicated worker and opens a repository
 timeline. First/previous/play/next/last controls, a direct scrubber, and four

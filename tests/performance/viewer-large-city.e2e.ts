@@ -92,6 +92,109 @@ test("25k production viewer stays within the rendering budget", async ({
   expect(snapshot.pickBenchmark.maximumAabbTests).toBeLessThanOrEqual(512);
 });
 
+test("25k hierarchy stays virtualized and synchronized with city state", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(`${viewerUrl}/?fixture=large-city-25k`, {
+    waitUntil: "domcontentloaded",
+    timeout: 45_000,
+  });
+  await page.locator("#viewer-tab-explore").click();
+  const tree = page.locator("#repository-tree");
+  const initialActiveId = await tree.getAttribute(
+    "aria-activedescendant",
+  );
+  expect(initialActiveId).not.toBeNull();
+  await expect(page.locator(`#${initialActiveId!}`)).toHaveAttribute(
+    "data-node-kind",
+    "repository",
+  );
+  await page.locator("#building-search").fill("file-24999.ts");
+  await page
+    .locator("#search-results .search-result-button")
+    .filter({ hasText: "file-24999.ts" })
+    .click();
+
+  await expect(page.locator("#selection-name")).toHaveText(
+    "file-24999.ts",
+  );
+  await page.locator("#viewer-tab-explore").click();
+  const selected = tree.locator(
+    '[role="treeitem"][aria-selected="true"]',
+  );
+  await expect(selected).toHaveText(/file-24999\.ts/u);
+  await expect(selected).toHaveAttribute("aria-level", "5");
+  expect(await tree.locator('[role="treeitem"]').count()).toBeLessThan(
+    80,
+  );
+  const selectedScrollTop = await tree.evaluate(
+    (element) => element.scrollTop,
+  );
+  expect(selectedScrollTop).toBeGreaterThan(0);
+  const activeDescendant = await tree.getAttribute(
+    "aria-activedescendant",
+  );
+  expect(activeDescendant).toBe(await selected.getAttribute("id"));
+
+  await tree.hover();
+  await page.mouse.wheel(0, -1_024);
+  await expect
+    .poll(() => tree.evaluate((element) => element.scrollTop))
+    .toBeLessThan(selectedScrollTop);
+  expect(await tree.locator('[role="treeitem"]').count()).toBeLessThan(
+    80,
+  );
+  const renderedIndexes = await tree
+    .locator('[role="treeitem"]')
+    .evaluateAll((rows) =>
+      rows.map((row) => Number((row as HTMLElement).dataset.treeRowIndex)),
+    );
+  expect(renderedIndexes).toEqual(
+    [...renderedIndexes].sort((left, right) => left - right),
+  );
+
+  await tree.press("ArrowUp");
+  const alternativeId = await tree.getAttribute(
+    "aria-activedescendant",
+  );
+  expect(alternativeId).not.toBeNull();
+  const alternative = page.locator(`#${alternativeId!}`);
+  await expect(alternative).toHaveAttribute(
+    "data-node-kind",
+    "building",
+  );
+  const alternativeName = (await alternative
+    .locator(".repository-tree-label")
+    .textContent())!;
+  await tree.press("Enter");
+  await expect(page.locator("#selection-name")).toHaveText(
+    alternativeName,
+  );
+  await page.locator("#isolate-district").click();
+  await expect(
+    tree.locator('[role="treeitem"][aria-selected="true"]'),
+  ).toHaveAttribute("data-isolated", "true");
+  await page.locator("#show-whole-city").click();
+  await expect(
+    tree.locator('[role="treeitem"][aria-selected="true"]'),
+  ).not.toHaveAttribute("data-isolated", "true");
+
+  await tree.press("ArrowLeft");
+  const parentId = await tree.getAttribute("aria-activedescendant");
+  expect(parentId).not.toBeNull();
+  await expect(page.locator(`#${parentId!}`)).toHaveAttribute(
+    "data-node-kind",
+    "district",
+  );
+  await tree.press("ArrowLeft");
+  await expect(page.locator(`#${parentId!}`)).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+});
+
 test("25k removal cues stay bounded and respect isolation in reduced motion", async ({
   page,
 }) => {
