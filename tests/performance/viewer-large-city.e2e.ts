@@ -699,6 +699,12 @@ test("isolates and focuses exact cross-district selections and uses visible sear
 
   await page.locator("#advanced-query-focus").click();
   await page.locator("#advanced-query-isolate").click();
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await expect(
+    page.locator(
+      '#repository-tree [role="treeitem"][aria-selected="true"]',
+    ),
+  ).toHaveCount(3);
   await expect
     .poll(async () =>
       page.evaluate(
@@ -715,7 +721,6 @@ test("isolates and focuses exact cross-district selections and uses visible sear
       visibleBuildingCount: 3,
       dependencyRoutes: { routeCount: 2 },
     });
-  await page.getByRole("tab", { name: "Explore" }).click();
   await expect(page.locator("#show-whole-city")).toBeEnabled();
   await page.locator("#show-whole-city").click();
   await expect
