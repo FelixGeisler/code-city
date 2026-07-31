@@ -10,6 +10,15 @@ interface PerformanceSnapshot {
   readonly buildingBatchCount: number;
   readonly objectCount: number;
   readonly renderCalls: number;
+  readonly evolutionRemovals: {
+    readonly totalCount: number;
+    readonly visibleCount: number;
+    readonly objectCount: number;
+    readonly geometryCount: number;
+    readonly materialCount: number;
+    readonly drawCalls: number;
+  } | null;
+  readonly evolutionRemovalAnimated: boolean;
   readonly pickBenchmark: {
     readonly count: number;
     readonly p95Milliseconds: number;
@@ -80,6 +89,80 @@ test("25k production viewer stays within the rendering budget", async ({
   expect(snapshot.pickBenchmark.count).toBe(50);
   expect(snapshot.pickBenchmark.p95Milliseconds).toBeLessThanOrEqual(32);
   expect(snapshot.pickBenchmark.maximumAabbTests).toBeLessThanOrEqual(512);
+});
+
+test("25k removal cues stay bounded and respect isolation in reduced motion", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(
+    `${viewerUrl}/?fixture=large-city-25k&evolution-removals=1&performance=1`,
+    { waitUntil: "domcontentloaded", timeout: 45_000 },
+  );
+  await page.waitForFunction(
+    () =>
+      (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+        }
+      ).__CODE_CITY_PERFORMANCE__?.ready === true,
+    undefined,
+    { timeout: 45_000 },
+  );
+
+  const wholeCity = await page.evaluate(
+    () =>
+      (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+        }
+      ).__CODE_CITY_PERFORMANCE__!,
+  );
+  expect(wholeCity.evolutionRemovals).toEqual({
+    totalCount: 25_000,
+    visibleCount: 25_000,
+    objectCount: 1,
+    geometryCount: 1,
+    materialCount: 1,
+    drawCalls: 1,
+  });
+  expect(wholeCity.evolutionRemovalAnimated).toBe(false);
+  expect(wholeCity.objectCount).toBeLessThanOrEqual(385);
+  expect(wholeCity.renderCalls).toBeLessThanOrEqual(257);
+
+  await page.goto(
+    `${viewerUrl}/?fixture=large-city-25k&evolution-removals=1&` +
+      `isolate-district=district%3A007&performance=1`,
+    { waitUntil: "domcontentloaded", timeout: 45_000 },
+  );
+  await page.waitForFunction(
+    () =>
+      (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+        }
+      ).__CODE_CITY_PERFORMANCE__?.ready === true,
+    undefined,
+    { timeout: 45_000 },
+  );
+  const isolated = await page.evaluate(
+    () =>
+      (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+        }
+      ).__CODE_CITY_PERFORMANCE__!,
+  );
+
+  expect(isolated.evolutionRemovals).toMatchObject({
+    totalCount: 25_000,
+    visibleCount: 250,
+    objectCount: 1,
+    geometryCount: 1,
+    materialCount: 1,
+    drawCalls: 1,
+  });
+  expect(isolated.evolutionRemovalAnimated).toBe(false);
 });
 
 test("WebGL 1 without ANGLE uses the bounded accessible fallback", async ({

@@ -27,7 +27,7 @@ export interface EvolutionTransition {
   readonly addedBuildingIds: readonly string[];
   readonly removedBuildings: readonly Pick<
     CityBuilding,
-    "id" | "name" | "position" | "size"
+    "id" | "name" | "districtId" | "position" | "size"
   >[];
   readonly renamedBuildingIds: readonly string[];
   readonly resizedBuildingIds: readonly string[];
@@ -277,6 +277,7 @@ export function compareEvolutionFrames(
     removedBuildings.push({
       id,
       name: building.name,
+      districtId: building.districtId,
       position: building.position,
       size: building.size,
     });
