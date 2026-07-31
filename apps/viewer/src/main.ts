@@ -134,6 +134,7 @@ import {
   type DesignSmellOverlayDiagnostics,
   type DesignSmellOverlayMarker,
 } from "./design-smell-overlay.js";
+import { installSafeExtensionPanel } from "./safe-extension-panel.js";
 import {
   type ProjectedPrintPlate,
   viewerPrintMeshBatches,
@@ -3239,6 +3240,9 @@ const designSmellPanel = installDesignSmellPanel(
     onQueryFactsChange: updateAdvancedQueryDesignSmells,
   },
 );
+const safeExtensionPanel = installSafeExtensionPanel(
+  element<HTMLElement>("safe-extension-panel"),
+);
 
 visualizationModeSelect.addEventListener("change", () => {
   const selected = visualizationModeSelect.value;
@@ -3571,6 +3575,8 @@ window.addEventListener("beforeunload", () => {
   imageExportDialog.dispose();
   designSmellPanel.dispose();
   cityScene.disposeDesignSmellOverlay();
+  safeExtensionPanel.dispose();
+  advancedQueryWorker.dispose();
   logoLoadGate.invalidate();
   loadedModelLogo?.dispose();
   loadedModelLogo = undefined;
@@ -3676,6 +3682,7 @@ function activateImportedModel(
   resetEvolutionTimeline();
   activeModelSource = source;
   metricMappingPanel.setProject(model);
+  safeExtensionPanel.setProject(model);
   applyModel(model, source);
   void startEvolutionTimeline(source);
 }
