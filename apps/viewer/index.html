@@ -1592,13 +1592,13 @@
                   </label>
                   <label class="metric-mapping-field" for="safe-extension-json">
                     <span>Extension configuration (JSON)</span>
-                    <textarea id="safe-extension-json" rows="12" spellcheck="false" aria-describedby="safe-extension-diagnostics"></textarea>
+                    <textarea id="safe-extension-json" rows="12" maxlength="131072" spellcheck="false" aria-describedby="safe-extension-diagnostics"></textarea>
                   </label>
                   <p id="safe-extension-status" role="status" aria-live="polite" aria-atomic="true"></p>
                   <p id="safe-extension-diagnostics" class="metric-mapping-help"></p>
                   <div class="metric-mapping-actions">
                     <button id="safe-extension-preview" class="button button-primary" type="button">Preview safely</button>
-                    <button id="safe-extension-export" class="button" type="button">Export JSON</button>
+                    <button id="safe-extension-export" class="button" type="button" disabled>Export JSON</button>
                   </div>
                 </div>
               </section>

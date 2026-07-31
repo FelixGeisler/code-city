@@ -1254,9 +1254,11 @@ class CityScene {
   public setBuildingGroupHighlight(
     buildingIds: readonly string[],
     visible = true,
+    color?: string,
   ): void {
     this.buildingLayer?.setGroupHighlight(
       visible ? buildingIds : [],
+      color,
     );
   }
 
@@ -2856,6 +2858,7 @@ class UnavailableCityScene {
   public setBuildingGroupHighlight(
     _buildingIds: readonly string[],
     _visible: boolean,
+    _color?: string,
   ): void {}
 
   public get buildingSelectionIsolated(): boolean {
@@ -3242,7 +3245,20 @@ const designSmellPanel = installDesignSmellPanel(
 );
 const safeExtensionPanel = installSafeExtensionPanel(
   element<HTMLElement>("safe-extension-panel"),
+  {
+    onPreview: (evaluation) => {
+      const overlay = evaluation.configuration.overlays?.[0];
+      if (overlay !== undefined) {
+        cityScene.setBuildingGroupHighlight(
+          evaluation.matches[overlay.filterId] ?? [],
+          true,
+          overlay.color,
+        );
+      }
+    },
+  },
 );
+safeExtensionPanel.setProject(activeModel);
 
 visualizationModeSelect.addEventListener("change", () => {
   const selected = visualizationModeSelect.value;
@@ -3576,7 +3592,6 @@ window.addEventListener("beforeunload", () => {
   designSmellPanel.dispose();
   cityScene.disposeDesignSmellOverlay();
   safeExtensionPanel.dispose();
-  advancedQueryWorker.dispose();
   logoLoadGate.invalidate();
   loadedModelLogo?.dispose();
   loadedModelLogo = undefined;

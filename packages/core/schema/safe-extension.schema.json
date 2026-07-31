@@ -7,31 +7,229 @@
   "required": ["version", "id", "name", "compatibility", "scope"],
   "properties": {
     "version": { "const": "codecity.extensions/1" },
-    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" },
-    "name": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "id": { "$ref": "#/$defs/identifier" },
+    "name": { "$ref": "#/$defs/label" },
     "compatibility": {
-      "type": "object", "additionalProperties": false,
+      "type": "object",
+      "additionalProperties": false,
       "required": ["cityModel", "capabilities"],
       "properties": {
         "cityModel": { "const": "1.x" },
-        "capabilities": { "type": "array", "uniqueItems": true, "maxItems": 32, "items": { "enum": ["derived-metrics", "mappings", "filters", "legends", "layouts", "queries", "overlays"] } }
+        "capabilities": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 7,
+          "items": {
+            "enum": [
+              "derived-metrics",
+              "mappings",
+              "filters",
+              "legends",
+              "layouts",
+              "queries",
+              "overlays"
+            ]
+          }
+        }
       }
     },
     "scope": {
       "oneOf": [
-        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "project" } } },
-        { "type": "object", "additionalProperties": false, "required": ["kind", "approvalId"], "properties": { "kind": { "const": "administrator" }, "approvalId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" } } }
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "project" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "approvalId"],
+          "properties": {
+            "kind": { "const": "administrator" },
+            "approvalId": { "$ref": "#/$defs/identifier" }
+          }
+        }
       ]
     },
-    "derivedMetrics": { "$ref": "#/$defs/definitions" },
-    "mappings": { "$ref": "#/$defs/definitions" },
-    "filters": { "$ref": "#/$defs/definitions" },
-    "legends": { "$ref": "#/$defs/definitions" },
-    "layouts": { "$ref": "#/$defs/definitions" },
-    "queries": { "$ref": "#/$defs/definitions" },
-    "overlays": { "$ref": "#/$defs/definitions" }
+    "derivedMetrics": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/derivedMetric" }
+    },
+    "mappings": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/mapping" }
+    },
+    "filters": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/filter" }
+    },
+    "legends": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/legend" }
+    },
+    "layouts": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/layout" }
+    },
+    "queries": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/query" }
+    },
+    "overlays": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/overlay" }
+    }
   },
   "$defs": {
-    "definitions": { "type": "array", "maxItems": 32, "items": { "type": "object" } }
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,63}$"
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160
+    },
+    "number": {
+      "type": "number",
+      "minimum": -1000000000,
+      "maximum": 1000000000
+    },
+    "expression": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "value"],
+          "properties": {
+            "op": { "const": "constant" },
+            "value": { "$ref": "#/$defs/number" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "metric"],
+          "properties": {
+            "op": { "const": "metric" },
+            "metric": {
+              "enum": [
+                "sloc",
+                "decisionLoad",
+                "maximumComplexity",
+                "executableUnitCount"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "value"],
+          "properties": {
+            "op": { "enum": ["log1p", "absolute", "negate"] },
+            "value": { "$ref": "#/$defs/expression" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["op", "left", "right"],
+          "properties": {
+            "op": {
+              "enum": [
+                "add",
+                "subtract",
+                "multiply",
+                "divide",
+                "minimum",
+                "maximum"
+              ]
+            },
+            "left": { "$ref": "#/$defs/expression" },
+            "right": { "$ref": "#/$defs/expression" }
+          }
+        }
+      ]
+    },
+    "derivedMetric": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "expression"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "$ref": "#/$defs/label" },
+        "expression": { "$ref": "#/$defs/expression" }
+      }
+    },
+    "mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "metric", "target", "minimum", "maximum"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "metric": { "$ref": "#/$defs/identifier" },
+        "target": { "enum": ["color", "height", "footprint"] },
+        "minimum": { "$ref": "#/$defs/number" },
+        "maximum": { "$ref": "#/$defs/number" }
+      }
+    },
+    "filter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "metric", "operator", "value"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "metric": { "$ref": "#/$defs/identifier" },
+        "operator": { "enum": ["atLeast", "atMost"] },
+        "value": { "$ref": "#/$defs/number" }
+      }
+    },
+    "legend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "mappingId"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "label": { "$ref": "#/$defs/label" },
+        "mappingId": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "layout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "strategy"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "strategy": { "enum": ["preserve-city", "group-by-module"] }
+      }
+    },
+    "query": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "filterId"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "filterId": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "overlay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "filterId", "color"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "filterId": { "$ref": "#/$defs/identifier" },
+        "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }
+      }
+    }
   }
 }

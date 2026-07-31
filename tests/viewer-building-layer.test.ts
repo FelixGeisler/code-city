@@ -213,6 +213,11 @@ describe("viewer building layer", () => {
     layer.setGroupHighlight(["c", "missing", "a", "a"]);
     expect(layer.groupHighlightObject.count).toBe(2);
     expect(layer.groupHighlightObject.visible).toBe(true);
+    expect(layer.groupHighlightObject.material.color.getHexString()).toBe("63e6ff");
+    layer.setGroupHighlight(["a"], "#DC2626");
+    expect(layer.groupHighlightObject.material.color.getHexString()).toBe("dc2626");
+    layer.setGroupHighlight(["c", "a"]);
+    expect(layer.groupHighlightObject.material.color.getHexString()).toBe("63e6ff");
     expect(
       new THREE.Raycaster(
         new THREE.Vector3(2, 20, 0),
