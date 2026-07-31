@@ -905,13 +905,20 @@ export async function readExactEvolutionArtifact(
   if (expectedBytes > MAXIMUM_EVOLUTION_ARTIFACT_BYTES) {
     throw evolutionArtifactTooLargeFailure();
   }
+  const body = response.body;
   if (
     response.headers.get("content-length") !== String(expectedBytes) ||
-    response.body === null
+    body === null
   ) {
+    if (body !== null) {
+      void body.cancel().catch(() => undefined);
+    }
     throw protocolError("Evolution artifact size does not match.");
   }
-  if (signal.aborted) throw abortFailure();
+  if (signal.aborted) {
+    void body.cancel().catch(() => undefined);
+    throw abortFailure();
+  }
 
   let buffer: ArrayBuffer;
   try {
@@ -923,14 +930,14 @@ export async function readExactEvolutionArtifact(
       throw new TypeError("The artifact allocator returned an invalid buffer.");
     }
   } catch {
-    void response.body.cancel().catch(() => undefined);
+    void body.cancel().catch(() => undefined);
     throw protocolError(
       `The evolution artifact could not fit in browser memory. Re-import with fewer history frames or a lower maxEvolutionOutputBytes (maximum ${MAXIMUM_EVOLUTION_ARTIFACT_MEBIBYTES} MiB).`,
     );
   }
 
   const destination = new Uint8Array(buffer);
-  const reader = response.body.getReader();
+  const reader = body.getReader();
   let offset = 0;
   let complete = false;
   try {

@@ -233,6 +233,42 @@ describe("viewer import API protocol", () => {
     expect(cancelCalls).toBe(1);
   });
 
+  it("cancels an unlocked evolution body on early rejection", async () => {
+    let mismatchCancellations = 0;
+    const mismatched = {
+      headers: new Headers({ "content-length": "1" }),
+      body: {
+        cancel: async () => {
+          mismatchCancellations += 1;
+        },
+      },
+    } as unknown as Response;
+    await expect(
+      readExactEvolutionArtifact(
+        mismatched,
+        new AbortController().signal,
+        2,
+      ),
+    ).rejects.toThrow(/size does not match/iu);
+    expect(mismatchCancellations).toBe(1);
+
+    let abortCancellations = 0;
+    const aborted = {
+      headers: new Headers({ "content-length": "2" }),
+      body: {
+        cancel: async () => {
+          abortCancellations += 1;
+        },
+      },
+    } as unknown as Response;
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      readExactEvolutionArtifact(aborted, controller.signal, 2),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(abortCancellations).toBe(1);
+  });
+
   it("rejects truncated or misdeclared evolution artifacts", async () => {
     const bytes = new TextEncoder().encode("{}");
     const client = new ViewerImportApiClient(
