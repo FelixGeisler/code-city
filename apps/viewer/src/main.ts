@@ -2541,13 +2541,15 @@ async function seekEvolution(
     ) {
       return false;
     }
-    evolutionSeekGate.settle(seekGeneration);
     if (error instanceof DOMException && error.name === "AbortError") {
+      evolutionSeekGate.settle(seekGeneration);
       renderEvolutionTimeline();
       return false;
     }
-    evolutionStatus.textContent =
-      error instanceof Error ? error.message : "The frame could not be shown.";
+    evolutionSeekGate.fail(
+      seekGeneration,
+      error instanceof Error ? error.message : "The frame could not be shown.",
+    );
     renderEvolutionTimeline();
     return false;
   }
@@ -2589,6 +2591,7 @@ function renderEvolutionTimeline(): void {
           `${transition.resizedBuildingIds.length} resized`,
         ].join(" \u00b7 ");
   evolutionStatus.textContent =
+    evolutionSeekGate.failure ??
     `${new Date(frame.committedAt).toLocaleString()}${changeText ? ` \u00b7 ${changeText}` : ""}`;
 }
 

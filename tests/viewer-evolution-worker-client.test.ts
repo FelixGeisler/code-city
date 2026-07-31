@@ -118,4 +118,73 @@ describe("evolution timeline worker client", () => {
       requestId: secondRequest.requestId,
     });
   });
+
+  it("sends cooperative cancellation and recovers with a later seek", async () => {
+    const worker = new FakeEvolutionWorker();
+    const client = new EvolutionTimelineWorkerClient({
+      createWorker: () => worker as unknown as Worker,
+    });
+    const loading = client.load(new ArrayBuffer(1), {
+      size: 1,
+      sha256: "c".repeat(64),
+    });
+    worker.respond({
+      type: "loaded",
+      requestId: worker.requests[0]!.requestId,
+      frames: [frame, { ...frame, index: 1 }],
+      histories: [],
+      model: DEMO_MODEL,
+      analysis,
+    });
+    await loading;
+
+    const cancelled = client.seek(0, 1);
+    const cancelledRequest = worker.requests.at(-1)!;
+    client.cancel();
+    await expect(cancelled).rejects.toMatchObject({ name: "AbortError" });
+    expect(worker.requests.at(-1)).toMatchObject({
+      type: "cancel",
+      requestId: cancelledRequest.requestId + 1,
+    });
+
+    const recovered = client.seek(0, 1);
+    const recoveredRequest = worker.requests.at(-1)!;
+    worker.respond({
+      type: "frame",
+      requestId: cancelledRequest.requestId,
+      frame,
+      model: DEMO_MODEL,
+      analysis,
+      transition: {
+        fromIndex: 0,
+        toIndex: 1,
+        addedBuildingIds: [],
+        removedBuildings: [],
+        renamedBuildingIds: [],
+        resizedBuildingIds: [],
+        changedBuildingIds: [],
+        interpolatedBuildings: [],
+      },
+    });
+    worker.respond({
+      type: "frame",
+      requestId: recoveredRequest.requestId,
+      frame: { ...frame, index: 1 },
+      model: DEMO_MODEL,
+      analysis,
+      transition: {
+        fromIndex: 0,
+        toIndex: 1,
+        addedBuildingIds: [],
+        removedBuildings: [],
+        renamedBuildingIds: [],
+        resizedBuildingIds: [],
+        changedBuildingIds: [],
+        interpolatedBuildings: [],
+      },
+    });
+    await expect(recovered).resolves.toMatchObject({
+      requestId: recoveredRequest.requestId,
+    });
+  });
 });

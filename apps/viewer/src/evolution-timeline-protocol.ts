@@ -21,7 +21,13 @@ export interface EvolutionSeekRequest {
   readonly toIndex: number;
 }
 
+export interface EvolutionCancelRequest {
+  readonly type: "cancel";
+  readonly requestId: number;
+}
+
 export type EvolutionWorkerRequest =
+  | EvolutionCancelRequest
   | EvolutionLoadRequest
   | EvolutionSeekRequest;
 
@@ -107,6 +113,9 @@ export function isEvolutionWorkerRequest(
       typeof candidate["expectedSha256"] === "string" &&
       SHA256_PATTERN.test(candidate["expectedSha256"])
     );
+  }
+  if (candidate["type"] === "cancel") {
+    return exactKeys(candidate, ["type", "requestId"]);
   }
   return (
     candidate["type"] === "seek" &&

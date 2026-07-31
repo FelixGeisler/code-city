@@ -47,13 +47,19 @@ export interface EvolutionFrameAnalysis {
 export class EvolutionSeekGate {
   #generation = 0;
   #busy = false;
+  #failure: string | undefined;
 
   public get busy(): boolean {
     return this.#busy;
   }
 
+  public get failure(): string | undefined {
+    return this.#failure;
+  }
+
   public begin(): number {
     this.#busy = true;
+    this.#failure = undefined;
     this.#generation += 1;
     return this.#generation;
   }
@@ -65,6 +71,14 @@ export class EvolutionSeekGate {
   public settle(generation: number): boolean {
     if (!this.isCurrent(generation)) return false;
     this.#busy = false;
+    this.#failure = undefined;
+    return true;
+  }
+
+  public fail(generation: number, message: string): boolean {
+    if (!this.isCurrent(generation)) return false;
+    this.#busy = false;
+    this.#failure = message;
     return true;
   }
 
@@ -72,6 +86,7 @@ export class EvolutionSeekGate {
     const wasBusy = this.#busy;
     this.#generation += 1;
     this.#busy = false;
+    this.#failure = undefined;
     return wasBusy;
   }
 }

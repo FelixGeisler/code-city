@@ -102,6 +102,13 @@ describe("viewer evolution timeline analysis", () => {
     expect(gate.busy).toBe(true);
     expect(gate.settle(next)).toBe(true);
     expect(gate.busy).toBe(false);
+
+    const failed = gate.begin();
+    expect(gate.fail(failed, "Frame replay failed.")).toBe(true);
+    expect(gate.failure).toBe("Frame replay failed.");
+    const recovered = gate.begin();
+    expect(gate.failure).toBeUndefined();
+    expect(gate.settle(recovered)).toBe(true);
   });
 
   it("summarizes frames and stable-lineage history deterministically", () => {
