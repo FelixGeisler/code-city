@@ -147,6 +147,10 @@ import {
   showAllDistricts,
 } from "./repository-explorer.js";
 import {
+  installRepositoryHierarchyTree,
+  repositoryHierarchyProjectKey,
+} from "./repository-hierarchy-tree.js";
+import {
   createSceneEntity,
   decodeSceneEntityKey,
   encodeSceneEntityKey,
@@ -176,6 +180,7 @@ import {
 import {
   installViewerWorkspace,
   nextBoundedResultLimit,
+  type ViewerWorkspaceState,
 } from "./viewer-workspace.js";
 import { summarizeViewerScope } from "./viewer-overview.js";
 import {
@@ -318,9 +323,15 @@ const INITIAL_ROUTE_RESULT_LIMIT = 8;
 const EVOLUTION_DEPENDENCY_ROUTE_COLOR = "#f472b6";
 
 const sceneHost = element<HTMLDivElement>("scene");
+let synchronizeHierarchyWorkspace = (
+  _state: ViewerWorkspaceState,
+): void => {};
 const viewerWorkspace = installViewerWorkspace(
   element<HTMLElement>("viewer-workspace"),
   element<HTMLElement>("viewer-workspace-scroll"),
+  {
+    onStateChange: (state) => synchronizeHierarchyWorkspace(state),
+  },
 );
 const fileInput = element<HTMLInputElement>("model-file");
 const fileOpenButton = element<HTMLButtonElement>("model-file-open");
@@ -450,6 +461,10 @@ const buildingSearch = element<HTMLInputElement>("building-search");
 const searchStatus = element<HTMLParagraphElement>("search-status");
 const searchResults = element<HTMLUListElement>("search-results");
 const searchShowMore = element<HTMLButtonElement>("search-show-more");
+const repositoryTree = element<HTMLElement>("repository-tree");
+const repositoryTreeStatus = element<HTMLElement>(
+  "repository-tree-status",
+);
 const isolateDistrictButton =
   element<HTMLButtonElement>("isolate-district");
 const showWholeCityButton =
@@ -1384,7 +1399,11 @@ class CityScene {
     schedulePerformanceDiagnostics();
   }
 
-  public selectBuilding(id: string, focus = false): boolean {
+  public selectBuilding(
+    id: string,
+    focus = false,
+    showDetails = true,
+  ): boolean {
     const context = this.buildingContexts.get(id);
     if (!context) {
       return false;
@@ -1396,14 +1415,18 @@ class CityScene {
     ) {
       this.applyDistrictIsolation(context.building.districtId, false);
     }
-    this.select(createSceneEntity("building", id));
+    this.select(createSceneEntity("building", id), showDetails);
     if (focus) {
       this.focusBuilding(id);
     }
     return true;
   }
 
-  public selectDistrict(id: string, focus = false): boolean {
+  public selectDistrict(
+    id: string,
+    focus = false,
+    showDetails = true,
+  ): boolean {
     const group = this.districtGroups.get(id);
     if (!group || !this.districtContexts.has(id)) {
       return false;
@@ -1415,7 +1438,7 @@ class CityScene {
     ) {
       this.applyDistrictIsolation(id, false);
     }
-    this.select(createSceneEntity("district", id));
+    this.select(createSceneEntity("district", id), showDetails);
     if (focus) {
       this.frameDistrict(id, true);
     }
@@ -2356,8 +2379,11 @@ class CityScene {
     this.showCityLayout(false);
   }
 
-  private select(entity: SceneEntity | null): void {
-    if (entity !== null) {
+  private select(
+    entity: SceneEntity | null,
+    showDetails = true,
+  ): void {
+    if (entity !== null && showDetails) {
       viewerWorkspace.show("details", { intent: "passive" });
     }
     if (sameSceneEntity(entity, this.selectedEntity)) {
@@ -2763,6 +2789,24 @@ let activeExternalNodes: readonly ExternalSceneNode[] =
   activeExternalLayout.nodes;
 let requestCityPresentation = (): void => {};
 const cityScene = createCityScene();
+const repositoryHierarchyTree = installRepositoryHierarchyTree({
+  tree: repositoryTree,
+  status: repositoryTreeStatus,
+  model: DEMO_MODEL,
+  projectKey: repositoryHierarchyProjectKey(
+    DEMO_MODEL,
+    activeModelSource.label,
+  ),
+  onActivate: activateRepositoryTreeEntity,
+});
+synchronizeHierarchyWorkspace = (state): void => {
+  if (
+    state.activeView === "explore" &&
+    state.sheetState !== "collapsed"
+  ) {
+    repositoryHierarchyTree.reveal();
+  }
+};
 const printPlateToolbar = installPrintPlateToolbar(
   {
     root: element<HTMLElement>("print-plate-toolbar"),
@@ -3179,6 +3223,7 @@ window.addEventListener("keydown", (event) => {
 window.addEventListener("beforeunload", () => {
   resetEvolutionTimeline(false);
   viewerWorkspace.dispose();
+  repositoryHierarchyTree.dispose();
   printPlateToolbar.dispose();
   projectImportDialog.dispose();
   metricMappingPanel.dispose();
@@ -3358,6 +3403,13 @@ function applyModel(
   districtDependencyFootprintsById =
     nextDistrictDependencyFootprints;
   repositoryExplorerIndex = nextRepositoryExplorerIndex;
+  repositoryHierarchyTree.setModel(
+    model,
+    repositoryHierarchyProjectKey(
+      model,
+      source.jobId ?? source.label,
+    ),
+  );
   explorerState = resetExplorerState();
   activeExternalLayout = nextExternalLayout;
   activeExternalNodes = nextExternalLayout.nodes;
@@ -4101,6 +4153,28 @@ function selectDistrictFromExplorer(districtId: string): void {
   }
 }
 
+function activateRepositoryTreeEntity(entity: SceneEntity): void {
+  if (entity.kind === "building") {
+    const next = selectExplorerBuilding(
+      explorerState,
+      activeModel,
+      entity.id,
+    );
+    if (selectedExplorerBuildingId(next) === entity.id) {
+      cityScene.selectBuilding(entity.id, true, false);
+    }
+  } else if (entity.kind === "district") {
+    const next = selectExplorerDistrict(
+      explorerState,
+      activeModel,
+      entity.id,
+    );
+    if (selectedExplorerDistrictId(next) === entity.id) {
+      cityScene.selectDistrict(entity.id, true, false);
+    }
+  }
+}
+
 function clearBuildingSelection(): void {
   activeEvolutionLineageSelection = undefined;
   cityScene.resetSelection();
@@ -4116,6 +4190,7 @@ function synchronizeExplorerState(state: ExplorerState): void {
   if (state.selectedEntity !== null) {
     activeEvolutionLineageSelection = undefined;
   }
+  repositoryHierarchyTree.synchronize(state);
   const selectedBuildingId = selectedExplorerBuildingId(state);
   const selectedDistrictId = selectedExplorerDistrictId(state);
   const selectedExternalNodeId = selectedExplorerExternalId(state);
