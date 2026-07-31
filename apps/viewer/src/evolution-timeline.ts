@@ -91,6 +91,109 @@ export class EvolutionSeekGate {
   }
 }
 
+export interface EvolutionDeferredSeekControllerOptions<TResult> {
+  readonly currentIndex: () => number;
+  readonly request: (
+    fromIndex: number,
+    targetIndex: number,
+  ) => Promise<TResult>;
+  readonly cancelRequest: () => void;
+  readonly render: () => void;
+  readonly failureMessage?: (error: unknown) => string;
+}
+
+export interface EvolutionDeferredSeekApplication<TResult> {
+  readonly result: TResult;
+  readonly fromIndex: number;
+  readonly targetIndex: number;
+}
+
+/**
+ * Owns the complete deferred seek lifecycle used by the timeline UI.
+ *
+ * The controller deliberately keeps the requested target separate from the
+ * currently applied frame. That lets rendering retain the newest slider value
+ * while an older request settles, without allowing a stale result to mutate
+ * either the city or the visible failure state.
+ */
+export class EvolutionDeferredSeekController<TResult> {
+  readonly #gate = new EvolutionSeekGate();
+  readonly #options: EvolutionDeferredSeekControllerOptions<TResult>;
+  #targetIndex: number | undefined;
+
+  public constructor(
+    options: EvolutionDeferredSeekControllerOptions<TResult>,
+  ) {
+    this.#options = options;
+  }
+
+  public get busy(): boolean {
+    return this.#gate.busy;
+  }
+
+  public get failure(): string | undefined {
+    return this.#gate.failure;
+  }
+
+  public get targetIndex(): number | undefined {
+    return this.#targetIndex;
+  }
+
+  public async seek(
+    targetIndex: number,
+    apply: (value: EvolutionDeferredSeekApplication<TResult>) => void,
+  ): Promise<boolean> {
+    const fromIndex = this.#options.currentIndex();
+    if (targetIndex === fromIndex) {
+      const wasBusy = this.#gate.cancel();
+      this.#targetIndex = undefined;
+      if (wasBusy) this.#options.cancelRequest();
+      this.#options.render();
+      return true;
+    }
+
+    if (this.#gate.busy) this.#options.cancelRequest();
+    const generation = this.#gate.begin();
+    this.#targetIndex = targetIndex;
+    this.#options.render();
+
+    try {
+      const result = await this.#options.request(fromIndex, targetIndex);
+      if (!this.#gate.isCurrent(generation)) return false;
+      apply({ result, fromIndex, targetIndex });
+      if (!this.#gate.settle(generation)) return false;
+      this.#targetIndex = undefined;
+      this.#options.render();
+      return true;
+    } catch (error) {
+      if (!this.#gate.isCurrent(generation)) return false;
+      this.#targetIndex = undefined;
+      if (error instanceof DOMException && error.name === "AbortError") {
+        this.#gate.settle(generation);
+      } else {
+        this.#gate.fail(
+          generation,
+          this.#options.failureMessage?.(error) ??
+            (error instanceof Error
+              ? error.message
+              : "The frame could not be shown."),
+        );
+      }
+      this.#options.render();
+      return false;
+    }
+  }
+
+  public cancel(): boolean {
+    const hadFailure = this.#gate.failure !== undefined;
+    const wasBusy = this.#gate.cancel();
+    this.#targetIndex = undefined;
+    if (wasBusy) this.#options.cancelRequest();
+    if (wasBusy || hadFailure) this.#options.render();
+    return wasBusy;
+  }
+}
+
 function commits(bundle: EvolutionBundle): readonly EvolutionCommitMetadata[] {
   return [bundle.baseline.commit, ...bundle.deltas.map(({ commit }) => commit)];
 }
