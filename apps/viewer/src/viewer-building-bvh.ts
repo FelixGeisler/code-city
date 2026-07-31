@@ -25,6 +25,11 @@ export interface BuildingBvhHit {
 
 export interface BuildingBvhPickOptions {
   readonly districtId?: string;
+  /**
+   * Optional exact visibility filter. An empty set deliberately makes every
+   * building unpickable.
+   */
+  readonly buildingIds?: ReadonlySet<string>;
   readonly maximumDistance?: number;
 }
 
@@ -115,8 +120,9 @@ export class BuildingAabbBvh {
       options.maximumDistance === undefined
         ? Number.POSITIVE_INFINITY
         : positiveDistance(options.maximumDistance);
+    const buildingIds = options.buildingIds;
     const root = this.root;
-    if (root === null) {
+    if (root === null || buildingIds?.size === 0) {
       return Object.freeze({ hit: null, aabbTests: 0 });
     }
     if (
@@ -158,8 +164,9 @@ export class BuildingAabbBvh {
       if (node.entries !== undefined) {
         for (const entry of node.entries) {
           if (
-            districtId !== undefined &&
-            entry.districtId !== districtId
+            (districtId !== undefined &&
+              entry.districtId !== districtId) ||
+            (buildingIds !== undefined && !buildingIds.has(entry.id))
           ) {
             continue;
           }

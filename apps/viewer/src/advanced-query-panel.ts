@@ -32,6 +32,8 @@ import {
 } from "./advanced-selection.js";
 import { metricMappingProjectIdentity } from "./metric-mapping-storage.js";
 
+export const MAXIMUM_ADVANCED_COMPARISON_ROWS = 100;
+
 export interface AdvancedQueryPanelContext {
   readonly selectedBuildingId?: string;
   readonly selectedDistrictId?: string;
@@ -50,8 +52,8 @@ export interface AdvancedQueryPanelOptions {
   readonly onSelectionChange: (
     state: AdvancedSelectionState,
   ) => void;
-  readonly onFocus: (buildingId: string) => void;
-  readonly onIsolate: (districtId: string) => void;
+  readonly onFocus: (buildingIds: readonly string[]) => void;
+  readonly onIsolate: (buildingIds: readonly string[]) => void;
   readonly onExport?: (artifact: AdvancedQueryExport) => void;
 }
 
@@ -130,6 +132,10 @@ export function installAdvancedQueryPanel(
     root,
     "advanced-query-comparison-summary",
   );
+  const comparisonBody = control<HTMLTableSectionElement>(
+    root,
+    "advanced-query-comparison-body",
+  );
   const focus = control<HTMLButtonElement>(root, "advanced-query-focus");
   const isolate = control<HTMLButtonElement>(root, "advanced-query-isolate");
   const compare = control<HTMLButtonElement>(root, "advanced-query-compare");
@@ -170,21 +176,6 @@ export function installAdvancedQueryPanel(
   const resultIds = (): readonly string[] =>
     evaluation?.results.map(({ buildingId }) => buildingId) ?? [];
 
-  const sameDistrict = (): string | undefined => {
-    if (model === undefined || selection.buildingIds.length === 0) {
-      return undefined;
-    }
-    const buildings = new Map(
-      model.buildings.map((building) => [building.id, building]),
-    );
-    const districts = new Set(
-      selection.buildingIds
-        .map((id) => buildings.get(id)?.districtId)
-        .filter((id): id is string => id !== undefined),
-    );
-    return districts.size === 1 ? [...districts][0] : undefined;
-  };
-
   const renderSelection = (notify = true): void => {
     const selected = new Set(selection.buildingIds);
     for (const button of results.querySelectorAll<HTMLButtonElement>(
@@ -209,8 +200,8 @@ export function installAdvancedQueryPanel(
     overlay.textContent = selection.overlayVisible
       ? "Overlay on"
       : "Overlay off";
-    focus.disabled = selection.primaryBuildingId === null;
-    isolate.disabled = sameDistrict() === undefined;
+    focus.disabled = count === 0;
+    isolate.disabled = count === 0;
     compare.disabled = count < 2;
     exportButton.disabled = count === 0;
     saveSelection.disabled =
@@ -440,18 +431,26 @@ export function installAdvancedQueryPanel(
     renderSelection();
   });
   focus.addEventListener("click", () => {
-    if (selection.primaryBuildingId !== null) {
-      options.onFocus(selection.primaryBuildingId);
+    if (selection.buildingIds.length > 0) {
+      options.onFocus(selection.buildingIds);
     }
   });
   isolate.addEventListener("click", () => {
-    const districtId = sameDistrict();
-    if (districtId !== undefined) options.onIsolate(districtId);
+    if (selection.buildingIds.length > 0) {
+      options.onIsolate(selection.buildingIds);
+    }
   });
   compare.addEventListener("click", () => {
     if (model === undefined) return;
     const selected = selectedBuildings(model, selection);
-    comparisonSummary.textContent = comparisonText(selected);
+    const visibleCount = renderComparisonTable(
+      comparisonBody,
+      selected,
+    );
+    comparisonSummary.textContent = comparisonText(
+      selected,
+      visibleCount,
+    );
     comparison.hidden = false;
   });
   exportButton.addEventListener("click", () => {
@@ -577,6 +576,7 @@ export function installAdvancedQueryPanel(
     },
     selectFromScene(buildingId, intent = {}) {
       const ordered =
+        intent.orderedBuildingIds ??
         evaluation?.results.map((entry) => entry.buildingId) ??
         model?.buildings.map((building) => building.id) ??
         [];
@@ -610,11 +610,18 @@ function selectedBuildings(
   model: CityModel,
   selection: AdvancedSelectionState,
 ): readonly CityBuilding[] {
-  const selected = new Set(selection.buildingIds);
-  return model.buildings.filter(({ id }) => selected.has(id));
+  const buildings = new Map(
+    model.buildings.map((building) => [building.id, building]),
+  );
+  return selection.buildingIds
+    .map((id) => buildings.get(id))
+    .filter((building): building is CityBuilding => building !== undefined);
 }
 
-function comparisonText(buildings: readonly CityBuilding[]): string {
+function comparisonText(
+  buildings: readonly CityBuilding[],
+  visibleCount: number,
+): string {
   if (buildings.length < 2) return "Select at least two buildings.";
   const values = (
     key: keyof CityBuilding["metrics"],
@@ -623,13 +630,86 @@ function comparisonText(buildings: readonly CityBuilding[]): string {
     `${Math.min(...source).toLocaleString()}–${Math.max(...source).toLocaleString()}`;
   const languages = new Set(buildings.map(({ language }) => language));
   const risks = new Set(buildings.map(({ risk }) => risk));
+  const tableScope =
+    visibleCount < buildings.length
+      ? ` Table shows the first ${visibleCount.toLocaleString()} of ${buildings.length.toLocaleString()} selected buildings.`
+      : ` Table shows all ${visibleCount.toLocaleString()} selected buildings.`;
   return (
     `${buildings.length.toLocaleString()} buildings · ` +
     `SLOC ${range(values("sloc"))} · ` +
     `complexity ${range(values("maximumComplexity"))} · ` +
     `${languages.size.toLocaleString()} languages · ` +
-    `${risks.size.toLocaleString()} risk bands`
+    `${risks.size.toLocaleString()} risk bands.` +
+    tableScope
   );
+}
+
+function renderComparisonTable(
+  body: HTMLTableSectionElement,
+  buildings: readonly CityBuilding[],
+): number {
+  body.replaceChildren();
+  const visible = boundedAdvancedComparisonBuildings(buildings);
+  for (const building of visible) {
+    const row = document.createElement("tr");
+    row.dataset["buildingId"] = building.id;
+    const identity = document.createElement("th");
+    identity.scope = "row";
+    identity.className = "advanced-query-comparison-building";
+    const name = document.createElement("span");
+    name.textContent = building.name;
+    const path = document.createElement("span");
+    path.className = "advanced-query-comparison-path";
+    path.textContent = building.path;
+    identity.append(name, path);
+    row.append(
+      identity,
+      comparisonCell(languageLabel(building.language)),
+      comparisonCell(riskLabel(building.risk)),
+      comparisonCell(building.metrics.sloc.toLocaleString()),
+      comparisonCell(building.metrics.decisionLoad.toLocaleString()),
+      comparisonCell(
+        building.metrics.maximumComplexity.toLocaleString(),
+      ),
+      comparisonCell(
+        building.metrics.executableUnitCount.toLocaleString(),
+      ),
+    );
+    body.append(row);
+  }
+  return visible.length;
+}
+
+export function boundedAdvancedComparisonBuildings(
+  buildings: readonly CityBuilding[],
+): readonly CityBuilding[] {
+  return Object.freeze(
+    buildings.slice(0, MAXIMUM_ADVANCED_COMPARISON_ROWS),
+  );
+}
+
+function comparisonCell(value: string): HTMLTableCellElement {
+  const cell = document.createElement("td");
+  cell.textContent = value;
+  return cell;
+}
+
+function languageLabel(language: SourceLanguage): string {
+  switch (language) {
+    case "csharp":
+      return "C#";
+    case "typescript":
+      return "TypeScript";
+    case "javascript":
+      return "JavaScript";
+  }
+}
+
+function riskLabel(risk: RiskBand): string {
+  return risk
+    .split("-")
+    .map((part) => part[0]!.toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function replaceSelectOptions(

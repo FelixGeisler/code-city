@@ -8,6 +8,8 @@ interface PerformanceSnapshot {
   readonly firstInteractiveMilliseconds: number;
   readonly buildingRenderMode: "instanced" | "legacy" | null;
   readonly buildingBatchCount: number;
+  readonly visibleBuildingCount: number;
+  readonly buildingVisibilityMaskActive: boolean;
   readonly objectCount: number;
   readonly renderCalls: number;
   readonly evolutionRemovals: {
@@ -20,6 +22,9 @@ interface PerformanceSnapshot {
     readonly drawCalls: number;
   } | null;
   readonly evolutionRemovalAnimated: boolean;
+  readonly dependencyRoutes: {
+    readonly routeCount: number;
+  };
   readonly pickBenchmark: {
     readonly count: number;
     readonly p95Milliseconds: number;
@@ -495,6 +500,147 @@ test("runs explainable queries and synchronizes bounded multiple selections", as
     .selectOption("Review set");
   await expect(page.locator("#advanced-query-status")).toContainText(
     "5 saved buildings selected",
+  );
+});
+
+test("isolates and focuses exact cross-district selections and uses visible search order", async ({
+  page,
+}) => {
+  await page.goto(`${viewerUrl}/?performance=1`, {
+    waitUntil: "domcontentloaded",
+    timeout: 45_000,
+  });
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await page.locator("#advanced-query-run").click();
+  await expect(page.locator("#advanced-query-status")).toContainText(
+    "5 matches",
+  );
+
+  const main = page.locator(
+    '.advanced-query-result[data-building-id="building:main"]',
+  );
+  const validation = page.locator(
+    '.advanced-query-result[data-building-id="building:validation"]',
+  );
+  const model = page.locator(
+    '.advanced-query-result[data-building-id="building:model"]',
+  );
+  await main.click();
+  await validation.click({ modifiers: ["Control"] });
+  await model.click({ modifiers: ["Control"] });
+  await expect(
+    page.locator('.advanced-query-result[aria-selected="true"]'),
+  ).toHaveCount(3);
+  await expect(page.locator("#selection-status")).toContainText(
+    "3 buildings selected",
+  );
+
+  await page.getByRole("tab", { name: "Details" }).click();
+  await page.locator("#dependency-section summary").click();
+  await expect(page.locator("#dependency-outgoing-count")).toHaveText(
+    "2",
+  );
+  await page.locator("#dependency-outgoing-toggle").click();
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await page.locator("#advanced-query-compare").click();
+  await expect(
+    page.locator("#advanced-query-comparison-summary"),
+  ).toContainText("Table shows all 3 selected buildings");
+  await expect(
+    page.locator("#advanced-query-comparison-body tr"),
+  ).toHaveCount(3);
+  await expect(
+    page.locator(
+      '#advanced-query-comparison-table th[scope="col"]',
+    ),
+  ).toHaveCount(7);
+  await expect(
+    page.locator(
+      '#advanced-query-comparison-body th[scope="row"]',
+    ),
+  ).toHaveCount(3);
+
+  await page.locator("#advanced-query-focus").click();
+  await page.locator("#advanced-query-isolate").click();
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () =>
+          (
+            window as Window & {
+              __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+            }
+          ).__CODE_CITY_PERFORMANCE__,
+      ),
+    )
+    .toMatchObject({
+      buildingVisibilityMaskActive: true,
+      visibleBuildingCount: 3,
+      dependencyRoutes: { routeCount: 2 },
+    });
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await expect(page.locator("#show-whole-city")).toBeEnabled();
+  await page.locator("#show-whole-city").click();
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () =>
+          (
+            window as Window & {
+              __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+            }
+          ).__CODE_CITY_PERFORMANCE__,
+      ),
+    )
+    .toMatchObject({
+      buildingVisibilityMaskActive: false,
+      visibleBuildingCount: 5,
+    });
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await page.locator("#advanced-query-isolate").click();
+
+  await page.locator("#advanced-query-clear").click();
+  await expect
+    .poll(async () =>
+      page.evaluate(
+        () =>
+          (
+            window as Window & {
+              __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+            }
+          ).__CODE_CITY_PERFORMANCE__,
+      ),
+    )
+    .toMatchObject({
+      buildingVisibilityMaskActive: false,
+      visibleBuildingCount: 5,
+    });
+
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await page.locator("#building-search").fill("src");
+  const searchBuildings = page.locator(
+    '#search-results .search-result-button[data-building-id]',
+  );
+  await expect(searchBuildings).toHaveCount(4);
+  await searchBuildings.nth(0).click({ modifiers: ["Control"] });
+  await searchBuildings.nth(1).click({ modifiers: ["Control"] });
+  await expect(
+    page.locator(
+      '#search-results .search-result-button[aria-pressed="true"]',
+    ),
+  ).toHaveCount(2);
+  await searchBuildings.nth(3).click({ modifiers: ["Shift"] });
+  await expect(
+    page.locator(
+      '#search-results .search-result-button[aria-pressed="true"]',
+    ),
+  ).toHaveCount(3);
+  await expect(searchBuildings.nth(0)).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await expect(page.locator("#selection-status")).toContainText(
+    "3 buildings selected",
   );
 });
 
