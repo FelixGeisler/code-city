@@ -123,8 +123,9 @@ of record overhead for every parsed change. Retained semantic facts are capped
 at 128 MiB, including nested units, import metadata, warnings, strings,
 objects, arrays, references, and conservative copy overhead. Other ceilings
 limit accumulated tree entries to 2,000,000, stable lineages to 100,000, and
-the serialized evolution artifact to 512 MiB. Every runtime JSON string and
-property name in an evolution bundle is limited to 64 KiB of encoded UTF-8.
+the serialized evolution artifact to a browser-safe 64 MiB. Every runtime JSON
+string and property name in an evolution bundle is limited to 64 KiB of
+encoded UTF-8.
 The total deadline is at most two hours and covers history analysis, canonical
 evolution preparation and publication, and temporary import cleanup. Lower
 `analysis.timeoutMs` supplies that history deadline only when
@@ -134,6 +135,19 @@ per-request bounds are available through
 `maxAggregateChangedPaths`, `maxAggregateChangedPathBytes`,
 `maxAggregateSemanticBytes`, `maxAggregateTreeEntries`, `maxUniqueLineages`,
 `maxEvolutionOutputBytes`, and `totalDeadlineMs`.
+
+The 64 MiB evolution ceiling is enforced by analysis, publication, persisted
+job metadata, and the viewer. The viewer rejects oversized legacy metadata
+before downloading it. For accepted artifacts it allocates exactly the
+declared length, copies response chunks directly into that one owned buffer,
+and transfers the same buffer to the timeline worker. Main-thread binary
+retention is therefore bounded to one full artifact buffer plus the current
+transport chunk; it does not retain every chunk or make another full transfer
+copy. Digesting, UTF-8 decoding, JSON parsing, validation, and replay state add
+engine-dependent worker allocations, so self-hosted deployments should reserve
+at least 512 MiB of transient browser memory for each timeline being loaded.
+Reduce the selected history, increase `sampleEvery`, or lower
+`maxEvolutionOutputBytes` when that budget is unavailable.
 
 The server keeps credential-free semantic facts in a private, versioned,
 bounded cache under `CODECITY_DATA_DIR`; immutable commit SHA, analyzer

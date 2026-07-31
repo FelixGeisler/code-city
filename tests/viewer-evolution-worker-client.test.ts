@@ -6,10 +6,12 @@ import type { EvolutionWorkerRequest } from "../apps/viewer/src/evolution-timeli
 
 class FakeEvolutionWorker extends EventTarget {
   readonly requests: EvolutionWorkerRequest[] = [];
+  readonly transfers: Transferable[][] = [];
   terminated = false;
 
-  postMessage(value: unknown): void {
+  postMessage(value: unknown, transfer: Transferable[] = []): void {
     this.requests.push(value as EvolutionWorkerRequest);
+    this.transfers.push(transfer);
   }
 
   terminate(): void {
@@ -53,6 +55,8 @@ describe("evolution timeline worker client", () => {
     });
 
     await expect(loaded).resolves.toMatchObject({ frames: [frame] });
+    expect(request).toMatchObject({ bytes });
+    expect(worker.transfers[0]).toEqual([bytes]);
     expect(worker.terminated).toBe(false);
   });
 

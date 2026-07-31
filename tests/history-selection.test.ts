@@ -61,7 +61,7 @@ describe("bounded history selection", () => {
       maxAggregateChangedPathBytes: 16 * 1024 * 1024,
       maxAggregateSemanticBytes: 128 * 1024 * 1024,
       maxUniqueLineages: 100_000,
-      maxEvolutionOutputBytes: 512 * 1024 * 1024,
+      maxEvolutionOutputBytes: 64 * 1024 * 1024,
       maxAggregateTreeEntries: 2_000_000,
     });
     expect(Object.isFrozen(HISTORY_SELECTION_LIMITS)).toBe(true);
@@ -337,7 +337,8 @@ describe("bounded history selection", () => {
       maxAggregateChangedPaths: 500_000,
       maxAggregateChangedPathBytes: 16 * 1024 * 1024,
       maxUniqueLineages: 100_000,
-      maxEvolutionOutputBytes: 512 * 1024 * 1024,
+      maxEvolutionOutputBytes:
+        HISTORY_SELECTION_LIMITS.maxEvolutionOutputBytes,
       maxAggregateTreeEntries: 2_000_000,
     });
 
@@ -638,7 +639,8 @@ describe("bounded history selection", () => {
         request: {
           mode: "commit-count",
           commitCount: 1,
-          maxEvolutionOutputBytes: 512 * 1024 * 1024 + 1,
+          maxEvolutionOutputBytes:
+            HISTORY_SELECTION_LIMITS.maxEvolutionOutputBytes + 1,
         },
         code: "limit-exceeded",
       },

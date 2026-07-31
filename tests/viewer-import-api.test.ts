@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import { EVOLUTION_BUNDLE_LIMITS } from "../packages/core/src/evolution.js";
 import {
   ImportApiError,
   parseCapabilitiesResponse,
   parseImportJob,
   parseUploadReservationResponse,
+  readExactEvolutionArtifact,
   ViewerImportApiClient,
   type ImportApiFetch,
   type ImportJob,
@@ -117,6 +119,156 @@ describe("viewer import API protocol", () => {
     ]);
   });
 
+  it("copies many response chunks into one exact owned allocation", async () => {
+    const chunkCount = 4_096;
+    const chunks = Array.from(
+      { length: chunkCount },
+      (_, index) =>
+        Uint8Array.of(
+          index & 0xff,
+          (index >>> 8) & 0xff,
+          0xa5,
+        ),
+    );
+    const size = chunks.reduce(
+      (total, chunk) => total + chunk.byteLength,
+      0,
+    );
+    const expected = new Uint8Array(size);
+    let expectedOffset = 0;
+    for (const chunk of chunks) {
+      expected.set(chunk, expectedOffset);
+      expectedOffset += chunk.byteLength;
+    }
+
+    let readIndex = 0;
+    let cancelCalls = 0;
+    let releaseCalls = 0;
+    const response = {
+      headers: new Headers({ "content-length": String(size) }),
+      body: {
+        getReader: () => ({
+          read: async (): Promise<
+            ReadableStreamReadResult<Uint8Array>
+          > =>
+            readIndex < chunks.length
+              ? { done: false, value: chunks[readIndex++]! }
+              : { done: true, value: undefined },
+          cancel: async () => {
+            cancelCalls += 1;
+          },
+          releaseLock: () => {
+            releaseCalls += 1;
+          },
+        }),
+      },
+    } as unknown as Response;
+    const allocations: number[] = [];
+    let allocated: ArrayBuffer | undefined;
+    const result = await readExactEvolutionArtifact(
+      response,
+      new AbortController().signal,
+      size,
+      (byteLength) => {
+        allocations.push(byteLength);
+        allocated = new ArrayBuffer(byteLength);
+        return allocated;
+      },
+    );
+
+    expect(allocations).toEqual([size]);
+    expect(result).toBe(allocated);
+    expect(new Uint8Array(result)).toEqual(expected);
+    expect(cancelCalls).toBe(0);
+    expect(releaseCalls).toBe(1);
+
+    for (const chunk of chunks) chunk.fill(0);
+    expect(new Uint8Array(result)).toEqual(expected);
+  });
+
+  it("cancels a stalled exact-length evolution stream", async () => {
+    let reads = 0;
+    let cancelCalls = 0;
+    let secondReadStarted!: () => void;
+    const waitingForSecondRead = new Promise<void>((resolve) => {
+      secondReadStarted = resolve;
+    });
+    const stalled = new Promise<
+      ReadableStreamReadResult<Uint8Array>
+    >(() => undefined);
+    const response = {
+      headers: new Headers({ "content-length": "2" }),
+      body: {
+        getReader: () => ({
+          read: (): Promise<
+            ReadableStreamReadResult<Uint8Array>
+          > => {
+            reads += 1;
+            if (reads === 1) {
+              return Promise.resolve({
+                done: false,
+                value: Uint8Array.of(1),
+              });
+            }
+            secondReadStarted();
+            return stalled;
+          },
+          cancel: async () => {
+            cancelCalls += 1;
+          },
+          releaseLock: () => undefined,
+        }),
+      },
+    } as unknown as Response;
+    const controller = new AbortController();
+    const reading = readExactEvolutionArtifact(
+      response,
+      controller.signal,
+      2,
+    );
+
+    await waitingForSecondRead;
+    controller.abort();
+    await expect(reading).rejects.toMatchObject({ name: "AbortError" });
+    expect(cancelCalls).toBe(1);
+  });
+
+  it("cancels an unlocked evolution body on early rejection", async () => {
+    let mismatchCancellations = 0;
+    const mismatched = {
+      headers: new Headers({ "content-length": "1" }),
+      body: {
+        cancel: async () => {
+          mismatchCancellations += 1;
+        },
+      },
+    } as unknown as Response;
+    await expect(
+      readExactEvolutionArtifact(
+        mismatched,
+        new AbortController().signal,
+        2,
+      ),
+    ).rejects.toThrow(/size does not match/iu);
+    expect(mismatchCancellations).toBe(1);
+
+    let abortCancellations = 0;
+    const aborted = {
+      headers: new Headers({ "content-length": "2" }),
+      body: {
+        cancel: async () => {
+          abortCancellations += 1;
+        },
+      },
+    } as unknown as Response;
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      readExactEvolutionArtifact(aborted, controller.signal, 2),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(abortCancellations).toBe(1);
+  });
+
   it("rejects truncated or misdeclared evolution artifacts", async () => {
     const bytes = new TextEncoder().encode("{}");
     const client = new ViewerImportApiClient(
@@ -139,6 +291,30 @@ describe("viewer import API protocol", () => {
         sha256: "b".repeat(64),
       }),
     ).rejects.toThrow(/size does not match/iu);
+  });
+
+  it("rejects an oversized evolution artifact before downloading it", async () => {
+    let fetched = false;
+    const client = new ViewerImportApiClient(
+      new URL("https://city.example.test/"),
+      {
+        fetch: async () => {
+          fetched = true;
+          throw new Error("The oversized artifact must not be fetched.");
+        },
+      },
+    );
+
+    await expect(
+      client.evolutionArtifact(JOB_ID, {
+        artifactUrl: `/api/v1/artifacts/${JOB_ID}/evolution.json`,
+        size: EVOLUTION_BUNDLE_LIMITS.serializedBytes + 1,
+        sha256: "b".repeat(64),
+      }),
+    ).rejects.toThrow(
+      /browser-safe 64 MiB limit.*fewer history frames.*maxEvolutionOutputBytes/iu,
+    );
+    expect(fetched).toBe(false);
   });
 
   it("accepts a bounded retained source response above the generic API limit", async () => {
@@ -570,7 +746,7 @@ describe("viewer import API protocol", () => {
       },
       {
         ...completedHistoryJob().result!.evolution!,
-        size: 512 * 1024 * 1024 + 1,
+        size: EVOLUTION_BUNDLE_LIMITS.serializedBytes + 1,
       },
       {
         ...completedHistoryJob().result!.evolution!,
@@ -589,7 +765,7 @@ describe("viewer import API protocol", () => {
             evolution,
           },
         }),
-      ).toThrow(/evolution|shape/u);
+      ).toThrow(/evolution|shape/iu);
     }
 
     const request: UploadImportSubmission = {

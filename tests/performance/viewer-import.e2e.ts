@@ -9,6 +9,7 @@ import path from "node:path";
 import {
   GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY,
   GENERIC_GIT_PRESECURED_WINDOWS_ACL,
+  HISTORY_SELECTION_LIMITS,
   type GenericGitAnalysisResult,
   type GenericGitHistoryAnalysisResult,
   type LocalAnalysisOptions,
@@ -170,7 +171,8 @@ function createHistoryAnalysisResult(
     maxAggregateChangedPathBytes: 16 * 1024 * 1024,
     maxAggregateSemanticBytes: 128 * 1024 * 1024,
     maxUniqueLineages: 100_000,
-    maxEvolutionOutputBytes: 512 * 1024 * 1024,
+    maxEvolutionOutputBytes:
+      HISTORY_SELECTION_LIMITS.maxEvolutionOutputBytes,
     maxAggregateTreeEntries: 2_000_000,
   };
   return {
@@ -980,6 +982,68 @@ test("submits bounded history, validates both artifacts, and restores its recent
   expect(removedResponses).toEqual([404, 404, 404]);
   await expect(page.locator("#model-name")).toHaveText(HISTORY_TITLE);
   await expect(page.locator("#status")).toContainText(HISTORY_VERSION);
+});
+
+test("rejects an oversized legacy evolution artifact before downloading it", async ({
+  page,
+}) => {
+  const legacyJobId = "33333333-3333-4333-8333-333333333333";
+  const jobPath = `/api/v1/jobs/${legacyJobId}`;
+  const evolutionPath =
+    `/api/v1/artifacts/${legacyJobId}/evolution.json`;
+  await openAuthenticatedWizard(page);
+  await page
+    .getByRole("button", { name: "Close project import" })
+    .click();
+  await page.evaluate((jobId) => {
+    localStorage.setItem("code-city.last-import-job.v1", jobId);
+  }, legacyJobId);
+
+  let evolutionRequests = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === evolutionPath) {
+      evolutionRequests += 1;
+    }
+  });
+  await page.route(`**${jobPath}`, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        job: {
+          id: legacyJobId,
+          kind: "project-import",
+          state: "completed",
+          createdAt: "2026-07-31T00:00:00.000Z",
+          updatedAt: "2026-07-31T00:00:01.000Z",
+          progress: { phase: "ready", current: 3, total: 3 },
+          result: {
+            kind: "city-model",
+            artifactToken: legacyJobId,
+            artifactUrl:
+              `/api/v1/artifacts/${legacyJobId}/city-model.json`,
+            evolution: {
+              artifactUrl: evolutionPath,
+              size:
+                HISTORY_SELECTION_LIMITS.maxEvolutionOutputBytes + 1,
+              sha256: "a".repeat(64),
+            },
+          },
+        },
+      }),
+    });
+  });
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "Import project" }).click();
+  await expect(page.locator("#project-import-progress-detail")).toContainText(
+    "Evolution artifact exceeds the browser-safe 64 MiB limit. Re-import with fewer history frames or a lower maxEvolutionOutputBytes.",
+  );
+  expect(evolutionRequests).toBe(0);
+  await page
+    .getByRole("button", { name: "Close project import" })
+    .click();
+  await expect(page.locator("#project-import-dialog")).toBeHidden();
 });
 
 test("imports a browser directory and repository ZIP with identity and analysis options", async ({

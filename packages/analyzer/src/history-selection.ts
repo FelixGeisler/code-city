@@ -1,3 +1,5 @@
+import { EVOLUTION_BUNDLE_LIMITS } from "../../core/src/evolution.js";
+
 const MEBIBYTE = 1024 * 1024;
 const COMMIT_SHA = /^[0-9a-f]{40}$/u;
 const ISO_INSTANT =
@@ -32,7 +34,7 @@ export const HISTORY_SELECTION_LIMITS = Object.freeze({
   maxAggregateChangedPathBytes: 16 * MEBIBYTE,
   maxAggregateSemanticBytes: 128 * MEBIBYTE,
   maxUniqueLineages: 100_000,
-  maxEvolutionOutputBytes: 512 * MEBIBYTE,
+  maxEvolutionOutputBytes: EVOLUTION_BUNDLE_LIMITS.serializedBytes,
   maxAggregateTreeEntries: 2_000_000,
 });
 

@@ -161,7 +161,8 @@ function historyAnalysisResultFixture(
     maxAggregateChangedPathBytes: 16 * 1024 * 1024,
     maxAggregateSemanticBytes: 128 * 1024 * 1024,
     maxUniqueLineages: 100_000,
-    maxEvolutionOutputBytes: 512 * 1024 * 1024,
+    maxEvolutionOutputBytes:
+      HISTORY_SELECTION_LIMITS.maxEvolutionOutputBytes,
     maxAggregateTreeEntries: 2_000_000,
   };
   return {

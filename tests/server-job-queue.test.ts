@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { afterEach, expect, it, vi } from "vitest";
 
+import { EVOLUTION_BUNDLE_LIMITS } from "../packages/core/src/evolution.js";
 import {
   JobTaskFailure,
   PersistentJobQueue,
@@ -764,7 +765,7 @@ it("fails without persisting invalid or credential-bearing results", async () =>
       ...historyResult(id),
       evolution: {
         ...historyResult(id).evolution,
-        size: 512 * 1024 * 1024 + 1,
+        size: EVOLUTION_BUNDLE_LIMITS.serializedBytes + 1,
       },
     }),
     (id) => ({
