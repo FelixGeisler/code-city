@@ -138,6 +138,20 @@ contains only a server-chosen fixed filename, and is swept during startup.
 Size and concurrency limits are intentionally hard deployment safety limits,
 not client-controlled analysis options.
 
+`CODECITY_SOURCE_RETENTION` accepts exactly `retain` or `disabled`; the
+production entrypoint and Compose default to `disabled`. Only the exact
+`retain` value opts in. Retained files may contain private repository source
+and must be covered by the deployment's private storage, backup, and deletion
+policy. They are bounded to
+16 MiB each and 128 MiB per source artifact beneath
+`CODECITY_DATA_DIR/sources`, share completed-job lifecycle cleanup, and require
+the same private filesystem boundary as uploads and city artifacts. Set
+`disabled` where source persistence is prohibited. The optional
+`CODECITY_EDITOR_URL_TEMPLATE` must be an absolute `https`, `vscode`, or
+`vscode-insiders` URL without credentials, contain `\{path\}`, and may contain
+`\{line\}`. It is a deployment adapter only; Code City never derives or exposes
+a server-local checkout path.
+
 Windows/IIS deployments must protect `CODECITY_DATA_DIR` for uploads and
 artifacts even when Generic Git is disabled. Its ACL and inherited child ACLs
 must admit only the service identity and trusted administrators. The data

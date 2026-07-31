@@ -608,7 +608,52 @@
                 Show more routes
               </button>
               </div>
-            </details>
+              </details>
+              <details
+                id="building-source-details"
+                class="source-section"
+              >
+                <summary>
+                  <span>Source code</span>
+                  <span
+                    id="building-source-summary"
+                    class="details-summary-meta"
+                  >Select to load</span>
+                </summary>
+                <p
+                  id="building-source-status"
+                  class="source-status"
+                  role="status"
+                  aria-live="polite"
+                >
+                  Source is available only for retained imported repositories.
+                </p>
+                <div id="building-source-content" hidden>
+                  <p class="source-provenance">
+                    <span id="building-source-path"></span>
+                    <span id="building-source-revision"></span>
+                  </p>
+                  <p class="source-actions">
+                    <a
+                      id="building-source-external"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      hidden
+                    >Open immutable source</a>
+                    <a
+                      id="building-source-editor"
+                      rel="noopener noreferrer"
+                      hidden
+                    >Open configured editor</a>
+                  </p>
+                  <pre
+                    id="building-source-code"
+                    class="source-code"
+                    tabindex="0"
+                    aria-label="Read-only source code"
+                  ></pre>
+                </div>
+              </details>
 
             <p id="building-units-empty" class="units-empty">
               Executable units not recorded.

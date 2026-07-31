@@ -131,7 +131,11 @@ function collectUnits(source: ts.SourceFile): readonly ExecutableUnitMetric[] {
     }
 
     visit(body);
-    units.push({ name, line, complexity: 1 + decisions });
+    const endLine =
+      source.getLineAndCharacterOfPosition(
+        Math.max(body.getStart(source), body.getEnd() - 1),
+      ).line + 1;
+    units.push({ name, line, endLine, complexity: 1 + decisions });
   }
 
   // Keeping a top-level unit for every source file makes file totals stable and

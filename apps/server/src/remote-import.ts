@@ -30,13 +30,17 @@ import {
   type GitHubSnapshotCredential,
   type GitHubSnapshotCredentialProvider,
   type LocalAnalysisOptions,
+  type RepositorySnapshot,
 } from "../../../packages/analyzer/src/index.js";
 import {
   normalizeAssetRelativePath,
   type EvolutionBundle,
   type PreparedEvolutionSerialization,
 } from "../../../packages/core/src/index.js";
-import type { CityModel } from "../../../packages/core/src/index.js";
+import type {
+  CityModel,
+  SourceRepositoryProvenance,
+} from "../../../packages/core/src/index.js";
 
 import {
   type JobRecord,
@@ -53,6 +57,12 @@ import type {
   CredentialProfileBinding,
   CredentialProfileRegistry,
 } from "./credential-profiles.js";
+import {
+  attachSourceProvenance,
+  createSourceArtifact,
+  type SourceRetentionPolicy,
+} from "./source-artifact.js";
+import { SourceArtifactStore } from "./source-artifact-store.js";
 
 const ROOT_KEYS = ["analysis", "history", "identity", "source"] as const;
 const SOURCE_KEYS = [
@@ -338,6 +348,8 @@ export class RemoteImportPolicy {
 interface RemoteImportRuntime {
   readonly jobs: PersistentJobQueue;
   readonly artifacts: ImportArtifactStore;
+  readonly sources?: SourceArtifactStore;
+  readonly sourceRetention?: SourceRetentionPolicy;
   readonly policy: RemoteImportPolicy;
   readonly credentialProfiles: CredentialProfileRegistry;
   readonly dependencies?: RemoteImportDependencies;
@@ -1522,6 +1534,7 @@ function stagingCleanup(
 
 interface RemoteImportAnalysisOutput {
   readonly model: CityModel;
+  readonly sourceSnapshot?: RepositorySnapshot;
   readonly evolution?: EvolutionBundle;
   readonly preparedEvolution?: PreparedEvolutionSerialization;
   /**
@@ -1603,6 +1616,43 @@ function historyRepositoryIdentity(repositoryUrl: string): string {
   }
 }
 
+function remoteSourceProvenance(
+  model: CityModel,
+  request: RemoteImportRequest,
+  credential: BoundCredentialProfile | undefined,
+  revision: string,
+  repositoryUrl: string,
+): SourceRepositoryProvenance {
+  const repository = model.repositories[0];
+  if (repository === undefined || model.repositories.length !== 1) {
+    throw new TypeError(
+      "Remote source provenance requires exactly one repository.",
+    );
+  }
+  return Object.freeze({
+    repositoryId: repository.id,
+    provider:
+      request.source.kind === "github"
+        ? "github"
+        : credential?.provider === "azure-devops"
+          ? "azure-devops"
+          : "generic-git",
+    revision: Object.freeze({
+      kind: "commit",
+      value: revision,
+    }),
+    repositoryUrl,
+  });
+}
+
+function attachRemoteSourceProvenance(
+  model: CityModel,
+  create: () => SourceRepositoryProvenance,
+): CityModel {
+  if (model.repositories.length !== 1) return model;
+  return attachSourceProvenance(model, [create()]);
+}
+
 function genericHistoryRef(request: RemoteImportRequest): string | undefined {
   if (request.history?.mode === "tag-range") {
     return `refs/tags/${request.history.newestTagName}`;
@@ -1624,6 +1674,7 @@ async function analyze(
   staging: ImportStagingDirectory,
   credentialBinding: BoundCredentialProfile | undefined,
   dependencies: RemoteImportDependencies | undefined,
+  retainSource: boolean,
 ): Promise<RemoteImportAnalysisOutput> {
   const options = analyzerOptions(request, context.signal);
   const repositoryRequest = {
@@ -1690,6 +1741,7 @@ async function analyze(
                     : { maxTotalBytes: request.analysis.maxTotalBytes }),
                 },
               }),
+          ...(retainSource ? { retainSourceSnapshot: true } : {}),
         },
         {
           ...(dependencies?.semanticCache === undefined
@@ -1716,7 +1768,18 @@ async function analyze(
         },
       );
     return Object.freeze({
-      model: result.model,
+      model: attachRemoteSourceProvenance(result.model, () =>
+        remoteSourceProvenance(
+          result.model,
+          request,
+          credentialBinding,
+          result.tipSha,
+          historyRepositoryIdentity(request.source.repositoryUrl),
+        ),
+      ),
+      ...(result.sourceSnapshot === undefined
+        ? {}
+        : { sourceSnapshot: result.sourceSnapshot }),
       evolution: result.evolution.bundle,
       ...(result.evolution.preparedSerialization === undefined
         ? {}
@@ -1731,21 +1794,30 @@ async function analyze(
     const implementation =
       dependencies?.analyzePublicGitHubRepository ??
       analyzePublicGitHubRepository;
-    if (credentialBinding === undefined) {
-      return Object.freeze({
-        model: (await implementation(repositoryRequest, options)).model,
-      });
-    }
-    if (credentialBinding.provider !== "github") {
-      throw fixedTaskFailure();
-    }
+    const result =
+      credentialBinding === undefined
+        ? await implementation(repositoryRequest, options)
+        : credentialBinding.provider !== "github"
+          ? (() => {
+              throw fixedTaskFailure();
+            })()
+          : await implementation(repositoryRequest, options, {
+              credentialProvider:
+                githubCredentialProvider(credentialBinding),
+            });
     return Object.freeze({
-      model: (
-        await implementation(repositoryRequest, options, {
-        credentialProvider:
-          githubCredentialProvider(credentialBinding),
-        })
-      ).model,
+      model: attachRemoteSourceProvenance(result.model, () =>
+        remoteSourceProvenance(
+          result.model,
+          request,
+          credentialBinding,
+          result.commitSha,
+          result.canonicalRepositoryUrl,
+        ),
+      ),
+      ...(retainSource && result.sourceSnapshot !== undefined
+        ? { sourceSnapshot: result.sourceSnapshot }
+        : {}),
     });
   }
   const implementation =
@@ -1754,26 +1826,36 @@ async function analyze(
   if (credentialBinding?.provider === "github") {
     throw fixedTaskFailure();
   }
-  return Object.freeze({
-    model: (
-      await implementation(repositoryRequest, options, {
-      ...(credentialBinding === undefined
-        ? {}
-        : {
-            credentialProvider:
-              genericGitCredentialProvider(credentialBinding),
-          }),
-      temporaryWorkspaceOptions: {
-        trustedPrivateParent: {
-          directory: staging.directory,
-          windowsAclProtection:
-            GENERIC_GIT_PRESECURED_WINDOWS_ACL,
-          canonicalAncestryProtection:
-            GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY,
-        },
+  const result = await implementation(repositoryRequest, options, {
+    ...(credentialBinding === undefined
+      ? {}
+      : {
+          credentialProvider:
+            genericGitCredentialProvider(credentialBinding),
+        }),
+    temporaryWorkspaceOptions: {
+      trustedPrivateParent: {
+        directory: staging.directory,
+        windowsAclProtection:
+          GENERIC_GIT_PRESECURED_WINDOWS_ACL,
+        canonicalAncestryProtection:
+          GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY,
       },
-      })
-    ).model,
+    },
+  });
+  return Object.freeze({
+    model: attachRemoteSourceProvenance(result.model, () =>
+      remoteSourceProvenance(
+        result.model,
+        request,
+        credentialBinding,
+        result.commitSha,
+        historyRepositoryIdentity(request.source.repositoryUrl),
+      ),
+    ),
+    ...(retainSource && result.sourceSnapshot !== undefined
+      ? { sourceSnapshot: result.sourceSnapshot }
+      : {}),
   });
 }
 
@@ -1886,6 +1968,7 @@ export async function enqueueRemoteImport(
               staging,
               boundCredential,
               runtime.dependencies,
+              runtime.sourceRetention === "retain",
             );
           } catch (error) {
             throw analysisTaskFailure(error);
@@ -1912,6 +1995,23 @@ export async function enqueueRemoteImport(
               current: 1,
               total: IMPORT_PROGRESS_TOTAL,
             });
+            operationCheckpoint();
+            const repository = analyzed.model.repositories[0];
+            const publishedSource =
+              runtime.sourceRetention === "retain" &&
+              runtime.sources !== undefined &&
+              analyzed.sourceSnapshot !== undefined &&
+              repository !== undefined
+                ? await runtime.sources.publish(
+                    context.id,
+                    createSourceArtifact(analyzed.model, [
+                      {
+                        repositoryId: repository.id,
+                        snapshot: analyzed.sourceSnapshot,
+                      },
+                    ]),
+                  )
+                : undefined;
             operationCheckpoint();
             const publishedHistory =
               analyzed.evolution === undefined
@@ -1960,6 +2060,17 @@ export async function enqueueRemoteImport(
               artifactToken: context.id,
               artifactUrl:
                 `/api/v1/artifacts/${context.id}/city-model.json`,
+              source:
+                publishedSource === undefined
+                  ? { availability: "disabled" as const }
+                  : {
+                      availability: "retained" as const,
+                      artifactUrl:
+                        `/api/v1/artifacts/${context.id}/source`,
+                      size: publishedSource.size,
+                      sha256: publishedSource.sha256,
+                      indexSha256: publishedSource.indexSha256,
+                    },
               ...(publishedHistory === undefined
                 ? {}
                 : {
@@ -2001,12 +2112,18 @@ export async function enqueueRemoteImport(
                   runtime.artifacts.cleanupCityModelArtifact(
                     record.id,
                   ),
+                  ...(runtime.sources === undefined
+                    ? []
+                    : [runtime.sources.cleanup(record.id)]),
                 ]),
           ]);
         },
         rollback: async (record) => {
           await allCleanupOperations([
             runtime.artifacts.cleanupCityModelArtifact(record.id),
+            ...(runtime.sources === undefined
+              ? []
+              : [runtime.sources.cleanup(record.id)]),
             runtime.artifacts.cleanupStagingDirectory(staging.token),
           ]);
         },

@@ -16,6 +16,7 @@ import type {
   BuildingMetricNormalization,
   ExecutableUnitMetric,
   MetricMethod,
+  SourceLocation,
   SourceLanguage,
   SourceMetrics,
   Vector3,
@@ -42,6 +43,7 @@ export interface UnpositionedBuilding {
   readonly metrics: SourceMetrics;
   readonly metricMethod?: MetricMethod;
   readonly units?: readonly ExecutableUnitMetric[];
+  readonly sourceLocation?: SourceLocation;
   readonly semanticGroupId?: string;
   readonly metricNormalization?: BuildingMetricNormalization;
   /**
@@ -338,6 +340,9 @@ function createLocalDistrict(
           ? {}
           : { metricMethod: item.fact.metricMethod }),
         ...(item.fact.units === undefined ? {} : { units: item.fact.units }),
+        ...(item.fact.sourceLocation === undefined
+          ? {}
+          : { sourceLocation: item.fact.sourceLocation }),
         risk: item.risk,
         semanticGroupId:
           item.fact.semanticGroupId ?? semanticGroupForRisk(item.risk),

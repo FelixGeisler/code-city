@@ -169,6 +169,7 @@ function controllerFixture(options: {
   const states: ImportControllerState[] = [];
   const modelReady = vi.fn();
   const signedOut = vi.fn();
+  const resultRemoved = vi.fn();
   const scheduled: Array<{
     readonly callback: () => void;
     readonly delay: number;
@@ -183,6 +184,7 @@ function controllerFixture(options: {
     },
     onModelReady: modelReady,
     onSignedOut: signedOut,
+    onResultRemoved: resultRemoved,
     schedulePoll: (callback, delay) => {
       const entry = { callback, delay };
       scheduled.push(entry);
@@ -195,7 +197,14 @@ function controllerFixture(options: {
       if (index >= 0) scheduled.splice(index, 1);
     },
   });
-  return { controller, states, modelReady, signedOut, scheduled };
+  return {
+    controller,
+    states,
+    modelReady,
+    signedOut,
+    resultRemoved,
+    scheduled,
+  };
 }
 
 describe("viewer import job storage", () => {
@@ -656,6 +665,7 @@ describe("viewer import controller", () => {
     expect(cancelJob).not.toHaveBeenCalled();
     expect(storage.value).toBeUndefined();
     expect(fixture.controller.state.status).toBe("idle");
+    expect(fixture.resultRemoved).toHaveBeenCalledWith(JOB_ID);
   });
 
   it("retains failed removal state, retries, and converges on a missing result", async () => {

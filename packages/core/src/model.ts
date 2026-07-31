@@ -157,7 +157,43 @@ export interface BuildingMetricNormalization {
 export interface ExecutableUnitMetric {
   readonly name: string;
   readonly line: number;
+  /** Inclusive end line when the analyzer can determine it. */
+  readonly endLine?: number;
   readonly complexity: number;
+}
+
+export interface SourceLocation {
+  readonly startLine: number;
+  readonly endLine: number;
+}
+
+export type SourceRevision =
+  | {
+      readonly kind: "commit";
+      readonly value: string;
+    }
+  | {
+      readonly kind: "snapshot";
+      readonly value: `sha256:${string}`;
+    };
+
+export type SourceRepositoryProvider =
+  | "azure-devops"
+  | "generic-git"
+  | "github"
+  | "uploaded-archive";
+
+export interface SourceRepositoryProvenance {
+  readonly repositoryId: string;
+  readonly provider: SourceRepositoryProvider;
+  readonly revision: SourceRevision;
+  /** Canonical credential-free remote URL. Omitted for uploaded archives. */
+  readonly repositoryUrl?: string;
+}
+
+export interface SourceNavigationProvenance {
+  readonly version: "codecity.source-navigation/1";
+  readonly repositories: readonly SourceRepositoryProvenance[];
 }
 
 export interface SemanticGroup {
@@ -260,6 +296,7 @@ export interface CityBuilding {
    */
   readonly metricNormalization?: BuildingMetricNormalization;
   readonly units?: readonly ExecutableUnitMetric[];
+  readonly sourceLocation?: SourceLocation;
   readonly risk: RiskBand;
   readonly semanticGroupId: string;
   readonly position: Vector3;
@@ -313,6 +350,11 @@ export interface CityModel {
   readonly analysis?: {
     readonly warnings: readonly string[];
   };
+  /**
+   * Immutable, credential-free provenance used by authorized source reads.
+   * Source text is deliberately stored outside the city model.
+   */
+  readonly sourceProvenance?: SourceNavigationProvenance;
   readonly identity?: CityIdentity;
   readonly identityPanel?: CityIdentityPanel;
   /**

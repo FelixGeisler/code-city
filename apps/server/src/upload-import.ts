@@ -9,6 +9,7 @@ import {
   SnapshotPathError,
   SnapshotPolicyError,
   type LocalAnalysisOptions,
+  type RepositorySnapshot,
 } from "../../../packages/analyzer/src/index.js";
 import {
   validateCityModel,
@@ -35,6 +36,13 @@ import {
   type RemoteImportFieldErrorCode,
   type RemoteImportIdentity,
 } from "./remote-import.js";
+import {
+  attachSourceProvenance,
+  createSourceArtifact,
+  uploadedSnapshotProvenance,
+  type SourceRetentionPolicy,
+} from "./source-artifact.js";
+import { SourceArtifactStore } from "./source-artifact-store.js";
 
 const MEBIBYTE = 1024 * 1024;
 const IMPORT_JOB_KIND = "project-import";
@@ -635,7 +643,10 @@ async function uploadedZipModel(
   },
   bytes: Uint8Array,
   context: JobTaskContext,
-): Promise<CityModel> {
+): Promise<{
+  readonly model: CityModel;
+  readonly snapshot: RepositorySnapshot;
+}> {
   const startedAt = Date.now();
   const timeoutMs =
     request.analysis?.timeoutMs ?? DEFAULT_SNAPSHOT_LIMITS.timeoutMs;
@@ -677,10 +688,11 @@ async function uploadedZipModel(
     current: 1,
     total: ZIP_PROGRESS_TOTAL,
   });
-  return analyzeRepositorySnapshots(
+  const model = await analyzeRepositorySnapshots(
     [snapshot],
     analyzerOptions(request, context.signal, remaining),
   );
+  return Object.freeze({ model, snapshot });
 }
 
 function uploadTaskFailure(error: unknown): JobTaskFailure {
@@ -714,6 +726,8 @@ export async function enqueueUploadedImport(
   runtime: {
     readonly jobs: PersistentJobQueue;
     readonly artifacts: ImportArtifactStore;
+    readonly sources?: SourceArtifactStore;
+    readonly sourceRetention?: SourceRetentionPolicy;
   },
 ): Promise<JobRecord> {
   const request = lease.request;
@@ -737,11 +751,12 @@ export async function enqueueUploadedImport(
             context.signal,
           );
           let model: CityModel;
+          let sourceSnapshot: RepositorySnapshot | undefined;
           try {
-            model =
-              request.source.kind === "city-model"
-                ? uploadedModel(bytes)
-                : await uploadedZipModel(
+            if (request.source.kind === "city-model") {
+              model = uploadedModel(bytes);
+            } else {
+              const analyzed = await uploadedZipModel(
                     request as UploadImportRequest & {
                       readonly source: Extract<
                         UploadImportSource,
@@ -751,6 +766,21 @@ export async function enqueueUploadedImport(
                     bytes,
                     context,
                   );
+              sourceSnapshot = analyzed.snapshot;
+              const repository = analyzed.model.repositories[0];
+              if (
+                repository === undefined ||
+                analyzed.model.repositories.length !== 1
+              ) {
+                throw new JobTaskFailure("analysis-failed");
+              }
+              model = attachSourceProvenance(analyzed.model, [
+                uploadedSnapshotProvenance(
+                  repository.id,
+                  analyzed.snapshot,
+                ),
+              ]);
+            }
           } catch (error) {
             throw uploadTaskFailure(error);
           }
@@ -760,6 +790,22 @@ export async function enqueueUploadedImport(
             current: zip ? 2 : 1,
             total: zip ? ZIP_PROGRESS_TOTAL : MODEL_PROGRESS_TOTAL,
           });
+          const repository = model.repositories[0];
+          const publishedSource =
+            runtime.sourceRetention === "retain" &&
+            runtime.sources !== undefined &&
+            sourceSnapshot !== undefined &&
+            repository !== undefined
+              ? await runtime.sources.publish(
+                  context.id,
+                  createSourceArtifact(model, [
+                    {
+                      repositoryId: repository.id,
+                      snapshot: sourceSnapshot,
+                    },
+                  ]),
+                )
+              : undefined;
           await runtime.artifacts.publishCityModel(context.id, model);
           context.signal.throwIfAborted();
           await context.report({
@@ -779,6 +825,22 @@ export async function enqueueUploadedImport(
             artifactToken: context.id,
             artifactUrl:
               `/api/v1/artifacts/${context.id}/city-model.json`,
+            source:
+              publishedSource === undefined
+                ? {
+                    availability:
+                      request.source.kind === "city-model"
+                        ? ("not-captured" as const)
+                        : ("disabled" as const),
+                  }
+                : {
+                    availability: "retained" as const,
+                    artifactUrl:
+                      `/api/v1/artifacts/${context.id}/source`,
+                    size: publishedSource.size,
+                    sha256: publishedSource.sha256,
+                    indexSha256: publishedSource.indexSha256,
+                  },
           };
         } catch (error) {
           await lease.cleanup().catch(() => undefined);
@@ -792,12 +854,20 @@ export async function enqueueUploadedImport(
             lease.cleanup(),
             ...(record.state === "completed"
               ? []
-              : [runtime.artifacts.cleanupCityModelArtifact(record.id)]),
+              : [
+                  runtime.artifacts.cleanupCityModelArtifact(record.id),
+                  ...(runtime.sources === undefined
+                    ? []
+                    : [runtime.sources.cleanup(record.id)]),
+                ]),
           ]);
         },
         rollback: async (record) => {
           await cleanupAll([
             runtime.artifacts.cleanupCityModelArtifact(record.id),
+            ...(runtime.sources === undefined
+              ? []
+              : [runtime.sources.cleanup(record.id)]),
             lease.cleanup(),
           ]);
         },

@@ -626,6 +626,31 @@ it("provides the job id and strictly persists a city-model result", async () => 
   expect(Object.isFrozen(reopened.get(queued.id)?.result)).toBe(true);
 });
 
+it("persists and reloads the model-only source availability state", async () => {
+  const dataDirectory = await temporaryDirectory();
+  const queue = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(queue);
+  const queued = await queue.enqueue("analysis", async ({ id }) => ({
+    ...cityModelResult(id),
+    source: { availability: "not-captured" as const },
+  }));
+  const completed = await waitFor(
+    queue,
+    queued.id,
+    ({ state }) => state === "completed",
+  );
+  expect(completed.result?.source).toEqual({
+    availability: "not-captured",
+  });
+  await queue.close();
+
+  const reopened = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(reopened);
+  expect(reopened.get(queued.id)?.result?.source).toEqual({
+    availability: "not-captured",
+  });
+});
+
 it("strictly persists and reloads optional evolution artifact metadata", async () => {
   const dataDirectory = await temporaryDirectory();
   const queue = await PersistentJobQueue.open({ dataDirectory });

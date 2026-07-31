@@ -104,6 +104,30 @@ export function environmentWindowsCredentialFilesTrust(
   );
 }
 
+export function environmentSourceRetention(
+  value: string | undefined,
+): "retain" | "disabled" {
+  if (value === undefined || value === "" || value === "disabled") {
+    return "disabled";
+  }
+  if (value === "retain") return "retain";
+  throw new Error(
+    "CODECITY_SOURCE_RETENTION must be exactly retain or disabled.",
+  );
+}
+
+export function environmentEditorUrlTemplate(
+  value: string | undefined,
+): string | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (value !== value.trim()) {
+    throw new Error(
+      "CODECITY_EDITOR_URL_TEMPLATE must not contain surrounding whitespace.",
+    );
+  }
+  return value;
+}
+
 export async function runServer(): Promise<void> {
   const controller = new AbortController();
   const stop = (): void => controller.abort();
@@ -138,6 +162,12 @@ export async function runServer(): Promise<void> {
       environmentWindowsCredentialFilesTrust(
         process.env["CODECITY_TRUST_WINDOWS_CREDENTIAL_FILES"],
       );
+    const sourceRetention = environmentSourceRetention(
+      process.env["CODECITY_SOURCE_RETENTION"],
+    );
+    const editorUrlTemplate = environmentEditorUrlTemplate(
+      process.env["CODECITY_EDITOR_URL_TEMPLATE"],
+    );
     const server = await startCodeCityServer({
       ...(host === undefined ? {} : { host }),
       ...(port === undefined ? {} : { port }),
@@ -157,6 +187,10 @@ export async function runServer(): Promise<void> {
           : { profilesFile: credentialProfilesFile }),
         trustWindowsCredentialFiles,
       },
+      sourceRetention,
+      ...(editorUrlTemplate === undefined
+        ? {}
+        : { editorUrlTemplate }),
       dataDirectory: path.resolve(
         process.env["CODECITY_DATA_DIR"] ?? "data",
       ),

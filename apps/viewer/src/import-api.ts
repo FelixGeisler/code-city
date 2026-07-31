@@ -1,10 +1,12 @@
 const API_RESPONSE_MAX_BYTES = 256 * 1024;
+const SOURCE_RESPONSE_MAX_BYTES = 16 * 1024 * 1024 * 6 + 64 * 1024;
 const API_REQUEST_DEADLINE_MS = 30_000;
 const API_UPLOAD_DEADLINE_MS = 11 * 60_000;
 const API_RESULT_REMOVAL_DEADLINE_MS = 31 * 60_000;
 const MAXIMUM_ERROR_FIELDS = 64;
 const MAXIMUM_TEXT_CHARACTERS = 2_048;
 const MAXIMUM_EVOLUTION_ARTIFACT_BYTES = 512 * 1024 * 1024;
+const MAXIMUM_SOURCE_ARTIFACT_BYTES = 128 * 1024 * 1024;
 
 export const IMPORT_JOB_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -157,6 +159,20 @@ export interface ImportJobResult {
     readonly size: number;
     readonly sha256: string;
   };
+  readonly source?:
+    | {
+        readonly availability: "disabled";
+      }
+    | {
+        readonly availability: "not-captured";
+      }
+    | {
+        readonly availability: "retained";
+        readonly artifactUrl: string;
+        readonly size: number;
+        readonly sha256: string;
+        readonly indexSha256: string;
+      };
 }
 
 export interface ImportJob {
@@ -447,6 +463,7 @@ function parseJobResult(value: unknown, jobId: string): ImportJobResult {
   }
   const candidate = value as Record<string, unknown>;
   const evolutionPresent = Object.hasOwn(candidate, "evolution");
+  const sourcePresent = Object.hasOwn(candidate, "source");
   const object = exactObject(
     value,
     [
@@ -454,6 +471,7 @@ function parseJobResult(value: unknown, jobId: string): ImportJobResult {
       "artifactUrl",
       "kind",
       ...(evolutionPresent ? ["evolution"] : []),
+      ...(sourcePresent ? ["source"] : []),
     ],
     "Import job result",
   );
@@ -492,11 +510,72 @@ function parseJobResult(value: unknown, jobId: string): ImportJobResult {
       sha256,
     });
   }
+  let source: ImportJobResult["source"];
+  if (sourcePresent) {
+    if (
+      typeof object["source"] !== "object" ||
+      object["source"] === null ||
+      Array.isArray(object["source"])
+    ) {
+      throw protocolError("Import source result is invalid.");
+    }
+    const sourceCandidate = object["source"] as Record<string, unknown>;
+    if (
+      sourceCandidate["availability"] === "disabled" ||
+      sourceCandidate["availability"] === "not-captured"
+    ) {
+      exactObject(
+        sourceCandidate,
+        ["availability"],
+        "Import source result",
+      );
+      source = Object.freeze({
+        availability: sourceCandidate["availability"],
+      });
+    } else {
+      const sourceObject = exactObject(
+        sourceCandidate,
+        [
+          "artifactUrl",
+          "availability",
+          "indexSha256",
+          "sha256",
+          "size",
+        ],
+        "Import source result",
+      );
+      const size = sourceObject["size"];
+      const sha256 = sourceObject["sha256"];
+      const indexSha256 = sourceObject["indexSha256"];
+      if (
+        sourceObject["availability"] !== "retained" ||
+        sourceObject["artifactUrl"] !==
+          `/api/v1/artifacts/${jobId}/source` ||
+        !Number.isSafeInteger(size) ||
+        (size as number) < 1 ||
+        (size as number) > MAXIMUM_SOURCE_ARTIFACT_BYTES ||
+        typeof sha256 !== "string" ||
+        !/^[0-9a-f]{64}$/u.test(sha256) ||
+        typeof indexSha256 !== "string" ||
+        !/^[0-9a-f]{64}$/u.test(indexSha256)
+      ) {
+        throw protocolError("Import source result is invalid.");
+      }
+      source = Object.freeze({
+        availability: "retained",
+        artifactUrl: sourceObject["artifactUrl"],
+        size: size as number,
+        sha256,
+        indexSha256,
+      });
+    }
+  }
   return Object.freeze({
     kind: "city-model",
     artifactToken: jobId,
     artifactUrl,
     ...(evolution === undefined ? {} : { evolution }),
+    ...(source === undefined ? {} : { source }),
   });
 }
 
@@ -732,6 +811,7 @@ async function waitForAbort<T>(
 async function readBoundedBytes(
   response: Response,
   signal: AbortSignal,
+  maximumBytes = API_RESPONSE_MAX_BYTES,
 ): Promise<Uint8Array> {
   const contentLength = response.headers.get("content-length");
   if (contentLength !== null) {
@@ -741,7 +821,7 @@ async function readBoundedBytes(
     const length = Number(contentLength);
     if (
       !Number.isSafeInteger(length) ||
-      length > API_RESPONSE_MAX_BYTES
+      length > maximumBytes
     ) {
       throw protocolError("API response exceeds the viewer limit.");
     }
@@ -758,7 +838,7 @@ async function readBoundedBytes(
         complete = true;
         break;
       }
-      if (item.value.byteLength > API_RESPONSE_MAX_BYTES - size) {
+      if (item.value.byteLength > maximumBytes - size) {
         throw protocolError("API response exceeds the viewer limit.");
       }
       size += item.value.byteLength;
@@ -783,6 +863,7 @@ async function readBoundedBytes(
 async function readJsonResponse(
   response: Response,
   signal: AbortSignal,
+  maximumBytes = API_RESPONSE_MAX_BYTES,
 ): Promise<unknown> {
   const contentType = response.headers.get("content-type");
   if (
@@ -791,7 +872,7 @@ async function readJsonResponse(
   ) {
     throw protocolError("API response is not UTF-8 JSON.");
   }
-  const bytes = await readBoundedBytes(response, signal);
+  const bytes = await readBoundedBytes(response, signal, maximumBytes);
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -931,6 +1012,30 @@ export class ViewerImportApiClient {
       );
     }
     return parseCapabilitiesResponse(response.value);
+  }
+
+  public async buildingSource(
+    jobId: string,
+    buildingId: string,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const response = await this.jsonRequest(
+      `/api/v1/artifacts/${jobId}/sources/${buildingId}`,
+      { method: "GET" },
+      signal,
+      this.requestDeadlineMs,
+      SOURCE_RESPONSE_MAX_BYTES,
+    );
+    if (response.response.status === 409) {
+      throw new ImportApiError(
+        "protocol",
+        "Source retention is disabled for this imported model.",
+      );
+    }
+    if (response.response.status !== 200) {
+      throw protocolError("Source code could not be loaded.");
+    }
+    return response.value;
   }
 
   public async createRemoteImport(
@@ -1167,10 +1272,15 @@ export class ViewerImportApiClient {
     init: RequestInit,
     signal?: AbortSignal,
     deadlineMs = this.requestDeadlineMs,
+    maximumResponseBytes = API_RESPONSE_MAX_BYTES,
   ): Promise<{ readonly response: Response; readonly value: unknown }> {
     return await this.withDeadline(signal, deadlineMs, async (requestSignal) => {
       const response = await this.fetchResponse(path, init, requestSignal);
-      const value = await readJsonResponse(response, requestSignal);
+      const value = await readJsonResponse(
+        response,
+        requestSignal,
+        maximumResponseBytes,
+      );
       if (!response.ok) throw parseErrorResponse(value, response);
       return { response, value };
     });

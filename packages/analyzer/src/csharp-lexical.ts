@@ -544,10 +544,17 @@ export function analyzeCSharpLexically(source: string): CSharpLexicalResult {
   }
 
   const units: ExecutableUnitMetric[] = [
-    { name: "<top-level>", line: 1, complexity: 1 + (decisionCounts[0] ?? 0) },
+    {
+      name: "<top-level>",
+      line: 1,
+      endLine: Math.max(1, source.split(/\r\n?|\n/u).length),
+      complexity: 1 + (decisionCounts[0] ?? 0),
+    },
     ...ranges.map((range, index) => ({
       name: range.name,
       line: range.line,
+      endLine: tokens[Math.min(range.end, tokens.length - 1)]?.line ??
+        range.line,
       complexity: 1 + (decisionCounts[index + 1] ?? 0),
     })),
   ].sort(

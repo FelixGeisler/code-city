@@ -135,6 +135,77 @@ describe("CityModel JSON Schema", () => {
     );
   });
 
+  it("accepts credential-free immutable source provenance and bounded line locations", () => {
+    const repository = DEMO_MODEL.repositories[0]!;
+    const building = DEMO_MODEL.buildings.find(
+      ({ repositoryId }) => repositoryId === repository.id,
+    )!;
+    const endLine = Math.max(
+      100,
+      ...(building.units ?? []).map(
+        ({ endLine, line }) => endLine ?? line,
+      ),
+    );
+    const extended = {
+      ...DEMO_MODEL,
+      sourceProvenance: {
+        version: "codecity.source-navigation/1" as const,
+        repositories: [
+          {
+            repositoryId: repository.id,
+            provider: "github" as const,
+            revision: {
+              kind: "commit" as const,
+              value: "a".repeat(40),
+            },
+            repositoryUrl: "https://github.com/example/repository",
+          },
+        ],
+      },
+      buildings: DEMO_MODEL.buildings.map((candidate) =>
+        candidate.id === building.id
+          ? {
+              ...candidate,
+              sourceLocation: { startLine: 1, endLine },
+            }
+          : candidate,
+      ),
+    };
+    expect(validateSchema(extended), errors()).toBe(true);
+    expect(validateCityModel(extended)).toBe(extended);
+
+    expect(() =>
+      validateCityModel({
+        ...extended,
+        sourceProvenance: {
+          ...extended.sourceProvenance,
+          repositories: [
+            {
+              ...extended.sourceProvenance.repositories[0]!,
+              repositoryUrl:
+                "https://token@example.com/example/repository",
+            },
+          ],
+        },
+      }),
+    ).toThrow(/credential/u);
+
+    expect(() =>
+      validateCityModel({
+        ...extended,
+        sourceProvenance: {
+          ...extended.sourceProvenance,
+          repositories: [
+            {
+              ...extended.sourceProvenance.repositories[0]!,
+              repositoryUrl: "javascript:alert(1)",
+            },
+          ],
+        },
+      }),
+    ).toThrow(/scheme or host/u);
+  });
+
   it("rejects unknown versions and incoherent additive fields", () => {
     expect(
       validateSchema({ ...DEMO_MODEL, schemaVersion: "2.0" }),

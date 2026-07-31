@@ -35,6 +35,10 @@ export interface SourceFileFact {
   readonly metrics: SourceMetrics;
   readonly metricMethod: MetricMethod;
   readonly units: readonly ExecutableUnitMetric[];
+  readonly sourceLocation?: {
+    readonly startLine: 1;
+    readonly endLine: number;
+  };
   readonly risk: RiskBand;
   readonly semanticGroupId: string;
   readonly imports: readonly StaticImportFact[];

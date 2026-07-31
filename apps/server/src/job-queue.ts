@@ -99,6 +99,20 @@ export interface JobResult {
     readonly size: number;
     readonly sha256: string;
   };
+  readonly source?:
+    | {
+        readonly availability: "disabled";
+      }
+    | {
+        readonly availability: "not-captured";
+      }
+    | {
+        readonly availability: "retained";
+        readonly artifactUrl: string;
+        readonly size: number;
+        readonly sha256: string;
+        readonly indexSha256: string;
+      };
 }
 
 export interface JobRecord {
@@ -173,23 +187,21 @@ const FINALIZATION_FAILURE_MESSAGE = "The job cleanup did not complete.";
 const TERMINAL_PERSISTENCE_FAILURE_MESSAGE =
   "The job terminal state could not be persisted.";
 const JOB_PROGRESS_KEYS = ["current", "phase", "total"] as const;
-const CITY_MODEL_ARTIFACT_KEYS = [
-  "artifactToken",
-  "artifactUrl",
-  "kind",
-] as const;
-const HISTORY_ARTIFACT_KEYS = [
-  "artifactToken",
-  "artifactUrl",
-  "evolution",
-  "kind",
-] as const;
 const EVOLUTION_ARTIFACT_KEYS = [
   "artifactUrl",
   "sha256",
   "size",
 ] as const;
+const DISABLED_SOURCE_KEYS = ["availability"] as const;
+const RETAINED_SOURCE_KEYS = [
+  "artifactUrl",
+  "availability",
+  "indexSha256",
+  "sha256",
+  "size",
+] as const;
 const EVOLUTION_ARTIFACT_MAX_BYTES = 512 * 1024 * 1024;
+const SOURCE_ARTIFACT_MAX_BYTES = 128 * 1024 * 1024;
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -289,10 +301,14 @@ function readResult(
     const token = candidate["artifactToken"];
     const url = candidate["artifactUrl"];
     const evolution = candidate["evolution"];
-    const expectedKeys =
-      evolution === undefined
-        ? CITY_MODEL_ARTIFACT_KEYS
-        : HISTORY_ARTIFACT_KEYS;
+    const source = candidate["source"];
+    const expectedKeys = [
+      "artifactToken",
+      "artifactUrl",
+      ...(evolution === undefined ? [] : ["evolution"]),
+      "kind",
+      ...(source === undefined ? [] : ["source"]),
+    ];
     if (
       keys.length !== expectedKeys.length ||
       !keys.every((key, index) => key === expectedKeys[index]) ||
@@ -339,6 +355,59 @@ function readResult(
         sha256: digest,
       });
     }
+    let normalizedSource: JobResult["source"];
+    if (source !== undefined) {
+      if (typeof source !== "object" || source === null) {
+        return undefined;
+      }
+      const sourceCandidate = source as Record<string, unknown>;
+      const sourceKeys = Object.keys(sourceCandidate).sort(compareText);
+      const availability = sourceCandidate["availability"];
+      if (
+        availability === "disabled" ||
+        availability === "not-captured"
+      ) {
+        if (
+          sourceKeys.length !== DISABLED_SOURCE_KEYS.length ||
+          !sourceKeys.every(
+            (key, index) => key === DISABLED_SOURCE_KEYS[index],
+          )
+        ) {
+          return undefined;
+        }
+        normalizedSource = Object.freeze({ availability });
+      } else if (availability === "retained") {
+        const sourceUrl = sourceCandidate["artifactUrl"];
+        const size = sourceCandidate["size"];
+        const digest = sourceCandidate["sha256"];
+        const indexDigest = sourceCandidate["indexSha256"];
+        if (
+          sourceKeys.length !== RETAINED_SOURCE_KEYS.length ||
+          !sourceKeys.every(
+            (key, index) => key === RETAINED_SOURCE_KEYS[index],
+          ) ||
+          sourceUrl !== `/api/v1/artifacts/${token}/source` ||
+          !Number.isSafeInteger(size) ||
+          (size as number) < 1 ||
+          (size as number) > SOURCE_ARTIFACT_MAX_BYTES ||
+          typeof digest !== "string" ||
+          !/^[0-9a-f]{64}$/u.test(digest) ||
+          typeof indexDigest !== "string" ||
+          !/^[0-9a-f]{64}$/u.test(indexDigest)
+        ) {
+          return undefined;
+        }
+        normalizedSource = Object.freeze({
+          availability,
+          artifactUrl: sourceUrl,
+          size: size as number,
+          sha256: digest,
+          indexSha256: indexDigest,
+        });
+      } else {
+        return undefined;
+      }
+    }
     return Object.freeze({
       kind,
       artifactToken: token,
@@ -346,6 +415,9 @@ function readResult(
       ...(normalizedEvolution === undefined
         ? {}
         : { evolution: normalizedEvolution }),
+      ...(normalizedSource === undefined
+        ? {}
+        : { source: normalizedSource }),
     });
   } catch {
     return undefined;

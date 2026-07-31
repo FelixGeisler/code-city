@@ -27,6 +27,18 @@ persisted job under `Location`. Branches and tags are discriminated from exact
 commit SHAs. A completed job owns
 `/api/v1/artifacts/\{id\}/city-model.json`.
 
+When source retention is explicitly enabled, analysis also publishes a separate,
+owner-private source artifact keyed by the same opaque job UUID. A source read
+at `/api/v1/artifacts/\{id\}/sources/\{building-id\}` is authorized before
+processing and reads only a bounded indexed manifest plus the selected,
+digest-verified file. It succeeds only when the completed job, model repository,
+building ID, path, language, location, and provenance all agree. The response contains one exact
+file, immutable repository provenance, and optional commit-pinned provider and
+explicitly configured editor links. Executable-unit rows scroll to their
+recorded line range. Source text is never copied into city/evolution models,
+print artifacts, or legends. Disabled retention returns an explicit reduced
+state rather than refetching a mutable branch.
+
 The default trusted-network mode preserves this unauthenticated API. When an
 operator supplies one private authorization-token file and exact public
 origin, the request dispatcher authorizes every API route before its body or

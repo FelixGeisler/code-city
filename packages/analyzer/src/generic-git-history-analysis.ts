@@ -137,6 +137,11 @@ export interface GenericGitHistoryAnalysisOptions {
     readonly version?: string;
     readonly logo?: string;
   };
+  /**
+   * Retains the bounded newest-revision snapshot for an authorized source
+   * artifact. It never participates in semantic cache keys.
+   */
+  readonly retainSourceSnapshot?: boolean;
 }
 
 export type HistoryAnalysisSnapshotOptions = Omit<
@@ -212,6 +217,7 @@ export interface GenericGitHistoryAnalysisResult {
   readonly selection: HistorySelectionResult;
   readonly model: CityModel;
   readonly evolution: HistoryEvolutionResult;
+  readonly sourceSnapshot?: RepositorySnapshot;
   readonly costEstimate: GenericGitHistoryCostEstimate;
   readonly cacheHits: number;
   readonly cacheMisses: number;
@@ -239,6 +245,7 @@ interface ResolvedAnalysisOptions {
     Required<HistoryAnalysisSnapshotOptions>
   >;
   readonly semanticConfiguration: unknown;
+  readonly retainSourceSnapshot: boolean;
   readonly identity?: CityIdentity;
 }
 
@@ -475,6 +482,12 @@ function resolveOptions(
     options.analysisOptions,
   );
   const identity = presentationIdentity(options.identity);
+  if (
+    options.retainSourceSnapshot !== undefined &&
+    typeof options.retainSourceSnapshot !== "boolean"
+  ) {
+    invalid("retainSourceSnapshot must be boolean.");
+  }
   return Object.freeze({
     analyzerFingerprint,
     metricConfiguration,
@@ -483,6 +496,7 @@ function resolveOptions(
       metricConfiguration,
       snapshotOptions,
     }),
+    retainSourceSnapshot: options.retainSourceSnapshot === true,
     ...(identity === undefined ? {} : { identity }),
   });
 }
@@ -1406,6 +1420,7 @@ async function analyzeSession(
   let cacheMisses = 0;
   let treeEntries = 0;
   let semanticBytes = 0;
+  let sourceSnapshot: RepositorySnapshot | undefined;
   let value: SessionAnalysisResult | undefined;
   let failed = false;
   let failure: unknown;
@@ -1421,6 +1436,12 @@ async function analyzeSession(
       const compute = async (): Promise<LocalAnalysisFacts> => {
         checkpoint(clock);
         const snapshot = await session.readSnapshot(commit.sha);
+        if (
+          options.retainSourceSnapshot === true &&
+          commit.sha === selection.summary.resolvedNewestSha
+        ) {
+          sourceSnapshot = snapshot;
+        }
         snapshotFileCount = snapshot.files.length;
         checkpoint(clock);
         const analyzed = await withinAnalysisDeadline(
@@ -1523,6 +1544,15 @@ async function analyzeSession(
         : { signal: clock.signal }),
     });
     checkpoint(clock);
+    if (
+      options.retainSourceSnapshot === true &&
+      sourceSnapshot === undefined
+    ) {
+      sourceSnapshot = await session.readSnapshot(
+        selection.summary.resolvedNewestSha,
+      );
+      checkpoint(clock);
+    }
     const model = evolution.model;
     value = Object.freeze({
       repository: session.repository,
@@ -1532,6 +1562,7 @@ async function analyzeSession(
       selection,
       model,
       evolution,
+      ...(sourceSnapshot === undefined ? {} : { sourceSnapshot }),
       costEstimate: Object.freeze({
         traversedCommitCount: selection.summary.traversedCommitCount,
         selectedCommitCount: selection.summary.selectedCommitCount,

@@ -87,6 +87,24 @@ function headersOf(init: RequestInit): Record<string, string> {
 }
 
 describe("viewer import API protocol", () => {
+  it("accepts a bounded retained source response above the generic API limit", async () => {
+    const payload = {
+      source: {
+        text: "x".repeat(512 * 1024),
+      },
+    };
+    const client = new ViewerImportApiClient(
+      new URL("https://city.example.test/"),
+      { fetch: async () => jsonResponse(payload) },
+    );
+    await expect(
+      client.buildingSource(
+        JOB_ID,
+        "building:1234567890abcdef",
+      ),
+    ).resolves.toEqual(payload);
+  });
+
   it("uses exact same-origin session requests and exposes only redacted profiles", async () => {
     const calls: Array<{
       readonly input: string | URL;
@@ -478,6 +496,15 @@ describe("viewer import API protocol", () => {
     expect(parseImportJob(completedHistoryJob())).toEqual(
       completedHistoryJob(),
     );
+    expect(
+      parseImportJob({
+        ...completedJob(),
+        result: {
+          ...completedJob().result!,
+          source: { availability: "not-captured" },
+        },
+      }).result?.source,
+    ).toEqual({ availability: "not-captured" });
     for (const evolution of [
       {
         ...completedHistoryJob().result!.evolution!,

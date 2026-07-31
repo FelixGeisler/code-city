@@ -89,6 +89,13 @@ import {
   ViewerLoadGateway,
 } from "./model-source.js";
 import { validateCityModel } from "./model-validation.js";
+import { ViewerImportApiClient } from "./import-api.js";
+import {
+  loadBuildingSource,
+  sourceLineWindow,
+  sourceLineTokens,
+  type BuildingSource,
+} from "./source-navigation.js";
 import {
   createRepositoryExplorerIndex,
   DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT,
@@ -180,6 +187,12 @@ interface CameraTransition {
 interface ModelSource {
   readonly label: string;
   readonly assetRoot?: URL;
+  readonly jobId?: string;
+  readonly sourceAvailability?:
+    | "disabled"
+    | "not-captured"
+    | "retained"
+    | "unavailable";
 }
 
 interface ViewerPerformanceDiagnostics {
@@ -386,6 +399,15 @@ const inspectorFields = {
   unitsCaption: element<HTMLTableCaptionElement>("building-units-caption"),
   units: element<HTMLTableSectionElement>("building-units"),
   unitsShowMore: element<HTMLButtonElement>("building-units-show-more"),
+  sourceDetails: element<HTMLDetailsElement>("building-source-details"),
+  sourceSummary: element<HTMLElement>("building-source-summary"),
+  sourceStatus: element<HTMLParagraphElement>("building-source-status"),
+  sourceContent: element<HTMLDivElement>("building-source-content"),
+  sourcePath: element<HTMLElement>("building-source-path"),
+  sourceRevision: element<HTMLElement>("building-source-revision"),
+  sourceExternal: element<HTMLAnchorElement>("building-source-external"),
+  sourceEditor: element<HTMLAnchorElement>("building-source-editor"),
+  sourceCode: element<HTMLPreElement>("building-source-code"),
 };
 
 const districtInspectorFields = {
@@ -1607,6 +1629,10 @@ class CityScene {
 
 let activeModel: CityModel = DEMO_MODEL;
 let activeModelSource: ModelSource = { label: "Built-in demo" };
+let sourceRequest: AbortController | undefined;
+let loadedBuildingSource:
+  | { readonly buildingId: string; readonly source: BuildingSource }
+  | undefined;
 let visualizationMode: ViewerVisualizationMode = "semantic";
 let previewPrinterProfile: PrinterProfile | undefined;
 let activeBuildingsById = new Map(
@@ -1666,6 +1692,9 @@ const printPlateToolbar = installPrintPlateToolbar(
 );
 requestCityPresentation = (): void => printPlateToolbar.show("city");
 const viewerLoadGateway = new ViewerLoadGateway();
+const sourceApi = new ViewerImportApiClient(
+  new URL(window.location.href),
+);
 const automaticModelLoadGate = new AutomaticModelLoadGate();
 const logoLoadGate = new AutomaticModelLoadGate();
 let loadedModelLogo: LoadedViewerImage | undefined;
@@ -1680,11 +1709,16 @@ const projectImportDialog = installProjectImportDialog({
     activateImportedModel(model, {
       label: source.label,
       assetRoot: source.assetRoot,
+      jobId: source.jobId,
+      sourceAvailability: source.sourceAvailability,
     });
   },
   onSignedOut: () => {
     automaticModelLoadGate.invalidate();
     activateImportedModel(DEMO_MODEL, { label: "Built-in demo" });
+  },
+  onResultRemoved: (jobId) => {
+    if (activeModelSource.jobId === jobId) scrubBuildingSource();
   },
 });
 const printExportDialog = installPrintExportDialog({
@@ -2026,6 +2060,8 @@ function applyModel(model: CityModel, source: ModelSource): void {
   cityScene.assertBuildingCapability(model.buildings.length);
 
   activeModel = model;
+  activeModelSource = source;
+  scrubBuildingSource();
   activeBuildingsById = buildingsById;
   activeDistrictsById = districtsById;
   dependencyExplorerIndex = nextDependencyExplorerIndex;
@@ -3482,6 +3518,199 @@ function renderViewerOverview(): void {
   }
 }
 
+function sourceAvailabilityMessage(): string {
+  if (activeModelSource.sourceAvailability === "disabled") {
+    return "Source retention is disabled for this deployment; provenance and metrics remain available.";
+  }
+  if (activeModelSource.sourceAvailability === "unavailable") {
+    return "This imported result predates retained source navigation.";
+  }
+  if (activeModelSource.sourceAvailability === "not-captured") {
+    return "This model-only import did not capture source files; import a repository archive or remote repository to enable navigation.";
+  }
+  return "Source is unavailable for models opened directly in the viewer.";
+}
+
+function scrubBuildingSource(): void {
+  sourceRequest?.abort();
+  sourceRequest = undefined;
+  loadedBuildingSource = undefined;
+  inspectorFields.sourceCode.replaceChildren();
+  inspectorFields.sourcePath.textContent = "";
+  inspectorFields.sourceRevision.textContent = "";
+  inspectorFields.sourceExternal.removeAttribute("href");
+  inspectorFields.sourceEditor.removeAttribute("href");
+  inspectorFields.sourceExternal.hidden = true;
+  inspectorFields.sourceEditor.hidden = true;
+  inspectorFields.sourceContent.hidden = true;
+}
+
+function renderSourceCode(
+  source: BuildingSource,
+  startLine?: number,
+  endLine = startLine,
+): void {
+  inspectorFields.sourceCode.replaceChildren();
+  const lines = source.text.split(/\r\n?|\n/u);
+  const {
+    requestedStart,
+    requestedEnd,
+    firstLine,
+    lastLine,
+    omittedBefore,
+    omittedAfter,
+  } = sourceLineWindow(
+    lines.length,
+    startLine ?? source.location.startLine,
+    endLine ?? startLine ?? source.location.startLine,
+  );
+  const appendOmitted = (text: string): void => {
+    const indicator = document.createElement("span");
+    indicator.className = "source-line source-line-omitted";
+    indicator.textContent = text;
+    inspectorFields.sourceCode.append(indicator);
+  };
+  if (omittedBefore > 0) {
+    appendOmitted(`â€¦ ${omittedBefore} earlier lines omitted â€¦`);
+  }
+  for (
+    let lineNumber = firstLine;
+    lineNumber <= lastLine;
+    lineNumber += 1
+  ) {
+    const text = lines[lineNumber - 1]!;
+    const line = document.createElement("span");
+    line.className = "source-line";
+    line.dataset["line"] = String(lineNumber);
+    if (
+      startLine !== undefined &&
+      lineNumber >= startLine &&
+      lineNumber <= (endLine ?? startLine)
+    ) {
+      line.classList.add("source-line-highlight");
+    }
+    for (const token of sourceLineTokens(text)) {
+      const span = document.createElement("span");
+      if (token.kind !== "text") {
+        span.className = `source-token-${token.kind}`;
+      }
+      span.textContent = token.text;
+      line.append(span);
+    }
+    if (text === "") line.append("\u200b");
+    inspectorFields.sourceCode.append(line);
+  }
+  if (omittedAfter > 0) {
+    appendOmitted(`â€¦ ${omittedAfter} later lines omitted â€¦`);
+  }
+  inspectorFields.sourceCode
+    .querySelector<HTMLElement>(`[data-line="${requestedStart}"]`)
+    ?.scrollIntoView({ block: "center" });
+}
+
+function revealBuildingSource(
+  building: CityBuilding,
+  startLine?: number,
+  endLine?: number,
+): void {
+  inspectorFields.sourceDetails.open = true;
+  if (
+    loadedBuildingSource?.buildingId === building.id
+  ) {
+    renderSourceCode(
+      loadedBuildingSource.source,
+      startLine,
+      endLine,
+    );
+    return;
+  }
+  scrubBuildingSource();
+  const jobId = activeModelSource.jobId;
+  if (
+    jobId === undefined ||
+    activeModelSource.sourceAvailability !== "retained"
+  ) {
+    inspectorFields.sourceSummary.textContent = "Unavailable";
+    inspectorFields.sourceStatus.textContent =
+      sourceAvailabilityMessage();
+    return;
+  }
+  const controller = new AbortController();
+  sourceRequest = controller;
+  inspectorFields.sourceSummary.textContent = "Loading";
+  const provenance = activeModel.sourceProvenance?.repositories.find(
+    ({ repositoryId }) => repositoryId === building.repositoryId,
+  );
+  if (provenance === undefined) {
+    sourceRequest = undefined;
+    inspectorFields.sourceSummary.textContent = "Unavailable";
+    inspectorFields.sourceStatus.textContent =
+      "This building has no validated source provenance.";
+    return;
+  }
+  inspectorFields.sourceStatus.textContent =
+    `Loading ${building.path}…`;
+  void loadBuildingSource(
+    jobId,
+    {
+      buildingId: building.id,
+      repositoryId: building.repositoryId,
+      path: building.path,
+      language: building.language,
+      ...(building.sourceLocation === undefined
+        ? {}
+        : { location: building.sourceLocation }),
+      provenance,
+    },
+    (requestedJobId, requestedBuildingId, signal) =>
+      sourceApi.buildingSource(
+        requestedJobId,
+        requestedBuildingId,
+        signal,
+      ),
+    controller.signal,
+  )
+    .then((source) => {
+      if (controller.signal.aborted || sourceRequest !== controller) {
+        return;
+      }
+      sourceRequest = undefined;
+      loadedBuildingSource = { buildingId: building.id, source };
+      inspectorFields.sourceSummary.textContent = "Read only";
+      inspectorFields.sourceStatus.textContent =
+        `Showing the exact retained file for ${source.path}.`;
+      inspectorFields.sourcePath.textContent = source.path;
+      inspectorFields.sourceRevision.textContent =
+        `${source.provenance.provider} · ${source.provenance.revision.value}`;
+      inspectorFields.sourceExternal.hidden =
+        source.externalUrl === undefined;
+      if (source.externalUrl !== undefined) {
+        inspectorFields.sourceExternal.href = source.externalUrl;
+      }
+      inspectorFields.sourceEditor.hidden =
+        source.editorUrl === undefined;
+      if (source.editorUrl !== undefined) {
+        inspectorFields.sourceEditor.href = source.editorUrl;
+      }
+      inspectorFields.sourceContent.hidden = false;
+      renderSourceCode(source, startLine, endLine);
+    })
+    .catch((error: unknown) => {
+      if (
+        controller.signal.aborted ||
+        sourceRequest !== controller
+      ) {
+        return;
+      }
+      scrubBuildingSource();
+      inspectorFields.sourceSummary.textContent = "Unavailable";
+      inspectorFields.sourceStatus.textContent =
+        error instanceof Error
+          ? error.message
+          : "Source code could not be loaded.";
+    });
+}
+
 function showInspector(context: BuildingContext | null): void {
   inspectorEmpty.hidden = context !== null;
   inspectorContent.hidden = context === null;
@@ -3490,6 +3719,7 @@ function showInspector(context: BuildingContext | null): void {
   clearSelectionButton.hidden = context === null;
   dependencySection.open = false;
   if (!context) {
+    scrubBuildingSource();
     selectionKind.textContent = "Details";
     selectionName.textContent = "Nothing selected";
     selectionStatus.textContent = "Selection cleared.";
@@ -3513,6 +3743,11 @@ function showInspector(context: BuildingContext | null): void {
     building.metricMethod ?? "Not recorded";
   inspectorFields.metricExplanation.textContent =
     describeBuildingMetrics(activeModel, building);
+  inspectorFields.sourceDetails.open = false;
+  revealBuildingSource(
+    building,
+    building.sourceLocation?.startLine,
+  );
   executableUnitVisibleLimit =
     INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;
   inspectorFields.unitsDetails.open = false;
@@ -3523,6 +3758,7 @@ function showInspector(context: BuildingContext | null): void {
 }
 
 function showDistrictInspector(context: DistrictContext): void {
+  scrubBuildingSource();
   const { district, repository, module, buildingCount } = context;
   inspectorEmpty.hidden = true;
   inspectorContent.hidden = true;
@@ -3546,6 +3782,7 @@ function showDistrictInspector(context: DistrictContext): void {
 }
 
 function showExternalInspector(node: ExternalSceneNode): void {
+  scrubBuildingSource();
   const presentation = presentExternalDependency(
     node,
     externalConsumerIdentity,
@@ -3697,7 +3934,19 @@ function renderExecutableUnits(building: CityBuilding): void {
 
     const line = document.createElement("td");
     line.className = "unit-number";
-    line.textContent = unit.line.toLocaleString();
+    const jump = document.createElement("button");
+    jump.className = "unit-source-jump";
+    jump.type = "button";
+    jump.textContent = unit.line.toLocaleString();
+    jump.title = `Open ${unit.name} at line ${unit.line.toLocaleString()}`;
+    jump.addEventListener("click", () => {
+      revealBuildingSource(
+        building,
+        unit.line,
+        unit.endLine ?? unit.line,
+      );
+    });
+    line.append(jump);
 
     row.append(name, complexity, line);
     inspectorFields.units.append(row);
