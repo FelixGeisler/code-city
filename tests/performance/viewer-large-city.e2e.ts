@@ -11,6 +11,7 @@ interface PerformanceSnapshot {
   readonly objectCount: number;
   readonly renderCalls: number;
   readonly evolutionRemovals: {
+    readonly renderMode: "instanced" | "merged";
     readonly totalCount: number;
     readonly visibleCount: number;
     readonly objectCount: number;
@@ -119,6 +120,7 @@ test("25k removal cues stay bounded and respect isolation in reduced motion", as
       ).__CODE_CITY_PERFORMANCE__!,
   );
   expect(wholeCity.evolutionRemovals).toEqual({
+    renderMode: "instanced",
     totalCount: 25_000,
     visibleCount: 25_000,
     objectCount: 1,
@@ -155,6 +157,7 @@ test("25k removal cues stay bounded and respect isolation in reduced motion", as
   );
 
   expect(isolated.evolutionRemovals).toMatchObject({
+    renderMode: "instanced",
     totalCount: 25_000,
     visibleCount: 250,
     objectCount: 1,
