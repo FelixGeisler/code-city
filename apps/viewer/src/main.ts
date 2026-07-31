@@ -3206,8 +3206,18 @@ function selectDistrictFromExplorer(districtId: string): void {
   }
 }
 
-function activateRepositoryTreeEntity(entity: SceneEntity): void {
+function activateRepositoryTreeEntity(
+  entity: SceneEntity,
+  intent: AdvancedSelectionIntent,
+): void {
   if (entity.kind === "building") {
+    if (
+      advancedQueryPanel !== undefined &&
+      (intent.additive || intent.range)
+    ) {
+      advancedQueryPanel.selectFromScene(entity.id, intent);
+      return;
+    }
     const next = selectExplorerBuilding(
       explorerState,
       activeModel,
@@ -3331,7 +3341,6 @@ function synchronizeExplorerState(state: ExplorerState): void {
   const previousIsolatedDistrictId =
     explorerState.isolatedDistrictId;
   explorerState = state;
-  repositoryHierarchyTree.synchronize(state);
   if (state.selectedEntity !== null) {
     activeEvolutionLineageSelection = undefined;
   }
@@ -3387,7 +3396,19 @@ function synchronizeExplorerState(state: ExplorerState): void {
       advancedQueryPanel.selection.buildingIds.length !== 1)
   ) {
     advancedQueryPanel.selectFromScene(selectedBuildingId);
+  } else if (
+    !applyingAdvancedSelection &&
+    selectedBuildingId === null &&
+    state.selectedEntity !== null &&
+    advancedQueryPanel !== undefined &&
+    advancedQueryPanel.selection.buildingIds.length > 0
+  ) {
+    advancedQueryPanel.clearSelection();
   }
+  repositoryHierarchyTree.synchronize(
+    state,
+    advancedQueryPanel?.selection.buildingIds,
+  );
   renderExternalNodeList();
   renderDependencyExplorer();
   renderDistrictDependencyExplorer();

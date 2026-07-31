@@ -424,6 +424,27 @@ test("runs explainable queries and synchronizes bounded multiple selections", as
     page.locator('.advanced-query-result[aria-selected="true"]'),
   ).toHaveCount(2);
 
+  await page.getByRole("tab", { name: "Explore" }).click();
+  const treeBuildings = page.locator(
+    '#repository-tree [role="treeitem"][data-node-kind="building"]',
+  );
+  await expect(treeBuildings).toHaveCount(3);
+  await treeBuildings.first().click();
+  await treeBuildings.nth(1).click({ modifiers: ["Control"] });
+  await treeBuildings.nth(2).click({ modifiers: ["Shift"] });
+  await expect(
+    page.locator(
+      '#repository-tree [role="treeitem"][aria-selected="true"]',
+    ),
+  ).toHaveCount(2);
+  await expect(page.locator("#selection-status")).toContainText(
+    "2 buildings selected",
+  );
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await expect(
+    page.locator('.advanced-query-result[aria-selected="true"]'),
+  ).toHaveCount(2);
+
   await expect(page.locator("#advanced-query-isolate")).toBeEnabled();
   await page.locator("#advanced-query-compare").click();
   await expect(
