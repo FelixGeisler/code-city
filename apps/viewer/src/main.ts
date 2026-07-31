@@ -2334,6 +2334,12 @@ function applyModel(
   const preservedDistrictRouteVisibleLimit = districtRouteVisibleLimit;
   const preservedDistrictDependencyBundleId =
     selectedDistrictDependencyBundleId;
+  const preservedBuildingSearch = options.preserveSelection
+    ? buildingSearch.value
+    : "";
+  const preservedSearchResultLimit = options.preserveSelection
+    ? searchResultLimit
+    : DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT;
   printExportDialog.invalidate();
   printPlateToolbar.setPlan(undefined);
   const buildingsById = new Map(
@@ -2374,8 +2380,8 @@ function applyModel(
   explorerState = resetExplorerState();
   activeExternalLayout = nextExternalLayout;
   activeExternalNodes = nextExternalLayout.nodes;
-  buildingSearch.value = "";
-  searchResultLimit = DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT;
+  buildingSearch.value = preservedBuildingSearch;
+  searchResultLimit = preservedSearchResultLimit;
   synchronizeExplorerState(explorerState);
   renderBuildingSearch();
   cityScene.load(
