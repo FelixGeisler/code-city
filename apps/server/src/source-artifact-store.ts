@@ -1,5 +1,9 @@
-import { createHash, randomUUID } from "node:crypto";
-import { constants, promises as fs } from "node:fs";
+import { createHash, randomUUID, type Hash } from "node:crypto";
+import {
+  constants,
+  promises as fs,
+  type BigIntStats,
+} from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 
@@ -7,7 +11,7 @@ import { isImportArtifactToken } from "./import-artifacts.js";
 import {
   parseSourceArtifact,
   parseSourceArtifactIndex,
-  serializeSourceArtifact,
+  prepareSourceArtifact,
   SOURCE_ARTIFACT_MAX_BYTES,
   SOURCE_ARTIFACT_PREFIX_BYTES,
   sourceArtifactIndexLength,
@@ -15,10 +19,12 @@ import {
   type SourceArtifact,
   type SourceArtifactIndex,
   type SourceArtifactIndexFile,
+  type SourceArtifactWorkOptions,
 } from "./source-artifact.js";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
+const STREAM_CHUNK_BYTES = 64 * 1024;
 const SOURCE_FILE_NAME = "source.pack";
 const SOURCE_STAGE_PATTERN =
   /^\.source-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/u;
@@ -58,8 +64,28 @@ function errorCode(error: unknown): string | undefined {
     : undefined;
 }
 
-function privateMode(mode: number, expected: number): boolean {
-  return process.platform === "win32" || (mode & 0o777) === expected;
+function privateMode(mode: bigint, expected: number): boolean {
+  return (
+    process.platform === "win32" ||
+    (mode & 0o777n) === BigInt(expected)
+  );
+}
+
+function stableIdentity(
+  status: Pick<BigIntStats, "ino">,
+): boolean {
+  // The device number alone identifies only a filesystem. An inode/file ID
+  // of zero cannot distinguish two entries on that filesystem, so it cannot
+  // attest a path against replacement even when dev is non-zero.
+  return status.ino !== 0n;
+}
+
+async function exactLstat(value: string): Promise<BigIntStats> {
+  return fs.lstat(value, { bigint: true });
+}
+
+async function exactHandleStat(handle: FileHandle): Promise<BigIntStats> {
+  return handle.stat({ bigint: true });
 }
 
 function samePath(left: string, right: string): boolean {
@@ -87,20 +113,29 @@ async function directory(
   description: string,
 ): Promise<string> {
   const resolved = path.resolve(value);
-  const status = await fs.lstat(resolved);
+  const status = await exactLstat(resolved);
   if (
     status.isSymbolicLink() ||
     !status.isDirectory() ||
+    !stableIdentity(status) ||
     !privateMode(status.mode, DIRECTORY_MODE)
   ) {
     throw new Error(`${description} must be a private regular directory.`);
   }
   const canonical = await fs.realpath(resolved);
+  const finalStatus = await exactLstat(resolved);
   // Windows realpath expands legitimate 8.3 path components (including the
   // runner's temporary directory). The direct lstat above still rejects a
   // reparse point at this directory entry, while the server's shared data
   // directory guard is responsible for its trusted ancestry.
-  if (process.platform !== "win32" && !samePath(canonical, resolved)) {
+  if (
+    finalStatus.isSymbolicLink() ||
+    !finalStatus.isDirectory() ||
+    finalStatus.dev !== status.dev ||
+    finalStatus.ino !== status.ino ||
+    !privateMode(finalStatus.mode, DIRECTORY_MODE) ||
+    (process.platform !== "win32" && !samePath(canonical, resolved))
+  ) {
     throw new Error(`${description} must not resolve through a link.`);
   }
   return canonical;
@@ -117,16 +152,84 @@ async function ensureChild(
   } catch (error) {
     if (errorCode(error) !== "EEXIST") throw error;
   }
-  try {
-    await fs.chmod(candidate, DIRECTORY_MODE);
-  } catch (error) {
-    if (process.platform !== "win32") throw error;
+  const before = await exactLstat(candidate);
+  if (
+    before.isSymbolicLink() ||
+    !before.isDirectory() ||
+    !stableIdentity(before)
+  ) {
+    throw new Error(`${description} must be a private regular directory.`);
   }
-  const canonical = await directory(candidate, description);
-  if (!directChild(parent, canonical)) {
+  const canonicalBefore = await fs.realpath(candidate);
+  if (
+    !samePath(canonicalBefore, candidate) ||
+    !directChild(parent, canonicalBefore)
+  ) {
     throw new Error(`${description} escaped its private parent.`);
   }
-  return canonical;
+
+  // Node cannot portably open directory handles on Windows. Avoid chmod by
+  // pathname there: a second identity check still rejects a replaced child,
+  // while the configured data directory supplies the inherited private ACL.
+  if (process.platform === "win32") {
+    const canonicalAfter = await fs.realpath(candidate);
+    const after = await exactLstat(candidate);
+    if (
+      after.isSymbolicLink() ||
+      !after.isDirectory() ||
+      !stableIdentity(after) ||
+      after.dev !== before.dev ||
+      after.ino !== before.ino ||
+      !samePath(canonicalAfter, canonicalBefore) ||
+      !samePath(canonicalAfter, candidate) ||
+      !directChild(parent, canonicalAfter)
+    ) {
+      throw new Error(`${description} changed while it was initialized.`);
+    }
+    return canonicalAfter;
+  }
+
+  let handle: FileHandle | undefined;
+  try {
+    handle = await fs.open(
+      candidate,
+      constants.O_RDONLY |
+        (constants.O_DIRECTORY ?? 0) |
+        (constants.O_NOFOLLOW ?? 0),
+    );
+    const opened = await exactHandleStat(handle);
+    if (
+      !opened.isDirectory() ||
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino ||
+      !stableIdentity(opened)
+    ) {
+      throw new Error(`${description} changed while it was initialized.`);
+    }
+    await handle.chmod(DIRECTORY_MODE);
+    const hardened = await exactHandleStat(handle);
+    const canonicalAfter = await fs.realpath(candidate);
+    const after = await exactLstat(candidate);
+    if (
+      !hardened.isDirectory() ||
+      hardened.dev !== opened.dev ||
+      hardened.ino !== opened.ino ||
+      !privateMode(hardened.mode, DIRECTORY_MODE) ||
+      after.isSymbolicLink() ||
+      !after.isDirectory() ||
+      after.dev !== opened.dev ||
+      after.ino !== opened.ino ||
+      !privateMode(after.mode, DIRECTORY_MODE) ||
+      !samePath(canonicalAfter, canonicalBefore) ||
+      !samePath(canonicalAfter, candidate) ||
+      !directChild(parent, canonicalAfter)
+    ) {
+      throw new Error(`${description} changed while it was initialized.`);
+    }
+    return canonicalAfter;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }
 
 async function syncDirectory(directoryPath: string): Promise<void> {
@@ -153,16 +256,28 @@ async function existingTokenDirectory(
   const candidate = path.join(parent, token(value));
   let status;
   try {
-    status = await fs.lstat(candidate);
+    status = await exactLstat(candidate);
   } catch (error) {
     if (errorCode(error) === "ENOENT") return undefined;
     throw error;
   }
-  if (status.isSymbolicLink() || !status.isDirectory()) {
+  if (
+    status.isSymbolicLink() ||
+    !status.isDirectory() ||
+    !stableIdentity(status)
+  ) {
     throw new Error("Source artifact directory is invalid.");
   }
   const canonical = await fs.realpath(candidate);
-  if (!directChild(parent, canonical) || !samePath(candidate, canonical)) {
+  const finalStatus = await exactLstat(candidate);
+  if (
+    finalStatus.isSymbolicLink() ||
+    !finalStatus.isDirectory() ||
+    finalStatus.dev !== status.dev ||
+    finalStatus.ino !== status.ino ||
+    !directChild(parent, canonical) ||
+    !samePath(candidate, canonical)
+  ) {
     throw new Error("Source artifact directory escaped its private parent.");
   }
   return directory(canonical, "Source artifact directory");
@@ -175,8 +290,10 @@ async function openSourceFile(
       readonly handle: FileHandle;
       readonly size: number;
       readonly mtimeMs: number;
-      readonly device: number;
-      readonly inode: number;
+      readonly sizeBytes: bigint;
+      readonly modifiedNs: bigint;
+      readonly device: bigint;
+      readonly inode: bigint;
       readonly canonicalPath: string;
     }
   | undefined
@@ -184,7 +301,7 @@ async function openSourceFile(
   const filePath = path.join(directoryPath, SOURCE_FILE_NAME);
   let before;
   try {
-    before = await fs.lstat(filePath);
+    before = await exactLstat(filePath);
   } catch (error) {
     if (errorCode(error) === "ENOENT") return undefined;
     throw error;
@@ -192,9 +309,10 @@ async function openSourceFile(
   if (
     before.isSymbolicLink() ||
     !before.isFile() ||
-    before.nlink !== 1 ||
-    before.size < SOURCE_ARTIFACT_PREFIX_BYTES + 2 ||
-    before.size > SOURCE_ARTIFACT_MAX_BYTES ||
+    before.nlink !== 1n ||
+    !stableIdentity(before) ||
+    before.size < BigInt(SOURCE_ARTIFACT_PREFIX_BYTES + 2) ||
+    before.size > BigInt(SOURCE_ARTIFACT_MAX_BYTES) ||
     !privateMode(before.mode, FILE_MODE)
   ) {
     throw new Error("Source artifact must be one private regular file.");
@@ -214,10 +332,11 @@ async function openSourceFile(
         (constants.O_NOFOLLOW ?? 0) |
         (constants.O_NONBLOCK ?? 0),
     );
-    const opened = await handle.stat();
+    const opened = await exactHandleStat(handle);
     if (
       !opened.isFile() ||
-      opened.nlink !== 1 ||
+      opened.nlink !== 1n ||
+      !stableIdentity(opened) ||
       opened.dev !== before.dev ||
       opened.ino !== before.ino ||
       opened.size !== before.size ||
@@ -227,8 +346,10 @@ async function openSourceFile(
     }
     return {
       handle,
-      size: opened.size,
-      mtimeMs: opened.mtimeMs,
+      size: Number(opened.size),
+      mtimeMs: Number(opened.mtimeMs),
+      sizeBytes: opened.size,
+      modifiedNs: opened.mtimeNs,
       device: opened.dev,
       inode: opened.ino,
       canonicalPath,
@@ -280,12 +401,36 @@ async function readExact(
 async function assertOpenedUnchanged(
   opened: NonNullable<Awaited<ReturnType<typeof openSourceFile>>>,
 ): Promise<void> {
-  const after = await opened.handle.stat();
-  const canonicalAfter = await fs.realpath(opened.canonicalPath);
+  let after;
+  let pathAfter;
+  let canonicalAfter: string;
+  try {
+    after = await exactHandleStat(opened.handle);
+    canonicalAfter = await fs.realpath(opened.canonicalPath);
+    pathAfter = await exactLstat(opened.canonicalPath);
+  } catch (error) {
+    throw new Error("Source artifact changed while it was read.", {
+      cause: error,
+    });
+  }
   if (
+    !after.isFile() ||
+    after.nlink !== 1n ||
+    !stableIdentity(after) ||
     after.dev !== opened.device ||
     after.ino !== opened.inode ||
-    after.size !== opened.size ||
+    after.size !== opened.sizeBytes ||
+    after.mtimeNs !== opened.modifiedNs ||
+    !privateMode(after.mode, FILE_MODE) ||
+    pathAfter.isSymbolicLink() ||
+    !pathAfter.isFile() ||
+    pathAfter.nlink !== 1n ||
+    !stableIdentity(pathAfter) ||
+    pathAfter.dev !== opened.device ||
+    pathAfter.ino !== opened.inode ||
+    pathAfter.size !== opened.sizeBytes ||
+    pathAfter.mtimeNs !== opened.modifiedNs ||
+    !privateMode(pathAfter.mode, FILE_MODE) ||
     !samePath(canonicalAfter, opened.canonicalPath)
   ) {
     throw new Error("Source artifact changed while it was read.");
@@ -351,6 +496,58 @@ function metadata(
   });
 }
 
+function publicationCheckpoint(options: SourceArtifactWorkOptions): void {
+  options.signal?.throwIfAborted();
+  options.checkpoint?.();
+  options.signal?.throwIfAborted();
+}
+
+function updateDigest(
+  digest: Hash,
+  bytes: Uint8Array,
+  options: SourceArtifactWorkOptions,
+): void {
+  for (
+    let offset = 0;
+    offset < bytes.byteLength;
+    offset += STREAM_CHUNK_BYTES
+  ) {
+    publicationCheckpoint(options);
+    digest.update(
+      bytes.subarray(
+        offset,
+        Math.min(offset + STREAM_CHUNK_BYTES, bytes.byteLength),
+      ),
+    );
+  }
+  publicationCheckpoint(options);
+}
+
+async function writeExact(
+  handle: FileHandle,
+  bytes: Uint8Array,
+  position: number,
+  options: SourceArtifactWorkOptions,
+): Promise<number> {
+  let offset = 0;
+  while (offset < bytes.byteLength) {
+    publicationCheckpoint(options);
+    const result = await handle.write(
+      bytes,
+      offset,
+      Math.min(STREAM_CHUNK_BYTES, bytes.byteLength - offset),
+      position + offset,
+    );
+    publicationCheckpoint(options);
+    if (result.bytesWritten === 0) {
+      throw new Error("Staged source artifact write stopped early.");
+    }
+    offset += result.bytesWritten;
+  }
+  publicationCheckpoint(options);
+  return position + offset;
+}
+
 export class SourceArtifactStore {
   readonly #sourcesDirectory: string;
   readonly #mutations = new Set<string>();
@@ -379,40 +576,61 @@ export class SourceArtifactStore {
   public async publish(
     value: string,
     artifact: SourceArtifact,
+    options: SourceArtifactWorkOptions = {},
   ): Promise<SourceArtifactMetadata> {
     const normalized = token(value);
+    publicationCheckpoint(options);
     if (this.#mutations.has(normalized)) {
       throw new Error("A source artifact mutation is already active.");
     }
     this.#mutations.add(normalized);
     let artifactDirectory: string | undefined;
+    let artifactDirectoryIdentity:
+      | { readonly device: bigint; readonly inode: bigint }
+      | undefined;
     let stagePath: string | undefined;
     let stageIdentity:
-      | { readonly device: number; readonly inode: number }
+      | { readonly device: bigint; readonly inode: bigint }
       | undefined;
     let destinationLinked = false;
+    let completed = false;
     let handle: FileHandle | undefined;
     try {
+      publicationCheckpoint(options);
       artifactDirectory = await ensureChild(
         this.#sourcesDirectory,
         normalized,
         "Source artifact directory",
       );
+      const artifactDirectoryStatus = await exactLstat(
+        artifactDirectory,
+      );
+      if (!stableIdentity(artifactDirectoryStatus)) {
+        throw new Error("Source artifact directory identity is invalid.");
+      }
+      artifactDirectoryIdentity = {
+        device: artifactDirectoryStatus.dev,
+        inode: artifactDirectoryStatus.ino,
+      };
+      publicationCheckpoint(options);
       const destination = path.join(
         artifactDirectory,
         SOURCE_FILE_NAME,
       );
       try {
-        await fs.lstat(destination);
+        await exactLstat(destination);
         throw new Error("Source artifact already exists.");
       } catch (error) {
         if (errorCode(error) !== "ENOENT") throw error;
       }
-      const bytes = serializeSourceArtifact(artifact);
+      publicationCheckpoint(options);
+      const prepared = prepareSourceArtifact(artifact, options);
+      publicationCheckpoint(options);
       stagePath = path.join(
         artifactDirectory,
         `.source-${randomUUID()}.tmp`,
       );
+      publicationCheckpoint(options);
       handle = await fs.open(
         stagePath,
         constants.O_WRONLY |
@@ -421,54 +639,107 @@ export class SourceArtifactStore {
           (constants.O_NOFOLLOW ?? 0),
         FILE_MODE,
       );
-      await handle.writeFile(bytes);
+      const created = await exactHandleStat(handle);
+      if (
+        !created.isFile() ||
+        created.nlink !== 1n ||
+        !privateMode(created.mode, FILE_MODE) ||
+        !stableIdentity(created)
+      ) {
+        throw new Error("Staged source artifact failed its policy.");
+      }
+      stageIdentity = {
+        device: created.dev,
+        inode: created.ino,
+      };
+      publicationCheckpoint(options);
+      let writePosition = await writeExact(
+        handle,
+        prepared.prefix,
+        0,
+        options,
+      );
+      for (const indexChunk of prepared.indexChunks) {
+        writePosition = await writeExact(
+          handle,
+          indexChunk,
+          writePosition,
+          options,
+        );
+      }
+      for (const payload of prepared.payloads) {
+        publicationCheckpoint(options);
+        writePosition = await writeExact(
+          handle,
+          payload,
+          writePosition,
+          options,
+        );
+      }
+      publicationCheckpoint(options);
+      if (writePosition !== prepared.size) {
+        throw new Error("Staged source artifact length is invalid.");
+      }
       try {
         await handle.chmod(FILE_MODE);
       } catch (error) {
         if (process.platform !== "win32") throw error;
       }
+      publicationCheckpoint(options);
       await handle.sync();
-      const staged = await handle.stat();
+      publicationCheckpoint(options);
+      const staged = await exactHandleStat(handle);
       if (
         !staged.isFile() ||
-        staged.nlink !== 1 ||
-        staged.size !== bytes.byteLength ||
+        staged.nlink !== 1n ||
+        staged.size !== BigInt(prepared.size) ||
         !privateMode(staged.mode, FILE_MODE) ||
-        (staged.dev === 0 && staged.ino === 0)
+        staged.dev !== stageIdentity.device ||
+        staged.ino !== stageIdentity.inode
       ) {
         throw new Error("Staged source artifact failed its policy.");
       }
-      stageIdentity = { device: staged.dev, inode: staged.ino };
+      publicationCheckpoint(options);
       await handle.close();
       handle = undefined;
+      publicationCheckpoint(options);
       await syncDirectory(artifactDirectory);
+      publicationCheckpoint(options);
       await fs.link(stagePath, destination);
       destinationLinked = true;
+      publicationCheckpoint(options);
       await syncDirectory(artifactDirectory);
+      publicationCheckpoint(options);
       const opened = await openSourceFileWithLinks(artifactDirectory, 2);
       if (
         opened === undefined ||
         opened.device !== staged.dev ||
         opened.inode !== staged.ino ||
-        opened.size !== bytes.byteLength
+        opened.sizeBytes !== staged.size
       ) {
         await opened?.handle.close();
         throw new Error("Published source artifact identity is invalid.");
       }
       await opened.handle.close();
+      publicationCheckpoint(options);
       await fs.unlink(stagePath);
       stagePath = undefined;
-      destinationLinked = false;
+      publicationCheckpoint(options);
       await syncDirectory(artifactDirectory);
-      const published = await openSourceFile(artifactDirectory);
-      if (published === undefined) {
+      publicationCheckpoint(options);
+      const published = await this.verify(normalized, options);
+      if (
+        published === undefined ||
+        published.size !== prepared.size ||
+        published.sha256 !== prepared.sha256 ||
+        published.indexSha256 !== prepared.indexSha256
+      ) {
         throw new Error("Published source artifact is missing.");
       }
-      try {
-        return metadata(normalized, bytes, published.mtimeMs);
-      } finally {
-        await published.handle.close();
-      }
+      publicationCheckpoint(options);
+      completed = true;
+      destinationLinked = false;
+      return published;
     } catch (error) {
       if (
         destinationLinked &&
@@ -479,7 +750,9 @@ export class SourceArtifactStore {
           artifactDirectory,
           SOURCE_FILE_NAME,
         );
-        const status = await fs.lstat(destination).catch(() => undefined);
+        const status = await exactLstat(destination).catch(
+          () => undefined,
+        );
         if (
           status?.dev === stageIdentity.device &&
           status.ino === stageIdentity.inode
@@ -489,17 +762,44 @@ export class SourceArtifactStore {
       }
       throw error;
     } finally {
-      this.#mutations.delete(normalized);
       await handle?.close().catch(() => undefined);
-      if (stagePath !== undefined && stageIdentity !== undefined) {
-        const status = await fs.lstat(stagePath).catch(() => undefined);
-        if (
-          status?.dev === stageIdentity.device &&
-          status.ino === stageIdentity.inode
-        ) {
+      if (stagePath !== undefined) {
+        if (stageIdentity === undefined) {
+          // The path was created exclusively inside the private token
+          // directory. If its first handle stat failed, unlinking this exact
+          // entry is the only way to avoid leaking the stage and token.
           await fs.unlink(stagePath).catch(() => undefined);
+        } else {
+          const status = await exactLstat(stagePath).catch(
+            () => undefined,
+          );
+          if (
+            status?.dev === stageIdentity.device &&
+            status.ino === stageIdentity.inode
+          ) {
+            await fs.unlink(stagePath).catch(() => undefined);
+          }
         }
       }
+      if (
+        !completed &&
+        artifactDirectory !== undefined &&
+        artifactDirectoryIdentity !== undefined
+      ) {
+        const status = await exactLstat(artifactDirectory).catch(
+          () => undefined,
+        );
+        if (
+          status?.isDirectory() &&
+          !status.isSymbolicLink() &&
+          status.dev === artifactDirectoryIdentity.device &&
+          status.ino === artifactDirectoryIdentity.inode
+        ) {
+          await fs.rmdir(artifactDirectory).catch(() => undefined);
+          await syncDirectory(this.#sourcesDirectory).catch(() => undefined);
+        }
+      }
+      this.#mutations.delete(normalized);
     }
   }
 
@@ -575,7 +875,10 @@ export class SourceArtifactStore {
       }
       let text: string;
       try {
-        text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+        text = new TextDecoder("utf-8", {
+          fatal: true,
+          ignoreBOM: true,
+        }).decode(bytes);
       } catch {
         throw new Error("Selected source file is not valid UTF-8.");
       }
@@ -602,48 +905,53 @@ export class SourceArtifactStore {
 
   private async verify(
     value: string,
-    signal?: AbortSignal,
+    options: SourceArtifactWorkOptions = {},
   ): Promise<SourceArtifactMetadata | undefined> {
     const normalized = token(value);
+    publicationCheckpoint(options);
     const artifactDirectory = await existingTokenDirectory(
       this.#sourcesDirectory,
       normalized,
     );
     if (artifactDirectory === undefined) return undefined;
+    publicationCheckpoint(options);
     const opened = await openSourceFile(artifactDirectory);
     if (opened === undefined) return undefined;
     try {
-      const indexed = await readIndex(opened, signal);
-      const overall = createHash("sha256")
-        .update(indexed.prefix)
-        .update(indexed.bytes);
+      const indexed = await readIndex(opened, options.signal);
+      const overall = createHash("sha256");
+      updateDigest(overall, indexed.prefix, options);
+      updateDigest(overall, indexed.bytes, options);
       for (const file of indexed.index.files) {
+        publicationCheckpoint(options);
         const digest = createHash("sha256");
         let offset = 0;
         while (offset < file.size) {
-          signal?.throwIfAborted();
+          publicationCheckpoint(options);
           const bytes = await readExact(
             opened.handle,
             indexed.payloadOffset + file.offset + offset,
-            Math.min(64 * 1024, file.size - offset),
-            signal,
+            Math.min(STREAM_CHUNK_BYTES, file.size - offset),
+            options.signal,
           );
-          digest.update(bytes);
-          overall.update(bytes);
+          updateDigest(digest, bytes, options);
+          updateDigest(overall, bytes, options);
           offset += bytes.byteLength;
         }
+        publicationCheckpoint(options);
         if (digest.digest("hex") !== file.sha256) {
           throw new Error("Retained source file digest is invalid.");
         }
       }
       await assertOpenedUnchanged(opened);
+      publicationCheckpoint(options);
+      const indexDigest = createHash("sha256");
+      updateDigest(indexDigest, indexed.bytes, options);
       return Object.freeze({
         token: normalized,
         size: opened.size,
         sha256: overall.digest("hex"),
-        indexSha256: createHash("sha256")
-          .update(indexed.bytes)
-          .digest("hex"),
+        indexSha256: indexDigest.digest("hex"),
         lastModified: new Date(opened.mtimeMs).toUTCString(),
       });
     } finally {
@@ -741,7 +1049,7 @@ async function openSourceFileWithLinks(
   const filePath = path.join(directoryPath, SOURCE_FILE_NAME);
   let before;
   try {
-    before = await fs.lstat(filePath);
+    before = await exactLstat(filePath);
   } catch (error) {
     if (errorCode(error) === "ENOENT") return undefined;
     throw error;
@@ -749,30 +1057,66 @@ async function openSourceFileWithLinks(
   if (
     before.isSymbolicLink() ||
     !before.isFile() ||
-    before.nlink !== expectedLinks ||
+    before.nlink !== BigInt(expectedLinks) ||
+    !stableIdentity(before) ||
+    before.size < BigInt(SOURCE_ARTIFACT_PREFIX_BYTES + 2) ||
+    before.size > BigInt(SOURCE_ARTIFACT_MAX_BYTES) ||
     !privateMode(before.mode, FILE_MODE)
   ) {
     throw new Error("Source artifact link state is invalid.");
   }
-  const handle = await fs.open(
-    filePath,
-    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
-  );
-  const opened = await handle.stat();
-  if (
-    opened.dev !== before.dev ||
-    opened.ino !== before.ino ||
-    opened.nlink !== expectedLinks
-  ) {
-    await handle.close();
-    throw new Error("Source artifact changed during publication.");
+  let handle: FileHandle | undefined;
+  try {
+    handle = await fs.open(
+      filePath,
+      constants.O_RDONLY |
+        (constants.O_NOFOLLOW ?? 0) |
+        (constants.O_NONBLOCK ?? 0),
+    );
+    const opened = await exactHandleStat(handle);
+    if (
+      !opened.isFile() ||
+      !stableIdentity(opened) ||
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino ||
+      opened.nlink !== BigInt(expectedLinks) ||
+      opened.size !== before.size ||
+      !privateMode(opened.mode, FILE_MODE)
+    ) {
+      throw new Error("Source artifact changed during publication.");
+    }
+    const canonicalPath = await fs.realpath(filePath);
+    if (
+      !samePath(canonicalPath, filePath) ||
+      !directChild(directoryPath, canonicalPath)
+    ) {
+      throw new Error("Source artifact escaped its private directory.");
+    }
+    const pathAfter = await exactLstat(filePath);
+    if (
+      pathAfter.isSymbolicLink() ||
+      !pathAfter.isFile() ||
+      !stableIdentity(pathAfter) ||
+      pathAfter.dev !== opened.dev ||
+      pathAfter.ino !== opened.ino ||
+      pathAfter.nlink !== BigInt(expectedLinks) ||
+      pathAfter.size !== opened.size ||
+      !privateMode(pathAfter.mode, FILE_MODE)
+    ) {
+      throw new Error("Source artifact changed during publication.");
+    }
+    return {
+      handle,
+      size: Number(opened.size),
+      mtimeMs: Number(opened.mtimeMs),
+      sizeBytes: opened.size,
+      modifiedNs: opened.mtimeNs,
+      device: opened.dev,
+      inode: opened.ino,
+      canonicalPath,
+    };
+  } catch (error) {
+    await handle?.close().catch(() => undefined);
+    throw error;
   }
-  return {
-    handle,
-    size: opened.size,
-    mtimeMs: opened.mtimeMs,
-    device: opened.dev,
-    inode: opened.ino,
-    canonicalPath: await fs.realpath(filePath),
-  };
 }

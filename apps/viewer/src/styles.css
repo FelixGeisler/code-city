@@ -1587,6 +1587,11 @@ button,
   box-shadow: inset 3px 0 #facc15;
 }
 
+.source-line-truncated {
+  color: #8a9aad;
+  font-style: italic;
+}
+
 .source-token-comment {
   color: #7fb77e;
 }

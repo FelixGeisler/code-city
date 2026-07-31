@@ -1986,6 +1986,10 @@ export async function enqueueRemoteImport(
             const operationCheckpoint =
               deadline?.checkpoint ??
               (() => context.signal.throwIfAborted());
+            const sourceWork = {
+              signal: operationSignal,
+              checkpoint: operationCheckpoint,
+            };
             operationCheckpoint();
             await context.report({
               phase:
@@ -2004,12 +2008,17 @@ export async function enqueueRemoteImport(
               repository !== undefined
                 ? await runtime.sources.publish(
                     context.id,
-                    createSourceArtifact(analyzed.model, [
-                      {
-                        repositoryId: repository.id,
-                        snapshot: analyzed.sourceSnapshot,
-                      },
-                    ]),
+                    createSourceArtifact(
+                      analyzed.model,
+                      [
+                        {
+                          repositoryId: repository.id,
+                          snapshot: analyzed.sourceSnapshot,
+                        },
+                      ],
+                      sourceWork,
+                    ),
+                    sourceWork,
                   )
                 : undefined;
             operationCheckpoint();

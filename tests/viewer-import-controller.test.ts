@@ -5,6 +5,7 @@ import {
   type ImportAuthorizationStatus,
   type ImportCredentialProfile,
   type ImportJob,
+  type ImportJobResult,
   type ImportUploadReservation,
 } from "../apps/viewer/src/import-api.js";
 import {
@@ -16,6 +17,7 @@ import {
 } from "../apps/viewer/src/import-controller.js";
 import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
 import { ViewerLoadGateway } from "../apps/viewer/src/model-source.js";
+import type { CityModel } from "../packages/core/src/model.js";
 
 const JOB_ID = "11111111-1111-4111-8111-111111111111";
 const UPLOAD_ID = "22222222-2222-4222-8222-222222222222";
@@ -39,6 +41,22 @@ const UNAUTHENTICATED: ImportAuthorizationStatus = {
 const PROFILES: readonly ImportCredentialProfile[] = Object.freeze([
   { id: "github", label: "Private GitHub", provider: "github" },
 ]);
+const SOURCE_PROVENANCE_MODEL = Object.freeze({
+  ...DEMO_MODEL,
+  sourceProvenance: Object.freeze({
+    version: "codecity.source-navigation/1" as const,
+    repositories: Object.freeze([
+      Object.freeze({
+        repositoryId: DEMO_MODEL.repositories[0]!.id,
+        provider: "uploaded-archive" as const,
+        revision: Object.freeze({
+          kind: "snapshot" as const,
+          value: `sha256:${"a".repeat(64)}`,
+        }),
+      }),
+    ]),
+  }),
+}) satisfies CityModel;
 
 function job(
   state: ImportJob["state"],
@@ -47,6 +65,7 @@ function job(
     readonly evolution?: NonNullable<
       NonNullable<ImportJob["result"]>["evolution"]
     >;
+    readonly source?: ImportJobResult["source"];
   } = {},
 ): ImportJob {
   const base = {
@@ -70,6 +89,9 @@ function job(
         ...(options.evolution === undefined
           ? {}
           : { evolution: options.evolution }),
+        ...(options.source === undefined
+          ? {}
+          : { source: options.source }),
       },
     };
   }
@@ -589,12 +611,82 @@ describe("viewer import controller", () => {
         size: 12_345,
         sha256: "a".repeat(64),
       },
+      sourceAvailability: "unavailable",
     });
     expect(fixture.controller.state).toMatchObject({
       status: "completed",
       job: { id: JOB_ID, state: "completed" },
     });
     expect(storage.writes.every((value) => value === JOB_ID)).toBe(true);
+  });
+
+  it.each([
+    [
+      { availability: "disabled" } as const,
+      "disabled",
+    ],
+    [
+      { availability: "not-captured" } as const,
+      "model-only",
+    ],
+    [
+      {
+        availability: "retained",
+        artifactUrl: `/api/v1/artifacts/${JOB_ID}/source`,
+        size: 12_345,
+        sha256: "a".repeat(64),
+        indexSha256: "b".repeat(64),
+      } as const,
+      "retained",
+    ],
+  ])(
+    "maps the completed source result %s to %s",
+    async (source, expectedAvailability) => {
+      const fixture = controllerFixture({
+        storage: new MemoryJobStorage(JOB_ID),
+        api: fakeApi({
+          getJob: async () => job("completed", { source }),
+        }),
+      });
+
+      fixture.controller.initialize();
+      await settle(16);
+
+      expect(fixture.modelReady).toHaveBeenCalledTimes(1);
+      expect(fixture.modelReady.mock.calls[0]![1]).toMatchObject({
+        jobId: JOB_ID,
+        sourceAvailability: expectedAvailability,
+      });
+    },
+  );
+
+  it("keeps not-captured generic when the model has source provenance", async () => {
+    const fixture = controllerFixture({
+      storage: new MemoryJobStorage(JOB_ID),
+      gateway: modelGateway([
+        new Response(JSON.stringify(SOURCE_PROVENANCE_MODEL), {
+          status: 200,
+          headers: {
+            "content-type": "application/json; charset=utf-8",
+          },
+        }),
+      ]),
+      api: fakeApi({
+        getJob: async () =>
+          job("completed", {
+            source: { availability: "not-captured" },
+          }),
+      }),
+    });
+
+    fixture.controller.initialize();
+    await settle(16);
+
+    expect(fixture.modelReady).toHaveBeenCalledTimes(1);
+    expect(fixture.modelReady.mock.calls[0]![1]).toMatchObject({
+      jobId: JOB_ID,
+      sourceAvailability: "unavailable",
+    });
   });
 
   it("locks cancellation while a completed artifact is opening", async () => {

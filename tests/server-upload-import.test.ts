@@ -499,6 +499,84 @@ describe("upload import HTTP jobs", () => {
     }
   });
 
+  it("keeps cancellation classification while retained-source publication is active", async () => {
+    const roots = await fixture();
+    const server = await startCodeCityServer({
+      host: "127.0.0.1",
+      port: 0,
+      ...roots,
+      sourceRetention: "retain",
+    });
+    servers.push(server);
+    const bytes = Buffer.from(
+      zipSync({
+        "src/main.ts": strToU8("export const value = 1;\n"),
+      }),
+    );
+    const reservation = await reserve(server, {
+      source: {
+        kind: "repository-zip",
+        sizeBytes: bytes.byteLength,
+        repositoryName: "Cancellation",
+        rootMode: "archive-root",
+      },
+    });
+    let announcePublication!: () => void;
+    const publicationStarted = new Promise<void>((resolve) => {
+      announcePublication = resolve;
+    });
+    let observedSignal: AbortSignal | undefined;
+    vi.spyOn(server.sources, "publish").mockImplementation(
+      async (_token, _artifact, options = {}) => {
+        observedSignal = options.signal;
+        if (observedSignal === undefined) {
+          throw new Error("Retained-source publication needs the job signal.");
+        }
+        announcePublication();
+        await new Promise<void>((resolve) => {
+          if (observedSignal?.aborted) {
+            resolve();
+            return;
+          }
+          observedSignal?.addEventListener("abort", () => resolve(), {
+            once: true,
+          });
+        });
+        observedSignal.throwIfAborted();
+        throw new Error("Expected retained-source publication to abort.");
+      },
+    );
+
+    const queued = await put(
+      server,
+      reservation.uploadUrl,
+      bytes,
+      "application/zip",
+    );
+    expect(queued.status).toBe(202);
+    const job = (JSON.parse(queued.body) as { job: JobRecord }).job;
+    await publicationStarted;
+    const cancelled = await server.jobs.cancel(job.id);
+    expect(cancelled?.state).toBe("cancelled");
+    expect((await waitForTerminal(server, job.id)).state).toBe(
+      "cancelled",
+    );
+    expect(observedSignal?.aborted).toBe(true);
+    expect(await server.sources.read(job.id)).toBeUndefined();
+    expect(await server.artifacts.statCityModel(job.id)).toBeUndefined();
+    await waitForMissing(
+      path.join(roots.dataDirectory, "sources", job.id),
+    );
+    await waitForMissing(
+      path.join(
+        roots.dataDirectory,
+        "tmp",
+        "imports",
+        reservation.token,
+      ),
+    );
+  });
+
   it("fails invalid model content safely and consumes each reservation once", async () => {
     const roots = await fixture();
     const server = await startCodeCityServer({

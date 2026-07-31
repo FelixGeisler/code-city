@@ -91,10 +91,13 @@ import {
 import { validateCityModel } from "./model-validation.js";
 import { ViewerImportApiClient } from "./import-api.js";
 import {
+  extractSourceLineWindow,
   loadBuildingSource,
   sourceOmissionMarker,
-  sourceLineWindow,
-  sourceLineTokens,
+  presentSourceLine,
+  SOURCE_RENDERED_CHARACTER_LIMIT,
+  SOURCE_RENDERED_TOKEN_LIMIT,
+  sourceOwnerAfterResultRemoval,
   type BuildingSource,
 } from "./source-navigation.js";
 import {
@@ -199,7 +202,9 @@ interface ModelSource {
   readonly jobId?: string;
   readonly sourceAvailability?:
     | "disabled"
+    | "model-only"
     | "not-captured"
+    | "removed"
     | "retained"
     | "unavailable";
   readonly evolution?: {
@@ -1906,7 +1911,7 @@ const projectImportDialog = installProjectImportDialog({
     activateImportedModel(DEMO_MODEL, { label: "Built-in demo" });
   },
   onResultRemoved: (jobId) => {
-    if (activeModelSource.jobId === jobId) scrubBuildingSource();
+    markActiveSourceResultRemoved(jobId);
   },
 });
 const printExportDialog = installPrintExportDialog({
@@ -4136,8 +4141,14 @@ function sourceAvailabilityMessage(): string {
   if (activeModelSource.sourceAvailability === "disabled") {
     return "Source retention is disabled for this deployment; provenance and metrics remain available.";
   }
+  if (activeModelSource.sourceAvailability === "model-only") {
+    return "This model-only import contains no retained source. Import the repository or a repository ZIP to enable source navigation.";
+  }
+  if (activeModelSource.sourceAvailability === "removed") {
+    return "The retained source result was removed from the server.";
+  }
   if (activeModelSource.sourceAvailability === "unavailable") {
-    return "This imported result predates retained source navigation.";
+    return "No retained source snapshot was captured for this imported result. Re-import the repository to enable source navigation.";
   }
 
   if (activeModelSource.sourceAvailability === "not-captured") {
@@ -4146,10 +4157,17 @@ function sourceAvailabilityMessage(): string {
   return "Source is unavailable for models opened directly in the viewer.";
 }
 
-function scrubBuildingSource(): void {
+function scrubBuildingSource(closeDetails = true): void {
   sourceRequest?.abort();
   sourceRequest = undefined;
   loadedBuildingSource = undefined;
+  if (closeDetails) inspectorFields.sourceDetails.open = false;
+  inspectorFields.sourceSummary.textContent =
+    activeModelSource.sourceAvailability === "retained"
+      ? "Select a building"
+      : "Unavailable";
+  inspectorFields.sourceStatus.textContent =
+    sourceAvailabilityMessage();
   inspectorFields.sourceCode.replaceChildren();
   inspectorFields.sourcePath.textContent = "";
   inspectorFields.sourceRevision.textContent = "";
@@ -4160,13 +4178,22 @@ function scrubBuildingSource(): void {
   inspectorFields.sourceContent.hidden = true;
 }
 
+function markActiveSourceResultRemoved(jobId: string): void {
+  const nextSource = sourceOwnerAfterResultRemoval(
+    activeModelSource,
+    jobId,
+  );
+  if (nextSource === activeModelSource) return;
+  activeModelSource = nextSource;
+  scrubBuildingSource();
+}
+
 function renderSourceCode(
   source: BuildingSource,
   startLine?: number,
   endLine = startLine,
 ): void {
   inspectorFields.sourceCode.replaceChildren();
-  const lines = source.text.split(/\r\n?|\n/u);
   const {
     requestedStart,
     requestedEnd,
@@ -4174,8 +4201,9 @@ function renderSourceCode(
     lastLine,
     omittedBefore,
     omittedAfter,
-  } = sourceLineWindow(
-    lines.length,
+    lines,
+  } = extractSourceLineWindow(
+    source.text,
     startLine ?? source.location.startLine,
     endLine ?? startLine ?? source.location.startLine,
   );
@@ -4188,12 +4216,16 @@ function renderSourceCode(
   if (omittedBefore > 0) {
     appendOmitted(sourceOmissionMarker(omittedBefore, "earlier"));
   }
-  for (
-    let lineNumber = firstLine;
-    lineNumber <= lastLine;
-    lineNumber += 1
-  ) {
-    const text = lines[lineNumber - 1]!;
+  let remainingCharacters = SOURCE_RENDERED_CHARACTER_LIMIT;
+  let remainingTokens = SOURCE_RENDERED_TOKEN_LIMIT;
+  for (const sourceLine of lines) {
+    const { lineNumber, text } = sourceLine;
+    if (remainingCharacters === 0 || remainingTokens === 0) {
+      appendOmitted(
+        `Lines ${lineNumber.toLocaleString()}\u2013${lastLine.toLocaleString()} omitted at the viewer rendering limit`,
+      );
+      break;
+    }
     const line = document.createElement("span");
     line.className = "source-line";
     line.dataset["line"] = String(lineNumber);
@@ -4204,13 +4236,33 @@ function renderSourceCode(
     ) {
       line.classList.add("source-line-highlight");
     }
-    for (const token of sourceLineTokens(text)) {
+    const presentation = presentSourceLine(
+      text,
+      remainingCharacters,
+      remainingTokens,
+    );
+    for (const token of presentation.tokens) {
       const span = document.createElement("span");
       if (token.kind !== "text") {
         span.className = `source-token-${token.kind}`;
       }
       span.textContent = token.text;
       line.append(span);
+    }
+    remainingCharacters -= presentation.text.length;
+    remainingTokens -= presentation.tokens.length;
+    if (presentation.omittedCharacters > 0) {
+      const marker = document.createElement("span");
+      marker.className = "source-line-truncated";
+      marker.textContent =
+        ` \u2026 [${presentation.omittedCharacters.toLocaleString()} characters omitted from this line at the viewer limit]`;
+      line.append(marker);
+    } else if (!presentation.syntaxHighlighted) {
+      const marker = document.createElement("span");
+      marker.className = "source-line-truncated";
+      marker.textContent =
+        " [syntax highlighting omitted at the viewer token limit]";
+      line.append(marker);
     }
     if (text === "") line.append("\u200b");
     inspectorFields.sourceCode.append(line);
@@ -4228,10 +4280,10 @@ function revealBuildingSource(
   startLine?: number,
   endLine?: number,
 ): void {
-  inspectorFields.sourceDetails.open = true;
   if (
     loadedBuildingSource?.buildingId === building.id
   ) {
+    inspectorFields.sourceDetails.open = true;
     renderSourceCode(
       loadedBuildingSource.source,
       startLine,
@@ -4239,7 +4291,8 @@ function revealBuildingSource(
     );
     return;
   }
-  scrubBuildingSource();
+  scrubBuildingSource(false);
+  inspectorFields.sourceDetails.open = true;
   const jobId = activeModelSource.jobId;
   if (
     jobId === undefined ||
@@ -4317,7 +4370,7 @@ function revealBuildingSource(
       ) {
         return;
       }
-      scrubBuildingSource();
+      scrubBuildingSource(false);
       inspectorFields.sourceSummary.textContent = "Unavailable";
       inspectorFields.sourceStatus.textContent =
         error instanceof Error

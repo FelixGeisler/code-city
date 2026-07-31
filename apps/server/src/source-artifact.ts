@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, type Hash } from "node:crypto";
 
 import {
   normalizePath,
@@ -21,6 +21,12 @@ export const SOURCE_ARTIFACT_MAX_INDEX_BYTES = 4 * 1024 * 1024;
 export const SOURCE_ARTIFACT_PREFIX_BYTES = 12;
 export const SOURCE_ARTIFACT_MAGIC = Buffer.from("CCSRC02\n", "ascii");
 export type SourceRetentionPolicy = "retain" | "disabled";
+
+export interface SourceArtifactWorkOptions {
+  readonly signal?: AbortSignal;
+  /** Synchronous cancellation/deadline checkpoint for CPU-bound work. */
+  readonly checkpoint?: () => void;
+}
 
 export interface SourceArtifactLocation {
   readonly startLine: number;
@@ -59,6 +65,19 @@ export interface SourceArtifactIndex {
   readonly files: readonly SourceArtifactIndexFile[];
 }
 
+export interface PreparedSourceArtifact {
+  readonly artifact: SourceArtifact;
+  readonly prefix: Buffer;
+  readonly indexChunks: readonly Buffer[];
+  readonly index: SourceArtifactIndex;
+  readonly payloads: readonly Buffer[];
+  readonly size: number;
+  /** Digest of the complete serialized v2 source pack. */
+  readonly sha256: string;
+  /** Digest of the exact canonical JSON index bytes. */
+  readonly indexSha256: string;
+}
+
 export interface RetainedRepositorySnapshot {
   readonly repositoryId: string;
   readonly snapshot: RepositorySnapshot;
@@ -68,37 +87,147 @@ function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function lineCount(text: string): number {
-  return Math.max(1, text.split(/\r\n?|\n/u).length);
+const SOURCE_ARTIFACT_WORK_CHUNK_BYTES = 64 * 1024;
+// A UTF-16 code unit can require at most three UTF-8 bytes unless paired;
+// this keeps every encoded chunk below the 64 KiB work bound.
+const SOURCE_ARTIFACT_UTF8_CHUNK_CHARACTERS = 16 * 1024;
+
+function workCheckpoint(options: SourceArtifactWorkOptions): void {
+  options.signal?.throwIfAborted();
+  options.checkpoint?.();
+  options.signal?.throwIfAborted();
 }
 
-function canonicalSnapshotDigest(snapshot: RepositorySnapshot): string {
+function lineCount(
+  text: string,
+  options: SourceArtifactWorkOptions = {},
+): number {
+  let count = 1;
+  let previousWasCarriageReturn = false;
+  for (let index = 0; index < text.length; index += 1) {
+    if (
+      index % SOURCE_ARTIFACT_UTF8_CHUNK_CHARACTERS === 0
+    ) {
+      workCheckpoint(options);
+    }
+    const codeUnit = text.charCodeAt(index);
+    if (codeUnit === 0x0d) {
+      count += 1;
+      previousWasCarriageReturn = true;
+    } else if (codeUnit === 0x0a) {
+      if (!previousWasCarriageReturn) count += 1;
+      previousWasCarriageReturn = false;
+    } else {
+      previousWasCarriageReturn = false;
+    }
+  }
+  workCheckpoint(options);
+  return count;
+}
+
+function updateDigest(
+  digest: Hash,
+  bytes: Uint8Array,
+  options: SourceArtifactWorkOptions,
+): void {
+  for (
+    let offset = 0;
+    offset < bytes.byteLength;
+    offset += SOURCE_ARTIFACT_WORK_CHUNK_BYTES
+  ) {
+    workCheckpoint(options);
+    digest.update(
+      bytes.subarray(
+        offset,
+        Math.min(
+          offset + SOURCE_ARTIFACT_WORK_CHUNK_BYTES,
+          bytes.byteLength,
+        ),
+      ),
+    );
+  }
+  workCheckpoint(options);
+}
+
+function encodedUtf8(
+  text: string,
+  options: SourceArtifactWorkOptions,
+): { readonly chunks: readonly Buffer[]; readonly byteLength: number } {
+  const chunks: Buffer[] = [];
+  let byteLength = 0;
+  let offset = 0;
+  while (offset < text.length) {
+    workCheckpoint(options);
+    let end = Math.min(
+      offset + SOURCE_ARTIFACT_UTF8_CHUNK_CHARACTERS,
+      text.length,
+    );
+    if (
+      end < text.length &&
+      end > offset &&
+      text.charCodeAt(end - 1) >= 0xd800 &&
+      text.charCodeAt(end - 1) <= 0xdbff &&
+      text.charCodeAt(end) >= 0xdc00 &&
+      text.charCodeAt(end) <= 0xdfff
+    ) {
+      end -= 1;
+    }
+    const chunk = Buffer.from(text.slice(offset, end), "utf8");
+    chunks.push(chunk);
+    byteLength += chunk.byteLength;
+    offset = end;
+    workCheckpoint(options);
+  }
+  workCheckpoint(options);
+  return { chunks, byteLength };
+}
+
+function utf8ByteLength(
+  text: string,
+  options: SourceArtifactWorkOptions,
+): number {
+  return encodedUtf8(text, options).byteLength;
+}
+
+function canonicalSnapshotDigest(
+  snapshot: RepositorySnapshot,
+  options: SourceArtifactWorkOptions,
+): string {
   const digest = createHash("sha256");
-  for (const file of [...snapshot.files].sort((left, right) =>
-    compareText(left.path, right.path),
-  )) {
-    const pathBytes = Buffer.from(file.path, "utf8");
-    const textBytes = Buffer.from(file.text, "utf8");
+  for (const file of [...snapshot.files].sort((left, right) => {
+    workCheckpoint(options);
+    return compareText(left.path, right.path);
+  })) {
+    workCheckpoint(options);
+    const pathBytes = encodedUtf8(file.path, options);
+    const textBytes = encodedUtf8(file.text, options);
     const header = Buffer.allocUnsafe(8);
     header.writeUInt32BE(pathBytes.byteLength, 0);
     header.writeUInt32BE(textBytes.byteLength, 4);
     digest.update(header);
-    digest.update(pathBytes);
-    digest.update(textBytes);
+    for (const chunk of pathBytes.chunks) {
+      updateDigest(digest, chunk, options);
+    }
+    for (const chunk of textBytes.chunks) {
+      updateDigest(digest, chunk, options);
+    }
   }
+  workCheckpoint(options);
   return digest.digest("hex");
 }
 
 export function uploadedSnapshotProvenance(
   repositoryId: string,
   snapshot: RepositorySnapshot,
+  options: SourceArtifactWorkOptions = {},
 ): SourceRepositoryProvenance {
   return Object.freeze({
     repositoryId,
     provider: "uploaded-archive",
     revision: Object.freeze({
       kind: "snapshot",
-      value: `sha256:${canonicalSnapshotDigest(snapshot)}` as const,
+      value:
+        `sha256:${canonicalSnapshotDigest(snapshot, options)}` as const,
     }),
   });
 }
@@ -106,14 +235,19 @@ export function uploadedSnapshotProvenance(
 export function attachSourceProvenance(
   model: CityModel,
   repositories: readonly SourceRepositoryProvenance[],
+  options: SourceArtifactWorkOptions = {},
 ): CityModel {
-  return validateCityModel({
-    ...model,
-    sourceProvenance: {
-      version: "codecity.source-navigation/1",
-      repositories,
+  workCheckpoint(options);
+  return validateCityModel(
+    {
+      ...model,
+      sourceProvenance: {
+        version: "codecity.source-navigation/1",
+        repositories,
+      },
     },
-  });
+    { checkpoint: () => workCheckpoint(options) },
+  );
 }
 
 function requiredSnapshotFile(
@@ -132,21 +266,26 @@ function requiredSnapshotFile(
 export function createSourceArtifact(
   model: CityModel,
   retained: readonly RetainedRepositorySnapshot[],
+  options: SourceArtifactWorkOptions = {},
 ): SourceArtifact {
+  workCheckpoint(options);
   const provenance = model.sourceProvenance;
   if (provenance === undefined) {
     throw new TypeError("Source provenance is required.");
   }
   const snapshots = new Map(
-    retained.map(({ repositoryId, snapshot }) => [
-      repositoryId,
-      new Map(
-        snapshot.files.map((file) => [
-          normalizePath(file.path),
-          file,
-        ]),
-      ),
-    ]),
+    retained.map(({ repositoryId, snapshot }) => {
+      workCheckpoint(options);
+      return [
+        repositoryId,
+        new Map(
+          snapshot.files.map((file) => {
+            workCheckpoint(options);
+            return [normalizePath(file.path), file] as const;
+          }),
+        ),
+      ] as const;
+    }),
   );
   if (
     snapshots.size !== retained.length ||
@@ -157,14 +296,17 @@ export function createSourceArtifact(
     );
   }
   for (const repository of provenance.repositories) {
+    workCheckpoint(options);
     if (!snapshots.has(repository.repositoryId)) {
       throw new TypeError(
         "Retained source repositories must exactly match provenance.",
       );
     }
   }
+  let payloadBytes = 0;
   const files = model.buildings
     .map((building): SourceArtifactFile => {
+      workCheckpoint(options);
       const repositoryFiles = snapshots.get(building.repositoryId);
       if (repositoryFiles === undefined) {
         throw new TypeError(
@@ -175,15 +317,23 @@ export function createSourceArtifact(
         repositoryFiles,
         normalizePath(building.path),
       );
-      const lines = lineCount(file.text);
-      const retainedByteLength = Buffer.byteLength(file.text, "utf8");
+      const lines = lineCount(file.text, options);
+      const normalizedByteLength = utf8ByteLength(file.text, options);
       if (
         !Number.isSafeInteger(file.byteLength) ||
-        file.byteLength < retainedByteLength ||
+        (file.byteLength !== normalizedByteLength &&
+          file.byteLength !== normalizedByteLength + 3) ||
         file.byteLength > SOURCE_ARTIFACT_MAX_FILE_BYTES ||
-        retainedByteLength > SOURCE_ARTIFACT_MAX_FILE_BYTES
+        normalizedByteLength > SOURCE_ARTIFACT_MAX_FILE_BYTES
       ) {
         throw new TypeError("A retained source file is outside its limits.");
+      }
+      payloadBytes += normalizedByteLength;
+      if (
+        !Number.isSafeInteger(payloadBytes) ||
+        payloadBytes > SOURCE_ARTIFACT_MAX_BYTES
+      ) {
+        throw new TypeError("Retained source exceeds its total byte limit.");
       }
       if (
         building.sourceLocation !== undefined &&
@@ -205,21 +355,24 @@ export function createSourceArtifact(
       });
     })
     .sort(
-      (left, right) =>
-        compareText(left.repositoryId, right.repositoryId) ||
-        compareText(left.path, right.path) ||
-        compareText(left.buildingId, right.buildingId),
+      (left, right) => {
+        workCheckpoint(options);
+        return (
+          compareText(left.repositoryId, right.repositoryId) ||
+          compareText(left.path, right.path) ||
+          compareText(left.buildingId, right.buildingId)
+        );
+      },
     );
   if (new Set(files.map(({ buildingId }) => buildingId)).size !== files.length) {
     throw new TypeError("Retained source building identifiers are duplicated.");
   }
-  const artifact = Object.freeze({
+  workCheckpoint(options);
+  return Object.freeze({
     version: SOURCE_ARTIFACT_VERSION,
     provenance,
     files: Object.freeze(files),
   });
-  serializeSourceArtifact(artifact);
-  return artifact;
 }
 
 function exactKeys(
@@ -237,7 +390,10 @@ function exactKeys(
   }
 }
 
-function normalizedProvenance(value: unknown): SourceNavigationProvenance {
+function normalizedProvenance(
+  value: unknown,
+  options: SourceArtifactWorkOptions = {},
+): SourceNavigationProvenance {
   const repositories = (
     value as {
       readonly repositories?: readonly {
@@ -245,23 +401,29 @@ function normalizedProvenance(value: unknown): SourceNavigationProvenance {
       }[];
     }
   )?.repositories;
-  const provenanceModel = validateCityModel({
-    schemaVersion: "1.0",
-    generator: { name: "code-city", version: "source-artifact" },
-    repositories:
-      repositories?.map(({ repositoryId }) => ({
-        id: repositoryId,
-        name: repositoryId,
-      })) ?? [],
-    solutions: [],
-    modules: [],
-    semanticGroups: [],
-    sourceProvenance: value,
-    districts: [],
-    buildings: [],
-    dependencies: [],
-    bounds: { x: 0, y: 0, z: 0 },
-  });
+  const provenanceModel = validateCityModel(
+    {
+      schemaVersion: "1.0",
+      generator: { name: "code-city", version: "source-artifact" },
+      repositories:
+        repositories?.map(({ repositoryId }) => {
+          workCheckpoint(options);
+          return {
+            id: repositoryId,
+            name: repositoryId,
+          };
+        }) ?? [],
+      solutions: [],
+      modules: [],
+      semanticGroups: [],
+      sourceProvenance: value,
+      districts: [],
+      buildings: [],
+      dependencies: [],
+      bounds: { x: 0, y: 0, z: 0 },
+    },
+    { checkpoint: () => workCheckpoint(options) },
+  );
   return provenanceModel.sourceProvenance!;
 }
 
@@ -358,7 +520,11 @@ function normalizedFileIdentity(
   });
 }
 
-export function normalizeSourceArtifact(value: unknown): SourceArtifact {
+export function normalizeSourceArtifact(
+  value: unknown,
+  options: SourceArtifactWorkOptions = {},
+): SourceArtifact {
+  workCheckpoint(options);
   if (
     typeof value !== "object" ||
     value === null ||
@@ -371,7 +537,7 @@ export function normalizeSourceArtifact(value: unknown): SourceArtifact {
   if (object["version"] !== SOURCE_ARTIFACT_VERSION) {
     throw new TypeError("Source artifact version is invalid.");
   }
-  const provenance = normalizedProvenance(object["provenance"]);
+  const provenance = normalizedProvenance(object["provenance"], options);
   if (!Array.isArray(object["files"])) {
     throw new TypeError("Source artifact files must be an array.");
   }
@@ -380,6 +546,7 @@ export function normalizeSourceArtifact(value: unknown): SourceArtifact {
   );
   const seen = new Set<string>();
   const files = object["files"].map((value, index): SourceArtifactFile => {
+    workCheckpoint(options);
     if (
       typeof value !== "object" ||
       value === null ||
@@ -408,11 +575,11 @@ export function normalizeSourceArtifact(value: unknown): SourceArtifact {
     );
     const text = file["text"];
     const size =
-      typeof text === "string" ? Buffer.byteLength(text, "utf8") : 0;
+      typeof text === "string" ? utf8ByteLength(text, options) : 0;
     if (
       typeof text !== "string" ||
       size > SOURCE_ARTIFACT_MAX_FILE_BYTES ||
-      identity.location.endLine !== lineCount(text)
+      identity.location.endLine !== lineCount(text, options)
     ) {
       throw new TypeError(
         `Source artifact file ${index} is outside its limits.`,
@@ -429,7 +596,9 @@ export function normalizeSourceArtifact(value: unknown): SourceArtifact {
 
 export function normalizeSourceArtifactIndex(
   value: unknown,
+  options: SourceArtifactWorkOptions = {},
 ): SourceArtifactIndex {
+  workCheckpoint(options);
   if (
     typeof value !== "object" ||
     value === null ||
@@ -446,7 +615,7 @@ export function normalizeSourceArtifactIndex(
   if (object["version"] !== SOURCE_ARTIFACT_VERSION) {
     throw new TypeError("Source artifact index version is invalid.");
   }
-  const provenance = normalizedProvenance(object["provenance"]);
+  const provenance = normalizedProvenance(object["provenance"], options);
   if (!Array.isArray(object["files"])) {
     throw new TypeError("Source artifact index files must be an array.");
   }
@@ -457,6 +626,7 @@ export function normalizeSourceArtifactIndex(
   let nextOffset = 0;
   const files = object["files"].map(
     (value, index): SourceArtifactIndexFile => {
+      workCheckpoint(options);
       if (
         typeof value !== "object" ||
         value === null ||
@@ -575,13 +745,30 @@ export function sourceArtifactPayloadBytes(
 }
 
 export function serializeSourceArtifact(value: SourceArtifact): Buffer {
-  const normalized = normalizeSourceArtifact(value);
+  const prepared = prepareSourceArtifact(value);
+  return Buffer.concat(
+    [prepared.prefix, ...prepared.indexChunks, ...prepared.payloads],
+    prepared.size,
+  );
+}
+
+export function prepareSourceArtifact(
+  value: SourceArtifact,
+  options: SourceArtifactWorkOptions = {},
+): PreparedSourceArtifact {
+  workCheckpoint(options);
+  const normalized = normalizeSourceArtifact(value, options);
   const payloads: Buffer[] = [];
   let offset = 0;
   const files = normalized.files.map(
     (file): SourceArtifactIndexFile => {
-      const bytes = Buffer.from(file.text, "utf8");
-      payloads.push(bytes);
+      workCheckpoint(options);
+      const encoded = encodedUtf8(file.text, options);
+      payloads.push(...encoded.chunks);
+      const digest = createHash("sha256");
+      for (const chunk of encoded.chunks) {
+        updateDigest(digest, chunk, options);
+      }
       const indexed = Object.freeze({
         buildingId: file.buildingId,
         repositoryId: file.repositoryId,
@@ -589,34 +776,71 @@ export function serializeSourceArtifact(value: SourceArtifact): Buffer {
         language: file.language,
         location: file.location,
         offset,
-        size: bytes.byteLength,
-        sha256: createHash("sha256").update(bytes).digest("hex"),
+        size: encoded.byteLength,
+        sha256: digest.digest("hex"),
       });
-      offset += bytes.byteLength;
+      offset += encoded.byteLength;
       return indexed;
     },
   );
-  const index = normalizeSourceArtifactIndex({
-    version: SOURCE_ARTIFACT_VERSION,
-    provenance: normalized.provenance,
-    files,
+  const index = normalizeSourceArtifactIndex(
+    {
+      version: SOURCE_ARTIFACT_VERSION,
+      provenance: normalized.provenance,
+      files,
+    },
+    options,
+  );
+  let serializedProperties = 0;
+  const serializedIndex = JSON.stringify(index, (_key, item) => {
+    serializedProperties += 1;
+    if (serializedProperties >= 256) {
+      serializedProperties = 0;
+      workCheckpoint(options);
+    }
+    return item;
   });
-  const indexBytes = Buffer.from(JSON.stringify(index), "utf8");
-  if (indexBytes.byteLength > SOURCE_ARTIFACT_MAX_INDEX_BYTES) {
+  workCheckpoint(options);
+  const encodedIndex = encodedUtf8(serializedIndex, options);
+  if (encodedIndex.byteLength > SOURCE_ARTIFACT_MAX_INDEX_BYTES) {
     throw new TypeError("Source artifact index exceeds its byte limit.");
   }
   const prefix = Buffer.alloc(SOURCE_ARTIFACT_PREFIX_BYTES);
   SOURCE_ARTIFACT_MAGIC.copy(prefix);
   prefix.writeUInt32BE(
-    indexBytes.byteLength,
+    encodedIndex.byteLength,
     SOURCE_ARTIFACT_MAGIC.byteLength,
   );
   const total =
-    prefix.byteLength + indexBytes.byteLength + sourceArtifactPayloadBytes(index);
+    prefix.byteLength +
+    encodedIndex.byteLength +
+    sourceArtifactPayloadBytes(index);
   if (total > SOURCE_ARTIFACT_MAX_BYTES) {
     throw new TypeError("Source artifact exceeds its total byte limit.");
   }
-  return Buffer.concat([prefix, indexBytes, ...payloads], total);
+  const overallDigest = createHash("sha256");
+  updateDigest(overallDigest, prefix, options);
+  for (const chunk of encodedIndex.chunks) {
+    updateDigest(overallDigest, chunk, options);
+  }
+  for (const payload of payloads) {
+    updateDigest(overallDigest, payload, options);
+  }
+  const indexDigest = createHash("sha256");
+  for (const chunk of encodedIndex.chunks) {
+    updateDigest(indexDigest, chunk, options);
+  }
+  workCheckpoint(options);
+  return Object.freeze({
+    artifact: normalized,
+    prefix,
+    indexChunks: Object.freeze([...encodedIndex.chunks]),
+    index,
+    payloads: Object.freeze(payloads),
+    size: total,
+    sha256: overallDigest.digest("hex"),
+    indexSha256: indexDigest.digest("hex"),
+  });
 }
 
 export function parseSourceArtifact(bytes: Uint8Array): SourceArtifact {
@@ -657,7 +881,10 @@ export function parseSourceArtifact(bytes: Uint8Array): SourceArtifact {
     }
     let text: string;
     try {
-      text = new TextDecoder("utf-8", { fatal: true }).decode(payload);
+      text = new TextDecoder("utf-8", {
+        fatal: true,
+        ignoreBOM: true,
+      }).decode(payload);
     } catch {
       throw new TypeError(
         `Source artifact file ${fileIndex} must be valid UTF-8.`,
