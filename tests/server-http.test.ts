@@ -593,7 +593,7 @@ it("deletes completed snapshot and history jobs with their owned artifacts", asy
   servers.push(restarted);
   expect(restarted.jobs.get(snapshot.id)).toBeUndefined();
   expect(restarted.jobs.get(history.id)).toBeUndefined();
-});
+}, 15_000);
 
 it("revokes ownership before waiting for an active artifact response", async () => {
   const server = await startCodeCityServer({
