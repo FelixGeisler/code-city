@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   EVOLUTION_BUNDLE_LIMITS,
+  ValidatedEvolutionReplayCursor,
   canonicalEvolutionBundleJson,
   deriveEvolutionChangeKinds,
   iterateCanonicalEvolutionBundleBytes,
@@ -356,6 +357,82 @@ describe("EvolutionBundle 1.0", () => {
         ({ commit: value }) => value.index,
       ),
     ).toEqual([0, 1, 2]);
+  });
+
+  it("reuses the active validated frame for near-linear sequential playback", async () => {
+    const value = mutable(bundle());
+    const frameCount = EVOLUTION_BUNDLE_LIMITS.frames;
+    value.deltas = Array.from(
+      { length: frameCount - 1 },
+      (_, offset) => {
+        const index = offset + 1;
+        const changes = {
+          ...emptyChanges(),
+          model: { bounds: { x: 10 + index, y: 4, z: 10 } },
+        };
+        return { commit: commit(index), changes };
+      },
+    );
+    value.selection.requestedCommitCount = frameCount;
+    value.selection.selectedCommitCount = frameCount;
+    value.selection.sampledCommitCount = frameCount;
+    value.selection.traversedCommitCount = frameCount;
+    value.selection.resolvedNewestSha = shaFor(frameCount - 1);
+    value.selection.sampledCommitShas = Array.from(
+      { length: frameCount },
+      (_, index) => shaFor(index),
+    );
+
+    const validated = validateEvolutionBundle(value);
+    const cursor = new ValidatedEvolutionReplayCursor(validated);
+    let totalApplications = 0;
+    for (let index = 1; index < frameCount; index += 1) {
+      const result = await cursor.seek(index - 1, index);
+      totalApplications += result.appliedDeltaCount;
+      expect(result.model.bounds.x).toBe(10 + index);
+    }
+
+    expect(totalApplications).toBe(frameCount - 1);
+    expect(cursor.activeIndex).toBe(frameCount - 1);
+
+    const expectedFrames = [
+      ...replayValidatedEvolutionBundle(validated),
+    ];
+    const backward = await cursor.seek(frameCount - 1, 37);
+    expect(backward.appliedDeltaCount).toBe(37);
+    expect(backward.model).toEqual(expectedFrames[37]!.model);
+    const forward = await cursor.seek(37, frameCount - 1);
+    expect(forward.appliedDeltaCount).toBe(frameCount - 1 - 37);
+    expect(forward.model).toEqual(expectedFrames.at(-1)!.model);
+  });
+
+  it("keeps arbitrary seeks bounded and cancellation transactional", async () => {
+    const validated = validateEvolutionBundle(bundle());
+    const cursor = new ValidatedEvolutionReplayCursor(validated);
+    const last = await cursor.seek(0, 2);
+    expect(last.appliedDeltaCount).toBe(2);
+
+    const baseline = await cursor.seek(2, 0);
+    expect(baseline.appliedDeltaCount).toBe(0);
+    expect(baseline.model).toEqual(
+      [...replayValidatedEvolutionBundle(validated)][0]!.model,
+    );
+
+    const cancelled = new Error("cancel replay");
+    let checkpoints = 0;
+    await expect(
+      cursor.seek(0, 2, {
+        checkpoint: () => {
+          checkpoints += 1;
+          if (checkpoints === 3) throw cancelled;
+        },
+      }),
+    ).rejects.toBe(cancelled);
+    expect(cursor.activeIndex).toBe(0);
+
+    const recovered = await cursor.seek(0, 2);
+    expect(recovered.appliedDeltaCount).toBe(2);
+    expect(recovered.model).toEqual(last.model);
   });
 
   it("accepts all normalized selection modes without persisting mutable tag names", () => {

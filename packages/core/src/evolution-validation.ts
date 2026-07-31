@@ -293,11 +293,7 @@ export function* replayEvolutionBundle(
 export function* replayValidatedEvolutionBundle(
   bundle: EvolutionBundle,
 ): Generator<EvolutionReplayFrame, void, undefined> {
-  if (!VALIDATED_EVOLUTION_BUNDLES.has(bundle)) {
-    throw new TypeError(
-      "Evolution bundle must be the exact result of validateEvolutionBundle.",
-    );
-  }
+  assertValidatedEvolutionBundle(bundle);
   const work = new ValidationCheckpoint(undefined);
   let model = normalizeCityModel(bundle.baseline.model, work);
   yield {
@@ -320,6 +316,140 @@ export function* replayValidatedEvolutionBundle(
       commit: structuredClone(delta.commit),
       model: structuredClone(model),
     };
+  }
+}
+
+export interface EvolutionReplayCursorOptions {
+  /**
+   * Called during bounded validation work. Throwing leaves the active cursor
+   * unchanged.
+   */
+  readonly checkpoint?: () => void;
+  /**
+   * Lets worker callers process queued cancellation messages during a longer
+   * replay. Cursor state is committed only after this and `checkpoint` finish.
+   */
+  readonly yieldControl?: () => Promise<void>;
+}
+
+export interface EvolutionReplayCursorResult {
+  readonly fromModel: CityModel;
+  readonly model: CityModel;
+  /** Exact number of bundle deltas applied for this seek. */
+  readonly appliedDeltaCount: number;
+}
+
+const EVOLUTION_REPLAY_YIELD_INTERVAL = 4;
+
+/**
+ * Reuses one validated active frame for near-linear forward playback.
+ *
+ * Backward and non-active seeks deliberately replay from the immutable
+ * baseline. Evolution bundles contain at most 100 frames, so this fallback is
+ * deterministic and bounded without retaining multiple full city snapshots.
+ */
+export class ValidatedEvolutionReplayCursor {
+  readonly #bundle: EvolutionBundle;
+  #activeIndex = 0;
+  #activeModel: CityModel;
+
+  public constructor(bundle: EvolutionBundle) {
+    assertValidatedEvolutionBundle(bundle);
+    this.#bundle = bundle;
+    this.#activeModel = normalizeCityModel(
+      bundle.baseline.model,
+      new ValidationCheckpoint(undefined),
+    );
+  }
+
+  public get activeIndex(): number {
+    return this.#activeIndex;
+  }
+
+  public async seek(
+    fromIndex: number,
+    toIndex: number,
+    options: EvolutionReplayCursorOptions = {},
+  ): Promise<EvolutionReplayCursorResult> {
+    this.#assertFrameIndex(fromIndex);
+    this.#assertFrameIndex(toIndex);
+    const work = new ValidationCheckpoint(options.checkpoint);
+    let appliedDeltaCount = 0;
+    work.checkpoint();
+
+    const advance = async (
+      source: CityModel,
+      sourceIndex: number,
+      targetIndex: number,
+    ): Promise<CityModel> => {
+      const state: ReplayState = {
+        model: normalizeCityModel(source, work),
+        operationCount: 0,
+        lineages: collectLineages(source, work),
+      };
+      for (let offset = sourceIndex; offset < targetIndex; offset += 1) {
+        work.checkpoint();
+        state.model = applyEvolutionChanges(
+          state,
+          this.#bundle.deltas[offset]!.changes,
+          `deltas[${offset}].changes`,
+          work,
+        );
+        appliedDeltaCount += 1;
+        if (
+          options.yieldControl !== undefined &&
+          appliedDeltaCount % EVOLUTION_REPLAY_YIELD_INTERVAL === 0
+        ) {
+          await options.yieldControl();
+          work.checkpoint();
+        }
+      }
+      return state.model;
+    };
+
+    const fromModel =
+      fromIndex === this.#activeIndex
+        ? structuredClone(this.#activeModel)
+        : await advance(this.#bundle.baseline.model, 0, fromIndex);
+    let model: CityModel;
+    if (toIndex === fromIndex) {
+      model = structuredClone(fromModel);
+    } else if (toIndex > fromIndex) {
+      model = await advance(fromModel, fromIndex, toIndex);
+    } else if (toIndex === this.#activeIndex) {
+      model = structuredClone(this.#activeModel);
+    } else {
+      model = await advance(this.#bundle.baseline.model, 0, toIndex);
+    }
+
+    // This is the transactional boundary: cancellation or replay failures
+    // above leave the last successfully displayed frame intact.
+    work.checkpoint();
+    this.#activeIndex = toIndex;
+    this.#activeModel = structuredClone(model);
+    return Object.freeze({
+      fromModel,
+      model,
+      appliedDeltaCount,
+    });
+  }
+
+  #assertFrameIndex(index: number): void {
+    if (
+      !Number.isSafeInteger(index) ||
+      index < 0 ||
+      index > this.#bundle.deltas.length
+    ) {
+      throw new Error("The requested evolution frame is out of range.");
+    }
+  }
+}
+
+function assertValidatedEvolutionBundle(bundle: EvolutionBundle): void {
+  if (!VALIDATED_EVOLUTION_BUNDLES.has(bundle)) {
+    throw new TypeError(
+      "Evolution bundle must be the exact result of validateEvolutionBundle.",
+    );
   }
 }
 

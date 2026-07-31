@@ -1,9 +1,8 @@
 /// <reference lib="webworker" />
 
 import {
-  replayValidatedEvolutionBundle,
+  ValidatedEvolutionReplayCursor,
   validateEvolutionBundle,
-  type CityModel,
   type EvolutionBundle,
 } from "../../../packages/core/src/index.js";
 import {
@@ -20,8 +19,7 @@ import {
 
 const workerScope = self as unknown as DedicatedWorkerGlobalScope;
 let activeBundle: EvolutionBundle | undefined;
-let activeFrameIndex = 0;
-let activeFrameModel: CityModel | undefined;
+let replayCursor: ValidatedEvolutionReplayCursor | undefined;
 let latestRequestId = 0;
 
 function hex(bytes: ArrayBuffer): string {
@@ -30,29 +28,10 @@ function hex(bytes: ArrayBuffer): string {
     .join("");
 }
 
-async function replayAt(
-  bundle: EvolutionBundle,
-  index: number,
-  requestId: number,
-): Promise<CityModel> {
-  if (index < 0 || index > bundle.deltas.length) {
-    throw new Error("The requested evolution frame is out of range.");
+function assertCurrentRequest(requestId: number): void {
+  if (requestId !== latestRequestId) {
+    throw new DOMException("The evolution seek was replaced.", "AbortError");
   }
-  if (activeFrameIndex === index && activeFrameModel !== undefined) {
-    return structuredClone(activeFrameModel);
-  }
-  for (const frame of replayValidatedEvolutionBundle(bundle)) {
-    if (requestId !== latestRequestId) {
-      throw new DOMException("The evolution seek was replaced.", "AbortError");
-    }
-    if (frame.commit.index === index) {
-      return frame.model;
-    }
-    if (frame.commit.index % 4 === 0) {
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    }
-  }
-  throw new Error("The requested evolution frame is unavailable.");
 }
 
 workerScope.addEventListener(
@@ -74,8 +53,7 @@ workerScope.addEventListener(
         );
         const bundle = validateEvolutionBundle(JSON.parse(text) as unknown);
         activeBundle = bundle;
-        activeFrameIndex = 0;
-        activeFrameModel = structuredClone(bundle.baseline.model);
+        replayCursor = new ValidatedEvolutionReplayCursor(bundle);
         response = {
           type: "loaded",
           requestId: request.requestId,
@@ -86,35 +64,30 @@ workerScope.addEventListener(
         };
       } else {
         const bundle = activeBundle;
-        if (!bundle) throw new Error("Repository evolution is not loaded.");
-        const from = await replayAt(
-          bundle,
-          request.fromIndex,
-          request.requestId,
-        );
-        const model = await replayAt(
-          bundle,
-          request.toIndex,
-          request.requestId,
-        );
-        if (request.requestId !== latestRequestId) {
-          throw new DOMException(
-            "The evolution seek was replaced.",
-            "AbortError",
-          );
+        const cursor = replayCursor;
+        if (!bundle || !cursor) {
+          throw new Error("Repository evolution is not loaded.");
         }
-        activeFrameIndex = request.toIndex;
-        activeFrameModel = structuredClone(model);
+        const replay = await cursor.seek(
+          request.fromIndex,
+          request.toIndex,
+          {
+            checkpoint: () => assertCurrentRequest(request.requestId),
+            yieldControl: () =>
+              new Promise<void>((resolve) => setTimeout(resolve, 0)),
+          },
+        );
+        assertCurrentRequest(request.requestId);
         const frames = summarizeEvolutionFrames(bundle);
         response = {
           type: "frame",
           requestId: request.requestId,
           frame: frames[request.toIndex]!,
-          model,
+          model: replay.model,
           analysis: analyzeEvolutionFrame(bundle, request.toIndex),
           transition: compareEvolutionFrames(
-            from,
-            model,
+            replay.fromModel,
+            replay.model,
             request.fromIndex,
             request.toIndex,
           ),
