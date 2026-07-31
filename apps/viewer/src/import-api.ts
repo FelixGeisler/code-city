@@ -20,6 +20,12 @@ const PROFILE_ID_PATTERN = /^[a-z][a-z0-9-]{0,63}$/u;
 const ERROR_CODE_PATTERN = /^[a-z][a-z0-9-]{0,63}$/u;
 const AUTHORIZATION_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const AI_PROVIDER_ID_PATTERN = /^[a-z][a-z0-9-]{0,63}$/u;
+const AI_CONTEXT_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
+const AI_BUILDING_ID_PATTERN = /^[a-z0-9-]+:[0-9a-f]{16}$/u;
+const AI_GUIDANCE_MINIMUM_TIMEOUT_MS = 1_000;
+const AI_GUIDANCE_MAXIMUM_TIMEOUT_MS = 60_000;
+const AI_GUIDANCE_MAXIMUM_SOURCE_BYTES = 128 * 1024;
+const AI_GUIDANCE_MAXIMUM_RELATED_BUILDINGS = 25_000;
 const FIELD_PATH_PATTERN =
   /^\$(?:\.[A-Za-z][A-Za-z0-9]*|\[[0-9]+\])*$/u;
 const UNSAFE_TEXT = /[\p{Cc}\p{Cf}\p{Cs}]/u;
@@ -44,13 +50,33 @@ export interface ViewerAiGuidanceProviders {
   readonly providers: readonly ViewerAiGuidanceProvider[];
 }
 
-export interface ViewerAiGuidancePreview {
-  readonly preview: {
-    readonly enabled: true;
-    readonly provider: ViewerAiGuidanceProvider;
-    readonly transmission: {
+export type ViewerAiGuidanceContext =
+  | Readonly<{ version: "codecity.ai-context/1"; kind: "file"; buildingId: string }>
+  | Readonly<{ version: "codecity.ai-context/1"; kind: "type" | "callable"; buildingId: string; stableId: string }>
+  | Readonly<{ version: "codecity.ai-context/1"; kind: "dependency"; buildingId: string; dependencyId: string }>
+  | Readonly<{ version: "codecity.ai-context/1"; kind: "smell"; buildingId: string; findingId: string; ruleId: string }>;
+
+export interface ViewerAiGuidanceRange { readonly startLine: number; readonly endLine: number; readonly startColumn?: number; readonly endColumn?: number; }
+export type ViewerAiGuidanceResolvedContext =
+  | Readonly<{ version: "codecity.ai-context/1"; kind: "file"; buildingId: string; label: string; range: ViewerAiGuidanceRange }>
+  | Readonly<{ version: "codecity.ai-context/1"; kind: "type" | "callable"; buildingId: string; stableId: string; name: string; constructKind: string; label: string; range: ViewerAiGuidanceRange }>
+  | Readonly<{ version: "codecity.ai-context/1"; kind: "smell"; buildingId: string; findingId: string; ruleId: string; label: string; range: ViewerAiGuidanceRange; evidence: Readonly<Record<string, unknown>> }>;
+
+interface ViewerAiGuidanceLimits { readonly timeoutMs: number; readonly maximumSourceBytes: number; }
+export type ViewerAiGuidancePreview = Readonly<{ preview:
+  | Readonly<{ enabled: false; availability: "disabled"; limits: ViewerAiGuidanceLimits; privacy: "no-prompt-storage" }>
+  | Readonly<{ enabled: true; availability: "unavailable"; provider: ViewerAiGuidanceProvider; context: ViewerAiGuidanceContext; reason: string; limits: ViewerAiGuidanceLimits; privacy: "no-prompt-storage" }>
+  | Readonly<{
+      enabled: true;
+      availability: "available";
+      provider: ViewerAiGuidanceProvider;
+      transmission: {
       readonly version: 1;
       readonly task: "source-guidance";
+      readonly providerId: string;
+      readonly context: ViewerAiGuidanceResolvedContext;
+      readonly contextDigest: string;
+      readonly findingDigest?: string;
       readonly source: {
         readonly path: string;
         readonly language: string;
@@ -66,12 +92,14 @@ export interface ViewerAiGuidancePreview {
     readonly limits: { readonly timeoutMs: number; readonly maximumSourceBytes: number };
     readonly privacy: "no-prompt-storage";
     readonly grant: string;
-  };
-}
+  }> }>;
 
 export interface ViewerAiGuidanceResult {
   readonly result: {
     readonly provider: ViewerAiGuidanceProvider;
+    readonly context: ViewerAiGuidanceResolvedContext;
+    readonly contextDigest: string;
+    readonly findingDigest?: string;
     readonly suggestions: readonly {
       readonly title: string;
       readonly detail: string;
@@ -392,34 +420,160 @@ function parseAiGuidanceProviders(value: unknown): ViewerAiGuidanceProviders {
   return Object.freeze({ enabled: object["enabled"], providers: Object.freeze(providers) });
 }
 
-function parseAiLineRange(value: unknown, description: string): { readonly startLine: number; readonly endLine: number } {
-  const object = exactObject(value, ["endLine", "startLine"], description);
+function parseAiLineRange(value: unknown, description: string): ViewerAiGuidanceRange {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw protocolError(`${description} is invalid.`);
+  const raw = value as Record<string, unknown>;
+  const hasColumns = "startColumn" in raw || "endColumn" in raw;
+  const object = exactObject(value, hasColumns ? ["endColumn", "endLine", "startColumn", "startLine"] : ["endLine", "startLine"], description);
   const startLine = positiveInteger(object["startLine"], `${description} start`);
   const endLine = positiveInteger(object["endLine"], `${description} end`);
   if (endLine < startLine) throw protocolError(`${description} is invalid.`);
-  return Object.freeze({ startLine, endLine });
+  if (!hasColumns) return Object.freeze({ startLine, endLine });
+  const startColumn = positiveInteger(object["startColumn"], `${description} start column`);
+  const endColumn = positiveInteger(object["endColumn"], `${description} end column`);
+  if (endLine === startLine && endColumn < startColumn) throw protocolError(`${description} is invalid.`);
+  return Object.freeze({ startLine, endLine, startColumn, endColumn });
+}
+
+function parseAiContext(value: unknown): ViewerAiGuidanceContext {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw protocolError("AI context is invalid.");
+  const raw = value as Record<string, unknown>;
+  const version = raw["version"];
+  const kind = raw["kind"];
+  const buildingId = safeText(raw["buildingId"], "AI context building ID", 128);
+  if (version !== "codecity.ai-context/1" || !AI_BUILDING_ID_PATTERN.test(buildingId)) throw protocolError("AI context is invalid.");
+  if (kind === "file") { exactObject(value, ["buildingId", "kind", "version"], "AI file context"); return Object.freeze({ version, kind, buildingId }); }
+  if (kind === "type" || kind === "callable") { const object = exactObject(value, ["buildingId", "kind", "stableId", "version"], "AI declaration context"); return Object.freeze({ version, kind, buildingId, stableId: safeText(object["stableId"], "AI context stable ID", 512) }); }
+  if (kind === "dependency") { const object = exactObject(value, ["buildingId", "dependencyId", "kind", "version"], "AI dependency context"); return Object.freeze({ version, kind, buildingId, dependencyId: safeText(object["dependencyId"], "AI dependency ID", 512) }); }
+  if (kind === "smell") { const object = exactObject(value, ["buildingId", "findingId", "kind", "ruleId", "version"], "AI smell context"); return Object.freeze({ version, kind, buildingId, findingId: safeText(object["findingId"], "AI finding ID", 512), ruleId: safeText(object["ruleId"], "AI smell rule ID", 128) }); }
+  throw protocolError("AI context kind is invalid.");
+}
+
+function parseAiResolvedContext(value: unknown): ViewerAiGuidanceResolvedContext {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw protocolError("Resolved AI context is invalid.");
+  const raw = value as Record<string, unknown>;
+  const descriptor = parseAiContext(Object.fromEntries(Object.entries(raw).filter(([key]) => ["version", "kind", "buildingId", "stableId", "findingId", "ruleId"].includes(key))));
+  const label = safeText(raw["label"], "AI context label", 1_000);
+  const range = parseAiLineRange(raw["range"], "AI context range");
+  if (descriptor.kind === "file") {
+    exactObject(value, ["buildingId", "kind", "label", "range", "version"], "Resolved AI file context");
+    if (range.startColumn !== undefined || range.endColumn !== undefined) throw protocolError("Resolved AI file context range is invalid.");
+    return Object.freeze({ ...descriptor, label, range });
+  }
+  if (descriptor.kind === "type" || descriptor.kind === "callable") {
+    const object = exactObject(value, ["buildingId", "constructKind", "kind", "label", "name", "range", "stableId", "version"], "Resolved AI declaration context");
+    if (range.startColumn === undefined || range.endColumn === undefined) throw protocolError("Resolved AI declaration context range is invalid.");
+    return Object.freeze({ ...descriptor, name: safeText(object["name"], "AI declaration name", 1_000), constructKind: safeText(object["constructKind"], "AI declaration kind", 120), label, range });
+  }
+  if (descriptor.kind !== "smell") throw protocolError("Resolved dependency AI context cannot include source.");
+  const object = exactObject(value, ["buildingId", "evidence", "findingId", "kind", "label", "range", "ruleId", "version"], "Resolved AI smell context");
+  if (range.startColumn !== undefined || range.endColumn !== undefined) throw protocolError("Resolved AI smell context range is invalid.");
+  if (object["evidence"] === null || typeof object["evidence"] !== "object" || Array.isArray(object["evidence"])) throw protocolError("AI smell evidence is invalid.");
+  const rawEvidence = object["evidence"] as Record<string, unknown>;
+  const optionalKeys = ["unit", "subject", "line", "endLine", "relatedBuildingIds"].filter((key) => rawEvidence[key] !== undefined);
+  const evidence = exactObject(rawEvidence, ["kind", "label", "value", "threshold", ...optionalKeys], "AI smell evidence");
+  const kind = evidence["kind"];
+  if (kind !== "metric" && kind !== "executable-unit" && kind !== "dependency" && kind !== "cycle") throw protocolError("AI smell evidence kind is invalid.");
+  const expectedKind = descriptor.ruleId === "high-complexity-method" ? "executable-unit" : descriptor.ruleId === "oversized-file" ? "metric" : descriptor.ruleId === "excessive-coupling" ? "dependency" : descriptor.ruleId === "dependency-cycle" ? "cycle" : undefined;
+  if (expectedKind === undefined || kind !== expectedKind) throw protocolError("AI smell evidence does not match its rule.");
+  const evidenceLabel = safeText(evidence["label"], "AI smell evidence label", 256);
+  const evidenceValue = nonNegativeInteger(evidence["value"], "AI smell evidence value");
+  const evidenceThreshold = positiveInteger(evidence["threshold"], "AI smell evidence threshold");
+  if (evidenceThreshold > 1_000_000_000 || evidenceValue < evidenceThreshold) throw protocolError("AI smell evidence values are invalid.");
+  const unit = evidence["unit"] === undefined ? undefined : safeText(evidence["unit"], "AI smell evidence unit", 256);
+  const subject = evidence["subject"] === undefined ? undefined : safeText(evidence["subject"], "AI smell evidence subject", 256);
+  const line = evidence["line"] === undefined ? undefined : positiveInteger(evidence["line"], "AI smell evidence line");
+  const endLine = evidence["endLine"] === undefined ? undefined : positiveInteger(evidence["endLine"], "AI smell evidence end line");
+  if (endLine !== undefined && (line === undefined || endLine < line)) throw protocolError("AI smell evidence range is invalid.");
+  if (kind === "executable-unit") {
+    if (line === undefined || subject === undefined || evidence["relatedBuildingIds"] !== undefined) throw protocolError("AI executable-unit smell evidence is invalid.");
+    if (range.startLine !== line || range.endLine !== (endLine ?? line)) throw protocolError("AI smell evidence range does not match its context.");
+  } else if (line !== undefined || endLine !== undefined || subject !== undefined) {
+    throw protocolError("AI smell evidence is invalid for its kind.");
+  }
+  let relatedBuildingIds: readonly string[] | undefined;
+  if (kind === "cycle") {
+    if (!Array.isArray(evidence["relatedBuildingIds"]) || evidence["relatedBuildingIds"].length < 1 || evidence["relatedBuildingIds"].length > AI_GUIDANCE_MAXIMUM_RELATED_BUILDINGS || evidence["relatedBuildingIds"].length !== evidenceValue) throw protocolError("AI cycle evidence is invalid.");
+    const parsed = evidence["relatedBuildingIds"].map((id) => safeText(id, "AI related building ID", 128));
+    if (parsed.some((id) => !AI_BUILDING_ID_PATTERN.test(id)) || parsed.some((id, index) => index > 0 && parsed[index - 1]! >= id)) throw protocolError("AI related building IDs are invalid.");
+    relatedBuildingIds = Object.freeze(parsed);
+  } else if (evidence["relatedBuildingIds"] !== undefined) {
+    throw protocolError("AI smell evidence is invalid for its kind.");
+  }
+  const normalizedEvidence = Object.freeze({
+    kind,
+    label: evidenceLabel,
+    value: evidenceValue,
+    threshold: evidenceThreshold,
+    ...(unit === undefined ? {} : { unit }),
+    ...(subject === undefined ? {} : { subject }),
+    ...(line === undefined ? {} : { line }),
+    ...(endLine === undefined ? {} : { endLine }),
+    ...(relatedBuildingIds === undefined ? {} : { relatedBuildingIds }),
+  });
+  return Object.freeze({ ...descriptor, label, range, evidence: normalizedEvidence });
+}
+
+function parseAiLimits(value: unknown): ViewerAiGuidanceLimits {
+  const limits = exactObject(value, ["maximumSourceBytes", "timeoutMs"], "AI limits");
+  const timeoutMs = positiveInteger(limits["timeoutMs"], "AI timeout");
+  const maximumSourceBytes = positiveInteger(limits["maximumSourceBytes"], "AI source limit");
+  if (timeoutMs < AI_GUIDANCE_MINIMUM_TIMEOUT_MS || timeoutMs > AI_GUIDANCE_MAXIMUM_TIMEOUT_MS || maximumSourceBytes > AI_GUIDANCE_MAXIMUM_SOURCE_BYTES) throw protocolError("AI limits are invalid.");
+  return Object.freeze({ timeoutMs, maximumSourceBytes });
 }
 
 function parseAiGuidancePreview(value: unknown): ViewerAiGuidancePreview {
   const root = exactObject(value, ["preview"], "AI preview response");
-  const preview = exactObject(root["preview"], ["enabled", "grant", "limits", "privacy", "provider", "transmission"], "AI preview");
-  if (preview["enabled"] !== true || preview["privacy"] !== "no-prompt-storage" || typeof preview["grant"] !== "string" || !AUTHORIZATION_TOKEN_PATTERN.test(preview["grant"])) throw protocolError("AI preview is invalid.");
-  const transmission = exactObject(preview["transmission"], ["findings", "source", "task", "version"], "AI transmission");
+  if (root["preview"] === null || typeof root["preview"] !== "object" || Array.isArray(root["preview"])) throw protocolError("AI preview is invalid.");
+  const raw = root["preview"] as Record<string, unknown>;
+  if (raw["privacy"] !== "no-prompt-storage") throw protocolError("AI preview is invalid.");
+  if (raw["enabled"] === false) {
+    const preview = exactObject(raw, ["availability", "enabled", "limits", "privacy"], "Disabled AI preview");
+    if (preview["availability"] !== "disabled") throw protocolError("Disabled AI preview is invalid.");
+    return Object.freeze({ preview: Object.freeze({ enabled: false, availability: "disabled", limits: parseAiLimits(preview["limits"]), privacy: "no-prompt-storage" }) });
+  }
+  if (raw["enabled"] !== true) throw protocolError("AI preview is invalid.");
+  if (raw["availability"] === "unavailable") {
+    const preview = exactObject(raw, ["availability", "context", "enabled", "limits", "privacy", "provider", "reason"], "Unavailable AI preview");
+    return Object.freeze({ preview: Object.freeze({ enabled: true, availability: "unavailable", provider: parseAiProvider(preview["provider"]), context: parseAiContext(preview["context"]), reason: safeText(preview["reason"], "AI context unavailability reason", 1_000), limits: parseAiLimits(preview["limits"]), privacy: "no-prompt-storage" }) });
+  }
+  const preview = exactObject(raw, ["availability", "enabled", "grant", "limits", "privacy", "provider", "transmission"], "AI preview");
+  if (preview["availability"] !== "available" || typeof preview["grant"] !== "string" || !AUTHORIZATION_TOKEN_PATTERN.test(preview["grant"])) throw protocolError("AI preview is invalid.");
+  const provider = parseAiProvider(preview["provider"]);
+  const limits = parseAiLimits(preview["limits"]);
+  if (preview["transmission"] === null || typeof preview["transmission"] !== "object" || Array.isArray(preview["transmission"])) throw protocolError("AI transmission is invalid.");
+  const transmissionRaw = preview["transmission"] as Record<string, unknown>;
+  const hasFindingDigest = "findingDigest" in transmissionRaw;
+  const transmission = exactObject(transmissionRaw, hasFindingDigest ? ["context", "contextDigest", "findingDigest", "findings", "providerId", "source", "task", "version"] : ["context", "contextDigest", "findings", "providerId", "source", "task", "version"], "AI transmission");
   if (transmission["version"] !== 1 || transmission["task"] !== "source-guidance") throw protocolError("AI transmission version is invalid.");
+  const providerId = safeText(transmission["providerId"], "AI transmission provider ID", 64);
+  if (!AI_PROVIDER_ID_PATTERN.test(providerId) || providerId !== provider.id) throw protocolError("AI transmission provider does not match its preview.");
+  const context = parseAiResolvedContext(transmission["context"]);
+  const contextDigest = safeText(transmission["contextDigest"], "AI context digest", 64);
+  if (!AI_CONTEXT_DIGEST_PATTERN.test(contextDigest)) throw protocolError("AI context digest is invalid.");
+  const findingDigest = hasFindingDigest ? safeText(transmission["findingDigest"], "AI finding digest", 64) : undefined;
+  if ((findingDigest !== undefined && !AI_CONTEXT_DIGEST_PATTERN.test(findingDigest)) || (context.kind === "smell") !== (findingDigest !== undefined)) throw protocolError("AI finding digest is invalid.");
   const source = exactObject(transmission["source"], ["language", "lines", "path", "text"], "AI transmission source");
   const findings = exactObject(transmission["findings"], ["decisionLoad", "maximumComplexity", "sloc"], "AI findings");
-  const limits = exactObject(preview["limits"], ["maximumSourceBytes", "timeoutMs"], "AI limits");
+  const lines = parseAiLineRange(source["lines"], "AI source range");
+  if (JSON.stringify(lines) !== JSON.stringify(context.range)) throw protocolError("AI source range does not match its context.");
+  if (typeof source["text"] !== "string" || new TextEncoder().encode(source["text"]).byteLength > limits.maximumSourceBytes) throw protocolError("AI source text exceeds its advertised limit.");
   return Object.freeze({ preview: Object.freeze({
     enabled: true,
-    provider: parseAiProvider(preview["provider"]),
+    availability: "available",
+    provider,
     transmission: Object.freeze({
       version: 1,
       task: "source-guidance",
+      providerId,
+      context,
+      contextDigest,
+      ...(findingDigest === undefined ? {} : { findingDigest }),
       source: Object.freeze({
         path: safeText(source["path"], "AI source path", 4_096),
         language: safeText(source["language"], "AI source language", 120),
-        text: typeof source["text"] === "string" ? source["text"] : (() => { throw protocolError("AI source text is invalid."); })(),
-        lines: parseAiLineRange(source["lines"], "AI source range"),
+        text: source["text"],
+        lines,
       }),
       findings: Object.freeze({
         sloc: nonNegativeInteger(findings["sloc"], "AI SLOC"),
@@ -427,10 +581,7 @@ function parseAiGuidancePreview(value: unknown): ViewerAiGuidancePreview {
         decisionLoad: nonNegativeInteger(findings["decisionLoad"], "AI decision load"),
       }),
     }),
-    limits: Object.freeze({
-      timeoutMs: positiveInteger(limits["timeoutMs"], "AI timeout"),
-      maximumSourceBytes: positiveInteger(limits["maximumSourceBytes"], "AI source limit"),
-    }),
+    limits,
     privacy: "no-prompt-storage",
     grant: preview["grant"],
   }) });
@@ -438,7 +589,15 @@ function parseAiGuidancePreview(value: unknown): ViewerAiGuidancePreview {
 
 function parseAiGuidanceResult(value: unknown): ViewerAiGuidanceResult {
   const root = exactObject(value, ["result"], "AI guidance response");
-  const result = exactObject(root["result"], ["provider", "suggestions"], "AI guidance result");
+  if (root["result"] === null || typeof root["result"] !== "object" || Array.isArray(root["result"])) throw protocolError("AI guidance result is invalid.");
+  const raw = root["result"] as Record<string, unknown>;
+  const hasFindingDigest = "findingDigest" in raw;
+  const result = exactObject(raw, hasFindingDigest ? ["context", "contextDigest", "findingDigest", "provider", "suggestions"] : ["context", "contextDigest", "provider", "suggestions"], "AI guidance result");
+  const context = parseAiResolvedContext(result["context"]);
+  const contextDigest = safeText(result["contextDigest"], "AI context digest", 64);
+  if (!AI_CONTEXT_DIGEST_PATTERN.test(contextDigest)) throw protocolError("AI context digest is invalid.");
+  const findingDigest = hasFindingDigest ? safeText(result["findingDigest"], "AI finding digest", 64) : undefined;
+  if ((findingDigest !== undefined && !AI_CONTEXT_DIGEST_PATTERN.test(findingDigest)) || (context.kind === "smell") !== (findingDigest !== undefined)) throw protocolError("AI finding digest is invalid.");
   if (!Array.isArray(result["suggestions"]) || result["suggestions"].length > 20) throw protocolError("AI suggestions are invalid.");
   const suggestions = result["suggestions"].map((value) => {
     const suggestion = exactObject(value, ["citation", "detail", "title"], "AI suggestion");
@@ -450,7 +609,7 @@ function parseAiGuidanceResult(value: unknown): ViewerAiGuidanceResult {
       citation: Object.freeze({ path: safeText(citation["path"], "AI citation path", 4_096), ...range }),
     });
   });
-  return Object.freeze({ result: Object.freeze({ provider: parseAiProvider(result["provider"]), suggestions: Object.freeze(suggestions) }) });
+  return Object.freeze({ result: Object.freeze({ provider: parseAiProvider(result["provider"]), context, contextDigest, ...(findingDigest === undefined ? {} : { findingDigest }), suggestions: Object.freeze(suggestions) }) });
 }
 
 function evolutionArtifactTooLargeFailure(): ImportApiError {
@@ -1288,8 +1447,11 @@ export class ViewerImportApiClient {
     return parseAiGuidanceProviders((await this.jsonRequest("/api/v1/ai/providers", { method: "GET" }, signal, this.requestDeadlineMs, API_RESPONSE_MAX_BYTES)).value);
   }
 
-  public async aiGuidancePreview(jobId: string, buildingId: string, providerId: string, signal?: AbortSignal): Promise<ViewerAiGuidancePreview> {
-    return parseAiGuidancePreview((await this.jsonRequest(`/api/v1/ai/preview/${jobId}/${buildingId}/${providerId}`, { method: "POST", headers: { "X-Code-City-Request": "1" } }, signal, this.requestDeadlineMs, SOURCE_RESPONSE_MAX_BYTES)).value);
+  public async aiGuidancePreview(jobId: string, context: ViewerAiGuidanceContext, providerId: string, signal?: AbortSignal): Promise<ViewerAiGuidancePreview> {
+    this.requireJobId(jobId);
+    const descriptor = parseAiContext(context);
+    if (!AI_PROVIDER_ID_PATTERN.test(providerId)) throw protocolError("AI provider ID is invalid.");
+    return parseAiGuidancePreview((await this.jsonRequest(`/api/v1/ai/preview/${jobId}/${descriptor.buildingId}/${providerId}`, { method: "POST", headers: { "content-type": "application/json", "X-Code-City-Request": "1" }, body: JSON.stringify(descriptor) }, signal, this.requestDeadlineMs, SOURCE_RESPONSE_MAX_BYTES)).value);
   }
 
   public async aiGuidanceRequest(

@@ -26,8 +26,20 @@ const source = {
   location: { startLine: 1, endLine: 1 },
 } as const;
 const metrics = { sloc: 1, maximumComplexity: 1, decisionLoad: 0 } as const;
-const providerJson = (value: unknown): Response =>
-  new Response(JSON.stringify(value), {
+const selection = {
+  source,
+  metrics,
+  context: {
+    version: "codecity.ai-context/1",
+    kind: "file",
+    buildingId: source.buildingId,
+    label: "example source file",
+    range: source.location,
+  },
+  contextDigest: "a".repeat(64),
+} as const;
+const providerJson = (value: unknown, providerId = "local"): Response =>
+  new Response(JSON.stringify({ providerId, contextDigest: selection.contextDigest, ...(value as Record<string, unknown>) }), {
     headers: { "content-type": "application/json" },
   });
 
@@ -35,7 +47,7 @@ describe("AiGuidanceAdapter", () => {
   it("does not call a provider while disabled", () => {
     const fetch = vi.fn();
     const adapter = new AiGuidanceAdapter({ version: AI_GUIDANCE_CONFIG_VERSION, enabled: false, providers: [] }, { fetch });
-    expect(adapter.preview(source, metrics, "local")).toMatchObject({ enabled: false, privacy: "no-prompt-storage" });
+    expect(adapter.preview(selection, "local")).toMatchObject({ enabled: false, privacy: "no-prompt-storage" });
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -43,11 +55,11 @@ describe("AiGuidanceAdapter", () => {
     let sent: RequestInit | undefined;
     const fetch = vi.fn(async (_input: string | URL, init: RequestInit) => { sent = init; return providerJson({ suggestions: [{ title: "Extract branch", detail: "The selected method has a branch." }] }); });
     const adapter = new AiGuidanceAdapter({ version: 1, enabled: true, providers: [{ id: "local", label: "Local model", endpoint: "http://127.0.0.1:11434/guidance", authorization: { header: "Authorization", value: "secret" } }] }, { fetch });
-    const preview = adapter.preview(source, metrics, "local");
+    const preview = adapter.preview(selection, "local");
     expect(preview).toMatchObject({ enabled: true, provider: { id: "local", label: "Local model" }, transmission: { source: { text: source.text }, findings: metrics } });
     expect(JSON.stringify(preview)).not.toContain("secret");
     expect(fetch).not.toHaveBeenCalled();
-    const result = await adapter.request(source, metrics, "local");
+    const result = await adapter.request(selection, "local");
     expect(result.suggestions[0]).toMatchObject({ citation: { path: source.path, startLine: 1, endLine: 1 } });
     expect(fetch).toHaveBeenCalledOnce();
     expect(sent?.headers).toMatchObject({ authorization: "secret" });
@@ -65,7 +77,7 @@ describe("AiGuidanceAdapter", () => {
   it("rejects private DNS answers before a provider transport can run", async () => {
     const fetch = vi.fn();
     const adapter = new AiGuidanceAdapter({ version: 1, enabled: true, providers: [{ id: "remote", label: "Remote", endpoint: "https://ai.example.test/guidance" }] }, { fetch, resolve: async () => ["10.1.2.3"] });
-    await expect(adapter.request(source, metrics, "remote")).rejects.toThrow(/unsafe address/);
+    await expect(adapter.request(selection, "remote")).rejects.toThrow(/unsafe address/);
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -78,14 +90,14 @@ describe("AiGuidanceAdapter", () => {
   ])("rejects special or IPv4-transition DNS answer %s", async (address) => {
     const fetch = vi.fn();
     const adapter = new AiGuidanceAdapter({ version: 1, enabled: true, providers: [{ id: "remote", label: "Remote", endpoint: "https://ai.example.test/guidance" }] }, { fetch, resolve: async () => [address] });
-    await expect(adapter.request(source, metrics, "remote")).rejects.toThrow(/unsafe address/);
+    await expect(adapter.request(selection, "remote")).rejects.toThrow(/unsafe address/);
     expect(fetch).not.toHaveBeenCalled();
   });
 
   it("settles promptly when cancellation occurs during DNS resolution", async () => {
     const controller = new AbortController();
     const adapter = new AiGuidanceAdapter({ version: 1, enabled: true, providers: [{ id: "remote", label: "Remote", endpoint: "https://ai.example.test/guidance" }] }, { resolve: async () => new Promise<readonly string[]>(() => undefined) });
-    const pending = adapter.request(source, metrics, "remote", controller.signal);
+    const pending = adapter.request(selection, "remote", controller.signal);
     controller.abort();
     await expect(pending).rejects.toThrow(/cancelled|timed out/iu);
   });
@@ -94,7 +106,7 @@ describe("AiGuidanceAdapter", () => {
     const fetch = vi.fn();
     const audit = vi.fn();
     const adapter = new AiGuidanceAdapter({ version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: "http://localhost:11434/guidance" }] }, { fetch, audit });
-    await expect(adapter.request(source, metrics, "local", AbortSignal.abort())).rejects.toThrow(/cancelled/);
+    await expect(adapter.request(selection, "local", AbortSignal.abort())).rejects.toThrow(/cancelled/);
     expect(fetch).not.toHaveBeenCalled();
     expect(audit).toHaveBeenCalledTimes(1);
     expect(audit).toHaveBeenLastCalledWith(expect.objectContaining({ outcome: "cancelled" }));
@@ -104,24 +116,44 @@ describe("AiGuidanceAdapter", () => {
     const encoder = new TextEncoder();
     const fetch = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(encoder.encode("x".repeat(AI_GUIDANCE_MAX_RESPONSE_BYTES + 1))); } }), { headers: { "content-type": "application/json" } }));
     const adapter = new AiGuidanceAdapter({ version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: "http://localhost:11434/guidance" }] }, { fetch });
-    await expect(adapter.request(source, metrics, "local")).rejects.toThrow(/size limit/);
+    await expect(adapter.request(selection, "local")).rejects.toThrow(/size limit/);
   });
 
   it("requires an exact JSON provider response", async () => {
     const wrongType = new AiGuidanceAdapter({ version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: "http://localhost:11434/guidance" }] }, { fetch: async () => new Response('{"suggestions":[]}') });
-    await expect(wrongType.request(source, metrics, "local")).rejects.toThrow(/content type/);
+    await expect(wrongType.request(selection, "local")).rejects.toThrow(/content type/);
     const extraRoot = new AiGuidanceAdapter({ version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: "http://localhost:11434/guidance" }] }, { fetch: async () => providerJson({ suggestions: [], metadata: "not allowed" }) });
-    await expect(extraRoot.request(source, metrics, "local")).rejects.toThrow(/invalid response/);
+    await expect(extraRoot.request(selection, "local")).rejects.toThrow(/invalid response|stale/);
+  });
+
+  it("rejects stale context and finding digest echoes from a provider", async () => {
+    const staleContext = new AiGuidanceAdapter({ version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: "http://localhost:11434/guidance" }] }, { fetch: async () => providerJson({ contextDigest: "b".repeat(64), suggestions: [] }) });
+    await expect(staleContext.request(selection, "local")).rejects.toThrow(/stale|invalid/);
+    const smellSelection = {
+      ...selection,
+      context: { version: "codecity.ai-context/1", kind: "smell", buildingId: source.buildingId, findingId: "smell:high-complexity-method:0123456789abcdef", ruleId: "high-complexity-method", label: "High-complexity method", range: source.location, evidence: { kind: "executable-unit", label: "Cyclomatic complexity", value: 16, threshold: 15 } },
+      findingDigest: "b".repeat(64),
+    } as const;
+    const staleFinding = new AiGuidanceAdapter({ version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: "http://localhost:11434/guidance" }] }, { fetch: async () => new Response(JSON.stringify({ providerId: "local", contextDigest: selection.contextDigest, findingDigest: "c".repeat(64), suggestions: [] }), { headers: { "content-type": "application/json" } }) });
+    await expect(staleFinding.request(smellSelection, "local")).rejects.toThrow(/stale|invalid/);
+  });
+
+  it("rejects a response bound to another configured provider", async () => {
+    const adapter = new AiGuidanceAdapter({ version: 1, enabled: true, providers: [
+      { id: "first", label: "First", endpoint: "http://localhost:11434/guidance" },
+      { id: "second", label: "Second", endpoint: "http://localhost:11435/guidance" },
+    ] }, { fetch: async () => providerJson({ suggestions: [] }, "first") });
+    await expect(adapter.request(selection, "second")).rejects.toThrow(/mismatched|invalid/);
   });
 
   it("keeps guidance successful when an audit sink throws and selects the requested provider", async () => {
-    const fetch = vi.fn(async () => providerJson({ suggestions: [] }));
+    const fetch = vi.fn(async () => providerJson({ suggestions: [] }, "second"));
     const audit = vi.fn(() => { throw new Error("audit unavailable"); });
     const adapter = new AiGuidanceAdapter({ version: 1, enabled: true, providers: [
       { id: "first", label: "First", endpoint: "http://localhost:11434/guidance" },
       { id: "second", label: "Second", endpoint: "http://localhost:11435/guidance" },
     ] }, { fetch, audit });
-    await expect(adapter.request(source, metrics, "second")).resolves.toMatchObject({ provider: { id: "second" } });
+    await expect(adapter.request(selection, "second")).resolves.toMatchObject({ provider: { id: "second" } });
     expect(fetch).toHaveBeenCalledWith(expect.objectContaining({ port: "11435" }), expect.any(Object));
     expect(audit).toHaveBeenCalledTimes(1);
   });
@@ -129,7 +161,7 @@ describe("AiGuidanceAdapter", () => {
   it("isolates provider failures and records metadata without a prompt", async () => {
     const audit = vi.fn();
     const adapter = new AiGuidanceAdapter({ version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: "http://localhost:11434/guidance" }] }, { fetch: async () => { throw new Error("offline"); }, audit });
-    await expect(adapter.request(source, metrics, "local")).rejects.toThrow("offline");
+    await expect(adapter.request(selection, "local")).rejects.toThrow("offline");
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({ providerId: "local", buildingId: source.buildingId, outcome: "failed", sourceBytes: expect.any(Number) }));
     expect(JSON.stringify(audit.mock.calls)).not.toContain(source.text);
   });
@@ -137,7 +169,7 @@ describe("AiGuidanceAdapter", () => {
   it("cancels an in-flight provider operation", async () => {
     const controller = new AbortController();
     const adapter = new AiGuidanceAdapter({ version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: "http://localhost:11434/guidance" }] }, { fetch: async (_url, init) => new Promise((_resolve, reject) => init.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true })) });
-    const pending = adapter.request(source, metrics, "local", controller.signal);
+    const pending = adapter.request(selection, "local", controller.signal);
     controller.abort();
     await expect(pending).rejects.toThrow(/cancelled|timed out/iu);
   });
@@ -175,25 +207,25 @@ describe("AiGuidanceAdapter", () => {
           return;
         }
         response.writeHead(200, { "content-type": "application/json" });
-        response.end('{"suggestions":[]}');
+        response.end(JSON.stringify({ providerId: "local", contextDigest: selection.contextDigest, suggestions: [] }));
       });
     });
     await new Promise<void>((resolve) => provider.listen(0, "127.0.0.1", resolve));
     const port = (provider.address() as AddressInfo).port;
     try {
       const adapter = new AiGuidanceAdapter({ version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: `http://localhost:${port}/guidance` }] });
-      await expect(adapter.request(source, metrics, "local")).resolves.toMatchObject({ suggestions: [] });
+      await expect(adapter.request(selection, "local")).resolves.toMatchObject({ suggestions: [] });
       expect(host).toBe(`localhost:${port}`);
-      expect(JSON.parse(body)).toEqual(adapter.preview(source, metrics, "local").transmission);
+      expect(JSON.parse(body)).toEqual(adapter.preview(selection, "local").transmission);
       const redirecting = new AiGuidanceAdapter({ version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: `http://localhost:${port}/redirect` }] });
-      await expect(redirecting.request(source, metrics, "local")).rejects.toThrow(/did not complete/);
+      await expect(redirecting.request(selection, "local")).rejects.toThrow(/did not complete/);
       expect(requests).toBe(2);
       const stalled = new AiGuidanceAdapter({ version: 1, enabled: true, timeoutMs: 1_000, providers: [{ id: "local", label: "Local", endpoint: `http://localhost:${port}/stall` }] });
-      await expect(stalled.request(source, metrics, "local")).rejects.toThrow(/timed out/);
+      await expect(stalled.request(selection, "local")).rejects.toThrow(/timed out/);
       await stallClosed;
       expect(requests).toBe(3);
       const stalledError = new AiGuidanceAdapter({ version: 1, enabled: true, providers: [{ id: "local", label: "Local", endpoint: `http://localhost:${port}/error-stall` }] });
-      await expect(stalledError.request(source, metrics, "local")).rejects.toThrow(/did not complete/);
+      await expect(stalledError.request(selection, "local")).rejects.toThrow(/did not complete/);
       await errorStallClosed;
       expect(requests).toBe(4);
     } finally {
@@ -213,7 +245,7 @@ describe("AiGuidanceAdapter", () => {
         if (error !== undefined) outgoing.emit("error", error);
       };
       outgoing.end = () => {
-        const incoming = Readable.from([Buffer.from('{"suggestions":[]}', "utf8")]) as http.IncomingMessage;
+        const incoming = Readable.from([Buffer.from(JSON.stringify({ providerId: "remote", contextDigest: selection.contextDigest, suggestions: [] }), "utf8")]) as http.IncomingMessage;
         incoming.statusCode = 200;
         incoming.headers = { "content-type": "application/json" };
         callback(incoming);
@@ -222,7 +254,7 @@ describe("AiGuidanceAdapter", () => {
     }) as typeof https.request);
     try {
       const adapter = new AiGuidanceAdapter({ version: 1, enabled: true, providers: [{ id: "remote", label: "Remote", endpoint: "https://ai.example.test/guidance" }] }, { resolve: async () => ["8.8.8.8"] });
-      await expect(adapter.request(source, metrics, "remote")).resolves.toMatchObject({ suggestions: [] });
+      await expect(adapter.request(selection, "remote")).resolves.toMatchObject({ suggestions: [] });
       expect(captured?.hostname).toBe("8.8.8.8");
       expect(captured?.servername).toBe("ai.example.test");
       expect((captured?.headers as Record<string, string>)["host"]).toBe("ai.example.test");
