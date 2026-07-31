@@ -11,3 +11,4 @@
 * xref:10-quality-requirements.adoc[10. Quality Requirements]
 * xref:11-risks-and-technical-debt.adoc[11. Risks and Technical Debt]
 * xref:12-glossary.adoc[12. Glossary]
+* xref:13-safe-extensions.adoc[13. Safe Extensions]

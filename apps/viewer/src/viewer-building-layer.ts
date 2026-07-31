@@ -416,8 +416,12 @@ export class ViewerBuildingLayer {
     this.refreshHighlight(slot);
   }
 
-  public setGroupHighlight(ids: readonly string[]): void {
+  public setGroupHighlight(
+    ids: readonly string[],
+    color = "#63e6ff",
+  ): void {
     this.assertActive();
+    this.groupHighlight.material.color.set(color);
     const seen = new Set<string>();
     const valid: string[] = [];
     for (const id of ids) {
