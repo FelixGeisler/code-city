@@ -581,7 +581,7 @@ export function installAdvancedQueryPanel(
       evaluation = undefined;
       results.replaceChildren();
       if (definition === undefined) return;
-      status.textContent = "Refreshing query contextâ€¦";
+      status.textContent = "Refreshing query context...";
       void runDefinition(definition);
     },
     selectFromScene(buildingId, intent = {}) {

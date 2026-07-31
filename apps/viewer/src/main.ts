@@ -1270,6 +1270,7 @@ class CityScene {
     }
     this.buildingLayer?.setIsolatedDistrict(null);
     this.evolutionAnimation?.removals.setIsolatedDistrict(null);
+    this.designSmellOverlay.setIsolatedDistrict(null);
     this.isolatedDistrictId = null;
     this.buildingVisibilityMask = valid;
     this.buildingLayer?.setVisibleBuildingIds([...valid]);
@@ -1877,6 +1878,7 @@ class CityScene {
     this.buildingLayer?.setIsolatedDistrict(null);
     this.buildingLayer?.setVisibleBuildingIds(null);
     this.evolutionAnimation?.removals.setIsolatedDistrict(null);
+    this.designSmellOverlay.setIsolatedDistrict(null);
     let restored = false;
     return () => {
       if (restored) return;
@@ -1891,6 +1893,7 @@ class CityScene {
       this.evolutionAnimation?.removals.setIsolatedDistrict(
         previousIsolation,
       );
+      this.designSmellOverlay.setIsolatedDistrict(previousIsolation);
     };
   }
 
