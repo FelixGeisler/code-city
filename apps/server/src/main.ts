@@ -1,9 +1,11 @@
 import path from "node:path";
+import { writeSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 import { startCodeCityServer } from "./server.js";
 import {
   AI_GUIDANCE_CONFIG_VERSION,
+  AI_GUIDANCE_MAX_PROVIDERS,
   type AiGuidanceConfiguration,
 } from "./ai-guidance.js";
 
@@ -146,6 +148,7 @@ export function environmentAiGuidanceConfiguration(
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error("CODECITY_AI_GUIDANCE_CONFIG must be an object.");
   const object = raw as Record<string, unknown>;
   if (object["version"] !== AI_GUIDANCE_CONFIG_VERSION || typeof object["enabled"] !== "boolean" || !Array.isArray(object["providers"])) throw new Error("CODECITY_AI_GUIDANCE_CONFIG must use version 1.");
+  if (object["providers"].length > AI_GUIDANCE_MAX_PROVIDERS) throw new Error(`CODECITY_AI_GUIDANCE_CONFIG supports at most ${AI_GUIDANCE_MAX_PROVIDERS} providers.`);
   const allowed = new Set(["version", "enabled", "providers", "timeoutMs", "maximumSourceBytes"]);
   if (Object.keys(object).some((key) => !allowed.has(key))) throw new Error("CODECITY_AI_GUIDANCE_CONFIG has an unknown field.");
   const providers = object["providers"].map((rawProvider) => {
@@ -154,9 +157,7 @@ export function environmentAiGuidanceConfiguration(
     const providerAllowed = new Set(["id", "label", "endpoint", "authorizationEnv", "authorizationHeader"]);
     if (Object.keys(provider).some((key) => !providerAllowed.has(key)) || typeof provider["id"] !== "string" || typeof provider["label"] !== "string" || typeof provider["endpoint"] !== "string") throw new Error("AI provider configuration is invalid.");
     if (provider["authorizationEnv"] === undefined) {
-      if (provider["authorizationHeader"] !== undefined) {
-        throw new Error("AI provider authorization header requires an authorizationEnv.");
-      }
+      if (provider["authorizationHeader"] !== undefined) throw new Error("AI provider authorizationHeader requires authorizationEnv.");
       return { id: provider["id"], label: provider["label"], endpoint: provider["endpoint"] };
     }
     if (typeof provider["authorizationEnv"] !== "string" || !/^[A-Z][A-Z0-9_]{0,127}$/u.test(provider["authorizationEnv"]) || (provider["authorizationHeader"] !== undefined && typeof provider["authorizationHeader"] !== "string")) throw new Error("AI provider credential reference is invalid.");
@@ -175,6 +176,22 @@ export function environmentAiGuidanceConfiguration(
     providers,
     ...(object["timeoutMs"] === undefined ? {} : { timeoutMs: object["timeoutMs"] as number }),
     ...(object["maximumSourceBytes"] === undefined ? {} : { maximumSourceBytes: object["maximumSourceBytes"] as number }),
+  };
+}
+
+/** Enables the built-in metadata-only audit sink. Prompt, output, and secrets are never passed to it. */
+export function environmentAiGuidanceAudit(
+  value: string | undefined,
+  write: typeof writeSync = writeSync,
+): ((event: Readonly<{ providerId: string; buildingId: string; outcome: "completed" | "cancelled" | "failed"; sourceBytes: number; durationMs: number }>) => void) | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (value !== "stderr") throw new Error("CODECITY_AI_GUIDANCE_AUDIT must be exactly stderr when enabled.");
+  return (event) => {
+    try {
+      // A synchronous descriptor write has no later Writable "error" event
+      // that could escape this best-effort boundary.
+      write(process.stderr.fd, `${JSON.stringify({ event: "ai-guidance", ...event })}\n`);
+    } catch { /* Audit is deliberately best-effort. */ }
   };
 }
 
@@ -221,6 +238,9 @@ export async function runServer(): Promise<void> {
     const aiGuidance = environmentAiGuidanceConfiguration(
       process.env["CODECITY_AI_GUIDANCE_CONFIG"],
     );
+    const aiGuidanceAudit = environmentAiGuidanceAudit(
+      process.env["CODECITY_AI_GUIDANCE_AUDIT"],
+    );
     const server = await startCodeCityServer({
       ...(host === undefined ? {} : { host }),
       ...(port === undefined ? {} : { port }),
@@ -242,6 +262,7 @@ export async function runServer(): Promise<void> {
       },
       sourceRetention,
       ...(aiGuidance === undefined ? {} : { aiGuidance }),
+      ...(aiGuidanceAudit === undefined ? {} : { aiGuidanceAudit }),
       ...(editorUrlTemplate === undefined
         ? {}
         : { editorUrlTemplate }),

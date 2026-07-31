@@ -38,25 +38,45 @@ variable name, so the configuration JSON never contains a secret.
 ]}
 ----
 
-Remote endpoints must use HTTPS; HTTP is allowed only for `localhost` or an
-IPv4/IPv6 loopback endpoint. Endpoint URLs cannot contain credentials, queries,
-or fragments, and redirects are refused. Each call has a bounded timeout,
-source and response size limits, cancellation on browser disconnect, and a
-strict provider response contract.
+The viewer lists the configured providers and the user selects one before a
+preview is issued. Remote endpoints must use HTTPS; HTTP is allowed only for
+literal `localhost` or an IPv4/IPv6 loopback endpoint. Remote DNS answers are
+validated and the selected safe address is pinned for the request; private,
+link-local, loopback, mapped-IPv6, and special addresses are rejected. Endpoint
+URLs cannot contain credentials, queries, or fragments, redirects are refused,
+and only `Authorization`, `api-key`, or `x-api-key` credentials are accepted.
+At most 64 providers may be configured.
+Each call has a bounded timeout, source and streamed-response size limits,
+cancellation on browser disconnect, and a strict provider response contract.
 
-For a selected retained building the viewer first displays the exact source and
-measured metrics that would be transmitted. Clicking **Send this exact preview
-once** is the only path that invokes a provider. The browser sends no source
-text or metrics in that confirmation; it names only the retained job/building,
-and the server reads the verified retained source and derives metrics from the
-matching city-model artifact. Suggestions are labelled as optional and cite
-the selected source line range. Provider failures leave deterministic findings
-and source navigation available.
+For a selected retained building the viewer first displays the exact bounded
+source range and server-derived metrics that would be transmitted. The server
+issues a short-lived, opaque, session-bound grant that is bound to the selected
+provider, job, building, source digest, and findings. Clicking **Send this exact
+preview once** consumes that grant atomically; the browser sends neither source
+nor metrics. Suggestions are labelled as optional and cite the selected source
+line range. Provider failures leave deterministic findings and source navigation
+available.
 
-Prompts and model output are not stored. An optional administrator audit sink
-can receive only provider ID, selected building ID, byte count, duration, and
-completed/cancelled/failed outcome. Do not put credentials in URLs, browser
-configuration, logs, or repository files.
+Declaration-level source navigation remains isolated from this file-level
+guidance flow: selecting a class or callable shows its stable descriptor and
+exact range but does not request a preview or transmit source to a provider.
+
+Preview creation is an origin-protected `POST`, not a cacheable read. In
+trusted-network deployments the server creates a short-lived, `HttpOnly`,
+`SameSite=Strict` approval cookie so users remain distinct even when IIS, Azure,
+or another reverse proxy presents one shared network address. Forwarded address
+headers are not trusted for approval identity. A failed or indeterminate request
+invalidates the displayed grant and requires a fresh preview and confirmation.
+Guidance operations are coordinated per retained import: deleting that same
+import aborts and waits for its active provider call, while reads, guidance, and
+deletion for other imports remain independent.
+
+Prompts and model output are not stored. Set `CODECITY_AI_GUIDANCE_AUDIT=stderr`
+to enable the built-in administrator audit sink; it emits only provider ID,
+selected building ID, byte count, duration, and completed/cancelled/failed
+outcome. Audit-sink failures never change a guidance result. Do not put
+credentials in URLs, browser configuration, logs, or repository files.
 
 == Metric mapping
 

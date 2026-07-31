@@ -20,7 +20,9 @@ const MAXIMUM_PUBLIC_ORIGIN_CHARACTERS = 2_048;
 const MAXIMUM_AUTHORIZATION_HEADER_CHARACTERS = 256;
 const MAXIMUM_COOKIE_HEADER_CHARACTERS = 8 * 1_024;
 const SESSION_COOKIE_NAME = "codecity-session";
+const APPROVAL_COOKIE_NAME = "codecity-approval";
 const SESSION_LIFETIME_MS = 8 * 60 * 60 * 1_000;
+const APPROVAL_SESSION_LIFETIME_MS = 10 * 60 * 1_000;
 const MAXIMUM_SESSIONS = 64;
 const MAXIMUM_SESSION_TOKEN_ATTEMPTS = 8;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
@@ -394,7 +396,10 @@ function bearerCandidate(request: IncomingMessage): {
   return { bytes: decoded, validFormat: true, present: true };
 }
 
-function sessionCookieToken(request: IncomingMessage): string | undefined {
+function cookieToken(
+  request: IncomingMessage,
+  expectedName: string,
+): string | undefined {
   const values = rawHeaderValues(request, "cookie");
   if (
     values.length !== 1 ||
@@ -408,13 +413,17 @@ function sessionCookieToken(request: IncomingMessage): string | undefined {
     const separator = trimmed.indexOf("=");
     if (separator <= 0) continue;
     const name = trimmed.slice(0, separator);
-    if (name !== SESSION_COOKIE_NAME) continue;
+    if (name !== expectedName) continue;
     if (result !== undefined) return undefined;
     const value = trimmed.slice(separator + 1);
     if (!TOKEN_PATTERN.test(value)) return undefined;
     result = value;
   }
   return result;
+}
+
+function sessionCookieToken(request: IncomingMessage): string | undefined {
+  return cookieToken(request, SESSION_COOKIE_NAME);
 }
 
 function rawHostMatches(
@@ -473,6 +482,7 @@ export class InboundAuthorization {
   readonly #now: () => number;
   readonly #randomBytes: (size: number) => Buffer;
   readonly #sessions = new Map<string, Session>();
+  readonly #approvalSessions = new Map<string, Session>();
   #closed = false;
 
   private constructor(
@@ -609,6 +619,75 @@ export class InboundAuthorization {
     };
   }
 
+  /** A non-secret, stable binding for short-lived, server-issued action grants. */
+  public approvalBinding(request: IncomingMessage): string | undefined {
+    if (this.#closed) return undefined;
+    if (this.#mode === "trusted-network") {
+      const token = cookieToken(request, APPROVAL_COOKIE_NAME);
+      if (token === undefined) return undefined;
+      const digest = sessionDigest(token);
+      const session = this.#approvalSessions.get(digest);
+      if (session === undefined) return undefined;
+      if (session.expiresAt <= this.#now()) {
+        this.#approvalSessions.delete(digest);
+        return undefined;
+      }
+      return `trusted-network-session:${digest}`;
+    }
+    const bearer = bearerCandidate(request);
+    if (bearer.present) {
+      const matches = timingSafeEqual(this.#token!, bearer.bytes);
+      const binding = bearer.validFormat && matches
+        ? createHash("sha256").update("bearer:").update(bearer.bytes).digest("base64url")
+        : undefined;
+      bearer.bytes.fill(0);
+      return binding;
+    }
+    const token = sessionCookieToken(request);
+    if (token === undefined) return undefined;
+    const digest = sessionDigest(token);
+    const session = this.#sessions.get(digest);
+    return session !== undefined && session.expiresAt > this.#now() ? `session:${digest}` : undefined;
+  }
+
+  /**
+   * Returns a browser-specific approval binding. Trusted-network mode still
+   * uses an HttpOnly cookie so reverse proxies cannot collapse every user onto
+   * one IP-derived grant identity.
+   */
+  public ensureApprovalBinding(
+    request: IncomingMessage,
+  ): { readonly binding: string; readonly setCookie?: string } | undefined {
+    const existing = this.approvalBinding(request);
+    if (existing !== undefined) return { binding: existing };
+    if (this.#closed || this.#mode !== "trusted-network") return undefined;
+    this.removeExpiredApprovalSessions();
+    for (let attempt = 0; attempt < MAXIMUM_SESSION_TOKEN_ATTEMPTS; attempt += 1) {
+      const bytes = this.#randomBytes(AUTH_TOKEN_BYTES);
+      const token = bytes.toString("base64url");
+      bytes.fill(0);
+      const digest = sessionDigest(token);
+      if (this.#approvalSessions.has(digest)) continue;
+      while (this.#approvalSessions.size >= MAXIMUM_SESSIONS) {
+        const oldest = this.#approvalSessions.keys().next().value as
+          | string
+          | undefined;
+        if (oldest === undefined) break;
+        this.#approvalSessions.delete(oldest);
+      }
+      const createdAt = this.#now();
+      this.#approvalSessions.set(digest, {
+        createdAt,
+        expiresAt: createdAt + APPROVAL_SESSION_LIFETIME_MS,
+      });
+      return {
+        binding: `trusted-network-session:${digest}`,
+        setCookie: `${APPROVAL_COOKIE_NAME}=${token}; Path=/api/v1/ai; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(APPROVAL_SESSION_LIFETIME_MS / 1_000)}${this.#secureCookie ? "; Secure" : ""}`,
+      };
+    }
+    throw new Error("A secure AI approval session could not be created.");
+  }
+
   public requestUsesPublicAuthority(
     request: IncomingMessage,
   ): boolean {
@@ -689,6 +768,7 @@ export class InboundAuthorization {
     if (this.#closed) return;
     this.#closed = true;
     this.#sessions.clear();
+    this.#approvalSessions.clear();
     this.#token?.fill(0);
   }
 
@@ -696,6 +776,13 @@ export class InboundAuthorization {
     const now = this.#now();
     for (const [digest, session] of this.#sessions) {
       if (session.expiresAt <= now) this.#sessions.delete(digest);
+    }
+  }
+
+  private removeExpiredApprovalSessions(): void {
+    const now = this.#now();
+    for (const [digest, session] of this.#approvalSessions) {
+      if (session.expiresAt <= now) this.#approvalSessions.delete(digest);
     }
   }
 }
