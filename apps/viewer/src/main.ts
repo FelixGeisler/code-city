@@ -891,6 +891,7 @@ class CityScene {
     const removals = new EvolutionRemovalLayer(
       transition.removedBuildings,
       this.isolatedDistrictId,
+      { instancingSupported: this.instancingSupported },
     );
     this.city.add(removals.object);
     const addedIds = new Set(transition.addedBuildingIds);
