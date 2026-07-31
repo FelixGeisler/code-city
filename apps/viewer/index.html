@@ -55,6 +55,9 @@
             hidden
           />
           <button id="demo-button" class="button" type="button">Demo</button>
+          <button id="image-export-open" class="button" type="button">
+            Export image
+          </button>
           <button id="print-export-open" class="button" type="button">
             Export print file
           </button>
@@ -63,6 +66,28 @@
 
       <main id="viewport">
         <div id="scene" aria-label="Interactive 3D code city"></div>
+
+        <div
+          id="camera-toolbar"
+          class="camera-toolbar"
+          aria-label="Camera controls"
+        >
+          <label>
+            <span>Projection</span>
+            <select id="camera-projection">
+              <option value="perspective">Perspective</option>
+              <option value="orthographic">Orthographic</option>
+            </select>
+          </label>
+          <div role="group" aria-label="Camera presets">
+            <button id="camera-isometric" type="button">Isometric</button>
+            <button id="camera-top-down" type="button">Top-down</button>
+            <button id="camera-selected" type="button" disabled>
+              Selected
+            </button>
+            <button id="camera-whole-city" type="button">Whole city</button>
+          </div>
+        </div>
 
         <div class="scene-meta">
           <img id="model-logo" alt="" hidden />
@@ -2214,6 +2239,160 @@
             aria-live="polite"
             aria-atomic="true"
           ></p>
+        </form>
+      </dialog>
+
+      <dialog
+        id="image-export-dialog"
+        class="image-export-dialog"
+        aria-labelledby="image-export-title"
+        aria-describedby="image-export-description"
+      >
+        <form id="image-export-form">
+          <header class="image-export-heading">
+            <div>
+              <p class="eyebrow">Documentation image</p>
+              <h2 id="image-export-title">Export PNG image</h2>
+            </div>
+            <button
+              id="image-export-close"
+              class="icon-button"
+              type="button"
+              aria-label="Close image export"
+            >
+              &times;
+            </button>
+          </header>
+
+          <p id="image-export-description" class="image-export-help">
+            Render the current city directly at an independent resolution.
+            Viewer buttons, timelines, panels, and other UI chrome are never
+            included.
+          </p>
+
+          <fieldset class="image-export-options">
+            <legend class="visually-hidden">Image export options</legend>
+
+            <label class="image-export-field" for="image-export-resolution">
+              <span>Resolution</span>
+              <select id="image-export-resolution">
+                <option value="full-hd">Full HD (1920 × 1080)</option>
+                <option value="qhd">QHD (2560 × 1440)</option>
+                <option value="4k" selected>4K UHD (3840 × 2160)</option>
+                <option value="square">Square (2048 × 2048)</option>
+                <option value="custom">Custom</option>
+              </select>
+            </label>
+
+            <div class="image-export-grid">
+              <label class="image-export-field" for="image-export-width">
+                <span>Width</span>
+                <input
+                  id="image-export-width"
+                  type="number"
+                  min="256"
+                  max="8192"
+                  step="1"
+                  value="3840"
+                  required
+                />
+              </label>
+              <label class="image-export-field" for="image-export-height">
+                <span>Height</span>
+                <input
+                  id="image-export-height"
+                  type="number"
+                  min="256"
+                  max="8192"
+                  step="1"
+                  value="2160"
+                  required
+                />
+              </label>
+            </div>
+
+            <div class="image-export-grid">
+              <label class="image-export-field" for="image-export-projection">
+                <span>Projection</span>
+                <select id="image-export-projection">
+                  <option value="perspective">Perspective</option>
+                  <option value="orthographic">Orthographic</option>
+                </select>
+              </label>
+              <label class="image-export-field" for="image-export-preset">
+                <span>Framing</span>
+                <select id="image-export-preset">
+                  <option value="isometric">Isometric</option>
+                  <option value="top-down">Top-down</option>
+                  <option value="selected-entity">Selected entity</option>
+                  <option value="whole-city" selected>Whole city</option>
+                </select>
+              </label>
+            </div>
+
+            <label class="image-export-field" for="image-export-background">
+              <span>Background</span>
+              <select id="image-export-background">
+                <option value="scene">Scene background</option>
+                <option value="transparent">Transparent</option>
+              </select>
+            </label>
+
+            <div class="image-export-checks">
+              <label>
+                <input id="image-export-labels" type="checkbox" checked />
+                <span>Selected and hovered labels</span>
+              </label>
+              <label>
+                <input id="image-export-legend" type="checkbox" checked />
+                <span>Readable visualization legend</span>
+              </label>
+              <label>
+                <input id="image-export-evolution" type="checkbox" />
+                <span id="image-export-evolution-text">
+                  No repository evolution frame is active
+                </span>
+              </label>
+            </div>
+          </fieldset>
+
+          <p id="image-export-limits" class="image-export-help"></p>
+
+          <div class="image-export-actions">
+            <button
+              id="image-export-submit"
+              class="button button-primary"
+              type="submit"
+            >
+              Prepare PNG
+            </button>
+            <a
+              id="image-export-download"
+              class="button button-primary"
+              href="#"
+              download
+              hidden
+            >
+              Download PNG
+            </a>
+          </div>
+
+          <p
+            id="image-export-status"
+            class="image-export-status"
+            role="status"
+            aria-live="polite"
+          ></p>
+
+          <section
+            id="image-export-errors"
+            class="image-export-errors"
+            role="alert"
+            hidden
+          >
+            <h3>Image cannot be generated</h3>
+            <ul id="image-export-error-list"></ul>
+          </section>
         </form>
       </dialog>
 

@@ -16,6 +16,11 @@
 |Meshes slice differently across tools
 |Validate and smoke-test representative exports
 
+|Browser GPU limits or context loss prevent image export
+|Preflight dimensions against GPU capabilities and a 512 MiB sample-aware
+working-memory estimate; disable image controls during loss and show an
+accessible fallback when WebGL cannot start
+
 |Remote inputs enable SSRF or traversal
 |Allowlist hosted providers and validate archives
 
