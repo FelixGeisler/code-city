@@ -34,6 +34,7 @@ let dataDirectory: string;
 let accessToken: string;
 let directoryFixture: string;
 let zipFixture: string;
+let sourceNavigationZipFixture: string;
 let cityModelFixture: CityModel;
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
@@ -365,6 +366,43 @@ test.beforeAll(async () => {
       ),
     }),
   );
+  const retainedSourceLines = Array.from(
+    { length: 260 },
+    (_, index) =>
+      index === 4
+        ? "// retained-source-sentinel"
+        : `// retained filler line ${index + 1}`,
+  );
+  retainedSourceLines.push(
+    "export function retainedComplexity(value: number): number {",
+    "  if (value > 0 && value < 10) {",
+    "    return value;",
+    "  }",
+    "  return 0;",
+    "}",
+    "",
+  );
+  sourceNavigationZipFixture = path.join(
+    testRoot,
+    "source-navigation-project.zip",
+  );
+  await fs.writeFile(
+    sourceNavigationZipFixture,
+    zipSync({
+      "source-navigation-project/package.json": strToU8(
+        JSON.stringify({
+          name: "source-navigation-project",
+          version: "1.0.0",
+        }),
+      ),
+      "source-navigation-project/src/retained-large.ts": strToU8(
+        retainedSourceLines.join("\n"),
+      ),
+      "source-navigation-project/src/sibling.ts": strToU8(
+        "export const siblingMustNotBeFetched = true;\n",
+      ),
+    }),
+  );
   cityModelFixture = JSON.parse(
     await fs.readFile(
       path.resolve("examples/demo-city.json"),
@@ -465,6 +503,9 @@ test.beforeAll(async () => {
       "https://dev.azure.com",
       "https://git.example.test",
     ],
+    editorUrlTemplate:
+      "https://editor.example.test/open?path={path}&line={line}",
+    sourceRetention: "retain",
     trustWindowsGitWorkspace: true,
     importDependencies: {
       analyzePublicGitHubRepository: githubAnalyzer,
@@ -607,6 +648,19 @@ test("uploads, opens, and restores a city model through the real browser API", a
   expect(await page.content()).not.toContain(accessToken);
   expect(server.jobs.get(stored.jobId!)?.state).toBe("completed");
 
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await page
+    .locator("#building-search")
+    .fill("apps/viewer/src/main.ts");
+  await page
+    .locator(
+      '.search-result-button[title="apps/viewer/src/main.ts"]',
+    )
+    .click();
+  await expect(page.locator("#building-source-status")).toHaveText(
+    "This model-only import contains no retained source. Import the repository or a repository ZIP to enable source navigation.",
+  );
+
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.locator("#model-name")).toHaveAttribute(
     "title",
@@ -746,6 +800,7 @@ test("submits bounded history, validates both artifacts, and restores its recent
       title: HISTORY_TITLE,
       version: HISTORY_VERSION,
     },
+    retainSourceSnapshot: true,
     analysisOptions: {
       maxRetainedFiles: 432,
       maxFileBytes: 1024 * 1024,
@@ -995,6 +1050,205 @@ test("imports a browser directory and repository ZIP with identity and analysis 
   await startAndWaitForImportedCity(page);
   await expect(page.locator("#model-name")).toHaveText("ZIP import E2E");
   await expect(page.locator("#status")).toContainText("zip-v1");
+});
+
+test("scrubs retained ZIP source across selection, stale response, refetch, and removal", async ({
+  page,
+}) => {
+  const sourceRequests: string[] = [];
+  page.on("request", (request) => {
+    const url = new URL(request.url());
+    if (
+      request.method() === "GET" &&
+      /^\/api\/v1\/artifacts\/[^/]+\/sources\/[^/]+$/u.test(
+        url.pathname,
+      )
+    ) {
+      sourceRequests.push(url.pathname);
+    }
+  });
+
+  await openAuthenticatedWizard(page);
+  await chooseSource(page, "zip");
+  await page
+    .locator("#project-import-zip")
+    .setInputFiles(sourceNavigationZipFixture);
+  await page.locator("#project-import-zip-root").selectOption(
+    "archive-root",
+  );
+  await continueToOptions(page);
+  await page
+    .locator("#project-import-identity-title")
+    .fill("Source navigation E2E");
+  await continueToReview(page);
+  const jobId = await startAndWaitForImportedCity(page);
+  await expect(page.locator("#model-name")).toHaveText(
+    "Source navigation E2E",
+  );
+
+  const cityArtifact = await server.artifacts.readCityModel(jobId);
+  expect(cityArtifact).toBeDefined();
+  const importedModel = JSON.parse(
+    new TextDecoder("utf-8", { fatal: true }).decode(
+      cityArtifact!.bytes,
+    ),
+  ) as CityModel;
+  const retainedBuilding = importedModel.buildings.find(
+    ({ path: sourcePath }) =>
+      sourcePath.endsWith("src/retained-large.ts"),
+  );
+  const siblingBuilding = importedModel.buildings.find(
+    ({ path: sourcePath }) =>
+      sourcePath.endsWith("src/sibling.ts"),
+  );
+  expect(retainedBuilding).toBeDefined();
+  expect(siblingBuilding).toBeDefined();
+
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await page.locator("#building-search").fill("retained-large");
+  const retainedResult = page
+    .locator(".search-result-button")
+    .filter({ hasText: "retained-large.ts" });
+  await expect(retainedResult).toHaveCount(1);
+  await retainedResult.click();
+
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Showing the exact retained file",
+  );
+  await expect(page.locator("#building-source-code")).toContainText(
+    "retained-source-sentinel",
+  );
+  await expect(page.locator(".source-line-omitted")).toBeVisible();
+  await expect(page.locator(".source-line-omitted").first()).toContainText(
+    "…",
+  );
+  await expect(
+    page.locator(".source-line-omitted").first(),
+  ).not.toContainText("â€¦");
+  await expect
+    .poll(() => page.locator(".source-line").count())
+    .toBeLessThanOrEqual(500);
+  await expect.poll(() => sourceRequests).toEqual([
+    `/api/v1/artifacts/${jobId}/sources/${retainedBuilding!.id}`,
+  ]);
+
+  await page.locator("#building-units-details summary").click();
+  const unitJump = page.locator(
+    '.unit-source-jump[title^="Open retainedComplexity at line"]',
+  );
+  await expect(unitJump).toHaveCount(1);
+  await unitJump.click();
+  await expect(
+    page.locator(".source-line-highlight").first(),
+  ).toContainText("export function retainedComplexity");
+  await expect(page.locator(".source-line-omitted")).toContainText(
+    "omitted",
+  );
+  expect(sourceRequests).toEqual([
+    `/api/v1/artifacts/${jobId}/sources/${retainedBuilding!.id}`,
+  ]);
+  expect(sourceRequests).not.toContain(
+    `/api/v1/artifacts/${jobId}/sources/${siblingBuilding!.id}`,
+  );
+
+  const sourcePath =
+    `/api/v1/artifacts/${jobId}/sources/${retainedBuilding!.id}`;
+  const sourceCode = page.locator("#building-source-code");
+  const sourceContent = page.locator("#building-source-content");
+  const sourcePathLabel = page.locator("#building-source-path");
+  const sourceEditor = page.locator("#building-source-editor");
+  await expect(sourcePathLabel).toContainText("retained-large.ts");
+  await expect(sourceEditor).toHaveAttribute(
+    "href",
+    /^https:\/\/editor\.example\.test\/open\?/u,
+  );
+
+  await page.getByRole("button", { name: "Clear selection" }).click();
+  await expect(sourceCode).toHaveText("");
+  await expect(sourceContent).toBeHidden();
+  await expect(sourcePathLabel).toHaveText("");
+  await expect(sourceEditor).not.toHaveAttribute("href", /.+/u);
+
+  let releaseStaleResponse = (): void => undefined;
+  let markStaleRequestStarted = (): void => undefined;
+  let markStaleRequestFinished = (): void => undefined;
+  const staleResponseGate = new Promise<void>((resolve) => {
+    releaseStaleResponse = () => resolve();
+  });
+  const staleRequestStarted = new Promise<void>((resolve) => {
+    markStaleRequestStarted = () => resolve();
+  });
+  const staleRequestFinished = new Promise<void>((resolve) => {
+    markStaleRequestFinished = () => resolve();
+  });
+  await page.route(
+    `**${sourcePath}`,
+    async (route) => {
+      markStaleRequestStarted();
+      await staleResponseGate;
+      try {
+        const response = await route.fetch();
+        await route.fulfill({ response });
+      } catch {
+        // Clearing the selection is expected to abort this request.
+      } finally {
+        markStaleRequestFinished();
+      }
+    },
+    { times: 1 },
+  );
+
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await retainedResult.click();
+  await staleRequestStarted;
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Loading",
+  );
+  await page.getByRole("button", { name: "Clear selection" }).click();
+  releaseStaleResponse();
+  await staleRequestFinished;
+  await page.evaluate(
+    async () =>
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      }),
+  );
+  await expect(sourceCode).toHaveText("");
+  await expect(sourceContent).toBeHidden();
+  await expect(sourcePathLabel).toHaveText("");
+  await expect(sourceEditor).not.toHaveAttribute("href", /.+/u);
+
+  const requestsBeforeRefetch = sourceRequests.length;
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await retainedResult.click();
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Showing the exact retained file",
+  );
+  await expect
+    .poll(() => sourceRequests.length)
+    .toBeGreaterThan(requestsBeforeRefetch);
+  expect(new Set(sourceRequests)).toEqual(new Set([sourcePath]));
+
+  await page.getByRole("button", { name: "Import project" }).click();
+  expect(
+    await page.evaluate(() =>
+      localStorage.getItem("code-city.last-import-job.v1"),
+    ),
+  ).toBe(jobId);
+  expect(server.jobs.get(jobId)?.state).toBe("completed");
+  const removeCurrentResult = page.getByRole("button", {
+    name: "Remove stored import",
+  });
+  await expect(removeCurrentResult).toBeVisible();
+  await removeCurrentResult.click();
+  await expect.poll(() => server.jobs.get(jobId)).toBeUndefined();
+  await expect(sourceCode).toHaveText("");
+  await expect(sourceContent).toBeHidden();
+  await expect(sourcePathLabel).toHaveText("");
+  await expect(sourceEditor).not.toHaveAttribute("href", /.+/u);
+  await expect(page.locator("#building-source-status")).toHaveText(
+    "The retained source result was removed from the server.",
+  );
 });
 
 test("accepts all remote sources, revisions, profiles, and server field corrections without network access", async ({

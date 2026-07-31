@@ -129,6 +129,7 @@ export interface ImportedCityModelSource {
   readonly jobId: string;
   readonly sourceAvailability:
     | NonNullable<ImportJobResult["source"]>["availability"]
+    | "model-only"
     | "unavailable";
   readonly evolution?: NonNullable<ImportJobResult["evolution"]>;
 }
@@ -1111,13 +1112,19 @@ export class ImportController {
       );
       if (!this.isCurrent(controller, generation)) return;
       const model = validateCityModel(loaded.model);
+      const reportedSourceAvailability =
+        job.result.source?.availability;
       await this.onModelReady(model, {
         label: "Imported project",
         responseUrl: loaded.responseUrl,
         assetRoot: assetRootFromResponseUrl(loaded.responseUrl.href),
         jobId: job.id,
         sourceAvailability:
-          job.result.source?.availability ?? "unavailable",
+          reportedSourceAvailability === "not-captured"
+            ? model.sourceProvenance === undefined
+              ? "model-only"
+              : "unavailable"
+            : (reportedSourceAvailability ?? "unavailable"),
         ...(job.result.evolution === undefined
           ? {}
           : { evolution: job.result.evolution }),

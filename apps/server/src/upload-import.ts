@@ -750,6 +750,7 @@ export async function enqueueUploadedImport(
             request.source.sizeBytes,
             context.signal,
           );
+          const sourceWork = { signal: context.signal };
           let model: CityModel;
           let sourceSnapshot: RepositorySnapshot | undefined;
           try {
@@ -774,12 +775,17 @@ export async function enqueueUploadedImport(
               ) {
                 throw new JobTaskFailure("analysis-failed");
               }
-              model = attachSourceProvenance(analyzed.model, [
-                uploadedSnapshotProvenance(
-                  repository.id,
-                  analyzed.snapshot,
-                ),
-              ]);
+              model = attachSourceProvenance(
+                analyzed.model,
+                [
+                  uploadedSnapshotProvenance(
+                    repository.id,
+                    analyzed.snapshot,
+                    sourceWork,
+                  ),
+                ],
+                sourceWork,
+              );
             }
           } catch (error) {
             throw uploadTaskFailure(error);
@@ -798,12 +804,17 @@ export async function enqueueUploadedImport(
             repository !== undefined
               ? await runtime.sources.publish(
                   context.id,
-                  createSourceArtifact(model, [
-                    {
-                      repositoryId: repository.id,
-                      snapshot: sourceSnapshot,
-                    },
-                  ]),
+                  createSourceArtifact(
+                    model,
+                    [
+                      {
+                        repositoryId: repository.id,
+                        snapshot: sourceSnapshot,
+                      },
+                    ],
+                    sourceWork,
+                  ),
+                  sourceWork,
                 )
               : undefined;
           await runtime.artifacts.publishCityModel(context.id, model);

@@ -51,6 +51,12 @@ import {
 const DEFAULT_HOST = "0.0.0.0";
 const DEFAULT_PORT = 3_000;
 const MAXIMUM_REQUEST_TARGET_CHARACTERS = 2_048;
+const MAXIMUM_EDITOR_URL_CHARACTERS = 4_096;
+const EDITOR_URL_PROTOCOLS = Object.freeze([
+  "https:",
+  "vscode:",
+  "vscode-insiders:",
+]);
 export const REMOTE_IMPORT_REQUEST_MAX_BYTES = 32 * 1024;
 export const REMOTE_IMPORT_REQUEST_DEADLINE_MS = 5_000;
 export const ARTIFACT_RESPONSE_IDLE_TIMEOUT_MS = 30_000;
@@ -494,9 +500,89 @@ function configuredEditorUrl(
     .split("/")
     .map((segment) => encodeURIComponent(segment))
     .join("/");
-  return template
+  const rendered = template
     .replaceAll("{path}", encodedPath)
     .replaceAll("{line}", String(line));
+  if (rendered.length > MAXIMUM_EDITOR_URL_CHARACTERS) {
+    return undefined;
+  }
+  try {
+    const configured = editorUrlAuthority(template);
+    const parsed = new URL(rendered);
+    if (
+      !EDITOR_URL_PROTOCOLS.includes(parsed.protocol) ||
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.protocol !== configured.protocol ||
+      parsed.host !== configured.host
+    ) {
+      return undefined;
+    }
+    return rendered;
+  } catch {
+    return undefined;
+  }
+}
+
+interface EditorUrlAuthority {
+  readonly protocol: string;
+  readonly host: string;
+}
+
+function renderedEditorUrl(
+  template: string,
+  pathSample: string,
+  lineSample: string,
+): URL {
+  return new URL(
+    template
+      .replaceAll("{path}", pathSample)
+      .replaceAll("{line}", lineSample),
+  );
+}
+
+function editorUrlAuthority(template: string): EditorUrlAuthority {
+  const parsed = renderedEditorUrl(
+    template,
+    "src/example.ts",
+    "1",
+  );
+  return Object.freeze({
+    protocol: parsed.protocol,
+    host: parsed.host,
+  });
+}
+
+function editorTemplateAuthorityContainsPlaceholder(
+  template: string,
+): boolean {
+  const schemeEnd = template.indexOf(":");
+  if (
+    schemeEnd < 0 ||
+    template.slice(schemeEnd + 1, schemeEnd + 3) !== "//"
+  ) {
+    return false;
+  }
+  const authorityStart = schemeEnd + 3;
+  const suffix = template.slice(authorityStart);
+  const delimiter = suffix.search(/[/?#]/u);
+  const authority =
+    delimiter < 0 ? suffix : suffix.slice(0, delimiter);
+  return (
+    authority.includes("{path}") ||
+    authority.includes("{line}")
+  );
+}
+
+function editorTemplateSchemeContainsPlaceholder(
+  template: string,
+): boolean {
+  const schemeEnd = template.indexOf(":");
+  const scheme = schemeEnd < 0 ? template : template.slice(0, schemeEnd);
+  return (
+    scheme.includes("{path}") ||
+    scheme.includes("{line}")
+  );
 }
 
 function validateEditorUrlTemplate(
@@ -505,33 +591,43 @@ function validateEditorUrlTemplate(
   if (template === undefined) return;
   if (
     template !== template.trim() ||
+    template.length > MAXIMUM_EDITOR_URL_CHARACTERS ||
     !template.includes("{path}") ||
-    /[\u0000-\u001F\u007F]/u.test(template) ||
-    /\{(?!path\}|line\})/u.test(template)
+    /[\p{Cc}\p{Cf}\p{Cs}]/u.test(template) ||
+    template
+      .replaceAll("{path}", "")
+      .replaceAll("{line}", "")
+      .match(/[{}]/u) !== null ||
+    editorTemplateSchemeContainsPlaceholder(template) ||
+    editorTemplateAuthorityContainsPlaceholder(template)
   ) {
     throw new Error(
-      "The editor URL template must be trimmed and contain {path}; only {path} and {line} placeholders are supported.",
+      "The editor URL template must be at most 4096 characters, be trimmed, contain {path}, and keep placeholders outside the URL scheme and authority.",
     );
   }
   let parsed: URL;
+  let alternate: URL;
   try {
-    parsed = new URL(
-      template
-        .replaceAll("{path}", "src/example.ts")
-        .replaceAll("{line}", "1"),
+    parsed = renderedEditorUrl(template, "src/example.ts", "1");
+    alternate = renderedEditorUrl(
+      template,
+      "nested/%E2%98%83.test.ts",
+      "987654321",
     );
   } catch {
     throw new Error("The editor URL template must be an absolute URL.");
   }
   if (
-    !["https:", "vscode:", "vscode-insiders:"].includes(
-      parsed.protocol,
-    ) ||
+    !EDITOR_URL_PROTOCOLS.includes(parsed.protocol) ||
     parsed.username !== "" ||
-    parsed.password !== ""
+    parsed.password !== "" ||
+    alternate.username !== "" ||
+    alternate.password !== "" ||
+    parsed.protocol !== alternate.protocol ||
+    parsed.host !== alternate.host
   ) {
     throw new Error(
-      "The editor URL template must use HTTPS, vscode, or vscode-insiders and must not contain credentials.",
+      "The editor URL template must use HTTPS, vscode, or vscode-insiders, must not contain credentials, and must keep a fixed protocol and authority.",
     );
   }
 }
@@ -2022,6 +2118,7 @@ function apiHandler(
           sourceArtifact.sha256 !== expected.sha256 ||
           sourceArtifact.indexSha256 !== expected.indexSha256
         ) {
+          artifactResponse.touch();
           sendJson(request, response, 404, {
             error: {
               code: "source-not-found",
@@ -2033,6 +2130,7 @@ function apiHandler(
         const file = sourceArtifact.file;
         const provenance = sourceArtifact.provenance;
         const line = file.location.startLine;
+        artifactResponse.touch();
         sendJson(request, response, 200, {
           source: {
             buildingId: file.buildingId,
@@ -2059,6 +2157,7 @@ function apiHandler(
       })
       .catch(() => {
         if (!response.destroyed) {
+          artifactResponse.touch();
           sendJson(request, response, 500, {
             error: {
               code: "source-read-failed",

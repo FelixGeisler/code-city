@@ -7,9 +7,13 @@ const JOB_ID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const BUILDING_ID = /^[a-z0-9-]+:[0-9a-f]{16}$/u;
 const MAXIMUM_SOURCE_BYTES = 16 * 1024 * 1024;
+const MAXIMUM_EDITOR_URL_CHARACTERS = 4_096;
 const UNSAFE_TEXT = /[\p{Cc}\p{Cf}\p{Cs}]/u;
 const SOURCE_LINE_CONTEXT = 120;
-const SOURCE_LINE_WINDOW_LIMIT = 500;
+export const SOURCE_LINE_WINDOW_LIMIT = 500;
+
+export const SOURCE_RENDERED_CHARACTER_LIMIT = 64 * 1024;
+export const SOURCE_RENDERED_TOKEN_LIMIT = 4_096;
 
 export interface BuildingSource {
   readonly buildingId: string;
@@ -47,6 +51,15 @@ export interface SourceLineWindow {
   readonly omittedAfter: number;
 }
 
+export interface SourceTextLine {
+  readonly lineNumber: number;
+  readonly text: string;
+}
+
+export interface ExtractedSourceLineWindow extends SourceLineWindow {
+  readonly lines: readonly SourceTextLine[];
+}
+
 export function sourceOmissionMarker(
   count: number,
   direction: "earlier" | "later",
@@ -55,6 +68,32 @@ export function sourceOmissionMarker(
     throw new TypeError("Source omission count must be a positive integer.");
   }
   return `\u2026 ${count} ${direction} lines omitted \u2026`;
+}
+
+type RemovedSourceOwner<Source> =
+  Omit<Source, "sourceAvailability"> & {
+    readonly sourceAvailability: "removed";
+  };
+
+export function sourceOwnerAfterResultRemoval<
+  Source extends {
+    readonly jobId?: string;
+    readonly sourceAvailability?: string;
+  },
+>(
+  source: Source,
+  removedJobId: string,
+): Source | RemovedSourceOwner<Source> {
+  if (
+    source.jobId !== removedJobId ||
+    source.sourceAvailability !== "retained"
+  ) {
+    return source;
+  }
+  return Object.freeze({
+    ...source,
+    sourceAvailability: "removed" as const,
+  }) as RemovedSourceOwner<Source>;
 }
 
 export function sourceLineWindow(
@@ -96,6 +135,140 @@ export function sourceLineWindow(
     lastLine,
     omittedBefore: firstLine - 1,
     omittedAfter: totalLines - lastLine,
+  });
+}
+
+function visitSourceLines(
+  text: string,
+  visitor?: (
+    lineNumber: number,
+    startOffset: number,
+    endOffset: number,
+  ) => void,
+): number {
+  let lineNumber = 1;
+  let lineStart = 0;
+  let cursor = 0;
+  while (cursor < text.length) {
+    const character = text.charCodeAt(cursor);
+    if (character !== 10 && character !== 13) {
+      cursor += 1;
+      continue;
+    }
+    visitor?.(lineNumber, lineStart, cursor);
+    lineNumber += 1;
+    if (
+      character === 13 &&
+      text.charCodeAt(cursor + 1) === 10
+    ) {
+      cursor += 1;
+    }
+    cursor += 1;
+    lineStart = cursor;
+  }
+  visitor?.(lineNumber, lineStart, text.length);
+  return lineNumber;
+}
+
+export function sourceLineCount(text: string): number {
+  if (typeof text !== "string") {
+    throw new TypeError("Source text must be a string.");
+  }
+  return visitSourceLines(text);
+}
+
+export function extractSourceLineWindow(
+  text: string,
+  startLine: number,
+  endLine = startLine,
+): ExtractedSourceLineWindow {
+  if (
+    typeof text !== "string" ||
+    !Number.isSafeInteger(startLine) ||
+    !Number.isSafeInteger(endLine)
+  ) {
+    throw new TypeError("Source line window bounds are invalid.");
+  }
+
+  const provisionalStart = Math.max(1, startLine);
+  const provisionalEnd = Math.max(provisionalStart, endLine);
+  const targetFirst = Math.max(
+    1,
+    provisionalStart - SOURCE_LINE_CONTEXT,
+  );
+  const contextualLast =
+    provisionalEnd >
+    Number.MAX_SAFE_INTEGER - SOURCE_LINE_CONTEXT
+      ? Number.MAX_SAFE_INTEGER
+      : provisionalEnd + SOURCE_LINE_CONTEXT;
+  const targetLast = Math.min(
+    contextualLast,
+    targetFirst + SOURCE_LINE_WINDOW_LIMIT - 1,
+  );
+
+  const targetNumbers = new Float64Array(
+    SOURCE_LINE_WINDOW_LIMIT,
+  );
+  const targetStarts = new Float64Array(
+    SOURCE_LINE_WINDOW_LIMIT,
+  );
+  const targetEnds = new Float64Array(SOURCE_LINE_WINDOW_LIMIT);
+  const tailNumbers = new Float64Array(SOURCE_LINE_WINDOW_LIMIT);
+  const tailStarts = new Float64Array(SOURCE_LINE_WINDOW_LIMIT);
+  const tailEnds = new Float64Array(SOURCE_LINE_WINDOW_LIMIT);
+
+  const totalLines = visitSourceLines(
+    text,
+    (lineNumber, startOffset, endOffset) => {
+      if (
+        lineNumber >= targetFirst &&
+        lineNumber <= targetLast
+      ) {
+        const targetIndex = lineNumber - targetFirst;
+        targetNumbers[targetIndex] = lineNumber;
+        targetStarts[targetIndex] = startOffset;
+        targetEnds[targetIndex] = endOffset;
+      }
+      const tailIndex =
+        (lineNumber - 1) % SOURCE_LINE_WINDOW_LIMIT;
+      tailNumbers[tailIndex] = lineNumber;
+      tailStarts[tailIndex] = startOffset;
+      tailEnds[tailIndex] = endOffset;
+    },
+  );
+  const window = sourceLineWindow(
+    totalLines,
+    startLine,
+    endLine,
+  );
+  const useTarget =
+    window.firstLine >= targetFirst &&
+    window.lastLine <= targetLast;
+  const lines: SourceTextLine[] = [];
+  for (
+    let lineNumber = window.firstLine;
+    lineNumber <= window.lastLine;
+    lineNumber += 1
+  ) {
+    const index = useTarget
+      ? lineNumber - targetFirst
+      : (lineNumber - 1) % SOURCE_LINE_WINDOW_LIMIT;
+    const numbers = useTarget ? targetNumbers : tailNumbers;
+    const starts = useTarget ? targetStarts : tailStarts;
+    const ends = useTarget ? targetEnds : tailEnds;
+    if (numbers[index] !== lineNumber) {
+      throw new TypeError("Source line extraction failed.");
+    }
+    lines.push(
+      Object.freeze({
+        lineNumber,
+        text: text.slice(starts[index], ends[index]),
+      }),
+    );
+  }
+  return Object.freeze({
+    ...window,
+    lines: Object.freeze(lines),
   });
 }
 
@@ -161,7 +334,12 @@ function immutableExternalUrl(
 }
 
 function safeEditorUrl(value: string): boolean {
-  if (UNSAFE_TEXT.test(value)) return false;
+  if (
+    value.length > MAXIMUM_EDITOR_URL_CHARACTERS ||
+    UNSAFE_TEXT.test(value)
+  ) {
+    return false;
+  }
   try {
     const url = new URL(value);
     return (
@@ -224,7 +402,7 @@ function parseBuildingSource(
     (expected.location === undefined &&
       (location["startLine"] !== 1 ||
         location["endLine"] !==
-          Math.max(1, source["text"].split(/\r\n?|\n/u).length))) ||
+          sourceLineCount(source["text"]))) ||
     provenance === undefined ||
     !exactKeys(provenance, [
       "provider",
@@ -285,31 +463,250 @@ export interface SourceToken {
   readonly text: string;
 }
 
-const TOKEN_PATTERN =
-  /(\/\/.*$|\/\*.*?\*\/|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b(?:abstract|async|await|boolean|break|case|catch|class|const|continue|default|do|else|enum|export|extends|false|finally|for|from|function|get|if|implements|import|in|instanceof|interface|let|namespace|new|null|number|override|private|protected|public|readonly|return|set|static|string|super|switch|this|throw|true|try|type|typeof|undefined|using|var|void|while|yield)\b|\b\d+(?:\.\d+)?\b)/gmu;
+export interface SourceLinePresentation {
+  readonly text: string;
+  readonly tokens: readonly SourceToken[];
+  readonly omittedCharacters: number;
+  readonly syntaxHighlighted: boolean;
+}
+
+const SOURCE_KEYWORDS = new Set([
+  "abstract",
+  "async",
+  "await",
+  "boolean",
+  "break",
+  "case",
+  "catch",
+  "class",
+  "const",
+  "continue",
+  "default",
+  "do",
+  "else",
+  "enum",
+  "export",
+  "extends",
+  "false",
+  "finally",
+  "for",
+  "from",
+  "function",
+  "get",
+  "if",
+  "implements",
+  "import",
+  "in",
+  "instanceof",
+  "interface",
+  "let",
+  "namespace",
+  "new",
+  "null",
+  "number",
+  "override",
+  "private",
+  "protected",
+  "public",
+  "readonly",
+  "return",
+  "set",
+  "static",
+  "string",
+  "super",
+  "switch",
+  "this",
+  "throw",
+  "true",
+  "try",
+  "type",
+  "typeof",
+  "undefined",
+  "using",
+  "var",
+  "void",
+  "while",
+  "yield",
+]);
+
+function isAsciiWordCharacter(character: string | undefined): boolean {
+  if (character === undefined) return false;
+  const code = character.charCodeAt(0);
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    code === 95 ||
+    (code >= 97 && code <= 122)
+  );
+}
+
+function isAsciiDigit(character: string | undefined): boolean {
+  if (character === undefined) return false;
+  const code = character.charCodeAt(0);
+  return code >= 48 && code <= 57;
+}
+
+function quotedTokenEnd(line: string, start: number): number {
+  const quote = line[start]!;
+  let cursor = start + 1;
+  while (cursor < line.length) {
+    const character = line[cursor]!;
+    if (character === "\\") {
+      cursor = Math.min(line.length, cursor + 2);
+      continue;
+    }
+    cursor += 1;
+    if (character === quote) return cursor;
+  }
+  return line.length;
+}
+
+function tokenizeSourceLine(
+  line: string,
+  maximumTokens: number,
+): {
+  readonly complete: boolean;
+  readonly tokens: readonly SourceToken[];
+} {
+  const tokens: SourceToken[] = [];
+  let cursor = 0;
+  let plainTextStart = 0;
+
+  const appendToken = (
+    start: number,
+    end: number,
+    kind: SourceTokenKind,
+  ): boolean => {
+    const needed = (start > plainTextStart ? 1 : 0) + 1;
+    if (tokens.length + needed > maximumTokens) return false;
+    if (start > plainTextStart) {
+      tokens.push({
+        kind: "text",
+        text: line.slice(plainTextStart, start),
+      });
+    }
+    tokens.push({ kind, text: line.slice(start, end) });
+    plainTextStart = end;
+    return true;
+  };
+
+  while (cursor < line.length) {
+    let end = cursor;
+    let kind: SourceTokenKind | undefined;
+    if (line.startsWith("//", cursor)) {
+      end = line.length;
+      kind = "comment";
+    } else if (line.startsWith("/*", cursor)) {
+      const terminator = line.indexOf("*/", cursor + 2);
+      end = terminator < 0 ? line.length : terminator + 2;
+      kind = "comment";
+    } else {
+      const character = line[cursor]!;
+      if (
+        character === '"' ||
+        character === "'" ||
+        character === "`"
+      ) {
+        end = quotedTokenEnd(line, cursor);
+        kind = "string";
+      } else if (isAsciiWordCharacter(character)) {
+        let digitsOnly = isAsciiDigit(character);
+        end = cursor + 1;
+        while (isAsciiWordCharacter(line[end])) {
+          digitsOnly &&= isAsciiDigit(line[end]);
+          end += 1;
+        }
+        const word = line.slice(cursor, end);
+        if (SOURCE_KEYWORDS.has(word)) {
+          kind = "keyword";
+        } else if (digitsOnly) {
+          const fractionStart = end;
+          if (
+            line[fractionStart] === "." &&
+            isAsciiDigit(line[fractionStart + 1])
+          ) {
+            let fractionEnd = fractionStart + 2;
+            while (isAsciiDigit(line[fractionEnd])) {
+              fractionEnd += 1;
+            }
+            if (!isAsciiWordCharacter(line[fractionEnd])) {
+              end = fractionEnd;
+            }
+          }
+          if (!isAsciiWordCharacter(line[end])) kind = "number";
+        }
+      }
+    }
+
+    if (kind === undefined) {
+      cursor = Math.max(cursor + 1, end);
+      continue;
+    }
+    if (!appendToken(cursor, end, kind)) {
+      return { complete: false, tokens: Object.freeze(tokens) };
+    }
+    cursor = end;
+  }
+
+  if (plainTextStart < line.length) {
+    if (tokens.length === maximumTokens) {
+      return { complete: false, tokens: Object.freeze(tokens) };
+    }
+    tokens.push({
+      kind: "text",
+      text: line.slice(plainTextStart),
+    });
+  }
+  return { complete: true, tokens: Object.freeze(tokens) };
+}
 
 export function sourceLineTokens(line: string): readonly SourceToken[] {
-  const tokens: SourceToken[] = [];
-  let index = 0;
-  for (const match of line.matchAll(TOKEN_PATTERN)) {
-    const start = match.index;
-    if (start > index) {
-      tokens.push({ kind: "text", text: line.slice(index, start) });
-    }
-    const text = match[0];
-    const kind: SourceTokenKind = text.startsWith("//") ||
-      text.startsWith("/*")
-      ? "comment"
-      : /^["'`]/u.test(text)
-        ? "string"
-        : /^\d/u.test(text)
-          ? "number"
-          : "keyword";
-    tokens.push({ kind, text });
-    index = start + text.length;
+  return tokenizeSourceLine(
+    line,
+    Number.MAX_SAFE_INTEGER,
+  ).tokens;
+}
+
+export function presentSourceLine(
+  line: string,
+  maximumCharacters: number,
+  maximumTokens: number,
+): SourceLinePresentation {
+  if (
+    !Number.isSafeInteger(maximumCharacters) ||
+    maximumCharacters < 0 ||
+    !Number.isSafeInteger(maximumTokens) ||
+    maximumTokens < 1
+  ) {
+    throw new TypeError("Source rendering budgets are invalid.");
   }
-  if (index < line.length) {
-    tokens.push({ kind: "text", text: line.slice(index) });
+  const text = line.slice(0, maximumCharacters);
+  const omittedCharacters = line.length - text.length;
+  if (omittedCharacters > 0) {
+    return Object.freeze({
+      text,
+      tokens: Object.freeze([
+        { kind: "text" as const, text },
+      ]),
+      omittedCharacters,
+      syntaxHighlighted: false,
+    });
   }
-  return tokens;
+  const tokenized = tokenizeSourceLine(text, maximumTokens);
+  if (!tokenized.complete) {
+    return Object.freeze({
+      text,
+      tokens: Object.freeze([
+        { kind: "text" as const, text },
+      ]),
+      omittedCharacters: 0,
+      syntaxHighlighted: false,
+    });
+  }
+  return Object.freeze({
+    text,
+    tokens: tokenized.tokens,
+    omittedCharacters: 0,
+    syntaxHighlighted: true,
+  });
 }
