@@ -244,9 +244,16 @@ function transition(value: unknown): boolean {
     const building = record(item);
     return (
       building !== undefined &&
-      exactKeys(building, ["id", "name", "position", "size"]) &&
+      exactKeys(building, [
+        "id",
+        "name",
+        "districtId",
+        "position",
+        "size",
+      ]) &&
       typeof building["id"] === "string" &&
       typeof building["name"] === "string" &&
+      typeof building["districtId"] === "string" &&
       record(building["position"]) !== undefined &&
       record(building["size"]) !== undefined
     );

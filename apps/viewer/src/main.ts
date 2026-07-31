@@ -66,6 +66,10 @@ import {
   type RouteEndpointGeometry,
 } from "./dependency-route-layout.js";
 import { DEMO_MODEL } from "./demo-model.js";
+import {
+  EvolutionRemovalLayer,
+  type EvolutionRemovalDiagnostics,
+} from "./evolution-removal-layer.js";
 import { presentExternalDependency } from "./external-dependency-inspector.js";
 import { installProjectImportDialog } from "./project-import-dialog.js";
 import { installPrintExportDialog } from "./print-export-dialog.js";
@@ -225,7 +229,7 @@ interface SceneEvolutionAnimation {
       readonly size: CityBuilding["size"];
     }
   >;
-  readonly ghosts: THREE.Group;
+  readonly removals: EvolutionRemovalLayer;
 }
 
 interface ViewerPerformanceDiagnostics {
@@ -233,6 +237,8 @@ interface ViewerPerformanceDiagnostics {
   readonly buildingBatchCount: number;
   readonly objectCount: number;
   readonly renderCalls: number;
+  readonly evolutionRemovals: EvolutionRemovalDiagnostics | null;
+  readonly evolutionRemovalAnimated: boolean;
   readonly pickBenchmark: {
     readonly count: number;
     readonly p95Milliseconds: number;
@@ -882,29 +888,11 @@ class CityScene {
     reducedMotion: boolean,
   ): void {
     this.clearEvolutionAnimation();
-    const ghosts = new THREE.Group();
-    ghosts.name = "code-city:evolution-removals";
-    for (const building of transition.removedBuildings) {
-      const geometry = new THREE.BoxGeometry(
-        building.size.x,
-        building.size.y,
-        building.size.z,
-      );
-      const material = new THREE.MeshBasicMaterial({
-        color: "#fb7185",
-        transparent: true,
-        opacity: 0.48,
-        depthWrite: false,
-      });
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.set(
-        building.position.x,
-        building.position.y,
-        building.position.z,
-      );
-      ghosts.add(mesh);
-    }
-    this.city.add(ghosts);
+    const removals = new EvolutionRemovalLayer(
+      transition.removedBuildings,
+      this.isolatedDistrictId,
+    );
+    this.city.add(removals.object);
     const addedIds = new Set(transition.addedBuildingIds);
     const fromById = new Map(
       transition.interpolatedBuildings.map((building) => [
@@ -922,7 +910,7 @@ class CityScene {
       durationMs: reducedMotion ? Number.POSITIVE_INFINITY : 700,
       addedIds,
       fromById,
-      ghosts,
+      removals,
     };
   }
 
@@ -1172,6 +1160,7 @@ class CityScene {
       group.visible = districtId === id;
     }
     this.buildingLayer?.setIsolatedDistrict(id);
+    this.evolutionAnimation?.removals.setIsolatedDistrict(id);
     this.isolatedDistrictId = id;
     const selection = this.selectedEntity;
     const hiddenSelection =
@@ -1195,6 +1184,7 @@ class CityScene {
       group.visible = true;
     }
     this.buildingLayer?.setIsolatedDistrict(null);
+    this.evolutionAnimation?.removals.setIsolatedDistrict(null);
     this.isolatedDistrictId = null;
     this.frameObject(this.city, true);
     this.emitState();
@@ -1220,6 +1210,11 @@ class CityScene {
       buildingBatchCount: this.buildingLayer?.batchCount ?? 0,
       objectCount,
       renderCalls: this.renderer.info.render.calls,
+      evolutionRemovals:
+        this.evolutionAnimation?.removals.diagnostics() ?? null,
+      evolutionRemovalAnimated:
+        this.evolutionAnimation !== null &&
+        Number.isFinite(this.evolutionAnimation.durationMs),
       pickBenchmark:
         this.buildingLayer?.benchmarkPicks(50) ??
         Object.freeze({
@@ -1297,15 +1292,7 @@ class CityScene {
       animation.fromById,
       eased,
     );
-    for (const child of animation.ghosts.children) {
-      if (child instanceof THREE.Mesh) {
-        const material = child.material;
-        if (material instanceof THREE.MeshBasicMaterial) {
-          material.opacity = 0.48 * (1 - eased);
-        }
-        child.scale.y = Math.max(0.02, 1 - eased);
-      }
-    }
+    animation.removals.setProgress(eased);
     if (progress === 1) this.clearEvolutionAnimation();
   }
 
@@ -1318,8 +1305,8 @@ class CityScene {
       animation.fromById,
       1,
     );
-    this.city.remove(animation.ghosts);
-    disposeObject(animation.ghosts);
+    this.city.remove(animation.removals.object);
+    animation.removals.dispose();
   }
 
   private clearPrintPlate(): void {
@@ -2212,9 +2199,21 @@ let performanceDiagnosticsGeneration = 0;
 const initialParameters = new URL(window.location.href).searchParams;
 if (initialParameters.get("fixture") === LARGE_CITY_FIXTURE_NAME) {
   try {
-    activateImportedModel(createLargeCityFixture(), {
+    const fixture = createLargeCityFixture();
+    activateImportedModel(fixture, {
       label: "Built-in 25k performance fixture",
     });
+    const isolatedDistrict =
+      initialParameters.get("isolate-district");
+    if (isolatedDistrict !== null) {
+      cityScene.isolateDistrict(isolatedDistrict, false);
+    }
+    if (initialParameters.get("evolution-removals") === "1") {
+      cityScene.showEvolutionTransition(
+        largeCityRemovalTransition(fixture),
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+      );
+    }
   } catch (error) {
     activateImportedModel(DEMO_MODEL, { label: "Built-in demo" });
     showError(messageOf(error));
@@ -2222,6 +2221,31 @@ if (initialParameters.get("fixture") === LARGE_CITY_FIXTURE_NAME) {
 } else {
   activateImportedModel(DEMO_MODEL, { label: "Built-in demo" });
   void loadModelFromQuery();
+}
+
+function largeCityRemovalTransition(
+  model: CityModel,
+): EvolutionTransition {
+  return Object.freeze({
+    fromIndex: 0,
+    toIndex: 1,
+    addedBuildingIds: Object.freeze([]),
+    removedBuildings: Object.freeze(
+      model.buildings.map((building) =>
+        Object.freeze({
+          id: building.id,
+          name: building.name,
+          districtId: building.districtId,
+          position: building.position,
+          size: building.size,
+        }),
+      ),
+    ),
+    renamedBuildingIds: Object.freeze([]),
+    resizedBuildingIds: Object.freeze([]),
+    changedBuildingIds: Object.freeze([]),
+    interpolatedBuildings: Object.freeze([]),
+  });
 }
 
 async function loadModelFromQuery(): Promise<void> {

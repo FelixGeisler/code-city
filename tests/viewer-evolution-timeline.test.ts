@@ -174,5 +174,13 @@ describe("viewer evolution timeline analysis", () => {
     expect(transition.removedBuildings.length).toBe(
       DEMO_MODEL.buildings.length - 1,
     );
+    expect(
+      transition.removedBuildings.every(
+        (building) =>
+          building.districtId ===
+          DEMO_MODEL.buildings.find(({ id }) => id === building.id)
+            ?.districtId,
+      ),
+    ).toBe(true);
   });
 });
