@@ -161,6 +161,28 @@ function applicationReceipt(
   };
 }
 
+function horizontallyDisjoint(
+  left: {
+    readonly position: { readonly x: number; readonly z: number };
+    readonly size: { readonly x: number; readonly z: number };
+  },
+  right: {
+    readonly position: { readonly x: number; readonly z: number };
+    readonly size: { readonly x: number; readonly z: number };
+  },
+): boolean {
+  return (
+    left.position.x + left.size.x / 2 <=
+      right.position.x - right.size.x / 2 ||
+    right.position.x + right.size.x / 2 <=
+      left.position.x - left.size.x / 2 ||
+    left.position.z + left.size.z / 2 <=
+      right.position.z - right.size.z / 2 ||
+    right.position.z + right.size.z / 2 <=
+      left.position.z - left.size.z / 2
+  );
+}
+
 describe("safe declarative extensions", () => {
   it("publishes a strict schema that accepts the preset", () => {
     expect(
@@ -389,7 +411,7 @@ describe("safe declarative extensions", () => {
     expect(validateCityModel(projected)).toBe(projected);
   });
 
-  it("keeps districts disjoint when one module spans multiple districts", () => {
+  it("keeps buildings and districts collision-safe, anchored, and explicit", () => {
     const candidate = structuredClone(DEMO_MODEL);
     const coreDistrict = candidate.districts.find(
       ({ id }) => id === "district:core",
@@ -400,8 +422,12 @@ describe("safe declarative extensions", () => {
         (building as { moduleId: string }).moduleId = "module:viewer";
       }
     }
+    const emptyDistrict = structuredClone(candidate.districts[0]!);
+    (emptyDistrict as { id: string }).id = "district:empty";
+    (emptyDistrict as { name: string }).name = "Empty district";
+    (candidate.districts as typeof emptyDistrict[]).push(emptyDistrict);
     const model = validateCityModel(candidate);
-    const configuration = validateSafeExtensionConfiguration({
+    const moduleConfiguration = validateSafeExtensionConfiguration({
       version: EXTENSION_CONFIGURATION_VERSION,
       id: "module-layout",
       name: "Module layout",
@@ -412,24 +438,115 @@ describe("safe declarative extensions", () => {
       scope: { kind: "project" },
       layouts: [{ id: "modules", strategy: "group-by-module" }],
     });
-    const evaluation = evaluateSafeExtension(model, configuration);
+    const evaluation = evaluateSafeExtension(model, moduleConfiguration);
     const projected = applySafeExtensionEvaluation(
       model,
       evaluation,
       applicationReceipt(model, evaluation),
     );
-    const [left, right] = projected.districts;
-    const districtsAreDisjoint =
-      left!.position.x + left!.size.x / 2 <=
-        right!.position.x - right!.size.x / 2 ||
-      right!.position.x + right!.size.x / 2 <=
-        left!.position.x - left!.size.x / 2 ||
-      left!.position.z + left!.size.z / 2 <=
-        right!.position.z - right!.size.z / 2 ||
-      right!.position.z + right!.size.z / 2 <=
-        left!.position.z - left!.size.z / 2;
-    expect(districtsAreDisjoint).toBe(true);
+    for (const [index, district] of projected.districts.entries()) {
+      for (const other of projected.districts.slice(index + 1)) {
+        expect(horizontallyDisjoint(district, other)).toBe(true);
+      }
+    }
+    const originalMinimumZ = Math.min(
+      ...model.districts.map(
+        (district) => district.position.z - district.size.z / 2,
+      ),
+    );
+    const originalMinimumX = Math.min(
+      ...model.districts.map(
+        (district) => district.position.x - district.size.x / 2,
+      ),
+    );
+    const originalMaximumX = Math.max(
+      ...model.districts.map(
+        (district) => district.position.x + district.size.x / 2,
+      ),
+    );
+    const projectedMinimumZ = Math.min(
+      ...projected.districts.map(
+        (district) => district.position.z - district.size.z / 2,
+      ),
+    );
+    const projectedMinimumX = Math.min(
+      ...projected.districts.map(
+        (district) => district.position.x - district.size.x / 2,
+      ),
+    );
+    const projectedMaximumX = Math.max(
+      ...projected.districts.map(
+        (district) => district.position.x + district.size.x / 2,
+      ),
+    );
+    expect(projectedMinimumZ).toBeCloseTo(originalMinimumZ, 10);
+    expect((projectedMinimumX + projectedMaximumX) / 2).toBeCloseTo(
+      (originalMinimumX + originalMaximumX) / 2,
+      10,
+    );
+    expect(
+      model.identityPanel!.position.z + model.identityPanel!.size.z / 2,
+    ).toBeLessThan(projectedMinimumZ);
     expect(validateCityModel(projected)).toBe(projected);
+
+    const footprintConfiguration = validateSafeExtensionConfiguration({
+      version: EXTENSION_CONFIGURATION_VERSION,
+      id: "footprint-layout",
+      name: "Footprint layout",
+      compatibility: {
+        cityModel: "1.x",
+        capabilities: ["mappings"],
+      },
+      scope: { kind: "project" },
+      mappings: [
+        {
+          id: "footprint",
+          metric: "sloc",
+          target: "footprint",
+          minimum: 0,
+          maximum: 1,
+        },
+      ],
+    });
+    const footprintEvaluation = evaluateSafeExtension(
+      model,
+      footprintConfiguration,
+    );
+    expect(footprintEvaluation.application.layouts).toHaveLength(0);
+    expect(footprintEvaluation.diagnostics).toContainEqual({
+      path: "mappings[0]",
+      message:
+        "Footprint changes applied a deterministic collision-safe module and district relayout.",
+    });
+    const footprintProjection = applySafeExtensionEvaluation(
+      model,
+      footprintEvaluation,
+      applicationReceipt(model, footprintEvaluation),
+    );
+    for (const [index, building] of footprintProjection.buildings.entries()) {
+      for (const other of footprintProjection.buildings.slice(index + 1)) {
+        expect(horizontallyDisjoint(building, other)).toBe(true);
+      }
+    }
+    for (const [index, district] of footprintProjection.districts.entries()) {
+      for (const other of footprintProjection.districts.slice(index + 1)) {
+        expect(horizontallyDisjoint(district, other)).toBe(true);
+      }
+    }
+    expect(validateCityModel(footprintProjection)).toBe(footprintProjection);
+
+    const preserveConfiguration = validateSafeExtensionConfiguration({
+      ...footprintConfiguration,
+      id: "preserved-footprint",
+      compatibility: {
+        cityModel: "1.x",
+        capabilities: ["mappings", "layouts"],
+      },
+      layouts: [{ id: "preserve", strategy: "preserve-city" }],
+    });
+    expect(() => evaluateSafeExtension(model, preserveConfiguration)).toThrow(
+      /cannot preserve city positions.*use group-by-module/,
+    );
 
     const tiny = snapshot(2);
     for (const building of tiny.buildings) {
@@ -438,7 +555,7 @@ describe("safe declarative extensions", () => {
       (building.size as { x: number; z: number }).x = 0.000_001;
       (building.size as { x: number; z: number }).z = 0.000_001;
     }
-    const tinyEvaluation = evaluateSafeExtension(tiny, configuration);
+    const tinyEvaluation = evaluateSafeExtension(tiny, moduleConfiguration);
     expect(
       tinyEvaluation.application.buildings[1]!.position.x -
         tinyEvaluation.application.buildings[0]!.position.x,

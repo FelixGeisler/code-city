@@ -2696,8 +2696,68 @@ export function applySafeExtensionEvaluation(
     );
   });
   if (!horizontalGeometryChanged && !verticalGeometryChanged) return model;
-  if (horizontalGeometryChanged) {
-    reanchorHorizontalExtensionLayout(model, mutableBuildings);
+  const mutableDistricts = horizontalGeometryChanged
+    ? (() => {
+        const buildingsByDistrict = new Map<
+          string,
+          MutableBuildingApplication[]
+        >();
+        for (const building of mutableBuildings) {
+          const group = buildingsByDistrict.get(building.districtId) ?? [];
+          group.push(building);
+          buildingsByDistrict.set(building.districtId, group);
+        }
+        return model.districts.map((district) => {
+          const members = buildingsByDistrict.get(district.id) ?? [];
+          if (members.length === 0) {
+            return {
+              ...district,
+              position: { ...district.position },
+              size: { ...district.size },
+            };
+          }
+          const extent: HorizontalExtent = {
+            minimumX: Number.POSITIVE_INFINITY,
+            maximumX: Number.NEGATIVE_INFINITY,
+            minimumZ: Number.POSITIVE_INFINITY,
+            maximumZ: Number.NEGATIVE_INFINITY,
+          };
+          for (const building of members) {
+            includeHorizontal(extent, building.position, building.size);
+          }
+          if (!finiteHorizontalExtent(extent)) {
+            throw new RangeError(
+              `Extension geometry for district '${district.id}' is invalid.`,
+            );
+          }
+          return {
+            ...district,
+            position: {
+              x: (extent.minimumX + extent.maximumX) / 2,
+              y: district.position.y,
+              z: (extent.minimumZ + extent.maximumZ) / 2,
+            },
+            size: {
+              x:
+                extent.maximumX -
+                extent.minimumX +
+                extensionDistrictPadding * 2,
+              y: district.size.y,
+              z:
+                extent.maximumZ -
+                extent.minimumZ +
+                extensionDistrictPadding * 2,
+            },
+          };
+        });
+      })()
+    : undefined;
+  if (mutableDistricts !== undefined) {
+    applyCollisionSafeDistrictLayout(
+      model,
+      mutableBuildings,
+      mutableDistricts,
+    );
   }
   const buildings = Object.freeze(
     mutableBuildings.map((building) =>
@@ -2708,57 +2768,18 @@ export function applySafeExtensionEvaluation(
       }),
     ),
   );
-
-  const districts = horizontalGeometryChanged
-    ? (() => {
-        const buildingsByDistrict = new Map<
-          string,
-          typeof buildings[number][]
-        >();
-        for (const building of buildings) {
-          const group = buildingsByDistrict.get(building.districtId) ?? [];
-          group.push(building);
-          buildingsByDistrict.set(building.districtId, group);
-        }
-        return Object.freeze(
-          model.districts.map((district) => {
-            const members = buildingsByDistrict.get(district.id) ?? [];
-            if (members.length === 0) return district;
-            const extent: HorizontalExtent = {
-              minimumX: Number.POSITIVE_INFINITY,
-              maximumX: Number.NEGATIVE_INFINITY,
-              minimumZ: Number.POSITIVE_INFINITY,
-              maximumZ: Number.NEGATIVE_INFINITY,
-            };
-            for (const building of members) {
-              includeHorizontal(extent, building.position, building.size);
-            }
-            if (!finiteHorizontalExtent(extent)) {
-              throw new RangeError(
-                `Extension geometry for district '${district.id}' is invalid.`,
-              );
-            }
-            const size = Object.freeze({
-              x:
-                extent.maximumX -
-                extent.minimumX +
-                extensionDistrictPadding * 2,
-              y: district.size.y,
-              z:
-                extent.maximumZ -
-                extent.minimumZ +
-                extensionDistrictPadding * 2,
-            });
-            const position = Object.freeze({
-              x: (extent.minimumX + extent.maximumX) / 2,
-              y: district.position.y,
-              z: (extent.minimumZ + extent.maximumZ) / 2,
-            });
-            return Object.freeze({ ...district, position, size });
-          }),
+  const districts =
+    mutableDistricts === undefined
+      ? model.districts
+      : Object.freeze(
+          mutableDistricts.map((district) =>
+            Object.freeze({
+              ...district,
+              position: Object.freeze({ ...district.position }),
+              size: Object.freeze({ ...district.size }),
+            }),
+          ),
         );
-      })()
-    : model.districts;
 
   const cityExtent: HorizontalExtent | undefined = horizontalGeometryChanged
     ? {
