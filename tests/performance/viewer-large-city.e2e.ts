@@ -20,6 +20,13 @@ interface PerformanceSnapshot {
     readonly drawCalls: number;
   } | null;
   readonly evolutionRemovalAnimated: boolean;
+  readonly designSmells: {
+    readonly requestedFindings: number;
+    readonly candidateMarkers: number;
+    readonly visibleMarkers: number;
+    readonly omittedMarkers: number;
+    readonly batchCount: number;
+  };
   readonly pickBenchmark: {
     readonly count: number;
     readonly p95Milliseconds: number;
@@ -195,6 +202,108 @@ test("25k hierarchy stays virtualized and synchronized with city state", async (
     "aria-expanded",
     "false",
   );
+});
+
+test("design-smell overlay is accessible, paginated, suppressible, and isolated", async ({
+  page,
+}) => {
+  await page.goto(
+    `${viewerUrl}/?fixture=large-city-25k&` +
+      `isolate-district=district%3A007&performance=1`,
+    { waitUntil: "domcontentloaded", timeout: 45_000 },
+  );
+  await page.getByRole("tab", { name: "Metrics" }).click();
+  const panel = page.locator("#design-smell-panel");
+  await expect(panel).toHaveAttribute("aria-busy", "false", {
+    timeout: 45_000,
+  });
+  await expect(panel.locator(".design-smell-status")).toContainText(
+    "unsuppressed findings",
+    { timeout: 45_000 },
+  );
+
+  await expect(
+    panel.getByLabel("High-complexity method design-smell overlay"),
+  ).toBeDisabled();
+  await expect(panel.locator(".design-smell-unavailable")).toContainText(
+    "Executable-unit complexity facts are not recorded",
+  );
+  await expect(
+    panel.getByLabel("Oversized class design-smell overlay"),
+  ).toBeDisabled();
+  await expect(panel.locator(".design-smell-unavailable")).toContainText(
+    "Per-class size facts are not present",
+  );
+  await expect(
+    panel.getByLabel("Excessive coupling design-smell overlay"),
+  ).toBeEnabled();
+  await expect(panel.locator(".design-smell-filters")).toContainText(
+    "C# 10; TypeScript 10; JavaScript 10",
+  );
+
+  const resultRows = panel.locator(".design-smell-finding");
+  await expect(resultRows).toHaveCount(100);
+  await expect(panel.locator(".design-smell-pagination")).toBeVisible();
+  await expect(
+    panel.locator(".design-smell-pagination span"),
+  ).toContainText("Showing 1–100 of");
+  const firstFinding = resultRows.first().locator("button").first();
+  await expect(firstFinding).toContainText("⚠ Oversized file");
+  expect(await firstFinding.textContent()).not.toMatch(/â|Â|Ã/u);
+
+  const before = await panel.locator(".design-smell-count").textContent();
+  await resultRows.first().getByRole("button", {
+    name: "Suppress rule for building",
+  }).click();
+  await expect(panel.locator(".design-smell-count")).not.toHaveText(
+    before ?? "",
+    { timeout: 45_000 },
+  );
+  expect(
+    await page.evaluate(() =>
+      Object.keys(localStorage).some((key) =>
+        key.startsWith(
+          "code-city-design-smell-suppressions-v1:",
+        ),
+      ),
+    ),
+  ).toBe(true);
+
+  await panel.getByRole("button", { name: "Next" }).click();
+  await expect(
+    panel.locator(".design-smell-pagination span"),
+  ).toContainText("Showing 101–200 of");
+  await expect(resultRows).toHaveCount(100);
+
+  await page.waitForFunction(
+    () => {
+      const diagnostics = (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+        }
+      ).__CODE_CITY_PERFORMANCE__?.designSmells;
+      return (
+        diagnostics !== undefined &&
+        diagnostics.requestedFindings > 2_000 &&
+        diagnostics.visibleMarkers > 0
+      );
+    },
+    undefined,
+    { timeout: 45_000 },
+  );
+  const diagnostics = await page.evaluate(
+    () =>
+      (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+        }
+      ).__CODE_CITY_PERFORMANCE__!.designSmells,
+  );
+  expect(diagnostics.batchCount).toBeLessThanOrEqual(4);
+  expect(diagnostics.candidateMarkers).toBeGreaterThan(2_000);
+  expect(diagnostics.visibleMarkers).toBeGreaterThan(0);
+  expect(diagnostics.visibleMarkers).toBeLessThanOrEqual(250);
+  expect(diagnostics.omittedMarkers).toBeGreaterThan(0);
 });
 
 test("25k removal cues stay bounded and respect isolation in reduced motion", async ({
