@@ -3304,12 +3304,13 @@ const designSmellPanel = installDesignSmellPanel(
 safeExtensionPanel = installSafeExtensionPanel(
   element<HTMLElement>("safe-extension-panel"),
   {
-    onPreview: (evaluation) => {
+    onPreview: (review) => {
       const projected = applySafeExtensionEvaluation(
         safeExtensionBaseModel,
-        evaluation,
+        review.evaluation,
+        review.application,
       );
-      activeSafeExtensionEvaluation = evaluation;
+      activeSafeExtensionEvaluation = review.evaluation;
       applyModel(projected, activeModelSource, {
         preserveView: true,
         preserveSelection: true,
@@ -3325,6 +3326,11 @@ safeExtensionPanel = installSafeExtensionPanel(
           preserveView: true,
           preserveSelection: true,
         });
+      } else if (!suppressSafeExtensionRestore) {
+        printExportDialog.invalidate();
+        imageExportDialog.invalidate();
+        printPlateToolbar.setPlan(undefined);
+        applyVisualization();
       }
     },
   },

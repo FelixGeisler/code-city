@@ -8,11 +8,14 @@ import {
   type CityModel,
   type ExtensionEvaluation,
 } from "../../../packages/core/src/index.js";
-import { SafeExtensionWorkerClient } from "./safe-extension-worker-client.js";
+import {
+  SafeExtensionWorkerClient,
+  type SafeExtensionWorkerReview,
+} from "./safe-extension-worker-client.js";
 
 export interface SafeExtensionPanelOptions {
   readonly workerClient?: SafeExtensionWorkerClient;
-  readonly onPreview?: (evaluation: ExtensionEvaluation) => void;
+  readonly onPreview?: (review: SafeExtensionWorkerReview) => void;
   readonly onInvalidate?: () => void;
 }
 
@@ -63,6 +66,7 @@ export function installSafeExtensionPanel(
     client.cancel();
     reviewed = undefined;
     exportButton.disabled = true;
+    preview.disabled = model === undefined;
     if (previewApplied) {
       previewApplied = false;
       if (notify) options.onInvalidate?.();
@@ -125,14 +129,16 @@ export function installSafeExtensionPanel(
     show("Evaluating extension preview…");
     void client
       .evaluate(previewModel, configuration)
-      .then((evaluation) => {
+      .then((review) => {
         if (generation !== currentGeneration) return;
-        const validated = validateSafeExtensionEvaluation(evaluation, {
+        const validated = validateSafeExtensionEvaluation(review.evaluation, {
           model: previewModel,
           configuration,
         });
         try {
-          options.onPreview?.(validated);
+          options.onPreview?.(
+            Object.freeze({ ...review, evaluation: validated }),
+          );
           previewApplied = true;
         } catch (error) {
           options.onInvalidate?.();
@@ -200,6 +206,7 @@ export function installSafeExtensionPanel(
         "Reviewed configuration exported once. Preview again before another export.",
       );
     } catch (error) {
+      invalidate();
       show(
         error instanceof Error ? error.message : "Extension export failed.",
         "The raw configuration is revalidated and digest-bound to the current project before every export.",

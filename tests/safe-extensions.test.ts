@@ -3,11 +3,14 @@ import { readFile } from "node:fs/promises";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
+import { validateCityModel } from "../packages/core/src/model-validation.js";
+import type { CityModel } from "../packages/core/src/model.js";
 import {
   EXTENSION_CONFIGURATION_VERSION,
   EXTENSION_LIMITS,
   SAFE_EXTENSION_PRESETS,
   SafeExtensionApprovalAuthority,
+  SafeExtensionApplicationAuthority,
   applySafeExtensionEvaluation,
   createSafeExtensionModelSnapshot,
   evaluateSafeExtension,
@@ -17,6 +20,7 @@ import {
   validateSafeExtensionConfiguration,
   validateSafeExtensionEvaluation,
   type SafeExtensionAdministratorApproval,
+  type SafeExtensionApplicationReceipt,
   type SafeExtensionConfigurationV1,
   type SafeExtensionModelSnapshot,
 } from "../packages/core/src/extensions.js";
@@ -127,6 +131,7 @@ function completeConfiguration(): SafeExtensionConfigurationV1 {
     queries: [{ id: "complex-query", filterId: "complex" }],
     overlays: [
       { id: "complex-overlay", filterId: "complex", color: "#00aa11" },
+      { id: "final-overlay", filterId: "complex", color: "#123456" },
     ],
   });
 }
@@ -145,6 +150,17 @@ function expressionConfiguration(expression: unknown): unknown {
   };
 }
 
+function applicationReceipt(
+  model: CityModel,
+  evaluation: ReturnType<typeof evaluateSafeExtension>,
+) {
+  const authority = new SafeExtensionApplicationAuthority();
+  return {
+    authority,
+    receipt: authority.issue(model, evaluation),
+  };
+}
+
 describe("safe declarative extensions", () => {
   it("publishes a strict schema that accepts the preset", () => {
     expect(
@@ -157,6 +173,15 @@ describe("safe declarative extensions", () => {
         overlays: [{ script: "fetch('/secrets')" }],
       }),
     ).toBe(false);
+    expect(
+      validateSchema({ ...SAFE_EXTENSION_PRESETS[0], id: "constructor" }),
+    ).toBe(false);
+    expect(() =>
+      validateSafeExtensionConfiguration({
+        ...SAFE_EXTENSION_PRESETS[0],
+        id: "prototype",
+      }),
+    ).toThrow(/bounded lowercase identifier/);
     expect(
       validateSchema({
         ...SAFE_EXTENSION_PRESETS[0],
@@ -194,6 +219,11 @@ describe("safe declarative extensions", () => {
         color: "#00AA11",
         buildingIds: ["building-0001"],
       },
+      {
+        id: "final-overlay",
+        color: "#123456",
+        buildingIds: ["building-0001"],
+      },
     ]);
     const low = first.application.buildings.find(
       ({ id }) => id === "building-0000",
@@ -203,7 +233,7 @@ describe("safe declarative extensions", () => {
     )!;
     expect(low.size.y).not.toBe(2);
     expect(high.size.x).toBe(4);
-    expect(high.color).toBe("#00AA11");
+    expect(high.color).toBe("#123456");
     expect(low.position.x).not.toBe(0);
     expect(first.diagnostics.some(({ path }) => path.startsWith("mappings"))).toBe(
       true,
@@ -221,15 +251,79 @@ describe("safe declarative extensions", () => {
         configuration: SAFE_EXTENSION_PRESETS[0],
       }),
     ).toEqual(evaluation);
-    const projected = applySafeExtensionEvaluation(DEMO_MODEL, evaluation);
+    const projectApplication = applicationReceipt(DEMO_MODEL, evaluation);
+    const projected = applySafeExtensionEvaluation(
+      DEMO_MODEL,
+      evaluation,
+      projectApplication,
+    );
     expect(projected.buildings).toHaveLength(DEMO_MODEL.buildings.length);
     expect(projected.buildings[0]?.id).toBe(DEMO_MODEL.buildings[0]?.id);
+    expect(() =>
+      applySafeExtensionEvaluation(DEMO_MODEL, evaluation, projectApplication),
+    ).toThrow(/already been used/);
+
+    const forgedReceipt = {
+      kind: "safe-extension-application-receipt",
+      expiresAt: new Date(Date.now() + 1_000).toISOString(),
+    } as unknown as SafeExtensionApplicationReceipt;
+    expect(() =>
+      applySafeExtensionEvaluation(DEMO_MODEL, evaluation, {
+        authority: new SafeExtensionApplicationAuthority(),
+        receipt: forgedReceipt,
+      }),
+    ).toThrow(/invalid/);
+
+    let receiptNow = 10_000;
+    const expiringAuthority = new SafeExtensionApplicationAuthority({
+      now: () => receiptNow,
+    });
+    const expiringReceipt = expiringAuthority.issue(DEMO_MODEL, evaluation, 10);
+    receiptNow += 10;
+    expect(() =>
+      applySafeExtensionEvaluation(DEMO_MODEL, evaluation, {
+        authority: expiringAuthority,
+        receipt: expiringReceipt,
+      }),
+    ).toThrow(/expired/);
+
+    const geometryEvaluation = evaluateSafeExtension(
+      DEMO_MODEL,
+      completeConfiguration(),
+    );
+    const geometryProjection = applySafeExtensionEvaluation(
+      DEMO_MODEL,
+      geometryEvaluation,
+      applicationReceipt(DEMO_MODEL, geometryEvaluation),
+    );
+    expect(validateCityModel(geometryProjection)).toBe(geometryProjection);
+    expect(geometryProjection.bounds).not.toEqual(DEMO_MODEL.bounds);
+    expect(geometryProjection.base?.size.x).toBe(
+      geometryProjection.bounds.x,
+    );
 
     const forged = structuredClone(evaluation);
-    forged.application.buildings[0]!.size.x = Number.NaN;
-    expect(() => applySafeExtensionEvaluation(DEMO_MODEL, forged)).toThrow(
+    const forgedApplication = applicationReceipt(DEMO_MODEL, evaluation);
+    (forged.application.buildings[0]!.size as { x: number }).x = Number.NaN;
+    expect(() =>
+      applySafeExtensionEvaluation(DEMO_MODEL, forged, forgedApplication),
+    ).toThrow(
       /finite JSON numbers|bounded number/,
     );
+    const finiteTamper = structuredClone(evaluation);
+    (finiteTamper.application.buildings[0]!.position as { x: number }).x += 0.25;
+    const finiteTamperAuthority = new SafeExtensionApplicationAuthority();
+    const finiteTamperApplication = {
+      authority: finiteTamperAuthority,
+      receipt: finiteTamperAuthority.issue(DEMO_MODEL, finiteTamper),
+    };
+    expect(() =>
+      applySafeExtensionEvaluation(
+        DEMO_MODEL,
+        finiteTamper,
+        finiteTamperApplication,
+      ),
+    ).toThrow(/does not match deterministic evaluation/);
     expect(() =>
       validateSafeExtensionEvaluation(evaluation, { model: snapshot() }),
     ).toThrow(/different project model/);
@@ -263,6 +357,21 @@ describe("safe declarative extensions", () => {
     expect(() => createSafeExtensionModelSnapshot(snapshot(1, "1.bad"))).toThrow(
       /supported schema version/,
     );
+    let accessed = false;
+    const hostileLegacy = {
+      ...legacy,
+    } as Record<string, unknown>;
+    Object.defineProperty(hostileLegacy, "version", {
+      enumerable: false,
+      get: () => {
+        accessed = true;
+        return "codecity.extensions/0";
+      },
+    });
+    expect(() => migrateSafeExtensionConfiguration(hostileLegacy)).toThrow(
+      /accessors|extra properties/,
+    );
+    expect(accessed).toBe(false);
   });
 
   it("requires exact capability declarations and references", () => {
@@ -293,6 +402,18 @@ describe("safe declarative extensions", () => {
         queries: [{ id: "missing-query", filterId: "missing" }],
       }),
     ).toThrow(/reference a filter/);
+
+    const reservedModelId = snapshot(1);
+    (reservedModelId.buildings[0] as { id: string }).id = "constructor";
+    expect(
+      evaluateSafeExtension(reservedModelId, {
+        version: EXTENSION_CONFIGURATION_VERSION,
+        id: "empty",
+        name: "Empty",
+        compatibility: { cityModel: "1.x", capabilities: [] },
+        scope: { kind: "project" },
+      }).application.buildings[0]?.id,
+    ).toBe("constructor");
   });
 
   it("enforces byte, aggregate, graph, accessor, and expression limits", () => {
@@ -321,6 +442,15 @@ describe("safe declarative extensions", () => {
     );
     expect(getterCalled).toBe(false);
 
+    const hidden = { ...SAFE_EXTENSION_PRESETS[0] } as Record<string, unknown>;
+    Object.defineProperty(hidden, "script", {
+      enumerable: false,
+      value: "fetch('/secret')",
+    });
+    expect(() => validateSafeExtensionConfiguration(hidden)).toThrow(
+      /accessors|plain JSON objects/,
+    );
+
     const balanced = (depth: number): unknown =>
       depth === 0
         ? { op: "constant", value: 1 }
@@ -346,6 +476,19 @@ describe("safe declarative extensions", () => {
         })),
       }),
     ).toThrow(/aggregate expression limit/);
+  });
+
+  it("accepts the documented model boundary and rejects one building beyond it", () => {
+    expect(
+      createSafeExtensionModelSnapshot(
+        snapshot(EXTENSION_LIMITS.modelBuildings),
+      ).buildings,
+    ).toHaveLength(EXTENSION_LIMITS.modelBuildings);
+    expect(() =>
+      createSafeExtensionModelSnapshot(
+        snapshot(EXTENSION_LIMITS.modelBuildings + 1),
+      ),
+    ).toThrow(/unsupported array|bounded array/);
   });
 
   it("fails explicit invalid math instead of silently coercing it", () => {
@@ -378,6 +521,29 @@ describe("safe declarative extensions", () => {
         }),
       ),
     ).toThrow(/out-of-range/);
+
+    const tiny = snapshot(1);
+    (tiny.buildings[0]!.size as { y: number }).y = 0.000_001;
+    const mapped = evaluateSafeExtension(tiny, {
+      version: EXTENSION_CONFIGURATION_VERSION,
+      id: "tiny-height",
+      name: "Tiny height",
+      compatibility: {
+        cityModel: "1.x",
+        capabilities: ["mappings"],
+      },
+      scope: { kind: "project" },
+      mappings: [
+        {
+          id: "height",
+          metric: "sloc",
+          target: "height",
+          minimum: 10,
+          maximum: 20,
+        },
+      ],
+    });
+    expect(mapped.application.buildings[0]?.size.y).toBe(0.000_000_25);
   });
 
   it("issues unforgeable, expiring, one-use administrator approvals bound to both digests", () => {
@@ -418,17 +584,67 @@ describe("safe declarative extensions", () => {
       }),
     ).toThrow(/already been used/);
 
+    const modelBound = authority.issue(DEMO_MODEL, configuration);
+    const changedModel = {
+      ...DEMO_MODEL,
+      buildings: [
+        {
+          ...DEMO_MODEL.buildings[0]!,
+          metrics: {
+            ...DEMO_MODEL.buildings[0]!.metrics,
+            sloc: DEMO_MODEL.buildings[0]!.metrics.sloc + 1,
+          },
+        },
+        ...DEMO_MODEL.buildings.slice(1),
+      ],
+    };
+    expect(() =>
+      evaluateSafeExtension(changedModel, configuration, {
+        administratorApproval: { authority, approval: modelBound },
+      }),
+    ).toThrow(/does not match/);
+
     const once = authority.issue(DEMO_MODEL, configuration);
-    expect(
-      evaluateSafeExtension(DEMO_MODEL, configuration, {
-        administratorApproval: { authority, approval: once },
-      }).binding.scope,
-    ).toBe("administrator");
+    const administratorEvaluation = evaluateSafeExtension(
+      DEMO_MODEL,
+      configuration,
+      { administratorApproval: { authority, approval: once } },
+    );
+    expect(administratorEvaluation.binding.scope).toBe("administrator");
     expect(() =>
       evaluateSafeExtension(DEMO_MODEL, configuration, {
         administratorApproval: { authority, approval: once },
       }),
     ).toThrow(/already been used/);
+
+    const clonedAdministratorEvaluation = structuredClone(
+      administratorEvaluation,
+    );
+    expect(() =>
+      applySafeExtensionEvaluation(
+        DEMO_MODEL,
+        clonedAdministratorEvaluation,
+        applicationReceipt(DEMO_MODEL, clonedAdministratorEvaluation),
+      ),
+    ).toThrow(/not an unused approved evaluation/);
+    const administratorApplication = applicationReceipt(
+      DEMO_MODEL,
+      administratorEvaluation,
+    );
+    expect(
+      applySafeExtensionEvaluation(
+        DEMO_MODEL,
+        administratorEvaluation,
+        administratorApplication,
+      ),
+    ).toBe(DEMO_MODEL);
+    expect(() =>
+      applySafeExtensionEvaluation(
+        DEMO_MODEL,
+        administratorEvaluation,
+        administratorApplication,
+      ),
+    ).toThrow(/application receipt is invalid or has already been used/);
 
     const expired = authority.issue(DEMO_MODEL, configuration, 10);
     now += 11;

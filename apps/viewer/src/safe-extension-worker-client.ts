@@ -1,8 +1,10 @@
 import {
   createSafeExtensionModelSnapshot,
   migrateSafeExtensionConfiguration,
+  SafeExtensionApplicationAuthority,
   type CityModel,
   type ExtensionEvaluation,
+  type SafeExtensionApplicationReceipt,
 } from "../../../packages/core/src/index.js";
 import {
   validateSafeExtensionWorkerRequest,
@@ -13,6 +15,14 @@ import {
 export interface SafeExtensionWorkerClientOptions {
   readonly createWorker?: () => Worker;
   readonly timeoutMilliseconds?: number;
+}
+
+export interface SafeExtensionWorkerReview {
+  readonly evaluation: ExtensionEvaluation;
+  readonly application: {
+    readonly authority: SafeExtensionApplicationAuthority;
+    readonly receipt: SafeExtensionApplicationReceipt;
+  };
 }
 
 interface ActiveEvaluation {
@@ -31,6 +41,8 @@ function cancellationError(): DOMException {
 export class SafeExtensionWorkerClient {
   private readonly createWorker: () => Worker;
   private readonly timeoutMilliseconds: number;
+  private readonly applicationAuthority =
+    new SafeExtensionApplicationAuthority();
   private active: ActiveEvaluation | undefined;
   private nextJob = 0;
   private disposed = false;
@@ -58,7 +70,7 @@ export class SafeExtensionWorkerClient {
   public evaluate(
     model: CityModel,
     configuration: unknown,
-  ): Promise<ExtensionEvaluation> {
+  ): Promise<SafeExtensionWorkerReview> {
     if (this.disposed) {
       return Promise.reject(
         new Error("The extension worker client has been disposed."),
@@ -124,7 +136,27 @@ export class SafeExtensionWorkerClient {
           finish(() => reject(new Error(response.message)));
           return;
         }
-        finish(() => resolve(response.evaluation));
+        let receipt: SafeExtensionApplicationReceipt;
+        try {
+          receipt = this.applicationAuthority.issue(
+            request.model,
+            response.evaluation,
+          );
+        } catch {
+          invalidResponse();
+          return;
+        }
+        finish(() =>
+          resolve(
+            Object.freeze({
+              evaluation: response.evaluation,
+              application: Object.freeze({
+                authority: this.applicationAuthority,
+                receipt,
+              }),
+            }),
+          ),
+        );
       };
       const onError = () =>
         finish(() =>

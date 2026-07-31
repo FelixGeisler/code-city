@@ -65,7 +65,7 @@ function exactRecord(
   >;
   for (const key of keys) {
     const descriptor = descriptors[key]!;
-    if (!("value" in descriptor)) {
+    if (!("value" in descriptor) || descriptor.enumerable !== true) {
       throw new TypeError("Worker message must not contain accessors.");
     }
     result[key] = descriptor.value;

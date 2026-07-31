@@ -3,6 +3,7 @@ import type {
   SourceMetrics,
   Vector3,
 } from "./model.js";
+import { validateCityModel } from "./model-validation.js";
 
 /**
  * Public, data-only extension contract. It deliberately has no script, URL,
@@ -40,6 +41,8 @@ export const EXTENSION_LIMITS = Object.freeze({
   resultBytes: 32 * 1024 * 1024,
   approvalTtlMilliseconds: 60_000,
   approvalMaximumTtlMilliseconds: 5 * 60_000,
+  applicationReceiptTtlMilliseconds: 30_000,
+  applicationReceiptMaximumTtlMilliseconds: 60_000,
 });
 
 export type ExtensionExpression =
@@ -229,11 +232,22 @@ function exact(
   path: string,
 ): Record<string, unknown> {
   if (!plain(value)) throw new TypeError(`${path} must be an object.`);
-  const actual = Object.keys(value);
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    throw new TypeError(`${path} has unsupported properties.`);
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const actual = Object.getOwnPropertyNames(value);
   if (
     actual.some((key) => forbiddenKeys.has(key)) ||
     actual.length !== keys.length ||
-    !keys.every((key) => Object.prototype.hasOwnProperty.call(value, key))
+    !keys.every((key) => {
+      const descriptor = descriptors[key];
+      return (
+        descriptor !== undefined &&
+        descriptor.enumerable === true &&
+        "value" in descriptor
+      );
+    })
   ) {
     throw new TypeError(`${path} has unsupported properties.`);
   }
@@ -244,7 +258,8 @@ function identifier(value: unknown, path: string): string {
   if (
     typeof value !== "string" ||
     !/^[a-z][a-z0-9-]*$/u.test(value) ||
-    value.length > EXTENSION_LIMITS.identifierCharacters
+    value.length > EXTENSION_LIMITS.identifierCharacters ||
+    forbiddenKeys.has(value)
   ) {
     throw new TypeError(`${path} must be a bounded lowercase identifier.`);
   }
@@ -381,6 +396,7 @@ function boundedJsonByteLength(
       const descriptor = descriptors[key];
       if (
         descriptor === undefined ||
+        descriptor.enumerable !== true ||
         !("value" in descriptor) ||
         descriptor.get !== undefined ||
         descriptor.set !== undefined
@@ -397,9 +413,14 @@ function boundedJsonByteLength(
       ) {
         throw new RangeError(`${description} contains an unsupported array.`);
       }
-      const keys = Object.keys(item);
-      if (keys.length !== item.length) {
-        throw new TypeError(`${description} must not contain sparse arrays.`);
+      const keys = Object.getOwnPropertyNames(item);
+      if (
+        keys.length !== item.length + 1 ||
+        keys[keys.length - 1] !== "length"
+      ) {
+        throw new TypeError(
+          `${description} must not contain sparse arrays or extra properties.`,
+        );
       }
       for (let index = item.length - 1; index >= 0; index -= 1) {
         pushDescriptor(String(index), current.depth + 1);
@@ -409,7 +430,7 @@ function boundedJsonByteLength(
     if (!plain(item)) {
       throw new TypeError(`${description} must contain plain JSON objects.`);
     }
-    const keys = Object.keys(item);
+    const keys = Object.getOwnPropertyNames(item);
     if (keys.length > bounds.objectKeys) {
       throw new RangeError(`${description} exceeds the object-key limit.`);
     }
@@ -834,7 +855,18 @@ export function validateSafeExtensionConfiguration(
 export function migrateSafeExtensionConfiguration(
   value: unknown,
 ): SafeExtensionConfigurationV1 {
-  if (plain(value) && value.version === "codecity.extensions/0") {
+  // Inspect the complete graph before reading or spreading even the legacy
+  // discriminator. This keeps v0 migration inside the same accessor/size
+  // boundary as the current format.
+  boundedJsonByteLength(value, configurationJsonBounds, "configuration");
+  const versionDescriptor = plain(value)
+    ? Object.getOwnPropertyDescriptor(value, "version")
+    : undefined;
+  const version =
+    versionDescriptor !== undefined && "value" in versionDescriptor
+      ? versionDescriptor.value
+      : undefined;
+  if (plain(value) && version === "codecity.extensions/0") {
     const { version: _version, ...rest } = value;
     return validateSafeExtensionConfiguration({
       ...rest,
@@ -1072,6 +1104,116 @@ export function safeExtensionModelDigest(
   return snapshotDigest(createSafeExtensionModelSnapshot(model));
 }
 
+function evaluationDigest(
+  evaluation: ExtensionEvaluation,
+): `sha256:${string}` {
+  return sha256(JSON.stringify(evaluation));
+}
+
+declare const applicationReceiptBrand: unique symbol;
+export interface SafeExtensionApplicationReceipt {
+  readonly kind: "safe-extension-application-receipt";
+  readonly expiresAt: string;
+  readonly [applicationReceiptBrand]: true;
+}
+
+interface ApplicationReceiptRecord {
+  readonly configurationSha256: `sha256:${string}`;
+  readonly modelSha256: `sha256:${string}`;
+  readonly evaluationSha256: `sha256:${string}`;
+  readonly expiresAt: number;
+  consumed: boolean;
+}
+
+export interface SafeExtensionApplicationAuthorityOptions {
+  readonly now?: () => number;
+}
+
+/**
+ * Trusted client-side handoff between a dedicated evaluator worker and the
+ * renderer. Receipts are opaque identities, expire quickly, are consumed on
+ * their first attempt, and bind the complete result as well as both inputs.
+ */
+export class SafeExtensionApplicationAuthority {
+  readonly #now: () => number;
+  readonly #records = new WeakMap<object, ApplicationReceiptRecord>();
+
+  public constructor(options: SafeExtensionApplicationAuthorityOptions = {}) {
+    this.#now = options.now ?? Date.now;
+  }
+
+  public issue(
+    model:
+      | Pick<CityModel, "schemaVersion" | "buildings">
+      | SafeExtensionModelSnapshot,
+    evaluation: ExtensionEvaluation,
+    ttlMilliseconds: number =
+      EXTENSION_LIMITS.applicationReceiptTtlMilliseconds,
+  ): SafeExtensionApplicationReceipt {
+    if (
+      !Number.isSafeInteger(ttlMilliseconds) ||
+      ttlMilliseconds < 1 ||
+      ttlMilliseconds > EXTENSION_LIMITS.applicationReceiptMaximumTtlMilliseconds
+    ) {
+      throw new RangeError("Extension application receipt lifetime is invalid.");
+    }
+    const validated = validateSafeExtensionEvaluation(evaluation, { model });
+    const issuedAt = this.#now();
+    if (!Number.isSafeInteger(issuedAt)) {
+      throw new RangeError("Extension application receipt clock is invalid.");
+    }
+    const expiresAt = issuedAt + ttlMilliseconds;
+    if (!Number.isSafeInteger(expiresAt) || Math.abs(expiresAt) > 8.64e15) {
+      throw new RangeError("Extension application receipt expiry is invalid.");
+    }
+    const receipt = Object.freeze({
+      kind: "safe-extension-application-receipt" as const,
+      expiresAt: new Date(expiresAt).toISOString(),
+    }) as SafeExtensionApplicationReceipt;
+    this.#records.set(receipt, {
+      configurationSha256: validated.binding.configurationSha256,
+      modelSha256: validated.binding.modelSha256,
+      evaluationSha256: evaluationDigest(validated),
+      expiresAt,
+      consumed: false,
+    });
+    return receipt;
+  }
+
+  public consume(
+    receipt: SafeExtensionApplicationReceipt,
+    model:
+      | Pick<CityModel, "schemaVersion" | "buildings">
+      | SafeExtensionModelSnapshot,
+    evaluation: ExtensionEvaluation,
+  ): ExtensionEvaluation {
+    const record =
+      typeof receipt === "object" && receipt !== null
+        ? this.#records.get(receipt)
+        : undefined;
+    if (record === undefined || record.consumed) {
+      throw new TypeError(
+        "Extension application receipt is invalid or has already been used.",
+      );
+    }
+    record.consumed = true;
+    if (this.#now() >= record.expiresAt) {
+      throw new TypeError("Extension application receipt has expired.");
+    }
+    const validated = validateSafeExtensionEvaluation(evaluation, { model });
+    if (
+      record.configurationSha256 !== validated.binding.configurationSha256 ||
+      record.modelSha256 !== validated.binding.modelSha256 ||
+      record.evaluationSha256 !== evaluationDigest(validated)
+    ) {
+      throw new TypeError(
+        "Extension application receipt does not match this result and project.",
+      );
+    }
+    return validated;
+  }
+}
+
 declare const administratorApprovalBrand: unique symbol;
 export interface SafeExtensionAdministratorApproval {
   readonly kind: "safe-extension-administrator-approval";
@@ -1122,7 +1264,7 @@ export class SafeExtensionApprovalAuthority {
   public issue(
     model: Pick<CityModel, "schemaVersion" | "buildings">,
     candidate: unknown,
-    ttlMilliseconds = EXTENSION_LIMITS.approvalTtlMilliseconds,
+    ttlMilliseconds: number = EXTENSION_LIMITS.approvalTtlMilliseconds,
   ): SafeExtensionAdministratorApproval {
     if (
       !Number.isSafeInteger(ttlMilliseconds) ||
@@ -1140,7 +1282,14 @@ export class SafeExtensionApprovalAuthority {
         `Administrator approval '${configuration.scope.approvalId}' is not available in this deployment.`,
       );
     }
-    const expiresAt = this.#now() + ttlMilliseconds;
+    const issuedAt = this.#now();
+    if (!Number.isSafeInteger(issuedAt)) {
+      throw new RangeError("Administrator approval clock is invalid.");
+    }
+    const expiresAt = issuedAt + ttlMilliseconds;
+    if (!Number.isSafeInteger(expiresAt) || Math.abs(expiresAt) > 8.64e15) {
+      throw new RangeError("Administrator approval expiry is invalid.");
+    }
     const grant = Object.freeze({
       kind: "safe-extension-administrator-approval" as const,
       expiresAt: new Date(expiresAt).toISOString(),
@@ -1168,7 +1317,7 @@ export class SafeExtensionApprovalAuthority {
       throw new TypeError("Administrator approval is invalid or has already been used.");
     }
     record.consumed = true;
-    if (this.#now() > record.expiresAt) {
+    if (this.#now() >= record.expiresAt) {
       throw new TypeError("Administrator approval has expired.");
     }
     if (
@@ -1374,6 +1523,8 @@ export interface EvaluateSafeExtensionOptions {
   };
 }
 
+const approvedAdministratorEvaluations = new WeakSet<ExtensionEvaluation>();
+
 /** Evaluates bounded AST nodes against an already-loaded model. No I/O APIs are reachable. */
 export function evaluateSafeExtension(
   model: Pick<CityModel, "schemaVersion" | "buildings"> | SafeExtensionModelSnapshot,
@@ -1477,12 +1628,12 @@ export function evaluateSafeExtension(
         building.color = interpolateColor(normalized);
       } else if (mapping.target === "height") {
         const ground = building.position.y - building.size.y / 2;
-        building.size.y = Math.max(0.02, building.size.y * (0.25 + normalized * 1.75));
+        building.size.y *= 0.25 + normalized * 1.75;
         building.position.y = ground + building.size.y / 2;
       } else {
         const factor = 0.5 + normalized * 1.5;
-        building.size.x = Math.max(0.02, building.size.x * factor);
-        building.size.z = Math.max(0.02, building.size.z * factor);
+        building.size.x *= factor;
+        building.size.z *= factor;
       }
       assertPresentationBounds(building, `mappings[${mappingIndex}].${building.id}`);
     }
@@ -1579,6 +1730,9 @@ export function evaluateSafeExtension(
     }),
   });
   boundedJsonByteLength(evaluation, resultJsonBounds, "extension evaluation");
+  if (configuration.scope.kind === "administrator") {
+    approvedAdministratorEvaluations.add(evaluation);
+  }
   return evaluation;
 }
 
@@ -1606,10 +1760,7 @@ function resultRecord(
 ): Record<string, unknown> {
   if (!plain(value)) throw new TypeError(`${path} must be an object.`);
   const keys = Object.keys(value);
-  if (
-    keys.length > maximumKeys ||
-    keys.some((key) => forbiddenKeys.has(key))
-  ) {
+  if (keys.length > maximumKeys) {
     throw new RangeError(`${path} exceeds its result limit.`);
   }
   return value;
@@ -2119,12 +2270,79 @@ export function validateSafeExtensionEvaluation(
   });
 }
 
-/** Verifies every result, its digest binding, and applies reviewed geometry. */
+function vectorsEqual(left: Vector3, right: Vector3): boolean {
+  return left.x === right.x && left.y === right.y && left.z === right.z;
+}
+
+interface HorizontalExtent {
+  minimumX: number;
+  maximumX: number;
+  minimumZ: number;
+  maximumZ: number;
+}
+
+function includeHorizontal(
+  extent: HorizontalExtent,
+  position: Vector3,
+  size: Vector3,
+  frontRelief = 0,
+): void {
+  extent.minimumX = Math.min(extent.minimumX, position.x - size.x / 2);
+  extent.maximumX = Math.max(extent.maximumX, position.x + size.x / 2);
+  extent.minimumZ = Math.min(
+    extent.minimumZ,
+    position.z - size.z / 2 - frontRelief,
+  );
+  extent.maximumZ = Math.max(extent.maximumZ, position.z + size.z / 2);
+}
+
+function finiteHorizontalExtent(extent: HorizontalExtent): boolean {
+  return (
+    Number.isFinite(extent.minimumX) &&
+    Number.isFinite(extent.maximumX) &&
+    Number.isFinite(extent.minimumZ) &&
+    Number.isFinite(extent.maximumZ)
+  );
+}
+
+/** Verifies every result, its digest binding, and applies coherent geometry. */
 export function applySafeExtensionEvaluation(
   model: CityModel,
   evaluation: ExtensionEvaluation,
+  application: {
+    readonly authority: SafeExtensionApplicationAuthority;
+    readonly receipt: SafeExtensionApplicationReceipt;
+  },
 ): CityModel {
-  const validated = validateSafeExtensionEvaluation(evaluation, { model });
+  const administratorAuthorized =
+    typeof evaluation === "object" &&
+    evaluation !== null &&
+    approvedAdministratorEvaluations.delete(evaluation);
+  let validated = application.authority.consume(
+    application.receipt,
+    model,
+    evaluation,
+  );
+  if (
+    validated.configuration.scope.kind === "administrator" &&
+    !administratorAuthorized
+  ) {
+    throw new TypeError(
+      "Administrator extension result is not an unused approved evaluation.",
+    );
+  }
+  if (validated.configuration.scope.kind === "project") {
+    const recomputed = validateSafeExtensionEvaluation(
+      evaluateSafeExtension(model, validated.configuration),
+      { model, configuration: validated.configuration },
+    );
+    if (evaluationDigest(recomputed) !== evaluationDigest(validated)) {
+      throw new TypeError(
+        "Extension result does not match deterministic evaluation.",
+      );
+    }
+    validated = recomputed;
+  }
   const presentations = new Map<string, ExtensionBuildingApplication>();
   for (const presentation of validated.application.buildings) {
     if (presentations.has(presentation.id)) {
@@ -2138,19 +2356,133 @@ export function applySafeExtensionEvaluation(
   ) {
     throw new TypeError("Extension preview does not match the project buildings.");
   }
-  return Object.freeze({
-    ...model,
-    buildings: Object.freeze(
-      model.buildings.map((building) => {
-        const presentation = presentations.get(building.id)!;
-        return Object.freeze({
-          ...building,
-          position: Object.freeze({ ...presentation.position }),
-          size: Object.freeze({ ...presentation.size }),
-        });
-      }),
-    ),
+  const buildings = Object.freeze(
+    model.buildings.map((building) => {
+      const presentation = presentations.get(building.id)!;
+      return Object.freeze({
+        ...building,
+        position: Object.freeze({ ...presentation.position }),
+        size: Object.freeze({ ...presentation.size }),
+      });
+    }),
+  );
+  const geometryChanged = model.buildings.some((building, index) => {
+    const projected = buildings[index]!;
+    return (
+      !vectorsEqual(building.position, projected.position) ||
+      !vectorsEqual(building.size, projected.size)
+    );
   });
+  if (!geometryChanged) return model;
+
+  const buildingsByDistrict = new Map<string, typeof buildings[number][]>();
+  for (const building of buildings) {
+    const group = buildingsByDistrict.get(building.districtId) ?? [];
+    group.push(building);
+    buildingsByDistrict.set(building.districtId, group);
+  }
+  const districtPadding = 0.5;
+  const districts = Object.freeze(
+    model.districts.map((district) => {
+      const members = buildingsByDistrict.get(district.id) ?? [];
+      if (members.length === 0) return district;
+      const extent: HorizontalExtent = {
+        minimumX: Number.POSITIVE_INFINITY,
+        maximumX: Number.NEGATIVE_INFINITY,
+        minimumZ: Number.POSITIVE_INFINITY,
+        maximumZ: Number.NEGATIVE_INFINITY,
+      };
+      for (const building of members) {
+        includeHorizontal(extent, building.position, building.size);
+      }
+      if (!finiteHorizontalExtent(extent)) {
+        throw new RangeError(
+          `Extension geometry for district '${district.id}' is invalid.`,
+        );
+      }
+      const size = Object.freeze({
+        x: extent.maximumX - extent.minimumX + districtPadding * 2,
+        y: district.size.y,
+        z: extent.maximumZ - extent.minimumZ + districtPadding * 2,
+      });
+      const position = Object.freeze({
+        x: (extent.minimumX + extent.maximumX) / 2,
+        y: district.position.y,
+        z: (extent.minimumZ + extent.maximumZ) / 2,
+      });
+      return Object.freeze({ ...district, position, size });
+    }),
+  );
+
+  const cityExtent: HorizontalExtent = {
+    minimumX: Number.POSITIVE_INFINITY,
+    maximumX: Number.NEGATIVE_INFINITY,
+    minimumZ: Number.POSITIVE_INFINITY,
+    maximumZ: Number.NEGATIVE_INFINITY,
+  };
+  for (const district of districts) {
+    includeHorizontal(cityExtent, district.position, district.size);
+  }
+  if (model.identityPanel !== undefined) {
+    includeHorizontal(
+      cityExtent,
+      model.identityPanel.position,
+      model.identityPanel.size,
+      model.identityPanel.reliefDepth,
+    );
+  }
+  const base =
+    model.base === undefined || !finiteHorizontalExtent(cityExtent)
+      ? model.base
+      : Object.freeze({
+          ...model.base,
+          position: Object.freeze({
+            x: (cityExtent.minimumX + cityExtent.maximumX) / 2,
+            y: model.base.position.y,
+            z: (cityExtent.minimumZ + cityExtent.maximumZ) / 2,
+          }),
+          size: Object.freeze({
+            x: cityExtent.maximumX - cityExtent.minimumX,
+            y: model.base.size.y,
+            z: cityExtent.maximumZ - cityExtent.minimumZ,
+          }),
+        });
+  const maximumY = Math.max(
+    model.bounds.y,
+    ...buildings.map(
+      (building) => building.position.y + building.size.y / 2,
+    ),
+    ...districts.map(
+      (district) => district.position.y + district.size.y / 2,
+    ),
+    ...(model.identityPanel === undefined
+      ? []
+      : [
+          model.identityPanel.position.y +
+            model.identityPanel.size.y / 2,
+        ]),
+  );
+  const bounds = Object.freeze({
+    x:
+      base?.size.x ??
+      (finiteHorizontalExtent(cityExtent)
+        ? cityExtent.maximumX - cityExtent.minimumX
+        : model.bounds.x),
+    y: maximumY,
+    z:
+      base?.size.z ??
+      (finiteHorizontalExtent(cityExtent)
+        ? cityExtent.maximumZ - cityExtent.minimumZ
+        : model.bounds.z),
+  });
+  const projected = Object.freeze({
+    ...model,
+    ...(base === undefined ? {} : { base }),
+    districts,
+    buildings,
+    bounds,
+  });
+  return validateCityModel(projected);
 }
 
 export const SAFE_EXTENSION_PRESETS: readonly SafeExtensionConfigurationV1[] =
