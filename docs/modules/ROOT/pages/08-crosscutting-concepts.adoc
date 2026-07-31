@@ -47,10 +47,11 @@ strict provider response contract.
 For a selected retained building the viewer first displays the exact source and
 measured metrics that would be transmitted. Clicking **Send this exact preview
 once** is the only path that invokes a provider. The browser sends no source
-text in that confirmation; it names only the retained job/building and metrics,
-and the server reads the verified retained source. Suggestions are labelled as
-optional and cite the selected source line range. Provider failures leave
-deterministic findings and source navigation available.
+text or metrics in that confirmation; it names only the retained job/building,
+and the server reads the verified retained source and derives metrics from the
+matching city-model artifact. Suggestions are labelled as optional and cite
+the selected source line range. Provider failures leave deterministic findings
+and source navigation available.
 
 Prompts and model output are not stored. An optional administrator audit sink
 can receive only provider ID, selected building ID, byte count, duration, and

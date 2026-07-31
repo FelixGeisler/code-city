@@ -1152,10 +1152,9 @@ export class ViewerImportApiClient {
   public async aiGuidanceRequest(
     jobId: string,
     buildingId: string,
-    metrics: { readonly sloc: number; readonly maximumComplexity: number; readonly decisionLoad: number },
     signal?: AbortSignal,
   ): Promise<unknown> {
-    return (await this.jsonRequest("/api/v1/ai/requests", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ approval: "once", jobId, buildingId, metrics }) }, signal, this.requestDeadlineMs, API_RESPONSE_MAX_BYTES)).value;
+    return (await this.jsonRequest("/api/v1/ai/requests", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ approval: "once", jobId, buildingId }) }, signal, this.requestDeadlineMs, API_RESPONSE_MAX_BYTES)).value;
   }
 
   public async evolutionArtifact(

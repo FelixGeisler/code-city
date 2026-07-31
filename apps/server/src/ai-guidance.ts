@@ -44,6 +44,7 @@ export interface AiGuidancePreview {
   readonly enabled: boolean;
   readonly provider?: { readonly id: string; readonly label: string };
   readonly source?: Pick<AiGuidanceSource, "buildingId" | "path" | "language" | "text" | "location">;
+  readonly metrics?: AiGuidanceMetrics;
   readonly limits: { readonly timeoutMs: number; readonly maximumSourceBytes: number };
   readonly privacy: "no-prompt-storage";
 }
@@ -76,9 +77,13 @@ function checkedText(value: string, label: string, maximum: number): void {
 function localAddress(hostname: string): boolean {
   const normalized = hostname.toLowerCase();
   if (normalized === "localhost" || normalized.endsWith(".localhost")) return true;
-  const family = net.isIP(normalized);
-  if (family === 4) return normalized.startsWith("127.");
-  return family === 6 && normalized === "::1";
+  const address =
+    normalized.startsWith("[") && normalized.endsWith("]")
+      ? normalized.slice(1, -1)
+      : normalized;
+  const family = net.isIP(address);
+  if (family === 4) return address.startsWith("127.");
+  return family === 6 && address === "::1";
 }
 
 function safeEndpoint(value: string): URL {
@@ -121,6 +126,18 @@ function validSource(source: AiGuidanceSource, limit: number): void {
   if (!PROVIDER_ID.test(source.buildingId.split(":")[0] ?? "") || source.path.length === 0 || source.path.length > 4_096 || UNSAFE_TEXT.test(source.path) || !Number.isSafeInteger(source.location.startLine) || !Number.isSafeInteger(source.location.endLine) || source.location.startLine < 1 || source.location.endLine < source.location.startLine || new TextEncoder().encode(source.text).byteLength > limit) throw new Error("Selected source is outside the AI guidance limits.");
 }
 
+function validMetrics(metrics: AiGuidanceMetrics): void {
+  for (const value of [
+    metrics.sloc,
+    metrics.maximumComplexity,
+    metrics.decisionLoad,
+  ]) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error("AI guidance metrics are invalid.");
+    }
+  }
+}
+
 function responseSuggestions(value: unknown, source: AiGuidanceSource): readonly AiGuidanceSuggestion[] {
   if (typeof value !== "object" || value === null || Array.isArray(value) || !Array.isArray((value as Record<string, unknown>)["suggestions"])) throw new Error("AI provider returned an invalid response.");
   const suggestions = (value as Record<string, unknown>)["suggestions"] as unknown[];
@@ -132,6 +149,52 @@ function responseSuggestions(value: unknown, source: AiGuidanceSource): readonly
     checkedText(item["title"], "AI suggestion title", 500); checkedText(item["detail"], "AI suggestion detail", 8_000);
     return Object.freeze({ title: item["title"], detail: item["detail"], citation: Object.freeze({ path: source.path, startLine: source.location.startLine, endLine: source.location.endLine }) });
   }));
+}
+
+async function boundedResponseText(
+  response: Response,
+  maximumBytes: number,
+): Promise<string> {
+  const declared = response.headers.get("content-length");
+  if (declared !== null) {
+    const bytes = Number(declared);
+    if (
+      !Number.isSafeInteger(bytes) ||
+      bytes < 0 ||
+      bytes > maximumBytes
+    ) {
+      throw new Error("AI provider response exceeded the size limit.");
+    }
+  }
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) break;
+      received += result.value.byteLength;
+      if (received > maximumBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error("AI provider response exceeded the size limit.");
+      }
+      chunks.push(result.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error("AI provider returned invalid UTF-8.");
+  }
 }
 
 export class AiGuidanceAdapter {
@@ -149,26 +212,32 @@ export class AiGuidanceAdapter {
     return Object.freeze({ enabled: false, limits: Object.freeze({ timeoutMs: this.#config.timeoutMs, maximumSourceBytes: this.#config.maximumSourceBytes }), privacy: "no-prompt-storage" });
   }
 
-  public preview(source: AiGuidanceSource): AiGuidancePreview {
+  public preview(
+    source: AiGuidanceSource,
+    metrics: AiGuidanceMetrics,
+  ): AiGuidancePreview {
     const provider = this.#config.providers[0];
     if (!this.#config.enabled || provider === undefined) return this.disabledPreview();
     validSource(source, this.#config.maximumSourceBytes);
-    return Object.freeze({ enabled: true, provider: Object.freeze({ id: provider.id, label: provider.label }), source: Object.freeze({ buildingId: source.buildingId, path: source.path, language: source.language, text: source.text, location: source.location }), limits: Object.freeze({ timeoutMs: this.#config.timeoutMs, maximumSourceBytes: this.#config.maximumSourceBytes }), privacy: "no-prompt-storage" });
+    validMetrics(metrics);
+    return Object.freeze({ enabled: true, provider: Object.freeze({ id: provider.id, label: provider.label }), source: Object.freeze({ buildingId: source.buildingId, path: source.path, language: source.language, text: source.text, location: source.location }), metrics: Object.freeze({ ...metrics }), limits: Object.freeze({ timeoutMs: this.#config.timeoutMs, maximumSourceBytes: this.#config.maximumSourceBytes }), privacy: "no-prompt-storage" });
   }
 
   public async request(source: AiGuidanceSource, metrics: AiGuidanceMetrics, signal?: AbortSignal): Promise<AiGuidanceResult> {
-    const preview = this.preview(source); const provider = this.#config.providers[0];
+    const preview = this.preview(source, metrics); const provider = this.#config.providers[0];
     if (!preview.enabled || provider === undefined) throw new Error("AI guidance is disabled by the administrator.");
-    for (const value of [metrics.sloc, metrics.maximumComplexity, metrics.decisionLoad]) if (!Number.isSafeInteger(value) || value < 0) throw new Error("AI guidance metrics are invalid.");
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(new Error("AI guidance request timed out.")), this.#config.timeoutMs);
-    const forwardAbort = () => controller.abort(signal?.reason); signal?.addEventListener("abort", forwardAbort, { once: true });
+    const forwardAbort = () => controller.abort(signal?.reason);
+    if (signal?.aborted) controller.abort(signal.reason);
+    else signal?.addEventListener("abort", forwardAbort, { once: true });
     const started = Date.now(); const bytes = new TextEncoder().encode(source.text).byteLength;
     try {
+      controller.signal.throwIfAborted();
       const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json" };
       if (provider.authorization !== undefined) headers[provider.authorization.header] = provider.authorization.value;
       const response = await this.#fetch(provider.url, { method: "POST", headers, redirect: "error", signal: controller.signal, body: JSON.stringify({ version: 1, task: "source-guidance", source: { path: source.path, language: source.language, text: source.text, lines: source.location }, findings: metrics }) });
       if (!response.ok) throw new Error("Configured AI provider did not complete the request.");
-      const text = await response.text(); if (new TextEncoder().encode(text).byteLength > AI_GUIDANCE_MAX_RESPONSE_BYTES) throw new Error("AI provider response exceeded the size limit.");
+      const text = await boundedResponseText(response, AI_GUIDANCE_MAX_RESPONSE_BYTES);
       const suggestions = responseSuggestions(JSON.parse(text), source); this.#audit?.({ providerId: provider.id, buildingId: source.buildingId, outcome: "completed", sourceBytes: bytes, durationMs: Date.now() - started });
       return Object.freeze({ provider: publicProvider(provider)!, suggestions });
     } catch (error) {

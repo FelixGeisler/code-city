@@ -153,10 +153,20 @@ export function environmentAiGuidanceConfiguration(
     const provider = rawProvider as Record<string, unknown>;
     const providerAllowed = new Set(["id", "label", "endpoint", "authorizationEnv", "authorizationHeader"]);
     if (Object.keys(provider).some((key) => !providerAllowed.has(key)) || typeof provider["id"] !== "string" || typeof provider["label"] !== "string" || typeof provider["endpoint"] !== "string") throw new Error("AI provider configuration is invalid.");
-    if (provider["authorizationEnv"] === undefined) return { id: provider["id"], label: provider["label"], endpoint: provider["endpoint"] };
+    if (provider["authorizationEnv"] === undefined) {
+      if (provider["authorizationHeader"] !== undefined) {
+        throw new Error("AI provider authorization header requires an authorizationEnv.");
+      }
+      return { id: provider["id"], label: provider["label"], endpoint: provider["endpoint"] };
+    }
     if (typeof provider["authorizationEnv"] !== "string" || !/^[A-Z][A-Z0-9_]{0,127}$/u.test(provider["authorizationEnv"]) || (provider["authorizationHeader"] !== undefined && typeof provider["authorizationHeader"] !== "string")) throw new Error("AI provider credential reference is invalid.");
     const secret = environment[provider["authorizationEnv"]];
-    if (secret === undefined || secret.length === 0) throw new Error(`AI provider credential ${provider["authorizationEnv"]} is not configured.`);
+    if (secret === undefined || secret.length === 0) {
+      if (object["enabled"]) {
+        throw new Error(`AI provider credential ${provider["authorizationEnv"]} is not configured.`);
+      }
+      return { id: provider["id"], label: provider["label"], endpoint: provider["endpoint"] };
+    }
     return { id: provider["id"], label: provider["label"], endpoint: provider["endpoint"], authorization: { header: (provider["authorizationHeader"] as string | undefined) ?? "Authorization", value: secret } };
   });
   return {

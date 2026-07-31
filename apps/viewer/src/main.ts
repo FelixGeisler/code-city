@@ -6233,6 +6233,7 @@ function scrubBuildingSource(closeDetails = true): void {
   inspectorFields.aiPreview.hidden = true;
   inspectorFields.aiPreview.textContent = "";
   inspectorFields.aiRequest.hidden = true;
+  inspectorFields.aiRequest.disabled = false;
   inspectorFields.aiSuggestions.hidden = true;
   inspectorFields.aiSuggestions.replaceChildren();
   inspectorFields.sourcePath.textContent = "";
@@ -6343,7 +6344,6 @@ function renderSourceCode(
 
 function prepareAiGuidance(
   building: CityBuilding,
-  source: BuildingSource,
 ): void {
   const jobId = activeModelSource.jobId;
   if (jobId === undefined) return;
@@ -6355,13 +6355,13 @@ function prepareAiGuidance(
   void sourceApi.aiGuidancePreview(jobId, building.id, controller.signal)
     .then((value) => {
       if (controller.signal.aborted || aiGuidanceRequest !== controller) return;
-      const preview = (value as { preview?: { enabled?: boolean; provider?: { label?: string }; source?: unknown; limits?: unknown } }).preview;
-      if (preview?.enabled !== true || preview.provider?.label === undefined || preview.source === undefined) {
+      const preview = (value as { preview?: { enabled?: boolean; provider?: { label?: string }; source?: unknown; metrics?: unknown; limits?: unknown } }).preview;
+      if (preview?.enabled !== true || preview.provider?.label === undefined || preview.source === undefined || preview.metrics === undefined) {
         inspectorFields.aiSummary.textContent = "Disabled";
         inspectorFields.aiStatus.textContent = "AI guidance is disabled by the administrator. No source was sent.";
         return;
       }
-      const transmission = { source: preview.source, findings: { sloc: building.metrics.sloc, maximumComplexity: building.metrics.maximumComplexity, decisionLoad: building.metrics.decisionLoad } };
+      const transmission = { source: preview.source, findings: preview.metrics };
       inspectorFields.aiSummary.textContent = "Preview ready";
       inspectorFields.aiStatus.textContent = `This exact source and measured findings will be sent once to ${preview.provider.label} after you confirm.`;
       inspectorFields.aiPreview.textContent = JSON.stringify(transmission, null, 2);
@@ -6371,7 +6371,7 @@ function prepareAiGuidance(
         if (aiGuidanceRequest !== controller || controller.signal.aborted) return;
         inspectorFields.aiRequest.disabled = true;
         inspectorFields.aiStatus.textContent = "Requesting optional suggestions…";
-        void sourceApi.aiGuidanceRequest(jobId, building.id, transmission.findings, controller.signal)
+        void sourceApi.aiGuidanceRequest(jobId, building.id, controller.signal)
           .then((result) => {
             if (controller.signal.aborted || aiGuidanceRequest !== controller) return;
             const suggestions = (result as { result?: { suggestions?: readonly { title?: string; detail?: string; citation?: { path?: string; startLine?: number; endLine?: number } }[] } }).result?.suggestions;
@@ -6491,7 +6491,7 @@ function revealBuildingSource(
       }
       inspectorFields.sourceContent.hidden = false;
       renderSourceCode(source, startLine, endLine);
-      prepareAiGuidance(building, source);
+      prepareAiGuidance(building);
     })
     .catch((error: unknown) => {
       if (
