@@ -86,6 +86,9 @@ export const CITY_MODEL_LIMITS = Object.freeze({
   referencesPerEntity: 10_000,
   targetFrameworksPerModule: 128,
   metricUnitsPerBuilding: 10_000,
+  sourceTypesPerBuilding: 10_000,
+  sourceCallablesPerBuilding: 10_000,
+  sourceRelationsPerBuilding: 50_000,
   warnings: 10_000,
   coordinateMagnitude: 1_000_000,
   identifierCharacters: 256,
@@ -390,6 +393,12 @@ export function validateCityModel(
       work,
       sourceEndLine,
     );
+    validateSourceStructure(
+      building.sourceStructure,
+      prefix,
+      sourceEndLine,
+      work,
+    );
     validateBuildingMetricNormalization(
       building.metricNormalization,
       metrics,
@@ -628,6 +637,69 @@ function validateBuildingMetricDetails(
   if (maximum !== aggregate.maximumComplexity) {
     fail(`${prefix}.units must preserve metrics.maximumComplexity`);
   }
+}
+
+function validateSourceStructure(
+  value: unknown,
+  prefix: string,
+  sourceEndLine: number | undefined,
+  work: ValidationCheckpoint,
+): void {
+  if (value === undefined) return;
+  const structure = objectAt(value, `${prefix}.sourceStructure`);
+  if (structure.version !== "codecity.source-structure/1") {
+    fail(`${prefix}.sourceStructure.version must be "codecity.source-structure/1"`);
+  }
+  const availability = enumValue(
+    structure.availability,
+    new Set(["available", "unavailable"]),
+    `${prefix}.sourceStructure.availability`,
+  );
+  const types = objectArray(structure.types, `${prefix}.sourceStructure.types`, CITY_MODEL_LIMITS.sourceTypesPerBuilding, work);
+  const callables = objectArray(structure.callables, `${prefix}.sourceStructure.callables`, CITY_MODEL_LIMITS.sourceCallablesPerBuilding, work);
+  const relations = objectArray(structure.relations, `${prefix}.sourceStructure.relations`, CITY_MODEL_LIMITS.sourceRelationsPerBuilding, work);
+  const unavailable = stringArray(structure.unavailable, `${prefix}.sourceStructure.unavailable`, CITY_MODEL_LIMITS.warnings, CITY_MODEL_LIMITS.warningCharacters, work);
+  if (availability === "unavailable" && (types.length !== 0 || callables.length !== 0 || relations.length !== 0)) {
+    fail(`${prefix}.sourceStructure unavailable detail must not contain inferred entities`);
+  }
+  const ids = new Set<string>();
+  const typeIds = new Set<string>();
+  const range = (item: JsonObject, itemPrefix: string): void => {
+    const location = objectAt(item.range, `${itemPrefix}.range`);
+    const startLine = positiveInteger(location.startLine, `${itemPrefix}.range.startLine`);
+    const startColumn = positiveInteger(location.startColumn, `${itemPrefix}.range.startColumn`);
+    const endLine = positiveInteger(location.endLine, `${itemPrefix}.range.endLine`);
+    const endColumn = positiveInteger(location.endColumn, `${itemPrefix}.range.endColumn`);
+    if (endLine < startLine || (endLine === startLine && endColumn < startColumn)) fail(`${itemPrefix}.range must not end before it starts`);
+    if (sourceEndLine !== undefined && endLine > sourceEndLine) fail(`${itemPrefix}.range must remain inside the building source location`);
+  };
+  types.forEach((item, index) => {
+    const itemPrefix = `${prefix}.sourceStructure.types[${index}]`;
+    const id = nonEmptyString(item.id, `${itemPrefix}.id`, CITY_MODEL_LIMITS.identifierCharacters);
+    if (ids.has(id)) fail(`${itemPrefix}.id must be unique within sourceStructure`); ids.add(id); typeIds.add(id);
+    nonEmptyString(item.name, `${itemPrefix}.name`, CITY_MODEL_LIMITS.displayTextCharacters);
+    enumValue(item.kind, new Set(["class", "interface", "enum", "type", "struct", "record", "delegate"]), `${itemPrefix}.kind`);
+    range(item, itemPrefix);
+  });
+  callables.forEach((item, index) => {
+    const itemPrefix = `${prefix}.sourceStructure.callables[${index}]`;
+    const id = nonEmptyString(item.id, `${itemPrefix}.id`, CITY_MODEL_LIMITS.identifierCharacters);
+    if (ids.has(id)) fail(`${itemPrefix}.id must be unique within sourceStructure`); ids.add(id);
+    nonEmptyString(item.name, `${itemPrefix}.name`, CITY_MODEL_LIMITS.displayTextCharacters);
+    enumValue(item.kind, new Set(["function", "method", "constructor", "accessor", "lambda", "local-function"]), `${itemPrefix}.kind`);
+    range(item, itemPrefix);
+    if (item.complexity !== undefined) positiveInteger(item.complexity, `${itemPrefix}.complexity`);
+  });
+  types.forEach((item, index) => { if (item.parentTypeId !== undefined && !typeIds.has(nonEmptyString(item.parentTypeId, `${prefix}.sourceStructure.types[${index}].parentTypeId`, CITY_MODEL_LIMITS.identifierCharacters))) fail(`${prefix}.sourceStructure.types[${index}].parentTypeId must reference a type`); });
+  callables.forEach((item, index) => { if (item.enclosingTypeId !== undefined && !typeIds.has(nonEmptyString(item.enclosingTypeId, `${prefix}.sourceStructure.callables[${index}].enclosingTypeId`, CITY_MODEL_LIMITS.identifierCharacters))) fail(`${prefix}.sourceStructure.callables[${index}].enclosingTypeId must reference a type`); });
+  relations.forEach((item, index) => {
+    const itemPrefix = `${prefix}.sourceStructure.relations[${index}]`;
+    nonEmptyString(item.id, `${itemPrefix}.id`, CITY_MODEL_LIMITS.identifierCharacters);
+    enumValue(item.kind, new Set(["extends", "implements", "calls", "type-reference"]), `${itemPrefix}.kind`);
+    if (item.provenance !== "syntax") fail(`${itemPrefix}.provenance must be "syntax"`);
+    if (!ids.has(nonEmptyString(item.sourceId, `${itemPrefix}.sourceId`, CITY_MODEL_LIMITS.identifierCharacters)) || !ids.has(nonEmptyString(item.targetId, `${itemPrefix}.targetId`, CITY_MODEL_LIMITS.identifierCharacters))) fail(`${itemPrefix} must reference known sourceStructure entities`);
+  });
+  if (unavailable.length === 0 && availability === "unavailable") fail(`${prefix}.sourceStructure.unavailable must explain unavailable detail`);
 }
 
 function validateIdentity(
@@ -1239,6 +1311,21 @@ function nonEmptyString(
     fail(`${path} must not be empty`);
   }
   return item;
+}
+
+function stringArray(
+  value: unknown,
+  path: string,
+  maximumItems: number,
+  maximumLength: number,
+  work: ValidationCheckpoint,
+): readonly string[] {
+  if (!Array.isArray(value)) fail(`${path} must be an array`);
+  if (value.length > maximumItems) fail(`${path} must contain at most ${maximumItems} items`);
+  return value.map((item, index) => {
+    work.consume();
+    return nonEmptyString(item, `${path}[${index}]`, maximumLength);
+  });
 }
 
 function finiteNumber(value: unknown, path: string): number {

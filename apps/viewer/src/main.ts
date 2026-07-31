@@ -53,7 +53,11 @@ import {
   type CameraPreset,
   type CameraProjection,
 } from "./camera-presets.js";
-import { projectFineDetail } from "./progressive-granularity.js";
+import {
+  FINE_DETAIL_INITIAL_LIMIT,
+  FINE_DETAIL_MAXIMUM_LIMIT,
+  projectFineDetail,
+} from "./progressive-granularity.js";
 import { cityBaseForModel } from "./city-surface.js";
 import {
   createDependencyExplorerIndex,
@@ -574,6 +578,12 @@ const inspectorFields = {
   unitsCaption: element<HTMLTableCaptionElement>("building-units-caption"),
   units: element<HTMLTableSectionElement>("building-units"),
   unitsShowMore: element<HTMLButtonElement>("building-units-show-more"),
+  sourceStructureDetails: element<HTMLDetailsElement>("building-source-structure-details"),
+  sourceStructureSummary: element<HTMLElement>("building-source-structure-summary"),
+  sourceStructureStatus: element<HTMLParagraphElement>("building-source-structure-status"),
+  sourceStructure: element<HTMLOListElement>("building-source-structure"),
+  sourceStructureShowMore: element<HTMLButtonElement>("building-source-structure-show-more"),
+  sourceStructureReturn: element<HTMLButtonElement>("building-source-structure-return"),
   sourceDetails: element<HTMLDetailsElement>("building-source-details"),
   sourceSummary: element<HTMLElement>("building-source-summary"),
   sourceStatus: element<HTMLParagraphElement>("building-source-status"),
@@ -3412,6 +3422,26 @@ inspectorFields.unitsShowMore.addEventListener("click", () => {
     INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT,
   );
   renderExecutableUnits(building);
+  renderSourceStructure(building);
+});
+inspectorFields.sourceStructureShowMore.addEventListener("click", () => {
+  const building = selectedExplorerBuildingId(explorerState)
+    ? activeBuildingsById.get(selectedExplorerBuildingId(explorerState)!)
+    : undefined;
+  if (!building) return;
+  executableUnitVisibleLimit = nextBoundedResultLimit(
+    executableUnitVisibleLimit,
+    FINE_DETAIL_MAXIMUM_LIMIT,
+    FINE_DETAIL_INITIAL_LIMIT,
+  );
+  renderSourceStructure(building);
+});
+inspectorFields.sourceStructureReturn.addEventListener("click", () => {
+  // The city scene, selected building and OrbitControls were never replaced;
+  // closing the drill-down therefore restores the exact prior camera/selection.
+  inspectorFields.sourceStructureDetails.open = false;
+  inspectorFields.sourceStructureReturn.hidden = true;
+  setStatus("Returned to the selected building in the city.");
 });
 buildingSearch.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && buildingSearch.value !== "") {
@@ -4225,6 +4255,7 @@ function showUnavailableEvolutionBuilding(
       : `The selected lineage was removed by commit ${referenceContext}. Its last known facts remain visible.`;
   inspectorFields.unitsDetails.hidden = true;
   inspectorFields.sourceDetails.hidden = true;
+  inspectorFields.sourceStructureDetails.hidden = true;
   renderBuildingEvolutionHistory(building.id);
   selectionStatus.textContent =
     state.kind === "not-yet-created"
@@ -6793,6 +6824,43 @@ function renderExecutableUnits(building: CityBuilding): void {
 
     row.append(name, complexity, line);
     inspectorFields.units.append(row);
+  }
+}
+
+function renderSourceStructure(building: CityBuilding): void {
+  const detail = projectFineDetail(building, executableUnitVisibleLimit);
+  inspectorFields.sourceStructure.replaceChildren();
+  inspectorFields.sourceStructureDetails.hidden = detail.state === "unavailable";
+  inspectorFields.sourceStructureDetails.open = false;
+  inspectorFields.sourceStructureReturn.hidden = true;
+  inspectorFields.sourceStructureShowMore.hidden = detail.omittedCount === 0;
+  inspectorFields.sourceStructureStatus.textContent =
+    detail.state === "unavailable"
+      ? detail.unavailable.join(" ")
+      : detail.unavailable.length === 0
+        ? "Ranges are persisted analyzer facts; no call or type edge is inferred."
+        : detail.unavailable.join(" ");
+  inspectorFields.sourceStructureSummary.textContent =
+    detail.state === "unavailable"
+      ? "Unavailable"
+      : `${detail.totalCount.toLocaleString()} declarations${detail.omittedCount > 0 ? ` · ${detail.omittedCount.toLocaleString()} not loaded` : ""}`;
+  inspectorFields.sourceStructureShowMore.textContent =
+    `Show ${Math.min(FINE_DETAIL_INITIAL_LIMIT, detail.omittedCount).toLocaleString()} more declarations`;
+  for (const node of detail.nodes) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "unit-source-jump";
+    const nesting = node.parentId === undefined ? "" : "↳ ";
+    const columns = node.startColumn === undefined ? "" : `:${node.startColumn}`;
+    button.textContent = `${nesting}${node.kind === "type" ? "Type" : "Function"} ${node.name} · ${node.startLine}${columns}`;
+    button.title = `Open the exact persisted range for ${node.name}`;
+    button.addEventListener("click", () => {
+      revealBuildingSource(building, node.startLine, node.endLine);
+      inspectorFields.sourceStructureReturn.hidden = false;
+    });
+    item.append(button);
+    inspectorFields.sourceStructure.append(item);
   }
 }
 
