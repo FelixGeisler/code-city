@@ -664,6 +664,7 @@ function validateSourceStructure(
   }
   const ids = new Set<string>();
   const typeIds = new Set<string>();
+  const relationIds = new Set<string>();
   const range = (item: JsonObject, itemPrefix: string): void => {
     const location = objectAt(item.range, `${itemPrefix}.range`);
     const startLine = positiveInteger(location.startLine, `${itemPrefix}.range.startLine`);
@@ -694,7 +695,9 @@ function validateSourceStructure(
   callables.forEach((item, index) => { if (item.enclosingTypeId !== undefined && !typeIds.has(nonEmptyString(item.enclosingTypeId, `${prefix}.sourceStructure.callables[${index}].enclosingTypeId`, CITY_MODEL_LIMITS.identifierCharacters))) fail(`${prefix}.sourceStructure.callables[${index}].enclosingTypeId must reference a type`); });
   relations.forEach((item, index) => {
     const itemPrefix = `${prefix}.sourceStructure.relations[${index}]`;
-    nonEmptyString(item.id, `${itemPrefix}.id`, CITY_MODEL_LIMITS.identifierCharacters);
+    const id = nonEmptyString(item.id, `${itemPrefix}.id`, CITY_MODEL_LIMITS.identifierCharacters);
+    if (relationIds.has(id)) fail(`${itemPrefix}.id must be unique within sourceStructure.relations`);
+    relationIds.add(id);
     enumValue(item.kind, new Set(["extends", "implements", "calls", "type-reference"]), `${itemPrefix}.kind`);
     if (item.provenance !== "syntax") fail(`${itemPrefix}.provenance must be "syntax"`);
     if (!ids.has(nonEmptyString(item.sourceId, `${itemPrefix}.sourceId`, CITY_MODEL_LIMITS.identifierCharacters)) || !ids.has(nonEmptyString(item.targetId, `${itemPrefix}.targetId`, CITY_MODEL_LIMITS.identifierCharacters))) fail(`${itemPrefix} must reference known sourceStructure entities`);

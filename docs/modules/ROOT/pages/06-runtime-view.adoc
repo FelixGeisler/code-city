@@ -233,20 +233,6 @@ set position, expansion, selection, and active-descendant state. Fixed
 viewer retains expansion, active row, and scroll state for the eight most
 recent project identities.
 
-== Progressive file detail
-
-The city always renders files as the stable, printable unit. Opening a file can
-project its persisted executable units into a bounded interactive detail list;
-each entry keeps its recorded source range, complexity, and provenance. This
-projection is created only for the drilled file and caps output at 200 entries,
-so loading a large city never constructs method meshes for every file.
-
-The current analyzer persists function ranges for C#, TypeScript, and
-JavaScript. It does not yet persist class/type declarations or fine-grained
-relationships, so the detail view reports those as unavailable rather than
-guessing. Fine detail is deliberately not printable; closing it leaves the
-file-level city selection and camera context intact.
-
 == Metric configuration
 
 The metric-mapping workspace lists the curated presets and saved custom
@@ -436,6 +422,10 @@ The file-level city remains the startup level of detail.  Analyzer-produced
 models may add the backwards-compatible
 `codecity.source-structure/1` building extension, containing deterministic
 class/type and callable identities plus exact one-based line/column ranges.
+Semantic IDs are derived from declaration ancestry, kind, name, signature, and
+same-key occurrence rather than source order, so unrelated insertions do not
+renumber existing declarations. Callable complexity remains an analyzer fact
+with the declaration instead of being recomputed by the viewer.
 The viewer requests a bounded data projection only after a file is selected;
 it creates no fine-detail meshes while the city starts. The declaration list is
 keyboard accessible, opens the retained exact source range, and **Return to

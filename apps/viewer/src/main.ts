@@ -3031,6 +3031,7 @@ let repositoryExplorerIndex = createRepositoryExplorerIndex(DEMO_MODEL);
 let searchResultLimit = DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT;
 let executableUnitVisibleLimit =
   INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;
+let sourceStructureVisibleLimit = FINE_DETAIL_INITIAL_LIMIT;
 let explorerState = resetExplorerState();
 let activeExternalLayout = createExternalDependencyLayout(DEMO_MODEL);
 let activeExternalNodes: readonly ExternalSceneNode[] =
@@ -3422,15 +3423,14 @@ inspectorFields.unitsShowMore.addEventListener("click", () => {
     INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT,
   );
   renderExecutableUnits(building);
-  renderSourceStructure(building);
 });
 inspectorFields.sourceStructureShowMore.addEventListener("click", () => {
   const building = selectedExplorerBuildingId(explorerState)
     ? activeBuildingsById.get(selectedExplorerBuildingId(explorerState)!)
     : undefined;
   if (!building) return;
-  executableUnitVisibleLimit = nextBoundedResultLimit(
-    executableUnitVisibleLimit,
+  sourceStructureVisibleLimit = nextBoundedResultLimit(
+    sourceStructureVisibleLimit,
     FINE_DETAIL_MAXIMUM_LIMIT,
     FINE_DETAIL_INITIAL_LIMIT,
   );
@@ -3441,6 +3441,7 @@ inspectorFields.sourceStructureReturn.addEventListener("click", () => {
   // closing the drill-down therefore restores the exact prior camera/selection.
   inspectorFields.sourceStructureDetails.open = false;
   inspectorFields.sourceStructureReturn.hidden = true;
+  inspectorFields.sourceDetails.open = false;
   setStatus("Returned to the selected building in the city.");
 });
 buildingSearch.addEventListener("keydown", (event) => {
@@ -6584,8 +6585,12 @@ function showInspector(context: BuildingContext | null): void {
   );
   executableUnitVisibleLimit =
     INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;
+  sourceStructureVisibleLimit = FINE_DETAIL_INITIAL_LIMIT;
   inspectorFields.unitsDetails.open = false;
+  inspectorFields.sourceStructureDetails.open = false;
+  inspectorFields.sourceStructureReturn.hidden = true;
   renderExecutableUnits(building);
+  renderSourceStructure(building);
   selectionStatus.textContent =
     `Selected ${building.name}. Maximum cyclomatic complexity ` +
     `${building.metrics.maximumComplexity.toLocaleString()}.`;
@@ -6828,11 +6833,16 @@ function renderExecutableUnits(building: CityBuilding): void {
 }
 
 function renderSourceStructure(building: CityBuilding): void {
-  const detail = projectFineDetail(building, executableUnitVisibleLimit);
+  const detail = projectFineDetail(building, sourceStructureVisibleLimit);
+  const wasOpen = inspectorFields.sourceStructureDetails.open;
+  const returnWasVisible =
+    !inspectorFields.sourceStructureReturn.hidden;
   inspectorFields.sourceStructure.replaceChildren();
   inspectorFields.sourceStructureDetails.hidden = detail.state === "unavailable";
-  inspectorFields.sourceStructureDetails.open = false;
-  inspectorFields.sourceStructureReturn.hidden = true;
+  inspectorFields.sourceStructureDetails.open =
+    detail.state !== "unavailable" && wasOpen;
+  inspectorFields.sourceStructureReturn.hidden =
+    detail.state === "unavailable" || !returnWasVisible;
   inspectorFields.sourceStructureShowMore.hidden = detail.omittedCount === 0;
   inspectorFields.sourceStructureStatus.textContent =
     detail.state === "unavailable"

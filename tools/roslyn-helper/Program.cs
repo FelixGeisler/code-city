@@ -300,24 +300,28 @@ internal static class Program
             .ThenBy(TypeKind, StringComparer.Ordinal)
             .ThenBy(TypeName, StringComparer.Ordinal)
             .ToArray();
-        var typeIds = declarations.Select((node, index) =>
-            new { Node = node, Id = $"type:{index + 1:D4}" })
-            .ToDictionary(item => item.Node, item => item.Id);
+        var typeIds = StableDeclarationIds(
+            declarations,
+            "source-type",
+            node => $"{DeclarationPath(node)}|{TypeKind(node)}:{TypeName(node)}"
+        );
         var types = declarations.Select(node => new TypeFact(
             typeIds[node], SanitizeName(TypeName(node)), TypeKind(node), Range(node),
             ParentTypeId(node, typeIds)
         )).ToArray();
-        var callableIds = callableNodes
+        var orderedCallables = callableNodes
             .OrderBy(node => node.SpanStart)
             .ThenBy(UnitName, StringComparer.Ordinal)
-            .Select((node, index) => new { Node = node, Id = $"callable:{index + 1:D4}" })
-            .ToDictionary(item => item.Node, item => item.Id);
-        var callables = callableNodes.Select(node => new CallableFact(
+            .ToArray();
+        var callableIds = StableDeclarationIds(
+            orderedCallables,
+            "source-callable",
+            node => $"{DeclarationPath(node)}|{CallableKind(node)}:{UnitName(node)}({CallableSignature(node)})"
+        );
+        var callables = orderedCallables.Select(node => new CallableFact(
             callableIds[node], SanitizeName(UnitName(node)), CallableKind(node), Range(node),
             ParentTypeId(node, typeIds), 1 + CountDecisions(CallableBody(node))
-        )).OrderBy(item => item.Range.StartLine).ThenBy(item => item.Range.StartColumn)
-          .ThenBy(item => item.Kind, StringComparer.Ordinal).ThenBy(item => item.Name, StringComparer.Ordinal)
-          .ToArray();
+        )).ToArray();
         return new SourceStructureFact(
             "codecity.source-structure/1", "available", types, callables,
             Array.Empty<RelationFact>(),
@@ -355,6 +359,87 @@ internal static class Program
         AnonymousFunctionExpressionSyntax => "lambda",
         _ => "method",
     };
+
+    private static Dictionary<SyntaxNode, string> StableDeclarationIds(
+        IEnumerable<SyntaxNode> nodes,
+        string scope,
+        Func<SyntaxNode, string> key
+    )
+    {
+        var occurrences = new Dictionary<string, int>(StringComparer.Ordinal);
+        var result = new Dictionary<SyntaxNode, string>();
+        foreach (var node in nodes)
+        {
+            var identity = key(node).Normalize(NormalizationForm.FormC);
+            var occurrence = occurrences.GetValueOrDefault(identity) + 1;
+            occurrences[identity] = occurrence;
+            result[node] = StableLocalId(
+                scope,
+                identity,
+                occurrence.ToString(CultureInfo.InvariantCulture)
+            );
+        }
+        return result;
+    }
+
+    private static string StableLocalId(
+        string scope,
+        params string[] components
+    )
+    {
+        var payload = string.Join(
+            "|",
+            components.Select(component =>
+                $"{component.Length.ToString(CultureInfo.InvariantCulture)}:{component}"
+            )
+        );
+        var bytes = Encoding.UTF8.GetBytes($"{scope}|{payload}");
+        var hash = 14695981039346656037UL;
+        foreach (var value in bytes)
+        {
+            hash ^= value;
+            hash = unchecked(hash * 1099511628211UL);
+        }
+        return $"{scope}:{hash:x16}";
+    }
+
+    private static string DeclarationPath(SyntaxNode node)
+    {
+        var parts = new List<string>();
+        for (var parent = node.Parent; parent is not null; parent = parent.Parent)
+        {
+            if (IsTypeDeclaration(parent))
+            {
+                parts.Add($"{TypeKind(parent)}:{TypeName(parent)}");
+            }
+            else if (IsCallable(parent))
+            {
+                parts.Add(
+                    $"callable:{CallableKind(parent)}:{UnitName(parent)}({CallableSignature(parent)})"
+                );
+            }
+        }
+        parts.Reverse();
+        return string.Join("/", parts);
+    }
+
+    private static string CallableSignature(SyntaxNode node)
+    {
+        IEnumerable<ParameterSyntax> parameters = node switch
+        {
+            BaseMethodDeclarationSyntax method => method.ParameterList.Parameters,
+            LocalFunctionStatementSyntax local => local.ParameterList.Parameters,
+            ParenthesizedLambdaExpressionSyntax lambda => lambda.ParameterList.Parameters,
+            SimpleLambdaExpressionSyntax lambda => new[] { lambda.Parameter },
+            AnonymousMethodExpressionSyntax anonymous =>
+                anonymous.ParameterList?.Parameters ?? [],
+            _ => [],
+        };
+        return string.Join(
+            ",",
+            parameters.Select(parameter => parameter.Type?.ToString() ?? "_")
+        );
+    }
 
     private static SourceRangeFact Range(SyntaxNode node)
     {

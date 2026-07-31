@@ -13,14 +13,39 @@ describe("persisted source structure", () => {
       "}",
       "export function top() { return new Outer(); }",
     ].join("\n"));
-    expect(result.sourceStructure.types.map(({ id, name, kind, range }) => ({ id, name, kind, startLine: range.startLine, startColumn: range.startColumn }))).toEqual([
-      { id: "type:0001", name: "Outer", kind: "class", startLine: 1, startColumn: 1 },
-      { id: "type:0002", name: "Inner", kind: "class", startLine: 3, startColumn: 3 },
+    expect(result.sourceStructure.types.map(({ name, kind, range }) => ({ name, kind, startLine: range.startLine, startColumn: range.startColumn }))).toEqual([
+      { name: "Outer", kind: "class", startLine: 1, startColumn: 1 },
+      { name: "Inner", kind: "class", startLine: 3, startColumn: 3 },
     ]);
+    expect(result.sourceStructure.types[0]!.id).toMatch(
+      /^source-type:[0-9a-f]{16}$/u,
+    );
     expect(result.sourceStructure.callables.map(({ name, enclosingTypeId }) => [name, enclosingTypeId])).toEqual([
-      ["method", "type:0001"], ["run", "type:0002"], ["top", undefined],
+      ["method", result.sourceStructure.types[0]!.id],
+      ["run", result.sourceStructure.types[1]!.id],
+      ["top", undefined],
     ]);
     expect(result.sourceStructure.unavailable[0]).toContain("does not infer semantic bindings");
+  });
+
+  it("keeps semantic declaration identities stable across unrelated insertions", () => {
+    const before = analyzeTypeScriptSource(
+      "src/example.ts",
+      "class C { m(value: number) { if (value) return 1; return 0; } }",
+    ).sourceStructure;
+    const after = analyzeTypeScriptSource(
+      "src/example.ts",
+      "function unrelated() {}\nclass C { m(value: number) { if (value) return 1; return 0; } }",
+    ).sourceStructure;
+    expect(after.types.find(({ name }) => name === "C")?.id).toBe(
+      before.types.find(({ name }) => name === "C")?.id,
+    );
+    expect(after.callables.find(({ name }) => name === "m")?.id).toBe(
+      before.callables.find(({ name }) => name === "m")?.id,
+    );
+    expect(before.callables.find(({ name }) => name === "m")?.complexity).toBe(
+      2,
+    );
   });
 
   it("validates additive structure and exposes it lazily as types and functions", () => {
