@@ -993,7 +993,7 @@
     },
     "sourceTypeFact": {
       "type": "object",
-      "required": ["id", "name", "kind", "range", "provenance"],
+      "required": ["id", "name", "kind", "range"],
       "properties": {
         "id": { "$ref": "#/$defs/nonEmptyString" },
         "name": { "$ref": "#/$defs/nonEmptyString" },
@@ -1006,7 +1006,7 @@
     },
     "sourceCallableFact": {
       "type": "object",
-      "required": ["id", "name", "kind", "range", "provenance"],
+      "required": ["id", "name", "kind", "range"],
       "properties": {
         "id": { "$ref": "#/$defs/nonEmptyString" },
         "name": { "$ref": "#/$defs/nonEmptyString" },

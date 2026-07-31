@@ -57,6 +57,7 @@ import {
   FINE_DETAIL_INITIAL_LIMIT,
   FINE_DETAIL_MAXIMUM_LIMIT,
   projectFineDetail,
+  type FineDetailNode,
 } from "./progressive-granularity.js";
 import { cityBaseForModel } from "./city-surface.js";
 import {
@@ -3078,6 +3079,9 @@ let executableUnitVisibleLimit =
 let fineDetailVisibleLimit = FINE_DETAIL_INITIAL_LIMIT;
 let fineDetailDrilledBuildingId: string | undefined;
 let expandedFineDetailTypeIds = new Set<string>();
+let selectedSourceDeclaration:
+  | { readonly buildingId: string; readonly node: FineDetailNode }
+  | undefined;
 let explorerState = resetExplorerState();
 let activeExternalLayout = createExternalDependencyLayout(DEMO_MODEL);
 let activeExternalNodes: readonly ExternalSceneNode[] =
@@ -3501,10 +3505,25 @@ inspectorFields.sourceStructureShowMore.addEventListener("click", () => {
 inspectorFields.sourceStructureReturn.addEventListener("click", () => {
   // The city scene, selected building and OrbitControls were never replaced;
   // closing the drill-down therefore restores the exact prior camera/selection.
+  const selectedBuildingId = selectedExplorerBuildingId(explorerState);
+  const building = selectedBuildingId === null
+    ? undefined
+    : activeBuildingsById.get(selectedBuildingId);
+  sourceRequest?.abort();
+  sourceRequest = undefined;
   inspectorFields.sourceStructureDetails.open = false;
   inspectorFields.sourceStructureReturn.hidden = true;
   fineDetailDrilledBuildingId = undefined;
+  selectedSourceDeclaration = undefined;
   inspectorFields.sourceDetails.open = false;
+  if (
+    building !== undefined &&
+    loadedBuildingSource?.buildingId === building.id
+  ) {
+    prepareAiGuidance(building);
+  } else {
+    resetAiGuidancePresentation();
+  }
   sceneHost.querySelector<HTMLCanvasElement>("canvas")?.focus();
   setStatus("Returned to the selected building in the city.");
 });
@@ -6367,8 +6386,6 @@ function sourceAvailabilityMessage(): string {
 function scrubBuildingSource(closeDetails = true): void {
   sourceRequest?.abort();
   sourceRequest = undefined;
-  aiGuidanceRequest?.abort();
-  aiGuidanceRequest = undefined;
   loadedBuildingSource = undefined;
   if (closeDetails) inspectorFields.sourceDetails.open = false;
   inspectorFields.sourceSummary.textContent =
@@ -6378,15 +6395,10 @@ function scrubBuildingSource(closeDetails = true): void {
   inspectorFields.sourceStatus.textContent =
     sourceAvailabilityMessage();
   inspectorFields.sourceCode.replaceChildren();
-  inspectorFields.aiDetails.open = false;
-  inspectorFields.aiSummary.textContent = "Not requested";
-  inspectorFields.aiStatus.textContent = "Suggestions are optional and deterministic findings remain separate.";
-  inspectorFields.aiPreview.hidden = true;
-  inspectorFields.aiPreview.textContent = "";
-  inspectorFields.aiRequest.hidden = true;
-  inspectorFields.aiRequest.disabled = false;
-  inspectorFields.aiSuggestions.hidden = true;
-  inspectorFields.aiSuggestions.replaceChildren();
+  resetAiGuidancePresentation();
+  selectedSourceDeclaration = undefined;
+  fineDetailDrilledBuildingId = undefined;
+  inspectorFields.sourceStructureReturn.hidden = true;
   inspectorFields.sourcePath.textContent = "";
   inspectorFields.sourceRevision.textContent = "";
   inspectorFields.sourceExternal.removeAttribute("href");
@@ -6394,6 +6406,21 @@ function scrubBuildingSource(closeDetails = true): void {
   inspectorFields.sourceExternal.hidden = true;
   inspectorFields.sourceEditor.hidden = true;
   inspectorFields.sourceContent.hidden = true;
+}
+
+function resetAiGuidancePresentation(): void {
+  aiGuidanceRequest?.abort();
+  aiGuidanceRequest = undefined;
+  inspectorFields.aiDetails.open = false;
+  inspectorFields.aiSummary.textContent = "Not requested";
+  inspectorFields.aiStatus.textContent = "Suggestions are optional and deterministic findings remain separate.";
+  inspectorFields.aiPreview.hidden = true;
+  inspectorFields.aiPreview.textContent = "";
+  inspectorFields.aiRequest.hidden = true;
+  inspectorFields.aiRequest.disabled = false;
+  inspectorFields.aiRequest.onclick = null;
+  inspectorFields.aiSuggestions.hidden = true;
+  inspectorFields.aiSuggestions.replaceChildren();
 }
 
 function markActiveSourceResultRemoved(jobId: string): void {
@@ -6517,11 +6544,21 @@ function renderSourceCode(
 
 function prepareAiGuidance(
   building: CityBuilding,
+  declaration?: FineDetailNode,
 ): void {
+  resetAiGuidancePresentation();
+  if (declaration !== undefined) {
+    inspectorFields.aiSummary.textContent = "Declaration selected";
+    inspectorFields.aiStatus.textContent =
+      `AI guidance for ${sourceStructureKindLabel(declaration.kind)} ${declaration.name} ` +
+      `(${declaration.id}, lines ${declaration.startLine}–${declaration.endLine}) ` +
+      "requires scoped server review support. No source was sent to an AI provider.";
+    inspectorFields.aiRequest.disabled = true;
+    return;
+  }
   const jobId = activeModelSource.jobId;
   if (jobId === undefined) return;
   const controller = new AbortController();
-  aiGuidanceRequest?.abort();
   aiGuidanceRequest = controller;
   inspectorFields.aiSummary.textContent = "Preparing preview";
   inspectorFields.aiStatus.textContent = "No source has been sent to an AI provider.";
@@ -6583,10 +6620,20 @@ function revealBuildingSource(
   endLine?: number,
   startColumn?: number,
   endColumn?: number,
+  declaration?: FineDetailNode,
 ): void {
+  const declarationSelection =
+    declaration === undefined
+      ? undefined
+      : { buildingId: building.id, node: declaration };
   if (
     loadedBuildingSource?.buildingId === building.id
   ) {
+    selectedSourceDeclaration = declarationSelection;
+    fineDetailDrilledBuildingId = declaration === undefined
+      ? undefined
+      : building.id;
+    inspectorFields.sourceStructureReturn.hidden = declaration === undefined;
     inspectorFields.sourceDetails.open = true;
     renderSourceCode(
       loadedBuildingSource.source,
@@ -6595,9 +6642,15 @@ function revealBuildingSource(
       startColumn,
       endColumn,
     );
+    prepareAiGuidance(building, declaration);
     return;
   }
   scrubBuildingSource(false);
+  selectedSourceDeclaration = declarationSelection;
+  fineDetailDrilledBuildingId = declaration === undefined
+    ? undefined
+    : building.id;
+  inspectorFields.sourceStructureReturn.hidden = declaration === undefined;
   inspectorFields.sourceDetails.open = true;
   const jobId = activeModelSource.jobId;
   if (
@@ -6668,7 +6721,7 @@ function revealBuildingSource(
       }
       inspectorFields.sourceContent.hidden = false;
       renderSourceCode(source, startLine, endLine, startColumn, endColumn);
-      prepareAiGuidance(building);
+      prepareAiGuidance(building, declaration);
     })
     .catch((error: unknown) => {
       if (
@@ -6723,6 +6776,8 @@ function showInspector(context: BuildingContext | null): void {
     describeBuildingMetrics(activeModel, building);
   renderBuildingEvolutionHistory(building.id);
   inspectorFields.sourceDetails.open = false;
+  selectedSourceDeclaration = undefined;
+  fineDetailDrilledBuildingId = undefined;
   revealBuildingSource(
     building,
     building.sourceLocation?.startLine,
@@ -6730,7 +6785,6 @@ function showInspector(context: BuildingContext | null): void {
   executableUnitVisibleLimit =
     INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;
   fineDetailVisibleLimit = FINE_DETAIL_INITIAL_LIMIT;
-  fineDetailDrilledBuildingId = undefined;
   expandedFineDetailTypeIds = new Set();
   inspectorFields.unitsDetails.open = false;
   inspectorFields.sourceStructureDetails.open = false;
@@ -7021,14 +7075,42 @@ function renderSourceStructure(building: CityBuilding): void {
         const jump = document.createElement("button");
         jump.type = "button";
         jump.className = "unit-source-jump source-structure-source-jump";
+        jump.dataset["sourceDeclarationId"] = node.id;
+        jump.dataset["sourceDeclarationCategory"] = node.category;
+        jump.dataset["sourceDeclarationKind"] = node.kind;
+        jump.dataset["sourceDeclarationStartLine"] = String(node.startLine);
+        jump.dataset["sourceDeclarationEndLine"] = String(node.endLine);
+        if (node.startColumn !== undefined) {
+          jump.dataset["sourceDeclarationStartColumn"] = String(node.startColumn);
+        }
+        if (node.endColumn !== undefined) {
+          jump.dataset["sourceDeclarationEndColumn"] = String(node.endColumn);
+        }
+        if (
+          selectedSourceDeclaration?.buildingId === building.id &&
+          selectedSourceDeclaration.node.id === node.id
+        ) {
+          jump.setAttribute("aria-current", "location");
+        }
         const columns = node.startColumn === undefined ? "" : `:${node.startColumn}`;
         jump.textContent = label ?? `${sourceStructureKindLabel(node.kind)} ${node.name} · ${node.startLine}${columns}`;
         jump.title = `${node.explanation} Open its exact persisted source range.`;
         jump.setAttribute("aria-label", `${sourceStructureKindLabel(node.kind)} ${node.name}. ${node.explanation} Starts line ${node.startLine}${columns}. Open its exact persisted source range.`);
         jump.addEventListener("click", () => {
-          revealBuildingSource(building, node.startLine, node.endLine, node.startColumn, node.endColumn);
-          fineDetailDrilledBuildingId = building.id;
-          inspectorFields.sourceStructureReturn.hidden = false;
+          for (const current of inspectorFields.sourceStructure.querySelectorAll(
+            '[aria-current="location"]',
+          )) {
+            current.removeAttribute("aria-current");
+          }
+          revealBuildingSource(
+            building,
+            node.startLine,
+            node.endLine,
+            node.startColumn,
+            node.endColumn,
+            node,
+          );
+          jump.setAttribute("aria-current", "location");
         });
         return jump;
       };

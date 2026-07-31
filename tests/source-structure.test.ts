@@ -9,7 +9,7 @@ describe("persisted source structure", () => {
     const result = analyzeTypeScriptSource("src/example.ts", [
       "export class Outer {",
       "  method(value: number) { return value + 1; }",
-      "  class Inner { run = () => 1; }",
+      "  static Inner = class Inner { run = () => 1; };",
       "}",
       "export function top() { return new Outer(); }",
     ].join("\n"));
@@ -17,7 +17,7 @@ describe("persisted source structure", () => {
     const inner = result.sourceStructure.types.find(({ name }) => name === "Inner")!;
     expect([outer, inner].map(({ id, name, kind, range }) => ({ id, name, kind, startLine: range.startLine, startColumn: range.startColumn }))).toEqual([
       expect.objectContaining({ id: expect.stringMatching(/^type:/u), name: "Outer", kind: "class", startLine: 1, startColumn: 1 }),
-      expect.objectContaining({ id: expect.stringMatching(/^type:/u), name: "Inner", kind: "class", startLine: 3, startColumn: 3 }),
+      expect.objectContaining({ id: expect.stringMatching(/^type:/u), name: "Inner", kind: "class", startLine: 3, startColumn: 18 }),
     ]);
     expect(result.sourceStructure.callables.map(({ name, enclosingTypeId, complexity }) => [name, enclosingTypeId, complexity])).toEqual([
       ["method", outer.id, 1], ["run", inner.id, 1], ["top", undefined, 1],
@@ -120,6 +120,22 @@ describe("persisted source structure", () => {
     const detail = projectFineDetail(building);
     expect(detail.nodes.map(({ category, kind, name }) => [category, kind, name])).toEqual([["type", "class", "C"], ["callable", "method", "m"]]);
     expect(detail.printable.state).toBe("not-printable");
+    expect(() => validateCityModel({ schemaVersion: "1.0", generator: { name: "code-city", version: "test" }, repositories: [{ id: "r", name: "R" }], solutions: [], modules: [{ id: "m", repositoryId: "r", kind: "unassigned", name: "M", path: ".", solutionIds: [] }], semanticGroups: [{ id: "low", label: "Low", color: "#000000", priority: 0 }], districts: [{ id: "d", repositoryId: "r", moduleId: "m", name: "D", path: ".", position: { x: 0, y: 0, z: 0 }, size: { x: 2, y: 1, z: 2 } }], buildings: [building], dependencies: [], bounds: { x: 2, y: 2, z: 2 } })).not.toThrow();
+  });
+
+  it("keeps source-structure v1 models from before declaration provenance compatible", () => {
+    const structure = analyzeTypeScriptSource("x.ts", "class C { m() {} }").sourceStructure;
+    const legacyStructure = {
+      ...structure,
+      types: structure.types.map(({ provenance: _provenance, ...item }) => item),
+      callables: structure.callables.map(({ provenance: _provenance, ...item }) => item),
+    };
+    const building = {
+      id: "b", repositoryId: "r", moduleId: "m", districtId: "d", name: "x.ts", path: "x.ts", language: "typescript" as const,
+      metrics: { sloc: 1, decisionLoad: 0, maximumComplexity: 1, executableUnitCount: 1 },
+      sourceLocation: { startLine: 1 as const, endLine: 1 }, sourceStructure: legacyStructure,
+      risk: "low" as const, semanticGroupId: "low", position: { x: 0, y: 0, z: 0 }, size: { x: 1, y: 1, z: 1 },
+    };
     expect(() => validateCityModel({ schemaVersion: "1.0", generator: { name: "code-city", version: "test" }, repositories: [{ id: "r", name: "R" }], solutions: [], modules: [{ id: "m", repositoryId: "r", kind: "unassigned", name: "M", path: ".", solutionIds: [] }], semanticGroups: [{ id: "low", label: "Low", color: "#000000", priority: 0 }], districts: [{ id: "d", repositoryId: "r", moduleId: "m", name: "D", path: ".", position: { x: 0, y: 0, z: 0 }, size: { x: 2, y: 1, z: 2 } }], buildings: [building], dependencies: [], bounds: { x: 2, y: 2, z: 2 } })).not.toThrow();
   });
 

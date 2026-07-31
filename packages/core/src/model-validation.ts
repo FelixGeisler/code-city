@@ -685,7 +685,7 @@ function validateSourceStructure(
     if (ids.has(id)) fail(`${itemPrefix}.id must be unique within sourceStructure`); ids.add(id); typeIds.add(id);
     nonEmptyString(item.name, `${itemPrefix}.name`, CITY_MODEL_LIMITS.displayTextCharacters);
     enumValue(item.kind, new Set(["class", "interface", "enum", "type", "struct", "record", "delegate"]), `${itemPrefix}.kind`);
-    if (item.provenance !== "syntax") fail(`${itemPrefix}.provenance must be "syntax"`);
+    if (item.provenance !== undefined && item.provenance !== "syntax") fail(`${itemPrefix}.provenance must be "syntax" when present`);
     range(item, itemPrefix);
   });
   callables.forEach((item, index) => {
@@ -694,7 +694,7 @@ function validateSourceStructure(
     if (ids.has(id)) fail(`${itemPrefix}.id must be unique within sourceStructure`); ids.add(id); callableIds.add(id);
     nonEmptyString(item.name, `${itemPrefix}.name`, CITY_MODEL_LIMITS.displayTextCharacters);
     enumValue(item.kind, new Set(["function", "method", "constructor", "accessor", "lambda", "local-function"]), `${itemPrefix}.kind`);
-    if (item.provenance !== "syntax") fail(`${itemPrefix}.provenance must be "syntax"`);
+    if (item.provenance !== undefined && item.provenance !== "syntax") fail(`${itemPrefix}.provenance must be "syntax" when present`);
     range(item, itemPrefix);
     if (item.complexity !== undefined) positiveInteger(item.complexity, `${itemPrefix}.complexity`);
   });
@@ -725,7 +725,7 @@ function validateSourceStructure(
   relations.forEach((item, index) => {
     const itemPrefix = `${prefix}.sourceStructure.relations[${index}]`;
     const id = nonEmptyString(item.id, `${itemPrefix}.id`, CITY_MODEL_LIMITS.identifierCharacters);
-    if (relationIds.has(id)) fail(`${itemPrefix}.id must be unique within sourceStructure`); relationIds.add(id);
+    if (ids.has(id) || relationIds.has(id)) fail(`${itemPrefix}.id must be unique within sourceStructure`); relationIds.add(id);
     const kind = enumValue(item.kind, new Set(["extends", "implements", "calls", "type-reference"]), `${itemPrefix}.kind`);
     if (item.provenance !== "syntax") fail(`${itemPrefix}.provenance must be "syntax"`);
     const sourceId = nonEmptyString(item.sourceId, `${itemPrefix}.sourceId`, CITY_MODEL_LIMITS.identifierCharacters);
