@@ -12,6 +12,7 @@ import {
   parseSourceArtifact,
   parseSourceArtifactIndex,
   serializeSourceArtifact,
+  SOURCE_ARTIFACT_MAX_FILE_BYTES,
   SOURCE_ARTIFACT_PREFIX_BYTES,
   sourceArtifactIndexLength,
   sourceArtifactFile,
@@ -22,22 +23,28 @@ import { SourceArtifactStore } from "../apps/server/src/source-artifact-store.js
 const roots: string[] = [];
 const TOKEN = "123e4567-e89b-42d3-a456-426614174000";
 
-function snapshot(text = "export function answer() {\n  return 42;\n}\n"): RepositorySnapshot {
+function snapshot(
+  text = "export function answer() {\n  return 42;\n}\n",
+  byteLength = Buffer.byteLength(text),
+): RepositorySnapshot {
   return {
     name: "example",
     files: [
       {
         path: "src/answer.ts",
         text,
-        byteLength: Buffer.byteLength(text),
+        byteLength,
       },
     ],
     diagnostics: [],
   };
 }
 
-async function fixture() {
-  const retained = snapshot();
+async function fixture(
+  text = "export function answer() {\n  return 42;\n}\n",
+  byteLength = Buffer.byteLength(text),
+) {
+  const retained = snapshot(text, byteLength);
   const analyzed = await analyzeRepositorySnapshots([retained]);
   const repository = analyzed.repositories[0]!;
   const model = attachSourceProvenance(analyzed, [
@@ -144,6 +151,85 @@ describe("source artifacts", () => {
         { repositoryId, snapshot: snapshot("export const answer = 42;\n") },
       ]),
     ).toThrow(/source location does not match/u);
+  });
+
+  it("retains normalized BOM-prefixed and BOM-only source text", async () => {
+    const source = "export const answer = 42;\n";
+    const bom = await fixture(source, Buffer.byteLength(source) + 3);
+    expect(bom.artifact.files[0]?.text).toBe(source);
+    expect(parseSourceArtifact(serializeSourceArtifact(bom.artifact)).files[0])
+      .toMatchObject({ text: source });
+
+    const empty = await fixture("", 3);
+    const bytes = serializeSourceArtifact(empty.artifact);
+    const parsed = parseSourceArtifact(bytes);
+    expect(parsed.files[0]).toMatchObject({
+      location: { startLine: 1, endLine: 1 },
+      text: "",
+    });
+
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "code-city-source-"));
+    roots.push(root);
+    await fs.chmod(root, 0o700);
+    const store = await SourceArtifactStore.open({ dataDirectory: root });
+    const published = await store.publish(TOKEN, empty.artifact);
+    await expect(
+      store.readFile(
+        TOKEN,
+        empty.model.buildings[0]!.id,
+        published,
+      ),
+    ).resolves.toMatchObject({
+      file: {
+        location: { startLine: 1, endLine: 1 },
+        size: 0,
+        text: "",
+      },
+    });
+  });
+
+  it("enforces raw and retained source byte boundaries independently", async () => {
+    const { model } = await fixture();
+    const oneLineModel = {
+      ...model,
+      buildings: model.buildings.map((building) => ({
+        ...building,
+        sourceLocation: { startLine: 1, endLine: 1 },
+      })),
+    };
+    const atLimit = "x".repeat(SOURCE_ARTIFACT_MAX_FILE_BYTES);
+    expect(
+      createSourceArtifact(oneLineModel, [
+        {
+          repositoryId: model.repositories[0]!.id,
+          snapshot: snapshot(atLimit),
+        },
+      ]).files[0]?.text.length,
+    ).toBe(SOURCE_ARTIFACT_MAX_FILE_BYTES);
+    expect(() =>
+      createSourceArtifact(oneLineModel, [
+        {
+          repositoryId: model.repositories[0]!.id,
+          snapshot: snapshot(`${atLimit}x`),
+        },
+      ]),
+    ).toThrow(/outside its limits/u);
+    expect(() =>
+      createSourceArtifact(oneLineModel, [
+        {
+          repositoryId: model.repositories[0]!.id,
+          snapshot: snapshot("x", SOURCE_ARTIFACT_MAX_FILE_BYTES + 1),
+        },
+      ]),
+    ).toThrow(/outside its limits/u);
+    expect(() =>
+      createSourceArtifact(oneLineModel, [
+        {
+          repositoryId: model.repositories[0]!.id,
+          snapshot: snapshot("\u00e9", 1),
+        },
+      ]),
+    ).toThrow(/outside its limits/u);
   });
 
   it("rejects malformed offsets, truncation, and selected payload digest changes", async () => {
