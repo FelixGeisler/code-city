@@ -120,4 +120,27 @@ describe("viewer advanced selection", () => {
       ),
     ).toThrow(/at most 500/u);
   });
+
+  it("allows large ordering contexts without expanding the selection", () => {
+    const largeOrder = Array.from(
+      { length: 25_000 },
+      (_, index) => `building:${index}`,
+    );
+    const anchored = selectAdvancedBuilding(
+      EMPTY_ADVANCED_SELECTION,
+      largeOrder[0]!,
+    );
+    expect(
+      selectAdvancedBuilding(anchored, largeOrder[1]!, {
+        range: true,
+        orderedBuildingIds: largeOrder,
+      }).buildingIds,
+    ).toEqual(["building:0", "building:1"]);
+    expect(() =>
+      selectAdvancedBuilding(anchored, largeOrder.at(-1)!, {
+        range: true,
+        orderedBuildingIds: largeOrder,
+      }),
+    ).toThrow(/at most 500 buildings/u);
+  });
 });

@@ -23,6 +23,7 @@ export interface AdvancedQueryWorkerContext {
         ruleIds: readonly string[],
       ][]
     | null;
+  readonly ruleSchemaVersion: string | null;
 }
 
 export interface AdvancedQueryEvaluateRequest {
@@ -113,7 +114,11 @@ function isWorkerContext(value: unknown): value is AdvancedQueryWorkerContext {
   const candidate = record(value);
   return (
     candidate !== undefined &&
-    hasExactKeys(candidate, ["changes", "smellRules"]) &&
+    hasExactKeys(candidate, [
+      "changes",
+      "smellRules",
+      "ruleSchemaVersion",
+    ]) &&
     nullableStringArrayTuples(
       candidate["changes"],
       3,
@@ -122,7 +127,9 @@ function isWorkerContext(value: unknown): value is AdvancedQueryWorkerContext {
     nullableStringArrayTuples(
       candidate["smellRules"],
       MAXIMUM_RULE_IDS_PER_BUILDING,
-    )
+    ) &&
+    (candidate["ruleSchemaVersion"] === null ||
+      boundedString(candidate["ruleSchemaVersion"], 128))
   );
 }
 
@@ -238,7 +245,7 @@ function nullableStringArrayTuples(
         Array.isArray(entry) &&
         entry.length === 2 &&
         boundedString(entry[0], 256) &&
-        boundedStringArray(entry[1], maximumValues) &&
+        boundedStringArray(entry[1], maximumValues, true) &&
         (allowedValues === undefined ||
           entry[1].every((item: string) => allowedValues.has(item))),
     ) &&
@@ -249,6 +256,7 @@ function nullableStringArrayTuples(
 function boundedStringArray(
   value: unknown,
   maximumLength: number,
+  unique = false,
 ): value is string[] {
   return (
     Array.isArray(value) &&
@@ -256,7 +264,7 @@ function boundedStringArray(
     value.every((entry) =>
       boundedString(entry, MAXIMUM_RESULT_TEXT_CHARACTERS),
     ) &&
-    new Set(value).size === value.length
+    (!unique || new Set(value).size === value.length)
   );
 }
 

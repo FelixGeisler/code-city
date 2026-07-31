@@ -53,6 +53,7 @@ describe("advanced query worker client", () => {
         ["building:z", ["added", "changed"]],
       ],
       smellRules: null,
+      ruleSchemaVersion: null,
     });
     const evaluation = evaluateAdvancedQuery(DEMO_MODEL, definition);
     worker.respond({
@@ -76,9 +77,42 @@ describe("advanced query worker client", () => {
     expect(worker.request?.context).toEqual({
       changes: [],
       smellRules: [],
+      ruleSchemaVersion: null,
     });
     client.cancel();
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("accepts bounded duplicate explanations from distinct conditions", async () => {
+    const worker = new FakeAdvancedQueryWorker();
+    const client = new AdvancedQueryWorkerClient({
+      createWorker: () => worker as unknown as Worker,
+    });
+    const definition: AdvancedQueryDefinition = {
+      ...query(),
+      conditions: [
+        {
+          kind: "metric",
+          metric: "maximumComplexity",
+          operator: "at-least",
+          value: 0,
+        },
+        {
+          kind: "metric",
+          metric: "maximumComplexity",
+          operator: "at-most",
+          value: 1_000,
+        },
+      ],
+    };
+    const evaluation = evaluateAdvancedQuery(DEMO_MODEL, definition);
+    expect(evaluation.results[0]?.reasons[0]).toBe(
+      evaluation.results[0]?.reasons[1],
+    );
+    const pending = client.evaluate(DEMO_MODEL, definition);
+    worker.respond({ type: "result", jobId: 1, evaluation });
+
+    await expect(pending).resolves.toEqual(evaluation);
   });
 
   it("hard-cancels an obsolete worker when a newer query starts", async () => {
@@ -119,6 +153,38 @@ describe("advanced query worker client", () => {
     });
     await expect(pending).rejects.toThrow(/invalid response/iu);
     expect(worker.terminated).toBe(true);
+  });
+
+  it("rejects a structurally valid result that does not match its request", async () => {
+    for (const mutate of [
+      (evaluation: ReturnType<typeof evaluateAdvancedQuery>) => ({
+        ...evaluation,
+        queryId: "query:forged",
+      }),
+      (evaluation: ReturnType<typeof evaluateAdvancedQuery>) => ({
+        ...evaluation,
+        results: [
+          {
+            ...evaluation.results[0]!,
+            name: "forged.ts",
+          },
+          ...evaluation.results.slice(1),
+        ],
+      }),
+    ]) {
+      const worker = new FakeAdvancedQueryWorker();
+      const client = new AdvancedQueryWorkerClient({
+        createWorker: () => worker as unknown as Worker,
+      });
+      const pending = client.evaluate(DEMO_MODEL, query());
+      worker.respond({
+        type: "result",
+        jobId: 1,
+        evaluation: mutate(evaluateAdvancedQuery(DEMO_MODEL, query())),
+      });
+      await expect(pending).rejects.toThrow(/invalid response/iu);
+      expect(worker.terminated).toBe(true);
+    }
   });
 
   it("rejects internally inconsistent and oversized evaluations", async () => {

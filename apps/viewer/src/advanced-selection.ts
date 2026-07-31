@@ -3,6 +3,7 @@ import type { CityModel } from "../../../packages/core/src/model.js";
 export const ADVANCED_SELECTION_SET_VERSION =
   "codecity.selection-set/1";
 export const MAXIMUM_ADVANCED_SELECTION_SIZE = 500;
+export const MAXIMUM_ADVANCED_SELECTION_ORDER_SIZE = 25_000;
 
 export interface AdvancedSelectionState {
   readonly buildingIds: readonly string[];
@@ -241,7 +242,21 @@ function validateOrderedIds(
       "Range selection requires a non-empty ordered building list.",
     );
   }
-  return canonicalIds(value);
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const candidate of value) {
+    const id = requiredId(candidate, "Building ID");
+    if (seen.has(id)) continue;
+    seen.add(id);
+    result.push(id);
+    if (result.length > MAXIMUM_ADVANCED_SELECTION_ORDER_SIZE) {
+      throw new RangeError(
+        "A range-selection order can contain at most " +
+          `${MAXIMUM_ADVANCED_SELECTION_ORDER_SIZE} buildings.`,
+      );
+    }
+  }
+  return result;
 }
 
 function normalizedName(name: string): string {

@@ -103,6 +103,30 @@ describe("viewer advanced queries", () => {
     ).toEqual(["building:client", "building:server"]);
   });
 
+  it("uses ordinal text ordering independent of the host locale", () => {
+    const city = model();
+    const renamed = {
+      ...city,
+      buildings: city.buildings.slice(0, 2).map((building, index) => ({
+        ...building,
+        name: index === 0 ? "ä.ts" : "z.ts",
+        path: index === 0 ? "src/ä.ts" : "src/z.ts",
+      })),
+      dependencies: [],
+    };
+    const sorted = evaluateAdvancedQuery(
+      { ...renamed, buildings: renamed.buildings.toReversed() },
+      definition({
+        sort: { key: "name", direction: "ascending" },
+      }),
+    );
+
+    expect(sorted.results.map(({ name }) => name)).toEqual([
+      "z.ts",
+      "ä.ts",
+    ]);
+  });
+
   it("reports missing evolution and smell capabilities explicitly", () => {
     const query = definition({
       match: "any",
@@ -110,6 +134,11 @@ describe("viewer advanced queries", () => {
         { kind: "changed", changeKinds: ["added", "changed"] },
         { kind: "smell", ruleId: "complexity/high-v1" },
       ],
+      capabilities: {
+        modelSchemaVersion: "1.0",
+        metricSchemaVersion: ADVANCED_QUERY_METRIC_SCHEMA_VERSION,
+        ruleSchemaVersion: "codecity.design-smells/1",
+      },
     });
 
     expect(evaluateAdvancedQuery(model(), query)).toMatchObject({
@@ -128,12 +157,28 @@ describe("viewer advanced queries", () => {
       smellRuleIdsByBuildingId: new Map([
         ["building:quiet", new Set(["complexity/high-v1"])],
       ]),
+      ruleSchemaVersion: "codecity.design-smells/1",
     });
     expect(evaluated.state).toBe("results");
     expect(evaluated.results.map(({ buildingId }) => buildingId)).toEqual([
       "building:client",
       "building:quiet",
     ]);
+
+    expect(
+      evaluateAdvancedQuery(model(), query, {
+        smellRuleIdsByBuildingId: new Map([
+          ["building:quiet", new Set(["complexity/high-v1"])],
+        ]),
+        ruleSchemaVersion: "codecity.design-smells/2",
+      }),
+    ).toMatchObject({
+      state: "unavailable",
+      unavailableReasons: [
+        "Change data is unavailable for the current model snapshot.",
+        'Design-smell schema "codecity.design-smells/1" is unavailable.',
+      ],
+    });
   });
 
   it("truncates large matches without hiding the total", () => {
@@ -175,6 +220,13 @@ describe("viewer advanced queries", () => {
         limit: 501,
       }),
     ).toThrow(/1 through 500/u);
+    expect(() =>
+      validateAdvancedQueryDefinition(
+        definition({
+          conditions: [{ kind: "smell", ruleId: "complexity/high-v1" }],
+        }),
+      ),
+    ).toThrow(/rule schema version/u);
   });
 
   it("requires identities for contextual built-in queries", () => {

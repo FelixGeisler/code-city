@@ -1889,6 +1889,9 @@ let activeEvolutionLineageSelection:
   | undefined;
 let activeEvolutionAnalysis: EvolutionVisualizationData | undefined;
 let activeEvolutionTransition: EvolutionTransition | undefined;
+let activeEvolutionQueryChanges:
+  | ReadonlyMap<string, ReadonlySet<AdvancedQueryChangeKind>>
+  | undefined;
 let activeEvolutionDependencyChanges:
   | EvolutionDependencyChanges
   | undefined;
@@ -2599,6 +2602,7 @@ function resetEvolutionTimeline(recreateWorker = true): void {
   activeEvolutionLineageSelection = undefined;
   activeEvolutionAnalysis = undefined;
   activeEvolutionTransition = undefined;
+  activeEvolutionQueryChanges = undefined;
   activeEvolutionDependencyChanges = undefined;
   activeEvolutionTargetDependencyIds = new Set();
   activeEvolutionIndex = 0;
@@ -2722,6 +2726,9 @@ async function seekEvolution(
       activeEvolutionIndex = targetIndex;
       activeEvolutionAnalysis = evolutionVisualizationData(result.analysis);
       activeEvolutionTransition = initial ? undefined : result.transition;
+      activeEvolutionQueryChanges = initial
+        ? undefined
+        : evolutionQueryChanges(result.transition);
       activeEvolutionDependencyChanges = initial
         ? undefined
         : result.transition.dependencyChanges;
@@ -3277,8 +3284,14 @@ function advancedQueryPanelContext() {
 }
 
 function activeAdvancedQueryContext(): AdvancedQueryContext {
-  const transition = activeEvolutionTransition;
-  if (transition === undefined) return {};
+  return activeEvolutionQueryChanges === undefined
+    ? {}
+    : { changesByBuildingId: activeEvolutionQueryChanges };
+}
+
+function evolutionQueryChanges(
+  transition: EvolutionTransition,
+): ReadonlyMap<string, ReadonlySet<AdvancedQueryChangeKind>> {
   const changes = new Map<
     string,
     Set<AdvancedQueryChangeKind>
@@ -3299,7 +3312,7 @@ function activeAdvancedQueryContext(): AdvancedQueryContext {
     transition.removedBuildings.map(({ id }) => id),
     "removed",
   );
-  return { changesByBuildingId: changes };
+  return changes;
 }
 
 function applyAdvancedSelection(

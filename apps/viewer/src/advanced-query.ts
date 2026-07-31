@@ -98,6 +98,7 @@ export interface AdvancedQueryContext {
     string,
     ReadonlySet<string>
   >;
+  readonly ruleSchemaVersion?: string;
 }
 
 export interface AdvancedQueryResult {
@@ -290,6 +291,14 @@ export function validateAdvancedQueryDefinition(
     MAXIMUM_QUERY_RESULTS,
   );
   const capabilities = validateCapabilities(value["capabilities"]);
+  if (
+    conditions.some(({ kind }) => kind === "smell") &&
+    capabilities.ruleSchemaVersion === undefined
+  ) {
+    throw new TypeError(
+      "Queries that reference design-smell rules must declare a rule schema version.",
+    );
+  }
   return Object.freeze({
     version: ADVANCED_QUERY_VERSION,
     id,
@@ -340,7 +349,13 @@ export function evaluateAdvancedQuery(
 
   for (const building of model.buildings) {
     const matches = definition.conditions.map((condition) =>
-      matchCondition(building, condition, dependencies, context),
+      matchCondition(
+        building,
+        condition,
+        dependencies,
+        context,
+        definition.capabilities.ruleSchemaVersion,
+      ),
     );
     for (const result of matches) {
       if (result.unavailable !== undefined) {
@@ -386,7 +401,7 @@ export function evaluateAdvancedQuery(
   );
   const results = Object.freeze(matched.slice(0, definition.limit));
   const unavailableReasons = Object.freeze(
-    [...unavailable].sort((left, right) => left.localeCompare(right)),
+    [...unavailable].sort(compareText),
   );
   const state =
     unavailableReasons.length > 0
@@ -412,6 +427,7 @@ function matchCondition(
   condition: AdvancedQueryCondition,
   dependencies: DependencyCounts,
   context: AdvancedQueryContext,
+  ruleSchemaVersion: string | undefined,
 ): ConditionMatch {
   switch (condition.kind) {
     case "text": {
@@ -419,9 +435,9 @@ function matchCondition(
         condition.field === "name-or-path"
           ? [building.name, building.path]
           : [building[condition.field]];
-      const value = condition.value.trim().toLocaleLowerCase();
+      const value = condition.value.trim().toLowerCase();
       const matched = candidates.some((candidateValue) => {
-        const candidate = candidateValue.trim().toLocaleLowerCase();
+        const candidate = candidateValue.trim().toLowerCase();
         return condition.operator === "equals"
           ? candidate === value
           : candidate.includes(value);
@@ -459,7 +475,7 @@ function matchCondition(
       return {
         matched,
         reason: matched
-          ? `${metricLabel(condition.metric)} is ${value.toLocaleString()}`
+          ? `${metricLabel(condition.metric)} is ${String(value)}`
           : undefined,
       };
     }
@@ -474,7 +490,7 @@ function matchCondition(
         matched: count >= condition.minimum,
         reason:
           count >= condition.minimum
-            ? `${count.toLocaleString()} ${condition.direction} dependencies`
+            ? `${String(count)} ${condition.direction} dependencies`
             : undefined,
       };
     }
@@ -526,6 +542,13 @@ function matchCondition(
           matched: false,
           unavailable:
             `Design-smell rule "${condition.ruleId}" is unavailable.`,
+        };
+      }
+      if (context.ruleSchemaVersion !== ruleSchemaVersion) {
+        return {
+          matched: false,
+          unavailable:
+            `Design-smell schema "${ruleSchemaVersion ?? "unspecified"}" is unavailable.`,
         };
       }
       const matched =
@@ -656,11 +679,11 @@ function compareResults(
   const primary =
     typeof leftValue === "number" && typeof rightValue === "number"
       ? leftValue - rightValue
-      : String(leftValue).localeCompare(String(rightValue));
+      : compareText(String(leftValue), String(rightValue));
   return (
     primary * direction ||
-    left.path.localeCompare(right.path) ||
-    left.buildingId.localeCompare(right.buildingId)
+    compareText(left.path, right.path) ||
+    compareText(left.buildingId, right.buildingId)
   );
 }
 
@@ -668,7 +691,7 @@ function querySortValue(
   result: AdvancedQueryResult,
   key: AdvancedQuerySortKey,
 ): string | number {
-  if (key === "name" || key === "path") return result[key].toLocaleLowerCase();
+  if (key === "name" || key === "path") return result[key].toLowerCase();
   if (key === "dependency-count") return result.dependencyCount;
   return result.metrics[key];
 }
@@ -1065,6 +1088,10 @@ function metricLabel(metric: AdvancedQueryMetric): string {
     case "executableUnitCount":
       return "executable units";
   }
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

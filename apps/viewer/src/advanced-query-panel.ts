@@ -580,11 +580,18 @@ export function installAdvancedQueryPanel(
         evaluation?.results.map((entry) => entry.buildingId) ??
         model?.buildings.map((building) => building.id) ??
         [];
-      selection = selectAdvancedBuilding(selection, buildingId, {
-        ...intent,
-        ...(intent.range ? { orderedBuildingIds: ordered } : {}),
-      });
-      renderSelection();
+      try {
+        selection = selectAdvancedBuilding(selection, buildingId, {
+          ...intent,
+          ...(intent.range ? { orderedBuildingIds: ordered } : {}),
+        });
+        renderSelection();
+      } catch (error) {
+        status.textContent =
+          error instanceof Error
+            ? error.message
+            : "The building selection could not be changed.";
+      }
     },
     clearSelection() {
       selection = clearAdvancedSelection(selection);

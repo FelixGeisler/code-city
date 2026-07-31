@@ -44,6 +44,11 @@ workerScope.addEventListener("message", (event: MessageEvent<unknown>) => {
               ]),
             ),
           }),
+      ...(request.context.ruleSchemaVersion === null
+        ? {}
+        : {
+            ruleSchemaVersion: request.context.ruleSchemaVersion,
+          }),
     };
     response = {
       type: "result",

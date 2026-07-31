@@ -312,11 +312,16 @@ function compareNames(
   left: { readonly name: string },
   right: { readonly name: string },
 ): number {
-  return left.name.localeCompare(right.name);
+  const folded = compareText(foldedName(left.name), foldedName(right.name));
+  return folded || compareText(left.name, right.name);
 }
 
 function foldedName(value: string): string {
   return value.toLocaleLowerCase("en-US");
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function hasDuplicateNames(

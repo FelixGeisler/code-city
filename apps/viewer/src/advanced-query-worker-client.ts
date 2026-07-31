@@ -81,7 +81,13 @@ export class AdvancedQueryWorkerClient {
         const response = event.data;
         if (
           !isAdvancedQueryWorkerResponse(response) ||
-          response.jobId !== jobId
+          response.jobId !== jobId ||
+          (response.type === "result" &&
+            !evaluationMatchesRequest(
+              response.evaluation,
+              model,
+              definition,
+            ))
         ) {
           finish(() =>
             reject(
@@ -144,6 +150,39 @@ export class AdvancedQueryWorkerClient {
   }
 }
 
+function evaluationMatchesRequest(
+  evaluation: AdvancedQueryEvaluation,
+  model: CityModel,
+  definition: AdvancedQueryDefinition,
+): boolean {
+  if (
+    evaluation.queryId !== definition.id ||
+    evaluation.evaluatedBuildingCount !== model.buildings.length
+  ) {
+    return false;
+  }
+  const buildings = new Map(
+    model.buildings.map((building) => [building.id, building]),
+  );
+  return evaluation.results.every((result) => {
+    const building = buildings.get(result.buildingId);
+    return (
+      building !== undefined &&
+      result.name === building.name &&
+      result.path === building.path &&
+      result.districtId === building.districtId &&
+      result.language === building.language &&
+      result.risk === building.risk &&
+      result.metrics.sloc === building.metrics.sloc &&
+      result.metrics.decisionLoad === building.metrics.decisionLoad &&
+      result.metrics.maximumComplexity ===
+        building.metrics.maximumComplexity &&
+      result.metrics.executableUnitCount ===
+        building.metrics.executableUnitCount
+    );
+  });
+}
+
 function serializeContext(
   context: AdvancedQueryContext,
 ): AdvancedQueryWorkerContext {
@@ -156,6 +195,7 @@ function serializeContext(
       context.smellRuleIdsByBuildingId === undefined
         ? null
         : sortedMapEntries(context.smellRuleIdsByBuildingId),
+    ruleSchemaVersion: context.ruleSchemaVersion ?? null,
   };
 }
 
@@ -168,5 +208,7 @@ function sortedMapEntries<T extends string>(
       ([id, values]) =>
         [id, [...values].sort()] as [string, readonly T[]],
     )
-    .sort(([left], [right]) => left.localeCompare(right));
+    .sort(([left], [right]) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    );
 }
