@@ -160,6 +160,15 @@ entries, then attached to the published city frames. Evolution author policy
 `/api/v1/artifacts/<job-id>/evolution.json` use the same inbound authorization
 policy as the city-model artifact and send `Cache-Control: no-store`.
 
+The viewer worker reuses its last successfully validated evolution frame for
+forward playback, so a 100-frame timeline applies exactly 99 deltas. An
+arbitrary endpoint that cannot reuse that state deterministically falls back
+to the canonical baseline; the validated 100-frame artifact limit caps this
+at 99 delta applications. The worker intentionally retains no additional
+full-city checkpoint graphs, preserving the evolution artifact's documented
+transient-memory budget. Incremental state changes only after a seek's final
+cancellation check, so superseded work cannot alter later playback.
+
 At most four upload reservations and 256 MiB of staged upload data exist at
 once. City models are capped at 128 MiB, ZIPs at 64 MiB, unused reservations
 expire after five minutes, and each upload has 30-second idle and ten-minute

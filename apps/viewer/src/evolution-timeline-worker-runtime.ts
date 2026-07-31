@@ -41,10 +41,15 @@ export interface EvolutionTimelineWorkerRuntimeOptions {
   readonly postMessage: (response: EvolutionWorkerResponse) => void;
   readonly yieldControl?: (phase: EvolutionWorkerWorkPhase) => Promise<void>;
   readonly checkpointInterval?: number;
+  readonly onReplayDeltaApplied?: (frameIndex: number) => void;
 }
 
 type Identified = Readonly<{ id: string }>;
 type JsonContainer = Record<string, unknown> | unknown[];
+type ReplaySource = Readonly<{
+  index: number;
+  model: CityModel;
+}>;
 
 const MODEL_CHANGE_KEYS = Object.freeze([
   "metricMapping",
@@ -327,26 +332,50 @@ async function replayAt(
   index: number,
   activeFrameIndex: number,
   activeFrameModel: CityModel | undefined,
+  requestSource: ReplaySource | undefined,
+  onReplayDeltaApplied: ((frameIndex: number) => void) | undefined,
   work: CooperativeCheckpoint,
 ): Promise<CityModel> {
   if (index < 0 || index > bundle.deltas.length) {
     throw new Error("The requested evolution frame is out of range.");
   }
-  if (activeFrameIndex === index && activeFrameModel !== undefined) {
+
+  let source: ReplaySource = { index: 0, model: baselineModel };
+  const consider = (
+    candidateIndex: number,
+    candidateModel: CityModel | undefined,
+  ): void => {
+    if (
+      candidateModel !== undefined &&
+      candidateIndex <= index &&
+      candidateIndex > source.index
+    ) {
+      source = { index: candidateIndex, model: candidateModel };
+    }
+  };
+  consider(activeFrameIndex, activeFrameModel);
+  if (requestSource !== undefined) {
+    consider(requestSource.index, requestSource.model);
+  }
+
+  if (source.index === index) {
     return cooperativeCloneJson(
-      activeFrameModel,
+      source.model,
       work,
       "cached-frame-clone",
     );
   }
 
-  let model = await cooperativeCloneJson(
-    baselineModel,
-    work,
-    "delta-replay",
-  );
-  for (let offset = 0; offset < index; offset += 1) {
+  // applyDelta is persistent: it builds new roots and collection arrays and
+  // never mutates its source model. A cold direct seek may still start at the
+  // baseline, but the validated 100-frame limit caps each fallback endpoint at
+  // 99 applications. Avoiding retained checkpoint graphs keeps playback within
+  // the evolution artifact's documented transient-memory budget.
+  let model = source.model;
+  for (let offset = source.index; offset < index; offset += 1) {
     model = await applyDelta(model, bundle.deltas[offset]!.changes, work);
+    const frameIndex = offset + 1;
+    onReplayDeltaApplied?.(frameIndex);
   }
   work.assertCurrent();
   return model;
@@ -511,6 +540,7 @@ export class EvolutionTimelineWorkerRuntime {
     phase: EvolutionWorkerWorkPhase,
   ) => Promise<void>;
   readonly #checkpointInterval: number;
+  readonly #onReplayDeltaApplied: ((frameIndex: number) => void) | undefined;
   #activeBundle: EvolutionBundle | undefined;
   #baselineModel: CityModel | undefined;
   #activeFrameIndex = 0;
@@ -526,6 +556,7 @@ export class EvolutionTimelineWorkerRuntime {
       });
     this.#checkpointInterval =
       options.checkpointInterval ?? EVOLUTION_WORK_CHECKPOINT_INTERVAL;
+    this.#onReplayDeltaApplied = options.onReplayDeltaApplied;
     if (
       !Number.isSafeInteger(this.#checkpointInterval) ||
       this.#checkpointInterval < 1
@@ -625,6 +656,8 @@ export class EvolutionTimelineWorkerRuntime {
       request.fromIndex,
       this.#activeFrameIndex,
       this.#activeFrameModel,
+      undefined,
+      this.#onReplayDeltaApplied,
       work,
     );
     const model = await replayAt(
@@ -633,9 +666,11 @@ export class EvolutionTimelineWorkerRuntime {
       request.toIndex,
       this.#activeFrameIndex,
       this.#activeFrameModel,
+      { index: request.fromIndex, model: from },
+      this.#onReplayDeltaApplied,
       work,
     );
-    const cachedModel = await cooperativeCloneJson(
+    const responseModel = await cooperativeCloneJson(
       model,
       work,
       "post-replay-clone",
@@ -655,12 +690,12 @@ export class EvolutionTimelineWorkerRuntime {
     );
     work.assertCurrent();
     this.#activeFrameIndex = request.toIndex;
-    this.#activeFrameModel = cachedModel;
+    this.#activeFrameModel = model;
     return {
       type: "frame",
       requestId: request.requestId,
       frame: summarizeEvolutionFrames(bundle)[request.toIndex]!,
-      model,
+      model: responseModel,
       analysis,
       transition,
     };

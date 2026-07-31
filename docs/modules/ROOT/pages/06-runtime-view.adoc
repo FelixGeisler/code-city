@@ -218,12 +218,15 @@ digest, validates the bounded bundle, owns its replay state, and returns only
 the requested full frame plus bounded transition and visualization facts.
 
 First, previous, play/pause, next, last, speed, and range controls all use the
-same direct-seek path. Each seek replays from the validated baseline, so the
-stable scene for a commit is independent of prior playback. Request IDs make a
-new scrub cancel the pending UI result; late worker frames cannot become
-current. The worker retains one bundle and materializes only the source and
-target replay frames needed for a transition rather than retaining all full
-models.
+same direct-seek path. Forward playback reuses the last validated frame and
+applies only the missing delta suffix. An endpoint that cannot reuse that state
+replays deterministically from the canonical baseline, with at most 99 deltas
+under the 100-frame artifact limit, so the stable scene for a commit remains
+independent of prior playback. Request IDs make a new scrub cancel the pending
+UI result; late worker frames cannot become current. The worker retains one
+bundle, its baseline, and its active frame, and materializes only the source
+and target replay frames needed for a transition. It does not retain a set of
+full-city checkpoint models.
 
 Scene reloads preserve the orbit camera and reselect a stable building,
 district, or external-dependency ID when it still exists. A removed selected
