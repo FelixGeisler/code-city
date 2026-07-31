@@ -58,63 +58,6 @@ function sourceCallableKind(node: ts.Node): SourceCallableFact["kind"] {
   return ts.isFunctionDeclaration(node) || ts.isFunctionExpression(node) ? "function" : "method";
 }
 
-function executableComplexity(node: ts.FunctionLikeDeclaration): number {
-  if (node.body === undefined) return 1;
-  let decisions = 0;
-  function visit(current: ts.Node): void {
-    if (
-      current !== node.body &&
-      isExecutableUnit(current) &&
-      current.body !== undefined
-    ) {
-      return;
-    }
-    decisions += decisionIncrement(current);
-    ts.forEachChild(current, visit);
-  }
-  visit(node.body);
-  return 1 + decisions;
-}
-
-function declarationPath(node: ts.Node, source: ts.SourceFile): string {
-  const parts: string[] = [];
-  for (let parent = node.parent; parent !== undefined; parent = parent.parent) {
-    const kind = sourceTypeKind(parent);
-    if (kind !== undefined) {
-      const named = (parent as ts.Declaration & {
-        name?: ts.DeclarationName;
-      }).name;
-      parts.push(`${kind}:${named?.getText(source) || "<anonymous>"}`);
-    } else if (isExecutableUnit(parent)) {
-      parts.push(
-        `callable:${sourceCallableKind(parent)}:${unitName(parent, source)}(${callableSignature(parent, source)})`,
-      );
-    }
-  }
-  return parts.reverse().join("/");
-}
-
-function callableSignature(
-  node: ts.FunctionLikeDeclaration,
-  source: ts.SourceFile,
-): string {
-  return node.parameters
-    .map((parameter) => parameter.type?.getText(source) ?? "_")
-    .join(",");
-}
-
-function stableLocalIds(
-  scope: "source-type" | "source-callable",
-  keys: readonly string[],
-): readonly string[] {
-  const occurrences = new Map<string, number>();
-  return keys.map((key) => {
-    const occurrence = (occurrences.get(key) ?? 0) + 1;
-    occurrences.set(key, occurrence);
-    return stableId(scope, key, String(occurrence));
-  });
-}
-
 /**
  * Collects declarations directly from the parsed syntax tree. It intentionally
  * does not resolve names across files or invent call edges: program/type-checker

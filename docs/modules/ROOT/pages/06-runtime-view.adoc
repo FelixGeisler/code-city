@@ -426,6 +426,9 @@ The viewer requests a bounded data projection only after a file is selected;
 it creates no fine-detail meshes while the city starts. The declaration list is
 keyboard accessible, opens the retained exact source range, and **Return to
 city** closes the drill-down without replacing the selected building or camera.
+Selecting a declaration suspends the existing file-wide AI action and exposes
+only its stable ID and exact range; no source is sent until scoped server review
+support can bind approval to that declaration.
 Fine detail is explicitly `not-printable`; print exports retain file/district
 geometry only.
 

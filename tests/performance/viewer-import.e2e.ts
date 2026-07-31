@@ -2789,13 +2789,43 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   const cameraBeforeDetail = await page.evaluate(() =>
     document.querySelector<HTMLCanvasElement>("#scene canvas")?.getBoundingClientRect().toJSON(),
   );
-  await page.getByRole("button", { name: /Function sameLineExact\./u }).click();
+  const exactFunction = page.getByRole("button", {
+    name: /Function sameLineExact\./u,
+  });
+  await expect(exactFunction).toHaveAttribute(
+    "data-source-declaration-id",
+    /callable:/u,
+  );
+  await expect(exactFunction).toHaveAttribute(
+    "data-source-declaration-category",
+    "callable",
+  );
+  await expect(exactFunction).toHaveAttribute(
+    "data-source-declaration-start-line",
+    /\d+/u,
+  );
+  await expect(exactFunction).toHaveAttribute(
+    "data-source-declaration-start-column",
+    /\d+/u,
+  );
+  await exactFunction.click();
   const highlightedLine = page.locator(".source-line-highlight").first();
   await expect(highlightedLine).toContainText("sameLinePrefix");
   await expect(highlightedLine).toContainText("sameLineSuffix");
   await expect.poll(async () =>
     (await highlightedLine.locator(".source-range-highlight").allTextContents()).join("")
   ).toBe("export function sameLineExact(): number { return 7; }");
+  await expect(page.locator("#building-ai-guidance-summary")).toHaveText(
+    "Declaration selected",
+  );
+  await expect(page.locator("#building-ai-guidance-status")).toContainText(
+    "requires scoped server review support",
+  );
+  await expect(page.locator("#building-ai-guidance-status")).toContainText(
+    "No source was sent",
+  );
+  await expect(page.locator("#building-ai-guidance-request")).toBeHidden();
+  expect(guidanceRequests).toEqual([]);
   await expect(page.locator("#building-source-structure-return")).toBeVisible();
   await page.locator("#building-source-structure-show-more").click();
   await expect(page.locator("#building-source-structure-details")).toHaveAttribute("open", "");
@@ -2808,6 +2838,9 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   expect(await page.evaluate(() =>
     document.querySelector<HTMLCanvasElement>("#scene canvas")?.getBoundingClientRect().toJSON(),
   )).toEqual(cameraBeforeDetail);
+  const sourceDetails = page.locator("#building-source-details");
+  await expect(sourceDetails).not.toHaveAttribute("open", "");
+  await sourceDetails.locator("summary").click();
   await expect(page.locator(".source-line-omitted")).toBeVisible();
   await expect(page.locator(".source-line-omitted").first()).toContainText(
     "…",
