@@ -92,6 +92,7 @@ import { validateCityModel } from "./model-validation.js";
 import { ViewerImportApiClient } from "./import-api.js";
 import {
   loadBuildingSource,
+  sourceOmissionMarker,
   sourceLineWindow,
   sourceLineTokens,
   type BuildingSource,
@@ -2403,7 +2404,7 @@ async function startEvolutionTimeline(source: ModelSource): Promise<void> {
   evolutionBusy = true;
   evolutionCommit.textContent = "Loading repository history";
   evolutionStatus.textContent =
-    "Verifying and preparing deterministic timeline framesâ€¦";
+    "Verifying and preparing deterministic timeline frames\u2026";
   renderEvolutionTimeline();
   try {
     const bytes = await sourceApi.evolutionArtifact(
@@ -2486,7 +2487,7 @@ async function seekEvolution(
       : undefined;
   evolutionBusy = true;
   evolutionRange.value = String(targetIndex);
-  evolutionStatus.textContent = "Seekingâ€¦";
+  evolutionStatus.textContent = "Seeking\u2026";
   renderEvolutionTimeline();
   try {
     const result = await evolutionWorker.seek(fromIndex, targetIndex);
@@ -2563,7 +2564,7 @@ function renderEvolutionTimeline(): void {
   evolutionRange.disabled = lastIndex === 0;
   evolutionPlay.disabled = lastIndex === 0;
   evolutionPlay.setAttribute("aria-pressed", String(evolutionPlaying));
-  evolutionPlay.textContent = evolutionPlaying ? "â¸" : "â¶";
+  evolutionPlay.textContent = evolutionPlaying ? "\u23f8" : "\u25b6";
   evolutionPlay.setAttribute(
     "aria-label",
     evolutionPlaying
@@ -2572,7 +2573,7 @@ function renderEvolutionTimeline(): void {
   );
   if (!frame) return;
   evolutionCommit.textContent =
-    `${activeEvolutionIndex + 1}/${activeEvolutionFrames.length} Â· ` +
+    `${activeEvolutionIndex + 1}/${activeEvolutionFrames.length} \u00b7 ` +
     frame.sha.slice(0, 10);
   const transition = activeEvolutionTransition;
   const changeText =
@@ -2583,9 +2584,9 @@ function renderEvolutionTimeline(): void {
           `${transition.removedBuildings.length} removed`,
           `${transition.renamedBuildingIds.length} renamed`,
           `${transition.resizedBuildingIds.length} resized`,
-        ].join(" Â· ");
+        ].join(" \u00b7 ");
   evolutionStatus.textContent =
-    `${new Date(frame.committedAt).toLocaleString()}${changeText ? ` Â· ${changeText}` : ""}`;
+    `${new Date(frame.committedAt).toLocaleString()}${changeText ? ` \u00b7 ${changeText}` : ""}`;
 }
 
 function startEvolutionPlayback(): void {
@@ -2620,7 +2621,7 @@ function stopEvolutionPlayback(): void {
     evolutionPlaybackTimer = undefined;
   }
   evolutionPlay?.setAttribute("aria-pressed", "false");
-  if (evolutionPlay) evolutionPlay.textContent = "â¶";
+  if (evolutionPlay) evolutionPlay.textContent = "\u25b6";
 }
 
 function showDeletedEvolutionBuilding(building: CityBuilding): void {
@@ -4173,7 +4174,7 @@ function renderSourceCode(
     inspectorFields.sourceCode.append(indicator);
   };
   if (omittedBefore > 0) {
-    appendOmitted(`â€¦ ${omittedBefore} earlier lines omitted â€¦`);
+    appendOmitted(sourceOmissionMarker(omittedBefore, "earlier"));
   }
   for (
     let lineNumber = firstLine;
@@ -4203,7 +4204,7 @@ function renderSourceCode(
     inspectorFields.sourceCode.append(line);
   }
   if (omittedAfter > 0) {
-    appendOmitted(`â€¦ ${omittedAfter} later lines omitted â€¦`);
+    appendOmitted(sourceOmissionMarker(omittedAfter, "later"));
   }
   inspectorFields.sourceCode
     .querySelector<HTMLElement>(`[data-line="${requestedStart}"]`)
