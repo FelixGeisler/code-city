@@ -160,11 +160,48 @@ SIGINT, SIGTERM, or explicit close stops it.
 == Viewer workspace
 
 The workspace opens on **Overview** and provides **Explore**, **Routes**,
-**Details**, and **Overview** in one scrolling surface. On desktop it is a
-resizable side dock; below 1100 px it becomes a collapsed, peek, or expanded
-bottom sheet. Selecting geometry only peeks at details, while explicit search
-opens them. A persistent scope chip resets district isolation and scopes the
-overview metrics.
+**Queries**, **Details**, **Overview**, and **Metrics** in one scrolling
+surface. On desktop it is a resizable side dock; below 1100 px it becomes a
+collapsed, peek, or expanded bottom sheet. Selecting geometry only peeks at
+details, while explicit search opens them. A persistent scope chip resets
+district isolation and scopes the overview metrics.
+
+== Advanced queries and selections
+
+The Queries workspace defines versioned, exact query data over building names,
+paths, languages, risk bands, source metrics, dependency counts and
+neighborhoods, the active evolution transition, and available design-smell
+rules. Built-in queries rank highest complexity and dependency hubs, inspect
+the incoming or outgoing neighborhood of the primary building, show recent
+changes, or scope results to the selected district. Stable path and building
+identity tie-breakers keep every result order deterministic. Each result lists
+the conditions that matched; missing transition or rule data produces an
+explicit unavailable or partial state instead of silently returning no match.
+
+Query evaluation is isolated in a fresh, cancellable worker. A query has at
+most 16 conditions, inspects at most 25,000 buildings and 250,000 dependency
+facts, and returns at most 500 results. The response reports the evaluated and
+total counts plus truncation. The main thread validates exact response fields,
+bounds, state/count consistency, unique result identities, and explanation
+limits before publishing it. Starting another query or model frame terminates
+the obsolete worker.
+
+Pointer, query-result, search, and hierarchy selection share one primary
+building and one bounded selection set. Ctrl/Command toggles membership; Shift
+selects the range in the current deterministic list; arrow keys move through
+query results. The screen-reader result list exposes each membership through
+`aria-selected`, while the live status announces counts and capability
+failures. Up to 500 buildings may be selected. Their instanced overlay remains
+one bounded draw object and can be disabled without losing membership.
+
+Focus targets the primary building. Isolation is available when every selected
+building belongs to one district. Compare summarizes the selected metrics, and
+export downloads the versioned query, selection set, and selected building
+facts as JSON. Named queries and selection sets use versioned project-local
+browser storage keyed by stable project identity. Each query records its model,
+metric, and optional rule schema capability; incompatible or malformed stored
+data is ignored. Evolution frames retain surviving identities and rerun the
+active query, while loading a different project clears the selection.
 
 == Metric configuration
 

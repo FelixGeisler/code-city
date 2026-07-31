@@ -29,6 +29,11 @@ previews
 frame; reduced-motion mode performs no spatial interpolation; stable
 selections survive while their lineage exists
 
+|Query interaction
+|Every match explains itself; deterministic ordering synchronizes one bounded
+selection across scene, hierarchy, and result views; unavailable capabilities
+and truncated totals remain explicit
+
 |Performance
 |Viewer input is bounded; instancing is required before raising the limits
 |===

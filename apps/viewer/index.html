@@ -189,6 +189,18 @@
               Routes
             </button>
             <button
+              id="viewer-tab-queries"
+              class="viewer-workspace-tab"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="viewer-view-queries"
+              data-workspace-view="queries"
+              tabindex="-1"
+            >
+              Queries
+            </button>
+            <button
               id="viewer-tab-details"
               class="viewer-workspace-tab"
               type="button"
@@ -333,6 +345,282 @@
             </div>
           </div>
         </section>
+            </div>
+
+            <div
+              id="viewer-view-queries"
+              class="viewer-workspace-view"
+              role="tabpanel"
+              aria-labelledby="viewer-tab-queries"
+              data-workspace-panel="queries"
+              hidden
+            >
+              <section
+                id="advanced-query-panel"
+                class="panel advanced-query-panel"
+                aria-labelledby="advanced-query-title"
+              >
+                <div class="panel-heading">
+                  <div>
+                    <h2 id="advanced-query-title">Query city</h2>
+                    <p>
+                      Run bounded structural queries and build a reusable
+                      building selection.
+                    </p>
+                  </div>
+                </div>
+                <div class="advanced-query-body">
+                  <label for="advanced-query-preset">
+                    <span>Common query</span>
+                    <select id="advanced-query-preset">
+                      <option value="highest-complexity">
+                        Highest complexity
+                      </option>
+                      <option value="dependency-hubs">
+                        Dependency hubs
+                      </option>
+                      <option value="incoming-neighborhood">
+                        Incoming neighborhood
+                      </option>
+                      <option value="outgoing-neighborhood">
+                        Outgoing neighborhood
+                      </option>
+                      <option value="changed-recently">
+                        Changed recently
+                      </option>
+                      <option value="selected-district">
+                        Selected district
+                      </option>
+                      <option value="custom">Custom filters</option>
+                    </select>
+                  </label>
+                  <fieldset id="advanced-query-filters">
+                    <legend>Custom filters</legend>
+                    <label for="advanced-query-text">
+                      <span>Name or path contains</span>
+                      <input
+                        id="advanced-query-text"
+                        type="search"
+                        maxlength="128"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <label for="advanced-query-language">
+                      <span>Language</span>
+                      <select id="advanced-query-language">
+                        <option value="">Any language</option>
+                        <option value="typescript">TypeScript</option>
+                        <option value="javascript">JavaScript</option>
+                        <option value="csharp">C#</option>
+                      </select>
+                    </label>
+                    <label for="advanced-query-risk">
+                      <span>Risk</span>
+                      <select id="advanced-query-risk">
+                        <option value="">Any risk</option>
+                        <option value="low">Low</option>
+                        <option value="moderate">Moderate</option>
+                        <option value="high">High</option>
+                        <option value="very-high">Very high</option>
+                      </select>
+                    </label>
+                    <label for="advanced-query-complexity">
+                      <span>Minimum complexity</span>
+                      <input
+                        id="advanced-query-complexity"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value="0"
+                      />
+                    </label>
+                    <label for="advanced-query-dependencies">
+                      <span>Minimum dependencies</span>
+                      <input
+                        id="advanced-query-dependencies"
+                        type="number"
+                        min="0"
+                        step="1"
+                        value="0"
+                      />
+                    </label>
+                    <label for="advanced-query-smell">
+                      <span>Design-smell rule ID</span>
+                      <input
+                        id="advanced-query-smell"
+                        type="text"
+                        maxlength="128"
+                        autocomplete="off"
+                        placeholder="Optional"
+                      />
+                    </label>
+                    <label class="advanced-query-check">
+                      <input id="advanced-query-changed" type="checkbox" />
+                      <span>Changed in the active timeline step</span>
+                    </label>
+                  </fieldset>
+                  <div class="advanced-query-run-row">
+                    <label for="advanced-query-limit">
+                      <span>Maximum results</span>
+                      <select id="advanced-query-limit">
+                        <option value="25">25</option>
+                        <option value="50" selected>50</option>
+                        <option value="100">100</option>
+                        <option value="250">250</option>
+                        <option value="500">500</option>
+                      </select>
+                    </label>
+                    <button
+                      id="advanced-query-run"
+                      class="button button-primary"
+                      type="button"
+                    >
+                      Run query
+                    </button>
+                  </div>
+                  <p
+                    id="advanced-query-status"
+                    class="search-status"
+                    role="status"
+                    aria-live="polite"
+                    aria-atomic="true"
+                  >
+                    Choose a query to inspect this city.
+                  </p>
+                  <div
+                    class="advanced-query-result-actions"
+                    role="group"
+                    aria-label="Query selection"
+                  >
+                    <button
+                      id="advanced-query-select-all"
+                      class="button button-compact"
+                      type="button"
+                      disabled
+                    >
+                      Select results
+                    </button>
+                    <button
+                      id="advanced-query-clear"
+                      class="button button-compact"
+                      type="button"
+                      disabled
+                    >
+                      Clear selection
+                    </button>
+                    <button
+                      id="advanced-query-overlay"
+                      class="button button-compact"
+                      type="button"
+                      aria-pressed="true"
+                      disabled
+                    >
+                      Overlay on
+                    </button>
+                  </div>
+                  <ul
+                    id="advanced-query-results"
+                    class="advanced-query-results"
+                    role="listbox"
+                    aria-label="Advanced query results"
+                    aria-multiselectable="true"
+                  ></ul>
+                  <section
+                    id="advanced-query-comparison"
+                    class="advanced-query-comparison"
+                    aria-labelledby="advanced-query-comparison-title"
+                    hidden
+                  >
+                    <h3 id="advanced-query-comparison-title">
+                      Selection comparison
+                    </h3>
+                    <p id="advanced-query-comparison-summary"></p>
+                  </section>
+                  <div
+                    class="advanced-query-selection-actions"
+                    role="group"
+                    aria-label="Actions for selected buildings"
+                  >
+                    <button
+                      id="advanced-query-focus"
+                      class="button button-compact"
+                      type="button"
+                      disabled
+                    >
+                      Focus primary
+                    </button>
+                    <button
+                      id="advanced-query-isolate"
+                      class="button button-compact"
+                      type="button"
+                      disabled
+                    >
+                      Isolate selection district
+                    </button>
+                    <button
+                      id="advanced-query-compare"
+                      class="button button-compact"
+                      type="button"
+                      disabled
+                    >
+                      Compare
+                    </button>
+                    <button
+                      id="advanced-query-export"
+                      class="button button-compact"
+                      type="button"
+                      disabled
+                    >
+                      Export JSON
+                    </button>
+                  </div>
+                  <section
+                    class="advanced-query-saved"
+                    aria-labelledby="advanced-query-saved-title"
+                  >
+                    <h3 id="advanced-query-saved-title">Saved for project</h3>
+                    <label for="advanced-query-save-name">
+                      <span>Name</span>
+                      <input
+                        id="advanced-query-save-name"
+                        type="text"
+                        maxlength="64"
+                        autocomplete="off"
+                      />
+                    </label>
+                    <div class="advanced-query-saved-actions">
+                      <button
+                        id="advanced-query-save"
+                        class="button button-compact"
+                        type="button"
+                        disabled
+                      >
+                        Save query
+                      </button>
+                      <button
+                        id="advanced-selection-save"
+                        class="button button-compact"
+                        type="button"
+                        disabled
+                      >
+                        Save selection
+                      </button>
+                    </div>
+                    <label for="advanced-query-saved">
+                      <span>Saved query</span>
+                      <select id="advanced-query-saved">
+                        <option value="">None saved</option>
+                      </select>
+                    </label>
+                    <label for="advanced-selection-saved">
+                      <span>Saved selection</span>
+                      <select id="advanced-selection-saved">
+                        <option value="">None saved</option>
+                      </select>
+                    </label>
+                  </section>
+                </div>
+              </section>
             </div>
 
             <div

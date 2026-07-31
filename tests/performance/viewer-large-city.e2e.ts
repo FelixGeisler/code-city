@@ -288,6 +288,90 @@ test("metric mappings require an explicit preview and preserve named project con
   ).toContainText(["Choose configuration", "Team print"]);
 });
 
+test("runs explainable queries and synchronizes bounded multiple selections", async ({
+  page,
+}) => {
+  await page.goto(viewerUrl, {
+    waitUntil: "domcontentloaded",
+    timeout: 45_000,
+  });
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await page.locator("#advanced-query-run").click();
+  await expect(page.locator("#advanced-query-status")).toContainText(
+    "5 matches",
+  );
+
+  const resultButtons = page.locator(".advanced-query-result");
+  await expect(resultButtons).toHaveCount(5);
+  await expect(resultButtons.first()).toContainText("main.ts");
+  await resultButtons.first().click();
+  await expect(
+    page.locator("#advanced-query-panel"),
+  ).toBeVisible();
+  await expect(resultButtons.first()).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await resultButtons.nth(1).click({ modifiers: ["Control"] });
+  await expect(
+    page.locator('.advanced-query-result[aria-selected="true"]'),
+  ).toHaveCount(2);
+  await resultButtons.nth(2).click({ modifiers: ["Shift"] });
+  await expect(
+    page.locator('.advanced-query-result[aria-selected="true"]'),
+  ).toHaveCount(2);
+
+  await expect(page.locator("#advanced-query-isolate")).toBeEnabled();
+  await page.locator("#advanced-query-compare").click();
+  await expect(
+    page.locator("#advanced-query-comparison-summary"),
+  ).toContainText("2 buildings");
+  await page.locator("#advanced-query-overlay").click();
+  await expect(page.locator("#advanced-query-overlay")).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await page.locator("#advanced-query-overlay").click();
+
+  await page.locator("#advanced-query-select-all").click();
+  await expect(
+    page.locator('.advanced-query-result[aria-selected="true"]'),
+  ).toHaveCount(5);
+  await page.locator("#advanced-query-save-name").fill("Review set");
+  await page.locator("#advanced-query-save").click();
+  await page.locator("#advanced-selection-save").click();
+  await expect(page.locator("#advanced-query-saved")).toContainText(
+    "Review set",
+  );
+  await expect(page.locator("#advanced-selection-saved")).toContainText(
+    "Review set",
+  );
+
+  const downloadPromise = page.waitForEvent("download");
+  await page.locator("#advanced-query-export").click();
+  const download = await downloadPromise;
+  expect(download.suggestedFilename()).toBe("code-city-selection.json");
+  const downloadPath = await download.path();
+  expect(downloadPath).not.toBeNull();
+  await expect
+    .poll(async () =>
+      fs.readFile(downloadPath!, "utf8"),
+    )
+    .toContain('"version": "codecity.query-export/1"');
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await expect(page.locator("#advanced-query-saved")).toContainText(
+    "Review set",
+  );
+  await page
+    .locator("#advanced-selection-saved")
+    .selectOption("Review set");
+  await expect(page.locator("#advanced-query-status")).toContainText(
+    "5 saved buildings selected",
+  );
+});
+
 async function disableBrowserInstancing(
   page: import("@playwright/test").Page,
 ): Promise<void> {

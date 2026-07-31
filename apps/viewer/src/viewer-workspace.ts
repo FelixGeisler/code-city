@@ -1,6 +1,7 @@
 export const VIEWER_WORKSPACE_VIEWS = [
   "explore",
   "routes",
+  "queries",
   "details",
   "overview",
   "metrics",

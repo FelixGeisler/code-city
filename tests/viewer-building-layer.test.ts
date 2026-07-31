@@ -140,6 +140,31 @@ describe("viewer building layer", () => {
     expect(hovered?.visible).toBe(false);
   });
 
+  it("renders a non-raycast group selection and respects isolation", () => {
+    const layer = new ViewerBuildingLayer([
+      building("a", 2, "district-a"),
+      building("b", 4, "district-b"),
+      building("c", 6, "district-a"),
+    ]);
+
+    layer.setGroupHighlight(["c", "missing", "a", "a"]);
+    expect(layer.groupHighlightObject.count).toBe(2);
+    expect(layer.groupHighlightObject.visible).toBe(true);
+    expect(
+      new THREE.Raycaster(
+        new THREE.Vector3(2, 20, 0),
+        new THREE.Vector3(0, -1, 0),
+      ).intersectObject(layer.groupHighlightObject),
+    ).toEqual([]);
+
+    layer.setIsolatedDistrict("district-b");
+    expect(layer.groupHighlightObject.visible).toBe(false);
+    layer.setIsolatedDistrict("district-a");
+    expect(layer.groupHighlightObject.count).toBe(2);
+    layer.setGroupHighlight([]);
+    expect(layer.groupHighlightObject.visible).toBe(false);
+  });
+
   it("supports bounded legacy meshes and rejects oversized fallback models", () => {
     const fallback = new ViewerBuildingLayer(
       [building("b", 4), building("a", 2)],
