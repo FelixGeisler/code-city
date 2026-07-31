@@ -34,6 +34,17 @@ import { metricMappingProjectIdentity } from "./metric-mapping-storage.js";
 
 export const MAXIMUM_ADVANCED_COMPARISON_ROWS = 100;
 
+export function retainsAdvancedQueryProjectContext(
+  currentProjectIdentity: string | undefined,
+  nextProjectIdentity: string,
+  preserveContext = false,
+): boolean {
+  return (
+    preserveContext ||
+    currentProjectIdentity === nextProjectIdentity
+  );
+}
+
 export interface AdvancedQueryPanelContext {
   readonly selectedBuildingId?: string;
   readonly selectedDistrictId?: string;
@@ -59,7 +70,17 @@ export interface AdvancedQueryPanelOptions {
 
 export interface AdvancedQueryPanelController {
   readonly selection: AdvancedSelectionState;
-  setProject(model: CityModel): void;
+  setProject(
+    model: CityModel,
+    options?: {
+      /**
+       * The caller has established continuity across two frames of the same
+       * imported evolution artifact. Retain the active definition and
+       * intersect its selection even when solution/module topology changed.
+       */
+      readonly preserveContext?: boolean;
+    },
+  ): void;
   refreshContext(): void;
   selectFromScene(
     buildingId: string,
@@ -167,6 +188,10 @@ export function installAdvancedQueryPanel(
     options.storage ?? browserStorage(),
   );
   let model: CityModel | undefined;
+  // Evolution frames may legitimately add/remove modules. Keep saved items
+  // in the namespace established by the imported project instead of moving
+  // them between topology-derived storage keys while the timeline is sought.
+  let storageScopeModel: CityModel | undefined;
   let projectIdentity: string | undefined;
   let definition: AdvancedQueryDefinition | undefined;
   let evaluation: AdvancedQueryEvaluation | undefined;
@@ -258,9 +283,9 @@ export function installAdvancedQueryPanel(
   };
 
   const renderSaved = (): void => {
-    const snapshot = model === undefined
+    const snapshot = storageScopeModel === undefined
       ? { queries: [], selectionSets: [] }
-      : store.load(model);
+      : store.load(storageScopeModel);
     replaceSelectOptions(
       savedQueries,
       "None saved",
@@ -482,16 +507,25 @@ export function installAdvancedQueryPanel(
       saveName.value.trim().length === 0;
   });
   saveQuery.addEventListener("click", () => {
-    if (model === undefined || definition === undefined) return;
-    const result = store.saveQuery(model, saveName.value, definition);
+    if (
+      storageScopeModel === undefined ||
+      definition === undefined
+    ) {
+      return;
+    }
+    const result = store.saveQuery(
+      storageScopeModel,
+      saveName.value,
+      definition,
+    );
     status.textContent = result.message;
     if (result.ok) renderSaved();
   });
   saveSelection.addEventListener("click", () => {
-    if (model === undefined) return;
+    if (storageScopeModel === undefined) return;
     try {
       const result = store.saveSelectionSet(
-        model,
+        storageScopeModel,
         createAdvancedSelectionSet(
           saveName.value,
           selection.buildingIds,
@@ -507,16 +541,27 @@ export function installAdvancedQueryPanel(
     }
   });
   savedQueries.addEventListener("change", () => {
-    if (model === undefined || savedQueries.value === "") return;
+    if (
+      storageScopeModel === undefined ||
+      savedQueries.value === ""
+    ) {
+      return;
+    }
     const saved = store
-      .load(model)
+      .load(storageScopeModel)
       .queries.find(({ name }) => name === savedQueries.value);
     if (saved !== undefined) void runDefinition(saved.definition);
   });
   savedSelections.addEventListener("change", () => {
-    if (model === undefined || savedSelections.value === "") return;
+    if (
+      model === undefined ||
+      storageScopeModel === undefined ||
+      savedSelections.value === ""
+    ) {
+      return;
+    }
     const saved = store
-      .load(model)
+      .load(storageScopeModel)
       .selectionSets.find(({ name }) => name === savedSelections.value);
     if (saved === undefined) return;
     selection = replaceAdvancedSelection(
@@ -552,9 +597,16 @@ export function installAdvancedQueryPanel(
     get selection() {
       return selection;
     },
-    setProject(nextModel) {
+    setProject(nextModel, updateOptions = {}) {
       const nextProjectIdentity = metricMappingProjectIdentity(nextModel);
-      const sameProject = projectIdentity === nextProjectIdentity;
+      const sameProject = retainsAdvancedQueryProjectContext(
+        projectIdentity,
+        nextProjectIdentity,
+        updateOptions.preserveContext,
+      );
+      if (!sameProject || storageScopeModel === undefined) {
+        storageScopeModel = nextModel;
+      }
       projectIdentity = nextProjectIdentity;
       model = nextModel;
       generation += 1;

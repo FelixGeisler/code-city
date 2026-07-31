@@ -133,6 +133,39 @@ describe("evolution removal layer", () => {
     expect(disposeMaterial).toHaveBeenCalledTimes(1);
   });
 
+  it("intersects exact building masks with district isolation", () => {
+    const layer = new EvolutionRemovalLayer(
+      maximumRemovalFixture().slice(0, 500),
+    );
+    const object = instancedObject(layer);
+
+    layer.setVisibleBuildingIds([
+      "building:7",
+      "building:107",
+      "building:207",
+      "building:8",
+      "building:missing",
+    ]);
+    expect(object.count).toBe(4);
+    expect(layer.diagnostics().visibleCount).toBe(4);
+
+    layer.setIsolatedDistrict("district:7");
+    expect(object.count).toBe(3);
+    expect(layer.diagnostics().visibleCount).toBe(3);
+
+    layer.setVisibleBuildingIds([]);
+    expect(object.count).toBe(0);
+    expect(layer.diagnostics()).toMatchObject({
+      visibleCount: 0,
+      drawCalls: 0,
+    });
+
+    layer.setVisibleBuildingIds(null);
+    expect(object.count).toBe(5);
+    expect(layer.diagnostics().visibleCount).toBe(5);
+    layer.dispose();
+  });
+
   it("keeps the non-instancing fallback to one merged draw call", () => {
     const definitions = maximumRemovalFixture().slice(0, 500);
     const layer = new EvolutionRemovalLayer(
