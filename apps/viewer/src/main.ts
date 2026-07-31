@@ -890,8 +890,8 @@ class CityScene {
     this.clearEvolutionAnimation();
     const removals = new EvolutionRemovalLayer(
       transition.removedBuildings,
+      this.isolatedDistrictId,
     );
-    removals.setIsolatedDistrict(this.isolatedDistrictId);
     this.city.add(removals.object);
     const addedIds = new Set(transition.addedBuildingIds);
     const fromById = new Map(

@@ -54,11 +54,13 @@ describe("evolution removal layer", () => {
   });
 
   it("filters instances by district and animates without reallocating", () => {
-    const layer = new EvolutionRemovalLayer(maximumRemovalFixture());
+    const layer = new EvolutionRemovalLayer(
+      maximumRemovalFixture(),
+      "district:7",
+    );
     const geometry = layer.object.geometry;
     const material = layer.object.material;
 
-    layer.setIsolatedDistrict("district:7");
     expect(layer.object.count).toBe(250);
     expect(layer.diagnostics()).toMatchObject({
       totalCount: MAXIMUM_BUILDINGS,

@@ -49,6 +49,7 @@ export class EvolutionRemovalLayer {
 
   public constructor(
     definitions: readonly EvolutionRemovalDefinition[],
+    isolatedDistrictId: string | null = null,
   ) {
     this.definitions = definitions;
     const geometry = new THREE.BoxGeometry(1, 1, 1);
@@ -68,7 +69,7 @@ export class EvolutionRemovalLayer {
     // Rebuilding a 25k-instance bounding volume on every isolation change
     // costs more than drawing this single translucent cue batch.
     this.object.frustumCulled = false;
-    this.setIsolatedDistrict(null);
+    this.setIsolatedDistrict(isolatedDistrictId);
   }
 
   public setIsolatedDistrict(districtId: string | null): void {
