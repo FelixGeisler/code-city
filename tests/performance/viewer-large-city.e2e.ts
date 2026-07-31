@@ -207,6 +207,9 @@ test("25k hierarchy stays virtualized and synchronized with city state", async (
 test("design-smell overlay is accessible, paginated, suppressible, and isolated", async ({
   page,
 }) => {
+  // Rendering has a separate strict budget; this scenario also waits for two
+  // worker evaluations and exercises cross-panel query synchronization.
+  test.setTimeout(90_000);
   await page.goto(
     `${viewerUrl}/?fixture=large-city-25k&` +
       `isolate-district=district%3A007&performance=1`,
@@ -251,6 +254,22 @@ test("design-smell overlay is accessible, paginated, suppressible, and isolated"
   await expect(firstFinding).toContainText("⚠ Oversized file");
   expect(await firstFinding.textContent()).not.toMatch(/â|Â|Ã/u);
 
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await page
+    .locator("#advanced-query-preset")
+    .selectOption("custom");
+  await page
+    .locator("#advanced-query-smell")
+    .fill("oversized-file");
+  await page.locator("#advanced-query-run").click();
+  const queryStatus = page.locator("#advanced-query-status");
+  await expect(queryStatus).toContainText("matches", {
+    timeout: 45_000,
+  });
+  const queryStatusBeforeSuppression =
+    await queryStatus.textContent();
+  await page.getByRole("tab", { name: "Metrics" }).click();
+
   const before = await panel.locator(".design-smell-count").textContent();
   await resultRows.first().getByRole("button", {
     name: "Suppress rule for building",
@@ -268,6 +287,14 @@ test("design-smell overlay is accessible, paginated, suppressible, and isolated"
       ),
     ),
   ).toBe(true);
+
+  await page.getByRole("tab", { name: "Queries" }).click();
+  await expect(queryStatus).not.toHaveText(
+    queryStatusBeforeSuppression ?? "",
+    { timeout: 45_000 },
+  );
+  await expect(queryStatus).toContainText("matches");
+  await page.getByRole("tab", { name: "Metrics" }).click();
 
   await panel.getByRole("button", { name: "Next" }).click();
   await expect(

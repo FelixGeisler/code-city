@@ -4496,7 +4496,7 @@ function updateAdvancedQueryDesignSmells(
     return;
   }
   activeDesignSmellQueryFacts = next;
-  advancedQueryPanel?.setProject(activeModel);
+  advancedQueryPanel?.refreshContext();
 }
 
 function equalDesignSmellQueryFacts(
