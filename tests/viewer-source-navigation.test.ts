@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   loadBuildingSource,
+  sourceOmissionMarker,
   sourceLineWindow,
   sourceLineTokens,
 } from "../apps/viewer/src/source-navigation.js";
@@ -117,5 +118,14 @@ describe("viewer source navigation", () => {
       omittedBefore: 249_879,
       omittedAfter: 249_621,
     });
+  });
+
+  it("renders proper ellipses around both omission markers", () => {
+    expect(sourceOmissionMarker(249_879, "earlier")).toBe(
+      "\u2026 249879 earlier lines omitted \u2026",
+    );
+    expect(sourceOmissionMarker(249_621, "later")).toBe(
+      "\u2026 249621 later lines omitted \u2026",
+    );
   });
 });

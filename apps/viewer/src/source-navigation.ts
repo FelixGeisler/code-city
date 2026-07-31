@@ -47,6 +47,16 @@ export interface SourceLineWindow {
   readonly omittedAfter: number;
 }
 
+export function sourceOmissionMarker(
+  count: number,
+  direction: "earlier" | "later",
+): string {
+  if (!Number.isSafeInteger(count) || count < 1) {
+    throw new TypeError("Source omission count must be a positive integer.");
+  }
+  return `\u2026 ${count} ${direction} lines omitted \u2026`;
+}
+
 export function sourceLineWindow(
   totalLines: number,
   startLine: number,
