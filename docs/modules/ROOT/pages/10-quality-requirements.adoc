@@ -27,7 +27,8 @@ previews
 |Evolution playback
 |Direct seeking is path-independent; a superseded seek cannot publish a stale
 frame; reduced-motion mode performs no spatial interpolation; stable
-selections survive while their lineage exists
+selections and route controls survive while their lineage or route exists;
+dependency changes and rebuilt route geometry describe the target frame
 
 |Performance
 |Viewer input is bounded; instancing is required before raising the limits

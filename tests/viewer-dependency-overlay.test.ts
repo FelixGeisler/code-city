@@ -122,6 +122,56 @@ describe("dependency overlay curve geometry", () => {
 });
 
 describe("DependencyRouteOverlay lifecycle", () => {
+  it("reports owned deterministic route geometry after every replacement", () => {
+    const scene = new THREE.Scene();
+    const overlay = new DependencyRouteOverlay(scene);
+    const route = dependencyRoute({
+      id: "diagnostic-route",
+      consumer: groundedEndpoint(
+        { x: -2, y: 0, z: 3 },
+        { x: -2, y: 2, z: 3 },
+      ),
+      provider: { x: 8, y: 4, z: -1 },
+      weight: 5,
+      color: "#f472b6",
+      emphasized: true,
+    });
+
+    overlay.replace([route]);
+    const diagnostics = overlay.diagnostics();
+    expect(diagnostics).toEqual({
+      routeCount: 1,
+      gatewayCount: 1,
+      routes: [
+        {
+          id: "diagnostic-route",
+          consumer: route.consumer,
+          provider: route.provider,
+          direction: "outgoing",
+          weight: 5,
+          color: "#f472b6",
+          emphasized: true,
+        },
+      ],
+    });
+    (
+      route.consumer.anchor as {
+        x: number;
+        y: number;
+        z: number;
+      }
+    ).x = 99;
+    expect(diagnostics.routes[0]?.consumer.anchor.x).toBe(-2);
+
+    overlay.clear();
+    expect(overlay.diagnostics()).toEqual({
+      routeCount: 0,
+      gatewayCount: 0,
+      routes: [],
+    });
+    overlay.dispose();
+  });
+
   it("uses at most three non-raycast scene-level draw objects", () => {
     const scene = new THREE.Scene();
     const overlay = new DependencyRouteOverlay(scene);

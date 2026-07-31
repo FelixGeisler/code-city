@@ -235,6 +235,18 @@ to the frame's path-independent visualization. With `prefers-reduced-motion`,
 the full target geometry is published immediately and only static change cues
 are shown.
 
+Dependency comparison uses stable endpoint and route identities to distinguish
+additions, removals, metadata changes, and retargets in either seek direction.
+  The timeline reports the actual relationship counts and marks affected
+  target-frame endpoints and visible routes in pink until the next seek
+  replaces that transition context.
+Building-route direction toggles and limits, together with
+cross-district visibility, kind filters, limits, and a still-valid selected
+route, survive direct and arbitrary seeks. Both overlays are rebuilt from the
+target model, so preserved controls never retain stale route content or
+geometry; only a route selection that no longer matches the target frame is
+dropped.
+
 The **Building age** mode counts frames since a lineage first appeared.
 **Historical churn** counts its additions, replacements, and removals through
 the selected commit. Both modes are unavailable, with an explicit explanation,
