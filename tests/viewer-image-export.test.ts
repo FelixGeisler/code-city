@@ -128,10 +128,28 @@ describe("image export pixels", () => {
     expect(
       imageExportFileName(
         "M\u00fcnchen API / Core",
-        { width: 3_840, height: 2_160, preset: "top-down" },
+        {
+          width: 3_840,
+          height: 2_160,
+          camera: {
+            mode: "custom",
+            lens: "orthographic",
+            angle: "top-down",
+            fit: "whole-city",
+          },
+        },
         "ABCDEF0123456789",
       ),
-    ).toBe("munchen-api-core-abcdef0123-top-down-3840x2160.png");
+    ).toBe(
+      "munchen-api-core-abcdef0123-orthographic-top-down-whole-city-3840x2160.png",
+    );
+    expect(
+      imageExportFileName("Code City", {
+        width: 1_920,
+        height: 1_080,
+        camera: { mode: "current-view" },
+      }),
+    ).toBe("code-city-current-view-1920x1080.png");
     expect(formatBytes(512 * 1024 * 1024)).toBe("512.0 MiB");
   });
 });

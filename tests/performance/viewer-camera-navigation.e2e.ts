@@ -61,8 +61,14 @@ test("top-down behaves like a resettable map and restores orbit navigation", asy
   );
   const initial = await readCamera(page);
 
-  await page.locator("#camera-projection").selectOption("orthographic");
-  await page.locator("#camera-top-down").click();
+  await expect(page.locator("#camera-view-3d")).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(page.locator("#camera-selected")).toHaveCount(0);
+  await expect(page.locator("#camera-whole-city")).toHaveCount(0);
+  await page.locator("#camera-view-3d").focus();
+  await page.keyboard.press("ArrowRight");
   // Begin the pan while the 520 ms preset transition is still active. The
   // control handoff must finish the canonical frame before applying the drag.
   await dragCanvas(page, canvas, 110, 75);
@@ -79,8 +85,8 @@ test("top-down behaves like a resettable map and restores orbit navigation", asy
     Math.abs(panned.target[0] - initial.target[0]) +
       Math.abs(panned.target[2] - initial.target[2]),
   ).toBeGreaterThan(0.1);
-  await expect(page.locator("#camera-top-down")).toHaveAttribute(
-    "aria-current",
+  await expect(page.locator("#camera-view-map")).toHaveAttribute(
+    "aria-pressed",
     "true",
   );
   await expect(page.locator("#camera-controls-hint")).toContainText(
@@ -96,7 +102,7 @@ test("top-down behaves like a resettable map and restores orbit navigation", asy
   expectTopDownFrame(zoomed);
   expect(zoomed.target[1]).toBeCloseTo(initial.target[1], 8);
 
-  await page.locator("#camera-top-down").click();
+  await page.locator("#camera-view-map").click();
   await waitForTopDownReset(page, initial.target);
   const firstReset = await readCamera(page);
   expectTopDownFrame(firstReset);
@@ -113,12 +119,12 @@ test("top-down behaves like a resettable map and restores orbit navigation", asy
       );
     })
     .toBeGreaterThan(0.1);
-  await page.locator("#camera-top-down").click();
+  await page.locator("#camera-view-map").click();
   await waitForTopDownReset(page, initial.target);
   const secondReset = await readCamera(page);
   expectFramesClose(secondReset, firstReset);
 
-  await page.locator("#camera-isometric").click();
+  await page.locator("#camera-view-3d").click();
   await expect
     .poll(async () => {
       const camera = await readCamera(page);
@@ -132,8 +138,9 @@ test("top-down behaves like a resettable map and restores orbit navigation", asy
     })
     .toBe(true);
   const isometric = await readCamera(page);
-  await expect(page.locator("#camera-top-down")).not.toHaveAttribute(
-    "aria-current",
+  expect(isometric.projection).toBe("perspective");
+  await expect(page.locator("#camera-view-3d")).toHaveAttribute(
+    "aria-pressed",
     "true",
   );
   await expect(page.locator("#camera-controls-hint")).toContainText(
@@ -176,21 +183,21 @@ test("rapid scope framing stays canonical and projection diagnostics stay fresh"
   await expect(page.locator("#isolate-district")).toBeEnabled();
   await page.locator("#isolate-district").click();
   await expect(page.locator("#show-whole-city")).toBeEnabled();
-  await page.locator("#camera-projection").selectOption("orthographic");
-  await expect
-    .poll(async () => (await readCamera(page)).projection)
-    .toBe("orthographic");
+  await page.locator("#camera-view-map").click();
+  await expect(page.locator("#camera-fit-scope")).toBeEnabled();
+  await page.locator("#camera-fit-scope").click();
+  await expect(page.locator("#show-whole-city")).toBeEnabled();
   await page.evaluate(() => {
-    const topDown = document.querySelector<HTMLButtonElement>(
-      "#camera-top-down",
+    const map = document.querySelector<HTMLButtonElement>(
+      "#camera-view-map",
     );
     const wholeCity = document.querySelector<HTMLButtonElement>(
       "#show-whole-city",
     );
-    if (topDown === null || wholeCity === null) {
+    if (map === null || wholeCity === null) {
       throw new Error("Camera or scope control is unavailable.");
     }
-    topDown.click();
+    map.click();
     wholeCity.click();
   });
 
@@ -208,16 +215,28 @@ test("rapid scope framing stays canonical and projection diagnostics stay fresh"
   const rapidFrame = await readCamera(page);
   expectTopDownFrame(rapidFrame);
 
-  await page.locator("#camera-top-down").click();
+  await page.locator("#camera-view-map").click();
   await waitForTopDownReset(page, rapidFrame.target);
   const canonicalFrame = await readCamera(page);
   expect(rapidFrame.viewHeight).toBeCloseTo(canonicalFrame.viewHeight, 8);
 
+  await page.locator("#camera-view-advanced > summary").click();
   await page.locator("#camera-projection").selectOption("perspective");
   await expect
     .poll(async () => (await readCamera(page)).projection)
     .toBe("perspective");
   expectTopDownFrame(await readCamera(page));
+  await expect(page.locator("#camera-view-3d")).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await expect(page.locator("#camera-view-map")).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await expect(page.locator("#camera-view-status")).toHaveText(
+    "Custom view",
+  );
 });
 
 async function readCamera(page: Page): Promise<CameraSnapshot> {

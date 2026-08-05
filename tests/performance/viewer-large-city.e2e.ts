@@ -990,7 +990,7 @@ test("25k exact selection mask stays instanced and constrains canvas BVH picking
       visibleBuildingCount: 3,
     });
 
-  await page.locator("#camera-selected").click();
+  await page.locator("#camera-focus-selection").click();
   await page.waitForTimeout(750);
   const selectedPoint = await sceneCanvasCenter(page);
   await page.mouse.click(selectedPoint.x, selectedPoint.y);
@@ -1047,10 +1047,15 @@ async function prepareWholeCityPngHash(
   await expect(page.locator("#image-export-dialog")).toBeVisible();
   await page.locator("#image-export-width").fill("640");
   await page.locator("#image-export-height").fill("400");
+  await page.locator("#image-export-view").selectOption("custom");
+  const advancedLens = page.locator(".image-export-advanced-lens");
+  if ((await advancedLens.getAttribute("open")) === null) {
+    await advancedLens.locator("summary").click();
+  }
   await page
     .locator("#image-export-projection")
     .selectOption("orthographic");
-  await page.locator("#image-export-preset").selectOption("whole-city");
+  await page.locator("#image-export-fit").selectOption("whole-city");
   await page
     .locator("#image-export-background")
     .selectOption("transparent");

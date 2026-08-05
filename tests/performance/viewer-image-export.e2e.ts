@@ -39,8 +39,7 @@ test("exports an independent transparent PNG without DOM chrome", async ({
   await page.goto(viewerUrl, { waitUntil: "domcontentloaded" });
   await expect(page.locator("#scene canvas")).toBeVisible();
 
-  await page.locator("#camera-projection").selectOption("orthographic");
-  await page.locator("#camera-top-down").click();
+  await page.locator("#camera-view-map").click();
   await page.evaluate(() => {
     const sentinel = document.createElement("div");
     sentinel.id = "image-export-dom-sentinel";
@@ -52,12 +51,23 @@ test("exports an independent transparent PNG without DOM chrome", async ({
 
   await page.locator("#image-export-open").click();
   await expect(page.locator("#image-export-dialog")).toBeVisible();
-  await expect(page.locator("#image-export-projection")).toHaveValue(
-    "orthographic",
+  await expect(page.locator("#image-export-view")).toHaveValue(
+    "current-view",
   );
+  await expect(page.locator("#image-export-current-view")).toContainText(
+    "Map view is inherited exactly",
+  );
+  await expect(page.locator("#image-export-custom-camera")).toBeHidden();
+  await page.locator("#image-export-view").selectOption("custom");
+  await expect(page.locator("#image-export-custom-camera")).toBeVisible();
+  await page.locator("#image-export-angle").selectOption("top-down");
+  await page.locator("#image-export-fit").selectOption("current-scope");
+  await page.locator(".image-export-advanced-lens > summary").click();
+  await page
+    .locator("#image-export-projection")
+    .selectOption("orthographic");
   await page.locator("#image-export-width").fill("1200");
   await page.locator("#image-export-height").fill("700");
-  await page.locator("#image-export-preset").selectOption("top-down");
   await page
     .locator("#image-export-background")
     .selectOption("transparent");
@@ -69,7 +79,7 @@ test("exports an independent transparent PNG without DOM chrome", async ({
   await expect(download).toBeVisible({ timeout: 30_000 });
   await expect(download).toHaveAttribute(
     "download",
-    /-top-down-1200x700\.png$/u,
+    /-orthographic-top-down-current-scope-1200x700\.png$/u,
   );
   const decoded = await page.evaluate(async () => {
     const anchor = document.querySelector<HTMLAnchorElement>(
@@ -146,7 +156,8 @@ test("context loss disables export with an accessible explanation", async ({
     "false",
   );
   await expect(page.locator("#image-export-open")).toBeDisabled();
-  await expect(page.locator("#camera-projection")).toBeDisabled();
+  await expect(page.locator("#camera-view-3d")).toBeDisabled();
+  await expect(page.locator("#camera-view-map")).toBeDisabled();
   await expect(page.locator("#scene canvas")).toHaveAttribute(
     "aria-label",
     /WebGL context was lost/u,
@@ -160,6 +171,7 @@ test("closing image export with Escape preserves the selected entity", async ({
   page,
 }) => {
   await page.goto(viewerUrl, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("#camera-focus-selection")).toBeHidden();
   await page.getByRole("tab", { name: "Explore" }).click();
   await page
     .locator("#building-search")
@@ -169,14 +181,16 @@ test("closing image export with Escape preserves the selected entity", async ({
       '.search-result-button[title="apps/viewer/src/main.ts"]',
     )
     .click();
-  await expect(page.locator("#camera-selected")).toBeEnabled();
+  await expect(page.locator("#camera-focus-selection")).toBeVisible();
+  await expect(page.locator("#camera-focus-selection")).toBeEnabled();
 
   await page.locator("#image-export-open").click();
   await expect(page.locator("#image-export-dialog")).toBeVisible();
   await page.keyboard.press("Escape");
 
   await expect(page.locator("#image-export-dialog")).not.toBeVisible();
-  await expect(page.locator("#camera-selected")).toBeEnabled();
+  await expect(page.locator("#camera-focus-selection")).toBeVisible();
+  await expect(page.locator("#camera-focus-selection")).toBeEnabled();
 });
 
 test("initial WebGL failure leaves the rest of the viewer accessible", async ({
