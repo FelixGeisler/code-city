@@ -22,6 +22,9 @@ import {
   PrintExportController,
   type PrintExportControllerState,
 } from "./print-export-controller.js";
+import type {
+  PrintExportGenerateOptions,
+} from "./print-export-protocol.js";
 import {
   PrintDownloadManager,
   tryPublishCalibrationDownloads,
@@ -101,6 +104,34 @@ export function shouldRetainPrintLayoutOnDialogClose(
   status: PrintExportControllerState["status"],
 ): boolean {
   return status === "ready" || status === "bundle-ready";
+}
+
+export interface PrintExportControlValues {
+  readonly scale: number;
+  readonly labelPolicy: "auto" | "off";
+  readonly routePolicy: "auto" | "off";
+  readonly includeLegend: boolean;
+  readonly acknowledgeBelowProfileScale: boolean;
+  readonly fitPolicy: PrintFitPolicy;
+  readonly maximumPlateCount?: number;
+}
+
+export function printExportOptionsFromControls(
+  values: PrintExportControlValues,
+): PrintExportGenerateOptions {
+  return {
+    scale: values.scale,
+    labelPolicy: values.labelPolicy,
+    routePolicy: values.routePolicy,
+    includeLegend: values.includeLegend,
+    acknowledgeBelowProfileScale:
+      values.acknowledgeBelowProfileScale,
+    fitPolicy: values.fitPolicy,
+    ...(values.fitPolicy === "tile" &&
+    values.maximumPlateCount !== undefined
+      ? { maximumPlateCount: values.maximumPlateCount }
+      : {}),
+  };
 }
 
 function requiredElement<T extends HTMLElement>(id: string): T {
@@ -192,6 +223,10 @@ export function installPrintExportDialog(
   const legendInput = requiredElement<HTMLInputElement>(
     "print-legend-download-enabled",
   );
+  const belowProfileScaleAcknowledgement =
+    requiredElement<HTMLInputElement>(
+      "print-below-profile-scale-acknowledgement",
+    );
   const submitButton =
     requiredElement<HTMLButtonElement>("print-export-submit");
   const calibrationButton =
@@ -223,6 +258,15 @@ export function installPrintExportDialog(
     requiredElement<HTMLElement>("print-export-channels-title");
   const channelsList =
     requiredElement<HTMLUListElement>("print-export-channels");
+  const fidelityWrap = requiredElement<HTMLDivElement>(
+    "print-export-fidelity-wrap",
+  );
+  const fidelitySummary = requiredElement<HTMLParagraphElement>(
+    "print-export-fidelity-summary",
+  );
+  const fidelityViolations = requiredElement<HTMLUListElement>(
+    "print-export-fidelity-violations",
+  );
   const warningWrap =
     requiredElement<HTMLDivElement>("print-export-warning-wrap");
   const warningsList =
@@ -233,6 +277,9 @@ export function installPrintExportDialog(
     requiredElement<HTMLAnchorElement>("print-export-download");
   const legendDownload = requiredElement<HTMLAnchorElement>(
     "print-export-legend-download",
+  );
+  const printManifestDownload = requiredElement<HTMLAnchorElement>(
+    "print-export-manifest-download",
   );
   const calibrationDownload = requiredElement<HTMLAnchorElement>(
     "print-calibration-download",
@@ -363,6 +410,9 @@ export function installPrintExportDialog(
     legendDownload.removeAttribute("href");
     legendDownload.removeAttribute("download");
     legendDownload.hidden = true;
+    printManifestDownload.removeAttribute("href");
+    printManifestDownload.removeAttribute("download");
+    printManifestDownload.hidden = true;
     calibrationDownload.removeAttribute("href");
     calibrationDownload.removeAttribute("download");
     calibrationDownload.hidden = true;
@@ -375,6 +425,9 @@ export function installPrintExportDialog(
     clearPrintLayout();
     clearDownloads();
     preflightSection.hidden = true;
+    fidelityWrap.hidden = true;
+    fidelitySummary.textContent = "";
+    fidelityViolations.replaceChildren();
     errorSection.hidden = true;
     errorList.replaceChildren();
   }
@@ -411,8 +464,9 @@ export function installPrintExportDialog(
       `${millimeters(largest.depth)} \u00d7 ` +
       `${millimeters(largest.height)} mm`;
     partsElement.textContent =
-      `Scale ${millimeters(preflight.requestedScale)} \u2192 ` +
-      `${millimeters(preflight.appliedScale)} \u00b7 ` +
+      `Scale requested ${millimeters(preflight.requestedScale)} \u00b7 ` +
+      `applied ${millimeters(preflight.appliedScale)} \u00b7 ` +
+      `profile-safe ${millimeters(preflight.minimumSafeScale)} \u00b7 ` +
       `${printedLabels.toLocaleString()} labels \u00b7 ` +
       `${preflight.routes.printedCount.toLocaleString()} routes`;
     trianglesWrap.hidden = true;
@@ -439,6 +493,22 @@ export function installPrintExportDialog(
       plateItems.push(remaining);
     }
     channelsList.replaceChildren(...plateItems);
+    fidelitySummary.textContent =
+      `Applied scale ${millimeters(preflight.appliedScale)} is below the ` +
+      `profile-safe scale ${millimeters(preflight.minimumSafeScale)}. ` +
+      "You explicitly acknowledged reduced print fidelity; this does not " +
+      "indicate a printer hardware danger.";
+    fidelityViolations.replaceChildren(
+      ...preflight.featureViolations.map((violation) => {
+        const item = document.createElement("li");
+        item.textContent =
+          `${violation.category.replaceAll("-", " ")}: ` +
+          `${millimeters(violation.resultingValue)} mm resulting \u00b7 ` +
+          `${millimeters(violation.minimum)} mm profile minimum`;
+        return item;
+      }),
+    );
+    fidelityWrap.hidden = preflight.featureViolations.length === 0;
     const allWarnings = [
       ...preflight.warnings,
       ...preflight.plates.flatMap((plate) =>
@@ -478,6 +548,7 @@ export function installPrintExportDialog(
   function renderCalibrationPreflight(
     preflight: CalibrationPrintExportPreflight,
   ): void {
+    fidelityWrap.hidden = true;
     dimensionsElement.textContent =
       `${millimeters(preflight.dimensions.x)} \u00d7 ` +
       `${millimeters(preflight.dimensions.y)} \u00d7 ` +
@@ -538,6 +609,7 @@ export function installPrintExportDialog(
       },
       {
         artifact: state.artifact,
+        manifestBytes: state.manifestBytes,
         ...(state.legendBytes === undefined
           ? {}
           : { legendBytes: state.legendBytes }),
@@ -554,6 +626,11 @@ export function installPrintExportDialog(
     artifactDownload.textContent =
       `Download ${state.artifact.format.toUpperCase()}`;
     artifactDownload.hidden = false;
+    if (available.manifest !== undefined) {
+      printManifestDownload.href = available.manifest.url;
+      printManifestDownload.download = available.manifest.fileName;
+      printManifestDownload.hidden = false;
+    }
     if (available.legend !== undefined) {
       legendDownload.href = available.legend.url;
       legendDownload.download = available.legend.fileName;
@@ -876,6 +953,10 @@ export function installPrintExportDialog(
   labelsSelect.addEventListener("change", invalidateOutput);
   routesInput.addEventListener("change", invalidateOutput);
   legendInput.addEventListener("change", invalidateOutput);
+  belowProfileScaleAcknowledgement.addEventListener(
+    "change",
+    invalidateOutput,
+  );
   function startExport(event: Event): void {
     event.preventDefault();
     if (!enabled) return;
@@ -900,16 +981,18 @@ export function installPrintExportDialog(
       format,
       model: options.getModel(),
       profile,
-      options: {
+      options: printExportOptionsFromControls({
         scale: Number(scaleInput.value),
         labelPolicy: labelsSelect.value === "off" ? "off" : "auto",
         routePolicy: routesInput.checked ? "auto" : "off",
         includeLegend: legendInput.checked,
+        acknowledgeBelowProfileScale:
+          belowProfileScaleAcknowledgement.checked,
         fitPolicy,
         ...(maximumPlates === undefined
           ? {}
           : { maximumPlateCount: maximumPlates }),
-      },
+      }),
     });
   }
   function startCalibration(): void {

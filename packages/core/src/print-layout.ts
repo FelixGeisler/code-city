@@ -7,6 +7,39 @@ import {
 } from "./print.js";
 
 export type PrintFitPolicy = "error" | "scale" | "tile";
+/** Shared boundary tolerance for all scale-fidelity contracts. */
+export const PRINT_FIDELITY_EPSILON = 1e-9;
+export const PRINT_FEATURE_CATEGORIES = Object.freeze([
+  "wall-thickness",
+  "gap",
+  "minimum-feature-size",
+  "base-thickness",
+  "label-stroke-width",
+  "raised-feature-height",
+  "recessed-feature-depth",
+  "route-width",
+  "connector-width",
+] as const);
+export type PrintFeatureCategory =
+  (typeof PRINT_FEATURE_CATEGORIES)[number];
+
+/** A profile fidelity limit crossed by the applied physical scale. */
+export interface PrintFeatureViolation {
+  readonly category: PrintFeatureCategory;
+  /** Resulting physical measurement in millimetres. */
+  readonly resultingValue: number;
+  /** Configured printer-profile minimum in millimetres. */
+  readonly minimum: number;
+}
+
+/** Durable scale/fidelity metadata shared by previews and print artifacts. */
+export interface PrintScaleFidelity {
+  readonly requestedScale: number;
+  readonly appliedScale: number;
+  readonly minimumSafeScale: number;
+  readonly belowProfileScaleAcknowledged: boolean;
+  readonly featureViolations: readonly PrintFeatureViolation[];
+}
 export type PrintLayoutRotation = 0 | 90;
 export type PrintLayoutReservationKind =
   | "identity"
@@ -91,6 +124,12 @@ export interface PrintLayoutFeatureMeasurements {
 export interface PrintLayoutRequest {
   readonly fitPolicy?: PrintFitPolicy;
   readonly requestedScale?: number;
+  /**
+   * Explicit expert acknowledgement that an applied scale may put printable
+   * details below the selected profile's guaranteed fidelity limits. It does
+   * not bypass physical build-volume checks.
+   */
+  readonly acknowledgeBelowProfileScale?: boolean;
   readonly districts: readonly PrintLayoutDistrictInput[];
   readonly features: PrintLayoutFeatureMeasurements;
   readonly identity?: PrintLayoutIdentityInput;
@@ -183,6 +222,8 @@ export interface PrintLayoutPlan {
    */
   readonly appliedScale: number;
   readonly minimumSafeScale: number;
+  readonly belowProfileScaleAcknowledged: boolean;
+  readonly featureViolations: readonly PrintFeatureViolation[];
   readonly buildVolume: Vector3;
   readonly usableBuildBounds: PrintLayoutBounds;
   readonly usableBuildSpan: Vector3;
@@ -286,7 +327,7 @@ interface AttemptResult {
   readonly unplaced: readonly PackItem[];
 }
 
-const EPSILON = 1e-9;
+const EPSILON = PRINT_FIDELITY_EPSILON;
 const SCALE_SEARCH_ITERATIONS = 52;
 const PLATE_ID_DIGITS = 2;
 const MAXIMUM_PLATE_COUNT = 99;
@@ -594,6 +635,70 @@ function minimumSafeScale(
     Math.max(limits.minimumFeatureSize, limits.lineWidth),
   );
   return Math.max(...ratios);
+}
+
+function featureViolations(
+  features: PrintLayoutFeatureMeasurements,
+  limits: ResolvedPrinterGeometryLimits,
+  scale: number,
+): readonly PrintFeatureViolation[] {
+  const candidates: readonly {
+    readonly category: PrintFeatureCategory;
+    readonly value: number | null | undefined;
+    readonly minimum: number;
+  }[] = [
+    {
+      category: "wall-thickness",
+      value: features.wallThickness,
+      minimum: limits.minimumWallThickness,
+    },
+    { category: "gap", value: features.gap, minimum: limits.minimumGap },
+    {
+      category: "minimum-feature-size",
+      value: features.minimumFeatureSize,
+      minimum: limits.minimumFeatureSize,
+    },
+    {
+      category: "base-thickness",
+      value: features.baseThickness,
+      minimum: limits.minimumBaseThickness,
+    },
+    {
+      category: "label-stroke-width",
+      value: features.labelStrokeWidth,
+      minimum: limits.minimumLabelStrokeWidth,
+    },
+    {
+      category: "raised-feature-height",
+      value: features.raisedFeatureHeight,
+      minimum: limits.minimumRaisedFeatureHeight,
+    },
+    {
+      category: "recessed-feature-depth",
+      value: features.recessedFeatureDepth,
+      minimum: limits.minimumRecessedFeatureDepth,
+    },
+    {
+      category: "route-width",
+      value: features.routeWidth,
+      minimum: limits.minimumRouteWidth,
+    },
+    {
+      category: "connector-width",
+      value: features.connectorWidth,
+      minimum: Math.max(limits.minimumFeatureSize, limits.lineWidth),
+    },
+  ];
+  return candidates.flatMap(({ category, value, minimum }) => {
+    if (value === null || value === undefined) return [];
+    const resultingValue = finiteLayoutArithmetic(
+      value * scale,
+      `Resulting ${category}`,
+    );
+    return resultingValue + EPSILON < minimum
+      ? [{ category, resultingValue, minimum }]
+      : [];
+  });
 }
 
 function usableGeometry(
@@ -1892,6 +1997,7 @@ function validateInputs(
 ): {
   readonly fitPolicy: PrintFitPolicy;
   readonly requestedScale: number;
+  readonly acknowledgeBelowProfileScale: boolean;
   readonly districts: readonly PrintLayoutDistrictInput[];
   readonly identity?: PrintLayoutIdentityInput;
   readonly rearReservation?: PrintLayoutRearReservationInput;
@@ -1910,6 +2016,17 @@ function validateInputs(
     request.requestedScale ?? 1,
     "requestedScale",
   );
+  if (
+    request.acknowledgeBelowProfileScale !== undefined &&
+    typeof request.acknowledgeBelowProfileScale !== "boolean"
+  ) {
+    throw new PrintLayoutError([
+      {
+        code: "invalid-request",
+        message: "acknowledgeBelowProfileScale must be a boolean.",
+      },
+    ]);
+  }
   if (request.districts.length > MAXIMUM_DISTRICT_COUNT) {
     throw new PrintLayoutError([
       {
@@ -2096,6 +2213,8 @@ function validateInputs(
   return {
     fitPolicy,
     requestedScale,
+    acknowledgeBelowProfileScale:
+      request.acknowledgeBelowProfileScale ?? false,
     districts,
     ...(identity === undefined ? {} : { identity }),
     ...(rearReservation === undefined ? {} : { rearReservation }),
@@ -2103,8 +2222,53 @@ function validateInputs(
   };
 }
 
-function scaleWarning(requested: number, applied: number): string {
-  return `Print layout was scaled from ${formatDimension(requested)} to ${formatDimension(applied)} to fit one plate safely.`;
+function scaleWarning(
+  requested: number,
+  applied: number,
+  profileSafe: boolean,
+): string {
+  return `Print layout was scaled from ${formatDimension(requested)} to ${formatDimension(applied)} to fit one plate${profileSafe ? " safely" : ""}.`;
+}
+
+function belowProfileWarning(
+  applied: number,
+  safe: number,
+  violations: readonly PrintFeatureViolation[],
+): string {
+  const details = violations
+    .map(
+      ({ category, resultingValue, minimum }) =>
+        `${category} ${formatDimension(resultingValue)} mm < ${formatDimension(minimum)} mm`,
+    )
+    .join(", ");
+  return (
+    `Applied scale ${formatDimension(applied)} is below the profile-safe scale ${formatDimension(safe)}. ` +
+    "The acknowledged risk is reduced print fidelity, not printer hardware danger." +
+    (details.length === 0 ? "" : ` Below-limit features: ${details}.`)
+  );
+}
+
+function knownSinglePlateBelow(
+  context: LayoutContext,
+  districts: readonly PrintLayoutDistrictInput[],
+  failedScale: number,
+): { readonly scale: number; readonly attempt: AttemptResult } | undefined {
+  let scale = failedScale;
+  for (
+    let iteration = 0;
+    iteration < SCALE_SEARCH_ITERATIONS;
+    iteration += 1
+  ) {
+    scale /= 2;
+    if (!Number.isFinite(scale) || scale <= EPSILON) return undefined;
+    const attempt = attemptSinglePlate(
+      context,
+      scale,
+      scaleDistricts(districts, context.profile, scale),
+    );
+    if (attempt !== undefined) return { scale, attempt };
+  }
+  return undefined;
 }
 
 /**
@@ -2137,14 +2301,16 @@ export function planPrintLayout(
     "Minimum profile-safe scale",
   );
   if (validated.requestedScale + EPSILON < safeScale) {
-    throw new PrintLayoutError([
-      {
-        code: "unsafe-scale",
-        message:
-          `Requested scale ${formatDimension(validated.requestedScale)} is below the minimum profile-safe scale ${formatDimension(safeScale)} ` +
-          "for the supplied wall, gap, label, relief, route, base, and connector measurements.",
-      },
-    ]);
+    if (!validated.acknowledgeBelowProfileScale) {
+      throw new PrintLayoutError([
+        {
+          code: "unsafe-scale",
+          message:
+            `Requested scale ${formatDimension(validated.requestedScale)} is below the minimum profile-safe scale ${formatDimension(safeScale)} ` +
+            "for the supplied wall, gap, label, relief, route, base, and connector measurements.",
+        },
+      ]);
+    }
   }
 
   let appliedScale = validated.requestedScale;
@@ -2186,15 +2352,39 @@ export function planPrintLayout(
         },
       ]);
     } else {
-      items = scaleDistricts(validated.districts, profile, safeScale);
-      ensureIndividualDistrictsFit(context, safeScale, items);
-      const minimumAttempt = attemptSinglePlate(
-        context,
+      const safeSearchStart = Math.min(
         safeScale,
+        validated.requestedScale,
+      );
+      items = scaleDistricts(validated.districts, profile, safeSearchStart);
+      let minimumScale = safeSearchStart;
+      let minimumAttempt = attemptSinglePlate(
+        context,
+        minimumScale,
         items,
       );
+      if (
+        minimumAttempt === undefined &&
+        validated.acknowledgeBelowProfileScale
+      ) {
+        const below = knownSinglePlateBelow(
+          context,
+          validated.districts,
+          minimumScale,
+        );
+        if (below !== undefined) {
+          minimumScale = below.scale;
+          minimumAttempt = below.attempt;
+        }
+      }
       if (minimumAttempt === undefined) {
-        const plateOne = createPlate(context, safeScale, 1);
+        items = scaleDistricts(
+          validated.districts,
+          profile,
+          minimumScale,
+        );
+        ensureIndividualDistrictsFit(context, minimumScale, items);
+        const plateOne = createPlate(context, minimumScale, 1);
         if (plateOne.issue !== undefined) {
           throw new PrintLayoutError([plateOne.issue]);
         }
@@ -2202,13 +2392,15 @@ export function planPrintLayout(
           {
             code: "city-does-not-fit",
             message:
-              `Complete districts do not fit together on one plate at the minimum profile-safe scale ${formatDimension(safeScale)}; ` +
+              (validated.acknowledgeBelowProfileScale
+                ? `Complete districts do not fit together on one plate even below the profile-safe scale ${formatDimension(safeScale)}; `
+                : `Complete districts do not fit together on one plate at the minimum profile-safe scale ${formatDimension(safeScale)}; `) +
               'in Print export, set Fit policy to "Split complete districts (tiled multi-plate export)".',
             available: { ...context.usableSpan },
           },
         ]);
       }
-      let low = safeScale;
+      let low = minimumScale;
       let high = validated.requestedScale;
       let best = minimumAttempt;
       for (
@@ -2238,7 +2430,11 @@ export function planPrintLayout(
       appliedScale = low;
       attempt = best;
       warnings.push(
-        scaleWarning(validated.requestedScale, appliedScale),
+        scaleWarning(
+          validated.requestedScale,
+          appliedScale,
+          appliedScale + EPSILON >= safeScale,
+        ),
       );
     }
   }
@@ -2268,12 +2464,23 @@ export function planPrintLayout(
       `${unplaced.length} ${unplaced.length === 1 ? "district was" : "districts were"} not placed because maximumPlateCount is ${context.maximumPlateCount}.`,
     );
   }
+  const violations = featureViolations(
+    validated.features,
+    context.limits,
+    appliedScale,
+  );
+  if (violations.length > 0) {
+    warnings.push(belowProfileWarning(appliedScale, safeScale, violations));
+  }
   return {
     profileId: profile.id,
     fitPolicy: validated.fitPolicy,
     requestedScale: validated.requestedScale,
     appliedScale,
     minimumSafeScale: safeScale,
+    belowProfileScaleAcknowledged:
+      validated.acknowledgeBelowProfileScale,
+    featureViolations: violations,
     buildVolume: { ...profile.buildVolume },
     usableBuildBounds: context.usableBounds,
     usableBuildSpan: context.usableSpan,

@@ -148,8 +148,12 @@ describe("viewer print export worker", () => {
     expect(new Uint8Array(result.response.legendBytes!)).toEqual(
       shared.legendBytes,
     );
+    expect(new Uint8Array(result.response.manifestBytes)).toEqual(
+      shared.manifestBytes,
+    );
     expect(result.transfer).toEqual([
       result.response.artifact.bytes,
+      result.response.manifestBytes,
       result.response.legendBytes,
     ]);
     },
@@ -181,6 +185,68 @@ describe("viewer print export worker", () => {
         message: expect.stringMatching(/requires.*packing span/iu),
       },
     });
+  });
+
+  it("transfers acknowledged below-profile preflight and direct manifest exactly", () => {
+    const workerRequest = request({
+      profile: createSingleChannelProfile(),
+      options: {
+        scale: 0.5,
+        fitPolicy: "error",
+        acknowledgeBelowProfileScale: true,
+        labelPolicy: "off",
+        routePolicy: "off",
+        includeLegend: false,
+      },
+    });
+    const emitted: Array<{
+      response: PrintExportWorkerResponse;
+      transfer: readonly ArrayBuffer[];
+    }> = [];
+
+    runPrintExportRequest(workerRequest, (response, transfer = []) => {
+      emitted.push({ response, transfer });
+    });
+
+    const preflight = emitted.find(
+      ({ response }) => response.type === "preflight",
+    )?.response;
+    expect(preflight).toMatchObject({
+      type: "preflight",
+      preflight: {
+        requestedScale: 0.5,
+        appliedScale: 0.5,
+        minimumSafeScale: 1.6,
+        belowProfileScaleAcknowledged: true,
+        featureViolations: expect.arrayContaining([
+          expect.objectContaining({ category: "wall-thickness" }),
+        ]),
+      },
+      preview: {
+        requestedScale: 0.5,
+        appliedScale: 0.5,
+        minimumSafeScale: 1.6,
+        belowProfileScaleAcknowledged: true,
+      },
+    });
+    const result = emitted.at(-1)!;
+    expect(result.response.type).toBe("result");
+    if (result.response.type !== "result") {
+      throw new Error("Expected a direct export result.");
+    }
+    const manifest = JSON.parse(
+      new TextDecoder().decode(result.response.manifestBytes),
+    );
+    expect(manifest.fit).toMatchObject({
+      requestedScale: 0.5,
+      appliedScale: 0.5,
+      minimumSafeScale: 1.6,
+      belowProfileScaleAcknowledged: true,
+    });
+    expect(result.transfer).toEqual([
+      result.response.artifact.bytes,
+      result.response.manifestBytes,
+    ]);
   });
 
   it("returns structured failures instead of throwing out of the worker", () => {

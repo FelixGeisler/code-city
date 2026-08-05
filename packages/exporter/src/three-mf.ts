@@ -4,6 +4,11 @@ import {
 } from "fflate";
 
 import { normalizeDisplayColor } from "../../core/src/color.js";
+import {
+  PRINT_FIDELITY_EPSILON,
+  PRINT_FEATURE_CATEGORIES,
+  type PrintFeatureCategory,
+} from "../../core/src/print-layout.js";
 import type {
   PrintPart,
   PrintableCity,
@@ -37,6 +42,9 @@ const BASE_MATERIAL_RESOURCE_ID = 1;
 const CITY_OBJECT_RESOURCE_ID = 2;
 const FIXED_ZIP_DATE = new Date(1980, 0, 1, 0, 0, 0, 0);
 const CORE_INDEX_LIMIT = 0x80000000;
+const FEATURE_CATEGORY_ORDER = new Map<PrintFeatureCategory, number>(
+  PRINT_FEATURE_CATEGORIES.map((category, index) => [category, index]),
+);
 
 function compare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -90,6 +98,105 @@ function positiveNumber(value: number, field: string): string {
     throw new TypeError(`${field} must be positive.`);
   }
   return canonicalNumber(value, field);
+}
+
+function scaleFidelityMetadata(city: PrintableCity): readonly string[] {
+  const fidelity = city.scaleFidelity;
+  if (fidelity === undefined) return [];
+  const requestedScale = positiveNumber(
+    fidelity.requestedScale,
+    "scaleFidelity.requestedScale",
+  );
+  const appliedScale = positiveNumber(
+    fidelity.appliedScale,
+    "scaleFidelity.appliedScale",
+  );
+  const minimumSafeScale = positiveNumber(
+    fidelity.minimumSafeScale,
+    "scaleFidelity.minimumSafeScale",
+  );
+  if (
+    Math.abs(Number(appliedScale) - city.scale) >
+      PRINT_FIDELITY_EPSILON
+  ) {
+    throw new RangeError(
+      "scaleFidelity.appliedScale must match the printable city scale.",
+    );
+  }
+  if (
+    Number(appliedScale) >
+      Number(requestedScale) + PRINT_FIDELITY_EPSILON
+  ) {
+    throw new RangeError(
+      "scaleFidelity.appliedScale must not exceed requestedScale.",
+    );
+  }
+  if (typeof fidelity.belowProfileScaleAcknowledged !== "boolean") {
+    throw new TypeError(
+      "scaleFidelity.belowProfileScaleAcknowledged must be a boolean.",
+    );
+  }
+  if (!Array.isArray(fidelity.featureViolations)) {
+    throw new TypeError("scaleFidelity.featureViolations must be an array.");
+  }
+  if (fidelity.featureViolations.length > FEATURE_CATEGORY_ORDER.size) {
+    throw new RangeError("scaleFidelity has too many feature violations.");
+  }
+  let previousCategoryOrder = -1;
+  const violations = fidelity.featureViolations.map((violation, index) => {
+    const categoryOrder = FEATURE_CATEGORY_ORDER.get(violation.category);
+    if (categoryOrder === undefined || categoryOrder <= previousCategoryOrder) {
+      throw new TypeError(
+        "scaleFidelity feature violations must use unique canonical category order.",
+      );
+    }
+    previousCategoryOrder = categoryOrder;
+    const resultingValue = Number(
+      positiveNumber(
+        violation.resultingValue,
+        `scaleFidelity.featureViolations[${index}].resultingValue`,
+      ),
+    );
+    const minimum = Number(
+      positiveNumber(
+        violation.minimum,
+        `scaleFidelity.featureViolations[${index}].minimum`,
+      ),
+    );
+    if (resultingValue + PRINT_FIDELITY_EPSILON >= minimum) {
+      throw new RangeError(
+        `scaleFidelity.featureViolations[${index}] is not below its minimum.`,
+      );
+    }
+    return {
+      category: requiredText(
+        violation.category,
+        `scaleFidelity.featureViolations[${index}].category`,
+      ),
+      resultingValue,
+      minimum,
+    };
+  });
+  const belowSafe =
+    Number(appliedScale) + PRINT_FIDELITY_EPSILON <
+    Number(minimumSafeScale);
+  if (belowSafe !== (violations.length > 0)) {
+    throw new RangeError(
+      "scaleFidelity safe scale and feature violations must agree.",
+    );
+  }
+  if (belowSafe && !fidelity.belowProfileScaleAcknowledged) {
+    throw new RangeError(
+      "Below-profile 3MF metadata requires explicit acknowledgement.",
+    );
+  }
+  return [
+    `  <metadata name="codecity:RequestedScale" preserve="1">${requestedScale}</metadata>`,
+    `  <metadata name="codecity:AppliedScale" preserve="1">${appliedScale}</metadata>`,
+    `  <metadata name="codecity:ProfileSafeScale" preserve="1">${minimumSafeScale}</metadata>`,
+    `  <metadata name="codecity:BelowProfileScaleAcknowledged" preserve="1">${String(fidelity.belowProfileScaleAcknowledged)}</metadata>`,
+    `  <metadata name="codecity:FeatureViolations" preserve="1">${xml(JSON.stringify(violations), "scaleFidelity.featureViolations")}</metadata>`,
+  ];
 }
 
 function coordinate(value: number, field: string): string {
@@ -266,6 +373,7 @@ function modelXml(
         ]),
     `  <metadata name="codecity:Profile" preserve="1">${xml(profileId, "profileId")}</metadata>`,
     `  <metadata name="codecity:Scale" preserve="1">${scale}</metadata>`,
+    ...scaleFidelityMetadata(city),
   ];
 
   const materials = parts.map(

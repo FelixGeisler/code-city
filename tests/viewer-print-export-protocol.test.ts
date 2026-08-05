@@ -10,7 +10,10 @@ import {
   type PrintExportGenerateRequest,
   type PrintExportTransferArtifact,
 } from "../apps/viewer/src/print-export-protocol.js";
-import { createSingleChannelProfile } from "../packages/core/src/index.js";
+import {
+  createSingleChannelProfile,
+  PRINT_FIDELITY_EPSILON,
+} from "../packages/core/src/index.js";
 import {
   generateCalibrationPrintExport,
 } from "../packages/exporter/src/calibration.js";
@@ -44,6 +47,9 @@ function samplePreflight(): PrintPlateBundlePreflight {
     fitPolicy: "error",
     requestedScale: 3,
     appliedScale: 3,
+    minimumSafeScale: 3,
+    belowProfileScaleAcknowledged: false,
+    featureViolations: [],
     plateCount: 1,
     plates: [{
       number: 1,
@@ -105,6 +111,9 @@ function samplePreview(
     appliedPolicy: "error",
     requestedScale: 3,
     appliedScale: 3,
+    minimumSafeScale: 3,
+    belowProfileScaleAcknowledged: false,
+    featureViolations: [],
     sourceBounds: bounds,
     printableBounds: bounds,
     warnings: preflight.warnings,
@@ -245,6 +254,7 @@ describe("viewer print export protocol", () => {
         type: "result",
         jobId: 1,
         artifact: { ...sampleArtifact(), bytes: archive },
+        manifestBytes: new ArrayBuffer(8),
       }),
     ).toBe(true);
     expect(
@@ -272,6 +282,7 @@ describe("viewer print export protocol", () => {
         type: "result",
         jobId: 1,
         artifact: sampleArtifact("stl"),
+        manifestBytes: new ArrayBuffer(8),
       }),
     ).toBe(true);
     expect(
@@ -419,11 +430,131 @@ describe("viewer print export protocol", () => {
       preflight: { ...base, appliedScale: 2 },
       preview: { ...preview, appliedScale: 2 },
     })).toBe(false);
+    expect(isPrintExportWorkerResponse({
+      type: "preflight",
+      jobId: 10,
+      preflight: {
+        ...base,
+        appliedScale: base.requestedScale + PRINT_FIDELITY_EPSILON / 2,
+      },
+      preview: {
+        ...preview,
+        appliedScale: base.requestedScale + PRINT_FIDELITY_EPSILON / 2,
+      },
+    })).toBe(true);
+    expect(isPrintExportWorkerResponse({
+      type: "preflight",
+      jobId: 10,
+      preflight: {
+        ...base,
+        appliedScale: base.requestedScale + PRINT_FIDELITY_EPSILON * 2,
+      },
+      preview: {
+        ...preview,
+        appliedScale: base.requestedScale + PRINT_FIDELITY_EPSILON * 2,
+      },
+    })).toBe(false);
     expect(boundedPrintTransferBuffer(new ArrayBuffer(4), 4)).toBe(true);
     expect(boundedPrintTransferBuffer(new ArrayBuffer(5), 4)).toBe(false);
     expect(() =>
       boundedPrintTransferBuffer(new ArrayBuffer(1), 0),
     ).toThrow(TypeError);
+  });
+
+  it("accepts only acknowledged, canonical, matching below-profile metadata", () => {
+    const base = samplePreflight();
+    const featureViolations = [
+      {
+        category: "wall-thickness" as const,
+        resultingValue: 0.4,
+        minimum: 0.8,
+      },
+      {
+        category: "gap" as const,
+        resultingValue: 0.2,
+        minimum: 0.5,
+      },
+    ];
+    const preflight: PrintPlateBundlePreflight = {
+      ...base,
+      requestedScale: 0.5,
+      appliedScale: 0.5,
+      minimumSafeScale: 1.6,
+      belowProfileScaleAcknowledged: true,
+      featureViolations,
+    };
+    const preview: PrintPlatePreviewSource = {
+      ...samplePreview(preflight),
+      requestedScale: 0.5,
+      appliedScale: 0.5,
+      minimumSafeScale: 1.6,
+      belowProfileScaleAcknowledged: true,
+      featureViolations,
+    };
+    const response = {
+      type: "preflight",
+      jobId: 11,
+      preflight,
+      preview,
+    } as const;
+
+    expect(isPrintExportWorkerResponse(response)).toBe(true);
+    expect(isPrintExportWorkerResponse({
+      ...response,
+      preflight: {
+        ...preflight,
+        belowProfileScaleAcknowledged: false,
+      },
+    })).toBe(false);
+    expect(isPrintExportWorkerResponse({
+      ...response,
+      preflight: {
+        ...preflight,
+        featureViolations: [...featureViolations].reverse(),
+      },
+    })).toBe(false);
+    expect(isPrintExportWorkerResponse({
+      ...response,
+      preflight: {
+        ...preflight,
+        featureViolations: [{
+          category: "wall-thickness",
+          resultingValue: 0.8,
+          minimum: 0.8,
+        }],
+      },
+    })).toBe(false);
+    expect(isPrintExportWorkerResponse({
+      ...response,
+      preview: {
+        ...preview,
+        minimumSafeScale: 1.7,
+      },
+    })).toBe(false);
+
+    const request: PrintExportGenerateRequest = {
+      type: "generate",
+      jobId: 12,
+      format: "3mf",
+      model: {},
+      profile: {},
+      options: {
+        scale: 0.5,
+        fitPolicy: "error",
+        acknowledgeBelowProfileScale: true,
+        labelPolicy: "off",
+        routePolicy: "off",
+        includeLegend: false,
+      },
+    };
+    expect(isPrintExportGenerateRequest(request)).toBe(true);
+    expect(isPrintExportGenerateRequest({
+      ...request,
+      options: {
+        ...request.options,
+        acknowledgeBelowProfileScale: "yes",
+      },
+    })).toBe(false);
   });
 
   it("preserves structured validation issues and normalizes unknown errors", () => {

@@ -95,6 +95,11 @@ describe("print-plate CLI", () => {
       expect(await fs.readFile(outputPath)).toEqual(
         Buffer.from(expected.artifact.bytes),
       );
+      expect(
+        await fs.readFile(
+          path.join(directory, "city.print-manifest.json"),
+        ),
+      ).toEqual(Buffer.from(expected.manifestBytes));
 
       expect(
         await runCli(
@@ -140,6 +145,190 @@ describe("print-plate CLI", () => {
       ]);
     },
   );
+
+  it(
+    "keeps the safe default and publishes exact acknowledged fidelity artifacts",
+    { timeout: 20_000 },
+    async () => {
+      const directory = await temporaryDirectory();
+      const modelPath = path.join(directory, "model.json");
+      const profilePath = path.join(directory, "profile.json");
+      const outputPath = path.join(directory, "city.3mf");
+      const manifestPath = path.join(
+        directory,
+        "city.print-manifest.json",
+      );
+      const planPath = path.join(directory, "plan.json");
+      await Promise.all([
+        fs.writeFile(modelPath, JSON.stringify(DEMO_MODEL), "utf8"),
+        fs.writeFile(
+          profilePath,
+          JSON.stringify(createSingleChannelProfile()),
+          "utf8",
+        ),
+      ]);
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const io = {
+        stdout: (message: string) => stdout.push(message),
+        stderr: (message: string) => stderr.push(message),
+      };
+      const common = [
+        "--model",
+        modelPath,
+        "--profile",
+        profilePath,
+        "--format",
+        "3mf",
+        "--scale",
+        "0.5",
+        "--fit",
+        "error",
+        "--labels",
+        "off",
+        "--routes",
+        "off",
+      ];
+
+      expect(await runCli([
+        "export",
+        ...common,
+        "--legend",
+        "off",
+        "--output",
+        outputPath,
+      ], io)).toBe(1);
+      expect(stderr.join(" ")).toContain("minimum profile-safe scale");
+      await expect(fs.access(outputPath)).rejects.toThrow();
+      await expect(fs.access(manifestPath)).rejects.toThrow();
+      stdout.length = 0;
+      stderr.length = 0;
+
+      expect(await runCli([
+        "export",
+        ...common,
+        "--acknowledge-below-profile-scale",
+        "--legend",
+        "off",
+        "--output",
+        outputPath,
+      ], io)).toBe(0);
+      const manifest = JSON.parse(
+        await fs.readFile(manifestPath, "utf8"),
+      ) as {
+        readonly fit: {
+          readonly requestedScale: number;
+          readonly appliedScale: number;
+          readonly minimumSafeScale: number;
+          readonly belowProfileScaleAcknowledged: boolean;
+          readonly featureViolations: readonly {
+            readonly category: string;
+            readonly resultingValue: number;
+            readonly minimum: number;
+          }[];
+        };
+      };
+      expect(manifest.fit).toMatchObject({
+        requestedScale: 0.5,
+        appliedScale: 0.5,
+        minimumSafeScale: 1.6,
+        belowProfileScaleAcknowledged: true,
+      });
+      expect(manifest.fit.featureViolations.length).toBeGreaterThan(0);
+      expect(stdout.join("")).toContain(
+        "Scale: requested 0.5; applied 0.5; profile-safe 1.6; below-profile acknowledgement yes.",
+      );
+      expect(stderr.join("")).toContain(
+        "This is a print-fidelity risk, not a printer hardware danger.",
+      );
+      expect(stdout.join("")).toContain(`Wrote ${path.resolve(manifestPath)}`);
+
+      stdout.length = 0;
+      stderr.length = 0;
+      expect(await runCli([
+        "plan",
+        ...common,
+        "--acknowledge-below-profile-scale",
+        "--output",
+        planPath,
+      ], io)).toBe(0);
+      const plan = JSON.parse(await fs.readFile(planPath, "utf8")) as {
+        readonly layout: typeof manifest.fit;
+      };
+      expect(plan.layout).toMatchObject({
+        requestedScale: manifest.fit.requestedScale,
+        appliedScale: manifest.fit.appliedScale,
+        minimumSafeScale: manifest.fit.minimumSafeScale,
+        belowProfileScaleAcknowledged:
+          manifest.fit.belowProfileScaleAcknowledged,
+        featureViolations: manifest.fit.featureViolations,
+      });
+    },
+  );
+
+  it("rejects valued or duplicate acknowledgement flags before publication", async () => {
+    const messages: string[] = [];
+    const io = {
+      stdout: () => undefined,
+      stderr: (message: string) => messages.push(message),
+    };
+
+    expect(await runCli([
+      "plan",
+      "--acknowledge-below-profile-scale=true",
+    ], io)).toBe(1);
+    expect(await runCli([
+      "export",
+      "--acknowledge-below-profile-scale",
+      "--acknowledge-below-profile-scale",
+    ], io)).toBe(1);
+    expect(messages.join(" ")).toContain("does not accept a value");
+    expect(messages.join(" ")).toContain("may only be supplied once");
+  });
+
+  it("publishes no direct artifacts when manifest and legend paths collide", async () => {
+    const directory = await temporaryDirectory();
+    const modelPath = path.join(directory, "model.json");
+    const profilePath = path.join(directory, "profile.json");
+    const outputPath = path.join(directory, "city.3mf");
+    const companionPath = path.join(
+      directory,
+      "city.print-manifest.json",
+    );
+    await Promise.all([
+      fs.writeFile(modelPath, JSON.stringify(DEMO_MODEL), "utf8"),
+      fs.writeFile(
+        profilePath,
+        JSON.stringify(createSingleChannelProfile()),
+        "utf8",
+      ),
+    ]);
+    const messages: string[] = [];
+
+    expect(await runCli([
+      "export",
+      "--model",
+      modelPath,
+      "--profile",
+      profilePath,
+      "--format",
+      "3mf",
+      "--scale",
+      "3",
+      "--fit",
+      "error",
+      "--legend",
+      companionPath,
+      "--output",
+      outputPath,
+    ], {
+      stdout: () => undefined,
+      stderr: (message) => messages.push(message),
+    })).toBe(1);
+    expect(messages.join(" ")).toMatch(/duplicate|different paths/iu);
+    await expect(fs.access(outputPath)).rejects.toThrow();
+    await expect(fs.access(companionPath)).rejects.toThrow();
+  });
 
   it(
     "publishes the exact deterministic tile bundle and a concise plate plan",

@@ -710,6 +710,13 @@ affected plate, marked as original once and replica thereafter. Cross-plate
 routes are not printed; the bundle manifest records consumer, provider, and
 their plate numbers. No artifact may exceed the usable profile volume.
 
+Below-profile scaling is an explicit, typed exception to fidelity minima, not
+to physical print bounds. With acknowledgement, the planner may maximize one
+known-valid packing topology below the safe scale. It deterministically records
+requested, applied, and minimum-safe scales and an ordered violation for every
+affected feature category (`resultingValue` and profile `minimum`). Without
+acknowledgement the same request fails before geometry generation.
+
 The Prusa XL one-, two-, and five-tool configurations are profiles of the same
 model.
 

@@ -36,6 +36,7 @@ import {
   type PrinterProfile,
 } from "../../core/src/print.js";
 import type { PrintRoutePolicy } from "../../core/src/print-routes.js";
+import type { PrintScaleFidelity } from "../../core/src/print-layout.js";
 
 import {
   PrintGeometryValidationError,
@@ -122,6 +123,8 @@ export interface PrintableCity {
   readonly version?: string;
   readonly unit: "millimeter";
   readonly scale: number;
+  /** Exporter-owned scale metadata; it never changes the mesh geometry. */
+  readonly scaleFidelity?: PrintScaleFidelity;
   readonly bounds: PrintBounds;
   readonly measurements: {
     readonly baseThickness: number;
@@ -140,6 +143,7 @@ export interface PrintSemanticAssignment {
 export interface BuildPrintableCityOptions {
   readonly scale: number;
   readonly profile: PrinterProfile;
+  readonly scaleFidelity?: PrintScaleFidelity;
   readonly labelPolicy?: PrintLabelPolicy;
   readonly routePolicy?: PrintRoutePolicy;
   /**
@@ -2219,6 +2223,9 @@ export function buildPrintableCityArtifacts(
     ...(version === undefined ? {} : { version }),
     unit: "millimeter",
     scale,
+    ...(options.scaleFidelity === undefined
+      ? {}
+      : { scaleFidelity: options.scaleFidelity }),
     bounds: cityBounds,
     measurements: {
       baseThickness: baseBounds.size.z,
@@ -2228,7 +2235,11 @@ export function buildPrintableCityArtifacts(
     },
     parts: createParts(primitives, model, options.profile),
   };
-  const issues = validatePrintableCity(city, options.profile);
+  const issues = validatePrintableCity(
+    city,
+    options.profile,
+    options.scaleFidelity,
+  );
   if (issues.length > 0) {
     throw new PrintGeometryValidationError(issues);
   }

@@ -469,7 +469,17 @@ Use `--fit error` for one direct 3MF or STL. `--fit scale` reduces the model no
 further than the profile-safe feature scale and still requires one plate.
 `--fit tile` preserves the requested scale and assigns complete districts to
 at most `--max-plates` (default `99`). Scale and tile exports are deterministic
-ZIP bundles:
+ZIP bundles.
+
+The expert-only `--acknowledge-below-profile-scale` flag permits an explicit
+lower scale and lets `--fit scale` search below the profile-safe floor. Without
+that flag the existing rejection is unchanged. The acknowledgement means that
+thin walls, gaps, labels, relief, routes, or connectors may lose fidelity; it
+does not indicate printer hardware danger and never bypasses usable build-volume
+checks. Preflight records requested, applied, and safe scales and lists each
+violated feature with its resulting and minimum millimetres. Direct exports
+write a deterministic `.print-manifest.json` sidecar; ZIP exports carry the
+same fields in `manifest.json`.
 
 [source,powershell]
 ----
@@ -491,6 +501,10 @@ runs in a cancellable module worker. Select 3MF or STL and a bundled or local
 JSON profile. Preflight reports plate count, filenames, dimensions,
 utilization, applied scale, warnings, omissions, and unplaced objects. No input
 is sent over the network.
+
+The viewer exposes the same behavior behind an unchecked expert
+acknowledgement. Exact below-limit measurements appear in preflight before the
+artifact and manifest downloads are offered.
 
 **Prepare calibration** uses the selected profile without repository content
 and downloads the deterministic calibration plate in the selected format plus

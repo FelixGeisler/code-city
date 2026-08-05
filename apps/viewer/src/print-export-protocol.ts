@@ -1,12 +1,16 @@
 import type {
-  PrintExportOptions,
   PrintExportPhase,
 } from "../../../packages/exporter/src/print-export.js";
+import {
+  PRINT_FIDELITY_EPSILON,
+  PRINT_FEATURE_CATEGORIES,
+} from "../../../packages/core/src/print-layout.js";
 import type {
   CalibrationMeasurement,
   CalibrationPrintExportPreflight,
 } from "../../../packages/exporter/src/calibration.js";
 import type {
+  PrintPlateExportOptions,
   PrintPlateBundlePreflight,
   PrintPlatePreviewSource,
 } from "../../../packages/exporter/src/print-plates.js";
@@ -15,13 +19,20 @@ import {
   type PrintLayoutPreviewPlan,
 } from "./print-plate-preview.js";
 
+export type PrintExportGenerateOptions = Omit<
+  PrintPlateExportOptions,
+  "fitPolicy"
+> & {
+  readonly fitPolicy?: PrintPlateExportOptions["fitPolicy"];
+};
+
 export interface PrintExportGenerateRequest {
   readonly type: "generate";
   readonly jobId: number;
   readonly format: "3mf" | "stl";
   readonly model: unknown;
   readonly profile: unknown;
-  readonly options: PrintExportOptions;
+  readonly options: PrintExportGenerateOptions;
 }
 
 export interface PrintCalibrationGenerateRequest {
@@ -75,6 +86,7 @@ export interface PrintExportResultResponse {
   readonly type: "result";
   readonly jobId: number;
   readonly artifact: PrintExportTransferArtifact;
+  readonly manifestBytes: ArrayBuffer;
   readonly legendBytes?: ArrayBuffer;
 }
 
@@ -264,7 +276,7 @@ function printFormat(value: unknown): value is "3mf" | "stl" {
   return value === "3mf" || value === "stl";
 }
 
-function exportOptions(value: unknown): value is PrintExportOptions {
+function exportOptions(value: unknown): value is PrintExportGenerateOptions {
   const candidate = record(value);
   return (
     candidate !== undefined &&
@@ -275,6 +287,8 @@ function exportOptions(value: unknown): value is PrintExportOptions {
     (candidate["routePolicy"] === "auto" ||
       candidate["routePolicy"] === "off") &&
     typeof candidate["includeLegend"] === "boolean" &&
+    (candidate["acknowledgeBelowProfileScale"] === undefined ||
+      typeof candidate["acknowledgeBelowProfileScale"] === "boolean") &&
     (candidate["fitPolicy"] === undefined ||
       candidate["fitPolicy"] === "error" ||
       candidate["fitPolicy"] === "scale" ||
@@ -484,6 +498,10 @@ function bundlePreflight(
     candidate["requestedScale"] <= 0 ||
     !finiteNumber(candidate["appliedScale"]) ||
     candidate["appliedScale"] <= 0 ||
+    !finiteNumber(candidate["minimumSafeScale"]) ||
+    candidate["minimumSafeScale"] <= 0 ||
+    typeof candidate["belowProfileScaleAcknowledged"] !== "boolean" ||
+    !featureViolations(candidate["featureViolations"]) ||
     !positiveInteger(candidate["plateCount"]) ||
     Number(candidate["plateCount"]) > BUNDLE_PLATE_LIMIT ||
     !Array.isArray(candidate["plates"]) ||
@@ -516,17 +534,23 @@ function bundlePreflight(
     String(fileName).toLocaleLowerCase("en-US"),
   );
   const normalized = candidate as unknown as PrintPlateBundlePreflight;
+  const belowSafe =
+    normalized.appliedScale + PRINT_FIDELITY_EPSILON <
+    normalized.minimumSafeScale;
   if (
+    belowSafe !== (normalized.featureViolations.length > 0) ||
+    (belowSafe && !normalized.belowProfileScaleAcknowledged) ||
     ((normalized.fitPolicy === "tile" ||
       normalized.fitPolicy === "error") &&
-      !approximatelyEqual(
+      !fidelityEqual(
         normalized.appliedScale,
         normalized.requestedScale,
       )) ||
     (normalized.fitPolicy === "error" && normalized.plateCount !== 1) ||
     (normalized.fitPolicy === "scale" && normalized.plateCount !== 1) ||
     (normalized.fitPolicy === "scale" &&
-      normalized.appliedScale > normalized.requestedScale + BOUNDS_EPSILON)
+      normalized.appliedScale >
+        normalized.requestedScale + PRINT_FIDELITY_EPSILON)
   ) {
     return false;
   }
@@ -607,6 +631,44 @@ function bundlePreflight(
   );
 }
 
+const FEATURE_CATEGORIES = new Set<string>(PRINT_FEATURE_CATEGORIES);
+const FEATURE_CATEGORY_ORDER = new Map<string, number>(
+  PRINT_FEATURE_CATEGORIES.map((category, index) => [category, index]),
+);
+
+function featureViolations(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length > FEATURE_CATEGORIES.size) {
+    return false;
+  }
+  const seen = new Set<string>();
+  let previousOrder = -1;
+  return value.every((item) => {
+    const candidate = record(item);
+    const category = candidate?.["category"];
+    const order = typeof category === "string"
+      ? FEATURE_CATEGORY_ORDER.get(category)
+      : undefined;
+    if (
+      candidate === undefined ||
+      typeof category !== "string" ||
+      !FEATURE_CATEGORIES.has(category) ||
+      seen.has(category) ||
+      order === undefined ||
+      order <= previousOrder ||
+      !finiteNumber(candidate["resultingValue"]) ||
+      candidate["resultingValue"] <= 0 ||
+      !finiteNumber(candidate["minimum"]) ||
+      candidate["resultingValue"] + PRINT_FIDELITY_EPSILON >=
+        candidate["minimum"]
+    ) {
+      return false;
+    }
+    seen.add(category);
+    previousOrder = order;
+    return true;
+  });
+}
+
 export function normalizePrintExportPreviewSource(
   value: unknown,
 ): PrintLayoutPreviewPlan | undefined {
@@ -628,6 +690,10 @@ function approximatelyEqual(left: number, right: number): boolean {
   if (left === right) return true;
   const scale = Math.max(1, Math.abs(left), Math.abs(right));
   return Math.abs(left - right) <= BOUNDS_EPSILON * scale;
+}
+
+function fidelityEqual(left: number, right: number): boolean {
+  return Math.abs(left - right) <= PRINT_FIDELITY_EPSILON;
 }
 
 function saturatingWeightAdd(left: number, right: number): number {
@@ -671,8 +737,16 @@ function bundleMatchesPreview(
   if (
     preview.requestedPolicy !== preflight.fitPolicy ||
     preview.appliedPolicy !== preflight.fitPolicy ||
-    !approximatelyEqual(preview.requestedScale, preflight.requestedScale) ||
-    !approximatelyEqual(preview.appliedScale, preflight.appliedScale) ||
+    !fidelityEqual(preview.requestedScale, preflight.requestedScale) ||
+    !fidelityEqual(preview.appliedScale, preflight.appliedScale) ||
+    !fidelityEqual(
+      preview.minimumSafeScale,
+      preflight.minimumSafeScale,
+    ) ||
+    preview.belowProfileScaleAcknowledged !==
+      preflight.belowProfileScaleAcknowledged ||
+    JSON.stringify(preview.featureViolations) !==
+      JSON.stringify(preflight.featureViolations) ||
     preview.plates.length !== preflight.plateCount ||
     !equalStringSets(preview.warnings, preflight.warnings) ||
     !equalStringSets(
@@ -725,7 +799,7 @@ function singleMatchesPreview(
     preflight.plateCount !== 1 ||
     preview.requestedPolicy !== "error" ||
     preview.appliedPolicy !== "error" ||
-    !approximatelyEqual(preview.requestedScale, preview.appliedScale) ||
+    !fidelityEqual(preview.requestedScale, preview.appliedScale) ||
     preview.plates.length !== 1 ||
     preview.unplacedObjects.length !== 0 ||
     !equalStringSets(preview.warnings, preflight.warnings) ||
@@ -974,6 +1048,10 @@ export function isPrintExportWorkerResponse(
       const artifact = candidate["artifact"];
       return (
         transferArtifact(artifact) &&
+        candidate["manifestBytes"] instanceof ArrayBuffer &&
+        candidate["manifestBytes"].byteLength > 0 &&
+        candidate["manifestBytes"].byteLength <=
+          PRINT_MANIFEST_BYTE_LIMIT &&
         (candidate["legendBytes"] === undefined ||
           (candidate["legendBytes"] instanceof ArrayBuffer &&
             candidate["legendBytes"].byteLength > 0 &&

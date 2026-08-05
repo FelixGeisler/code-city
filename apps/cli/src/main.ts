@@ -53,13 +53,15 @@ Usage:
   codecity plan --model <city-model.json> --profile <profile.json> \\
     --format <stl|3mf> --output <print-plan.json> [--scale <factor>] \\
     [--fit <error|scale|tile>] [--max-plates <count>] \\
-    [--labels <auto|off>] [--routes <auto|off>]
+    [--labels <auto|off>] [--routes <auto|off>] \\
+    [--acknowledge-below-profile-scale]
   codecity export --model <city-model.json> --profile <profile.json> \\
     --format <stl|3mf> --output <model.stl|model.3mf|bundle.zip> \\
     [--scale <factor>] [--fit <error|scale|tile>] \\
     [--max-plates <count>] \\
     [--labels <auto|off>] [--routes <auto|off>] \\
-    [--legend <legend.json|off>]
+    [--legend <legend.json|off>] \\
+    [--acknowledge-below-profile-scale]
   codecity calibrate --profile <profile.json> --output <model.stl|model.3mf> \\
     [--format <stl|3mf>] [--manifest <manifest.json>]
   codecity compare-connectors --profile <profile.json> --output <model.3mf> \\
@@ -91,6 +93,9 @@ Print options:
   --labels <auto|off>  Same-channel physical labels (default: auto)
   --routes <auto|off>  Aggregated dependency traces (default: off)
   --legend <path|off>  Private companion legend (default: beside model)
+  --acknowledge-below-profile-scale
+                       Expert acknowledgement allowing detail below profile
+                       fidelity minima; physical build limits still apply
 
 General:
   -h, --help           Show this help
@@ -136,6 +141,7 @@ const defaultIo: CliIo = {
 function parseArguments(
   args: readonly string[],
   valuedOptions: ReadonlySet<string>,
+  flagOptions: ReadonlySet<string> = new Set(),
 ): ParsedArguments {
   const positionals: string[] = [];
   const options = new Map<string, string>();
@@ -150,8 +156,18 @@ function parseArguments(
     if (!positionalOnly && argument.startsWith("--")) {
       const equals = argument.indexOf("=");
       const name = equals < 0 ? argument.slice(2) : argument.slice(2, equals);
-      if (!valuedOptions.has(name)) {
+      if (!valuedOptions.has(name) && !flagOptions.has(name)) {
         throw new Error(`Unknown option '--${name}'.`);
+      }
+      if (flagOptions.has(name)) {
+        if (equals >= 0) {
+          throw new Error(`Flag '--${name}' does not accept a value.`);
+        }
+        if (options.has(name)) {
+          throw new Error(`Option '--${name}' may only be supplied once.`);
+        }
+        options.set(name, "true");
+        continue;
       }
       const value = equals < 0 ? args[index + 1] : argument.slice(equals + 1);
       if (value === undefined || (equals < 0 && value.startsWith("--"))) {
@@ -430,6 +446,7 @@ async function planCommand(args: readonly string[], io: CliIo): Promise<void> {
       "labels",
       "routes",
     ]),
+    new Set(["acknowledge-below-profile-scale"]),
   );
   if (parsed.positionals.length > 0) {
     throw new Error(
@@ -452,6 +469,9 @@ async function planCommand(args: readonly string[], io: CliIo): Promise<void> {
   );
   const labelPolicy = cliLabelPolicy(parsed.options.get("labels"));
   const routePolicy = cliRoutePolicy(parsed.options.get("routes"));
+  const acknowledgeBelowProfileScale = parsed.options.has(
+    "acknowledge-below-profile-scale",
+  );
   const model = parseCityModel(await readJson(modelPath, "city model"));
   const profile = parsePrinterProfile(
     await readJson(profilePath, "printer profile"),
@@ -466,6 +486,7 @@ async function planCommand(args: readonly string[], io: CliIo): Promise<void> {
       labelPolicy,
       routePolicy,
       includeLegend: false,
+      acknowledgeBelowProfileScale,
       ...(plateLimit === undefined
         ? {}
         : { maximumPlateCount: plateLimit }),
@@ -498,6 +519,7 @@ async function planCommand(args: readonly string[], io: CliIo): Promise<void> {
       prepared.layout.plates.length === 1 ? "plate" : "plates"
     } at scale ${millimeters(prepared.layout.appliedScale)}.\nWrote ${path.resolve(output)}\n`,
   );
+  printFidelitySummary(io, prepared.layout);
   io.stdout(`${labelSummary(prepared.preflight.labels)}\n`);
   io.stdout(`${routeSummary(prepared.preflight.routes)}\n`);
 }
@@ -584,6 +606,34 @@ function routeSummary(routes: {
 
 function defaultLegendPath(output: string): string {
   return output.replace(/\.(?:3mf|stl|zip)$/iu, ".legend.json");
+}
+
+function directPrintManifestPath(output: string): string {
+  return output.replace(/\.(?:3mf|stl)$/iu, ".print-manifest.json");
+}
+
+function printFidelitySummary(
+  io: CliIo,
+  fidelity: {
+    readonly requestedScale: number;
+    readonly appliedScale: number;
+    readonly minimumSafeScale: number;
+    readonly belowProfileScaleAcknowledged: boolean;
+    readonly featureViolations: readonly {
+      readonly category: string;
+      readonly resultingValue: number;
+      readonly minimum: number;
+    }[];
+  },
+): void {
+  io.stdout(
+    `Scale: requested ${millimeters(fidelity.requestedScale)}; applied ${millimeters(fidelity.appliedScale)}; profile-safe ${millimeters(fidelity.minimumSafeScale)}; below-profile acknowledgement ${fidelity.belowProfileScaleAcknowledged ? "yes" : "no"}.\n`,
+  );
+  for (const violation of fidelity.featureViolations) {
+    io.stderr(
+      `Warning: ${violation.category} is ${millimeters(violation.resultingValue)} mm after scaling; profile minimum is ${millimeters(violation.minimum)} mm. This is a print-fidelity risk, not a printer hardware danger.\n`,
+    );
+  }
 }
 
 function legendPath(
@@ -780,6 +830,7 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
       "routes",
       "legend",
     ]),
+    new Set(["acknowledge-below-profile-scale"]),
   );
   if (parsed.positionals.length > 0) {
     throw new Error(
@@ -800,6 +851,9 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
   );
   const labelPolicy = cliLabelPolicy(parsed.options.get("labels"));
   const routePolicy = cliRoutePolicy(parsed.options.get("routes"));
+  const acknowledgeBelowProfileScale = parsed.options.has(
+    "acknowledge-below-profile-scale",
+  );
   if (fitPolicy === "error") {
     requireMatchingOutputExtension(output, format, "Export");
   } else if (path.extname(output).toLowerCase() !== ".zip") {
@@ -826,6 +880,7 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
       labelPolicy,
       routePolicy,
       includeLegend: companionOutput !== undefined,
+      acknowledgeBelowProfileScale,
       ...(plateLimit === undefined
         ? {}
         : { maximumPlateCount: plateLimit }),
@@ -853,6 +908,7 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
         exported.manifest.plateCount === 1 ? "plate" : "plates"
       } at applied scale ${millimeters(exported.layout.appliedScale)}.\n`,
     );
+    printFidelitySummary(io, exported.layout);
     for (const plate of exported.manifest.plates) {
       const size = plate.preflight.dimensions;
       io.stdout(
@@ -874,9 +930,15 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
     return;
   }
   const exported = serializePreparedSinglePrintPlateExport(prepared);
+  const manifestOutput = directPrintManifestPath(output);
   const publishedPaths = await publishArtifactsAtomically(
     [
       { destination: output, bytes: exported.artifact.bytes },
+      {
+        destination: manifestOutput,
+        bytes: exported.manifestBytes,
+        mode: 0o600,
+      },
       ...(companionOutput === undefined
         ? []
         : [
@@ -890,16 +952,18 @@ async function exportCommand(args: readonly string[], io: CliIo): Promise<void> 
     { protectedPaths: [modelPath, profilePath] },
   );
   const absoluteOutput = publishedPaths[0]!;
-  const absoluteLegend = publishedPaths[1];
+  const absoluteManifest = publishedPaths[1]!;
+  const absoluteLegend = publishedPaths[2];
   const plate = exported.preflight.plates[0]!;
   const bounds = plate.dimensions;
   io.stdout(
     `Exported 1 ${format.toUpperCase()} print plate at applied scale ${millimeters(exported.layout.appliedScale)}.\n`,
   );
+  printFidelitySummary(io, exported.layout);
   io.stdout(
     `Plate 1: ${path.basename(output)} · ${millimeters(bounds.width)} × ${millimeters(bounds.depth)} × ${millimeters(bounds.height)} mm · ${Math.round(plate.utilization * 100)}% used.\n`,
   );
-  io.stdout(`Wrote ${absoluteOutput}\n`);
+  io.stdout(`Wrote ${absoluteOutput}\nWrote ${absoluteManifest}\n`);
   if (absoluteLegend !== undefined) {
     io.stdout(`Wrote ${absoluteLegend}\n`);
   } else {

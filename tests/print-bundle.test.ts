@@ -148,6 +148,13 @@ function city(
     version: "v1",
     unit: "millimeter",
     scale: 2,
+    scaleFidelity: {
+      requestedScale: 3,
+      appliedScale: 2,
+      minimumSafeScale: 2,
+      belowProfileScaleAcknowledged: false,
+      featureViolations: [],
+    },
     bounds: bounds(0, 0, 0, 40, 30, 6 + plateNumber),
     measurements: {
       baseThickness: 1,
@@ -215,6 +222,9 @@ function request(
     fitPolicy: "tile",
     requestedScale: 3,
     appliedScale: 2,
+    minimumSafeScale: 2,
+    belowProfileScaleAcknowledged: false,
+    featureViolations: [],
     warnings: reverse
       ? ["Scaled to preserve minimum features.", "Two plates."]
       : ["Two plates.", "Scaled to preserve minimum features."],
@@ -311,6 +321,9 @@ describe("deterministic multi-plate print bundles", () => {
       policy: "tile",
       requestedScale: 3,
       appliedScale: 2,
+      minimumSafeScale: 2,
+      belowProfileScaleAcknowledged: false,
+      featureViolations: [],
     });
     expect(manifest.plateCount).toBe(2);
     expect(manifest.plates[0]?.layout).toMatchObject({
@@ -402,6 +415,70 @@ describe("deterministic multi-plate print bundles", () => {
         "unplaced-endpoint": 0,
       },
     });
+  });
+
+  it("carries acknowledged fidelity into bundle manifests and rejects plate tampering", () => {
+    const base = request();
+    const featureViolations = [
+      {
+        category: "wall-thickness" as const,
+        resultingValue: 0.4,
+        minimum: 0.8,
+      },
+      {
+        category: "gap" as const,
+        resultingValue: 0.2,
+        minimum: 0.5,
+      },
+    ];
+    const fidelity = {
+      requestedScale: 0.5,
+      appliedScale: 0.5,
+      minimumSafeScale: 1.6,
+      belowProfileScaleAcknowledged: true,
+      featureViolations,
+    } as const;
+    const acknowledged: PrintBundleRequest = {
+      ...base,
+      ...fidelity,
+      plates: base.plates.map((item) => ({
+        ...item,
+        city: {
+          ...item.city,
+          scale: fidelity.appliedScale,
+          scaleFidelity: fidelity,
+        },
+      })),
+    };
+
+    const result = serializePrintBundle(acknowledged);
+    expect(result.manifest.fit).toEqual({
+      policy: "tile",
+      ...fidelity,
+    });
+    expect(JSON.parse(decoder.decode(result.manifestBytes)).fit).toEqual(
+      result.manifest.fit,
+    );
+
+    const first = acknowledged.plates[0]!;
+    expect(() =>
+      serializePrintBundle({
+        ...acknowledged,
+        plates: [
+          {
+            ...first,
+            city: {
+              ...first.city,
+              scaleFidelity: {
+                ...fidelity,
+                belowProfileScaleAcknowledged: false,
+              },
+            },
+          },
+          ...acknowledged.plates.slice(1),
+        ],
+      }),
+    ).toThrow(/scale-fidelity metadata does not match/u);
   });
 
   it("is byte-identical across plate, part, warning, transform, and omission input order", () => {

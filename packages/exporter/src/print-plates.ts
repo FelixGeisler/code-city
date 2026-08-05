@@ -21,6 +21,7 @@ import {
   type ExternalDependencyLayout,
   type ExternalDependencySelection,
   type PrintFitPolicy,
+  type PrintFeatureViolation,
   type PrintFormat,
   type PrintLabelPolicy,
   type PrintLayoutBounds,
@@ -66,10 +67,13 @@ const DEFAULT_MAXIMUM_PLATE_COUNT = 99;
 const IDENTITY_MINIMUM_FEATURE = 0.8;
 const STL_INFORMATION_LOSS_WARNING =
   "STL is a single multi-shell mesh; colors, tool assignments, and 3MF metadata are not preserved.";
+export const PRINT_EXPORT_MANIFEST_SCHEMA =
+  "https://felixgeisler.github.io/code-city/schemas/print-export-v1.json" as const;
 
 export interface PrintPlateExportOptions {
   readonly scale: number;
   readonly fitPolicy: PrintFitPolicy;
+  readonly acknowledgeBelowProfileScale?: boolean;
   readonly labelPolicy: PrintLabelPolicy;
   readonly routePolicy: PrintRoutePolicy;
   readonly includeLegend: boolean;
@@ -115,6 +119,9 @@ export interface PrintPlateBundlePreflight {
   readonly fitPolicy: PrintFitPolicy;
   readonly requestedScale: number;
   readonly appliedScale: number;
+  readonly minimumSafeScale: number;
+  readonly belowProfileScaleAcknowledged: boolean;
+  readonly featureViolations: readonly PrintFeatureViolation[];
   readonly plateCount: number;
   readonly plates: readonly {
     readonly number: number;
@@ -144,6 +151,9 @@ export interface PrintPlatePreviewSource {
   readonly appliedPolicy: PrintFitPolicy;
   readonly requestedScale: number;
   readonly appliedScale: number;
+  readonly minimumSafeScale: number;
+  readonly belowProfileScaleAcknowledged: boolean;
+  readonly featureViolations: readonly PrintFeatureViolation[];
   readonly sourceBounds: {
     readonly minimum: Vector3;
     readonly maximum: Vector3;
@@ -191,7 +201,31 @@ export interface SinglePrintPlateExportResult {
   readonly preflight: PrintPlateBundlePreflight;
   readonly preview: PrintPlatePreviewSource;
   readonly artifact: PrintExportArtifact;
+  readonly manifest: DirectPrintExportManifest;
+  readonly manifestBytes: Uint8Array;
   readonly legendBytes?: Uint8Array;
+}
+
+export interface DirectPrintExportManifest {
+  readonly schema: typeof PRINT_EXPORT_MANIFEST_SCHEMA;
+  readonly title: string;
+  readonly version?: string;
+  readonly format: PrintFormat;
+  readonly profile: {
+    readonly id: string;
+    readonly name: string;
+  };
+  readonly fit: {
+    readonly policy: "error";
+    readonly requestedScale: number;
+    readonly appliedScale: number;
+    readonly minimumSafeScale: number;
+    readonly belowProfileScaleAcknowledged: boolean;
+    readonly featureViolations: readonly PrintFeatureViolation[];
+  };
+  readonly plate: PrintPlateBundlePreflight["plates"][number];
+  readonly warnings: readonly string[];
+  readonly legendIncluded: boolean;
 }
 
 interface Box {
@@ -1065,6 +1099,14 @@ function validateRequestOptions(options: PrintPlateExportOptions): void {
     throw new RangeError("Print scale must be a positive finite number.");
   }
   if (
+    options.acknowledgeBelowProfileScale !== undefined &&
+    typeof options.acknowledgeBelowProfileScale !== "boolean"
+  ) {
+    throw new TypeError(
+      "Below-profile scale acknowledgement must be a boolean.",
+    );
+  }
+  if (
     options.fitPolicy !== "error" &&
     options.fitPolicy !== "scale" &&
     options.fitPolicy !== "tile"
@@ -1128,6 +1170,8 @@ export function preparePrintPlateBundle(
   const layout = planPrintLayout(profile, {
     fitPolicy: request.options.fitPolicy,
     requestedScale: request.options.scale,
+    acknowledgeBelowProfileScale:
+      request.options.acknowledgeBelowProfileScale ?? false,
     districts: model.districts.map((district) => {
       const districtGroups = new Set([
         "base",
@@ -1239,6 +1283,14 @@ export function preparePrintPlateBundle(
       {
         profile,
         scale: 1,
+        scaleFidelity: {
+          requestedScale: layout.requestedScale,
+          appliedScale: layout.appliedScale,
+          minimumSafeScale: layout.minimumSafeScale,
+          belowProfileScaleAcknowledged:
+            layout.belowProfileScaleAcknowledged,
+          featureViolations: layout.featureViolations,
+        },
         labelPolicy: request.options.labelPolicy,
         routePolicy: request.options.routePolicy,
         plateNumber: {
@@ -1370,6 +1422,10 @@ export function preparePrintPlateBundle(
     fitPolicy: layout.fitPolicy,
     requestedScale: layout.requestedScale,
     appliedScale: layout.appliedScale,
+    minimumSafeScale: layout.minimumSafeScale,
+    belowProfileScaleAcknowledged:
+      layout.belowProfileScaleAcknowledged,
+    featureViolations: layout.featureViolations,
     warnings,
     unplacedObjects: unplaced,
     routeOmissions: omissions,
@@ -1392,6 +1448,10 @@ export function preparePrintPlateBundle(
     appliedPolicy: layout.fitPolicy,
     requestedScale: layout.requestedScale,
     appliedScale: layout.appliedScale,
+    minimumSafeScale: layout.minimumSafeScale,
+    belowProfileScaleAcknowledged:
+      layout.belowProfileScaleAcknowledged,
+    featureViolations: layout.featureViolations,
     sourceBounds: sizedBounds(sourceMinimum, sourceMaximum),
     printableBounds: sizedBounds(
       { x: 0, y: 0, z: 0 },
@@ -1435,6 +1495,10 @@ export function preparePrintPlateBundle(
     fitPolicy: layout.fitPolicy,
     requestedScale: layout.requestedScale,
     appliedScale: layout.appliedScale,
+    minimumSafeScale: layout.minimumSafeScale,
+    belowProfileScaleAcknowledged:
+      layout.belowProfileScaleAcknowledged,
+    featureViolations: layout.featureViolations,
     plateCount: preparedPlates.length,
     plates: preparedPlates.map(
       ({ layout: plate, artifacts, bundlePlate }) => ({
@@ -1549,7 +1613,34 @@ export function serializePreparedSinglePrintPlateExport(
           mimeType: "model/stl",
           fileExtension: ".stl",
           bytes: serializeBinaryStl(city),
-        };
+      };
+  const manifest: DirectPrintExportManifest = {
+    schema: PRINT_EXPORT_MANIFEST_SCHEMA,
+    title: prepared.preflight.title,
+    ...(prepared.model.identity?.version === undefined
+      ? {}
+      : { version: prepared.model.identity.version }),
+    format: prepared.format,
+    profile: {
+      id: prepared.preflight.profileId,
+      name: prepared.preflight.profileName,
+    },
+    fit: {
+      policy: "error",
+      requestedScale: prepared.preflight.requestedScale,
+      appliedScale: prepared.preflight.appliedScale,
+      minimumSafeScale: prepared.preflight.minimumSafeScale,
+      belowProfileScaleAcknowledged:
+        prepared.preflight.belowProfileScaleAcknowledged,
+      featureViolations: prepared.preflight.featureViolations,
+    },
+    plate: prepared.preflight.plates[0]!,
+    warnings: prepared.preflight.warnings,
+    legendIncluded: prepared.preflight.legendIncluded,
+  };
+  const manifestBytes = new TextEncoder().encode(
+    `${JSON.stringify(manifest, null, 2)}\n`,
+  );
   progress(onProgress, {
     phase: "complete",
     completed: 1,
@@ -1562,6 +1653,8 @@ export function serializePreparedSinglePrintPlateExport(
     preflight: prepared.preflight,
     preview: prepared.preview,
     artifact,
+    manifest,
+    manifestBytes,
     ...(prepared.bundleRequest.legendBytes === undefined
       ? {}
       : { legendBytes: prepared.bundleRequest.legendBytes }),
