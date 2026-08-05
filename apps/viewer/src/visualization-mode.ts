@@ -2,11 +2,15 @@ import {
   DEFAULT_METRIC_MAPPING,
   describeMetricMapping,
   isVersionedMetricMapping,
+  metricColorPaletteEntry,
   normalizeMetricChannelValue,
 } from "../../../packages/core/src/metrics.js";
 import type {
   CityBuilding,
   CityModel,
+  MetricMethod,
+  MetricNormalizationState,
+  MetricSourceKey,
   SemanticGroup,
 } from "../../../packages/core/src/model.js";
 import { assignSemanticGroups } from "../../../packages/core/src/print.js";
@@ -31,6 +35,25 @@ export interface ViewerVisualization {
   readonly legend: readonly SemanticGroup[];
   readonly status: string;
   readonly available: boolean;
+}
+
+export interface BuildingMetricPresentationRow {
+  readonly id: "footprint" | "height" | "color" | "method";
+  readonly label: string;
+  readonly value: string;
+  readonly description: string;
+  readonly state: MetricNormalizationState;
+}
+
+export interface BuildingMetricTechnicalEntry {
+  readonly label: string;
+  readonly value: string;
+}
+
+export interface BuildingMetricPresentation {
+  readonly buildingId: string;
+  readonly rows: readonly BuildingMetricPresentationRow[];
+  readonly technical: readonly BuildingMetricTechnicalEntry[];
 }
 
 const RISK_GROUPS = Object.freeze([
@@ -295,47 +318,320 @@ export function createViewerVisualization(
   }
 }
 
-export function describeBuildingMetrics(
+export function presentBuildingMetrics(
   model: CityModel,
   building: CityBuilding,
-): string {
+): BuildingMetricPresentation {
   const mapping = model.metricMapping ?? DEFAULT_METRIC_MAPPING;
+  const method = metricMethodPresentation(building.metricMethod);
   if (isVersionedMetricMapping(mapping)) {
-    const channel = (
-      name: "footprint" | "height" | "color",
-    ): string => {
-      const definition = mapping.channels[name];
-      const value = building.metrics[definition.metric];
+    const channelRow = (
+      id: "footprint" | "height" | "color",
+      label: string,
+      purpose: string,
+    ): BuildingMetricPresentationRow => {
+      const definition = mapping.channels[id];
+      const raw = building.metrics[definition.metric];
       const normalized = normalizeMetricChannelValue(
         building.metrics,
         definition,
       );
-      return `${name} ${definition.metric} raw ${value}, normalized ${normalized.value.toFixed(4)} (${normalized.clamped ? "clamped" : "available"}), ${definition.formula} → ${definition.normalization.formula} (cap ${definition.normalization.cap}, missing ${definition.normalization.missing})`;
+      const palette =
+        id === "color"
+          ? metricColorPaletteEntry(
+              normalized.value,
+              mapping.channels.color.palette,
+            ).label
+          : undefined;
+      return {
+        id,
+        label,
+        value:
+          formatMetricValue(definition.metric, raw) +
+          (palette === undefined ? "" : ` · ${palette}`),
+        description:
+          `${purpose} ${metricMeaning(definition.metric)}` +
+          (normalized.clamped
+            ? ` Values above ${definition.normalization.cap.toLocaleString()} share the display maximum.`
+            : ""),
+        state: normalized.clamped ? "clamped" : "available",
+      };
     };
-    return [
-      `Raw SLOC ${building.metrics.sloc}; decision load ${building.metrics.decisionLoad}; maximum per-unit complexity ${building.metrics.maximumComplexity}; executable units ${building.metrics.executableUnitCount}.`,
-      `Metric method ${building.metricMethod ?? "not recorded"}.`,
-      `Metric channels: ${channel("footprint")}; ${channel("height")}; ${channel("color")}.`,
-      `Geometry formulas: footprint ${mapping.geometry.footprint.formula} (${mapping.geometry.footprint.minimumSide}–${mapping.geometry.footprint.maximumSide}); height ${mapping.geometry.height.formula} (${mapping.geometry.height.minimumHeight}–${mapping.geometry.height.maximumHeight}); color ${mapping.channels.color.scale}.`,
-      `Mapping provenance: ${describeMetricMapping(mapping)}`,
-    ].join(" ");
+    return {
+      buildingId: building.id,
+      rows: [
+        channelRow(
+          "footprint",
+          "Footprint",
+          "Controls the building's width and depth.",
+        ),
+        channelRow(
+          "height",
+          "Height",
+          "Controls how tall the building appears.",
+        ),
+        channelRow(
+          "color",
+          "Color",
+          "Selects the building's color band.",
+        ),
+        {
+          id: "method",
+          label: "Measured with",
+          value: method.label,
+          description: method.description,
+          state:
+            building.metricMethod === undefined
+              ? "unavailable"
+              : "available",
+        },
+      ],
+      technical: versionedMetricTechnicalEntries(
+        mapping,
+        building,
+      ),
+    };
   }
-  const normalization = building.metricNormalization;
+
+  const normalizationState = (
+    metric: "sloc" | "decisionLoad",
+  ): MetricNormalizationState => {
+    const persisted = building.metricNormalization?.[metric].state;
+    if (persisted !== undefined) return persisted;
+    return building.metrics[metric] > mapping.normalizationCaps[metric]
+      ? "clamped"
+      : "available";
+  };
+  const legacyRow = (
+    id: "footprint" | "height",
+    label: string,
+    purpose: string,
+    metric: "sloc" | "decisionLoad",
+  ): BuildingMetricPresentationRow => {
+    const state = normalizationState(metric);
+    return {
+      id,
+      label,
+      value: formatMetricValue(metric, building.metrics[metric]),
+      description:
+        `${purpose} ${metricMeaning(metric)}` +
+        (state === "clamped"
+          ? ` Values above ${mapping.normalizationCaps[metric].toLocaleString()} share the display maximum.`
+          : state === "unavailable"
+            ? " Display normalization was not recorded."
+            : ""),
+      state,
+    };
+  };
+  return {
+    buildingId: building.id,
+    rows: [
+      legacyRow(
+        "footprint",
+        "Footprint",
+        "Controls the building's width and depth.",
+        "sloc",
+      ),
+      legacyRow(
+        "height",
+        "Height",
+        "Controls how tall the building appears.",
+        "decisionLoad",
+      ),
+      {
+        id: "color",
+        label: "Color",
+        value:
+          formatMetricValue(
+            "maximumComplexity",
+            building.metrics.maximumComplexity,
+          ) + ` · ${riskLabel(building.risk)}`,
+        description:
+          "Selects the building's complexity-risk color band. Maximum complexity is the highest measured executable unit.",
+        state: "available",
+      },
+      {
+        id: "method",
+        label: "Measured with",
+        value: method.label,
+        description: method.description,
+        state:
+          building.metricMethod === undefined
+            ? "unavailable"
+            : "available",
+      },
+    ],
+    technical: legacyMetricTechnicalEntries(
+      model,
+      mapping,
+      building,
+    ),
+  };
+}
+
+function metricMethodPresentation(
+  method: MetricMethod | undefined,
+): { readonly label: string; readonly description: string } {
+  switch (method) {
+    case "typescript-compiler-api-v1":
+      return {
+        label: "TypeScript compiler analysis",
+        description:
+          "Static TypeScript/JavaScript syntax analysis calculated these values.",
+      };
+    case "csharp-roslyn-v1":
+      return {
+        label: "Roslyn analysis (C#)",
+        description:
+          "Microsoft Roslyn syntax analysis calculated these values.",
+      };
+    case "csharp-lexical-v1":
+      return {
+        label: "C# lexical analysis",
+        description:
+          "A deterministic lexical fallback calculated these values.",
+      };
+    case undefined:
+      return {
+        label: "Not recorded",
+        description:
+          "This older or model-only city does not identify the analyzer used.",
+      };
+  }
+}
+
+function metricMeaning(metric: MetricSourceKey): string {
+  switch (metric) {
+    case "sloc":
+      return "More source lines produce a larger footprint.";
+    case "decisionLoad":
+      return "More decision points produce more height.";
+    case "maximumComplexity":
+      return "The most complex executable unit determines this channel.";
+    case "executableUnitCount":
+      return "More functions, methods, and other executable units increase this channel.";
+  }
+}
+
+function formatMetricValue(
+  metric: MetricSourceKey,
+  value: number,
+): string {
+  const formatted = value.toLocaleString();
+  switch (metric) {
+    case "sloc":
+      return `${formatted} SLOC`;
+    case "decisionLoad":
+      return `${formatted} decision points`;
+    case "maximumComplexity":
+      return `CC ${formatted}`;
+    case "executableUnitCount":
+      return `${formatted} executable units`;
+  }
+}
+
+function riskLabel(risk: CityBuilding["risk"]): string {
+  return `${risk === "very-high" ? "Very high" : risk[0]!.toUpperCase() + risk.slice(1)} risk`;
+}
+
+function rawMetricFacts(building: CityBuilding): string {
+  return (
+    `SLOC ${building.metrics.sloc}; decision load ${building.metrics.decisionLoad}; ` +
+    `maximum per-unit complexity ${building.metrics.maximumComplexity}; ` +
+    `executable units ${building.metrics.executableUnitCount}`
+  );
+}
+
+function versionedMetricTechnicalEntries(
+  mapping: Extract<CityModel["metricMapping"], { readonly definitionVersion: "1.0" }>,
+  building: CityBuilding,
+): readonly BuildingMetricTechnicalEntry[] {
+  const channel = (
+    name: "footprint" | "height" | "color",
+  ): string => {
+    const definition = mapping.channels[name];
+    const value = building.metrics[definition.metric];
+    const normalized = normalizeMetricChannelValue(
+      building.metrics,
+      definition,
+    );
+    return (
+      `${definition.metric}: raw ${value}, normalized ${normalized.value.toFixed(4)} ` +
+      `(${normalized.clamped ? "clamped" : "available"}); ` +
+      `${definition.formula} → ${definition.normalization.formula}; ` +
+      `cap ${definition.normalization.cap}; missing ${definition.normalization.missing}` +
+      (name === "color" ? `; scale ${mapping.channels.color.scale}` : "")
+    );
+  };
+  return [
+    {
+      label: "Analyzer ID",
+      value: building.metricMethod ?? "not recorded",
+    },
+    { label: "Raw facts", value: rawMetricFacts(building) },
+    { label: "Footprint channel", value: channel("footprint") },
+    { label: "Height channel", value: channel("height") },
+    { label: "Color channel", value: channel("color") },
+    {
+      label: "Geometry",
+      value:
+        `footprint ${mapping.geometry.footprint.formula} ` +
+        `(${mapping.geometry.footprint.minimumSide}–${mapping.geometry.footprint.maximumSide}); ` +
+        `height ${mapping.geometry.height.formula} ` +
+        `(${mapping.geometry.height.minimumHeight}–${mapping.geometry.height.maximumHeight})`,
+    },
+    {
+      label: "Mapping provenance",
+      value: describeMetricMapping(mapping),
+    },
+  ];
+}
+
+function legacyMetricTechnicalEntries(
+  model: CityModel,
+  mapping: typeof DEFAULT_METRIC_MAPPING,
+  building: CityBuilding,
+): readonly BuildingMetricTechnicalEntry[] {
   const state = (metric: "sloc" | "decisionLoad"): string => {
-    const persisted = normalization?.[metric].state;
+    const persisted = building.metricNormalization?.[metric].state;
     if (persisted !== undefined) return persisted;
     const value = building.metrics[metric];
     const cap = mapping.normalizationCaps[metric];
     return `${value > cap ? "clamped" : "available"} (derived from the schema-default mapping)`;
   };
   return [
-    `Raw SLOC ${building.metrics.sloc}; decision load ${building.metrics.decisionLoad}; maximum per-unit complexity ${building.metrics.maximumComplexity}; executable units ${building.metrics.executableUnitCount}.`,
-    `Metric method ${building.metricMethod ?? "not recorded"}.`,
-    `Formula IDs: footprint ${mapping.formulas.footprint}; height ${mapping.formulas.height}; risk ${mapping.formulas.risk}; normalization ${mapping.formulas.normalization}.`,
-    `Normalization caps: SLOC ${mapping.normalizationCaps.sloc}; decision load ${mapping.normalizationCaps.decisionLoad}.`,
-    `Normalization state: SLOC ${state("sloc")}; decision load ${state("decisionLoad")}.`,
-    model.metricMapping === undefined
-      ? "Mapping provenance: schema-default mapping derived for a legacy model."
-      : "Mapping provenance: persisted in the CityModel.",
-  ].join(" ");
+    {
+      label: "Analyzer ID",
+      value: building.metricMethod ?? "not recorded",
+    },
+    { label: "Raw facts", value: rawMetricFacts(building) },
+    {
+      label: "Formula IDs",
+      value:
+        `footprint ${mapping.formulas.footprint}; height ${mapping.formulas.height}; ` +
+        `risk ${mapping.formulas.risk}; normalization ${mapping.formulas.normalization}`,
+    },
+    {
+      label: "Normalization",
+      value:
+        `SLOC cap ${mapping.normalizationCaps.sloc}, ${state("sloc")}; ` +
+        `decision-load cap ${mapping.normalizationCaps.decisionLoad}, ${state("decisionLoad")}`,
+    },
+    {
+      label: "Mapping provenance",
+      value:
+        model.metricMapping === undefined
+          ? "Schema-default mapping derived for a legacy model."
+          : "Persisted in the CityModel.",
+    },
+  ];
+}
+
+export function describeBuildingMetrics(
+  model: CityModel,
+  building: CityBuilding,
+): string {
+  return presentBuildingMetrics(model, building).technical
+    .map(({ label, value }) => `${label}: ${value}.`)
+    .join(" ");
 }

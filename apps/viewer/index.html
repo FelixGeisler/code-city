@@ -913,28 +913,65 @@
                 <dt>Language</dt>
                 <dd id="building-language"></dd>
               </div>
-              <div class="metric">
-                <dt>SLOC</dt>
-                <dd id="building-sloc"></dd>
-              </div>
-              <div class="metric">
-                <dt>Decision load</dt>
-                <dd id="building-load"></dd>
-              </div>
-              <div class="metric">
-                <dt>Max complexity</dt>
-                <dd id="building-cc"></dd>
-              </div>
-              <div class="wide">
-                <dt>Metric method</dt>
-                <dd id="building-metric-method"></dd>
-              </div>
               <div id="building-evolution-row" class="wide" hidden>
                 <dt>Repository history</dt>
                 <dd id="building-evolution"></dd>
               </div>
             </dl>
-            <p id="building-metric-explanation" class="dependency-status"></p>
+            <p
+              id="building-metric-explanation"
+              class="inspector-history-notice"
+              role="status"
+              hidden
+            ></p>
+
+            <section
+              id="building-metric-presentation"
+              class="metric-presentation"
+              aria-labelledby="building-metric-presentation-title"
+            >
+              <h4 id="building-metric-presentation-title">
+                How this building is drawn
+              </h4>
+              <dl id="building-metric-rows" class="metric-presentation-grid"></dl>
+              <details
+                id="building-metric-technical-details"
+                class="metric-technical-details"
+              >
+                <summary>
+                  <span>Technical metric details</span>
+                  <span class="details-summary-meta">Analyzer and formulas</span>
+                </summary>
+                <dl id="building-metric-technical" class="metric-technical-list"></dl>
+              </details>
+            </section>
+
+            <section
+              id="building-hotspots-section"
+              class="complexity-hotspots"
+              aria-labelledby="building-hotspots-title"
+            >
+              <div class="complexity-hotspots-heading">
+                <h4 id="building-hotspots-title">Complexity hotspots</h4>
+                <span id="building-hotspots-count" class="unit-count">0</span>
+              </div>
+              <p
+                id="building-hotspots-status"
+                class="complexity-hotspots-status"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              ></p>
+              <ol
+                id="building-hotspots"
+                class="complexity-hotspot-list"
+                aria-label="Most complex executable units"
+              ></ol>
+              <p id="building-hotspots-source-note" class="complexity-source-note">
+                Source actions use retained import artifacts. Model-only cities
+                keep measured line ranges, but may not include source text.
+              </p>
+            </section>
 
             <details
               id="dependency-section"
@@ -1082,13 +1119,37 @@
                 hidden
               >
                 <summary>
-                  <span id="executable-units-title">Executable units</span>
+                  <span id="executable-units-title">All executable units</span>
                   <span id="building-unit-count" class="unit-count">0</span>
                   <span
                     id="building-units-summary"
                     class="details-summary-meta"
                   ></span>
                 </summary>
+                <div class="unit-controls">
+                  <label>
+                    <span>Search units</span>
+                    <input
+                      id="building-units-search"
+                      type="search"
+                      placeholder="Name, line, or complexity"
+                      autocomplete="off"
+                    />
+                  </label>
+                  <label>
+                    <span>Sort by</span>
+                    <select id="building-units-sort">
+                      <option value="complexity">Complexity (highest first)</option>
+                      <option value="source">Source order</option>
+                    </select>
+                  </label>
+                </div>
+                <p
+                  id="building-units-filter-status"
+                  class="unit-filter-status"
+                  role="status"
+                  aria-live="polite"
+                ></p>
                 <div class="unit-table-wrap">
                   <table class="unit-table">
                     <caption
@@ -1099,7 +1160,7 @@
                       <tr>
                         <th scope="col">Unit</th>
                         <th scope="col">Complexity</th>
-                        <th scope="col">Line</th>
+                        <th scope="col">Source</th>
                       </tr>
                     </thead>
                     <tbody id="building-units"></tbody>

@@ -2779,6 +2779,12 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
       targetId === siblingBuilding!.id,
   );
   expect(retainedDependency).toBeDefined();
+  const retainedUnit = retainedBuilding!.units?.find(
+    ({ name }) => name === "retainedComplexity",
+  );
+  expect(retainedUnit).toBeDefined();
+  expect(retainedUnit!.complexity).toBeGreaterThanOrEqual(15);
+  expect(retainedUnit!.endLine).toBeDefined();
 
   await page.getByRole("tab", { name: "Explore" }).click();
   await page.locator("#building-search").fill("retained-large");
@@ -2971,10 +2977,70 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
     `/api/v1/artifacts/${jobId}/sources/${retainedBuilding!.id}`,
   ]);
 
-  await page.locator("#building-units-details summary").click();
-  const unitJump = page.locator(
-    '.unit-source-jump[title^="Open retainedComplexity at line"]',
+  const metricPresentation = page.locator(
+    "#building-metric-presentation",
   );
+  await expect(metricPresentation).toContainText("How this building is drawn");
+  await expect(metricPresentation).toContainText("Footprint");
+  await expect(metricPresentation).toContainText("Height");
+  await expect(metricPresentation).toContainText("Color");
+  await expect(metricPresentation).toContainText("Measured with");
+  await expect(page.locator("#building-metric-rows")).not.toContainText(
+    "typescript-compiler-api-v1",
+  );
+  const technicalMetrics = page.locator(
+    "#building-metric-technical-details",
+  );
+  await expect(technicalMetrics).not.toHaveAttribute("open", "");
+  await technicalMetrics.locator("summary").click();
+  await expect(page.locator("#building-metric-technical")).toContainText(
+    "typescript-compiler-api-v1",
+  );
+  await expect(page.locator("#building-metric-technical")).toContainText(
+    "Mapping provenance",
+  );
+
+  await expect(page.locator("#building-hotspots-status")).toContainText(
+    "1 hotspot",
+  );
+  await expect(page.locator("#building-hotspots-status")).toContainText(
+    "at or above CC 15",
+  );
+  const hotspot = page.locator(".complexity-hotspot").first();
+  await expect(hotspot).toContainText("retainedComplexity");
+  await expect(hotspot).toContainText(
+    `lines ${retainedUnit!.line.toLocaleString()}–${retainedUnit!.endLine!.toLocaleString()}`,
+  );
+  await hotspot.getByRole("button", {
+    name: /View source for retainedComplexity, lines/u,
+  }).click();
+  await expect(page.locator(".source-line-highlight").first()).toHaveAttribute(
+    "data-line",
+    String(retainedUnit!.line),
+  );
+  await expect(page.locator(".source-line-highlight").last()).toHaveAttribute(
+    "data-line",
+    String(retainedUnit!.endLine),
+  );
+
+  await page.locator("#building-units-details summary").click();
+  await expect(page.locator("#building-units-summary")).toContainText(
+    `highest CC ${retainedUnit!.complexity.toLocaleString()}`,
+  );
+  const firstUnitRow = page.locator("#building-units tr").first();
+  await expect(firstUnitRow).toContainText("retainedComplexity");
+  await page.locator("#building-units-sort").selectOption("source");
+  await expect(page.locator("#building-units-filter-status")).toContainText(
+    "sorted by source order",
+  );
+  await page.locator("#building-units-search").fill("retainedComplexity");
+  await expect(page.locator("#building-units-filter-status")).toContainText(
+    "1 of",
+  );
+  await expect(page.locator("#building-units tr")).toHaveCount(1);
+  const unitJump = page.getByRole("button", {
+    name: /View source for retainedComplexity, lines/u,
+  }).last();
   await expect(unitJump).toHaveCount(1);
   await unitJump.click();
   await expect(
@@ -3025,13 +3091,6 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   await page.getByRole("tab", { name: "Explore" }).click();
   await page.locator("#building-search").fill("retained-large");
   await expect(retainedResult).toHaveCount(1);
-
-  const retainedUnit = retainedBuilding!.units?.find(
-    ({ name }) => name === "retainedComplexity",
-  );
-  expect(retainedUnit).toBeDefined();
-  expect(retainedUnit!.complexity).toBeGreaterThanOrEqual(15);
-  expect(retainedUnit!.endLine).toBeDefined();
 
   await page.getByRole("tab", { name: "Metrics" }).click();
   const smellPanel = page.locator("#design-smell-panel");
