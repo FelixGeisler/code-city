@@ -160,6 +160,11 @@ export interface ExecutableUnitMetric {
   /** Inclusive end line when the analyzer can determine it. */
   readonly endLine?: number;
   readonly complexity: number;
+  /**
+   * Optional additive explanation emitted by analyzers that can retain exact
+   * syntax sites. Its absence is the legacy aggregate-only representation.
+   */
+  readonly decisionEvidence?: ExecutableUnitDecisionEvidence;
 }
 
 export interface SourceLocation {
@@ -176,6 +181,55 @@ export interface SourceRange extends SourceLocation {
   readonly startColumn: number;
   readonly endColumn: number;
 }
+
+export type ComplexityDecisionKind =
+  | "conditional-branch"
+  | "loop"
+  | "switch-arm"
+  | "catch"
+  | "conditional-expression"
+  | "short-circuit-operator"
+  | "nullish-operator"
+  | "guard"
+  | "pattern-operator";
+
+export interface ComplexityDecisionSite {
+  readonly kind: ComplexityDecisionKind;
+  /** Exact inclusive range of the contributing keyword or operator token. */
+  readonly range: SourceRange;
+  readonly contribution: number;
+}
+
+interface ExecutableUnitDecisionEvidenceBase {
+  readonly version: "codecity.complexity-evidence/1";
+  /** Stable within a persisted model and globally bound by the analyzer. */
+  readonly unitId: string;
+  readonly scope: "top-level" | "callable";
+  /** Stable source-structure callable identity when declaration facts exist. */
+  readonly callableId?: string;
+  readonly sites: readonly ComplexityDecisionSite[];
+}
+
+export type ExecutableUnitDecisionEvidence =
+  | (ExecutableUnitDecisionEvidenceBase & {
+      readonly status: "complete";
+      readonly totalContribution: number;
+      readonly omittedContribution: 0;
+      readonly reason?: never;
+    })
+  | (ExecutableUnitDecisionEvidenceBase & {
+      readonly status: "truncated";
+      readonly totalContribution: number;
+      readonly omittedContribution: number;
+      readonly reason: string;
+    })
+  | (ExecutableUnitDecisionEvidenceBase & {
+      readonly status: "unavailable";
+      readonly sites: readonly [];
+      readonly totalContribution?: never;
+      readonly omittedContribution?: never;
+      readonly reason: string;
+    });
 
 export type SourceTypeKind = "class" | "interface" | "enum" | "type" | "struct" | "record" | "delegate";
 export type SourceCallableKind = "function" | "method" | "constructor" | "accessor" | "lambda" | "local-function";

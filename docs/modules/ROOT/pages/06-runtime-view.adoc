@@ -424,6 +424,9 @@ Semantic IDs are derived from declaration ancestry, kind, name, signature, and
 same-key occurrence rather than source order, so unrelated insertions do not
 renumber existing declarations. Callable complexity remains an analyzer fact
 with the declaration instead of being recomputed by the viewer.
+Versioned executable-unit decision evidence links back to that callable ID and
+retains only validated, bounded source sites; consumers never need to infer
+branches from retained text.
 The viewer requests a bounded data projection only after a file is selected;
 it creates no fine-detail meshes while the city starts. The declaration list is
 keyboard accessible, opens the retained exact source range, and **Return to

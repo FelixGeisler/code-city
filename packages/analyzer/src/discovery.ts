@@ -7,6 +7,7 @@ import type {
   CityModule,
   CityRepository,
   CitySolution,
+  ExecutableUnitDecisionEvidence,
   IdentityLogo,
   SourceLanguage,
   SourceMetrics,
@@ -96,6 +97,143 @@ interface AnalysisGuard {
 }
 
 const VIRTUAL_WORKSPACE_ROOT = "/code-city";
+const DECISION_EVIDENCE_TRUNCATED_REASON =
+  "Decision-site evidence was truncated by analyzer retention limits.";
+const DECISION_EVIDENCE_OMITTED_WARNING =
+  "Executable-unit decision evidence was omitted after serialized evidence limits were reached.";
+
+function retainedDecisionEvidence(
+  evidence: ExecutableUnitDecisionEvidence,
+  retainedSiteCount: number,
+): ExecutableUnitDecisionEvidence {
+  if (
+    evidence.status === "unavailable" ||
+    retainedSiteCount >= evidence.sites.length
+  ) {
+    return evidence;
+  }
+  const sites = Object.freeze(evidence.sites.slice(0, retainedSiteCount));
+  const retainedContribution = sites.reduce(
+    (total, site) => total + site.contribution,
+    0,
+  );
+  return Object.freeze({
+    version: evidence.version,
+    unitId: evidence.unitId,
+    scope: evidence.scope,
+    ...(evidence.callableId === undefined
+      ? {}
+      : { callableId: evidence.callableId }),
+    status: "truncated" as const,
+    totalContribution: evidence.totalContribution,
+    omittedContribution:
+      evidence.totalContribution - retainedContribution,
+    reason: DECISION_EVIDENCE_TRUNCATED_REASON,
+    sites,
+  });
+}
+
+function serializedEvidenceBytes(
+  evidence: ExecutableUnitDecisionEvidence,
+): number {
+  return new TextEncoder().encode(JSON.stringify(evidence)).byteLength;
+}
+
+function fitDecisionEvidence(
+  evidence: ExecutableUnitDecisionEvidence,
+  retainedSiteLimit: number,
+  serializedByteLimit: number,
+): {
+  readonly evidence?: ExecutableUnitDecisionEvidence;
+  readonly bytes: number;
+} {
+  const maximumSites = Math.min(evidence.sites.length, retainedSiteLimit);
+  let candidate = retainedDecisionEvidence(evidence, maximumSites);
+  let bytes = serializedEvidenceBytes(candidate);
+  if (bytes <= serializedByteLimit) return { evidence: candidate, bytes };
+  if (evidence.status === "unavailable") return { bytes: 0 };
+
+  let lower = 0;
+  let upper = maximumSites - 1;
+  let retained: ExecutableUnitDecisionEvidence | undefined;
+  let retainedBytes = 0;
+  while (lower <= upper) {
+    const middle = Math.floor((lower + upper) / 2);
+    candidate = retainedDecisionEvidence(evidence, middle);
+    bytes = serializedEvidenceBytes(candidate);
+    if (bytes <= serializedByteLimit) {
+      retained = candidate;
+      retainedBytes = bytes;
+      lower = middle + 1;
+    } else {
+      upper = middle - 1;
+    }
+  }
+  return retained === undefined
+    ? { bytes: 0 }
+    : { evidence: retained, bytes: retainedBytes };
+}
+
+function boundProjectDecisionEvidence(
+  sources: readonly PendingSource[],
+  warnings: string[],
+): readonly PendingSource[] {
+  let remainingSites = CITY_MODEL_LIMITS.decisionSitesPerModel;
+  let remainingBytes = CITY_MODEL_LIMITS.decisionEvidenceBytesPerModel;
+  let omittedUnits = 0;
+  const bounded = sources.map((source) => {
+    let remainingBuildingSites =
+      CITY_MODEL_LIMITS.decisionSitesPerBuilding;
+    let remainingBuildingBytes =
+      CITY_MODEL_LIMITS.decisionEvidenceBytesPerBuilding;
+    return {
+      ...source,
+      fact: {
+        ...source.fact,
+        units: source.fact.units.map((unit) => {
+          const evidence = unit.decisionEvidence;
+          if (evidence === undefined) return unit;
+          const retainedSiteLimit = Math.min(
+            remainingSites,
+            remainingBuildingSites,
+          );
+          const serializedByteLimit = Math.min(
+            CITY_MODEL_LIMITS.decisionEvidenceBytesPerUnit,
+            remainingBytes,
+            remainingBuildingBytes,
+          );
+          const fitted = fitDecisionEvidence(
+            evidence,
+            retainedSiteLimit,
+            serializedByteLimit,
+          );
+          if (fitted.evidence === undefined) {
+            omittedUnits += 1;
+            const { decisionEvidence: _omitted, ...aggregateOnly } = unit;
+            return aggregateOnly;
+          }
+          remainingSites -= fitted.evidence.sites.length;
+          remainingBuildingSites -= fitted.evidence.sites.length;
+          remainingBytes -= fitted.bytes;
+          remainingBuildingBytes -= fitted.bytes;
+          if (fitted.evidence === evidence) return unit;
+          return {
+            ...unit,
+            decisionEvidence: fitted.evidence,
+          };
+        }),
+      },
+    };
+  });
+  if (omittedUnits > 0) {
+    warnings.push(
+      sanitizeWarningText(
+        `${DECISION_EVIDENCE_OMITTED_WARNING} Omitted units: ${omittedUnits}.`,
+      ),
+    );
+  }
+  return bounded;
+}
 
 function portableSegment(value: string): string {
   const normalized = value.replaceAll("\\", "/");
@@ -881,6 +1019,19 @@ function pendingSource(
       units: units.map((unit) => ({
         ...unit,
         name: sanitizeDisplayText(unit.name, "Unnamed unit"),
+        ...(unit.decisionEvidence === undefined
+          ? {}
+          : {
+              decisionEvidence: {
+                ...unit.decisionEvidence,
+                unitId: `${buildingId}:${unit.decisionEvidence.unitId}`,
+                ...(unit.decisionEvidence.callableId === undefined
+                  ? {}
+                  : {
+                      callableId: `${buildingId}:${unit.decisionEvidence.callableId}`,
+                    }),
+              },
+            }),
       })),
       sourceLocation: {
         startLine: 1,
@@ -1066,6 +1217,13 @@ async function analyzeSources(
         );
         continue;
       }
+      if (outcome.warnings.includes("decision-evidence-byte-limit")) {
+        warnings.push(
+          sanitizeWarningText(
+            `${source.relativePath}: C# ${DECISION_EVIDENCE_OMITTED_WARNING}`,
+          ),
+        );
+      }
       const result: RoslynFileFact = outcome;
       pendingSources.push(
         pendingSource(
@@ -1085,10 +1243,11 @@ async function analyzeSources(
     }
   }
 
+  const orderedSources = pendingSources.sort((left, right) =>
+    compareStable(left.fact.id, right.fact.id),
+  );
   return {
-    sources: pendingSources.sort((left, right) =>
-      compareStable(left.fact.id, right.fact.id),
-    ),
+    sources: boundProjectDecisionEvidence(orderedSources, warnings),
     unassignedModules: [...unassignedByRepository.values()].sort(
       (left, right) => compareStable(left.module.id, right.module.id),
     ),

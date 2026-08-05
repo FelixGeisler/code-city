@@ -243,6 +243,81 @@ it("emits inclusive Roslyn end columns for one-character bodies and multiline de
   ].join("\n"));
 });
 
+it("records exact Roslyn decision tokens and links them to the stable callable", async () => {
+  const launch = await resolveBundledRoslynLaunch();
+  const source = [
+    "class C",
+    "{",
+    "    int Decide(bool a, bool b, int? value)",
+    "    {",
+    "        for (var index = 0; index < 1; index++)",
+    "            if (a && b) break;",
+    "        try",
+    "        {",
+    "            return value switch",
+    "            {",
+    "                1 when value is 1 or 2 => a ? 1 : 0,",
+    "                _ => value ?? 0",
+    "            };",
+    "        }",
+    "        catch { return 0; }",
+    "    }",
+    "}",
+  ].join("\n");
+  const [result] = await analyzeCSharpWithRoslyn(
+    [{ id: "source.cs", source }],
+    launch,
+  );
+  if (result?.status !== "ok") throw new Error("Roslyn fixture was skipped.");
+  const unit = result.units.find(({ name }) => name === "Decide")!;
+  const callable = result.sourceStructure.callables.find(
+    ({ name }) => name === "Decide",
+  )!;
+  const evidence = unit.decisionEvidence!;
+
+  expect(evidence.status).toBe("complete");
+  if (evidence.status !== "complete") throw new Error("Expected complete evidence.");
+  expect(evidence.callableId).toBe(callable.id);
+  expect(evidence.totalContribution).toBe(unit.complexity - 1);
+  expect(evidence.sites.map(({ kind }) => kind)).toEqual([
+    "loop",
+    "conditional-branch",
+    "short-circuit-operator",
+    "guard",
+    "pattern-operator",
+    "switch-arm",
+    "conditional-expression",
+    "nullish-operator",
+    "catch",
+  ]);
+  expect(
+    evidence.sites.map(({ range }) => textAtInclusiveRange(source, range)),
+  ).toEqual(["for", "if", "&&", "when", "or", "=>", "?", "??", "catch"]);
+});
+
+it("rejects helper evidence whose contribution total disagrees with complexity", async () => {
+  const source = `${readRequest}process.stdout.write(JSON.stringify({protocolVersion:request.protocolVersion,files:request.files.map(file=>({id:file.id,status:"ok",metricMethod:"csharp-roslyn-v1",sloc:1,decisionLoad:1,maximumComplexity:2,executableUnitCount:1,units:[{name:"<top-level>",line:1,endLine:1,complexity:2,decisionEvidence:{version:"codecity.complexity-evidence/1",unitId:"unit:top-level",scope:"top-level",status:"complete",totalContribution:0,omittedContribution:0,sites:[]}}],warnings:[]}))}));`;
+
+  await expect(
+    analyzeCSharpWithRoslyn(
+      [{ id: "source.cs", source: "if (ready) run();" }],
+      nodeHelper(source),
+    ),
+  ).rejects.toThrow("inconsistent decision evidence");
+});
+
+it("still validates evidence bounds and identities for syntax-error outcomes", async () => {
+  const evidence = `{version:"codecity.complexity-evidence/1",unitId:"duplicate",scope:"callable",status:"complete",totalContribution:0,omittedContribution:0,sites:[]}`;
+  const source = `${readRequest}process.stdout.write(JSON.stringify({protocolVersion:request.protocolVersion,files:request.files.map(file=>({id:file.id,status:"ok",metricMethod:"csharp-roslyn-v1",sloc:1,decisionLoad:0,maximumComplexity:1,executableUnitCount:2,units:[{name:"first",line:1,complexity:1,decisionEvidence:${evidence}},{name:"second",line:1,complexity:1,decisionEvidence:${evidence}}],warnings:["syntax-errors-present"]}))}));`;
+
+  await expect(
+    analyzeCSharpWithRoslyn(
+      [{ id: "source.cs", source: "class {" }],
+      nodeHelper(source),
+    ),
+  ).rejects.toThrow("duplicate unit identities");
+});
+
 it("scopes duplicate Roslyn declarations by namespace, type, and enclosing callable", async () => {
   const launch = await resolveBundledRoslynLaunch();
   const [result] = await analyzeCSharpWithRoslyn([{

@@ -27,6 +27,23 @@ const METRIC_NORMALIZATION_STATES = new Set([
   "clamped",
   "unavailable",
 ]);
+const COMPLEXITY_DECISION_KINDS = new Set([
+  "conditional-branch",
+  "loop",
+  "switch-arm",
+  "catch",
+  "conditional-expression",
+  "short-circuit-operator",
+  "nullish-operator",
+  "guard",
+  "pattern-operator",
+]);
+const COMPLEXITY_EVIDENCE_STATUSES = new Set([
+  "complete",
+  "truncated",
+  "unavailable",
+]);
+const COMPLEXITY_EVIDENCE_SCOPES = new Set(["top-level", "callable"]);
 const MODULE_KINDS = new Set([
   "dotnet-project",
   "angular-project",
@@ -89,6 +106,12 @@ export const CITY_MODEL_LIMITS = Object.freeze({
   sourceTypesPerBuilding: 10_000,
   sourceCallablesPerBuilding: 10_000,
   sourceRelationsPerBuilding: 50_000,
+  decisionSitesPerUnit: 256,
+  decisionSitesPerBuilding: 4_096,
+  decisionSitesPerModel: 250_000,
+  decisionEvidenceBytesPerUnit: 96 * 1_024,
+  decisionEvidenceBytesPerBuilding: 2 * 1_024 * 1_024,
+  decisionEvidenceBytesPerModel: 64 * 1_024 * 1_024,
   warnings: 10_000,
   coordinateMagnitude: 1_000_000,
   identifierCharacters: 256,
@@ -328,6 +351,8 @@ export function validateCityModel(
     vector(district.size, `${prefix}.size`, true);
   });
 
+  let modelDecisionSites = 0;
+  let modelDecisionEvidenceBytes = 0;
   buildings.forEach((building, index) => {
     work.consume();
     const prefix = `buildings[${index}]`;
@@ -385,7 +410,7 @@ export function validateCityModel(
       building.sourceLocation,
       prefix,
     );
-    validateBuildingMetricDetails(
+    const metricDetails = validateBuildingMetricDetails(
       building.metricMethod,
       building.units,
       metrics,
@@ -393,12 +418,28 @@ export function validateCityModel(
       work,
       sourceEndLine,
     );
-    validateSourceStructure(
+    const sourceStructure = validateSourceStructure(
       building.sourceStructure,
       prefix,
       sourceEndLine,
       work,
     );
+    validateDecisionEvidenceLinks(metricDetails.links, sourceStructure);
+    modelDecisionSites += metricDetails.decisionSites;
+    modelDecisionEvidenceBytes += metricDetails.serializedBytes;
+    if (modelDecisionSites > CITY_MODEL_LIMITS.decisionSitesPerModel) {
+      fail(
+        `model decision-site evidence exceeds the ${CITY_MODEL_LIMITS.decisionSitesPerModel}-site limit`,
+      );
+    }
+    if (
+      modelDecisionEvidenceBytes >
+      CITY_MODEL_LIMITS.decisionEvidenceBytesPerModel
+    ) {
+      fail(
+        `model decision-site evidence exceeds the ${CITY_MODEL_LIMITS.decisionEvidenceBytesPerModel}-byte serialized limit`,
+      );
+    }
     validateBuildingMetricNormalization(
       building.metricNormalization,
       metrics,
@@ -583,6 +624,275 @@ function validateNormalizedMetric(
   }
 }
 
+interface ValidatedSourceRange {
+  readonly startLine: number;
+  readonly startColumn: number;
+  readonly endLine: number;
+  readonly endColumn: number;
+}
+
+interface DecisionEvidenceLink {
+  readonly prefix: string;
+  readonly unit: JsonObject;
+  readonly scope: string;
+  readonly callableId?: string;
+  readonly sites: readonly ValidatedSourceRange[];
+}
+
+interface BuildingMetricDetailsValidation {
+  readonly decisionSites: number;
+  readonly serializedBytes: number;
+  readonly links: readonly DecisionEvidenceLink[];
+}
+
+interface SourceCallableValidation {
+  readonly value: JsonObject;
+  readonly range: ValidatedSourceRange;
+  readonly complexity?: number;
+}
+
+interface SourceStructureValidation {
+  readonly availability: string;
+  readonly callables: ReadonlyMap<string, SourceCallableValidation>;
+}
+
+function validateExactSourceRange(
+  value: unknown,
+  path: string,
+  sourceEndLine?: number,
+): ValidatedSourceRange {
+  const location = objectAt(value, path);
+  exactObjectKeys(
+    location,
+    ["startLine", "startColumn", "endLine", "endColumn"],
+    [],
+    path,
+  );
+  const startLine = positiveInteger(location.startLine, `${path}.startLine`);
+  const startColumn = positiveInteger(
+    location.startColumn,
+    `${path}.startColumn`,
+  );
+  const endLine = positiveInteger(location.endLine, `${path}.endLine`);
+  const endColumn = positiveInteger(location.endColumn, `${path}.endColumn`);
+  if (
+    endLine < startLine ||
+    (endLine === startLine && endColumn < startColumn)
+  ) {
+    fail(`${path} must not end before it starts`);
+  }
+  if (sourceEndLine !== undefined && endLine > sourceEndLine) {
+    fail(`${path} must remain inside the building source location`);
+  }
+  return { startLine, startColumn, endLine, endColumn };
+}
+
+function rangeEndsBefore(
+  left: ValidatedSourceRange,
+  right: ValidatedSourceRange,
+): boolean {
+  return (
+    left.endLine < right.startLine ||
+    (left.endLine === right.startLine && left.endColumn < right.startColumn)
+  );
+}
+
+function rangeContains(
+  outer: ValidatedSourceRange,
+  inner: ValidatedSourceRange,
+): boolean {
+  const startsInside =
+    inner.startLine > outer.startLine ||
+    (inner.startLine === outer.startLine &&
+      inner.startColumn >= outer.startColumn);
+  const endsInside =
+    inner.endLine < outer.endLine ||
+    (inner.endLine === outer.endLine && inner.endColumn <= outer.endColumn);
+  return startsInside && endsInside;
+}
+
+function safeNonNegativeInteger(value: unknown, path: string): number {
+  const parsed = nonNegativeInteger(value, path);
+  if (!Number.isSafeInteger(parsed)) {
+    fail(`${path} must be a safe integer`);
+  }
+  return parsed;
+}
+
+function serializedUtf8Bytes(value: unknown, path: string): number {
+  let serialized: string | undefined;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    fail(`${path} must be JSON serializable`);
+  }
+  if (serialized === undefined) fail(`${path} must be JSON serializable`);
+  return new TextEncoder().encode(serialized).byteLength;
+}
+
+function validateDecisionEvidence(
+  value: unknown,
+  unit: JsonObject,
+  line: number,
+  endLine: number,
+  prefix: string,
+  sourceEndLine: number | undefined,
+  work: ValidationCheckpoint,
+): { readonly link: DecisionEvidenceLink; readonly serializedBytes: number } {
+  const evidence = objectAt(value, prefix);
+  exactObjectKeys(
+    evidence,
+    ["version", "unitId", "scope", "status", "sites"],
+    [
+      "callableId",
+      "totalContribution",
+      "omittedContribution",
+      "reason",
+    ],
+    prefix,
+  );
+  if (evidence.version !== "codecity.complexity-evidence/1") {
+    fail(`${prefix}.version must be "codecity.complexity-evidence/1"`);
+  }
+  nonEmptyString(
+    evidence.unitId,
+    `${prefix}.unitId`,
+    CITY_MODEL_LIMITS.identifierCharacters,
+  );
+  const scope = enumValue(
+    evidence.scope,
+    COMPLEXITY_EVIDENCE_SCOPES,
+    `${prefix}.scope`,
+  );
+  const callableId =
+    evidence.callableId === undefined
+      ? undefined
+      : nonEmptyString(
+          evidence.callableId,
+          `${prefix}.callableId`,
+          CITY_MODEL_LIMITS.identifierCharacters,
+        );
+  if (scope === "top-level" && callableId !== undefined) {
+    fail(`${prefix}.callableId must be omitted for top-level evidence`);
+  }
+  const status = enumValue(
+    evidence.status,
+    COMPLEXITY_EVIDENCE_STATUSES,
+    `${prefix}.status`,
+  );
+  const sites = objectArray(
+    evidence.sites,
+    `${prefix}.sites`,
+    CITY_MODEL_LIMITS.decisionSitesPerUnit,
+    work,
+  );
+  const ranges: ValidatedSourceRange[] = [];
+  let retainedContribution = 0;
+  for (const [index, site] of sites.entries()) {
+    work.consume();
+    const sitePrefix = `${prefix}.sites[${index}]`;
+    exactObjectKeys(
+      site,
+      ["kind", "range", "contribution"],
+      [],
+      sitePrefix,
+    );
+    enumValue(
+      site.kind,
+      COMPLEXITY_DECISION_KINDS,
+      `${sitePrefix}.kind`,
+    );
+    const range = validateExactSourceRange(
+      site.range,
+      `${sitePrefix}.range`,
+      sourceEndLine,
+    );
+    if (range.startLine < line || range.endLine > endLine) {
+      fail(`${sitePrefix}.range must remain inside its executable unit`);
+    }
+    const previous = ranges.at(-1);
+    if (previous !== undefined && !rangeEndsBefore(previous, range)) {
+      fail(`${prefix}.sites must be strictly source ordered and non-overlapping`);
+    }
+    ranges.push(range);
+    const contribution = positiveInteger(
+      site.contribution,
+      `${sitePrefix}.contribution`,
+    );
+    if (retainedContribution > Number.MAX_SAFE_INTEGER - contribution) {
+      fail(`${prefix}.sites contribution total exceeds a safe integer`);
+    }
+    retainedContribution += contribution;
+  }
+
+  if (status === "unavailable") {
+    if (sites.length !== 0) {
+      fail(`${prefix}.sites must be empty when evidence is unavailable`);
+    }
+    if (
+      evidence.totalContribution !== undefined ||
+      evidence.omittedContribution !== undefined
+    ) {
+      fail(
+        `${prefix} must not synthesize contribution totals when evidence is unavailable`,
+      );
+    }
+    nonEmptyString(
+      evidence.reason,
+      `${prefix}.reason`,
+      CITY_MODEL_LIMITS.warningCharacters,
+    );
+  } else {
+    const totalContribution = safeNonNegativeInteger(
+      evidence.totalContribution,
+      `${prefix}.totalContribution`,
+    );
+    const omittedContribution = safeNonNegativeInteger(
+      evidence.omittedContribution,
+      `${prefix}.omittedContribution`,
+    );
+    if (totalContribution !== (unit.complexity as number) - 1) {
+      fail(`${prefix}.totalContribution must equal unit complexity minus one`);
+    }
+    if (
+      retainedContribution > Number.MAX_SAFE_INTEGER - omittedContribution ||
+      retainedContribution + omittedContribution !== totalContribution
+    ) {
+      fail(
+        `${prefix} retained and omitted contributions must equal totalContribution`,
+      );
+    }
+    if (status === "complete") {
+      if (omittedContribution !== 0) {
+        fail(`${prefix}.omittedContribution must be zero when complete`);
+      }
+      if (evidence.reason !== undefined) {
+        fail(`${prefix}.reason must be omitted when complete`);
+      }
+    } else {
+      if (omittedContribution === 0) {
+        fail(`${prefix}.omittedContribution must be positive when truncated`);
+      }
+      nonEmptyString(
+        evidence.reason,
+        `${prefix}.reason`,
+        CITY_MODEL_LIMITS.warningCharacters,
+      );
+    }
+  }
+
+  const serializedBytes = serializedUtf8Bytes(evidence, prefix);
+  if (serializedBytes > CITY_MODEL_LIMITS.decisionEvidenceBytesPerUnit) {
+    fail(
+      `${prefix} exceeds the ${CITY_MODEL_LIMITS.decisionEvidenceBytesPerUnit}-byte serialized limit`,
+    );
+  }
+  return {
+    link: { prefix, unit, scope, ...(callableId === undefined ? {} : { callableId }), sites: ranges },
+    serializedBytes,
+  };
+}
+
 function validateBuildingMetricDetails(
   methodValue: unknown,
   unitsValue: unknown,
@@ -590,8 +900,9 @@ function validateBuildingMetricDetails(
   prefix: string,
   work: ValidationCheckpoint,
   sourceEndLine?: number,
-): void {
-  if (methodValue === undefined && unitsValue === undefined) return;
+): BuildingMetricDetailsValidation {
+  const empty = { decisionSites: 0, serializedBytes: 0, links: [] } as const;
+  if (methodValue === undefined && unitsValue === undefined) return empty;
   if (methodValue === undefined || unitsValue === undefined) {
     fail(`${prefix}.metricMethod and ${prefix}.units must be supplied together`);
   }
@@ -603,6 +914,10 @@ function validateBuildingMetricDetails(
     CITY_MODEL_LIMITS.metricUnitsPerBuilding,
     work,
   );
+  const unitIds = new Set<string>();
+  const links: DecisionEvidenceLink[] = [];
+  let decisionSites = 0;
+  let serializedBytes = 0;
   units.forEach((unit, index) => {
     work.consume();
     const unitPrefix = `${prefix}.units[${index}]`;
@@ -623,6 +938,38 @@ function validateBuildingMetricDetails(
       fail(`${unitPrefix} must remain inside the building source location`);
     }
     positiveInteger(unit.complexity, `${unitPrefix}.complexity`);
+    if (unit.decisionEvidence !== undefined) {
+      const validated = validateDecisionEvidence(
+        unit.decisionEvidence,
+        unit,
+        line,
+        endLine,
+        `${unitPrefix}.decisionEvidence`,
+        sourceEndLine,
+        work,
+      );
+      const unitId = (unit.decisionEvidence as JsonObject).unitId as string;
+      if (unitIds.has(unitId)) {
+        fail(`${unitPrefix}.decisionEvidence.unitId must be unique within the building`);
+      }
+      unitIds.add(unitId);
+      links.push(validated.link);
+      decisionSites += validated.link.sites.length;
+      serializedBytes += validated.serializedBytes;
+      if (decisionSites > CITY_MODEL_LIMITS.decisionSitesPerBuilding) {
+        fail(
+          `${prefix} decision-site evidence exceeds the ${CITY_MODEL_LIMITS.decisionSitesPerBuilding}-site file limit`,
+        );
+      }
+      if (
+        serializedBytes >
+        CITY_MODEL_LIMITS.decisionEvidenceBytesPerBuilding
+      ) {
+        fail(
+          `${prefix} decision-site evidence exceeds the ${CITY_MODEL_LIMITS.decisionEvidenceBytesPerBuilding}-byte serialized file limit`,
+        );
+      }
+    }
   });
   if (units.length !== aggregate.executableUnitCount) {
     fail(
@@ -637,6 +984,7 @@ function validateBuildingMetricDetails(
   if (maximum !== aggregate.maximumComplexity) {
     fail(`${prefix}.units must preserve metrics.maximumComplexity`);
   }
+  return { decisionSites, serializedBytes, links };
 }
 
 function validateSourceStructure(
@@ -644,8 +992,8 @@ function validateSourceStructure(
   prefix: string,
   sourceEndLine: number | undefined,
   work: ValidationCheckpoint,
-): void {
-  if (value === undefined) return;
+): SourceStructureValidation | undefined {
+  if (value === undefined) return undefined;
   if (sourceEndLine === undefined) {
     fail(`${prefix}.sourceStructure requires building.sourceLocation for exact ranges`);
   }
@@ -668,17 +1016,9 @@ function validateSourceStructure(
   const ids = new Set<string>();
   const typeIds = new Set<string>();
   const callableIds = new Set<string>();
+  const callableDetails = new Map<string, SourceCallableValidation>();
   const relationIds = new Set<string>();
   const parentByTypeId = new Map<string, string>();
-  const range = (item: JsonObject, itemPrefix: string): void => {
-    const location = objectAt(item.range, `${itemPrefix}.range`);
-    const startLine = positiveInteger(location.startLine, `${itemPrefix}.range.startLine`);
-    const startColumn = positiveInteger(location.startColumn, `${itemPrefix}.range.startColumn`);
-    const endLine = positiveInteger(location.endLine, `${itemPrefix}.range.endLine`);
-    const endColumn = positiveInteger(location.endColumn, `${itemPrefix}.range.endColumn`);
-    if (endLine < startLine || (endLine === startLine && endColumn < startColumn)) fail(`${itemPrefix}.range must not end before it starts`);
-    if (sourceEndLine !== undefined && endLine > sourceEndLine) fail(`${itemPrefix}.range must remain inside the building source location`);
-  };
   types.forEach((item, index) => {
     const itemPrefix = `${prefix}.sourceStructure.types[${index}]`;
     const id = nonEmptyString(item.id, `${itemPrefix}.id`, CITY_MODEL_LIMITS.identifierCharacters);
@@ -686,7 +1026,7 @@ function validateSourceStructure(
     nonEmptyString(item.name, `${itemPrefix}.name`, CITY_MODEL_LIMITS.displayTextCharacters);
     enumValue(item.kind, new Set(["class", "interface", "enum", "type", "struct", "record", "delegate"]), `${itemPrefix}.kind`);
     if (item.provenance !== undefined && item.provenance !== "syntax") fail(`${itemPrefix}.provenance must be "syntax" when present`);
-    range(item, itemPrefix);
+    validateExactSourceRange(item.range, `${itemPrefix}.range`, sourceEndLine);
   });
   callables.forEach((item, index) => {
     const itemPrefix = `${prefix}.sourceStructure.callables[${index}]`;
@@ -695,8 +1035,19 @@ function validateSourceStructure(
     nonEmptyString(item.name, `${itemPrefix}.name`, CITY_MODEL_LIMITS.displayTextCharacters);
     enumValue(item.kind, new Set(["function", "method", "constructor", "accessor", "lambda", "local-function"]), `${itemPrefix}.kind`);
     if (item.provenance !== undefined && item.provenance !== "syntax") fail(`${itemPrefix}.provenance must be "syntax" when present`);
-    range(item, itemPrefix);
-    if (item.complexity !== undefined) positiveInteger(item.complexity, `${itemPrefix}.complexity`);
+    const range = validateExactSourceRange(
+      item.range,
+      `${itemPrefix}.range`,
+      sourceEndLine,
+    );
+    const complexity = item.complexity === undefined
+      ? undefined
+      : positiveInteger(item.complexity, `${itemPrefix}.complexity`);
+    callableDetails.set(id, {
+      value: item,
+      range,
+      ...(complexity === undefined ? {} : { complexity }),
+    });
   });
   types.forEach((item, index) => { if (item.parentTypeId !== undefined) { const parent = nonEmptyString(item.parentTypeId, `${prefix}.sourceStructure.types[${index}].parentTypeId`, CITY_MODEL_LIMITS.identifierCharacters); if (!typeIds.has(parent)) fail(`${prefix}.sourceStructure.types[${index}].parentTypeId must reference a type`); parentByTypeId.set(item.id as string, parent); } });
   callables.forEach((item, index) => { if (item.enclosingTypeId !== undefined && !typeIds.has(nonEmptyString(item.enclosingTypeId, `${prefix}.sourceStructure.callables[${index}].enclosingTypeId`, CITY_MODEL_LIMITS.identifierCharacters))) fail(`${prefix}.sourceStructure.callables[${index}].enclosingTypeId must reference a type`); });
@@ -736,6 +1087,62 @@ function validateSourceStructure(
     if (kind === "type-reference" && !typeIds.has(targetId)) fail(`${itemPrefix}.type-reference target must be a type declaration`);
   });
   if (unavailable.length === 0 && availability === "unavailable") fail(`${prefix}.sourceStructure.unavailable must explain unavailable detail`);
+  return { availability, callables: callableDetails };
+}
+
+function validateDecisionEvidenceLinks(
+  links: readonly DecisionEvidenceLink[],
+  structure: SourceStructureValidation | undefined,
+): void {
+  let topLevelCount = 0;
+  const linkedCallableIds = new Set<string>();
+  for (const link of links) {
+    if (link.scope === "top-level") {
+      topLevelCount += 1;
+      if (topLevelCount > 1) {
+        fail(`${link.prefix}.scope permits only one top-level unit per building`);
+      }
+      if (link.unit.name !== "<top-level>" || link.unit.line !== 1) {
+        fail(`${link.prefix}.scope top-level must identify the file top-level unit`);
+      }
+      continue;
+    }
+
+    if (structure?.availability === "available" && link.callableId === undefined) {
+      fail(`${link.prefix}.callableId is required when source structure is available`);
+    }
+    if (link.callableId === undefined || structure?.availability !== "available") {
+      continue;
+    }
+    const callable = structure.callables.get(link.callableId);
+    if (callable === undefined) {
+      fail(`${link.prefix}.callableId must reference a sourceStructure callable`);
+    }
+    if (linkedCallableIds.has(link.callableId)) {
+      fail(`${link.prefix}.callableId must link to only one executable unit`);
+    }
+    linkedCallableIds.add(link.callableId);
+    if (callable.value.name !== link.unit.name) {
+      fail(`${link.prefix} name must match its sourceStructure callable`);
+    }
+    if (
+      callable.complexity !== undefined &&
+      callable.complexity !== link.unit.complexity
+    ) {
+      fail(`${link.prefix} complexity must match its sourceStructure callable`);
+    }
+    if (
+      callable.range.startLine !== link.unit.line ||
+      callable.range.endLine !== (link.unit.endLine ?? link.unit.line)
+    ) {
+      fail(`${link.prefix} line range must match its sourceStructure callable`);
+    }
+    for (const site of link.sites) {
+      if (!rangeContains(callable.range, site)) {
+        fail(`${link.prefix}.sites must remain inside its sourceStructure callable`);
+      }
+    }
+  }
 }
 
 function validateIdentity(
@@ -1140,6 +1547,21 @@ function objectAt(value: unknown, path: string): JsonObject {
     fail(`${path} must be an object`);
   }
   return value as JsonObject;
+}
+
+function exactObjectKeys(
+  value: JsonObject,
+  required: readonly string[],
+  optional: readonly string[],
+  path: string,
+): void {
+  const allowedKeys = new Set([...required, ...optional]);
+  if (
+    required.some((key) => !Object.hasOwn(value, key)) ||
+    Object.keys(value).some((key) => !allowedKeys.has(key))
+  ) {
+    fail(`${path} has unknown or missing fields`);
+  }
 }
 
 function objectArray(
