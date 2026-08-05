@@ -159,16 +159,28 @@ SIGINT, SIGTERM, or explicit close stops it.
 
 == Viewer workspace
 
-The workspace opens on **Overview** and provides **Explore**, **Routes**,
-**Queries**, **Details**, **Overview**, and **Metrics** in one scrolling
-surface. On desktop it is a resizable side dock; below 1100 px it becomes a
-collapsed, peek, or expanded bottom sheet. Selecting geometry only peeks at
-details, while explicit search opens them. A persistent scope chip resets
-district isolation and scopes the overview metrics.
+The workspace has two primary destinations: **Explore** and **Analyze**.
+Explore is the default and combines scoped overview, available color modes,
+search, and the repository tree in one scrolling surface. Analyze opens on
+**Findings** and groups **Routes** and **Queries** behind nested, keyboard-
+navigable tabs. Selecting a building, district, or dependency opens
+contextual **Details** instead of adding another permanent destination; the
+back action restores the prior primary and nested view with its scroll state.
+
+On desktop the workspace is a resizable side dock; below 1100 px it becomes a
+collapsed, peek, or expanded bottom sheet. Passive scene selection does not
+steal keyboard focus, while explicit finding, query, or source navigation may
+focus the contextual details region. A persistent scope chip resets district
+isolation and scopes the overview metrics. **Import project** remains the one
+visible primary header action. **Project** groups local model, demo, and
+Advanced settings actions; **Export** groups image and print export.
+History color modes are offered only while verified evolution facts exist,
+and print-assignment color is offered only while a valid printer profile is
+available.
 
 == Advanced queries and selections
 
-The Queries workspace defines versioned, exact query data over building names,
+The **Analyze > Queries** view defines versioned, exact query data over building names,
 paths, languages, risk bands, source metrics, dependency counts and
 neighborhoods, the active evolution transition, and available design-smell
 rules. Built-in queries rank highest complexity and dependency hubs, inspect
@@ -233,8 +245,8 @@ and camera context intact.
 
 == Metric configuration
 
-The metric-mapping workspace lists the curated presets and saved custom
-configurations for the loaded project. Complexity, Maintenance, and Print are
+**Project > Advanced settings > Metric mapping** lists the curated presets and
+saved custom configurations for the loaded project. Complexity, Maintenance, and Print are
 available. Dependencies, Ownership, and Evolution stay visible but disabled
 with the missing-fact reason described in
 xref:08-crosscutting-concepts.adoc#_curated_presets[Curated presets].

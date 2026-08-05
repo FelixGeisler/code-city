@@ -100,6 +100,55 @@ button,
   gap: 9px;
 }
 
+.header-disclosure {
+  position: relative;
+}
+
+.header-disclosure > summary {
+  list-style: none;
+}
+
+.header-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.header-disclosure > summary::after {
+  margin-left: 8px;
+  color: var(--muted);
+  content: "\25be";
+  font-size: 10px;
+}
+
+.header-disclosure[open] > summary {
+  border-color: rgba(121, 196, 255, 0.48);
+  background: rgba(31, 57, 83, 0.96);
+}
+
+.header-disclosure[open] > summary::after {
+  transform: rotate(180deg);
+}
+
+.header-disclosure-panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 9px);
+  right: 0;
+  width: min(210px, calc(100vw - 24px));
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid rgba(121, 196, 255, 0.3);
+  border-radius: 10px;
+  background: rgba(7, 17, 31, 0.98);
+  box-shadow: 0 18px 52px rgba(0, 0, 0, 0.44);
+  backdrop-filter: blur(16px);
+}
+
+.header-disclosure-panel .button {
+  width: 100%;
+  justify-content: flex-start;
+}
+
 .button {
   min-height: 36px;
   display: inline-flex;
@@ -668,7 +717,7 @@ button,
 .viewer-workspace-tabs {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   padding: 6px;
   background: rgba(7, 17, 31, 0.68);
 }
@@ -817,6 +866,65 @@ button,
 
 .viewer-workspace-view {
   min-width: 0;
+}
+
+.analyze-workspace-tabs {
+  position: sticky;
+  z-index: 3;
+  top: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(7, 17, 31, 0.96);
+  backdrop-filter: blur(12px);
+}
+
+.analyze-workspace-tab {
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.analyze-workspace-tab:hover,
+.analyze-workspace-tab[aria-selected="true"] {
+  color: #f5fbff;
+  background: rgba(54, 163, 255, 0.14);
+}
+
+.analyze-workspace-tab[aria-selected="true"] {
+  border-color: rgba(121, 196, 255, 0.24);
+}
+
+.analyze-workspace-tab:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: -2px;
+}
+
+.viewer-contextual-details-navigation {
+  position: sticky;
+  z-index: 3;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  background: rgba(7, 17, 31, 0.96);
+  font-size: 11px;
+  font-weight: 750;
+  backdrop-filter: blur(12px);
 }
 
 .viewer-workspace .panel {
@@ -2279,6 +2387,28 @@ button,
   padding: 12px;
 }
 
+.explore-overview .panel-heading {
+  border-bottom: 0;
+}
+
+.overview-details {
+  border-top: 1px solid var(--line);
+}
+
+.overview-details > summary,
+.design-smell-options > summary,
+.advanced-project-settings-section > summary {
+  padding: 10px 13px;
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.overview-details-body {
+  border-top: 1px solid var(--line);
+}
+
 .metric-mapping-panel .panel-heading {
   min-height: 54px;
 }
@@ -2351,6 +2481,94 @@ button,
   align-items: center;
   justify-content: space-between;
   gap: 0.6rem;
+}
+
+.design-smell-options {
+  border-top: 1px solid var(--line);
+}
+
+.design-smell-options[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.design-smell-options > :not(summary) {
+  margin: 12px;
+}
+
+.design-smell-options > .design-smell-filters {
+  margin-block: 0;
+}
+
+.advanced-project-settings-dialog {
+  width: min(820px, calc(100vw - 32px));
+  max-height: min(900px, calc(100dvh - 32px));
+  padding: 0;
+  overflow: auto;
+  border: 1px solid rgba(121, 196, 255, 0.3);
+  border-radius: 14px;
+  color: #eff7ff;
+  background:
+    linear-gradient(145deg, rgba(54, 163, 255, 0.08), transparent 42%),
+    #091726;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+
+.advanced-project-settings-dialog::backdrop {
+  background: rgba(2, 8, 16, 0.76);
+  backdrop-filter: blur(7px);
+}
+
+.advanced-project-settings-heading {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(9, 23, 38, 0.97);
+}
+
+.advanced-project-settings-heading h2,
+.advanced-project-settings-heading p,
+#advanced-project-settings-description {
+  margin: 0;
+}
+
+.advanced-project-settings-heading h2 {
+  font-size: 20px;
+}
+
+#advanced-project-settings-description {
+  padding: 14px 20px 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.advanced-project-settings-content {
+  display: grid;
+  gap: 12px;
+  padding: 14px 20px 20px;
+}
+
+.advanced-project-settings-section {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(4, 14, 26, 0.46);
+}
+
+.advanced-project-settings-section[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+.advanced-project-settings-section .panel {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .metric-mapping-panel .panel-heading .eyebrow {
@@ -3824,6 +4042,7 @@ button,
 @media (max-width: 720px) {
   .topbar {
     height: 60px;
+    gap: 8px;
     padding: 0 12px;
   }
 
@@ -3833,16 +4052,13 @@ button,
 
   .actions {
     min-width: 0;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .actions::-webkit-scrollbar {
-    display: none;
+    gap: 5px;
   }
 
   .actions .button {
     flex: 0 0 auto;
+    padding-inline: 8px;
+    font-size: 11px;
     white-space: nowrap;
   }
 
@@ -3966,6 +4182,29 @@ button,
     font-size: 10px;
   }
 
+  .analyze-workspace-tab {
+    min-height: 38px;
+    padding-inline: 3px;
+    font-size: 10px;
+  }
+
+  .advanced-project-settings-dialog {
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - 20px);
+  }
+
+  .advanced-project-settings-heading {
+    padding: 14px;
+  }
+
+  #advanced-project-settings-description {
+    padding: 12px 14px 0;
+  }
+
+  .advanced-project-settings-content {
+    padding: 12px 14px 14px;
+  }
+
   .metric-preview-banner {
     top: 124px;
     right: 12px;
@@ -4008,6 +4247,12 @@ button,
 
   .project-import-grid-limits {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .brand > span {
+    display: none;
   }
 }
 

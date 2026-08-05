@@ -21,7 +21,12 @@ test("safe extension preview applies every declarative result and export is dige
     sourceCode.textContent = "RETAINED-SOURCE-STATE";
     aiStatus.textContent = "RETAINED-AI-GUIDANCE-STATE";
   });
-  await page.getByRole("tab", { name: "Metrics" }).click();
+  await page.locator("#project-actions-menu > summary").click();
+  await page.locator("#advanced-project-settings-open").click();
+  await page
+    .locator(".advanced-project-settings-section > summary")
+    .filter({ hasText: "Safe extensions" })
+    .click();
   await page.getByLabel("Public preset").selectOption("complexity-focus");
   await expect(page.getByRole("button", { name: "Export JSON" })).toBeDisabled();
   await page.getByRole("button", { name: "Preview safely" }).click();

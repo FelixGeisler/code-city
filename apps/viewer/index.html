@@ -41,26 +41,51 @@
           >
             Import project
           </button>
-          <button
-            id="model-file-open"
-            class="button"
-            type="button"
+          <details
+            id="project-actions-menu"
+            class="header-disclosure"
           >
-            Open model
-          </button>
+            <summary class="button">Project</summary>
+            <div class="header-disclosure-panel">
+              <button
+                id="model-file-open"
+                class="button"
+                type="button"
+              >
+                Open model
+              </button>
+              <button id="demo-button" class="button" type="button">
+                Load demo
+              </button>
+              <button
+                id="advanced-project-settings-open"
+                class="button"
+                type="button"
+              >
+                Advanced settings
+              </button>
+            </div>
+          </details>
           <input
             id="model-file"
             type="file"
             accept=".json,application/json"
             hidden
           />
-          <button id="demo-button" class="button" type="button">Demo</button>
-          <button id="image-export-open" class="button" type="button">
-            Export image
-          </button>
-          <button id="print-export-open" class="button" type="button">
-            Export print file
-          </button>
+          <details
+            id="export-actions-menu"
+            class="header-disclosure"
+          >
+            <summary class="button">Export</summary>
+            <div class="header-disclosure-panel">
+              <button id="image-export-open" class="button" type="button">
+                Export image
+              </button>
+              <button id="print-export-open" class="button" type="button">
+                Export print file
+              </button>
+            </div>
+          </details>
         </div>
       </header>
 
@@ -207,7 +232,9 @@
           id="viewer-workspace"
           class="viewer-workspace"
           aria-label="Viewer tools"
-          data-active-view="overview"
+          data-active-view="explore"
+          data-active-analyze-view="findings"
+          data-details-open="false"
           data-sheet-state="expanded"
           data-collapsed="false"
         >
@@ -234,71 +261,23 @@
               class="viewer-workspace-tab"
               type="button"
               role="tab"
-              aria-selected="false"
+              aria-selected="true"
               aria-controls="viewer-view-explore"
               data-workspace-view="explore"
-              tabindex="-1"
             >
               Explore
             </button>
             <button
-              id="viewer-tab-routes"
+              id="viewer-tab-analyze"
               class="viewer-workspace-tab"
               type="button"
               role="tab"
               aria-selected="false"
-              aria-controls="viewer-view-routes"
-              data-workspace-view="routes"
+              aria-controls="viewer-view-analyze"
+              data-workspace-view="analyze"
               tabindex="-1"
             >
-              Routes
-            </button>
-            <button
-              id="viewer-tab-queries"
-              class="viewer-workspace-tab"
-              type="button"
-              role="tab"
-              aria-selected="false"
-              aria-controls="viewer-view-queries"
-              data-workspace-view="queries"
-              tabindex="-1"
-            >
-              Queries
-            </button>
-            <button
-              id="viewer-tab-details"
-              class="viewer-workspace-tab"
-              type="button"
-              role="tab"
-              aria-selected="false"
-              aria-controls="viewer-view-details"
-              data-workspace-view="details"
-              tabindex="-1"
-            >
-              Details
-            </button>
-            <button
-              id="viewer-tab-overview"
-              class="viewer-workspace-tab"
-              type="button"
-              role="tab"
-              aria-selected="true"
-              aria-controls="viewer-view-overview"
-              data-workspace-view="overview"
-            >
-              Overview
-            </button>
-            <button
-              id="viewer-tab-metrics"
-              class="viewer-workspace-tab"
-              type="button"
-              role="tab"
-              aria-selected="false"
-              aria-controls="viewer-view-metrics"
-              data-workspace-view="metrics"
-              tabindex="-1"
-            >
-              Metrics
+              Analyze
             </button>
           </div>
             <button
@@ -340,8 +319,122 @@
               role="tabpanel"
               aria-labelledby="viewer-tab-explore"
               data-workspace-panel="explore"
-              hidden
             >
+              <section
+                class="panel overview-panel explore-overview"
+                aria-labelledby="overview-title"
+              >
+                <div class="panel-heading">
+                  <div>
+                    <p class="eyebrow">Explore</p>
+                    <h2 id="overview-title">City overview</h2>
+                  </div>
+                </div>
+                <div class="overview-content">
+                  <label class="project-import-field" for="visualization-mode">
+                    <span>Color by</span>
+                    <select id="visualization-mode">
+                      <option value="semantic">Semantic groups</option>
+                      <option value="complexity">Complexity risk</option>
+                    </select>
+                  </label>
+                  <p
+                    id="visualization-mode-status"
+                    class="overview-scope-description"
+                    role="status"
+                    aria-live="polite"
+                  ></p>
+                  <details id="overview-details" class="overview-details">
+                    <summary>City metrics and legend</summary>
+                    <div class="overview-details-body">
+                      <p id="overview-scope-description" class="overview-scope-description">
+                        Metrics for the whole city.
+                      </p>
+                      <dl class="overview-metrics" aria-label="Scoped city metrics">
+                        <div><dt>Repositories</dt><dd id="overview-repositories">0</dd></div>
+                        <div><dt>Solutions</dt><dd id="overview-solutions">0</dd></div>
+                        <div><dt>Modules</dt><dd id="overview-modules">0</dd></div>
+                        <div><dt>Districts</dt><dd id="overview-districts">0</dd></div>
+                        <div><dt>Buildings</dt><dd id="overview-buildings">0</dd></div>
+                        <div><dt>Total SLOC</dt><dd id="overview-sloc">0</dd></div>
+                        <div>
+                          <dt>Median complexity</dt>
+                          <dd id="overview-median-complexity">0</dd>
+                        </div>
+                        <div>
+                          <dt>Maximum complexity</dt>
+                          <dd id="overview-max-complexity">0</dd>
+                        </div>
+                        <div>
+                          <dt>Dependency edges</dt>
+                          <dd id="overview-dependency-edges">0</dd>
+                        </div>
+                        <div>
+                          <dt>Reference weight</dt>
+                          <dd id="overview-reference-weight">0</dd>
+                        </div>
+                      </dl>
+                      <section
+                        class="overview-risk"
+                        aria-labelledby="overview-risk-title"
+                      >
+                        <h3 id="overview-risk-title">Risk distribution</h3>
+                        <ul>
+                          <li>
+                            <span>Low</span>
+                            <span class="overview-risk-track" aria-hidden="true">
+                              <span id="overview-risk-low-bar"></span>
+                            </span>
+                            <strong id="overview-risk-low">0</strong>
+                          </li>
+                          <li>
+                            <span>Moderate</span>
+                            <span class="overview-risk-track" aria-hidden="true">
+                              <span id="overview-risk-moderate-bar"></span>
+                            </span>
+                            <strong id="overview-risk-moderate">0</strong>
+                          </li>
+                          <li>
+                            <span>High</span>
+                            <span class="overview-risk-track" aria-hidden="true">
+                              <span id="overview-risk-high-bar"></span>
+                            </span>
+                            <strong id="overview-risk-high">0</strong>
+                          </li>
+                          <li>
+                            <span>Very high</span>
+                            <span class="overview-risk-track" aria-hidden="true">
+                              <span id="overview-risk-very-high-bar"></span>
+                            </span>
+                            <strong id="overview-risk-very-high">0</strong>
+                          </li>
+                        </ul>
+                      </section>
+                      <section
+                        id="external-zone"
+                        class="external-zone"
+                        aria-labelledby="external-zone-title"
+                        hidden
+                      >
+                        <h3 id="external-zone-title">External dependencies</h3>
+                        <ul
+                          id="external-list"
+                          class="external-list"
+                          aria-label="External dependencies"
+                        ></ul>
+                      </section>
+                      <details id="overview-legend" class="legend-details">
+                        <summary id="legend-title">Legend</summary>
+                        <ul
+                          id="legend"
+                          class="legend"
+                          aria-label="Semantic groups"
+                        ></ul>
+                      </details>
+                    </div>
+                  </details>
+                </div>
+              </section>
         <section
           id="find-panel"
           class="panel find-panel"
@@ -437,13 +530,75 @@
             </div>
 
             <div
-              id="viewer-view-queries"
+              id="viewer-view-analyze"
               class="viewer-workspace-view"
               role="tabpanel"
-              aria-labelledby="viewer-tab-queries"
-              data-workspace-panel="queries"
+              aria-labelledby="viewer-tab-analyze"
+              data-workspace-panel="analyze"
               hidden
             >
+              <div
+                class="analyze-workspace-tabs"
+                role="tablist"
+                aria-label="Analyze tools"
+              >
+                <button
+                  id="analyze-tab-findings"
+                  class="analyze-workspace-tab"
+                  type="button"
+                  role="tab"
+                  aria-selected="true"
+                  aria-controls="analyze-view-findings"
+                  data-analyze-view="findings"
+                >
+                  Findings
+                </button>
+                <button
+                  id="analyze-tab-routes"
+                  class="analyze-workspace-tab"
+                  type="button"
+                  role="tab"
+                  aria-selected="false"
+                  aria-controls="analyze-view-routes"
+                  data-analyze-view="routes"
+                  tabindex="-1"
+                >
+                  Routes
+                </button>
+                <button
+                  id="analyze-tab-queries"
+                  class="analyze-workspace-tab"
+                  type="button"
+                  role="tab"
+                  aria-selected="false"
+                  aria-controls="analyze-view-queries"
+                  data-analyze-view="queries"
+                  tabindex="-1"
+                >
+                  Queries
+                </button>
+              </div>
+              <div
+                id="analyze-view-findings"
+                class="analyze-workspace-view"
+                role="tabpanel"
+                aria-labelledby="analyze-tab-findings"
+                data-analyze-panel="findings"
+              >
+                <section
+                  id="design-smell-panel"
+                  class="panel design-smell-panel"
+                  aria-labelledby="design-smell-title"
+                ></section>
+              </div>
+              <div
+                id="analyze-view-queries"
+                class="analyze-workspace-view"
+                role="tabpanel"
+                aria-labelledby="analyze-tab-queries"
+                data-analyze-panel="queries"
+                hidden
+              >
               <section
                 id="advanced-query-panel"
                 class="panel advanced-query-panel"
@@ -581,6 +736,14 @@
                     role="group"
                     aria-label="Query selection"
                   >
+                    <button
+                      id="advanced-query-inspect"
+                      class="button button-compact"
+                      type="button"
+                      disabled
+                    >
+                      Inspect primary
+                    </button>
                     <button
                       id="advanced-query-select-all"
                       class="button button-compact"
@@ -744,11 +907,11 @@
             </div>
 
             <div
-              id="viewer-view-routes"
-              class="viewer-workspace-view"
+              id="analyze-view-routes"
+              class="analyze-workspace-view"
               role="tabpanel"
-              aria-labelledby="viewer-tab-routes"
-              data-workspace-panel="routes"
+              aria-labelledby="analyze-tab-routes"
+              data-analyze-panel="routes"
               hidden
             >
         <section
@@ -892,15 +1055,28 @@
           </div>
         </section>
             </div>
+            </div>
 
             <div
               id="viewer-view-details"
-              class="viewer-workspace-view"
-              role="tabpanel"
-              aria-labelledby="viewer-tab-details"
-              data-workspace-panel="details"
+              class="viewer-workspace-view viewer-contextual-details"
+              role="region"
+              aria-labelledby="selection-name"
+              data-workspace-context="details"
+              tabindex="-1"
               hidden
             >
+              <div class="viewer-contextual-details-navigation">
+                <button
+                  id="viewer-details-back"
+                  class="button button-compact"
+                  type="button"
+                  data-workspace-details-back
+                >
+                  Back to workspace
+                </button>
+                <span>Contextual details</span>
+              </div>
         <section
           id="inspector"
           class="panel inspector"
@@ -1300,133 +1476,36 @@
           </div>
         </section>
             </div>
+          </div>
+        </aside>
 
-            <div
-              id="viewer-view-overview"
-              class="viewer-workspace-view"
-              role="tabpanel"
-              aria-labelledby="viewer-tab-overview"
-              data-workspace-panel="overview"
-            >
-        <section
-          class="panel overview-panel"
-          aria-labelledby="overview-title"
+        <dialog
+          id="advanced-project-settings-dialog"
+          class="advanced-project-settings-dialog"
+          aria-labelledby="advanced-project-settings-title"
+          aria-describedby="advanced-project-settings-description"
         >
-          <div class="panel-heading">
-            <h2 id="overview-title">Scoped overview</h2>
-          </div>
-          <div class="overview-content">
-            <p id="overview-scope-description" class="overview-scope-description">
-              Metrics for the whole city.
-            </p>
-            <label class="project-import-field" for="visualization-mode">
-              <span>Visualization mode</span>
-              <select id="visualization-mode">
-                <option value="semantic">Semantic groups</option>
-                <option value="complexity">Complexity risk</option>
-                <option value="age">Building age</option>
-                <option value="churn">Historical churn</option>
-                <option value="print">Printer-profile assignment preview</option>
-              </select>
-            </label>
-            <p
-              id="visualization-mode-status"
-              class="overview-scope-description"
-              role="status"
-              aria-live="polite"
-            ></p>
-            <dl class="overview-metrics" aria-label="Scoped city metrics">
-              <div><dt>Repositories</dt><dd id="overview-repositories">0</dd></div>
-              <div><dt>Solutions</dt><dd id="overview-solutions">0</dd></div>
-              <div><dt>Modules</dt><dd id="overview-modules">0</dd></div>
-              <div><dt>Districts</dt><dd id="overview-districts">0</dd></div>
-              <div><dt>Buildings</dt><dd id="overview-buildings">0</dd></div>
-              <div><dt>Total SLOC</dt><dd id="overview-sloc">0</dd></div>
-              <div>
-                <dt>Median complexity</dt>
-                <dd id="overview-median-complexity">0</dd>
-              </div>
-              <div>
-                <dt>Maximum complexity</dt>
-                <dd id="overview-max-complexity">0</dd>
-              </div>
-              <div>
-                <dt>Dependency edges</dt>
-                <dd id="overview-dependency-edges">0</dd>
-              </div>
-              <div>
-                <dt>Reference weight</dt>
-                <dd id="overview-reference-weight">0</dd>
-              </div>
-            </dl>
-            <section
-              class="overview-risk"
-              aria-labelledby="overview-risk-title"
-            >
-              <h3 id="overview-risk-title">Risk distribution</h3>
-              <ul>
-                <li>
-                  <span>Low</span>
-                  <span class="overview-risk-track" aria-hidden="true">
-                    <span id="overview-risk-low-bar"></span>
-                  </span>
-                  <strong id="overview-risk-low">0</strong>
-                </li>
-                <li>
-                  <span>Moderate</span>
-                  <span class="overview-risk-track" aria-hidden="true">
-                    <span id="overview-risk-moderate-bar"></span>
-                  </span>
-                  <strong id="overview-risk-moderate">0</strong>
-                </li>
-                <li>
-                  <span>High</span>
-                  <span class="overview-risk-track" aria-hidden="true">
-                    <span id="overview-risk-high-bar"></span>
-                  </span>
-                  <strong id="overview-risk-high">0</strong>
-                </li>
-                <li>
-                  <span>Very high</span>
-                  <span class="overview-risk-track" aria-hidden="true">
-                    <span id="overview-risk-very-high-bar"></span>
-                  </span>
-                  <strong id="overview-risk-very-high">0</strong>
-                </li>
-              </ul>
-            </section>
-            <section
-              id="external-zone"
-              class="external-zone"
-              aria-labelledby="external-zone-title"
-              hidden
-            >
-              <h3 id="external-zone-title">External dependencies</h3>
-              <ul
-                id="external-list"
-                class="external-list"
-                aria-label="External dependencies"
-              ></ul>
-            </section>
-            <details id="overview-legend" class="legend-details">
-              <summary id="legend-title">Legend</summary>
-              <ul
-                id="legend"
-                class="legend"
-                aria-label="Semantic groups"
-              ></ul>
-            </details>
-          </div>
-        </section>
+          <header class="advanced-project-settings-heading">
+            <div>
+              <p class="eyebrow">Project configuration</p>
+              <h2 id="advanced-project-settings-title">Advanced settings</h2>
             </div>
-            <div
-              id="viewer-view-metrics"
-              class="viewer-workspace-view"
-              role="tabpanel"
-              aria-labelledby="viewer-tab-metrics"
-              data-workspace-panel="metrics"
-              hidden
+            <button
+              id="advanced-project-settings-close"
+              class="icon-button"
+              type="button"
+              aria-label="Close advanced project settings"
             >
+              &times;
+            </button>
+          </header>
+          <p id="advanced-project-settings-description">
+            Change project geometry or preview a reviewed data-only extension.
+            These settings are optional and do not block exploration or findings.
+          </p>
+          <div class="advanced-project-settings-content">
+            <details class="advanced-project-settings-section" open>
+              <summary>Metric mapping</summary>
               <section
                 id="metric-mapping-panel"
                 class="panel metric-mapping-panel"
@@ -1666,11 +1745,9 @@
                   </div>
                 </div>
               </section>
-              <section
-                id="design-smell-panel"
-                class="panel design-smell-panel"
-                aria-labelledby="design-smell-title"
-              ></section>
+            </details>
+            <details class="advanced-project-settings-section">
+              <summary>Safe extensions</summary>
               <section
                 id="safe-extension-panel"
                 class="panel metric-mapping-panel"
@@ -1704,9 +1781,9 @@
                   </div>
                 </div>
               </section>
-            </div>
+            </details>
           </div>
-        </aside>
+        </dialog>
 
         <p
           id="metric-preview-banner"

@@ -62,6 +62,7 @@ test("below-profile export stays opt-in and exposes exact fidelity downloads", a
 }) => {
   test.setTimeout(60_000);
   await page.goto(viewerUrl, { waitUntil: "domcontentloaded" });
+  await page.locator("#export-actions-menu > summary").click();
   await page.getByRole("button", { name: "Export print file" }).click();
 
   const dialog = page.getByRole("dialog", { name: "Export print file" });

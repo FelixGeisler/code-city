@@ -7,12 +7,34 @@ import {
 } from "../packages/core/src/index.js";
 import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
 import {
+  availableViewerVisualizationModes,
   createViewerVisualization,
   describeBuildingMetrics,
   presentBuildingMetrics,
 } from "../apps/viewer/src/visualization-mode.js";
 
 describe("viewer visualization modes", () => {
+  it("only offers modes backed by the current project context", () => {
+    expect(
+      availableViewerVisualizationModes({
+        evolution: false,
+        printProfile: false,
+      }),
+    ).toEqual(["semantic", "complexity"]);
+    expect(
+      availableViewerVisualizationModes({
+        evolution: true,
+        printProfile: false,
+      }),
+    ).toEqual(["semantic", "complexity", "age", "churn"]);
+    expect(
+      availableViewerVisualizationModes({
+        evolution: false,
+        printProfile: true,
+      }),
+    ).toEqual(["semantic", "complexity", "print"]);
+  });
+
   it("uses persisted risk metadata without reclassifying metrics", () => {
     const model = {
       ...DEMO_MODEL,

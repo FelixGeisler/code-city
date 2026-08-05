@@ -49,6 +49,7 @@ test("exports an independent transparent PNG without DOM chrome", async ({
     document.body.append(sentinel);
   });
 
+  await page.locator("#export-actions-menu > summary").click();
   await page.locator("#image-export-open").click();
   await expect(page.locator("#image-export-dialog")).toBeVisible();
   await expect(page.locator("#image-export-view")).toHaveValue(
@@ -184,6 +185,7 @@ test("closing image export with Escape preserves the selected entity", async ({
   await expect(page.locator("#camera-focus-selection")).toBeVisible();
   await expect(page.locator("#camera-focus-selection")).toBeEnabled();
 
+  await page.locator("#export-actions-menu > summary").click();
   await page.locator("#image-export-open").click();
   await expect(page.locator("#image-export-dialog")).toBeVisible();
   await page.keyboard.press("Escape");
@@ -225,7 +227,7 @@ test("initial WebGL failure leaves the rest of the viewer accessible", async ({
   await expect(fallback).toContainText("3D viewer unavailable");
   await expect(page.locator("#image-export-open")).toBeDisabled();
   await expect(page.locator("#model-name")).not.toBeEmpty();
-  await expect(page.getByRole("tab", { name: "Overview" })).toBeEnabled();
+  await expect(page.getByRole("tab", { name: "Explore" })).toBeEnabled();
 
   // The drill-down return path must remain safe when no scene canvas exists.
   // Expose the normally contextual action to emulate a capability loss while

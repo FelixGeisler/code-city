@@ -499,14 +499,25 @@ npm run cli -- export `
   --output build\print\code-city-demo.stl
 ```
 
-The viewer accepts a `city-model.json` through **Open model**. **Print plates**
-selects a generic, Prusa XL, or local custom printer profile, previews the exact
-exporter layout, and downloads direct 3MF/STL or a deterministic multi-plate ZIP.
+The viewer starts in **Explore**, where overview, color mode, search, and the
+synchronized repository tree share one task-oriented workspace. Selecting a
+building opens contextual **Details** with complexity hotspots first; use
+**Back to workspace** to return without losing Explore or Analyze state.
+**Analyze** opens on explainable design-smell findings and groups Routes and
+Queries as secondary analysis tools. Metric Mapping and Safe Extensions live
+under **Project > Advanced settings**. History color modes appear only while
+verified history is loaded, and print assignment appears only after a valid
+printer profile is available.
+
+The viewer accepts a `city-model.json` through **Project > Open model**.
+**Export > Export print file** selects a generic, Prusa XL, or local custom
+printer profile, previews the exact exporter layout, and downloads direct
+3MF/STL or a deterministic multi-plate ZIP.
 Generation runs locally in a cancellable worker; no model or profile is uploaded.
 **Prepare calibration** downloads a profile-only test plate and measurement
 manifest.
 
-The **Queries** workspace provides explainable built-in rankings,
+**Analyze > Queries** provides explainable built-in rankings,
 dependency neighborhoods, change filters, and compound name, language, risk,
 metric, dependency, and design-smell filters. Results support additive and
 range selection from query, tree, scene, and visible search order. Focus uses

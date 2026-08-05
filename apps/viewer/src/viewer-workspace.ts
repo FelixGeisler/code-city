@@ -1,14 +1,19 @@
 export const VIEWER_WORKSPACE_VIEWS = [
   "explore",
-  "routes",
-  "queries",
-  "details",
-  "overview",
-  "metrics",
+  "analyze",
 ] as const;
 
 export type ViewerWorkspaceView =
   (typeof VIEWER_WORKSPACE_VIEWS)[number];
+
+export const VIEWER_ANALYZE_VIEWS = [
+  "findings",
+  "routes",
+  "queries",
+] as const;
+
+export type ViewerAnalyzeView =
+  (typeof VIEWER_ANALYZE_VIEWS)[number];
 
 export const VIEWER_WORKSPACE_SHEET_STATES = [
   "collapsed",
@@ -61,16 +66,20 @@ export function nextBoundedResultLimit(
 
 export interface ViewerWorkspaceState {
   readonly activeView: ViewerWorkspaceView;
+  readonly activeAnalyzeView: ViewerAnalyzeView;
+  readonly detailsOpen: boolean;
   readonly sheetState: ViewerWorkspaceSheetState;
 }
 
 export interface ViewerWorkspaceShowOptions {
   readonly intent?: ViewerWorkspaceShowIntent;
-  readonly focusTab?: boolean;
+  readonly focus?: boolean;
 }
 
 export interface ViewerWorkspaceController {
   readonly activeView: ViewerWorkspaceView;
+  readonly activeAnalyzeView: ViewerAnalyzeView;
+  readonly detailsOpen: boolean;
   readonly sheetState: ViewerWorkspaceSheetState;
   readonly collapsed: boolean;
   readonly compact: boolean;
@@ -78,6 +87,12 @@ export interface ViewerWorkspaceController {
     view: ViewerWorkspaceView,
     options?: ViewerWorkspaceShowOptions,
   ) => void;
+  showAnalyze: (
+    view: ViewerAnalyzeView,
+    options?: ViewerWorkspaceShowOptions,
+  ) => void;
+  showDetails: (options?: ViewerWorkspaceShowOptions) => void;
+  closeDetails: (options?: { readonly focusTab?: boolean }) => void;
   setSheetState: (state: ViewerWorkspaceSheetState) => void;
   /** Compatibility alias for integrations using the previous controller. */
   setCollapsed: (collapsed: boolean) => void;
@@ -94,14 +109,16 @@ export function initialViewerWorkspaceState(
   compact: boolean,
 ): ViewerWorkspaceState {
   return {
-    activeView: "overview",
+    activeView: "explore",
+    activeAnalyzeView: "findings",
+    detailsOpen: false,
     sheetState: compact ? "peek" : "expanded",
   };
 }
 
 export function workspaceStateForShow(
   current: ViewerWorkspaceState,
-  view: ViewerWorkspaceView,
+  view: ViewerWorkspaceView | "details",
   options: {
     readonly compact: boolean;
     readonly intent?: ViewerWorkspaceShowIntent | undefined;
@@ -119,7 +136,28 @@ export function workspaceStateForShow(
     sheetState = "peek";
   }
 
-  return { activeView: view, sheetState };
+  return view === "details"
+    ? { ...current, detailsOpen: true, sheetState }
+    : {
+        ...current,
+        activeView: view,
+        detailsOpen: false,
+        sheetState,
+      };
+}
+
+export function workspaceStateForAnalyze(
+  current: ViewerWorkspaceState,
+  view: ViewerAnalyzeView,
+  options: {
+    readonly compact: boolean;
+    readonly intent?: ViewerWorkspaceShowIntent | undefined;
+  },
+): ViewerWorkspaceState {
+  return {
+    ...workspaceStateForShow(current, "analyze", options),
+    activeAnalyzeView: view,
+  };
 }
 
 export function parseViewerWorkspaceWidth(
@@ -198,6 +236,20 @@ export function workspaceViewForNavigation(
   return VIEWER_WORKSPACE_VIEWS[nextIndex]!;
 }
 
+export function analyzeViewForNavigation(
+  current: ViewerAnalyzeView,
+  key: ViewerWorkspaceNavigationKey,
+): ViewerAnalyzeView {
+  if (key === "Home") return VIEWER_ANALYZE_VIEWS[0];
+  if (key === "End") return VIEWER_ANALYZE_VIEWS.at(-1)!;
+  const currentIndex = VIEWER_ANALYZE_VIEWS.indexOf(current);
+  const offset = key === "ArrowRight" ? 1 : -1;
+  const nextIndex =
+    (currentIndex + offset + VIEWER_ANALYZE_VIEWS.length) %
+    VIEWER_ANALYZE_VIEWS.length;
+  return VIEWER_ANALYZE_VIEWS[nextIndex]!;
+}
+
 function workspaceView(
   element: HTMLElement,
   attribute: "workspaceView" | "workspacePanel",
@@ -216,6 +268,28 @@ function requiredViewElement<T extends HTMLElement>(
   );
   if (!match) {
     throw new Error(`Missing viewer workspace ${attribute} '${view}'.`);
+  }
+  return match;
+}
+
+function analyzeView(
+  element: HTMLElement,
+  attribute: "analyzeView" | "analyzePanel",
+): ViewerAnalyzeView | undefined {
+  const value = element.dataset[attribute];
+  return VIEWER_ANALYZE_VIEWS.find((candidate) => candidate === value);
+}
+
+function requiredAnalyzeElement<T extends HTMLElement>(
+  elements: readonly T[],
+  attribute: "analyzeView" | "analyzePanel",
+  view: ViewerAnalyzeView,
+): T {
+  const match = elements.find(
+    (element) => analyzeView(element, attribute) === view,
+  );
+  if (!match) {
+    throw new Error(`Missing viewer analyze ${attribute} '${view}'.`);
   }
   return match;
 }
@@ -267,6 +341,16 @@ export function installViewerWorkspace(
       '[role="tabpanel"][data-workspace-panel]',
     ),
   ];
+  const analyzeTabs = [
+    ...root.querySelectorAll<HTMLButtonElement>(
+      '[role="tab"][data-analyze-view]',
+    ),
+  ];
+  const analyzePanels = [
+    ...root.querySelectorAll<HTMLElement>(
+      '[role="tabpanel"][data-analyze-panel]',
+    ),
+  ];
   const tabsByView = new Map(
     VIEWER_WORKSPACE_VIEWS.map((view) => [
       view,
@@ -279,6 +363,30 @@ export function installViewerWorkspace(
       requiredViewElement(panels, "workspacePanel", view),
     ]),
   );
+  const analyzeTabsByView = new Map(
+    VIEWER_ANALYZE_VIEWS.map((view) => [
+      view,
+      requiredAnalyzeElement(analyzeTabs, "analyzeView", view),
+    ]),
+  );
+  const analyzePanelsByView = new Map(
+    VIEWER_ANALYZE_VIEWS.map((view) => [
+      view,
+      requiredAnalyzeElement(analyzePanels, "analyzePanel", view),
+    ]),
+  );
+  const detailsPanel = root.querySelector<HTMLElement>(
+    '[data-workspace-context="details"]',
+  );
+  if (!detailsPanel) {
+    throw new Error("Missing contextual viewer details panel.");
+  }
+  const detailsBack = root.querySelector<HTMLButtonElement>(
+    "[data-workspace-details-back]",
+  );
+  if (!detailsBack) {
+    throw new Error("Missing contextual viewer details back action.");
+  }
   const toggle = root.querySelector<HTMLButtonElement>(
     "[data-workspace-toggle]",
   );
@@ -302,18 +410,34 @@ export function installViewerWorkspace(
     }
   })();
   const cleanups: (() => void)[] = [];
-  const scrollTopByView = new Map<ViewerWorkspaceView, number>(
-    VIEWER_WORKSPACE_VIEWS.map((view) => [view, 0]),
-  );
+  type ScrollKey =
+    | "explore"
+    | `analyze:${ViewerAnalyzeView}`
+    | "details";
+  const scrollTopByView = new Map<ScrollKey, number>([
+    ["explore", 0],
+    ...VIEWER_ANALYZE_VIEWS.map(
+      (view): readonly [ScrollKey, number] => [`analyze:${view}`, 0],
+    ),
+    ["details", 0],
+  ]);
   let compact =
     hostWindow.innerWidth < VIEWER_WORKSPACE_COMPACT_BREAKPOINT;
   let state = initialViewerWorkspaceState(compact);
   let preferredWidth = readPreferredWidth(storage);
   let activePointerCleanup: (() => void) | undefined;
+  const scrollKey = (candidate: ViewerWorkspaceState): ScrollKey =>
+    candidate.detailsOpen
+      ? "details"
+      : candidate.activeView === "explore"
+        ? "explore"
+        : `analyze:${candidate.activeAnalyzeView}`;
   const notifyState = (): void =>
     options.onStateChange?.(
       Object.freeze({
         activeView: state.activeView,
+        activeAnalyzeView: state.activeAnalyzeView,
+        detailsOpen: state.detailsOpen,
         sheetState: state.sheetState,
       }),
     );
@@ -369,14 +493,39 @@ export function installViewerWorkspace(
 
   const renderView = (): void => {
     root.dataset["activeView"] = state.activeView;
+    root.dataset["activeAnalyzeView"] = state.activeAnalyzeView;
+    root.dataset["detailsOpen"] = String(state.detailsOpen);
     for (const candidate of VIEWER_WORKSPACE_VIEWS) {
-      const selected = candidate === state.activeView;
+      const active = candidate === state.activeView;
       const tab = tabsByView.get(candidate)!;
       const panel = panelsByView.get(candidate)!;
+      tab.setAttribute("aria-selected", String(active));
+      tab.tabIndex = active ? 0 : -1;
+      panel.hidden = !active || state.detailsOpen;
+    }
+    for (const candidate of VIEWER_ANALYZE_VIEWS) {
+      const selected = candidate === state.activeAnalyzeView;
+      const visible =
+        selected && state.activeView === "analyze" && !state.detailsOpen;
+      const tab = analyzeTabsByView.get(candidate)!;
+      const panel = analyzePanelsByView.get(candidate)!;
       tab.setAttribute("aria-selected", String(selected));
       tab.tabIndex = selected ? 0 : -1;
-      panel.hidden = !selected;
+      panel.hidden = !visible;
     }
+    detailsPanel.hidden = !state.detailsOpen;
+  };
+
+  const transition = (next: ViewerWorkspaceState): boolean => {
+    const previousKey = scrollKey(state);
+    const nextKey = scrollKey(next);
+    const changed = previousKey !== nextKey;
+    if (changed) scrollTopByView.set(previousKey, scrollOwner.scrollTop);
+    state = next;
+    renderView();
+    renderSheetState();
+    if (changed) scrollOwner.scrollTop = scrollTopByView.get(nextKey) ?? 0;
+    return changed;
   };
 
   const setSheetState = (
@@ -397,24 +546,61 @@ export function installViewerWorkspace(
     view: ViewerWorkspaceView,
     showOptions: ViewerWorkspaceShowOptions = {},
   ): void => {
-    const previousView = state.activeView;
-    const changed = view !== previousView;
-    if (changed) {
-      scrollTopByView.set(previousView, scrollOwner.scrollTop);
-    }
-    state = workspaceStateForShow(state, view, {
-      compact,
-      intent: showOptions.intent,
-    });
-    renderView();
-    renderSheetState();
-    if (changed) {
-      scrollOwner.scrollTop = scrollTopByView.get(view) ?? 0;
-    }
-
+    transition(
+      workspaceStateForShow(state, view, {
+        compact,
+        intent: showOptions.intent,
+      }),
+    );
     const passive = showOptions.intent === "passive";
-    if (showOptions.focusTab && !passive) {
+    if (showOptions.focus && !passive) {
       tabsByView.get(view)!.focus();
+    }
+    notifyState();
+  };
+
+  const showAnalyze = (
+    view: ViewerAnalyzeView,
+    showOptions: ViewerWorkspaceShowOptions = {},
+  ): void => {
+    transition(
+      workspaceStateForAnalyze(state, view, {
+        compact,
+        intent: showOptions.intent,
+      }),
+    );
+    const passive = showOptions.intent === "passive";
+    if (showOptions.focus && !passive) {
+      analyzeTabsByView.get(view)!.focus();
+    }
+    notifyState();
+  };
+
+  const showDetails = (
+    showOptions: ViewerWorkspaceShowOptions = {},
+  ): void => {
+    transition(
+      workspaceStateForShow(state, "details", {
+        compact,
+        intent: showOptions.intent,
+      }),
+    );
+    const passive = showOptions.intent === "passive";
+    if (showOptions.focus && !passive) detailsPanel.focus();
+    notifyState();
+  };
+
+  const closeDetails = (
+    closeOptions: { readonly focusTab?: boolean } = {},
+  ): void => {
+    if (!state.detailsOpen) return;
+    transition({ ...state, detailsOpen: false });
+    if (closeOptions.focusTab) {
+      if (state.activeView === "analyze") {
+        analyzeTabsByView.get(state.activeAnalyzeView)!.focus();
+      } else {
+        tabsByView.get(state.activeView)!.focus();
+      }
     }
     notifyState();
   };
@@ -438,7 +624,7 @@ export function installViewerWorkspace(
       event.preventDefault();
       show(workspaceViewForNavigation(view, event.key), {
         intent: "explicit",
-        focusTab: true,
+        focus: true,
       });
     };
     tab.addEventListener("click", onClick);
@@ -448,6 +634,32 @@ export function installViewerWorkspace(
       tab.removeEventListener("keydown", onKeyDown);
     });
   }
+
+  for (const view of VIEWER_ANALYZE_VIEWS) {
+    const tab = analyzeTabsByView.get(view)!;
+    const onClick = (): void =>
+      showAnalyze(view, { intent: "explicit" });
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!isNavigationKey(event.key)) return;
+      event.preventDefault();
+      showAnalyze(analyzeViewForNavigation(view, event.key), {
+        intent: "explicit",
+        focus: true,
+      });
+    };
+    tab.addEventListener("click", onClick);
+    tab.addEventListener("keydown", onKeyDown);
+    cleanups.push(() => {
+      tab.removeEventListener("click", onClick);
+      tab.removeEventListener("keydown", onKeyDown);
+    });
+  }
+
+  const onDetailsBack = (): void => closeDetails({ focusTab: true });
+  detailsBack.addEventListener("click", onDetailsBack);
+  cleanups.push(() =>
+    detailsBack.removeEventListener("click", onDetailsBack),
+  );
 
   const onToggle = (): void => {
     if (state.sheetState === "collapsed") {
@@ -571,6 +783,12 @@ export function installViewerWorkspace(
     get sheetState() {
       return state.sheetState;
     },
+    get activeAnalyzeView() {
+      return state.activeAnalyzeView;
+    },
+    get detailsOpen() {
+      return state.detailsOpen;
+    },
     get collapsed() {
       return state.sheetState === "collapsed";
     },
@@ -578,6 +796,9 @@ export function installViewerWorkspace(
       return compact;
     },
     show,
+    showAnalyze,
+    showDetails,
+    closeDetails,
     setSheetState,
     setCollapsed: (collapsed: boolean) =>
       setSheetState(collapsed ? "collapsed" : "expanded"),

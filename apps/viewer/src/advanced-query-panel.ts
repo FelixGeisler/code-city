@@ -65,6 +65,7 @@ export interface AdvancedQueryPanelOptions {
   ) => void;
   readonly onFocus: (buildingIds: readonly string[]) => void;
   readonly onIsolate: (buildingIds: readonly string[]) => void;
+  readonly onInspect?: (buildingId: string) => void;
   readonly onExport?: (artifact: AdvancedQueryExport) => void;
 }
 
@@ -158,6 +159,10 @@ export function installAdvancedQueryPanel(
     root,
     "advanced-query-comparison-body",
   );
+  const inspect = control<HTMLButtonElement>(
+    root,
+    "advanced-query-inspect",
+  );
   const focus = control<HTMLButtonElement>(root, "advanced-query-focus");
   const isolate = control<HTMLButtonElement>(root, "advanced-query-isolate");
   const compare = control<HTMLButtonElement>(root, "advanced-query-compare");
@@ -227,6 +232,7 @@ export function installAdvancedQueryPanel(
       ? "Overlay on"
       : "Overlay off";
     focus.disabled = count === 0;
+    inspect.disabled = selection.primaryBuildingId === null;
     isolate.disabled = count === 0;
     compare.disabled = count < 2;
     exportButton.disabled = count === 0;
@@ -455,6 +461,11 @@ export function installAdvancedQueryPanel(
       !selection.overlayVisible,
     );
     renderSelection();
+  });
+  inspect.addEventListener("click", () => {
+    if (selection.primaryBuildingId !== null) {
+      options.onInspect?.(selection.primaryBuildingId);
+    }
   });
   focus.addEventListener("click", () => {
     if (selection.buildingIds.length > 0) {
