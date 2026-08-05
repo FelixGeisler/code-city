@@ -58,6 +58,10 @@ import {
   type CameraProjection,
 } from "./camera-presets.js";
 import {
+  cameraNavigationProfile,
+  type CameraNavigationMode,
+} from "./camera-navigation.js";
+import {
   FINE_DETAIL_INITIAL_LIMIT,
   FINE_DETAIL_MAXIMUM_LIMIT,
   projectFineDetail,
@@ -337,6 +341,11 @@ interface ViewerPerformanceDiagnostics {
   readonly camera: {
     readonly position: readonly [number, number, number];
     readonly target: readonly [number, number, number];
+    readonly up: readonly [number, number, number];
+    readonly projection: CameraProjection;
+    readonly navigationMode: CameraNavigationMode;
+    readonly zoom: number;
+    readonly viewHeight: number;
   };
   readonly evolutionRemovals: EvolutionRemovalDiagnostics | null;
   readonly evolutionRemovalAnimated: boolean;
@@ -406,6 +415,8 @@ const cameraSelectedButton =
   element<HTMLButtonElement>("camera-selected");
 const cameraWholeCityButton =
   element<HTMLButtonElement>("camera-whole-city");
+const cameraControlsHint =
+  element<HTMLParagraphElement>("camera-controls-hint");
 const metricPreviewBanner =
   element<HTMLParagraphElement>("metric-preview-banner");
 const statusElement = element<HTMLParagraphElement>("status");
@@ -718,6 +729,9 @@ class CityScene {
   private isolatedDistrictId: string | null = null;
   private buildingVisibilityMask: ReadonlySet<string> | null = null;
   private cameraTransition: CameraTransition | null = null;
+  private cameraNavigationMode: CameraNavigationMode = "orbit";
+  private orbitOrientationBeforeTopDown: CameraOrientation | null = null;
+  private topDownTargetY: number | null = null;
   private evolutionAnimation: SceneEvolutionAnimation | null = null;
   private orthographicViewHeight = 20;
   private webglContextAvailable = true;
@@ -829,12 +843,19 @@ class CityScene {
     this.orthographicCamera.position.copy(this.camera.position);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.07;
-    this.controls.screenSpacePanning = false;
     this.controls.minDistance = 2;
-    this.controls.maxPolarAngle = Math.PI * 0.495;
+    this.applyCameraNavigationProfile("orbit");
     this.controls.addEventListener("start", () => {
-      this.cameraTransition = null;
+      if (
+        this.cameraNavigationMode === "top-down" &&
+        this.cameraTransition !== null
+      ) {
+        this.completeCameraTransition();
+      } else {
+        this.cameraTransition = null;
+      }
     });
+    this.controls.addEventListener("end", schedulePerformanceDiagnostics);
 
     this.renderer.domElement.addEventListener(
       "pointerdown",
@@ -1105,7 +1126,14 @@ class CityScene {
 
   public setProjection(projection: CameraProjection): void {
     if (projection === this.projection) return;
-    this.cameraTransition = null;
+    if (
+      this.cameraNavigationMode === "top-down" &&
+      this.cameraTransition !== null
+    ) {
+      this.completeCameraTransition();
+    } else {
+      this.cameraTransition = null;
+    }
     const target = this.controls.target.clone();
     const direction = this.camera.position.clone().sub(target);
     if (direction.lengthSq() < 1e-12) direction.set(1, 1, 1);
@@ -1155,7 +1183,9 @@ class CityScene {
       Math.max(1, this.host.clientHeight),
     );
     this.controls.update();
+    this.enforceTopDownNavigationPlane();
     this.updateFog();
+    schedulePerformanceDiagnostics();
   }
 
   public applyCameraPreset(
@@ -1164,16 +1194,23 @@ class CityScene {
   ): boolean {
     this.ensureCityPresentation();
     if (preset === "whole-city") {
-      this.showWholeCity();
-      return true;
+      this.showWholeCity(false);
     }
     const bounds = this.boundsForPreset(preset);
     if (bounds === undefined || bounds.isEmpty()) return false;
-    const orientation = cameraOrientationForPreset(
-      preset,
-      this.camera.position.clone().sub(this.controls.target),
-      this.camera.up,
-    );
+    const restoredOrbitOrientation =
+      preset === "top-down"
+        ? (this.prepareTopDownNavigation(), undefined)
+        : this.leaveTopDownNavigation();
+    const orientation =
+      restoredOrbitOrientation !== undefined &&
+      (preset === "selected-entity" || preset === "whole-city")
+        ? restoredOrbitOrientation
+        : cameraOrientationForPreset(
+            preset,
+            this.camera.position.clone().sub(this.controls.target),
+            this.camera.up,
+          );
     this.frameBounds(bounds, animate, false, orientation);
     return true;
   }
@@ -1721,6 +1758,7 @@ class CityScene {
 
   public performanceDiagnostics(): ViewerPerformanceDiagnostics {
     this.controls.update();
+    this.enforceTopDownNavigationPlane();
     this.updateFog();
     this.renderer.render(this.scene, this.camera);
     let objectCount = 0;
@@ -1739,6 +1777,23 @@ class CityScene {
       camera: {
         position: [this.camera.position.x, this.camera.position.y, this.camera.position.z] as const,
         target: [this.controls.target.x, this.controls.target.y, this.controls.target.z] as const,
+        up: [this.camera.up.x, this.camera.up.y, this.camera.up.z] as const,
+        projection: this.projection,
+        navigationMode: this.cameraNavigationMode,
+        zoom: this.camera.zoom,
+        viewHeight:
+          this.camera === this.orthographicCamera
+            ? this.orthographicViewHeight /
+              Math.max(this.orthographicCamera.zoom, 1e-6)
+            : perspectiveViewHeightAtDistance(
+                Math.max(
+                  this.perspectiveCamera.position.distanceTo(
+                    this.controls.target,
+                  ),
+                  0.01,
+                ),
+                this.perspectiveCamera.fov,
+              ),
       },
       evolutionRemovals:
         this.evolutionAnimation?.removals.diagnostics() ?? null,
@@ -1763,6 +1818,7 @@ class CityScene {
     this.updateCameraTransition();
     this.updateEvolutionAnimation();
     this.controls.update();
+    this.enforceTopDownNavigationPlane();
     this.updateFog();
     this.renderer.render(this.scene, this.camera);
   };
@@ -2306,19 +2362,27 @@ class CityScene {
     orientation?: CameraOrientation,
   ): void {
     const center = bounds.getCenter(new THREE.Vector3());
+    if (this.cameraNavigationMode === "top-down") {
+      this.topDownTargetY = center.y;
+    }
     const size = bounds.getSize(new THREE.Vector3());
     const maximumDimension = Math.max(size.x, size.y, size.z, 1);
     const aspect =
       Math.max(1, this.host.clientWidth) /
       Math.max(1, this.host.clientHeight);
     const direction =
-      orientation?.direction.clone() ??
-      this.camera.position.clone().sub(this.controls.target);
+      this.cameraNavigationMode === "top-down"
+        ? new THREE.Vector3(0, 1, 0)
+        : orientation?.direction.clone() ??
+          this.camera.position.clone().sub(this.controls.target);
     if (direction.lengthSq() < 1e-8) {
       direction.set(1, 0.78, -1);
     }
     direction.normalize();
-    const up = orientation?.up.clone() ?? this.camera.up.clone();
+    const up =
+      this.cameraNavigationMode === "top-down"
+        ? new THREE.Vector3(0, 0, -1)
+        : orientation?.up.clone() ?? this.camera.up.clone();
     const distance =
       this.camera === this.perspectiveCamera
         ? cameraDistanceForBounds(
@@ -2371,6 +2435,7 @@ class CityScene {
         );
       }
       this.controls.update();
+      this.enforceTopDownNavigationPlane();
       this.updateFog();
       return;
     }
@@ -2426,6 +2491,7 @@ class CityScene {
       currentDistance,
     );
     this.controls.update();
+    this.enforceTopDownNavigationPlane();
     this.updateFog();
   }
 
@@ -2471,8 +2537,112 @@ class CityScene {
       );
     }
     if (progress === 1) {
-      this.cameraTransition = null;
+      this.completeCameraTransition();
     }
+  }
+
+  private completeCameraTransition(): void {
+    const transition = this.cameraTransition;
+    if (transition === null) return;
+    this.cameraTransition = null;
+    this.camera.position.copy(transition.toPosition);
+    this.camera.up.copy(transition.toUp);
+    this.controls.target.copy(transition.toTarget);
+    if (transition.toOrthographicViewHeight !== undefined) {
+      this.orthographicViewHeight =
+        transition.toOrthographicViewHeight;
+      this.orthographicCamera.zoom = 1;
+      this.updateCameraProjection(
+        Math.max(1, this.host.clientWidth),
+        Math.max(1, this.host.clientHeight),
+      );
+    }
+    this.discardControlMomentum();
+    this.updateFog();
+    schedulePerformanceDiagnostics();
+  }
+
+  private prepareTopDownNavigation(): void {
+    this.discardControlMomentum();
+    if (this.cameraNavigationMode !== "top-down") {
+      this.orbitOrientationBeforeTopDown =
+        cameraOrientationForPreset(
+          "whole-city",
+          this.camera.position.clone().sub(this.controls.target),
+          this.camera.up,
+        );
+      this.cameraNavigationMode = "top-down";
+      this.applyCameraNavigationProfile("top-down");
+    }
+  }
+
+  private leaveTopDownNavigation(): CameraOrientation | undefined {
+    if (this.cameraNavigationMode !== "top-down") return undefined;
+    this.discardControlMomentum();
+    const orientation = this.orbitOrientationBeforeTopDown;
+    this.orbitOrientationBeforeTopDown = null;
+    this.topDownTargetY = null;
+    this.cameraNavigationMode = "orbit";
+    this.applyCameraNavigationProfile("orbit");
+    return orientation === null
+      ? undefined
+      : {
+          direction: orientation.direction.clone(),
+          up: orientation.up.clone(),
+        };
+  }
+
+  private applyCameraNavigationProfile(
+    mode: CameraNavigationMode,
+  ): void {
+    const profile = cameraNavigationProfile(mode);
+    this.controls.enableRotate = profile.enableRotate;
+    this.controls.screenSpacePanning = profile.screenSpacePanning;
+    this.controls.minPolarAngle = profile.minPolarAngle;
+    this.controls.maxPolarAngle = profile.maxPolarAngle;
+    Object.assign(this.controls.mouseButtons, profile.mouseButtons);
+    Object.assign(this.controls.touches, profile.touches);
+    this.host.dataset["cameraNavigation"] = mode;
+    if (mode === "top-down") {
+      cameraTopDownButton.setAttribute("aria-current", "true");
+    } else {
+      cameraTopDownButton.removeAttribute("aria-current");
+    }
+    cameraControlsHint.textContent =
+      mode === "top-down"
+        ? "Drag to pan · Scroll or pinch to zoom"
+        : "Drag to orbit · Scroll to zoom · Right-drag to pan";
+  }
+
+  private discardControlMomentum(): void {
+    const damping = this.controls.enableDamping;
+    this.controls.enableDamping = false;
+    this.controls.update();
+    this.controls.enableDamping = damping;
+    this.enforceTopDownNavigationPlane();
+  }
+
+  private enforceTopDownNavigationPlane(): void {
+    if (
+      this.cameraNavigationMode !== "top-down" ||
+      this.topDownTargetY === null ||
+      this.cameraTransition !== null
+    ) {
+      return;
+    }
+    const distance = Math.max(
+      this.camera.position.distanceTo(this.controls.target),
+      0.01,
+    );
+    this.controls.target.y = this.topDownTargetY;
+    this.camera.position.set(
+      this.controls.target.x,
+      this.topDownTargetY + distance,
+      this.controls.target.z,
+    );
+    this.camera.up.set(0, 0, -1);
+    this.camera.lookAt(this.controls.target);
+    this.camera.updateMatrixWorld(true);
   }
 
   private replaceGrid(bounds: THREE.Box3, gridY: number): void {
@@ -2973,6 +3143,11 @@ class UnavailableCityScene {
       camera: Object.freeze({
         position: Object.freeze([0, 0, 0] as const),
         target: Object.freeze([0, 0, 0] as const),
+        up: Object.freeze([0, 1, 0] as const),
+        projection: "perspective",
+        navigationMode: "orbit",
+        zoom: 1,
+        viewHeight: 0,
       }),
       evolutionRemovals: null,
       evolutionRemovalAnimated: false,
