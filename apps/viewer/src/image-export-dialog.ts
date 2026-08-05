@@ -1,5 +1,9 @@
 import type { CameraProjection } from "./camera-presets.js";
 import {
+  cameraViewModeLabel,
+  type CameraViewMode,
+} from "./camera-view-mode.js";
+import {
   IMAGE_EXPORT_LIMITS,
   formatBytes,
   type ImageExportRequest,
@@ -8,6 +12,7 @@ import {
 
 export interface ImageExportDialogContext {
   readonly projection: CameraProjection;
+  readonly viewMode: CameraViewMode;
   readonly selectedEntityAvailable: boolean;
   readonly evolutionFrame?: {
     readonly label: string;
@@ -82,10 +87,23 @@ export function installImageExportDialog(
     requiredElement<HTMLSelectElement>("image-export-resolution");
   const width = requiredElement<HTMLInputElement>("image-export-width");
   const height = requiredElement<HTMLInputElement>("image-export-height");
+  const view = requiredElement<HTMLSelectElement>("image-export-view");
+  const currentViewOption = requiredOption(view, "current-view");
+  const currentViewText = requiredElement<HTMLElement>(
+    "image-export-current-view",
+  );
+  const customCamera = requiredElement<HTMLElement>(
+    "image-export-custom-camera",
+  );
+  const angle = requiredElement<HTMLSelectElement>("image-export-angle");
+  const fit = requiredElement<HTMLSelectElement>("image-export-fit");
+  const selectedFit = requiredOption(fit, "selected-entity");
   const projection =
     requiredElement<HTMLSelectElement>("image-export-projection");
-  const preset = requiredElement<HTMLSelectElement>("image-export-preset");
-  const selectedPreset = requiredOption(preset, "selected-entity");
+  const currentProjectionOption = requiredOption(
+    projection,
+    "current-view",
+  );
   const background =
     requiredElement<HTMLSelectElement>("image-export-background");
   const labels = requiredElement<HTMLInputElement>("image-export-labels");
@@ -108,6 +126,7 @@ export function installImageExportDialog(
   const attempts = new ImageExportAttemptGate();
   let objectUrl: string | undefined;
   let disposed = false;
+  let inheritedViewLabel = "Current view";
 
   limits.textContent =
     `Minimum ${IMAGE_EXPORT_LIMITS.minimumDimension}px per side; ` +
@@ -154,8 +173,8 @@ export function installImageExportDialog(
         (control === evolution &&
           evolution.dataset["available"] !== "true");
     }
-    selectedPreset.disabled =
-      busy || selectedPreset.dataset["available"] !== "true";
+    selectedFit.disabled =
+      busy || selectedFit.dataset["available"] !== "true";
   };
 
   const synchronizeResolution = (): void => {
@@ -179,19 +198,39 @@ export function installImageExportDialog(
     }
   };
 
-  const updateContext = (): void => {
+  const synchronizeCameraChoice = (): void => {
+    customCamera.hidden = view.value !== "custom";
+    currentViewText.textContent =
+      view.value === "current-view"
+        ? `${inheritedViewLabel} is inherited exactly, including lens, angle, pan, and zoom.`
+        : "Custom camera settings fit a target independently from the visible view.";
+  };
+
+  const updateContext = (resetCamera: boolean): void => {
     const current = options.context();
-    projection.value = current.projection;
-    selectedPreset.dataset["available"] = String(
+    const viewLabel = cameraViewModeLabel(current.viewMode);
+    inheritedViewLabel = viewLabel;
+    currentViewOption.textContent =
+      `Current view (${viewLabel.replace(" view", "")})`;
+    currentProjectionOption.textContent =
+      `Current lens (${current.projection === "orthographic" ? "Orthographic" : "Perspective"})`;
+    selectedFit.dataset["available"] = String(
       current.selectedEntityAvailable,
     );
-    selectedPreset.disabled = !current.selectedEntityAvailable;
+    selectedFit.disabled = !current.selectedEntityAvailable;
     if (
       !current.selectedEntityAvailable &&
-      preset.value === "selected-entity"
+      fit.value === "selected-entity"
     ) {
-      preset.value = "whole-city";
+      fit.value = "current-scope";
     }
+    if (resetCamera) {
+      view.value = "current-view";
+      angle.value = "current-view";
+      fit.value = "current-scope";
+      projection.value = "current-view";
+    }
+    synchronizeCameraChoice();
     evolution.dataset["available"] = String(
       current.evolutionFrame !== undefined,
     );
@@ -209,9 +248,9 @@ export function installImageExportDialog(
     setBusy(false);
     revoke();
     clearErrors();
-    updateContext();
+    updateContext(true);
     status.textContent =
-      "The 3D scene is rendered directly; viewer controls and panels are never captured.";
+      "Current view is selected. The scene is rendered directly; viewer controls and panels are never captured.";
     if (!dialog.open) dialog.showModal();
   };
 
@@ -221,7 +260,7 @@ export function installImageExportDialog(
     setBusy(false);
     revoke();
     if (dialog.open) {
-      updateContext();
+      updateContext(false);
       status.textContent =
         "The scene changed. Prepare a new PNG for the current state.";
     }
@@ -238,16 +277,27 @@ export function installImageExportDialog(
     const request: ImageExportRequest = {
       width: Number(width.value),
       height: Number(height.value),
-      projection:
-        projection.value === "orthographic"
-          ? "orthographic"
-          : "perspective",
-      preset:
-        preset.value === "isometric" ||
-        preset.value === "selected-entity" ||
-        preset.value === "top-down"
-          ? preset.value
-          : "whole-city",
+      camera:
+        view.value === "custom"
+          ? {
+              mode: "custom",
+              angle:
+                angle.value === "isometric" ||
+                angle.value === "top-down"
+                  ? angle.value
+                  : "current-view",
+              fit:
+                fit.value === "selected-entity" ||
+                fit.value === "whole-city"
+                  ? fit.value
+                  : "current-scope",
+              lens:
+                projection.value === "orthographic" ||
+                projection.value === "perspective"
+                  ? projection.value
+                  : "current-view",
+            }
+          : { mode: "current-view" },
       background:
         background.value === "transparent" ? "transparent" : "scene",
       includeLabels: labels.checked,
@@ -283,6 +333,7 @@ export function installImageExportDialog(
   resolution.addEventListener("change", synchronizeResolution);
   width.addEventListener("input", synchronizeCustomResolution);
   height.addEventListener("input", synchronizeCustomResolution);
+  view.addEventListener("change", synchronizeCameraChoice);
   closeButton.addEventListener("click", close);
   dialog.addEventListener("close", onClose);
   form.addEventListener("submit", onSubmit);
@@ -296,6 +347,7 @@ export function installImageExportDialog(
     resolution.removeEventListener("change", synchronizeResolution);
     width.removeEventListener("input", synchronizeCustomResolution);
     height.removeEventListener("input", synchronizeCustomResolution);
+    view.removeEventListener("change", synchronizeCameraChoice);
     closeButton.removeEventListener("click", close);
     dialog.removeEventListener("close", onClose);
     form.removeEventListener("submit", onSubmit);
@@ -303,6 +355,7 @@ export function installImageExportDialog(
   };
 
   synchronizeResolution();
+  synchronizeCameraChoice();
   return { open, invalidate, dispose };
 }
 

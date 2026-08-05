@@ -1,15 +1,28 @@
-import type {
-  CameraPreset,
-  CameraProjection,
-} from "./camera-presets.js";
+import type { CameraProjection } from "./camera-presets.js";
 
 export type ImageExportBackground = "scene" | "transparent";
+export type ImageExportAngle =
+  | "current-view"
+  | "isometric"
+  | "top-down";
+export type ImageExportFitTarget =
+  | "current-scope"
+  | "selected-entity"
+  | "whole-city";
+export type ImageExportLens = "current-view" | CameraProjection;
+export type ImageExportCamera =
+  | { readonly mode: "current-view" }
+  | {
+      readonly mode: "custom";
+      readonly angle: ImageExportAngle;
+      readonly fit: ImageExportFitTarget;
+      readonly lens: ImageExportLens;
+    };
 
 export interface ImageExportRequest {
   readonly width: number;
   readonly height: number;
-  readonly projection: CameraProjection;
-  readonly preset: CameraPreset;
+  readonly camera: ImageExportCamera;
   readonly background: ImageExportBackground;
   readonly includeLabels: boolean;
   readonly includeLegend: boolean;
@@ -314,7 +327,7 @@ export function drawImageExportOverlay(
 
 export function imageExportFileName(
   title: string,
-  request: Pick<ImageExportRequest, "height" | "preset" | "width">,
+  request: Pick<ImageExportRequest, "camera" | "height" | "width">,
   frameSha?: string,
 ): string {
   const slug =
@@ -329,7 +342,11 @@ export function imageExportFileName(
     frameSha === undefined
       ? ""
       : `-${frameSha.toLowerCase().replace(/[^0-9a-f]/gu, "").slice(0, 10)}`;
-  return `${slug}${frame}-${request.preset}-${request.width}x${request.height}.png`;
+  const camera =
+    request.camera.mode === "current-view"
+      ? "current-view"
+      : `${request.camera.lens}-${request.camera.angle}-${request.camera.fit}`;
+  return `${slug}${frame}-${camera}-${request.width}x${request.height}.png`;
 }
 
 export function formatBytes(bytes: number): string {

@@ -70,28 +70,63 @@
         <div
           id="camera-toolbar"
           class="camera-toolbar"
-          aria-label="Camera controls"
+          aria-label="View controls"
         >
-          <label>
-            <span>Projection</span>
-            <select id="camera-projection">
-              <option value="perspective">Perspective</option>
-              <option value="orthographic">Orthographic</option>
-            </select>
-          </label>
-          <div role="group" aria-label="Camera presets">
-            <button id="camera-isometric" type="button">Isometric</button>
+          <div
+            id="camera-view-switch"
+            class="camera-view-switch"
+            role="group"
+            aria-label="View mode"
+          >
             <button
-              id="camera-top-down"
+              id="camera-view-3d"
               type="button"
+              aria-pressed="true"
             >
-              Top-down
+              3D
             </button>
-            <button id="camera-selected" type="button" disabled>
-              Selected
+            <button
+              id="camera-view-map"
+              type="button"
+              aria-pressed="false"
+            >
+              Map
             </button>
-            <button id="camera-whole-city" type="button">Whole city</button>
           </div>
+          <button id="camera-fit-scope" type="button">Fit scope</button>
+          <button id="camera-focus-selection" type="button" hidden>
+            Focus selection
+          </button>
+          <details id="camera-view-advanced" class="camera-view-advanced">
+            <summary>View options</summary>
+            <div class="camera-view-advanced-panel">
+              <label for="camera-projection">
+                <span>Lens</span>
+                <select id="camera-projection">
+                  <option value="perspective">Perspective</option>
+                  <option value="orthographic">Orthographic</option>
+                </select>
+              </label>
+              <div class="camera-angle-options">
+                <span>Angle</span>
+                <div role="group" aria-label="Camera angle">
+                  <button id="camera-isometric" type="button">
+                    Three-quarter
+                  </button>
+                  <button id="camera-top-down" type="button">
+                    Top-down
+                  </button>
+                </div>
+              </div>
+              <p>
+                Lens and angle can be combined independently. Primary 3D and
+                Map views restore their recommended navigation.
+              </p>
+            </div>
+          </details>
+          <span id="camera-view-status" class="camera-view-status">
+            3D view
+          </span>
         </div>
 
         <div class="scene-meta">
@@ -2465,24 +2500,64 @@
               </label>
             </div>
 
-            <div class="image-export-grid">
-              <label class="image-export-field" for="image-export-projection">
-                <span>Projection</span>
-                <select id="image-export-projection">
-                  <option value="perspective">Perspective</option>
-                  <option value="orthographic">Orthographic</option>
-                </select>
-              </label>
-              <label class="image-export-field" for="image-export-preset">
-                <span>Framing</span>
-                <select id="image-export-preset">
-                  <option value="isometric">Isometric</option>
-                  <option value="top-down">Top-down</option>
-                  <option value="selected-entity">Selected entity</option>
-                  <option value="whole-city" selected>Whole city</option>
-                </select>
-              </label>
-            </div>
+            <label class="image-export-field" for="image-export-view">
+              <span>Camera</span>
+              <select id="image-export-view">
+                <option value="current-view" selected>Current view</option>
+                <option value="custom">Customize camera</option>
+              </select>
+            </label>
+
+            <p id="image-export-current-view" class="image-export-help">
+              Current view inherits the visible lens, angle, pan, and zoom.
+            </p>
+
+            <section
+              id="image-export-custom-camera"
+              class="image-export-custom-camera"
+              aria-label="Custom image camera"
+              hidden
+            >
+              <div class="image-export-grid">
+                <label class="image-export-field" for="image-export-angle">
+                  <span>Angle</span>
+                  <select id="image-export-angle">
+                    <option value="current-view" selected>
+                      Current angle
+                    </option>
+                    <option value="isometric">Three-quarter</option>
+                    <option value="top-down">Top-down</option>
+                  </select>
+                </label>
+                <label class="image-export-field" for="image-export-fit">
+                  <span>Fit target</span>
+                  <select id="image-export-fit">
+                    <option value="current-scope" selected>
+                      Current scope
+                    </option>
+                    <option value="selected-entity">Selected entity</option>
+                    <option value="whole-city">Whole city</option>
+                  </select>
+                </label>
+              </div>
+
+              <details class="image-export-advanced-lens">
+                <summary>Advanced lens</summary>
+                <label
+                  class="image-export-field"
+                  for="image-export-projection"
+                >
+                  <span>Projection</span>
+                  <select id="image-export-projection">
+                    <option value="current-view" selected>
+                      Current lens
+                    </option>
+                    <option value="perspective">Perspective</option>
+                    <option value="orthographic">Orthographic</option>
+                  </select>
+                </label>
+              </details>
+            </section>
 
             <label class="image-export-field" for="image-export-background">
               <span>Background</span>
