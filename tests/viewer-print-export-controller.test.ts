@@ -86,6 +86,9 @@ function preflight(
     fitPolicy: "error",
     requestedScale: 3,
     appliedScale: 3,
+    minimumSafeScale: 3,
+    belowProfileScaleAcknowledged: false,
+    featureViolations: [],
     plateCount: 1,
     plates: [{
       number: 1,
@@ -180,6 +183,9 @@ function singlePreview(
     appliedPolicy: "error",
     requestedScale: 3,
     appliedScale: 3,
+    minimumSafeScale: 3,
+    belowProfileScaleAcknowledged: false,
+    featureViolations: [],
     sourceBounds: bounds,
     printableBounds: bounds,
     warnings: value.warnings,
@@ -209,6 +215,9 @@ function bundlePreflight(
     fitPolicy: "tile",
     requestedScale: 3,
     appliedScale: 3,
+    minimumSafeScale: 3,
+    belowProfileScaleAcknowledged: false,
+    featureViolations: [],
     plateCount: 1,
     plates: [
       {
@@ -270,6 +279,9 @@ function bundlePreview(): PrintPlatePreviewSource {
     appliedPolicy: "tile",
     requestedScale: 3,
     appliedScale: 3,
+    minimumSafeScale: 3,
+    belowProfileScaleAcknowledged: false,
+    featureViolations: [],
     sourceBounds: bounds,
     printableBounds: bounds,
     warnings: [],
@@ -363,6 +375,7 @@ describe("viewer print export controller", () => {
       type: "result",
       jobId,
       artifact: exported,
+      manifestBytes: new ArrayBuffer(8),
     });
     expect(controller.state).toMatchObject({
       status: "ready",
@@ -372,6 +385,89 @@ describe("viewer print export controller", () => {
     expect(worker.terminationCount).toBe(1);
     expect(worker.onmessage).toBeNull();
     expect(states.at(-1)?.status).toBe("ready");
+  });
+
+  it("fingerprints the expert acknowledgement and preserves fidelity preflight", () => {
+    const featureViolations = [{
+      category: "wall-thickness" as const,
+      resultingValue: 0.4,
+      minimum: 0.8,
+    }];
+    const request = {
+      ...START_REQUEST,
+      options: {
+        ...START_REQUEST.options,
+        scale: 0.5,
+        acknowledgeBelowProfileScale: true,
+      },
+    } as const;
+    const value: PrintPlateBundlePreflight = {
+      ...preflight(),
+      requestedScale: 0.5,
+      appliedScale: 0.5,
+      minimumSafeScale: 1.6,
+      belowProfileScaleAcknowledged: true,
+      featureViolations,
+    };
+    const preview: PrintPlatePreviewSource = {
+      ...singlePreview(value),
+      requestedScale: 0.5,
+      appliedScale: 0.5,
+      minimumSafeScale: 1.6,
+      belowProfileScaleAcknowledged: true,
+      featureViolations,
+    };
+    const worker = new FakeWorker();
+    const controller = new PrintExportController(() => worker);
+    const jobId = controller.start(request);
+
+    expect(worker.messages[0]).toMatchObject({
+      type: "generate",
+      options: {
+        scale: 0.5,
+        acknowledgeBelowProfileScale: true,
+      },
+    });
+    worker.emit({ type: "preflight", jobId, preflight: value, preview });
+    expect(controller.state).toMatchObject({
+      status: "busy",
+      preflight: {
+        minimumSafeScale: 1.6,
+        belowProfileScaleAcknowledged: true,
+        featureViolations,
+      },
+    });
+    worker.emit({
+      type: "result",
+      jobId,
+      artifact: artifact(),
+      manifestBytes: new ArrayBuffer(8),
+    });
+    expect(controller.state.status).toBe("ready");
+
+    const forgedWorker = new FakeWorker();
+    const forged = new PrintExportController(() => forgedWorker);
+    const forgedJob = forged.start(request);
+    forgedWorker.emit({
+      type: "preflight",
+      jobId: forgedJob,
+      preflight: {
+        ...value,
+        minimumSafeScale: 0.5,
+        belowProfileScaleAcknowledged: false,
+        featureViolations: [],
+      },
+      preview: {
+        ...preview,
+        minimumSafeScale: 0.5,
+        belowProfileScaleAcknowledged: false,
+        featureViolations: [],
+      },
+    });
+    expect(forged.state).toMatchObject({
+      status: "failed",
+      error: { kind: "protocol" },
+    });
   });
 
   it("accepts a real calibration worker result and terminates the job", () => {
@@ -510,6 +606,7 @@ describe("viewer print export controller", () => {
       type: "result",
       jobId: earlyJob,
       artifact: artifact(),
+      manifestBytes: new ArrayBuffer(8),
     });
     expect(early.state).toMatchObject({
       status: "failed",
@@ -707,6 +804,7 @@ describe("viewer print export controller", () => {
       type: "result",
       jobId: legendJob,
       artifact: artifact(),
+      manifestBytes: new ArrayBuffer(8),
       legendBytes: new ArrayBuffer(8),
     });
     expect(legend.state).toMatchObject({
@@ -730,7 +828,12 @@ describe("viewer print export controller", () => {
       preflight: stlPreflight,
       preview: singlePreview(stlPreflight),
     });
-    worker.emit({ type: "result", jobId, artifact: artifact() });
+    worker.emit({
+      type: "result",
+      jobId,
+      artifact: artifact(),
+      manifestBytes: new ArrayBuffer(8),
+    });
 
     expect(controller.state).toMatchObject({
       status: "failed",

@@ -35,6 +35,15 @@ describe("viewer print export UI", () => {
       /<option value="tile">\s+Split complete districts \(tiled multi-plate export\)\s+<\/option>/u,
     );
     expect(html).toContain('id="print-legend-download-enabled"');
+    expect(html).toMatch(
+      /id="print-below-profile-scale-acknowledgement"[\s\S]*type="checkbox"/u,
+    );
+    expect(html).not.toMatch(
+      /id="print-below-profile-scale-acknowledgement"[^>]*checked/u,
+    );
+    expect(html).toContain("Expert: allow scaling below this profile's guaranteed detail");
+    expect(html).toContain("print-fidelity");
+    expect(html).toContain("not a warning that the export can damage the printer");
     expect(html).toContain('id="visualization-mode"');
     expect(html).toContain(
       '<option value="complexity">Complexity risk</option>',
@@ -48,7 +57,11 @@ describe("viewer print export UI", () => {
     expect(html).toContain('id="print-export-preflight"');
     expect(html).toContain('id="print-export-triangles"');
     expect(html).toContain('id="print-export-download"');
+    expect(html).toContain('id="print-export-manifest-download"');
     expect(html).toContain('id="print-export-legend-download"');
+    expect(html).toContain('id="print-export-fidelity-wrap"');
+    expect(html).toContain('id="print-export-fidelity-summary"');
+    expect(html).toContain('id="print-export-fidelity-violations"');
     expect(html).toContain('id="print-calibration-download"');
     expect(html).toContain(
       'id="print-calibration-manifest-download"',
@@ -89,6 +102,19 @@ describe("viewer print export UI", () => {
     expect(source).toContain("preflight.manifest.couponCount");
     expect(source).toContain('"printable coupons"');
     expect(source).toContain("artifactDownload.hidden = true");
+    expect(source).toContain("printManifestDownload.hidden = true");
+    expect(source).toContain(
+      "belowProfileScaleAcknowledgement.checked",
+    );
+    expect(source).toMatch(
+      /belowProfileScaleAcknowledgement\.addEventListener\(\s*"change",\s*invalidateOutput/u,
+    );
+    expect(source).toContain(
+      "`${millimeters(violation.resultingValue)} mm resulting",
+    );
+    expect(source).toContain(
+      "printManifestDownload.download = available.manifest.fileName",
+    );
     expect(
       source.match(/artifactDownload\.hidden = false/gu)?.length,
     ).toBe(2);

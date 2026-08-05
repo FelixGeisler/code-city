@@ -1,3 +1,10 @@
+import {
+  PRINT_FIDELITY_EPSILON,
+  PRINT_FEATURE_CATEGORIES,
+  type PrintFeatureCategory,
+  type PrintFeatureViolation,
+} from "../../../packages/core/src/print-layout.js";
+
 export const PRINT_PREVIEW_MODES = ["city", "plates"] as const;
 
 export type PrintPreviewMode = (typeof PRINT_PREVIEW_MODES)[number];
@@ -71,6 +78,9 @@ export interface PrintLayoutPreviewPlan {
   readonly appliedPolicy: "error" | "scale" | "tile";
   readonly requestedScale: number;
   readonly appliedScale: number;
+  readonly minimumSafeScale: number;
+  readonly belowProfileScaleAcknowledged: boolean;
+  readonly featureViolations: readonly PrintFeatureViolation[];
   readonly sourceBounds: PrintPreviewBounds;
   readonly printableBounds: PrintPreviewBounds;
   readonly plates: readonly PrintPlatePreviewPlan[];
@@ -88,6 +98,9 @@ export interface PrintBundlePreviewSource {
   readonly appliedPolicy?: "error" | "scale" | "tile";
   readonly requestedScale: number;
   readonly appliedScale: number;
+  readonly minimumSafeScale: number;
+  readonly belowProfileScaleAcknowledged: boolean;
+  readonly featureViolations: readonly PrintFeatureViolation[];
   readonly sourceBounds: PrintPreviewBounds;
   readonly printableBounds: PrintPreviewBounds;
   readonly warnings: readonly string[];
@@ -173,6 +186,42 @@ const PREVIEW_VERTEX_LIMIT = 1_000_000;
 const PREVIEW_TRIANGLE_LIMIT = 1_000_000;
 const normalizedMeshes = new WeakSet<object>();
 const normalizedPlans = new WeakSet<object>();
+const FEATURE_CATEGORIES = new Set<PrintFeatureCategory>([
+  ...PRINT_FEATURE_CATEGORIES,
+]);
+const FEATURE_CATEGORY_ORDER = new Map<PrintFeatureCategory, number>(
+  PRINT_FEATURE_CATEGORIES.map((category, index) => [category, index]),
+);
+
+function featureViolations(
+  values: readonly PrintFeatureViolation[],
+): readonly PrintFeatureViolation[] {
+  if (!Array.isArray(values) || values.length > FEATURE_CATEGORIES.size) {
+    throw new TypeError("Print-layout feature violations are invalid.");
+  }
+  const seen = new Set<PrintFeatureCategory>();
+  let previousOrder = -1;
+  return Object.freeze(values.map((value) => {
+    const order = FEATURE_CATEGORY_ORDER.get(value.category);
+    if (
+      typeof value !== "object" ||
+      value === null ||
+      !FEATURE_CATEGORIES.has(value.category) ||
+      seen.has(value.category) ||
+      order === undefined ||
+      order <= previousOrder ||
+      !Number.isFinite(value.resultingValue) ||
+      value.resultingValue <= 0 ||
+      !Number.isFinite(value.minimum) ||
+      value.resultingValue + PRINT_FIDELITY_EPSILON >= value.minimum
+    ) {
+      throw new TypeError("Print-layout feature violation is invalid.");
+    }
+    seen.add(value.category);
+    previousOrder = order;
+    return Object.freeze({ ...value });
+  }));
+}
 
 function compare(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -592,9 +641,30 @@ export function normalizePrintLayoutPreviewPlan(
     !Number.isFinite(plan.requestedScale) ||
     plan.requestedScale <= 0 ||
     !Number.isFinite(plan.appliedScale) ||
-    plan.appliedScale <= 0
+    plan.appliedScale <= 0 ||
+    !Number.isFinite(plan.minimumSafeScale) ||
+    plan.minimumSafeScale <= 0
   ) {
     throw new TypeError("Print-layout scales must be positive.");
+  }
+  if (typeof plan.belowProfileScaleAcknowledged !== "boolean") {
+    throw new TypeError("Print-layout scale acknowledgement is invalid.");
+  }
+  const violations = featureViolations(plan.featureViolations);
+  if (
+    ((plan.appliedPolicy === "error" ||
+      plan.appliedPolicy === "tile") &&
+      Math.abs(plan.appliedScale - plan.requestedScale) >
+        PRINT_FIDELITY_EPSILON) ||
+    (plan.appliedPolicy === "scale" &&
+      plan.appliedScale >
+        plan.requestedScale + PRINT_FIDELITY_EPSILON) ||
+    (plan.appliedScale + PRINT_FIDELITY_EPSILON <
+      plan.minimumSafeScale) !==
+      (violations.length > 0) ||
+    (violations.length > 0 && !plan.belowProfileScaleAcknowledged)
+  ) {
+    throw new TypeError("Print-layout fidelity metadata is inconsistent.");
   }
   if (!Array.isArray(plan.plates) || plan.plates.length === 0) {
     throw new TypeError("A print-layout preview requires at least one plate.");
@@ -625,6 +695,10 @@ export function normalizePrintLayoutPreviewPlan(
     appliedPolicy: plan.appliedPolicy,
     requestedScale: plan.requestedScale,
     appliedScale: plan.appliedScale,
+    minimumSafeScale: plan.minimumSafeScale,
+    belowProfileScaleAcknowledged:
+      plan.belowProfileScaleAcknowledged,
+    featureViolations: violations,
     sourceBounds: bounds(plan.sourceBounds, "source bounds"),
     printableBounds: bounds(plan.printableBounds, "printable bounds"),
     plates: Object.freeze(plates),
@@ -744,6 +818,10 @@ export function printLayoutPreviewPlanFromBundle(
     appliedPolicy: source.appliedPolicy ?? source.fitPolicy,
     requestedScale: source.requestedScale,
     appliedScale: source.appliedScale,
+    minimumSafeScale: source.minimumSafeScale,
+    belowProfileScaleAcknowledged:
+      source.belowProfileScaleAcknowledged,
+    featureViolations: source.featureViolations,
     sourceBounds: source.sourceBounds,
     printableBounds: source.printableBounds,
     plates: sourcePlates.map((plate) => ({

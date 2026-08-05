@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { unzipSync } from "fflate";
+import { PRINT_FIDELITY_EPSILON } from "../packages/core/src/index.js";
 
 import {
   serializeThreeMf,
@@ -291,6 +292,113 @@ describe("deterministic 3MF package serialization", () => {
     expect(prusaConfig(bytes)).toContain(
       'key="name" value="Demo &amp; &lt;City&gt; &quot;XL&quot;"',
     );
+  });
+
+  it("writes exact below-profile fidelity metadata and rejects forged values", () => {
+    const printable: PrintableCity = {
+      ...city(),
+      scaleFidelity: {
+        requestedScale: 3,
+        appliedScale: 2,
+        minimumSafeScale: 3,
+        belowProfileScaleAcknowledged: true,
+        featureViolations: [
+          {
+            category: "wall-thickness",
+            resultingValue: 0.6,
+            minimum: 0.8,
+          },
+          {
+            category: "gap",
+            resultingValue: 0.4,
+            minimum: 0.5,
+          },
+        ],
+      },
+    };
+    const xml = model(serializeThreeMf(printable));
+
+    expect(xml).toContain(
+      '<metadata name="codecity:RequestedScale" preserve="1">3</metadata>',
+    );
+    expect(xml).toContain(
+      '<metadata name="codecity:AppliedScale" preserve="1">2</metadata>',
+    );
+    expect(xml).toContain(
+      '<metadata name="codecity:ProfileSafeScale" preserve="1">3</metadata>',
+    );
+    expect(xml).toContain(
+      '<metadata name="codecity:BelowProfileScaleAcknowledged" preserve="1">true</metadata>',
+    );
+    expect(xml).toContain(
+      "[{&quot;category&quot;:&quot;wall-thickness&quot;,&quot;resultingValue&quot;:0.6,&quot;minimum&quot;:0.8},{&quot;category&quot;:&quot;gap&quot;,&quot;resultingValue&quot;:0.4,&quot;minimum&quot;:0.5}]",
+    );
+
+    expect(() =>
+      serializeThreeMf({
+        ...printable,
+        scaleFidelity: {
+          ...printable.scaleFidelity!,
+          belowProfileScaleAcknowledged: false,
+        },
+      }),
+    ).toThrow(/requires explicit acknowledgement/u);
+    expect(() =>
+      serializeThreeMf({
+        ...printable,
+        scaleFidelity: {
+          ...printable.scaleFidelity!,
+          appliedScale: 1.9,
+        },
+      }),
+    ).toThrow(/must match the printable city scale/u);
+    expect(() =>
+      serializeThreeMf({
+        ...printable,
+        scaleFidelity: {
+          ...printable.scaleFidelity!,
+          requestedScale: 1,
+        },
+      }),
+    ).toThrow(/must not exceed requestedScale/u);
+    expect(() =>
+      serializeThreeMf({
+        ...printable,
+        scaleFidelity: {
+          ...printable.scaleFidelity!,
+          featureViolations: [
+            printable.scaleFidelity!.featureViolations[1]!,
+            printable.scaleFidelity!.featureViolations[0]!,
+          ],
+        },
+      }),
+    ).toThrow(/unique canonical category order/u);
+    expect(() =>
+      serializeThreeMf({
+        ...printable,
+        scaleFidelity: {
+          ...printable.scaleFidelity!,
+          featureViolations: [{
+            category: "wall-thickness",
+            resultingValue: 0.8,
+            minimum: 0.8,
+          }],
+        },
+      }),
+    ).toThrow(/not below its minimum/u);
+    expect(() =>
+      serializeThreeMf({
+        ...printable,
+        scaleFidelity: {
+          ...printable.scaleFidelity!,
+          featureViolations: [{
+            category: "wall-thickness",
+            resultingValue: 0.8 - PRINT_FIDELITY_EPSILON / 2,
+            minimum: 0.8,
+          }],
+        },
+      }),
+    ).toThrow(/not below its minimum/u);
   });
 
   it("does not serialize primitive identities or local source paths", () => {

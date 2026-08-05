@@ -1,8 +1,12 @@
 import {
+  PRINT_FIDELITY_EPSILON,
+} from "../../../packages/core/src/print-layout.js";
+import {
   isPrintExportWorkerResponse,
   normalizePrintExportPreviewSource,
   serializePrintExportError,
   type PrintCalibrationGenerateRequest,
+  type PrintExportGenerateOptions,
   type PrintExportFailure,
   type PrintExportGenerateRequest,
   type PrintPlateBundleResultResponse,
@@ -11,9 +15,6 @@ import {
   type PrintExportWorkerRequest,
   type PrintExportWorkerResponse,
 } from "./print-export-protocol.js";
-import type {
-  PrintExportOptions,
-} from "../../../packages/exporter/src/print-export.js";
 import type {
   CalibrationPrintExportPreflight,
 } from "../../../packages/exporter/src/calibration.js";
@@ -44,7 +45,7 @@ export interface PrintExportStartRequest {
   readonly format: "3mf" | "stl";
   readonly model: unknown;
   readonly profile: unknown;
-  readonly options: PrintExportOptions;
+  readonly options: PrintExportGenerateOptions;
 }
 
 export interface PrintCalibrationStartRequest {
@@ -72,6 +73,7 @@ export interface PrintExportReadyState {
   readonly preflight: PrintPlateBundlePreflight;
   readonly preview: PrintLayoutPreviewPlan;
   readonly artifact: PrintExportTransferArtifact;
+  readonly manifestBytes: ArrayBuffer;
   readonly legendBytes?: ArrayBuffer;
 }
 
@@ -135,9 +137,10 @@ interface PrintExportRequestFingerprint {
   readonly format: "3mf" | "stl";
   readonly fitPolicy: "error" | "scale" | "tile";
   readonly scale: number;
+  readonly acknowledgeBelowProfileScale: boolean;
   readonly maximumPlateCount?: number;
-  readonly routePolicy: PrintExportOptions["routePolicy"];
-  readonly labelPolicy: PrintExportOptions["labelPolicy"];
+  readonly routePolicy: PrintExportGenerateOptions["routePolicy"];
+  readonly labelPolicy: PrintExportGenerateOptions["labelPolicy"];
   readonly includeLegend: boolean;
   readonly profileId?: string;
   readonly profileName?: string;
@@ -155,8 +158,7 @@ function protocolFailure(message: string): PrintExportFailure {
 }
 
 function sameScale(left: number, right: number): boolean {
-  const scale = Math.max(1, Math.abs(left), Math.abs(right));
-  return Math.abs(left - right) <= 1e-7 * scale;
+  return Math.abs(left - right) <= PRINT_FIDELITY_EPSILON;
 }
 
 function profileField(
@@ -177,6 +179,8 @@ function requestFingerprint(
     format: request.format,
     fitPolicy: request.options.fitPolicy ?? "error",
     scale: request.options.scale,
+    acknowledgeBelowProfileScale:
+      request.options.acknowledgeBelowProfileScale ?? false,
     ...(request.options.maximumPlateCount === undefined
       ? {}
       : { maximumPlateCount: request.options.maximumPlateCount }),
@@ -200,6 +204,8 @@ function preflightMatchesRequest(
     preflight.format === fingerprint.format &&
     preflight.fitPolicy === fingerprint.fitPolicy &&
     sameScale(preflight.requestedScale, fingerprint.scale) &&
+    preflight.belowProfileScaleAcknowledged ===
+      fingerprint.acknowledgeBelowProfileScale &&
     preflight.routes.policy === fingerprint.routePolicy &&
     preflight.legendIncluded === fingerprint.includeLegend &&
     !labelsDisabled &&
@@ -548,6 +554,7 @@ export class PrintExportController {
           preflight: singleState.preflight,
           preview: singleState.preview,
           artifact: value.artifact,
+          manifestBytes: value.manifestBytes,
           ...(value.legendBytes === undefined
             ? {}
             : { legendBytes: value.legendBytes }),

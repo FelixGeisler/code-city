@@ -10,6 +10,7 @@ export interface PrintExportName {
 
 export interface PrintExportFileNames {
   readonly artifact: string;
+  readonly manifest: string;
   readonly legend: string;
 }
 
@@ -24,6 +25,7 @@ export interface PrintBundleFileNames {
 
 export interface PrintExportDownloadInput {
   readonly artifact: PrintExportTransferArtifact;
+  readonly manifestBytes?: ArrayBuffer;
   readonly legendBytes?: ArrayBuffer;
 }
 
@@ -39,6 +41,7 @@ export interface PrintExportDownload {
 
 export interface PrintExportDownloads {
   readonly artifact: PrintExportDownload;
+  readonly manifest?: PrintExportDownload;
   readonly legend?: PrintExportDownload;
 }
 
@@ -131,6 +134,7 @@ export function printExportFileNames(
   const stem = sanitizePrintFileStem(parts);
   return {
     artifact: `${stem}${fileExtension}`,
+    manifest: `${stem}.print-manifest.json`,
     legend: `${stem}.legend.json`,
   };
 }
@@ -196,9 +200,25 @@ export class PrintDownloadManager {
         url: artifactUrl,
         blob: artifactBlob,
       };
+      let manifest: PrintExportDownload | undefined;
+      if (input.manifestBytes !== undefined) {
+        const manifestBlob = new Blob([input.manifestBytes], {
+          type: "application/json",
+        });
+        const manifestUrl = this.objectUrls.createObjectURL(manifestBlob);
+        created.push(manifestUrl);
+        manifest = {
+          fileName: names.manifest,
+          url: manifestUrl,
+          blob: manifestBlob,
+        };
+      }
       if (input.legendBytes === undefined) {
         this.activeUrls = created;
-        return { artifact };
+        return {
+          artifact,
+          ...(manifest === undefined ? {} : { manifest }),
+        };
       }
 
       const legendBlob = new Blob([input.legendBytes], {
@@ -209,6 +229,7 @@ export class PrintDownloadManager {
       this.activeUrls = created;
       return {
         artifact,
+        ...(manifest === undefined ? {} : { manifest }),
         legend: {
           fileName: names.legend,
           url: legendUrl,

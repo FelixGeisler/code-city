@@ -67,8 +67,11 @@ function plan(): PrintLayoutPreviewPlan {
   return {
     requestedPolicy: "tile",
     appliedPolicy: "tile",
-    requestedScale: 3,
+    requestedScale: 2.5,
     appliedScale: 2.5,
+    minimumSafeScale: 2.5,
+    belowProfileScaleAcknowledged: false,
+    featureViolations: [],
     sourceBounds: bounds(500, 40, 300),
     printableBounds: bounds(340, 40, 340),
     plates: [
@@ -161,6 +164,13 @@ class FakeElement {
 }
 
 describe("exact print-plate preview projection", () => {
+  it("rejects tile previews that forge a changed applied scale", () => {
+    expect(() => normalizePrintLayoutPreviewPlan({
+      ...plan(),
+      requestedScale: plan().appliedScale + 0.1,
+    })).toThrow(/fidelity metadata is inconsistent/u);
+  });
+
   it("sorts plates deterministically and projects exporter bounds unchanged", () => {
     const normalized = normalizePrintLayoutPreviewPlan(plan());
     expect(normalized.plates.map(({ id }) => id)).toEqual([
@@ -200,11 +210,14 @@ describe("exact print-plate preview projection", () => {
     });
     const adapted = printLayoutPreviewPlanFromBundle({
       fitPolicy: "tile",
-      requestedScale: 3,
+      requestedScale: 2,
       appliedScale: 2,
+      minimumSafeScale: 2,
+      belowProfileScaleAcknowledged: false,
+      featureViolations: [],
       sourceBounds: bounds(700, 90, 500),
       printableBounds: bounds(340, 90, 340),
-      warnings: ["Scaled before tiling."],
+      warnings: ["Complete districts were split across plates."],
       unplacedObjects: [{ id: "external:unused" }],
       plates: [
         {
@@ -235,7 +248,7 @@ describe("exact print-plate preview projection", () => {
     expect(adapted).toMatchObject({
       requestedPolicy: "tile",
       appliedPolicy: "tile",
-      requestedScale: 3,
+      requestedScale: 2,
       appliedScale: 2,
       unplacedObjects: ["external:unused"],
       plates: [

@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { unzipSync } from "fflate";
 
 import {
   describe,
@@ -11,6 +12,7 @@ import {
   createPrusaXLProfile,
   createSingleChannelProfile,
   parsePrinterProfileJson,
+  PRINT_FIDELITY_EPSILON,
   validateCityModel,
   type CityDependency,
   type CityModel,
@@ -19,11 +21,15 @@ import {
 import {
   generatePrintPlateBundle,
   preparePrintPlateBundle,
+  serializePreparedPrintPlateBundle,
   serializePreparedSinglePrintPlateExport,
 } from "../packages/exporter/src/print-plates.js";
 import {
   PRINT_LOGO_RELIEF_FALLBACK_WARNING,
 } from "../packages/exporter/src/geometry.js";
+import {
+  validatePrintableCity,
+} from "../packages/exporter/src/validate.js";
 
 interface DistrictShape {
   readonly width: number;
@@ -270,6 +276,20 @@ describe("physical print-plate orchestration", () => {
       expect(result.artifact.format).toBe(format);
       expect(result.artifact.fileExtension).toBe(`.${format}`);
       expect(result.artifact.bytes.byteLength).toBeGreaterThan(100);
+      expect(result.manifest).toMatchObject({
+        format,
+        fit: {
+          policy: "error",
+          requestedScale: 3,
+          appliedScale: 3,
+          minimumSafeScale: 1.6,
+          belowProfileScaleAcknowledged: false,
+          featureViolations: [],
+        },
+      });
+      expect(
+        JSON.parse(new TextDecoder().decode(result.manifestBytes)),
+      ).toEqual(result.manifest);
       expect(result.legendBytes).toEqual(
         prepared.bundleRequest.legendBytes,
       );
@@ -422,6 +442,124 @@ describe("physical print-plate orchestration", () => {
       }),
     ).toThrow(/minimum profile-safe scale/u);
 
+    const acknowledged = preparePrintPlateBundle({
+      ...common,
+      options: {
+        ...common.options,
+        scale: 0.5,
+        fitPolicy: "error",
+        acknowledgeBelowProfileScale: true,
+      },
+    });
+    expect(acknowledged.preflight).toMatchObject({
+      requestedScale: 0.5,
+      appliedScale: 0.5,
+      minimumSafeScale: 1.6,
+      belowProfileScaleAcknowledged: true,
+    });
+    expect(acknowledged.preflight.featureViolations.length).toBeGreaterThan(0);
+    expect(acknowledged.preview.featureViolations).toEqual(
+      acknowledged.preflight.featureViolations,
+    );
+    const direct = serializePreparedSinglePrintPlateExport(acknowledged);
+    expect(direct.manifest.fit).toEqual({
+      policy: "error",
+      requestedScale: 0.5,
+      appliedScale: 0.5,
+      minimumSafeScale: 1.6,
+      belowProfileScaleAcknowledged: true,
+      featureViolations: acknowledged.layout.featureViolations,
+    });
+    expect(JSON.parse(new TextDecoder().decode(direct.manifestBytes))).toEqual(
+      direct.manifest,
+    );
+    const acknowledgedCity = acknowledged.plates[0]!.artifacts.city;
+    expect(validatePrintableCity(acknowledgedCity, profile)).toEqual([]);
+    expect(
+      validatePrintableCity(
+        {
+          ...acknowledgedCity,
+          scaleFidelity: {
+            ...acknowledgedCity.scaleFidelity!,
+            belowProfileScaleAcknowledged: false,
+          },
+        },
+        profile,
+      ).join(" "),
+    ).toContain("requires explicit acknowledgement");
+    expect(
+      validatePrintableCity(
+        acknowledgedCity,
+        profile,
+        {
+          ...acknowledgedCity.scaleFidelity!,
+          minimumSafeScale:
+            acknowledgedCity.scaleFidelity!.minimumSafeScale + 0.1,
+        },
+      ).join(" "),
+    ).toContain("does not match the printable city's embedded metadata");
+    const firstViolation = acknowledgedCity.scaleFidelity!
+      .featureViolations[0]!;
+    expect(
+      validatePrintableCity({
+        ...acknowledgedCity,
+        scaleFidelity: {
+          ...acknowledgedCity.scaleFidelity!,
+          featureViolations: [
+            {
+              ...firstViolation,
+              resultingValue:
+                firstViolation.minimum - PRINT_FIDELITY_EPSILON / 2,
+            },
+            ...acknowledgedCity.scaleFidelity!.featureViolations.slice(1),
+          ],
+        },
+      }, profile).join(" "),
+    ).toContain("Print fidelity violations are invalid");
+    const nullViolationCity = {
+      ...acknowledgedCity,
+      scaleFidelity: {
+        ...acknowledgedCity.scaleFidelity!,
+        featureViolations: [null, firstViolation],
+      },
+    } as unknown as typeof acknowledgedCity;
+    expect(() =>
+      validatePrintableCity(nullViolationCity, profile)
+    ).not.toThrow();
+    expect(
+      validatePrintableCity(nullViolationCity, profile).join(" "),
+    ).toContain("Print fidelity violations are invalid");
+    expect(
+      validatePrintableCity(acknowledgedCity, {
+        ...profile,
+        buildVolume: { x: 10, y: 10, z: 10 },
+      }).join(" "),
+    ).toMatch(/exceeds (?:the usable )?build/u);
+    const firstPart = acknowledgedCity.parts[0]!;
+    const firstPrimitive = firstPart.primitives[0]!;
+    const structurallyBroken = {
+      ...acknowledgedCity,
+      parts: [
+        {
+          ...firstPart,
+          primitives: [
+            {
+              ...firstPrimitive,
+              mesh: {
+                ...firstPrimitive.mesh,
+                triangles: firstPrimitive.mesh.triangles.slice(0, -1),
+              },
+            },
+            ...firstPart.primitives.slice(1),
+          ],
+        },
+        ...acknowledgedCity.parts.slice(1),
+      ],
+    };
+    expect(
+      validatePrintableCity(structurallyBroken, profile).join(" "),
+    ).toMatch(/watertight|exactly twice|triangle count/u);
+
     const scaled = preparePrintPlateBundle({
       ...common,
       options: {
@@ -448,6 +586,64 @@ describe("physical print-plate orchestration", () => {
     expect(tiled.layout.plates.length).toBeGreaterThan(1);
     expect(tiled.layout.appliedScale).toBe(3);
     withinBuildVolume(tiled, profile);
+  });
+
+  it("auto-scales below the safe floor only with acknowledgement and serializes exact fidelity", () => {
+    const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
+    const model = syntheticCity([
+      { width: 140, depth: 140 },
+      { width: 140, depth: 140 },
+    ]);
+    const prepared = preparePrintPlateBundle({
+      format: "3mf",
+      model,
+      profile,
+      options: {
+        scale: 3,
+        fitPolicy: "scale",
+        acknowledgeBelowProfileScale: true,
+        labelPolicy: "off",
+        routePolicy: "off",
+        includeLegend: false,
+      },
+    });
+
+    expect(prepared.layout.plates).toHaveLength(1);
+    expect(prepared.layout.appliedScale).toBeLessThan(
+      prepared.layout.minimumSafeScale,
+    );
+    expect(prepared.layout.appliedScale).toBeGreaterThan(0);
+    expect(prepared.layout.belowProfileScaleAcknowledged).toBe(true);
+    expect(prepared.layout.featureViolations.length).toBeGreaterThan(0);
+    expect(prepared.layout.warnings.join(" ")).toContain(
+      "print fidelity",
+    );
+    expect(prepared.layout.warnings.join(" ")).not.toContain(
+      "to fit one plate safely",
+    );
+    withinBuildVolume(prepared, profile);
+
+    const exported = serializePreparedPrintPlateBundle(prepared);
+    expect(exported.manifest.fit).toEqual({
+      policy: "scale",
+      requestedScale: prepared.layout.requestedScale,
+      appliedScale: prepared.layout.appliedScale,
+      minimumSafeScale: prepared.layout.minimumSafeScale,
+      belowProfileScaleAcknowledged: true,
+      featureViolations: prepared.layout.featureViolations,
+    });
+    const archive = unzipSync(exported.bytes);
+    const plateBytes = archive["plate-01.3mf"]!;
+    const plateArchive = unzipSync(plateBytes);
+    const xml = new TextDecoder().decode(
+      plateArchive["3D/3dmodel.model"],
+    );
+    expect(xml).toContain(
+      `<metadata name="codecity:AppliedScale" preserve="1">${prepared.layout.appliedScale}</metadata>`,
+    );
+    expect(xml).toContain(
+      '<metadata name="codecity:BelowProfileScaleAcknowledged" preserve="1">true</metadata>',
+    );
   });
 
   it("records cross-plate endpoint identities and relevant external replicas on compact continuous bases", () => {

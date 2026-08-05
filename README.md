@@ -553,7 +553,15 @@ and analyze `$(Build.SourcesDirectory)` locally.
 The Demo imports into PrusaSlicer with aligned tool parts. `--routes auto`
 prints capped, aggregated district dependencies; routes default to `off`. The
 private JSON legend maps printed codes to repository-relative paths. Oversized
-cities use profile-safe `--fit scale` or complete-district `--fit tile`;
+cities use profile-safe `--fit scale` or complete-district `--fit tile`.
+Experts may add `--acknowledge-below-profile-scale` to permit an explicitly
+requested lower scale or let `--fit scale` search below the profile-safe floor.
+The default remains a hard rejection. Preflight and deterministic manifests
+record requested, applied, and profile-safe scales plus every below-limit
+feature's resulting millimetres and configured minimum. This acknowledgement
+accepts possible lost, merged, or fragile detail; it never bypasses the
+printer's physical build volume. Direct STL/3MF exports write a
+`.print-manifest.json` sidecar, while bundle metadata stays in `manifest.json`;
 arbitrary fonts and slicer settings remain separate. Printable custom logos are
 local-only, must be transparent single-color SVG or PNG silhouettes, and are
 simplified to the selected printer profile's minimum feature size.

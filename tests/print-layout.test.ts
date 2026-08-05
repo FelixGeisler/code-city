@@ -342,7 +342,9 @@ describe("deterministic physical print layout", () => {
     expect(plan.appliedScale).toBeGreaterThanOrEqual(1);
     expect(plan.appliedScale).toBeLessThan(2);
     expect(plan.plates).toHaveLength(1);
-    expect(plan.warnings.some((warning) => /scaled from 2/u.test(warning)))
+    expect(plan.warnings.some((warning) =>
+      /scaled from 2.*to fit one plate safely\./u.test(warning)
+    ))
       .toBe(true);
   });
 
@@ -371,6 +373,119 @@ describe("deterministic physical print layout", () => {
         districts: [district("a", 5, 5)],
       }),
     ).toThrow(/minimum profile-safe scale 1/u);
+  });
+
+  it("allows an explicitly acknowledged lower scale with exact ordered fidelity violations", () => {
+    const plan = planPrintLayout(profile(), {
+      fitPolicy: "error",
+      requestedScale: 0.75,
+      acknowledgeBelowProfileScale: true,
+      features,
+      districts: [district("a", 5, 5)],
+    });
+
+    expect(plan).toMatchObject({
+      requestedScale: 0.75,
+      appliedScale: 0.75,
+      minimumSafeScale: 1,
+      belowProfileScaleAcknowledged: true,
+    });
+    expect(plan.featureViolations.map(({ category }) => category)).toEqual([
+      "wall-thickness",
+      "gap",
+      "minimum-feature-size",
+      "base-thickness",
+      "label-stroke-width",
+      "raised-feature-height",
+      "recessed-feature-depth",
+      "route-width",
+      "connector-width",
+    ]);
+    expect(plan.featureViolations).toEqual(
+      plan.featureViolations.map(({ category }) => ({
+        category,
+        resultingValue: 0.75,
+        minimum: 1,
+      })),
+    );
+    expect(plan.warnings.join(" ")).toMatch(
+      /print fidelity, not printer hardware danger.*wall-thickness 0\.75 mm < 1 mm/u,
+    );
+  });
+
+  it("searches below the safe floor only after acknowledgement and remains bounded", () => {
+    const request = {
+      fitPolicy: "scale" as const,
+      requestedScale: 2,
+      features,
+      districts: [district("a", 45, 30), district("b", 45, 30)],
+    };
+    expect(() =>
+      planPrintLayout(profile({ x: 60, y: 30, z: 40 }), request),
+    ).toThrow(/minimum profile-safe scale 1/u);
+
+    const first = planPrintLayout(profile({ x: 60, y: 30, z: 40 }), {
+      ...request,
+      acknowledgeBelowProfileScale: true,
+    });
+    const second = planPrintLayout(profile({ x: 60, y: 30, z: 40 }), {
+      ...request,
+      acknowledgeBelowProfileScale: true,
+    });
+    expect(second).toEqual(first);
+    expect(first.appliedScale).toBeLessThan(1);
+    expect(first.appliedScale).toBeGreaterThan(0);
+    expect(first.plates).toHaveLength(1);
+    expect(first.featureViolations.length).toBeGreaterThan(0);
+    expect(first.warnings.join(" ")).not.toContain(
+      "to fit one plate safely",
+    );
+    expect(first.warnings.join(" ")).toMatch(
+      /print fidelity, not printer hardware danger/u,
+    );
+  });
+
+  it("never treats acknowledgement as a physical build-volume override", () => {
+    expect(() =>
+      planPrintLayout(profile({ x: 60, y: 30, z: 40 }), {
+        fitPolicy: "scale",
+        requestedScale: 0.5,
+        acknowledgeBelowProfileScale: true,
+        features,
+        identity: {
+          id: "physical-identity",
+          sourceBounds: bounds(61, 2, 5),
+          scaleMode: "physical",
+        },
+        districts: [district("a", 5, 5)],
+      }),
+    ).toThrow(/reservation|does not fit|usable/u);
+  });
+
+  it("terminates deterministically when no positive searchable scale can fit", () => {
+    const request = {
+      fitPolicy: "scale" as const,
+      requestedScale: 2,
+      acknowledgeBelowProfileScale: true,
+      features,
+      districts: [district("astronomical", 1e15, 1e15)],
+    };
+    const run = () =>
+      planPrintLayout(profile({ x: 60, y: 30, z: 40 }), request);
+
+    expect(run).toThrow(/astronomical|does not fit|one plate/u);
+    expect(run).toThrow(/astronomical|does not fit|one plate/u);
+  });
+
+  it("uses the shared fidelity tolerance at the safe threshold", () => {
+    const plan = planPrintLayout(profile(), {
+      fitPolicy: "error",
+      requestedScale: 1 - 5e-10,
+      features,
+      districts: [district("a", 5, 5)],
+    });
+    expect(plan.featureViolations).toEqual([]);
+    expect(plan.belowProfileScaleAcknowledged).toBe(false);
   });
 
   it("names the exact district and W/D/H when it cannot fit alone", () => {

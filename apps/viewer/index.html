@@ -2628,6 +2628,22 @@
               <input id="print-legend-download-enabled" type="checkbox" checked />
               <span>Prepare private companion legend</span>
             </label>
+            <label class="print-export-check">
+              <input
+                id="print-below-profile-scale-acknowledgement"
+                type="checkbox"
+              />
+              <span>
+                Expert: allow scaling below this profile's guaranteed detail
+                limits
+              </span>
+            </label>
+            <p class="print-export-help">
+              This may make thin walls, gaps, labels, routes, or other details
+              merge, disappear, or become fragile. It is a print-fidelity
+              trade-off, not a warning that the export can damage the printer.
+              Physical build-volume limits still apply.
+            </p>
           </fieldset>
 
           <p class="print-export-help">
@@ -2711,6 +2727,11 @@
             </dl>
             <h4 id="print-export-channels-title">Used channels</h4>
             <ul id="print-export-channels"></ul>
+            <div id="print-export-fidelity-wrap" hidden>
+              <h4>Below-profile print-fidelity risk</h4>
+              <p id="print-export-fidelity-summary"></p>
+              <ul id="print-export-fidelity-violations"></ul>
+            </div>
             <div id="print-export-warning-wrap" hidden>
               <h4>Warnings</h4>
               <ul id="print-export-warnings"></ul>
@@ -2738,6 +2759,15 @@
               hidden
             >
               Download legend
+            </a>
+            <a
+              id="print-export-manifest-download"
+              class="button"
+              href="#"
+              download
+              hidden
+            >
+              Download print manifest
             </a>
             <a
               id="print-calibration-download"

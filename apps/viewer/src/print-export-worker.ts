@@ -131,6 +131,12 @@ export function runPrintExportRequest(
         options: {
           scale: request.options.scale,
           fitPolicy,
+          ...(request.options.acknowledgeBelowProfileScale === undefined
+            ? {}
+            : {
+                acknowledgeBelowProfileScale:
+                  request.options.acknowledgeBelowProfileScale,
+              }),
           labelPolicy: request.options.labelPolicy,
           routePolicy: request.options.routePolicy,
           includeLegend: request.options.includeLegend,
@@ -217,6 +223,7 @@ export function runPrintExportRequest(
       },
     );
     const artifact = transferableArtifact(result.artifact);
+    const manifestBytes = transferableBuffer(result.manifestBytes);
     const legendBytes =
       result.legendBytes === undefined
         ? undefined
@@ -225,13 +232,14 @@ export function runPrintExportRequest(
       type: "result",
       jobId: request.jobId,
       artifact,
+      manifestBytes,
       ...(legendBytes === undefined ? {} : { legendBytes }),
     };
     emit(
       response,
       legendBytes === undefined
-        ? [artifact.bytes]
-        : [artifact.bytes, legendBytes],
+        ? [artifact.bytes, manifestBytes]
+        : [artifact.bytes, manifestBytes, legendBytes],
     );
   } catch (error) {
     emit({

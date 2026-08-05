@@ -68,10 +68,12 @@ describe("viewer print downloads", () => {
       }),
     ).toEqual({
       artifact: "FLOW-Hub-test-1.3mf",
+      manifest: "FLOW-Hub-test-1.print-manifest.json",
       legend: "FLOW-Hub-test-1.legend.json",
     });
     expect(printExportFileNames({}, ".stl")).toEqual({
       artifact: "code-city.stl",
+      manifest: "code-city.print-manifest.json",
       legend: "code-city.legend.json",
     });
     expect(printCalibrationFileNames("prusa-xl-t1-t2")).toEqual({
@@ -167,6 +169,7 @@ describe("viewer print downloads", () => {
           "3mf",
           Uint8Array.from([1, 2, 3]).buffer,
         ),
+        manifestBytes: Uint8Array.from([123, 125]).buffer,
         legendBytes: Uint8Array.from([4, 5]).buffer,
       },
     );
@@ -176,12 +179,17 @@ describe("viewer print downloads", () => {
         fileName: "Code-City-Demo.3mf",
         url: "blob:test-1",
       },
+      manifest: {
+        fileName: "Code-City-Demo.print-manifest.json",
+        url: "blob:test-2",
+      },
       legend: {
         fileName: "Code-City-Demo.legend.json",
-        url: "blob:test-2",
+        url: "blob:test-3",
       },
     });
     expect(first.artifact.blob.type).toBe("model/3mf");
+    expect(first.manifest?.blob.type).toBe("application/json");
     expect(first.legend?.blob.type).toBe("application/json");
     expect(
       new Uint8Array(await first.artifact.blob.arrayBuffer()),
@@ -191,7 +199,11 @@ describe("viewer print downloads", () => {
       { title: "Next" },
       { artifact: artifact("stl", new ArrayBuffer(0)) },
     );
-    expect(urls.revoked).toEqual(["blob:test-1", "blob:test-2"]);
+    expect(urls.revoked).toEqual([
+      "blob:test-1",
+      "blob:test-2",
+      "blob:test-3",
+    ]);
     expect(second.legend).toBeUndefined();
 
     manager.clear();
@@ -200,12 +212,13 @@ describe("viewer print downloads", () => {
       "blob:test-1",
       "blob:test-2",
       "blob:test-3",
+      "blob:test-4",
     ]);
   });
 
   it("revokes partially-created URLs when replacement fails", () => {
     const urls = new FakeObjectUrls();
-    urls.failAt = 1;
+    urls.failAt = 2;
     const manager = new PrintDownloadManager(urls);
 
     expect(() =>
@@ -213,11 +226,12 @@ describe("viewer print downloads", () => {
         { title: "Code City" },
         {
           artifact: artifact("3mf"),
+          manifestBytes: new ArrayBuffer(1),
           legendBytes: new ArrayBuffer(1),
         },
       ),
     ).toThrow("Object URL creation failed.");
-    expect(urls.revoked).toEqual(["blob:test-1"]);
+    expect(urls.revoked).toEqual(["blob:test-1", "blob:test-2"]);
   });
 
   it("turns local publication failures into recoverable UI data", () => {

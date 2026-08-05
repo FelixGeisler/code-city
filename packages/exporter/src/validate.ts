@@ -2,6 +2,13 @@ import {
   resolvePrinterGeometryLimits,
   type PrinterProfile,
 } from "../../core/src/print.js";
+import {
+  PRINT_FIDELITY_EPSILON,
+  PRINT_FEATURE_CATEGORIES,
+  type PrintFeatureCategory,
+  type PrintFeatureViolation,
+  type PrintScaleFidelity,
+} from "../../core/src/print-layout.js";
 import type {
   PrintBounds,
   PrintMesh,
@@ -693,8 +700,136 @@ function minimumHorizontalGap(
 export function validatePrintableCity(
   city: PrintableCity,
   profile: PrinterProfile,
+  fidelity?: PrintScaleFidelity,
 ): readonly string[] {
   const issues: string[] = [];
+  const fidelityWasSupplied = fidelity !== undefined;
+  const embeddedFidelity = city.scaleFidelity;
+  if (
+    fidelity !== undefined &&
+    embeddedFidelity !== undefined &&
+    JSON.stringify(fidelity) !== JSON.stringify(embeddedFidelity)
+  ) {
+    issues.push(
+      "Supplied print fidelity does not match the printable city's embedded metadata.",
+    );
+  }
+  const effectiveFidelity = embeddedFidelity ?? fidelity;
+  const acknowledgedViolations = new Map<
+    PrintFeatureCategory,
+    PrintFeatureViolation
+  >();
+  if (effectiveFidelity !== undefined) {
+    const fidelity = effectiveFidelity;
+    let metadataValid = true;
+    if (
+      !Number.isFinite(fidelity.requestedScale) ||
+      fidelity.requestedScale <= 0 ||
+      !Number.isFinite(fidelity.appliedScale) ||
+      fidelity.appliedScale <= 0 ||
+      !Number.isFinite(fidelity.minimumSafeScale) ||
+      fidelity.minimumSafeScale <= 0
+    ) {
+      issues.push("Print fidelity scales must be positive finite numbers.");
+      metadataValid = false;
+    }
+    if (typeof fidelity.belowProfileScaleAcknowledged !== "boolean") {
+      issues.push("Print fidelity acknowledgement must be a boolean.");
+      metadataValid = false;
+    }
+    if (!Array.isArray(fidelity.featureViolations)) {
+      issues.push("Print fidelity violations must be an array.");
+      metadataValid = false;
+    } else {
+      const supported = new Set<PrintFeatureCategory>(
+        PRINT_FEATURE_CATEGORIES,
+      );
+      let previousCategoryIndex = -1;
+      for (const violation of fidelity.featureViolations) {
+        if (typeof violation !== "object" || violation === null) {
+          issues.push("Print fidelity violations are invalid or duplicated.");
+          metadataValid = false;
+          continue;
+        }
+        const expectedCategoryIndex = PRINT_FEATURE_CATEGORIES.indexOf(
+          violation.category,
+        );
+        if (
+          !supported.has(violation.category) ||
+          acknowledgedViolations.has(violation.category) ||
+          expectedCategoryIndex <= previousCategoryIndex ||
+          !Number.isFinite(violation.resultingValue) ||
+          violation.resultingValue <= 0 ||
+          !Number.isFinite(violation.minimum) ||
+          violation.resultingValue + PRINT_FIDELITY_EPSILON >=
+            violation.minimum
+        ) {
+          issues.push("Print fidelity violations are invalid or duplicated.");
+          metadataValid = false;
+          continue;
+        }
+        acknowledgedViolations.set(violation.category, violation);
+        previousCategoryIndex = expectedCategoryIndex;
+      }
+    }
+    if (
+      !fidelityWasSupplied &&
+      Number.isFinite(fidelity.appliedScale) &&
+      Number.isFinite(city.scale) &&
+      Math.abs(fidelity.appliedScale - city.scale) >
+        PRINT_FIDELITY_EPSILON
+    ) {
+      issues.push(
+        "Print fidelity applied scale does not match printable city scale.",
+      );
+      metadataValid = false;
+    }
+    if (
+      Number.isFinite(fidelity.requestedScale) &&
+      Number.isFinite(fidelity.appliedScale) &&
+      fidelity.appliedScale >
+        fidelity.requestedScale + PRINT_FIDELITY_EPSILON
+    ) {
+      issues.push(
+        "Print fidelity applied scale must not exceed requested scale.",
+      );
+      metadataValid = false;
+    }
+    if (
+      Number.isFinite(fidelity.appliedScale) &&
+      Number.isFinite(fidelity.minimumSafeScale) &&
+      ((fidelity.appliedScale + PRINT_FIDELITY_EPSILON <
+        fidelity.minimumSafeScale) !==
+        (acknowledgedViolations.size > 0))
+    ) {
+      issues.push(
+        "Print fidelity safe scale and feature violations do not agree.",
+      );
+      metadataValid = false;
+    }
+    if (
+      acknowledgedViolations.size > 0 &&
+      fidelity.belowProfileScaleAcknowledged !== true
+    ) {
+      issues.push(
+        "Below-profile fidelity validation requires explicit acknowledgement.",
+      );
+      metadataValid = false;
+    }
+    if (!metadataValid) acknowledgedViolations.clear();
+  }
+  const permitsBelowMinimum = (
+    category: PrintFeatureCategory,
+    actual: number,
+    minimum: number,
+  ): boolean => {
+    const violation = acknowledgedViolations.get(category);
+    return (
+      violation !== undefined &&
+      close(violation.resultingValue, actual) &&
+      close(violation.minimum, minimum)
+    );
+  };
   if (!Number.isFinite(city.scale) || city.scale <= 0) {
     issues.push("Print scale must be a positive finite number.");
   }
@@ -842,7 +977,12 @@ export function validatePrintableCity(
   }
   if (
     city.measurements.baseThickness + GEOMETRY_EPSILON <
-    geometryLimits.minimumBaseThickness
+      geometryLimits.minimumBaseThickness &&
+    !permitsBelowMinimum(
+      "base-thickness",
+      city.measurements.baseThickness,
+      geometryLimits.minimumBaseThickness,
+    )
   ) {
     issues.push(
       `Base thickness (${city.measurements.baseThickness}) is below profile minimum (${geometryLimits.minimumBaseThickness}).`,
@@ -856,7 +996,12 @@ export function validatePrintableCity(
   }
   if (
     city.measurements.wallThickness + GEOMETRY_EPSILON <
-    geometryLimits.minimumWallThickness
+      geometryLimits.minimumWallThickness &&
+    !permitsBelowMinimum(
+      "wall-thickness",
+      city.measurements.wallThickness,
+      geometryLimits.minimumWallThickness,
+    )
   ) {
     issues.push(
       `Wall thickness (${city.measurements.wallThickness}) is below profile minimum (${geometryLimits.minimumWallThickness}).`,
@@ -869,7 +1014,12 @@ export function validatePrintableCity(
   }
   if (
     city.measurements.minimumFeatureSize + GEOMETRY_EPSILON <
-    geometryLimits.minimumFeatureSize
+      geometryLimits.minimumFeatureSize &&
+    !permitsBelowMinimum(
+      "minimum-feature-size",
+      city.measurements.minimumFeatureSize,
+      geometryLimits.minimumFeatureSize,
+    )
   ) {
     issues.push(
       `Minimum feature size (${city.measurements.minimumFeatureSize}) is below profile minimum (${geometryLimits.minimumFeatureSize}).`,
@@ -888,7 +1038,8 @@ export function validatePrintableCity(
   if (
     measuredGap !== null &&
     measuredGap + GEOMETRY_EPSILON <
-      geometryLimits.minimumGap
+      geometryLimits.minimumGap &&
+    !permitsBelowMinimum("gap", measuredGap, geometryLimits.minimumGap)
   ) {
     issues.push(
       `Minimum gap (${measuredGap}) is below profile minimum (${geometryLimits.minimumGap}).`,

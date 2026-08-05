@@ -5,6 +5,12 @@ import {
 
 import { normalizeDisplayColor } from "../../core/src/color.js";
 import type { PrintFormat } from "../../core/src/print.js";
+import {
+  PRINT_FIDELITY_EPSILON,
+  PRINT_FEATURE_CATEGORIES,
+  type PrintFeatureCategory,
+  type PrintFeatureViolation,
+} from "../../core/src/print-layout.js";
 import type {
   PrintBounds,
   PrintLabelReport,
@@ -40,6 +46,9 @@ const MANIFEST_EXTERNAL_MINIMUM_BYTES = 128;
 const MANIFEST_ROUTE_OMISSION_MINIMUM_BYTES = 192;
 const MANIFEST_UNPLACED_MINIMUM_BYTES = 64;
 const MANIFEST_WARNING_MINIMUM_BYTES = 4;
+const FEATURE_CATEGORY_ORDER = new Map(
+  PRINT_FEATURE_CATEGORIES.map((category, index) => [category, index]),
+);
 
 export const PRINT_BUNDLE_SCHEMA =
   "https://felixgeisler.github.io/code-city/schemas/print-bundle-v1.json" as const;
@@ -160,6 +169,9 @@ export interface PrintBundleRequest {
   readonly fitPolicy: PrintBundleFitPolicy;
   readonly requestedScale: number;
   readonly appliedScale: number;
+  readonly minimumSafeScale: number;
+  readonly belowProfileScaleAcknowledged: boolean;
+  readonly featureViolations: readonly PrintFeatureViolation[];
   readonly warnings: readonly string[];
   readonly unplacedObjects: readonly PrintBundleUnplacedObject[];
   readonly routeOmissions: readonly PrintBundleRouteOmission[];
@@ -235,6 +247,9 @@ export interface PrintBundleManifest {
     readonly policy: PrintBundleFitPolicy;
     readonly requestedScale: number;
     readonly appliedScale: number;
+    readonly minimumSafeScale: number;
+    readonly belowProfileScaleAcknowledged: boolean;
+    readonly featureViolations: readonly PrintFeatureViolation[];
   };
   readonly plateCount: number;
   readonly warnings: readonly string[];
@@ -345,6 +360,50 @@ function nonNegative(value: number, field: string): number {
     throw new RangeError(`${field} must be a non-negative finite number.`);
   }
   return Object.is(value, -0) ? 0 : value;
+}
+
+function normalizedFeatureViolations(
+  values: readonly PrintFeatureViolation[],
+): readonly PrintFeatureViolation[] {
+  if (
+    !Array.isArray(values) ||
+    values.length > PRINT_FEATURE_CATEGORIES.length
+  ) {
+    throw new RangeError("featureViolations exceeds the supported feature count.");
+  }
+  const seen = new Set<PrintFeatureCategory>();
+  let previousOrder = -1;
+  return values.map((value, index): PrintFeatureViolation => {
+      if (typeof value !== "object" || value === null) {
+        throw new TypeError(`featureViolations[${index}] must be an object.`);
+      }
+      const order = FEATURE_CATEGORY_ORDER.get(value.category);
+      if (
+        order === undefined ||
+        seen.has(value.category) ||
+        order <= previousOrder
+      ) {
+        throw new TypeError(
+          `featureViolations[${index}].category must be unique, supported, and in canonical order.`,
+        );
+      }
+      seen.add(value.category);
+      previousOrder = order;
+      const resultingValue = positive(
+        value.resultingValue,
+        `featureViolations[${index}].resultingValue`,
+      );
+      const minimum = positive(
+        value.minimum,
+        `featureViolations[${index}].minimum`,
+      );
+      if (resultingValue + PRINT_FIDELITY_EPSILON >= minimum) {
+        throw new RangeError(
+          `featureViolations[${index}] must describe a below-minimum value.`,
+        );
+      }
+      return { category: value.category, resultingValue, minimum };
+    });
 }
 
 function positiveWeight(value: number, field: string): number {
@@ -1276,9 +1335,30 @@ function normalizedPlate(
       `Plate ${plate.number} profile does not match the bundle profile.`,
     );
   }
-  if (Math.abs(plate.city.scale - request.appliedScale) > EPSILON) {
+  if (
+    Math.abs(plate.city.scale - request.appliedScale) >
+      PRINT_FIDELITY_EPSILON
+  ) {
     throw new RangeError(
       `Plate ${plate.number} scale does not match the applied bundle scale.`,
+    );
+  }
+  const cityFidelity = plate.city.scaleFidelity;
+  if (
+    cityFidelity === undefined ||
+    Math.abs(cityFidelity.requestedScale - request.requestedScale) >
+      PRINT_FIDELITY_EPSILON ||
+    Math.abs(cityFidelity.appliedScale - request.appliedScale) >
+      PRINT_FIDELITY_EPSILON ||
+    Math.abs(cityFidelity.minimumSafeScale - request.minimumSafeScale) >
+      PRINT_FIDELITY_EPSILON ||
+    cityFidelity.belowProfileScaleAcknowledged !==
+      request.belowProfileScaleAcknowledged ||
+    JSON.stringify(cityFidelity.featureViolations) !==
+      JSON.stringify(request.featureViolations)
+  ) {
+    throw new TypeError(
+      `Plate ${plate.number} scale-fidelity metadata does not match the bundle manifest.`,
     );
   }
   if (requiredText(plate.city.title, "city.title") !== request.title) {
@@ -1569,9 +1649,36 @@ export function serializePrintBundle(
     "requestedScale",
   );
   const appliedScale = positive(request.appliedScale, "appliedScale");
+  const minimumSafeScale = positive(
+    request.minimumSafeScale,
+    "minimumSafeScale",
+  );
+  if (
+    typeof request.belowProfileScaleAcknowledged !== "boolean"
+  ) {
+    throw new TypeError(
+      "belowProfileScaleAcknowledged must be a boolean.",
+    );
+  }
+  const featureViolations = normalizedFeatureViolations(
+    request.featureViolations,
+  );
+  const acknowledged = request.belowProfileScaleAcknowledged;
+  const belowSafe =
+    appliedScale + PRINT_FIDELITY_EPSILON < minimumSafeScale;
+  if (belowSafe !== (featureViolations.length > 0)) {
+    throw new RangeError(
+      "Below-profile applied scale and feature violations must agree.",
+    );
+  }
+  if (belowSafe && !acknowledged) {
+    throw new RangeError(
+      "Below-profile applied scale requires explicit acknowledgement.",
+    );
+  }
   if (
     request.fitPolicy === "error" &&
-    Math.abs(requestedScale - appliedScale) > EPSILON
+    Math.abs(requestedScale - appliedScale) > PRINT_FIDELITY_EPSILON
   ) {
     throw new RangeError(
       "The 'error' fit policy must not change the requested scale.",
@@ -1579,7 +1686,7 @@ export function serializePrintBundle(
   }
   if (
     request.fitPolicy !== "error" &&
-    appliedScale > requestedScale + EPSILON
+    appliedScale > requestedScale + PRINT_FIDELITY_EPSILON
   ) {
     throw new RangeError(
       `The '${request.fitPolicy}' fit policy must not enlarge the requested scale.`,
@@ -1650,6 +1757,10 @@ export function serializePrintBundle(
     profile,
     requestedScale,
     appliedScale,
+    minimumSafeScale,
+    belowProfileScaleAcknowledged:
+      acknowledged,
+    featureViolations,
     plates,
   };
   const routeOmissions = normalizedRouteOmissions(
@@ -1678,6 +1789,10 @@ export function serializePrintBundle(
       policy: request.fitPolicy,
       requestedScale,
       appliedScale,
+      minimumSafeScale,
+      belowProfileScaleAcknowledged:
+        acknowledged,
+      featureViolations,
     },
     plateCount: plates.length,
     warnings,
