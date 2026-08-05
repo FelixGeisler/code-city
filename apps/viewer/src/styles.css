@@ -1379,6 +1379,234 @@ button,
   font-size: 12px;
 }
 
+.inspector-history-notice {
+  margin: 14px 0 0;
+  padding: 10px;
+  border: 1px solid rgba(148, 188, 226, 0.2);
+  border-radius: 8px;
+  color: #cfe1ef;
+  background: rgba(121, 196, 255, 0.05);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.metric-presentation,
+.complexity-hotspots {
+  margin-top: 18px;
+}
+
+.metric-presentation h4,
+.complexity-hotspots h4 {
+  margin: 0;
+  color: #edf7ff;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.metric-presentation-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin: 9px 0 0;
+}
+
+.metric-presentation-row {
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid rgba(148, 188, 226, 0.14);
+  border-radius: 8px;
+  background: rgba(121, 196, 255, 0.035);
+}
+
+.metric-presentation-row[data-metric="method"] {
+  grid-column: 1 / -1;
+}
+
+.metric-presentation-row[data-state="clamped"] {
+  border-color: rgba(250, 204, 21, 0.34);
+  background: rgba(250, 204, 21, 0.055);
+}
+
+.metric-presentation-row[data-state="unavailable"] {
+  border-style: dashed;
+}
+
+.metric-presentation-row dt,
+.metric-technical-list dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.metric-presentation-row dd,
+.metric-technical-list dd {
+  margin: 4px 0 0;
+}
+
+.metric-presentation-row dd {
+  display: grid;
+  gap: 4px;
+}
+
+.metric-presentation-row strong {
+  overflow-wrap: anywhere;
+  color: #f2f9ff;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.metric-presentation-row dd span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.metric-technical-details {
+  margin-top: 7px;
+  border: 1px solid rgba(148, 188, 226, 0.12);
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(6, 17, 30, 0.3);
+}
+
+.metric-technical-details > summary {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 9px;
+  color: #cfe1ef;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.metric-technical-details > summary:hover {
+  background: rgba(121, 196, 255, 0.05);
+}
+
+.metric-technical-details > summary:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: -3px;
+}
+
+.metric-technical-list {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  border-top: 1px solid rgba(148, 188, 226, 0.12);
+}
+
+.metric-technical-list > div {
+  min-width: 0;
+  padding: 8px 9px;
+}
+
+.metric-technical-list > div + div {
+  border-top: 1px solid rgba(148, 188, 226, 0.09);
+}
+
+.metric-technical-list dd {
+  overflow-wrap: anywhere;
+  color: #c6d9e8;
+  font: 10px/1.5 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.complexity-hotspots {
+  padding: 11px;
+  border: 1px solid rgba(251, 146, 60, 0.3);
+  border-radius: 9px;
+  background: linear-gradient(
+    145deg,
+    rgba(251, 146, 60, 0.08),
+    rgba(6, 17, 30, 0.46) 58%
+  );
+}
+
+.complexity-hotspots-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.complexity-hotspots-status,
+.complexity-source-note,
+.unit-filter-status {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.complexity-hotspots-status {
+  margin: 6px 0 0;
+}
+
+.complexity-source-note {
+  margin: 8px 0 0;
+}
+
+.complexity-hotspot-list {
+  display: grid;
+  gap: 6px;
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.complexity-hotspot-list:empty {
+  display: none;
+}
+
+.complexity-hotspot {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid rgba(148, 188, 226, 0.14);
+  border-left: 3px solid #facc15;
+  border-radius: 7px;
+  background: rgba(5, 15, 27, 0.58);
+}
+
+.complexity-hotspot[data-severity="high"] {
+  border-left-color: #fb923c;
+}
+
+.complexity-hotspot[data-severity="critical"] {
+  border-left-color: #f43f5e;
+}
+
+.complexity-hotspot-content {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.complexity-hotspot-name {
+  overflow: hidden;
+  color: #f4f9fe;
+  font: 600 11px/1.35 "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.complexity-hotspot-facts {
+  color: #c1d5e5;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.complexity-hotspot-source {
+  min-height: 30px;
+  white-space: nowrap;
+}
+
 .external-consumers-section {
   margin-top: 17px;
   padding-top: 14px;
@@ -1694,6 +1922,49 @@ button,
   outline-offset: -3px;
 }
 
+.unit-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(132px, 0.72fr);
+  gap: 8px;
+  padding: 9px;
+  border-top: 1px solid var(--line);
+}
+
+.unit-controls label {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.unit-controls input,
+.unit-controls select {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: 1px solid rgba(148, 188, 226, 0.2);
+  border-radius: 7px;
+  color: #edf7ff;
+  background: rgba(4, 14, 26, 0.72);
+  font: inherit;
+  font-size: 11px;
+}
+
+.unit-controls input:focus-visible,
+.unit-controls select:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 1px;
+}
+
+.unit-filter-status {
+  min-height: 15px;
+  margin: 0;
+  padding: 0 9px 8px;
+}
+
 .unit-table-wrap {
   border-top: 1px solid var(--line);
 }
@@ -1725,7 +1996,7 @@ button,
 
 .unit-table th:nth-child(3),
 .unit-table td:nth-child(3) {
-  width: 58px;
+  width: 112px;
 }
 
 .unit-table tbody th,
@@ -3814,6 +4085,23 @@ button,
 
   .metric-mapping-channel {
     grid-template-columns: 1fr;
+  }
+
+  .metric-presentation-grid,
+  .unit-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .metric-presentation-row[data-metric="method"] {
+    grid-column: auto;
+  }
+
+  .complexity-hotspot {
+    grid-template-columns: 1fr;
+  }
+
+  .complexity-hotspot-source {
+    width: 100%;
   }
 
   #advanced-query-filters {

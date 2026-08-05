@@ -45,7 +45,9 @@ import {
   canRevealMoreExecutableUnits,
   INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT,
   MAXIMUM_EXECUTABLE_UNIT_VISIBLE_LIMIT,
-  presentExecutableUnits,
+  presentBuildingComplexity,
+  type BuildingComplexityPresentation,
+  type ExecutableUnitSort,
 } from "./building-inspector.js";
 import {
   cameraOrientationForPreset,
@@ -238,7 +240,7 @@ import { ViewerFramePicker } from "./viewer-frame-picker.js";
 import { supportsViewerInstancing } from "./viewer-render-capability.js";
 import {
   createViewerVisualization,
-  describeBuildingMetrics,
+  presentBuildingMetrics,
   type EvolutionVisualizationData,
   type ViewerVisualizationMode,
 } from "./visualization-mode.js";
@@ -589,12 +591,21 @@ const inspectorFields = {
   module: element<HTMLElement>("building-module"),
   path: element<HTMLElement>("building-path"),
   language: element<HTMLElement>("building-language"),
-  sloc: element<HTMLElement>("building-sloc"),
-  load: element<HTMLElement>("building-load"),
-  cc: element<HTMLElement>("building-cc"),
-  metricMethod: element<HTMLElement>("building-metric-method"),
   metricExplanation: element<HTMLParagraphElement>(
     "building-metric-explanation",
+  ),
+  metricPresentation: element<HTMLElement>("building-metric-presentation"),
+  metricRows: element<HTMLDListElement>("building-metric-rows"),
+  metricTechnicalDetails: element<HTMLDetailsElement>(
+    "building-metric-technical-details",
+  ),
+  metricTechnical: element<HTMLDListElement>("building-metric-technical"),
+  hotspotsSection: element<HTMLElement>("building-hotspots-section"),
+  hotspotsCount: element<HTMLElement>("building-hotspots-count"),
+  hotspotsStatus: element<HTMLParagraphElement>("building-hotspots-status"),
+  hotspots: element<HTMLOListElement>("building-hotspots"),
+  hotspotsSourceNote: element<HTMLParagraphElement>(
+    "building-hotspots-source-note",
   ),
   evolutionRow: element<HTMLElement>("building-evolution-row"),
   evolution: element<HTMLElement>("building-evolution"),
@@ -604,6 +615,11 @@ const inspectorFields = {
   unitsSummary: element<HTMLElement>("building-units-summary"),
   unitsCaption: element<HTMLTableCaptionElement>("building-units-caption"),
   units: element<HTMLTableSectionElement>("building-units"),
+  unitsSearch: element<HTMLInputElement>("building-units-search"),
+  unitsSort: element<HTMLSelectElement>("building-units-sort"),
+  unitsFilterStatus: element<HTMLParagraphElement>(
+    "building-units-filter-status",
+  ),
   unitsShowMore: element<HTMLButtonElement>("building-units-show-more"),
   sourceStructureDetails: element<HTMLDetailsElement>("building-source-structure-details"),
   sourceStructureSummary: element<HTMLElement>("building-source-structure-summary"),
@@ -3270,6 +3286,8 @@ let repositoryExplorerIndex = createRepositoryExplorerIndex(DEMO_MODEL);
 let searchResultLimit = DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT;
 let executableUnitVisibleLimit =
   INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;
+let executableUnitQuery = "";
+let executableUnitSort: ExecutableUnitSort = "complexity";
 // Kept separate from the legacy executable-unit table: opening more source
 // declarations must never change the normal file metrics presentation.
 let fineDetailVisibleLimit = FINE_DETAIL_INITIAL_LIMIT;
@@ -3722,6 +3740,33 @@ inspectorFields.unitsShowMore.addEventListener("click", () => {
     MAXIMUM_EXECUTABLE_UNIT_VISIBLE_LIMIT,
     INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT,
   );
+  renderExecutableUnits(building);
+});
+inspectorFields.unitsSearch.addEventListener("input", () => {
+  const selectedBuildingId =
+    selectedExplorerBuildingId(explorerState);
+  const building = selectedBuildingId
+    ? activeBuildingsById.get(selectedBuildingId)
+    : undefined;
+  if (!building) return;
+  executableUnitQuery = inspectorFields.unitsSearch.value;
+  executableUnitVisibleLimit =
+    INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;
+  renderExecutableUnits(building);
+});
+inspectorFields.unitsSort.addEventListener("change", () => {
+  const selectedBuildingId =
+    selectedExplorerBuildingId(explorerState);
+  const building = selectedBuildingId
+    ? activeBuildingsById.get(selectedBuildingId)
+    : undefined;
+  if (!building) return;
+  executableUnitSort =
+    inspectorFields.unitsSort.value === "source"
+      ? "source"
+      : "complexity";
+  executableUnitVisibleLimit =
+    INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;
   renderExecutableUnits(building);
 });
 inspectorFields.sourceStructureShowMore.addEventListener("click", () => {
@@ -4608,19 +4653,19 @@ function showUnavailableEvolutionBuilding(
   inspectorFields.module.textContent = "Historical selection";
   inspectorFields.path.textContent = building.path;
   inspectorFields.language.textContent = languageLabel(building.language);
-  inspectorFields.sloc.textContent = building.metrics.sloc.toLocaleString();
-  inspectorFields.load.textContent =
-    building.metrics.decisionLoad.toLocaleString();
-  inspectorFields.cc.textContent =
-    building.metrics.maximumComplexity.toLocaleString();
-  inspectorFields.metricMethod.textContent =
-    building.metricMethod ?? "Not recorded";
+  inspectorFields.metricPresentation.hidden = false;
+  inspectorFields.metricTechnicalDetails.open = false;
+  renderBuildingMetrics(building);
+  inspectorFields.hotspotsSection.hidden = true;
+  inspectorFields.metricExplanation.hidden = false;
   inspectorFields.metricExplanation.textContent =
     state.kind === "not-yet-created"
       ? `The selected lineage is not present at this commit. It is introduced by commit ${referenceContext}.`
       : `The selected lineage was removed by commit ${referenceContext}. Its last known facts remain visible.`;
   inspectorFields.unitsDetails.hidden = true;
+  inspectorFields.unitsEmpty.hidden = true;
   inspectorFields.sourceDetails.hidden = true;
+  inspectorFields.aiDetails.hidden = true;
   inspectorFields.sourceStructureDetails.hidden = true;
   renderBuildingEvolutionHistory(building.id);
   selectionStatus.textContent =
@@ -7199,15 +7244,13 @@ function showInspector(context: BuildingContext | null): void {
   inspectorFields.module.textContent = module.name;
   inspectorFields.path.textContent = building.path;
   inspectorFields.language.textContent = languageLabel(building.language);
-  inspectorFields.sloc.textContent = building.metrics.sloc.toLocaleString();
-  inspectorFields.load.textContent =
-    building.metrics.decisionLoad.toLocaleString();
-  inspectorFields.cc.textContent =
-    building.metrics.maximumComplexity.toLocaleString();
-  inspectorFields.metricMethod.textContent =
-    building.metricMethod ?? "Not recorded";
-  inspectorFields.metricExplanation.textContent =
-    describeBuildingMetrics(activeModel, building);
+  inspectorFields.metricExplanation.hidden = true;
+  inspectorFields.metricExplanation.textContent = "";
+  inspectorFields.metricPresentation.hidden = false;
+  inspectorFields.metricTechnicalDetails.open = false;
+  inspectorFields.hotspotsSection.hidden = false;
+  inspectorFields.aiDetails.hidden = false;
+  renderBuildingMetrics(building);
   renderBuildingEvolutionHistory(building.id);
   inspectorFields.sourceDetails.open = false;
   selectedSourceDeclaration = undefined;
@@ -7224,12 +7267,22 @@ function showInspector(context: BuildingContext | null): void {
   );
   executableUnitVisibleLimit =
     INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;
+  executableUnitQuery = "";
+  executableUnitSort = "complexity";
+  inspectorFields.unitsSearch.value = "";
+  inspectorFields.unitsSort.value = "complexity";
   fineDetailVisibleLimit = FINE_DETAIL_INITIAL_LIMIT;
   expandedFineDetailTypeIds = new Set();
   inspectorFields.unitsDetails.open = false;
   inspectorFields.sourceStructureDetails.open = false;
   inspectorFields.sourceStructureReturn.hidden = true;
-  renderExecutableUnits(building);
+  const complexity = presentBuildingComplexity(building, {
+    visibleLimit: executableUnitVisibleLimit,
+    query: executableUnitQuery,
+    sort: executableUnitSort,
+  });
+  renderComplexityHotspots(building, complexity);
+  renderExecutableUnits(building, complexity);
   renderSourceStructure(building);
   selectionStatus.textContent =
     `Selected ${building.name}. Maximum cyclomatic complexity ` +
@@ -7383,18 +7436,154 @@ function externalConsumerIdentity(
   return { label: module.name, path: module.path };
 }
 
-function renderExecutableUnits(building: CityBuilding): void {
+function renderBuildingMetrics(building: CityBuilding): void {
+  const presentation = presentBuildingMetrics(activeModel, building);
+  inspectorFields.metricRows.replaceChildren();
+  inspectorFields.metricTechnical.replaceChildren();
+
+  for (const metric of presentation.rows) {
+    const item = document.createElement("div");
+    item.className = "metric-presentation-row";
+    item.dataset["metric"] = metric.id;
+    item.dataset["state"] = metric.state;
+    const label = document.createElement("dt");
+    label.textContent = metric.label;
+    const detail = document.createElement("dd");
+    const value = document.createElement("strong");
+    value.textContent = metric.value;
+    const description = document.createElement("span");
+    description.textContent = metric.description;
+    detail.append(value, description);
+    item.append(label, detail);
+    inspectorFields.metricRows.append(item);
+  }
+
+  for (const entry of presentation.technical) {
+    const item = document.createElement("div");
+    const label = document.createElement("dt");
+    label.textContent = entry.label;
+    const value = document.createElement("dd");
+    value.textContent = entry.value;
+    item.append(label, value);
+    inspectorFields.metricTechnical.append(item);
+  }
+}
+
+function renderComplexityHotspots(
+  building: CityBuilding,
+  presentation = presentBuildingComplexity(building),
+): void {
+  inspectorFields.hotspots.replaceChildren();
+  inspectorFields.hotspotsSourceNote.hidden =
+    presentation.state === "inconsistent" ||
+    (presentation.state === "available" &&
+      presentation.hotspotCount === 0);
+
+  if (presentation.state !== "available") {
+    inspectorFields.hotspotsCount.textContent = "—";
+    inspectorFields.hotspotsStatus.textContent = presentation.reason;
+    return;
+  }
+
+  inspectorFields.hotspotsCount.textContent =
+    presentation.hotspotCount.toLocaleString();
+  const risk =
+    building.risk === "very-high"
+      ? "Very high"
+      : building.risk[0]!.toUpperCase() + building.risk.slice(1);
+  const hotspotLabel =
+    presentation.hotspotCount === 1 ? "hotspot" : "hotspots";
+  inspectorFields.hotspotsStatus.textContent =
+    `${risk} complexity · ${presentation.hotspotCount.toLocaleString()} ${hotspotLabel} ` +
+    `at or above CC ${presentation.threshold.toLocaleString()} · ` +
+    `highest CC ${presentation.maximumComplexity.toLocaleString()}` +
+    (presentation.hiddenHotspotCount > 0
+      ? ` · showing the ${presentation.hotspots.length.toLocaleString()} most complex`
+      : "");
+
+  for (const hotspot of presentation.hotspots) {
+    const item = document.createElement("li");
+    item.className = "complexity-hotspot";
+    item.dataset["severity"] = hotspot.severity;
+
+    const content = document.createElement("div");
+    content.className = "complexity-hotspot-content";
+    const name = document.createElement("strong");
+    name.className = "complexity-hotspot-name";
+    name.textContent = hotspot.name;
+    const facts = document.createElement("span");
+    facts.className = "complexity-hotspot-facts";
+    facts.textContent =
+      `CC ${hotspot.complexity.toLocaleString()} · ` +
+      `${severityLabel(hotspot.severity)} · ` +
+      `threshold ${hotspot.threshold.toLocaleString()} · ` +
+      formatExecutableUnitRange(hotspot.line, hotspot.endLine);
+    content.append(name, facts);
+
+    const jump = document.createElement("button");
+    jump.className = "button button-compact complexity-hotspot-source";
+    jump.type = "button";
+    jump.textContent = "View source";
+    jump.title =
+      `Open ${hotspot.name} at ` +
+      formatExecutableUnitRange(hotspot.line, hotspot.endLine);
+    jump.setAttribute(
+      "aria-label",
+      `View source for ${hotspot.name}, ${formatExecutableUnitRange(hotspot.line, hotspot.endLine)}`,
+    );
+    jump.addEventListener("click", () => {
+      revealBuildingSource(
+        building,
+        hotspot.line,
+        hotspot.endLine ?? hotspot.line,
+      );
+    });
+    item.append(content, jump);
+    inspectorFields.hotspots.append(item);
+  }
+}
+
+function severityLabel(
+  severity: "moderate" | "high" | "critical",
+): string {
+  return severity[0]!.toUpperCase() + severity.slice(1);
+}
+
+function formatExecutableUnitRange(
+  line: number,
+  endLine: number | undefined,
+): string {
+  const end = endLine ?? line;
+  return end === line
+    ? `line ${line.toLocaleString()}`
+    : `lines ${line.toLocaleString()}–${end.toLocaleString()}`;
+}
+
+function renderExecutableUnits(
+  building: CityBuilding,
+  complexityPresentation?: BuildingComplexityPresentation,
+): void {
   const fineDetail = projectFineDetail(
     building,
     executableUnitVisibleLimit,
   );
-  const presentation = presentExecutableUnits(building.units, {
-    visibleLimit: executableUnitVisibleLimit,
-  });
+  const complexity =
+    complexityPresentation ??
+    presentBuildingComplexity(building, {
+      visibleLimit: executableUnitVisibleLimit,
+      query: executableUnitQuery,
+      sort: executableUnitSort,
+    });
+  const presentation =
+    complexity.state === "available"
+      ? complexity.allUnits
+      : null;
   const wasOpen = inspectorFields.unitsDetails.open;
   inspectorFields.units.replaceChildren();
-  inspectorFields.unitsDetails.hidden = presentation === null;
-  inspectorFields.unitsEmpty.hidden = presentation !== null;
+  inspectorFields.unitsDetails.hidden =
+    complexity.state !== "available" || presentation === null;
+  inspectorFields.unitsEmpty.hidden =
+    complexity.state === "available" && presentation !== null;
   inspectorFields.unitCount.hidden = presentation === null;
   inspectorFields.unitsShowMore.hidden =
     presentation === null ||
@@ -7402,9 +7591,14 @@ function renderExecutableUnits(building: CityBuilding): void {
 
   if (!presentation) {
     inspectorFields.unitsDetails.open = false;
+    inspectorFields.unitsEmpty.textContent =
+      complexity.state === "available"
+        ? "No executable units were recorded for this building."
+        : complexity.reason;
     inspectorFields.unitCount.textContent = "";
     inspectorFields.unitsSummary.textContent = "";
     inspectorFields.unitsCaption.textContent = "";
+    inspectorFields.unitsFilterStatus.textContent = "";
     inspectorFields.unitsShowMore.textContent = "Show more units";
     return;
   }
@@ -7415,23 +7609,23 @@ function renderExecutableUnits(building: CityBuilding): void {
     presentation.maximumComplexity.toLocaleString();
   inspectorFields.unitsDetails.open = wasOpen;
   inspectorFields.unitCount.textContent = count;
-  const cappedOmission =
-    presentation.hiddenCount > 0 &&
-    !canRevealMoreExecutableUnits(presentation);
   inspectorFields.unitsSummary.textContent =
-    `${count} ${unitLabel} · highest complexity ${maximumComplexity}` +
-    (presentation.hiddenCount > 0
-      ? cappedOmission
-        ? ` · showing first ${presentation.visibleCount.toLocaleString()}` +
-          ` · ${presentation.hiddenCount.toLocaleString()} omitted at viewer limit`
-        : ` · showing ${presentation.visibleCount.toLocaleString()}`
-      : "");
+    `${count} ${unitLabel} · highest CC ${maximumComplexity}`;
   inspectorFields.unitsSummary.title =
     fineDetail.state === "unavailable"
       ? fineDetail.unavailable.join(" ")
       : `Progressive detail: ${fineDetail.nodes.length.toLocaleString()} of ${fineDetail.totalCount.toLocaleString()} functions projected. ${fineDetail.printable.reason}`;
   inspectorFields.unitsCaption.textContent =
-    `Executable units for ${building.name}`;
+    `All executable units for ${building.name}`;
+  const sortLabel =
+    presentation.sort === "complexity"
+      ? "complexity, highest first"
+      : "source order";
+  inspectorFields.unitsFilterStatus.textContent =
+    presentation.query.length === 0
+      ? `Showing ${presentation.visibleCount.toLocaleString()} of ${presentation.matchingCount.toLocaleString()} units, sorted by ${sortLabel}.`
+      : `${presentation.matchingCount.toLocaleString()} of ${presentation.count.toLocaleString()} units match. ` +
+        `Showing ${presentation.visibleCount.toLocaleString()}, sorted by ${sortLabel}.`;
   const nextRevealCount = Math.min(
     INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT,
     presentation.hiddenCount,
@@ -7456,8 +7650,17 @@ function renderExecutableUnits(building: CityBuilding): void {
     const jump = document.createElement("button");
     jump.className = "unit-source-jump";
     jump.type = "button";
-    jump.textContent = unit.line.toLocaleString();
-    jump.title = `Open ${unit.name} at line ${unit.line.toLocaleString()}`;
+    jump.textContent = formatExecutableUnitRange(
+      unit.line,
+      unit.endLine,
+    );
+    jump.title =
+      `Open ${unit.name} at ` +
+      formatExecutableUnitRange(unit.line, unit.endLine);
+    jump.setAttribute(
+      "aria-label",
+      `View source for ${unit.name}, ${formatExecutableUnitRange(unit.line, unit.endLine)}`,
+    );
     jump.addEventListener("click", () => {
       revealBuildingSource(
         building,

@@ -496,7 +496,7 @@ function availabilityForRule(
   );
 }
 
-function severity(
+export function designSmellSeverity(
   value: number,
   threshold: number,
 ): DesignSmellSeverity {
@@ -597,7 +597,7 @@ function finding(
     ruleId: rule.id,
     ruleName: rule.name,
     ruleVersion: rule.version,
-    severity: severity(evidence.value, evidence.threshold),
+    severity: designSmellSeverity(evidence.value, evidence.threshold),
     evidence: Object.freeze({
       ...evidence,
       ...(evidence.relatedBuildingIds === undefined
@@ -1133,7 +1133,8 @@ function validateFinding(
     );
   }
   if (
-    finding["severity"] !== severity(evidence.value, evidence.threshold)
+    finding["severity"] !==
+      designSmellSeverity(evidence.value, evidence.threshold)
   ) {
     throw new TypeError(
       "Design-smell finding severity does not match its evidence.",
