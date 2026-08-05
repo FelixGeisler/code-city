@@ -66,6 +66,88 @@ describe("AiGuidanceAdapter", () => {
     expect(JSON.parse(String(sent?.body))).toMatchObject({ source: { text: source.text } });
   });
 
+  it("accepts the exact UTF-8 source-byte boundary and refuses one byte over without a grant or provider call", async () => {
+    const fetch = vi.fn();
+    const adapter = new AiGuidanceAdapter({
+      version: 1,
+      enabled: true,
+      maximumSourceBytes: 4,
+      providers: [{ id: "local", label: "Local model", endpoint: "http://localhost:11434/guidance" }],
+    }, { fetch });
+    const atBoundary = {
+      ...selection,
+      source: { ...source, text: "éé" },
+    };
+    const overBoundary = {
+      ...selection,
+      source: { ...source, text: "ééa" },
+    };
+
+    expect(adapter.preview(atBoundary, "local")).toMatchObject({
+      enabled: true,
+      availability: "available",
+      limits: { maximumSourceBytes: 4 },
+      transmission: { source: { text: "éé" } },
+    });
+    const preview = adapter.preview(overBoundary, "local");
+    expect(preview).toEqual(expect.objectContaining({
+      enabled: true,
+      availability: "unavailable",
+      provider: { id: "local", label: "Local model" },
+      context: {
+        version: "codecity.ai-context/1",
+        kind: "file",
+        buildingId: source.buildingId,
+      },
+      reason: expect.stringMatching(/5 UTF-8 bytes.*maximum of 4 bytes.*not truncated.*no source was sent/iu),
+      limits: { timeoutMs: 20_000, maximumSourceBytes: 4 },
+      privacy: "no-prompt-storage",
+    }));
+    expect(preview).not.toHaveProperty("transmission");
+    expect(JSON.stringify(preview)).not.toContain("ééa");
+    await expect(adapter.request(overBoundary, "local")).rejects.toThrow(/5 UTF-8 bytes.*maximum of 4 bytes/iu);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("reduces an oversized resolved finding to its identifier-only descriptor", () => {
+    const adapter = new AiGuidanceAdapter({
+      version: 1,
+      enabled: true,
+      maximumSourceBytes: 1,
+      providers: [{ id: "local", label: "Local model", endpoint: "http://localhost:11434/guidance" }],
+    });
+    const findingSelection = {
+      ...selection,
+      source: { ...source, text: "ab" },
+      context: {
+        version: "codecity.ai-context/1",
+        kind: "smell",
+        buildingId: source.buildingId,
+        findingId: "finding-1",
+        ruleId: "high-complexity-method",
+        label: "High complexity method",
+        range: source.location,
+        evidence: { privateAnalyzerDetail: "must-not-leak" },
+      },
+      findingDigest: "b".repeat(64),
+    } as const;
+
+    const preview = adapter.preview(findingSelection, "local");
+    expect(preview).toMatchObject({
+      enabled: true,
+      availability: "unavailable",
+      context: {
+        version: "codecity.ai-context/1",
+        kind: "smell",
+        buildingId: source.buildingId,
+        findingId: "finding-1",
+        ruleId: "high-complexity-method",
+      },
+    });
+    expect(JSON.stringify(preview)).not.toContain("privateAnalyzerDetail");
+    expect(JSON.stringify(preview)).not.toContain("must-not-leak");
+  });
+
   it("rejects remote loopback HTTP endpoints to prevent SSRF", () => {
     expect(() => new AiGuidanceAdapter({ version: 1, enabled: true, providers: [{ id: "remote", label: "Remote", endpoint: "http://example.test/guidance" }] })).toThrow(/HTTP/);
     expect(() => new AiGuidanceAdapter({ version: 1, enabled: true, providers: [{ id: "remote", label: "Remote", endpoint: "https://user:secret@example.test/guidance" }] })).toThrow(/credential-free/);
