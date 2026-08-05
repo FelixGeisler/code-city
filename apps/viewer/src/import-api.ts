@@ -24,6 +24,8 @@ const AI_CONTEXT_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const AI_BUILDING_ID_PATTERN = /^[a-z0-9-]+:[0-9a-f]{16}$/u;
 const AI_GUIDANCE_MINIMUM_TIMEOUT_MS = 1_000;
 const AI_GUIDANCE_MAXIMUM_TIMEOUT_MS = 60_000;
+const AI_GUIDANCE_ROUND_TRIP_OVERHEAD_MS = 10_000;
+const AI_GUIDANCE_APPROVAL_GRANT_TTL_MS = 2 * 60_000;
 const AI_GUIDANCE_MAXIMUM_SOURCE_BYTES = 128 * 1024;
 const AI_GUIDANCE_MAXIMUM_RELATED_BUILDINGS = 25_000;
 const FIELD_PATH_PATTERN =
@@ -56,11 +58,25 @@ export type ViewerAiGuidanceContext =
   | Readonly<{ version: "codecity.ai-context/1"; kind: "dependency"; buildingId: string; dependencyId: string }>
   | Readonly<{ version: "codecity.ai-context/1"; kind: "smell"; buildingId: string; findingId: string; ruleId: string }>;
 
-export interface ViewerAiGuidanceRange { readonly startLine: number; readonly endLine: number; readonly startColumn?: number; readonly endColumn?: number; }
+export interface ViewerAiGuidanceLineRange {
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly startColumn?: never;
+  readonly endColumn?: never;
+}
+export interface ViewerAiGuidanceColumnRange {
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly startColumn: number;
+  readonly endColumn: number;
+}
+export type ViewerAiGuidanceRange =
+  | ViewerAiGuidanceLineRange
+  | ViewerAiGuidanceColumnRange;
 export type ViewerAiGuidanceResolvedContext =
-  | Readonly<{ version: "codecity.ai-context/1"; kind: "file"; buildingId: string; label: string; range: ViewerAiGuidanceRange }>
-  | Readonly<{ version: "codecity.ai-context/1"; kind: "type" | "callable"; buildingId: string; stableId: string; name: string; constructKind: string; label: string; range: ViewerAiGuidanceRange }>
-  | Readonly<{ version: "codecity.ai-context/1"; kind: "smell"; buildingId: string; findingId: string; ruleId: string; label: string; range: ViewerAiGuidanceRange; evidence: Readonly<Record<string, unknown>> }>;
+  | Readonly<{ version: "codecity.ai-context/1"; kind: "file"; buildingId: string; label: string; range: ViewerAiGuidanceLineRange }>
+  | Readonly<{ version: "codecity.ai-context/1"; kind: "type" | "callable"; buildingId: string; stableId: string; name: string; constructKind: string; label: string; range: ViewerAiGuidanceColumnRange }>
+  | Readonly<{ version: "codecity.ai-context/1"; kind: "smell"; buildingId: string; findingId: string; ruleId: string; label: string; range: ViewerAiGuidanceLineRange; evidence: Readonly<Record<string, unknown>> }>;
 
 interface ViewerAiGuidanceLimits { readonly timeoutMs: number; readonly maximumSourceBytes: number; }
 export type ViewerAiGuidancePreview = Readonly<{ preview:
@@ -81,7 +97,7 @@ export type ViewerAiGuidancePreview = Readonly<{ preview:
         readonly path: string;
         readonly language: string;
         readonly text: string;
-        readonly lines: { readonly startLine: number; readonly endLine: number };
+        readonly lines: ViewerAiGuidanceRange;
       };
       readonly findings: {
         readonly sloc: number;
@@ -435,6 +451,12 @@ function parseAiLineRange(value: unknown, description: string): ViewerAiGuidance
   return Object.freeze({ startLine, endLine, startColumn, endColumn });
 }
 
+function hasAiGuidanceColumns(
+  range: ViewerAiGuidanceRange,
+): range is ViewerAiGuidanceColumnRange {
+  return range.startColumn !== undefined && range.endColumn !== undefined;
+}
+
 function parseAiContext(value: unknown): ViewerAiGuidanceContext {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw protocolError("AI context is invalid.");
   const raw = value as Record<string, unknown>;
@@ -457,17 +479,17 @@ function parseAiResolvedContext(value: unknown): ViewerAiGuidanceResolvedContext
   const range = parseAiLineRange(raw["range"], "AI context range");
   if (descriptor.kind === "file") {
     exactObject(value, ["buildingId", "kind", "label", "range", "version"], "Resolved AI file context");
-    if (range.startColumn !== undefined || range.endColumn !== undefined) throw protocolError("Resolved AI file context range is invalid.");
+    if (hasAiGuidanceColumns(range)) throw protocolError("Resolved AI file context range is invalid.");
     return Object.freeze({ ...descriptor, label, range });
   }
   if (descriptor.kind === "type" || descriptor.kind === "callable") {
     const object = exactObject(value, ["buildingId", "constructKind", "kind", "label", "name", "range", "stableId", "version"], "Resolved AI declaration context");
-    if (range.startColumn === undefined || range.endColumn === undefined) throw protocolError("Resolved AI declaration context range is invalid.");
+    if (!hasAiGuidanceColumns(range)) throw protocolError("Resolved AI declaration context range is invalid.");
     return Object.freeze({ ...descriptor, name: safeText(object["name"], "AI declaration name", 1_000), constructKind: safeText(object["constructKind"], "AI declaration kind", 120), label, range });
   }
   if (descriptor.kind !== "smell") throw protocolError("Resolved dependency AI context cannot include source.");
   const object = exactObject(value, ["buildingId", "evidence", "findingId", "kind", "label", "range", "ruleId", "version"], "Resolved AI smell context");
-  if (range.startColumn !== undefined || range.endColumn !== undefined) throw protocolError("Resolved AI smell context range is invalid.");
+  if (hasAiGuidanceColumns(range)) throw protocolError("Resolved AI smell context range is invalid.");
   if (object["evidence"] === null || typeof object["evidence"] !== "object" || Array.isArray(object["evidence"])) throw protocolError("AI smell evidence is invalid.");
   const rawEvidence = object["evidence"] as Record<string, unknown>;
   const optionalKeys = ["unit", "subject", "line", "endLine", "relatedBuildingIds"].filter((key) => rawEvidence[key] !== undefined);
@@ -520,6 +542,22 @@ function parseAiLimits(value: unknown): ViewerAiGuidanceLimits {
   const maximumSourceBytes = positiveInteger(limits["maximumSourceBytes"], "AI source limit");
   if (timeoutMs < AI_GUIDANCE_MINIMUM_TIMEOUT_MS || timeoutMs > AI_GUIDANCE_MAXIMUM_TIMEOUT_MS || maximumSourceBytes > AI_GUIDANCE_MAXIMUM_SOURCE_BYTES) throw protocolError("AI limits are invalid.");
   return Object.freeze({ timeoutMs, maximumSourceBytes });
+}
+
+function aiGuidanceRequestDeadlineMs(providerTimeoutMs: unknown): number {
+  if (
+    typeof providerTimeoutMs !== "number" ||
+    !Number.isSafeInteger(providerTimeoutMs) ||
+    providerTimeoutMs < AI_GUIDANCE_MINIMUM_TIMEOUT_MS ||
+    providerTimeoutMs > AI_GUIDANCE_MAXIMUM_TIMEOUT_MS
+  ) {
+    throw protocolError("AI timeout is invalid.");
+  }
+  const deadlineMs = providerTimeoutMs + AI_GUIDANCE_ROUND_TRIP_OVERHEAD_MS;
+  if (deadlineMs >= AI_GUIDANCE_APPROVAL_GRANT_TTL_MS) {
+    throw protocolError("AI request deadline exceeds its approval lifetime.");
+  }
+  return deadlineMs;
 }
 
 function parseAiGuidancePreview(value: unknown): ViewerAiGuidancePreview {
@@ -1456,9 +1494,11 @@ export class ViewerImportApiClient {
 
   public async aiGuidanceRequest(
     grant: string,
+    providerTimeoutMs: number,
     signal?: AbortSignal,
   ): Promise<ViewerAiGuidanceResult> {
-    return parseAiGuidanceResult((await this.jsonRequest("/api/v1/ai/requests", { method: "POST", headers: { "content-type": "application/json", "X-Code-City-Request": "1" }, body: JSON.stringify({ approval: "once", grant }) }, signal, this.requestDeadlineMs, API_RESPONSE_MAX_BYTES)).value);
+    const deadlineMs = aiGuidanceRequestDeadlineMs(providerTimeoutMs);
+    return parseAiGuidanceResult((await this.jsonRequest("/api/v1/ai/requests", { method: "POST", headers: { "content-type": "application/json", "X-Code-City-Request": "1" }, body: JSON.stringify({ approval: "once", grant }) }, signal, deadlineMs, API_RESPONSE_MAX_BYTES)).value);
   }
 
   public async evolutionArtifact(
@@ -1847,11 +1887,15 @@ export class ViewerImportApiClient {
     deadlineMs: number,
     operation: (signal: AbortSignal) => Promise<T>,
   ): Promise<T> {
+    if (externalSignal?.aborted) throw abortFailure();
     const controller = new AbortController();
     let deadlineExceeded = false;
     const abort = (): void => controller.abort();
-    if (externalSignal?.aborted) controller.abort();
-    else externalSignal?.addEventListener("abort", abort, { once: true });
+    externalSignal?.addEventListener("abort", abort, { once: true });
+    if (externalSignal?.aborted) {
+      externalSignal.removeEventListener("abort", abort);
+      throw abortFailure();
+    }
     const deadline = this.scheduleDeadline(() => {
       deadlineExceeded = true;
       controller.abort();

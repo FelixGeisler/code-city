@@ -48,13 +48,138 @@ describe("viewer AI guidance API", () => {
     let request: RequestInit | undefined;
     const fetch = vi.fn(async (_input: string | URL, init: RequestInit) => { request = init; return new Response(JSON.stringify({ result: { provider: { id: "local", label: "Local" }, context, contextDigest, suggestions: [] } }), { status: 200, headers: { "content-type": "application/json" } }); });
     const client = new ViewerImportApiClient(new URL("http://localhost/"), { fetch });
-    await client.aiGuidanceRequest("A".repeat(43));
+    await client.aiGuidanceRequest("A".repeat(43), 20_000);
     const body = String(request?.body);
     expect(body).toContain('"approval":"once"');
     expect(body).not.toContain("metrics");
     expect(body).not.toContain("text");
     expect(body).not.toContain("source");
     expect(new Headers(request?.headers).get("X-Code-City-Request")).toBe("1");
+  });
+
+  it("uses the advertised provider timeout plus bounded response overhead", async () => {
+    const scheduled: number[] = [];
+    const fetch = vi.fn(async (input: string | URL) => {
+      if (new URL(input).pathname.includes("/preview/")) {
+        return new Response(
+          JSON.stringify(availablePreview("export {};\n", {
+            timeoutMs: 45_000,
+            maximumSourceBytes: 131_072,
+          })),
+          { headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ result: { provider: { id: "local", label: "Local" }, context, contextDigest, suggestions: [] } }), { headers: { "content-type": "application/json" } });
+    });
+    const client = new ViewerImportApiClient(new URL("http://localhost/"), {
+      fetch,
+      scheduleDeadline: (_callback, milliseconds) => {
+        scheduled.push(milliseconds);
+        return scheduled.length;
+      },
+      clearDeadline: () => undefined,
+    });
+    const result = await client.aiGuidancePreview(
+      "00000000-0000-4000-8000-000000000000",
+      descriptor,
+      "local",
+    );
+    if (result.preview.availability !== "available") throw new Error("Expected an available preview.");
+    await client.aiGuidanceRequest(
+      result.preview.grant,
+      result.preview.limits.timeoutMs,
+    );
+    expect(scheduled.at(-1)).toBe(55_000);
+    expect(scheduled.at(-1)).toBeGreaterThan(30_000);
+    expect(scheduled.at(-1)).toBeLessThan(2 * 60_000);
+  });
+
+  it.each([999, 60_001, 1_000.5])(
+    "rejects invalid confirmation timeout %s before fetching",
+    async (timeoutMs) => {
+      const fetch = vi.fn(async () => new Response());
+      const client = new ViewerImportApiClient(new URL("http://localhost/"), { fetch });
+      await expect(client.aiGuidanceRequest("A".repeat(43), timeoutMs)).rejects.toThrow(/AI timeout is invalid/);
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("lets an already-aborted external signal win before scheduling or fetching", async () => {
+    const fetch = vi.fn(async () => new Response());
+    const scheduleDeadline = vi.fn(() => 1);
+    const client = new ViewerImportApiClient(new URL("http://localhost/"), {
+      fetch,
+      scheduleDeadline,
+    });
+    await expect(
+      client.aiGuidanceRequest("A".repeat(43), 60_000, AbortSignal.abort()),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(scheduleDeadline).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("closes the external-abort listener registration race", async () => {
+    let abortedReads = 0;
+    const addEventListener = vi.fn();
+    const removeEventListener = vi.fn();
+    const racingSignal = {
+      get aborted() {
+        abortedReads += 1;
+        return abortedReads > 1;
+      },
+      addEventListener,
+      removeEventListener,
+    } as unknown as AbortSignal;
+    const fetch = vi.fn(async () => new Response());
+    const scheduleDeadline = vi.fn(() => 1);
+    const client = new ViewerImportApiClient(new URL("http://localhost/"), {
+      fetch,
+      scheduleDeadline,
+    });
+    await expect(
+      client.aiGuidanceRequest("A".repeat(43), 60_000, racingSignal),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(addEventListener).toHaveBeenCalledOnce();
+    expect(removeEventListener).toHaveBeenCalledOnce();
+    expect(scheduleDeadline).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("preserves declaration columns in the parsed preview contract", async () => {
+    const declarationDescriptor = {
+      version: "codecity.ai-context/1",
+      kind: "callable",
+      buildingId,
+      stableId: "callable:demo",
+    } as const;
+    const declarationContext = {
+      ...declarationDescriptor,
+      name: "demo",
+      constructKind: "function",
+      label: "demo function",
+      range: { startLine: 2, startColumn: 3, endLine: 4, endColumn: 1 },
+    } as const;
+    const response = { preview: {
+      enabled: true,
+      availability: "available",
+      provider: { id: "local", label: "Local" },
+      transmission: { version: 1, task: "source-guidance", providerId: "local", context: declarationContext, contextDigest, source: { path: "src/a.ts", language: "typescript", text: "function demo() {\n  return 1;\n}", lines: declarationContext.range }, findings: { sloc: 3, maximumComplexity: 1, decisionLoad: 0 } },
+      limits: { timeoutMs: 20_000, maximumSourceBytes: 131_072 },
+      privacy: "no-prompt-storage",
+      grant: "A".repeat(43),
+    } };
+    const client = new ViewerImportApiClient(new URL("http://localhost/"), { fetch: async () => new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } }) });
+    const result = await client.aiGuidancePreview(
+      "00000000-0000-4000-8000-000000000000",
+      declarationDescriptor,
+      "local",
+    );
+    if (result.preview.availability !== "available" || result.preview.transmission.context.kind !== "callable") throw new Error("Expected a callable preview.");
+    const startColumn: number = result.preview.transmission.context.range.startColumn;
+    const endColumn: number = result.preview.transmission.context.range.endColumn;
+    expect({ startColumn, endColumn }).toEqual({ startColumn: 3, endColumn: 1 });
+    expect(result.preview.transmission.source.lines.startColumn).toBe(startColumn);
+    expect(result.preview.transmission.source.lines.endColumn).toBe(endColumn);
   });
 
   it.each([

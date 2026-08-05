@@ -10,6 +10,7 @@ import {
   ROSLYN_PROTOCOL_VERSION,
   type RoslynHelperLaunch,
 } from "../packages/analyzer/src/roslyn-host.js";
+import type { SourceRange } from "../packages/core/src/model.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -31,6 +32,22 @@ function nodeHelper(source: string): RoslynHelperLaunch {
 const readRequest =
   "const chunks=[];for await(const chunk of process.stdin)chunks.push(chunk);" +
   "const request=JSON.parse(Buffer.concat(chunks));";
+
+function textAtInclusiveRange(source: string, range: SourceRange): string {
+  const selectedLines = source
+    .split("\n")
+    .slice(range.startLine - 1, range.endLine);
+  const firstLine = selectedLines[0]!;
+  if (selectedLines.length === 1) {
+    return firstLine.slice(range.startColumn - 1, range.endColumn);
+  }
+  const lastLine = selectedLines.at(-1)!;
+  return [
+    firstLine.slice(range.startColumn - 1),
+    ...selectedLines.slice(1, -1),
+    lastLine.slice(0, range.endColumn),
+  ].join("\n");
+}
 
 afterEach(async () => {
   await Promise.all(
@@ -193,6 +210,37 @@ it("keeps Roslyn declaration IDs stable across body, member, and formatting edit
     const original = [...before.types, ...before.callables].find((item) => item.name === name)?.id;
     expect([...after.types, ...after.callables].find((item) => item.name === name)?.id, name).toBe(original);
   }
+});
+
+it("emits inclusive Roslyn end columns for one-character bodies and multiline declarations", async () => {
+  const launch = await resolveBundledRoslynLaunch();
+  const source = [
+    "class C",
+    "{",
+    "    System.Func<int> One = () => 1;",
+    "    int Multi(",
+    "        int value)",
+    "    {",
+    "        return value;",
+    "    }",
+    "}",
+  ].join("\n");
+  const [result] = await analyzeCSharpWithRoslyn(
+    [{ id: "source.cs", source }],
+    launch,
+  );
+  if (result?.status !== "ok") throw new Error("Roslyn fixture was skipped.");
+  const one = result.sourceStructure.callables.find(({ kind }) => kind === "lambda")!;
+  const multi = result.sourceStructure.callables.find(({ name }) => name === "Multi")!;
+
+  expect(textAtInclusiveRange(source, one.range)).toBe("() => 1");
+  expect(textAtInclusiveRange(source, multi.range)).toBe([
+    "int Multi(",
+    "        int value)",
+    "    {",
+    "        return value;",
+    "    }",
+  ].join("\n"));
 });
 
 it("scopes duplicate Roslyn declarations by namespace, type, and enclosing callable", async () => {

@@ -2689,7 +2689,7 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
       return;
     }
     const range = selected["kind"] === "type" || selected["kind"] === "callable"
-      ? { startLine: 1, startColumn: 1, endLine: 1, endColumn: marker.length + 1 }
+      ? { startLine: 1, startColumn: 1, endLine: 1, endColumn: marker.length }
       : { startLine: 1, endLine: 1 };
     const context = selected["kind"] === "file"
       ? { ...selected, label: "retained-large.ts source file", range }

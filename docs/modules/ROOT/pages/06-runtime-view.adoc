@@ -222,7 +222,9 @@ viewer retains expansion, active row, and scroll state for the eight most
 recent project identities.
 
 The analyzer also persists deterministic class/type and callable declarations
-with exact inclusive line/column ranges for C#, TypeScript, and JavaScript.
+with exact one-based line/column ranges for C#, TypeScript, and JavaScript.
+Columns count UTF-16 code units, and both endpoints are inclusive, so equal
+start and end columns identify one character.
 Only syntactically certain declaration ownership is represented. Call targets
 and cross-file type relationships require a semantic binding context and are
 therefore explicitly recorded as unavailable rather than guessed. Fine detail

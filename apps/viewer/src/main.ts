@@ -6780,7 +6780,11 @@ function prepareAiGuidance(
           inspectorFields.aiProvider.disabled = true;
           inspectorFields.aiStatus.textContent = "Requesting optional suggestions…";
           const expectedTransmission = preview.transmission;
-          void sourceApi.aiGuidanceRequest(grant, controller.signal)
+          void sourceApi.aiGuidanceRequest(
+            grant,
+            preview.limits.timeoutMs,
+            controller.signal,
+          )
           .then((result) => {
             if (controller.signal.aborted || aiGuidanceRequest !== controller || generation !== previewGeneration) return;
             if (

@@ -2,7 +2,24 @@ import { describe, expect, it } from "vitest";
 
 import { analyzeTypeScriptSource } from "../packages/analyzer/src/typescript-metrics.js";
 import { validateCityModel } from "../packages/core/src/model-validation.js";
+import type { SourceRange } from "../packages/core/src/model.js";
 import { projectFineDetail } from "../apps/viewer/src/progressive-granularity.js";
+
+function textAtInclusiveRange(source: string, range: SourceRange): string {
+  const selectedLines = source
+    .split("\n")
+    .slice(range.startLine - 1, range.endLine);
+  const firstLine = selectedLines[0]!;
+  if (selectedLines.length === 1) {
+    return firstLine.slice(range.startColumn - 1, range.endColumn);
+  }
+  const lastLine = selectedLines.at(-1)!;
+  return [
+    firstLine.slice(range.startColumn - 1),
+    ...selectedLines.slice(1, -1),
+    lastLine.slice(0, range.endColumn),
+  ].join("\n");
+}
 
 describe("persisted source structure", () => {
   it("records deterministic TypeScript declarations with exact source ranges", () => {
@@ -23,6 +40,29 @@ describe("persisted source structure", () => {
       ["method", outer.id, 1], ["run", inner.id, 1], ["top", undefined, 1],
     ]);
     expect(result.sourceStructure.unavailable[0]).toContain("does not infer semantic bindings");
+  });
+
+  it("emits inclusive TypeScript end columns for one-character bodies and multiline declarations", () => {
+    const source = [
+      "const one = () => 1;",
+      "export function multi(",
+      "  value: number,",
+      ") {",
+      "  return value;",
+      "}",
+    ].join("\n");
+    const structure = analyzeTypeScriptSource("src/ranges.ts", source).sourceStructure;
+    const one = structure.callables.find(({ name }) => name === "one")!;
+    const multi = structure.callables.find(({ name }) => name === "multi")!;
+
+    expect(textAtInclusiveRange(source, one.range)).toBe("() => 1");
+    expect(textAtInclusiveRange(source, multi.range)).toBe([
+      "export function multi(",
+      "  value: number,",
+      ") {",
+      "  return value;",
+      "}",
+    ].join("\n"));
   });
 
   it("keeps semantic declaration identities stable across unrelated insertions", () => {
