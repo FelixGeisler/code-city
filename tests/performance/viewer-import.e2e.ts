@@ -2308,12 +2308,32 @@ test("does not overwrite a newer clear or replacement selection during a seek", 
   await expect(page.locator("#building-source-status")).toContainText(
     "Showing the exact retained file",
   );
+  const detailsScroll = page.locator("#viewer-workspace-scroll");
+  await detailsScroll.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await expect
+    .poll(() => detailsScroll.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(0);
+  const clearSelection = page.getByRole("button", {
+    name: "Clear selection",
+  });
+  expect(
+    await clearSelection.evaluate((button) => {
+      const bounds = button.getBoundingClientRect();
+      const hit = document.elementFromPoint(
+        bounds.left + bounds.width / 2,
+        bounds.top + bounds.height / 2,
+      );
+      return hit !== null && (hit === button || button.contains(hit));
+    }),
+  ).toBe(true);
 
   await page.locator("#evolution-range").fill("1");
   await expect(page.locator("#evolution-status")).toHaveText(
     "Seeking\u2026",
   );
-  await page.getByRole("button", { name: "Clear selection" }).click();
+  await clearSelection.click();
   await expect(page.locator("#inspector-title")).toHaveText("Details");
   await expect(page.locator("#selection-name")).toHaveText(
     "Nothing selected",

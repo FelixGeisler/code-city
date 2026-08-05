@@ -624,6 +624,92 @@ describe("source navigation HTTP API", () => {
     expect(providerCalls).toBe(2);
   });
 
+  it("returns a normal unavailable preview one UTF-8 byte over the configured source limit", async () => {
+    const maximumSourceBytes = 64;
+    const prefix = "export {};\n// ";
+    const prefixBytes = Buffer.byteLength(prefix, "utf8");
+    const exactText = `${prefix}${"x".repeat(maximumSourceBytes - prefixBytes)}`;
+    const overText = `${prefix}${"x".repeat(maximumSourceBytes - prefixBytes - 1)}é`;
+    expect(Buffer.byteLength(exactText, "utf8")).toBe(maximumSourceBytes);
+    expect(Buffer.byteLength(overText, "utf8")).toBe(maximumSourceBytes + 1);
+
+    const providerFetch = vi.fn(async (_url: string | URL, init: RequestInit) =>
+      successfulProviderResponse(init));
+    const server = await fixture({
+      aiGuidance: {
+        version: 1,
+        enabled: true,
+        maximumSourceBytes,
+        providers: [{ id: "local", label: "Local", endpoint: "http://localhost:11434/guidance" }],
+      },
+      aiGuidanceAdapterOptions: { fetch: providerFetch },
+    });
+    const retained = (name: string, text: string): RepositorySnapshot => ({
+      name,
+      files: [{ path: `src/${name}.ts`, text, byteLength: Buffer.byteLength(text, "utf8") }],
+      diagnostics: [],
+    });
+    const exact = await publish(server, "exactAiBoundary", retained("exactAiBoundary", exactText));
+    const over = await publish(server, "overAiBoundary", retained("overAiBoundary", overText));
+
+    const exactResponse = await fetch(
+      new URL(`/api/v1/ai/preview/${exact.job.id}/${exact.building.id}/local`, server.url),
+      guidancePreviewOptions(exact.building.id),
+    );
+    expect(exactResponse.status).toBe(200);
+    const exactBody = await exactResponse.json() as {
+      preview: {
+        availability: string;
+        grant: string;
+        limits: { maximumSourceBytes: number };
+        transmission: { source: { text: string } };
+      };
+    };
+    expect(exactBody.preview).toMatchObject({
+      availability: "available",
+      limits: { maximumSourceBytes },
+      transmission: { source: { text: exactText } },
+      grant: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
+    });
+
+    const overResponse = await fetch(
+      new URL(`/api/v1/ai/preview/${over.job.id}/${over.building.id}/local`, server.url),
+      guidancePreviewOptions(over.building.id),
+    );
+    expect(overResponse.status).toBe(200);
+    const overBody = await overResponse.json() as { preview: Record<string, unknown> };
+    expect(overBody.preview).toMatchObject({
+      enabled: true,
+      availability: "unavailable",
+      provider: { id: "local", label: "Local" },
+      reason: expect.stringMatching(/65 UTF-8 bytes.*maximum of 64 bytes.*not truncated.*no source was sent/iu),
+      limits: { timeoutMs: 20_000, maximumSourceBytes },
+      privacy: "no-prompt-storage",
+    });
+    expect(overBody.preview["context"]).toEqual(guidanceContext(over.building.id));
+    expect(Object.keys(overBody.preview["context"] as Record<string, unknown>).sort()).toEqual([
+      "buildingId",
+      "kind",
+      "version",
+    ]);
+    expect(overBody.preview).not.toHaveProperty("grant");
+    expect(overBody.preview).not.toHaveProperty("transmission");
+    expect(JSON.stringify(overBody)).not.toContain(overText);
+    expect(providerFetch).not.toHaveBeenCalled();
+
+    const cookie = exactResponse.headers.get("set-cookie")!.split(";", 1)[0]!;
+    const guidanceResponse = await fetch(new URL("/api/v1/ai/requests", server.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-Code-City-Request": "1", cookie },
+      body: JSON.stringify({ approval: "once", grant: exactBody.preview.grant }),
+    });
+    expect(guidanceResponse.status).toBe(200);
+    expect(providerFetch).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(providerFetch.mock.calls[0]![1].body))).toMatchObject({
+      source: { text: exactText },
+    });
+  });
+
   it("derives file, type, callable, dependency, and smell contexts from retained artifacts", async () => {
     const providerPayloads: Record<string, unknown>[] = [];
     const server = await fixture({

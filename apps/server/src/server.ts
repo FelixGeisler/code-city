@@ -2498,7 +2498,8 @@ function apiHandler(
           return;
         }
         const preview = aiGuidance.preview(resolution.prepared.selection, aiPreview[3]!);
-        if (!preview.enabled || preview.availability !== "available") { sendJson(request, response, 404, { error: { code: "provider-not-found", message: "Selected AI provider is unavailable." } }); return; }
+        if (!preview.enabled) { sendJson(request, response, 404, { error: { code: "provider-not-found", message: "Selected AI provider is unavailable." } }); return; }
+        if (preview.availability === "unavailable") { sendJson(request, response, 200, { preview }); return; }
         sendJson(request, response, 200, { preview: Object.freeze({ ...preview, grant: grants.issue(approval.binding, aiPreview[3]!, resolution.prepared) }) });
       } catch {
         if (!response.destroyed) sendJson(request, response, 500, { error: { code: "ai-preview-failed", message: "AI guidance preview could not be prepared." } });

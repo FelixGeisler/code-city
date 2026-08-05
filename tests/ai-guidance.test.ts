@@ -11,6 +11,11 @@ import {
   AI_GUIDANCE_MAX_PROVIDERS,
   AI_GUIDANCE_MAX_RESPONSE_BYTES,
 } from "../apps/server/src/ai-guidance.js";
+import type {
+  AiGuidanceContextDescriptor,
+  AiGuidanceResolvedContext,
+  AiGuidanceSelection,
+} from "../apps/server/src/ai-guidance.js";
 import { sourceTextLineRange } from "../apps/server/src/source-artifact.js";
 import {
   environmentAiGuidanceAudit,
@@ -64,6 +69,106 @@ describe("AiGuidanceAdapter", () => {
     expect(fetch).toHaveBeenCalledOnce();
     expect(sent?.headers).toMatchObject({ authorization: "secret" });
     expect(JSON.parse(String(sent?.body))).toMatchObject({ source: { text: source.text } });
+  });
+
+  it("accepts the exact UTF-8 source-byte boundary and refuses one byte over without a grant or provider call", async () => {
+    const fetch = vi.fn();
+    const audit = vi.fn();
+    const adapter = new AiGuidanceAdapter({
+      version: 1,
+      enabled: true,
+      maximumSourceBytes: 4,
+      providers: [{ id: "local", label: "Local model", endpoint: "http://localhost:11434/guidance" }],
+    }, { fetch, audit });
+    const atBoundary = {
+      ...selection,
+      source: { ...source, text: "éé" },
+    };
+    const overBoundary = {
+      ...selection,
+      source: { ...source, text: "ééa" },
+    };
+
+    expect(adapter.preview(atBoundary, "local")).toMatchObject({
+      enabled: true,
+      availability: "available",
+      limits: { maximumSourceBytes: 4 },
+      transmission: { source: { text: "éé" } },
+    });
+    const preview = adapter.preview(overBoundary, "local");
+    expect(preview).toEqual(expect.objectContaining({
+      enabled: true,
+      availability: "unavailable",
+      provider: { id: "local", label: "Local model" },
+      context: {
+        version: "codecity.ai-context/1",
+        kind: "file",
+        buildingId: source.buildingId,
+      },
+      reason: expect.stringMatching(/5 UTF-8 bytes.*maximum of 4 bytes.*not truncated.*no source was sent/iu),
+      limits: { timeoutMs: 20_000, maximumSourceBytes: 4 },
+      privacy: "no-prompt-storage",
+    }));
+    expect(preview).not.toHaveProperty("transmission");
+    expect(JSON.stringify(preview)).not.toContain("ééa");
+    await expect(adapter.request(overBoundary, "local")).rejects.toThrow(/5 UTF-8 bytes.*maximum of 4 bytes/iu);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it("reduces every oversized resolved context to its exact identifier-only descriptor", () => {
+    const adapter = new AiGuidanceAdapter({
+      version: 1,
+      enabled: true,
+      maximumSourceBytes: 1,
+      providers: [{ id: "local", label: "Local model", endpoint: "http://localhost:11434/guidance" }],
+    });
+    const cases: readonly {
+      readonly resolved: AiGuidanceResolvedContext;
+      readonly descriptor: AiGuidanceContextDescriptor;
+      readonly findingDigest?: string;
+    }[] = [
+      {
+        resolved: { version: "codecity.ai-context/1", kind: "file", buildingId: source.buildingId, label: "example source file", range: source.location },
+        descriptor: { version: "codecity.ai-context/1", kind: "file", buildingId: source.buildingId },
+      },
+      {
+        resolved: { version: "codecity.ai-context/1", kind: "type", buildingId: source.buildingId, stableId: "type-1", name: "Example", constructKind: "class", label: "class Example", range: source.location },
+        descriptor: { version: "codecity.ai-context/1", kind: "type", buildingId: source.buildingId, stableId: "type-1" },
+      },
+      {
+        resolved: { version: "codecity.ai-context/1", kind: "callable", buildingId: source.buildingId, stableId: "callable-1", name: "example", constructKind: "function", label: "function example", range: source.location },
+        descriptor: { version: "codecity.ai-context/1", kind: "callable", buildingId: source.buildingId, stableId: "callable-1" },
+      },
+      {
+        resolved: { version: "codecity.ai-context/1", kind: "smell", buildingId: source.buildingId, findingId: "finding-1", ruleId: "high-complexity-method", label: "High complexity method", range: source.location, evidence: { privateAnalyzerDetail: "must-not-leak" } },
+        descriptor: { version: "codecity.ai-context/1", kind: "smell", buildingId: source.buildingId, findingId: "finding-1", ruleId: "high-complexity-method" },
+        findingDigest: "b".repeat(64),
+      },
+    ];
+
+    for (const { resolved, descriptor, findingDigest } of cases) {
+      const oversizedSelection: AiGuidanceSelection = {
+        source: { ...source, text: "ab" },
+        metrics,
+        context: resolved,
+        contextDigest: selection.contextDigest,
+        ...(findingDigest === undefined ? {} : { findingDigest }),
+      };
+      const preview = adapter.preview(oversizedSelection, "local");
+      expect(preview).toMatchObject({ enabled: true, availability: "unavailable" });
+      if (!preview.enabled || preview.availability !== "unavailable") throw new Error("Expected an unavailable AI preview.");
+      expect(preview.context).toEqual(descriptor);
+      expect(Object.keys(preview.context).sort()).toEqual(Object.keys(descriptor).sort());
+      expect(preview.context).not.toHaveProperty("label");
+      expect(preview.context).not.toHaveProperty("name");
+      expect(preview.context).not.toHaveProperty("constructKind");
+      expect(preview.context).not.toHaveProperty("range");
+      expect(preview.context).not.toHaveProperty("evidence");
+      expect(preview.context).not.toHaveProperty("source");
+      expect(preview).not.toHaveProperty("transmission");
+      expect(preview).not.toHaveProperty("grant");
+    }
   });
 
   it("rejects remote loopback HTTP endpoints to prevent SSRF", () => {
