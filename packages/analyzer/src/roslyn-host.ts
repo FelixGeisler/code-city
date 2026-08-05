@@ -7,7 +7,11 @@ import {
   CITY_MODEL_LIMITS,
 } from "../../core/src/index.js";
 import type {
+  ComplexityDecisionKind,
+  ComplexityDecisionSite,
   ExecutableUnitMetric,
+  ExecutableUnitDecisionEvidence,
+  SourceRange,
   SourceStructure,
   SourceMetrics,
 } from "../../core/src/index.js";
@@ -23,7 +27,21 @@ export const ROSLYN_HOST_LIMITS = Object.freeze({
   stderrBytes: 64 * 1024,
   timeoutMs: 30_000,
   unitsPerFile: CITY_MODEL_LIMITS.metricUnitsPerBuilding,
+  decisionSitesPerFile: CITY_MODEL_LIMITS.decisionSitesPerBuilding,
+  decisionSitesPerBatch: CITY_MODEL_LIMITS.decisionSitesPerModel,
 });
+
+const COMPLEXITY_DECISION_KINDS = new Set<ComplexityDecisionKind>([
+  "conditional-branch",
+  "loop",
+  "switch-arm",
+  "catch",
+  "conditional-expression",
+  "short-circuit-operator",
+  "nullish-operator",
+  "guard",
+  "pattern-operator",
+]);
 
 export interface RoslynSourceInput {
   /** Opaque per-batch identifier. Repository paths never cross the process boundary. */
@@ -392,15 +410,176 @@ function safeText(value: unknown, maximum: number): string {
   return value;
 }
 
+function parseExactRange(value: unknown): SourceRange {
+  const item = objectValue(value);
+  const parsed = {
+    startLine: integer(item.startLine, "source range start line", 1),
+    startColumn: integer(item.startColumn, "source range start column", 1),
+    endLine: integer(item.endLine, "source range end line", 1),
+    endColumn: integer(item.endColumn, "source range end column", 1),
+  };
+  if (
+    parsed.endLine < parsed.startLine ||
+    (parsed.endLine === parsed.startLine &&
+      parsed.endColumn < parsed.startColumn)
+  ) {
+    throw new RoslynHostError("The Roslyn helper returned an invalid source range.");
+  }
+  return parsed;
+}
+
+function rangeEndsBefore(left: SourceRange, right: SourceRange): boolean {
+  return left.endLine < right.startLine ||
+    (left.endLine === right.startLine && left.endColumn < right.startColumn);
+}
+
+function rangeContains(outer: SourceRange, inner: SourceRange): boolean {
+  const startsInside = inner.startLine > outer.startLine ||
+    (inner.startLine === outer.startLine && inner.startColumn >= outer.startColumn);
+  const endsInside = inner.endLine < outer.endLine ||
+    (inner.endLine === outer.endLine && inner.endColumn <= outer.endColumn);
+  return startsInside && endsInside;
+}
+
+function parseDecisionEvidence(
+  value: unknown,
+  complexity: number,
+  line: number,
+  endLine: number,
+): ExecutableUnitDecisionEvidence {
+  const evidence = objectValue(value);
+  if (evidence.version !== "codecity.complexity-evidence/1") {
+    throw new RoslynHostError("The Roslyn helper returned incompatible decision evidence.");
+  }
+  const unitId = safeText(evidence.unitId, CITY_MODEL_LIMITS.identifierCharacters);
+  const scope = evidence.scope;
+  if (scope !== "top-level" && scope !== "callable") {
+    throw new RoslynHostError("The Roslyn helper returned invalid decision evidence.");
+  }
+  const callableId = evidence.callableId === undefined
+    ? undefined
+    : safeText(evidence.callableId, CITY_MODEL_LIMITS.identifierCharacters);
+  if (scope === "top-level" && callableId !== undefined) {
+    throw new RoslynHostError("The Roslyn helper returned invalid top-level decision evidence.");
+  }
+  if (!Array.isArray(evidence.sites) ||
+    evidence.sites.length > CITY_MODEL_LIMITS.decisionSitesPerUnit) {
+    throw new RoslynHostError("The Roslyn helper returned oversized decision evidence.");
+  }
+  const sites: ComplexityDecisionSite[] = [];
+  let retainedContribution = 0;
+  for (const value_ of evidence.sites) {
+    const item = objectValue(value_);
+    if (!COMPLEXITY_DECISION_KINDS.has(item.kind as ComplexityDecisionKind)) {
+      throw new RoslynHostError("The Roslyn helper returned an invalid decision kind.");
+    }
+    const range = parseExactRange(item.range);
+    if (range.startLine < line || range.endLine > endLine ||
+      (sites.length > 0 && !rangeEndsBefore(sites.at(-1)!.range, range))) {
+      throw new RoslynHostError("The Roslyn helper returned unordered decision evidence.");
+    }
+    const contribution = integer(item.contribution, "decision contribution", 1);
+    if (retainedContribution > Number.MAX_SAFE_INTEGER - contribution) {
+      throw new RoslynHostError("The Roslyn helper returned excessive decision contributions.");
+    }
+    retainedContribution += contribution;
+    sites.push({
+      kind: item.kind as ComplexityDecisionKind,
+      range,
+      contribution,
+    });
+  }
+  const status = evidence.status;
+  let parsed: ExecutableUnitDecisionEvidence;
+  if (status === "unavailable") {
+    if (sites.length !== 0 || evidence.totalContribution !== undefined ||
+      evidence.omittedContribution !== undefined) {
+      throw new RoslynHostError("The Roslyn helper fabricated unavailable decision evidence.");
+    }
+    parsed = {
+      version: "codecity.complexity-evidence/1",
+      unitId,
+      scope,
+      ...(callableId === undefined ? {} : { callableId }),
+      status,
+      sites: [],
+      reason: safeText(evidence.reason, CITY_MODEL_LIMITS.warningCharacters),
+    };
+  } else if (status === "complete" || status === "truncated") {
+    const totalContribution = integer(
+      evidence.totalContribution,
+      "decision contribution total",
+      0,
+    );
+    const omittedContribution = integer(
+      evidence.omittedContribution,
+      "omitted decision contribution",
+      0,
+    );
+    if (totalContribution !== complexity - 1 ||
+      retainedContribution + omittedContribution !== totalContribution) {
+      throw new RoslynHostError("The Roslyn helper returned inconsistent decision evidence.");
+    }
+    if (status === "complete") {
+      if (omittedContribution !== 0 || evidence.reason !== undefined) {
+        throw new RoslynHostError("The Roslyn helper returned invalid complete decision evidence.");
+      }
+      parsed = {
+        version: "codecity.complexity-evidence/1",
+        unitId,
+        scope,
+        ...(callableId === undefined ? {} : { callableId }),
+        status,
+        totalContribution,
+        omittedContribution: 0,
+        sites,
+      };
+    } else {
+      if (omittedContribution === 0) {
+        throw new RoslynHostError("The Roslyn helper returned invalid truncated decision evidence.");
+      }
+      parsed = {
+        version: "codecity.complexity-evidence/1",
+        unitId,
+        scope,
+        ...(callableId === undefined ? {} : { callableId }),
+        status,
+        totalContribution,
+        omittedContribution,
+        reason: safeText(evidence.reason, CITY_MODEL_LIMITS.warningCharacters),
+        sites,
+      };
+    }
+  } else {
+    throw new RoslynHostError("The Roslyn helper returned invalid decision evidence status.");
+  }
+  if (Buffer.byteLength(JSON.stringify(parsed), "utf8") >
+    CITY_MODEL_LIMITS.decisionEvidenceBytesPerUnit) {
+    throw new RoslynHostError("The Roslyn helper returned oversized serialized decision evidence.");
+  }
+  return parsed;
+}
+
 function parseUnit(value: unknown): ExecutableUnitMetric {
   const unit = objectValue(value);
+  const line = integer(unit.line, "unit line", 1);
+  const endLine = unit.endLine === undefined
+    ? line
+    : integer(unit.endLine, "unit end line", 1);
+  const complexity = integer(unit.complexity, "unit complexity", 1);
+  const decisionEvidence = unit.decisionEvidence === undefined
+    ? undefined
+    : parseDecisionEvidence(unit.decisionEvidence, complexity, line, endLine);
+  if (decisionEvidence?.scope === "top-level" &&
+    (unit.name !== "<top-level>" || line !== 1)) {
+    throw new RoslynHostError("The Roslyn helper returned an invalid top-level unit.");
+  }
   return {
     name: safeText(unit.name, CITY_MODEL_LIMITS.displayTextCharacters),
-    line: integer(unit.line, "unit line", 1),
-    ...(unit.endLine === undefined
-      ? {}
-      : { endLine: integer(unit.endLine, "unit end line", 1) }),
-    complexity: integer(unit.complexity, "unit complexity", 1),
+    line,
+    ...(unit.endLine === undefined ? {} : { endLine }),
+    complexity,
+    ...(decisionEvidence === undefined ? {} : { decisionEvidence }),
   };
 }
 
@@ -420,23 +599,6 @@ function parseSourceStructure(value: unknown): SourceStructure {
   ) {
     throw new RoslynHostError("The Roslyn helper returned oversized source structure.");
   }
-  const range = (value_: unknown) => {
-    const item = objectValue(value_);
-    const parsed = {
-      startLine: integer(item.startLine, "source range start line", 1),
-      startColumn: integer(item.startColumn, "source range start column", 1),
-      endLine: integer(item.endLine, "source range end line", 1),
-      endColumn: integer(item.endColumn, "source range end column", 1),
-    };
-    if (
-      parsed.endLine < parsed.startLine ||
-      (parsed.endLine === parsed.startLine &&
-        parsed.endColumn < parsed.startColumn)
-    ) {
-      throw new RoslynHostError("The Roslyn helper returned an invalid source range.");
-    }
-    return parsed;
-  };
   const typeKinds = new Set(["class", "interface", "enum", "type", "struct", "record", "delegate"]);
   const callableKinds = new Set(["function", "method", "constructor", "accessor", "lambda", "local-function"]);
   const ids = new Set<string>();
@@ -446,12 +608,12 @@ function parseSourceStructure(value: unknown): SourceStructure {
   const types = structure.types.map((value_) => {
     const item = objectValue(value_); const id = safeText(item.id, CITY_MODEL_LIMITS.identifierCharacters);
     if (!typeKinds.has(item.kind as string) || item.provenance !== "syntax" || ids.has(id)) throw new RoslynHostError("The Roslyn helper returned invalid source structure."); ids.add(id); typeIds.add(id);
-    return { id, name: safeText(item.name, CITY_MODEL_LIMITS.displayTextCharacters), kind: item.kind as SourceStructure["types"][number]["kind"], range: range(item.range), provenance: "syntax" as const, ...(item.parentTypeId === undefined ? {} : { parentTypeId: safeText(item.parentTypeId, CITY_MODEL_LIMITS.identifierCharacters) }) };
+    return { id, name: safeText(item.name, CITY_MODEL_LIMITS.displayTextCharacters), kind: item.kind as SourceStructure["types"][number]["kind"], range: parseExactRange(item.range), provenance: "syntax" as const, ...(item.parentTypeId === undefined ? {} : { parentTypeId: safeText(item.parentTypeId, CITY_MODEL_LIMITS.identifierCharacters) }) };
   });
   const callables = structure.callables.map((value_) => {
     const item = objectValue(value_); const id = safeText(item.id, CITY_MODEL_LIMITS.identifierCharacters);
     if (!callableKinds.has(item.kind as string) || item.provenance !== "syntax" || ids.has(id)) throw new RoslynHostError("The Roslyn helper returned invalid source structure."); ids.add(id); callableIds.add(id);
-    return { id, name: safeText(item.name, CITY_MODEL_LIMITS.displayTextCharacters), kind: item.kind as SourceStructure["callables"][number]["kind"], range: range(item.range), provenance: "syntax" as const, ...(item.enclosingTypeId === undefined ? {} : { enclosingTypeId: safeText(item.enclosingTypeId, CITY_MODEL_LIMITS.identifierCharacters) }), complexity: integer(item.complexity, "source callable complexity", 1) };
+    return { id, name: safeText(item.name, CITY_MODEL_LIMITS.displayTextCharacters), kind: item.kind as SourceStructure["callables"][number]["kind"], range: parseExactRange(item.range), provenance: "syntax" as const, ...(item.enclosingTypeId === undefined ? {} : { enclosingTypeId: safeText(item.enclosingTypeId, CITY_MODEL_LIMITS.identifierCharacters) }), complexity: integer(item.complexity, "source callable complexity", 1) };
   });
   for (const type of types) if (type.parentTypeId !== undefined && !typeIds.has(type.parentTypeId)) throw new RoslynHostError("The Roslyn helper returned unresolved source structure reference.");
   for (const callable of callables) if (callable.enclosingTypeId !== undefined && !typeIds.has(callable.enclosingTypeId)) throw new RoslynHostError("The Roslyn helper returned unresolved source structure reference.");
@@ -488,6 +650,61 @@ function parseSourceStructure(value: unknown): SourceStructure {
   const unavailable = structure.unavailable.map((item) => safeText(item, CITY_MODEL_LIMITS.warningCharacters));
   if (structure.availability === "unavailable" && (types.length !== 0 || callables.length !== 0 || relations.length !== 0 || unavailable.length === 0)) throw new RoslynHostError("The Roslyn helper returned invalid unavailable source structure.");
   return { version: "codecity.source-structure/1", availability: structure.availability, types, callables, relations, unavailable };
+}
+
+function validateUnitEvidenceLinks(
+  units: readonly ExecutableUnitMetric[],
+  sourceStructure: SourceStructure,
+  validateCallableLinks = true,
+): void {
+  const unitIds = new Set<string>();
+  const linkedCallableIds = new Set<string>();
+  const callables = new Map(
+    sourceStructure.callables.map((callable) => [callable.id, callable]),
+  );
+  let topLevelCount = 0;
+  let siteCount = 0;
+  let serializedBytes = 0;
+  for (const unit of units) {
+    const evidence = unit.decisionEvidence;
+    if (evidence === undefined) continue;
+    if (unitIds.has(evidence.unitId)) {
+      throw new RoslynHostError("The Roslyn helper returned duplicate unit identities.");
+    }
+    unitIds.add(evidence.unitId);
+    siteCount += evidence.sites.length;
+    serializedBytes += Buffer.byteLength(JSON.stringify(evidence), "utf8");
+    if (evidence.scope === "top-level") {
+      topLevelCount += 1;
+      if (topLevelCount > 1 || unit.name !== "<top-level>" || unit.line !== 1) {
+        throw new RoslynHostError("The Roslyn helper returned invalid top-level evidence.");
+      }
+      continue;
+    }
+    if (!validateCallableLinks) continue;
+    if (sourceStructure.availability === "available" &&
+      evidence.callableId === undefined) {
+      throw new RoslynHostError("The Roslyn helper omitted a callable evidence link.");
+    }
+    if (evidence.callableId === undefined ||
+      sourceStructure.availability !== "available") continue;
+    if (linkedCallableIds.has(evidence.callableId)) {
+      throw new RoslynHostError("The Roslyn helper reused a callable evidence link.");
+    }
+    linkedCallableIds.add(evidence.callableId);
+    const callable = callables.get(evidence.callableId);
+    if (callable === undefined || callable.name !== unit.name ||
+      callable.complexity !== unit.complexity ||
+      callable.range.startLine !== unit.line ||
+      callable.range.endLine !== (unit.endLine ?? unit.line) ||
+      evidence.sites.some((site) => !rangeContains(callable.range, site.range))) {
+      throw new RoslynHostError("The Roslyn helper returned inconsistent callable evidence.");
+    }
+  }
+  if (siteCount > ROSLYN_HOST_LIMITS.decisionSitesPerFile ||
+    serializedBytes > CITY_MODEL_LIMITS.decisionEvidenceBytesPerBuilding) {
+    throw new RoslynHostError("The Roslyn helper returned oversized file decision evidence.");
+  }
 }
 
 function parseOutcome(value: unknown): RoslynFileOutcome {
@@ -532,10 +749,13 @@ function parseOutcome(value: unknown): RoslynFileOutcome {
     "maximum complexity",
     1,
   );
+  const decisionLoad = integer(item.decisionLoad, "decision load", 0);
   if (
     units.length !== executableUnitCount ||
     Math.max(...units.map(({ complexity }) => complexity)) !==
-      maximumComplexity
+      maximumComplexity ||
+    units.reduce((total, unit) => total + unit.complexity - 1, 0) !==
+      decisionLoad
   ) {
     throw new RoslynHostError(
       "The Roslyn helper returned inconsistent metrics.",
@@ -544,13 +764,18 @@ function parseOutcome(value: unknown): RoslynFileOutcome {
   const warnings = item.warnings.map((warning) =>
     safeText(warning, CITY_MODEL_LIMITS.warningCharacters),
   );
+  validateUnitEvidenceLinks(
+    units,
+    sourceStructure,
+    !warnings.includes("syntax-errors-present"),
+  );
   return {
     id,
     status: "ok",
     metricMethod: "csharp-roslyn-v1",
     metrics: {
       sloc: integer(item.sloc, "SLOC", 0),
-      decisionLoad: integer(item.decisionLoad, "decision load", 0),
+      decisionLoad,
       maximumComplexity,
       executableUnitCount,
     },
@@ -590,6 +815,24 @@ function parseResponse(
     throw new RoslynHostError(
       "The Roslyn helper returned mismatched source identifiers.",
     );
+  }
+  let decisionSites = 0;
+  let decisionEvidenceBytes = 0;
+  for (const outcome of outcomes) {
+    if (outcome.status !== "ok") continue;
+    for (const unit of outcome.units) {
+      const evidence = unit.decisionEvidence;
+      if (evidence === undefined) continue;
+      decisionSites += evidence.sites.length;
+      decisionEvidenceBytes += Buffer.byteLength(
+        JSON.stringify(evidence),
+        "utf8",
+      );
+    }
+  }
+  if (decisionSites > ROSLYN_HOST_LIMITS.decisionSitesPerBatch ||
+    decisionEvidenceBytes > CITY_MODEL_LIMITS.decisionEvidenceBytesPerModel) {
+    throw new RoslynHostError("The Roslyn helper returned oversized batch decision evidence.");
   }
   return outcomes.sort((left, right) =>
     left.id.localeCompare(right.id, "en-US"),

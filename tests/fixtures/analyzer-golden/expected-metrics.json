@@ -12,13 +12,63 @@
         "name": "<top-level>",
         "line": 1,
         "endLine": 11,
-        "complexity": 1
+        "complexity": 1,
+        "decisionEvidence": {
+          "version": "codecity.complexity-evidence/1",
+          "unitId": "building:5346a9e269d0a892:unit:top-level",
+          "scope": "top-level",
+          "status": "complete",
+          "totalContribution": 0,
+          "omittedContribution": 0,
+          "sites": []
+        }
       },
       {
         "name": "Choose",
         "line": 5,
         "endLine": 9,
-        "complexity": 4
+        "complexity": 4,
+        "decisionEvidence": {
+          "version": "codecity.complexity-evidence/1",
+          "unitId": "building:5346a9e269d0a892:unit:callable:d48bc0b06fff42ab",
+          "scope": "callable",
+          "callableId": "building:5346a9e269d0a892:callable:d48bc0b06fff42ab",
+          "status": "complete",
+          "totalContribution": 3,
+          "omittedContribution": 0,
+          "sites": [
+            {
+              "kind": "conditional-branch",
+              "range": {
+                "startLine": 7,
+                "startColumn": 9,
+                "endLine": 7,
+                "endColumn": 10
+              },
+              "contribution": 1
+            },
+            {
+              "kind": "short-circuit-operator",
+              "range": {
+                "startLine": 7,
+                "startColumn": 19,
+                "endLine": 7,
+                "endColumn": 20
+              },
+              "contribution": 1
+            },
+            {
+              "kind": "conditional-expression",
+              "range": {
+                "startLine": 8,
+                "startColumn": 22,
+                "endLine": 8,
+                "endColumn": 22
+              },
+              "contribution": 1
+            }
+          ]
+        }
       }
     ]
   },
@@ -35,13 +85,63 @@
         "name": "<top-level>",
         "line": 1,
         "endLine": 9,
-        "complexity": 1
+        "complexity": 1,
+        "decisionEvidence": {
+          "version": "codecity.complexity-evidence/1",
+          "unitId": "building:3484f10461080e34:unit:top-level",
+          "scope": "top-level",
+          "status": "complete",
+          "totalContribution": 0,
+          "omittedContribution": 0,
+          "sites": []
+        }
       },
       {
         "name": "choose",
         "line": 6,
         "endLine": 9,
-        "complexity": 4
+        "complexity": 4,
+        "decisionEvidence": {
+          "version": "codecity.complexity-evidence/1",
+          "unitId": "building:3484f10461080e34:unit:callable:callable:953ca195da6b9a69",
+          "scope": "callable",
+          "callableId": "building:3484f10461080e34:callable:callable:953ca195da6b9a69",
+          "status": "complete",
+          "totalContribution": 3,
+          "omittedContribution": 0,
+          "sites": [
+            {
+              "kind": "conditional-branch",
+              "range": {
+                "startLine": 7,
+                "startColumn": 3,
+                "endLine": 7,
+                "endColumn": 4
+              },
+              "contribution": 1
+            },
+            {
+              "kind": "short-circuit-operator",
+              "range": {
+                "startLine": 7,
+                "startColumn": 13,
+                "endLine": 7,
+                "endColumn": 14
+              },
+              "contribution": 1
+            },
+            {
+              "kind": "conditional-expression",
+              "range": {
+                "startLine": 8,
+                "startColumn": 16,
+                "endLine": 8,
+                "endColumn": 16
+              },
+              "contribution": 1
+            }
+          ]
+        }
       }
     ]
   },
@@ -58,19 +158,142 @@
         "name": "<top-level>",
         "line": 1,
         "endLine": 11,
-        "complexity": 1
+        "complexity": 1,
+        "decisionEvidence": {
+          "version": "codecity.complexity-evidence/1",
+          "unitId": "building:a4ff97c43a1841cc:unit:top-level",
+          "scope": "top-level",
+          "status": "complete",
+          "totalContribution": 0,
+          "omittedContribution": 0,
+          "sites": []
+        }
       },
       {
         "name": "Card",
         "line": 7,
         "endLine": 11,
-        "complexity": 2
+        "complexity": 2,
+        "decisionEvidence": {
+          "version": "codecity.complexity-evidence/1",
+          "unitId": "building:a4ff97c43a1841cc:unit:callable:callable:a5d8e0c9580ace9f",
+          "scope": "callable",
+          "callableId": "building:a4ff97c43a1841cc:callable:callable:a5d8e0c9580ace9f",
+          "status": "complete",
+          "totalContribution": 1,
+          "omittedContribution": 0,
+          "sites": [
+            {
+              "kind": "conditional-expression",
+              "range": {
+                "startLine": 9,
+                "startColumn": 5,
+                "endLine": 9,
+                "endColumn": 5
+              },
+              "contribution": 1
+            }
+          ]
+        }
       },
       {
         "name": "<callback>",
         "line": 9,
         "endLine": 9,
-        "complexity": 1
+        "complexity": 1,
+        "decisionEvidence": {
+          "version": "codecity.complexity-evidence/1",
+          "unitId": "building:a4ff97c43a1841cc:unit:callable:callable:7d5f19460a6c8153",
+          "scope": "callable",
+          "callableId": "building:a4ff97c43a1841cc:callable:callable:7d5f19460a6c8153",
+          "status": "complete",
+          "totalContribution": 0,
+          "omittedContribution": 0,
+          "sites": []
+        }
+      }
+    ]
+  },
+  "web/legacy.js": {
+    "metricMethod": "typescript-compiler-api-v1",
+    "metrics": {
+      "sloc": 4,
+      "decisionLoad": 4,
+      "maximumComplexity": 5,
+      "executableUnitCount": 2
+    },
+    "units": [
+      {
+        "name": "<top-level>",
+        "line": 1,
+        "endLine": 4,
+        "complexity": 1,
+        "decisionEvidence": {
+          "version": "codecity.complexity-evidence/1",
+          "unitId": "building:aeaa03134c1e1102:unit:top-level",
+          "scope": "top-level",
+          "status": "complete",
+          "totalContribution": 0,
+          "omittedContribution": 0,
+          "sites": []
+        }
+      },
+      {
+        "name": "legacyChoice",
+        "line": 1,
+        "endLine": 4,
+        "complexity": 5,
+        "decisionEvidence": {
+          "version": "codecity.complexity-evidence/1",
+          "unitId": "building:aeaa03134c1e1102:unit:callable:callable:7bdedb76c34855b8",
+          "scope": "callable",
+          "callableId": "building:aeaa03134c1e1102:callable:callable:7bdedb76c34855b8",
+          "status": "complete",
+          "totalContribution": 4,
+          "omittedContribution": 0,
+          "sites": [
+            {
+              "kind": "conditional-branch",
+              "range": {
+                "startLine": 2,
+                "startColumn": 3,
+                "endLine": 2,
+                "endColumn": 4
+              },
+              "contribution": 1
+            },
+            {
+              "kind": "short-circuit-operator",
+              "range": {
+                "startLine": 2,
+                "startColumn": 13,
+                "endLine": 2,
+                "endColumn": 14
+              },
+              "contribution": 1
+            },
+            {
+              "kind": "nullish-operator",
+              "range": {
+                "startLine": 2,
+                "startColumn": 39,
+                "endLine": 2,
+                "endColumn": 40
+              },
+              "contribution": 1
+            },
+            {
+              "kind": "conditional-expression",
+              "range": {
+                "startLine": 3,
+                "startColumn": 16,
+                "endLine": 3,
+                "endColumn": 16
+              },
+              "contribution": 1
+            }
+          ]
+        }
       }
     ]
   }

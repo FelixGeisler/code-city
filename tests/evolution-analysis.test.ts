@@ -294,10 +294,12 @@ function evolve(
 describe("history evolution analysis", () => {
   it("keeps a building lineage and placement across an exact Git rename", async () => {
     const before = await facts({
-      "src/old-name.ts": "export const answer = 42;\n",
+      "src/old-name.ts":
+        "export function answer(known: boolean) { return known ? 42 : 0; }\n",
     });
     const after = await facts({
-      "src/new-name.ts": "export const answer = 42;\n",
+      "src/new-name.ts":
+        "export function answer(known: boolean) { return known ? 42 : 0; }\n",
     });
     const selected = selection([COMMITS.b, COMMITS.a], {
       mode: "commit-count",
@@ -334,6 +336,24 @@ describe("history evolution analysis", () => {
     );
     expect(replayed[0]!.model.buildings[0]!.position).toEqual(
       replayed[1]!.model.buildings[0]!.position,
+    );
+    const beforeBuilding = replayed[0]!.model.buildings[0]!;
+    const afterBuilding = replayed[1]!.model.buildings[0]!;
+    const beforeUnits = beforeBuilding.units ?? [];
+    const afterUnits = afterBuilding.units ?? [];
+    expect(
+      beforeUnits.map((unit) => unit.decisionEvidence?.unitId),
+    ).toEqual(
+      afterUnits.map((unit) => unit.decisionEvidence?.unitId),
+    );
+    const callableEvidence = afterUnits.find(
+      (unit) => unit.decisionEvidence?.scope === "callable",
+    )?.decisionEvidence;
+    expect(callableEvidence?.callableId).toBe(
+      afterBuilding.sourceStructure?.callables[0]?.id,
+    );
+    expect(callableEvidence?.unitId.startsWith(`${afterBuilding.id}:`)).toBe(
+      true,
     );
     expect(
       result.bundle.deltas[0]!.changes.buildings.changed[0]!

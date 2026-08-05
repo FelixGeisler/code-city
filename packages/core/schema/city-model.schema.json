@@ -959,6 +959,9 @@
         "complexity": {
           "type": "integer",
           "minimum": 1
+        },
+        "decisionEvidence": {
+          "$ref": "#/$defs/executableUnitDecisionEvidence"
         }
       },
       "additionalProperties": true
@@ -989,6 +992,88 @@
         "endLine": { "type": "integer", "minimum": 1 },
         "endColumn": { "type": "integer", "minimum": 1 }
       },
+      "additionalProperties": false
+    },
+    "complexityDecisionSite": {
+      "type": "object",
+      "required": ["kind", "range", "contribution"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "conditional-branch",
+            "loop",
+            "switch-arm",
+            "catch",
+            "conditional-expression",
+            "short-circuit-operator",
+            "nullish-operator",
+            "guard",
+            "pattern-operator"
+          ]
+        },
+        "range": { "$ref": "#/$defs/sourceRange" },
+        "contribution": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": false
+    },
+    "executableUnitDecisionEvidence": {
+      "type": "object",
+      "required": ["version", "unitId", "scope", "status", "sites"],
+      "properties": {
+        "version": { "const": "codecity.complexity-evidence/1" },
+        "unitId": { "$ref": "#/$defs/nonEmptyString" },
+        "scope": { "enum": ["top-level", "callable"] },
+        "callableId": { "$ref": "#/$defs/nonEmptyString" },
+        "status": { "enum": ["complete", "truncated", "unavailable"] },
+        "totalContribution": { "type": "integer", "minimum": 0 },
+        "omittedContribution": { "type": "integer", "minimum": 0 },
+        "reason": { "$ref": "#/$defs/nonEmptyString" },
+        "sites": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/complexityDecisionSite" }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "status": { "const": "complete" } }, "required": ["status"] },
+          "then": {
+            "required": ["totalContribution", "omittedContribution"],
+            "properties": {
+              "totalContribution": { "type": "integer", "minimum": 0 },
+              "omittedContribution": { "const": 0 },
+              "reason": false
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "truncated" } }, "required": ["status"] },
+          "then": {
+            "required": ["totalContribution", "omittedContribution", "reason"],
+            "properties": {
+              "totalContribution": { "type": "integer", "minimum": 0 },
+              "omittedContribution": { "type": "integer", "minimum": 1 },
+              "reason": { "$ref": "#/$defs/nonEmptyString" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "status": { "const": "unavailable" } }, "required": ["status"] },
+          "then": {
+            "required": ["reason"],
+            "properties": {
+              "reason": { "$ref": "#/$defs/nonEmptyString" },
+              "sites": { "type": "array", "maxItems": 0 },
+              "totalContribution": false,
+              "omittedContribution": false
+            }
+          }
+        },
+        {
+          "if": { "properties": { "scope": { "const": "top-level" } }, "required": ["scope"] },
+          "then": { "properties": { "callableId": false } }
+        }
+      ],
       "additionalProperties": false
     },
     "sourceTypeFact": {

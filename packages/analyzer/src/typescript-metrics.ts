@@ -6,11 +6,27 @@ import type {
   StaticImportFact,
 } from "./types.js";
 import type {
+  ComplexityDecisionSite,
+  ExecutableUnitDecisionEvidence,
   SourceCallableFact,
   SourceStructure,
   SourceTypeFact,
 } from "../../core/src/model.js";
+import { CITY_MODEL_LIMITS } from "../../core/src/model-validation.js";
 import { stableId } from "../../core/src/path.js";
+
+const DECISION_EVIDENCE_TRUNCATED_REASON =
+  "Decision-site evidence was truncated by analyzer retention limits.";
+
+interface CollectedSourceStructure {
+  readonly structure: SourceStructure;
+  readonly callableIdByNode: ReadonlyMap<ts.Node, string>;
+}
+
+interface DecisionAnalysis {
+  readonly totalContribution: number;
+  readonly sites: readonly ComplexityDecisionSite[];
+}
 
 export interface TypeScriptMetricsResult {
   readonly sloc: number;
@@ -63,7 +79,7 @@ function sourceCallableKind(node: ts.Node): SourceCallableFact["kind"] {
  * does not resolve names across files or invent call edges: program/type-checker
  * context is not reliably available for arbitrary snapshots.
  */
-function collectSourceStructure(source: ts.SourceFile): SourceStructure {
+function collectSourceStructure(source: ts.SourceFile): CollectedSourceStructure {
   const rawTypes: Array<Omit<SourceTypeFact, "id" | "parentTypeId" | "provenance"> & { node: ts.Node }> = [];
   const rawCallables: Array<Omit<SourceCallableFact, "id" | "enclosingTypeId" | "complexity" | "provenance"> & { node: ts.Node }> = [];
   const typeByNode = new Map<ts.Node, string>();
@@ -98,22 +114,29 @@ function collectSourceStructure(source: ts.SourceFile): SourceStructure {
     return Object.freeze({ id: typeByNode.get(item.node)!, name: item.name, kind: item.kind, range: item.range, provenance: "syntax" as const, ...(parentTypeId === undefined ? {} : { parentTypeId }) });
   });
   rawCallables.sort(compareDeclaration);
+  const callableIdByNode = new Map<ts.Node, string>();
+  rawCallables.forEach((item) =>
+    callableIdByNode.set(item.node, uniqueId("callable", item, usedIds)),
+  );
   const callables = rawCallables.map((item) => {
     let parent = item.node.parent;
     while (parent && !typeByNode.has(parent)) parent = parent.parent;
     const enclosingTypeId = parent === undefined ? undefined : typeByNode.get(parent);
-    const complexity = callableComplexity(item.node);
-    return Object.freeze({ id: uniqueId("callable", item, usedIds), name: item.name, kind: item.kind, range: item.range, provenance: "syntax" as const, complexity, ...(enclosingTypeId === undefined ? {} : { enclosingTypeId }) });
+    const complexity = callableComplexity(item.node, source);
+    return Object.freeze({ id: callableIdByNode.get(item.node)!, name: item.name, kind: item.kind, range: item.range, provenance: "syntax" as const, complexity, ...(enclosingTypeId === undefined ? {} : { enclosingTypeId }) });
   });
   return Object.freeze({
-    version: "codecity.source-structure/1",
-    availability: "available",
-    types: Object.freeze(types),
-    callables: Object.freeze(callables),
-    relations: Object.freeze([]),
-    unavailable: Object.freeze([
-      "TypeScript/JavaScript cross-file type references and call targets are unavailable: the snapshot parser records only unambiguous declarations and does not infer semantic bindings.",
-    ]),
+    callableIdByNode,
+    structure: Object.freeze({
+      version: "codecity.source-structure/1",
+      availability: "available",
+      types: Object.freeze(types),
+      callables: Object.freeze(callables),
+      relations: Object.freeze([]),
+      unavailable: Object.freeze([
+        "TypeScript/JavaScript cross-file type references and call targets are unavailable: the snapshot parser records only unambiguous declarations and does not infer semantic bindings.",
+      ]),
+    }),
   });
 }
 
@@ -189,17 +212,10 @@ function sanitizeSourceName(value: string | undefined, fallback: string): string
   return result.trim() || fallback;
 }
 
-function callableComplexity(node: ts.Node): number {
+function callableComplexity(node: ts.Node, source: ts.SourceFile): number {
   const body = (node as ts.FunctionLikeDeclarationBase).body;
   if (!body) return 1;
-  let decisions = 0;
-  const visit = (current: ts.Node): void => {
-    if (current !== body && isExecutableUnit(current) && current.body) return;
-    decisions += decisionIncrement(current);
-    ts.forEachChild(current, visit);
-  };
-  visit(body);
-  return 1 + decisions;
+  return 1 + collectDecisionAnalysis(body, source).totalContribution;
 }
 
 function compareText(left: string, right: string): number {
@@ -231,7 +247,12 @@ function isExecutableUnit(
   );
 }
 
-function decisionIncrement(node: ts.Node): number {
+function decisionSite(
+  node: ts.Node,
+  source: ts.SourceFile,
+): ComplexityDecisionSite | undefined {
+  let kind: ComplexityDecisionSite["kind"] | undefined;
+  let marker: ts.Node | undefined;
   if (
     ts.isIfStatement(node) ||
     ts.isForStatement(node) ||
@@ -240,26 +261,90 @@ function decisionIncrement(node: ts.Node): number {
     ts.isWhileStatement(node) ||
     ts.isDoStatement(node) ||
     ts.isCatchClause(node) ||
-    ts.isConditionalExpression(node) ||
     ts.isCaseClause(node)
   ) {
-    return 1;
-  }
-
-  if (ts.isBinaryExpression(node)) {
-    const kind = node.operatorToken.kind;
+    kind = ts.isIfStatement(node)
+      ? "conditional-branch"
+      : ts.isCatchClause(node)
+        ? "catch"
+        : ts.isCaseClause(node)
+          ? "switch-arm"
+          : "loop";
+    marker = node.getFirstToken(source);
+  } else if (ts.isConditionalExpression(node)) {
+    kind = "conditional-expression";
+    marker = node.questionToken;
+  } else if (ts.isBinaryExpression(node)) {
+    const operator = node.operatorToken.kind;
     if (
-      kind === ts.SyntaxKind.AmpersandAmpersandToken ||
-      kind === ts.SyntaxKind.BarBarToken ||
-      kind === ts.SyntaxKind.QuestionQuestionToken ||
-      kind === ts.SyntaxKind.AmpersandAmpersandEqualsToken ||
-      kind === ts.SyntaxKind.BarBarEqualsToken ||
-      kind === ts.SyntaxKind.QuestionQuestionEqualsToken
+      operator === ts.SyntaxKind.AmpersandAmpersandToken ||
+      operator === ts.SyntaxKind.BarBarToken ||
+      operator === ts.SyntaxKind.AmpersandAmpersandEqualsToken ||
+      operator === ts.SyntaxKind.BarBarEqualsToken
     ) {
-      return 1;
+      kind = "short-circuit-operator";
+      marker = node.operatorToken;
+    } else if (
+      operator === ts.SyntaxKind.QuestionQuestionToken ||
+      operator === ts.SyntaxKind.QuestionQuestionEqualsToken
+    ) {
+      kind = "nullish-operator";
+      marker = node.operatorToken;
     }
   }
-  return 0;
+  if (kind === undefined || marker === undefined) return undefined;
+  return Object.freeze({ kind, range: sourceRange(marker, source), contribution: 1 });
+}
+
+function compareDecisionSites(
+  left: ComplexityDecisionSite,
+  right: ComplexityDecisionSite,
+): number {
+  return (
+    left.range.startLine - right.range.startLine ||
+    left.range.startColumn - right.range.startColumn ||
+    left.range.endLine - right.range.endLine ||
+    left.range.endColumn - right.range.endColumn ||
+    compareText(left.kind, right.kind)
+  );
+}
+
+function retainEarliestDecisionSite(
+  sites: ComplexityDecisionSite[],
+  site: ComplexityDecisionSite,
+): void {
+  let low = 0;
+  let high = sites.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (compareDecisionSites(sites[middle]!, site) <= 0) low = middle + 1;
+    else high = middle;
+  }
+  if (low >= CITY_MODEL_LIMITS.decisionSitesPerUnit) return;
+  sites.splice(low, 0, site);
+  if (sites.length > CITY_MODEL_LIMITS.decisionSitesPerUnit) sites.pop();
+}
+
+function collectDecisionAnalysis(
+  body: ts.Node,
+  source: ts.SourceFile,
+): DecisionAnalysis {
+  let totalContribution = 0;
+  const sites: ComplexityDecisionSite[] = [];
+  const visit = (node: ts.Node): void => {
+    if (node !== body && isExecutableUnit(node) && node.body) return;
+    const site = decisionSite(node, source);
+    if (site !== undefined) {
+      totalContribution += site.contribution;
+      retainEarliestDecisionSite(sites, site);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(body);
+  return Object.freeze({
+    totalContribution,
+    sites: Object.freeze(sites),
+  });
 }
 
 function countSloc(
@@ -293,24 +378,33 @@ function countSloc(
   return occupied.size;
 }
 
-function collectUnits(source: ts.SourceFile): readonly ExecutableUnitMetric[] {
-  const units: ExecutableUnitMetric[] = [];
+function collectUnits(
+  source: ts.SourceFile,
+  callableIdByNode: ReadonlyMap<ts.Node, string>,
+): readonly ExecutableUnitMetric[] {
+  interface RawUnit {
+    readonly name: string;
+    readonly line: number;
+    readonly endLine: number;
+    readonly analysis: DecisionAnalysis;
+    readonly scope: "top-level" | "callable";
+    readonly callableId?: string;
+  }
+  const rawUnits: RawUnit[] = [];
 
   function analyzeBody(
     body: ts.Node,
     name: string,
     line: number,
+    callableNode?: ts.Node,
   ): void {
-    let decisions = 0;
-
     function visit(node: ts.Node): void {
       if (node !== body && isExecutableUnit(node) && node.body) {
         const nestedLine =
           source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
-        analyzeBody(node.body, unitName(node, source), nestedLine);
+        analyzeBody(node.body, unitName(node, source), nestedLine, node);
         return;
       }
-      decisions += decisionIncrement(node);
       ts.forEachChild(node, visit);
     }
 
@@ -319,18 +413,74 @@ function collectUnits(source: ts.SourceFile): readonly ExecutableUnitMetric[] {
       source.getLineAndCharacterOfPosition(
         Math.max(body.getStart(source), body.getEnd() - 1),
       ).line + 1;
-    units.push({ name, line, endLine, complexity: 1 + decisions });
+    const callableId = callableNode === undefined
+      ? undefined
+      : callableIdByNode.get(callableNode);
+    rawUnits.push({
+      name,
+      line,
+      endLine,
+      analysis: collectDecisionAnalysis(body, source),
+      scope: callableNode === undefined ? "top-level" : "callable",
+      ...(callableId === undefined ? {} : { callableId }),
+    });
   }
 
   // Keeping a top-level unit for every source file makes file totals stable and
   // accounts for executable module initializers.
   analyzeBody(source, "<top-level>", 1);
-  return units.sort(
+  rawUnits.sort(
     (left, right) =>
       left.line - right.line ||
       left.name.localeCompare(right.name, "en-US") ||
-      left.complexity - right.complexity,
+      left.analysis.totalContribution - right.analysis.totalContribution,
   );
+  let remainingSites = CITY_MODEL_LIMITS.decisionSitesPerBuilding;
+  return Object.freeze(rawUnits.map((unit) => {
+    const retainedSites = Object.freeze(
+      unit.analysis.sites.slice(0, remainingSites),
+    );
+    remainingSites -= retainedSites.length;
+    const retainedContribution = retainedSites.reduce(
+      (total, site) => total + site.contribution,
+      0,
+    );
+    const omittedContribution =
+      unit.analysis.totalContribution - retainedContribution;
+    const identity = unit.callableId === undefined
+      ? "unit:top-level"
+      : `unit:${unit.callableId}`;
+    const decisionEvidence: ExecutableUnitDecisionEvidence =
+      omittedContribution === 0
+        ? Object.freeze({
+            version: "codecity.complexity-evidence/1" as const,
+            unitId: identity,
+            scope: unit.scope,
+            ...(unit.callableId === undefined ? {} : { callableId: unit.callableId }),
+            status: "complete" as const,
+            totalContribution: unit.analysis.totalContribution,
+            omittedContribution: 0 as const,
+            sites: retainedSites,
+          })
+        : Object.freeze({
+            version: "codecity.complexity-evidence/1" as const,
+            unitId: identity,
+            scope: unit.scope,
+            ...(unit.callableId === undefined ? {} : { callableId: unit.callableId }),
+            status: "truncated" as const,
+            totalContribution: unit.analysis.totalContribution,
+            omittedContribution,
+            reason: DECISION_EVIDENCE_TRUNCATED_REASON,
+            sites: retainedSites,
+          });
+    return Object.freeze({
+      name: unit.name,
+      line: unit.line,
+      endLine: unit.endLine,
+      complexity: 1 + unit.analysis.totalContribution,
+      decisionEvidence,
+    });
+  }));
 }
 
 function collectStaticImports(
@@ -406,7 +556,8 @@ export function analyzeTypeScriptSource(
     true,
     scriptKind,
   );
-  const units = collectUnits(source);
+  const sourceStructure = collectSourceStructure(source);
+  const units = collectUnits(source, sourceStructure.callableIdByNode);
   const parseDiagnostics =
     (
       source as ts.SourceFile & {
@@ -426,6 +577,6 @@ export function analyzeTypeScriptSource(
     units,
     imports: collectStaticImports(source),
     hasSyntaxErrors: parseDiagnostics.length > 0,
-    sourceStructure: collectSourceStructure(source),
+    sourceStructure: sourceStructure.structure,
   };
 }

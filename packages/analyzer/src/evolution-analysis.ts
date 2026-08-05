@@ -1735,6 +1735,92 @@ function remapIdentity(
   });
 }
 
+function remapSourceBoundId(
+  value: string,
+  sourceId: string,
+  lineageId: string,
+): string {
+  const prefix = `${sourceId}:`;
+  return value.startsWith(prefix)
+    ? `${lineageId}:${value.slice(prefix.length)}`
+    : value;
+}
+
+/**
+ * Fine-grained analyzer identities are namespaced by the path-derived source
+ * id. History replaces that id with a stable lineage id, so the nested
+ * identities must follow the same replacement. Otherwise an exact rename
+ * would make unchanged callable evidence look like a metric change.
+ */
+function remapSourceBoundIdentities(
+  source: SourceFileFact,
+  lineageId: string,
+  budget: EvolutionWorkBudget,
+): Pick<SourceFileFact, "units" | "sourceStructure"> {
+  const remapId = (value: string): string =>
+    remapSourceBoundId(value, source.id, lineageId);
+  const units = Object.freeze(
+    source.units.map((unit) => {
+      budget.consume();
+      const evidence = unit.decisionEvidence;
+      if (evidence === undefined) return unit;
+      return Object.freeze({
+        ...unit,
+        decisionEvidence: Object.freeze({
+          ...evidence,
+          unitId: remapId(evidence.unitId),
+          ...(evidence.callableId === undefined
+            ? {}
+            : { callableId: remapId(evidence.callableId) }),
+        }),
+      });
+    }),
+  );
+  const structure = source.sourceStructure;
+  if (structure === undefined) return Object.freeze({ units });
+  return Object.freeze({
+    units,
+    sourceStructure: Object.freeze({
+      ...structure,
+      types: Object.freeze(
+        structure.types.map((item) => {
+          budget.consume();
+          return Object.freeze({
+            ...item,
+            id: remapId(item.id),
+            ...(item.parentTypeId === undefined
+              ? {}
+              : { parentTypeId: remapId(item.parentTypeId) }),
+          });
+        }),
+      ),
+      callables: Object.freeze(
+        structure.callables.map((item) => {
+          budget.consume();
+          return Object.freeze({
+            ...item,
+            id: remapId(item.id),
+            ...(item.enclosingTypeId === undefined
+              ? {}
+              : { enclosingTypeId: remapId(item.enclosingTypeId) }),
+          });
+        }),
+      ),
+      relations: Object.freeze(
+        structure.relations.map((item) => {
+          budget.consume();
+          return Object.freeze({
+            ...item,
+            id: remapId(item.id),
+            sourceId: remapId(item.sourceId),
+            targetId: remapId(item.targetId),
+          });
+        }),
+      ),
+    }),
+  });
+}
+
 function remapFrame(
   prepared: PreparedFrame,
   repositoryId: string,
@@ -1810,8 +1896,14 @@ function remapFrame(
     if (id === undefined || moduleId === undefined) {
       fail("invalid-input", "A source lineage could not be resolved.");
     }
+    const boundIdentities = remapSourceBoundIdentities(
+      source,
+      id,
+      budget,
+    );
     return Object.freeze({
       ...source,
+      ...boundIdentities,
       id,
       repositoryId,
       moduleId,

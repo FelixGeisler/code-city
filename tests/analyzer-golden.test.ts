@@ -50,7 +50,7 @@ function dependency(
 }
 
 describe("offline analyzer golden repositories", () => {
-  it("emits the pinned C#, TypeScript, and TSX metric contract", async () => {
+  it("emits the pinned C#, TypeScript, TSX, and JavaScript metric contract", async () => {
     const facts = await analyzeLocalFacts([consumerRoot, providerRoot]);
     const byPath = new Map(
       facts.sources.map((source) => [source.path, source]),

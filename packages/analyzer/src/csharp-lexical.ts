@@ -1,4 +1,8 @@
+import type { ExecutableUnitDecisionEvidence } from "../../core/src/model.js";
 import type { ExecutableUnitMetric } from "./types.js";
+
+const LEXICAL_DECISION_EVIDENCE_UNAVAILABLE =
+  "Decision-site evidence is unavailable for csharp-lexical-v1 because the fallback scanner cannot prove stable callable ownership and exact syntax-token attribution.";
 
 interface Token {
   readonly value: string;
@@ -543,7 +547,7 @@ export function analyzeCSharpLexically(source: string): CSharpLexicalResult {
     decisionCounts[selected + 1] = (decisionCounts[selected + 1] ?? 0) + 1;
   }
 
-  const units: ExecutableUnitMetric[] = [
+  const measuredUnits: ExecutableUnitMetric[] = [
     {
       name: "<top-level>",
       line: 1,
@@ -563,6 +567,22 @@ export function analyzeCSharpLexically(source: string): CSharpLexicalResult {
       left.name.localeCompare(right.name, "en-US") ||
       left.complexity - right.complexity,
   );
+  const units = measuredUnits.map((unit, index) => {
+    const scope = unit.name === "<top-level>" && unit.line === 1
+      ? "top-level"
+      : "callable";
+    const decisionEvidence: ExecutableUnitDecisionEvidence = {
+      version: "codecity.complexity-evidence/1",
+      unitId: scope === "top-level"
+        ? "unit:top-level"
+        : `unit:csharp-lexical:${String(index).padStart(5, "0")}`,
+      scope,
+      status: "unavailable",
+      sites: [],
+      reason: LEXICAL_DECISION_EVIDENCE_UNAVAILABLE,
+    };
+    return { ...unit, decisionEvidence };
+  });
   const decisionLoad = units.reduce(
     (total, unit) => total + unit.complexity - 1,
     0,

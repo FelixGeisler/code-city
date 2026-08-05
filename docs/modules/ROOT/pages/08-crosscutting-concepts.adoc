@@ -168,6 +168,32 @@ Do not count `else`, `default`, `return`, `throw`, `await`, or optional chaining
 `decisionLoad` is `sum(CC(unit) - 1)`; `maximumComplexity` is the greatest
 recorded unit CC.
 
+Analyzer-produced executable units may add the backwards-compatible
+`codecity.complexity-evidence/1` object. It owns a stable unit identity and,
+for declared callables, references the matching
+`codecity.source-structure/1` callable identity. Each retained site records
+the contributing construct, contribution, and exact inclusive one-based
+line/UTF-16-column range of its keyword or operator token. Sites are persisted
+in strict source order and do not overlap, so source navigation and a bounded
+AI preview can select the recorded token without rediscovering syntax.
+
+`complete` evidence satisfies
+`CC(unit) = 1 + totalContribution`, with the retained contributions summing to
+the total. `truncated` evidence preserves the same aggregate invariant and
+records a positive `omittedContribution`; retained plus omitted contributions
+must equal the total. `unavailable` evidence has no sites or contribution
+total and carries a reason, so consumers must not reconstruct sites from the
+aggregate. An absent evidence object is the readable legacy aggregate-only
+case. The TypeScript compiler front end emits evidence for TypeScript and
+JavaScript, and the Roslyn helper emits it for C#. The
+`csharp-lexical-v1` fallback explicitly reports evidence as unavailable because
+it cannot prove stable callable ownership and exact syntax attribution.
+
+Retention is bounded to 256 sites per unit, 4,096 per file, and 250,000 per
+model. Serialized evidence is additionally limited to 96 KiB per unit, 2 MiB
+per file, and 64 MiB per model. Limits retain the earliest deterministic sites
+and mark the affected unit `truncated`; they never silently drop evidence.
+
 === Curated presets
 
 The preset catalog is versioned and distinguishes an unavailable design from
