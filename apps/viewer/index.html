@@ -1066,37 +1066,39 @@
               tabindex="-1"
               hidden
             >
-              <div class="viewer-contextual-details-navigation">
-                <button
-                  id="viewer-details-back"
-                  class="button button-compact"
-                  type="button"
-                  data-workspace-details-back
-                >
-                  Back to workspace
-                </button>
-                <span>Contextual details</span>
-              </div>
         <section
           id="inspector"
           class="panel inspector"
           aria-labelledby="selection-name"
         >
-          <div class="panel-heading selection-header">
-            <div class="selection-heading-copy">
-              <span id="inspector-title" class="selection-kind">Details</span>
-              <h2 id="selection-name">Nothing selected</h2>
+          <div class="viewer-contextual-details-sticky">
+            <div class="viewer-contextual-details-navigation">
+              <button
+                id="viewer-details-back"
+                class="button button-compact"
+                type="button"
+                data-workspace-details-back
+              >
+                Back to workspace
+              </button>
+              <span>Contextual details</span>
             </div>
-            <button
-              id="clear-selection"
-              class="icon-button"
-              type="button"
-              aria-label="Clear selection"
-              title="Clear selection"
-              hidden
-            >
-              ×
-            </button>
+            <div class="panel-heading selection-header">
+              <div class="selection-heading-copy">
+                <span id="inspector-title" class="selection-kind">Details</span>
+                <h2 id="selection-name">Nothing selected</h2>
+              </div>
+              <button
+                id="clear-selection"
+                class="icon-button"
+                type="button"
+                aria-label="Clear selection"
+                title="Clear selection"
+                hidden
+              >
+                ×
+              </button>
+            </div>
           </div>
           <div id="inspector-empty" class="empty-state">
             Select a building, district, or external dependency to inspect it.

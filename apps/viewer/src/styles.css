@@ -910,10 +910,15 @@ button,
   outline-offset: -2px;
 }
 
-.viewer-contextual-details-navigation {
+.viewer-contextual-details-sticky {
   position: sticky;
   z-index: 3;
   top: 0;
+  background: rgba(7, 17, 31, 0.97);
+  backdrop-filter: blur(14px);
+}
+
+.viewer-contextual-details-navigation {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -924,7 +929,12 @@ button,
   background: rgba(7, 17, 31, 0.96);
   font-size: 11px;
   font-weight: 750;
-  backdrop-filter: blur(12px);
+}
+
+.viewer-contextual-details .selection-header {
+  position: static;
+  z-index: auto;
+  backdrop-filter: none;
 }
 
 .viewer-workspace .panel {
