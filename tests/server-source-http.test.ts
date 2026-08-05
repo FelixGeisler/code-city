@@ -682,11 +682,16 @@ describe("source navigation HTTP API", () => {
       enabled: true,
       availability: "unavailable",
       provider: { id: "local", label: "Local" },
-      context: guidanceContext(over.building.id),
       reason: expect.stringMatching(/65 UTF-8 bytes.*maximum of 64 bytes.*not truncated.*no source was sent/iu),
       limits: { timeoutMs: 20_000, maximumSourceBytes },
       privacy: "no-prompt-storage",
     });
+    expect(overBody.preview["context"]).toEqual(guidanceContext(over.building.id));
+    expect(Object.keys(overBody.preview["context"] as Record<string, unknown>).sort()).toEqual([
+      "buildingId",
+      "kind",
+      "version",
+    ]);
     expect(overBody.preview).not.toHaveProperty("grant");
     expect(overBody.preview).not.toHaveProperty("transmission");
     expect(JSON.stringify(overBody)).not.toContain(overText);
