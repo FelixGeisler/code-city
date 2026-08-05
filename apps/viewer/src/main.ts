@@ -245,8 +245,10 @@ import {
 import { ViewerFramePicker } from "./viewer-frame-picker.js";
 import { supportsViewerInstancing } from "./viewer-render-capability.js";
 import {
+  availableViewerVisualizationModes,
   createViewerVisualization,
   presentBuildingMetrics,
+  viewerVisualizationModeLabel,
   type EvolutionVisualizationData,
   type ViewerVisualizationMode,
 } from "./visualization-mode.js";
@@ -413,6 +415,31 @@ const imageExportOpenButton =
   element<HTMLButtonElement>("image-export-open");
 const printExportOpenButton =
   element<HTMLButtonElement>("print-export-open");
+const projectActionsMenu =
+  element<HTMLDetailsElement>("project-actions-menu");
+const projectActionsSummary = projectActionsMenu.querySelector<HTMLElement>(
+  "summary",
+);
+if (projectActionsSummary === null) {
+  throw new Error("Missing Project menu summary.");
+}
+const exportActionsMenu =
+  element<HTMLDetailsElement>("export-actions-menu");
+const exportActionsSummary = exportActionsMenu.querySelector<HTMLElement>(
+  "summary",
+);
+if (exportActionsSummary === null) {
+  throw new Error("Missing Export menu summary.");
+}
+const advancedProjectSettingsOpen = element<HTMLButtonElement>(
+  "advanced-project-settings-open",
+);
+const advancedProjectSettingsDialog = element<HTMLDialogElement>(
+  "advanced-project-settings-dialog",
+);
+const advancedProjectSettingsClose = element<HTMLButtonElement>(
+  "advanced-project-settings-close",
+);
 const cameraViewSwitch = element<HTMLElement>("camera-view-switch");
 const cameraView3dButton =
   element<HTMLButtonElement>("camera-view-3d");
@@ -2881,7 +2908,9 @@ class CityScene {
     showDetails = true,
   ): void {
     if (entity !== null && showDetails) {
-      viewerWorkspace.show("details", { intent: "passive" });
+      viewerWorkspace.showDetails({ intent: "passive" });
+    } else if (entity === null) {
+      viewerWorkspace.closeDetails();
     }
     if (sameSceneEntity(entity, this.selectedEntity)) {
       return;
@@ -3282,7 +3311,8 @@ function createCityScene(): CityScene | UnavailableCityScene {
           return (
             intent.additive ||
             intent.range ||
-            viewerWorkspace.activeView === "queries"
+            (viewerWorkspace.activeView === "analyze" &&
+              viewerWorkspace.activeAnalyzeView === "queries")
           );
         }
         advancedQueryPanel.clearSelection();
@@ -3314,6 +3344,7 @@ let visualizationMode: ViewerVisualizationMode = "semantic";
 let activeVisualizationLabel = "Semantic groups";
 let activeLegendEntries: readonly ImageExportLegendEntry[] = [];
 let previewPrinterProfile: PrinterProfile | undefined;
+let printVisualizationContextActive = false;
 let evolutionWorker = new EvolutionTimelineWorkerClient();
 let evolutionLoadController: AbortController | undefined;
 let evolutionGeneration = 0;
@@ -3485,7 +3516,11 @@ const printExportDialog = installPrintExportDialog({
   },
   onProfilePreviewChange: (profile) => {
     previewPrinterProfile = profile;
-    if (visualizationMode === "print") applyVisualization();
+    if (!printVisualizationContextActive) return;
+    const modeChanged = synchronizeVisualizationModeOptions();
+    if (modeChanged || visualizationMode === "print") {
+      applyVisualization();
+    }
   },
 });
 const imageExportDialog = installImageExportDialog({
@@ -3560,6 +3595,9 @@ advancedQueryPanel = installAdvancedQueryPanel(
     onFocus: (buildingIds) => {
       cityScene.focusBuildings(buildingIds);
     },
+    onInspect: () => {
+      viewerWorkspace.showDetails({ intent: "explicit", focus: true });
+    },
     onIsolate: (buildingIds) => {
       applyingAdvancedSelection = true;
       try {
@@ -3575,9 +3613,9 @@ const designSmellPanel = installDesignSmellPanel(
   element<HTMLElement>("design-smell-panel"),
   {
     onNavigate: (finding) => {
-      viewerWorkspace.show("details", {
+      viewerWorkspace.showDetails({
         intent: "explicit",
-        focusTab: true,
+        focus: true,
       });
       selectBuildingFromExplorer(finding.buildingId);
       const building = activeBuildingsById.get(finding.buildingId);
@@ -3651,17 +3689,17 @@ setSafeExtensionProject(activeModel);
 
 visualizationModeSelect.addEventListener("change", () => {
   const selected = visualizationModeSelect.value;
-  if (
-    selected !== "semantic" &&
-    selected !== "complexity" &&
-    selected !== "age" &&
-    selected !== "churn" &&
-    selected !== "print"
-  ) {
+  const availableModes = availableViewerVisualizationModes({
+    evolution: activeEvolutionAnalysis !== undefined,
+    printProfile:
+      printVisualizationContextActive &&
+      previewPrinterProfile !== undefined,
+  });
+  if (!availableModes.includes(selected as ViewerVisualizationMode)) {
     visualizationModeSelect.value = visualizationMode;
     return;
   }
-  visualizationMode = selected;
+  visualizationMode = selected as ViewerVisualizationMode;
   applyVisualization();
   imageExportDialog.invalidate();
 });
@@ -3730,6 +3768,7 @@ cameraTopDownButton.addEventListener("click", () => {
   applyCameraPresetFromToolbar("top-down");
 });
 imageExportOpenButton.addEventListener("click", () => {
+  exportActionsMenu.open = false;
   stopEvolutionPlayback(false);
   if (!evolutionLoading && !evolutionSeekController.busy) {
     settleEvolutionTransition();
@@ -3769,6 +3808,8 @@ evolutionRange.addEventListener("input", () => {
 });
 
 fileOpenButton.addEventListener("click", () => {
+  projectActionsMenu.open = false;
+  projectActionsSummary.focus({ preventScroll: true });
   fileInput.click();
 });
 
@@ -3790,11 +3831,56 @@ fileInput.addEventListener("change", async () => {
 });
 
 demoButton.addEventListener("click", () => {
+  projectActionsMenu.open = false;
+  projectActionsSummary.focus({ preventScroll: true });
   automaticModelLoadGate.invalidate();
   activateImportedModel(DEMO_MODEL, { label: "Built-in demo" });
 });
 
+printExportOpenButton.addEventListener("click", () => {
+  exportActionsMenu.open = false;
+  printVisualizationContextActive = true;
+  synchronizeVisualizationModeOptions();
+});
+
+projectActionsMenu.addEventListener("toggle", () => {
+  if (projectActionsMenu.open) exportActionsMenu.open = false;
+});
+
+exportActionsMenu.addEventListener("toggle", () => {
+  if (exportActionsMenu.open) projectActionsMenu.open = false;
+});
+
+advancedProjectSettingsOpen.addEventListener("click", () => {
+  projectActionsMenu.open = false;
+  advancedProjectSettingsDialog.showModal();
+});
+
+advancedProjectSettingsClose.addEventListener("click", () => {
+  advancedProjectSettingsDialog.close();
+});
+
+advancedProjectSettingsDialog.addEventListener("click", (event) => {
+  if (event.target === advancedProjectSettingsDialog) {
+    advancedProjectSettingsDialog.close();
+  }
+});
+
+advancedProjectSettingsDialog.addEventListener("close", () => {
+  restoreDisclosureFocus(projectActionsSummary);
+});
+
+element<HTMLDialogElement>("image-export-dialog").addEventListener(
+  "close",
+  () => restoreDisclosureFocus(exportActionsSummary),
+);
+element<HTMLDialogElement>("print-export-dialog").addEventListener(
+  "close",
+  () => restoreDisclosureFocus(exportActionsSummary),
+);
+
 clearSelectionButton.addEventListener("click", () => {
+  viewerWorkspace.closeDetails({ focusTab: true });
   clearBuildingSelection();
 });
 
@@ -4051,6 +4137,7 @@ window.addEventListener("keydown", (event) => {
     !event.defaultPrevented &&
     document.querySelector("dialog[open]") === null
   ) {
+    viewerWorkspace.closeDetails({ focusTab: true });
     clearBuildingSelection();
     hideError();
   }
@@ -4386,10 +4473,7 @@ function resetEvolutionTimeline(recreateWorker = true): void {
   evolutionTimeline.hidden = true;
   evolutionRange.max = "0";
   evolutionRange.value = "0";
-  if (
-    visualizationMode === "age" ||
-    visualizationMode === "churn"
-  ) {
+  if (synchronizeVisualizationModeOptions()) {
     applyVisualization();
   }
 }
@@ -4420,6 +4504,7 @@ async function startEvolutionTimeline(source: ModelSource): Promise<void> {
       loaded.histories.map((history) => [history.id, history]),
     );
     activeEvolutionAnalysis = evolutionVisualizationData(loaded.analysis);
+    synchronizeVisualizationModeOptions();
     activeEvolutionIndex = 0;
     evolutionRange.max = String(Math.max(0, loaded.frames.length - 1));
     evolutionLoading = false;
@@ -4503,6 +4588,7 @@ async function seekEvolution(
           : createEvolutionBuildingLineageSelection(selectedBuilding);
       activeEvolutionIndex = targetIndex;
       activeEvolutionAnalysis = evolutionVisualizationData(result.analysis);
+      synchronizeVisualizationModeOptions();
       activeEvolutionTransition = initial ? undefined : result.transition;
       activeEvolutionQueryChanges = initial
         ? undefined
@@ -4893,9 +4979,9 @@ function renderExternalNodeList(): void {
       button.setAttribute("aria-current", "true");
     }
     button.addEventListener("click", () => {
-      viewerWorkspace.show("details", {
+      viewerWorkspace.showDetails({
         intent: "explicit",
-        focusTab: true,
+        focus: true,
       });
       cityScene.selectExternalNode(node.id);
     });
@@ -5025,9 +5111,9 @@ function renderBuildingSearch(): void {
           });
           if (additive || range) return;
         }
-        viewerWorkspace.show("details", {
+        viewerWorkspace.showDetails({
           intent: "explicit",
-          focusTab: true,
+          focus: true,
         });
         selectBuildingFromExplorer(result.buildingId);
       });
@@ -5040,9 +5126,9 @@ function renderBuildingSearch(): void {
         button.setAttribute("aria-current", "true");
       }
       button.addEventListener("click", () => {
-        viewerWorkspace.show("details", {
+        viewerWorkspace.showDetails({
           intent: "explicit",
-          focusTab: true,
+          focus: true,
         });
         selectDistrictFromExplorer(result.districtId);
       });
@@ -5125,7 +5211,7 @@ function activateRepositoryTreeEntity(
       entity.id,
     );
     if (selectedExplorerBuildingId(next) === entity.id) {
-      cityScene.selectBuilding(entity.id, true, false);
+      cityScene.selectBuilding(entity.id, true, true);
     }
   } else if (entity.kind === "district") {
     const next = selectExplorerDistrict(
@@ -5134,7 +5220,7 @@ function activateRepositoryTreeEntity(
       entity.id,
     );
     if (selectedExplorerDistrictId(next) === entity.id) {
-      cityScene.selectDistrict(entity.id, true, false);
+      cityScene.selectDistrict(entity.id, true, true);
     }
   }
 }
@@ -5837,9 +5923,9 @@ function isolateDistrictDependencyEndpoint(
     return;
   }
   if (focusInspectTab) {
-    viewerWorkspace.show("details", {
+    viewerWorkspace.showDetails({
       intent: "explicit",
-      focusTab: true,
+      focus: true,
     });
   }
   cityScene.isolateDistrict(districtId);
@@ -6144,18 +6230,18 @@ function dependencyListItem(
         target,
       );
       if (!node) return;
-      viewerWorkspace.show("details", {
+      viewerWorkspace.showDetails({
         intent: "explicit",
-        focusTab: true,
+        focus: true,
       });
       cityScene.selectExternalNode(node.id);
     });
   } else if (route.counterpart.kind === "building") {
     const counterpartBuildingId = route.counterpart.buildingId;
     row.addEventListener("click", () => {
-      viewerWorkspace.show("details", {
+      viewerWorkspace.showDetails({
         intent: "explicit",
-        focusTab: true,
+        focus: true,
       });
       selectBuildingFromExplorer(counterpartBuildingId);
     });
@@ -6224,9 +6310,9 @@ function dependencyListItem(
       buildingId: sourceBuilding.id,
       dependencyId: route.dependencyId,
     });
-    viewerWorkspace.show("details", {
+    viewerWorkspace.showDetails({
       intent: "explicit",
-      focusTab: true,
+      focus: true,
     });
     if (selectedExplorerBuildingId(explorerState) === sourceBuilding.id) {
       revealBuildingSource(
@@ -6705,6 +6791,27 @@ function renderLegend(
     item.append(swatch, label);
     legend.append(item);
   }
+}
+
+function synchronizeVisualizationModeOptions(): boolean {
+  const availableModes = availableViewerVisualizationModes({
+    evolution: activeEvolutionAnalysis !== undefined,
+    printProfile:
+      printVisualizationContextActive &&
+      previewPrinterProfile !== undefined,
+  });
+  const modeChanged = !availableModes.includes(visualizationMode);
+  if (modeChanged) visualizationMode = "semantic";
+  visualizationModeSelect.replaceChildren(
+    ...availableModes.map((mode) => {
+      const option = document.createElement("option");
+      option.value = mode;
+      option.textContent = viewerVisualizationModeLabel(mode);
+      return option;
+    }),
+  );
+  visualizationModeSelect.value = visualizationMode;
+  return modeChanged;
 }
 
 function applyVisualization(): void {
@@ -8037,6 +8144,17 @@ function disposeObject(object: THREE.Object3D): void {
         }
         material.dispose();
       });
+    }
+  });
+}
+
+function restoreDisclosureFocus(target: HTMLElement): void {
+  window.queueMicrotask(() => {
+    if (
+      target.isConnected &&
+      document.querySelector("dialog[open]") === null
+    ) {
+      target.focus({ preventScroll: true });
     }
   });
 }

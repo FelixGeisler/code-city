@@ -23,6 +23,36 @@ export type ViewerVisualizationMode =
   | "churn"
   | "print";
 
+export interface ViewerVisualizationCapabilities {
+  readonly evolution: boolean;
+  readonly printProfile: boolean;
+}
+
+const VIEWER_VISUALIZATION_MODE_LABELS = Object.freeze({
+  semantic: "Semantic groups",
+  complexity: "Complexity risk",
+  age: "Building age",
+  churn: "Historical churn",
+  print: "Print assignment preview",
+}) satisfies Readonly<Record<ViewerVisualizationMode, string>>;
+
+export function availableViewerVisualizationModes(
+  capabilities: ViewerVisualizationCapabilities,
+): readonly ViewerVisualizationMode[] {
+  return Object.freeze([
+    "semantic",
+    "complexity",
+    ...(capabilities.evolution ? (["age", "churn"] as const) : []),
+    ...(capabilities.printProfile ? (["print"] as const) : []),
+  ] satisfies ViewerVisualizationMode[]);
+}
+
+export function viewerVisualizationModeLabel(
+  mode: ViewerVisualizationMode,
+): string {
+  return VIEWER_VISUALIZATION_MODE_LABELS[mode];
+}
+
 export interface EvolutionVisualizationData {
   readonly ageByBuildingId: ReadonlyMap<string, number>;
   readonly churnByBuildingId: ReadonlyMap<string, number>;

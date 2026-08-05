@@ -1008,6 +1008,16 @@ async function openNextImport(page: Page): Promise<void> {
   await expect(page.locator("#project-import-source-title")).toBeVisible();
 }
 
+async function openAnalyzeTab(
+  page: Page,
+  tab: "Findings" | "Routes" | "Queries",
+): Promise<void> {
+  await page
+    .getByRole("tab", { name: "Analyze", exact: true })
+    .click();
+  await page.getByRole("tab", { name: tab, exact: true }).click();
+}
+
 async function chooseSource(
   page: Page,
   source:
@@ -1838,7 +1848,7 @@ test("preserves filtered selected dependency routes across evolution seeks", asy
 
   await expect(page.locator("#evolution-timeline")).toBeVisible();
   await expect(page.locator("#evolution-commit")).toContainText("2/2");
-  await page.getByRole("tab", { name: "Routes" }).click();
+  await openAnalyzeTab(page, "Routes");
   await page.locator("#district-routes-toggle").click();
   await page.locator("#district-route-filter-project").click();
   await page.locator("#district-route-filter-package").click();
@@ -1886,7 +1896,7 @@ test("preserves filtered selected dependency routes across evolution seeks", asy
   await expect(route).toHaveAttribute("aria-label", /2 edges, 2 references/u);
 
   await page.waitForTimeout(1_300);
-  await page.getByRole("tab", { name: "Queries" }).click();
+  await openAnalyzeTab(page, "Queries");
   await page
     .locator("#advanced-query-preset")
     .selectOption("changed-recently");
@@ -1911,7 +1921,7 @@ test("retains an exact building mask across evolution and intersects removed ide
   });
   await expect(page.locator("#overview-solutions")).toHaveText("2");
   await expect(page.locator("#overview-modules")).toHaveText("3");
-  await page.getByRole("tab", { name: "Queries" }).click();
+  await openAnalyzeTab(page, "Queries");
   await page.locator("#advanced-query-preset").selectOption("custom");
   await page.locator("#advanced-query-text").fill(".ts");
   await page.locator("#advanced-query-limit").selectOption("25");
@@ -1976,7 +1986,7 @@ test("retains an exact building mask across evolution and intersects removed ide
   });
 
   await seekEvolutionFrame(page, 1);
-  await page.getByRole("tab", { name: "Queries" }).click();
+  await openAnalyzeTab(page, "Queries");
   await expect
     .poll(selectionSnapshot, { timeout: 30_000 })
     .toMatchObject({
@@ -2034,7 +2044,7 @@ test("retains an exact building mask across evolution and intersects removed ide
   ).toHaveText(changedSavedName);
 
   await seekEvolutionFrame(page, 3);
-  await page.getByRole("tab", { name: "Queries" }).click();
+  await openAnalyzeTab(page, "Queries");
   await expect
     .poll(selectionSnapshot, { timeout: 30_000 })
     .toMatchObject({
@@ -2383,7 +2393,7 @@ test("preserves filtered route overlays and rebuilds their geometry across arbit
     page.locator("#dependency-list .dependency-result-button"),
   ).toHaveCount(12);
 
-  await page.getByRole("tab", { name: "Routes" }).click();
+  await openAnalyzeTab(page, "Routes");
   await page.locator("#district-route-filter-typescript").click();
   await expect(
     page.locator("#district-route-filter-typescript"),
@@ -2551,7 +2561,7 @@ test("preserves filtered route overlays and rebuilds their geometry across arbit
   ).toEqual(olderGeometry);
 
   await seekEvolutionFrame(page, 2);
-  await page.getByRole("tab", { name: "Routes" }).click();
+  await openAnalyzeTab(page, "Routes");
   const transientRoute = page
     .locator("#district-routes-list .district-route-button")
     .filter({ hasText: "lineage-added-package" });
@@ -3092,7 +3102,7 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   await page.locator("#building-search").fill("retained-large");
   await expect(retainedResult).toHaveCount(1);
 
-  await page.getByRole("tab", { name: "Metrics" }).click();
+  await openAnalyzeTab(page, "Findings");
   const smellPanel = page.locator("#design-smell-panel");
   await expect(smellPanel).toHaveAttribute("aria-busy", "false", {
     timeout: 30_000,
@@ -3102,8 +3112,9 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
       name: /High-complexity method.*retained-large\.ts/u,
     })
     .click();
+  await expect(page.locator("#viewer-view-details")).toBeVisible();
   await expect(
-    page.getByRole("tab", { name: "Details" }),
+    page.getByRole("tab", { name: "Analyze", exact: true }),
   ).toHaveAttribute("aria-selected", "true");
   await expect(page.locator("#selection-name")).toHaveText(
     "retained-large.ts",

@@ -207,14 +207,17 @@ export function installDesignSmellPanel(
   next.type = "button";
   pagination.append(previous, pageStatus, next);
 
+  const optionsDisclosure = element(document, "details");
+  optionsDisclosure.className = "design-smell-options";
+  const optionsSummary = element(document, "summary", "Rules and filters");
+  optionsDisclosure.append(optionsSummary, help, filters, unavailable);
+
   root.replaceChildren(
     heading,
-    help,
-    filters,
-    unavailable,
     status,
     results,
     pagination,
+    optionsDisclosure,
   );
 
   const filteredFindings = (): readonly DesignSmellFinding[] =>

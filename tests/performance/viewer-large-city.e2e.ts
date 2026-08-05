@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -44,6 +44,24 @@ const viewerRoot = path.resolve("build/viewer");
 let server: Server;
 let viewerUrl: string;
 
+async function openAnalyze(
+  page: Page,
+  view: "findings" | "routes" | "queries",
+): Promise<void> {
+  await page.locator("#viewer-tab-analyze").click();
+  await page.locator(`#analyze-tab-${view}`).click();
+}
+
+async function openAdvancedProjectSettings(page: Page): Promise<void> {
+  await page.locator("#project-actions-menu > summary").click();
+  await page.locator("#advanced-project-settings-open").click();
+  await expect(page.locator("#advanced-project-settings-dialog")).toBeVisible();
+}
+
+async function openExportMenu(page: Page): Promise<void> {
+  await page.locator("#export-actions-menu > summary").click();
+}
+
 test.beforeAll(async () => {
   server = createServer((request, response) => {
     void serveViewerFile(request.url ?? "/", response);
@@ -67,6 +85,163 @@ test.afterAll(async () => {
     });
     server.closeAllConnections();
   });
+});
+
+test("desktop workspace prioritizes exploration, findings, and contextual details", async ({
+  page,
+}) => {
+  await page.goto(viewerUrl, {
+    waitUntil: "domcontentloaded",
+    timeout: 45_000,
+  });
+  await expect(page.locator("#scene canvas")).toBeVisible();
+  await expect(page.locator("#image-export-open")).toBeEnabled();
+
+  const workspace = page.locator("#viewer-workspace");
+  await expect(workspace.locator("[data-workspace-view]")).toHaveCount(2);
+  await expect(page.locator("#viewer-view-explore")).toBeVisible();
+  await expect(page.locator("#viewer-view-details")).toBeHidden();
+  await expect(page.locator("#visualization-mode option")).toHaveText([
+    "Semantic groups",
+    "Complexity risk",
+  ]);
+
+  await page.locator("#building-search").fill("main.ts");
+  await page
+    .locator('#search-results [data-building-id="building:main"]')
+    .click();
+  await expect(workspace).toHaveAttribute("data-details-open", "true");
+  await expect(page.locator("#viewer-view-details")).toBeVisible();
+  await expect(page.locator("#building-hotspots-section")).toBeVisible();
+  await expect(page.locator("#building-metric-technical-details")).not.toHaveAttribute(
+    "open",
+    "",
+  );
+
+  await page.locator("#viewer-details-back").click();
+  await expect(page.locator("#viewer-view-explore")).toBeVisible();
+  await openAnalyze(page, "findings");
+  await expect(page.locator("#design-smell-panel")).toBeVisible();
+  await expect(page.locator("#advanced-query-panel")).toBeHidden();
+
+  await openAdvancedProjectSettings(page);
+  await expect(page.locator("#metric-mapping-panel")).toBeVisible();
+  await expect(page.locator("#safe-extension-panel")).toBeHidden();
+  await page.locator("#advanced-project-settings-close").click();
+  await expect(page.locator("#project-actions-menu > summary")).toBeFocused();
+
+  await openAdvancedProjectSettings(page);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#advanced-project-settings-dialog")).toBeHidden();
+  await expect(page.locator("#project-actions-menu > summary")).toBeFocused();
+
+  await openExportMenu(page);
+  await expect(page.locator("#image-export-open")).toBeVisible();
+  await expect(page.locator("#print-export-open")).toBeVisible();
+});
+
+test("narrow workspace preserves Analyze state across contextual inspection", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto(viewerUrl, {
+    waitUntil: "domcontentloaded",
+    timeout: 45_000,
+  });
+
+  const workspace = page.locator("#viewer-workspace");
+  await expect(workspace).toHaveAttribute("data-compact", "true");
+  await expect(workspace).toHaveAttribute("data-sheet-state", "peek");
+  await openAnalyze(page, "queries");
+  await expect(workspace).toHaveAttribute("data-sheet-state", "expanded");
+  await page.locator("#advanced-query-run").click();
+  await page.locator(".advanced-query-result").first().click();
+  await page.locator("#advanced-query-inspect").click();
+  await expect(page.locator("#viewer-view-details")).toBeVisible();
+  await expect(page.locator("#viewer-tab-analyze")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(page.locator("#analyze-tab-queries")).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await page.locator("#viewer-details-back").click();
+  await expect(page.locator("#analyze-view-queries")).toBeVisible();
+  await expect(page.locator("#analyze-tab-queries")).toBeFocused();
+  await expect(workspace).toHaveAttribute(
+    "data-active-analyze-view",
+    "queries",
+  );
+});
+
+test("disclosure actions and contextual dismissal restore visible keyboard focus", async ({
+  page,
+}) => {
+  await page.goto(viewerUrl, {
+    waitUntil: "domcontentloaded",
+    timeout: 45_000,
+  });
+  await expect(page.locator("#scene canvas")).toBeVisible();
+  await expect(page.locator("#image-export-open")).toBeEnabled();
+
+  const projectSummary = page.locator("#project-actions-menu > summary");
+  await projectSummary.focus();
+  await projectSummary.press("Enter");
+  const demo = page.locator("#demo-button");
+  await demo.focus();
+  await demo.press("Enter");
+  await expect(projectSummary).toBeFocused();
+
+  await projectSummary.press("Enter");
+  const openModel = page.locator("#model-file-open");
+  await openModel.focus();
+  const fileChooser = page.waitForEvent("filechooser");
+  await openModel.press("Enter");
+  await (await fileChooser).setFiles([]);
+  await expect(projectSummary).toBeFocused();
+
+  await openAdvancedProjectSettings(page);
+  await page.keyboard.press("Escape");
+  await expect(projectSummary).toBeFocused();
+
+  const exportSummary = page.locator("#export-actions-menu > summary");
+  await exportSummary.focus();
+  await exportSummary.press("Enter");
+  const imageExport = page.locator("#image-export-open");
+  await imageExport.focus();
+  await imageExport.press("Enter");
+  await expect(page.locator("#image-export-dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(exportSummary).toBeFocused();
+
+  await exportSummary.press("Enter");
+  const printExport = page.locator("#print-export-open");
+  await printExport.focus();
+  await printExport.press("Enter");
+  await expect(page.locator("#print-export-dialog")).toBeVisible();
+  await expect(
+    page.locator('#visualization-mode option[value="print"]'),
+  ).toHaveText("Print assignment preview");
+  const printClose = page.locator("#print-export-close");
+  await printClose.focus();
+  await printClose.press("Enter");
+  await expect(exportSummary).toBeFocused();
+
+  await page.locator("#building-search").fill("main.ts");
+  const mainResult = page.locator(
+    '#search-results [data-building-id="building:main"]',
+  );
+  await mainResult.click();
+  const clearSelection = page.locator("#clear-selection");
+  await clearSelection.focus();
+  await clearSelection.press("Enter");
+  await expect(page.locator("#viewer-tab-explore")).toBeFocused();
+
+  await page.locator("#building-search").fill("main.ts");
+  await mainResult.click();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#viewer-tab-explore")).toBeFocused();
 });
 
 test("25k production viewer stays within the rendering budget", async ({
@@ -187,6 +362,7 @@ test("25k hierarchy stays virtualized and synchronized with city state", async (
   await expect(page.locator("#selection-name")).toHaveText(
     alternativeName,
   );
+  await page.locator("#viewer-details-back").click();
   await page.locator("#isolate-district").click();
   await expect(
     tree.locator('[role="treeitem"][aria-selected="true"]'),
@@ -221,7 +397,7 @@ test("design-smell overlay is accessible, paginated, suppressible, and isolated"
       `isolate-district=district%3A007&performance=1`,
     { waitUntil: "domcontentloaded", timeout: 45_000 },
   );
-  await page.getByRole("tab", { name: "Metrics" }).click();
+  await openAnalyze(page, "findings");
   const panel = page.locator("#design-smell-panel");
   await expect(panel).toHaveAttribute("aria-busy", "false", {
     timeout: 45_000,
@@ -260,7 +436,7 @@ test("design-smell overlay is accessible, paginated, suppressible, and isolated"
   await expect(firstFinding).toContainText("⚠ Oversized file");
   expect(await firstFinding.textContent()).not.toMatch(/â|Â|Ã/u);
 
-  await page.getByRole("tab", { name: "Queries" }).click();
+  await openAnalyze(page, "queries");
   await page
     .locator("#advanced-query-preset")
     .selectOption("custom");
@@ -274,7 +450,7 @@ test("design-smell overlay is accessible, paginated, suppressible, and isolated"
   });
   const queryStatusBeforeSuppression =
     await queryStatus.textContent();
-  await page.getByRole("tab", { name: "Metrics" }).click();
+  await openAnalyze(page, "findings");
 
   const before = await panel.locator(".design-smell-count").textContent();
   await resultRows.first().getByRole("button", {
@@ -294,13 +470,13 @@ test("design-smell overlay is accessible, paginated, suppressible, and isolated"
     ),
   ).toBe(true);
 
-  await page.getByRole("tab", { name: "Queries" }).click();
+  await openAnalyze(page, "queries");
   await expect(queryStatus).not.toHaveText(
     queryStatusBeforeSuppression ?? "",
     { timeout: 45_000 },
   );
   await expect(queryStatus).toContainText("matches");
-  await page.getByRole("tab", { name: "Metrics" }).click();
+  await openAnalyze(page, "findings");
 
   await panel.getByRole("button", { name: "Next" }).click();
   await expect(
@@ -505,7 +681,7 @@ test("metric mappings require an explicit preview and preserve named project con
     waitUntil: "domcontentloaded",
     timeout: 45_000,
   });
-  await page.getByRole("tab", { name: "Metrics" }).click();
+  await openAdvancedProjectSettings(page);
 
   await expect(
     page.locator("#metric-mapping-unavailable-reasons"),
@@ -551,7 +727,7 @@ test("metric mappings require an explicit preview and preserve named project con
   );
 
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.getByRole("tab", { name: "Metrics" }).click();
+  await openAdvancedProjectSettings(page);
   await expect(
     page.locator("#metric-configuration-select option"),
   ).toContainText(["Choose configuration", "Team print"]);
@@ -564,7 +740,7 @@ test("runs explainable queries and synchronizes bounded multiple selections", as
     waitUntil: "domcontentloaded",
     timeout: 45_000,
   });
-  await page.getByRole("tab", { name: "Queries" }).click();
+  await openAnalyze(page, "queries");
   await page.locator("#advanced-query-run").click();
   await expect(page.locator("#advanced-query-status")).toContainText(
     "5 matches",
@@ -596,6 +772,7 @@ test("runs explainable queries and synchronizes bounded multiple selections", as
   );
   await expect(treeBuildings).toHaveCount(3);
   await treeBuildings.first().click();
+  await page.locator("#viewer-details-back").click();
   await treeBuildings.nth(1).click({ modifiers: ["Control"] });
   await treeBuildings.nth(2).click({ modifiers: ["Shift"] });
   await expect(
@@ -606,7 +783,7 @@ test("runs explainable queries and synchronizes bounded multiple selections", as
   await expect(page.locator("#selection-status")).toContainText(
     "2 buildings selected",
   );
-  await page.getByRole("tab", { name: "Queries" }).click();
+  await openAnalyze(page, "queries");
   await expect(
     page.locator('.advanced-query-result[aria-selected="true"]'),
   ).toHaveCount(2);
@@ -650,7 +827,7 @@ test("runs explainable queries and synchronizes bounded multiple selections", as
     .toContain('"version": "codecity.query-export/1"');
 
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.getByRole("tab", { name: "Queries" }).click();
+  await openAnalyze(page, "queries");
   await expect(page.locator("#advanced-query-saved")).toContainText(
     "Review set",
   );
@@ -669,7 +846,7 @@ test("isolates and focuses exact cross-district selections and uses visible sear
     waitUntil: "domcontentloaded",
     timeout: 45_000,
   });
-  await page.getByRole("tab", { name: "Queries" }).click();
+  await openAnalyze(page, "queries");
   await page.locator("#advanced-query-run").click();
   await expect(page.locator("#advanced-query-status")).toContainText(
     "5 matches",
@@ -694,13 +871,13 @@ test("isolates and focuses exact cross-district selections and uses visible sear
     "3 buildings selected",
   );
 
-  await page.getByRole("tab", { name: "Details" }).click();
+  await page.locator("#advanced-query-inspect").click();
   await page.locator("#dependency-section summary").click();
   await expect(page.locator("#dependency-outgoing-count")).toHaveText(
     "2",
   );
   await page.locator("#dependency-outgoing-toggle").click();
-  await page.getByRole("tab", { name: "Queries" }).click();
+  await openAnalyze(page, "queries");
   await page.locator("#advanced-query-compare").click();
   await expect(
     page.locator("#advanced-query-comparison-summary"),
@@ -760,7 +937,7 @@ test("isolates and focuses exact cross-district selections and uses visible sear
       buildingVisibilityMaskActive: false,
       visibleBuildingCount: 5,
     });
-  await page.getByRole("tab", { name: "Queries" }).click();
+  await openAnalyze(page, "queries");
   await page.locator("#advanced-query-isolate").click();
 
   await page.locator("#advanced-query-clear").click();
@@ -834,7 +1011,7 @@ test("canvas plain, additive, and range activation use the central city order", 
     waitUntil: "domcontentloaded",
     timeout: 45_000,
   });
-  await page.getByRole("tab", { name: "Queries" }).click();
+  await openAnalyze(page, "queries");
   await page.locator("#advanced-query-preset").selectOption("custom");
   await page.locator("#advanced-query-text").fill("main.ts");
   await page.locator("#advanced-query-run").click();
@@ -897,7 +1074,7 @@ test("canvas plain, additive, and range activation use the central city order", 
     .click();
   await page.waitForTimeout(750);
   const modelPoint = await sceneCanvasCenter(page);
-  await page.getByRole("tab", { name: "Queries" }).click();
+  await openAnalyze(page, "queries");
   await page
     .locator(
       '.advanced-query-result[data-building-id="building:main"]',
@@ -920,7 +1097,7 @@ test("whole-city PNG temporarily removes and then restores a building mask", asy
     waitUntil: "domcontentloaded",
     timeout: 45_000,
   });
-  await page.getByRole("tab", { name: "Queries" }).click();
+  await openAnalyze(page, "queries");
   await page.locator("#advanced-query-run").click();
   await expect(page.locator("#advanced-query-status")).toContainText(
     "5 matches",
@@ -932,7 +1109,7 @@ test("whole-city PNG temporarily removes and then restores a building mask", asy
     .click();
 
   const wholeCityHash = await prepareWholeCityPngHash(page);
-  await page.getByRole("tab", { name: "Queries" }).click();
+  await openAnalyze(page, "queries");
   await page.locator("#advanced-query-isolate").click();
   await expect
     .poll(() => selectionPerformanceSnapshot(page))
@@ -980,7 +1157,7 @@ test("25k exact selection mask stays instanced and constrains canvas BVH picking
     "3 buildings selected",
   );
 
-  await page.getByRole("tab", { name: "Queries" }).click();
+  await openAnalyze(page, "queries");
   await page.locator("#advanced-query-isolate").click();
   await expect
     .poll(() => selectionPerformanceSnapshot(page))
@@ -1043,6 +1220,7 @@ async function clickSceneCanvas(
 async function prepareWholeCityPngHash(
   page: import("@playwright/test").Page,
 ): Promise<string> {
+  await openExportMenu(page);
   await page.locator("#image-export-open").click();
   await expect(page.locator("#image-export-dialog")).toBeVisible();
   await page.locator("#image-export-width").fill("640");

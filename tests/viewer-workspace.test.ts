@@ -4,17 +4,22 @@ import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
+  analyzeViewForNavigation,
   initialViewerWorkspaceState,
   installViewerWorkspace,
   nextBoundedResultLimit,
   parseViewerWorkspaceWidth,
   VIEWER_WORKSPACE_MAX_WIDTH,
   VIEWER_WORKSPACE_MIN_WIDTH,
+  VIEWER_ANALYZE_VIEWS,
   VIEWER_WORKSPACE_VIEWS,
   VIEWER_WORKSPACE_WIDTH_STORAGE_KEY,
+  type ViewerAnalyzeView,
+  type ViewerWorkspaceState,
   type ViewerWorkspaceView,
   viewerWorkspaceMaximumWidth,
   viewerWorkspaceRuntimeWidth,
+  workspaceStateForAnalyze,
   workspaceStateForShow,
   workspaceViewForNavigation,
 } from "../apps/viewer/src/viewer-workspace.js";
@@ -132,6 +137,10 @@ interface WorkspaceFixture {
   readonly scrollOwner: FakeElement;
   readonly tabs: ReadonlyMap<ViewerWorkspaceView, FakeElement>;
   readonly panels: ReadonlyMap<ViewerWorkspaceView, FakeElement>;
+  readonly analyzeTabs: ReadonlyMap<ViewerAnalyzeView, FakeElement>;
+  readonly analyzePanels: ReadonlyMap<ViewerAnalyzeView, FakeElement>;
+  readonly details: FakeElement;
+  readonly detailsBack: FakeElement;
   readonly toggle: FakeElement;
   readonly resizer: FakeElement;
   readonly hostWindow: FakeWindow;
@@ -146,6 +155,10 @@ function workspaceFixture(width: number): WorkspaceFixture {
   const resizer = new FakeElement(hostWindow);
   const tabs = new Map<ViewerWorkspaceView, FakeElement>();
   const panels = new Map<ViewerWorkspaceView, FakeElement>();
+  const analyzeTabs = new Map<ViewerAnalyzeView, FakeElement>();
+  const analyzePanels = new Map<ViewerAnalyzeView, FakeElement>();
+  const details = new FakeElement(hostWindow);
+  const detailsBack = new FakeElement(hostWindow);
 
   for (const view of VIEWER_WORKSPACE_VIEWS) {
     const tab = new FakeElement(hostWindow);
@@ -155,6 +168,15 @@ function workspaceFixture(width: number): WorkspaceFixture {
     panel.dataset["workspacePanel"] = view;
     panels.set(view, panel);
   }
+  for (const view of VIEWER_ANALYZE_VIEWS) {
+    const tab = new FakeElement(hostWindow);
+    tab.dataset["analyzeView"] = view;
+    analyzeTabs.set(view, tab);
+    const panel = new FakeElement(hostWindow);
+    panel.dataset["analyzePanel"] = view;
+    analyzePanels.set(view, panel);
+  }
+  details.dataset["workspaceContext"] = "details";
   toggle.setChildren("[aria-hidden='true']", [toggleIcon]);
   root.setChildren(
     '[role="tab"][data-workspace-view]',
@@ -164,6 +186,16 @@ function workspaceFixture(width: number): WorkspaceFixture {
     '[role="tabpanel"][data-workspace-panel]',
     [...panels.values()],
   );
+  root.setChildren(
+    '[role="tab"][data-analyze-view]',
+    [...analyzeTabs.values()],
+  );
+  root.setChildren(
+    '[role="tabpanel"][data-analyze-panel]',
+    [...analyzePanels.values()],
+  );
+  root.setChildren('[data-workspace-context="details"]', [details]);
+  root.setChildren("[data-workspace-details-back]", [detailsBack]);
   root.setChildren("[data-workspace-toggle]", [toggle]);
   root.setChildren("[data-workspace-resizer]", [resizer]);
 
@@ -172,6 +204,10 @@ function workspaceFixture(width: number): WorkspaceFixture {
     scrollOwner,
     tabs,
     panels,
+    analyzeTabs,
+    analyzePanels,
+    details,
+    detailsBack,
     toggle,
     resizer,
     hostWindow,
@@ -190,14 +226,12 @@ function fakeEvent(
 }
 
 describe("viewer workspace navigation", () => {
-  it("uses the product-facing tab order", () => {
-    expect(VIEWER_WORKSPACE_VIEWS).toEqual([
-      "explore",
+  it("keeps the primary choice small and groups analysis tools", () => {
+    expect(VIEWER_WORKSPACE_VIEWS).toEqual(["explore", "analyze"]);
+    expect(VIEWER_ANALYZE_VIEWS).toEqual([
+      "findings",
       "routes",
       "queries",
-      "details",
-      "overview",
-      "metrics",
     ]);
   });
 
@@ -212,16 +246,28 @@ describe("viewer workspace navigation", () => {
 
   it("wraps predictably and supports Home and End", () => {
     expect(workspaceViewForNavigation("explore", "ArrowLeft")).toBe(
-      "metrics",
+      "analyze",
     );
-    expect(workspaceViewForNavigation("metrics", "ArrowRight")).toBe(
+    expect(workspaceViewForNavigation("analyze", "ArrowRight")).toBe(
       "explore",
     );
-    expect(workspaceViewForNavigation("routes", "Home")).toBe(
+    expect(workspaceViewForNavigation("analyze", "Home")).toBe(
       "explore",
     );
-    expect(workspaceViewForNavigation("routes", "End")).toBe(
-      "metrics",
+    expect(workspaceViewForNavigation("explore", "End")).toBe(
+      "analyze",
+    );
+    expect(analyzeViewForNavigation("findings", "ArrowLeft")).toBe(
+      "queries",
+    );
+    expect(analyzeViewForNavigation("queries", "ArrowRight")).toBe(
+      "findings",
+    );
+    expect(analyzeViewForNavigation("routes", "Home")).toBe(
+      "findings",
+    );
+    expect(analyzeViewForNavigation("routes", "End")).toBe(
+      "queries",
     );
   });
 
@@ -241,13 +287,17 @@ describe("viewer workspace navigation", () => {
 });
 
 describe("viewer workspace state", () => {
-  it("starts overview-first and only peeks on compact screens", () => {
+  it("starts in Explore and only peeks on compact screens", () => {
     expect(initialViewerWorkspaceState(false)).toEqual({
-      activeView: "overview",
+      activeView: "explore",
+      activeAnalyzeView: "findings",
+      detailsOpen: false,
       sheetState: "expanded",
     });
     expect(initialViewerWorkspaceState(true)).toEqual({
-      activeView: "overview",
+      activeView: "explore",
+      activeAnalyzeView: "findings",
+      detailsOpen: false,
       sheetState: "peek",
     });
   });
@@ -259,27 +309,44 @@ describe("viewer workspace state", () => {
         compact: true,
         intent: "passive",
       }),
-    ).toEqual({ activeView: "details", sheetState: "peek" });
+    ).toEqual({
+      activeView: "explore",
+      activeAnalyzeView: "findings",
+      detailsOpen: true,
+      sheetState: "peek",
+    });
     expect(
       workspaceStateForShow(
-        { activeView: "overview", sheetState: "expanded" },
+        { ...compact, sheetState: "expanded" },
         "details",
         { compact: true, intent: "passive" },
       ),
-    ).toEqual({ activeView: "details", sheetState: "expanded" });
+    ).toEqual({
+      activeView: "explore",
+      activeAnalyzeView: "findings",
+      detailsOpen: true,
+      sheetState: "expanded",
+    });
   });
 
-  it("expands explicit compact views and every desktop view", () => {
+  it("expands explicit compact views and preserves nested analysis state", () => {
     const collapsed = {
-      activeView: "overview",
+      activeView: "explore",
+      activeAnalyzeView: "findings",
+      detailsOpen: false,
       sheetState: "collapsed",
     } as const;
     expect(
-      workspaceStateForShow(collapsed, "routes", {
+      workspaceStateForAnalyze(collapsed, "routes", {
         compact: true,
         intent: "explicit",
-      }).sheetState,
-    ).toBe("expanded");
+      }),
+    ).toEqual({
+      activeView: "analyze",
+      activeAnalyzeView: "routes",
+      detailsOpen: false,
+      sheetState: "expanded",
+    });
     expect(
       workspaceStateForShow(collapsed, "details", {
         compact: false,
@@ -299,29 +366,30 @@ describe("viewer workspace state", () => {
       },
     );
 
-    expect(controller.activeView).toBe("overview");
+    expect(controller.activeView).toBe("explore");
+    expect(controller.activeAnalyzeView).toBe("findings");
     expect(controller.sheetState).toBe("peek");
     fixture.scrollOwner.scrollTop = 73;
-    controller.show("explore");
+    controller.showAnalyze("routes");
     fixture.scrollOwner.scrollTop = 21;
-    controller.show("overview");
-    expect(fixture.scrollOwner.scrollTop).toBe(73);
     controller.show("explore");
+    expect(fixture.scrollOwner.scrollTop).toBe(73);
+    controller.showAnalyze("routes");
     expect(fixture.scrollOwner.scrollTop).toBe(21);
 
     controller.setSheetState("collapsed");
-    controller.show("details", {
+    controller.showDetails({
       intent: "passive",
-      focusTab: true,
+      focus: true,
     });
     expect(controller.sheetState).toBe("peek");
-    expect(fixture.tabs.get("details")!.focusCount).toBe(0);
-    controller.show("routes", {
+    expect(fixture.details.focusCount).toBe(0);
+    controller.showAnalyze("queries", {
       intent: "explicit",
-      focusTab: true,
+      focus: true,
     });
     expect(controller.sheetState).toBe("expanded");
-    expect(fixture.tabs.get("routes")!.focusCount).toBe(1);
+    expect(fixture.analyzeTabs.get("queries")!.focusCount).toBe(1);
   });
 
   it("never lets passive intent steal focus, including on desktop", () => {
@@ -335,12 +403,42 @@ describe("viewer workspace state", () => {
       },
     );
 
-    controller.show("details", {
+    controller.showDetails({
       intent: "passive",
-      focusTab: true,
+      focus: true,
     });
     expect(controller.sheetState).toBe("expanded");
-    expect(fixture.tabs.get("details")!.focusCount).toBe(0);
+    expect(fixture.details.focusCount).toBe(0);
+  });
+
+  it("returns from contextual details to the prior workspace", () => {
+    const fixture = workspaceFixture(1300);
+    const controller = installViewerWorkspace(
+      fixture.root as unknown as HTMLElement,
+      fixture.scrollOwner as unknown as HTMLElement,
+      {
+        window: fixture.hostWindow as unknown as Window,
+        storage: fixture.hostWindow.localStorage,
+      },
+    );
+
+    controller.showAnalyze("routes");
+    controller.showDetails({ intent: "explicit", focus: true });
+    expect(controller.detailsOpen).toBe(true);
+    expect(fixture.details.focusCount).toBe(1);
+    expect(
+      fixture.tabs.get("analyze")!.getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(fixture.tabs.get("analyze")!.tabIndex).toBe(0);
+    expect(
+      fixture.analyzeTabs.get("routes")!.getAttribute("aria-selected"),
+    ).toBe("true");
+    fixture.detailsBack.dispatchEvent(fakeEvent("click"));
+    expect(controller.detailsOpen).toBe(false);
+    expect(controller.activeView).toBe("analyze");
+    expect(controller.activeAnalyzeView).toBe("routes");
+    expect(fixture.tabs.get("analyze")!.focusCount).toBe(0);
+    expect(fixture.analyzeTabs.get("routes")!.focusCount).toBe(1);
   });
 
   it("uses peek when entering compact mode and expands on desktop", () => {
@@ -366,10 +464,7 @@ describe("viewer workspace state", () => {
 
   it("reports initial, view, sheet, and responsive state changes", () => {
     const fixture = workspaceFixture(1300);
-    const states: {
-      readonly activeView: string;
-      readonly sheetState: string;
-    }[] = [];
+    const states: ViewerWorkspaceState[] = [];
     const controller = installViewerWorkspace(
       fixture.root as unknown as HTMLElement,
       fixture.scrollOwner as unknown as HTMLElement,
@@ -381,7 +476,12 @@ describe("viewer workspace state", () => {
     );
 
     expect(states).toEqual([
-      { activeView: "overview", sheetState: "expanded" },
+      {
+        activeView: "explore",
+        activeAnalyzeView: "findings",
+        detailsOpen: false,
+        sheetState: "expanded",
+      },
     ]);
     expect(Object.isFrozen(states[0])).toBe(true);
     controller.show("explore");
@@ -389,9 +489,24 @@ describe("viewer workspace state", () => {
     fixture.hostWindow.innerWidth = 900;
     fixture.hostWindow.dispatchEvent(fakeEvent("resize"));
     expect(states.slice(1)).toEqual([
-      { activeView: "explore", sheetState: "expanded" },
-      { activeView: "explore", sheetState: "collapsed" },
-      { activeView: "explore", sheetState: "collapsed" },
+      {
+        activeView: "explore",
+        activeAnalyzeView: "findings",
+        detailsOpen: false,
+        sheetState: "expanded",
+      },
+      {
+        activeView: "explore",
+        activeAnalyzeView: "findings",
+        detailsOpen: false,
+        sheetState: "collapsed",
+      },
+      {
+        activeView: "explore",
+        activeAnalyzeView: "findings",
+        detailsOpen: false,
+        sheetState: "collapsed",
+      },
     ]);
   });
 
@@ -410,7 +525,7 @@ describe("viewer workspace state", () => {
     expect(fixture.toggle.getAttribute("aria-label")).toBe(
       "Expand viewer tools fully",
     );
-    fixture.tabs.get("overview")!.focus();
+    fixture.tabs.get("explore")!.focus();
     controller.setSheetState("collapsed");
     expect(fixture.toggle.focusCount).toBe(1);
     expect(fixture.toggle.getAttribute("aria-expanded")).toBe("false");
@@ -513,7 +628,7 @@ describe("viewer workspace dock width", () => {
     fixture.toggle.dispatchEvent(fakeEvent("click"));
     fixture.hostWindow.innerWidth = 900;
     fixture.hostWindow.dispatchEvent(fakeEvent("resize"));
-    expect(controller.activeView).toBe("overview");
+    expect(controller.activeView).toBe("explore");
     expect(controller.sheetState).toBe("expanded");
     expect(controller.compact).toBe(false);
   });
@@ -556,7 +671,7 @@ describe("viewer workspace dock width", () => {
 });
 
 describe("viewer workspace markup", () => {
-  it("provides four labelled tabs and mounted tab panels", () => {
+  it("provides two primary tabs and grouped analysis tabs", () => {
     for (const view of VIEWER_WORKSPACE_VIEWS) {
       expect(html).toContain(`id="viewer-tab-${view}"`);
       expect(html).toContain(`data-workspace-view="${view}"`);
@@ -569,6 +684,20 @@ describe("viewer workspace markup", () => {
         ),
       );
     }
+    for (const view of VIEWER_ANALYZE_VIEWS) {
+      expect(html).toContain(`id="analyze-tab-${view}"`);
+      expect(html).toContain(`data-analyze-view="${view}"`);
+      expect(html).toContain(`id="analyze-view-${view}"`);
+      expect(html).toContain(`data-analyze-panel="${view}"`);
+      expect(html).toMatch(
+        new RegExp(
+          `id="analyze-view-${view}"[\\s\\S]*?role="tabpanel"[\\s\\S]*?aria-labelledby="analyze-tab-${view}"`,
+          "u",
+        ),
+      );
+    }
+    expect(html).toContain('data-workspace-context="details"');
+    expect(html).toContain("data-workspace-details-back");
     expect(html).toContain('id="viewer-workspace-toggle"');
     expect(html).toContain('aria-controls="viewer-workspace-scroll"');
     expect(html).toContain("data-workspace-resizer");
@@ -661,6 +790,14 @@ describe("viewer workspace markup", () => {
     expect(html).toMatch(
       /<input[\s\S]*?id="model-file"[\s\S]*?type="file"/u,
     );
+  });
+
+  it("keeps the primary import action visible and groups secondary actions", () => {
+    expect(html).toContain('id="project-import-open"');
+    expect(html).toContain('id="project-actions-menu"');
+    expect(html).toContain('id="export-actions-menu"');
+    expect(html).toContain('id="advanced-project-settings-dialog"');
+    expect(html).toContain('id="advanced-project-settings-open"');
   });
 
   it("docks beside the scene and becomes a three-state compact sheet", () => {

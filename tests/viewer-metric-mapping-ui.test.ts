@@ -22,13 +22,13 @@ beforeAll(async () => {
 });
 
 describe("viewer metric mapping UI", () => {
-  it("provides one accessible dedicated metrics tab and labelled controls", () => {
+  it("provides an explicit advanced settings surface and labelled controls", () => {
     expect(html).toMatch(
-      /id="viewer-tab-metrics"[\s\S]*role="tab"[\s\S]*aria-controls="viewer-view-metrics"[\s\S]*data-workspace-view="metrics"/u,
+      /id="advanced-project-settings-dialog"[\s\S]*aria-labelledby="advanced-project-settings-title"[\s\S]*<summary>Metric mapping<\/summary>[\s\S]*id="metric-mapping-panel"/u,
     );
-    expect(html).toMatch(
-      /id="viewer-view-metrics"[\s\S]*role="tabpanel"[\s\S]*aria-labelledby="viewer-tab-metrics"[\s\S]*data-workspace-panel="metrics"/u,
-    );
+    expect(html).not.toContain('id="viewer-tab-metrics"');
+    expect(html).toContain('id="advanced-project-settings-open"');
+    expect(html).toContain('id="advanced-project-settings-close"');
     for (const id of [
       "metric-mapping-preset",
       "metric-footprint-metric",
@@ -118,7 +118,7 @@ describe("viewer metric mapping UI", () => {
     );
   });
 
-  it("keeps the metrics workspace touch-usable and responsive", () => {
+  it("keeps advanced metric settings touch-usable and responsive", () => {
     expect(css).toMatch(
       /\.metric-mapping-channel select,[\s\S]*min-height:\s*38px/u,
     );
@@ -126,7 +126,10 @@ describe("viewer metric mapping UI", () => {
       /@media \(max-width: 600px\)[\s\S]*\.metric-mapping-channel\s*\{[\s\S]*grid-template-columns:\s*1fr/u,
     );
     expect(css).toMatch(
-      /\.viewer-workspace-tabs\s*\{[\s\S]*grid-template-columns:\s*repeat\(5,/u,
+      /\.viewer-workspace-tabs\s*\{[\s\S]*grid-template-columns:\s*repeat\(2,/u,
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 720px\)[\s\S]*\.advanced-project-settings-dialog\s*\{[\s\S]*width:\s*calc\(100vw - 20px\)/u,
     );
   });
 });

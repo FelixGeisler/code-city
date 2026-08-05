@@ -12,10 +12,12 @@ source-file dependency cycles. Per-class size, C# building-level dependencies,
 duplicate code, and feature envy remain explicitly unavailable until the
 CityModel contains facts that support those claims.
 
-The Design smells panel provides total and affected-building counts, a
-100-row paginated result window, rule filtering, keyboard-accessible navigation
-to the affected building, and text/symbol/shape/severity cues in addition to
-color. The 3D markers use at most four instanced batches and obey district
+**Analyze** opens on the Design smells panel, before expert configuration.
+It provides total and affected-building counts, a 100-row paginated result
+window, keyboard-accessible navigation to the affected building, and
+text/symbol/shape/severity cues in addition to color. Rule help, filters, and
+unavailable-capability explanations remain reachable in a collapsed
+**Rules and filters** disclosure so findings stay first. The 3D markers use at most four instanced batches and obey district
 isolation. A local, project-scoped browser store records false-positive
 suppressions without changing source code or the imported CityModel. Persisted
 data and worker messages use strict exact-key validation and bounded sizes;

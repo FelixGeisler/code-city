@@ -48,9 +48,7 @@ describe("viewer print export UI", () => {
     expect(html).toContain(
       '<option value="complexity">Complexity risk</option>',
     );
-    expect(html).toContain(
-      '<option value="print">Printer-profile assignment preview</option>',
-    );
+    expect(html).not.toContain('<option value="print">');
     expect(html).toContain('id="building-metric-explanation"');
     expect(html).toContain('id="print-export-cancel"');
     expect(html).toContain('id="print-calibration-submit"');

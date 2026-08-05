@@ -8,7 +8,9 @@ is the compatibility authority.
 
 == What a preview applies
 
-The Metrics tab provides a labelled JSON import, preview, and export flow. A
+**Project > Advanced settings > Safe extensions** provides a labelled JSON
+import, preview, and export flow without placing extension configuration ahead
+of Analyze findings. A
 successful preview projects the current city from an immutable base model. It
 applies every declared height, footprint, and color mapping; the optional
 `group-by-module` layout; declared legend endpoints; bounded query results; and
