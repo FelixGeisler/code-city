@@ -645,60 +645,6 @@ button,
   outline-offset: -3px;
 }
 
-.viewer-scope {
-  min-height: 43px;
-  flex: 0 0 auto;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--line);
-  background: rgba(10, 23, 39, 0.88);
-}
-
-.viewer-scope-eyebrow {
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-#viewer-scope-name {
-  overflow: hidden;
-  color: #edf8ff;
-  font-size: 12px;
-  font-weight: 750;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.viewer-scope-reset {
-  min-height: 28px;
-  padding: 0 8px;
-  border: 1px solid rgba(121, 196, 255, 0.25);
-  border-radius: 999px;
-  color: var(--accent-strong);
-  background: rgba(54, 163, 255, 0.08);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 750;
-  cursor: pointer;
-}
-
-.viewer-scope-reset:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.viewer-scope-reset:not(:disabled):hover,
-.viewer-scope-reset:focus-visible {
-  border-color: rgba(121, 196, 255, 0.58);
-  color: #fff;
-  outline: none;
-}
-
 .viewer-workspace-scroll {
   min-height: 0;
   flex: 1 1 auto;
@@ -717,9 +663,7 @@ button,
   height: 56px;
 }
 
-.viewer-workspace[data-sheet-state="collapsed"] .viewer-scope,
 .viewer-workspace[data-sheet-state="collapsed"] .viewer-workspace-scroll,
-.viewer-workspace[data-collapsed="true"] .viewer-scope,
 .viewer-workspace[data-collapsed="true"] .viewer-workspace-scroll {
   display: none;
 }
@@ -934,14 +878,6 @@ button,
   background: rgba(54, 163, 255, 0.17);
 }
 
-.repository-tree-row[data-isolated="true"] {
-  box-shadow: inset 3px 0 0 rgba(74, 222, 128, 0.72);
-}
-
-.repository-tree-row[data-out-of-scope="true"] {
-  opacity: 0.42;
-}
-
 .repository-tree-toggle {
   width: 14px;
   color: rgba(151, 190, 222, 0.92);
@@ -1085,14 +1021,6 @@ button,
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.isolation-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 7px;
-  padding-top: 3px;
-  border-top: 1px solid rgba(148, 188, 226, 0.12);
 }
 
 .district-routes-panel {
@@ -1335,15 +1263,6 @@ button,
 
 .district-route-contributors li {
   overflow-wrap: anywhere;
-}
-
-.district-route-isolation-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 7px;
-  margin-top: 10px;
-  padding-top: 9px;
-  border-top: 1px solid rgba(148, 188, 226, 0.12);
 }
 
 .inspector {
@@ -3935,9 +3854,7 @@ button,
     height: auto;
   }
 
-  .viewer-workspace[data-sheet-state="collapsed"] .viewer-scope,
   .viewer-workspace[data-sheet-state="collapsed"] .viewer-workspace-scroll,
-  .viewer-workspace[data-collapsed="true"] .viewer-scope,
   .viewer-workspace[data-collapsed="true"] .viewer-workspace-scroll {
     display: grid;
   }

@@ -128,25 +128,6 @@ export function keyedBaseGateway(
   );
 }
 
-/**
- * Projects a hidden isolation endpoint onto the visible district boundary.
- * No hidden district coordinates are accepted, so this function cannot leak
- * hidden geometry into the isolated view.
- */
-export function keyedIsolationGateway(
-  visibleDistrict: DistrictDependencyFootprint,
-  hiddenDistrictKey: string,
-): RouteEndpointGeometry {
-  assertFootprint(visibleDistrict, "Visible district");
-  assertKey(hiddenDistrictKey);
-  return keyedBoundaryGateway(
-    visibleDistrict,
-    hiddenDistrictKey,
-    visibleDistrict.surfaceY,
-    visibleDistrict.skylineY + SKYLINE_CLEARANCE,
-  );
-}
-
 function assertFootprint(
   district: DistrictDependencyFootprint,
   label: string,

@@ -709,8 +709,6 @@ describe("viewer workspace markup", () => {
       "building-search",
       "search-status",
       "search-results",
-      "isolate-district",
-      "show-whole-city",
       "district-routes-toggle",
       "district-routes-list",
       "district-routes-show-more",
@@ -809,16 +807,11 @@ describe("viewer workspace markup", () => {
     expect(css).toContain('data-sheet-state="peek"');
   });
 
-  it("keeps scope persistent and exposes all overview metrics", () => {
-    const scopePosition = html.indexOf('class="viewer-scope"');
-    const scrollPosition = html.indexOf(
-      'id="viewer-workspace-scroll"',
-    );
-    expect(scopePosition).toBeGreaterThan(0);
-    expect(scopePosition).toBeLessThan(scrollPosition);
-    expect(html).toMatch(
-      /id="viewer-scope-reset"[\s\S]*?aria-label="Show whole city"/u,
-    );
+  it("uses whole-city Explore metrics without district-scope controls", () => {
+    expect(html).not.toContain('class="viewer-scope"');
+    expect(html).not.toContain('id="viewer-scope-reset"');
+    expect(html).not.toContain('id="isolate-district"');
+    expect(html).not.toContain('id="show-whole-city"');
     for (const id of [
       "overview-repositories",
       "overview-solutions",

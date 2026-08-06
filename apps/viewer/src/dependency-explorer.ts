@@ -7,8 +7,6 @@ import type {
 import {
   normalizeExternalDependencyTarget,
 } from "../../../packages/core/src/external-dependencies.js";
-import { routeEndpointKey } from "./dependency-route-layout.js";
-
 export const DEPENDENCY_ROUTES_PER_DIRECTION = 20;
 export const MAXIMUM_MULTI_SELECTION_DEPENDENCY_ROUTES = 80;
 
@@ -95,7 +93,6 @@ interface IndexedDistrict {
 
 interface DependencyExplorerData {
   readonly buildings: ReadonlyMap<string, IndexedBuilding>;
-  readonly districts: ReadonlyMap<string, IndexedDistrict>;
   readonly incoming: ReadonlyMap<string, readonly SelectedDependencyRoute[]>;
   readonly outgoing: ReadonlyMap<string, readonly SelectedDependencyRoute[]>;
   readonly routes: ReadonlySet<SelectedDependencyRoute>;
@@ -130,17 +127,9 @@ export interface ExternalRouteEndpoint {
   readonly target: string;
 }
 
-export interface DistrictBoundaryRouteEndpoint {
-  readonly kind: "district-boundary";
-  readonly gatewayKey: string;
-  readonly districtId: string;
-  readonly hiddenCounterpart: InternalDependencyCounterpart;
-}
-
 export type DependencyRouteEndpoint =
   | BuildingRouteEndpoint
-  | ExternalRouteEndpoint
-  | DistrictBoundaryRouteEndpoint;
+  | ExternalRouteEndpoint;
 
 export interface DependencyRouteProjection {
   readonly dependencyId: string;
@@ -189,7 +178,6 @@ export function createDependencyExplorerIndex(
 
   const data: DependencyExplorerData = {
     buildings,
-    districts,
     incoming: freezeRouteMap(incoming),
     outgoing: freezeRouteMap(outgoing),
     routes,
@@ -326,17 +314,11 @@ export function toggleDependencyRouteDirection(
   });
 }
 
-/**
- * Resolves a selected route to renderable endpoints. When isolation hides an
- * internal counterpart, its building endpoint is replaced by a stable gateway
- * key for the visible district boundary; no hidden building position leaves
- * this helper.
- */
+/** Resolves a selected route to its exact renderable endpoints. */
 export function projectDependencyRoute(
   index: DependencyExplorerIndex,
   selectedBuildingId: string,
   route: SelectedDependencyRoute,
-  isolatedDistrictId: string | null,
 ): DependencyRouteProjection {
   const data = index[dependencyExplorerData];
   if (!data.routes.has(route)) {
@@ -354,14 +336,6 @@ export function projectDependencyRoute(
   }
 
   const selectedEndpoint = buildingEndpoint(selectedBuildingId);
-  if (
-    isolatedDistrictId !== null &&
-    selected.districtId !== isolatedDistrictId
-  ) {
-    throw new RangeError(
-      "The selected building must belong to the isolated district.",
-    );
-  }
   if (route.counterpart.kind === "external") {
     return Object.freeze({
       dependencyId: route.dependencyId,
@@ -375,21 +349,9 @@ export function projectDependencyRoute(
     data,
     route.counterpart.buildingId,
   );
-  let counterpartEndpoint: DependencyRouteEndpoint = buildingEndpoint(
+  const counterpartEndpoint: DependencyRouteEndpoint = buildingEndpoint(
     counterpart.id,
   );
-  if (
-    isolatedDistrictId !== null &&
-    counterpart.districtId !== isolatedDistrictId
-  ) {
-    const district = data.districts.get(isolatedDistrictId);
-    if (!district) {
-      throw new RangeError(
-        `Unknown isolated district "${isolatedDistrictId}".`,
-      );
-    }
-    counterpartEndpoint = boundaryEndpoint(district, counterpart);
-  }
 
   return Object.freeze({
     dependencyId: route.dependencyId,
@@ -664,18 +626,6 @@ function buildingEndpoint(buildingId: string): BuildingRouteEndpoint {
 
 function externalEndpoint(target: string): ExternalRouteEndpoint {
   return Object.freeze({ kind: "external", target });
-}
-
-function boundaryEndpoint(
-  district: IndexedDistrict,
-  hidden: IndexedBuilding,
-): DistrictBoundaryRouteEndpoint {
-  return Object.freeze({
-    kind: "district-boundary",
-    gatewayKey: routeEndpointKey("building", hidden.id),
-    districtId: district.id,
-    hiddenCounterpart: buildingCounterpart(hidden),
-  });
 }
 
 function assertFinitePosition(

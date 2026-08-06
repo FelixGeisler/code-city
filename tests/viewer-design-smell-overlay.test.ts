@@ -74,7 +74,7 @@ describe("design smell 3D overlay", () => {
     };
 
     overlay.replace([...moderate, critical]);
-    overlay.setIsolatedDistrict("district-critical");
+    overlay.setVisibleBuildingIds(["building-late-critical"]);
 
     expect(overlay.diagnostics()).toMatchObject({
       candidateMarkers: MAXIMUM_DESIGN_SMELL_OVERLAY_MARKERS + 1,
@@ -84,7 +84,7 @@ describe("design smell 3D overlay", () => {
     overlay.dispose();
   });
 
-  it("deduplicates a building/rule and hides markers outside isolation", () => {
+  it("deduplicates a building/rule and applies the exact building mask", () => {
     const overlay = new DesignSmellOverlay();
     overlay.replace([
       marker(0),
@@ -99,17 +99,10 @@ describe("design smell 3D overlay", () => {
       omittedMarkers: 1,
     });
 
-    overlay.setIsolatedDistrict("district-a");
-    expect(overlay.diagnostics().visibleMarkers).toBe(1);
-    overlay.setIsolatedDistrict(null);
-    expect(overlay.diagnostics().visibleMarkers).toBe(2);
-
     overlay.setVisibleBuildingIds(["building-1"]);
     expect(overlay.diagnostics().visibleMarkers).toBe(1);
-    overlay.setIsolatedDistrict("district-a");
-    expect(overlay.diagnostics().visibleMarkers).toBe(0);
     overlay.setVisibleBuildingIds(null);
-    expect(overlay.diagnostics().visibleMarkers).toBe(1);
+    expect(overlay.diagnostics().visibleMarkers).toBe(2);
     overlay.dispose();
   });
 

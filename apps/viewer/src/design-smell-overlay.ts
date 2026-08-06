@@ -119,7 +119,6 @@ export class DesignSmellOverlay {
   });
   private readonly batches: MarkerBatch[] = [];
   private markers: readonly CanonicalMarker[] = Object.freeze([]);
-  private isolatedDistrictId: string | null = null;
   private visibleBuildingIds: ReadonlySet<string> | null = null;
   private requestedFindings = 0;
   private candidateMarkers = 0;
@@ -165,12 +164,6 @@ export class DesignSmellOverlay {
     this.omittedMarkers =
       this.requestedFindings - this.markers.length;
     this.rebuildBatches();
-  }
-
-  public setIsolatedDistrict(id: string | null): void {
-    this.assertActive();
-    this.isolatedDistrictId = id;
-    this.populateBatches();
   }
 
   public setVisibleBuildingIds(ids: readonly string[] | null): void {
@@ -244,10 +237,8 @@ export class DesignSmellOverlay {
       let instance = 0;
       for (const marker of batch.markers) {
         if (
-          (this.isolatedDistrictId !== null &&
-            marker.districtId !== this.isolatedDistrictId) ||
-          (this.visibleBuildingIds !== null &&
-            !this.visibleBuildingIds.has(marker.buildingId))
+          this.visibleBuildingIds !== null &&
+          !this.visibleBuildingIds.has(marker.buildingId)
         ) {
           continue;
         }

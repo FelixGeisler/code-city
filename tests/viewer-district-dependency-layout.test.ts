@@ -4,7 +4,6 @@ import {
   districtBoundaryAnchor,
   districtRouteEndpoints,
   keyedBaseGateway,
-  keyedIsolationGateway,
   type DistrictDependencyRectangle,
 } from "../apps/viewer/src/district-dependency-layout.js";
 
@@ -92,21 +91,6 @@ describe("district dependency layout", () => {
     expect(isOnBoundary(other.contact, base)).toBe(true);
   });
 
-  it("projects isolation routes using only visible geometry and a key", () => {
-    const first = keyedIsolationGateway(consumer, "hidden:provider");
-    const repeated = keyedIsolationGateway(
-      consumer,
-      "hidden:provider",
-    );
-
-    expect(repeated).toEqual(first);
-    expect(first.contact.y).toBe(1);
-    expect(first.anchor.y).toBe(12.35);
-    expect(first.anchor.x).toBe(first.contact.x);
-    expect(first.anchor.z).toBe(first.contact.z);
-    expect(isOnBoundary(first.contact, consumer)).toBe(true);
-  });
-
   it("uses a finite deterministic fallback for coincident centers", () => {
     expect(
       districtBoundaryAnchor(consumer, {
@@ -152,12 +136,6 @@ describe("district dependency layout", () => {
     expect(() =>
       keyedBaseGateway(base, "external", 1, Number.NaN),
     ).toThrow(RangeError);
-    expect(() =>
-      keyedIsolationGateway(
-        { ...consumer, skylineY: 0 },
-        "hidden",
-      ),
-    ).toThrow(/below/iu);
   });
 });
 

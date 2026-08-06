@@ -9,9 +9,8 @@ export type DependencyOverlayDirection = "incoming" | "outgoing";
 export type DependencyOverlayPoint = RoutePoint;
 
 /**
- * A viewer-ready dependency. Endpoint resolution, route limiting, and
- * isolation projection happen upstream; this layer only renders the supplied
- * geometry.
+ * A viewer-ready dependency. Endpoint resolution and route limiting happen
+ * upstream; this layer only renders the supplied geometry.
  */
 export interface DependencyOverlayRoute {
   readonly id: string;

@@ -160,7 +160,7 @@ SIGINT, SIGTERM, or explicit close stops it.
 == Viewer workspace
 
 The workspace has two primary destinations: **Explore** and **Analyze**.
-Explore is the default and combines scoped overview, available color modes,
+Explore is the default and combines the whole-city overview, available color modes,
 search, and the repository tree in one scrolling surface. Analyze opens on
 **Findings** and groups **Routes** and **Queries** behind nested, keyboard-
 navigable tabs. Selecting a building, district, or dependency opens
@@ -170,9 +170,10 @@ back action restores the prior primary and nested view with its scroll state.
 On desktop the workspace is a resizable side dock; below 1100 px it becomes a
 collapsed, peek, or expanded bottom sheet. Passive scene selection does not
 steal keyboard focus, while explicit finding, query, or source navigation may
-focus the contextual details region. A persistent scope chip resets district
-isolation and scopes the overview metrics. **Import project** remains the one
-visible primary header action. **Project** groups local model, demo, and
+focus the contextual details region. Exact building selections can still be
+focused or isolated from **Analyze > Queries** without changing the city-wide
+overview. **Import project** remains the one visible primary header action.
+**Project** groups local model, demo, and
 Advanced settings actions; **Export** groups image and print export.
 History color modes are offered only while verified evolution facts exist,
 and print-assignment color is offered only while a valid printer profile is
@@ -225,7 +226,8 @@ selection.
 and file tree synchronized with the 3D scene and search results. A scene or
 search selection expands only its ancestor path and reveals the matching row;
 tree activation selects and frames the same district or building while
-remaining in Explore. Isolation marks the in-scope and out-of-scope rows.
+remaining in Explore. Repository, solution, module, directory, and source-file
+rows use consistent inline SVG marks instead of platform-dependent font glyphs.
 Arrow keys navigate or expand the hierarchy, Home and End jump to its bounds,
 and Enter or Space activates the current row. The flat ARIA tree reports level,
 set position, expansion, selection, and active-descendant state. Fixed
@@ -332,7 +334,7 @@ for model-only imports.
 == Camera and image export
 
 The live viewer uses one perspective, three-quarter 3D camera with orbit,
-zoom, and pan navigation. **Fit scope** and contextual **Focus selection** keep
+zoom, and pan navigation. **Fit city** and contextual **Focus selection** keep
 the current orientation while framing the corresponding semantic bounds.
 **Focus selection** remains hidden until a building, district, or external
 dependency is selected.

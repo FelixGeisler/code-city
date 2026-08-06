@@ -61,7 +61,7 @@ test("exports an independent transparent PNG without DOM chrome", async ({
   await page.locator("#image-export-view").selectOption("custom");
   await expect(page.locator("#image-export-custom-camera")).toBeVisible();
   await page.locator("#image-export-angle").selectOption("top-down");
-  await page.locator("#image-export-fit").selectOption("current-scope");
+  await page.locator("#image-export-fit").selectOption("whole-city");
   await page.locator(".image-export-advanced-lens > summary").click();
   await page
     .locator("#image-export-projection")
@@ -79,7 +79,7 @@ test("exports an independent transparent PNG without DOM chrome", async ({
   await expect(download).toBeVisible({ timeout: 30_000 });
   await expect(download).toHaveAttribute(
     "download",
-    /-orthographic-top-down-current-scope-1200x700\.png$/u,
+    /-orthographic-top-down-whole-city-1200x700\.png$/u,
   );
   const decoded = await page.evaluate(async () => {
     const anchor = document.querySelector<HTMLAnchorElement>(
@@ -174,7 +174,7 @@ test("context loss disables camera actions and restoration re-enables them", asy
     "false",
   );
   await expect(page.locator("#image-export-open")).toBeDisabled();
-  await expect(page.locator("#camera-fit-scope")).toBeDisabled();
+  await expect(page.locator("#camera-fit-city")).toBeDisabled();
   await expect(page.locator("#camera-focus-selection")).toBeDisabled();
   await expect(page.locator("#scene canvas")).toHaveAttribute(
     "aria-label",
@@ -196,7 +196,7 @@ test("context loss disables camera actions and restoration re-enables them", asy
     "true",
   );
   await expect(page.locator("#image-export-open")).toBeEnabled();
-  await expect(page.locator("#camera-fit-scope")).toBeEnabled();
+  await expect(page.locator("#camera-fit-city")).toBeEnabled();
   await expect(page.locator("#camera-focus-selection")).toBeVisible();
   await expect(page.locator("#camera-focus-selection")).toBeEnabled();
   await expect(page.locator("#scene canvas")).toHaveAttribute(

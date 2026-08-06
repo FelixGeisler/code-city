@@ -177,7 +177,6 @@ export class ViewerBuildingLayer {
   >;
   private groupHighlightedIds: readonly string[] = Object.freeze([]);
 
-  private isolatedDistrictId: string | null = null;
   private visibleBuildingIds: ReadonlySet<string> | null = null;
   private disposed = false;
 
@@ -313,9 +312,6 @@ export class ViewerBuildingLayer {
   ): BuildingBvhPickResult {
     return this.bvh.pick(ray, {
       ...options,
-      ...(this.isolatedDistrictId === null
-        ? {}
-        : { districtId: this.isolatedDistrictId }),
       ...(this.visibleBuildingIds === null
         ? {}
         : { buildingIds: this.visibleBuildingIds }),
@@ -371,12 +367,6 @@ export class ViewerBuildingLayer {
       p95Milliseconds: durations[p95Index] ?? 0,
       maximumAabbTests,
     });
-  }
-
-  public setIsolatedDistrict(id: string | null): void {
-    this.assertActive();
-    this.isolatedDistrictId = id;
-    this.refreshVisibility();
   }
 
   public setVisibleBuildingIds(ids: readonly string[] | null): void {
@@ -729,8 +719,6 @@ export class ViewerBuildingLayer {
 
   private isBuildingVisible(building: CanonicalBuilding): boolean {
     return (
-      (this.isolatedDistrictId === null ||
-        building.districtId === this.isolatedDistrictId) &&
       (this.visibleBuildingIds === null ||
         this.visibleBuildingIds.has(building.id))
     );

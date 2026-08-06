@@ -211,12 +211,12 @@ export function installImageExportDialog(
       !current.selectedEntityAvailable &&
       fit.value === "selected-entity"
     ) {
-      fit.value = "current-scope";
+      fit.value = "whole-city";
     }
     if (resetCamera) {
       view.value = "current-view";
       angle.value = "current-view";
-      fit.value = "current-scope";
+      fit.value = "whole-city";
       projection.value = "current-view";
     }
     synchronizeCameraChoice();
@@ -279,7 +279,7 @@ export function installImageExportDialog(
                 fit.value === "selected-entity" ||
                 fit.value === "whole-city"
                   ? fit.value
-                  : "current-scope",
+                  : "whole-city",
               lens:
                 projection.value === "orthographic" ||
                 projection.value === "perspective"

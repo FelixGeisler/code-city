@@ -37,7 +37,6 @@ describe("core district dependency aggregation", () => {
     const summary = summarizeDistrictDependencies(
       index,
       INITIAL_DISTRICT_DEPENDENCY_FILTERS,
-      null,
     );
     const reversedModel: CityModel = {
       ...model,
@@ -49,7 +48,6 @@ describe("core district dependency aggregation", () => {
     const reversedSummary = summarizeDistrictDependencies(
       createDistrictDependencyExplorerIndex(reversedModel),
       INITIAL_DISTRICT_DEPENDENCY_FILTERS,
-      null,
     );
 
     expect(createViewerIndex).toBe(createDistrictDependencyExplorerIndex);
@@ -123,7 +121,6 @@ describe("core district dependency aggregation", () => {
     const summary = summarizeDistrictDependencies(
       createDistrictDependencyExplorerIndex(model),
       INITIAL_DISTRICT_DEPENDENCY_FILTERS,
-      null,
       selection,
     );
     const reversedModel: CityModel = {
@@ -135,7 +132,6 @@ describe("core district dependency aggregation", () => {
     const reversedSummary = summarizeDistrictDependencies(
       createDistrictDependencyExplorerIndex(reversedModel),
       INITIAL_DISTRICT_DEPENDENCY_FILTERS,
-      null,
       selectExternalDependencies(reversedModel.dependencies),
     );
 
@@ -164,7 +160,6 @@ describe("core district dependency aggregation", () => {
         ),
       }),
       INITIAL_DISTRICT_DEPENDENCY_FILTERS,
-      null,
       selection,
     );
     const overflow = uncappedOverflow.bundles.find(

@@ -26,7 +26,6 @@ describe("district dependency aggregation", () => {
     const summary = summarizeDistrictDependencies(
       index,
       INITIAL_DISTRICT_DEPENDENCY_FILTERS,
-      null,
     );
 
     expect(index).toMatchObject({
@@ -145,12 +144,10 @@ describe("district dependency aggregation", () => {
     const forwardSummary = summarizeDistrictDependencies(
       createDistrictDependencyExplorerIndex(model),
       INITIAL_DISTRICT_DEPENDENCY_FILTERS,
-      null,
     );
     const reversedSummary = summarizeDistrictDependencies(
       createDistrictDependencyExplorerIndex(reversed),
       INITIAL_DISTRICT_DEPENDENCY_FILTERS,
-      null,
     );
 
     expect(reversedSummary).toEqual(forwardSummary);
@@ -183,7 +180,7 @@ describe("district dependency aggregation", () => {
     });
   });
 
-  it("recalculates bundles and contributors while availability stays scope-wide", () => {
+  it("recalculates bundles and contributors while availability stays city-wide", () => {
     const index = createDistrictDependencyExplorerIndex(
       aggregationModel(),
     );
@@ -196,7 +193,6 @@ describe("district dependency aggregation", () => {
     const summary = summarizeDistrictDependencies(
       index,
       typescriptOnly,
-      null,
     );
 
     expect(summary.availableKinds).toEqual([
@@ -241,13 +237,11 @@ describe("district dependency aggregation", () => {
       summarizeDistrictDependencies(
         createDistrictDependencyExplorerIndex(reversed),
         INITIAL_DISTRICT_DEPENDENCY_FILTERS,
-        null,
       ),
     ).toEqual(
       summarizeDistrictDependencies(
         createDistrictDependencyExplorerIndex(model),
         INITIAL_DISTRICT_DEPENDENCY_FILTERS,
-        null,
       ),
     );
   });
@@ -292,7 +286,6 @@ describe("district dependency aggregation", () => {
     const summary = summarizeDistrictDependencies(
       index,
       INITIAL_DISTRICT_DEPENDENCY_FILTERS,
-      null,
     );
 
     expect(summary).toMatchObject({
@@ -327,7 +320,6 @@ describe("district dependency aggregation", () => {
     const summary = summarizeDistrictDependencies(
       index,
       INITIAL_DISTRICT_DEPENDENCY_FILTERS,
-      null,
     );
 
     expect(Object.isFrozen(index)).toBe(true);
@@ -338,78 +330,6 @@ describe("district dependency aggregation", () => {
     expect(Object.isFrozen(summary.bundles[0]!.kinds)).toBe(true);
     expect(Object.isFrozen(summary.bundles[0]!.contributors)).toBe(true);
     expect(summary.totalBundleCount).toBe(4);
-  });
-});
-
-describe("district dependency isolation", () => {
-  it("keeps only touching bundles and hides the other district geometry", () => {
-    const index = createDistrictDependencyExplorerIndex(
-      aggregationModel(),
-    );
-
-    const summary = summarizeDistrictDependencies(
-      index,
-      INITIAL_DISTRICT_DEPENDENCY_FILTERS,
-      "district-a",
-    );
-
-    expect(summary).toMatchObject({
-      totalBundleCount: 3,
-      totalReferenceWeight: 53,
-      availableKinds: [
-        { kind: "typescript-import", edgeCount: 5, weight: 26 },
-        { kind: "project-reference", edgeCount: 2, weight: 12 },
-        { kind: "package-reference", edgeCount: 3, weight: 15 },
-      ],
-    });
-    const outgoing = summary.bundles.find(
-      ({ weight }) => weight === 42,
-    )!;
-    expect(outgoing.source).toEqual({
-      kind: "district",
-      districtId: "district-a",
-      name: "District A",
-      path: "districts/A",
-    });
-    expect(outgoing.target).toEqual({
-      kind: "district-boundary",
-      visibleDistrictId: "district-a",
-      hiddenDistrictId: "district-b",
-      hiddenDistrictName: "District B",
-      hiddenDistrictPath: "districts/B",
-    });
-    expect(outgoing.target).not.toHaveProperty("position");
-    expect(outgoing.target).not.toHaveProperty("size");
-
-    const incoming = summary.bundles.find(
-      ({ weight }) => weight === 4,
-    )!;
-    expect(incoming.source).toMatchObject({
-      kind: "district-boundary",
-      visibleDistrictId: "district-a",
-      hiddenDistrictId: "district-c",
-    });
-    expect(incoming.target).toMatchObject({
-      kind: "district",
-      districtId: "district-a",
-    });
-    expect(
-      summary.bundles.some(({ weight }) => weight === 3),
-    ).toBe(false);
-  });
-
-  it("rejects an unknown isolated district", () => {
-    const index = createDistrictDependencyExplorerIndex(
-      aggregationModel(),
-    );
-
-    expect(() =>
-      summarizeDistrictDependencies(
-        index,
-        INITIAL_DISTRICT_DEPENDENCY_FILTERS,
-        "missing",
-      ),
-    ).toThrow(/unknown isolated district/iu);
   });
 });
 
@@ -456,7 +376,6 @@ describe("district dependency filters", () => {
         projectReference: false,
         packageReference: false,
       },
-      null,
     );
 
     expect(summary).toMatchObject({
@@ -656,7 +575,6 @@ describe("district dependency model safety", () => {
     const summary = summarizeDistrictDependencies(
       index,
       INITIAL_DISTRICT_DEPENDENCY_FILTERS,
-      null,
     );
 
     expect(summary.totalReferenceWeight).toBe(maximum);

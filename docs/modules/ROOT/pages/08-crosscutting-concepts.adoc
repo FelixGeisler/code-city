@@ -296,23 +296,14 @@ uses its roof center for both. A district contact is the intersection of its X/Z
 rectangle with the center-to-counterpart ray, on the district top; coincident
 centers use -Z. `skylineY` is the maximum top Y of the district base and its
 visible buildings. The anchor keeps X/Z and uses `skylineY + 0.35`. An
-isolation contact uses key `kind + NUL + stable endpoint ID`: `building` plus
-building ID, `district` plus district ID, or `external` plus normalized target.
-The overflow endpoint uses key `"external-overflow" + NUL + "v1"`.
-Hash UTF-16 code units in order, starting at `0x811c9dc5`; for each unit use
-`hash = imul(hash xor unit, 0x01000193) unsigned`. `hash mod 4` selects `-Z`,
-`+X`, `+Z`, or `-X`;
-`0.08 + hash(key + NUL + "position") / 0xffffffff * 0.84` maps along that edge
-on the visible district top. Its anchor also uses `skylineY + 0.35`. An external
-node uses its roof center for both. A vertical gateway joins each distinct
-contact/anchor pair. Browser curves join anchors; no marker may float.
+external node uses its roof center for both. A vertical gateway joins each
+distinct contact/anchor pair. Browser curves join anchors; no marker may float.
 Arrowheads always point to the provider.
 
-The hidden-by-default overview bundles edges by visible district. Selection
+The hidden-by-default overview bundles edges by district. Selection
 expands incoming and outgoing file routes. Both views rank by weight with stable
 identity tie-breaking and report omissions. The overview shows at most 24
-bundles; selection shows at most 20 routes per direction. Isolation projects
-hidden endpoints to grounded boundary gateways.
+bundles; selection shows at most 20 routes per direction.
 
 == External dependencies
 
@@ -370,7 +361,7 @@ building or external node uses its own model box. Transient highlights, routes,
 labels, hidden helpers, and animated removal meshes are excluded, so fixed
 orientations produce the same frame and preserved orientations remain stable.
 
-The live viewer keeps one perspective orbit camera. Scope and selection framing
+The live viewer keeps one perspective orbit camera. City and selection framing
 preserve its current orientation and replace only the target and fitted
 distance. Independent PNG export cameras may use perspective or orthographic
 projection and three-quarter or top-down orientation without changing the live
@@ -400,8 +391,8 @@ download.
 
 Search matches normalized repository-relative building paths in the loaded
 model; it never reads source text or uses the network. Camera focus does not
-mutate the model. District isolation is a reversible visibility filter and
-keeps the shared base and identity context visible.
+mutate the model. Advanced queries can apply and clear an exact building mask
+without changing the model or the city-wide repository overview.
 
 == Determinism
 

@@ -24,6 +24,19 @@ export type RepositoryHierarchyNodeKind =
   | "district"
   | "building";
 
+export type RepositoryHierarchyNodeIconId =
+  | "git-repository"
+  | "solution"
+  | "package"
+  | "folder"
+  | "source-file";
+
+export interface RepositoryHierarchyNodeIcon {
+  readonly id: RepositoryHierarchyNodeIconId;
+  readonly label: string;
+  readonly paths: readonly string[];
+}
+
 export interface RepositoryHierarchyNode {
   readonly id: string;
   readonly entityId: string;
@@ -143,6 +156,55 @@ const KIND_ORDER: Readonly<Record<RepositoryHierarchyNodeKind, number>> =
     district: 3,
     building: 4,
   });
+
+const NODE_KIND_ICONS = Object.freeze({
+  repository: Object.freeze({
+    id: "git-repository",
+    label: "Repository",
+    paths: Object.freeze([
+      "M4 5.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm0 0v5a2 2 0 0 0 2 2h2.5M10 13.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM10 5.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Zm0 0v1a2 2 0 0 1-2 2H4",
+    ]),
+  }),
+  solution: Object.freeze({
+    id: "solution",
+    label: "Solution",
+    paths: Object.freeze([
+      "M2.5 4.5h7v7h-7z",
+      "M6.5 2.5h7v7h-2",
+    ]),
+  }),
+  module: Object.freeze({
+    id: "package",
+    label: "Module",
+    paths: Object.freeze([
+      "M2.5 5 8 2l5.5 3v6L8 14l-5.5-3V5Z",
+      "M2.5 5 8 8l5.5-3M8 8v6",
+    ]),
+  }),
+  district: Object.freeze({
+    id: "folder",
+    label: "Directory district",
+    paths: Object.freeze([
+      "M2 4h4l1.5 1.5H14v7.5H2V4Z",
+    ]),
+  }),
+  building: Object.freeze({
+    id: "source-file",
+    label: "Source file",
+    paths: Object.freeze([
+      "M4 2h5l3 3v9H4V2Z",
+      "M9 2v3h3M7 8 5.5 9.5 7 11M9 8l1.5 1.5L9 11",
+    ]),
+  }),
+}) satisfies Readonly<
+  Record<RepositoryHierarchyNodeKind, RepositoryHierarchyNodeIcon>
+>;
+
+export function repositoryHierarchyNodeIcon(
+  kind: RepositoryHierarchyNodeKind,
+): RepositoryHierarchyNodeIcon {
+  return NODE_KIND_ICONS[kind];
+}
 
 const navigationKeys = new Set<RepositoryTreeNavigationKey>([
   "ArrowDown",
@@ -545,7 +607,6 @@ class RepositoryHierarchyTree
   #expandedIds = new Set<string>();
   #activeId: string | undefined;
   #selectedNodeIds = new Set<string>();
-  #isolatedDistrictId: string | null = null;
   #rows: readonly RepositoryHierarchyRow[] = [];
   #renderFrame: number | undefined;
   #pendingScrollTop: number | undefined;
@@ -642,9 +703,7 @@ class RepositoryHierarchyTree
     state: ExplorerState,
     selectedBuildingIds?: readonly string[],
   ): void {
-    const previousIsolation = this.#isolatedDistrictId;
     const previousSelection = [...this.#selectedNodeIds];
-    this.#isolatedDistrictId = state.isolatedDistrictId;
     const selected =
       state.selectedEntity === null
         ? undefined
@@ -658,10 +717,7 @@ class RepositoryHierarchyTree
       if (nodeId !== undefined) selectedNodeIds.add(nodeId);
     }
     this.#selectedNodeIds = selectedNodeIds;
-    if (
-      previousIsolation !== this.#isolatedDistrictId ||
-      !sameStringSet(previousSelection, this.#selectedNodeIds)
-    ) {
+    if (!sameStringSet(previousSelection, this.#selectedNodeIds)) {
       this.#renderRevision += 1;
     }
     if (selected !== undefined) {
@@ -1016,25 +1072,10 @@ class RepositoryHierarchyTree
         String(this.#expandedIds.has(node.id)),
       );
     }
-    let isolationLabel = "";
-    if (
-      node.districtId !== undefined &&
-      node.districtId === this.#isolatedDistrictId
-    ) {
-      element.dataset["isolated"] = "true";
-      isolationLabel = ", inside isolated district";
-    } else if (
-      node.districtId !== undefined &&
-      this.#isolatedDistrictId !== null
-    ) {
-      element.dataset["outOfScope"] = "true";
-      isolationLabel = ", outside isolated district";
-    }
     element.setAttribute(
       "aria-label",
       `${nodeKindLabel(node.kind)} ${node.label}` +
-        (node.path === undefined ? "" : `, ${node.path}`) +
-        isolationLabel,
+        (node.path === undefined ? "" : `, ${node.path}`),
     );
     const toggle = document.createElement("span");
     toggle.className = "repository-tree-toggle";
@@ -1049,7 +1090,10 @@ class RepositoryHierarchyTree
     const icon = document.createElement("span");
     icon.className = "repository-tree-kind";
     icon.setAttribute("aria-hidden", "true");
-    icon.textContent = nodeKindIcon(node.kind);
+    const iconDescriptor = repositoryHierarchyNodeIcon(node.kind);
+    icon.dataset["nodeIcon"] = iconDescriptor.id;
+    icon.title = iconDescriptor.label;
+    icon.append(createNodeKindIcon(document, iconDescriptor));
     const text = document.createElement("span");
     text.className = "repository-tree-label";
     text.textContent = node.label;
@@ -1267,19 +1311,32 @@ function nodeKindLabel(kind: RepositoryHierarchyNodeKind): string {
   }
 }
 
-function nodeKindIcon(kind: RepositoryHierarchyNodeKind): string {
-  switch (kind) {
-    case "repository":
-      return "\u25c8";
-    case "solution":
-      return "\u25c7";
-    case "module":
-      return "\u25a3";
-    case "district":
-      return "\u25a6";
-    case "building":
-      return "\u25af";
+function createNodeKindIcon(
+  document: Document,
+  descriptor: RepositoryHierarchyNodeIcon,
+): SVGSVGElement {
+  const namespace = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(namespace, "svg");
+  svg.setAttribute("class", "repository-tree-kind-mark");
+  svg.setAttribute("data-icon", descriptor.id);
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.35");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  svg.style.display = "block";
+  svg.style.margin = "auto";
+  for (const pathData of descriptor.paths) {
+    const path = document.createElementNS(namespace, "path");
+    path.setAttribute("d", pathData);
+    svg.append(path);
   }
+  return svg;
 }
 
 function finiteNumber(value: number): number {

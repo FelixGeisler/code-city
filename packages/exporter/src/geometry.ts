@@ -1885,7 +1885,6 @@ export function buildPrintableCityArtifacts(
       : summarizeDistrictDependencies(
           createDistrictDependencyExplorerIndex(model),
           INITIAL_DISTRICT_DEPENDENCY_FILTERS,
-          null,
           externalSelection,
         );
   const base = externalLayout.base ?? sourceBase;
@@ -2312,8 +2311,6 @@ function printableRouteEndpointId(
   switch (endpoint.kind) {
     case "district":
       return printableDistrictRouteEndpointId(endpoint.districtId);
-    case "district-boundary":
-      return printableDistrictRouteEndpointId(endpoint.hiddenDistrictId);
     case "external":
       return printableExternalRouteEndpointId(
         endpoint.nodeId ?? endpoint.target,

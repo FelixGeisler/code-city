@@ -98,7 +98,6 @@ import {
   districtBoundaryAnchor,
   type DistrictDependencyFootprint,
   districtRouteEndpoints,
-  keyedIsolationGateway,
 } from "./district-dependency-layout.js";
 import {
   type DependencyOverlayRoute,
@@ -107,7 +106,6 @@ import {
 } from "./dependency-overlay.js";
 import {
   buildingRouteEndpoint,
-  routeEndpointKey,
   type RouteEndpointGeometry,
 } from "./dependency-route-layout.js";
 import { DEMO_MODEL } from "./demo-model.js";
@@ -194,7 +192,6 @@ import {
   createRepositoryExplorerIndex,
   DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT,
   type ExplorerState,
-  isolateSelectedDistrict as isolateExplorerDistrict,
   MAXIMUM_REPOSITORY_EXPLORER_RESULT_LIMIT,
   resetExplorerState,
   searchRepositoryEntities,
@@ -203,7 +200,6 @@ import {
   selectedExplorerExternalId,
   selectExplorerBuilding,
   selectExplorerDistrict,
-  showAllDistricts,
 } from "./repository-explorer.js";
 import {
   installRepositoryHierarchyTree,
@@ -241,7 +237,7 @@ import {
   nextBoundedResultLimit,
   type ViewerWorkspaceState,
 } from "./viewer-workspace.js";
-import { summarizeViewerScope } from "./viewer-overview.js";
+import { summarizeViewerOverview } from "./viewer-overview.js";
 import {
   assertViewerBuildingCapability,
   ViewerBuildingLayer,
@@ -446,8 +442,8 @@ const advancedProjectSettingsDialog = element<HTMLDialogElement>(
 const advancedProjectSettingsClose = element<HTMLButtonElement>(
   "advanced-project-settings-close",
 );
-const cameraFitScopeButton =
-  element<HTMLButtonElement>("camera-fit-scope");
+const cameraFitCityButton =
+  element<HTMLButtonElement>("camera-fit-city");
 const cameraFocusSelectionButton =
   element<HTMLButtonElement>("camera-focus-selection");
 const cameraControlsHint =
@@ -474,12 +470,16 @@ const selectionKind = element<HTMLElement>("inspector-title");
 const selectionName = element<HTMLHeadingElement>("selection-name");
 const dependencySection =
   element<HTMLDetailsElement>("dependency-section");
-const viewerScopeName = element<HTMLElement>("viewer-scope-name");
-const viewerScopeReset =
-  element<HTMLButtonElement>("viewer-scope-reset");
 const legend = element<HTMLUListElement>("legend");
 const visualizationModeSelect =
   element<HTMLSelectElement>("visualization-mode");
+const visualizationModeField = (() => {
+  const field = visualizationModeSelect.closest<HTMLElement>("label");
+  if (field === null) {
+    throw new Error("Missing visualization mode field.");
+  }
+  return field;
+})();
 const visualizationModeStatus =
   element<HTMLParagraphElement>("visualization-mode-status");
 const evolutionTimeline = element<HTMLElement>("evolution-timeline");
@@ -537,6 +537,9 @@ const overviewRiskFields = {
   },
 } as const;
 const selectionStatus = element<HTMLParagraphElement>("selection-status");
+const advancedQueryIsolateButton = element<HTMLButtonElement>(
+  "advanced-query-isolate",
+);
 const errorBanner = element<HTMLDivElement>("error-banner");
 const errorMessage = element<HTMLSpanElement>("error-message");
 const dismissErrorButton = element<HTMLButtonElement>("dismiss-error");
@@ -567,10 +570,6 @@ const repositoryTree = element<HTMLElement>("repository-tree");
 const repositoryTreeStatus = element<HTMLElement>(
   "repository-tree-status",
 );
-const isolateDistrictButton =
-  element<HTMLButtonElement>("isolate-district");
-const showWholeCityButton =
-  element<HTMLButtonElement>("show-whole-city");
 const districtRoutesToggle =
   element<HTMLButtonElement>("district-routes-toggle");
 const districtRouteTypeScriptFilter = element<HTMLButtonElement>(
@@ -611,13 +610,6 @@ const districtRouteDetailKinds = element<HTMLParagraphElement>(
 const districtRouteContributors = element<HTMLUListElement>(
   "district-route-contributors",
 );
-const districtRouteIsolateConsumer = element<HTMLButtonElement>(
-  "district-route-isolate-consumer",
-);
-const districtRouteIsolateProvider = element<HTMLButtonElement>(
-  "district-route-isolate-provider",
-);
-
 const inspectorFields = {
   codeInspection: element<HTMLElement>("building-code-inspection"),
   name: element<HTMLHeadingElement>("building-name"),
@@ -783,7 +775,6 @@ class CityScene {
   private grid: THREE.GridHelper | null = null;
   private hoveredEntity: SceneEntity | null = null;
   private selectedEntity: SceneEntity | null = null;
-  private isolatedDistrictId: string | null = null;
   private buildingVisibilityMask: ReadonlySet<string> | null = null;
   private cameraTransition: CameraTransition | null = null;
   private cameraNavigationMode: CameraNavigationMode = "orbit";
@@ -859,7 +850,7 @@ class CityScene {
         imageExportOpenButton.disabled = true;
         imageExportOpenButton.title =
           "Image export is unavailable while the WebGL context is lost.";
-        cameraFitScopeButton.disabled = true;
+        cameraFitCityButton.disabled = true;
         cameraFocusSelectionButton.disabled = true;
         this.renderer.domElement.setAttribute(
           "aria-label",
@@ -877,7 +868,7 @@ class CityScene {
         this.host.dataset["webglAvailable"] = "true";
         imageExportOpenButton.disabled = false;
         imageExportOpenButton.title = "";
-        cameraFitScopeButton.disabled = false;
+        cameraFitCityButton.disabled = false;
         synchronizeCameraFocusControl();
         this.renderer.domElement.setAttribute(
           "aria-label",
@@ -1179,9 +1170,9 @@ class CityScene {
     return this.selectedEntity !== null;
   }
 
-  public fitCurrentScope(animate = true): boolean {
+  public fitCity(animate = true): boolean {
     this.ensureCityPresentation();
-    const bounds = this.boundsForPreset("isometric");
+    const bounds = this.bounds();
     if (bounds === undefined || bounds.isEmpty()) return false;
     this.frameBounds(bounds, animate);
     return true;
@@ -1265,7 +1256,7 @@ class CityScene {
   ): boolean {
     this.ensureCityPresentation();
     if (preset === "whole-city") {
-      this.showWholeCity(false);
+      this.showAllBuildings(false);
     }
     const bounds = this.boundsForPreset(preset);
     if (bounds === undefined || bounds.isEmpty()) return false;
@@ -1305,10 +1296,10 @@ class CityScene {
     );
     this.ensureCityPresentation();
     this.clearEvolutionAnimation();
-    const restoreScope =
+    const restoreVisibility =
       request.camera.mode === "custom" &&
       request.camera.fit === "whole-city"
-        ? this.temporarilyShowWholeCity()
+        ? this.temporarilyShowAllBuildings()
         : () => undefined;
     let pixels: Uint8Array;
     let labels: readonly ImageExportProjectedLabel[];
@@ -1332,7 +1323,7 @@ class CityScene {
         request.background,
       );
     } finally {
-      restoreScope();
+      restoreVisibility();
     }
     const blob = await this.composeExportPng(pixels, resolution, {
       ...overlay,
@@ -1404,13 +1395,6 @@ class CityScene {
     if (valid.size === 0) return false;
     this.ensureCityPresentation();
     this.hover(null);
-    for (const group of this.districtGroups.values()) {
-      group.visible = true;
-    }
-    this.buildingLayer?.setIsolatedDistrict(null);
-    this.evolutionAnimation?.removals.setIsolatedDistrict(null);
-    this.designSmellOverlay.setIsolatedDistrict(null);
-    this.isolatedDistrictId = null;
     this.buildingVisibilityMask = valid;
     const visibleBuildingIds = [...valid];
     this.buildingLayer?.setVisibleBuildingIds(visibleBuildingIds);
@@ -1454,9 +1438,6 @@ class CityScene {
       });
     }
     this.designSmellOverlay.replace(markers);
-    this.designSmellOverlay.setIsolatedDistrict(
-      this.isolatedDistrictId,
-    );
     if (
       !this.city.children.includes(this.designSmellOverlay.object)
     ) {
@@ -1471,7 +1452,6 @@ class CityScene {
     this.clearEvolutionAnimation();
     const removals = new EvolutionRemovalLayer(
       transition.removedBuildings,
-      this.isolatedDistrictId,
       { instancingSupported: this.instancingSupported },
     );
     removals.setVisibleBuildingIds(
@@ -1692,12 +1672,6 @@ class CityScene {
     ) {
       this.clearBuildingVisibilityMask();
     }
-    if (
-      this.isolatedDistrictId !== null &&
-      this.isolatedDistrictId !== context.building.districtId
-    ) {
-      this.applyDistrictIsolation(context.building.districtId, false);
-    }
     this.select(createSceneEntity("building", id), showDetails);
     if (focus) {
       this.focusBuilding(id);
@@ -1716,12 +1690,6 @@ class CityScene {
     }
     this.ensureCityPresentation();
     this.clearBuildingVisibilityMask();
-    if (
-      this.isolatedDistrictId !== null &&
-      this.isolatedDistrictId !== id
-    ) {
-      this.applyDistrictIsolation(id, false);
-    }
     this.select(createSceneEntity("district", id), showDetails);
     if (focus) {
       this.frameDistrict(id, true);
@@ -1743,58 +1711,9 @@ class CityScene {
     return true;
   }
 
-  public isolateDistrict(id: string, focus = true): boolean {
-    if (!this.districtGroups.has(id)) {
-      return false;
-    }
+  public showAllBuildings(frame = true): void {
     this.ensureCityPresentation();
-    if (!this.applyDistrictIsolation(id, focus)) {
-      return false;
-    }
-    this.emitState();
-    return true;
-  }
-
-  private applyDistrictIsolation(id: string, focus: boolean): boolean {
-    const selectedGroup = this.districtGroups.get(id);
-    if (!selectedGroup) {
-      return false;
-    }
-    this.hover(null);
     this.clearBuildingVisibilityMask();
-    for (const [districtId, group] of this.districtGroups) {
-      group.visible = districtId === id;
-    }
-    this.buildingLayer?.setIsolatedDistrict(id);
-    this.evolutionAnimation?.removals.setIsolatedDistrict(id);
-    this.designSmellOverlay.setIsolatedDistrict(id);
-    this.isolatedDistrictId = id;
-    const selection = this.selectedEntity;
-    const hiddenSelection =
-      selection?.kind === "district"
-        ? selection.id !== id
-        : selection?.kind === "building"
-          ? this.buildingContexts.get(selection.id)?.building.districtId !== id
-          : false;
-    if (hiddenSelection) {
-      this.select(null);
-    }
-    if (focus) {
-      this.frameDistrict(id, true);
-    }
-    return true;
-  }
-
-  public showWholeCity(frame = true): void {
-    this.ensureCityPresentation();
-    for (const group of this.districtGroups.values()) {
-      group.visible = true;
-    }
-    this.buildingLayer?.setIsolatedDistrict(null);
-    this.clearBuildingVisibilityMask();
-    this.evolutionAnimation?.removals.setIsolatedDistrict(null);
-    this.designSmellOverlay.setIsolatedDistrict(null);
-    this.isolatedDistrictId = null;
     if (frame) this.frameBounds(this.bounds(), true);
     this.emitState();
     schedulePerformanceDiagnostics();
@@ -1907,11 +1826,9 @@ class CityScene {
     this.sceneLabelOverlay.clear();
     this.dependencyOverlay.clear();
     this.districtDependencyOverlay.clear();
-    this.designSmellOverlay.setIsolatedDistrict(null);
     this.designSmellOverlay.setVisibleBuildingIds(null);
     this.designSmellOverlay.clear();
     this.city.remove(this.designSmellOverlay.object);
-    this.isolatedDistrictId = null;
     this.buildingVisibilityMask = null;
     this.cameraTransition = null;
     this.select(null);
@@ -2015,12 +1932,6 @@ class CityScene {
     if (preset === "selected-entity") {
       return this.selectedEntityBounds();
     }
-    if (
-      preset !== "whole-city" &&
-      this.isolatedDistrictId !== null
-    ) {
-      return this.districtFrameBounds(this.isolatedDistrictId);
-    }
     return this.bounds();
   }
 
@@ -2041,40 +1952,24 @@ class CityScene {
     }
   }
 
-  private temporarilyShowWholeCity(): () => void {
-    const previousIsolation = this.isolatedDistrictId;
+  private temporarilyShowAllBuildings(): () => void {
     const previousBuildingVisibilityMask =
       this.buildingVisibilityMask === null
         ? null
         : [...this.buildingVisibilityMask];
-    const visibility = new Map(
-      [...this.districtGroups].map(([id, group]) => [id, group.visible]),
-    );
-    for (const group of this.districtGroups.values()) group.visible = true;
-    this.buildingLayer?.setIsolatedDistrict(null);
     this.buildingLayer?.setVisibleBuildingIds(null);
-    this.evolutionAnimation?.removals.setIsolatedDistrict(null);
     this.evolutionAnimation?.removals.setVisibleBuildingIds(null);
-    this.designSmellOverlay.setIsolatedDistrict(null);
     this.designSmellOverlay.setVisibleBuildingIds(null);
     let restored = false;
     return () => {
       if (restored) return;
       restored = true;
-      for (const [id, group] of this.districtGroups) {
-        group.visible = visibility.get(id) ?? true;
-      }
-      this.buildingLayer?.setIsolatedDistrict(previousIsolation);
       this.buildingLayer?.setVisibleBuildingIds(
         previousBuildingVisibilityMask,
-      );
-      this.evolutionAnimation?.removals.setIsolatedDistrict(
-        previousIsolation,
       );
       this.evolutionAnimation?.removals.setVisibleBuildingIds(
         previousBuildingVisibilityMask,
       );
-      this.designSmellOverlay.setIsolatedDistrict(previousIsolation);
       this.designSmellOverlay.setVisibleBuildingIds(
         previousBuildingVisibilityMask,
       );
@@ -2853,15 +2748,10 @@ class CityScene {
       ],
       false,
     )[0];
-    const buildingHit = this.buildingLayer?.pick(
-      {
-        origin: this.raycaster.ray.origin,
-        direction: this.raycaster.ray.direction,
-      },
-      this.isolatedDistrictId === null
-        ? {}
-        : { districtId: this.isolatedDistrictId },
-    ).hit;
+    const buildingHit = this.buildingLayer?.pick({
+      origin: this.raycaster.ray.origin,
+      direction: this.raycaster.ray.direction,
+    }).hit;
     if (
       buildingHit !== null &&
       buildingHit !== undefined &&
@@ -2938,7 +2828,6 @@ class CityScene {
   private emitState(): void {
     this.onStateChange({
       selectedEntity: this.selectedEntity,
-      isolatedDistrictId: this.isolatedDistrictId,
     });
   }
 
@@ -3118,7 +3007,7 @@ class UnavailableCityScene {
     imageExportOpenButton.disabled = true;
     imageExportOpenButton.title =
       "Image export requires an available WebGL context.";
-    cameraFitScopeButton.disabled = true;
+    cameraFitCityButton.disabled = true;
     cameraFocusSelectionButton.disabled = true;
   }
 
@@ -3134,7 +3023,7 @@ class UnavailableCityScene {
     return false;
   }
 
-  public fitCurrentScope(_animate = true): boolean {
+  public fitCity(_animate = true): boolean {
     return false;
   }
 
@@ -3242,11 +3131,7 @@ class UnavailableCityScene {
     return false;
   }
 
-  public isolateDistrict(_id: string, _focus = true): boolean {
-    return false;
-  }
-
-  public showWholeCity(_frame = true): void {}
+  public showAllBuildings(_frame = true): void {}
 
   public assertBuildingCapability(_buildingCount: number): void {}
 
@@ -3612,7 +3497,11 @@ advancedQueryPanel = installAdvancedQueryPanel(
     onIsolate: (buildingIds) => {
       applyingAdvancedSelection = true;
       try {
-        cityScene.isolateBuildings(buildingIds);
+        if (cityScene.buildingSelectionIsolated) {
+          cityScene.showAllBuildings();
+        } else {
+          cityScene.isolateBuildings(buildingIds);
+        }
       } finally {
         applyingAdvancedSelection = false;
       }
@@ -3708,12 +3597,15 @@ setSafeExtensionProject(activeModel);
 
 visualizationModeSelect.addEventListener("change", () => {
   const selected = visualizationModeSelect.value;
-  const availableModes = availableViewerVisualizationModes({
-    evolution: activeEvolutionAnalysis !== undefined,
-    printProfile:
-      printVisualizationContextActive &&
-      previewPrinterProfile !== undefined,
-  });
+  const availableModes = availableViewerVisualizationModes(
+    {
+      evolution: activeEvolutionAnalysis !== undefined,
+      printProfile:
+        printVisualizationContextActive &&
+        previewPrinterProfile !== undefined,
+    },
+    activeModel,
+  );
   if (!availableModes.includes(selected as ViewerVisualizationMode)) {
     visualizationModeSelect.value = visualizationMode;
     return;
@@ -3723,8 +3615,8 @@ visualizationModeSelect.addEventListener("change", () => {
   imageExportDialog.invalidate();
 });
 
-cameraFitScopeButton.addEventListener("click", () => {
-  if (cityScene.fitCurrentScope()) {
+cameraFitCityButton.addEventListener("click", () => {
+  if (cityScene.fitCity()) {
     imageExportDialog.invalidate();
   }
 });
@@ -3896,13 +3788,6 @@ districtRoutesList.addEventListener("keydown", (event) => {
 externalList.addEventListener("keydown", (event) => {
   navigateExternalNodes(event);
 });
-districtRouteIsolateConsumer.addEventListener("click", () => {
-  isolateDistrictDependencyEndpoint("consumer", true);
-});
-districtRouteIsolateProvider.addEventListener("click", () => {
-  isolateDistrictDependencyEndpoint("provider", true);
-});
-
 buildingSearch.addEventListener("input", () => {
   searchResultLimit = DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT;
   renderBuildingSearch();
@@ -4094,33 +3979,6 @@ searchResults.addEventListener("keydown", (event) => {
   }
 });
 
-isolateDistrictButton.addEventListener("click", () => {
-  const next = isolateExplorerDistrict(explorerState, activeModel);
-  if (
-    next !== explorerState &&
-    next.isolatedDistrictId !== null
-  ) {
-    cityScene.isolateDistrict(next.isolatedDistrictId);
-  }
-});
-
-showWholeCityButton.addEventListener("click", () => {
-  if (
-    cityScene.buildingSelectionIsolated ||
-    showAllDistricts(explorerState) !== explorerState
-  ) {
-    cityScene.showWholeCity();
-  }
-});
-viewerScopeReset.addEventListener("click", () => {
-  if (
-    explorerState.isolatedDistrictId !== null ||
-    cityScene.buildingSelectionIsolated
-  ) {
-    cityScene.showWholeCity();
-  }
-});
-
 dismissErrorButton.addEventListener("click", hideError);
 
 window.addEventListener("keydown", (event) => {
@@ -4159,11 +4017,6 @@ if (initialParameters.get("fixture") === LARGE_CITY_FIXTURE_NAME) {
     activateImportedModel(fixture, {
       label: "Built-in 25k performance fixture",
     });
-    const isolatedDistrict =
-      initialParameters.get("isolate-district");
-    if (isolatedDistrict !== null) {
-      cityScene.isolateDistrict(isolatedDistrict, false);
-    }
     if (initialParameters.get("evolution-removals") === "1") {
       cityScene.showEvolutionTransition(
         largeCityRemovalTransition(fixture),
@@ -4278,9 +4131,6 @@ function applyModel(
   const preservedSelection = options.preserveSelection
     ? explorerState.selectedEntity
     : null;
-  const preservedIsolation = options.preserveSelection
-    ? explorerState.isolatedDistrictId
-    : null;
   const preservedBuildingSelectionIsolation =
     options.preserveSelection &&
     cityScene.buildingSelectionIsolated;
@@ -4319,6 +4169,7 @@ function applyModel(
   cityScene.assertBuildingCapability(model.buildings.length);
 
   activeModel = model;
+  synchronizeVisualizationModeOptions();
   activeModelSource = source;
   scrubBuildingSource();
   activeBuildingsById = buildingsById;
@@ -4381,12 +4232,6 @@ function applyModel(
   applyVisualization();
   applyingAdvancedSelection = true;
   try {
-    if (
-      preservedIsolation !== null &&
-      activeDistrictsById.has(preservedIsolation)
-    ) {
-      cityScene.isolateDistrict(preservedIsolation, false);
-    }
     if (preservedSelection?.kind === "building") {
       cityScene.selectBuilding(preservedSelection.id);
     } else if (preservedSelection?.kind === "district") {
@@ -4407,9 +4252,9 @@ function applyModel(
     const retainedBuildingIds =
       advancedQueryPanel.selection.buildingIds.filter((id) =>
         activeBuildingsById.has(id),
-      );
+    );
     if (retainedBuildingIds.length === 0) {
-      cityScene.showWholeCity(false);
+      cityScene.showAllBuildings(false);
     } else {
       cityScene.isolateBuildings(retainedBuildingIds, false);
     }
@@ -4431,7 +4276,7 @@ function applyModel(
     selectedDistrictDependencyBundleId =
       preservedDistrictDependencyBundleId;
     // Scene loading clears both overlay objects. Re-render only after the
-    // target model, isolation, and selection have settled so route geometry
+    // target model and selection have settled so route geometry
     // is rebuilt from the target frame without losing user controls.
     renderDependencyExplorer();
     renderDistrictDependencyExplorer();
@@ -5211,7 +5056,6 @@ function advancedQueryPanelContext() {
   const selectedDistrictId =
     primaryDistrictId ??
     selectedExplorerDistrictId(explorerState) ??
-    explorerState.isolatedDistrictId ??
     undefined;
   return {
     ...(primaryBuildingId === undefined
@@ -5394,20 +5238,9 @@ function applyAdvancedSelection(
       selection.buildingIds,
       selection.overlayVisible,
     );
-    const selectedDistricts = new Set(
-      selection.buildingIds
-        .map((id) => activeBuildingsById.get(id)?.districtId)
-        .filter((id): id is string => id !== undefined),
-    );
-    if (
-      selectedDistricts.size > 1 &&
-      explorerState.isolatedDistrictId !== null
-    ) {
-      cityScene.showWholeCity(false);
-    }
     if (cityScene.buildingSelectionIsolated) {
       if (selection.buildingIds.length === 0) {
-        cityScene.showWholeCity(false);
+        cityScene.showAllBuildings(false);
       } else {
         cityScene.isolateBuildings(selection.buildingIds, false);
       }
@@ -5457,9 +5290,8 @@ function synchronizeAdvancedSelectionMembership(
 function synchronizeExplorerState(state: ExplorerState): void {
   const previousSelectedBuildingId =
     selectedExplorerBuildingId(explorerState);
-  const previousIsolatedDistrictId =
-    explorerState.isolatedDistrictId;
   explorerState = state;
+  synchronizeAdvancedQueryIsolationControl();
   if (state.selectedEntity !== null) {
     activeEvolutionLineageSelection = undefined;
   }
@@ -5487,22 +5319,6 @@ function synchronizeExplorerState(state: ExplorerState): void {
   if (previousSelectedBuildingId !== selectedBuildingId) {
     dependencyRouteVisibleLimit = INITIAL_ROUTE_RESULT_LIMIT;
   }
-  if (previousIsolatedDistrictId !== state.isolatedDistrictId) {
-    districtRouteVisibleLimit = INITIAL_ROUTE_RESULT_LIMIT;
-  }
-  const selected = selectedBuildingId
-    ? activeModel.buildings.find(
-        ({ id }) => id === selectedBuildingId,
-      )
-    : undefined;
-  const isolatableDistrictId =
-    selected?.districtId ?? selectedDistrictId;
-  isolateDistrictButton.disabled =
-    isolatableDistrictId === null ||
-    state.isolatedDistrictId === isolatableDistrictId;
-  showWholeCityButton.disabled =
-    state.isolatedDistrictId === null &&
-    !cityScene.buildingSelectionIsolated;
   synchronizeCameraFocusControl();
   imageExportDialog.invalidate();
   for (const button of searchResultButtons()) {
@@ -5552,6 +5368,17 @@ function synchronizeExplorerState(state: ExplorerState): void {
   renderViewerOverview();
 }
 
+function synchronizeAdvancedQueryIsolationControl(): void {
+  const active = cityScene.buildingSelectionIsolated;
+  advancedQueryIsolateButton.textContent = active
+    ? "Show all buildings"
+    : "Isolate selection";
+  advancedQueryIsolateButton.setAttribute(
+    "aria-pressed",
+    String(active),
+  );
+}
+
 function toggleDistrictDependencyFilter(kind: DependencyKind): void {
   districtDependencyFilters = toggleDistrictDependencyKind(
     districtDependencyFilters,
@@ -5569,7 +5396,6 @@ function renderDistrictDependencyExplorer(): void {
   const summary = summarizeDistrictDependencies(
     districtDependencyExplorerIndex,
     districtDependencyFilters,
-    explorerState.isolatedDistrictId,
   );
   const initiallyVisibleBundles = summary.bundles.slice(
     0,
@@ -5674,9 +5500,7 @@ function renderDistrictDependencyExplorer(): void {
     districtRoutesStatus.textContent = "No route kinds selected.";
   } else if (summary.totalBundleCount === 0) {
     districtRoutesStatus.textContent =
-      explorerState.isolatedDistrictId === null
-        ? "No routes match the selected kinds."
-        : "No matching routes touch this district.";
+      "No routes match the selected kinds.";
   } else {
     districtRoutesStatus.textContent =
       `Showing ${visibleBundles.length.toLocaleString()} of ` +
@@ -5807,8 +5631,6 @@ function renderDistrictDependencyDetails(
     districtRouteDetailTitle.textContent = "Route details";
     districtRouteDetailSummary.textContent = "";
     districtRouteDetailKinds.textContent = "";
-    districtRouteIsolateConsumer.disabled = true;
-    districtRouteIsolateProvider.disabled = true;
     return;
   }
 
@@ -5837,60 +5659,6 @@ function renderDistrictDependencyDetails(
       districtDependencyKindLabel(contributor.kind);
     districtRouteContributors.append(item);
   }
-
-  updateDistrictEndpointAction(
-    districtRouteIsolateConsumer,
-    bundle.source,
-    "consumer",
-  );
-  updateDistrictEndpointAction(
-    districtRouteIsolateProvider,
-    bundle.target,
-    "provider",
-  );
-}
-
-function updateDistrictEndpointAction(
-  button: HTMLButtonElement,
-  endpoint: DistrictDependencyEndpoint,
-  role: "consumer" | "provider",
-): void {
-  const districtId = districtDependencyEndpointDistrictId(endpoint);
-  button.disabled =
-    districtId === null ||
-    districtId === explorerState.isolatedDistrictId;
-  button.textContent =
-    districtId === null
-      ? "External provider"
-      : `Isolate ${role}`;
-}
-
-function isolateDistrictDependencyEndpoint(
-  role: "consumer" | "provider",
-  focusInspectTab = false,
-): void {
-  if (selectedDistrictDependencyBundleId === null) {
-    return;
-  }
-  const bundle = visibleDistrictDependencyBundlesById.get(
-    selectedDistrictDependencyBundleId,
-  );
-  if (!bundle) {
-    return;
-  }
-  const endpoint = role === "consumer" ? bundle.source : bundle.target;
-  const districtId = districtDependencyEndpointDistrictId(endpoint);
-  if (districtId === null) {
-    return;
-  }
-  if (focusInspectTab) {
-    viewerWorkspace.showDetails({
-      intent: "explicit",
-      focus: true,
-    });
-  }
-  cityScene.isolateDistrict(districtId);
-  cityScene.selectDistrict(districtId);
 }
 
 function navigateDistrictDependencyRoutes(event: KeyboardEvent): void {
@@ -6093,10 +5861,9 @@ function renderDependencyExplorer(): void {
       dependencyExplorerIndex,
       selectedBuildingId,
       route,
-      explorerState.isolatedDistrictId,
     );
     overlayRoutes.push(dependencyOverlayRoute(route, projection));
-    dependencyList.append(dependencyListItem(route, projection));
+    dependencyList.append(dependencyListItem(route));
   }
   cityScene.replaceDependencyRoutes(overlayRoutes);
 }
@@ -6143,10 +5910,9 @@ function renderMultiSelectionDependencyExplorer(
       dependencyExplorerIndex,
       selectedBuildingId,
       route,
-      explorerState.isolatedDistrictId,
     );
     overlayRoutes.push(dependencyOverlayRoute(route, projection));
-    dependencyList.append(dependencyListItem(route, projection));
+    dependencyList.append(dependencyListItem(route));
   }
   const omittedCount = summary.totalCount - summary.routes.length;
   dependencyStatus.textContent =
@@ -6171,7 +5937,6 @@ function updateDependencyToggle(
 
 function dependencyListItem(
   route: SelectedDependencyRoute,
-  projection: DependencyRouteProjection,
 ): HTMLLIElement {
   const item = document.createElement("li");
   item.className = "dependency-item";
@@ -6237,8 +6002,7 @@ function dependencyListItem(
   meta.className = "dependency-result-meta";
   meta.textContent =
     `${isExternal ? "External provider" : role} · ` +
-    referenceCountLabel(route.weight) +
-    hiddenBoundaryLabel(projection);
+    referenceCountLabel(route.weight);
 
   row.setAttribute(
     "aria-label",
@@ -6253,24 +6017,6 @@ function dependencyListItem(
   // no AI action for this context.
   item.append(row);
   return item;
-}
-
-function hiddenBoundaryLabel(
-  projection: DependencyRouteProjection,
-): string {
-  const boundary =
-    projection.source.kind === "district-boundary"
-      ? projection.source
-      : projection.target.kind === "district-boundary"
-        ? projection.target
-        : null;
-  if (!boundary) {
-    return "";
-  }
-  const hiddenDistrict = activeDistrictsById.get(
-    boundary.hiddenCounterpart.districtId,
-  );
-  return ` · Outside isolated district${hiddenDistrict ? `: ${hiddenDistrict.name}` : ""}`;
 }
 
 function dependencyOverlayRoute(
@@ -6307,12 +6053,6 @@ function dependencyEndpointGeometry(
         );
       }
       return buildingRouteEndpoint(building);
-    }
-    case "district-boundary": {
-      return keyedIsolationGateway(
-        requiredDistrictDependencyFootprint(endpoint.districtId),
-        endpoint.gatewayKey,
-      );
     }
     case "external": {
       return externalDependencyEndpoint(endpoint.target);
@@ -6374,58 +6114,6 @@ function districtDependencyRouteGeometry(
         provider.anchor,
       ),
       provider,
-    };
-  }
-
-  if (
-    bundle.source.kind === "district" &&
-    bundle.target.kind === "district-boundary"
-  ) {
-    const visibleDistrict = requiredDistrictDependencyFootprint(
-      bundle.source.districtId,
-    );
-    const provider = keyedIsolationGateway(
-      visibleDistrict,
-      routeEndpointKey(
-        "district",
-        bundle.target.hiddenDistrictId,
-      ),
-    );
-    return {
-      consumer: keyedIsolationGateway(
-        visibleDistrict,
-        routeEndpointKey(
-          "district",
-          bundle.source.districtId,
-        ),
-      ),
-      provider,
-    };
-  }
-
-  if (
-    bundle.source.kind === "district-boundary" &&
-    bundle.target.kind === "district"
-  ) {
-    const visibleDistrict = requiredDistrictDependencyFootprint(
-      bundle.target.districtId,
-    );
-    const consumer = keyedIsolationGateway(
-      visibleDistrict,
-      routeEndpointKey(
-        "district",
-        bundle.source.hiddenDistrictId,
-      ),
-    );
-    return {
-      consumer,
-      provider: keyedIsolationGateway(
-        visibleDistrict,
-        routeEndpointKey(
-          "district",
-          bundle.target.districtId,
-        ),
-      ),
     };
   }
 
@@ -6532,23 +6220,8 @@ function districtDependencyEndpointLabel(
   switch (endpoint.kind) {
     case "district":
       return endpoint.name;
-    case "district-boundary":
-      return endpoint.hiddenDistrictName;
     case "external":
       return endpoint.target;
-  }
-}
-
-function districtDependencyEndpointDistrictId(
-  endpoint: DistrictDependencyEndpoint,
-): string | null {
-  switch (endpoint.kind) {
-    case "district":
-      return endpoint.districtId;
-    case "district-boundary":
-      return endpoint.hiddenDistrictId;
-    case "external":
-      return null;
   }
 }
 
@@ -6708,22 +6381,26 @@ function renderLegend(
 }
 
 function synchronizeVisualizationModeOptions(): boolean {
-  const availableModes = availableViewerVisualizationModes({
-    evolution: activeEvolutionAnalysis !== undefined,
-    printProfile:
-      printVisualizationContextActive &&
-      previewPrinterProfile !== undefined,
-  });
+  const availableModes = availableViewerVisualizationModes(
+    {
+      evolution: activeEvolutionAnalysis !== undefined,
+      printProfile:
+        printVisualizationContextActive &&
+        previewPrinterProfile !== undefined,
+    },
+    activeModel,
+  );
   const modeChanged = !availableModes.includes(visualizationMode);
   if (modeChanged) visualizationMode = "semantic";
   visualizationModeSelect.replaceChildren(
     ...availableModes.map((mode) => {
       const option = document.createElement("option");
       option.value = mode;
-      option.textContent = viewerVisualizationModeLabel(mode);
+      option.textContent = viewerVisualizationModeLabel(mode, activeModel);
       return option;
     }),
   );
+  visualizationModeField.hidden = availableModes.length === 1;
   visualizationModeSelect.value = visualizationMode;
   return modeChanged;
 }
@@ -6886,17 +6563,9 @@ function applyVisualization(): void {
 }
 
 function renderViewerOverview(): void {
-  const summary = summarizeViewerScope(
-    activeModel,
-    explorerState.isolatedDistrictId,
-  );
-  viewerScopeName.textContent = summary.scope.label;
-  viewerScopeName.title = summary.scope.label;
-  viewerScopeReset.disabled = summary.scope.kind === "city";
+  const summary = summarizeViewerOverview(activeModel);
   overviewFields.description.textContent =
-    summary.scope.kind === "city"
-      ? "Metrics for the whole city."
-      : `Metrics for district ${summary.scope.name}.`;
+    "Metrics for the whole city.";
   overviewFields.repositories.textContent =
     summary.counts.repositories.toLocaleString();
   overviewFields.solutions.textContent =
@@ -7866,30 +7535,16 @@ function showExternalInspector(node: ExternalSceneNode): void {
 
 function externalConsumerIdentity(
   sourceId: string,
-): { readonly label: string; readonly path: string } | null | undefined {
-  const isolatedDistrictId = explorerState.isolatedDistrictId;
+): { readonly label: string; readonly path: string } | undefined {
   const building = activeBuildingsById.get(sourceId);
   if (building) {
-    return isolatedDistrictId !== null &&
-      building.districtId !== isolatedDistrictId
-      ? null
-      : { label: building.name, path: building.path };
+    return { label: building.name, path: building.path };
   }
 
   const module = activeModel.modules.find(({ id }) => id === sourceId);
-  if (!module) {
-    return isolatedDistrictId === null ? undefined : null;
-  }
-  if (
-    isolatedDistrictId !== null &&
-    !activeModel.districts.some(
-      ({ id, moduleId }) =>
-        id === isolatedDistrictId && moduleId === module.id,
-    )
-  ) {
-    return null;
-  }
-  return { label: module.name, path: module.path };
+  return module === undefined
+    ? undefined
+    : { label: module.name, path: module.path };
 }
 
 function renderBuildingMetrics(building: CityBuilding): void {

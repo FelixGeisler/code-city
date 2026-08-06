@@ -72,12 +72,11 @@ server cancellation.
 The **Explore** view includes a synchronized repository tree from repository
 through solution, module, district, and file. City or search selection expands
 only the selected path and scrolls it into view; selecting a district or file
-in the tree focuses the same 3D entity without leaving Explore. Isolation is
-reflected on mounted district and file rows. Arrow keys, Home, End, Enter, and
-Space provide complete keyboard navigation with ARIA tree semantics. A
-fixed-row virtual window keeps at most 160 rows in the DOM for large
-repositories, while
-expansion, active-row, and scroll state are retained independently for the
+in the tree focuses the same 3D entity without leaving Explore. Arrow keys,
+Home, End, Enter, and Space provide complete keyboard navigation with ARIA
+tree semantics. A fixed-row virtual window keeps at most 160 rows in the DOM
+for large repositories, while expansion, active-row, and scroll state are
+retained independently for the
 eight most recently viewed projects.
 
 When a completed import has an evolution companion, the viewer verifies its
@@ -97,7 +96,7 @@ publishes each frame directly with no spatial interpolation. The **Building age*
 building history are available only while a verified timeline is loaded.
 
 The live viewer uses one perspective, three-quarter 3D camera with orbit,
-zoom, and pan navigation. **Fit scope** and contextual **Focus selection**
+zoom, and pan navigation. **Fit city** and contextual **Focus selection**
 frame deterministic model-derived bounds without letting labels, highlights,
 routes, or evolution ghosts change the result.
 

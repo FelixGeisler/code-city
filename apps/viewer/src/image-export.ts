@@ -6,7 +6,6 @@ export type ImageExportAngle =
   | "isometric"
   | "top-down";
 export type ImageExportFitTarget =
-  | "current-scope"
   | "selected-entity"
   | "whole-city";
 export type ImageExportLens = "current-view" | CameraProjection;

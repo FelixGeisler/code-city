@@ -1,7 +1,6 @@
 import type {
   CityBuilding,
   CityDependency,
-  CityDistrict,
   CityModel,
   RiskBand,
 } from "../../../packages/core/src/model.js";
@@ -16,23 +15,7 @@ export type ViewerOverviewModel = Pick<
   | "solutions"
 >;
 
-export interface WholeCityViewerScope {
-  readonly kind: "city";
-  readonly districtId: null;
-  readonly name: "Whole city";
-  readonly label: "Whole city";
-}
-
-export interface DistrictViewerScope {
-  readonly kind: "district";
-  readonly districtId: string;
-  readonly name: string;
-  readonly label: string;
-}
-
-export type ViewerScope = WholeCityViewerScope | DistrictViewerScope;
-
-export interface ViewerScopeCounts {
+export interface ViewerOverviewCounts {
   readonly repositories: number;
   readonly solutions: number;
   readonly modules: number;
@@ -40,113 +23,42 @@ export interface ViewerScopeCounts {
   readonly buildings: number;
 }
 
-export interface ViewerScopeComplexity {
+export interface ViewerOverviewComplexity {
   readonly totalSloc: number;
   readonly medianMaximumComplexity: number;
   readonly maximumComplexity: number;
 }
 
-export type ViewerScopeRiskCounts = Readonly<Record<RiskBand, number>>;
+export type ViewerOverviewRiskCounts = Readonly<Record<RiskBand, number>>;
 
-export interface ViewerScopeDependencies {
+export interface ViewerOverviewDependencies {
   readonly edgeCount: number;
   readonly totalReferenceWeight: number;
 }
 
-export interface ViewerScopeSummary {
-  readonly scope: ViewerScope;
-  readonly counts: ViewerScopeCounts;
-  readonly complexity: ViewerScopeComplexity;
-  readonly risks: ViewerScopeRiskCounts;
-  readonly dependencies: ViewerScopeDependencies;
+export interface ViewerOverviewSummary {
+  readonly counts: ViewerOverviewCounts;
+  readonly complexity: ViewerOverviewComplexity;
+  readonly risks: ViewerOverviewRiskCounts;
+  readonly dependencies: ViewerOverviewDependencies;
 }
 
-/**
- * Summarizes either the whole city or one visible district. An unknown
- * district is treated as the whole city so stale UI state never produces an
- * empty or misleading overview.
- */
-export function summarizeViewerScope(
+/** Summarizes the complete city model shown by Explore. */
+export function summarizeViewerOverview(
   model: ViewerOverviewModel,
-  isolatedDistrictId: string | null,
-): ViewerScopeSummary {
-  const district =
-    isolatedDistrictId === null
-      ? undefined
-      : model.districts.find(({ id }) => id === isolatedDistrictId);
-  const buildings =
-    district === undefined
-      ? model.buildings
-      : model.buildings.filter(
-          ({ districtId }) => districtId === district.id,
-        );
-  const moduleIds = new Set(buildings.map(({ moduleId }) => moduleId));
-  const repositoryIds = new Set(
-    buildings.map(({ repositoryId }) => repositoryId),
-  );
-  const dependencies =
-    district === undefined
-      ? model.dependencies
-      : dependenciesFromScope(model.dependencies, buildings, moduleIds);
-
+): ViewerOverviewSummary {
   return Object.freeze({
-    scope: scopeDescriptor(district),
     counts: Object.freeze({
-      repositories:
-        district === undefined
-          ? distinctIds(model.repositories)
-          : repositoryIds.size,
-      solutions:
-        district === undefined
-          ? distinctIds(model.solutions)
-          : distinctIds(
-              model.solutions.filter(({ moduleIds: solutionModuleIds }) =>
-                solutionModuleIds.some((moduleId) =>
-                  moduleIds.has(moduleId),
-                ),
-              ),
-            ),
-      modules:
-        district === undefined ? distinctIds(model.modules) : moduleIds.size,
-      districts:
-        district === undefined ? distinctIds(model.districts) : 1,
-      buildings: distinctIds(buildings),
+      repositories: distinctIds(model.repositories),
+      solutions: distinctIds(model.solutions),
+      modules: distinctIds(model.modules),
+      districts: distinctIds(model.districts),
+      buildings: distinctIds(model.buildings),
     }),
-    complexity: summarizeComplexity(buildings),
-    risks: summarizeRisks(buildings),
-    dependencies: summarizeDependencies(dependencies),
+    complexity: summarizeComplexity(model.buildings),
+    risks: summarizeRisks(model.buildings),
+    dependencies: summarizeDependencies(model.dependencies),
   });
-}
-
-function scopeDescriptor(
-  district: CityDistrict | undefined,
-): ViewerScope {
-  if (district === undefined) {
-    return Object.freeze({
-      kind: "city",
-      districtId: null,
-      name: "Whole city",
-      label: "Whole city",
-    });
-  }
-  return Object.freeze({
-    kind: "district",
-    districtId: district.id,
-    name: district.name,
-    label: `City \u203a ${district.name}`,
-  });
-}
-
-function dependenciesFromScope(
-  dependencies: readonly CityDependency[],
-  buildings: readonly CityBuilding[],
-  moduleIds: ReadonlySet<string>,
-): readonly CityDependency[] {
-  const sourceIds = new Set([
-    ...buildings.map(({ id }) => id),
-    ...moduleIds,
-  ]);
-  return dependencies.filter(({ sourceId }) => sourceIds.has(sourceId));
 }
 
 function distinctIds(
@@ -157,7 +69,7 @@ function distinctIds(
 
 function summarizeComplexity(
   buildings: readonly CityBuilding[],
-): ViewerScopeComplexity {
+): ViewerOverviewComplexity {
   const maximumComplexities = buildings
     .map(({ metrics }) => metrics.maximumComplexity)
     .toSorted((left, right) => left - right);
@@ -185,7 +97,7 @@ function summarizeComplexity(
 
 function summarizeRisks(
   buildings: readonly CityBuilding[],
-): ViewerScopeRiskCounts {
+): ViewerOverviewRiskCounts {
   const risks: Record<RiskBand, number> = {
     low: 0,
     moderate: 0,
@@ -200,7 +112,7 @@ function summarizeRisks(
 
 function summarizeDependencies(
   dependencies: readonly CityDependency[],
-): ViewerScopeDependencies {
+): ViewerOverviewDependencies {
   return Object.freeze({
     edgeCount: dependencies.length,
     totalReferenceWeight: dependencies.reduce(
