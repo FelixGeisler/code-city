@@ -96,6 +96,23 @@ describe("EvolutionBundle JSON Schema", () => {
     expect(validateEvolutionBundle(value)).toBe(value);
   });
 
+  it("accepts the bounded complete-mainline selection variant", () => {
+    const value = fixture();
+    value.selection = {
+      ...value.selection,
+      mode: "root-to-tip",
+      samplingStrategy: "evenly-spaced-v1",
+      maxFrames: 20,
+    };
+    delete value.selection.sampleEvery;
+
+    expect(validateSchema(value), errors()).toBe(true);
+    expect(validateEvolutionBundle(value).selection).toMatchObject({
+      mode: "root-to-tip",
+      maxFrames: 20,
+    });
+  });
+
   it("rejects author data, mutable tag labels, and excessive histories", () => {
     const author = fixture();
     author.baseline.commit.author = { name: "Private" };

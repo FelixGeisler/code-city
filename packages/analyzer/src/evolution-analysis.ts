@@ -53,8 +53,9 @@ import {
 } from "./sanitization.js";
 import { cityModelFromFacts } from "./city-model.js";
 import type {
+  HistoryAnalysisFacts,
+  HistorySourceFileFact,
   LocalAnalysisFacts,
-  SourceFileFact,
 } from "./types.js";
 
 const GENERATOR_VERSION = "0.1.0";
@@ -94,7 +95,7 @@ export class HistoryEvolutionError extends Error {
 
 export interface HistoryEvolutionFrameInput {
   readonly commit: HistoryCommit;
-  readonly facts: LocalAnalysisFacts;
+  readonly facts: HistoryAnalysisFacts;
 }
 
 export interface HistoryEvolutionRequest {
@@ -182,7 +183,7 @@ interface DependencyIdentityState {
 
 interface AssignedFrame {
   readonly commit: HistoryCommit;
-  readonly facts: LocalAnalysisFacts;
+  readonly facts: HistoryAnalysisFacts;
 }
 
 interface PreparedFrame {
@@ -197,7 +198,7 @@ interface UnionSlot {
   readonly id: string;
   readonly buildingId: string;
   readonly moduleId: string;
-  readonly representative: SourceFileFact;
+  readonly representative: HistorySourceFileFact;
   readonly metrics: SourceMetrics;
 }
 
@@ -1072,7 +1073,7 @@ function projectReferenceMaterial(
 function typescriptReferenceMaterial(
   dependency: CityDependency,
   modulesById: ReadonlyMap<string, CityModule>,
-  sourcesById: ReadonlyMap<string, SourceFileFact>,
+  sourcesById: ReadonlyMap<string, HistorySourceFileFact>,
   budget: EvolutionWorkBudget,
 ): DependencyLogicalReference | undefined {
   const source = sourcesById.get(dependency.sourceId);
@@ -1158,7 +1159,7 @@ function typescriptReferenceMaterial(
 function dependencyLogicalReference(
   dependency: CityDependency,
   modulesById: ReadonlyMap<string, CityModule>,
-  sourcesById: ReadonlyMap<string, SourceFileFact>,
+  sourcesById: ReadonlyMap<string, HistorySourceFileFact>,
   budget: EvolutionWorkBudget,
 ): DependencyLogicalReference | undefined {
   let reference: DependencyLogicalReference | undefined;
@@ -1753,10 +1754,16 @@ function remapSourceBoundId(
  * would make unchanged callable evidence look like a metric change.
  */
 function remapSourceBoundIdentities(
-  source: SourceFileFact,
+  source: HistorySourceFileFact,
   lineageId: string,
   budget: EvolutionWorkBudget,
-): Pick<SourceFileFact, "units" | "sourceStructure"> {
+): Partial<
+  Pick<
+    LocalAnalysisFacts["sources"][number],
+    "units" | "sourceStructure"
+  >
+> {
+  if (source.units === undefined) return Object.freeze({});
   const remapId = (value: string): string =>
     remapSourceBoundId(value, source.id, lineageId);
   const units = Object.freeze(
@@ -1889,7 +1896,7 @@ function remapFrame(
       ),
     });
   });
-  const sources = facts.sources.map((source): SourceFileFact => {
+  const sources = facts.sources.map((source): HistorySourceFileFact => {
     budget.consume();
     const id = prepared.sourceIds.get(source.id);
     const moduleId = prepared.moduleIds.get(source.moduleId);
@@ -2115,8 +2122,12 @@ function createUnionLayout(
           path: slot.representative.path,
           language: slot.representative.language,
           metrics: slot.metrics,
-          metricMethod: slot.representative.metricMethod,
-          units: slot.representative.units,
+          ...(slot.representative.units === undefined
+            ? {}
+            : {
+                metricMethod: slot.representative.metricMethod,
+                units: slot.representative.units,
+              }),
           semanticGroupId:
             projection?.semanticGroupId ??
             slot.representative.semanticGroupId,

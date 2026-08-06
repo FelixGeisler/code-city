@@ -53,8 +53,11 @@ The wizard can package a browser-selected local directory, upload a ZIP or
 existing city model, or queue public/private GitHub, Azure DevOps, HTTPS, SSH,
 and scp-style Git imports. Remote imports support the default revision, a
 branch, a tag, or one exact commit, plus optional city identity and bounded
-analysis settings. They can also opt into a bounded first-parent history by
-recent commit count, inclusive UTC date range, or two exact tag names.
+analysis settings. They can also opt into a bounded first-parent history. The
+recommended default follows the complete mainline from its first commit to the
+selected revision and distributes at most 20 animation frames across that
+span. Recent commit count, inclusive UTC date range, and two exact tag names
+remain available as custom ranges.
 Directory packaging runs in a cancellable browser worker,
 keeps only analyzer inputs and ignore controls, rejects unsafe or colliding
 portable paths, and produces a deterministic, size-bounded ZIP before making
@@ -122,8 +125,10 @@ whose opaque UUID is saved in that browser; use the jobs API to enumerate and
 remove older retained results.
 
 History imports are reproducible from immutable commit SHAs and emit frames in
-oldest-first order. The oldest and newest selected commits are always included;
-`sampleEvery` controls intermediate frames. For example:
+oldest-first order. The recommended `root-to-tip` mode proves that the bounded
+first-parent traversal reached the repository root, then distributes up to
+`maxFrames` evenly across the complete span. The oldest and newest commits are
+always included. For example:
 
 ```json
 {
@@ -132,15 +137,18 @@ oldest-first order. The oldest and newest selected commits are always included;
     "repositoryUrl": "https://github.com/acme/example"
   },
   "history": {
-    "mode": "commit-count",
-    "commitCount": 500,
-    "sampleEvery": 6,
+    "mode": "root-to-tip",
+    "maxFrames": 20,
     "totalDeadlineMs": 1800000
   }
 }
 ```
 
-Date selections use `fromInclusive`, `toInclusive`, and a mandatory
+Mainlines longer than 500 commits are rejected with a specific instruction to
+choose a custom range; Code City never labels the newest 500 commits as a
+complete history. Custom recent-commit, date, and tag selections retain the
+advanced `sampleEvery` interval. Date selections use `fromInclusive`,
+`toInclusive`, and a mandatory
 `maxCommits`; tag selections use unqualified `oldestTagName`,
 `newestTagName`, and a mandatory `maxCommits`. Every request is rejected before
 repository analysis unless its declared bounds can produce at most 500
@@ -152,8 +160,10 @@ limit exact tags to 64, commit parents to 64, accumulated changed paths to
 500,000, and retained change data to 16 MiB. Retained change data charges the
 UTF-8 bytes of current and previous path names plus a conservative 128 bytes
 of record overhead for every parsed change. Retained semantic facts are capped
-at 128 MiB, including nested units, import metadata, warnings, strings,
-objects, arrays, references, and conservative copy overhead. Other ceilings
+at 128 MiB using explicit string, object, array, property, and reference
+charges. Historical frames retain the stable identities, aggregate metrics,
+and relationship inputs needed for animation; the newest frame additionally
+retains callable and source-structure detail for code inspection. Other ceilings
 limit accumulated tree entries to 2,000,000, stable lineages to 100,000, and
 the serialized evolution artifact to a browser-safe 64 MiB. Every runtime JSON
 string and property name in an evolution bundle is limited to 64 KiB of
@@ -178,7 +188,7 @@ transport chunk; it does not retain every chunk or make another full transfer
 copy. Digesting, UTF-8 decoding, JSON parsing, validation, and replay state add
 engine-dependent worker allocations, so self-hosted deployments should reserve
 at least 512 MiB of transient browser memory for each timeline being loaded.
-Reduce the selected history, increase `sampleEvery`, or lower
+Reduce the maximum animation frames, choose a custom range, or lower
 `maxEvolutionOutputBytes` when that budget is unavailable.
 
 The server keeps credential-free semantic facts in a private, versioned,

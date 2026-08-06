@@ -58,7 +58,6 @@ export type GitObjectSha = string;
 interface NormalizedEvolutionSelectionBase {
   readonly traversal: "first-parent";
   readonly order: "oldest-first";
-  readonly sampleEvery: number;
   readonly selectedCommitCount: number;
   readonly sampledCommitCount: number;
   readonly traversedCommitCount: number;
@@ -73,11 +72,18 @@ interface NormalizedEvolutionSelectionBase {
 
 export type NormalizedEvolutionSelection =
   | (NormalizedEvolutionSelectionBase & {
+      readonly mode: "root-to-tip";
+      readonly samplingStrategy: "evenly-spaced-v1";
+      readonly maxFrames: number;
+    })
+  | (NormalizedEvolutionSelectionBase & {
       readonly mode: "commit-count";
+      readonly sampleEvery: number;
       readonly requestedCommitCount: number;
     })
   | (NormalizedEvolutionSelectionBase & {
       readonly mode: "date-range";
+      readonly sampleEvery: number;
       /** Canonical UTC instant (`Date#toISOString()`). */
       readonly fromInclusive: string;
       /** Canonical UTC instant (`Date#toISOString()`). */
@@ -89,6 +95,7 @@ export type NormalizedEvolutionSelection =
        * above make the semantic selection reproducible if tags later move.
        */
       readonly mode: "tag-range";
+      readonly sampleEvery: number;
     });
 
 export interface EvolutionAnalyzerProvenance {

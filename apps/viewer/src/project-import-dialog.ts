@@ -51,6 +51,8 @@ export const PROJECT_IMPORT_HISTORY_LIMITS = Object.freeze({
   maxTagNameBytes: HISTORY_SELECTION_LIMITS.maxTagNameBytes,
 });
 
+export const PROJECT_IMPORT_HISTORY_DEFAULT_MAX_FRAMES = 20;
+
 export const PROJECT_IMPORT_SOURCE_CHOICES = Object.freeze([
   "directory",
   "zip",
@@ -165,6 +167,7 @@ const SERVER_FIELD_KEYS: Readonly<
   "$.history.oldestTagName": "history",
   "$.history.newestTagName": "history",
   "$.history.maxCommits": "history",
+  "$.history.maxFrames": "history",
   "$.history.sampleEvery": "history",
   "$.source.repositoryName": "repositoryName",
   "$.source.rootMode": "repositoryName",
@@ -380,6 +383,7 @@ interface ProjectImportHistoryControls {
   readonly options: HTMLElement;
   readonly mode: HTMLSelectElement;
   readonly panels: readonly HTMLElement[];
+  readonly maxFrames: HTMLInputElement;
   readonly commitCount: HTMLInputElement;
   readonly fromInclusive: HTMLInputElement;
   readonly toInclusive: HTMLInputElement;
@@ -388,6 +392,7 @@ interface ProjectImportHistoryControls {
   readonly newestTagName: HTMLInputElement;
   readonly tagMaxCommits: HTMLInputElement;
   readonly sampleEvery: HTMLInputElement;
+  readonly sampleEveryWrap: HTMLLabelElement;
   readonly frameHelp: HTMLElement;
   readonly error: HTMLElement;
   readonly allInputs: readonly HTMLElement[];
@@ -463,7 +468,7 @@ function createProjectImportHistoryControls(
   help.id = "project-import-history-help";
   help.className = "project-import-help";
   help.textContent =
-    "Optional. Analyze a bounded first-parent history instead of only one snapshot. UTC date values are interpreted exactly as shown.";
+    "Optional. Build a first-parent time-travel view ending at the selected revision. UTC date values are interpreted exactly as shown.";
 
   const options = document.createElement("div");
   options.id = "project-import-history-options";
@@ -477,6 +482,7 @@ function createProjectImportHistoryControls(
     "project-import-history-help project-import-error-history",
   );
   for (const [value, text] of [
+    ["root-to-tip", "Entire mainline (recommended)"],
     ["commit-count", "Most recent commits"],
     ["date-range", "UTC date range"],
     ["tag-range", "Exact tag range"],
@@ -488,9 +494,28 @@ function createProjectImportHistoryControls(
   }
   options.append(createHistoryLabel("History range", mode));
 
+  const rootPanel = document.createElement("div");
+  rootPanel.className = "project-import-history-fields";
+  rootPanel.dataset["historyModePanel"] = "root-to-tip";
+  const maxFrames = createHistoryInput(
+    "project-import-history-max-frames",
+    "number",
+  );
+  maxFrames.min = "2";
+  maxFrames.max = PROJECT_IMPORT_HISTORY_LIMITS.maxFrames.toString();
+  maxFrames.step = "1";
+  maxFrames.inputMode = "numeric";
+  maxFrames.value = PROJECT_IMPORT_HISTORY_DEFAULT_MAX_FRAMES.toString();
+  maxFrames.defaultValue =
+    PROJECT_IMPORT_HISTORY_DEFAULT_MAX_FRAMES.toString();
+  rootPanel.append(
+    createHistoryLabel("Maximum animation frames", maxFrames),
+  );
+
   const commitPanel = document.createElement("div");
   commitPanel.className = "project-import-history-fields";
   commitPanel.dataset["historyModePanel"] = "commit-count";
+  commitPanel.hidden = true;
   const commitCount = createHistoryInput(
     "project-import-history-commit-count",
     "number",
@@ -563,6 +588,11 @@ function createProjectImportHistoryControls(
   sampleEvery.inputMode = "numeric";
   sampleEvery.value = "1";
   sampleEvery.defaultValue = "1";
+  const sampleEveryWrap = createHistoryLabel(
+    "Sample every N commits",
+    sampleEvery,
+  );
+  sampleEveryWrap.hidden = true;
 
   const frameHelp = document.createElement("p");
   frameHelp.id = "project-import-history-frame-help";
@@ -571,10 +601,11 @@ function createProjectImportHistoryControls(
   frameHelp.setAttribute("aria-live", "polite");
 
   options.append(
+    rootPanel,
     commitPanel,
     datePanel,
     tagPanel,
-    createHistoryLabel("Sample every N commits", sampleEvery),
+    sampleEveryWrap,
     frameHelp,
   );
 
@@ -587,10 +618,16 @@ function createProjectImportHistoryControls(
 
   root.append(legend, toggle, help, options, error);
   remotePanel.append(root);
-  const panels = Object.freeze([commitPanel, datePanel, tagPanel]);
+  const panels = Object.freeze([
+    rootPanel,
+    commitPanel,
+    datePanel,
+    tagPanel,
+  ]);
   const allInputs = Object.freeze([
     enabled,
     mode,
+    maxFrames,
     commitCount,
     fromInclusive,
     toInclusive,
@@ -606,6 +643,7 @@ function createProjectImportHistoryControls(
     options,
     mode,
     panels,
+    maxFrames,
     commitCount,
     fromInclusive,
     toInclusive,
@@ -614,6 +652,7 @@ function createProjectImportHistoryControls(
     newestTagName,
     tagMaxCommits,
     sampleEvery,
+    sampleEveryWrap,
     frameHelp,
     error,
     allInputs,
@@ -728,6 +767,7 @@ function optionalInteger(
 export interface ProjectImportHistoryFieldValues {
   readonly enabled: boolean;
   readonly mode: string;
+  readonly maxFrames: string;
   readonly commitCount: string;
   readonly fromInclusive: string;
   readonly toInclusive: string;
@@ -742,11 +782,23 @@ function requiredHistoryInteger(
   rawValue: string,
   label: string,
 ): number {
+  return requiredBoundedHistoryInteger(
+    rawValue,
+    label,
+    PROJECT_IMPORT_HISTORY_LIMITS.maxCommits,
+  );
+}
+
+function requiredBoundedHistoryInteger(
+  rawValue: string,
+  label: string,
+  maximum: number,
+): number {
   const value = optionalInteger(
     rawValue,
     label,
     1,
-    PROJECT_IMPORT_HISTORY_LIMITS.maxCommits,
+    maximum,
   );
   if (value === undefined) {
     throw new Error(`${label} is required.`);
@@ -853,6 +905,22 @@ export function projectImportHistorySelection(
   values: ProjectImportHistoryFieldValues,
 ): RemoteImportHistorySelection | undefined {
   if (!values.enabled) return undefined;
+  if (values.mode === "root-to-tip") {
+    const maxFrames = requiredBoundedHistoryInteger(
+      values.maxFrames,
+      "Maximum animation frames",
+      PROJECT_IMPORT_HISTORY_LIMITS.maxFrames,
+    );
+    if (maxFrames < 2) {
+      throw new Error(
+        "Maximum animation frames must be at least 2.",
+      );
+    }
+    return {
+      mode: values.mode,
+      maxFrames,
+    };
+  }
   const sampleEvery = optionalInteger(
     values.sampleEvery,
     "Sample interval",
@@ -1589,6 +1657,7 @@ export function installProjectImportDialog(
     return {
       enabled: historyControls.enabled.checked,
       mode: historyControls.mode.value,
+      maxFrames: historyControls.maxFrames.value,
       commitCount: historyControls.commitCount.value,
       fromInclusive: historyControls.fromInclusive.value,
       toInclusive: historyControls.toInclusive.value,
@@ -1618,7 +1687,10 @@ export function installProjectImportDialog(
 
   function renderHistory(): void {
     const enabled = historyControls.enabled.checked;
+    const entireMainline =
+      historyControls.mode.value === "root-to-tip";
     historyControls.options.hidden = !enabled;
+    historyControls.sampleEveryWrap.hidden = entireMainline;
     historyControls.enabled.setAttribute(
       "aria-expanded",
       String(enabled),
@@ -1626,6 +1698,14 @@ export function installProjectImportDialog(
     for (const panel of historyControls.panels) {
       panel.hidden =
         panel.dataset["historyModePanel"] !== historyControls.mode.value;
+    }
+    if (entireMainline) {
+      const maxFrames = Number(historyControls.maxFrames.value);
+      historyControls.frameHelp.textContent =
+        Number.isSafeInteger(maxFrames) && maxFrames > 0
+          ? `First commit → selected revision · up to ${maxFrames.toLocaleString()} ${maxFrames === 1 ? "frame" : "frames"}`
+          : `Choose up to ${PROJECT_IMPORT_HISTORY_LIMITS.maxFrames.toLocaleString()} animation frames.`;
+      return;
     }
     const bound = historyCommitBound();
     const sampleEvery = Number(historyControls.sampleEvery.value);
@@ -1652,6 +1732,8 @@ export function installProjectImportDialog(
       );
       if (selection === undefined) return "Single snapshot";
       switch (selection.mode) {
+        case "root-to-tip":
+          return `First commit → selected revision · up to ${selection.maxFrames.toLocaleString()} ${selection.maxFrames === 1 ? "frame" : "frames"}`;
         case "commit-count":
           return `${selection.commitCount.toLocaleString()} recent commits`;
         case "date-range":
@@ -1717,6 +1799,7 @@ export function installProjectImportDialog(
     historyControls.toInclusive.value = "";
     historyControls.oldestTagName.value = "";
     historyControls.newestTagName.value = "";
+    historyControls.maxFrames.value = "";
     historyControls.commitCount.value = "";
     historyControls.dateMaxCommits.value = "";
     historyControls.tagMaxCommits.value = "";
@@ -2398,6 +2481,7 @@ export function installProjectImportDialog(
     updateReview();
   });
   for (const input of [
+    historyControls.maxFrames,
     historyControls.commitCount,
     historyControls.fromInclusive,
     historyControls.toInclusive,

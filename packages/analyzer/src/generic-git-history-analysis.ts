@@ -39,6 +39,7 @@ import {
   type HistoryAnalysisBounds,
   type HistorySelectionRequest,
   type HistorySelectionResult,
+  type RootToTipHistorySelectionRequest,
 } from "./history-selection.js";
 import { analyzeRepositorySnapshotFacts } from "./discovery.js";
 import {
@@ -46,6 +47,7 @@ import {
   type RepositorySnapshot,
 } from "./snapshot.js";
 import type {
+  HistoryAnalysisFacts,
   LocalAnalysisFacts,
   LocalAnalysisOptions,
 } from "./types.js";
@@ -100,6 +102,7 @@ export interface NamedTagRangeHistorySelectionRequest
 }
 
 export type GenericGitHistorySelectionRequest =
+  | RootToTipHistorySelectionRequest
   | CommitCountHistorySelectionRequest
   | DateRangeHistorySelectionRequest
   | NamedTagRangeHistorySelectionRequest;
@@ -677,7 +680,9 @@ function traversalMaximum(
   selection: GenericGitHistorySelectionRequest,
 ): number {
   const value =
-    selection.mode === "commit-count"
+    selection.mode === "root-to-tip"
+      ? HISTORY_SELECTION_LIMITS.maxTraversedCommits
+      : selection.mode === "commit-count"
       ? selection.commitCount
       : selection.maxCommits;
   if (!Number.isSafeInteger(value) || value <= 0) {
@@ -792,6 +797,13 @@ function immutableSelectionRequest(
   ) {
     invalid("Generic Git history selection must be a plain object.");
   }
+  if (selection.mode === "root-to-tip") {
+    return Object.freeze({
+      mode: selection.mode,
+      maxFrames: selection.maxFrames,
+      ...explicitBounds(selection),
+    });
+  }
   if (selection.mode === "commit-count") {
     return Object.freeze({
       mode: selection.mode,
@@ -821,7 +833,7 @@ function immutableSelectionRequest(
     });
   }
   invalid(
-    "Generic Git history selection mode must be commit-count, date-range, or tag-range.",
+    "Generic Git history selection mode must be root-to-tip, commit-count, date-range, or tag-range.",
   );
 }
 
@@ -878,6 +890,13 @@ function selectSessionHistory(
   const hasOverflowProbe = session.commits.length > maximumCommits;
   const boundedCommits = session.commits.slice(0, maximumCommits);
   const resolvedRequest = resolvedSelectionRequest(request, session);
+
+  if (hasOverflowProbe && resolvedRequest.mode === "root-to-tip") {
+    throw new HistorySelectionError(
+      "history-too-long",
+      `The complete first-parent mainline exceeds ${maximumCommits} commits; choose a bounded custom range.`,
+    );
+  }
 
   if (hasOverflowProbe && resolvedRequest.mode === "date-range") {
     throw new HistorySelectionError(
@@ -1017,7 +1036,7 @@ function chargeChangedPaths(
   return Object.freeze({ entries, bytes });
 }
 
-function semanticTreeEntries(facts: LocalAnalysisFacts): number {
+function semanticTreeEntries(facts: HistoryAnalysisFacts): number {
   return (
     facts.repositories.length +
     facts.solutions.length +
@@ -1027,7 +1046,10 @@ function semanticTreeEntries(facts: LocalAnalysisFacts): number {
   );
 }
 
-const SEMANTIC_RETENTION_SAFETY_FACTOR = 4;
+// The container, property-slot, child-reference, string-header, and UTF-8
+// charges below already form a conservative retained-heap estimate. Applying
+// an additional blanket multiplier double-counts those costs and rejected a
+// 9.7 MiB Code City fact graph as if it retained more than 230 MiB.
 const SEMANTIC_OBJECT_OVERHEAD_BYTES = 128;
 const SEMANTIC_ARRAY_OVERHEAD_BYTES = 64;
 const SEMANTIC_REFERENCE_BYTES = 16;
@@ -1044,14 +1066,16 @@ const SEMANTIC_FACT_KEYS = Object.freeze([
   "warnings",
 ] as const);
 
-function snapshotRetainedSemanticFacts(
-  value: unknown,
+function snapshotRetainedSemanticFacts<
+  TFacts extends HistoryAnalysisFacts,
+>(
+  value: TFacts,
   identity: CityIdentity | undefined,
   accumulated: number,
   maximum: number,
   clock: AnalysisClock,
 ): {
-  readonly facts: LocalAnalysisFacts;
+  readonly facts: TFacts;
   readonly bytes: number;
 } {
   const active = new WeakSet<object>();
@@ -1072,18 +1096,14 @@ function snapshotRetainedSemanticFacts(
     if (
       !Number.isSafeInteger(rawBytes) ||
       rawBytes < 0 ||
-      rawBytes >
-        Math.floor(
-          (maximum - charged) /
-            SEMANTIC_RETENTION_SAFETY_FACTOR,
-        )
+      rawBytes > maximum - charged
     ) {
       throw new HistoryEvolutionError(
         "limit-exceeded",
         `History analysis exceeded ${maximum} aggregate retained semantic bytes.`,
       );
     }
-    charged += rawBytes * SEMANTIC_RETENTION_SAFETY_FACTOR;
+    charged += rawBytes;
   };
   const descriptors = (
     item: object,
@@ -1291,11 +1311,51 @@ function snapshotRetainedSemanticFacts(
     semanticRoot,
     "facts",
     0,
-  ) as LocalAnalysisFacts;
+  ) as TFacts;
   checkpoint(clock);
   return Object.freeze({
     facts,
     bytes: charged,
+  });
+}
+
+/**
+ * Time-travel renders aggregate source metrics and stable relationships. Only
+ * the newest frame can be navigated to retained source, so repeating callable
+ * units and source-structure evidence in every older frame wastes most of the
+ * history memory and output budget without adding an animation capability.
+ */
+function historicalVisualizationFacts(
+  facts: LocalAnalysisFacts,
+): HistoryAnalysisFacts {
+  return Object.freeze({
+    repositories: facts.repositories,
+    solutions: facts.solutions,
+    modules: facts.modules,
+    sources: Object.freeze(
+      facts.sources.map((source) =>
+        Object.freeze({
+          id: source.id,
+          repositoryId: source.repositoryId,
+          moduleId: source.moduleId,
+          districtId: source.districtId,
+          districtName: source.districtName,
+          districtPath: source.districtPath,
+          name: source.name,
+          path: source.path,
+          language: source.language,
+          metrics: source.metrics,
+          ...(source.sourceLocation === undefined
+            ? {}
+            : { sourceLocation: source.sourceLocation }),
+          risk: source.risk,
+          semanticGroupId: source.semanticGroupId,
+          imports: source.imports,
+        }),
+      ),
+    ),
+    dependencies: facts.dependencies,
+    warnings: Object.freeze([]),
   });
 }
 
@@ -1428,11 +1488,12 @@ async function analyzeSession(
   try {
     const frames: {
       readonly commit: GenericGitHistoryCommit;
-      readonly facts: LocalAnalysisFacts;
+      readonly facts: HistoryAnalysisFacts;
     }[] = [];
     for (const commit of selection.sampledCommits) {
       checkpoint(clock);
       let snapshotFileCount: number | undefined;
+      let activeLease: HistorySemanticCacheLeaseLike | undefined;
       const compute = async (): Promise<LocalAnalysisFacts> => {
         checkpoint(clock);
         const snapshot = await session.readSnapshot(commit.sha);
@@ -1490,6 +1551,7 @@ async function analyzeSession(
           (lateLease) => lateLease.release(),
         );
         leases.push(lease);
+        activeLease = lease;
         if (lease.hit) cacheHits += 1;
         else cacheMisses += 1;
         checkpoint(clock);
@@ -1498,9 +1560,25 @@ async function analyzeSession(
           clock,
         );
         checkpoint(clock);
+        // A pluggable cache is an untrusted object boundary just like an
+        // analyzer result. Own and validate the complete graph before the
+        // historical projection reads any property from it; otherwise a
+        // cache hit could run accessors or proxy traps during compaction.
+        semanticFacts = snapshotRetainedSemanticFacts(
+          semanticFacts,
+          undefined,
+          0,
+          HISTORY_SELECTION_LIMITS.maxAggregateSemanticBytes,
+          clock,
+        ).facts;
+        checkpoint(clock);
       }
+      const retainedInput =
+        commit.sha === selection.summary.resolvedNewestSha
+          ? semanticFacts
+          : historicalVisualizationFacts(semanticFacts);
       const retained = snapshotRetainedSemanticFacts(
-        semanticFacts,
+        retainedInput,
         options.identity,
         semanticBytes,
         bounds.maxAggregateSemanticBytes,
@@ -1508,6 +1586,17 @@ async function analyzeSession(
       );
       const facts = retained.facts;
       semanticBytes = retained.bytes;
+      if (activeLease !== undefined) {
+        const expected = leases.pop();
+        if (expected !== activeLease) {
+          throw new HistoryEvolutionError(
+            "invalid-input",
+            "History semantic cache lease accounting is inconsistent.",
+          );
+        }
+        activeLease.release();
+        activeLease = undefined;
+      }
 
       const chargedEntries =
         snapshotFileCount ?? Math.max(1, semanticTreeEntries(facts));

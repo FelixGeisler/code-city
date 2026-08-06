@@ -27,6 +27,8 @@ export interface JobError {
     | "city-model-invalid"
     | "deadline-exceeded"
     | "failed"
+    | "history-limit-exceeded"
+    | "history-too-long"
     | "import-limit-exceeded"
     | "interrupted"
     | "repository-content-rejected"
@@ -39,6 +41,8 @@ export type JobTaskFailureCode =
   | "analysis-failed"
   | "city-model-invalid"
   | "deadline-exceeded"
+  | "history-limit-exceeded"
+  | "history-too-long"
   | "import-limit-exceeded"
   | "repository-content-rejected"
   | "repository-unavailable"
@@ -51,6 +55,10 @@ const JOB_TASK_FAILURE_MESSAGES: Readonly<
   "city-model-invalid": "The uploaded city model is invalid.",
   "deadline-exceeded":
     "The repository import exceeded its time limit.",
+  "history-limit-exceeded":
+    "This repository is too detailed for the selected history. Reduce the maximum animation frames or choose a custom range.",
+  "history-too-long":
+    "This mainline has more than 500 commits. Choose a custom history range.",
   "import-limit-exceeded":
     "The repository import exceeded a configured limit.",
   "repository-content-rejected":
@@ -68,6 +76,8 @@ function isJobTaskFailureCode(
     value === "analysis-failed" ||
     value === "city-model-invalid" ||
     value === "deadline-exceeded" ||
+    value === "history-limit-exceeded" ||
+    value === "history-too-long" ||
     value === "import-limit-exceeded" ||
     value === "repository-content-rejected" ||
     value === "repository-unavailable" ||

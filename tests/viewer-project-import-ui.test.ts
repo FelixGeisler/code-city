@@ -205,6 +205,18 @@ describe("viewer project import UI", () => {
       'frameHelp.setAttribute("aria-live", "polite")',
     );
     expect(dialogSource).toContain(
+      '["root-to-tip", "Entire mainline (recommended)"]',
+    );
+    expect(dialogSource).toContain(
+      'createHistoryLabel("Maximum animation frames", maxFrames)',
+    );
+    expect(dialogSource).toContain(
+      "First commit → selected revision · up to",
+    );
+    expect(dialogSource).toContain(
+      "PROJECT_IMPORT_HISTORY_DEFAULT_MAX_FRAMES = 20",
+    );
+    expect(dialogSource).toContain(
       'createHistoryLabel("From, inclusive (UTC)"',
     );
     expect(dialogSource).toContain(

@@ -14,6 +14,8 @@ import {
   GenericGitSnapshotError,
   GitHubSnapshotError,
   HISTORY_SELECTION_LIMITS,
+  HistoryEvolutionError,
+  HistorySelectionError,
   SnapshotDeadlineError,
   SnapshotLimitError,
   SnapshotPathError,
@@ -546,7 +548,25 @@ describe("remote import request parsing", () => {
     expect(sameNameTag.source.ref).toBe("tags/release");
   });
 
-  it("normalizes bounded commit, date, and tag history selections", () => {
+  it("normalizes full-mainline, commit, date, and tag history selections", () => {
+    expect(
+      parseRemoteImportRequest({
+        source: {
+          kind: "github",
+          repositoryUrl: "https://github.com/openai/example",
+        },
+        history: {
+          mode: "root-to-tip",
+          maxFrames: 20,
+          totalDeadlineMs: 60_000,
+        },
+      }).history,
+    ).toEqual({
+      mode: "root-to-tip",
+      maxFrames: 20,
+      totalDeadlineMs: 60_000,
+    });
+
     expect(
       parseRemoteImportRequest({
         source: {
@@ -626,6 +646,15 @@ describe("remote import request parsing", () => {
       repositoryUrl: "https://github.com/openai/example",
     };
     for (const history of [
+      {
+        mode: "root-to-tip",
+        maxFrames: 1,
+      },
+      {
+        mode: "root-to-tip",
+        maxFrames: 20,
+        sampleEvery: 2,
+      },
       {
         mode: "commit-count",
         commitCount: 101,
@@ -1372,9 +1401,8 @@ describe("remote import HTTP API", () => {
             revision: { kind: "branch", name: "main" },
           },
           history: {
-            mode: "commit-count",
-            commitCount: 25,
-            sampleEvery: 5,
+            mode: "root-to-tip",
+            maxFrames: 20,
           },
           identity: { title: "Evolution city" },
           analysis: {
@@ -1415,9 +1443,8 @@ describe("remote import HTTP API", () => {
       repositoryIdentity: repositoryUrl,
       ref: "refs/heads/main",
       selection: {
-        mode: "commit-count",
-        commitCount: 25,
-        sampleEvery: 5,
+        mode: "root-to-tip",
+        maxFrames: 20,
         totalDeadlineMs: 60_000,
       },
       signal: expect.any(AbortSignal),
@@ -1486,6 +1513,77 @@ describe("remote import HTTP API", () => {
     expect(persisted).not.toContain(repositoryUrl);
     expect(persisted).not.toContain("refs/heads/main");
     expect(persisted).not.toContain("Evolution city");
+  });
+
+  it("maps history capacity failures to safe actionable job errors", async () => {
+    const roots = await fixture();
+    const history = vi.fn(
+      async (requestValue: { readonly repositoryUrl: string }) => {
+        if (requestValue.repositoryUrl.endsWith("/too-long")) {
+          throw new HistorySelectionError(
+            "history-too-long",
+            "secret C:\\private\\repository has 501 commits",
+          );
+        }
+        throw new HistoryEvolutionError(
+          "limit-exceeded",
+          "secret retained semantic internals",
+        );
+      },
+    );
+    const server = await startCodeCityServer({
+      host: "127.0.0.1",
+      port: 0,
+      ...roots,
+      trustWindowsGitWorkspace: true,
+      importDependencies: {
+        analyzeGenericGitHistory:
+          history as NonNullable<
+            RemoteImportDependencies["analyzeGenericGitHistory"]
+          >,
+      },
+    });
+    servers.push(server);
+
+    for (const expected of [
+      {
+        repository: "too-long",
+        code: "history-too-long",
+        message:
+          "This mainline has more than 500 commits. Choose a custom history range.",
+      },
+      {
+        repository: "too-detailed",
+        code: "history-limit-exceeded",
+        message:
+          "This repository is too detailed for the selected history. Reduce the maximum animation frames or choose a custom range.",
+      },
+    ] as const) {
+      const response = await request(
+        new URL("/api/v1/imports", server.url),
+        {
+          method: "POST",
+          headers: importHeaders(),
+          body: JSON.stringify({
+            source: {
+              kind: "github",
+              repositoryUrl:
+                `https://github.com/openai/${expected.repository}`,
+            },
+            history: { mode: "root-to-tip", maxFrames: 20 },
+          }),
+        },
+      );
+      const queued = (JSON.parse(response.body) as { job: JobRecord })
+        .job;
+      const terminal = await waitForTerminal(server, queued.id);
+      expect(terminal.error).toEqual({
+        code: expected.code,
+        message: expected.message,
+      });
+      expect(JSON.stringify(terminal)).not.toContain("secret");
+      expect(JSON.stringify(terminal)).not.toContain("private");
+    }
   });
 
   it("applies the history deadline to artifact publication", async () => {

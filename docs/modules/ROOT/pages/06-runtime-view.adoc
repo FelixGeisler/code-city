@@ -121,6 +121,21 @@ uploaded as raw fixed-size bodies. The browser never sends an absolute local
 path and cannot observe empty directories or reliable symlink metadata; users
 choose ZIP or server-side Git when those details matter.
 
+Repository history defaults to *Entire mainline*: Code City follows the
+selected revision's first-parent ancestry to its root and distributes at most
+20 animation frames across the complete span, always including root and tip.
+The hard traversal ceiling is 500 commits. If a root cannot be proven within
+that ceiling, the import reports that the mainline is too long and asks for a
+custom recent, UTC-date, or exact-tag range instead of silently truncating it.
+Custom ranges retain an advanced fixed sampling interval.
+
+Historical frames keep stable identities, aggregate metrics, and relationship
+inputs required by the city animation. Fine-grained callable and source-
+structure inspection detail is retained for the newest frame, whose immutable
+source snapshot is the one available to source navigation. Semantic memory is
+charged from explicit object-graph costs, bounded cumulatively across these
+retained frames, and cache leases are released after each owned frame copy.
+
 After a validated `202`, the browser retains only the opaque job UUID and polls
 one request at a time. Refresh resumes an active job or reopens a completed
 artifact; explicit query-model and performance-fixture loads take precedence.

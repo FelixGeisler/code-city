@@ -27,6 +27,9 @@
     "selection": {
       "oneOf": [
         {
+          "$ref": "#/$defs/rootToTipSelection"
+        },
+        {
           "$ref": "#/$defs/commitCountSelection"
         },
         {
@@ -105,7 +108,6 @@
         "mode",
         "traversal",
         "order",
-        "sampleEvery",
         "selectedCommitCount",
         "sampledCommitCount",
         "traversedCommitCount",
@@ -116,6 +118,7 @@
       "properties": {
         "mode": {
           "enum": [
+            "root-to-tip",
             "commit-count",
             "date-range",
             "tag-range"
@@ -126,11 +129,6 @@
         },
         "order": {
           "const": "oldest-first"
-        },
-        "sampleEvery": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 500
         },
         "selectedCommitCount": {
           "type": "integer",
@@ -164,6 +162,35 @@
         }
       }
     },
+    "rootToTipSelection": {
+      "type": "object",
+      "allOf": [
+        {
+          "$ref": "#/$defs/selectionBase"
+        },
+        {
+          "type": "object",
+          "required": [
+            "samplingStrategy",
+            "maxFrames"
+          ],
+          "properties": {
+            "mode": {
+              "const": "root-to-tip"
+            },
+            "samplingStrategy": {
+              "const": "evenly-spaced-v1"
+            },
+            "maxFrames": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 100
+            }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    },
     "commitCountSelection": {
       "type": "object",
       "allOf": [
@@ -173,11 +200,17 @@
         {
           "type": "object",
           "required": [
+            "sampleEvery",
             "requestedCommitCount"
           ],
           "properties": {
             "mode": {
               "const": "commit-count"
+            },
+            "sampleEvery": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
             },
             "requestedCommitCount": {
               "type": "integer",
@@ -198,12 +231,18 @@
         {
           "type": "object",
           "required": [
+            "sampleEvery",
             "fromInclusive",
             "toInclusive"
           ],
           "properties": {
             "mode": {
               "const": "date-range"
+            },
+            "sampleEvery": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
             },
             "fromInclusive": {
               "$ref": "#/$defs/instant"
@@ -224,9 +263,17 @@
         },
         {
           "type": "object",
+          "required": [
+            "sampleEvery"
+          ],
           "properties": {
             "mode": {
               "const": "tag-range"
+            },
+            "sampleEvery": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
             }
           }
         }
