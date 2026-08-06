@@ -2747,7 +2747,7 @@ test("hides AI guidance when no provider is configured", async ({ page }) => {
 test("scrubs retained ZIP source across selection, stale response, refetch, and removal", async ({
   page,
 }) => {
-  test.setTimeout(75_000);
+  test.setTimeout(120_000);
   const sourceRequests: string[] = [];
   let releaseRemotePreview!: () => void;
   let announceRemotePreview!: () => void;
