@@ -318,13 +318,18 @@ function printBoundsFromCityBox(
 }
 
 function bounds(minimum: PrintPoint, maximum: PrintPoint): PrintBounds {
+  const printableMinimum = {
+    x: minimum.x < 0 && minimum.x >= -EPSILON ? 0 : minimum.x,
+    y: minimum.y < 0 && minimum.y >= -EPSILON ? 0 : minimum.y,
+    z: minimum.z < 0 && minimum.z >= -EPSILON ? 0 : minimum.z,
+  };
   return {
-    minimum: { ...minimum },
+    minimum: printableMinimum,
     maximum: { ...maximum },
     size: {
-      x: maximum.x - minimum.x,
-      y: maximum.y - minimum.y,
-      z: maximum.z - minimum.z,
+      x: maximum.x - printableMinimum.x,
+      y: maximum.y - printableMinimum.y,
+      z: maximum.z - printableMinimum.z,
     },
   };
 }

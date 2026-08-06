@@ -349,7 +349,8 @@ interface AttemptResult {
 }
 
 const EPSILON = PRINT_FIDELITY_EPSILON;
-const SCALE_SEARCH_ITERATIONS = 52;
+const SCALE_SEARCH_BELOW_ITERATIONS = 52;
+const SCALE_SEARCH_REFINEMENT_ITERATIONS = 32;
 const PLATE_ID_DIGITS = 2;
 const MAXIMUM_PLATE_COUNT = 99;
 const MAXIMUM_DISTRICT_COUNT = 512;
@@ -358,6 +359,14 @@ const MAXIMUM_FREE_RECTANGLE_COUNT = 4_096;
 const MAXIMUM_ID_LENGTH = 256;
 const MAXIMUM_NAME_LENGTH = 512;
 const FIT_POLICIES = new Set<PrintFitPolicy>(["error", "scale", "tile"]);
+
+function scaleSearchDiscoveryIntervals(districtCount: number): number {
+  if (districtCount <= 16) return 4_096;
+  if (districtCount <= 64) return 1_024;
+  if (districtCount <= 128) return 512;
+  if (districtCount <= 256) return 256;
+  return 128;
+}
 
 function compareText(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -583,6 +592,9 @@ function boundsSize(bounds: PrintLayoutBounds): Vector3 {
 }
 
 function formatDimension(value: number): string {
+  if (value !== 0 && Math.abs(value) < 0.000001) {
+    return value.toExponential(6);
+  }
   return Number(value.toFixed(6)).toString();
 }
 
@@ -1746,105 +1758,6 @@ function attemptTiled(
   return { plates, unplaced };
 }
 
-function separatedByGap(
-  left: PackedItem,
-  right: PackedItem,
-  gap: number,
-): boolean {
-  return (
-    left.x + left.width + gap <= right.x + EPSILON ||
-    right.x + right.width + gap <= left.x + EPSILON ||
-    left.z + left.depth + gap <= right.z + EPSILON ||
-    right.z + right.depth + gap <= left.z + EPSILON
-  );
-}
-
-/**
- * Grows one known-valid topology from the minimum safe scale. Anchors and
- * rotations remain fixed, so every bound/collision predicate is monotone as
- * scale increases; binary search never assumes monotonicity from greedy
- * MaxRects decisions.
- */
-function growKnownSinglePlate(
-  context: LayoutContext,
-  template: AttemptResult,
-  scale: number,
-  districts: readonly PackItem[],
-): AttemptResult | undefined {
-  const templatePlate = template.plates[0];
-  if (templatePlate === undefined) return undefined;
-  const byDistrict = new Map(
-    districts.map((item) => [item.id, item]),
-  );
-  const identity =
-    context.identity === undefined
-      ? undefined
-      : identityItem(context.identity, context.profile, scale);
-  const items: PackedItem[] = [];
-  const baseThickness = physicalBaseThickness(
-    context,
-    scale,
-    "Scaled fit plate base",
-  );
-  for (const placed of templatePlate.state.items) {
-    let scaled: PackItem;
-    switch (placed.kind) {
-      case "district": {
-        const district = byDistrict.get(placed.id);
-        if (district === undefined) return undefined;
-        scaled = district;
-        break;
-      }
-      case "identity":
-        if (identity === undefined || identity.id !== placed.id) {
-          return undefined;
-        }
-        scaled = identity;
-        break;
-      case "plate-number":
-        scaled = plateNumberItem(context, templatePlate.index);
-        break;
-      case "external-apron":
-      case "external-box":
-        return undefined;
-    }
-    const width =
-      placed.rotation === 0 ? scaled.width : scaled.depth;
-    const depth =
-      placed.rotation === 0 ? scaled.depth : scaled.width;
-    const next: PackedItem = {
-      ...scaled,
-      width,
-      depth,
-      x: placed.x,
-      z: placed.z,
-      rotation: placed.rotation,
-    };
-    if (
-      !itemFitsHeight(next, baseThickness, context) ||
-      next.x < -EPSILON ||
-      next.z < -EPSILON ||
-      next.x + next.width > context.packingSpan.x + EPSILON ||
-      next.z + next.depth > context.packingSpan.z + EPSILON ||
-      !items.every((other) =>
-        separatedByGap(other, next, context.gap),
-      )
-    ) {
-      return undefined;
-    }
-    items.push(next);
-  }
-  return {
-    plates: [
-      {
-        ...templatePlate,
-        state: { free: [], items },
-      },
-    ],
-    unplaced: [],
-  };
-}
-
 function transformFor(
   source: PrintLayoutBounds,
   scale: number,
@@ -2397,6 +2310,43 @@ function belowProfileWarning(
   );
 }
 
+function onePlateScaleCeiling(
+  context: LayoutContext,
+  districts: readonly PrintLayoutDistrictInput[],
+  requestedScale: number,
+): number {
+  const width = context.packingSpan.x + EPSILON;
+  const depth = context.packingSpan.z + EPSILON;
+  const height = context.usableSpan.y + EPSILON;
+  let ceiling = requestedScale;
+  const cap = (candidate: number): void => {
+    if (Number.isFinite(candidate) && candidate > 0) {
+      ceiling = Math.min(ceiling, candidate);
+    }
+  };
+
+  // The continuous plate base grows with model scale even when its printable
+  // thickness is clamped upward at small scales.
+  cap(height / context.features.baseThickness);
+  for (const district of districts) {
+    const size = boundsSize(district.sourceBounds);
+    const unrotated = Math.min(width / size.x, depth / size.z);
+    const rotated = Math.min(width / size.z, depth / size.x);
+    cap(Math.max(unrotated, rotated));
+    cap(height / size.y);
+  }
+  if (
+    context.identity !== undefined &&
+    context.identity.scaleMode !== "physical"
+  ) {
+    const size = boundsSize(context.identity.sourceBounds);
+    cap(width / size.x);
+    cap(depth / size.z);
+    cap(height / size.y);
+  }
+  return ceiling;
+}
+
 function knownSinglePlateBelow(
   context: LayoutContext,
   districts: readonly PrintLayoutDistrictInput[],
@@ -2405,11 +2355,11 @@ function knownSinglePlateBelow(
   let scale = failedScale;
   for (
     let iteration = 0;
-    iteration < SCALE_SEARCH_ITERATIONS;
+    iteration < SCALE_SEARCH_BELOW_ITERATIONS;
     iteration += 1
   ) {
     scale /= 2;
-    if (!Number.isFinite(scale) || scale <= EPSILON) return undefined;
+    if (!Number.isFinite(scale) || scale <= 0) return undefined;
     const attempt = attemptSinglePlate(
       context,
       scale,
@@ -2472,8 +2422,8 @@ export function planPrintLayout(
     );
     ensureIndividualDistrictsFit(context, appliedScale, items);
     attempt = attemptTiled(context, appliedScale, items);
-  } else {
-    let items = scaleDistricts(
+  } else if (validated.fitPolicy === "error") {
+    const items = scaleDistricts(
       validated.districts,
       context,
       appliedScale,
@@ -2485,7 +2435,7 @@ export function planPrintLayout(
     );
     if (requestedAttempt !== undefined) {
       attempt = requestedAttempt;
-    } else if (validated.fitPolicy === "error") {
+    } else {
       const plateOne = createPlate(context, appliedScale, 1);
       if (plateOne.issue !== undefined) {
         throw new PrintLayoutError([plateOne.issue]);
@@ -2500,39 +2450,137 @@ export function planPrintLayout(
           available: { ...context.usableSpan },
         },
       ]);
-    } else {
-      const safeSearchStart = Math.min(
-        safeScale,
-        validated.requestedScale,
-      );
-      items = scaleDistricts(validated.districts, context, safeSearchStart);
-      let minimumScale = safeSearchStart;
-      let minimumAttempt = attemptSinglePlate(
+    }
+  } else {
+    const safeSearchStart = Math.min(
+      safeScale,
+      validated.requestedScale,
+    );
+    const searchCeiling = onePlateScaleCeiling(
+      context,
+      validated.districts,
+      validated.requestedScale,
+    );
+    if (
+      searchCeiling + EPSILON < safeSearchStart &&
+      !validated.acknowledgeBelowProfileScale
+    ) {
+      const safeItems = scaleDistricts(
+        validated.districts,
         context,
-        minimumScale,
-        items,
+        safeSearchStart,
       );
-      if (
-        minimumAttempt === undefined &&
-        validated.acknowledgeBelowProfileScale
-      ) {
+      ensureIndividualDistrictsFit(
+        context,
+        safeSearchStart,
+        safeItems,
+      );
+      const safePlate = createPlate(context, safeSearchStart, 1);
+      if (safePlate.issue !== undefined) {
+        throw new PrintLayoutError([safePlate.issue]);
+      }
+      throw new PrintLayoutError([
+        {
+          code: "city-does-not-fit",
+          message:
+            `Complete districts do not fit together on one plate at the minimum profile-safe scale ${formatDimension(safeScale)}; ` +
+            'in Print export, set Fit policy to "Tile complete districts (multi-plate)".',
+          available: { ...context.usableSpan },
+        },
+      ]);
+    }
+    appliedScale = searchCeiling;
+    const ceilingItems = scaleDistricts(
+      validated.districts,
+      context,
+      searchCeiling,
+    );
+    const ceilingAttempt = attemptSinglePlate(
+      context,
+      searchCeiling,
+      ceilingItems,
+    );
+    if (ceilingAttempt !== undefined) {
+      attempt = ceilingAttempt;
+    } else {
+      const minimumScale = Math.min(safeSearchStart, searchCeiling);
+      const minimumAttempt =
+        searchCeiling === minimumScale
+          ? undefined
+          : attemptSinglePlate(
+              context,
+              minimumScale,
+              scaleDistricts(
+                validated.districts,
+                context,
+                minimumScale,
+              ),
+            );
+      let low = minimumScale;
+      let high = searchCeiling;
+      let best = minimumAttempt;
+      const searchSpan = high - low;
+      let previousFailure = high;
+      let discovered = false;
+      const discoveryIntervals = scaleSearchDiscoveryIntervals(
+        validated.districts.length,
+      );
+      // Greedy MaxRects decisions can change with scale, so a failed probe
+      // does not prove that every larger scale fails. Discover the highest
+      // sampled feasible topology on a dense, nested grid before refining
+      // its adjacent upper interval with fresh packing attempts. Small and
+      // ordinary cities receive denser coverage; large inputs stay bounded.
+      if (searchSpan > EPSILON) {
+        for (
+          let interval = 1;
+          interval < discoveryIntervals;
+          interval += 1
+        ) {
+          const fraction = interval / discoveryIntervals;
+          const candidateScale = high - searchSpan * fraction;
+          const candidateItems = scaleDistricts(
+            validated.districts,
+            context,
+            candidateScale,
+          );
+          const candidate = attemptSinglePlate(
+            context,
+            candidateScale,
+            candidateItems,
+          );
+          if (candidate === undefined) {
+            previousFailure = candidateScale;
+            continue;
+          }
+          low = candidateScale;
+          high = previousFailure;
+          best = candidate;
+          discovered = true;
+          break;
+        }
+      }
+      if (best === undefined && validated.acknowledgeBelowProfileScale) {
         const below = knownSinglePlateBelow(
           context,
           validated.districts,
           minimumScale,
         );
         if (below !== undefined) {
-          minimumScale = below.scale;
-          minimumAttempt = below.attempt;
+          low = below.scale;
+          best = below.attempt;
         }
       }
-      if (minimumAttempt === undefined) {
-        items = scaleDistricts(
+      if (best === undefined) {
+        const minimumItems = scaleDistricts(
           validated.districts,
           context,
           minimumScale,
         );
-        ensureIndividualDistrictsFit(context, minimumScale, items);
+        ensureIndividualDistrictsFit(
+          context,
+          minimumScale,
+          minimumItems,
+        );
         const plateOne = createPlate(context, minimumScale, 1);
         if (plateOne.issue !== undefined) {
           throw new PrintLayoutError([plateOne.issue]);
@@ -2549,23 +2597,22 @@ export function planPrintLayout(
           },
         ]);
       }
-      let low = minimumScale;
-      let high = validated.requestedScale;
-      let best = minimumAttempt;
+      if (!discovered) {
+        high = previousFailure;
+      }
       for (
         let iteration = 0;
-        iteration < SCALE_SEARCH_ITERATIONS;
+        iteration < SCALE_SEARCH_REFINEMENT_ITERATIONS;
         iteration += 1
       ) {
-        const candidateScale = (low + high) / 2;
+        const candidateScale = low + (high - low) / 2;
         const candidateItems = scaleDistricts(
           validated.districts,
           context,
           candidateScale,
         );
-        const candidate = growKnownSinglePlate(
+        const candidate = attemptSinglePlate(
           context,
-          minimumAttempt,
           candidateScale,
           candidateItems,
         );
@@ -2578,6 +2625,8 @@ export function planPrintLayout(
       }
       appliedScale = low;
       attempt = best;
+    }
+    if (appliedScale + EPSILON < validated.requestedScale) {
       warnings.push(
         scaleWarning(
           validated.requestedScale,

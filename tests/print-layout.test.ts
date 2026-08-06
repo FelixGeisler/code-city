@@ -603,28 +603,229 @@ describe("deterministic physical print layout", () => {
   });
 
   it("scales only as far as all supplied printer features remain safe", () => {
-    const plan = planPrintLayout(
-      profile({ x: 70, y: 30, z: 50 }),
-      {
-        fitPolicy: "scale",
-        requestedScale: 2,
-        features,
-        districts: [
-          district("a", 25, 20),
-          district("b", 25, 20),
-          district("c", 25, 20),
-        ],
-      },
-    );
+    const printer = profile({ x: 70, y: 30, z: 50 });
+    const districts = [
+      district("a", 25, 20),
+      district("b", 25, 20),
+      district("c", 25, 20),
+    ];
+    const knownFeasible = planPrintLayout(printer, {
+      fitPolicy: "error",
+      requestedScale: 1.2,
+      features,
+      districts,
+    });
+    const plan = planPrintLayout(printer, {
+      fitPolicy: "scale",
+      requestedScale: 2,
+      features,
+      districts,
+    });
 
     expect(plan.minimumSafeScale).toBe(1);
-    expect(plan.appliedScale).toBeGreaterThanOrEqual(1);
+    expect(knownFeasible.plates).toHaveLength(1);
+    expect(plan.appliedScale).toBeGreaterThanOrEqual(1.2);
     expect(plan.appliedScale).toBeLessThan(2);
     expect(plan.plates).toHaveLength(1);
     expect(plan.warnings.some((warning) =>
       /scaled from 2.*to fit one plate safely\./u.test(warning)
     ))
       .toBe(true);
+  });
+
+  it("repacks and rotates districts while searching for the largest one-plate scale", () => {
+    const printer = profile();
+    const districts = [district("rotating", 2, 24)];
+    const request = {
+      fitPolicy: "scale" as const,
+      requestedScale: 3,
+      features,
+      districts,
+    };
+    const knownFeasible = planPrintLayout(printer, {
+      ...request,
+      fitPolicy: "error",
+      requestedScale: 2.5,
+    });
+    const plan = planPrintLayout(printer, request);
+
+    expect(knownFeasible.plates).toHaveLength(1);
+    expect(
+      knownFeasible.plates[0]!.districts[0]!.transform.rotation,
+    ).toBe(90);
+    expect(plan.appliedScale).toBeCloseTo(
+      knownFeasible.appliedScale,
+      7,
+    );
+    expect(plan.appliedScale).toBeLessThan(3);
+    expect(plan.plates).toHaveLength(1);
+    expect(plan.plates[0]!.districts[0]!.transform.rotation).toBe(90);
+    expect(planPrintLayout(printer, request)).toEqual(plan);
+  });
+
+  it("discovers the highest sampled fit across non-monotone greedy packing islands", () => {
+    const printer = profile();
+    const districts = [district("a", 22, 6), district("b", 25, 4)];
+    const request = {
+      fitPolicy: "scale" as const,
+      requestedScale: 3,
+      features,
+      districts,
+    };
+    const knownFeasible = planPrintLayout(printer, {
+      ...request,
+      fitPolicy: "error",
+      requestedScale: 2.4,
+    });
+    const plan = planPrintLayout(printer, request);
+
+    expect(knownFeasible.plates).toHaveLength(1);
+    expect(plan.appliedScale).toBeCloseTo(
+      knownFeasible.appliedScale,
+      7,
+    );
+    expect(plan.appliedScale).toBeLessThan(3);
+    expect(plan.plates).toHaveLength(1);
+    expect(planPrintLayout(printer, request)).toEqual(plan);
+  });
+
+  it("discovers a narrow higher-scale packing island", () => {
+    const printer = profile({ x: 80, y: 20, z: 43 });
+    const districts = [
+      district("a", 18.2, 12.6, 1),
+      district("b", 19.7, 4.8, 1),
+      district("c", 25.9, 14.4, 1),
+    ];
+    const request = {
+      fitPolicy: "scale" as const,
+      requestedScale: 3.4,
+      districtGap: 1.5,
+      features,
+      districts,
+    };
+    const knownFeasible = planPrintLayout(printer, {
+      ...request,
+      fitPolicy: "error",
+      requestedScale: 1.87,
+    });
+    const plan = planPrintLayout(printer, request);
+
+    expect(knownFeasible.plates).toHaveLength(1);
+    expect(plan.appliedScale).toBeGreaterThanOrEqual(1.87);
+    expect(plan.appliedScale).toBeLessThan(3.4);
+    expect(plan.plates).toHaveLength(1);
+    expect(planPrintLayout(printer, request)).toEqual(plan);
+  });
+
+  it("discovers a sub-milliscale higher packing island", () => {
+    const printer = profile();
+    const districts = [
+      district("a", 21.9102400206, 18.1830263007),
+      district("b", 13.105355287, 22.6733841728),
+      district("c", 4.8652528599, 22.2512963507),
+      district("d", 5.1778066512, 9.9080212172),
+      district("e", 21.4625798352, 13.4086571056),
+      district("f", 2.7401287425, 23.7757696193),
+    ];
+    const request = {
+      fitPolicy: "scale" as const,
+      requestedScale: 3,
+      features,
+      districts,
+    };
+    const knownFeasible = planPrintLayout(printer, {
+      ...request,
+      fitPolicy: "error",
+      requestedScale: 1.3295,
+    });
+    const plan = planPrintLayout(printer, request);
+
+    expect(knownFeasible.plates).toHaveLength(1);
+    expect(plan.appliedScale).toBeGreaterThanOrEqual(1.3295);
+    expect(plan.appliedScale).toBeLessThan(3);
+    expect(plan.plates).toHaveLength(1);
+    expect(planPrintLayout(printer, request)).toEqual(plan);
+  });
+
+  it("discovers a higher-scale topology when the safe-scale greedy attempt fails", () => {
+    const printer = profile({ x: 60, y: 100, z: 45 });
+    const districts = [
+      district("a", 30, 29),
+      district("b", 24, 11),
+      district("c", 34, 6),
+    ];
+    const request = {
+      fitPolicy: "scale" as const,
+      requestedScale: 1.3,
+      features,
+      districts,
+    };
+    const knownFeasible = planPrintLayout(printer, {
+      ...request,
+      fitPolicy: "error",
+      requestedScale: 1.2,
+    });
+    const plan = planPrintLayout(printer, request);
+
+    expect(knownFeasible.plates).toHaveLength(1);
+    expect(plan.appliedScale).toBeGreaterThanOrEqual(1.2);
+    expect(plan.appliedScale).toBeLessThan(1.3);
+    expect(plan.plates).toHaveLength(1);
+    expect(planPrintLayout(printer, request)).toEqual(plan);
+  });
+
+  it("caps enormous scale targets before multiplying model dimensions", () => {
+    const printer = profile();
+    const request = {
+      fitPolicy: "scale" as const,
+      requestedScale: Number.MAX_VALUE,
+      features,
+      districts: [district("finite", 10, 10)],
+    };
+    const plan = planPrintLayout(printer, request);
+
+    expect(Number.isFinite(plan.appliedScale)).toBe(true);
+    expect(plan.appliedScale).toBeGreaterThanOrEqual(plan.minimumSafeScale);
+    expect(plan.appliedScale).toBeLessThan(Number.MAX_VALUE);
+    expect(plan.plates).toHaveLength(1);
+    expect(planPrintLayout(printer, request)).toEqual(plan);
+  });
+
+  it("can search below an enormous safe scale only after acknowledgement", () => {
+    const tinyFeatures: PrintLayoutFeatureMeasurements = {
+      wallThickness: 1e-200,
+      gap: 1e-200,
+      minimumFeatureSize: 1e-200,
+      baseThickness: 1e-200,
+      labelStrokeWidth: 1e-200,
+      raisedFeatureHeight: 1e-200,
+      recessedFeatureDepth: 1e-200,
+      routeWidth: 1e-200,
+      connectorWidth: 1e-200,
+    };
+    const printer = profile();
+    const request = {
+      fitPolicy: "scale" as const,
+      requestedScale: Number.MAX_VALUE,
+      acknowledgeBelowProfileScale: true,
+      features: tinyFeatures,
+      districts: [district("finite", 10, 10)],
+    };
+    expect(() =>
+      planPrintLayout(printer, {
+        ...request,
+        acknowledgeBelowProfileScale: false,
+      }),
+    ).toThrow(/minimum profile-safe scale|requires.*packing span/u);
+    const plan = planPrintLayout(printer, request);
+
+    expect(Number.isFinite(plan.appliedScale)).toBe(true);
+    expect(plan.appliedScale).toBeGreaterThan(0);
+    expect(plan.appliedScale).toBeLessThan(plan.minimumSafeScale);
+    expect(plan.belowProfileScaleAcknowledged).toBe(true);
+    expect(plan.featureViolations.length).toBeGreaterThan(0);
+    expect(plan.plates).toHaveLength(1);
+    expect(planPrintLayout(printer, request)).toEqual(plan);
   });
 
   it("names the visible tile option when one-plate scaling is impossible", () => {
@@ -691,6 +892,47 @@ describe("deterministic physical print layout", () => {
     );
   });
 
+  it("preserves an explicitly requested positive sub-epsilon scale", () => {
+    const plan = planPrintLayout(profile(), {
+      fitPolicy: "scale",
+      requestedScale: 5e-10,
+      acknowledgeBelowProfileScale: true,
+      features,
+      districts: [],
+    });
+
+    expect(plan.appliedScale).toBe(5e-10);
+    expect(plan.belowProfileScaleAcknowledged).toBe(true);
+    expect(plan.featureViolations.length).toBeGreaterThan(0);
+    expect(plan.plates).toHaveLength(1);
+  });
+
+  it("uses a valid positive sub-epsilon geometric ceiling", () => {
+    const printer = profile();
+    const districts = [district("wide", 120_000_000_002, 1, 1)];
+    const knownFeasible = planPrintLayout(printer, {
+      fitPolicy: "error",
+      requestedScale: 4.9e-10,
+      acknowledgeBelowProfileScale: true,
+      features,
+      districts,
+    });
+    const plan = planPrintLayout(printer, {
+      fitPolicy: "scale",
+      requestedScale: 2e-9,
+      acknowledgeBelowProfileScale: true,
+      features,
+      districts,
+    });
+
+    expect(plan.appliedScale).toBeGreaterThanOrEqual(
+      knownFeasible.appliedScale,
+    );
+    expect(plan.appliedScale).toBeLessThanOrEqual(2e-9);
+    expect(plan.featureViolations.length).toBeGreaterThan(0);
+    expect(plan.plates).toHaveLength(1);
+  });
+
   it("searches below the safe floor only after acknowledgement and remains bounded", () => {
     const request = {
       fitPolicy: "scale" as const,
@@ -740,7 +982,7 @@ describe("deterministic physical print layout", () => {
     ).toThrow(/reservation|does not fit|usable/u);
   });
 
-  it("terminates deterministically when no positive searchable scale can fit", () => {
+  it("finds a deterministic positive acknowledged fit for astronomical districts", () => {
     const request = {
       fitPolicy: "scale" as const,
       requestedScale: 2,
@@ -748,11 +990,20 @@ describe("deterministic physical print layout", () => {
       features,
       districts: [district("astronomical", 1e15, 1e15)],
     };
-    const run = () =>
-      planPrintLayout(profile({ x: 60, y: 30, z: 40 }), request);
+    const first = planPrintLayout(
+      profile({ x: 60, y: 30, z: 40 }),
+      request,
+    );
+    const second = planPrintLayout(
+      profile({ x: 60, y: 30, z: 40 }),
+      request,
+    );
 
-    expect(run).toThrow(/astronomical|does not fit|one plate/u);
-    expect(run).toThrow(/astronomical|does not fit|one plate/u);
+    expect(first.appliedScale).toBeGreaterThan(0);
+    expect(first.appliedScale).toBeLessThan(1e-9);
+    expect(first.featureViolations.length).toBeGreaterThan(0);
+    expect(first.plates).toHaveLength(1);
+    expect(second).toEqual(first);
   });
 
   it("uses the shared fidelity tolerance at the safe threshold", () => {
