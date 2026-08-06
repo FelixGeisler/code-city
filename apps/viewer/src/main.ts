@@ -64,12 +64,6 @@ import {
   type CameraNavigationMode,
 } from "./camera-navigation.js";
 import {
-  cameraViewMode,
-  cameraViewModeLabel,
-  primaryCameraViewConfiguration,
-  type PrimaryCameraViewMode,
-} from "./camera-view-mode.js";
-import {
   FINE_DETAIL_INITIAL_LIMIT,
   FINE_DETAIL_MAXIMUM_LIMIT,
   projectFineDetail,
@@ -452,23 +446,10 @@ const advancedProjectSettingsDialog = element<HTMLDialogElement>(
 const advancedProjectSettingsClose = element<HTMLButtonElement>(
   "advanced-project-settings-close",
 );
-const cameraViewSwitch = element<HTMLElement>("camera-view-switch");
-const cameraView3dButton =
-  element<HTMLButtonElement>("camera-view-3d");
-const cameraViewMapButton =
-  element<HTMLButtonElement>("camera-view-map");
 const cameraFitScopeButton =
   element<HTMLButtonElement>("camera-fit-scope");
 const cameraFocusSelectionButton =
   element<HTMLButtonElement>("camera-focus-selection");
-const cameraProjectionSelect =
-  element<HTMLSelectElement>("camera-projection");
-const cameraIsometricButton =
-  element<HTMLButtonElement>("camera-isometric");
-const cameraTopDownButton =
-  element<HTMLButtonElement>("camera-top-down");
-const cameraViewStatus =
-  element<HTMLElement>("camera-view-status");
 const cameraControlsHint =
   element<HTMLParagraphElement>("camera-controls-hint");
 const metricPreviewBanner =
@@ -878,13 +859,8 @@ class CityScene {
         imageExportOpenButton.disabled = true;
         imageExportOpenButton.title =
           "Image export is unavailable while the WebGL context is lost.";
-        cameraView3dButton.disabled = true;
-        cameraViewMapButton.disabled = true;
         cameraFitScopeButton.disabled = true;
         cameraFocusSelectionButton.disabled = true;
-        cameraProjectionSelect.disabled = true;
-        cameraIsometricButton.disabled = true;
-        cameraTopDownButton.disabled = true;
         this.renderer.domElement.setAttribute(
           "aria-label",
           "Interactive 3D code city unavailable because the WebGL context was lost",
@@ -901,13 +877,8 @@ class CityScene {
         this.host.dataset["webglAvailable"] = "true";
         imageExportOpenButton.disabled = false;
         imageExportOpenButton.title = "";
-        cameraView3dButton.disabled = false;
-        cameraViewMapButton.disabled = false;
         cameraFitScopeButton.disabled = false;
-        cameraProjectionSelect.disabled = false;
-        cameraIsometricButton.disabled = false;
-        cameraTopDownButton.disabled = false;
-        synchronizeCameraControls();
+        synchronizeCameraFocusControl();
         this.renderer.domElement.setAttribute(
           "aria-label",
           "Interactive 3D code city",
@@ -3147,13 +3118,8 @@ class UnavailableCityScene {
     imageExportOpenButton.disabled = true;
     imageExportOpenButton.title =
       "Image export requires an available WebGL context.";
-    cameraView3dButton.disabled = true;
-    cameraViewMapButton.disabled = true;
     cameraFitScopeButton.disabled = true;
     cameraFocusSelectionButton.disabled = true;
-    cameraProjectionSelect.disabled = true;
-    cameraIsometricButton.disabled = true;
-    cameraTopDownButton.disabled = true;
   }
 
   public get projection(): CameraProjection {
@@ -3577,10 +3543,6 @@ const imageExportDialog = installImageExportDialog({
     const frame = currentEvolutionExportFrame();
     return {
       projection: cityScene.projection,
-      viewMode: cameraViewMode(
-        cityScene.projection,
-        cityScene.navigationMode,
-      ),
       selectedEntityAvailable: cityScene.selectedEntityAvailable,
       ...(frame === undefined ? {} : { evolutionFrame: frame }),
     };
@@ -3761,42 +3723,6 @@ visualizationModeSelect.addEventListener("change", () => {
   imageExportDialog.invalidate();
 });
 
-cameraView3dButton.addEventListener("click", () => {
-  applyPrimaryCameraView("3d");
-});
-cameraViewMapButton.addEventListener("click", () => {
-  applyPrimaryCameraView("map");
-});
-cameraViewSwitch.addEventListener("keydown", (event) => {
-  if (!(event instanceof KeyboardEvent)) return;
-  const buttons = [cameraView3dButton, cameraViewMapButton] as const;
-  const current = buttons.findIndex(
-    (button) => button === document.activeElement,
-  );
-  if (current < 0) return;
-  let target: HTMLButtonElement | undefined;
-  switch (event.key) {
-    case "ArrowLeft":
-    case "ArrowUp":
-      target = buttons[(current - 1 + buttons.length) % buttons.length];
-      break;
-    case "ArrowRight":
-    case "ArrowDown":
-      target = buttons[(current + 1) % buttons.length];
-      break;
-    case "Home":
-      target = buttons[0];
-      break;
-    case "End":
-      target = buttons.at(-1);
-      break;
-    default:
-      return;
-  }
-  event.preventDefault();
-  target?.focus();
-  target?.click();
-});
 cameraFitScopeButton.addEventListener("click", () => {
   if (cityScene.fitCurrentScope()) {
     imageExportDialog.invalidate();
@@ -3808,21 +3734,6 @@ cameraFocusSelectionButton.addEventListener("click", () => {
     return;
   }
   imageExportDialog.invalidate();
-});
-cameraProjectionSelect.addEventListener("change", () => {
-  cityScene.setProjection(
-    cameraProjectionSelect.value === "orthographic"
-      ? "orthographic"
-      : "perspective",
-  );
-  synchronizeCameraControls();
-  imageExportDialog.invalidate();
-});
-cameraIsometricButton.addEventListener("click", () => {
-  applyCameraPresetFromToolbar("isometric");
-});
-cameraTopDownButton.addEventListener("click", () => {
-  applyCameraPresetFromToolbar("top-down");
 });
 imageExportOpenButton.addEventListener("click", () => {
   exportActionsMenu.open = false;
@@ -4910,49 +4821,7 @@ function currentEvolutionExportFrame():
   };
 }
 
-function applyCameraPresetFromToolbar(preset: CameraPreset): void {
-  if (!cityScene.applyCameraPreset(preset)) {
-    showError(
-      "Select a building, district, or external dependency before using the selected-entity camera preset.",
-    );
-    return;
-  }
-  synchronizeCameraControls();
-  imageExportDialog.invalidate();
-}
-
-function applyPrimaryCameraView(mode: PrimaryCameraViewMode): void {
-  const configuration = primaryCameraViewConfiguration(mode);
-  cityScene.setProjection(configuration.projection);
-  if (!cityScene.applyCameraPreset(configuration.preset)) {
-    showError("The requested camera view is unavailable.");
-    return;
-  }
-  synchronizeCameraControls();
-  imageExportDialog.invalidate();
-}
-
-function synchronizeCameraControls(): void {
-  cameraProjectionSelect.value = cityScene.projection;
-  const mode = cameraViewMode(
-    cityScene.projection,
-    cityScene.navigationMode,
-  );
-  cameraView3dButton.setAttribute(
-    "aria-pressed",
-    String(mode === "3d"),
-  );
-  cameraViewMapButton.setAttribute(
-    "aria-pressed",
-    String(mode === "map"),
-  );
-  cameraViewStatus.textContent = cameraViewModeLabel(mode);
-  cameraViewSwitch.dataset["viewMode"] = mode;
-  if (cityScene.navigationMode === "top-down") {
-    cameraTopDownButton.setAttribute("aria-current", "true");
-  } else {
-    cameraTopDownButton.removeAttribute("aria-current");
-  }
+function synchronizeCameraFocusControl(): void {
   cameraFocusSelectionButton.hidden = !cityScene.selectedEntityAvailable;
   cameraFocusSelectionButton.disabled =
     sceneHost.dataset["webglAvailable"] !== "true";
@@ -5634,7 +5503,7 @@ function synchronizeExplorerState(state: ExplorerState): void {
   showWholeCityButton.disabled =
     state.isolatedDistrictId === null &&
     !cityScene.buildingSelectionIsolated;
-  synchronizeCameraControls();
+  synchronizeCameraFocusControl();
   imageExportDialog.invalidate();
   for (const button of searchResultButtons()) {
     if (

@@ -370,13 +370,11 @@ building or external node uses its own model box. Transient highlights, routes,
 labels, hidden helpers, and animated removal meshes are excluded, so fixed
 orientations produce the same frame and preserved orientations remain stable.
 
-Perspective and orthographic cameras share a target, normalized view direction,
-and up vector. Projection switching converts perspective distance to the
-equivalent orthographic view height, or back again, so it preserves orientation
-and apparent vertical span. Isometric and top-down presets supply canonical
-direction and up vectors. Selected-entity and whole-city presets preserve the
-current orientation and replace only the target and fitted distance or view
-height.
+The live viewer keeps one perspective orbit camera. Scope and selection framing
+preserve its current orientation and replace only the target and fitted
+distance. Independent PNG export cameras may use perspective or orthographic
+projection and three-quarter or top-down orientation without changing the live
+camera.
 
 PNG export creates a camera from the requested semantic bounds and aspect ratio,
 renders the Three.js scene at the requested pixel dimensions, reads the resolved

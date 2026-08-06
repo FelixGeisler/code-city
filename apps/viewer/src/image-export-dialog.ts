@@ -1,9 +1,5 @@
 import type { CameraProjection } from "./camera-presets.js";
 import {
-  cameraViewModeLabel,
-  type CameraViewMode,
-} from "./camera-view-mode.js";
-import {
   IMAGE_EXPORT_LIMITS,
   formatBytes,
   type ImageExportRequest,
@@ -12,7 +8,6 @@ import {
 
 export interface ImageExportDialogContext {
   readonly projection: CameraProjection;
-  readonly viewMode: CameraViewMode;
   readonly selectedEntityAvailable: boolean;
   readonly evolutionFrame?: {
     readonly label: string;
@@ -88,7 +83,6 @@ export function installImageExportDialog(
   const width = requiredElement<HTMLInputElement>("image-export-width");
   const height = requiredElement<HTMLInputElement>("image-export-height");
   const view = requiredElement<HTMLSelectElement>("image-export-view");
-  const currentViewOption = requiredOption(view, "current-view");
   const currentViewText = requiredElement<HTMLElement>(
     "image-export-current-view",
   );
@@ -126,7 +120,6 @@ export function installImageExportDialog(
   const attempts = new ImageExportAttemptGate();
   let objectUrl: string | undefined;
   let disposed = false;
-  let inheritedViewLabel = "Current view";
 
   limits.textContent =
     `Minimum ${IMAGE_EXPORT_LIMITS.minimumDimension}px per side; ` +
@@ -202,16 +195,12 @@ export function installImageExportDialog(
     customCamera.hidden = view.value !== "custom";
     currentViewText.textContent =
       view.value === "current-view"
-        ? `${inheritedViewLabel} is inherited exactly, including lens, angle, pan, and zoom.`
+        ? "Current view is inherited exactly, including lens, angle, pan, and zoom."
         : "Custom camera settings fit a target independently from the visible view.";
   };
 
   const updateContext = (resetCamera: boolean): void => {
     const current = options.context();
-    const viewLabel = cameraViewModeLabel(current.viewMode);
-    inheritedViewLabel = viewLabel;
-    currentViewOption.textContent =
-      `Current view (${viewLabel.replace(" view", "")})`;
     currentProjectionOption.textContent =
       `Current lens (${current.projection === "orthographic" ? "Orthographic" : "Perspective"})`;
     selectedFit.dataset["available"] = String(

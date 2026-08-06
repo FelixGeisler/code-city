@@ -96,11 +96,10 @@ publishes each frame directly with no spatial interpolation. The **Building age*
 **Historical churn** visualization modes, commit metadata, and selected
 building history are available only while a verified timeline is loaded.
 
-The camera toolbar switches between perspective and orthographic projection
-while preserving the current orientation and visible scale. Isometric and
-top-down presets use stable orientations; selected-entity and whole-city
-presets frame deterministic model-derived bounds without letting labels,
-highlights, routes, or evolution ghosts change the result.
+The live viewer uses one perspective, three-quarter 3D camera with orbit,
+zoom, and pan navigation. **Fit scope** and contextual **Focus selection**
+frame deterministic model-derived bounds without letting labels, highlights,
+routes, or evolution ghosts change the result.
 
 **Export PNG** renders the scene directly at a resolution independent of the
 browser viewport. It supports isometric, top-down, selected-entity, and
