@@ -1432,7 +1432,7 @@ class CityScene {
         severity: finding.severity,
         position: {
           x: (bounds.min.x + bounds.max.x) / 2,
-          y: bounds.max.y + 0.65,
+          y: bounds.max.y,
           z: (bounds.min.z + bounds.max.z) / 2,
         },
       });
@@ -1743,6 +1743,10 @@ class CityScene {
     this.controls.update();
     this.enforceTopDownNavigationPlane();
     this.updateFog();
+    this.designSmellOverlay.updateView(
+      this.camera,
+      Math.max(1, this.host.clientHeight),
+    );
     this.renderer.render(this.scene, this.camera);
     let objectCount = 0;
     this.scene.traverse(() => {
@@ -1803,6 +1807,10 @@ class CityScene {
     this.controls.update();
     this.enforceTopDownNavigationPlane();
     this.updateFog();
+    this.designSmellOverlay.updateView(
+      this.camera,
+      Math.max(1, this.host.clientHeight),
+    );
     this.renderer.render(this.scene, this.camera);
   };
 
@@ -2156,7 +2164,7 @@ class CityScene {
   }
 
   private renderExportPixels(
-    camera: THREE.Camera,
+    camera: THREE.OrthographicCamera | THREE.PerspectiveCamera,
     target: THREE.Vector3,
     resolution: ValidatedImageExportResolution,
     background: ImageExportRequest["background"],
@@ -2227,6 +2235,13 @@ class CityScene {
       } else {
         this.renderer.setClearAlpha(1);
       }
+      // Export resolution changes pixel density, not the intended marker-to-city
+      // ratio. Size the overlay against the interactive CSS viewport so a 4K
+      // export does not turn readable badges back into tiny dots.
+      this.designSmellOverlay.updateView(
+        camera,
+        Math.max(1, rendererSize.y),
+      );
       this.renderer.clear(true, true, true);
       this.renderer.render(this.scene, camera);
       context.readPixels(
@@ -2260,6 +2275,10 @@ class CityScene {
       this.renderer.setViewport(viewport);
       this.renderer.setScissor(scissor);
       this.renderer.setScissorTest(scissorTest);
+      this.designSmellOverlay.updateView(
+        this.camera,
+        Math.max(1, this.host.clientHeight),
+      );
     }
   }
 
