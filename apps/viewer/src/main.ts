@@ -139,10 +139,12 @@ import {
 import { installMetricMappingPanel } from "./metric-mapping-panel.js";
 import { installDesignSmellPanel } from "./design-smell-panel.js";
 import {
-  DesignSmellOverlay,
-  type DesignSmellOverlayDiagnostics,
-  type DesignSmellOverlayMarker,
-} from "./design-smell-overlay.js";
+  createDesignSmellBuildingVisualization,
+  DESIGN_SMELL_BUILDING_LEGEND,
+  designSmellBuildingDiagnostics,
+  type DesignSmellBuildingDiagnostics,
+  type DesignSmellBuildingVisualization,
+} from "./design-smell-visualization.js";
 import {
   installSafeExtensionPanel,
   type SafeExtensionPanelController,
@@ -363,7 +365,7 @@ interface ViewerPerformanceDiagnostics {
   readonly evolutionRemovalAnimated: boolean;
   readonly dependencyRoutes: DependencyRouteOverlayDiagnostics;
   readonly districtDependencyRoutes: DependencyRouteOverlayDiagnostics;
-  readonly designSmells: DesignSmellOverlayDiagnostics;
+  readonly designSmells: DesignSmellBuildingDiagnostics;
   readonly pickBenchmark: {
     readonly count: number;
     readonly p95Milliseconds: number;
@@ -377,13 +379,19 @@ const EMPTY_DEPENDENCY_ROUTE_DIAGNOSTICS: DependencyRouteOverlayDiagnostics =
     gatewayCount: 0,
     routes: Object.freeze([]),
   });
-const EMPTY_DESIGN_SMELL_DIAGNOSTICS: DesignSmellOverlayDiagnostics =
+const EMPTY_DESIGN_SMELL_DIAGNOSTICS: DesignSmellBuildingDiagnostics =
   Object.freeze({
+    active: false,
     requestedFindings: 0,
-    candidateMarkers: 0,
-    visibleMarkers: 0,
-    omittedMarkers: 0,
-    batchCount: 0,
+    validFindings: 0,
+    buildingCount: 0,
+    affectedBuildings: 0,
+    coloredBuildings: 0,
+    severityBuildings: Object.freeze({
+      moderate: 0,
+      high: 0,
+      critical: 0,
+    }),
   });
 
 declare global {
@@ -403,11 +411,17 @@ const sceneHost = element<HTMLDivElement>("scene");
 let synchronizeHierarchyWorkspace = (
   _state: ViewerWorkspaceState,
 ): void => {};
+let synchronizeFindingsWorkspace = (
+  _state: ViewerWorkspaceState,
+): void => {};
 const viewerWorkspace = installViewerWorkspace(
   element<HTMLElement>("viewer-workspace"),
   element<HTMLElement>("viewer-workspace-scroll"),
   {
-    onStateChange: (state) => synchronizeHierarchyWorkspace(state),
+    onStateChange: (state) => {
+      synchronizeHierarchyWorkspace(state);
+      synchronizeFindingsWorkspace(state);
+    },
   },
 );
 const fileInput = element<HTMLInputElement>("model-file");
@@ -750,7 +764,6 @@ class CityScene {
   );
   private readonly sceneLabelOverlay = new SceneLabelOverlay(this.scene);
   private readonly webglRuntimeStatus = document.createElement("p");
-  private readonly designSmellOverlay = new DesignSmellOverlay();
   private readonly districtMeshes = new Map<
     string,
     THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>
@@ -1401,7 +1414,6 @@ class CityScene {
     this.evolutionAnimation?.removals.setVisibleBuildingIds(
       visibleBuildingIds,
     );
-    this.designSmellOverlay.setVisibleBuildingIds(visibleBuildingIds);
     const selection = this.selectedEntity;
     if (
       selection?.kind === "building" &&
@@ -1413,36 +1425,6 @@ class CityScene {
     this.emitState();
     schedulePerformanceDiagnostics();
     return true;
-  }
-
-  /** Neutral buildings remain unchanged; markers are batched by shape. */
-  public replaceDesignSmellOverlay(
-    findings: readonly DesignSmellFinding[],
-  ): void {
-    const markers: DesignSmellOverlayMarker[] = [];
-    for (const finding of findings) {
-      const bounds = this.buildingLayer?.bounds(finding.buildingId);
-      const context = this.buildingContexts.get(finding.buildingId);
-      if (!bounds || !context) continue;
-      markers.push({
-        id: finding.id,
-        buildingId: finding.buildingId,
-        districtId: context.building.districtId,
-        ruleId: finding.ruleId,
-        severity: finding.severity,
-        position: {
-          x: (bounds.min.x + bounds.max.x) / 2,
-          y: bounds.max.y,
-          z: (bounds.min.z + bounds.max.z) / 2,
-        },
-      });
-    }
-    this.designSmellOverlay.replace(markers);
-    if (
-      !this.city.children.includes(this.designSmellOverlay.object)
-    ) {
-      this.city.add(this.designSmellOverlay.object);
-    }
   }
 
   public showEvolutionTransition(
@@ -1724,7 +1706,6 @@ class CityScene {
     this.buildingVisibilityMask = null;
     this.buildingLayer?.setVisibleBuildingIds(null);
     this.evolutionAnimation?.removals.setVisibleBuildingIds(null);
-    this.designSmellOverlay.setVisibleBuildingIds(null);
   }
 
   public assertBuildingCapability(buildingCount: number): void {
@@ -1734,19 +1715,10 @@ class CityScene {
     );
   }
 
-  public disposeDesignSmellOverlay(): void {
-    this.city.remove(this.designSmellOverlay.object);
-    this.designSmellOverlay.dispose();
-  }
-
   public performanceDiagnostics(): ViewerPerformanceDiagnostics {
     this.controls.update();
     this.enforceTopDownNavigationPlane();
     this.updateFog();
-    this.designSmellOverlay.updateView(
-      this.camera,
-      Math.max(1, this.host.clientHeight),
-    );
     this.renderer.render(this.scene, this.camera);
     let objectCount = 0;
     this.scene.traverse(() => {
@@ -1790,7 +1762,7 @@ class CityScene {
       dependencyRoutes: this.dependencyOverlay.diagnostics(),
       districtDependencyRoutes:
         this.districtDependencyOverlay.diagnostics(),
-      designSmells: this.designSmellOverlay.diagnostics(),
+      designSmells: EMPTY_DESIGN_SMELL_DIAGNOSTICS,
       pickBenchmark:
         this.buildingLayer?.benchmarkPicks(50) ??
         Object.freeze({
@@ -1807,10 +1779,6 @@ class CityScene {
     this.controls.update();
     this.enforceTopDownNavigationPlane();
     this.updateFog();
-    this.designSmellOverlay.updateView(
-      this.camera,
-      Math.max(1, this.host.clientHeight),
-    );
     this.renderer.render(this.scene, this.camera);
   };
 
@@ -1834,9 +1802,6 @@ class CityScene {
     this.sceneLabelOverlay.clear();
     this.dependencyOverlay.clear();
     this.districtDependencyOverlay.clear();
-    this.designSmellOverlay.setVisibleBuildingIds(null);
-    this.designSmellOverlay.clear();
-    this.city.remove(this.designSmellOverlay.object);
     this.buildingVisibilityMask = null;
     this.cameraTransition = null;
     this.select(null);
@@ -1967,7 +1932,6 @@ class CityScene {
         : [...this.buildingVisibilityMask];
     this.buildingLayer?.setVisibleBuildingIds(null);
     this.evolutionAnimation?.removals.setVisibleBuildingIds(null);
-    this.designSmellOverlay.setVisibleBuildingIds(null);
     let restored = false;
     return () => {
       if (restored) return;
@@ -1976,9 +1940,6 @@ class CityScene {
         previousBuildingVisibilityMask,
       );
       this.evolutionAnimation?.removals.setVisibleBuildingIds(
-        previousBuildingVisibilityMask,
-      );
-      this.designSmellOverlay.setVisibleBuildingIds(
         previousBuildingVisibilityMask,
       );
     };
@@ -2235,13 +2196,6 @@ class CityScene {
       } else {
         this.renderer.setClearAlpha(1);
       }
-      // Export resolution changes pixel density, not the intended marker-to-city
-      // ratio. Size the overlay against the interactive CSS viewport so a 4K
-      // export does not turn readable badges back into tiny dots.
-      this.designSmellOverlay.updateView(
-        camera,
-        Math.max(1, rendererSize.y),
-      );
       this.renderer.clear(true, true, true);
       this.renderer.render(this.scene, camera);
       context.readPixels(
@@ -2275,10 +2229,6 @@ class CityScene {
       this.renderer.setViewport(viewport);
       this.renderer.setScissor(scissor);
       this.renderer.setScissorTest(scissorTest);
-      this.designSmellOverlay.updateView(
-        this.camera,
-        Math.max(1, this.host.clientHeight),
-      );
     }
   }
 
@@ -2921,9 +2871,18 @@ class CityScene {
           return null;
         }
         const { building } = context;
+        const findingSummary = designSmellBuildingSummaryText(
+          building.id,
+        );
         return {
           id: encodeSceneEntityKey(entity),
           text: building.name,
+          ...(findingSummary === undefined
+            ? {}
+            : {
+                accessibleText:
+                  `${building.name}; ${findingSummary}`,
+              }),
           position: {
             x: building.position.x,
             y: building.position.y + building.size.y * 0.5 + 1.35,
@@ -3124,12 +3083,6 @@ class UnavailableCityScene {
     _routes: readonly DependencyOverlayRoute[],
   ): void {}
 
-  public replaceDesignSmellOverlay(
-    _findings: readonly DesignSmellFinding[],
-  ): void {}
-
-  public disposeDesignSmellOverlay(): void {}
-
   public selectBuilding(
     _id: string,
     _focus = false,
@@ -3234,6 +3187,17 @@ let loadedBuildingSource:
 let visualizationMode: ViewerVisualizationMode = "semantic";
 let activeVisualizationLabel = "Semantic groups";
 let activeLegendEntries: readonly ImageExportLegendEntry[] = [];
+let activeDesignSmellFindings: readonly DesignSmellFinding[] =
+  Object.freeze([]);
+let activeDesignSmellVisualization: DesignSmellBuildingVisualization =
+  createDesignSmellBuildingVisualization(
+    activeModel.buildings.map(({ id }) => id),
+    activeDesignSmellFindings,
+  );
+let activeDesignSmellDiagnostics = designSmellBuildingDiagnostics(
+  activeDesignSmellVisualization,
+  false,
+);
 let previewPrinterProfile: PrinterProfile | undefined;
 let printVisualizationContextActive = false;
 let evolutionWorker = new EvolutionTimelineWorkerClient();
@@ -3331,6 +3295,26 @@ let activeDesignSmellQueryFacts:
   | undefined;
 let applyingAdvancedSelection = false;
 const cityScene = createCityScene();
+let designSmellWorkspaceActive =
+  viewerWorkspace.activeView === "analyze" &&
+  viewerWorkspace.activeAnalyzeView === "findings";
+synchronizeFindingsWorkspace = (state): void => {
+  const nextActive =
+    state.activeView === "analyze" &&
+    state.activeAnalyzeView === "findings";
+  if (nextActive === designSmellWorkspaceActive) return;
+  designSmellWorkspaceActive = nextActive;
+  imageExportDialog.invalidate();
+  applyVisualization();
+  const selected = explorerState.selectedEntity;
+  if (selected?.kind === "building") {
+    const building = activeBuildingsById.get(selected.id);
+    if (building !== undefined) {
+      selectionStatus.textContent = buildingSelectionStatus(building);
+    }
+  }
+  schedulePerformanceDiagnostics();
+};
 const repositoryHierarchyTree = installRepositoryHierarchyTree({
   tree: repositoryTree,
   status: repositoryTreeStatus,
@@ -3564,8 +3548,28 @@ const designSmellPanel = installDesignSmellPanel(
         }
       }
     },
-    onOverlayChange: (findings) => {
-      cityScene.replaceDesignSmellOverlay(findings);
+    onVisibleFindingsChange: (findings) => {
+      activeDesignSmellFindings = Object.freeze([...findings]);
+      activeDesignSmellVisualization =
+        createDesignSmellBuildingVisualization(
+          activeModel.buildings.map(({ id }) => id),
+          activeDesignSmellFindings,
+        );
+      activeDesignSmellDiagnostics = designSmellBuildingDiagnostics(
+        activeDesignSmellVisualization,
+        designSmellWorkspaceActive,
+      );
+      if (designSmellWorkspaceActive) {
+        imageExportDialog.invalidate();
+        applyVisualization();
+        const selected = explorerState.selectedEntity;
+        if (selected?.kind === "building") {
+          const building = activeBuildingsById.get(selected.id);
+          if (building !== undefined) {
+            selectionStatus.textContent = buildingSelectionStatus(building);
+          }
+        }
+      }
       schedulePerformanceDiagnostics();
     },
     onQueryFactsChange: updateAdvancedQueryDesignSmells,
@@ -4021,7 +4025,6 @@ window.addEventListener("beforeunload", () => {
   advancedQueryPanel?.dispose();
   imageExportDialog.dispose();
   designSmellPanel.dispose();
-  cityScene.disposeDesignSmellOverlay();
   safeExtensionPanel?.dispose();
   logoLoadGate.invalidate();
   loadedModelLogo?.dispose();
@@ -4766,6 +4769,7 @@ function schedulePerformanceDiagnostics(): void {
       firstInteractiveMilliseconds: performance.now(),
       evolutionFrameIndex: activeEvolutionIndex,
       ...diagnostics,
+      designSmells: activeDesignSmellDiagnostics,
     });
     window.__CODE_CITY_PERFORMANCE__ = snapshot;
     document.documentElement.dataset["viewerPerformance"] =
@@ -5282,12 +5286,26 @@ function applyAdvancedSelection(
   }
   synchronizeAdvancedSelectionMembership(selection.buildingIds);
   renderDependencyExplorer();
-  selectionStatus.textContent =
-    selection.buildingIds.length === 0
-      ? "Selection cleared."
-      : `${selection.buildingIds.length.toLocaleString()} ${
-          selection.buildingIds.length === 1 ? "building" : "buildings"
-        } selected.`;
+  const selectedFindingBuilding =
+    designSmellWorkspaceActive &&
+    selection.buildingIds.length === 1 &&
+    selection.primaryBuildingId !== null
+      ? activeBuildingsById.get(selection.primaryBuildingId)
+      : undefined;
+  if (selectedFindingBuilding !== undefined) {
+    selectionStatus.textContent = buildingSelectionStatus(
+      selectedFindingBuilding,
+    );
+  } else {
+    selectionStatus.textContent =
+      selection.buildingIds.length === 0
+        ? "Selection cleared."
+        : `${selection.buildingIds.length.toLocaleString()} ${
+            selection.buildingIds.length === 1
+              ? "building"
+              : "buildings"
+          } selected.`;
+  }
 }
 
 function synchronizeAdvancedSelectionMembership(
@@ -6431,7 +6449,7 @@ function applyVisualization(): void {
     previewPrinterProfile,
     activeEvolutionAnalysis,
   );
-  const colors = new Map(visualization.colorsByBuildingId);
+  let colors = new Map(visualization.colorsByBuildingId);
   const transition = activeEvolutionTransition;
   const dependencyChanges =
     transition?.dependencyChanges ??
@@ -6463,15 +6481,25 @@ function applyVisualization(): void {
   extension?.application.buildings.forEach((building) => {
     if (building.color !== undefined) colors.set(building.id, building.color);
   });
-  const visualizationLabel =
+  const baseVisualizationLabel =
     extension === undefined
       ? visualization.label
       : `Extension: ${extension.configuration.name}`;
+  if (designSmellWorkspaceActive) {
+    colors = new Map(activeDesignSmellVisualization.colorsByBuildingId);
+  }
+  const visualizationLabel = designSmellWorkspaceActive
+    ? "Design smells · highest visible severity"
+    : baseVisualizationLabel;
   cityScene.setVisualization(
     colors,
     visualizationLabel,
   );
   activeVisualizationLabel = visualizationLabel;
+  activeDesignSmellDiagnostics = designSmellBuildingDiagnostics(
+    activeDesignSmellVisualization,
+    designSmellWorkspaceActive,
+  );
   const transitionStatus =
     transition === undefined && dependencyChangeCount === 0
       ? ""
@@ -6484,8 +6512,11 @@ function applyVisualization(): void {
         `(${extension.application.mappings.length} mappings, ` +
         `${extension.application.layouts.length} layouts, ` +
         `${extension.application.overlays.length} overlays).`;
-  visualizationModeStatus.textContent =
-    visualization.status + transitionStatus + extensionStatus;
+  visualizationModeStatus.textContent = designSmellWorkspaceActive
+    ? `Findings temporarily replace ${baseVisualizationLabel} colors. ` +
+      "Each building shows its highest visible severity under the current " +
+      "rules and filters; gray means no visible finding, not verified clean."
+    : visualization.status + transitionStatus + extensionStatus;
   visualizationModeSelect.setAttribute(
     "aria-invalid",
     visualization.available ? "false" : "true",
@@ -6574,11 +6605,16 @@ function applyVisualization(): void {
       priority: 160 - index,
     });
   });
-  renderLegend(activeModel, [
-    ...extensionGroups,
-    ...changeGroups,
-    ...visualization.legend,
-  ]);
+  renderLegend(
+    activeModel,
+    designSmellWorkspaceActive
+      ? DESIGN_SMELL_BUILDING_LEGEND
+      : [
+          ...extensionGroups,
+          ...changeGroups,
+          ...visualization.legend,
+        ],
+  );
 }
 
 function renderViewerOverview(): void {
@@ -7428,9 +7464,37 @@ function showInspector(context: BuildingContext | null): void {
   renderDecisionEvidence(building);
   resetAiGuidancePresentation();
   discoverAiGuidanceCapability(building);
-  selectionStatus.textContent =
+  selectionStatus.textContent = buildingSelectionStatus(building);
+}
+
+function buildingSelectionStatus(building: CityBuilding): string {
+  const findingSummary = designSmellBuildingSummaryText(building.id);
+  return (
     `Selected ${building.name}. Maximum cyclomatic complexity ` +
-    `${building.metrics.maximumComplexity.toLocaleString()}.`;
+    `${building.metrics.maximumComplexity.toLocaleString()}.` +
+    (findingSummary === undefined ? "" : ` ${findingSummary}.`)
+  );
+}
+
+function designSmellBuildingSummaryText(
+  buildingId: string,
+): string | undefined {
+  if (!designSmellWorkspaceActive) return undefined;
+  const summary =
+    activeDesignSmellVisualization.findingSummaryByBuildingId.get(
+      buildingId,
+    );
+  if (summary === undefined) {
+    return (
+      "No visible design-smell finding under current rules and filters; " +
+      "this is not a verified-clean result"
+    );
+  }
+  return (
+    `${summary.count.toLocaleString()} visible design-smell ` +
+    `${summary.count === 1 ? "finding" : "findings"}; ` +
+    `highest severity ${summary.highestSeverity}`
+  );
 }
 
 function renderBuildingEvolutionHistory(buildingId: string): void {

@@ -1,6 +1,6 @@
 = 8. Cross-cutting Concepts
 
-== Explainable design-smell overlay
+== Explainable design-smell findings
 
 The viewer evaluates the versioned `codecity.design-smells/1` protocol and
 rule catalog `1.1.0` in a cancellable worker. Findings are heuristic signals,
@@ -15,10 +15,21 @@ CityModel contains facts that support those claims.
 **Analyze** opens on the Design smells panel, before expert configuration.
 It provides total and affected-building counts, a 100-row paginated result
 window, keyboard-accessible navigation to the affected building, and
-text/symbol/shape/severity cues in addition to color. Rule help, filters, and
+text, symbol, and severity cues in addition to color. While **Findings** is
+active, every building uses a complete findings color map: an affected
+building shows its highest visible severity (`critical` before `high` before
+`moderate`), and neutral gray means only that no finding is visible under the
+current rules and filters, not that the building is verified clean. The
+compact panel legend and accessible selected/hovered scene description expose
+the same meaning. Opening a finding's details retains this context; leaving
+**Findings** restores the selected metric visualization exactly. PNG export
+uses the currently visible findings colors and legend, while printable
+materials continue to come from the CityModel and printer assignment.
+
+Rule help, filters, and
 unavailable-capability explanations remain reachable in a collapsed
-**Rules and filters** disclosure so findings stay first. The 3D markers use at most four instanced batches and obey district
-isolation. A local, project-scoped browser store records false-positive
+**Rules and filters** disclosure so findings stay first. A local,
+project-scoped browser store records false-positive
 suppressions without changing source code or the imported CityModel. Persisted
 data and worker messages use strict exact-key validation and bounded sizes;
 evaluation caps imported buildings, findings, and suppressions to keep

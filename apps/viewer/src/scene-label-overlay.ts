@@ -13,6 +13,8 @@ export interface SceneLabel {
   readonly id: string;
   /** Rendered literally with Canvas2D fillText; it is never parsed as markup. */
   readonly text: string;
+  /** Optional fuller description used by the scene canvas accessible name. */
+  readonly accessibleText?: string;
   /** World-space center of the camera-facing label. */
   readonly position: SceneLabelPoint;
   /** Optional world-space label height. */
@@ -108,11 +110,11 @@ export function sceneLabelAccessibleName(
   const descriptions = [
     state.selected === null
       ? null
-      : `Selected: ${state.selected.text}`,
+      : `Selected: ${state.selected.accessibleText ?? state.selected.text}`,
     state.hovered === null ||
     state.hovered.id === state.selected?.id
       ? null
-      : `Hovered: ${state.hovered.text}`,
+      : `Hovered: ${state.hovered.accessibleText ?? state.hovered.text}`,
   ].filter((value): value is string => value !== null);
   return descriptions.length === 0
     ? DEFAULT_SCENE_ACCESSIBLE_NAME
@@ -164,9 +166,8 @@ export class SceneLabelOverlay {
    * itself represented in the browser accessibility tree.
    */
   public fullText(role: SceneLabelRole): string | null {
-    return role === "selected"
-      ? this.selected?.text ?? null
-      : this.hovered?.text ?? null;
+    const label = role === "selected" ? this.selected : this.hovered;
+    return label === null ? null : label.accessibleText ?? label.text;
   }
 
   public snapshot(): SceneLabelOverlayState {
@@ -437,6 +438,13 @@ function snapshotLabel(label: SceneLabel): SceneLabel {
     throw new TypeError("Scene label id must not be empty.");
   }
   layoutSceneLabelText(label.text);
+  if (
+    label.accessibleText !== undefined &&
+    (typeof label.accessibleText !== "string" ||
+      label.accessibleText.trim() === "")
+  ) {
+    throw new TypeError("Scene label accessibleText must not be empty.");
+  }
   validatePoint(label.position);
   if (
     label.worldHeight !== undefined &&
@@ -446,18 +454,17 @@ function snapshotLabel(label: SceneLabel): SceneLabel {
       "Scene label worldHeight must be positive and finite.",
     );
   }
-  return label.worldHeight === undefined
-    ? {
-        id: label.id,
-        text: label.text,
-        position: { ...label.position },
-      }
-    : {
-        id: label.id,
-        text: label.text,
-        position: { ...label.position },
-        worldHeight: label.worldHeight,
-      };
+  return {
+    id: label.id,
+    text: label.text,
+    ...(label.accessibleText === undefined
+      ? {}
+      : { accessibleText: label.accessibleText }),
+    position: { ...label.position },
+    ...(label.worldHeight === undefined
+      ? {}
+      : { worldHeight: label.worldHeight }),
+  };
 }
 
 function validatePoint(point: SceneLabelPoint): void {

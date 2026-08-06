@@ -2334,13 +2334,38 @@ button,
   color: var(--muted);
 }
 
+.design-smell-color-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.design-smell-color-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.design-smell-color-swatch {
+  width: 0.72rem;
+  height: 0.72rem;
+  border: 1px solid rgb(255 255 255 / 0.35);
+  border-radius: 0.18rem;
+}
+
 .design-smell-finding {
-  border-inline-start: 0.35rem solid #fb7185;
+  border-inline-start: 0.35rem solid #fb923c;
   padding-inline-start: 0.65rem;
 }
 
-.design-smell-finding.severity-moderate { border-color: #b45309; }
-.design-smell-finding.severity-critical { border-color: #7f1d1d; }
+.design-smell-finding.severity-moderate { border-color: #facc15; }
+.design-smell-finding.severity-high { border-color: #fb923c; }
+.design-smell-finding.severity-critical { border-color: #f43f5e; }
 .design-smell-finding button:first-child { text-align: start; font: inherit; color: inherit; text-decoration: underline; }
 .design-smell-suppress { margin-top: 0.35rem; }
 

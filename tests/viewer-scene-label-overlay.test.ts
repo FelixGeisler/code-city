@@ -72,6 +72,18 @@ describe("scene label accessible name", () => {
     ).toBe("Interactive 3D code city. Selected: index.ts");
     expect(
       sceneLabelAccessibleName({
+        selected: {
+          ...selected,
+          accessibleText:
+            "index.ts; 4 visible findings; highest severity critical",
+        },
+        hovered: null,
+      }),
+    ).toBe(
+      "Interactive 3D code city. Selected: index.ts; 4 visible findings; highest severity critical",
+    );
+    expect(
+      sceneLabelAccessibleName({
         selected,
         hovered: otherEntity,
       }),
@@ -176,6 +188,35 @@ describe("SceneLabelOverlay", () => {
     expect(selected?.visible).toBe(false);
     expect(hovered?.visible).toBe(true);
     expect(hovered?.userData["sceneLabelText"]).toBe("Same entity");
+  });
+
+  it("round-trips accessible text and exposes it as the full text", () => {
+    const scene = new THREE.Scene();
+    const canvases = new FakeCanvasFactory();
+    const overlay = new SceneLabelOverlay(scene, {
+      canvasFactory: canvases.create,
+    });
+    const selected = {
+      ...label("building", "index.ts", { x: 0, y: 1, z: 0 }),
+      accessibleText:
+        "index.ts; 4 visible findings; highest severity critical",
+    };
+
+    overlay.setSelected(selected);
+    const snapshot = overlay.snapshot();
+
+    expect(snapshot.selected).toEqual(selected);
+    expect(snapshot.selected).not.toBe(selected);
+    expect(overlay.fullText("selected")).toBe(selected.accessibleText);
+    expect(sceneLabelAccessibleName(snapshot)).toContain(
+      selected.accessibleText,
+    );
+
+    overlay.replace(snapshot);
+    expect(overlay.snapshot().selected).toEqual(selected);
+    expect(() =>
+      overlay.setSelected({ ...selected, accessibleText: " " }),
+    ).toThrow(/accessibleText must not be empty/u);
   });
 
   it("draws high-contrast literal text through the injected canvases", () => {

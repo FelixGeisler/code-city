@@ -430,7 +430,7 @@ export class ViewerBuildingLayer {
     const colorValue = new THREE.Color(color).getHex();
     Object.assign(building, { color, colorValue });
     if (this.mode === "instanced") {
-      this.populateBatches();
+      this.populateBatchColors();
     } else {
       this.legacyMeshes.get(id)?.material.color.setHex(colorValue);
     }
@@ -448,7 +448,7 @@ export class ViewerBuildingLayer {
       Object.assign(building, { color, colorValue });
     }
     if (this.mode === "instanced") {
-      this.populateBatches();
+      this.populateBatchColors();
     } else {
       for (const [id, mesh] of this.legacyMeshes) {
         mesh.material.color.setHex(
@@ -603,6 +603,28 @@ export class ViewerBuildingLayer {
       batch.visibleBuildingIds = Object.freeze(visibleIds);
       batch.mesh.computeBoundingBox();
       batch.mesh.computeBoundingSphere();
+    }
+  }
+
+  private populateBatchColors(): void {
+    const color = new THREE.Color();
+    for (const batch of this.batches) {
+      for (
+        let index = 0;
+        index < batch.visibleBuildingIds.length;
+        index += 1
+      ) {
+        const building = this.definitionsById.get(
+          batch.visibleBuildingIds[index]!,
+        )!;
+        batch.mesh.setColorAt(
+          index,
+          color.setHex(building.colorValue),
+        );
+      }
+      if (batch.mesh.instanceColor) {
+        batch.mesh.instanceColor.needsUpdate = true;
+      }
     }
   }
 
