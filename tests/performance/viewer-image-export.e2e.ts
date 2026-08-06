@@ -39,7 +39,6 @@ test("exports an independent transparent PNG without DOM chrome", async ({
   await page.goto(viewerUrl, { waitUntil: "domcontentloaded" });
   await expect(page.locator("#scene canvas")).toBeVisible();
 
-  await page.locator("#camera-view-map").click();
   await page.evaluate(() => {
     const sentinel = document.createElement("div");
     sentinel.id = "image-export-dom-sentinel";
@@ -56,7 +55,7 @@ test("exports an independent transparent PNG without DOM chrome", async ({
     "current-view",
   );
   await expect(page.locator("#image-export-current-view")).toContainText(
-    "Map view is inherited exactly",
+    "Current view is inherited exactly",
   );
   await expect(page.locator("#image-export-custom-camera")).toBeHidden();
   await page.locator("#image-export-view").selectOption("custom");
@@ -136,17 +135,35 @@ test("exports an independent transparent PNG without DOM chrome", async ({
   expect(decoded.maximumAlpha).toBeGreaterThan(0);
 });
 
-test("context loss disables export with an accessible explanation", async ({
+test("context loss disables camera actions and restoration re-enables them", async ({
   page,
 }) => {
   await page.goto(viewerUrl, { waitUntil: "domcontentloaded" });
   await expect(page.locator("#scene canvas")).toBeVisible();
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await page
+    .locator("#building-search")
+    .fill("apps/viewer/src/main.ts");
+  await page
+    .locator(
+      '.search-result-button[title="apps/viewer/src/main.ts"]',
+    )
+    .click();
+  await expect(page.locator("#camera-focus-selection")).toBeVisible();
+  await expect(page.locator("#camera-focus-selection")).toBeEnabled();
   const lost = await page.evaluate(() => {
     const canvas = document.querySelector<HTMLCanvasElement>("#scene canvas");
     const context =
       canvas?.getContext("webgl2") ?? canvas?.getContext("webgl");
     const extension = context?.getExtension("WEBGL_lose_context");
     if (extension === null || extension === undefined) return false;
+    (
+      window as Window & {
+        __CODE_CITY_RESTORE_WEBGL_CONTEXT__?: () => void;
+      }
+    ).__CODE_CITY_RESTORE_WEBGL_CONTEXT__ = () => {
+      extension.restoreContext();
+    };
     extension.loseContext();
     return true;
   });
@@ -157,8 +174,8 @@ test("context loss disables export with an accessible explanation", async ({
     "false",
   );
   await expect(page.locator("#image-export-open")).toBeDisabled();
-  await expect(page.locator("#camera-view-3d")).toBeDisabled();
-  await expect(page.locator("#camera-view-map")).toBeDisabled();
+  await expect(page.locator("#camera-fit-scope")).toBeDisabled();
+  await expect(page.locator("#camera-focus-selection")).toBeDisabled();
   await expect(page.locator("#scene canvas")).toHaveAttribute(
     "aria-label",
     /WebGL context was lost/u,
@@ -166,6 +183,27 @@ test("context loss disables export with an accessible explanation", async ({
   await expect(page.getByRole("alert")).toContainText(
     "The WebGL context was lost",
   );
+
+  await page.evaluate(() => {
+    (
+      window as Window & {
+        __CODE_CITY_RESTORE_WEBGL_CONTEXT__?: () => void;
+      }
+    ).__CODE_CITY_RESTORE_WEBGL_CONTEXT__?.();
+  });
+  await expect(page.locator("#scene")).toHaveAttribute(
+    "data-webgl-available",
+    "true",
+  );
+  await expect(page.locator("#image-export-open")).toBeEnabled();
+  await expect(page.locator("#camera-fit-scope")).toBeEnabled();
+  await expect(page.locator("#camera-focus-selection")).toBeVisible();
+  await expect(page.locator("#camera-focus-selection")).toBeEnabled();
+  await expect(page.locator("#scene canvas")).toHaveAttribute(
+    "aria-label",
+    "Interactive 3D code city",
+  );
+  await expect(page.locator(".webgl-runtime-status")).toBeHidden();
 });
 
 test("closing image export with Escape preserves the selected entity", async ({

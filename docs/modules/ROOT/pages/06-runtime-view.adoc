@@ -331,12 +331,11 @@ for model-only imports.
 
 == Camera and image export
 
-The camera toolbar switches between perspective and orthographic projection
-without changing the current look direction or apparent vertical span.
-Isometric and top-down presets apply stable orientations. Selected-entity and
-whole-city presets keep the current orientation while framing the corresponding
-semantic bounds. A selected-entity action is disabled until a building,
-district, or external dependency is selected.
+The live viewer uses one perspective, three-quarter 3D camera with orbit,
+zoom, and pan navigation. **Fit scope** and contextual **Focus selection** keep
+the current orientation while framing the corresponding semantic bounds.
+**Focus selection** remains hidden until a building, district, or external
+dependency is selected.
 
 **Export PNG** creates a new scene render whose resolution, projection, and
 framing are independent of the browser viewport and current camera projection.
@@ -354,9 +353,9 @@ frame. Each dimension must be a whole number from 256 through 8192 pixels.
 Preflight may lower that maximum to the active WebGL texture, renderbuffer, or
 viewport capability and rejects an estimated working set above 512 MiB. The
 estimate includes the actual framebuffer sample count. A lost context disables
-the camera and image controls until restoration; failure to create WebGL at
-startup shows an accessible fallback while project data and non-visual exports
-remain available.
+the camera-framing and image controls until restoration; failure to create
+WebGL at startup shows an accessible fallback while project data and non-visual
+exports remain available.
 
 == Viewer performance
 
