@@ -133,7 +133,7 @@
         "selectedCommitCount": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 500
+          "maximum": 100000
         },
         "sampledCommitCount": {
           "type": "integer",
@@ -143,7 +143,7 @@
         "traversedCommitCount": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 500
+          "maximum": 100000
         },
         "resolvedOldestSha": {
           "$ref": "#/$defs/gitSha"
@@ -179,7 +179,10 @@
               "const": "root-to-tip"
             },
             "samplingStrategy": {
-              "const": "evenly-spaced-v1"
+              "enum": [
+                "evenly-spaced-v1",
+                "elapsed-time-v1"
+              ]
             },
             "maxFrames": {
               "type": "integer",
@@ -210,6 +213,14 @@
             "sampleEvery": {
               "type": "integer",
               "minimum": 1,
+              "maximum": 500
+            },
+            "selectedCommitCount": {
+              "type": "integer",
+              "maximum": 500
+            },
+            "traversedCommitCount": {
+              "type": "integer",
               "maximum": 500
             },
             "requestedCommitCount": {
@@ -244,6 +255,14 @@
               "minimum": 1,
               "maximum": 500
             },
+            "selectedCommitCount": {
+              "type": "integer",
+              "maximum": 500
+            },
+            "traversedCommitCount": {
+              "type": "integer",
+              "maximum": 500
+            },
             "fromInclusive": {
               "$ref": "#/$defs/instant"
             },
@@ -273,6 +292,14 @@
             "sampleEvery": {
               "type": "integer",
               "minimum": 1,
+              "maximum": 500
+            },
+            "selectedCommitCount": {
+              "type": "integer",
+              "maximum": 500
+            },
+            "traversedCommitCount": {
+              "type": "integer",
               "maximum": 500
             }
           }

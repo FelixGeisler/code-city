@@ -106,10 +106,11 @@ export interface HistoryEvolutionRequest {
   readonly repositoryIdentity: string;
   readonly selection: HistorySelectionResult;
   /**
-   * One entry for every selected commit after the oldest boundary. Empty
-   * change lists are significant and must therefore still be present.
+   * One direct boundary diff for every sampled frame after the oldest frame,
+   * keyed by that newer frame SHA. Empty change lists are significant and
+   * must therefore still be present.
    */
-  readonly changesByCommit: ReadonlyMap<
+  readonly boundaryChangesByCommit: ReadonlyMap<
     string,
     readonly GenericGitHistoryPathChange[]
   >;
@@ -600,7 +601,7 @@ function validateRequest(
     request.historyBackend.renamePolicyRevision !==
       GENERIC_GIT_HISTORY_RENAME_POLICY_REVISION ||
     Object.keys(request.historyBackend).length !== 3 ||
-    !(request.changesByCommit instanceof Map) ||
+    !(request.boundaryChangesByCommit instanceof Map) ||
     !Array.isArray(request.frames)
   ) {
     fail("invalid-input", "Evolution history request is invalid.");
@@ -634,12 +635,12 @@ function validateRequest(
       );
     }
   });
-  selectedCommits.slice(1).forEach((commit) => {
+  sampledCommits.slice(1).forEach((commit) => {
     budget.consume();
-    if (!request.changesByCommit.has(commit.sha)) {
+    if (!request.boundaryChangesByCommit.has(commit.sha)) {
       fail(
         "invalid-input",
-        `History changes are missing for commit ${commit.sha}.`,
+        `History changes are missing for sampled frame ${commit.sha}.`,
       );
     }
   });
@@ -1541,12 +1542,6 @@ function prepareFrames(
     tokens: new Map(),
     materials: new Map(),
   };
-  const frameBySha = new Map(
-    request.frames.map((frame) => {
-      workBudget.consume();
-      return [frame.commit.sha, frame];
-    }),
-  );
   const prepared: PreparedFrame[] = [];
   let previousModules: readonly AssignedEntityIdentity[] = [];
   let previousSolutions: readonly AssignedEntityIdentity[] = [];
@@ -1557,20 +1552,19 @@ function prepareFrames(
     request.frames[0]!,
     workBudget,
   );
-  for (const [commitIndex, commit] of request.selection.selectedCommits.entries()) {
+  for (const [frameIndex, frame] of request.frames.entries()) {
     workBudget.consume();
     workBudget.checkpoint();
-    if (commitIndex > 0) {
+    const commit = frame.commit;
+    if (frameIndex > 0) {
       applyPathChanges(
         pathState,
         registry,
         commit.sha,
-        request.changesByCommit.get(commit.sha)!,
+        request.boundaryChangesByCommit.get(commit.sha)!,
         workBudget,
       );
     }
-    const frame = frameBySha.get(commit.sha);
-    if (frame === undefined) continue;
     seedFramePaths(pathState, registry, frame, workBudget);
 
     const sourceIds = new Map<string, string>();
@@ -2457,9 +2451,9 @@ function enforceChangedPathLimit(
 ): void {
   let paths = 0;
   let pathBytes = 0;
-  request.selection.selectedCommits.slice(1).forEach((commit) => {
+  request.selection.sampledCommits.slice(1).forEach((commit) => {
     budget.consume();
-    const changes = request.changesByCommit.get(commit.sha)!;
+    const changes = request.boundaryChangesByCommit.get(commit.sha)!;
     changes.forEach((change) => {
       budget.consume();
       validateChange(change);
@@ -2494,8 +2488,9 @@ function enforceChangedPathLimit(
 
 /**
  * Produces deterministic, rename-aware CityModel frames and a canonical
- * evolution bundle. Every traversed commit contributes path lineage changes,
- * while semantic analysis and output remain bounded to sampled frames.
+ * evolution bundle. Each adjacent sampled-frame boundary contributes one
+ * direct path diff, while semantic analysis and output remain bounded to the
+ * sampled frames themselves.
  */
 export function createHistoryEvolution(
   request: HistoryEvolutionRequest,

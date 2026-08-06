@@ -732,10 +732,34 @@ describe("viewer import API protocol", () => {
       error: {
         code: "history-too-long",
         message:
-          "This mainline has more than 500 commits. Choose a custom history range.",
+          "This mainline has more than 100,000 commits. Choose a bounded custom history range.",
       },
     } as const;
     expect(parseImportJob(historyFailure)).toEqual(historyFailure);
+    const historyCapabilityFailure = {
+      ...queuedJob(),
+      state: "failed",
+      error: {
+        code: "history-capability-unavailable",
+        message:
+          "Complete mainline history requires a Git server with filtered history fetch support. Choose a bounded custom history range.",
+      },
+    } as const;
+    expect(parseImportJob(historyCapabilityFailure)).toEqual(
+      historyCapabilityFailure,
+    );
+    const historyIncompleteFailure = {
+      ...queuedJob(),
+      state: "failed",
+      error: {
+        code: "history-incomplete",
+        message:
+          "The selected history cannot be proven complete because the Git server supplied a shallow boundary. Choose an available bounded range or use a complete remote.",
+      },
+    } as const;
+    expect(parseImportJob(historyIncompleteFailure)).toEqual(
+      historyIncompleteFailure,
+    );
     expect(
       parseImportJob({
         ...completedJob(),

@@ -123,11 +123,21 @@ choose ZIP or server-side Git when those details matter.
 
 Repository history defaults to *Entire mainline*: Code City follows the
 selected revision's first-parent ancestry to its root and distributes at most
-20 animation frames across the complete span, always including root and tip.
-The hard traversal ceiling is 500 commits. If a root cannot be proven within
-that ceiling, the import reports that the mainline is too long and asks for a
-custom recent, UTC-date, or exact-tag range instead of silently truncating it.
-Custom ranges retain an advanced fixed sampling interval.
+20 representative animation frames by elapsed time across the complete span,
+always including root and tip. Intermediate commits are indexed as lightweight
+metadata; their source is not analyzed. Complete-mainline indexing is capped at
+100,000 commits. If a root cannot be proven within that ceiling, the import is
+rejected instead of presenting a recent suffix as complete history. Complete
+mode also requires a verifiable treeless partial fetch; unsupported Git servers fail
+closed and direct the user to a bounded custom range. Custom
+recent-commit, UTC-date, and exact-tag ranges remain capped at 500 traversed
+commits and retain an advanced fixed sampling interval.
+
+The overview retains one net path diff between adjacent sampled frames instead
+of every intermediate commit's changes. This keeps acquisition and lineage work
+bounded by the frame count; rename detection across a sampled gap is Git's
+deterministic best effort. If the selected tip timestamp is not later than the
+root timestamp, sampling falls back to deterministic ancestry positions.
 
 Historical frames keep stable identities, aggregate metrics, and relationship
 inputs required by the city animation. Fine-grained callable and source-

@@ -240,6 +240,8 @@ export type ImportJobErrorCode =
   | "city-model-invalid"
   | "deadline-exceeded"
   | "failed"
+  | "history-capability-unavailable"
+  | "history-incomplete"
   | "history-limit-exceeded"
   | "history-too-long"
   | "import-limit-exceeded"
@@ -787,6 +789,8 @@ function isJobErrorCode(value: unknown): value is ImportJobErrorCode {
     value === "city-model-invalid" ||
     value === "deadline-exceeded" ||
     value === "failed" ||
+    value === "history-capability-unavailable" ||
+    value === "history-incomplete" ||
     value === "history-limit-exceeded" ||
     value === "history-too-long" ||
     value === "import-limit-exceeded" ||

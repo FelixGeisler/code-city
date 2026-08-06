@@ -30,6 +30,25 @@ function chain(count: number): readonly HistoryCommit[] {
   );
 }
 
+function chainAtDayOffsets(
+  oldestFirstDayOffsets: readonly number[],
+): readonly HistoryCommit[] {
+  return Object.freeze(
+    oldestFirstDayOffsets
+      .map((dayOffset, index) => {
+        const value = index + 1;
+        return Object.freeze({
+          sha: sha(value),
+          parents: Object.freeze(value === 1 ? [] : [sha(value - 1)]),
+          committedAt: new Date(
+            Date.UTC(2026, 0, 1) + dayOffset * 24 * 60 * 60 * 1_000,
+          ).toISOString(),
+        });
+      })
+      .reverse(),
+  );
+}
+
 function expectSelectionError(
   operation: () => unknown,
   code: HistorySelectionErrorCode,
@@ -49,6 +68,7 @@ describe("bounded history selection", () => {
     expect(HISTORY_CHANGED_PATH_RECORD_OVERHEAD_BYTES).toBe(128);
     expect(HISTORY_SELECTION_LIMITS).toEqual({
       maxTraversedCommits: 500,
+      maxIndexedCommits: 100_000,
       maxSampledFrames: 100,
       maxRequestedTags: 64,
       maxParentsPerCommit: 64,
@@ -67,18 +87,25 @@ describe("bounded history selection", () => {
     expect(Object.isFrozen(HISTORY_SELECTION_LIMITS)).toBe(true);
   });
 
-  it("selects the entire mainline with evenly spaced root and tip frames", () => {
+  it("selects the entire mainline with elapsed-time root and tip frames", () => {
     const result = selectHistory(chain(109), {
       mode: "root-to-tip",
       maxFrames: 20,
     });
 
+    const expectedValues = Array.from({ length: 20 }, (_, index) => {
+      const numerator = index * 108;
+      const denominator = 19;
+      const nearestIndexWithLowerTie = Math.floor(
+        (2 * numerator + denominator - 1) / (2 * denominator),
+      );
+      return 1 + nearestIndexWithLowerTie;
+    });
+
     expect(result.selectedCommits).toHaveLength(109);
     expect(result.sampledCommits).toHaveLength(20);
     expect(result.sampledCommits.map(({ sha: value }) => value)).toEqual(
-      Array.from({ length: 20 }, (_, index) =>
-        sha(1 + Math.floor((index * 108) / 19)),
-      ),
+      expectedValues.map(sha),
     );
     expect(new Set(result.summary.sampledCommitShas)).toHaveProperty(
       "size",
@@ -88,17 +115,76 @@ describe("bounded history selection", () => {
       mode: "root-to-tip",
       traversal: "first-parent",
       order: "oldest-first",
-      samplingStrategy: "evenly-spaced-v1",
+      samplingStrategy: "elapsed-time-v1",
       maxFrames: 20,
       selectedCommitCount: 109,
       sampledCommitCount: 20,
       traversedCommitCount: 109,
       resolvedOldestSha: sha(1),
       resolvedNewestSha: sha(109),
-      sampledCommitShas: Array.from({ length: 20 }, (_, index) =>
-        sha(1 + Math.floor((index * 108) / 19)),
-      ),
+      sampledCommitShas: expectedValues.map(sha),
     });
+  });
+
+  it("uses elapsed time before commit rank for uneven histories", () => {
+    const result = selectHistory(
+      chainAtDayOffsets([0, 0, 0, 0, 0, 90, 100]),
+      {
+        mode: "root-to-tip",
+        maxFrames: 3,
+      },
+    );
+
+    expect(result.summary.sampledCommitShas).toEqual([
+      sha(1),
+      sha(6),
+      sha(7),
+    ]);
+  });
+
+  it("breaks equal elapsed-time and rank distances by lower ancestry index", () => {
+    const result = selectHistory(chainAtDayOffsets([0, 40, 60, 100]), {
+      mode: "root-to-tip",
+      maxFrames: 3,
+    });
+
+    expect(result.summary.sampledCommitShas).toEqual([
+      sha(1),
+      sha(2),
+      sha(4),
+    ]);
+  });
+
+  it("clamps anomalous commit times to the root-to-tip interval", () => {
+    const result = selectHistory(
+      chainAtDayOffsets([0, -1_000, -1, -999, 1_000, 1_001, 100]),
+      {
+        mode: "root-to-tip",
+        maxFrames: 3,
+      },
+    );
+
+    expect(result.summary.sampledCommitShas).toEqual([
+      sha(1),
+      sha(4),
+      sha(7),
+    ]);
+  });
+
+  it("falls back to commit rank when the tip is not later than the root", () => {
+    const result = selectHistory(
+      chainAtDayOffsets([100, 0, 90, 80, 70, 60, 50]),
+      {
+        mode: "root-to-tip",
+        maxFrames: 3,
+      },
+    );
+
+    expect(result.summary.sampledCommitShas).toEqual([
+      sha(1),
+      sha(4),
+      sha(7),
+    ]);
   });
 
   it.each([1, 2, 20, 100])(
@@ -366,6 +452,41 @@ describe("bounded history selection", () => {
         selectHistory(oversized, {
           mode: "commit-count",
           commitCount: 1,
+        }),
+      "limit-exceeded",
+    );
+  });
+
+  it("accepts an indexed complete history at 100,000 and rejects max+1 before metadata", () => {
+    const exact = selectHistory(
+      chain(HISTORY_SELECTION_LIMITS.maxIndexedCommits),
+      {
+        mode: "root-to-tip",
+        maxFrames: 2,
+      },
+    );
+    expect(exact.selectedCommits).toHaveLength(100_000);
+    expect(exact.summary.sampledCommitShas).toEqual([
+      sha(1),
+      sha(100_000),
+    ]);
+
+    const inaccessible = {
+      get sha(): string {
+        throw new Error("commit metadata was inspected");
+      },
+      parents: [],
+      committedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const oversized = Array.from(
+      { length: HISTORY_SELECTION_LIMITS.maxIndexedCommits + 1 },
+      () => inaccessible,
+    );
+    expectSelectionError(
+      () =>
+        selectHistory(oversized, {
+          mode: "root-to-tip",
+          maxFrames: 20,
         }),
       "limit-exceeded",
     );

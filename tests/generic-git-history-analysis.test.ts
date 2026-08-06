@@ -43,6 +43,10 @@ function commits(count: number) {
       return Object.freeze({
         sha: sha(value),
         parents: Object.freeze(value === 1 ? [] : [sha(value - 1)]),
+        committedAtSeconds: Math.floor(
+          (Date.UTC(2025, 0, 1) + (value - 1) * DAY_MS) /
+            1_000,
+        ),
         committedAt: new Date(
           Date.UTC(2025, 0, 1) + (value - 1) * DAY_MS,
         ).toISOString(),
@@ -145,6 +149,7 @@ function evolutionResult(
 interface SessionHarness {
   readonly session: GenericGitHistorySession;
   readonly readChanges: ReturnType<typeof vi.fn>;
+  readonly readChangesBetween: ReturnType<typeof vi.fn>;
   readonly readSnapshot: ReturnType<typeof vi.fn>;
 }
 
@@ -153,19 +158,29 @@ function sessionHarness(
   options: {
     readonly tags?: GenericGitHistorySession["tags"];
     readonly change?: (
-      commitSha: string,
+      olderSha: string,
+      newerSha: string,
     ) => readonly GenericGitHistoryPathChange[];
     readonly snapshotFiles?: number;
     readonly backendVersion?: string;
+    readonly oldestCommitIsShallow?: boolean;
   } = {},
 ): SessionHarness {
   const history = commits(count);
   const readChanges = vi.fn(async (commitSha: string) =>
     Object.freeze([
-      ...(options.change?.(commitSha) ?? [
+      ...(options.change?.(commitSha, commitSha) ?? [
         { kind: "modified" as const, path: "src/main.ts" },
       ]),
     ]),
+  );
+  const readChangesBetween = vi.fn(
+    async (olderSha: string, newerSha: string) =>
+      Object.freeze([
+        ...(options.change?.(olderSha, newerSha) ?? [
+          { kind: "modified" as const, path: "src/main.ts" },
+        ]),
+      ]),
   );
   const readSnapshot = vi.fn(async (commitSha: string) =>
     snapshot(commitSha, options.snapshotFiles),
@@ -175,6 +190,8 @@ function sessionHarness(
       repository: "History",
       tipSha: history[0]!.sha,
       transport: "https",
+      oldestCommitIsShallow:
+        options.oldestCommitIsShallow ?? false,
       backend: Object.freeze({
         name: "git",
         version: options.backendVersion ?? "2.47.1.windows.2",
@@ -184,9 +201,11 @@ function sessionHarness(
       commits: history,
       tags: options.tags ?? Object.freeze([]),
       readChanges,
+      readChangesBetween,
       readSnapshot,
     }),
     readChanges,
+    readChangesBetween,
     readSnapshot,
   };
 }
@@ -479,7 +498,7 @@ describe("Generic Git history analysis orchestration", () => {
     );
   });
 
-  it("reads unsampled commit changes while snapshotting only sampled frames", async () => {
+  it("reads direct sampled-boundary changes and snapshots only sampled frames", async () => {
     const session = sessionHarness(5);
     const provider = providerHarness(session.session);
     let evolutionRequest: HistoryEvolutionRequest | undefined;
@@ -515,13 +534,19 @@ describe("Generic Git history analysis orchestration", () => {
       },
     );
 
-    expect(
-      session.readChanges.mock.calls.map(([commitSha]) => commitSha),
-    ).toEqual([sha(2), sha(3), sha(4), sha(5)]);
+    expect(session.readChangesBetween.mock.calls).toEqual([
+      [sha(1), sha(3)],
+      [sha(3), sha(5)],
+    ]);
     expect(
       session.readSnapshot.mock.calls.map(([commitSha]) => commitSha),
     ).toEqual([sha(1), sha(3), sha(5)]);
-    expect(evolutionRequest?.changesByCommit.size).toBe(4);
+    expect(evolutionRequest?.boundaryChangesByCommit.size).toBe(2);
+    expect(
+      evolutionRequest?.selection.selectedCommits.map(
+        ({ sha: value }) => value,
+      ),
+    ).toEqual([sha(1), sha(3), sha(5)]);
     expect(evolutionRequest?.historyBackend).toEqual(
       session.session.backend,
     );
@@ -533,6 +558,7 @@ describe("Generic Git history analysis orchestration", () => {
       sha(3),
       sha(5),
     ]);
+    expect(provider.requests[0]?.traversal).toBe("bounded");
     expect(result.cacheHits).toBe(0);
     expect(result.cacheMisses).toBe(3);
     expect(result.historyBackend).toBe(session.session.backend);
@@ -751,39 +777,33 @@ describe("Generic Git history analysis orchestration", () => {
     });
   });
 
-  it("carries intervening non-date-matching ancestry changes into evolution without changing the public selection", async () => {
+  it("uses one direct boundary diff without changing the public date selection", async () => {
     const base = sessionHarness(3, {
-      change: (commitSha) =>
-        commitSha === sha(2)
-          ? [
-              {
-                kind: "renamed",
-                previousPath: "src/old.ts",
-                path: "src/middle.ts",
-              },
-            ]
-          : [
-              {
-                kind: "renamed",
-                previousPath: "src/middle.ts",
-                path: "src/new.ts",
-              },
-            ],
+      change: () => [
+        {
+          kind: "renamed",
+          previousPath: "src/old.ts",
+          path: "src/new.ts",
+        },
+      ],
     });
     const nonMonotonicCommits = Object.freeze([
       {
         sha: sha(3),
         parents: Object.freeze([sha(2)]),
+        committedAtSeconds: 1_735_862_400,
         committedAt: "2025-01-03T00:00:00.000Z",
       },
       {
         sha: sha(2),
         parents: Object.freeze([sha(1)]),
+        committedAtSeconds: 1_735_689_600,
         committedAt: "2025-01-01T00:00:00.000Z",
       },
       {
         sha: sha(1),
         parents: Object.freeze([]),
+        committedAtSeconds: 1_735_776_000,
         committedAt: "2025-01-02T00:00:00.000Z",
       },
     ]);
@@ -819,10 +839,10 @@ describe("Generic Git history analysis orchestration", () => {
     ).toEqual([sha(1), sha(3)]);
     expect(
       internalSelection?.selectedCommits.map(({ sha: value }) => value),
-    ).toEqual([sha(1), sha(2), sha(3)]);
+    ).toEqual([sha(1), sha(3)]);
     expect(
-      base.readChanges.mock.calls.map(([commitSha]) => commitSha),
-    ).toEqual([sha(2), sha(3)]);
+      base.readChangesBetween.mock.calls,
+    ).toEqual([[sha(1), sha(3)]]);
     expect(
       base.readSnapshot.mock.calls.map(([commitSha]) => commitSha),
     ).toEqual([sha(1), sha(3)]);
@@ -853,12 +873,12 @@ describe("Generic Git history analysis orchestration", () => {
       traversedCommitCount: 500,
     });
     expect(result.selection.sampledCommits).toHaveLength(2);
-    expect(overflowSession.readChanges).toHaveBeenCalledTimes(499);
+    expect(overflowSession.readChangesBetween).toHaveBeenCalledOnce();
     expect(overflowSession.readSnapshot).toHaveBeenCalledTimes(2);
     expect(createEvolution).toHaveBeenCalledOnce();
   });
 
-  it("covers the complete mainline with evenly spaced bounded frames", async () => {
+  it("covers the complete mainline with elapsed-time bounded frames", async () => {
     const completeSession = sessionHarness(109);
     const completeProvider = providerHarness(completeSession.session);
     const createEvolution = vi.fn(evolutionResult);
@@ -876,10 +896,11 @@ describe("Generic Git history analysis orchestration", () => {
       },
     );
 
-    expect(completeProvider.requests[0]?.maximumCommits).toBe(500);
+    expect(completeProvider.requests[0]?.maximumCommits).toBe(100_000);
+    expect(completeProvider.requests[0]?.traversal).toBe("root-to-tip");
     expect(result.selection.summary).toMatchObject({
       mode: "root-to-tip",
-      samplingStrategy: "evenly-spaced-v1",
+      samplingStrategy: "elapsed-time-v1",
       maxFrames: 20,
       selectedCommitCount: 109,
       sampledCommitCount: 20,
@@ -887,13 +908,16 @@ describe("Generic Git history analysis orchestration", () => {
       resolvedNewestSha: sha(109),
     });
     expect(result.selection.sampledCommits).toHaveLength(20);
-    expect(completeSession.readChanges).toHaveBeenCalledTimes(108);
+    expect(completeSession.readChangesBetween).toHaveBeenCalledTimes(19);
     expect(completeSession.readSnapshot).toHaveBeenCalledTimes(20);
     expect(createEvolution).toHaveBeenCalledOnce();
   });
 
   it("rejects a complete-mainline overflow probe before repository reads", async () => {
-    const overflowSession = sessionHarness(501);
+    const overflowSession = sessionHarness(
+      HISTORY_SELECTION_LIMITS.maxIndexedCommits + 1,
+      { oldestCommitIsShallow: true },
+    );
     const overflowProvider = providerHarness(overflowSession.session);
     const createEvolution = vi.fn(evolutionResult);
 
@@ -911,9 +935,110 @@ describe("Generic Git history analysis orchestration", () => {
         },
       ),
     ).rejects.toMatchObject({ code: "history-too-long" });
-    expect(overflowSession.readChanges).not.toHaveBeenCalled();
+    expect(overflowSession.readChangesBetween).not.toHaveBeenCalled();
     expect(overflowSession.readSnapshot).not.toHaveBeenCalled();
     expect(createEvolution).not.toHaveBeenCalled();
+  });
+
+  it("rejects only selections whose completeness depends on an indexed shallow boundary", async () => {
+    const createEvolution = vi.fn(evolutionResult);
+    const incompleteRoot = sessionHarness(3, {
+      oldestCommitIsShallow: true,
+    });
+    await expect(
+      analyzeGenericGitHistory(
+        request({ mode: "root-to-tip", maxFrames: 3 }),
+        {},
+        {
+          withHistoryRepository: providerHarness(
+            incompleteRoot.session,
+          ).provider,
+          analyzeSnapshot: async () => facts("never"),
+          createEvolution,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "history-incomplete" });
+    expect(incompleteRoot.readChangesBetween).not.toHaveBeenCalled();
+
+    const incompleteDate = sessionHarness(3, {
+      oldestCommitIsShallow: true,
+    });
+    await expect(
+      analyzeGenericGitHistory(
+        request({
+          mode: "date-range",
+          fromInclusive: "2025-01-01T00:00:00Z",
+          toInclusive: "2025-01-03T00:00:00Z",
+          maxCommits: 3,
+        }),
+        {},
+        {
+          withHistoryRepository: providerHarness(
+            incompleteDate.session,
+          ).provider,
+          analyzeSnapshot: async () => facts("never"),
+          createEvolution,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "history-incomplete" });
+    expect(incompleteDate.readChangesBetween).not.toHaveBeenCalled();
+
+    const tooShort = sessionHarness(2, {
+      oldestCommitIsShallow: true,
+    });
+    await expect(
+      analyzeGenericGitHistory(
+        request({ mode: "commit-count", commitCount: 3 }),
+        {},
+        {
+          withHistoryRepository: providerHarness(
+            tooShort.session,
+          ).provider,
+          analyzeSnapshot: async () => facts("never"),
+          createEvolution,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "history-incomplete" });
+    expect(tooShort.readChangesBetween).not.toHaveBeenCalled();
+
+    const exactCount = sessionHarness(3, {
+      oldestCommitIsShallow: true,
+    });
+    await analyzeGenericGitHistory(
+      request({ mode: "commit-count", commitCount: 3 }),
+      {},
+      {
+        withHistoryRepository: providerHarness(exactCount.session)
+          .provider,
+        analyzeSnapshot: async () => facts("exact-count"),
+        createEvolution,
+      },
+    );
+    expect(exactCount.readChangesBetween).toHaveBeenCalledTimes(2);
+
+    const shallowTag = sessionHarness(3, {
+      oldestCommitIsShallow: true,
+      tags: Object.freeze([
+        Object.freeze({ name: "old", commitSha: sha(1) }),
+        Object.freeze({ name: "new", commitSha: sha(3) }),
+      ]),
+    });
+    await analyzeGenericGitHistory(
+      request({
+        mode: "tag-range",
+        oldestTagName: "old",
+        newestTagName: "new",
+        maxCommits: 3,
+      }),
+      {},
+      {
+        withHistoryRepository: providerHarness(shallowTag.session)
+          .provider,
+        analyzeSnapshot: async () => facts("tag-range"),
+        createEvolution,
+      },
+    );
+    expect(shallowTag.readChangesBetween).toHaveBeenCalledTimes(2);
   });
 
   it("rejects incomplete bounded date and tag ranges before reading repository data", async () => {
@@ -936,7 +1061,7 @@ describe("Generic Git history analysis orchestration", () => {
         },
       ),
     ).rejects.toMatchObject({ code: "limit-exceeded" });
-    expect(dateSession.readChanges).not.toHaveBeenCalled();
+    expect(dateSession.readChangesBetween).not.toHaveBeenCalled();
     expect(dateSession.readSnapshot).not.toHaveBeenCalled();
 
     const tagSession = sessionHarness(4, {
@@ -962,7 +1087,7 @@ describe("Generic Git history analysis orchestration", () => {
         },
       ),
     ).rejects.toMatchObject({ code: "limit-exceeded" });
-    expect(tagSession.readChanges).not.toHaveBeenCalled();
+    expect(tagSession.readChangesBetween).not.toHaveBeenCalled();
     expect(tagSession.readSnapshot).not.toHaveBeenCalled();
     expect(createEvolution).not.toHaveBeenCalled();
   });
@@ -994,7 +1119,7 @@ describe("Generic Git history analysis orchestration", () => {
         },
       ),
     ).rejects.toMatchObject({ code: "limit-exceeded" });
-    expect(changedSession.readChanges).toHaveBeenCalledOnce();
+    expect(changedSession.readChangesBetween).toHaveBeenCalledOnce();
     expect(changedSession.readSnapshot).not.toHaveBeenCalled();
     expect(createEvolution).not.toHaveBeenCalled();
   });
@@ -1026,7 +1151,7 @@ describe("Generic Git history analysis orchestration", () => {
         },
       ),
     ).rejects.toMatchObject({ code: "limit-exceeded" });
-    expect(changedSession.readChanges).toHaveBeenCalledTimes(2);
+    expect(changedSession.readChangesBetween).toHaveBeenCalledTimes(2);
     expect(changedSession.readSnapshot).not.toHaveBeenCalled();
     expect(createEvolution).not.toHaveBeenCalled();
   });

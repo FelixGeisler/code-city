@@ -1462,6 +1462,9 @@ function analysisTaskFailure(error: unknown): JobTaskFailure {
     if (error.code === "history-too-long") {
       return new JobTaskFailure("history-too-long");
     }
+    if (error.code === "history-incomplete") {
+      return new JobTaskFailure("history-incomplete");
+    }
     if (error.code === "limit-exceeded") {
       return new JobTaskFailure("history-limit-exceeded");
     }
@@ -1510,6 +1513,9 @@ function analysisTaskFailure(error: unknown): JobTaskFailure {
     return new JobTaskFailure("analysis-failed");
   }
   if (error instanceof GenericGitSnapshotError) {
+    if (error.code === "GIT_PARTIAL_CLONE_UNAVAILABLE") {
+      return new JobTaskFailure("history-capability-unavailable");
+    }
     if (error.code === "GIT_COMMAND_FAILED") {
       return new JobTaskFailure("repository-unavailable");
     }

@@ -37,6 +37,7 @@ import {
   type CommitCountHistorySelectionRequest,
   type DateRangeHistorySelectionRequest,
   type HistoryAnalysisBounds,
+  type HistoryCommit,
   type HistorySelectionRequest,
   type HistorySelectionResult,
   type RootToTipHistorySelectionRequest,
@@ -681,16 +682,20 @@ function traversalMaximum(
 ): number {
   const value =
     selection.mode === "root-to-tip"
-      ? HISTORY_SELECTION_LIMITS.maxTraversedCommits
+      ? HISTORY_SELECTION_LIMITS.maxIndexedCommits
       : selection.mode === "commit-count"
       ? selection.commitCount
       : selection.maxCommits;
   if (!Number.isSafeInteger(value) || value <= 0) {
     invalid("History traversal maximum must be a positive safe integer.");
   }
-  if (value > HISTORY_SELECTION_LIMITS.maxTraversedCommits) {
+  const maximum =
+    selection.mode === "root-to-tip"
+      ? HISTORY_SELECTION_LIMITS.maxIndexedCommits
+      : HISTORY_SELECTION_LIMITS.maxTraversedCommits;
+  if (value > maximum) {
     limit(
-      `History traversal maximum may not exceed ${HISTORY_SELECTION_LIMITS.maxTraversedCommits}.`,
+      `History ${selection.mode === "root-to-tip" ? "index" : "traversal"} maximum may not exceed ${maximum}.`,
     );
   }
   return value;
@@ -913,6 +918,29 @@ function selectSessionHistory(
       throw new HistorySelectionError(
         "limit-exceeded",
         `Both tag boundaries must be available within maxCommits ${maximumCommits}.`,
+      );
+    }
+  }
+  if (!hasOverflowProbe && session.oldestCommitIsShallow) {
+    if (resolvedRequest.mode === "root-to-tip") {
+      throw new HistorySelectionError(
+        "history-incomplete",
+        "Complete root-to-tip history cannot be proven because the oldest indexed first-parent commit is a shallow boundary.",
+      );
+    }
+    if (resolvedRequest.mode === "date-range") {
+      throw new HistorySelectionError(
+        "history-incomplete",
+        "The inclusive date range cannot be proven complete because the oldest indexed first-parent commit is a shallow boundary.",
+      );
+    }
+    if (
+      resolvedRequest.mode === "commit-count" &&
+      boundedCommits.length < resolvedRequest.commitCount
+    ) {
+      throw new HistorySelectionError(
+        "history-incomplete",
+        `Only ${boundedCommits.length} of ${resolvedRequest.commitCount} requested recent commits are available before a shallow boundary.`,
       );
     }
   }
@@ -1359,43 +1387,6 @@ function historicalVisualizationFacts(
   });
 }
 
-function contiguousEvolutionSelection(
-  selection: HistorySelectionResult,
-  session: GenericGitHistorySession,
-): HistorySelectionResult {
-  const newestIndex = session.commits.findIndex(
-    ({ sha }) => sha === selection.summary.resolvedNewestSha,
-  );
-  const oldestIndex = session.commits.findIndex(
-    ({ sha }) => sha === selection.summary.resolvedOldestSha,
-  );
-  if (
-    newestIndex < 0 ||
-    oldestIndex < newestIndex
-  ) {
-    throw new HistorySelectionError(
-      "selection-unavailable",
-      "Selected history boundaries do not form available first-parent ancestry.",
-    );
-  }
-  const selectedCommits = Object.freeze(
-    session.commits
-      .slice(newestIndex, oldestIndex + 1)
-      .reverse()
-      .map((commit) =>
-        Object.freeze({
-          sha: commit.sha,
-          parents: Object.freeze([...commit.parents]),
-          committedAt: commit.committedAt,
-        }),
-      ),
-  );
-  return Object.freeze({
-    ...selection,
-    selectedCommits,
-  });
-}
-
 async function defaultAnalyzeSnapshot(
   snapshot: RepositorySnapshot,
   context: HistorySnapshotAnalysisContext,
@@ -1442,21 +1433,26 @@ async function analyzeSession(
     session.backend,
   );
   const selection = selectSessionHistory(request.selection, session);
-  const evolutionSelection = contiguousEvolutionSelection(
-    selection,
-    session,
-  );
   checkpoint(clock);
 
-  const changesByCommit = new Map<
+  const boundaryChangesByCommit = new Map<
     string,
     readonly GenericGitHistoryPathChange[]
   >();
   let changedPaths = 0;
   let changedPathBytes = 0;
-  for (const commit of evolutionSelection.selectedCommits.slice(1)) {
+  for (
+    let frameIndex = 1;
+    frameIndex < selection.sampledCommits.length;
+    frameIndex += 1
+  ) {
     checkpoint(clock);
-    const changes = await session.readChanges(commit.sha);
+    const older = selection.sampledCommits[frameIndex - 1]!;
+    const newer = selection.sampledCommits[frameIndex]!;
+    const changes = await session.readChangesBetween(
+      older.sha,
+      newer.sha,
+    );
     checkpoint(clock);
     const charged = chargeChangedPaths(
       changes,
@@ -1468,7 +1464,7 @@ async function analyzeSession(
     );
     changedPaths = charged.entries;
     changedPathBytes = charged.bytes;
-    changesByCommit.set(commit.sha, changes);
+    boundaryChangesByCommit.set(newer.sha, changes);
   }
 
   const analyzeSnapshot =
@@ -1487,7 +1483,7 @@ async function analyzeSession(
 
   try {
     const frames: {
-      readonly commit: GenericGitHistoryCommit;
+      readonly commit: HistoryCommit;
       readonly facts: HistoryAnalysisFacts;
     }[] = [];
     for (const commit of selection.sampledCommits) {
@@ -1613,16 +1609,20 @@ async function analyzeSession(
     checkpoint(clock);
     const executionSelection: HistorySelectionResult =
       Object.freeze({
-        ...evolutionSelection,
+        ...selection,
+        // Evolution consumes one direct diff per adjacent sampled frame.
+        // Keep the normalized summary's complete indexed/traversed counts,
+        // but do not make lineage work proportional to every indexed commit.
+        selectedCommits: selection.sampledCommits,
         analysisBounds: Object.freeze({
-          ...evolutionSelection.analysisBounds,
+          ...selection.analysisBounds,
           totalDeadlineMs: remainingMilliseconds(clock),
         }),
       });
     const evolution = createEvolutionResult({
       repositoryIdentity: request.repositoryIdentity,
       selection: executionSelection,
-      changesByCommit,
+      boundaryChangesByCommit,
       frames: Object.freeze(frames),
       analyzerFingerprint,
       historyBackend: session.backend,
@@ -1756,6 +1756,10 @@ export async function analyzeGenericGitHistory(
   const tagNames = requestedTagNames(selection);
   const historyRequest: GenericGitHistoryRequest = Object.freeze({
     repositoryUrl,
+    traversal:
+      selection.mode === "root-to-tip"
+        ? "root-to-tip"
+        : "bounded",
     maximumCommits,
     maximumChangedPathEntries: bounds.maxAggregateChangedPaths,
     maximumChangedPathBytes: bounds.maxAggregateChangedPathBytes,

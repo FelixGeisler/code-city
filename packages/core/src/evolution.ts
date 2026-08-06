@@ -73,7 +73,9 @@ interface NormalizedEvolutionSelectionBase {
 export type NormalizedEvolutionSelection =
   | (NormalizedEvolutionSelectionBase & {
       readonly mode: "root-to-tip";
-      readonly samplingStrategy: "evenly-spaced-v1";
+      readonly samplingStrategy:
+        | "evenly-spaced-v1"
+        | "elapsed-time-v1";
       readonly maxFrames: number;
     })
   | (NormalizedEvolutionSelectionBase & {
@@ -216,7 +218,8 @@ export interface EvolutionReplayFrame {
 
 export const EVOLUTION_BUNDLE_LIMITS = Object.freeze({
   frames: 100,
-  traversedCommits: 500,
+  traversedCommits: 100_000,
+  customSelectionCommits: 500,
   sampleEvery: 500,
   parentsPerCommit: 64,
   uniqueEntityLineages: 100_000,

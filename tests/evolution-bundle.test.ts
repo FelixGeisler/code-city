@@ -676,7 +676,7 @@ describe("EvolutionBundle 1.0", () => {
     const exact = singleModelBundle(
       EVOLUTION_BUNDLE_LIMITS.frames,
       1,
-      EVOLUTION_BUNDLE_LIMITS.traversedCommits,
+      EVOLUTION_BUNDLE_LIMITS.customSelectionCommits,
     );
     const parents = Array.from(
       { length: EVOLUTION_BUNDLE_LIMITS.parentsPerCommit },
@@ -692,9 +692,23 @@ describe("EvolutionBundle 1.0", () => {
     const sampled = singleModelBundle(
       2,
       EVOLUTION_BUNDLE_LIMITS.sampleEvery,
-      EVOLUTION_BUNDLE_LIMITS.traversedCommits,
+      EVOLUTION_BUNDLE_LIMITS.customSelectionCommits,
     );
     expect(validateEvolutionBundle(sampled)).toBe(sampled);
+
+    const indexed = singleModelBundle(
+      2,
+      1,
+      EVOLUTION_BUNDLE_LIMITS.traversedCommits,
+    );
+    indexed.selection.mode = "root-to-tip";
+    indexed.selection.samplingStrategy = "elapsed-time-v1";
+    indexed.selection.maxFrames = 2;
+    indexed.selection.selectedCommitCount =
+      EVOLUTION_BUNDLE_LIMITS.traversedCommits;
+    delete indexed.selection.sampleEvery;
+    delete indexed.selection.requestedCommitCount;
+    expect(validateEvolutionBundle(indexed)).toBe(indexed);
   });
 
   it("rejects each exact bound plus one", () => {
@@ -727,6 +741,16 @@ describe("EvolutionBundle 1.0", () => {
     expect(() => validateEvolutionBundle(traversal)).toThrow(
       new RegExp(
         `must not exceed ${EVOLUTION_BUNDLE_LIMITS.traversedCommits}`,
+        "u",
+      ),
+    );
+
+    const customTraversal = mutable(singleModelBundle(1, 1, 1));
+    customTraversal.selection.traversedCommitCount =
+      EVOLUTION_BUNDLE_LIMITS.customSelectionCommits + 1;
+    expect(() => validateEvolutionBundle(customTraversal)).toThrow(
+      new RegExp(
+        `must not exceed ${EVOLUTION_BUNDLE_LIMITS.customSelectionCommits}`,
         "u",
       ),
     );

@@ -148,7 +148,8 @@ function createHistoryAnalysisResult(
   const historyBackend = {
     name: "git" as const,
     version: "2.47.1.windows.2",
-    renamePolicyRevision: "diff-tree-renames-50-myers-v1" as const,
+    renamePolicyRevision:
+      "sampled-boundary-diff-tree-renames-50-myers-v2" as const,
   };
   const addedDependency = model.dependencies.find(
     ({ id }) => id === "dependency:validation-model",

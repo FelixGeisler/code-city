@@ -13,6 +13,9 @@ import {
   type CityDependency,
   type CityModule,
 } from "../packages/core/src/index.js";
+import {
+  GENERIC_GIT_HISTORY_RENAME_POLICY_REVISION,
+} from "../packages/analyzer/src/git-snapshot.js";
 
 const A = "1111111111111111111111111111111111111111";
 const B = "2222222222222222222222222222222222222222";
@@ -455,7 +458,7 @@ function reversedDependencies(
 function evolve(
   newestFirst: readonly (typeof COMMITS)[keyof typeof COMMITS][],
   frames: readonly HistoryEvolutionFrameInput[],
-  changesByCommit: ReadonlyMap<
+  boundaryChangesByCommit: ReadonlyMap<
     string,
     readonly (
       | {
@@ -480,13 +483,14 @@ function evolve(
       mode: "commit-count",
       commitCount: newestFirst.length,
     }),
-    changesByCommit,
+    boundaryChangesByCommit,
     frames,
     analyzerFingerprint: "lineage-semantics-v1",
     historyBackend: {
       name: "git",
       version: "2.45.0",
-      renamePolicyRevision: "diff-tree-renames-50-myers-v1",
+      renamePolicyRevision:
+        GENERIC_GIT_HISTORY_RENAME_POLICY_REVISION,
     },
     metricConfiguration: { geometry: "default-v1" },
   });

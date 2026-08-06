@@ -174,7 +174,8 @@ function historyAnalysisResultFixture(
     historyBackend: {
       name: "git",
       version: "2.47.1.windows.2",
-      renamePolicyRevision: "diff-tree-renames-50-myers-v1",
+      renamePolicyRevision:
+        "sampled-boundary-diff-tree-renames-50-myers-v2",
     },
     selection: {
       selectedCommits: [commit],
@@ -1525,6 +1526,18 @@ describe("remote import HTTP API", () => {
             "secret C:\\private\\repository has 501 commits",
           );
         }
+        if (requestValue.repositoryUrl.endsWith("/shallow")) {
+          throw new HistorySelectionError(
+            "history-incomplete",
+            "secret shallow boundary diagnostics",
+          );
+        }
+        if (requestValue.repositoryUrl.endsWith("/no-filter")) {
+          throw new GenericGitSnapshotError(
+            "GIT_PARTIAL_CLONE_UNAVAILABLE",
+            "secret remote diagnostics",
+          );
+        }
         throw new HistoryEvolutionError(
           "limit-exceeded",
           "secret retained semantic internals",
@@ -1550,7 +1563,19 @@ describe("remote import HTTP API", () => {
         repository: "too-long",
         code: "history-too-long",
         message:
-          "This mainline has more than 500 commits. Choose a custom history range.",
+          "This mainline has more than 100,000 commits. Choose a bounded custom history range.",
+      },
+      {
+        repository: "shallow",
+        code: "history-incomplete",
+        message:
+          "The selected history cannot be proven complete because the Git server supplied a shallow boundary. Choose an available bounded range or use a complete remote.",
+      },
+      {
+        repository: "no-filter",
+        code: "history-capability-unavailable",
+        message:
+          "Complete mainline history requires a Git server with filtered history fetch support. Choose a bounded custom history range.",
       },
       {
         repository: "too-detailed",

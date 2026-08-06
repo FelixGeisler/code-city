@@ -56,8 +56,10 @@ branch, a tag, or one exact commit, plus optional city identity and bounded
 analysis settings. They can also opt into a bounded first-parent history. The
 recommended default follows the complete mainline from its first commit to the
 selected revision and distributes at most 20 animation frames across that
-span. Recent commit count, inclusive UTC date range, and two exact tag names
-remain available as custom ranges.
+span by elapsed time. These are representative snapshots: intermediate
+commits are indexed as lightweight metadata, but their source is not analyzed.
+Recent commit count, inclusive UTC date range, and two exact tag names remain
+available as custom ranges.
 Directory packaging runs in a cancellable browser worker,
 keeps only analyzer inputs and ignore controls, rejects unsafe or colliding
 portable paths, and produces a deterministic, size-bounded ZIP before making
@@ -127,8 +129,10 @@ remove older retained results.
 History imports are reproducible from immutable commit SHAs and emit frames in
 oldest-first order. The recommended `root-to-tip` mode proves that the bounded
 first-parent traversal reached the repository root, then distributes up to
-`maxFrames` evenly across the complete span. The oldest and newest commits are
-always included. For example:
+`maxFrames` representative snapshots by elapsed time across the complete span.
+The oldest and newest commits are always included. If the selected tip
+timestamp is not later than the root timestamp, sampling falls back to
+deterministic ancestry positions. For example:
 
 ```json
 {
@@ -144,20 +148,28 @@ always included. For example:
 }
 ```
 
-Mainlines longer than 500 commits are rejected with a specific instruction to
-choose a custom range; Code City never labels the newest 500 commits as a
-complete history. Custom recent-commit, date, and tag selections retain the
-advanced `sampleEvery` interval. Date selections use `fromInclusive`,
+Complete-mainline mode indexes at most 100,000 commits while loading and
+analyzing source only for the selected frames. A longer mainline is rejected
+with a specific instruction to choose a bounded custom range; Code City never
+labels a recent suffix as a complete history. It requires the Git server to
+support a verifiable treeless partial fetch and fails closed with the same
+bounded-range escape hatch when that capability is unavailable. Custom recent-commit, date, and
+tag selections remain limited to 500 traversed commits and retain the advanced
+`sampleEvery` interval. Date selections use `fromInclusive`,
 `toInclusive`, and a mandatory
 `maxCommits`; tag selections use unqualified `oldestTagName`,
 `newestTagName`, and a mandatory `maxCommits`. Every request is rejected before
-repository analysis unless its declared bounds can produce at most 500
-traversed commits and 100 sampled frames. Because Git commit timestamps need not
-be monotonic, a date range is accepted only when the first-parent traversal
+repository analysis unless its declared bounds can produce at most 100 sampled
+frames. Because Git commit timestamps need not be monotonic, a date range is
+accepted only when the first-parent traversal
 reaches the repository root within `maxCommits`; this prevents an older commit
 with an in-range timestamp from being silently omitted. Hard ceilings also
-limit exact tags to 64, commit parents to 64, accumulated changed paths to
-500,000, and retained change data to 16 MiB. Retained change data charges the
+limit exact tags to 64, commit parents to 64, accumulated sampled-boundary
+changed paths to 500,000, and retained change data to 16 MiB. The overview
+computes one net Git diff between each pair of adjacent sampled frames rather
+than retaining every intermediate commit's path changes. Rename detection
+across a sampled gap is therefore Git's deterministic best effort. Retained
+change data charges the
 UTF-8 bytes of current and previous path names plus a conservative 128 bytes
 of record overhead for every parsed change. Retained semantic facts are capped
 at 128 MiB using explicit string, object, array, property, and reference
