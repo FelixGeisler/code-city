@@ -306,6 +306,10 @@ function exportOptions(value: unknown): value is PrintExportGenerateOptions {
     (candidate["routePolicy"] === "auto" ||
       candidate["routePolicy"] === "off") &&
     typeof candidate["includeLegend"] === "boolean" &&
+    (candidate["wipeTowerReserveDepth"] === undefined ||
+      (finiteNumber(candidate["wipeTowerReserveDepth"]) &&
+        candidate["wipeTowerReserveDepth"] >= 0 &&
+        candidate["wipeTowerReserveDepth"] < 360)) &&
     (candidate["acknowledgeBelowProfileScale"] === undefined ||
       typeof candidate["acknowledgeBelowProfileScale"] === "boolean") &&
     (candidate["confirmCompactFit"] === undefined ||
@@ -525,6 +529,8 @@ function bundlePreflight(
     candidate["appliedScale"] <= 0 ||
     !finiteNumber(candidate["minimumSafeScale"]) ||
     candidate["minimumSafeScale"] <= 0 ||
+    !finiteNumber(candidate["wipeTowerReserveDepth"]) ||
+    candidate["wipeTowerReserveDepth"] < 0 ||
     typeof candidate["belowProfileScaleAcknowledged"] !== "boolean" ||
     !featureViolations(candidate["featureViolations"]) ||
     !positiveInteger(candidate["plateCount"]) ||

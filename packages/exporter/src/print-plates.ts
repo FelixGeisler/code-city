@@ -75,6 +75,8 @@ export interface PrintPlateExportOptions {
   readonly scale: number;
   readonly fitPolicy: PrintFitPolicy;
   readonly acknowledgeBelowProfileScale?: boolean;
+  /** Empty physical depth kept at the rear of every plate for a slicer tower. */
+  readonly wipeTowerReserveDepth?: number;
   readonly labelPolicy: PrintLabelPolicy;
   readonly routePolicy: PrintRoutePolicy;
   readonly includeLegend: boolean;
@@ -121,6 +123,8 @@ export interface PrintPlateBundlePreflight {
   readonly requestedScale: number;
   readonly appliedScale: number;
   readonly minimumSafeScale: number;
+  /** Empty rear plate depth reserved for the slicer's wipe tower. */
+  readonly wipeTowerReserveDepth: number;
   readonly belowProfileScaleAcknowledged: boolean;
   readonly featureViolations: readonly PrintFeatureViolation[];
   readonly plateCount: number;
@@ -1186,6 +1190,15 @@ function validateRequestOptions(options: PrintPlateExportOptions): void {
     );
   }
   if (
+    options.wipeTowerReserveDepth !== undefined &&
+    (!Number.isFinite(options.wipeTowerReserveDepth) ||
+      options.wipeTowerReserveDepth < 0)
+  ) {
+    throw new RangeError(
+      "Wipe tower reserve depth must be a non-negative finite number.",
+    );
+  }
+  if (
     options.fitPolicy !== "error" &&
     options.fitPolicy !== "scale" &&
     options.fitPolicy !== "tile"
@@ -1222,7 +1235,8 @@ export function preparePrintPlateBundle(
     completed: 0.05,
     message: "Validating model and printer profile",
   });
-  validateRequestOptions(request.options);
+  const options: PrintPlateExportOptions = { ...request.options };
+  validateRequestOptions(options);
   if (request.format !== "3mf" && request.format !== "stl") {
     throw new TypeError("Export format must be either '3mf' or 'stl'.");
   }
@@ -1239,7 +1253,7 @@ export function preparePrintPlateBundle(
   const channels = channelMap(assignments);
   const features = sourceFeatures(
     model,
-    request.options.scale,
+    options.scale,
   );
   const allExternal = selectExternalDependencies(model.dependencies);
   const hasExternal = allExternal.nodes.length > 0;
@@ -1249,11 +1263,14 @@ export function preparePrintPlateBundle(
   const externalApronDepth =
     EXTERNAL_DEPENDENCY_APRON_MARGIN * 2 +
     EXTERNAL_DEPENDENCY_BOX_SIZE.z;
-  const layout = planPrintLayout(profile, {
-    fitPolicy: request.options.fitPolicy,
-    requestedScale: request.options.scale,
+  const plannedLayout = planPrintLayout(profile, {
+    fitPolicy: options.fitPolicy,
+    requestedScale: options.scale,
     acknowledgeBelowProfileScale:
-      request.options.acknowledgeBelowProfileScale ?? false,
+      options.acknowledgeBelowProfileScale ?? false,
+    ...(options.wipeTowerReserveDepth === undefined
+      ? {}
+      : { reservedRearDepth: options.wipeTowerReserveDepth }),
     districts: model.districts.map((district) => {
       const districtGroups = new Set([
         "base",
@@ -1303,9 +1320,21 @@ export function preparePrintPlateBundle(
       : {}),
     districtGap: resolvePrinterGeometryLimits(profile).minimumGap,
     maximumPlateCount:
-      request.options.maximumPlateCount ?? DEFAULT_MAXIMUM_PLATE_COUNT,
+      options.maximumPlateCount ?? DEFAULT_MAXIMUM_PLATE_COUNT,
     baseChannelId: requiredChannel(channels, "base"),
   });
+  const wipeTowerWarning =
+    (options.wipeTowerReserveDepth ?? 0) > 0
+      ? `Reserved an empty ${options.wipeTowerReserveDepth} mm rear strip on every plate for the wipe tower. ` +
+        "PrusaSlicer centers imported geometry, so first move the complete city flush to the front edge, do not run Arrange afterward, then place the wipe tower in the revealed rear strip and verify the sliced G-code preview before printing."
+      : undefined;
+  const layout: PrintLayoutPlan =
+    wipeTowerWarning === undefined
+      ? plannedLayout
+      : {
+          ...plannedLayout,
+          warnings: [...plannedLayout.warnings, wipeTowerWarning],
+        };
   assertCompleteLayout(layout);
   progress(onProgress, {
     phase: "layout",
@@ -1379,8 +1408,8 @@ export function preparePrintPlateBundle(
             layout.belowProfileScaleAcknowledged,
           featureViolations: layout.featureViolations,
         },
-        labelPolicy: request.options.labelPolicy,
-        routePolicy: request.options.routePolicy,
+        labelPolicy: options.labelPolicy,
+        routePolicy: options.routePolicy,
         plateNumber: {
           id: plateNumber.id,
           label: plateNumber.label,
@@ -1454,7 +1483,7 @@ export function preparePrintPlateBundle(
   }
   const omissions = routeOmissions(
     model,
-    request.options.routePolicy,
+    options.routePolicy,
     districtByNode,
     plateByDistrict,
     routingReasons,
@@ -1492,12 +1521,12 @@ export function preparePrintPlateBundle(
   if (request.format === "stl") {
     warnings.push(STL_INFORMATION_LOSS_WARNING);
   }
-  const legendBytes = request.options.includeLegend
+  const legendBytes = options.includeLegend
     ? mergedLegend(
         preparedPlates,
         title,
         profile.id,
-        request.options.labelPolicy,
+        options.labelPolicy,
       )
     : undefined;
   const bundleRequest: PrintBundleRequest = {
@@ -1584,6 +1613,7 @@ export function preparePrintPlateBundle(
     requestedScale: layout.requestedScale,
     appliedScale: layout.appliedScale,
     minimumSafeScale: layout.minimumSafeScale,
+    wipeTowerReserveDepth: layout.reservedRearDepth,
     belowProfileScaleAcknowledged:
       layout.belowProfileScaleAcknowledged,
     featureViolations: layout.featureViolations,
@@ -1608,7 +1638,7 @@ export function preparePrintPlateBundle(
       }),
     ),
     labels: summedLabels(preparedPlates),
-    routes: summedRoutes(preparedPlates, request.options.routePolicy),
+    routes: summedRoutes(preparedPlates, options.routePolicy),
     warnings,
     unplacedObjects: unplaced,
     routeOmissions: omissions,
@@ -1618,7 +1648,7 @@ export function preparePrintPlateBundle(
     format: request.format,
     model,
     profile,
-    options: { ...request.options },
+    options,
     layout,
     plates: preparedPlates,
     bundleRequest,

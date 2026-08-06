@@ -147,6 +147,12 @@ export interface PrintLayoutRequest {
   readonly identity?: PrintLayoutIdentityInput;
   readonly rearReservation?: PrintLayoutRearReservationInput;
   /**
+   * Non-printable physical depth reserved at the rear (+Z) edge of the usable
+   * build surface. This remains outside the generated continuous plate base so
+   * a slicer can place auxiliary print structures there.
+   */
+  readonly reservedRearDepth?: number;
+  /**
    * Physical street width between independently placed objects. The planner
    * raises smaller values to the printer minimum and records a warning.
    */
@@ -246,6 +252,8 @@ export interface PrintLayoutPlan {
   readonly buildVolume: Vector3;
   readonly usableBuildBounds: PrintLayoutBounds;
   readonly usableBuildSpan: Vector3;
+  /** Resolved non-printable strip at the rear (+Z) build-surface edge. */
+  readonly reservedRearDepth: number;
   readonly districtGap: number;
   readonly plates: readonly PrintLayoutPlate[];
   readonly warnings: readonly string[];
@@ -334,6 +342,7 @@ interface LayoutContext {
   readonly usableSpan: Vector3;
   /** X/Z span available to identity, number, and districts before the apron. */
   readonly packingSpan: Vector3;
+  readonly reservedRearDepth: number;
   readonly baseChannelId: string;
   readonly gap: number;
   readonly plateIdDigits: number;
@@ -1086,7 +1095,7 @@ function rearPlateLayout(
     const z = maximumZ + context.gap;
     if (
       z + reservation.depth >
-      context.usableSpan.z + EPSILON
+      context.usableSpan.z - context.reservedRearDepth + EPSILON
     ) {
       return undefined;
     }
@@ -1530,14 +1539,20 @@ function initialContext(
     request.baseChannelId ?? profile.printChannels[0]!.id;
   orderedChannelIds(profile, [baseChannelId], "baseChannelId");
   const plateIdDigits = PLATE_ID_DIGITS;
+  const reservedRearDepth = request.reservedRearDepth ?? 0;
   const rearDepth = request.rearReservation?.depth ?? 0;
   const rearGap = request.rearReservation === undefined ? 0 : gap;
   const packingSpan = {
     x: usable.span.x,
     y: usable.span.y,
-    z: usable.span.z - rearDepth - rearGap,
+    z: usable.span.z - reservedRearDepth - rearDepth - rearGap,
   };
   if (packingSpan.z <= EPSILON) {
+    const requiredDepth = reservedRearDepth + rearDepth + rearGap;
+    const requiredDescription =
+      reservedRearDepth > 0
+        ? `Reserved rear depth ${formatDimension(reservedRearDepth)} mm${request.rearReservation === undefined ? "" : ` plus rear reservation '${request.rearReservation.id}' and its ${formatDimension(rearGap)} mm separation`}`
+        : `Rear reservation '${request.rearReservation?.id ?? "rear"}' plus its ${formatDimension(rearGap)} mm separation`;
     throw new PrintLayoutError([
       {
         code: "reservation-does-not-fit",
@@ -1547,11 +1562,11 @@ function initialContext(
         required: {
           x: usable.span.x,
           y: request.rearReservation?.height ?? 0,
-          z: rearDepth + rearGap,
+          z: requiredDepth,
         },
         available: { ...usable.span },
         message:
-          `Rear reservation '${request.rearReservation?.id ?? "rear"}' plus its ${formatDimension(rearGap)} mm separation requires ${formatDimension(rearDepth + rearGap)} mm depth, ` +
+          `${requiredDescription} requires ${formatDimension(requiredDepth)} mm depth, ` +
           `but the usable build depth is ${formatDimension(usable.span.z)} mm.`,
       },
     ]);
@@ -1562,6 +1577,7 @@ function initialContext(
     usableBounds: usable.bounds,
     usableSpan: usable.span,
     packingSpan,
+    reservedRearDepth,
     baseChannelId,
     gap,
     plateIdDigits,
@@ -1982,7 +1998,7 @@ function finalizePlate(
   }
   const usableArea = finiteArea(
     context.usableSpan.x,
-    context.usableSpan.z,
+    context.usableSpan.z - context.reservedRearDepth,
     "Usable build-surface area",
   );
   const utilization = finiteLayoutArithmetic(
@@ -2036,6 +2052,7 @@ function validateInputs(
   readonly fitPolicy: PrintFitPolicy;
   readonly requestedScale: number;
   readonly acknowledgeBelowProfileScale: boolean;
+  readonly reservedRearDepth: number;
   readonly districts: readonly PrintLayoutDistrictInput[];
   readonly identity?: PrintLayoutIdentityInput;
   readonly rearReservation?: PrintLayoutRearReservationInput;
@@ -2053,6 +2070,10 @@ function validateInputs(
   const requestedScale = finitePositive(
     request.requestedScale ?? 1,
     "requestedScale",
+  );
+  const reservedRearDepth = finiteNonNegative(
+    request.reservedRearDepth ?? 0,
+    "reservedRearDepth",
   );
   if (
     request.acknowledgeBelowProfileScale !== undefined &&
@@ -2277,6 +2298,7 @@ function validateInputs(
     requestedScale,
     acknowledgeBelowProfileScale:
       request.acknowledgeBelowProfileScale ?? false,
+    reservedRearDepth,
     districts,
     ...(identity === undefined ? {} : { identity }),
     ...(rearReservation === undefined ? {} : { rearReservation }),
@@ -2390,6 +2412,7 @@ export function planPrintLayout(
       ...(validated.rearReservation === undefined
         ? {}
         : { rearReservation: validated.rearReservation }),
+      reservedRearDepth: validated.reservedRearDepth,
     },
     validated.features,
     warnings,
@@ -2687,6 +2710,7 @@ export function planPrintLayout(
     buildVolume: { ...profile.buildVolume },
     usableBuildBounds: context.usableBounds,
     usableBuildSpan: context.usableSpan,
+    reservedRearDepth: context.reservedRearDepth,
     districtGap: context.gap,
     plates,
     warnings,

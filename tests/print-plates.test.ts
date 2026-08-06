@@ -262,6 +262,61 @@ function withinBuildVolume(
 }
 
 describe("physical print-plate orchestration", () => {
+  it("reserves and documents an empty rear strip for the PrusaSlicer wipe tower", () => {
+    const options = {
+      scale: 1,
+      fitPolicy: "error" as const,
+      wipeTowerReserveDepth: 30,
+      labelPolicy: "off" as const,
+      routePolicy: "off" as const,
+      includeLegend: false,
+    };
+    const prepared = preparePrintPlateBundle({
+      format: "3mf",
+      model: syntheticCity([{ width: 80, depth: 80 }]),
+      profile: createPrusaXLProfile([1, 2]),
+      options,
+    });
+    const warning =
+      "Reserved an empty 30 mm rear strip on every plate for the wipe tower. " +
+      "PrusaSlicer centers imported geometry, so first move the complete city flush to the front edge, do not run Arrange afterward, then place the wipe tower in the revealed rear strip and verify the sliced G-code preview before printing.";
+
+    expect(prepared.layout.reservedRearDepth).toBe(30);
+    expect(prepared.preflight.wipeTowerReserveDepth).toBe(30);
+    expect(prepared.layout.plates).toHaveLength(1);
+    expect(prepared.layout.plates[0]!.base.bounds.maximum.z).toBeLessThanOrEqual(
+      330 + 1e-9,
+    );
+    expect(prepared.layout.warnings).toContain(warning);
+    expect(prepared.preflight.warnings).toContain(warning);
+    expect(prepared.preview.warnings).toContain(warning);
+    expect(prepared.bundleRequest.warnings).toContain(warning);
+
+    options.wipeTowerReserveDepth = 45;
+    expect(prepared.options.wipeTowerReserveDepth).toBe(30);
+  });
+
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects invalid wipe-tower reserve depth %s before layout",
+    (wipeTowerReserveDepth) => {
+      expect(() =>
+        preparePrintPlateBundle({
+          format: "3mf",
+          model: DEMO_MODEL,
+          profile: createPrusaXLProfile([1, 2]),
+          options: {
+            scale: 1,
+            fitPolicy: "error",
+            wipeTowerReserveDepth,
+            labelPolicy: "off",
+            routePolicy: "off",
+            includeLegend: false,
+          },
+        }),
+      ).toThrow(/Wipe tower reserve depth must be a non-negative finite number/u);
+    },
+  );
+
   it("records one manifest-level warning for fixed-icon logo fallback", () => {
     const prepared = preparePrintPlateBundle({
       format: "3mf",

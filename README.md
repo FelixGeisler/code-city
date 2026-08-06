@@ -528,6 +528,14 @@ target on one plate, a profile-safe one-plate fit, then complete-district
 tiling. If real detail limits leave only a smaller complete one-plate fit, the
 viewer shows that exact proposal and requires **Confirm compact fit** before it
 serializes or offers a download. There is no ordinary Expert checkbox.
+For Prusa XL 3MF exports with at least two enabled tools, **Wipe tower strip**
+reserves an empty rear strip outside the continuous city base. Its 72 mm
+default covers the [official profile's 60 mm nominal tower width](https://github.com/prusa3d/PrusaSlicer/blob/master/resources/profiles/PrusaResearch.ini),
+standard brim, and placement clearance. PrusaSlicer centers imported geometry,
+so move the complete city flush to the front edge, do not run Arrange afterward,
+and place the tower in the revealed rear strip. Verify the sliced G-code
+preview; use 0 when the tower is disabled or increase the reservation when the
+preview is wider.
 **Prepare calibration** downloads a profile-only test plate and measurement
 manifest.
 

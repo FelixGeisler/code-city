@@ -154,6 +154,12 @@ function prepareConcretePrintExport(
         labelPolicy: request.options.labelPolicy,
         routePolicy: request.options.routePolicy,
         includeLegend: request.options.includeLegend,
+        ...(request.options.wipeTowerReserveDepth === undefined
+          ? {}
+          : {
+              wipeTowerReserveDepth:
+                request.options.wipeTowerReserveDepth,
+            }),
         ...(fitPolicy !== "tile" ||
         request.options.maximumPlateCount === undefined
           ? {}

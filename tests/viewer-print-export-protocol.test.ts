@@ -51,6 +51,7 @@ function samplePreflight(): PrintPlateBundlePreflight {
     requestedScale: 3,
     appliedScale: 3,
     minimumSafeScale: 3,
+    wipeTowerReserveDepth: 0,
     belowProfileScaleAcknowledged: false,
     featureViolations: [],
     plateCount: 1,
@@ -233,6 +234,34 @@ describe("viewer print export protocol", () => {
         format: "obj",
       }),
     ).toBe(false);
+    for (const wipeTowerReserveDepth of [0, 72, 359.999]) {
+      expect(
+        isPrintExportGenerateRequest({
+          ...request,
+          options: {
+            ...request.options,
+            wipeTowerReserveDepth,
+          },
+        }),
+      ).toBe(true);
+    }
+    for (const wipeTowerReserveDepth of [
+      -1,
+      360,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      "72",
+    ]) {
+      expect(
+        isPrintExportGenerateRequest({
+          ...request,
+          options: {
+            ...request.options,
+            wipeTowerReserveDepth,
+          },
+        }),
+      ).toBe(false);
+    }
     expect(
       isPrintExportGenerateRequest({
         ...request,
@@ -398,6 +427,32 @@ describe("viewer print export protocol", () => {
         message: "Impossible progress",
       }),
     ).toBe(false);
+    const {
+      wipeTowerReserveDepth: _omittedWipeTowerReserveDepth,
+      ...legacyPreflight
+    } = preflight;
+    expect(
+      isPrintExportWorkerResponse({
+        type: "preflight",
+        jobId: 1,
+        preflight: legacyPreflight,
+        preview,
+      }),
+    ).toBe(false);
+    for (const wipeTowerReserveDepth of [
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+    ]) {
+      expect(
+        isPrintExportWorkerResponse({
+          type: "preflight",
+          jobId: 1,
+          preflight: { ...preflight, wipeTowerReserveDepth },
+          preview,
+        }),
+      ).toBe(false);
+    }
     expect(
       isPrintExportWorkerResponse({
         type: "preflight",

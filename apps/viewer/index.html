@@ -2679,6 +2679,32 @@
               </div>
             </fieldset>
 
+            <div id="print-wipe-tower-wrap" hidden>
+              <label class="print-export-field" for="print-wipe-tower-strip">
+                <span>Wipe tower strip (mm)</span>
+                <input
+                  id="print-wipe-tower-strip"
+                  type="number"
+                  min="0"
+                  max="359.9"
+                  step="0.1"
+                  value="72"
+                  inputmode="decimal"
+                  aria-describedby="print-wipe-tower-help"
+                  required
+                />
+              </label>
+              <p id="print-wipe-tower-help" class="print-export-help">
+                Reserves city depth for an empty strip along the rear of the
+                plate. PrusaSlicer centers imported geometry, so move the
+                complete city flush to the front edge, do not run Arrange
+                afterward, and place the wipe tower in the revealed strip. The
+                72 mm default covers its nominal 60 mm width, standard brim, and
+                placement clearance. Use 0 if the tower is disabled; increase
+                it when the sliced preview is wider.
+              </p>
+            </div>
+
             <div id="print-custom-profile-wrap" hidden>
               <label class="print-export-field" for="print-custom-profile">
                 <span>Local profile file</span>
