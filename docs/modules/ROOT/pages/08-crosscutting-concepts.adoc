@@ -40,8 +40,14 @@ variable name, so the configuration JSON never contains a secret.
 ]}
 ----
 
-The viewer lists the configured providers and the user selects one before a
-preview is issued. Remote endpoints must use HTTPS; HTTP is allowed only for
+The viewer discovers providers once per authenticated browser session and
+hides the entire AI surface while discovery is loading, disabled, or
+unavailable. Successful enabled and disabled responses are kept only in
+memory; transient/authentication failures remain retryable, and authentication
+transitions invalidate the cache. A configured provider and exact retained-
+source context expose **Prepare AI preview**. No navigation, provider change,
+or focus reset issues a preview automatically. Remote endpoints must use HTTPS;
+HTTP is allowed only for
 literal `localhost` or an IPv4/IPv6 loopback endpoint. Remote DNS answers are
 validated and the selected safe address is pinned for the request; private,
 link-local, loopback, mapped-IPv6, and special addresses are rejected. Endpoint
@@ -51,19 +57,20 @@ At most 64 providers may be configured.
 Each call has a bounded timeout, source and streamed-response size limits,
 cancellation on browser disconnect, and a strict provider response contract.
 
-For a selected retained file, type, callable, dependency, or design-smell
+For a selected retained file, type, callable, or design-smell
 finding, the browser posts only a versioned descriptor containing stable IDs.
 It never supplies source, ranges, metrics, or evidence. The server validates the
 descriptor against the retained city model, re-evaluates smell findings, slices
 the recorded exact source range, and derives the transmitted metrics. Declaration
 columns count UTF-16 code units, and both endpoints are inclusive, including on
-the final line of a multi-line declaration. A valid dependency or finding
-without an analyzer-recorded exact range produces an
-explicit unavailable preview and no grant; Code City never substitutes guessed
-source.
-Dependency routes expose this check through **Preview AI guidance**; incoming
-routes first bind the context to their actual source building rather than the
-currently selected target building.
+the final line of a multi-line declaration. A valid finding
+without an analyzer-recorded exact range produces an explicit unavailable
+preview and no grant; Code City never substitutes guessed source. Hotspot AI is
+available only when persisted decision evidence links the unit to a stable
+callable that exists in the current source structure. Top-level, unlinked,
+legacy, and unavailable evidence never falls back to unit name, line, array
+index, or file context. Dependency navigation remains available, but there is
+no dependency AI button because dependency facts have no exact source range.
 
 The server issues a short-lived, opaque, session-bound grant bound to the
 provider, import, selected descriptor, exact source, metrics, context digest,
@@ -80,10 +87,10 @@ viewer reject stale, cross-provider, or otherwise mismatched output.
 Suggestions are labelled as optional and cite the selected source line range.
 Provider failures leave deterministic findings and source navigation available.
 
-Declaration-level source navigation prepares a preview for the selected type or
-callable descriptor. The approval shows and sends only that exact declaration
-range; changing the declaration or provider invalidates the displayed grant and
-requires a new preview.
+Declaration, hotspot, site, smell, and provider changes invalidate the displayed
+preview and grant. A new preview is created only after another explicit
+**Prepare AI preview** action. The generation binding includes the exact focus,
+including same-building hotspot and selected-site changes.
 
 Preview creation is an origin-protected `POST`, not a cacheable read. In
 trusted-network deployments the server creates a short-lived, `HttpOnly`,
@@ -95,7 +102,9 @@ Guidance operations are coordinated per retained import: deleting that same
 import aborts and waits for its active provider call, while reads, guidance, and
 deletion for other imports remain independent.
 
-Prompts and model output are not stored. Set `CODECITY_AI_GUIDANCE_AUDIT=stderr`
+Code City does not persist prompts or model output. A configured provider may
+retain submitted source or output according to that provider's own policy. Set
+`CODECITY_AI_GUIDANCE_AUDIT=stderr`
 to enable the built-in administrator audit sink; it emits only provider ID,
 selected building ID, byte count, duration, and completed/cancelled/failed
 outcome. Audit-sink failures never change a guidance result. Do not put

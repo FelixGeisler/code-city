@@ -439,13 +439,25 @@ with the declaration instead of being recomputed by the viewer.
 Versioned executable-unit decision evidence links back to that callable ID and
 retains only validated, bounded source sites; consumers never need to infer
 branches from retained text.
-The viewer requests a bounded data projection only after a file is selected;
-it creates no fine-detail meshes while the city starts. The declaration list is
-keyboard accessible, opens the retained exact source range, and **Return to
-city** closes the drill-down without replacing the selected building or camera.
-Selecting a declaration suspends the existing file-wide AI action and exposes
-only its stable ID and exact range; no source is sent until scoped server review
-support can bind approval to that declaration.
+The contextual **Code inspection** area calls this declaration projection the
+**Code outline** because it describes types and callables inside one file, not
+filesystem hierarchy. Selecting a building and expanding the outline perform
+no retained-source request. **Open retained source**, hotspot/unit source links,
+declaration links, and finding navigation are explicit source actions and share
+one stale-selection-guarded, per-building in-flight request. Selecting another
+building immediately scrubs the prior source, links, highlights, grants, and
+suggestions.
+
+Unit focus presents `CC = 1 base path + persisted decision contribution` from
+the versioned analyzer facts. Complete, truncated, explicitly unavailable, and
+legacy aggregate-only states remain distinct; truncated evidence reports both
+retained and omitted contribution. At most 20 sites render initially and 256
+after progressive reveal. Every retained site uses its exact inclusive UTF-16
+token range. Choosing a site retains the other markers while emphasizing and
+scrolling to that token; the viewer never derives complexity from how many
+sites remain after a bound. **Clear declaration focus** returns to file focus
+without closing source or outline, changing selection/camera, moving the
+workspace, or preparing AI guidance.
 Fine detail is explicitly `not-printable`; print exports retain file/district
 geometry only.
 

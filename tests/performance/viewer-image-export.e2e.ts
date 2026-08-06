@@ -238,8 +238,8 @@ test("initial WebGL failure leaves the rest of the viewer accessible", async ({
     returnButton.click();
   });
   await expect(fallback).toBeVisible();
-  await expect(page.locator("#status")).toHaveText(
-    "Returned to the selected building in the city.",
+  await expect(page.locator("#status")).toContainText(
+    "2 districts · 5 buildings",
   );
   expect(pageErrors).toEqual([]);
 });

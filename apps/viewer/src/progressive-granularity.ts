@@ -13,6 +13,8 @@ export interface FineDetailNode {
   readonly endLine: number;
   readonly endColumn?: number;
   readonly complexity?: number;
+  /** Original building.units index for exact local legacy navigation. */
+  readonly unitIndex?: number;
   readonly parentId?: string;
   readonly provenance: "persisted-source-structure" | "persisted-executable-unit";
   readonly explanation: string;
@@ -44,6 +46,7 @@ export function projectFineDetail(building: CityBuilding, requestedLimit = FINE_
     startLine: unit.line,
     endLine: unit.endLine ?? unit.line,
     complexity: unit.complexity,
+    unitIndex: index,
     provenance: "persisted-executable-unit" as const,
     explanation: `Executable-unit range persisted by ${building.metricMethod ?? "the analyzer"}; cyclomatic complexity ${unit.complexity}.`,
   })).sort(compareNodes);

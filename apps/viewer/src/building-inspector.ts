@@ -33,6 +33,7 @@ export interface ExecutableUnitPresentation {
 }
 
 export interface ComplexityHotspot extends ExecutableUnitMetric {
+  readonly unitIndex: number;
   readonly severity: DesignSmellSeverity;
   readonly threshold: number;
 }
@@ -128,10 +129,12 @@ export function presentBuildingComplexity(
   // persisted unit facts, the catalog threshold, and the shared severity
   // classifier. Do not run a second analyzer or infer missing unit facts.
   const allHotspots = building.units
-    .filter(({ complexity }) => complexity >= threshold)
-    .sort(compareComplexityFirst)
-    .map((unit) => ({
+    .map((unit, unitIndex) => ({ unit, unitIndex }))
+    .filter(({ unit }) => unit.complexity >= threshold)
+    .sort((left, right) => compareComplexityFirst(left.unit, right.unit))
+    .map(({ unit, unitIndex }) => ({
       ...unit,
+      unitIndex,
       threshold,
       severity: designSmellSeverity(unit.complexity, threshold),
     }));

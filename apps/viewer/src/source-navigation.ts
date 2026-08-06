@@ -1,5 +1,6 @@
 import type {
   SourceLanguage,
+  SourceRange,
   SourceRepositoryProvenance,
 } from "../../../packages/core/src/model.js";
 
@@ -470,6 +471,23 @@ export interface SourceLinePresentation {
   readonly syntaxHighlighted: boolean;
 }
 
+export interface SourceRangeMarker {
+  readonly id: string;
+  readonly range: SourceRange;
+  readonly selected?: boolean;
+}
+
+export interface HighlightedSourceToken extends SourceToken {
+  /** Marker identities whose inclusive UTF-16 ranges cover this text. */
+  readonly markerIds: readonly string[];
+  readonly selected: boolean;
+}
+
+export interface HighlightedSourceLinePresentation
+  extends Omit<SourceLinePresentation, "tokens"> {
+  readonly tokens: readonly HighlightedSourceToken[];
+}
+
 const SOURCE_KEYWORDS = new Set([
   "abstract",
   "async",
@@ -708,5 +726,105 @@ export function presentSourceLine(
     tokens: tokenized.tokens,
     omittedCharacters: 0,
     syntaxHighlighted: true,
+  });
+}
+
+/**
+ * Splits the already budgeted syntax presentation at exact persisted range
+ * boundaries. Source columns are one-based, inclusive UTF-16 code-unit
+ * offsets, matching the city-model contract and JavaScript string slicing.
+ * Multiple markers deliberately remain attached to the same slice.
+ */
+export function presentHighlightedSourceLine(
+  line: string,
+  lineNumber: number,
+  markers: readonly SourceRangeMarker[],
+  maximumCharacters: number,
+  maximumTokens: number,
+): HighlightedSourceLinePresentation {
+  if (!Number.isSafeInteger(lineNumber) || lineNumber < 1) {
+    throw new TypeError("Source line number is invalid.");
+  }
+  const lineMarkers = markers.filter(({ range }) =>
+    lineNumber >= range.startLine && lineNumber <= range.endLine,
+  );
+  // Every inclusive marker can add at most two split boundaries. Reserve that
+  // space before syntax tokenization so marker spans do not bypass the viewer's
+  // existing DOM-node budget.
+  const markerBoundaryBudget = Math.min(
+    Math.max(0, maximumTokens - 1),
+    lineMarkers.length * 2,
+  );
+  const presentation = presentSourceLine(
+    line,
+    maximumCharacters,
+    Math.max(1, maximumTokens - markerBoundaryBudget),
+  );
+  const applicable = lineMarkers.flatMap((marker) => {
+    const { range } = marker;
+    if (lineNumber < range.startLine || lineNumber > range.endLine) {
+      return [];
+    }
+    const start = lineNumber === range.startLine
+      ? range.startColumn - 1
+      : 0;
+    const end = lineNumber === range.endLine
+      ? range.endColumn
+      : presentation.text.length;
+    const boundedStart = Math.min(
+      presentation.text.length,
+      Math.max(0, start),
+    );
+    const boundedEnd = Math.min(
+      presentation.text.length,
+      Math.max(boundedStart, end),
+    );
+    return boundedEnd <= boundedStart
+      ? []
+      : [{ marker, start: boundedStart, end: boundedEnd }];
+  });
+  const highlighted: HighlightedSourceToken[] = [];
+  let tokenOffset = 0;
+  for (const token of presentation.tokens) {
+    const tokenStart = tokenOffset;
+    const tokenEnd = tokenStart + token.text.length;
+    const cuts = new Set([tokenStart, tokenEnd]);
+    for (const { start, end } of applicable) {
+      if (start > tokenStart && start < tokenEnd) cuts.add(start);
+      if (end > tokenStart && end < tokenEnd) cuts.add(end);
+    }
+    const ordered = [...cuts].sort((left, right) => left - right);
+    for (let index = 0; index + 1 < ordered.length; index += 1) {
+      const from = ordered[index]!;
+      const to = ordered[index + 1]!;
+      if (to <= from) continue;
+      const active = applicable.filter(
+        ({ start, end }) => from < end && to > start,
+      );
+      highlighted.push(Object.freeze({
+        kind: token.kind,
+        text: token.text.slice(from - tokenStart, to - tokenStart),
+        markerIds: Object.freeze(active.map(({ marker }) => marker.id)),
+        selected: active.some(({ marker }) => marker.selected === true),
+      }));
+    }
+    tokenOffset = tokenEnd;
+  }
+  if (highlighted.length > maximumTokens) {
+    return Object.freeze({
+      ...presentation,
+      tokens: Object.freeze(presentation.tokens.map((token) =>
+        Object.freeze({
+          ...token,
+          markerIds: Object.freeze([]),
+          selected: false,
+        }),
+      )),
+      syntaxHighlighted: false,
+    });
+  }
+  return Object.freeze({
+    ...presentation,
+    tokens: Object.freeze(highlighted),
   });
 }

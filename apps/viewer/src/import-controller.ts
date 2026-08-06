@@ -246,6 +246,8 @@ export interface ImportControllerOptions {
     source: ImportedCityModelSource,
   ) => void | Promise<void>;
   readonly onSignedOut?: () => void | Promise<void>;
+  readonly onAuthenticated?: () => void | Promise<void>;
+  readonly onAuthorizationLost?: () => void | Promise<void>;
   readonly onResultRemoved?: (jobId: string) => void | Promise<void>;
   readonly pollIntervalMs?: number;
   readonly now?: () => number;
@@ -322,6 +324,12 @@ export class ImportController {
     | ImportControllerOptions["onResultRemoved"]
     | undefined;
   private readonly onSignedOut: ImportControllerOptions["onSignedOut"];
+  private readonly onAuthenticated:
+    | ImportControllerOptions["onAuthenticated"]
+    | undefined;
+  private readonly onAuthorizationLost:
+    | ImportControllerOptions["onAuthorizationLost"]
+    | undefined;
   private readonly pollIntervalMs: number;
   private readonly now: () => number;
   private readonly schedulePoll: (
@@ -365,6 +373,8 @@ export class ImportController {
     this.onModelReady = options.onModelReady;
     this.onResultRemoved = options.onResultRemoved;
     this.onSignedOut = options.onSignedOut;
+    this.onAuthenticated = options.onAuthenticated;
+    this.onAuthorizationLost = options.onAuthorizationLost;
     this.pollIntervalMs =
       options.pollIntervalMs ?? IMPORT_JOB_POLL_INTERVAL_MS;
     if (
@@ -410,6 +420,13 @@ export class ImportController {
     void this.api.createSession(token, controller.signal).then(
       () => {
         if (!this.isCurrent(controller, generation)) return;
+        try {
+          void Promise.resolve(this.onAuthenticated?.()).catch(
+            () => undefined,
+          );
+        } catch {
+          // Refreshing optional viewer capabilities must not block sign-in.
+        }
         this.initialize();
       },
       (error: unknown) => {
@@ -1154,11 +1171,20 @@ export class ImportController {
     message?: string,
     resumeJobId = this.activeJob?.id ?? this.storage.read(),
   ): void {
+    const transitioned = this.currentState.status !== "authorization-required";
     this.updateState({
       status: "authorization-required",
       ...(resumeJobId === undefined ? {} : { resumeJobId }),
       ...(message === undefined ? {} : { message }),
     });
+    if (!transitioned) return;
+    try {
+      void Promise.resolve(this.onAuthorizationLost?.()).catch(
+        () => undefined,
+      );
+    } catch {
+      // Viewer cleanup must not prevent the authorization boundary.
+    }
   }
 
   private updateIdle(): void {

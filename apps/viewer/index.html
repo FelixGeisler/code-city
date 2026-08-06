@@ -1268,16 +1268,32 @@
               </button>
               </div>
               </details>
+              <section
+                id="building-code-inspection"
+                class="code-inspection"
+                aria-labelledby="building-code-inspection-title"
+              >
+                <div class="code-inspection-heading">
+                  <div>
+                    <h4 id="building-code-inspection-title">Code inspection</h4>
+                    <p>Inspect analyzer-recorded declarations, complexity evidence, and the retained read-only file.</p>
+                  </div>
+                  <button
+                    id="building-source-open"
+                    class="button button-compact"
+                    type="button"
+                  >Open retained source</button>
+                </div>
               <details
                 id="building-source-details"
                 class="source-section"
               >
                 <summary>
-                  <span>Source code</span>
+                  <span>Retained source</span>
                   <span
                     id="building-source-summary"
                     class="details-summary-meta"
-                  >Select to load</span>
+                  >Not loaded</span>
                 </summary>
                 <p
                   id="building-source-status"
@@ -1314,10 +1330,21 @@
                 </div>
               </details>
 
-              <details id="building-ai-guidance-details" class="source-section">
-                <summary><span>AI guidance (opt-in)</span><span id="building-ai-guidance-summary" class="details-summary-meta">Not requested</span></summary>
-                <p id="building-ai-guidance-status" class="source-status" role="status" aria-live="polite">Suggestions are optional and deterministic findings remain separate.</p>
+              <section id="building-decision-evidence" class="decision-evidence" hidden aria-labelledby="building-decision-evidence-title">
+                <div class="decision-evidence-heading">
+                  <h4 id="building-decision-evidence-title">Complexity decisions</h4>
+                  <strong id="building-decision-evidence-equation"></strong>
+                </div>
+                <p id="building-decision-evidence-status" class="source-status"></p>
+                <ol id="building-decision-sites" class="decision-site-list" aria-label="Persisted complexity decision sites"></ol>
+                <button id="building-decision-sites-show-more" class="button button-compact units-show-more" type="button" hidden>Show more decision sites</button>
+              </section>
+
+              <details id="building-ai-guidance-details" class="source-section" hidden>
+                <summary><span>AI guidance (opt-in)</span><span id="building-ai-guidance-summary" class="details-summary-meta"></span></summary>
+                <p id="building-ai-guidance-status" class="source-status" role="status" aria-live="polite"></p>
                 <label id="building-ai-guidance-provider-label" hidden>Provider <select id="building-ai-guidance-provider"></select></label>
+                <button id="building-ai-guidance-prepare" type="button" hidden>Prepare AI preview</button>
                 <pre id="building-ai-guidance-preview" class="source-code" hidden aria-label="Exact AI guidance transmission preview"></pre>
                 <button id="building-ai-guidance-request" type="button" hidden>Send this exact preview once</button>
                 <ul id="building-ai-guidance-suggestions" hidden aria-label="AI suggestions"></ul>
@@ -1391,14 +1418,16 @@
               </details>
               <details id="building-source-structure-details" class="units-section" hidden>
                 <summary>
-                  <span>File structure</span>
+                  <span>Code outline</span>
                   <span id="building-source-structure-summary" class="details-summary-meta"></span>
                 </summary>
+                <p class="dependency-status">Analyzer-recorded types and callables in this file; this is not a filesystem hierarchy.</p>
                 <p id="building-source-structure-status" class="dependency-status"></p>
                 <ol id="building-source-structure" class="external-consumers" aria-label="Nested file declarations"></ol>
                 <button id="building-source-structure-show-more" class="button button-compact units-show-more" type="button" aria-controls="building-source-structure" hidden>Show more declarations</button>
-                <button id="building-source-structure-return" class="button button-compact units-show-more" type="button" hidden>Return to city</button>
+                <button id="building-source-structure-return" class="button button-compact units-show-more" type="button" hidden>Clear declaration focus</button>
               </details>
+              </section>
           </div>
           <div
             id="district-inspector-content"

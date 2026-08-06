@@ -174,11 +174,23 @@ import {
   ViewerImportApiClient,
   type ViewerAiGuidanceContext,
 } from "./import-api.js";
+import { AiProviderDiscoveryController } from "./ai-provider-discovery.js";
+import {
+  codeInspectionAiContext,
+  codeInspectionFocusKey,
+  fileInspectionFocus,
+  INITIAL_DECISION_SITE_VISIBLE_LIMIT,
+  MAXIMUM_DECISION_SITE_VISIBLE_LIMIT,
+  presentDecisionEvidence,
+  resolveCodeInspectionFocus,
+  unitInspectionFocus,
+  type CodeInspectionFocus,
+} from "./code-inspection.js";
 import {
   extractSourceLineWindow,
   loadBuildingSource,
+  presentHighlightedSourceLine,
   sourceOmissionMarker,
-  presentSourceLine,
   SOURCE_RENDERED_CHARACTER_LIMIT,
   SOURCE_RENDERED_TOKEN_LIMIT,
   sourceOwnerAfterResultRemoval,
@@ -626,6 +638,7 @@ const districtRouteIsolateProvider = element<HTMLButtonElement>(
 );
 
 const inspectorFields = {
+  codeInspection: element<HTMLElement>("building-code-inspection"),
   name: element<HTMLHeadingElement>("building-name"),
   repository: element<HTMLElement>("building-repository"),
   module: element<HTMLElement>("building-module"),
@@ -661,6 +674,7 @@ const inspectorFields = {
     "building-units-filter-status",
   ),
   unitsShowMore: element<HTMLButtonElement>("building-units-show-more"),
+  sourceOpen: element<HTMLButtonElement>("building-source-open"),
   sourceStructureDetails: element<HTMLDetailsElement>("building-source-structure-details"),
   sourceStructureSummary: element<HTMLElement>("building-source-structure-summary"),
   sourceStructureStatus: element<HTMLParagraphElement>("building-source-structure-status"),
@@ -676,11 +690,17 @@ const inspectorFields = {
   sourceExternal: element<HTMLAnchorElement>("building-source-external"),
   sourceEditor: element<HTMLAnchorElement>("building-source-editor"),
   sourceCode: element<HTMLPreElement>("building-source-code"),
+  decisionEvidence: element<HTMLElement>("building-decision-evidence"),
+  decisionEvidenceEquation: element<HTMLElement>("building-decision-evidence-equation"),
+  decisionEvidenceStatus: element<HTMLParagraphElement>("building-decision-evidence-status"),
+  decisionSites: element<HTMLOListElement>("building-decision-sites"),
+  decisionSitesShowMore: element<HTMLButtonElement>("building-decision-sites-show-more"),
   aiDetails: element<HTMLDetailsElement>("building-ai-guidance-details"),
   aiSummary: element<HTMLElement>("building-ai-guidance-summary"),
   aiStatus: element<HTMLParagraphElement>("building-ai-guidance-status"),
   aiProviderLabel: element<HTMLLabelElement>("building-ai-guidance-provider-label"),
   aiProvider: element<HTMLSelectElement>("building-ai-guidance-provider"),
+  aiPrepare: element<HTMLButtonElement>("building-ai-guidance-prepare"),
   aiPreview: element<HTMLPreElement>("building-ai-guidance-preview"),
   aiRequest: element<HTMLButtonElement>("building-ai-guidance-request"),
   aiSuggestions: element<HTMLUListElement>("building-ai-guidance-suggestions"),
@@ -3329,14 +3349,15 @@ let activeModelSource: ModelSource = { label: "Built-in demo" };
 let safeExtensionBaseModel: CityModel = activeModel;
 let activeSafeExtensionEvaluation: ExtensionEvaluation | undefined;
 let suppressSafeExtensionRestore = false;
-let sourceRequest: AbortController | undefined;
-let aiGuidanceRequest: AbortController | undefined;
-let pendingAiGuidanceNavigation:
+let sourceRequest:
   | Readonly<{
       buildingId: string;
-      context: ViewerAiGuidanceContext;
+      controller: AbortController;
+      promise: Promise<BuildingSource>;
     }>
   | undefined;
+let aiGuidanceRequest: AbortController | undefined;
+let aiGuidanceGeneration = 0;
 let loadedBuildingSource:
   | { readonly buildingId: string; readonly source: BuildingSource }
   | undefined;
@@ -3372,6 +3393,8 @@ let activeEvolutionDependencyChanges:
   | undefined;
 let activeEvolutionTargetDependencyIds: ReadonlySet<string> = new Set();
 let activeEvolutionIndex = 0;
+let codeInspectionFrameAccessState: "terminal" | "historical" | "busy" =
+  "terminal";
 let evolutionPlaying = false;
 let evolutionLoading = false;
 let activeBuildingsById = new Map(
@@ -3414,6 +3437,9 @@ let expandedFineDetailTypeIds = new Set<string>();
 let selectedSourceDeclaration:
   | { readonly buildingId: string; readonly node: FineDetailNode }
   | undefined;
+let codeInspectionFocus: CodeInspectionFocus | undefined;
+let codeInspectionBuildingId: string | undefined;
+let decisionSiteVisibleLimit = INITIAL_DECISION_SITE_VISIBLE_LIMIT;
 let explorerState = resetExplorerState();
 let activeExternalLayout = createExternalDependencyLayout(DEMO_MODEL);
 let activeExternalNodes: readonly ExternalSceneNode[] =
@@ -3476,6 +3502,9 @@ const viewerLoadGateway = new ViewerLoadGateway();
 const sourceApi = new ViewerImportApiClient(
   new URL(window.location.href),
 );
+const aiProviderDiscovery = new AiProviderDiscoveryController(() =>
+  sourceApi.aiGuidanceProviders(),
+);
 const automaticModelLoadGate = new AutomaticModelLoadGate();
 const logoLoadGate = new AutomaticModelLoadGate();
 let loadedModelLogo: LoadedViewerImage | undefined;
@@ -3498,8 +3527,28 @@ const projectImportDialog = installProjectImportDialog({
     });
   },
   onSignedOut: () => {
+    aiProviderDiscovery.invalidate();
+    scrubBuildingSource();
     automaticModelLoadGate.invalidate();
     activateImportedModel(DEMO_MODEL, { label: "Built-in demo" });
+  },
+  onAuthorizationLost: () => {
+    aiProviderDiscovery.invalidate();
+    scrubBuildingSource();
+  },
+  onAuthenticated: () => {
+    aiProviderDiscovery.invalidate();
+    const building = selectedInspectionBuilding();
+    scrubBuildingSource();
+    if (building !== undefined) {
+      codeInspectionBuildingId = building.id;
+      setCodeInspectionFocus(building, fileInspectionFocus(building.id));
+      inspectorFields.sourceSummary.textContent =
+        sourceIsBoundToCurrentEvolutionFrame() ? "Not loaded" : "Historical frame";
+      inspectorFields.sourceStatus.textContent = sourceAvailabilityMessage();
+      synchronizeSourceOpenAvailability(building);
+      discoverAiGuidanceCapability(building);
+    }
   },
   onResultRemoved: (jobId) => {
     markActiveSourceResultRemoved(jobId);
@@ -3620,21 +3669,29 @@ const designSmellPanel = installDesignSmellPanel(
       selectBuildingFromExplorer(finding.buildingId);
       const building = activeBuildingsById.get(finding.buildingId);
       if (building !== undefined) {
-        revealBuildingSource(
-          building,
-          finding.evidence.line,
-          finding.evidence.endLine,
-          undefined,
-          undefined,
-          undefined,
-          {
-            version: "codecity.ai-context/1",
-            kind: "smell",
-            buildingId: finding.buildingId,
-            findingId: finding.id,
-            ruleId: finding.ruleId,
-          },
-        );
+        const focus = Object.freeze({
+          kind: "smell" as const,
+          buildingId: finding.buildingId,
+          findingId: finding.id,
+          ruleId: finding.ruleId,
+          ...(finding.evidence.line === undefined
+            ? {}
+            : {
+              range: Object.freeze({
+                startLine: finding.evidence.line,
+                endLine:
+                  finding.evidence.endLine ?? finding.evidence.line,
+              }),
+            }),
+        });
+        if (focus.range === undefined) {
+          setCodeInspectionFocus(building, focus);
+          if (loadedBuildingSource?.buildingId === building.id) {
+            renderSourceCode(building, loadedBuildingSource.source);
+          }
+        } else {
+          revealBuildingSource(building, focus);
+        }
       }
     },
     onOverlayChange: (findings) => {
@@ -4000,30 +4057,54 @@ inspectorFields.sourceStructureShowMore.addEventListener("click", () => {
   );
   renderSourceStructure(building);
 });
+inspectorFields.sourceOpen.addEventListener("click", () => {
+  const building = selectedInspectionBuilding();
+  if (!building) return;
+  revealBuildingSource(building, fileInspectionFocus(building.id));
+});
+inspectorFields.decisionSitesShowMore.addEventListener("click", () => {
+  const building = selectedInspectionBuilding();
+  if (!building) return;
+  decisionSiteVisibleLimit = nextBoundedResultLimit(
+    decisionSiteVisibleLimit,
+    MAXIMUM_DECISION_SITE_VISIBLE_LIMIT,
+    INITIAL_DECISION_SITE_VISIBLE_LIMIT,
+  );
+  renderDecisionEvidence(building);
+});
 inspectorFields.sourceStructureReturn.addEventListener("click", () => {
-  // The city scene, selected building and OrbitControls were never replaced;
-  // closing the drill-down therefore restores the exact prior camera/selection.
-  const selectedBuildingId = selectedExplorerBuildingId(explorerState);
-  const building = selectedBuildingId === null
-    ? undefined
-    : activeBuildingsById.get(selectedBuildingId);
-  sourceRequest?.abort();
-  sourceRequest = undefined;
-  inspectorFields.sourceStructureDetails.open = false;
+  const building = selectedInspectionBuilding();
+  if (building === undefined) return;
+  const sourceScrollTop = inspectorFields.sourceCode.scrollTop;
+  codeInspectionFocus = fileInspectionFocus(building.id);
   inspectorFields.sourceStructureReturn.hidden = true;
   fineDetailDrilledBuildingId = undefined;
   selectedSourceDeclaration = undefined;
-  inspectorFields.sourceDetails.open = false;
-  if (
-    building !== undefined &&
-    loadedBuildingSource?.buildingId === building.id
-  ) {
-    prepareAiGuidance(building);
-  } else {
-    resetAiGuidancePresentation();
+  inspectorFields.decisionEvidence.hidden = true;
+  inspectorFields.decisionSites.replaceChildren();
+  for (const current of inspectorFields.sourceStructure.querySelectorAll(
+    '[aria-current="location"]',
+  )) {
+    current.removeAttribute("aria-current");
   }
-  sceneHost.querySelector<HTMLCanvasElement>("canvas")?.focus();
-  setStatus("Returned to the selected building in the city.");
+  for (const current of inspectorFields.sourceCode.querySelectorAll(
+    ".source-line-highlight, .source-column-aware, .source-range-highlight, .source-decision-marker, .source-decision-marker-selected",
+  )) {
+    current.classList.remove(
+      "source-line-highlight",
+      "source-column-aware",
+      "source-range-highlight",
+      "source-decision-marker",
+      "source-decision-marker-selected",
+    );
+  }
+  inspectorFields.sourceCode.scrollTop = sourceScrollTop;
+  clearAiGuidanceResult();
+  renderAiGuidanceCapability(building);
+  const outlineSummary =
+    inspectorFields.sourceStructureDetails.querySelector<HTMLElement>("summary");
+  if (outlineSummary !== null) restoreDisclosureFocus(outlineSummary);
+  setStatus("Cleared declaration focus; the selected building and view are unchanged.");
 });
 buildingSearch.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && buildingSearch.value !== "") {
@@ -4468,6 +4549,7 @@ function resetEvolutionTimeline(recreateWorker = true): void {
   activeEvolutionDependencyChanges = undefined;
   activeEvolutionTargetDependencyIds = new Set();
   activeEvolutionIndex = 0;
+  codeInspectionFrameAccessState = "terminal";
   evolutionLoading = false;
   imageExportDialog.invalidate();
   evolutionTimeline.hidden = true;
@@ -4674,6 +4756,15 @@ function renderEvolutionTimeline(): void {
   const frame = activeEvolutionFrames[activeEvolutionIndex];
   const lastIndex = Math.max(0, activeEvolutionFrames.length - 1);
   const busy = evolutionLoading || evolutionSeekController.busy;
+  const frameAccessState = evolutionSeekController.busy
+    ? "busy"
+    : sourceIsBoundToCurrentEvolutionFrame()
+      ? "terminal"
+      : "historical";
+  if (frameAccessState !== codeInspectionFrameAccessState) {
+    codeInspectionFrameAccessState = frameAccessState;
+    refreshSelectedCodeInspectionFrameAccess();
+  }
   evolutionRange.value = String(
     evolutionSeekController.targetIndex ?? activeEvolutionIndex,
   );
@@ -4913,6 +5004,7 @@ function showUnavailableEvolutionBuilding(
     state.kind === "not-yet-created"
       ? `The selected lineage is not present at this commit. It is introduced by commit ${referenceContext}.`
       : `The selected lineage was removed by commit ${referenceContext}. Its last known facts remain visible.`;
+  inspectorFields.codeInspection.hidden = true;
   inspectorFields.unitsDetails.hidden = true;
   inspectorFields.unitsEmpty.hidden = true;
   inspectorFields.sourceDetails.hidden = true;
@@ -6287,57 +6379,10 @@ function dependencyListItem(
   );
   content.append(name, path, meta);
   row.append(direction, content);
-  const guidance = document.createElement("button");
-  guidance.type = "button";
-  guidance.className = "button button-compact dependency-guidance-button";
-  guidance.textContent = "Preview AI guidance";
-  guidance.disabled =
-    sourceBuilding === undefined ||
-    activeModelSource.jobId === undefined ||
-    activeModelSource.sourceAvailability !== "retained";
-  guidance.title = sourceBuilding === undefined || guidance.disabled
-    ? "AI dependency guidance requires retained source."
-    : `Preview the exact dependency context from ${sourceBuilding.path}; no source is sent without confirmation.`;
-  guidance.setAttribute(
-    "aria-label",
-    `Preview AI guidance for dependency ${route.dependencyId}`,
-  );
-  guidance.addEventListener("click", () => {
-    if (sourceBuilding === undefined) return;
-    const context: ViewerAiGuidanceContext = Object.freeze({
-      version: "codecity.ai-context/1",
-      kind: "dependency",
-      buildingId: sourceBuilding.id,
-      dependencyId: route.dependencyId,
-    });
-    viewerWorkspace.showDetails({
-      intent: "explicit",
-      focus: true,
-    });
-    if (selectedExplorerBuildingId(explorerState) === sourceBuilding.id) {
-      revealBuildingSource(
-        sourceBuilding,
-        sourceBuilding.sourceLocation?.startLine,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        context,
-        true,
-      );
-      return;
-    }
-    const navigation = Object.freeze({
-      buildingId: sourceBuilding.id,
-      context,
-    });
-    pendingAiGuidanceNavigation = navigation;
-    selectBuildingFromExplorer(sourceBuilding.id);
-    if (pendingAiGuidanceNavigation === navigation) {
-      pendingAiGuidanceNavigation = undefined;
-    }
-  });
-  item.append(row, guidance);
+  // Dependency navigation remains available on the route row. Analyzer data
+  // has no exact dependency source range, so the client deliberately exposes
+  // no AI action for this context.
+  item.append(row);
   return item;
 }
 
@@ -7024,7 +7069,34 @@ function renderViewerOverview(): void {
   }
 }
 
+function sourceIsBoundToCurrentEvolutionFrame(): boolean {
+  return !evolutionSeekController.busy &&
+    (activeEvolutionFrames.length === 0 ||
+      activeEvolutionIndex === activeEvolutionFrames.length - 1);
+}
+
+function retainedSourceActionAvailable(): boolean {
+  return activeModelSource.jobId !== undefined &&
+    activeModelSource.sourceAvailability === "retained" &&
+    sourceIsBoundToCurrentEvolutionFrame();
+}
+
 function sourceAvailabilityMessage(): string {
+  if (
+    activeModelSource.sourceAvailability === "retained" &&
+    evolutionSeekController.busy
+  ) {
+    return "Retained source and AI guidance are temporarily unavailable while Code City changes repository history frames.";
+  }
+  if (
+    activeModelSource.sourceAvailability === "retained" &&
+    !sourceIsBoundToCurrentEvolutionFrame()
+  ) {
+    return "Retained source and AI guidance are unavailable for historical frames because this import binds source only to the latest revision. Return to the final frame to inspect source.";
+  }
+  if (activeModelSource.sourceAvailability === "retained") {
+    return "Retained source is available. Select Open retained source above to load it, or use a source action.";
+  }
   if (activeModelSource.sourceAvailability === "disabled") {
     return "Source retention is disabled for this deployment; provenance and metrics remain available.";
   }
@@ -7044,22 +7116,69 @@ function sourceAvailabilityMessage(): string {
   return "Source is unavailable for models opened directly in the viewer.";
 }
 
+function synchronizeSourceOpenAvailability(
+  building?: CityBuilding,
+): void {
+  inspectorFields.sourceOpen.disabled = !retainedSourceActionAvailable();
+  inspectorFields.sourceOpen.title = inspectorFields.sourceOpen.disabled
+    ? sourceAvailabilityMessage()
+    : building === undefined
+      ? "Open the exact retained file for the selected building."
+      : `Open the exact retained file for ${building.path}.`;
+}
+
+function refreshSelectedCodeInspectionFrameAccess(): void {
+  const building = selectedInspectionBuilding();
+  if (building === undefined) return;
+  scrubBuildingSource(false);
+  codeInspectionBuildingId = building.id;
+  setCodeInspectionFocus(building, fileInspectionFocus(building.id));
+  inspectorFields.sourceSummary.textContent = evolutionSeekController.busy
+    ? "Changing frame"
+    : sourceIsBoundToCurrentEvolutionFrame()
+      ? "Not loaded"
+      : "Historical frame";
+  inspectorFields.sourceStatus.textContent = sourceAvailabilityMessage();
+  synchronizeSourceOpenAvailability(building);
+  const complexity = presentBuildingComplexity(building, {
+    visibleLimit: executableUnitVisibleLimit,
+    query: executableUnitQuery,
+    sort: executableUnitSort,
+  });
+  renderComplexityHotspots(building, complexity);
+  renderExecutableUnits(building, complexity);
+  renderSourceStructure(building);
+  if (sourceIsBoundToCurrentEvolutionFrame()) {
+    discoverAiGuidanceCapability(building);
+  }
+}
+
 function scrubBuildingSource(closeDetails = true): void {
-  pendingAiGuidanceNavigation = undefined;
-  sourceRequest?.abort();
+  sourceRequest?.controller.abort();
   sourceRequest = undefined;
   loadedBuildingSource = undefined;
   if (closeDetails) inspectorFields.sourceDetails.open = false;
   inspectorFields.sourceSummary.textContent =
-    activeModelSource.sourceAvailability === "retained"
+    activeModelSource.sourceAvailability === "retained" &&
+      !sourceIsBoundToCurrentEvolutionFrame()
+      ? "Historical frame"
+      : activeModelSource.sourceAvailability === "retained"
       ? "Select a building"
       : "Unavailable";
   inspectorFields.sourceStatus.textContent =
     sourceAvailabilityMessage();
+  synchronizeSourceOpenAvailability(selectedInspectionBuilding());
   inspectorFields.sourceCode.replaceChildren();
   resetAiGuidancePresentation();
+  codeInspectionFocus = undefined;
   selectedSourceDeclaration = undefined;
   fineDetailDrilledBuildingId = undefined;
+  decisionSiteVisibleLimit = INITIAL_DECISION_SITE_VISIBLE_LIMIT;
+  inspectorFields.decisionEvidence.hidden = true;
+  inspectorFields.decisionEvidenceEquation.textContent = "";
+  inspectorFields.decisionEvidenceStatus.textContent = "";
+  inspectorFields.decisionSites.replaceChildren();
+  inspectorFields.decisionSitesShowMore.hidden = true;
   inspectorFields.sourceStructureReturn.hidden = true;
   inspectorFields.sourcePath.textContent = "";
   inspectorFields.sourceRevision.textContent = "";
@@ -7071,13 +7190,18 @@ function scrubBuildingSource(closeDetails = true): void {
 }
 
 function resetAiGuidancePresentation(): void {
+  aiGuidanceGeneration += 1;
   aiGuidanceRequest?.abort();
   aiGuidanceRequest = undefined;
   inspectorFields.aiDetails.open = false;
-  inspectorFields.aiSummary.textContent = "Not requested";
-  inspectorFields.aiStatus.textContent = "Suggestions are optional and deterministic findings remain separate.";
+  inspectorFields.aiDetails.hidden = true;
+  inspectorFields.aiSummary.textContent = "";
+  inspectorFields.aiStatus.textContent = "";
   inspectorFields.aiPreview.hidden = true;
   inspectorFields.aiPreview.textContent = "";
+  inspectorFields.aiPrepare.hidden = true;
+  inspectorFields.aiPrepare.disabled = false;
+  inspectorFields.aiPrepare.onclick = null;
   inspectorFields.aiRequest.hidden = true;
   inspectorFields.aiRequest.disabled = false;
   inspectorFields.aiRequest.onclick = null;
@@ -7087,6 +7211,107 @@ function resetAiGuidancePresentation(): void {
   inspectorFields.aiProvider.replaceChildren();
   inspectorFields.aiSuggestions.hidden = true;
   inspectorFields.aiSuggestions.replaceChildren();
+}
+
+function clearAiGuidanceResult(): void {
+  aiGuidanceGeneration += 1;
+  aiGuidanceRequest?.abort();
+  aiGuidanceRequest = undefined;
+  inspectorFields.aiPreview.hidden = true;
+  inspectorFields.aiPreview.textContent = "";
+  inspectorFields.aiRequest.hidden = true;
+  inspectorFields.aiRequest.disabled = false;
+  inspectorFields.aiRequest.onclick = null;
+  inspectorFields.aiProvider.disabled = false;
+  inspectorFields.aiPrepare.disabled = false;
+  inspectorFields.aiSuggestions.hidden = true;
+  inspectorFields.aiSuggestions.replaceChildren();
+}
+
+function selectedInspectionBuilding(): CityBuilding | undefined {
+  const selectedId = selectedExplorerBuildingId(explorerState);
+  return selectedId === null
+    ? undefined
+    : activeBuildingsById.get(selectedId);
+}
+
+function renderAiGuidanceCapability(building: CityBuilding): void {
+  const capability = aiProviderDiscovery.capability;
+  const wasOpen = inspectorFields.aiDetails.open;
+  const selectedProvider = inspectorFields.aiProvider.value;
+  clearAiGuidanceResult();
+  if (
+    capability.state !== "configured" ||
+    selectedInspectionBuilding()?.id !== building.id
+  ) {
+    inspectorFields.aiDetails.hidden = true;
+    inspectorFields.aiDetails.open = false;
+    inspectorFields.aiProviderLabel.hidden = true;
+    inspectorFields.aiPrepare.hidden = true;
+    return;
+  }
+
+  if (!sourceIsBoundToCurrentEvolutionFrame()) {
+    inspectorFields.aiDetails.hidden = true;
+    inspectorFields.aiDetails.open = false;
+    inspectorFields.aiSummary.textContent = "";
+    inspectorFields.aiStatus.textContent = "";
+    inspectorFields.aiProviderLabel.hidden = true;
+    inspectorFields.aiProvider.replaceChildren();
+    inspectorFields.aiPrepare.hidden = true;
+    inspectorFields.aiPrepare.onclick = null;
+    return;
+  }
+
+  inspectorFields.aiDetails.hidden = false;
+  inspectorFields.aiDetails.open = wasOpen;
+  inspectorFields.aiSummary.textContent = "Available";
+  inspectorFields.aiProvider.replaceChildren();
+  for (const provider of capability.providers) {
+    const option = document.createElement("option");
+    option.value = provider.id;
+    option.textContent = provider.label;
+    inspectorFields.aiProvider.append(option);
+  }
+  if (capability.providers.some(({ id }) => id === selectedProvider)) {
+    inspectorFields.aiProvider.value = selectedProvider;
+  }
+  inspectorFields.aiProviderLabel.hidden = false;
+  const focus = codeInspectionFocus;
+  const context = focus === undefined
+    ? undefined
+    : codeInspectionAiContext(building, focus);
+  const eligible =
+    retainedSourceActionAvailable() &&
+    context !== undefined;
+  inspectorFields.aiPrepare.hidden = !eligible;
+  inspectorFields.aiStatus.textContent = eligible
+    ? "Prepare an exact server-verified preview explicitly. No source is sent to the provider until you confirm the one-time send. Code City does not persist prompts; provider retention depends on your configured provider."
+    : "AI guidance is available, but this focus has no exact server-resolvable retained-source context. Deterministic findings remain available.";
+  inspectorFields.aiProvider.onchange = () => {
+    clearAiGuidanceResult();
+    inspectorFields.aiSummary.textContent = "Available";
+    inspectorFields.aiPrepare.hidden = !eligible;
+    inspectorFields.aiStatus.textContent = eligible
+      ? "Provider changed. Prepare a new exact preview explicitly before sending."
+      : "This focus has no exact server-resolvable retained-source context.";
+  };
+  inspectorFields.aiPrepare.onclick = eligible && context !== undefined
+    ? () => prepareAiGuidancePreview(building, context)
+    : null;
+}
+
+function discoverAiGuidanceCapability(building: CityBuilding): void {
+  if (!sourceIsBoundToCurrentEvolutionFrame()) {
+    renderAiGuidanceCapability(building);
+    return;
+  }
+  inspectorFields.aiDetails.hidden = true;
+  void aiProviderDiscovery.discover().then(() => {
+    if (selectedInspectionBuilding()?.id === building.id) {
+      renderAiGuidanceCapability(building);
+    }
+  });
 }
 
 function markActiveSourceResultRemoved(jobId: string): void {
@@ -7100,16 +7325,20 @@ function markActiveSourceResultRemoved(jobId: string): void {
 }
 
 function renderSourceCode(
+  building: CityBuilding,
   source: BuildingSource,
-  startLine?: number,
-  endLine = startLine,
-  startColumn?: number,
-  endColumn?: number,
 ): void {
+  const focus = codeInspectionFocus ?? fileInspectionFocus(building.id);
+  const resolved = resolveCodeInspectionFocus(building, focus);
+  if (resolved === undefined) {
+    inspectorFields.sourceCode.replaceChildren();
+    inspectorFields.sourceSummary.textContent = "No exact range";
+    inspectorFields.sourceStatus.textContent =
+      "The selected code focus has no current persisted source range. Choose Open retained source above to inspect the file.";
+    return;
+  }
   inspectorFields.sourceCode.replaceChildren();
   const {
-    requestedStart,
-    requestedEnd,
     firstLine,
     lastLine,
     omittedBefore,
@@ -7117,8 +7346,12 @@ function renderSourceCode(
     lines,
   } = extractSourceLineWindow(
     source.text,
-    startLine ?? source.location.startLine,
-    endLine ?? startLine ?? source.location.startLine,
+    focus.kind === "unit" && focus.selectedSiteIndex !== undefined
+      ? (resolved.exactRange?.startLine ?? resolved.contextualRange.startLine)
+      : resolved.contextualRange.startLine,
+    focus.kind === "unit" && focus.selectedSiteIndex !== undefined
+      ? (resolved.exactRange?.endLine ?? resolved.contextualRange.endLine)
+      : resolved.contextualRange.endLine,
   );
   const appendOmitted = (text: string): void => {
     const indicator = document.createElement("span");
@@ -7143,44 +7376,42 @@ function renderSourceCode(
     line.className = "source-line";
     line.dataset["line"] = String(lineNumber);
     if (
-      startLine !== undefined &&
-      lineNumber >= startLine &&
-      lineNumber <= (endLine ?? startLine)
+      lineNumber >= resolved.contextualRange.startLine &&
+      lineNumber <= resolved.contextualRange.endLine
     ) {
       line.classList.add("source-line-highlight");
-      if (startColumn !== undefined && endColumn !== undefined) {
+      if (resolved.exactRange !== undefined) {
         line.classList.add("source-column-aware");
       }
     }
-    const presentation = presentSourceLine(
+    const markers = [
+      ...resolved.decisionMarkers,
+      ...(resolved.exactRange === undefined ||
+      resolved.decisionMarkers.some(({ selected }) => selected)
+        ? []
+        : [{ id: "focus", range: resolved.exactRange, selected: true }]),
+    ];
+    const presentation = presentHighlightedSourceLine(
       text,
+      lineNumber,
+      markers,
       remainingCharacters,
       remainingTokens,
     );
-    let tokenOffset = 0;
-    const highlightStart = startLine === undefined || startColumn === undefined
-      ? -1
-      : lineNumber === startLine ? startColumn - 1 : lineNumber > startLine && lineNumber <= (endLine ?? startLine) ? 0 : -1;
-    const highlightEnd = highlightStart < 0 || endColumn === undefined
-      ? -1
-      : lineNumber === (endLine ?? startLine) ? endColumn : text.length;
     for (const token of presentation.tokens) {
-      const tokenStart = tokenOffset;
-      const tokenEnd = tokenStart + token.text.length;
-      const cuts = [...new Set([tokenStart, tokenEnd, Math.max(tokenStart, highlightStart), Math.min(tokenEnd, highlightEnd)])]
-        .filter((offset) => offset >= tokenStart && offset <= tokenEnd)
-        .sort((left, right) => left - right);
-      for (let index = 0; index + 1 < cuts.length; index += 1) {
-        const from = cuts[index]!;
-        const to = cuts[index + 1]!;
-        if (to <= from) continue;
-        const span = document.createElement("span");
-        if (token.kind !== "text") span.classList.add(`source-token-${token.kind}`);
-        if (highlightStart >= 0 && from < highlightEnd && to > highlightStart) span.classList.add("source-range-highlight");
-        span.textContent = token.text.slice(from - tokenStart, to - tokenStart);
-        line.append(span);
+      const span = document.createElement("span");
+      if (token.kind !== "text") {
+        span.classList.add(`source-token-${token.kind}`);
       }
-      tokenOffset = tokenEnd;
+      if (token.markerIds.length > 0) {
+        span.classList.add("source-decision-marker");
+      }
+      if (token.selected) {
+        span.classList.add("source-range-highlight");
+        span.classList.add("source-decision-marker-selected");
+      }
+      span.textContent = token.text;
+      line.append(span);
     }
     remainingCharacters -= presentation.text.length;
     remainingTokens -= presentation.tokens.length;
@@ -7204,31 +7435,39 @@ function renderSourceCode(
     appendOmitted(sourceOmissionMarker(omittedAfter, "later"));
   }
   inspectorFields.sourceCode
-    .querySelector<HTMLElement>(`[data-line="${requestedStart}"]`)
+    .querySelector<HTMLElement>(`[data-line="${resolved.scrollLine}"]`)
     ?.scrollIntoView({ block: "center" });
 }
 
-function prepareAiGuidance(
+function prepareAiGuidancePreview(
   building: CityBuilding,
-  declaration?: FineDetailNode,
-  requestedContext?: ViewerAiGuidanceContext,
-  openDetails = false,
+  context: ViewerAiGuidanceContext,
 ): void {
-  resetAiGuidancePresentation();
-  inspectorFields.aiDetails.open = openDetails;
-  const context: ViewerAiGuidanceContext = requestedContext ?? (
-    declaration === undefined
-      ? { version: "codecity.ai-context/1", kind: "file", buildingId: building.id }
-      : { version: "codecity.ai-context/1", kind: declaration.category === "type" ? "type" : "callable", buildingId: building.id, stableId: declaration.id }
-  );
   const jobId = activeModelSource.jobId;
-  if (jobId === undefined) return;
+  const focus = codeInspectionFocus;
+  if (
+    jobId === undefined ||
+    !retainedSourceActionAvailable() ||
+    focus === undefined ||
+    codeInspectionAiContext(building, focus) === undefined
+  ) return;
+  clearAiGuidanceResult();
   const controller = new AbortController();
   aiGuidanceRequest = controller;
+  inspectorFields.aiPrepare.disabled = true;
+  const focusGeneration = ++aiGuidanceGeneration;
+  const focusKey = codeInspectionFocusKey(focus);
+  const stillCurrent = (): boolean =>
+    !controller.signal.aborted &&
+    aiGuidanceRequest === controller &&
+    aiGuidanceGeneration === focusGeneration &&
+    codeInspectionFocus !== undefined &&
+    codeInspectionFocusKey(codeInspectionFocus) === focusKey;
   let previewRequest: AbortController | undefined;
   let previewGeneration = 0;
   controller.signal.addEventListener("abort", () => previewRequest?.abort(), { once: true });
   inspectorFields.aiSummary.textContent = "Preparing preview";
+  inspectorFields.aiDetails.open = true;
   inspectorFields.aiStatus.textContent = "No source has been sent to an AI provider.";
   const loadPreview = (providerId: string): void => {
     previewRequest?.abort();
@@ -7242,11 +7481,10 @@ function prepareAiGuidance(
     inspectorFields.aiStatus.textContent = "Preparing exact server-verified preview…";
     void sourceApi.aiGuidancePreview(jobId, context, providerId, previewController.signal)
       .then((value) => {
-        if (controller.signal.aborted || previewController.signal.aborted || aiGuidanceRequest !== controller || generation !== previewGeneration || inspectorFields.aiProvider.value !== providerId) return;
+        if (!stillCurrent() || previewController.signal.aborted || generation !== previewGeneration || inspectorFields.aiProvider.value !== providerId) return;
         const preview = value.preview;
         if (!preview.enabled) {
-          inspectorFields.aiSummary.textContent = "Disabled";
-          inspectorFields.aiStatus.textContent = "AI guidance is disabled by the administrator. No source was sent.";
+          resetAiGuidancePresentation();
           return;
         }
         if (preview.provider.id !== providerId) throw new Error("AI guidance preview was invalid.");
@@ -7260,13 +7498,14 @@ function prepareAiGuidance(
         const grant = preview.grant;
         if (preview.transmission.providerId !== providerId) throw new Error("AI guidance transmission did not match its provider.");
         inspectorFields.aiSummary.textContent = "Preview ready";
+        inspectorFields.aiPrepare.disabled = false;
         inspectorFields.aiStatus.textContent = `This exact server-verified source and findings will be sent once to ${preview.provider.label} after you confirm.`;
         inspectorFields.aiPreview.textContent = JSON.stringify(preview.transmission, null, 2);
         inspectorFields.aiPreview.hidden = false;
         inspectorFields.aiRequest.hidden = false;
         inspectorFields.aiRequest.disabled = false;
         inspectorFields.aiRequest.onclick = () => {
-          if (aiGuidanceRequest !== controller || controller.signal.aborted || generation !== previewGeneration || inspectorFields.aiProvider.value !== providerId) return;
+          if (!stillCurrent() || generation !== previewGeneration || inspectorFields.aiProvider.value !== providerId) return;
           inspectorFields.aiRequest.onclick = null;
           inspectorFields.aiRequest.disabled = true;
           inspectorFields.aiProvider.disabled = true;
@@ -7278,7 +7517,7 @@ function prepareAiGuidance(
             controller.signal,
           )
           .then((result) => {
-            if (controller.signal.aborted || aiGuidanceRequest !== controller || generation !== previewGeneration) return;
+            if (!stillCurrent() || generation !== previewGeneration) return;
             if (
               result.result.provider.id !== providerId ||
               result.result.contextDigest !== expectedTransmission.contextDigest ||
@@ -7296,101 +7535,54 @@ function prepareAiGuidance(
               inspectorFields.aiSuggestions.append(item);
             }
             inspectorFields.aiSuggestions.hidden = false;
+            inspectorFields.aiRequest.hidden = true;
             inspectorFields.aiSummary.textContent = "Suggestions";
             inspectorFields.aiStatus.textContent = "Suggestions are optional; deterministic findings above are unchanged.";
           })
           .catch(() => {
-            if (!controller.signal.aborted && aiGuidanceRequest === controller) {
+            if (stillCurrent()) {
+              clearAiGuidanceResult();
+              inspectorFields.aiDetails.hidden = false;
+              inspectorFields.aiDetails.open = true;
+              inspectorFields.aiPrepare.hidden = false;
+              inspectorFields.aiPrepare.disabled = false;
+              inspectorFields.aiSummary.textContent = "Preview required";
               inspectorFields.aiStatus.textContent = "AI suggestions are unavailable; deterministic analysis and source navigation remain available.";
-              inspectorFields.aiProvider.disabled = false;
-              inspectorFields.aiRequest.hidden = true;
-              inspectorFields.aiRequest.onclick = null;
-              loadPreview(inspectorFields.aiProvider.value);
             }
           });
         };
       })
       .catch(() => {
-        if (!controller.signal.aborted && !previewController.signal.aborted && aiGuidanceRequest === controller && generation === previewGeneration) {
-          inspectorFields.aiSummary.textContent = "Unavailable";
-          inspectorFields.aiStatus.textContent = "AI guidance preview is unavailable; deterministic analysis remains available.";
+        if (stillCurrent() && !previewController.signal.aborted && generation === previewGeneration) {
+          clearAiGuidanceResult();
+          inspectorFields.aiDetails.hidden = false;
+          inspectorFields.aiDetails.open = true;
+          inspectorFields.aiPrepare.hidden = false;
+          inspectorFields.aiPrepare.disabled = false;
+          inspectorFields.aiSummary.textContent = "Preview required";
+          inspectorFields.aiStatus.textContent = "AI guidance preview is unavailable; retry requires another explicit preview.";
         }
       });
   };
-  void sourceApi.aiGuidanceProviders(controller.signal)
-    .then((value) => {
-      if (controller.signal.aborted || aiGuidanceRequest !== controller) return;
-      const providers = (value as { enabled?: unknown; providers?: readonly { id?: unknown; label?: unknown }[] }).providers;
-      if ((value as { enabled?: unknown }).enabled !== true || providers === undefined || providers.length === 0 || providers.some((provider) => typeof provider.id !== "string" || typeof provider.label !== "string")) {
-        inspectorFields.aiSummary.textContent = "Disabled";
-        inspectorFields.aiStatus.textContent = "AI guidance is disabled by the administrator. No source was sent.";
-        return;
-      }
-      inspectorFields.aiProvider.replaceChildren();
-      for (const provider of providers) {
-        const option = document.createElement("option");
-        option.value = provider.id as string;
-        option.textContent = provider.label as string;
-        inspectorFields.aiProvider.append(option);
-      }
-      inspectorFields.aiProviderLabel.hidden = false;
-      inspectorFields.aiProvider.disabled = false;
-      inspectorFields.aiProvider.onchange = () => loadPreview(inspectorFields.aiProvider.value);
-      loadPreview(inspectorFields.aiProvider.value);
-    })
-    .catch(() => {
-      if (!controller.signal.aborted && aiGuidanceRequest === controller) {
-        inspectorFields.aiSummary.textContent = "Unavailable";
-        inspectorFields.aiStatus.textContent = "AI guidance preview is unavailable; deterministic analysis remains available.";
-      }
-    });
+  loadPreview(inspectorFields.aiProvider.value);
 }
 
 function revealBuildingSource(
   building: CityBuilding,
-  startLine?: number,
-  endLine?: number,
-  startColumn?: number,
-  endColumn?: number,
-  declaration?: FineDetailNode,
-  guidanceContext?: ViewerAiGuidanceContext,
-  openAiGuidance = false,
+  focus: CodeInspectionFocus,
 ): void {
-  const declarationSelection =
-    declaration === undefined
-      ? undefined
-      : { buildingId: building.id, node: declaration };
-  if (
-    loadedBuildingSource?.buildingId === building.id
-  ) {
-    selectedSourceDeclaration = declarationSelection;
-    fineDetailDrilledBuildingId = declaration === undefined
-      ? undefined
-      : building.id;
-    inspectorFields.sourceStructureReturn.hidden = declaration === undefined;
-    inspectorFields.sourceDetails.open = true;
-    renderSourceCode(
-      loadedBuildingSource.source,
-      startLine,
-      endLine,
-      startColumn,
-      endColumn,
-    );
-    prepareAiGuidance(
-      building,
-      declaration,
-      guidanceContext,
-      openAiGuidance,
-    );
+  setCodeInspectionFocus(building, focus);
+  inspectorFields.sourceDetails.open = true;
+  if (!sourceIsBoundToCurrentEvolutionFrame()) {
+    inspectorFields.sourceSummary.textContent = "Historical frame";
+    inspectorFields.sourceStatus.textContent = sourceAvailabilityMessage();
+    inspectorFields.sourceContent.hidden = true;
     return;
   }
-  scrubBuildingSource(false);
-  selectedSourceDeclaration = declarationSelection;
-  fineDetailDrilledBuildingId = declaration === undefined
-    ? undefined
-    : building.id;
-  inspectorFields.sourceStructureReturn.hidden = declaration === undefined;
-  inspectorFields.sourceDetails.open = true;
+  if (loadedBuildingSource?.buildingId === building.id) {
+    presentLoadedBuildingSource(building, loadedBuildingSource.source);
+    return;
+  }
   const jobId = activeModelSource.jobId;
   if (
     jobId === undefined ||
@@ -7401,14 +7593,19 @@ function revealBuildingSource(
       sourceAvailabilityMessage();
     return;
   }
+  if (sourceRequest?.buildingId === building.id) return;
+  sourceRequest?.controller.abort();
+  sourceRequest = undefined;
+  loadedBuildingSource = undefined;
+  codeInspectionBuildingId = undefined;
+  inspectorFields.sourceCode.replaceChildren();
+  inspectorFields.sourceContent.hidden = true;
   const controller = new AbortController();
-  sourceRequest = controller;
   inspectorFields.sourceSummary.textContent = "Loading";
   const provenance = activeModel.sourceProvenance?.repositories.find(
     ({ repositoryId }) => repositoryId === building.repositoryId,
   );
   if (provenance === undefined) {
-    sourceRequest = undefined;
     inspectorFields.sourceSummary.textContent = "Unavailable";
     inspectorFields.sourceStatus.textContent =
       "This building has no validated source provenance.";
@@ -7416,7 +7613,7 @@ function revealBuildingSource(
   }
   inspectorFields.sourceStatus.textContent =
     `Loading ${building.path}…`;
-  void loadBuildingSource(
+  const promise = loadBuildingSource(
     jobId,
     {
       buildingId: building.id,
@@ -7433,54 +7630,172 @@ function revealBuildingSource(
         requestedJobId,
         requestedBuildingId,
         signal,
-      ),
+    ),
     controller.signal,
-  )
+  );
+  const request = Object.freeze({
+    buildingId: building.id,
+    controller,
+    promise,
+  });
+  sourceRequest = request;
+  void promise
     .then((source) => {
-      if (controller.signal.aborted || sourceRequest !== controller) {
+      if (
+        controller.signal.aborted ||
+        sourceRequest !== request ||
+        selectedInspectionBuilding()?.id !== building.id
+      ) {
         return;
       }
       sourceRequest = undefined;
       loadedBuildingSource = { buildingId: building.id, source };
-      inspectorFields.sourceSummary.textContent = "Read only";
-      inspectorFields.sourceStatus.textContent =
-        `Showing the exact retained file for ${source.path}.`;
-      inspectorFields.sourcePath.textContent = source.path;
-      inspectorFields.sourceRevision.textContent =
-        `${source.provenance.provider} · ${source.provenance.revision.value}`;
-      inspectorFields.sourceExternal.hidden =
-        source.externalUrl === undefined;
-      if (source.externalUrl !== undefined) {
-        inspectorFields.sourceExternal.href = source.externalUrl;
-      }
-      inspectorFields.sourceEditor.hidden =
-        source.editorUrl === undefined;
-      if (source.editorUrl !== undefined) {
-        inspectorFields.sourceEditor.href = source.editorUrl;
-      }
-      inspectorFields.sourceContent.hidden = false;
-      renderSourceCode(source, startLine, endLine, startColumn, endColumn);
-      prepareAiGuidance(
-        building,
-        declaration,
-        guidanceContext,
-        openAiGuidance,
-      );
+      presentLoadedBuildingSource(building, source);
     })
     .catch((error: unknown) => {
       if (
         controller.signal.aborted ||
-        sourceRequest !== controller
+        sourceRequest !== request
       ) {
         return;
       }
-      scrubBuildingSource(false);
+      sourceRequest = undefined;
+      loadedBuildingSource = undefined;
+      inspectorFields.sourceCode.replaceChildren();
+      inspectorFields.sourceContent.hidden = true;
       inspectorFields.sourceSummary.textContent = "Unavailable";
       inspectorFields.sourceStatus.textContent =
         error instanceof Error
           ? error.message
           : "Source code could not be loaded.";
     });
+}
+
+function presentLoadedBuildingSource(
+  building: CityBuilding,
+  source: BuildingSource,
+): void {
+  inspectorFields.sourceDetails.open = true;
+  inspectorFields.sourceSummary.textContent = "Read only";
+  inspectorFields.sourceStatus.textContent =
+    `Showing the exact retained file for ${source.path}.`;
+  inspectorFields.sourcePath.textContent = source.path;
+  inspectorFields.sourceRevision.textContent =
+    `${source.provenance.provider} · ${source.provenance.revision.value}`;
+  inspectorFields.sourceExternal.hidden = source.externalUrl === undefined;
+  if (source.externalUrl === undefined) {
+    inspectorFields.sourceExternal.removeAttribute("href");
+  } else {
+    inspectorFields.sourceExternal.href = source.externalUrl;
+  }
+  inspectorFields.sourceEditor.hidden = source.editorUrl === undefined;
+  if (source.editorUrl === undefined) {
+    inspectorFields.sourceEditor.removeAttribute("href");
+  } else {
+    inspectorFields.sourceEditor.href = source.editorUrl;
+  }
+  inspectorFields.sourceContent.hidden = false;
+  renderSourceCode(building, source);
+  renderAiGuidanceCapability(building);
+}
+
+function setCodeInspectionFocus(
+  building: CityBuilding,
+  focus: CodeInspectionFocus,
+): void {
+  const previous = codeInspectionFocus;
+  const changed = previous === undefined ||
+    codeInspectionFocusKey(previous) !== codeInspectionFocusKey(focus);
+  codeInspectionFocus = focus;
+  selectedSourceDeclaration = undefined;
+  if (focus.kind === "declaration") {
+    const node = projectFineDetail(building, FINE_DETAIL_MAXIMUM_LIMIT).nodes
+      .find(({ id, category }) =>
+        id === focus.stableId && category === focus.category,
+      );
+    if (node !== undefined) {
+      selectedSourceDeclaration = { buildingId: building.id, node };
+    }
+  }
+  fineDetailDrilledBuildingId = focus.kind === "file"
+    ? undefined
+    : building.id;
+  inspectorFields.sourceStructureReturn.hidden = focus.kind === "file";
+  if (changed) {
+    const sameUnit =
+      previous?.kind === "unit" &&
+      focus.kind === "unit" &&
+      previous.unit.decisionEvidence?.unitId !== undefined &&
+      previous.unit.decisionEvidence.unitId ===
+        focus.unit.decisionEvidence?.unitId;
+    if (!sameUnit) {
+      decisionSiteVisibleLimit = INITIAL_DECISION_SITE_VISIBLE_LIMIT;
+    }
+    clearAiGuidanceResult();
+  }
+  renderDecisionEvidence(building);
+  renderSourceStructure(building);
+  renderAiGuidanceCapability(building);
+}
+
+function renderDecisionEvidence(building: CityBuilding): void {
+  const focus = codeInspectionFocus;
+  inspectorFields.decisionSites.replaceChildren();
+  if (focus?.kind !== "unit" || focus.buildingId !== building.id) {
+    inspectorFields.decisionEvidence.hidden = true;
+    inspectorFields.decisionSitesShowMore.hidden = true;
+    return;
+  }
+  const presentation = presentDecisionEvidence(focus.unit, {
+    visibleLimit: decisionSiteVisibleLimit,
+    ...(focus.selectedSiteIndex === undefined
+      ? {}
+      : { selectedSiteIndex: focus.selectedSiteIndex }),
+  });
+  inspectorFields.decisionEvidence.hidden = false;
+  inspectorFields.decisionEvidence.dataset["state"] = presentation.state;
+  inspectorFields.decisionEvidenceEquation.textContent =
+    presentation.equation;
+  inspectorFields.decisionEvidenceStatus.textContent =
+    presentation.summary;
+  for (const site of presentation.sites) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "decision-site-button";
+    button.dataset["decisionSiteIndex"] = String(site.index);
+    button.textContent =
+      `${site.label} · +${site.contribution.toLocaleString()} CC`;
+    if (site.selected) button.setAttribute("aria-current", "location");
+    button.addEventListener("click", () => {
+      const nextFocus = unitInspectionFocus(
+        building.id,
+        focus.unit,
+        site.index,
+        focus.localUnitIndex,
+      );
+      setCodeInspectionFocus(building, nextFocus);
+      if (loadedBuildingSource?.buildingId === building.id) {
+        renderSourceCode(building, loadedBuildingSource.source);
+      }
+      const replacement =
+        inspectorFields.decisionSites.querySelector<HTMLButtonElement>(
+          `[data-decision-site-index="${String(site.index)}"]`,
+        );
+      if (replacement !== null) restoreDisclosureFocus(replacement);
+    });
+    item.append(button);
+    inspectorFields.decisionSites.append(item);
+  }
+  inspectorFields.decisionSitesShowMore.hidden =
+    !presentation.canShowMore;
+  if (presentation.canShowMore) {
+    inspectorFields.decisionSitesShowMore.textContent =
+      `Show ${Math.min(
+        INITIAL_DECISION_SITE_VISIBLE_LIMIT,
+        presentation.hiddenSiteCount,
+      ).toLocaleString()} more decision sites`;
+  }
 }
 
 function showInspector(context: BuildingContext | null): void {
@@ -7500,13 +7815,12 @@ function showInspector(context: BuildingContext | null): void {
   }
 
   const { building, repository, module } = context;
-  const pendingGuidance =
-    pendingAiGuidanceNavigation?.buildingId === building.id
-      ? pendingAiGuidanceNavigation
-      : undefined;
-  if (pendingGuidance !== undefined) {
-    pendingAiGuidanceNavigation = undefined;
+  if (codeInspectionBuildingId !== building.id) {
+    scrubBuildingSource();
+    codeInspectionBuildingId = building.id;
   }
+  codeInspectionFocus = fileInspectionFocus(building.id);
+  inspectorFields.codeInspection.hidden = false;
   inspectorFields.unitsDetails.hidden = false;
   inspectorFields.sourceDetails.hidden = false;
   selectionKind.textContent = "Building";
@@ -7521,22 +7835,20 @@ function showInspector(context: BuildingContext | null): void {
   inspectorFields.metricPresentation.hidden = false;
   inspectorFields.metricTechnicalDetails.open = false;
   inspectorFields.hotspotsSection.hidden = false;
-  inspectorFields.aiDetails.hidden = false;
   renderBuildingMetrics(building);
   renderBuildingEvolutionHistory(building.id);
   inspectorFields.sourceDetails.open = false;
+  inspectorFields.sourceSummary.textContent =
+    activeModelSource.sourceAvailability === "retained" &&
+      !sourceIsBoundToCurrentEvolutionFrame()
+      ? "Historical frame"
+      : activeModelSource.sourceAvailability === "retained"
+      ? "Not loaded"
+      : "Unavailable";
+  inspectorFields.sourceStatus.textContent = sourceAvailabilityMessage();
+  synchronizeSourceOpenAvailability(building);
   selectedSourceDeclaration = undefined;
   fineDetailDrilledBuildingId = undefined;
-  revealBuildingSource(
-    building,
-    building.sourceLocation?.startLine,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    pendingGuidance?.context,
-    pendingGuidance !== undefined,
-  );
   executableUnitVisibleLimit =
     INITIAL_EXECUTABLE_UNIT_VISIBLE_LIMIT;
   executableUnitQuery = "";
@@ -7556,6 +7868,9 @@ function showInspector(context: BuildingContext | null): void {
   renderComplexityHotspots(building, complexity);
   renderExecutableUnits(building, complexity);
   renderSourceStructure(building);
+  renderDecisionEvidence(building);
+  resetAiGuidancePresentation();
+  discoverAiGuidanceCapability(building);
   selectionStatus.textContent =
     `Selected ${building.name}. Maximum cyclomatic complexity ` +
     `${building.metrics.maximumComplexity.toLocaleString()}.`;
@@ -7796,9 +8111,12 @@ function renderComplexityHotspots(
     jump.className = "button button-compact complexity-hotspot-source";
     jump.type = "button";
     jump.textContent = "View source";
+    jump.disabled = !sourceIsBoundToCurrentEvolutionFrame();
     jump.title =
-      `Open ${hotspot.name} at ` +
-      formatExecutableUnitRange(hotspot.line, hotspot.endLine);
+      jump.disabled
+        ? sourceAvailabilityMessage()
+        : `Open ${hotspot.name} at ` +
+          formatExecutableUnitRange(hotspot.line, hotspot.endLine);
     jump.setAttribute(
       "aria-label",
       `View source for ${hotspot.name}, ${formatExecutableUnitRange(hotspot.line, hotspot.endLine)}`,
@@ -7806,8 +8124,12 @@ function renderComplexityHotspots(
     jump.addEventListener("click", () => {
       revealBuildingSource(
         building,
-        hotspot.line,
-        hotspot.endLine ?? hotspot.line,
+        unitInspectionFocus(
+          building.id,
+          hotspot,
+          undefined,
+          hotspot.unitIndex,
+        ),
       );
     });
     item.append(content, jump);
@@ -7922,13 +8244,16 @@ function renderExecutableUnits(
     const jump = document.createElement("button");
     jump.className = "unit-source-jump";
     jump.type = "button";
+    jump.disabled = !sourceIsBoundToCurrentEvolutionFrame();
     jump.textContent = formatExecutableUnitRange(
       unit.line,
       unit.endLine,
     );
     jump.title =
-      `Open ${unit.name} at ` +
-      formatExecutableUnitRange(unit.line, unit.endLine);
+      jump.disabled
+        ? sourceAvailabilityMessage()
+        : `Open ${unit.name} at ` +
+          formatExecutableUnitRange(unit.line, unit.endLine);
     jump.setAttribute(
       "aria-label",
       `View source for ${unit.name}, ${formatExecutableUnitRange(unit.line, unit.endLine)}`,
@@ -7936,8 +8261,12 @@ function renderExecutableUnits(
     jump.addEventListener("click", () => {
       revealBuildingSource(
         building,
-        unit.line,
-        unit.endLine ?? unit.line,
+        unitInspectionFocus(
+          building.id,
+          unit,
+          undefined,
+          building.units?.indexOf(unit),
+        ),
       );
     });
     line.append(jump);
@@ -7990,9 +8319,13 @@ function renderSourceStructure(building: CityBuilding): void {
         const jump = document.createElement("button");
         jump.type = "button";
         jump.className = "unit-source-jump source-structure-source-jump";
+        jump.disabled = !sourceIsBoundToCurrentEvolutionFrame();
         jump.dataset["sourceDeclarationId"] = node.id;
         jump.dataset["sourceDeclarationCategory"] = node.category;
         jump.dataset["sourceDeclarationKind"] = node.kind;
+        if (node.unitIndex !== undefined) {
+          jump.dataset["sourceUnitIndex"] = String(node.unitIndex);
+        }
         jump.dataset["sourceDeclarationStartLine"] = String(node.startLine);
         jump.dataset["sourceDeclarationEndLine"] = String(node.endLine);
         if (node.startColumn !== undefined) {
@@ -8001,15 +8334,23 @@ function renderSourceStructure(building: CityBuilding): void {
         if (node.endColumn !== undefined) {
           jump.dataset["sourceDeclarationEndColumn"] = String(node.endColumn);
         }
-        if (
+        const selectedDeclaration =
           selectedSourceDeclaration?.buildingId === building.id &&
-          selectedSourceDeclaration.node.id === node.id
-        ) {
+          selectedSourceDeclaration.node.id === node.id;
+        const selectedLegacyUnit =
+          node.provenance === "persisted-executable-unit" &&
+          node.unitIndex !== undefined &&
+          codeInspectionFocus?.kind === "unit" &&
+          codeInspectionFocus.buildingId === building.id &&
+          codeInspectionFocus.localUnitIndex === node.unitIndex;
+        if (selectedDeclaration || selectedLegacyUnit) {
           jump.setAttribute("aria-current", "location");
         }
         const columns = node.startColumn === undefined ? "" : `:${node.startColumn}`;
         jump.textContent = label ?? `${sourceStructureKindLabel(node.kind)} ${node.name} · ${node.startLine}${columns}`;
-        jump.title = `${node.explanation} Open its exact persisted source range.`;
+        jump.title = jump.disabled
+          ? sourceAvailabilityMessage()
+          : `${node.explanation} Open its exact persisted source range.`;
         jump.setAttribute("aria-label", `${sourceStructureKindLabel(node.kind)} ${node.name}. ${node.explanation} Starts line ${node.startLine}${columns}. Open its exact persisted source range.`);
         jump.addEventListener("click", () => {
           for (const current of inspectorFields.sourceStructure.querySelectorAll(
@@ -8017,15 +8358,32 @@ function renderSourceStructure(building: CityBuilding): void {
           )) {
             current.removeAttribute("aria-current");
           }
-          revealBuildingSource(
-            building,
-            node.startLine,
-            node.endLine,
-            node.startColumn,
-            node.endColumn,
-            node,
-          );
-          jump.setAttribute("aria-current", "location");
+          const legacyUnit = node.unitIndex === undefined
+            ? undefined
+            : building.units?.[node.unitIndex];
+          const nextFocus =
+            node.provenance === "persisted-executable-unit"
+              ? legacyUnit === undefined
+                ? undefined
+                : unitInspectionFocus(
+                    building.id,
+                    legacyUnit,
+                    undefined,
+                    node.unitIndex,
+                  )
+              : Object.freeze({
+                  kind: "declaration" as const,
+                  buildingId: building.id,
+                  category: node.category,
+                  stableId: node.id,
+                });
+          if (nextFocus === undefined) return;
+          revealBuildingSource(building, nextFocus);
+          const replacement =
+            inspectorFields.sourceStructure.querySelector<HTMLButtonElement>(
+              `[data-source-declaration-id="${CSS.escape(node.id)}"][data-source-declaration-category="${CSS.escape(node.category)}"]`,
+            );
+          if (replacement !== null) restoreDisclosureFocus(replacement);
         });
         return jump;
       };
