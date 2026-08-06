@@ -4,6 +4,7 @@ import type {
 import {
   PRINT_FIDELITY_EPSILON,
   PRINT_FEATURE_CATEGORIES,
+  type PrintLayoutIssue,
 } from "../../../packages/core/src/print-layout.js";
 import type {
   CalibrationMeasurement,
@@ -12,19 +13,29 @@ import type {
 import type {
   PrintPlateExportOptions,
   PrintPlateBundlePreflight,
-  PrintPlatePreviewSource,
 } from "../../../packages/exporter/src/print-plates.js";
 import {
   printLayoutPreviewPlanFromBundle,
+  type PrintBundlePreviewSource,
   type PrintLayoutPreviewPlan,
+  type RequestedPrintFitPolicy,
 } from "./print-plate-preview.js";
 
 export type PrintExportGenerateOptions = Omit<
   PrintPlateExportOptions,
-  "fitPolicy"
+  "fitPolicy" | "acknowledgeBelowProfileScale"
 > & {
-  readonly fitPolicy?: PrintPlateExportOptions["fitPolicy"];
+  readonly fitPolicy?: RequestedPrintFitPolicy;
+  /**
+   * Confirms the exact below-profile compact plan proposed by an earlier Auto
+   * run. The worker still recomputes the plan before serializing it.
+   */
+  readonly confirmCompactFit?: boolean;
+  /** @deprecated Browser UI uses the normal Auto compact-fit confirmation. */
+  readonly acknowledgeBelowProfileScale?: boolean;
 };
+
+export type PrintExportPreviewSource = PrintBundlePreviewSource;
 
 export interface PrintExportGenerateRequest {
   readonly type: "generate";
@@ -58,14 +69,21 @@ export interface PrintPlateBundlePreflightResponse {
   readonly type: "bundle-preflight";
   readonly jobId: number;
   readonly preflight: PrintPlateBundlePreflight;
-  readonly preview: PrintPlatePreviewSource;
+  readonly preview: PrintExportPreviewSource;
 }
 
 export interface PrintExportPreflightResponse {
   readonly type: "preflight";
   readonly jobId: number;
   readonly preflight: PrintPlateBundlePreflight;
-  readonly preview: PrintPlatePreviewSource;
+  readonly preview: PrintExportPreviewSource;
+}
+
+export interface PrintCompactFitConfirmationResponse {
+  readonly type: "confirmation-required";
+  readonly jobId: number;
+  readonly preflight: PrintPlateBundlePreflight;
+  readonly preview: PrintExportPreviewSource;
 }
 
 export type PrintExportTransferArtifact =
@@ -120,7 +138,7 @@ export interface PrintExportFailure {
   readonly kind: PrintExportFailureKind;
   readonly name: string;
   readonly message: string;
-  readonly issues: readonly string[];
+  readonly issues: readonly (string | PrintLayoutIssue)[];
 }
 
 export interface PrintExportFailureResponse {
@@ -133,6 +151,7 @@ export type PrintExportWorkerResponse =
   | PrintExportProgressResponse
   | PrintExportPreflightResponse
   | PrintPlateBundlePreflightResponse
+  | PrintCompactFitConfirmationResponse
   | PrintExportResultResponse
   | PrintPlateBundleResultResponse
   | PrintCalibrationResultResponse
@@ -289,10 +308,16 @@ function exportOptions(value: unknown): value is PrintExportGenerateOptions {
     typeof candidate["includeLegend"] === "boolean" &&
     (candidate["acknowledgeBelowProfileScale"] === undefined ||
       typeof candidate["acknowledgeBelowProfileScale"] === "boolean") &&
+    (candidate["confirmCompactFit"] === undefined ||
+      typeof candidate["confirmCompactFit"] === "boolean") &&
     (candidate["fitPolicy"] === undefined ||
+      candidate["fitPolicy"] === "auto" ||
       candidate["fitPolicy"] === "error" ||
       candidate["fitPolicy"] === "scale" ||
       candidate["fitPolicy"] === "tile") &&
+    (candidate["confirmCompactFit"] !== true ||
+      candidate["fitPolicy"] === undefined ||
+      candidate["fitPolicy"] === "auto") &&
     (candidate["maximumPlateCount"] === undefined ||
       (positiveInteger(candidate["maximumPlateCount"]) &&
         Number(candidate["maximumPlateCount"]) <= 99))
@@ -518,6 +543,7 @@ function bundlePreflight(
       BUNDLE_WARNING_TEXT_LIMIT,
     ) ||
     !bundleUnplacedObjects(candidate["unplacedObjects"]) ||
+    (candidate["unplacedObjects"] as readonly unknown[]).length !== 0 ||
     !bundleRouteOmissions(
       candidate["routeOmissions"],
       Number(candidate["plateCount"]),
@@ -677,7 +703,7 @@ export function normalizePrintExportPreviewSource(
   if (cached !== undefined) return cached;
   try {
     const normalized = printLayoutPreviewPlanFromBundle(
-      value as PrintPlatePreviewSource,
+      value as PrintExportPreviewSource,
     );
     normalizedPreviewCache.set(value, normalized);
     return normalized;
@@ -735,7 +761,6 @@ function bundleMatchesPreview(
   preview: PrintLayoutPreviewPlan,
 ): boolean {
   if (
-    preview.requestedPolicy !== preflight.fitPolicy ||
     preview.appliedPolicy !== preflight.fitPolicy ||
     !fidelityEqual(preview.requestedScale, preflight.requestedScale) ||
     !fidelityEqual(preview.appliedScale, preflight.appliedScale) ||
@@ -795,11 +820,7 @@ function singleMatchesPreview(
   preview: PrintLayoutPreviewPlan,
 ): boolean {
   if (
-    preflight.fitPolicy !== "error" ||
     preflight.plateCount !== 1 ||
-    preview.requestedPolicy !== "error" ||
-    preview.appliedPolicy !== "error" ||
-    !fidelityEqual(preview.requestedScale, preview.appliedScale) ||
     preview.plates.length !== 1 ||
     preview.unplacedObjects.length !== 0 ||
     !equalStringSets(preview.warnings, preflight.warnings) ||
@@ -814,6 +835,21 @@ function singleMatchesPreview(
     portablePlateFileName(plate.fileName, preflight.format) &&
     plate.id === preflightPlate.id &&
     plate.fileName === preflightPlate.fileName
+  );
+}
+
+function compactConfirmationMatches(
+  preflight: PrintPlateBundlePreflight,
+  preview: PrintLayoutPreviewPlan,
+): boolean {
+  return (
+    preflight.fitPolicy === "scale" &&
+    preflight.plateCount === 1 &&
+    preflight.featureViolations.length > 0 &&
+    preflight.belowProfileScaleAcknowledged &&
+    preview.requestedPolicy === "auto" &&
+    preview.appliedPolicy === "scale" &&
+    singleMatchesPreview(preflight, preview)
   );
 }
 
@@ -959,6 +995,59 @@ function calibrationPreflight(
   );
 }
 
+const PRINT_LAYOUT_ISSUE_CODES = new Set([
+  "invalid-request",
+  "resource-limit",
+  "unsafe-scale",
+  "district-does-not-fit",
+  "reservation-does-not-fit",
+  "city-does-not-fit",
+]);
+
+function issueVector(value: unknown): boolean {
+  const candidate = record(value);
+  return (
+    candidate !== undefined &&
+    finiteNumber(candidate["x"]) &&
+    candidate["x"] >= 0 &&
+    finiteNumber(candidate["y"]) &&
+    candidate["y"] >= 0 &&
+    finiteNumber(candidate["z"]) &&
+    candidate["z"] >= 0
+  );
+}
+
+function layoutIssue(value: unknown): value is PrintLayoutIssue {
+  const candidate = record(value);
+  return (
+    candidate !== undefined &&
+    typeof candidate["code"] === "string" &&
+    PRINT_LAYOUT_ISSUE_CODES.has(candidate["code"]) &&
+    boundedText(candidate["message"], BUNDLE_WARNING_TEXT_LIMIT) &&
+    (candidate["objectId"] === undefined ||
+      boundedText(candidate["objectId"])) &&
+    (candidate["required"] === undefined ||
+      issueVector(candidate["required"])) &&
+    (candidate["available"] === undefined ||
+      issueVector(candidate["available"]))
+  );
+}
+
+function failureIssues(
+  value: unknown,
+): value is readonly (string | PrintLayoutIssue)[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= BUNDLE_WARNING_LIMIT &&
+    value.every(
+      (issue) =>
+        (typeof issue === "string" &&
+          issue.length <= BUNDLE_WARNING_TEXT_LIMIT) ||
+        layoutIssue(issue),
+    )
+  );
+}
+
 function failure(value: unknown): value is PrintExportFailure {
   const candidate = record(value);
   return (
@@ -968,7 +1057,7 @@ function failure(value: unknown): value is PrintExportFailure {
       candidate["kind"] === "protocol") &&
     typeof candidate["name"] === "string" &&
     typeof candidate["message"] === "string" &&
-    stringArray(candidate["issues"])
+    failureIssues(candidate["issues"])
   );
 }
 
@@ -1040,8 +1129,18 @@ export function isPrintExportWorkerResponse(
       const preview = normalizePrintExportPreviewSource(candidate["preview"]);
       return (
         bundlePreflight(bundle) &&
+        bundle.plateCount > 1 &&
         preview !== undefined &&
         bundleMatchesPreview(bundle, preview)
+      );
+    }
+    case "confirmation-required": {
+      const proposed = candidate["preflight"];
+      const preview = normalizePrintExportPreviewSource(candidate["preview"]);
+      return (
+        bundlePreflight(proposed) &&
+        preview !== undefined &&
+        compactConfirmationMatches(proposed, preview)
       );
     }
     case "result": {
@@ -1099,15 +1198,90 @@ function errorRecord(error: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-export function viewerPrintExportGuidance(message: string): string {
-  return message
+export function viewerPrintExportGuidance(
+  message: string,
+  issueCode?: PrintLayoutIssue["code"],
+): string {
+  const visible = message.replaceAll(
+    "Split complete districts (tiled multi-plate export)",
+    "Tile complete districts (multi-plate)",
+  );
+  const append = (value: string, guidance: string): string =>
+    `${value}${/[.!?]$/u.test(value) ? " " : ". "}${guidance}`;
+  if (issueCode === "district-does-not-fit") {
+    let guided = visible
+      .replace(
+        "use fitPolicy 'scale' or 'tile'.",
+        'Choose "Auto fit (recommended)" or lower the Target scale.',
+      )
+      .replace(
+        "use fitPolicy 'tile'.",
+        'Choose "Auto fit (recommended)" or lower the Target scale.',
+      );
+    if (!guided.includes("Auto fit (recommended)")) {
+      guided = append(
+        guided,
+        'Choose "Auto fit (recommended)" or lower the Target scale.',
+      );
+    }
+    if (!guided.includes("cannot split this oversized district")) {
+      guided = append(
+        guided,
+        "Whole-district Tile cannot split this oversized district.",
+      );
+    }
+    return guided;
+  }
+  if (issueCode === "unsafe-scale") {
+    const guided = visible
+      .replace(
+        "use fitPolicy 'scale' or 'tile'.",
+        'raise the Target scale or choose "Auto fit (recommended)".',
+      )
+      .replace(
+        "use fitPolicy 'tile'.",
+        'raise the Target scale or choose "Auto fit (recommended)".',
+      );
+    return guided.includes("Auto fit (recommended)")
+      ? guided
+      : append(
+          guided,
+          'Raise the Target scale to the profile-safe value, or choose "Auto fit (recommended)" to preview a viable compact fit for confirmation.',
+        );
+  }
+  if (issueCode === "city-does-not-fit") {
+    const guided = visible
+      .replace(
+        'in Print export, set Fit policy to "Scale to one plate" or "Tile complete districts (multi-plate)".',
+        'in Print export, choose "Auto fit (recommended)", "Scale to one plate", or "Tile complete districts (multi-plate)".',
+      )
+      .replace(
+        'in Print export, set Fit policy to "Tile complete districts (multi-plate)".',
+        'in Print export, choose "Auto fit (recommended)" or "Tile complete districts (multi-plate)".',
+      )
+      .replace(
+        "use fitPolicy 'scale' or 'tile'.",
+        'choose "Auto fit (recommended)", "Scale to one plate", or "Tile complete districts (multi-plate)".',
+      )
+      .replace(
+        "use fitPolicy 'tile'.",
+        'choose "Auto fit (recommended)" or "Tile complete districts (multi-plate)".',
+      );
+    return guided.includes("Auto fit (recommended)")
+      ? guided
+      : append(
+          guided,
+          'Choose "Auto fit (recommended)"; for a specific outcome, choose "Scale to one plate" or "Tile complete districts (multi-plate)".',
+        );
+  }
+  return visible
     .replace(
       "use fitPolicy 'scale' or 'tile'.",
-      'choose "Scale to one plate" or "Split complete districts (tiled multi-plate export)" under Fit policy.',
+      'choose "Auto fit (recommended)", "Scale to one plate", or "Tile complete districts (multi-plate)" under Fit policy.',
     )
     .replace(
       "use fitPolicy 'tile'.",
-      'choose "Split complete districts (tiled multi-plate export)" under Fit policy.',
+      'choose "Auto fit (recommended)" or "Tile complete districts (multi-plate)" under Fit policy.',
     );
 }
 
@@ -1116,16 +1290,40 @@ export function serializePrintExportError(
   kind?: PrintExportFailureKind,
 ): PrintExportFailure {
   const candidate = errorRecord(error);
-  const issues = stringArray(candidate?.["issues"])
-    ? candidate["issues"].map(viewerPrintExportGuidance)
+  const sourceIssues = failureIssues(candidate?.["issues"])
+    ? candidate["issues"]
     : [];
+  const issues = sourceIssues.map((issue) => {
+    if (typeof issue === "string") {
+      return viewerPrintExportGuidance(issue);
+    }
+    return {
+      code: issue.code,
+      message: viewerPrintExportGuidance(issue.message, issue.code),
+      ...(issue.objectId === undefined
+        ? {}
+        : { objectId: issue.objectId }),
+      ...(issue.required === undefined
+        ? {}
+        : { required: { ...issue.required } }),
+      ...(issue.available === undefined
+        ? {}
+        : { available: { ...issue.available } }),
+    } satisfies PrintLayoutIssue;
+  });
   const rawMessage =
     error instanceof Error
       ? error.message
       : typeof error === "string"
         ? error
         : "The print export failed unexpectedly.";
-  const message = viewerPrintExportGuidance(rawMessage);
+  const primaryLayoutIssue = sourceIssues.find(
+    (issue): issue is PrintLayoutIssue => typeof issue !== "string",
+  );
+  const message = viewerPrintExportGuidance(
+    rawMessage,
+    primaryLayoutIssue?.code,
+  );
   const name =
     error instanceof Error
       ? error.name

@@ -704,6 +704,17 @@ Line width must be from one through two nozzle diameters. Wall, label and route
 widths must be at least one line. Twice each margin must leave a positive build
 span; base plus raised-feature height must fit the declared maximum height.
 
+Shared plate bases and exposed district foundations are physical supports, not
+scalable detail features. For every applied scale, the exporter regenerates the
+shared base at least `minimumBaseThickness` thick and each district foundation
+at least the greater of `minimumBaseThickness` and
+`minimumRaisedFeatureHeight`. Their thickness ratios are therefore excluded
+from the minimum profile-safe detail scale. If clamping adds thickness to a
+district foundation, the planner records that delta as its foundation lift and
+raises the district's buildings by the same amount. The adjusted foundation,
+lifted contents, layout bounds, and generated plate geometry remain one
+consistent physical plan.
+
 The print planner maps semantic groups onto one or more channels. If groups
 outnumber channels, it deterministically merges them, produces monochrome
 output, or fails, as selected by the profile. Exporters measure transformed
@@ -736,12 +747,24 @@ affected plate, marked as original once and replica thereafter. Cross-plate
 routes are not printed; the bundle manifest records consumer, provider, and
 their plate numbers. No artifact may exceed the usable profile volume.
 
+The browser adds a requested `auto` policy without adding it to the concrete
+planner policies. Auto orders concrete attempts as requested one plate,
+profile-safe one plate, complete whole-district Tile when viable and complete,
+then a compact one-plate proposal. Preview metadata retains requested `auto`
+separately from the applied `error`, `scale`, or `tile` policy. The output form
+comes from the completed plate count, and any non-empty unplaced set is a hard
+failure.
+
 Below-profile scaling is an explicit, typed exception to fidelity minima, not
 to physical print bounds. With acknowledgement, the planner may maximize one
 known-valid packing topology below the safe scale. It deterministically records
 requested, applied, and minimum-safe scales and an ordered violation for every
 affected feature category (`resultingValue` and profile `minimum`). Without
 acknowledgement the same request fails before geometry generation.
+In the normal viewer flow this acknowledgement is represented by an exact
+compact-fit confirmation state, not an always-visible Expert checkbox. The
+proposal is not serialized; confirmation reruns the same deterministic input
+and only then creates the direct one-plate artifact.
 
 The Prusa XL one-, two-, and five-tool configurations are profiles of the same
 model.

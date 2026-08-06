@@ -13,6 +13,8 @@ import {
   createSingleChannelProfile,
   parsePrinterProfileJson,
   PRINT_FIDELITY_EPSILON,
+  PrintLayoutError,
+  resolvePrinterGeometryLimits,
   validateCityModel,
   type CityDependency,
   type CityModel,
@@ -138,6 +140,51 @@ function syntheticCity(
       y: Math.max(10, ...buildings.map(({ position, size }) => position.y + size.y / 2)),
       z: baseDepth,
     },
+  });
+}
+
+function syntheticUnassignedCity(buildingCount = 315): CityModel {
+  const source = syntheticCity(
+    [{ width: 240, depth: 200 }],
+    [],
+    "Unassigned City",
+  );
+  const district = {
+    ...source.districts[0]!,
+    name: "Unassigned",
+    path: "unassigned",
+  };
+  const template = source.buildings[0]!;
+  const columns = 21;
+  const rows = Math.ceil(buildingCount / columns);
+  const buildings = Array.from({ length: buildingCount }, (_, index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    const height = 4 + (index % 5);
+    const suffix = String(index).padStart(3, "0");
+    return {
+      ...template,
+      id: `building:unassigned-${suffix}`,
+      name: `unassigned-${suffix}.ts`,
+      path: `unassigned/unassigned-${suffix}.ts`,
+      position: {
+        x: (column - (columns - 1) / 2) * 10,
+        y:
+          district.position.y + district.size.y / 2 + height / 2,
+        z: (row - (rows - 1) / 2) * 10,
+      },
+      size: { x: 8, y: height, z: 8 },
+    };
+  });
+  return validateCityModel({
+    ...source,
+    modules: source.modules.map((module) => ({
+      ...module,
+      kind: "unassigned" as const,
+      name: "Unassigned",
+    })),
+    districts: [district],
+    buildings,
   });
 }
 
@@ -282,7 +329,7 @@ describe("physical print-plate orchestration", () => {
           policy: "error",
           requestedScale: 3,
           appliedScale: 3,
-          minimumSafeScale: 1.6,
+          minimumSafeScale: 0.4,
           belowProfileScaleAcknowledged: false,
           featureViolations: [],
         },
@@ -301,7 +348,7 @@ describe("physical print-plate orchestration", () => {
     },
   );
 
-  it("rejects direct serialization of a non-error fit policy", () => {
+  it("serializes a complete one-plate non-error fit policy directly", () => {
     const prepared = preparePrintPlateBundle({
       format: "3mf",
       model: DEMO_MODEL,
@@ -315,9 +362,243 @@ describe("physical print-plate orchestration", () => {
       },
     });
 
+    const result = serializePreparedSinglePrintPlateExport(prepared);
+
+    expect(result.layout.plates).toHaveLength(1);
+    expect(result.manifest.fit.policy).toBe("scale");
+    expect(result.artifact.format).toBe("3mf");
+  });
+
+  it.each(["3mf", "stl"] as const)(
+    "auto-fits one oversized 315-building Unassigned district into a complete direct %s artifact",
+    (format) => {
+      const prepared = preparePrintPlateBundle({
+        format,
+        model: syntheticUnassignedCity(),
+        profile: createSingleChannelProfile(),
+        options: {
+          scale: 3,
+          fitPolicy: "scale",
+          labelPolicy: "off",
+          routePolicy: "off",
+          includeLegend: false,
+        },
+      });
+
+      expect(prepared.layout.plates).toHaveLength(1);
+      expect(prepared.layout.unplaced).toEqual([]);
+      expect(prepared.layout.appliedScale).toBeLessThan(3);
+      expect(prepared.layout.plates[0]!.districts).toHaveLength(1);
+      expect(prepared.model.buildings).toHaveLength(315);
+      const city = prepared.plates[0]!.artifacts.city;
+      expect(
+        city.parts
+          .flatMap(({ primitives }) => primitives)
+          .filter(({ kind }) => kind === "building"),
+      ).toHaveLength(315);
+      expect(validatePrintableCity(city, prepared.profile)).toEqual([]);
+      const result = serializePreparedSinglePrintPlateExport(prepared);
+      expect(result.manifest.fit.policy).toBe("scale");
+      expect(result.artifact.format).toBe(format);
+      expect(result.artifact.bytes.byteLength).toBeGreaterThan(100);
+    },
+  );
+
+  it("rejects incomplete capped tiling before geometry and serialization", () => {
+    const phases: string[] = [];
+    let error: unknown;
+    try {
+      preparePrintPlateBundle(
+        {
+          format: "3mf",
+          model: syntheticCity([
+            { width: 140, depth: 140 },
+            { width: 140, depth: 140 },
+          ]),
+          profile: createPrusaXLProfile([1, 2, 3, 4, 5]),
+          options: {
+            scale: 2,
+            fitPolicy: "tile",
+            labelPolicy: "off",
+            routePolicy: "off",
+            includeLegend: false,
+            maximumPlateCount: 1,
+          },
+        },
+        ({ phase }) => phases.push(phase),
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(PrintLayoutError);
+    expect((error as PrintLayoutError).issues).toEqual([
+      expect.objectContaining({
+        code: "resource-limit",
+        objectId: "district:001",
+      }),
+    ]);
+    expect(phases).not.toContain("geometry");
+
+    const complete = preparePrintPlateBundle({
+      format: "3mf",
+      model: syntheticCity([{ width: 80, depth: 80 }]),
+      profile: createSingleChannelProfile(),
+      options: {
+        scale: 1,
+        fitPolicy: "error",
+        labelPolicy: "off",
+        routePolicy: "off",
+        includeLegend: false,
+      },
+    });
+    const incomplete = {
+      ...complete,
+      layout: {
+        ...complete.layout,
+        unplaced: [
+          {
+            kind: "district" as const,
+            id: "district:missing",
+            name: "Missing district",
+            reason: "plate-limit" as const,
+            required: { x: 10, y: 10, z: 10 },
+          },
+        ],
+      },
+    };
+    expect(() => serializePreparedPrintPlateBundle(incomplete)).toThrow(
+      PrintLayoutError,
+    );
     expect(() =>
-      serializePreparedSinglePrintPlateExport(prepared),
-    ).toThrow(/requires fit policy 'error'/u);
+      serializePreparedSinglePrintPlateExport(incomplete),
+    ).toThrow(PrintLayoutError);
+  });
+
+  it("clamps plate foundations while keeping buildings on their exposed tops", () => {
+    const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
+    const limits = resolvePrinterGeometryLimits(profile);
+    const prepared = preparePrintPlateBundle({
+      format: "3mf",
+      model: syntheticCity([{ width: 80, depth: 80 }]),
+      profile,
+      options: {
+        scale: 0.5,
+        fitPolicy: "error",
+        labelPolicy: "off",
+        routePolicy: "off",
+        includeLegend: false,
+      },
+    });
+    const placement = prepared.layout.plates[0]!.districts[0]!;
+    const primitives = prepared.plates[0]!.artifacts.city.parts.flatMap(
+      ({ primitives }) => primitives,
+    );
+    const base = primitives.find(({ kind }) => kind === "base")!;
+    const district = primitives.find(({ kind }) => kind === "district")!;
+    const building = primitives.find(({ kind }) => kind === "building")!;
+    const foundationFloor = Math.max(
+      limits.minimumBaseThickness,
+      limits.minimumRaisedFeatureHeight,
+    );
+
+    expect(prepared.layout.minimumSafeScale).toBeCloseTo(0.1, 12);
+    expect(prepared.layout.featureViolations).toEqual([]);
+    expect(placement.foundationThickness).toBe(foundationFloor);
+    expect(placement.foundationLift).toBeCloseTo(
+      foundationFloor - 0.25,
+      12,
+    );
+    expect(base.bounds.size.z).toBe(limits.minimumBaseThickness);
+    expect(district.bounds.size.z).toBe(foundationFloor);
+    expect(district.bounds.minimum.z).toBe(base.bounds.maximum.z);
+    expect(building.bounds.minimum.z).toBe(district.bounds.maximum.z);
+    expect(
+      prepared.plates[0]!.artifacts.city.measurements.wallThickness,
+    ).toBeCloseTo(4, 12);
+    expect(
+      prepared.plates[0]!.artifacts.city.measurements.minimumGap,
+    ).toBeNull();
+  });
+
+  it("keeps zero-building detail metrics finite and constraint-neutral", () => {
+    const source = syntheticCity(
+      [{ width: 240, depth: 80 }],
+      [],
+      "A",
+    );
+    const model = validateCityModel({ ...source, buildings: [] });
+    const profile = createSingleChannelProfile({
+      buildVolume: { x: 120, y: 120, z: 120 },
+    });
+    const prepared = preparePrintPlateBundle({
+      format: "3mf",
+      model,
+      profile,
+      options: {
+        scale: 1,
+        fitPolicy: "scale",
+        labelPolicy: "off",
+        routePolicy: "off",
+        includeLegend: false,
+      },
+    });
+    const measurements = prepared.plates[0]!.artifacts.city.measurements;
+
+    expect(prepared.layout.appliedScale).toBeLessThan(1);
+    expect(prepared.layout.minimumSafeScale).toBeGreaterThan(0);
+    expect(prepared.layout.minimumSafeScale).toBeLessThan(1e-100);
+    expect(prepared.layout.featureViolations).toEqual([]);
+    expect(Number.isFinite(measurements.wallThickness)).toBe(true);
+    expect(Number.isFinite(measurements.minimumFeatureSize)).toBe(true);
+    expect(measurements.minimumGap).toBeNull();
+    expect(
+      validatePrintableCity(
+        prepared.plates[0]!.artifacts.city,
+        profile,
+      ),
+    ).toEqual([]);
+  });
+
+  it("retains sub-epsilon building detail in structured safe-scale checks", () => {
+    const source = syntheticCity([{ width: 80, depth: 80 }]);
+    const model = validateCityModel({
+      ...source,
+      buildings: source.buildings.map((building) => ({
+        ...building,
+        size: { ...building.size, x: 1e-10 },
+      })),
+    });
+    const phases: string[] = [];
+    let error: unknown;
+    try {
+      preparePrintPlateBundle(
+        {
+          format: "3mf",
+          model,
+          profile: createSingleChannelProfile(),
+          options: {
+            scale: 1,
+            fitPolicy: "scale",
+            labelPolicy: "off",
+            routePolicy: "off",
+            includeLegend: false,
+          },
+        },
+        ({ phase }) => phases.push(phase),
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(PrintLayoutError);
+    expect((error as PrintLayoutError).issues).toEqual([
+      expect.objectContaining({ code: "unsafe-scale" }),
+    ]);
+    expect((error as Error).message).toContain(
+      "minimum profile-safe scale 8000000000",
+    );
+    expect(phases).toEqual(["validating"]);
   });
 
   it.each([
@@ -417,8 +698,8 @@ describe("physical print-plate orchestration", () => {
   it("rejects unsafe scale, scales one plate conservatively, and tiles without oversized artifacts", () => {
     const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
     const model = syntheticCity([
-      { width: 80, depth: 80 },
-      { width: 80, depth: 80 },
+      { width: 80, depth: 80, height: 0.5 },
+      { width: 80, depth: 80, height: 0.5 },
     ]);
     const common = {
       format: "3mf" as const,
@@ -591,8 +872,8 @@ describe("physical print-plate orchestration", () => {
   it("auto-scales below the safe floor only with acknowledgement and serializes exact fidelity", () => {
     const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
     const model = syntheticCity([
-      { width: 140, depth: 140 },
-      { width: 140, depth: 140 },
+      { width: 140, depth: 140, height: 0.5 },
+      { width: 140, depth: 140, height: 0.5 },
     ]);
     const prepared = preparePrintPlateBundle({
       format: "3mf",

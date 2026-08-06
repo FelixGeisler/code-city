@@ -8,10 +8,14 @@ import {
   preparePrintPlateBundle,
   serializePreparedPrintPlateBundle,
   serializePreparedSinglePrintPlateExport,
+  type PreparedPrintPlateBundle,
 } from "../../../packages/exporter/src/print-plates.js";
+import type { PrintFitPolicy } from "../../../packages/core/src/print-layout.js";
 import {
   isPrintExportWorkerRequest,
   serializePrintExportError,
+  type PrintExportGenerateRequest,
+  type PrintExportPreviewSource,
   type PrintExportTransferArtifact,
   type PrintExportWorkerRequest,
   type PrintExportWorkerResponse,
@@ -83,6 +87,237 @@ function transferableArtifact(
   throw new Error("The print exporter returned an invalid artifact tuple.");
 }
 
+function preparedPreview(
+  prepared: PreparedPrintPlateBundle,
+  requestedPolicy: NonNullable<
+    PrintExportGenerateRequest["options"]["fitPolicy"]
+  >,
+): PrintExportPreviewSource {
+  return {
+    ...prepared.preview,
+    fitPolicy: requestedPolicy,
+    appliedPolicy: prepared.layout.fitPolicy,
+  };
+}
+
+function rejectIncompletePreparedBundle(
+  prepared: PreparedPrintPlateBundle,
+): void {
+  if (
+    prepared.layout.unplaced.length === 0 &&
+    prepared.preflight.unplacedObjects.length === 0 &&
+    prepared.preview.unplacedObjects.length === 0
+  ) {
+    return;
+  }
+  const identifiers = [
+    ...prepared.layout.unplaced.map(({ id }) => id),
+    ...prepared.preflight.unplacedObjects.map(({ id }) => id),
+    ...prepared.preview.unplacedObjects.map(({ id }) => id),
+  ];
+  const error = Object.assign(
+    new Error(
+      "The print layout is incomplete; every object must be placed before export.",
+    ),
+    {
+      name: "PrintLayoutError",
+      issues: [
+        {
+          code: "city-does-not-fit" as const,
+          message:
+            `The print layout left ${new Set(identifiers).size.toLocaleString("en-US")} ` +
+            "objects unplaced; no partial print file was created.",
+        },
+      ],
+    },
+  );
+  throw error;
+}
+
+function prepareConcretePrintExport(
+  request: PrintExportGenerateRequest,
+  fitPolicy: PrintFitPolicy,
+  acknowledgeBelowProfileScale: boolean,
+  emit: PrintExportWorkerEmitter,
+): PreparedPrintPlateBundle {
+  const prepared = preparePrintPlateBundle(
+    {
+      format: request.format,
+      model: request.model,
+      profile: request.profile,
+      options: {
+        scale: request.options.scale,
+        fitPolicy,
+        ...(acknowledgeBelowProfileScale
+          ? { acknowledgeBelowProfileScale: true }
+          : {}),
+        labelPolicy: request.options.labelPolicy,
+        routePolicy: request.options.routePolicy,
+        includeLegend: request.options.includeLegend,
+        ...(fitPolicy !== "tile" ||
+        request.options.maximumPlateCount === undefined
+          ? {}
+          : {
+              maximumPlateCount:
+                request.options.maximumPlateCount,
+            }),
+      },
+    },
+    (value) => {
+      emit({
+        type: "progress",
+        jobId: request.jobId,
+        phase: value.phase,
+        completed: value.completed,
+        message: value.message,
+      });
+    },
+  );
+  rejectIncompletePreparedBundle(prepared);
+  return prepared;
+}
+
+function serializePreparedOutput(
+  request: PrintExportGenerateRequest,
+  requestedPolicy: NonNullable<
+    PrintExportGenerateRequest["options"]["fitPolicy"]
+  >,
+  prepared: PreparedPrintPlateBundle,
+  emit: PrintExportWorkerEmitter,
+): void {
+  rejectIncompletePreparedBundle(prepared);
+  const preview = preparedPreview(prepared, requestedPolicy);
+  if (prepared.preflight.plateCount === 1) {
+    emit({
+      type: "preflight",
+      jobId: request.jobId,
+      preflight: prepared.preflight,
+      preview,
+    });
+    const result = serializePreparedSinglePrintPlateExport(
+      prepared,
+      (value) => {
+        emit({
+          type: "progress",
+          jobId: request.jobId,
+          phase: value.phase,
+          completed: value.completed,
+          message: value.message,
+        });
+      },
+    );
+    const artifact = transferableArtifact(result.artifact);
+    const manifestBytes = transferableBuffer(result.manifestBytes);
+    const legendBytes =
+      result.legendBytes === undefined
+        ? undefined
+        : transferableBuffer(result.legendBytes);
+    emit(
+      {
+        type: "result",
+        jobId: request.jobId,
+        artifact,
+        manifestBytes,
+        ...(legendBytes === undefined ? {} : { legendBytes }),
+      },
+      legendBytes === undefined
+        ? [artifact.bytes, manifestBytes]
+        : [artifact.bytes, manifestBytes, legendBytes],
+    );
+    return;
+  }
+
+  emit({
+    type: "bundle-preflight",
+    jobId: request.jobId,
+    preflight: prepared.preflight,
+    preview,
+  });
+  const result = serializePreparedPrintPlateBundle(
+    prepared,
+    (value) => {
+      emit({
+        type: "progress",
+        jobId: request.jobId,
+        phase: value.phase,
+        completed: value.completed,
+        message: value.message,
+      });
+    },
+  );
+  const bundleBytes = transferableBuffer(result.bytes);
+  const manifestBytes = transferableBuffer(result.manifestBytes);
+  const legendBytes =
+    result.legendBytes === undefined
+      ? undefined
+      : transferableBuffer(result.legendBytes);
+  emit(
+    {
+      type: "bundle-result",
+      jobId: request.jobId,
+      artifact: {
+        format: "zip",
+        mimeType: "application/zip",
+        fileExtension: ".zip",
+        bytes: bundleBytes,
+      },
+      manifestBytes,
+      ...(legendBytes === undefined ? {} : { legendBytes }),
+    },
+    legendBytes === undefined
+      ? [bundleBytes, manifestBytes]
+      : [bundleBytes, manifestBytes, legendBytes],
+  );
+}
+
+function prepareAutoPrintExport(
+  request: PrintExportGenerateRequest,
+  emit: PrintExportWorkerEmitter,
+): PreparedPrintPlateBundle | undefined {
+  let lastError: unknown;
+  for (const fitPolicy of ["error", "scale", "tile"] as const) {
+    try {
+      return prepareConcretePrintExport(request, fitPolicy, false, emit);
+    } catch (error) {
+      if (
+        typeof error !== "object" ||
+        error === null ||
+        (error as { readonly name?: unknown }).name !== "PrintLayoutError"
+      ) {
+        throw error;
+      }
+      lastError = error;
+    }
+  }
+
+  let compact: PreparedPrintPlateBundle;
+  try {
+    compact = prepareConcretePrintExport(request, "scale", true, emit);
+  } catch (error) {
+    throw error ?? lastError;
+  }
+  if (compact.preflight.featureViolations.length === 0) {
+    return compact;
+  }
+  if (request.options.confirmCompactFit === true) {
+    return compact;
+  }
+  emit({
+    type: "progress",
+    jobId: request.jobId,
+    phase: "layout",
+    completed: 0.8,
+    message: "Compact one-plate fit is ready for confirmation",
+  });
+  emit({
+    type: "confirmation-required",
+    jobId: request.jobId,
+    preflight: compact.preflight,
+    preview: preparedPreview(compact, "auto"),
+  });
+  return undefined;
+}
+
 export function runPrintExportRequest(
   request: PrintExportWorkerRequest,
   emit: PrintExportWorkerEmitter,
@@ -122,124 +357,26 @@ export function runPrintExportRequest(
       return;
     }
 
-    const fitPolicy = request.options.fitPolicy ?? "error";
-    const prepared = preparePrintPlateBundle(
-      {
-        format: request.format,
-        model: request.model,
-        profile: request.profile,
-        options: {
-          scale: request.options.scale,
-          fitPolicy,
-          ...(request.options.acknowledgeBelowProfileScale === undefined
-            ? {}
-            : {
-                acknowledgeBelowProfileScale:
-                  request.options.acknowledgeBelowProfileScale,
-              }),
-          labelPolicy: request.options.labelPolicy,
-          routePolicy: request.options.routePolicy,
-          includeLegend: request.options.includeLegend,
-          ...(request.options.maximumPlateCount === undefined
-            ? {}
-            : {
-                maximumPlateCount:
-                  request.options.maximumPlateCount,
-              }),
-        },
-      },
-      (value) => {
-        emit({
-          type: "progress",
-          jobId: request.jobId,
-          phase: value.phase,
-          completed: value.completed,
-          message: value.message,
-        });
-      },
-    );
-    if (fitPolicy !== "error") {
-      emit({
-        type: "bundle-preflight",
-        jobId: request.jobId,
-        preflight: prepared.preflight,
-        preview: prepared.preview,
-      });
-      const result = serializePreparedPrintPlateBundle(
-        prepared,
-        (value) => {
-          emit({
-            type: "progress",
-            jobId: request.jobId,
-            phase: value.phase,
-            completed: value.completed,
-            message: value.message,
-          });
-        },
-      );
-      const bundleBytes = transferableBuffer(result.bytes);
-      const manifestBytes = transferableBuffer(result.manifestBytes);
-      const legendBytes =
-        result.legendBytes === undefined
-          ? undefined
-          : transferableBuffer(result.legendBytes);
-      emit(
-        {
-          type: "bundle-result",
-          jobId: request.jobId,
-          artifact: {
-            format: "zip",
-            mimeType: "application/zip",
-            fileExtension: ".zip",
-            bytes: bundleBytes,
-          },
-          manifestBytes,
-          ...(legendBytes === undefined ? {} : { legendBytes }),
-        },
-        legendBytes === undefined
-          ? [bundleBytes, manifestBytes]
-          : [bundleBytes, manifestBytes, legendBytes],
-      );
+    const requestedPolicy = request.options.fitPolicy ?? "auto";
+    if (requestedPolicy === "auto") {
+      const prepared = prepareAutoPrintExport(request, emit);
+      if (prepared !== undefined) {
+        serializePreparedOutput(request, "auto", prepared, emit);
+      }
       return;
     }
 
-    emit({
-      type: "preflight",
-      jobId: request.jobId,
-      preflight: prepared.preflight,
-      preview: prepared.preview,
-    });
-
-    const result = serializePreparedSinglePrintPlateExport(
-      prepared,
-      (progress) => {
-        emit({
-          type: "progress",
-          jobId: request.jobId,
-          phase: progress.phase,
-          completed: progress.completed,
-          message: progress.message,
-        });
-      },
+    const prepared = prepareConcretePrintExport(
+      request,
+      requestedPolicy,
+      request.options.acknowledgeBelowProfileScale ?? false,
+      emit,
     );
-    const artifact = transferableArtifact(result.artifact);
-    const manifestBytes = transferableBuffer(result.manifestBytes);
-    const legendBytes =
-      result.legendBytes === undefined
-        ? undefined
-        : transferableBuffer(result.legendBytes);
-    const response: PrintExportWorkerResponse = {
-      type: "result",
-      jobId: request.jobId,
-      artifact,
-      manifestBytes,
-      ...(legendBytes === undefined ? {} : { legendBytes }),
-    };
-    emit(
-      response,
-      legendBytes === undefined
-        ? [artifact.bytes, manifestBytes]
-        : [artifact.bytes, manifestBytes, legendBytes],
+    serializePreparedOutput(
+      request,
+      requestedPolicy,
+      prepared,
+      emit,
     );
   } catch (error) {
     emit({

@@ -6,6 +6,7 @@ import {
   assignSemanticGroups,
   parsePrinterProfile,
   planPrintLayout,
+  PrintLayoutError,
   resolvePrinterGeometryLimits,
   normalizeExternalDependencyTarget,
   selectExternalDependencies,
@@ -216,7 +217,7 @@ export interface DirectPrintExportManifest {
     readonly name: string;
   };
   readonly fit: {
-    readonly policy: "error";
+    readonly policy: PrintFitPolicy;
     readonly requestedScale: number;
     readonly appliedScale: number;
     readonly minimumSafeScale: number;
@@ -359,6 +360,46 @@ function sourceDistrictBounds(
   };
 }
 
+function sourceDistrictFoundationThickness(
+  district: CityDistrict,
+  baseTop: number,
+): number {
+  const districtBox = box(district.position, district.size);
+  return (
+    districtBox.maximum.y -
+    Math.max(districtBox.minimum.y, baseTop)
+  );
+}
+
+function sourceBuildingPrimitiveBounds(
+  building: CityBuilding,
+): {
+  readonly id: string;
+  readonly bounds: PrintableCity["bounds"];
+} {
+  const value = box(building.position, building.size);
+  return {
+    id: building.id,
+    bounds: {
+      minimum: {
+        x: value.minimum.x,
+        y: value.minimum.z,
+        z: value.minimum.y,
+      },
+      maximum: {
+        x: value.maximum.x,
+        y: value.maximum.z,
+        z: value.maximum.y,
+      },
+      size: {
+        x: building.size.x,
+        y: building.size.z,
+        z: building.size.y,
+      },
+    },
+  };
+}
+
 function sourcePrimitiveBounds(model: CityModel): readonly {
   readonly id: string;
   readonly bounds: PrintableCity["bounds"];
@@ -411,27 +452,7 @@ function sourcePrimitiveBounds(model: CityModel): readonly {
     });
   }
   for (const building of model.buildings) {
-    const value = box(building.position, building.size);
-    items.push({
-      id: building.id,
-      bounds: {
-        minimum: {
-          x: value.minimum.x,
-          y: value.minimum.z,
-          z: value.minimum.y,
-        },
-        maximum: {
-          x: value.maximum.x,
-          y: value.maximum.z,
-          z: value.maximum.y,
-        },
-        size: {
-          x: building.size.x,
-          y: building.size.z,
-          z: building.size.y,
-        },
-      },
-    });
+    items.push(sourceBuildingPrimitiveBounds(building));
   }
   return items.filter(
     ({ bounds }) =>
@@ -441,19 +462,41 @@ function sourcePrimitiveBounds(model: CityModel): readonly {
   );
 }
 
-function sourceFeatures(model: CityModel): PrintLayoutFeatureMeasurements {
+function sourceFeatures(
+  model: CityModel,
+  requestedScale: number,
+): PrintLayoutFeatureMeasurements {
   const base = requiredBase(model);
-  const primitives = sourcePrimitiveBounds(model);
-  const smallest = Math.min(
-    ...primitives.flatMap(({ bounds }) => [
-      bounds.size.x,
-      bounds.size.y,
-      bounds.size.z,
-    ]),
+  const primitives = model.buildings.map(sourceBuildingPrimitiveBounds);
+  const primitiveById = new Map(
+    primitives.map((item) => [item.id, item]),
   );
+  const smallest =
+    primitives.length === 0
+      // The core contract requires positive finite detail measurements even
+      // when the city has no scalable building detail. Keep that absence
+      // effectively constraint-neutral without overflowing when the planner
+      // evaluates the requested physical scale.
+      ? Number.MAX_VALUE / Math.max(1, requestedScale) / 4
+      : Math.min(
+          ...primitives.flatMap(({ bounds }) => [
+            bounds.size.x,
+            bounds.size.y,
+            bounds.size.z,
+          ]),
+        );
+  const districtGaps = model.districts.flatMap(({ id }) => {
+    const gap = minimumPositiveHorizontalGap(
+      model.buildings
+        .filter(({ districtId }) => districtId === id)
+        .map(({ id: buildingId }) => primitiveById.get(buildingId)!),
+      EPSILON,
+    );
+    return gap === null ? [] : [gap];
+  });
   return {
     wallThickness: smallest,
-    gap: minimumPositiveHorizontalGap(primitives, EPSILON),
+    gap: districtGaps.length === 0 ? null : Math.min(...districtGaps),
     minimumFeatureSize: smallest,
     baseThickness: base.size.y,
     labelStrokeWidth: null,
@@ -552,10 +595,31 @@ function transformDistrict(
   district: CityDistrict,
   placement: PrintLayoutDistrictPlacement,
 ): CityDistrict {
+  const transformedPosition = transformPoint(
+    district.position,
+    placement,
+  );
+  const transformedSize = transformSize(district.size, placement);
+  const scaledExposedFoundation =
+    placement.foundationThickness - placement.foundationLift;
+  const scaledBaseOverlap = Math.max(
+    0,
+    transformedSize.y - scaledExposedFoundation,
+  );
+  const minimumY =
+    placement.bounds.minimum.y - scaledBaseOverlap;
+  const maximumY =
+    placement.bounds.minimum.y + placement.foundationThickness;
   return {
     ...district,
-    position: transformPoint(district.position, placement),
-    size: transformSize(district.size, placement),
+    position: {
+      ...transformedPosition,
+      y: (minimumY + maximumY) / 2,
+    },
+    size: {
+      ...transformedSize,
+      y: maximumY - minimumY,
+    },
   };
 }
 
@@ -1014,6 +1078,21 @@ function plateWarnings(
   return [...new Set(warnings)];
 }
 
+function assertCompleteLayout(layout: PrintLayoutPlan): void {
+  if (layout.unplaced.length === 0) return;
+  throw new PrintLayoutError(
+    layout.unplaced.map((item) => ({
+      code: "resource-limit",
+      objectId: item.id,
+      required: { ...item.required },
+      available: { ...layout.usableBuildSpan },
+      message:
+        `District '${item.name}' (${item.id}) remains unplaced because the print layout reached its plate limit. ` +
+        "Partial print exports are not allowed.",
+    })),
+  );
+}
+
 function mergedLegend(
   plates: readonly PreparedPrintPlate[],
   title: string,
@@ -1158,7 +1237,10 @@ export function preparePrintPlateBundle(
   const baseBounds = box(base.position, base.size);
   const assignments = assignSemanticGroups(profile, model.semanticGroups);
   const channels = channelMap(assignments);
-  const features = sourceFeatures(model);
+  const features = sourceFeatures(
+    model,
+    request.options.scale,
+  );
   const allExternal = selectExternalDependencies(model.dependencies);
   const hasExternal = allExternal.nodes.length > 0;
   const externalChannel = hasExternal
@@ -1187,6 +1269,11 @@ export function preparePrintPlateBundle(
           model.buildings,
           baseBounds.maximum.y,
         ),
+        sourceFoundationThickness:
+          sourceDistrictFoundationThickness(
+            district,
+            baseBounds.maximum.y,
+          ),
         channelIds: [...districtGroups]
           .map((group) => requiredChannel(channels, group))
           .sort(compare),
@@ -1219,6 +1306,7 @@ export function preparePrintPlateBundle(
       request.options.maximumPlateCount ?? DEFAULT_MAXIMUM_PLATE_COUNT,
     baseChannelId: requiredChannel(channels, "base"),
   });
+  assertCompleteLayout(layout);
   progress(onProgress, {
     phase: "layout",
     completed: 0.2,
@@ -1543,6 +1631,7 @@ export function serializePreparedPrintPlateBundle(
   prepared: PreparedPrintPlateBundle,
   onProgress?: PrintPlateExportProgressListener,
 ): PrintPlateBundleExportResult {
+  assertCompleteLayout(prepared.layout);
   progress(onProgress, {
     phase: "serializing",
     completed: 0.85,
@@ -1570,19 +1659,15 @@ export function serializePreparedPrintPlateBundle(
 }
 
 /**
- * Serializes the exact one-plate geometry produced by the `error` fit policy
- * without wrapping the artifact in a ZIP. This preserves the compact base and
- * physical plate number while retaining the direct STL/3MF CLI contract.
+ * Serializes exact complete one-plate geometry without wrapping the artifact
+ * in a ZIP. This preserves the compact base and physical plate number while
+ * retaining the direct STL/3MF CLI contract.
  */
 export function serializePreparedSinglePrintPlateExport(
   prepared: PreparedPrintPlateBundle,
   onProgress?: PrintPlateExportProgressListener,
 ): SinglePrintPlateExportResult {
-  if (prepared.layout.fitPolicy !== "error") {
-    throw new RangeError(
-      "Direct single-plate export requires fit policy 'error'.",
-    );
-  }
+  assertCompleteLayout(prepared.layout);
   if (
     prepared.layout.plates.length !== 1 ||
     prepared.plates.length !== 1 ||
@@ -1626,7 +1711,7 @@ export function serializePreparedSinglePrintPlateExport(
       name: prepared.preflight.profileName,
     },
     fit: {
-      policy: "error",
+      policy: prepared.layout.fitPolicy,
       requestedScale: prepared.preflight.requestedScale,
       appliedScale: prepared.preflight.appliedScale,
       minimumSafeScale: prepared.preflight.minimumSafeScale,

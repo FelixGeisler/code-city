@@ -13,6 +13,9 @@ import {
 import {
   createSingleChannelProfile,
   PRINT_FIDELITY_EPSILON,
+  PrintLayoutError,
+  planPrintLayout,
+  type PrintLayoutDistrictInput,
 } from "../packages/core/src/index.js";
 import {
   generateCalibrationPrintExport,
@@ -132,6 +135,78 @@ function samplePreview(
   };
 }
 
+const plannerFeatures = {
+  wallThickness: 1,
+  gap: 1,
+  minimumFeatureSize: 1,
+  baseThickness: 1,
+  labelStrokeWidth: 1,
+  raisedFeatureHeight: 1,
+  recessedFeatureDepth: 1,
+  routeWidth: 1,
+  connectorWidth: 1,
+};
+
+function plannerDistrict(
+  id: string,
+  width: number,
+  depth: number,
+): PrintLayoutDistrictInput {
+  return {
+    id,
+    name: `District ${id}`,
+    sourceBounds: {
+      minimum: { x: 0, y: 0, z: 0 },
+      maximum: { x: width, y: 5, z: depth },
+    },
+    channelIds: ["channel-1"],
+  };
+}
+
+function actualPlannerFailure(
+  requestedScale: number,
+  districts: readonly PrintLayoutDistrictInput[],
+): PrintLayoutError {
+  const profile = createSingleChannelProfile({
+    buildVolume: { x: 60, y: 30, z: 45 },
+    geometryLimits: {
+      minimumWallThickness: 1,
+      minimumGap: 1,
+      minimumFeatureSize: 1,
+      minimumBaseThickness: 1,
+      nozzleDiameter: 1,
+      lineWidth: 1,
+      buildMargins: { x: 0, y: 0, z: 0 },
+      minimumRaisedFeatureHeight: 1,
+      minimumRecessedFeatureDepth: 1,
+      minimumLabelStrokeWidth: 1,
+      minimumRouteWidth: 1,
+      maximumModelHeight: 30,
+    },
+  });
+  try {
+    planPrintLayout(profile, {
+      requestedScale,
+      features: plannerFeatures,
+      districts,
+    });
+  } catch (error) {
+    expect(error).toBeInstanceOf(PrintLayoutError);
+    return error as PrintLayoutError;
+  }
+  throw new Error("Expected the print planner to reject the layout.");
+}
+
+function serializedFailureText(
+  failure: ReturnType<typeof serializePrintExportError>,
+): string {
+  return [
+    failure.message,
+    ...failure.issues.map((issue) =>
+      typeof issue === "string" ? issue : issue.message),
+  ].join(" ");
+}
+
 describe("viewer print export protocol", () => {
   it("accepts only complete generate requests with positive job ids", () => {
     const request: PrintExportGenerateRequest = {
@@ -174,6 +249,35 @@ describe("viewer print export protocol", () => {
         },
       }),
     ).toBe(true);
+    expect(
+      isPrintExportGenerateRequest({
+        ...request,
+        options: {
+          ...request.options,
+          confirmCompactFit: true,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isPrintExportGenerateRequest({
+        ...request,
+        options: {
+          ...request.options,
+          fitPolicy: "auto",
+          confirmCompactFit: true,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isPrintExportGenerateRequest({
+        ...request,
+        options: {
+          ...request.options,
+          fitPolicy: "scale",
+          confirmCompactFit: true,
+        },
+      }),
+    ).toBe(false);
     expect(
       isPrintExportGenerateRequest({
         ...request,
@@ -557,6 +661,56 @@ describe("viewer print export protocol", () => {
     })).toBe(false);
   });
 
+  it("validates an exact Auto compact-fit proposal without artifact bytes", () => {
+    const featureViolations = [{
+      category: "wall-thickness" as const,
+      resultingValue: 0.4,
+      minimum: 0.8,
+    }];
+    const preflight: PrintPlateBundlePreflight = {
+      ...samplePreflight(),
+      fitPolicy: "scale",
+      requestedScale: 3,
+      appliedScale: 0.5,
+      minimumSafeScale: 1.6,
+      belowProfileScaleAcknowledged: true,
+      featureViolations,
+    };
+    const preview = {
+      ...samplePreview(preflight),
+      fitPolicy: "auto" as const,
+      appliedPolicy: "scale" as const,
+      requestedScale: 3,
+      appliedScale: 0.5,
+      minimumSafeScale: 1.6,
+      belowProfileScaleAcknowledged: true,
+      featureViolations,
+    };
+
+    expect(isPrintExportWorkerResponse({
+      type: "confirmation-required",
+      jobId: 13,
+      preflight,
+      preview,
+    })).toBe(true);
+    expect(isPrintExportWorkerResponse({
+      type: "confirmation-required",
+      jobId: 13,
+      preflight: {
+        ...preflight,
+        minimumSafeScale: preflight.appliedScale,
+        belowProfileScaleAcknowledged: false,
+        featureViolations: [],
+      },
+      preview: {
+        ...preview,
+        minimumSafeScale: preview.appliedScale,
+        belowProfileScaleAcknowledged: false,
+        featureViolations: [],
+      },
+    })).toBe(false);
+  });
+
   it("preserves structured validation issues and normalizes unknown errors", () => {
     const validation = Object.assign(new Error("Invalid print plan."), {
       name: "PrintPlanValidationError",
@@ -577,6 +731,81 @@ describe("viewer print export protocol", () => {
     });
   });
 
+  it("adds code-aware viewer recovery to actual planner layout errors", () => {
+    const unsafe = serializePrintExportError(actualPlannerFailure(
+      0.5,
+      [plannerDistrict("small", 5, 5)],
+    ));
+    expect(unsafe).toMatchObject({
+      kind: "validation",
+      issues: [{
+        code: "unsafe-scale",
+      }],
+    });
+    expect(serializedFailureText(unsafe)).toContain(
+      'Raise the Target scale to the profile-safe value',
+    );
+    expect(serializedFailureText(unsafe)).toContain(
+      '"Auto fit (recommended)"',
+    );
+
+    const city = serializePrintExportError(actualPlannerFailure(
+      1,
+      [
+        plannerDistrict("a", 45, 30),
+        plannerDistrict("b", 45, 30),
+      ],
+    ));
+    expect(city).toMatchObject({
+      kind: "validation",
+      issues: [{ code: "city-does-not-fit" }],
+    });
+    expect(serializedFailureText(city)).toContain(
+      '"Auto fit (recommended)"',
+    );
+    expect(serializedFailureText(city)).toContain('"Scale to one plate"');
+    expect(serializedFailureText(city)).toContain(
+      '"Tile complete districts (multi-plate)"',
+    );
+    expect(serializedFailureText(city)).not.toContain(
+      "Split complete districts",
+    );
+
+    const district = serializePrintExportError(actualPlannerFailure(
+      1,
+      [plannerDistrict("oversized", 80, 50)],
+    ));
+    expect(district).toMatchObject({
+      kind: "validation",
+      issues: [{
+        code: "district-does-not-fit",
+        objectId: "oversized",
+        required: {
+          x: expect.any(Number),
+          y: expect.any(Number),
+          z: expect.any(Number),
+        },
+        available: {
+          x: expect.any(Number),
+          y: expect.any(Number),
+          z: expect.any(Number),
+        },
+      }],
+    });
+    expect(serializedFailureText(district)).toContain(
+      '"Auto fit (recommended)"',
+    );
+    expect(serializedFailureText(district)).toContain(
+      "lower the Target scale",
+    );
+    expect(serializedFailureText(district)).toContain(
+      "Whole-district Tile cannot split this oversized district.",
+    );
+    expect(serializedFailureText(district)).not.toMatch(
+      /(?:choose|select|use|set).*Tile complete districts/iu,
+    );
+  });
+
   it("uses the visible Fit policy labels in recovery guidance", () => {
     const failedPlan = new Error(
       "Complete districts do not fit together on one plate at the minimum profile-safe scale 0.4; use fitPolicy 'tile'.",
@@ -584,11 +813,22 @@ describe("viewer print export protocol", () => {
 
     const failure = serializePrintExportError(failedPlan);
 
+    expect(failure.message).toContain('"Auto fit (recommended)"');
     expect(failure.message).toContain(
-      '"Split complete districts (tiled multi-plate export)" under Fit policy',
+      '"Tile complete districts (multi-plate)"',
     );
     expect(failure.message).not.toContain("fitPolicy");
     expect(failure.message).not.toContain("'tile'");
+
+    const legacyLabelFailure = serializePrintExportError(new Error(
+      'Choose "Split complete districts (tiled multi-plate export)".',
+    ));
+    expect(legacyLabelFailure.message).toContain(
+      '"Tile complete districts (multi-plate)"',
+    );
+    expect(legacyLabelFailure.message).not.toContain(
+      "Split complete districts",
+    );
   });
 
   it("validates fitted bundle preflight, preview, and ZIP responses", () => {
@@ -605,7 +845,7 @@ describe("viewer print export protocol", () => {
       },
     });
     const preflightResponse = {
-      type: "bundle-preflight",
+      type: "preflight",
       jobId: 3,
       preflight: prepared.preflight,
       preview: prepared.preview,
@@ -632,6 +872,24 @@ describe("viewer print export protocol", () => {
         artifact: {
           ...resultResponse.artifact,
           mimeType: "application/octet-stream",
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isPrintExportWorkerResponse({
+        ...preflightResponse,
+        preflight: {
+          ...prepared.preflight,
+          unplacedObjects: [{
+            kind: "district",
+            id: "district:missing",
+            label: "Missing",
+            reason: "no-space",
+          }],
+        },
+        preview: {
+          ...prepared.preview,
+          unplacedObjects: [{ id: "district:missing" }],
         },
       }),
     ).toBe(false);

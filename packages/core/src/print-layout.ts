@@ -9,6 +9,11 @@ import {
 export type PrintFitPolicy = "error" | "scale" | "tile";
 /** Shared boundary tolerance for all scale-fidelity contracts. */
 export const PRINT_FIDELITY_EPSILON = 1e-9;
+/**
+ * Stable persisted feature order. `base-thickness` remains for legacy
+ * manifest/3MF decoding, but the planner no longer emits it because bases are
+ * physically clamped to the profile floor.
+ */
 export const PRINT_FEATURE_CATEGORIES = Object.freeze([
   "wall-thickness",
   "gap",
@@ -64,6 +69,12 @@ export interface PrintLayoutDistrictInput {
   readonly id: string;
   readonly name: string;
   readonly sourceBounds: PrintLayoutBounds;
+  /**
+   * Exposed bottom foundation thickness inside sourceBounds at scale 1. The
+   * planner may raise its physical thickness to the conservative maximum of
+   * the profile's base-thickness and raised-feature-height minima.
+   */
+  readonly sourceFoundationThickness?: number;
   readonly channelIds?: readonly string[];
 }
 
@@ -113,6 +124,7 @@ export interface PrintLayoutFeatureMeasurements {
   readonly wallThickness: number;
   readonly gap: number | null;
   readonly minimumFeatureSize: number;
+  /** Shared plate-base source thickness; physically clamped by the planner. */
   readonly baseThickness: number;
   readonly labelStrokeWidth?: number | null;
   readonly raisedFeatureHeight?: number | null;
@@ -165,6 +177,13 @@ export interface PrintLayoutDistrictPlacement {
   readonly plateId: string;
   readonly sourceBounds: PrintLayoutBounds;
   readonly bounds: PrintLayoutBounds;
+  /** Profile-safe physical foundation thickness exposed above the plate base. */
+  readonly foundationThickness: number;
+  /**
+   * Physical Y offset added to uniformly scaled non-foundation contents.
+   */
+  readonly foundationLift: number;
+  /** Transform for non-foundation district contents, including the lift. */
   readonly transform: PrintLayoutTransform;
   readonly channelIds: readonly string[];
 }
@@ -276,6 +295,8 @@ interface PackItem {
   readonly height: number;
   readonly sourceBounds?: PrintLayoutBounds;
   readonly sourceScale?: number;
+  readonly foundationThickness?: number;
+  readonly foundationLift?: number;
   readonly channelIds: readonly string[];
   readonly allowRotation: boolean;
 }
@@ -404,6 +425,71 @@ function finiteScaledLength(
     ]);
   }
   return result;
+}
+
+interface PhysicalFoundationScale {
+  readonly thickness: number;
+  readonly lift: number;
+}
+
+function physicalFoundationScale(
+  sourceThickness: number,
+  scale: number,
+  minimumThickness: number,
+  field: string,
+  objectId?: string,
+): PhysicalFoundationScale {
+  const scaledThickness = finiteScaledLength(
+    sourceThickness,
+    scale,
+    `${field} scaled thickness`,
+    objectId,
+  );
+  const thickness = Math.max(scaledThickness, minimumThickness);
+  return {
+    thickness,
+    lift: finiteLayoutArithmetic(
+      thickness - scaledThickness,
+      `${field} lift`,
+      objectId,
+    ),
+  };
+}
+
+function physicalBaseThickness(
+  context: LayoutContext,
+  scale: number,
+  field: string,
+  objectId?: string,
+): number {
+  return physicalFoundationScale(
+    context.features.baseThickness,
+    scale,
+    context.limits.minimumBaseThickness,
+    field,
+    objectId,
+  ).thickness;
+}
+
+function districtFoundationScale(
+  district: PrintLayoutDistrictInput,
+  context: LayoutContext,
+  scale: number,
+): PhysicalFoundationScale {
+  const sourceThickness = district.sourceFoundationThickness;
+  if (sourceThickness === undefined) {
+    return { thickness: 0, lift: 0 };
+  }
+  return physicalFoundationScale(
+    sourceThickness,
+    scale,
+    Math.max(
+      context.limits.minimumBaseThickness,
+      context.limits.minimumRaisedFeatureHeight,
+    ),
+    `District '${district.id}' foundation`,
+    district.id,
+  );
 }
 
 function finiteArea(
@@ -615,7 +701,6 @@ function minimumSafeScale(
   const ratios: number[] = [
     limits.minimumWallThickness / features.wallThickness,
     limits.minimumFeatureSize / features.minimumFeatureSize,
-    limits.minimumBaseThickness / features.baseThickness,
   ];
   const add = (
     value: number | null | undefined,
@@ -657,11 +742,6 @@ function featureViolations(
       category: "minimum-feature-size",
       value: features.minimumFeatureSize,
       minimum: limits.minimumFeatureSize,
-    },
-    {
-      category: "base-thickness",
-      value: features.baseThickness,
-      minimum: limits.minimumBaseThickness,
     },
     {
       category: "label-stroke-width",
@@ -743,12 +823,23 @@ function districtOrder(left: PackItem, right: PackItem): number {
 
 function scaleDistricts(
   districts: readonly PrintLayoutDistrictInput[],
-  profile: PrinterProfile,
+  context: LayoutContext,
   scale: number,
 ): readonly PackItem[] {
   return districts
     .map((district): PackItem => {
       const size = boundsSize(district.sourceBounds);
+      const foundation = districtFoundationScale(
+        district,
+        context,
+        scale,
+      );
+      const scaledHeight = finiteScaledLength(
+        size.y,
+        scale,
+        `District '${district.id}' scaled height`,
+        district.id,
+      );
       return {
         id: district.id,
         kind: "district",
@@ -765,16 +856,17 @@ function scaleDistricts(
           `District '${district.id}' scaled depth`,
           district.id,
         ),
-        height: finiteScaledLength(
-          size.y,
-          scale,
-          `District '${district.id}' scaled height`,
+        height: finiteLayoutArithmetic(
+          scaledHeight + foundation.lift,
+          `District '${district.id}' physical height`,
           district.id,
         ),
         sourceBounds: district.sourceBounds,
         sourceScale: scale,
+        foundationThickness: foundation.thickness,
+        foundationLift: foundation.lift,
         channelIds: orderedChannelIds(
-          profile,
+          context.profile,
           district.channelIds,
           `District '${district.id}'`,
         ),
@@ -1248,7 +1340,12 @@ function reservationFitIssue(
 ): PrintLayoutIssue {
   const required = requiredSize(
     item,
-    context.features.baseThickness * scale,
+    physicalBaseThickness(
+      context,
+      scale,
+      `Reservation '${item.id}' plate base`,
+      item.id,
+    ),
   );
   const available = {
     x: context.packingSpan.x,
@@ -1271,8 +1368,8 @@ function createPlate(
   scale: number,
   index: number,
 ): PlateCreationResult {
-  const baseThickness = finiteScaledLength(
-    context.features.baseThickness,
+  const baseThickness = physicalBaseThickness(
+    context,
     scale,
     `Plate ${index} base thickness`,
     `${plateId(index, context.plateIdDigits)}-base`,
@@ -1508,7 +1605,12 @@ function exactDistrictFailure(
   };
   const required = requiredSize(
     item,
-    context.features.baseThickness * scale,
+    physicalBaseThickness(
+      context,
+      scale,
+      `District '${item.id}' plate base`,
+      item.id,
+    ),
   );
   return new PrintLayoutError([
     {
@@ -1532,7 +1634,11 @@ function ensureIndividualDistrictsFit(
   if (created.issue !== undefined) {
     throw new PrintLayoutError([created.issue]);
   }
-  const baseThickness = context.features.baseThickness * scale;
+  const baseThickness = physicalBaseThickness(
+    context,
+    scale,
+    "District fit plate base",
+  );
   for (const item of items) {
     if (
       !itemFitsHeight(item, baseThickness, context) ||
@@ -1551,7 +1657,11 @@ function attemptSinglePlate(
   const created = createPlate(context, scale, 1);
   if (created.issue !== undefined) return undefined;
   let plate = created.plate;
-  const baseThickness = context.features.baseThickness * scale;
+  const baseThickness = physicalBaseThickness(
+    context,
+    scale,
+    "Single-plate fit base",
+  );
   for (const item of items) {
     if (!itemFitsHeight(item, baseThickness, context)) {
       return undefined;
@@ -1575,7 +1685,11 @@ function attemptTiled(
   if (firstResult.issue !== undefined) {
     throw new PrintLayoutError([firstResult.issue]);
   }
-  const baseThickness = context.features.baseThickness * scale;
+  const baseThickness = physicalBaseThickness(
+    context,
+    scale,
+    "Tiled fit plate base",
+  );
   const plates: MutablePlate[] = [firstResult.plate];
   const unplaced: PackItem[] = [];
   for (const item of items) {
@@ -1667,7 +1781,11 @@ function growKnownSinglePlate(
       ? undefined
       : identityItem(context.identity, context.profile, scale);
   const items: PackedItem[] = [];
-  const baseThickness = context.features.baseThickness * scale;
+  const baseThickness = physicalBaseThickness(
+    context,
+    scale,
+    "Scaled fit plate base",
+  );
   for (const placed of templatePlate.state.items) {
     let scaled: PackItem;
     switch (placed.kind) {
@@ -1793,8 +1911,8 @@ function finalizePlate(
   context: LayoutContext,
   scale: number,
 ): PrintLayoutPlate {
-  const baseThickness = finiteScaledLength(
-    context.features.baseThickness,
+  const baseThickness = physicalBaseThickness(
+    context,
     scale,
     `Plate ${plate.index} base thickness`,
     `${plate.id}-base`,
@@ -1807,17 +1925,24 @@ function finalizePlate(
     const bounds = placedBounds(item, context, baseTop);
     if (item.kind === "district") {
       const sourceBounds = item.sourceBounds!;
+      const foundationThickness = item.foundationThickness ?? 0;
+      const foundationLift = item.foundationLift ?? 0;
       districtPlacements.push({
         districtId: item.id,
         name: item.name,
         plateId: plate.id,
         sourceBounds,
         bounds,
+        foundationThickness,
+        foundationLift,
         transform: transformFor(
           sourceBounds,
           item.sourceScale ?? scale,
           item.rotation,
-          bounds.minimum,
+          {
+            ...bounds.minimum,
+            y: bounds.minimum.y + foundationLift,
+          },
         ),
         channelIds: item.channelIds,
       });
@@ -2058,13 +2183,37 @@ function validateInputs(
         `District '${district.id}' name`,
         MAXIMUM_NAME_LENGTH,
       );
+      const sourceBounds = validateBounds(
+        district.sourceBounds,
+        `District '${district.id}' sourceBounds`,
+      );
+      const sourceFoundationThickness =
+        district.sourceFoundationThickness === undefined
+          ? undefined
+          : finitePositive(
+              district.sourceFoundationThickness,
+              `District '${district.id}' sourceFoundationThickness`,
+            );
+      if (
+        sourceFoundationThickness !== undefined &&
+        sourceFoundationThickness > boundsSize(sourceBounds).y
+      ) {
+        throw new PrintLayoutError([
+          {
+            code: "invalid-request",
+            objectId: district.id,
+            message:
+              `District '${district.id}' sourceFoundationThickness must not exceed its sourceBounds height.`,
+          },
+        ]);
+      }
       return {
         id: district.id,
         name: district.name,
-        sourceBounds: validateBounds(
-          district.sourceBounds,
-          `District '${district.id}' sourceBounds`,
-        ),
+        sourceBounds,
+        ...(sourceFoundationThickness === undefined
+          ? {}
+          : { sourceFoundationThickness }),
         channelIds: orderedChannelIds(
           profile,
           district.channelIds,
@@ -2264,7 +2413,7 @@ function knownSinglePlateBelow(
     const attempt = attemptSinglePlate(
       context,
       scale,
-      scaleDistricts(districts, context.profile, scale),
+      scaleDistricts(districts, context, scale),
     );
     if (attempt !== undefined) return { scale, attempt };
   }
@@ -2307,7 +2456,7 @@ export function planPrintLayout(
           code: "unsafe-scale",
           message:
             `Requested scale ${formatDimension(validated.requestedScale)} is below the minimum profile-safe scale ${formatDimension(safeScale)} ` +
-            "for the supplied wall, gap, label, relief, route, base, and connector measurements.",
+            "for the supplied wall, gap, label, relief, route, and connector measurements.",
         },
       ]);
     }
@@ -2318,7 +2467,7 @@ export function planPrintLayout(
   if (validated.fitPolicy === "tile") {
     const items = scaleDistricts(
       validated.districts,
-      profile,
+      context,
       appliedScale,
     );
     ensureIndividualDistrictsFit(context, appliedScale, items);
@@ -2326,7 +2475,7 @@ export function planPrintLayout(
   } else {
     let items = scaleDistricts(
       validated.districts,
-      profile,
+      context,
       appliedScale,
     );
     const requestedAttempt = attemptSinglePlate(
@@ -2347,7 +2496,7 @@ export function planPrintLayout(
           code: "city-does-not-fit",
           message:
             `Complete districts do not fit together on one plate at scale ${formatDimension(appliedScale)}; ` +
-            'in Print export, set Fit policy to "Scale to one plate" or "Split complete districts (tiled multi-plate export)".',
+            'in Print export, set Fit policy to "Scale to one plate" or "Tile complete districts (multi-plate)".',
           available: { ...context.usableSpan },
         },
       ]);
@@ -2356,7 +2505,7 @@ export function planPrintLayout(
         safeScale,
         validated.requestedScale,
       );
-      items = scaleDistricts(validated.districts, profile, safeSearchStart);
+      items = scaleDistricts(validated.districts, context, safeSearchStart);
       let minimumScale = safeSearchStart;
       let minimumAttempt = attemptSinglePlate(
         context,
@@ -2380,7 +2529,7 @@ export function planPrintLayout(
       if (minimumAttempt === undefined) {
         items = scaleDistricts(
           validated.districts,
-          profile,
+          context,
           minimumScale,
         );
         ensureIndividualDistrictsFit(context, minimumScale, items);
@@ -2395,7 +2544,7 @@ export function planPrintLayout(
               (validated.acknowledgeBelowProfileScale
                 ? `Complete districts do not fit together on one plate even below the profile-safe scale ${formatDimension(safeScale)}; `
                 : `Complete districts do not fit together on one plate at the minimum profile-safe scale ${formatDimension(safeScale)}; `) +
-              'in Print export, set Fit policy to "Split complete districts (tiled multi-plate export)".',
+              'in Print export, set Fit policy to "Tile complete districts (multi-plate)".',
             available: { ...context.usableSpan },
           },
         ]);
@@ -2411,7 +2560,7 @@ export function planPrintLayout(
         const candidateScale = (low + high) / 2;
         const candidateItems = scaleDistricts(
           validated.districts,
-          profile,
+          context,
           candidateScale,
         );
         const candidate = growKnownSinglePlate(
@@ -2450,7 +2599,12 @@ export function planPrintLayout(
       reason: "plate-limit",
       required: requiredSize(
         item,
-        context.features.baseThickness * appliedScale,
+        physicalBaseThickness(
+          context,
+          appliedScale,
+          `Unplaced district '${item.id}' plate base`,
+          item.id,
+        ),
       ),
     }),
   );

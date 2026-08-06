@@ -298,16 +298,21 @@ function cityBox(position: Vector3, size: Vector3): CityBox {
 function printBoundsFromCityBox(
   box: CityBox,
   transform: CoordinateTransform,
+  verticalOffset = 0,
 ): PrintBounds {
   const minimum = {
     x: (box.minimum.x - transform.origin.x) * transform.scale,
     y: (box.minimum.z - transform.origin.z) * transform.scale,
-    z: (box.minimum.y - transform.origin.y) * transform.scale,
+    z:
+      (box.minimum.y - transform.origin.y) * transform.scale +
+      verticalOffset,
   };
   const maximum = {
     x: (box.maximum.x - transform.origin.x) * transform.scale,
     y: (box.maximum.z - transform.origin.z) * transform.scale,
-    z: (box.maximum.y - transform.origin.y) * transform.scale,
+    z:
+      (box.maximum.y - transform.origin.y) * transform.scale +
+      verticalOffset,
   };
   return bounds(minimum, maximum);
 }
@@ -463,11 +468,30 @@ function measuredBounds(
   return bounds(minimum, maximum);
 }
 
-function minimumPrimitiveFeature(
+function minimumScalableFeature(
   primitives: readonly PrintPrimitive[],
+  profile: PrinterProfile,
+  hasDistricts: boolean,
 ): number {
+  const scalable = primitives.filter(({ kind }) => kind === "building");
+  if (scalable.length === 0) {
+    if (!hasDistricts) {
+      return Math.min(
+        ...primitives.flatMap(({ bounds: item }) => [
+          item.size.x,
+          item.size.y,
+          item.size.z,
+        ]),
+      );
+    }
+    const limits = resolvePrinterGeometryLimits(profile);
+    return Math.max(
+      limits.minimumWallThickness,
+      limits.minimumFeatureSize,
+    );
+  }
   return Math.min(
-    ...primitives.flatMap(({ bounds: item }) => [
+    ...scalable.flatMap(({ bounds: item }) => [
       item.size.x,
       item.size.y,
       item.size.z,
@@ -488,10 +512,25 @@ function intervalGap(
   );
 }
 
-function minimumHorizontalGap(
+function minimumWithinDistrictHorizontalGap(
+  model: CityModel,
+  buildingPrimitives: ReadonlyMap<string, PrintPrimitive>,
   primitives: readonly PrintPrimitive[],
 ): number | null {
-  return minimumPositiveHorizontalGap(primitives, EPSILON);
+  if (model.districts.length === 0) {
+    return minimumPositiveHorizontalGap(primitives, EPSILON);
+  }
+  let minimum = Number.POSITIVE_INFINITY;
+  for (const district of model.districts) {
+    const gap = minimumPositiveHorizontalGap(
+      model.buildings
+        .filter(({ districtId }) => districtId === district.id)
+        .map(({ id }) => buildingPrimitives.get(id)!),
+      EPSILON,
+    );
+    if (gap !== null) minimum = Math.min(minimum, gap);
+  }
+  return Number.isFinite(minimum) ? minimum : null;
 }
 
 function semanticChannelMap(
@@ -1661,6 +1700,7 @@ function plateNumberPrimitives(
   baseBounds: PrintBounds,
   channelId: string,
   profile: PrinterProfile,
+  verticalOffset = 0,
 ): readonly PrintPrimitive[] {
   if (value.id.trim() === "") {
     throw new PrintGeometryValidationError([
@@ -1678,6 +1718,7 @@ function plateNumberPrimitives(
       maximum: { ...value.bounds.maximum },
     },
     transform,
+    verticalOffset,
   );
   if (
     Math.abs(reservation.minimum.z - baseBounds.maximum.z) > EPSILON ||
@@ -1894,6 +1935,7 @@ export function buildPrintableCityArtifacts(
     options.profile,
   );
   const baseCityBox = cityBox(base.position, base.size);
+  const geometryLimits = resolvePrinterGeometryLimits(options.profile);
   const transform: CoordinateTransform = {
     scale,
     origin: { ...baseCityBox.minimum },
@@ -1902,7 +1944,22 @@ export function buildPrintableCityArtifacts(
     semanticChannels,
     base.semanticGroupId,
   );
-  const baseBounds = printBoundsFromCityBox(baseCityBox, transform);
+  const scaledBaseBounds = printBoundsFromCityBox(
+    baseCityBox,
+    transform,
+  );
+  const baseThickness = Math.max(
+    scaledBaseBounds.size.z,
+    geometryLimits.minimumBaseThickness,
+  );
+  const baseLift = baseThickness - scaledBaseBounds.size.z;
+  const baseBounds = bounds(
+    scaledBaseBounds.minimum,
+    {
+      ...scaledBaseBounds.maximum,
+      z: scaledBaseBounds.minimum.z + baseThickness,
+    },
+  );
   const primitives: PrintPrimitive[] = [
     primitive(
       base.id,
@@ -1920,6 +1977,7 @@ export function buildPrintableCityArtifacts(
         baseBounds,
         baseChannelId,
         options.profile,
+        baseLift,
       ),
     );
   }
@@ -1932,7 +1990,12 @@ export function buildPrintableCityArtifacts(
   const districtPrimitives = new Map<string, PrintPrimitive>();
   const buildingPrimitives = new Map<string, PrintPrimitive>();
   const externalPrimitives = new Map<string, PrintPrimitive>();
+  const districtLiftById = new Map<string, number>();
   const baseTop = baseCityBox.maximum.y;
+  const minimumDistrictFoundationThickness = Math.max(
+    geometryLimits.minimumBaseThickness,
+    geometryLimits.minimumRaisedFeatureHeight,
+  );
 
   for (const district of [...model.districts].sort((left, right) =>
     compare(left.id, right.id),
@@ -1950,12 +2013,33 @@ export function buildPrintableCityArtifacts(
         `District '${district.id}' has no printable volume above the shared base.`,
       ]);
     }
+    const scaledDistrictBounds = printBoundsFromCityBox(
+      clipped,
+      transform,
+      baseLift,
+    );
+    const foundationThickness = Math.max(
+      scaledDistrictBounds.size.z,
+      minimumDistrictFoundationThickness,
+    );
+    const foundationLift =
+      foundationThickness - scaledDistrictBounds.size.z;
+    districtLiftById.set(district.id, foundationLift);
     const districtPrimitive = primitive(
       district.id,
       "district",
       base.semanticGroupId,
       baseChannelId,
-      printBoundsFromCityBox(clipped, transform),
+      bounds(
+        {
+          ...scaledDistrictBounds.minimum,
+          z: baseBounds.maximum.z,
+        },
+        {
+          ...scaledDistrictBounds.maximum,
+          z: baseBounds.maximum.z + foundationThickness,
+        },
+      ),
     );
     districtPrimitives.set(district.id, districtPrimitive);
     primitives.push(districtPrimitive);
@@ -1976,6 +2060,7 @@ export function buildPrintableCityArtifacts(
       printBoundsFromCityBox(
         cityBox(building.position, building.size),
         transform,
+        baseLift + (districtLiftById.get(building.districtId) ?? 0),
       ),
     );
     buildingPrimitives.set(building.id, buildingPrimitive);
@@ -1998,6 +2083,7 @@ export function buildPrintableCityArtifacts(
           printBoundsFromCityBox(
             cityBox(node.position, node.size),
             transform,
+            baseLift,
           ),
         );
         externalPrimitives.set(node.id, externalPrimitive);
@@ -2083,6 +2169,7 @@ export function buildPrintableCityArtifacts(
             maximum: { ...options.identityReservation.maximum },
           },
           transform,
+          baseLift,
         ),
   );
   primitives.push(...identityGeometry.primitives);
@@ -2211,7 +2298,11 @@ export function buildPrintableCityArtifacts(
   }
   primitives.sort(primitiveOrder);
   const cityBounds = measuredBounds(primitives);
-  const minimumFeatureSize = minimumPrimitiveFeature(primitives);
+  const minimumFeatureSize = minimumScalableFeature(
+    primitives,
+    options.profile,
+    model.districts.length > 0,
+  );
   const city: PrintableCity = {
     application: {
       name: "Code City",
@@ -2230,7 +2321,11 @@ export function buildPrintableCityArtifacts(
       baseThickness: baseBounds.size.z,
       wallThickness: minimumFeatureSize,
       minimumFeatureSize,
-      minimumGap: minimumHorizontalGap(primitives),
+      minimumGap: minimumWithinDistrictHorizontalGap(
+        model,
+        buildingPrimitives,
+        primitives,
+      ),
     },
     parts: createParts(primitives, model, options.profile),
   };

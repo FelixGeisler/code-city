@@ -8,39 +8,31 @@ import {
 } from "../apps/viewer/src/print-export-dialog.js";
 
 describe("viewer print export dialog state", () => {
-  it("maps the unchecked expert control safely and preserves explicit acknowledgement", () => {
+  it("maps Auto as the normal fit policy and preserves its tile plate cap", () => {
     const common = {
-      scale: 0.5,
+      scale: 3,
       labelPolicy: "off" as const,
       routePolicy: "off" as const,
       includeLegend: false,
-      fitPolicy: "error" as const,
+      fitPolicy: "auto" as const,
+      maximumPlateCount: 4,
     };
 
-    expect(printExportOptionsFromControls({
-      ...common,
-      acknowledgeBelowProfileScale: false,
-    })).toEqual({
-      ...common,
-      acknowledgeBelowProfileScale: false,
-    });
-    expect(printExportOptionsFromControls({
-      ...common,
-      acknowledgeBelowProfileScale: true,
-    })).toEqual({
-      ...common,
-      acknowledgeBelowProfileScale: true,
-    });
+    expect(printExportOptionsFromControls(common)).toEqual(common);
     expect(printExportOptionsFromControls({
       ...common,
       fitPolicy: "tile",
-      maximumPlateCount: 4,
-      acknowledgeBelowProfileScale: true,
     })).toMatchObject({
       fitPolicy: "tile",
       maximumPlateCount: 4,
-      acknowledgeBelowProfileScale: true,
     });
+    expect(printExportOptionsFromControls({
+      ...common,
+      fitPolicy: "error",
+    })).not.toHaveProperty("maximumPlateCount");
+    expect(printExportOptionsFromControls(common)).not.toHaveProperty(
+      "acknowledgeBelowProfileScale",
+    );
   });
 
   it("invalidates stale asynchronous custom-profile reads", () => {

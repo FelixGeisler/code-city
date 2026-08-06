@@ -218,7 +218,7 @@ function bundlePreflight(
     minimumSafeScale: 3,
     belowProfileScaleAcknowledged: false,
     featureViolations: [],
-    plateCount: 1,
+    plateCount: 2,
     plates: [
       {
         number: 1,
@@ -227,6 +227,30 @@ function bundlePreflight(
         dimensions: { width: 10, depth: 20, height: 5 },
         utilization: 0.5,
         channelIds: ["base"],
+        warnings: [],
+        labels: {
+          printedBuildings: 0,
+          skippedBuildings: 0,
+          printedDistricts: 0,
+          skippedDistricts: 0,
+        },
+        routes: {
+          policy: "off",
+          totalCount: 0,
+          printedCount: 0,
+          omittedCount: 0,
+          totalWeight: 0,
+          printedWeight: 0,
+          omittedWeight: 0,
+        },
+      },
+      {
+        number: 2,
+        id: "plate-2",
+        fileName: "plate-02.3mf",
+        dimensions: { width: 10, depth: 20, height: 5 },
+        utilization: 0.4,
+        channelIds: [],
         warnings: [],
         labels: {
           printedBuildings: 0,
@@ -315,6 +339,15 @@ function bundlePreview(): PrintPlatePreviewSource {
           },
         ],
       },
+      {
+        number: 2,
+        id: "plate-2",
+        fileName: "plate-02.3mf",
+        utilization: 0.4,
+        bounds,
+        warnings: [],
+        parts: [],
+      },
     ],
   };
 }
@@ -328,6 +361,7 @@ const START_REQUEST = {
     labelPolicy: "auto",
     routePolicy: "off",
     includeLegend: false,
+    fitPolicy: "error",
   },
 } as const;
 
@@ -385,6 +419,84 @@ describe("viewer print export controller", () => {
     expect(worker.terminationCount).toBe(1);
     expect(worker.onmessage).toBeNull();
     expect(states.at(-1)?.status).toBe("ready");
+  });
+
+  it("holds an exact Auto compact plan until normal confirmation reruns it", () => {
+    const workers = [new FakeWorker(), new FakeWorker()];
+    let workerIndex = 0;
+    const controller = new PrintExportController(
+      () => workers[workerIndex++]!,
+    );
+    const request = {
+      ...START_REQUEST,
+      options: {
+        ...START_REQUEST.options,
+        fitPolicy: "auto" as const,
+      },
+    };
+    const featureViolations = [{
+      category: "wall-thickness" as const,
+      resultingValue: 0.4,
+      minimum: 0.8,
+    }];
+    const proposal = {
+      ...preflight(),
+      fitPolicy: "scale" as const,
+      requestedScale: 3,
+      appliedScale: 0.5,
+      minimumSafeScale: 1.6,
+      belowProfileScaleAcknowledged: true,
+      featureViolations,
+    };
+    const proposalPreview = {
+      ...singlePreview(proposal),
+      fitPolicy: "auto" as const,
+      appliedPolicy: "scale" as const,
+      requestedScale: 3,
+      appliedScale: 0.5,
+      minimumSafeScale: 1.6,
+      belowProfileScaleAcknowledged: true,
+      featureViolations,
+    };
+
+    const proposalJob = controller.start(request);
+    workers[0]!.emit({
+      type: "confirmation-required",
+      jobId: proposalJob,
+      preflight: proposal,
+      preview: proposalPreview,
+    });
+
+    expect(controller.state).toMatchObject({
+      status: "confirmation-required",
+      jobId: proposalJob,
+      preflight: { appliedScale: 0.5 },
+      preview: { requestedPolicy: "auto", appliedPolicy: "scale" },
+    });
+    expect(workers[0]!.terminationCount).toBe(1);
+
+    const confirmedJob = controller.confirmCompactFit();
+    expect(confirmedJob).toBe(2);
+    expect(workers[1]!.messages[0]).toMatchObject({
+      type: "generate",
+      options: {
+        fitPolicy: "auto",
+        confirmCompactFit: true,
+      },
+    });
+    workers[1]!.emit({
+      type: "preflight",
+      jobId: confirmedJob,
+      preflight: proposal,
+      preview: proposalPreview,
+    });
+    workers[1]!.emit({
+      type: "result",
+      jobId: confirmedJob,
+      artifact: artifact(),
+      manifestBytes: new ArrayBuffer(8),
+    });
+    expect(controller.state.status).toBe("ready");
   });
 
   it("fingerprints the expert acknowledgement and preserves fidelity preflight", () => {
@@ -541,8 +653,10 @@ describe("viewer print export controller", () => {
       status: "busy",
       jobId,
       progress: { phase: "layout", completed: 0.2 },
-      bundlePreflight: { plateCount: 1, fitPolicy: "tile" },
-      bundlePreview: { plates: [{ id: "plate-1" }] },
+      bundlePreflight: { plateCount: 2, fitPolicy: "tile" },
+      bundlePreview: {
+        plates: [{ id: "plate-1" }, { id: "plate-2" }],
+      },
     });
 
     const bytes = Uint8Array.from([80, 75, 3, 4]).buffer;
@@ -562,8 +676,10 @@ describe("viewer print export controller", () => {
     expect(controller.state).toMatchObject({
       status: "bundle-ready",
       jobId,
-      preflight: { plateCount: 1 },
-      preview: { plates: [{ id: "plate-1" }] },
+      preflight: { plateCount: 2 },
+      preview: {
+        plates: [{ id: "plate-1" }, { id: "plate-2" }],
+      },
       artifact: { format: "zip", bytes },
       manifestBytes,
     });
@@ -635,6 +751,36 @@ describe("viewer print export controller", () => {
       status: "failed",
       error: { kind: "protocol" },
     });
+  });
+
+  it("rejects a worker plan that leaves any object unplaced", () => {
+    const worker = new FakeWorker();
+    const controller = new PrintExportController(() => worker);
+    const jobId = controller.start(START_REQUEST);
+    worker.emitRaw({
+      type: "preflight",
+      jobId,
+      preflight: {
+        ...preflight(),
+        unplacedObjects: [{
+          kind: "district",
+          id: "district:missing",
+          label: "Missing",
+          reason: "no-space",
+        }],
+      },
+      preview: {
+        ...singlePreview(),
+        unplacedObjects: [{ id: "district:missing" }],
+      },
+    });
+
+    expect(controller.state).toMatchObject({
+      status: "failed",
+      jobId,
+      error: { kind: "protocol" },
+    });
+    expect(worker.terminationCount).toBe(1);
   });
 
   it("rejects a second preflight instead of replacing the published plan", () => {

@@ -9,9 +9,6 @@ import type {
   PrintFormat,
 } from "../../../packages/core/src/print.js";
 import type {
-  PrintFitPolicy,
-} from "../../../packages/core/src/print-layout.js";
-import type {
   CalibrationPrintExportPreflight,
 } from "../../../packages/exporter/src/calibration.js";
 import type {
@@ -35,6 +32,7 @@ import type { ViewerLoadGateway } from "./model-source.js";
 import {
   withPrintLayoutPreviewReadiness,
   type PrintLayoutPreviewPlan,
+  type RequestedPrintFitPolicy,
 } from "./print-plate-preview.js";
 
 export interface PrintExportDialogOptions {
@@ -111,8 +109,7 @@ export interface PrintExportControlValues {
   readonly labelPolicy: "auto" | "off";
   readonly routePolicy: "auto" | "off";
   readonly includeLegend: boolean;
-  readonly acknowledgeBelowProfileScale: boolean;
-  readonly fitPolicy: PrintFitPolicy;
+  readonly fitPolicy: RequestedPrintFitPolicy;
   readonly maximumPlateCount?: number;
 }
 
@@ -124,10 +121,8 @@ export function printExportOptionsFromControls(
     labelPolicy: values.labelPolicy,
     routePolicy: values.routePolicy,
     includeLegend: values.includeLegend,
-    acknowledgeBelowProfileScale:
-      values.acknowledgeBelowProfileScale,
     fitPolicy: values.fitPolicy,
-    ...(values.fitPolicy === "tile" &&
+    ...((values.fitPolicy === "tile" || values.fitPolicy === "auto") &&
     values.maximumPlateCount !== undefined
       ? { maximumPlateCount: values.maximumPlateCount }
       : {}),
@@ -149,9 +144,20 @@ function issuesOf(error: unknown): readonly string[] {
     const issues = (error as { readonly issues?: unknown }).issues;
     if (
       Array.isArray(issues) &&
-      issues.every((issue) => typeof issue === "string")
+      issues.every(
+        (issue) =>
+          typeof issue === "string" ||
+          (typeof issue === "object" &&
+            issue !== null &&
+            typeof (issue as { readonly message?: unknown }).message ===
+              "string"),
+      )
     ) {
-      return issues;
+      return issues.map((issue) =>
+        typeof issue === "string"
+          ? issue
+          : String((issue as { readonly message: string }).message),
+      );
     }
   }
   return [messageOf(error)];
@@ -173,11 +179,16 @@ function printFormat(value: string): PrintFormat {
   throw new Error("Choose either 3MF or STL.");
 }
 
-function printFitPolicy(value: string): PrintFitPolicy {
-  if (value === "error" || value === "scale" || value === "tile") {
+function printFitPolicy(value: string): RequestedPrintFitPolicy {
+  if (
+    value === "auto" ||
+    value === "error" ||
+    value === "scale" ||
+    value === "tile"
+  ) {
     return value;
   }
-  throw new Error("Choose error, scale, or tile as the fit policy.");
+  throw new Error("Choose auto, keep scale, scale, or tile as the fit policy.");
 }
 
 function maximumPlateCount(value: string): number {
@@ -223,10 +234,6 @@ export function installPrintExportDialog(
   const legendInput = requiredElement<HTMLInputElement>(
     "print-legend-download-enabled",
   );
-  const belowProfileScaleAcknowledgement =
-    requiredElement<HTMLInputElement>(
-      "print-below-profile-scale-acknowledgement",
-    );
   const submitButton =
     requiredElement<HTMLButtonElement>("print-export-submit");
   const calibrationButton =
@@ -244,6 +251,15 @@ export function installPrintExportDialog(
     requiredElement<HTMLElement>("print-export-errors");
   const errorList =
     requiredElement<HTMLUListElement>("print-export-error-list");
+  const compactConfirmationSection = requiredElement<HTMLElement>(
+    "print-export-compact-confirmation",
+  );
+  const compactConfirmationSummary = requiredElement<HTMLParagraphElement>(
+    "print-export-compact-confirmation-summary",
+  );
+  const compactConfirmationButton = requiredElement<HTMLButtonElement>(
+    "print-export-compact-confirm",
+  );
   const preflightSection =
     requiredElement<HTMLElement>("print-export-preflight");
   const dimensionsElement =
@@ -322,7 +338,7 @@ export function installPrintExportDialog(
     return printFormat(formatSelect.value);
   }
 
-  function selectedFitPolicy(): PrintFitPolicy {
+  function selectedFitPolicy(): RequestedPrintFitPolicy {
     return printFitPolicy(fitSelect.value);
   }
 
@@ -430,6 +446,8 @@ export function installPrintExportDialog(
     fidelityViolations.replaceChildren();
     errorSection.hidden = true;
     errorList.replaceChildren();
+    compactConfirmationSection.hidden = true;
+    compactConfirmationSummary.textContent = "";
   }
 
   function renderErrors(issues: readonly string[]): void {
@@ -443,8 +461,29 @@ export function installPrintExportDialog(
     errorSection.hidden = false;
   }
 
+  function renderCompactConfirmation(
+    preflight: PrintPlateBundlePreflight,
+  ): void {
+    compactConfirmationSummary.textContent =
+      `Auto fit found a complete one-plate layout at scale ` +
+      `${millimeters(preflight.appliedScale)}, below the profile-safe ` +
+      `${millimeters(preflight.minimumSafeScale)} scale. No print file has ` +
+      "been created yet.";
+    compactConfirmationSection.hidden = false;
+  }
+
+  function fitPolicyLabel(policy: "error" | "scale" | "tile"): string {
+    switch (policy) {
+      case "error": return "kept target scale";
+      case "scale": return "scaled one plate";
+      case "tile": return "tiled complete districts";
+    }
+  }
+
   function renderBundlePreflight(
     preflight: PrintPlateBundlePreflight,
+    preview?: PrintLayoutPreviewPlan,
+    awaitingConfirmation = false,
   ): void {
     const largest = preflight.plates.reduce(
       (current, plate) => ({
@@ -464,8 +503,10 @@ export function installPrintExportDialog(
       `${millimeters(largest.depth)} \u00d7 ` +
       `${millimeters(largest.height)} mm`;
     partsElement.textContent =
-      `Scale requested ${millimeters(preflight.requestedScale)} \u00b7 ` +
-      `applied ${millimeters(preflight.appliedScale)} \u00b7 ` +
+      `${preview?.requestedPolicy === "auto" ? "Auto fit" : "Fit"} \u2192 ` +
+      `${fitPolicyLabel(preview?.appliedPolicy ?? preflight.fitPolicy)} \u00b7 ` +
+      `target scale ${millimeters(preflight.requestedScale)} \u00b7 ` +
+      `applied scale ${millimeters(preflight.appliedScale)} \u00b7 ` +
       `profile-safe ${millimeters(preflight.minimumSafeScale)} \u00b7 ` +
       `${printedLabels.toLocaleString()} labels \u00b7 ` +
       `${preflight.routes.printedCount.toLocaleString()} routes`;
@@ -493,11 +534,15 @@ export function installPrintExportDialog(
       plateItems.push(remaining);
     }
     channelsList.replaceChildren(...plateItems);
-    fidelitySummary.textContent =
-      `Applied scale ${millimeters(preflight.appliedScale)} is below the ` +
-      `profile-safe scale ${millimeters(preflight.minimumSafeScale)}. ` +
-      "You explicitly acknowledged reduced print fidelity; this does not " +
-      "indicate a printer hardware danger.";
+    fidelitySummary.textContent = awaitingConfirmation
+      ? `The proposed applied scale ${millimeters(preflight.appliedScale)} is ` +
+        `below the profile-safe scale ${millimeters(preflight.minimumSafeScale)}. ` +
+        "Review the exact preview and confirm this print-fidelity trade-off " +
+        "before any file is created."
+      : `Applied scale ${millimeters(preflight.appliedScale)} is below the ` +
+        `profile-safe scale ${millimeters(preflight.minimumSafeScale)}. ` +
+        "You confirmed the reduced print-fidelity trade-off; this does not " +
+        "indicate a printer hardware danger.";
     fidelityViolations.replaceChildren(
       ...preflight.featureViolations.map((violation) => {
         const item = document.createElement("li");
@@ -726,7 +771,7 @@ export function installPrintExportDialog(
       const fitPolicy = selectedFitPolicy();
       fitPolicyValid = true;
       maximumPlateCountValid =
-        fitPolicy !== "tile" ||
+        (fitPolicy !== "tile" && fitPolicy !== "auto") ||
         Number.isSafeInteger(selectedMaximumPlateCount());
     } catch {
       fitPolicyValid = false;
@@ -751,6 +796,7 @@ export function installPrintExportDialog(
     optionsFieldset.disabled = busy;
     cancelButton.hidden = !busy;
     progressWrap.hidden = !busy;
+    compactConfirmationSection.hidden = true;
     updateSubmitAvailability();
 
     if (state.status === "idle") {
@@ -769,7 +815,10 @@ export function installPrintExportDialog(
         state.bundlePreflight !== undefined &&
         state.bundlePreview !== undefined
       ) {
-        renderBundlePreflight(state.bundlePreflight);
+        renderBundlePreflight(
+          state.bundlePreflight,
+          state.bundlePreview,
+        );
         publishPrintLayout(
           state.jobId,
           state.bundlePreview,
@@ -779,7 +828,7 @@ export function installPrintExportDialog(
         state.preflight !== undefined &&
         state.preview !== undefined
       ) {
-        renderBundlePreflight(state.preflight);
+        renderBundlePreflight(state.preflight, state.preview);
         publishPrintLayout(state.jobId, state.preview, "planned");
       }
       return;
@@ -787,12 +836,15 @@ export function installPrintExportDialog(
     if (state.status === "failed") {
       clearDownloads();
       if (state.preflight !== undefined) {
-        renderBundlePreflight(state.preflight);
+        renderBundlePreflight(state.preflight, state.preview);
         if (state.preview !== undefined) {
           publishPrintLayout(state.jobId, state.preview, "planned");
         }
       } else if (state.bundlePreflight !== undefined) {
-        renderBundlePreflight(state.bundlePreflight);
+        renderBundlePreflight(
+          state.bundlePreflight,
+          state.bundlePreview,
+        );
         if (state.bundlePreview !== undefined) {
           publishPrintLayout(
             state.jobId,
@@ -803,9 +855,19 @@ export function installPrintExportDialog(
       }
       renderErrors(
         state.error.issues.length > 0
-          ? state.error.issues
+          ? state.error.issues.map((issue) =>
+              typeof issue === "string" ? issue : issue.message,
+            )
           : [state.error.message],
       );
+      return;
+    }
+    if (state.status === "confirmation-required") {
+      clearDownloads();
+      errorSection.hidden = true;
+      renderBundlePreflight(state.preflight, state.preview, true);
+      publishPrintLayout(state.jobId, state.preview, "planned");
+      renderCompactConfirmation(state.preflight);
       return;
     }
     if (state.status === "calibration-ready") {
@@ -814,12 +876,12 @@ export function installPrintExportDialog(
       return;
     }
     if (state.status === "bundle-ready") {
-      renderBundlePreflight(state.preflight);
+      renderBundlePreflight(state.preflight, state.preview);
       publishPrintLayout(state.jobId, state.preview, "ready");
       renderBundleReady(state);
       return;
     }
-    renderBundlePreflight(state.preflight);
+    renderBundlePreflight(state.preflight, state.preview);
     publishPrintLayout(state.jobId, state.preview, "ready");
     renderReady(state);
   }
@@ -849,13 +911,14 @@ export function installPrintExportDialog(
   }
 
   function updateFitControls(): void {
-    let tiled = false;
+    let usesPlateLimit = false;
     try {
-      tiled = selectedFitPolicy() === "tile";
+      const fitPolicy = selectedFitPolicy();
+      usesPlateLimit = fitPolicy === "auto" || fitPolicy === "tile";
     } catch {
-      tiled = false;
+      usesPlateLimit = false;
     }
-    maximumPlateCountInput.disabled = !tiled;
+    maximumPlateCountInput.disabled = !usesPlateLimit;
     updateSubmitAvailability();
   }
 
@@ -953,23 +1016,19 @@ export function installPrintExportDialog(
   labelsSelect.addEventListener("change", invalidateOutput);
   routesInput.addEventListener("change", invalidateOutput);
   legendInput.addEventListener("change", invalidateOutput);
-  belowProfileScaleAcknowledgement.addEventListener(
-    "change",
-    invalidateOutput,
-  );
   function startExport(event: Event): void {
     event.preventDefault();
     if (!enabled) return;
     clearResultPanels();
     let profile: PrinterProfile;
     let format: PrintFormat;
-    let fitPolicy: PrintFitPolicy;
+    let fitPolicy: RequestedPrintFitPolicy;
     let maximumPlates: number | undefined;
     try {
       ({ profile, format } = resolveProfileForFormat());
       fitPolicy = selectedFitPolicy();
       maximumPlates =
-        fitPolicy === "tile"
+        fitPolicy === "tile" || fitPolicy === "auto"
           ? selectedMaximumPlateCount()
           : undefined;
     } catch (error) {
@@ -986,8 +1045,6 @@ export function installPrintExportDialog(
         labelPolicy: labelsSelect.value === "off" ? "off" : "auto",
         routePolicy: routesInput.checked ? "auto" : "off",
         includeLegend: legendInput.checked,
-        acknowledgeBelowProfileScale:
-          belowProfileScaleAcknowledgement.checked,
         fitPolicy,
         ...(maximumPlates === undefined
           ? {}
@@ -1010,6 +1067,14 @@ export function installPrintExportDialog(
     controller.startCalibration({ profile, format });
   }
   form.addEventListener("submit", startExport);
+  compactConfirmationButton.addEventListener("click", () => {
+    compactConfirmationSection.hidden = true;
+    try {
+      controller.confirmCompactFit();
+    } catch (error) {
+      renderErrors([messageOf(error)]);
+    }
+  });
   calibrationButton.addEventListener("click", startCalibration);
   window.addEventListener("beforeunload", () => {
     controller.dispose();

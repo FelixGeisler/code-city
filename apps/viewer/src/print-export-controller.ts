@@ -105,12 +105,20 @@ export interface PrintExportFailedState {
   readonly bundlePreview?: PrintLayoutPreviewPlan;
 }
 
+export interface PrintExportConfirmationRequiredState {
+  readonly status: "confirmation-required";
+  readonly jobId: number;
+  readonly preflight: PrintPlateBundlePreflight;
+  readonly preview: PrintLayoutPreviewPlan;
+}
+
 export type PrintExportControllerState =
   | PrintExportIdleState
   | PrintExportBusyState
   | PrintExportReadyState
   | PrintPlateBundleReadyState
   | PrintCalibrationReadyState
+  | PrintExportConfirmationRequiredState
   | PrintExportFailedState;
 
 export interface PrintExportControllerCallbacks {
@@ -126,16 +134,18 @@ export interface PrintExportControllerCallbacks {
 interface ActiveWorker {
   readonly jobId: number;
   readonly kind: "city" | "calibration";
-  readonly output: "single" | "bundle" | "calibration";
+  output: "pending" | "single" | "bundle" | "calibration";
   readonly format: "3mf" | "stl";
   readonly requestFingerprint?: PrintExportRequestFingerprint;
+  readonly startRequest?: PrintExportStartRequest;
   readonly worker: PrintExportWorkerLike;
   watchdogHandle?: unknown;
 }
 
 interface PrintExportRequestFingerprint {
   readonly format: "3mf" | "stl";
-  readonly fitPolicy: "error" | "scale" | "tile";
+  readonly fitPolicy: "auto" | "error" | "scale" | "tile";
+  readonly confirmCompactFit: boolean;
   readonly scale: number;
   readonly acknowledgeBelowProfileScale: boolean;
   readonly maximumPlateCount?: number;
@@ -177,7 +187,8 @@ function requestFingerprint(
   const profileName = profileField(request.profile, "name");
   return Object.freeze({
     format: request.format,
-    fitPolicy: request.options.fitPolicy ?? "error",
+    fitPolicy: request.options.fitPolicy ?? "auto",
+    confirmCompactFit: request.options.confirmCompactFit ?? false,
     scale: request.options.scale,
     acknowledgeBelowProfileScale:
       request.options.acknowledgeBelowProfileScale ?? false,
@@ -195,6 +206,7 @@ function requestFingerprint(
 function preflightMatchesRequest(
   preflight: PrintPlateBundlePreflight,
   fingerprint: PrintExportRequestFingerprint,
+  allowUnconfirmedCompactProposal = false,
 ): boolean {
   const labelsDisabled =
     fingerprint.labelPolicy === "off" &&
@@ -202,10 +214,15 @@ function preflightMatchesRequest(
       preflight.labels.printedDistricts !== 0);
   return (
     preflight.format === fingerprint.format &&
-    preflight.fitPolicy === fingerprint.fitPolicy &&
+    (fingerprint.fitPolicy === "auto" ||
+      preflight.fitPolicy === fingerprint.fitPolicy) &&
     sameScale(preflight.requestedScale, fingerprint.scale) &&
     preflight.belowProfileScaleAcknowledged ===
-      fingerprint.acknowledgeBelowProfileScale &&
+      (fingerprint.fitPolicy === "auto" &&
+      preflight.featureViolations.length > 0 &&
+      (fingerprint.confirmCompactFit || allowUnconfirmedCompactProposal)
+        ? true
+        : fingerprint.acknowledgeBelowProfileScale) &&
     preflight.routes.policy === fingerprint.routePolicy &&
     preflight.legendIncluded === fingerprint.includeLegend &&
     !labelsDisabled &&
@@ -232,6 +249,7 @@ export class PrintExportController {
   private nextJobId = 0;
   private active: ActiveWorker | undefined;
   private currentState: PrintExportControllerState = IDLE_STATE;
+  private compactConfirmationRequest: PrintExportStartRequest | undefined;
   private disposed = false;
 
   public constructor(
@@ -261,14 +279,14 @@ export class PrintExportController {
   }
 
   public start(request: PrintExportStartRequest): number {
+    this.compactConfirmationRequest = undefined;
     const fingerprint = requestFingerprint(request);
     return this.startWorker(
       "city",
-      fingerprint.fitPolicy === "error"
-        ? "single"
-        : "bundle",
+      "pending",
       request.format,
       fingerprint,
+      request,
       (jobId): PrintExportGenerateRequest => ({
         type: "generate",
         jobId,
@@ -286,6 +304,7 @@ export class PrintExportController {
       "calibration",
       request.format,
       undefined,
+      undefined,
       (jobId): PrintCalibrationGenerateRequest => ({
         type: "calibrate",
         jobId,
@@ -300,6 +319,7 @@ export class PrintExportController {
     output: ActiveWorker["output"],
     format: ActiveWorker["format"],
     fingerprint: PrintExportRequestFingerprint | undefined,
+    startRequest: PrintExportStartRequest | undefined,
     createRequest: (jobId: number) => PrintExportWorkerRequest,
   ): number {
     if (this.disposed) {
@@ -330,6 +350,7 @@ export class PrintExportController {
       ...(fingerprint === undefined
         ? {}
         : { requestFingerprint: fingerprint }),
+      ...(startRequest === undefined ? {} : { startRequest }),
     };
     worker.onmessage = (event) => {
       this.receive(worker, jobId, event.data);
@@ -366,6 +387,7 @@ export class PrintExportController {
 
   public cancel(): void {
     this.stopActiveWorker();
+    this.compactConfirmationRequest = undefined;
     if (this.currentState.status !== "idle") {
       this.updateState(IDLE_STATE);
     }
@@ -375,9 +397,28 @@ export class PrintExportController {
     this.cancel();
   }
 
+  public confirmCompactFit(): number {
+    const request = this.compactConfirmationRequest;
+    if (
+      this.currentState.status !== "confirmation-required" ||
+      request === undefined
+    ) {
+      throw new Error("No compact print fit is awaiting confirmation.");
+    }
+    return this.start({
+      ...request,
+      options: {
+        ...request.options,
+        fitPolicy: "auto",
+        confirmCompactFit: true,
+      },
+    });
+  }
+
   public dispose(): void {
     if (this.disposed) return;
     this.stopActiveWorker();
+    this.compactConfirmationRequest = undefined;
     this.disposed = true;
     if (this.currentState.status !== "idle") {
       this.updateState(IDLE_STATE);
@@ -404,6 +445,7 @@ export class PrintExportController {
       output,
       format,
       requestFingerprint: fingerprint,
+      startRequest,
     } = this.active!;
 
     switch (value.type) {
@@ -434,7 +476,10 @@ export class PrintExportController {
       }
       case "preflight": {
         const state = this.busyState(jobId);
-        if (kind !== "city" || output !== "single") {
+        if (
+          kind !== "city" ||
+          (output !== "pending" && output !== "single")
+        ) {
           this.fail(
             worker,
             jobId,
@@ -449,7 +494,6 @@ export class PrintExportController {
           fingerprint === undefined ||
           !preflightMatchesRequest(value.preflight, fingerprint) ||
           preview === undefined ||
-          fingerprint.fitPolicy !== "error" ||
           preview.requestedPolicy !== fingerprint.fitPolicy ||
           !sameScale(preview.requestedScale, fingerprint.scale) ||
           state?.preflight !== undefined ||
@@ -464,6 +508,7 @@ export class PrintExportController {
           );
           break;
         }
+        this.active!.output = "single";
         this.updateState({
           status: "busy",
           jobId,
@@ -477,7 +522,10 @@ export class PrintExportController {
       }
       case "bundle-preflight": {
         const state = this.busyState(jobId);
-        if (kind !== "city" || output !== "bundle") {
+        if (
+          kind !== "city" ||
+          (output !== "pending" && output !== "bundle")
+        ) {
           this.fail(
             worker,
             jobId,
@@ -492,7 +540,6 @@ export class PrintExportController {
           fingerprint === undefined ||
           !preflightMatchesRequest(value.preflight, fingerprint) ||
           preview === undefined ||
-          fingerprint.fitPolicy === "error" ||
           preview.requestedPolicy !== fingerprint.fitPolicy ||
           !sameScale(preview.requestedScale, fingerprint.scale) ||
           state?.preflight !== undefined ||
@@ -507,6 +554,7 @@ export class PrintExportController {
           );
           break;
         }
+        this.active!.output = "bundle";
         this.updateState({
           status: "busy",
           jobId,
@@ -515,6 +563,42 @@ export class PrintExportController {
           ...(state?.progress === undefined
             ? {}
             : { progress: state.progress }),
+        });
+        break;
+      }
+      case "confirmation-required": {
+        const state = this.busyState(jobId);
+        const preview = normalizePrintExportPreviewSource(value.preview);
+        if (
+          kind !== "city" ||
+          output !== "pending" ||
+          fingerprint === undefined ||
+          fingerprint.fitPolicy !== "auto" ||
+          fingerprint.confirmCompactFit ||
+          startRequest === undefined ||
+          !preflightMatchesRequest(value.preflight, fingerprint, true) ||
+          preview === undefined ||
+          preview.requestedPolicy !== "auto" ||
+          !sameScale(preview.requestedScale, fingerprint.scale) ||
+          state?.preflight !== undefined ||
+          state?.bundlePreflight !== undefined
+        ) {
+          this.fail(
+            worker,
+            jobId,
+            protocolFailure(
+              "The print worker returned a compact fit for another export request.",
+            ),
+          );
+          break;
+        }
+        this.finishWorker(worker, jobId);
+        this.compactConfirmationRequest = startRequest;
+        this.updateState({
+          status: "confirmation-required",
+          jobId,
+          preflight: value.preflight,
+          preview,
         });
         break;
       }

@@ -20,7 +20,6 @@ import {
   generateCalibrationPrintExport,
 } from "../packages/exporter/src/calibration.js";
 import {
-  generatePrintPlateBundle,
   preparePrintPlateBundle,
   serializePreparedSinglePrintPlateExport,
 } from "../packages/exporter/src/print-plates.js";
@@ -106,7 +105,7 @@ describe("viewer print export worker", () => {
       throw new Error("Expected a preflight response.");
     }
     expect(preflight.preview).toMatchObject({
-      fitPolicy: "error",
+      fitPolicy: "auto",
       appliedPolicy: "error",
       plates: [
         {
@@ -159,13 +158,14 @@ describe("viewer print export worker", () => {
     },
   );
 
-  it("fails an oversized default export before publishing a preview", () => {
+  it("fails an oversized keep-scale export before publishing a preview", () => {
     const responses: PrintExportWorkerResponse[] = [];
 
     runPrintExportRequest(
       request({
         options: {
           scale: 100,
+          fitPolicy: "error",
           labelPolicy: "off",
           routePolicy: "off",
           includeLegend: false,
@@ -183,6 +183,14 @@ describe("viewer print export worker", () => {
       type: "failure",
       error: {
         message: expect.stringMatching(/requires.*packing span/iu),
+        issues: expect.arrayContaining([
+          expect.objectContaining({
+            code: "district-does-not-fit",
+            objectId: expect.any(String),
+            required: expect.objectContaining({ x: expect.any(Number) }),
+            available: expect.objectContaining({ x: expect.any(Number) }),
+          }),
+        ]),
       },
     });
   });
@@ -191,7 +199,7 @@ describe("viewer print export worker", () => {
     const workerRequest = request({
       profile: createSingleChannelProfile(),
       options: {
-        scale: 0.5,
+        scale: 0.2,
         fitPolicy: "error",
         acknowledgeBelowProfileScale: true,
         labelPolicy: "off",
@@ -214,18 +222,18 @@ describe("viewer print export worker", () => {
     expect(preflight).toMatchObject({
       type: "preflight",
       preflight: {
-        requestedScale: 0.5,
-        appliedScale: 0.5,
-        minimumSafeScale: 1.6,
+        requestedScale: 0.2,
+        appliedScale: 0.2,
+        minimumSafeScale: 0.4,
         belowProfileScaleAcknowledged: true,
         featureViolations: expect.arrayContaining([
-          expect.objectContaining({ category: "wall-thickness" }),
+          expect.objectContaining({ category: expect.any(String) }),
         ]),
       },
       preview: {
-        requestedScale: 0.5,
-        appliedScale: 0.5,
-        minimumSafeScale: 1.6,
+        requestedScale: 0.2,
+        appliedScale: 0.2,
+        minimumSafeScale: 0.4,
         belowProfileScaleAcknowledged: true,
       },
     });
@@ -238,15 +246,81 @@ describe("viewer print export worker", () => {
       new TextDecoder().decode(result.response.manifestBytes),
     );
     expect(manifest.fit).toMatchObject({
-      requestedScale: 0.5,
-      appliedScale: 0.5,
-      minimumSafeScale: 1.6,
+      requestedScale: 0.2,
+      appliedScale: 0.2,
+      minimumSafeScale: 0.4,
       belowProfileScaleAcknowledged: true,
     });
     expect(result.transfer).toEqual([
       result.response.artifact.bytes,
       result.response.manifestBytes,
     ]);
+  });
+
+  it("returns a compact Auto preview without serializing until confirmation", () => {
+    const baseRequest = request({
+      model: DEMO_MODEL,
+      profile: createSingleChannelProfile(),
+      options: {
+        scale: 0.2,
+        fitPolicy: "auto",
+        maximumPlateCount: 12,
+        labelPolicy: "off",
+        routePolicy: "off",
+        includeLegend: false,
+      },
+    });
+    const proposal: PrintExportWorkerResponse[] = [];
+    runPrintExportRequest(baseRequest, (response) => proposal.push(response));
+
+    expect(proposal.some(({ type }) => type === "result" || type === "bundle-result"))
+      .toBe(false);
+    expect(proposal.some(
+      (response) => response.type === "progress" && response.phase === "serializing",
+    )).toBe(false);
+    const proposedResponse = proposal.at(-1);
+    if (proposedResponse?.type === "failure") {
+      throw new Error(proposedResponse.error.message);
+    }
+    expect(proposal.at(-1)).toMatchObject({
+      type: "confirmation-required",
+      preflight: {
+        fitPolicy: "scale",
+        plateCount: 1,
+        featureViolations: expect.arrayContaining([expect.any(Object)]),
+      },
+      preview: {
+        fitPolicy: "auto",
+        appliedPolicy: "scale",
+        unplacedObjects: [],
+      },
+    });
+
+    const confirmed: PrintExportWorkerResponse[] = [];
+    runPrintExportRequest({
+      ...baseRequest,
+      jobId: baseRequest.jobId + 1,
+      options: {
+        scale: 0.2,
+        maximumPlateCount: 12,
+        labelPolicy: "off",
+        routePolicy: "off",
+        includeLegend: false,
+        confirmCompactFit: true,
+      },
+    }, (response) => confirmed.push(response));
+    expect(confirmed.find(({ type }) => type === "preflight")).toMatchObject({
+      type: "preflight",
+      preview: {
+        fitPolicy: "auto",
+        appliedPolicy: "scale",
+      },
+    });
+    const confirmedResponse = confirmed.at(-1);
+    if (confirmedResponse?.type === "failure") {
+      throw new Error(confirmedResponse.error.message);
+    }
+    expect(confirmed.at(-1)?.type).toBe("result");
   });
 
   it("returns structured failures instead of throwing out of the worker", () => {
@@ -271,7 +345,7 @@ describe("viewer print export worker", () => {
     });
   });
 
-  it("returns an exact deterministic ZIP and preview for fitted plate bundles", () => {
+  it("selects direct output from the completed one-plate result", () => {
     const workerRequest = request({
       options: {
         scale: 3,
@@ -282,7 +356,8 @@ describe("viewer print export worker", () => {
         includeLegend: true,
       },
     });
-    const shared = generatePrintPlateBundle({
+    const shared = serializePreparedSinglePrintPlateExport(
+      preparePrintPlateBundle({
       format: workerRequest.format,
       model: workerRequest.model,
       profile: workerRequest.profile,
@@ -290,7 +365,8 @@ describe("viewer print export worker", () => {
         ...workerRequest.options,
         fitPolicy: "scale",
       },
-    });
+      }),
+    );
     const emitted: Array<{
       response: PrintExportWorkerResponse;
       transfer: readonly ArrayBuffer[];
@@ -314,28 +390,28 @@ describe("viewer print export worker", () => {
       "complete",
     ]);
     const preflight = emitted.find(
-      ({ response }) => response.type === "bundle-preflight",
+      ({ response }) => response.type === "preflight",
     )?.response;
     expect(preflight).toMatchObject({
-      type: "bundle-preflight",
+      type: "preflight",
       preflight: {
         plateCount: shared.preflight.plateCount,
         appliedScale: shared.preflight.appliedScale,
       },
     });
-    if (preflight?.type !== "bundle-preflight") {
-      throw new Error("Expected a bundle preflight response.");
+    if (preflight?.type !== "preflight") {
+      throw new Error("Expected a direct preflight response.");
     }
     expect(preflight.preview.plates).toHaveLength(
-      shared.manifest.plateCount,
+      shared.preflight.plateCount,
     );
     const result = emitted.at(-1)!;
-    expect(result.response.type).toBe("bundle-result");
-    if (result.response.type !== "bundle-result") {
-      throw new Error("Expected a bundle result response.");
+    expect(result.response.type).toBe("result");
+    if (result.response.type !== "result") {
+      throw new Error("Expected a direct result response.");
     }
     expect(new Uint8Array(result.response.artifact.bytes)).toEqual(
-      shared.bytes,
+      shared.artifact.bytes,
     );
     expect(new Uint8Array(result.response.manifestBytes)).toEqual(
       shared.manifestBytes,
