@@ -144,7 +144,6 @@ describe("dependency explorer index", () => {
         forward,
         "building-a",
         routes[0]!,
-        null,
       ).target,
     ).toEqual({ kind: "external", target: "Caf\u00e9" });
   });
@@ -503,27 +502,8 @@ describe("dependency route state", () => {
   });
 });
 
-describe("dependency route isolation projection", () => {
-  it("keeps internal endpoints visible without cross-district isolation", () => {
-    const index = routeProjectionIndex();
-    const route = dependencyRoutesForBuilding(
-      index,
-      "building-a",
-    )!.outgoing.routes.find(
-      ({ dependencyId }) => dependencyId === "a-to-b",
-    )!;
-
-    expect(
-      projectDependencyRoute(index, "building-a", route, null),
-    ).toEqual({
-      dependencyId: "a-to-b",
-      direction: "outgoing",
-      source: { kind: "building", buildingId: "building-a" },
-      target: { kind: "building", buildingId: "building-b" },
-    });
-  });
-
-  it("projects an outgoing hidden provider to the district boundary", () => {
+describe("dependency route projection", () => {
+  it("keeps internal endpoints as exact buildings across districts", () => {
     const index = routeProjectionIndex();
     const route = dependencyRoutesForBuilding(
       index,
@@ -532,11 +512,29 @@ describe("dependency route isolation projection", () => {
       ({ dependencyId }) => dependencyId === "a-to-c",
     )!;
 
+    expect(
+      projectDependencyRoute(index, "building-a", route),
+    ).toEqual({
+      dependencyId: "a-to-c",
+      direction: "outgoing",
+      source: { kind: "building", buildingId: "building-a" },
+      target: { kind: "building", buildingId: "building-c" },
+    });
+  });
+
+  it("keeps external providers as external endpoints", () => {
+    const index = routeProjectionIndex();
+    const route = dependencyRoutesForBuilding(
+      index,
+      "building-a",
+    )!.outgoing.routes.find(
+      ({ dependencyId }) => dependencyId === "a-to-rxjs",
+    )!;
+
     const projection = projectDependencyRoute(
       index,
       "building-a",
       route,
-      "district-a",
     );
 
     expect(projection.source).toEqual({
@@ -544,121 +542,9 @@ describe("dependency route isolation projection", () => {
       buildingId: "building-a",
     });
     expect(projection.target).toEqual({
-      kind: "district-boundary",
-      gatewayKey: "building\u0000building-c",
-      districtId: "district-a",
-      hiddenCounterpart: {
-        kind: "building",
-        buildingId: "building-c",
-        districtId: "district-b",
-        name: "Gamma.ts",
-        path: "src/Gamma.ts",
-      },
+      kind: "external",
+      target: "rxjs",
     });
-    expect(projection.target).not.toHaveProperty("buildingId");
-    expect(projection.target).not.toHaveProperty("position");
-  });
-
-  it("projects an incoming hidden consumer as the route source", () => {
-    const index = routeProjectionIndex();
-    const route = dependencyRoutesForBuilding(
-      index,
-      "building-a",
-    )!.incoming.routes.find(
-      ({ dependencyId }) => dependencyId === "c-to-a",
-    )!;
-
-    const projection = projectDependencyRoute(
-      index,
-      "building-a",
-      route,
-      "district-a",
-    );
-
-    expect(projection.source).toMatchObject({
-      kind: "district-boundary",
-      gatewayKey: "building\u0000building-c",
-      hiddenCounterpart: {
-        buildingId: "building-c",
-      },
-    });
-    expect(projection.source).not.toHaveProperty("position");
-    expect(projection.target).toEqual({
-      kind: "building",
-      buildingId: "building-a",
-    });
-
-    const outgoingRoute = dependencyRoutesForBuilding(
-      index,
-      "building-a",
-    )!.outgoing.routes.find(
-      ({ dependencyId }) => dependencyId === "a-to-c",
-    )!;
-    const outgoingProjection = projectDependencyRoute(
-      index,
-      "building-a",
-      outgoingRoute,
-      "district-a",
-    );
-    if (
-      projection.source.kind !== "district-boundary" ||
-      outgoingProjection.target.kind !== "district-boundary"
-    ) {
-      throw new TypeError("Expected projected district gateways.");
-    }
-    expect(projection.source.gatewayKey).toBe(
-      outgoingProjection.target.gatewayKey,
-    );
-  });
-
-  it("does not replace same-district or external endpoints", () => {
-    const index = routeProjectionIndex();
-    const routes = dependencyRoutesForBuilding(
-      index,
-      "building-a",
-    )!.outgoing.routes;
-    const internal = routes.find(
-      ({ dependencyId }) => dependencyId === "a-to-b",
-    )!;
-    const external = routes.find(
-      ({ dependencyId }) => dependencyId === "a-to-rxjs",
-    )!;
-
-    expect(
-      projectDependencyRoute(
-        index,
-        "building-a",
-        internal,
-        "district-a",
-      ).target,
-    ).toEqual({ kind: "building", buildingId: "building-b" });
-    expect(
-      projectDependencyRoute(
-        index,
-        "building-a",
-        external,
-        "district-a",
-      ).target,
-    ).toEqual({ kind: "external", target: "rxjs" });
-  });
-
-  it("rejects a projection whose selected building is outside isolation", () => {
-    const index = routeProjectionIndex();
-    const route = dependencyRoutesForBuilding(
-      index,
-      "building-a",
-    )!.outgoing.routes.find(
-      ({ dependencyId }) => dependencyId === "a-to-c",
-    )!;
-
-    expect(() =>
-      projectDependencyRoute(
-        index,
-        "building-a",
-        route,
-        "district-b",
-      ),
-    ).toThrow(/selected building must belong/u);
   });
 });
 

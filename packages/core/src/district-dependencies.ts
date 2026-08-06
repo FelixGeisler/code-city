@@ -59,14 +59,6 @@ export interface VisibleDistrictDependencyEndpoint {
   readonly path: string;
 }
 
-export interface BoundaryDistrictDependencyEndpoint {
-  readonly kind: "district-boundary";
-  readonly visibleDistrictId: string;
-  readonly hiddenDistrictId: string;
-  readonly hiddenDistrictName: string;
-  readonly hiddenDistrictPath: string;
-}
-
 export interface ExternalDistrictDependencyEndpoint {
   readonly kind: "external";
   /**
@@ -82,7 +74,6 @@ export interface ExternalDistrictDependencyEndpoint {
 
 export type DistrictDependencyEndpoint =
   | VisibleDistrictDependencyEndpoint
-  | BoundaryDistrictDependencyEndpoint
   | ExternalDistrictDependencyEndpoint;
 
 export interface DistrictDependencyBundle {
@@ -103,7 +94,7 @@ export interface DistrictDependencyBundle {
 
 export interface DistrictDependencySummary {
   /**
-   * Scope-wide availability before the current kind filters are applied.
+   * City-wide availability before the current kind filters are applied.
    * Entries always follow TypeScript, project, package order, including zeros.
    */
   readonly availableKinds: readonly DistrictDependencyKindSummary[];
@@ -290,14 +281,13 @@ export function toggleDistrictDependencyKind(
 }
 
 /**
- * Applies dependency-kind filters and optional district isolation, then returns
- * the strongest 24 bundles. All counts and weights are recomputed from the
- * filtered edges before the display cap is applied.
+ * Applies dependency-kind filters and returns the strongest 24 city-wide
+ * bundles. All counts and weights are recomputed from the filtered edges
+ * before the display cap is applied.
  */
 export function summarizeDistrictDependencies(
   index: DistrictDependencyExplorerIndex,
   filters: DistrictDependencyFilters,
-  isolatedDistrictId: string | null,
   externalProjection?: DistrictDependencyExternalProjection,
 ): DistrictDependencySummary {
   assertFilters(filters);
@@ -305,42 +295,23 @@ export function summarizeDistrictDependencies(
   if (!data) {
     throw new TypeError("Invalid district dependency explorer index.");
   }
-  if (
-    isolatedDistrictId !== null &&
-    !data.districts.has(isolatedDistrictId)
-  ) {
-    throw new RangeError(
-      `Unknown isolated district "${isolatedDistrictId}".`,
-    );
-  }
 
   const projectedBundles = projectExternalBundles(
     data.bundles,
     externalProjection,
   );
   const bundles = projectedBundles
-    .filter(
-      (bundle) =>
-        isolatedDistrictId === null ||
-        bundleTouchesDistrict(bundle, isolatedDistrictId),
-    )
     .map((bundle) =>
       summarizeBundle(
         bundle,
         data.districts,
         filters,
-        isolatedDistrictId,
       ),
     )
     .filter(
       (bundle): bundle is DistrictDependencyBundle => bundle !== null,
     )
     .sort(compareSummarizedBundles);
-  const scopedBundles = projectedBundles.filter(
-    (bundle) =>
-      isolatedDistrictId === null ||
-      bundleTouchesDistrict(bundle, isolatedDistrictId),
-  );
   const visible = Object.freeze(
     bundles.slice(0, DISTRICT_DEPENDENCY_BUNDLES_LIMIT),
   );
@@ -350,7 +321,7 @@ export function summarizeDistrictDependencies(
     bundles.slice(DISTRICT_DEPENDENCY_BUNDLES_LIMIT),
   );
   return Object.freeze({
-    availableKinds: summarizeAvailableKinds(scopedBundles),
+    availableKinds: summarizeAvailableKinds(projectedBundles),
     totalBundleCount: bundles.length,
     visibleBundleCount: visible.length,
     hiddenBundleCount: bundles.length - visible.length,
@@ -692,7 +663,6 @@ function summarizeBundle(
   bundle: IndexedBundle,
   districts: ReadonlyMap<string, IndexedDistrict>,
   filters: DistrictDependencyFilters,
-  isolatedDistrictId: string | null,
 ): DistrictDependencyBundle | null {
   const edges = bundle.edges.filter((edge) =>
     filterIncludes(filters, edge.kind),
@@ -729,13 +699,11 @@ function summarizeBundle(
     id: bundle.id,
     source: districtEndpoint(
       requiredDistrict(districts, bundle.sourceDistrictId),
-      isolatedDistrictId,
     ),
     target:
       bundle.target.kind === "district"
         ? districtEndpoint(
             requiredDistrict(districts, bundle.target.districtId),
-            isolatedDistrictId,
           )
         : Object.freeze({
             kind: "external",
@@ -754,20 +722,7 @@ function summarizeBundle(
 
 function districtEndpoint(
   district: IndexedDistrict,
-  isolatedDistrictId: string | null,
-): VisibleDistrictDependencyEndpoint | BoundaryDistrictDependencyEndpoint {
-  if (
-    isolatedDistrictId !== null &&
-    district.id !== isolatedDistrictId
-  ) {
-    return Object.freeze({
-      kind: "district-boundary",
-      visibleDistrictId: isolatedDistrictId,
-      hiddenDistrictId: district.id,
-      hiddenDistrictName: district.name,
-      hiddenDistrictPath: district.path,
-    });
-  }
+): VisibleDistrictDependencyEndpoint {
   return Object.freeze({
     kind: "district",
     districtId: district.id,
@@ -805,17 +760,6 @@ function toContributor(
     targetPath: target.path,
     weight: edge.weight,
   });
-}
-
-function bundleTouchesDistrict(
-  bundle: IndexedBundle,
-  districtId: string,
-): boolean {
-  return (
-    bundle.sourceDistrictId === districtId ||
-    (bundle.target.kind === "district" &&
-      bundle.target.districtId === districtId)
-  );
 }
 
 function filterIncludes(
@@ -936,8 +880,6 @@ function endpointIdentity(endpoint: DistrictDependencyEndpoint): string {
   switch (endpoint.kind) {
     case "district":
       return `district:${endpoint.districtId}`;
-    case "district-boundary":
-      return `district:${endpoint.hiddenDistrictId}`;
     case "external":
       return `external:${endpoint.nodeId ?? endpoint.target}`;
   }

@@ -91,7 +91,7 @@ describe("viewer building layer", () => {
     expect(layer.matrix("a")?.equals(matrix)).toBe(true);
   });
 
-  it("compacts isolated instances and restores canonical ordering", () => {
+  it("compacts exact building masks and restores canonical ordering", () => {
     const layer = new ViewerBuildingLayer([
       building("d", 8, "district-b"),
       building("b", 4, "district-b"),
@@ -100,13 +100,13 @@ describe("viewer building layer", () => {
     ]);
     const batch = layer.batchObjects[0]!;
 
-    layer.setIsolatedDistrict("district-b");
+    layer.setVisibleBuildingIds(["b", "d"]);
     expect(layer.visibleBuildingCount).toBe(2);
     expect([0, 1].map((index) => layer.instanceBuildingId(batch, index)))
       .toEqual(["b", "d"]);
     expect(layer.districtBounds("district-b")?.max.x).toBe(9);
 
-    layer.setIsolatedDistrict(null);
+    layer.setVisibleBuildingIds(null);
     expect(layer.visibleBuildingCount).toBe(4);
     expect(
       [0, 1, 2, 3].map((index) =>
@@ -143,13 +143,6 @@ describe("viewer building layer", () => {
       }).hit?.id,
     ).toBe("district-a-visible");
 
-    layer.setIsolatedDistrict("district-b");
-    expect(layer.visibleBuildingCount).toBe(1);
-    expect(layer.instanceBuildingId(batch, 0)).toBe(
-      "district-b-visible",
-    );
-
-    layer.setIsolatedDistrict(null);
     layer.setVisibleBuildingIds(null);
     expect(layer.visibleBuildingCount).toBe(4);
     expect(
@@ -196,14 +189,14 @@ describe("viewer building layer", () => {
       ).intersectObjects(layer.object.children, true),
     ).toEqual([]);
 
-    layer.setIsolatedDistrict("district-a");
+    layer.setVisibleBuildingIds(["a"]);
     expect(hovered?.visible).toBe(true);
     expect(selected?.visible).toBe(false);
     layer.setHighlight("hovered", null);
     expect(hovered?.visible).toBe(false);
   });
 
-  it("renders a non-raycast group selection and respects isolation", () => {
+  it("renders a non-raycast group selection and respects the building mask", () => {
     const layer = new ViewerBuildingLayer([
       building("a", 2, "district-a"),
       building("b", 4, "district-b"),
@@ -225,9 +218,9 @@ describe("viewer building layer", () => {
       ).intersectObject(layer.groupHighlightObject),
     ).toEqual([]);
 
-    layer.setIsolatedDistrict("district-b");
+    layer.setVisibleBuildingIds(["b"]);
     expect(layer.groupHighlightObject.visible).toBe(false);
-    layer.setIsolatedDistrict("district-a");
+    layer.setVisibleBuildingIds(["a", "c"]);
     expect(layer.groupHighlightObject.count).toBe(2);
     layer.setGroupHighlight([]);
     expect(layer.groupHighlightObject.visible).toBe(false);
@@ -257,8 +250,7 @@ describe("viewer building layer", () => {
         direction: { x: 1, y: 0, z: 0 },
       }).hit,
     ).toBeNull();
-    fallback.setVisibleBuildingIds(null);
-    fallback.setIsolatedDistrict("missing");
+    fallback.setVisibleBuildingIds(["missing"]);
     expect(fallback.visibleBuildingCount).toBe(0);
 
     const oversized = Array.from(
@@ -313,7 +305,6 @@ describe("viewer building layer", () => {
     expect(geometryDispose).toHaveBeenCalledTimes(1);
     expect(materialDispose).toHaveBeenCalledTimes(1);
     expect(instanceDispose).toHaveBeenCalledTimes(1);
-    expect(() => layer.setIsolatedDistrict(null)).toThrow(/disposed/u);
     expect(() => layer.setVisibleBuildingIds(null)).toThrow(/disposed/u);
     expect(() => layer.selectionBounds(["a"])).toThrow(/disposed/u);
   });

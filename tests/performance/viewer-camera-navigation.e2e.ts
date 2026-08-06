@@ -53,7 +53,7 @@ test.afterAll(async () => {
   });
 });
 
-test("viewer exposes one perspective orbit camera with working scope fitting", async ({
+test("viewer exposes one perspective orbit camera with working city fitting", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1_440, height: 900 });
@@ -67,7 +67,7 @@ test("viewer exposes one perspective orbit camera with working scope fitting", a
   await expect(
     page.getByRole("group", { name: "Camera controls" }),
   ).toBeVisible();
-  await expect(page.locator("#camera-fit-scope")).toBeEnabled();
+  await expect(page.locator("#camera-fit-city")).toBeEnabled();
   await expect(page.locator("#camera-focus-selection")).toBeHidden();
   await expect(page.locator("#camera-controls-hint")).toContainText(
     "Drag to orbit",
@@ -105,17 +105,17 @@ test("viewer exposes one perspective orbit camera with working scope fitting", a
     )
     .toBeGreaterThan(0.1);
 
-  await page.locator("#camera-fit-scope").click();
+  await page.locator("#camera-fit-city").click();
   await waitForStableCamera(page);
   const firstFit = await readCamera(page);
   expectPerspectiveOrbit(firstFit);
 
-  await page.locator("#camera-fit-scope").click();
+  await page.locator("#camera-fit-city").click();
   await waitForStableCamera(page);
   expectPerspectiveOrbit(await readCamera(page));
 });
 
-test("scope and selection framing stay in the fixed 3D viewer", async ({
+test("city and selection framing stay in the fixed 3D viewer", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1_440, height: 900 });
@@ -141,18 +141,18 @@ test("scope and selection framing stay in the fixed 3D viewer", async ({
     ),
   ).toBeLessThan(1e-5);
 
-  await page.locator("#viewer-tab-explore").click();
-  await expect(page.locator("#isolate-district")).toBeEnabled();
-  await page.locator("#isolate-district").click();
-  await expect(page.locator("#show-whole-city")).toBeEnabled();
-  await page.locator("#camera-fit-scope").click();
+  const focusedDistance = cameraDistance(focused);
+  await page.locator("#camera-fit-city").click();
   await waitForStableCamera(page);
-  expectPerspectiveOrbit(await readCamera(page));
-
-  await page.locator("#show-whole-city").click();
-  await page.locator("#camera-fit-scope").click();
-  await waitForStableCamera(page);
-  expectPerspectiveOrbit(await readCamera(page));
+  const fittedCity = await readCamera(page);
+  expectPerspectiveOrbit(fittedCity);
+  expect(cameraDistance(fittedCity)).toBeGreaterThan(focusedDistance);
+  expect(
+    vectorDistance(
+      normalizedCameraDirection(fittedCity),
+      normalizedCameraDirection(focused),
+    ),
+  ).toBeLessThan(1e-5);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(

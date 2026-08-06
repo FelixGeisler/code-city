@@ -7,6 +7,7 @@ import {
   MAX_REPOSITORY_TREE_RENDERED_ROWS,
   navigateRepositoryHierarchy,
   repositoryHierarchyAncestorIds,
+  repositoryHierarchyNodeIcon,
   repositoryHierarchyProjectKey,
   repositoryHierarchyVisibleActiveId,
   repositoryTreeVirtualWindow,
@@ -16,6 +17,39 @@ import {
 import { createSceneEntity } from "../apps/viewer/src/scene-entity.js";
 
 describe("repository hierarchy tree", () => {
+  it("uses stable, recognizable SVG metadata for every hierarchy kind", () => {
+    const icons = ([
+      "repository",
+      "solution",
+      "module",
+      "district",
+      "building",
+    ] as const).map(repositoryHierarchyNodeIcon);
+
+    expect(icons.map(({ id }) => id)).toEqual([
+      "git-repository",
+      "solution",
+      "package",
+      "folder",
+      "source-file",
+    ]);
+    expect(icons.map(({ label }) => label)).toEqual([
+      "Repository",
+      "Solution",
+      "Module",
+      "Directory district",
+      "Source file",
+    ]);
+    expect(icons.every(({ paths }) => paths.length > 0)).toBe(true);
+    expect(new Set(icons.flatMap(({ paths }) => paths)).size).toBe(
+      icons.reduce((total, { paths }) => total + paths.length, 0),
+    );
+    for (const icon of icons) {
+      expect(Object.isFrozen(icon)).toBe(true);
+      expect(Object.isFrozen(icon.paths)).toBe(true);
+    }
+  });
+
   it("builds one stable repository-to-file path with nested modules", () => {
     const model = hierarchyModel();
     const index = createRepositoryHierarchyIndex(model);

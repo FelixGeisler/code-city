@@ -83,10 +83,12 @@ describe("evolution removal layer", () => {
     layer.dispose();
   });
 
-  it("filters instances by district and animates without reallocating", () => {
-    const layer = new EvolutionRemovalLayer(
-      maximumRemovalFixture(),
-      "district:7",
+  it("filters instances by exact building mask and animates without reallocating", () => {
+    const layer = new EvolutionRemovalLayer(maximumRemovalFixture());
+    layer.setVisibleBuildingIds(
+      Array.from({ length: 250 }, (_, index) =>
+        `building:${index * DISTRICT_COUNT + 7}`,
+      ),
     );
     const object = instancedObject(layer);
     const geometry = object.geometry;
@@ -117,7 +119,7 @@ describe("evolution removal layer", () => {
     expect(layer.diagnostics().drawCalls).toBe(0);
 
     layer.setProgress(0);
-    layer.setIsolatedDistrict(null);
+    layer.setVisibleBuildingIds(null);
     expect(object.count).toBe(MAXIMUM_BUILDINGS);
     expect(object.visible).toBe(true);
     expect(object.geometry).toBe(geometry);
@@ -133,7 +135,7 @@ describe("evolution removal layer", () => {
     expect(disposeMaterial).toHaveBeenCalledTimes(1);
   });
 
-  it("intersects exact building masks with district isolation", () => {
+  it("applies and clears exact building masks", () => {
     const layer = new EvolutionRemovalLayer(
       maximumRemovalFixture().slice(0, 500),
     );
@@ -149,10 +151,6 @@ describe("evolution removal layer", () => {
     expect(object.count).toBe(4);
     expect(layer.diagnostics().visibleCount).toBe(4);
 
-    layer.setIsolatedDistrict("district:7");
-    expect(object.count).toBe(3);
-    expect(layer.diagnostics().visibleCount).toBe(3);
-
     layer.setVisibleBuildingIds([]);
     expect(object.count).toBe(0);
     expect(layer.diagnostics()).toMatchObject({
@@ -161,8 +159,8 @@ describe("evolution removal layer", () => {
     });
 
     layer.setVisibleBuildingIds(null);
-    expect(object.count).toBe(5);
-    expect(layer.diagnostics().visibleCount).toBe(5);
+    expect(object.count).toBe(500);
+    expect(layer.diagnostics().visibleCount).toBe(500);
     layer.dispose();
   });
 
@@ -170,7 +168,6 @@ describe("evolution removal layer", () => {
     const definitions = maximumRemovalFixture().slice(0, 500);
     const layer = new EvolutionRemovalLayer(
       definitions,
-      null,
       { instancingSupported: false },
     );
     if (layer.object instanceof THREE.InstancedMesh) {
@@ -198,7 +195,13 @@ describe("evolution removal layer", () => {
       drawCalls: 1,
     });
 
-    layer.setIsolatedDistrict("district:7");
+    layer.setVisibleBuildingIds([
+      "building:7",
+      "building:107",
+      "building:207",
+      "building:307",
+      "building:407",
+    ]);
     expect(disposeWholeCityGeometry).toHaveBeenCalledTimes(1);
     expect(
       object.geometry.getAttribute("position").count,
@@ -208,15 +211,15 @@ describe("evolution removal layer", () => {
       drawCalls: 1,
     });
 
-    const isolatedGeometry = object.geometry;
-    const disposeIsolatedGeometry = vi.spyOn(
-      isolatedGeometry,
+    const maskedGeometry = object.geometry;
+    const disposeMaskedGeometry = vi.spyOn(
+      maskedGeometry,
       "dispose",
     );
     const disposeMaterial = vi.spyOn(material, "dispose");
     layer.dispose();
     layer.dispose();
-    expect(disposeIsolatedGeometry).toHaveBeenCalledTimes(1);
+    expect(disposeMaskedGeometry).toHaveBeenCalledTimes(1);
     expect(disposeMaterial).toHaveBeenCalledTimes(1);
   });
 });

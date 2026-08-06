@@ -106,12 +106,10 @@ export interface RepositoryExplorerIndex {
 
 export interface ExplorerState {
   readonly selectedEntity: SceneEntity | null;
-  readonly isolatedDistrictId: string | null;
 }
 
 export const INITIAL_EXPLORER_STATE: ExplorerState = Object.freeze({
   selectedEntity: null,
-  isolatedDistrictId: null,
 });
 
 interface RankedResult {
@@ -379,11 +377,7 @@ export function resetExplorerState(): ExplorerState {
   return INITIAL_EXPLORER_STATE;
 }
 
-/**
- * Selects only buildings belonging to the current model. When a district is
- * already isolated, selection follows the newly selected building to its
- * district.
- */
+/** Selects only buildings belonging to the current model. */
 export function selectExplorerBuilding(
   state: ExplorerState,
   model: Pick<CityModel, "buildings">,
@@ -396,10 +390,6 @@ export function selectExplorerBuilding(
 
   return {
     selectedEntity: createSceneEntity("building", building.id),
-    isolatedDistrictId:
-      state.isolatedDistrictId === null
-        ? null
-        : building.districtId,
   };
 }
 
@@ -413,8 +403,6 @@ export function selectExplorerDistrict(
   }
   return {
     selectedEntity: createSceneEntity("district", districtId),
-    isolatedDistrictId:
-      state.isolatedDistrictId === null ? null : districtId,
   };
 }
 
@@ -424,7 +412,6 @@ export function clearExplorerSelection(state: ExplorerState): ExplorerState {
   }
   return {
     selectedEntity: null,
-    isolatedDistrictId: state.isolatedDistrictId,
   };
 }
 
@@ -450,47 +437,6 @@ export function selectedExplorerDistrictId(
   return state.selectedEntity?.kind === "district"
     ? state.selectedEntity.id
     : null;
-}
-
-export function isolateSelectedDistrict(
-  state: ExplorerState,
-  model: Pick<CityModel, "buildings" | "districts">,
-): ExplorerState {
-  const selectedDistrictId = selectedExplorerDistrictId(state);
-  if (
-    selectedDistrictId !== null &&
-    model.districts.some(({ id }) => id === selectedDistrictId)
-  ) {
-    if (state.isolatedDistrictId === selectedDistrictId) return state;
-    return {
-      selectedEntity: state.selectedEntity,
-      isolatedDistrictId: selectedDistrictId,
-    };
-  }
-  const selectedBuildingId = selectedExplorerBuildingId(state);
-  if (selectedBuildingId === null) {
-    return state;
-  }
-  const building = model.buildings.find(
-    ({ id }) => id === selectedBuildingId,
-  );
-  if (!building || state.isolatedDistrictId === building.districtId) {
-    return state;
-  }
-  return {
-    selectedEntity: state.selectedEntity,
-    isolatedDistrictId: building.districtId,
-  };
-}
-
-export function showAllDistricts(state: ExplorerState): ExplorerState {
-  if (state.isolatedDistrictId === null) {
-    return state;
-  }
-  return {
-    selectedEntity: state.selectedEntity,
-    isolatedDistrictId: null,
-  };
 }
 
 function indexBuilding(

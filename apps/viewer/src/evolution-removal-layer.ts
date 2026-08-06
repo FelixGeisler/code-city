@@ -69,8 +69,9 @@ const UNIT_BOX_TRIANGLES = new Float32Array([
  * viewer fallback gets one merged, non-indexed geometry instead of regressing
  * to a mesh, material, and draw call per removal.
  *
- * Instance or vertex data is rebuilt only when district isolation changes;
- * frame animation updates one opacity uniform instead of touching every cue.
+ * Instance or vertex data is rebuilt only when the exact building mask
+ * changes; frame animation updates one opacity uniform instead of touching
+ * every cue.
  */
 export class EvolutionRemovalLayer {
   public readonly object: EvolutionRemovalObject;
@@ -80,14 +81,12 @@ export class EvolutionRemovalLayer {
   private readonly matrix = new THREE.Matrix4();
   private readonly position = new THREE.Vector3();
   private readonly scale = new THREE.Vector3();
-  private isolatedDistrictId: string | null | undefined;
   private visibleBuildingIds: ReadonlySet<string> | null = null;
   private disposed = false;
   private visibleCount = 0;
 
   public constructor(
     definitions: readonly EvolutionRemovalDefinition[],
-    isolatedDistrictId: string | null = null,
     options: EvolutionRemovalLayerOptions = {},
   ) {
     this.definitions = definitions;
@@ -113,13 +112,6 @@ export class EvolutionRemovalLayer {
     this.object.name = "code-city:evolution-removals";
     this.object.frustumCulled = false;
     this.object.raycast = () => undefined;
-    this.setIsolatedDistrict(isolatedDistrictId);
-  }
-
-  public setIsolatedDistrict(districtId: string | null): void {
-    this.assertActive();
-    if (districtId === this.isolatedDistrictId) return;
-    this.isolatedDistrictId = districtId;
     this.refreshVisibleDefinitions();
   }
 
@@ -128,7 +120,7 @@ export class EvolutionRemovalLayer {
    *
    * Removal cues that no longer belong to the retained selection stay hidden
    * during an evolution seek, instead of leaking unrelated buildings through
-   * an otherwise isolated view.
+   * an otherwise masked view.
    */
   public setVisibleBuildingIds(ids: readonly string[] | null): void {
     this.assertActive();
@@ -138,16 +130,11 @@ export class EvolutionRemovalLayer {
 
   private refreshVisibleDefinitions(): void {
     const visibleDefinitions =
-      this.isolatedDistrictId === null &&
       this.visibleBuildingIds === null
         ? this.definitions
         : this.definitions.filter(
             (definition) =>
-              (this.isolatedDistrictId === null ||
-                definition.districtId ===
-                  this.isolatedDistrictId) &&
-              (this.visibleBuildingIds === null ||
-                this.visibleBuildingIds.has(definition.id)),
+              this.visibleBuildingIds?.has(definition.id) === true,
           );
     this.visibleCount = visibleDefinitions.length;
     if (this.object instanceof THREE.InstancedMesh) {

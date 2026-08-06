@@ -4,13 +4,19 @@ import { createSingleChannelProfile } from "../packages/core/src/printer-profile
 import {
   applyMetricMapping,
   DEFAULT_VERSIONED_METRIC_MAPPING,
+  resolveMetricMappingPreset,
 } from "../packages/core/src/index.js";
 import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
 import {
   availableViewerVisualizationModes,
+  configuredColorDuplicatesComplexityRisk,
   createViewerVisualization,
   describeBuildingMetrics,
   presentBuildingMetrics,
+  semanticAndComplexityPartitionsMatch,
+  semanticVisualizationPresentation,
+  semanticVisualizationUsesConfiguredColor,
+  viewerVisualizationModeLabel,
 } from "../apps/viewer/src/visualization-mode.js";
 
 describe("viewer visualization modes", () => {
@@ -33,6 +39,106 @@ describe("viewer visualization modes", () => {
         printProfile: true,
       }),
     ).toEqual(["semantic", "complexity", "print"]);
+  });
+
+  it("removes a duplicate risk mode and names the configured color honestly", () => {
+    const model = applyMetricMapping(
+      DEMO_MODEL,
+      DEFAULT_VERSIONED_METRIC_MAPPING,
+    );
+
+    expect(semanticVisualizationUsesConfiguredColor(model)).toBe(true);
+    expect(semanticAndComplexityPartitionsMatch(model)).toBe(true);
+    expect(configuredColorDuplicatesComplexityRisk(model)).toBe(true);
+    expect(
+      availableViewerVisualizationModes(
+        { evolution: false, printProfile: false },
+        model,
+      ),
+    ).toEqual(["semantic"]);
+    expect(
+      availableViewerVisualizationModes(
+        { evolution: true, printProfile: true },
+        model,
+      ),
+    ).toEqual(["semantic", "age", "churn", "print"]);
+    expect(viewerVisualizationModeLabel("semantic", model)).toBe(
+      "Configured color: Maximum complexity",
+    );
+    expect(semanticVisualizationPresentation(model)).toEqual({
+      label: "Configured color: Maximum complexity",
+      status:
+        "Colors use maximum complexity from the active Complexity metric mapping.",
+      configuredMetric: "maximumComplexity",
+    });
+    expect(createViewerVisualization(model, "semantic")).toMatchObject({
+      label: "Configured color: Maximum complexity",
+      status:
+        "Colors use maximum complexity from the active Complexity metric mapping.",
+    });
+  });
+
+  it("keeps useful risk comparison for a different configured color metric", () => {
+    const model = applyMetricMapping(
+      DEMO_MODEL,
+      resolveMetricMappingPreset("maintenance"),
+    );
+
+    expect(semanticVisualizationUsesConfiguredColor(model)).toBe(true);
+    expect(configuredColorDuplicatesComplexityRisk(model)).toBe(false);
+    expect(
+      availableViewerVisualizationModes(
+        { evolution: false, printProfile: false },
+        model,
+      ),
+    ).toEqual(["semantic", "complexity"]);
+    expect(viewerVisualizationModeLabel("semantic", model)).toBe(
+      "Configured color: Decision load",
+    );
+  });
+
+  it("does not claim caller-authored semantic groups are configured colors", () => {
+    expect(semanticVisualizationUsesConfiguredColor(DEMO_MODEL)).toBe(false);
+    expect(semanticAndComplexityPartitionsMatch(DEMO_MODEL)).toBe(false);
+    expect(configuredColorDuplicatesComplexityRisk(DEMO_MODEL)).toBe(false);
+    expect(semanticVisualizationPresentation(DEMO_MODEL)).toEqual({
+      label: "Semantic groups",
+      status: "Colors show the model's persisted semantic groups.",
+    });
+    expect(
+      availableViewerVisualizationModes(
+        { evolution: false, printProfile: false },
+        DEMO_MODEL,
+      ),
+    ).toEqual(["semantic", "complexity"]);
+  });
+
+  it("falls back to semantic copy when persisted assignments differ from the mapping", () => {
+    const configured = applyMetricMapping(
+      DEMO_MODEL,
+      DEFAULT_VERSIONED_METRIC_MAPPING,
+    );
+    const first = configured.buildings[0]!;
+    const alternativeGroup = configured.semanticGroups.find(
+      ({ id }) =>
+        id.startsWith("metric-color-") &&
+        id !== first.semanticGroupId,
+    )!;
+    const model = {
+      ...configured,
+      buildings: configured.buildings.map((building, index) =>
+        index === 0
+          ? { ...building, semanticGroupId: alternativeGroup.id }
+          : building,
+      ),
+    };
+
+    expect(semanticVisualizationUsesConfiguredColor(model)).toBe(false);
+    expect(configuredColorDuplicatesComplexityRisk(model)).toBe(false);
+    expect(semanticVisualizationPresentation(model)).toEqual({
+      label: "Semantic groups",
+      status: "Colors show the model's persisted semantic groups.",
+    });
   });
 
   it("uses persisted risk metadata without reclassifying metrics", () => {

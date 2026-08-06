@@ -98,7 +98,7 @@
           role="group"
           aria-label="Camera controls"
         >
-          <button id="camera-fit-scope" type="button">Fit scope</button>
+          <button id="camera-fit-city" type="button">Fit city</button>
           <button id="camera-focus-selection" type="button" hidden>
             Focus selection
           </button>
@@ -243,20 +243,6 @@
               <span aria-hidden="true">−</span>
             </button>
           </header>
-          <div class="viewer-scope" aria-label="Current city scope">
-            <span class="viewer-scope-eyebrow">Scope</span>
-            <strong id="viewer-scope-name">Whole city</strong>
-            <button
-              id="viewer-scope-reset"
-              class="viewer-scope-reset"
-              type="button"
-              aria-label="Show whole city"
-              title="Show whole city"
-              disabled
-            >
-              Reset
-            </button>
-          </div>
           <div
             id="viewer-workspace-scroll"
             class="viewer-workspace-scroll"
@@ -300,7 +286,7 @@
                       <p id="overview-scope-description" class="overview-scope-description">
                         Metrics for the whole city.
                       </p>
-                      <dl class="overview-metrics" aria-label="Scoped city metrics">
+                      <dl class="overview-metrics" aria-label="City metrics">
                         <div><dt>Repositories</dt><dd id="overview-repositories">0</dd></div>
                         <div><dt>Solutions</dt><dd id="overview-solutions">0</dd></div>
                         <div><dt>Modules</dt><dd id="overview-modules">0</dd></div>
@@ -429,28 +415,6 @@
             >
               Show more results
             </button>
-            <div
-              class="isolation-actions"
-              role="group"
-              aria-label="City isolation"
-            >
-              <button
-                id="isolate-district"
-                class="button button-compact"
-                type="button"
-                disabled
-              >
-                Isolate district
-              </button>
-              <button
-                id="show-whole-city"
-                class="button button-compact"
-                type="button"
-                disabled
-              >
-                Show whole city
-              </button>
-            </div>
           </div>
         </section>
         <section
@@ -981,26 +945,6 @@
                 class="district-route-contributors"
                 aria-label="Top route contributors"
               ></ul>
-              <div
-                class="district-route-isolation-actions"
-                role="group"
-                aria-label="Isolate a route endpoint"
-              >
-                <button
-                  id="district-route-isolate-consumer"
-                  class="button button-compact"
-                  type="button"
-                >
-                  Isolate consumer
-                </button>
-                <button
-                  id="district-route-isolate-provider"
-                  class="button button-compact"
-                  type="button"
-                >
-                  Isolate provider
-                </button>
-              </div>
             </section>
           </div>
         </section>
@@ -2591,11 +2535,8 @@
                 <label class="image-export-field" for="image-export-fit">
                   <span>Fit target</span>
                   <select id="image-export-fit">
-                    <option value="current-scope" selected>
-                      Current scope
-                    </option>
                     <option value="selected-entity">Selected entity</option>
-                    <option value="whole-city">Whole city</option>
+                    <option value="whole-city" selected>Whole city</option>
                   </select>
                 </label>
               </div>

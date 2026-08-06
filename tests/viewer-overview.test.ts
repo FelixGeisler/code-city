@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  summarizeViewerScope,
+  summarizeViewerOverview,
   type ViewerOverviewModel,
 } from "../apps/viewer/src/viewer-overview.js";
 import type {
@@ -14,7 +14,7 @@ import type {
   RiskBand,
 } from "../packages/core/src/model.js";
 
-describe("viewer scope overview", () => {
+describe("viewer city overview", () => {
   it("summarizes the whole city with an odd complexity median", () => {
     const model = overviewModel({
       buildings: [
@@ -44,13 +44,7 @@ describe("viewer scope overview", () => {
       ],
     });
 
-    expect(summarizeViewerScope(model, null)).toEqual({
-      scope: {
-        kind: "city",
-        districtId: null,
-        name: "Whole city",
-        label: "Whole city",
-      },
+    expect(summarizeViewerOverview(model)).toEqual({
       counts: {
         repositories: 2,
         solutions: 2,
@@ -76,7 +70,7 @@ describe("viewer scope overview", () => {
     });
   });
 
-  it("uses an even median and deduplicates scoped modules, repositories, and solutions", () => {
+  it("summarizes every district and deduplicates city entities", () => {
     const model = overviewModel({
       buildings: [
         building("building:a", "district:a", "module:a", "repository:a", 11, 2, "low"),
@@ -108,35 +102,29 @@ describe("viewer scope overview", () => {
       ],
     });
 
-    const summary = summarizeViewerScope(model, "district:a");
+    const summary = summarizeViewerOverview(model);
 
-    expect(summary.scope).toEqual({
-      kind: "district",
-      districtId: "district:a",
-      name: "Frontend",
-      label: "City \u203a Frontend",
-    });
     expect(summary.counts).toEqual({
-      repositories: 1,
-      solutions: 2,
-      modules: 2,
-      districts: 1,
-      buildings: 4,
+      repositories: 2,
+      solutions: 3,
+      modules: 3,
+      districts: 2,
+      buildings: 5,
     });
     expect(summary.complexity).toEqual({
-      totalSloc: 60,
-      medianMaximumComplexity: 5,
-      maximumComplexity: 8,
+      totalSloc: 79,
+      medianMaximumComplexity: 6,
+      maximumComplexity: 20,
     });
     expect(summary.risks).toEqual({
       low: 1,
       moderate: 1,
       high: 2,
-      "very-high": 0,
+      "very-high": 1,
     });
   });
 
-  it("counts building and module sources but excludes target-only inbound dependencies", () => {
+  it("counts every city dependency", () => {
     const model = overviewModel({
       buildings: [
         building("building:inside", "district:a", "module:a", "repository:a", 10, 1, "low"),
@@ -167,14 +155,14 @@ describe("viewer scope overview", () => {
     });
 
     expect(
-      summarizeViewerScope(model, "district:a").dependencies,
+      summarizeViewerOverview(model).dependencies,
     ).toEqual({
-      edgeCount: 2,
-      totalReferenceWeight: 5,
+      edgeCount: 4,
+      totalReferenceWeight: 17,
     });
   });
 
-  it("returns zero metrics for a district without buildings", () => {
+  it("returns zero building metrics for an empty city", () => {
     const model = overviewModel({
       dependencies: [
         dependency("dependency:unscoped-module", "module:empty", 4),
@@ -194,12 +182,12 @@ describe("viewer scope overview", () => {
       ],
     });
 
-    const summary = summarizeViewerScope(model, "district:empty");
+    const summary = summarizeViewerOverview(model);
 
     expect(summary.counts).toEqual({
-      repositories: 0,
-      solutions: 0,
-      modules: 0,
+      repositories: 1,
+      solutions: 1,
+      modules: 1,
       districts: 1,
       buildings: 0,
     });
@@ -215,12 +203,12 @@ describe("viewer scope overview", () => {
       "very-high": 0,
     });
     expect(summary.dependencies).toEqual({
-      edgeCount: 0,
-      totalReferenceWeight: 0,
+      edgeCount: 1,
+      totalReferenceWeight: 4,
     });
   });
 
-  it("falls back to the whole city for a stale district id and freezes its result", () => {
+  it("freezes the whole-city result", () => {
     const model = overviewModel({
       buildings: [
         building("building:a", "district:a", "module:a", "repository:a", 5, 3, "low"),
@@ -238,11 +226,9 @@ describe("viewer scope overview", () => {
       ],
     });
 
-    const summary = summarizeViewerScope(model, "district:removed");
+    const summary = summarizeViewerOverview(model);
 
-    expect(summary).toEqual(summarizeViewerScope(model, null));
     expect(Object.isFrozen(summary)).toBe(true);
-    expect(Object.isFrozen(summary.scope)).toBe(true);
     expect(Object.isFrozen(summary.counts)).toBe(true);
     expect(Object.isFrozen(summary.complexity)).toBe(true);
     expect(Object.isFrozen(summary.risks)).toBe(true);

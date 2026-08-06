@@ -9,7 +9,7 @@ import {
 } from "../apps/viewer/src/scene-navigation.js";
 
 describe("focusedDistrictBounds", () => {
-  it("includes selected-district buildings before isolation and external nodes", () => {
+  it("includes selected-district buildings and external nodes", () => {
     const district = new THREE.Mesh(
       new THREE.BoxGeometry(10, 1, 10),
     );

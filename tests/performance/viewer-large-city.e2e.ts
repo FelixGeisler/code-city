@@ -48,8 +48,18 @@ async function openAnalyze(
   page: Page,
   view: "findings" | "routes" | "queries",
 ): Promise<void> {
-  await page.locator("#viewer-tab-analyze").click();
-  await page.locator(`#analyze-tab-${view}`).click();
+  const analyzeTab = page.locator("#viewer-tab-analyze");
+  const analyzePanel = page.locator("#viewer-view-analyze");
+  if (
+    (await analyzeTab.getAttribute("aria-selected")) !== "true" ||
+    !(await analyzePanel.isVisible())
+  ) {
+    await analyzeTab.click();
+  }
+  const nestedTab = page.locator(`#analyze-tab-${view}`);
+  if ((await nestedTab.getAttribute("aria-selected")) !== "true") {
+    await nestedTab.click();
+  }
 }
 
 async function openAdvancedProjectSettings(page: Page): Promise<void> {
@@ -301,6 +311,11 @@ test("25k hierarchy stays virtualized and synchronized with city state", async (
     "data-node-kind",
     "repository",
   );
+  await expect(
+    page.locator(
+      `#${initialActiveId!} .repository-tree-kind svg[data-icon="git-repository"]`,
+    ),
+  ).toHaveCount(1);
   await page.locator("#building-search").fill("file-24999.ts");
   await page
     .locator("#search-results .search-result-button")
@@ -316,6 +331,11 @@ test("25k hierarchy stays virtualized and synchronized with city state", async (
   );
   await expect(selected).toHaveText(/file-24999\.ts/u);
   await expect(selected).toHaveAttribute("aria-level", "5");
+  await expect(
+    selected.locator(
+      '.repository-tree-kind svg[data-icon="source-file"]',
+    ),
+  ).toHaveCount(1);
   expect(await tree.locator('[role="treeitem"]').count()).toBeLessThan(
     80,
   );
@@ -363,14 +383,6 @@ test("25k hierarchy stays virtualized and synchronized with city state", async (
     alternativeName,
   );
   await page.locator("#viewer-details-back").click();
-  await page.locator("#isolate-district").click();
-  await expect(
-    tree.locator('[role="treeitem"][aria-selected="true"]'),
-  ).toHaveAttribute("data-isolated", "true");
-  await page.locator("#show-whole-city").click();
-  await expect(
-    tree.locator('[role="treeitem"][aria-selected="true"]'),
-  ).not.toHaveAttribute("data-isolated", "true");
 
   await tree.press("ArrowLeft");
   const parentId = await tree.getAttribute("aria-activedescendant");
@@ -386,17 +398,16 @@ test("25k hierarchy stays virtualized and synchronized with city state", async (
   );
 });
 
-test("design-smell overlay is accessible, paginated, suppressible, and isolated", async ({
+test("design-smell overlay is accessible, paginated, and suppressible", async ({
   page,
 }) => {
   // Rendering has a separate strict budget; this scenario also waits for two
   // worker evaluations and exercises cross-panel query synchronization.
-  test.setTimeout(90_000);
-  await page.goto(
-    `${viewerUrl}/?fixture=large-city-25k&` +
-      `isolate-district=district%3A007&performance=1`,
-    { waitUntil: "domcontentloaded", timeout: 45_000 },
-  );
+  test.setTimeout(120_000);
+  await page.goto(`${viewerUrl}/?fixture=large-city-25k&performance=1`, {
+    waitUntil: "domcontentloaded",
+    timeout: 45_000,
+  });
   await openAnalyze(page, "findings");
   const panel = page.locator("#design-smell-panel");
   await expect(panel).toHaveAttribute("aria-busy", "false", {
@@ -511,7 +522,7 @@ test("design-smell overlay is accessible, paginated, suppressible, and isolated"
   expect(diagnostics.batchCount).toBeLessThanOrEqual(4);
   expect(diagnostics.candidateMarkers).toBeGreaterThan(2_000);
   expect(diagnostics.visibleMarkers).toBeGreaterThan(0);
-  expect(diagnostics.visibleMarkers).toBeLessThanOrEqual(250);
+  expect(diagnostics.visibleMarkers).toBeLessThanOrEqual(2_000);
   expect(diagnostics.omittedMarkers).toBeGreaterThan(0);
 });
 
@@ -537,7 +548,7 @@ test("25k startup does not materialize fine detail for every file", async ({
   expect(snapshot.renderCalls).toBeLessThanOrEqual(256);
 });
 
-test("25k removal cues stay bounded and respect isolation in reduced motion", async ({
+test("25k removal cues stay bounded in reduced motion", async ({
   page,
 }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -576,41 +587,6 @@ test("25k removal cues stay bounded and respect isolation in reduced motion", as
   expect(wholeCity.evolutionRemovalAnimated).toBe(false);
   expect(wholeCity.objectCount).toBeLessThanOrEqual(385);
   expect(wholeCity.renderCalls).toBeLessThanOrEqual(257);
-
-  await page.goto(
-    `${viewerUrl}/?fixture=large-city-25k&evolution-removals=1&` +
-      `isolate-district=district%3A007&performance=1`,
-    { waitUntil: "domcontentloaded", timeout: 45_000 },
-  );
-  await page.waitForFunction(
-    () =>
-      (
-        window as Window & {
-          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
-        }
-      ).__CODE_CITY_PERFORMANCE__?.ready === true,
-    undefined,
-    { timeout: 45_000 },
-  );
-  const isolated = await page.evaluate(
-    () =>
-      (
-        window as Window & {
-          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
-        }
-      ).__CODE_CITY_PERFORMANCE__!,
-  );
-
-  expect(isolated.evolutionRemovals).toMatchObject({
-    renderMode: "instanced",
-    totalCount: 25_000,
-    visibleCount: 250,
-    objectCount: 1,
-    geometryCount: 1,
-    materialCount: 1,
-    drawCalls: 1,
-  });
-  expect(isolated.evolutionRemovalAnimated).toBe(false);
 });
 
 test("WebGL 1 without ANGLE uses the bounded accessible fallback", async ({
@@ -920,8 +896,9 @@ test("isolates and focuses exact cross-district selections and uses visible sear
       visibleBuildingCount: 3,
       dependencyRoutes: { routeCount: 2 },
     });
-  await expect(page.locator("#show-whole-city")).toBeEnabled();
-  await page.locator("#show-whole-city").click();
+  await openAnalyze(page, "queries");
+  await expect(page.locator("#advanced-query-isolate")).toBeEnabled();
+  await page.locator("#advanced-query-isolate").click();
   await expect
     .poll(async () =>
       page.evaluate(
@@ -937,7 +914,6 @@ test("isolates and focuses exact cross-district selections and uses visible sear
       buildingVisibilityMaskActive: false,
       visibleBuildingCount: 5,
     });
-  await openAnalyze(page, "queries");
   await page.locator("#advanced-query-isolate").click();
 
   await page.locator("#advanced-query-clear").click();

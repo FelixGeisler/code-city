@@ -5,6 +5,9 @@ import {
   metricColorPaletteEntry,
   normalizeMetricChannelValue,
 } from "../../../packages/core/src/metrics.js";
+import {
+  projectBuildingMetricMapping,
+} from "../../../packages/core/src/metric-mapping.js";
 import type {
   CityBuilding,
   CityModel,
@@ -38,10 +41,14 @@ const VIEWER_VISUALIZATION_MODE_LABELS = Object.freeze({
 
 export function availableViewerVisualizationModes(
   capabilities: ViewerVisualizationCapabilities,
+  model?: CityModel,
 ): readonly ViewerVisualizationMode[] {
+  const complexityIsRedundant =
+    model !== undefined &&
+    configuredColorDuplicatesComplexityRisk(model);
   return Object.freeze([
     "semantic",
-    "complexity",
+    ...(!complexityIsRedundant ? (["complexity"] as const) : []),
     ...(capabilities.evolution ? (["age", "churn"] as const) : []),
     ...(capabilities.printProfile ? (["print"] as const) : []),
   ] satisfies ViewerVisualizationMode[]);
@@ -49,8 +56,123 @@ export function availableViewerVisualizationModes(
 
 export function viewerVisualizationModeLabel(
   mode: ViewerVisualizationMode,
+  model?: CityModel,
 ): string {
+  if (mode === "semantic" && model !== undefined) {
+    return semanticVisualizationPresentation(model).label;
+  }
   return VIEWER_VISUALIZATION_MODE_LABELS[mode];
+}
+
+export interface SemanticVisualizationPresentation {
+  readonly label: string;
+  readonly status: string;
+  readonly configuredMetric?: MetricSourceKey;
+}
+
+const METRIC_SOURCE_LABELS = Object.freeze({
+  sloc: "Source lines of code",
+  decisionLoad: "Decision load",
+  maximumComplexity: "Maximum complexity",
+  executableUnitCount: "Executable-unit count",
+}) satisfies Readonly<Record<MetricSourceKey, string>>;
+
+/**
+ * Reports whether every persisted building color was produced by the model's
+ * active versioned metric mapping. This keeps the viewer copy honest for
+ * caller-authored CityModels that deliberately retain their own groups.
+ */
+export function semanticVisualizationUsesConfiguredColor(
+  model: CityModel,
+): boolean {
+  const mapping = model.metricMapping;
+  if (mapping === undefined || !isVersionedMetricMapping(mapping)) {
+    return false;
+  }
+  return model.buildings.every(
+    (building, index) =>
+      projectBuildingMetricMapping(
+        building.metrics,
+        mapping,
+        `buildings[${index}]`,
+      ).semanticGroupId === building.semanticGroupId,
+  );
+}
+
+/**
+ * Tests equivalence of the persisted-color and risk partitions in linear
+ * time. Color shades and group IDs may differ; only which buildings are
+ * grouped together matters.
+ */
+export function semanticAndComplexityPartitionsMatch(
+  model: Pick<CityModel, "buildings">,
+): boolean {
+  const riskBySemanticGroup = new Map<
+    CityBuilding["semanticGroupId"],
+    CityBuilding["risk"]
+  >();
+  const semanticGroupByRisk = new Map<
+    CityBuilding["risk"],
+    CityBuilding["semanticGroupId"]
+  >();
+  for (const building of model.buildings) {
+    const risk = riskBySemanticGroup.get(building.semanticGroupId);
+    if (risk !== undefined && risk !== building.risk) return false;
+    const semanticGroup = semanticGroupByRisk.get(building.risk);
+    if (
+      semanticGroup !== undefined &&
+      semanticGroup !== building.semanticGroupId
+    ) {
+      return false;
+    }
+    riskBySemanticGroup.set(building.semanticGroupId, building.risk);
+    semanticGroupByRisk.set(building.risk, building.semanticGroupId);
+  }
+  return true;
+}
+
+/**
+ * Suppresses Complexity risk only when the active configured color is itself
+ * maximum complexity and produces the same building partition. Other metric
+ * mappings retain both useful comparisons even if a small data set happens to
+ * assign similar colors by coincidence.
+ */
+export function configuredColorDuplicatesComplexityRisk(
+  model: CityModel,
+): boolean {
+  const mapping = model.metricMapping;
+  return (
+    mapping !== undefined &&
+    isVersionedMetricMapping(mapping) &&
+    mapping.channels.color.metric === "maximumComplexity" &&
+    semanticVisualizationUsesConfiguredColor(model) &&
+    semanticAndComplexityPartitionsMatch(model)
+  );
+}
+
+export function semanticVisualizationPresentation(
+  model: CityModel,
+): SemanticVisualizationPresentation {
+  const mapping = model.metricMapping;
+  if (
+    mapping !== undefined &&
+    isVersionedMetricMapping(mapping) &&
+    semanticVisualizationUsesConfiguredColor(model)
+  ) {
+    const metric = mapping.channels.color.metric;
+    const metricLabel = METRIC_SOURCE_LABELS[metric];
+    return Object.freeze({
+      label: `Configured color: ${metricLabel}`,
+      status:
+        `Colors use ${metricLabel.toLocaleLowerCase("en-US")} from the active ` +
+        `${mapping.name} metric mapping.`,
+      configuredMetric: metric,
+    });
+  }
+  return Object.freeze({
+    label: "Semantic groups",
+    status: "Colors show the model's persisted semantic groups.",
+  });
 }
 
 export interface EvolutionVisualizationData {
@@ -142,9 +264,10 @@ function semanticVisualization(model: CityModel): ViewerVisualization {
   const colors = new Map(
     model.semanticGroups.map(({ id, color }) => [id, color]),
   );
+  const presentation = semanticVisualizationPresentation(model);
   return {
     mode: "semantic",
-    label: "Semantic groups",
+    label: presentation.label,
     colorsByBuildingId: new Map(
       model.buildings.map(({ id, semanticGroupId }) => [
         id,
@@ -152,7 +275,7 @@ function semanticVisualization(model: CityModel): ViewerVisualization {
       ]),
     ),
     legend: model.semanticGroups,
-    status: "Colors show the model's persisted semantic groups.",
+    status: presentation.status,
     available: true,
   };
 }
