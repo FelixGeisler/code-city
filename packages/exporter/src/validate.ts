@@ -679,11 +679,29 @@ function measuredPrimitiveBounds(
   };
 }
 
-function minimumPrimitiveFeature(
+function minimumScalableFeature(
   primitives: readonly PrintPrimitive[],
+  profile: PrinterProfile,
 ): number {
+  const scalable = primitives.filter(({ kind }) => kind === "building");
+  if (scalable.length === 0) {
+    if (!primitives.some(({ kind }) => kind === "district")) {
+      return Math.min(
+        ...primitives.flatMap((item) => [
+          item.bounds.size.x,
+          item.bounds.size.y,
+          item.bounds.size.z,
+        ]),
+      );
+    }
+    const limits = resolvePrinterGeometryLimits(profile);
+    return Math.max(
+      limits.minimumWallThickness,
+      limits.minimumFeatureSize,
+    );
+  }
   return Math.min(
-    ...primitives.flatMap((item) => [
+    ...scalable.flatMap((item) => [
       item.bounds.size.x,
       item.bounds.size.y,
       item.bounds.size.z,
@@ -691,10 +709,54 @@ function minimumPrimitiveFeature(
   );
 }
 
-function minimumHorizontalGap(
+function minimumWithinDistrictHorizontalGap(
   primitives: readonly PrintPrimitive[],
 ): number | null {
-  return minimumPositiveHorizontalGap(primitives, GEOMETRY_EPSILON);
+  const districts = primitives.filter(({ kind }) => kind === "district");
+  if (districts.length === 0) {
+    return minimumPositiveHorizontalGap(
+      primitives,
+      GEOMETRY_EPSILON,
+    );
+  }
+  const buildings = primitives.filter(({ kind }) => kind === "building");
+  let minimum = Number.POSITIVE_INFINITY;
+  for (const district of districts) {
+    const supported = buildings.filter((building) => {
+      const xOverlap =
+        Math.min(
+          district.bounds.maximum.x,
+          building.bounds.maximum.x,
+        ) -
+        Math.max(
+          district.bounds.minimum.x,
+          building.bounds.minimum.x,
+        );
+      const yOverlap =
+        Math.min(
+          district.bounds.maximum.y,
+          building.bounds.maximum.y,
+        ) -
+        Math.max(
+          district.bounds.minimum.y,
+          building.bounds.minimum.y,
+        );
+      return (
+        close(
+          district.bounds.maximum.z,
+          building.bounds.minimum.z,
+        ) &&
+        xOverlap > GEOMETRY_EPSILON &&
+        yOverlap > GEOMETRY_EPSILON
+      );
+    });
+    const gap = minimumPositiveHorizontalGap(
+      supported,
+      GEOMETRY_EPSILON,
+    );
+    if (gap !== null) minimum = Math.min(minimum, gap);
+  }
+  return Number.isFinite(minimum) ? minimum : null;
 }
 
 export function validatePrintableCity(
@@ -988,7 +1050,30 @@ export function validatePrintableCity(
       `Base thickness (${city.measurements.baseThickness}) is below profile minimum (${geometryLimits.minimumBaseThickness}).`,
     );
   }
-  const measuredFeature = minimumPrimitiveFeature(primitives);
+  if (base !== undefined) {
+    const minimumDistrictFoundationThickness = Math.max(
+      geometryLimits.minimumBaseThickness,
+      geometryLimits.minimumRaisedFeatureHeight,
+    );
+    for (const district of primitives.filter(
+      ({ kind }) => kind === "district",
+    )) {
+      if (!close(district.bounds.minimum.z, base.bounds.maximum.z)) {
+        issues.push(
+          `District foundation '${district.id}' must rest directly on the shared base.`,
+        );
+      }
+      if (
+        district.bounds.size.z + GEOMETRY_EPSILON <
+        minimumDistrictFoundationThickness
+      ) {
+        issues.push(
+          `District foundation '${district.id}' thickness (${district.bounds.size.z}) is below profile minimum (${minimumDistrictFoundationThickness}).`,
+        );
+      }
+    }
+  }
+  const measuredFeature = minimumScalableFeature(primitives, profile);
   if (
     !close(city.measurements.wallThickness, measuredFeature)
   ) {
@@ -1025,7 +1110,7 @@ export function validatePrintableCity(
       `Minimum feature size (${city.measurements.minimumFeatureSize}) is below profile minimum (${geometryLimits.minimumFeatureSize}).`,
     );
   }
-  const measuredGap = minimumHorizontalGap(primitives);
+  const measuredGap = minimumWithinDistrictHorizontalGap(primitives);
   const reportedGap = city.measurements.minimumGap;
   if (
     (measuredGap === null) !== (reportedGap === null) ||

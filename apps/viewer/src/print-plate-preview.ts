@@ -9,6 +9,12 @@ export const PRINT_PREVIEW_MODES = ["city", "plates"] as const;
 
 export type PrintPreviewMode = (typeof PRINT_PREVIEW_MODES)[number];
 export type PrintLayoutPreviewReadiness = "planned" | "ready";
+export type RequestedPrintFitPolicy =
+  | "auto"
+  | "error"
+  | "scale"
+  | "tile";
+export type AppliedPrintFitPolicy = "error" | "scale" | "tile";
 
 export interface PrintPreviewPoint {
   readonly x: number;
@@ -74,8 +80,8 @@ export interface PrintLayoutPreviewPlan {
    * packing.
    */
   readonly readiness?: PrintLayoutPreviewReadiness;
-  readonly requestedPolicy: "error" | "scale" | "tile";
-  readonly appliedPolicy: "error" | "scale" | "tile";
+  readonly requestedPolicy: RequestedPrintFitPolicy;
+  readonly appliedPolicy: AppliedPrintFitPolicy;
   readonly requestedScale: number;
   readonly appliedScale: number;
   readonly minimumSafeScale: number;
@@ -94,8 +100,8 @@ export interface PrintLayoutPreviewPlan {
  * preview projection.
  */
 export interface PrintBundlePreviewSource {
-  readonly fitPolicy: "error" | "scale" | "tile";
-  readonly appliedPolicy?: "error" | "scale" | "tile";
+  readonly fitPolicy: RequestedPrintFitPolicy;
+  readonly appliedPolicy?: AppliedPrintFitPolicy;
   readonly requestedScale: number;
   readonly appliedScale: number;
   readonly minimumSafeScale: number;
@@ -624,6 +630,7 @@ export function normalizePrintLayoutPreviewPlan(
     return plan;
   }
   if (
+    plan.requestedPolicy !== "auto" &&
     plan.requestedPolicy !== "error" &&
     plan.requestedPolicy !== "scale" &&
     plan.requestedPolicy !== "tile"
@@ -812,10 +819,17 @@ export function printLayoutPreviewPlanFromBundle(
       throw new TypeError("Bundle preview routes exceed browser limits.");
     }
   }
+  const appliedPolicy = source.appliedPolicy ??
+    (source.fitPolicy === "auto" ? undefined : source.fitPolicy);
+  if (appliedPolicy === undefined) {
+    throw new TypeError(
+      "An Auto print-layout preview requires a concrete applied policy.",
+    );
+  }
   const plan: PrintLayoutPreviewPlan = {
     readiness,
     requestedPolicy: source.fitPolicy,
-    appliedPolicy: source.appliedPolicy ?? source.fitPolicy,
+    appliedPolicy,
     requestedScale: source.requestedScale,
     appliedScale: source.appliedScale,
     minimumSafeScale: source.minimumSafeScale,

@@ -12,7 +12,10 @@ import { unzipSync } from "fflate";
 
 import { runCli } from "../apps/cli/src/main.js";
 import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
-import { createSingleChannelProfile } from "../packages/core/src/index.js";
+import {
+  createSingleChannelProfile,
+  validateCityModel,
+} from "../packages/core/src/index.js";
 import {
   generatePrintPlateBundle,
   preparePrintPlateBundle,
@@ -159,8 +162,20 @@ describe("print-plate CLI", () => {
         "city.print-manifest.json",
       );
       const planPath = path.join(directory, "plan.json");
+      const thinDetailModel = validateCityModel({
+        ...DEMO_MODEL,
+        buildings: DEMO_MODEL.buildings.map((building, index) =>
+          index === 0
+            ? {
+                ...building,
+                position: { ...building.position, y: 1.25 },
+                size: { ...building.size, y: 0.5 },
+              }
+            : building,
+        ),
+      });
       await Promise.all([
-        fs.writeFile(modelPath, JSON.stringify(DEMO_MODEL), "utf8"),
+        fs.writeFile(modelPath, JSON.stringify(thinDetailModel), "utf8"),
         fs.writeFile(
           profilePath,
           JSON.stringify(createSingleChannelProfile()),

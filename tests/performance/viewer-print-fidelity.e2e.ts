@@ -57,7 +57,7 @@ test.afterAll(async () => {
   });
 });
 
-test("below-profile export stays opt-in and exposes exact fidelity downloads", async ({
+test("Auto compact fit requires confirmation before exact fidelity downloads", async ({
   page,
 }) => {
   test.setTimeout(60_000);
@@ -67,34 +67,28 @@ test("below-profile export stays opt-in and exposes exact fidelity downloads", a
 
   const dialog = page.getByRole("dialog", { name: "Export print file" });
   await expect(dialog).toBeVisible();
-  const acknowledgement = dialog.getByLabel(
-    /Expert: allow scaling below/u,
-  );
-  await expect(acknowledgement).not.toBeChecked();
-  await dialog.locator("#print-scale").fill("0.5");
-  await dialog.locator("#print-fit").selectOption("error");
+  await expect(dialog.locator("#print-fit")).toHaveValue("auto");
+  await expect(dialog).not.toContainText(/Expert: allow scaling below/u);
+  await dialog.locator("#print-scale").fill("0.2");
   await dialog.locator("#print-legend-download-enabled").uncheck();
 
-  await dialog.getByRole("button", { name: "Prepare export" }).click();
-  await expect(dialog.locator("#print-export-errors")).toContainText(
-    "minimum profile-safe scale 1.6",
-    { timeout: 30_000 },
-  );
-  await expect(dialog.locator("#print-export-preflight")).toBeHidden();
-
-  await acknowledgement.check();
-  await expect(dialog.locator("#print-export-errors")).toBeHidden();
   await dialog.getByRole("button", { name: "Prepare export" }).click();
   await expect(dialog.locator("#print-export-preflight")).toBeVisible({
     timeout: 30_000,
   });
+  await expect(
+    dialog.locator("#print-export-compact-confirmation"),
+  ).toBeVisible();
+  await expect(
+    dialog.locator("#print-export-compact-confirmation-summary"),
+  ).toContainText("No print file has been created yet");
   await expect(dialog.locator("#print-export-fidelity-wrap")).toBeVisible();
   await expect(
     dialog.locator("#print-export-fidelity-summary"),
-  ).toContainText("Applied scale 0.5");
+  ).toContainText(/proposed applied scale 0\.2/iu);
   await expect(
     dialog.locator("#print-export-fidelity-summary"),
-  ).toContainText("profile-safe scale 1.6");
+  ).toContainText("profile-safe scale 0.4");
   await expect(
     dialog.locator("#print-export-fidelity-violations li").first(),
   ).toContainText(/mm resulting.*mm profile minimum/u);
@@ -103,6 +97,12 @@ test("below-profile export stays opt-in and exposes exact fidelity downloads", a
   const manifestDownload = dialog.locator(
     "#print-export-manifest-download",
   );
+  await expect(printDownload).toBeHidden();
+  await expect(manifestDownload).toBeHidden();
+
+  await dialog.getByRole("button", {
+    name: "Confirm compact fit and create file",
+  }).click();
   await expect(printDownload).toBeVisible();
   await expect(manifestDownload).toBeVisible();
   await expect(manifestDownload).toHaveAttribute(
@@ -111,7 +111,7 @@ test("below-profile export stays opt-in and exposes exact fidelity downloads", a
   );
   await expect(manifestDownload).toHaveAttribute("href", /^blob:/u);
 
-  await acknowledgement.uncheck();
+  await dialog.locator("#print-scale").fill("0.3");
   await expect(dialog.locator("#print-export-preflight")).toBeHidden();
   await expect(manifestDownload).toBeHidden();
   await expect(manifestDownload).not.toHaveAttribute("href", /.+/u);

@@ -156,6 +156,285 @@ describe("deterministic physical print layout", () => {
     expect(plan.plates[0]!.base.size.x).toBeLessThan(65);
   });
 
+  it("scales shared and district foundations normally above their profile floors", () => {
+    const plan = planPrintLayout(
+      profile({ x: 80, y: 50, z: 60 }),
+      {
+        requestedScale: 3,
+        features: { ...features, baseThickness: 0.4 },
+        districts: [
+          {
+            ...district("founded", 4, 4, 4),
+            sourceFoundationThickness: 0.4,
+          },
+        ],
+      },
+    );
+
+    const placement = plan.plates[0]!.districts[0]!;
+    expect(plan.plates[0]!.base.size.y).toBeCloseTo(1.2, 12);
+    expect(placement.foundationThickness).toBeCloseTo(1.2, 12);
+    expect(placement.foundationLift).toBe(0);
+    expect(
+      placement.bounds.maximum.y - placement.bounds.minimum.y,
+    ).toBe(12);
+    expect(
+      transformPoint(placement.sourceBounds.minimum, placement.transform).y,
+    ).toBe(placement.bounds.minimum.y);
+  });
+
+  it("clamps thin physical foundations and lifts uniformly scaled contents", () => {
+    const scale = 0.4;
+    const safeFeatures: PrintLayoutFeatureMeasurements = {
+      wallThickness: 2.5,
+      gap: 2.5,
+      minimumFeatureSize: 2.5,
+      baseThickness: 1,
+      labelStrokeWidth: 2.5,
+      raisedFeatureHeight: 2.5,
+      recessedFeatureDepth: 2.5,
+      routeWidth: 2.5,
+      connectorWidth: 2.5,
+    };
+    const plan = planPrintLayout(profile({ x: 30, y: 20, z: 30 }), {
+      requestedScale: scale,
+      features: safeFeatures,
+      districts: [
+        {
+          ...district("founded", 5, 5, 5, { x: 10, y: 2, z: 20 }),
+          sourceFoundationThickness: 1,
+        },
+      ],
+    });
+
+    const plate = plan.plates[0]!;
+    const placement = plate.districts[0]!;
+    expect(plan.minimumSafeScale).toBe(scale);
+    expect(plan.featureViolations).toEqual([]);
+    expect(plate.base.size.y).toBe(1);
+    expect(placement.foundationThickness).toBe(1);
+    expect(placement.foundationLift).toBeCloseTo(0.6, 12);
+    expect(placement.bounds.minimum.y).toBe(1);
+    expect(placement.bounds.maximum.y).toBeCloseTo(3.6, 12);
+
+    const transformedSourceBottom = transformPoint(
+      placement.sourceBounds.minimum,
+      placement.transform,
+    );
+    expect(transformedSourceBottom.y).toBeCloseTo(1.6, 12);
+    expect(
+      transformPoint(
+        {
+          ...placement.sourceBounds.minimum,
+          y: placement.sourceBounds.minimum.y + 1,
+        },
+        placement.transform,
+      ).y,
+    ).toBeCloseTo(
+      placement.bounds.minimum.y + placement.foundationThickness,
+      12,
+    );
+    expect(
+      transformPoint(placement.sourceBounds.maximum, placement.transform).y,
+    ).toBeCloseTo(placement.bounds.maximum.y, 12);
+  });
+
+  it("auto-fits a founded district while preserving physical foundation floors", () => {
+    const plan = planPrintLayout(profile(), {
+      fitPolicy: "scale",
+      requestedScale: 1.6,
+      features: {
+        wallThickness: 2.5,
+        gap: 2.5,
+        minimumFeatureSize: 2.5,
+        baseThickness: 1,
+        labelStrokeWidth: 2.5,
+        raisedFeatureHeight: 2.5,
+        recessedFeatureDepth: 2.5,
+        routeWidth: 2.5,
+        connectorWidth: 2.5,
+      },
+      districts: [
+        {
+          ...district("auto-fit", 80, 40, 5, { x: 10, y: 2, z: 20 }),
+          sourceFoundationThickness: 1,
+        },
+      ],
+    });
+
+    expect(plan.plates).toHaveLength(1);
+    expect(plan.appliedScale).toBeLessThan(plan.requestedScale);
+    expect(plan.appliedScale).toBeGreaterThanOrEqual(plan.minimumSafeScale);
+    expect(plan.appliedScale).toBeLessThan(1);
+    expect(plan.minimumSafeScale).toBe(0.4);
+    expect(plan.featureViolations).toEqual([]);
+
+    const plate = plan.plates[0]!;
+    const placement = plate.districts[0]!;
+    expect(plate.base.size.y).toBe(1);
+    expect(placement.foundationThickness).toBe(1);
+    expect(placement.foundationLift).toBeCloseTo(
+      1 - plan.appliedScale,
+      12,
+    );
+    expect(
+      placement.bounds.maximum.y - placement.bounds.minimum.y,
+    ).toBeCloseTo(1 + 4 * plan.appliedScale, 12);
+    expect(
+      transformPoint(
+        {
+          ...placement.sourceBounds.minimum,
+          y: placement.sourceBounds.minimum.y + 1,
+        },
+        placement.transform,
+      ).y,
+    ).toBeCloseTo(
+      placement.bounds.minimum.y + placement.foundationThickness,
+      12,
+    );
+  });
+
+  it("keeps base and district heights continuous at their clamp breakpoints", () => {
+    const breakpoint = 2.5;
+    const delta = 1e-6;
+    const run = (scale: number) =>
+      planPrintLayout(profile({ x: 80, y: 30, z: 60 }), {
+        requestedScale: scale,
+        features: {
+          wallThickness: 10,
+          gap: 10,
+          minimumFeatureSize: 10,
+          baseThickness: 0.4,
+          labelStrokeWidth: 10,
+          raisedFeatureHeight: 10,
+          recessedFeatureDepth: 10,
+          routeWidth: 10,
+          connectorWidth: 10,
+        },
+        districts: [
+          {
+            ...district("breakpoint", 2, 2, 2),
+            sourceFoundationThickness: 0.4,
+          },
+        ],
+      });
+    const below = run(breakpoint - delta);
+    const exact = run(breakpoint);
+    const above = run(breakpoint + delta);
+    const districtHeight = (plan: ReturnType<typeof run>) => {
+      const bounds = plan.plates[0]!.districts[0]!.bounds;
+      return bounds.maximum.y - bounds.minimum.y;
+    };
+
+    expect(below.plates[0]!.base.size.y).toBe(1);
+    expect(exact.plates[0]!.base.size.y).toBe(1);
+    expect(above.plates[0]!.base.size.y).toBeCloseTo(
+      0.4 * (breakpoint + delta),
+      12,
+    );
+    expect(districtHeight(below)).toBeCloseTo(
+      1 + 1.6 * (breakpoint - delta),
+      12,
+    );
+    expect(districtHeight(exact)).toBe(5);
+    expect(districtHeight(above)).toBeCloseTo(
+      2 * (breakpoint + delta),
+      12,
+    );
+  });
+
+  it("accepts the exact adjusted height boundary and reports the same height below it", () => {
+    const request = {
+      fitPolicy: "tile" as const,
+      requestedScale: 0.4,
+      features: {
+        wallThickness: 2.5,
+        gap: 2.5,
+        minimumFeatureSize: 2.5,
+        baseThickness: 1,
+        labelStrokeWidth: 2.5,
+        raisedFeatureHeight: 2.5,
+        recessedFeatureDepth: 2.5,
+        routeWidth: 2.5,
+        connectorWidth: 2.5,
+      },
+      districts: [
+        {
+          ...district("boundary", 5, 5, 5),
+          sourceFoundationThickness: 1,
+        },
+      ],
+    };
+    const exact = planPrintLayout(
+      profile({ x: 30, y: 3.6, z: 30 }),
+      request,
+    );
+    expect(exact.plates[0]!.dimensions.y).toBeCloseTo(3.6, 12);
+
+    try {
+      planPrintLayout(
+        profile({ x: 30, y: 3.6 - 2e-9, z: 30 }),
+        request,
+      );
+      throw new Error("Expected adjusted district height to exceed the plate.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(PrintLayoutError);
+      expect((error as PrintLayoutError).issues[0]).toMatchObject({
+        code: "district-does-not-fit",
+        objectId: "boundary",
+        required: { x: 2, y: 3.6, z: 2 },
+      });
+    }
+  });
+
+  it("uses custom base and raised-feature floors for physical foundations", () => {
+    const customProfile = createSingleChannelProfile({
+      buildVolume: { x: 30, y: 10, z: 30 },
+      geometryLimits: {
+        minimumWallThickness: 0.6,
+        minimumGap: 0.5,
+        minimumFeatureSize: 0.7,
+        minimumBaseThickness: 0.8,
+        nozzleDiameter: 0.4,
+        lineWidth: 0.45,
+        buildMargins: { x: 0, y: 0, z: 0 },
+        minimumRaisedFeatureHeight: 1.3,
+        minimumRecessedFeatureDepth: 0.6,
+        minimumLabelStrokeWidth: 0.5,
+        minimumRouteWidth: 0.7,
+        maximumModelHeight: 10,
+      },
+    });
+    const plan = planPrintLayout(customProfile, {
+      requestedScale: 0.4,
+      features: {
+        wallThickness: 10,
+        gap: 10,
+        minimumFeatureSize: 10,
+        baseThickness: 1,
+        labelStrokeWidth: 10,
+        raisedFeatureHeight: 10,
+        recessedFeatureDepth: 10,
+        routeWidth: 10,
+        connectorWidth: 10,
+      },
+      districts: [
+        {
+          ...district("custom", 5, 5, 5),
+          sourceFoundationThickness: 1,
+        },
+      ],
+    });
+
+    const placement = plan.plates[0]!.districts[0]!;
+    expect(plan.minimumSafeScale).toBeCloseTo(0.13, 12);
+    expect(plan.featureViolations).toEqual([]);
+    expect(plan.plates[0]!.base.size.y).toBe(0.8);
+    expect(placement.foundationThickness).toBe(1.3);
+    expect(placement.foundationLift).toBeCloseTo(0.9, 12);
+    expect(plan.plates[0]!.dimensions.y).toBeCloseTo(3.7, 12);
+  });
+
   it("reports usable X/Y/Z spans and keeps every object attached to one continuous plate base", () => {
     const plan = planPrintLayout(
       profile({ x: 80, y: 35, z: 60 }, { x: 2, y: 3, z: 4 }),
@@ -305,7 +584,7 @@ describe("deterministic physical print layout", () => {
         ],
       }),
     ).toThrow(
-      /Fit policy.*"Scale to one plate".*"Split complete districts \(tiled multi-plate export\)"/u,
+      /Fit policy.*"Scale to one plate".*"Tile complete districts \(multi-plate\)"/u,
     );
     try {
       planPrintLayout(profile(), {
@@ -360,7 +639,7 @@ describe("deterministic physical print layout", () => {
         ],
       }),
     ).toThrow(
-      /minimum profile-safe scale 1.*Fit policy.*"Split complete districts \(tiled multi-plate export\)"/u,
+      /minimum profile-safe scale 1.*Fit policy.*"Tile complete districts \(multi-plate\)"/u,
     );
   });
 
@@ -394,7 +673,6 @@ describe("deterministic physical print layout", () => {
       "wall-thickness",
       "gap",
       "minimum-feature-size",
-      "base-thickness",
       "label-stroke-width",
       "raised-feature-height",
       "recessed-feature-depth",

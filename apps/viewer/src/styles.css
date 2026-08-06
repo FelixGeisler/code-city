@@ -3601,6 +3601,7 @@ button,
 .print-export-heading p,
 .print-export-preflight h3,
 .print-export-preflight h4,
+.print-export-confirmation h3,
 .print-export-errors h3 {
   margin: 0;
 }
@@ -3659,6 +3660,7 @@ button,
 .print-export-field select:focus-visible,
 .print-export-check input:focus-visible,
 .print-tool-selection input:focus-visible,
+.print-export-confirmation button:focus-visible,
 .print-export-downloads a:focus-visible {
   outline: 2px solid var(--accent-strong);
   outline-offset: 2px;
@@ -3730,7 +3732,8 @@ button,
 }
 
 .print-export-errors,
-.print-export-preflight {
+.print-export-preflight,
+.print-export-confirmation {
   padding: 14px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -3740,6 +3743,29 @@ button,
 .print-export-errors {
   border-color: rgba(255, 128, 144, 0.38);
   color: #ffd5da;
+}
+
+.print-export-confirmation {
+  display: grid;
+  gap: 10px;
+  border-color: rgba(255, 199, 94, 0.48);
+  color: #ffe8b8;
+  background: rgba(65, 45, 11, 0.42);
+}
+
+.print-export-confirmation h3 {
+  font-size: 14px;
+}
+
+.print-export-confirmation p {
+  margin: 0;
+  color: #d9cbaa;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.print-export-confirmation button {
+  width: fit-content;
 }
 
 .print-export-errors h3,

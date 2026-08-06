@@ -523,6 +523,11 @@ The viewer accepts a `city-model.json` through **Project > Open model**.
 printer profile, previews the exact exporter layout, and downloads direct
 3MF/STL or a deterministic multi-plate ZIP.
 Generation runs locally in a cancellable worker; no model or profile is uploaded.
+The default **Auto fit (recommended)** treats scale 3 as a target: it tries the
+target on one plate, a profile-safe one-plate fit, then complete-district
+tiling. If real detail limits leave only a smaller complete one-plate fit, the
+viewer shows that exact proposal and requires **Confirm compact fit** before it
+serializes or offers a download. There is no ordinary Expert checkbox.
 **Prepare calibration** downloads a profile-only test plate and measurement
 manifest.
 
@@ -573,14 +578,24 @@ and analyze `$(Build.SourcesDirectory)` locally.
 The Demo imports into PrusaSlicer with aligned tool parts. `--routes auto`
 prints capped, aggregated district dependencies; routes default to `off`. The
 private JSON legend maps printed codes to repository-relative paths. Oversized
-cities use profile-safe `--fit scale` or complete-district `--fit tile`.
+CLI exports use profile-safe `--fit scale` or complete-district `--fit tile`;
+the viewer's Auto workflow tries both where they are viable.
 Experts may add `--acknowledge-below-profile-scale` to permit an explicitly
 requested lower scale or let `--fit scale` search below the profile-safe floor.
 The default remains a hard rejection. Preflight and deterministic manifests
 record requested, applied, and profile-safe scales plus every below-limit
 feature's resulting millimetres and configured minimum. This acknowledgement
 accepts possible lost, merged, or fragile detail; it never bypasses the
-printer's physical build volume. Direct STL/3MF exports write a
+printer's physical build volume. Shared plate bases and exposed district
+foundations are regenerated after scaling as physical supports: shared bases
+are clamped to the profile's minimum base thickness, while district foundations
+are clamped to the larger of the minimum base thickness and minimum raised
+feature height. Those supports are excluded from the scalable-detail safety
+floor. When a district foundation is thickened, its buildings are lifted by
+the same delta so they remain seated on it. Every completed viewer export
+refuses non-empty unplaced objects. In the browser, a completed one-plate plan
+downloads direct STL/3MF; only a completed multi-plate plan is wrapped in a
+ZIP. Direct STL/3MF exports write a
 `.print-manifest.json` sidecar, while bundle metadata stays in `manifest.json`;
 arbitrary fonts and slicer settings remain separate. Printable custom logos are
 local-only, must be transparent single-color SVG or PNG silhouettes, and are

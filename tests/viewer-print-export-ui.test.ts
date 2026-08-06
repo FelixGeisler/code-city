@@ -32,18 +32,21 @@ describe("viewer print export UI", () => {
     expect(html).toContain('id="print-labels"');
     expect(html).toContain('id="print-routes"');
     expect(html).toMatch(
-      /<option value="tile">\s+Split complete districts \(tiled multi-plate export\)\s+<\/option>/u,
+      /<select id="print-fit">\s*<option value="auto">Auto fit \(recommended\)<\/option>/u,
+    );
+    expect(html).toMatch(
+      /<option value="tile">\s+Tile complete districts \(multi-plate\)\s+<\/option>/u,
     );
     expect(html).toContain('id="print-legend-download-enabled"');
-    expect(html).toMatch(
-      /id="print-below-profile-scale-acknowledgement"[\s\S]*type="checkbox"/u,
+    expect(html).not.toContain(
+      'id="print-below-profile-scale-acknowledgement"',
     );
-    expect(html).not.toMatch(
-      /id="print-below-profile-scale-acknowledgement"[^>]*checked/u,
-    );
-    expect(html).toContain("Expert: allow scaling below this profile's guaranteed detail");
+    expect(html).not.toContain("Expert: allow scaling below");
+    expect(html).toContain("Target scale (maximum)");
     expect(html).toContain("print-fidelity");
-    expect(html).toContain("not a warning that the export can damage the printer");
+    expect(html).toContain('id="print-export-compact-confirmation"');
+    expect(html).toContain('id="print-export-compact-confirm"');
+    expect(html).toContain("before a file is created");
     expect(html).toContain('id="visualization-mode"');
     expect(html).toContain(
       '<option value="complexity">Complexity risk</option>',
@@ -101,12 +104,8 @@ describe("viewer print export UI", () => {
     expect(source).toContain('"printable coupons"');
     expect(source).toContain("artifactDownload.hidden = true");
     expect(source).toContain("printManifestDownload.hidden = true");
-    expect(source).toContain(
-      "belowProfileScaleAcknowledgement.checked",
-    );
-    expect(source).toMatch(
-      /belowProfileScaleAcknowledgement\.addEventListener\(\s*"change",\s*invalidateOutput/u,
-    );
+    expect(source).not.toContain("belowProfileScaleAcknowledgement");
+    expect(source).toContain("controller.confirmCompactFit()");
     expect(source).toContain(
       "`${millimeters(violation.resultingValue)} mm resulting",
     );

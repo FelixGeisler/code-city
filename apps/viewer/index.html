@@ -2708,7 +2708,7 @@
 
             <div class="print-export-grid">
               <label class="print-export-field" for="print-scale">
-                <span>Scale</span>
+                <span>Target scale (maximum)</span>
                 <input
                   id="print-scale"
                   type="number"
@@ -2733,10 +2733,11 @@
               <label class="print-export-field" for="print-fit">
                 <span>Fit policy</span>
                 <select id="print-fit">
+                  <option value="auto">Auto fit (recommended)</option>
                   <option value="error">Keep scale or fail</option>
                   <option value="scale">Scale to one plate</option>
                   <option value="tile">
-                    Split complete districts (tiled multi-plate export)
+                    Tile complete districts (multi-plate)
                   </option>
                 </select>
               </label>
@@ -2764,27 +2765,15 @@
               <input id="print-legend-download-enabled" type="checkbox" checked />
               <span>Prepare private companion legend</span>
             </label>
-            <label class="print-export-check">
-              <input
-                id="print-below-profile-scale-acknowledgement"
-                type="checkbox"
-              />
-              <span>
-                Expert: allow scaling below this profile's guaranteed detail
-                limits
-              </span>
-            </label>
-            <p class="print-export-help">
-              This may make thin walls, gaps, labels, routes, or other details
-              merge, disappear, or become fragile. It is a print-fidelity
-              trade-off, not a warning that the export can damage the printer.
-              Physical build-volume limits still apply.
-            </p>
           </fieldset>
 
           <p class="print-export-help">
-            Error preserves the requested scale. Scale fits one plate. Tile
-            keeps complete districts together and downloads a ZIP.
+            Auto tries the target scale on one plate, a profile-safe one-plate
+            fit, then complete-district tiling. If only a smaller compact fit
+            is viable, you can review its exact preview and confirm the
+            print-fidelity trade-off before a file is created. Tile keeps
+            complete districts together and downloads a ZIP when it needs
+            multiple plates.
             Calibration uses only the selected printer profile and never
             includes repository content.
           </p>
@@ -2872,6 +2861,31 @@
               <h4>Warnings</h4>
               <ul id="print-export-warnings"></ul>
             </div>
+          </section>
+
+          <section
+            id="print-export-compact-confirmation"
+            class="print-export-confirmation"
+            aria-labelledby="print-export-compact-confirmation-title"
+            hidden
+          >
+            <h3 id="print-export-compact-confirmation-title">
+              Confirm compact fit
+            </h3>
+            <p id="print-export-compact-confirmation-summary"></p>
+            <p>
+              Thin walls, gaps, labels, routes, or other details may merge,
+              disappear, or become fragile. This is a print-fidelity
+              trade-off, not a printer hardware danger; physical build-volume
+              limits still apply.
+            </p>
+            <button
+              id="print-export-compact-confirm"
+              class="button button-primary"
+              type="button"
+            >
+              Confirm compact fit and create file
+            </button>
           </section>
 
           <div

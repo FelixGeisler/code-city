@@ -16,10 +16,10 @@ identical semantic groups, layout, legend, and bundle bytes
 missing-value policy, scale, and mapping provenance
 
 |Printability
-|Every artifact fits the usable profile volume; scaling stays profile-safe by
-default, or requires explicit expert acknowledgement with exact durable
-fidelity violations; tiling keeps districts whole; print consumes the mapping
-applied in the viewer
+|Every artifact fits the usable profile volume and contains no unplaced
+objects; browser Auto fit stays profile-safe when possible and requires an
+exact normal confirmation before a compact below-profile plan is serialized;
+tiling keeps districts whole; print consumes the mapping applied in the viewer
 
 |Atomic reconfiguration
 |Cancellation or invalid input preserves the active city; an applied

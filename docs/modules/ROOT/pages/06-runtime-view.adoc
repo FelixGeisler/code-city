@@ -496,8 +496,8 @@ district-aggregated dependencies.
 Use `--fit error` for one direct 3MF or STL. `--fit scale` reduces the model no
 further than the profile-safe feature scale and still requires one plate.
 `--fit tile` preserves the requested scale and assigns complete districts to
-at most `--max-plates` (default `99`). Scale and tile exports are deterministic
-ZIP bundles.
+at most `--max-plates` (default `99`). Scale and tile CLI exports are
+deterministic ZIP bundles.
 
 The expert-only `--acknowledge-below-profile-scale` flag permits an explicit
 lower scale and lets `--fit scale` search below the profile-safe floor. Without
@@ -524,15 +524,31 @@ The ZIP contains `manifest.json` and numbered `plate-01` artifacts. The
 manifest reports applied scale, bounds, warnings, unplaced objects, and omitted
 cross-plate routes with both endpoint IDs and plate numbers.
 
-In the viewer, **Print plates** prepares and previews the same geometry; export
-runs in a cancellable module worker. Select 3MF or STL and a bundled or local
-JSON profile. Preflight reports plate count, filenames, dimensions,
-utilization, applied scale, warnings, omissions, and unplaced objects. No input
-is sent over the network.
+In the viewer, **Auto fit (recommended)** is the default and the entered scale
+is a target/maximum. Auto tries the requested one-plate layout, a profile-safe
+one-plate fit, viable complete-district tiling, and finally an exact compact
+one-plate proposal. It never recommends whole-district Tile for a district
+that is itself oversized. If the compact proposal has real detail violations,
+the exact plates and below-limit measurements appear in preflight with a normal
+**Confirm compact fit** action. No artifact serialization or download occurs
+before confirmation; confirmation deterministically reruns the plan.
 
-The viewer exposes the same behavior behind an unchecked expert
-acknowledgement. Exact below-limit measurements appear in preflight before the
-artifact and manifest downloads are offered.
+**Print plates** previews the exporter geometry while export runs in a
+cancellable module worker. Preflight distinguishes requested Auto from the
+concrete applied policy and reports plate count, filenames, dimensions,
+utilization, target/applied scale, warnings, and omissions. Export rejects any
+non-empty unplaced set. The browser selects direct 3MF/STL for one completed
+plate and a ZIP for multiple completed plates. Select 3MF or STL and a bundled
+or local JSON profile; no input is sent over the network.
+
+After the concrete scale is selected, the exporter regenerates the shared
+plate base and each exposed district foundation as physical supports. A shared
+base is clamped to `minimumBaseThickness`; a district foundation is clamped to
+the greater of `minimumBaseThickness` and `minimumRaisedFeatureHeight`. These
+support thicknesses do not contribute to the scalable-detail safety floor.
+The planner records any extra district thickness as a foundation lift and
+applies that same lift to the district's buildings, keeping them seated on the
+adjusted foundation.
 
 **Prepare calibration** uses the selected profile without repository content
 and downloads the deterministic calibration plate in the selected format plus

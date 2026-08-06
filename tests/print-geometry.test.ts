@@ -112,9 +112,9 @@ describe("Demo printable geometry", () => {
     expect(city.bounds.minimum).toEqual({ x: 0, y: 0, z: 0 });
     expect(city.bounds.size).toEqual({ x: 93, y: 48, z: 33 });
     expect(city.measurements.baseThickness).toBe(1.5);
-    expect(city.measurements.wallThickness).toBeCloseTo(0.8, 10);
-    expect(city.measurements.minimumFeatureSize).toBeCloseTo(0.8, 10);
-    expect(city.measurements.minimumGap).toBeCloseTo(0.8, 10);
+    expect(city.measurements.wallThickness).toBeCloseTo(9, 10);
+    expect(city.measurements.minimumFeatureSize).toBeCloseTo(9, 10);
+    expect(city.measurements.minimumGap).toBeCloseTo(3, 10);
     expect(city.parts.map(({ channelId }) => channelId)).toEqual([
       "tool-1",
       "tool-2",
@@ -397,6 +397,55 @@ describe("Demo printable geometry", () => {
     expect(validatePrintableCity(city, profile)).toEqual([]);
   });
 
+  it("clamps shared and district foundations without shrinking scalable detail", () => {
+    const {
+      identity: _identity,
+      identityPanel: _identityPanel,
+      ...model
+    } = DEMO_MODEL;
+    const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
+    const city = buildPrintableCity(
+      model,
+      assignments(),
+      { scale: 1, profile, labelPolicy: "off" },
+    );
+    const primitives = city.parts.flatMap(({ primitives }) => primitives);
+    const base = primitives.find(({ kind }) => kind === "base")!;
+    const districts = primitives.filter(({ kind }) => kind === "district");
+    const buildings = primitives.filter(({ kind }) => kind === "building");
+
+    expect(base.bounds.size.z).toBe(
+      profile.geometryLimits.minimumBaseThickness,
+    );
+    expect(
+      districts.every(
+        ({ bounds }) =>
+          bounds.size.z ===
+            Math.max(
+              profile.geometryLimits.minimumBaseThickness,
+              profile.geometryLimits.minimumRaisedFeatureHeight ?? 0,
+            ) &&
+          bounds.minimum.z === base.bounds.maximum.z,
+      ),
+    ).toBe(true);
+    expect(
+      buildings.every((building) =>
+        districts.some(
+          (district) =>
+            district.bounds.maximum.z === building.bounds.minimum.z &&
+            district.bounds.minimum.x < building.bounds.maximum.x &&
+            district.bounds.maximum.x > building.bounds.minimum.x &&
+            district.bounds.minimum.y < building.bounds.maximum.y &&
+            district.bounds.maximum.y > building.bounds.minimum.y,
+        ),
+      ),
+    ).toBe(true);
+    expect(city.measurements.wallThickness).toBeCloseTo(3, 10);
+    expect(city.measurements.minimumFeatureSize).toBeCloseTo(3, 10);
+    expect(city.measurements.minimumGap).toBeCloseTo(1, 10);
+    expect(validatePrintableCity(city, profile)).toEqual([]);
+  });
+
   it("adds fitting same-channel roof codes and ground district labels", () => {
     const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
     const artifacts = buildPrintableCityArtifacts(
@@ -621,7 +670,7 @@ describe("Demo printable geometry", () => {
           ...profile,
           geometryLimits: {
             ...profile.geometryLimits,
-            minimumWallThickness: 1,
+            minimumWallThickness: 10,
           },
         },
       }),
@@ -633,7 +682,7 @@ describe("Demo printable geometry", () => {
           ...profile,
           geometryLimits: {
             ...profile.geometryLimits,
-            minimumGap: 1,
+            minimumGap: 4,
           },
         },
       }),
