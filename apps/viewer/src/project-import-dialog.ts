@@ -95,6 +95,8 @@ export interface InstallProjectImportDialogOptions {
     source: ImportedCityModelSource,
   ) => void | Promise<void>;
   readonly onSignedOut?: () => void | Promise<void>;
+  readonly onAuthenticated?: () => void | Promise<void>;
+  readonly onAuthorizationLost?: () => void | Promise<void>;
   readonly onResultRemoved?: (jobId: string) => void | Promise<void>;
 }
 
@@ -1300,6 +1302,12 @@ export function installProjectImportDialog(
     ...(options.onSignedOut === undefined
       ? {}
       : { onSignedOut: options.onSignedOut }),
+    ...(options.onAuthenticated === undefined
+      ? {}
+      : { onAuthenticated: options.onAuthenticated }),
+    ...(options.onAuthorizationLost === undefined
+      ? {}
+      : { onAuthorizationLost: options.onAuthorizationLost }),
     ...(options.onResultRemoved === undefined
       ? {}
       : { onResultRemoved: options.onResultRemoved }),

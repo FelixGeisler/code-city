@@ -745,11 +745,11 @@ test.beforeAll(async () => {
     }),
   );
   const retainedSourceLines = Array.from(
-    { length: 260 },
+    { length: 430 },
     (_, index) =>
       index === 4
         ? "// retained-source-sentinel"
-        : `// retained filler line ${index + 1}`,
+        : `const retainedFiller${index + 1} = ${index + 1};`,
   );
   retainedSourceLines.unshift(
     'import { siblingMustNotBeFetched } from "./sibling";',
@@ -1339,6 +1339,7 @@ async function districtRouteGeometry(
 async function selectLineageBuilding(
   page: Page,
   building: CityBuilding,
+  openSource = false,
 ): Promise<void> {
   await page.getByRole("tab", { name: "Explore" }).click();
   await page.locator("#building-search").fill(building.name);
@@ -1349,6 +1350,12 @@ async function selectLineageBuilding(
   await result.click();
   await expect(page.locator("#inspector-title")).toHaveText("Building");
   await expect(page.locator("#selection-name")).toHaveText(building.name);
+  if (openSource) {
+    await page.locator("#building-source-open").click();
+    await expect(page.locator("#building-source-status")).toContainText(
+      "Showing the exact retained file",
+    );
+  }
 }
 
 function lastRemoteInvocation(
@@ -2153,11 +2160,22 @@ test("rejects an oversized legacy evolution artifact before downloading it", asy
 test("keeps a future lineage selected before creation and restores its source at creation", async ({
   page,
 }) => {
+  const retainedSourceRequests: string[] = [];
+  const aiPreviewRequests: string[] = [];
+  page.on("request", (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (/^\/api\/v1\/artifacts\/[^/]+\/sources\/[^/]+$/u.test(pathname)) {
+      retainedSourceRequests.push(pathname);
+    }
+    if (pathname.startsWith("/api/v1/ai/preview/")) {
+      aiPreviewRequests.push(pathname);
+    }
+  });
   const fixture = await openLineageEvolutionFixture(page);
   const building = fixture.futureBuilding;
   const shortCreationCommit = LINEAGE_COMMITS[2]!.slice(0, 10);
 
-  await selectLineageBuilding(page, building);
+  await selectLineageBuilding(page, building, true);
   await expect(page.locator("#building-source-status")).toContainText(
     "Showing the exact retained file",
   );
@@ -2190,6 +2208,7 @@ test("keeps a future lineage selected before creation and restores its source at
     "removed",
   );
   await expect(page.locator("#building-source-details")).toBeHidden();
+  await expect(page.locator("#building-code-inspection")).toBeHidden();
 
   await seekEvolutionFrame(page, 0);
   await expect(page.locator("#inspector-title")).toHaveText(
@@ -2202,6 +2221,7 @@ test("keeps a future lineage selected before creation and restores its source at
   await expect(page.locator("#selection-status")).not.toContainText(
     "removed",
   );
+  await expect(page.locator("#building-code-inspection")).toBeHidden();
 
   await seekEvolutionFrame(page, 2);
   await expect(page.locator("#inspector-title")).toHaveText("Building");
@@ -2210,6 +2230,29 @@ test("keeps a future lineage selected before creation and restores its source at
     "Code City Demo",
   );
   await expect(page.locator("#building-source-details")).toBeVisible();
+  await expect(page.locator("#building-code-inspection")).toBeVisible();
+  await expect(page.locator("#building-source-status")).toContainText(
+    "unavailable for historical frames",
+  );
+  await expect(page.locator("#building-source-summary")).toHaveText(
+    "Historical frame",
+  );
+  await expect(page.locator("#building-source-open")).toBeDisabled();
+  await expect(page.locator("#building-ai-guidance-details")).toBeHidden();
+  const requestsAtHistoricalFrame = retainedSourceRequests.length;
+  await page.locator("#building-source-open").evaluate((button) =>
+    (button as HTMLButtonElement).click()
+  );
+  expect(retainedSourceRequests).toHaveLength(requestsAtHistoricalFrame);
+  expect(aiPreviewRequests).toEqual([]);
+
+  await seekEvolutionFrame(page, 3);
+  await expect(page.locator("#building-code-inspection")).toBeVisible();
+  await expect(page.locator("#building-source-open")).toBeEnabled();
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Open retained source above",
+  );
+  await page.locator("#building-source-open").click();
   await expect(page.locator("#building-source-status")).toContainText(
     "Showing the exact retained file",
   );
@@ -2219,9 +2262,13 @@ test("keeps a future lineage selected before creation and restores its source at
   await expect(page.locator("#building-evolution")).toContainText(
     `First seen ${shortCreationCommit} at frame 3`,
   );
+  expect(retainedSourceRequests.length).toBeGreaterThan(
+    requestsAtHistoricalFrame,
+  );
+  expect(aiPreviewRequests).toEqual([]);
 });
 
-test("keeps a removed lineage tombstone and restores its source before removal", async ({
+test("keeps a removed lineage tombstone without using latest-revision source", async ({
   page,
 }) => {
   const fixture = await openLineageEvolutionFixture(page);
@@ -2233,11 +2280,10 @@ test("keeps a removed lineage tombstone and restores its source before removal",
   await seekEvolutionFrame(page, 1);
   await selectLineageBuilding(page, building);
   await expect(page.locator("#building-source-status")).toContainText(
-    "Showing the exact retained file",
+    "unavailable for historical frames",
   );
-  await expect(page.locator("#building-source-code")).toContainText(
-    "removed-lineage-source-sentinel",
-  );
+  await expect(page.locator("#building-source-open")).toBeDisabled();
+  await expect(page.locator("#building-source-code")).toHaveText("");
 
   await seekEvolutionFrame(page, 2);
   await expect(page.locator("#inspector-title")).toHaveText(
@@ -2259,6 +2305,7 @@ test("keeps a removed lineage tombstone and restores its source before removal",
     `Removed by ${shortRemovalCommit} at frame 3`,
   );
   await expect(page.locator("#building-source-details")).toBeHidden();
+  await expect(page.locator("#building-code-inspection")).toBeHidden();
 
   await seekEvolutionFrame(page, 3);
   await expect(page.locator("#inspector-title")).toHaveText(
@@ -2271,6 +2318,7 @@ test("keeps a removed lineage tombstone and restores its source before removal",
   await expect(page.locator("#building-repository")).not.toContainText(
     shortNewestCommit,
   );
+  await expect(page.locator("#building-code-inspection")).toBeHidden();
   await expect(
     page.locator("#building-metric-explanation"),
   ).toContainText(
@@ -2284,12 +2332,11 @@ test("keeps a removed lineage tombstone and restores its source before removal",
     "Code City Demo",
   );
   await expect(page.locator("#building-source-details")).toBeVisible();
+  await expect(page.locator("#building-code-inspection")).toBeVisible();
   await expect(page.locator("#building-source-status")).toContainText(
-    "Showing the exact retained file",
+    "unavailable for historical frames",
   );
-  await expect(page.locator("#building-source-code")).toContainText(
-    "removed-lineage-source-sentinel",
-  );
+  await expect(page.locator("#building-source-open")).toBeDisabled();
   await expect(page.locator("#building-evolution")).toContainText(
     `First seen ${shortCreationCommit} at frame 1`,
   );
@@ -2304,7 +2351,7 @@ test("does not overwrite a newer clear or replacement selection during a seek", 
   const fixture = await openLineageEvolutionFixture(page, {
     seekDelayMs: 2_000,
   });
-  await selectLineageBuilding(page, fixture.futureBuilding);
+  await selectLineageBuilding(page, fixture.futureBuilding, true);
   await expect(page.locator("#building-source-status")).toContainText(
     "Showing the exact retained file",
   );
@@ -2333,6 +2380,12 @@ test("does not overwrite a newer clear or replacement selection during a seek", 
   await expect(page.locator("#evolution-status")).toHaveText(
     "Seeking\u2026",
   );
+  await expect(page.locator("#building-source-open")).toBeDisabled();
+  await expect(page.locator("#building-source-summary")).toHaveText(
+    "Changing frame",
+  );
+  await expect(page.locator("#building-source-code")).toHaveText("");
+  await expect(page.locator("#building-ai-guidance-details")).toBeHidden();
   await clearSelection.click();
   await expect(page.locator("#inspector-title")).toHaveText("Details");
   await expect(page.locator("#selection-name")).toHaveText(
@@ -2678,21 +2731,36 @@ test("imports a browser directory and repository ZIP with identity and analysis 
   await expect(page.locator("#status")).toContainText("zip-v1");
 });
 
+test("hides AI guidance when no provider is configured", async ({ page }) => {
+  await openAuthenticatedWizard(page);
+  await page.getByRole("button", { name: "Close project import" }).click();
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await page.locator("#building-search").fill(".ts");
+  const result = page.locator(".search-result-button").first();
+  await expect(result).toBeVisible();
+  await result.click();
+  await expect(page.locator("#building-ai-guidance-details")).toBeHidden();
+  await expect(page.locator("#building-ai-guidance-prepare")).toBeHidden();
+  await expect(page.locator("#building-ai-guidance-status")).toHaveText("");
+});
+
 test("scrubs retained ZIP source across selection, stale response, refetch, and removal", async ({
   page,
 }) => {
-  test.setTimeout(75_000);
+  test.setTimeout(120_000);
   const sourceRequests: string[] = [];
   let releaseRemotePreview!: () => void;
   let announceRemotePreview!: () => void;
   const remotePreviewReleased = new Promise<void>((resolve) => { releaseRemotePreview = resolve; });
   const remotePreviewStarted = new Promise<void>((resolve) => { announceRemotePreview = resolve; });
   let localPreviewCalls = 0;
+  let providerRequests = 0;
   let guidanceRequests = 0;
   const guidanceBodies: unknown[] = [];
   const previewContexts: Record<string, unknown>[] = [];
   const approved = new Map<string, { providerId: string; context: Record<string, unknown>; contextDigest: string; findingDigest?: string; source: { path: string; lines: { startLine: number; endLine: number } } }>();
   await page.route("**/api/v1/ai/providers", async (route) => {
+    providerRequests += 1;
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ enabled: true, providers: [{ id: "remote", label: "Remote review" }, { id: "local", label: "Local model" }] }) });
   });
   await page.route("**/api/v1/ai/preview/**", async (route) => {
@@ -2713,6 +2781,21 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
         provider: { id: providerId, label: providerId === "remote" ? "Remote review" : "Local model" },
         context: selected,
         reason: "This dependency has no analyzer-recorded exact source range.",
+        limits: { timeoutMs: 20_000, maximumSourceBytes: 131_072 },
+        privacy: "no-prompt-storage",
+      } }) });
+      return;
+    }
+    if (
+      selected["kind"] === "smell" &&
+      selected["ruleId"] === "oversized-file"
+    ) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ preview: {
+        enabled: true,
+        availability: "unavailable",
+        provider: { id: providerId, label: providerId === "remote" ? "Remote review" : "Local model" },
+        context: selected,
+        reason: "This oversized-file finding has no exact source range.",
         limits: { timeoutMs: 20_000, maximumSourceBytes: 131_072 },
         privacy: "no-prompt-storage",
       } }) });
@@ -2803,6 +2886,7 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   );
   expect(retainedBuilding).toBeDefined();
   expect(siblingBuilding).toBeDefined();
+  expect(retainedBuilding!.metrics.sloc).toBeGreaterThanOrEqual(400);
   const retainedDependency = importedModel.dependencies.find(
     ({ sourceId, targetId }) =>
       sourceId === retainedBuilding!.id &&
@@ -2823,20 +2907,43 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
     .filter({ hasText: "retained-large.ts" });
   await expect(retainedResult).toHaveCount(1);
   await retainedResult.click();
-  await remotePreviewStarted;
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Open retained source above",
+  );
+  await expect(page.locator("#building-source-summary")).toHaveText(
+    "Not loaded",
+  );
+  expect(sourceRequests).toEqual([]);
+  expect(previewContexts).toEqual([]);
+  await expect.poll(() => providerRequests).toBe(1);
+  await page.locator("#building-source-structure-details summary").click();
+  expect(sourceRequests).toEqual([]);
+  expect(previewContexts).toEqual([]);
+  await page.locator("#building-source-structure-details summary").click();
   await page.locator("#building-ai-guidance-details summary").click();
+  await page.locator("#building-ai-guidance-prepare").click();
+  await remotePreviewStarted;
   await page.locator("#building-ai-guidance-provider").selectOption("local");
+  await expect(page.locator("#building-ai-guidance-preview")).toBeHidden();
+  await page.locator("#building-ai-guidance-prepare").click();
   await expect(page.locator("#building-ai-guidance-preview")).toContainText("LOCAL-PAYLOAD-1");
   releaseRemotePreview();
   await expect(page.locator("#building-ai-guidance-provider")).toHaveValue("local");
   await expect(page.locator("#building-ai-guidance-preview")).not.toContainText("REMOTE-PAYLOAD");
   await page.locator("#building-ai-guidance-request").dblclick();
   await expect.poll(() => guidanceRequests).toBe(1);
-  await expect.poll(() => localPreviewCalls).toBeGreaterThanOrEqual(2);
+  await expect(page.locator("#building-ai-guidance-preview")).toBeHidden();
+  await page.locator("#building-ai-guidance-prepare").click();
+  await expect.poll(() => localPreviewCalls).toBe(2);
   await expect(page.locator("#building-ai-guidance-preview")).toContainText("LOCAL-PAYLOAD-2");
   await page.locator("#building-ai-guidance-request").click();
   await expect.poll(() => guidanceRequests).toBe(2);
   await expect(page.locator("#building-ai-guidance-suggestions")).toContainText("Keep it small");
+
+  await page.locator("#building-source-open").click();
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Showing the exact retained file",
+  );
 
   await page.locator("#dependency-section summary").click();
   await page.locator("#dependency-outgoing-toggle").click();
@@ -2844,26 +2951,10 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
     .locator(".dependency-item")
     .filter({ hasText: "sibling.ts" });
   await expect(dependencyItem).toHaveCount(1);
-  await dependencyItem.getByRole("button", {
-    name: `Preview AI guidance for dependency ${retainedDependency!.id}`,
-  }).click();
-  await expect(page.locator("#building-ai-guidance-details")).toHaveAttribute(
-    "open",
-    "",
-  );
-  await expect(page.locator("#building-ai-guidance-summary")).toHaveText(
-    "Context unavailable",
-  );
-  await expect(page.locator("#building-ai-guidance-status")).toContainText(
-    "no analyzer-recorded exact source range",
-  );
-  await expect(page.locator("#building-ai-guidance-request")).toBeHidden();
-  expect(previewContexts.at(-1)).toEqual({
-    version: "codecity.ai-context/1",
-    kind: "dependency",
-    buildingId: retainedBuilding!.id,
-    dependencyId: retainedDependency!.id,
-  });
+  await expect(dependencyItem.getByRole("button", {
+    name: /AI guidance/u,
+  })).toHaveCount(0);
+  expect(previewContexts.some(({ kind }) => kind === "dependency")).toBe(false);
   expect(guidanceRequests).toBe(2);
 
   await expect(page.locator("#building-source-status")).toContainText(
@@ -2919,12 +3010,15 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
     "data-source-declaration-id",
   );
   await exactFunction.click();
+  await expect(exactFunction).toBeFocused();
   const highlightedLine = page.locator(".source-line-highlight").first();
   await expect(highlightedLine).toContainText("sameLinePrefix");
   await expect(highlightedLine).toContainText("sameLineSuffix");
   await expect.poll(async () =>
     (await highlightedLine.locator(".source-range-highlight").allTextContents()).join("")
   ).toBe("export function sameLineExact(): number { return 7; }");
+  await expect(page.locator("#building-ai-guidance-preview")).toBeHidden();
+  await page.locator("#building-ai-guidance-prepare").click();
   await expect(page.locator("#building-ai-guidance-summary")).toHaveText(
     "Preview ready",
   );
@@ -2934,7 +3028,6 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   await expect(page.locator("#building-ai-guidance-preview")).toContainText(
     exactFunctionId!,
   );
-  await page.locator("#building-ai-guidance-details summary").click();
   await expect(page.locator("#building-ai-guidance-request")).toBeVisible();
   expect(previewContexts.at(-1)).toMatchObject({
     version: "codecity.ai-context/1",
@@ -2949,15 +3042,27 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   await expect(page.locator("#building-source-structure-return")).toBeVisible();
   await expect(page.locator("#building-source-structure-show-more")).toBeHidden();
   await expect(page.getByRole("button", { name: /Method method44\./u })).toBeVisible();
+  const sourceScrollBeforeClear = await page.locator("#building-source-code")
+    .evaluate((element) => element.scrollTop);
   await page.locator("#building-source-structure-return").click();
+  await expect(
+    page.locator("#building-source-structure-details summary"),
+  ).toBeFocused();
   await expect(page.locator("#selection-name")).toHaveText("retained-large.ts");
-  await expect(page.locator("#scene canvas")).toBeFocused();
+  await expect(page.locator("#building-source-structure-details")).toHaveAttribute(
+    "open",
+    "",
+  );
+  await expect(page.locator("#building-source-details")).toHaveAttribute(
+    "open",
+    "",
+  );
+  expect(await page.locator("#building-source-code")
+    .evaluate((element) => element.scrollTop)).toBe(sourceScrollBeforeClear);
   expect(await page.evaluate(() =>
     document.querySelector<HTMLCanvasElement>("#scene canvas")?.getBoundingClientRect().toJSON(),
   )).toEqual(cameraBeforeDetail);
   const sourceDetails = page.locator("#building-source-details");
-  await expect(sourceDetails).not.toHaveAttribute("open", "");
-  await sourceDetails.locator("summary").click();
   await expect(page.locator(".source-line-omitted")).toBeVisible();
   await expect(page.locator(".source-line-omitted").first()).toContainText(
     "…",
@@ -2972,35 +3077,26 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
     "#building-source-structure-details",
   );
   await expect(structureDetails).toBeVisible();
-  await structureDetails.locator("summary").click();
   const structureJump = structureDetails.getByRole("button", {
     name: /Function retainedComplexity/u,
   });
   await expect(structureJump).toBeVisible();
   await structureJump.click();
+  await expect(structureJump).toBeFocused();
   await expect(page.locator(".source-line-highlight").first()).toContainText(
     "export function retainedComplexity",
   );
   await structureDetails.getByRole("button", {
-    name: "Return to city",
+    name: "Clear declaration focus",
   }).click();
-  await expect(structureDetails).not.toHaveAttribute("open", "");
-  await expect(page.locator("#building-source-details")).not.toHaveAttribute(
+  await expect(structureDetails.locator("summary")).toBeFocused();
+  await expect(structureDetails).toHaveAttribute("open", "");
+  await expect(page.locator("#building-source-details")).toHaveAttribute(
     "open",
     "",
   );
-  await page.locator("#building-ai-guidance-details summary").click();
-  await expect(page.locator("#building-ai-guidance-preview")).toContainText(
-    "REMOTE-PAYLOAD",
-  );
+  await expect(page.locator("#building-ai-guidance-preview")).toBeHidden();
   expect(guidanceRequests).toBe(2);
-  await page.getByRole("button", {
-    name: "Send this exact preview once",
-  }).click();
-  await expect(page.locator("#building-ai-guidance-suggestions")).toContainText(
-    "Keep it small",
-  );
-  expect(guidanceRequests).toBe(3);
   expect(guidanceBodies.at(-1)).toMatchObject({ approval: "once", grant: expect.any(String) });
   expect(JSON.stringify(guidanceBodies.at(-1))).not.toMatch(/source|metrics|context/iu);
   await expect.poll(() => sourceRequests).toEqual([
@@ -3052,6 +3148,33 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
     "data-line",
     String(retainedUnit!.endLine),
   );
+  await expect(page.locator("#building-decision-evidence")).toBeVisible();
+  await expect(page.locator("#building-decision-evidence-equation")).toContainText(
+    `CC ${retainedUnit!.complexity.toLocaleString()} = 1 base path`,
+  );
+  const firstDecision = page.locator("#building-decision-sites button").first();
+  await expect(firstDecision).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator("#building-code-inspection")).toBeVisible();
+  await expect(page.locator("#building-decision-evidence")).toBeVisible();
+  await firstDecision.click();
+  await expect(firstDecision).toBeFocused();
+  await expect(page.locator(".source-decision-marker-selected")).toBeVisible();
+  await page.setViewportSize({ width: 1_440, height: 900 });
+  await page.locator("#building-ai-guidance-prepare").click();
+  const hotspotContext = previewContexts.at(-1)!;
+  expect(hotspotContext).toEqual({
+    version: "codecity.ai-context/1",
+    kind: "callable",
+    buildingId: retainedBuilding!.id,
+    stableId: retainedUnit!.decisionEvidence!.callableId,
+  });
+  expect(Object.keys(hotspotContext).sort()).toEqual([
+    "buildingId",
+    "kind",
+    "stableId",
+    "version",
+  ]);
 
   await page.locator("#building-units-details summary").click();
   await expect(page.locator("#building-units-summary")).toContainText(
@@ -3094,30 +3217,24 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   await expect(siblingResult).toHaveCount(1);
   await siblingResult.click();
   await expect(page.locator("#building-source-status")).toContainText(
-    "Showing the exact retained file",
+    "Open retained source above",
   );
+  expect(sourceRequests).not.toContain(
+    `/api/v1/artifacts/${jobId}/sources/${siblingBuilding!.id}`,
+  );
+  await expect.poll(() => providerRequests).toBe(1);
   await page.locator("#dependency-section summary").click();
   await page.locator("#dependency-incoming-toggle").click();
   const incomingDependencyItem = page
-    .locator(".dependency-item")
+    .locator(
+      '.dependency-item:has(.dependency-result-button[data-direction="incoming"])',
+    )
     .filter({ hasText: "retained-large.ts" });
   await expect(incomingDependencyItem).toHaveCount(1);
-  await incomingDependencyItem.getByRole("button", {
-    name: `Preview AI guidance for dependency ${retainedDependency!.id}`,
-  }).click();
-  await expect(page.locator("#selection-name")).toHaveText(
-    "retained-large.ts",
-  );
-  await expect(page.locator("#building-ai-guidance-summary")).toHaveText(
-    "Context unavailable",
-  );
-  expect(previewContexts.at(-1)).toEqual({
-    version: "codecity.ai-context/1",
-    kind: "dependency",
-    buildingId: retainedBuilding!.id,
-    dependencyId: retainedDependency!.id,
-  });
-  expect(guidanceRequests).toBe(3);
+  await expect(incomingDependencyItem.getByRole("button", {
+    name: /AI guidance/u,
+  })).toHaveCount(0);
+  expect(guidanceRequests).toBe(2);
   await page.getByRole("tab", { name: "Explore" }).click();
   await page.locator("#building-search").fill("retained-large");
   await expect(retainedResult).toHaveCount(1);
@@ -3148,6 +3265,9 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
     "data-line",
     String(retainedUnit!.endLine),
   );
+  await expect(page.locator("#building-ai-guidance-preview")).toBeHidden();
+  await page.locator("#building-ai-guidance-details summary").click();
+  await page.locator("#building-ai-guidance-prepare").click();
   await expect(page.locator("#building-ai-guidance-summary")).toHaveText(
     "Preview ready",
   );
@@ -3160,6 +3280,54 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
     buildingId: retainedBuilding!.id,
     ruleId: "high-complexity-method",
   });
+
+  const requestsBeforeLineLessSmell = sourceRequests.length;
+  await page.locator("#viewer-details-back").click();
+  await expect(
+    page.getByRole("tab", { name: "Analyze", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
+  await expect(smellPanel).toBeVisible();
+  const lineLessSmell = smellPanel.getByRole("button", {
+    name: /Oversized file.*retained-large\.ts/u,
+  });
+  await expect(lineLessSmell).toBeVisible();
+  await lineLessSmell.click();
+  await expect(page.locator("#selection-name")).toHaveText(
+    "retained-large.ts",
+  );
+  await expect(page.locator("#building-source-code")).toHaveText("");
+  await expect(page.locator("#building-source-status")).toContainText(
+    "no current persisted source range",
+  );
+  await expect(page.locator("#building-ai-guidance-preview")).toBeHidden();
+  await page.locator("#building-ai-guidance-prepare").click();
+  await expect(page.locator("#building-ai-guidance-summary")).toHaveText(
+    "Context unavailable",
+  );
+  await expect(page.locator("#building-ai-guidance-status")).toContainText(
+    "no exact source range",
+  );
+  await expect(page.locator("#building-ai-guidance-request")).toBeHidden();
+  expect(previewContexts.at(-1)).toEqual({
+    version: "codecity.ai-context/1",
+    kind: "smell",
+    buildingId: retainedBuilding!.id,
+    findingId: expect.any(String),
+    ruleId: "oversized-file",
+  });
+  expect(sourceRequests).toHaveLength(requestsBeforeLineLessSmell);
+  await page.locator("#building-source-open").click();
+  await expect(page.locator("#building-source-summary")).toHaveText(
+    "Read only",
+  );
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Showing the exact retained file",
+  );
+  await expect(page.locator("#building-source-content")).toBeVisible();
+  await expect(page.locator("#building-source-code")).toContainText(
+    "retained-source-sentinel",
+  );
+  expect(sourceRequests).toHaveLength(requestsBeforeLineLessSmell);
 
   const sourcePath =
     `/api/v1/artifacts/${jobId}/sources/${retainedBuilding!.id}`;
@@ -3213,7 +3381,11 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
 
   await page.getByRole("tab", { name: "Explore" }).click();
   await retainedResult.click();
+  const sourceRequestsBeforeSingleFlight = sourceRequests.length;
+  await page.locator("#building-source-open").click();
+  await page.locator("#building-source-open").click();
   await staleRequestStarted;
+  expect(sourceRequests).toHaveLength(sourceRequestsBeforeSingleFlight + 1);
   await expect(page.locator("#building-source-status")).toContainText(
     "Loading",
   );
@@ -3234,27 +3406,65 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   const requestsBeforeRefetch = sourceRequests.length;
   await page.getByRole("tab", { name: "Explore" }).click();
   await retainedResult.click();
+  await page.locator("#building-source-open").click();
   await expect(page.locator("#building-source-status")).toContainText(
     "Showing the exact retained file",
   );
   await expect
     .poll(() => sourceRequests.length)
     .toBeGreaterThan(requestsBeforeRefetch);
-  expect(new Set(sourceRequests)).toEqual(new Set([
-    sourcePath,
-    `/api/v1/artifacts/${jobId}/sources/${siblingBuilding!.id}`,
-  ]));
+  expect(new Set(sourceRequests)).toEqual(new Set([sourcePath]));
+
+  await page.locator("#building-ai-guidance-details summary").click();
+  await page.locator("#building-ai-guidance-prepare").click();
+  await expect(page.locator("#building-ai-guidance-summary")).toHaveText(
+    "Preview ready",
+  );
+  const sourceRequestsBeforeReauthentication = sourceRequests.length;
+  const previewsBeforeReauthentication = previewContexts.length;
+  const providersBeforeReauthentication = providerRequests;
+  expect(await page.evaluate(async () =>
+    (await fetch("/api/v1/auth/session", {
+      method: "DELETE",
+      headers: { "X-Code-City-Request": "1" },
+    })).status
+  )).toBe(204);
+  await page.getByRole("button", { name: "Import project" }).click();
+  const removeCurrentResult = page.getByRole("button", {
+    name: "Remove stored import",
+  });
+  await expect(removeCurrentResult).toBeVisible();
+  await removeCurrentResult.click();
+  await expect(page.locator("#project-import-auth")).toBeVisible();
+  await expect(sourceCode).toHaveText("");
+  await expect(sourceContent).toBeHidden();
+  await expect(page.locator("#building-ai-guidance-preview")).toBeHidden();
+  await expect(page.locator("#building-ai-guidance-preview")).toHaveText("");
+  await expect(page.locator("#building-ai-guidance-request")).toBeHidden();
+  expect(sourceRequests).toHaveLength(sourceRequestsBeforeReauthentication);
+  expect(previewContexts).toHaveLength(previewsBeforeReauthentication);
+  expect(server.jobs.get(jobId)?.state).toBe("completed");
+  await page.getByRole("button", { name: "Close project import" }).click();
+  await expect(page.locator("#project-import-dialog")).toBeHidden();
+  await expect(sourceCode).toHaveText("");
+  await expect(page.locator("#building-ai-guidance-preview")).toHaveText("");
 
   await page.getByRole("button", { name: "Import project" }).click();
+  await page.locator("#project-import-token").fill(accessToken);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.locator("#project-import-auth")).toBeHidden();
+  await expect.poll(() => providerRequests).toBeGreaterThan(
+    providersBeforeReauthentication,
+  );
+  await expect(page.locator("#project-import-dialog")).toBeHidden();
+
   expect(
     await page.evaluate(() =>
       localStorage.getItem("code-city.last-import-job.v1"),
     ),
   ).toBe(jobId);
   expect(server.jobs.get(jobId)?.state).toBe("completed");
-  const removeCurrentResult = page.getByRole("button", {
-    name: "Remove stored import",
-  });
+  await page.getByRole("button", { name: "Import project" }).click();
   await expect(removeCurrentResult).toBeVisible();
   await removeCurrentResult.click();
   await expect.poll(() => server.jobs.get(jobId)).toBeUndefined();
@@ -3263,6 +3473,11 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   await expect(sourcePathLabel).toHaveText("");
   await expect(sourceEditor).not.toHaveAttribute("href", /.+/u);
   await expect(page.locator("#building-source-status")).toHaveText(
+    "The retained source result was removed from the server.",
+  );
+  await expect(page.locator("#building-source-open")).toBeDisabled();
+  await expect(page.locator("#building-source-open")).toHaveAttribute(
+    "title",
     "The retained source result was removed from the server.",
   );
 });

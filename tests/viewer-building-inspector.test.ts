@@ -136,11 +136,21 @@ describe("viewer building inspector", () => {
   });
 
   it("ranks deterministic high-complexity evidence and retains exact ranges", () => {
+    const decisionEvidence = Object.freeze({
+      version: "codecity.complexity-evidence/1" as const,
+      unitId: "building:hotspots:unit:critical",
+      scope: "callable" as const,
+      callableId: "building:hotspots:callable:critical",
+      status: "complete" as const,
+      totalContribution: 29,
+      omittedContribution: 0 as const,
+      sites: Object.freeze([]),
+    });
     const presentation = presentBuildingComplexity(
       building("hotspots", [
         { name: "earlyLow", line: 2, endLine: 4, complexity: 1 },
         { name: "moderate", line: 900, endLine: 920, complexity: 15 },
-        { name: "critical", line: 700, endLine: 760, complexity: 30 },
+        { name: "critical", line: 700, endLine: 760, complexity: 30, decisionEvidence },
         { name: "high", line: 800, endLine: 850, complexity: 21 },
       ]),
     );
@@ -174,6 +184,9 @@ describe("viewer building inspector", () => {
         severity: "moderate",
       }),
     ]);
+    expect(presentation.hotspots[0]?.decisionEvidence).toBe(
+      decisionEvidence,
+    );
   });
 
   it("keeps hotspots ranked while all units are independently searched and sorted", () => {

@@ -509,6 +509,17 @@ under **Project > Advanced settings**. History color modes appear only while
 verified history is loaded, and print assignment appears only after a valid
 printer profile is available.
 
+Contextual **Details** includes one **Code inspection** area. Its **Code
+outline** is analyzer-recorded types and callables inside the selected file,
+not a filesystem tree. Selecting a building or expanding the outline performs
+no source request; **Open retained source**, hotspot/unit links, declarations,
+and findings are explicit source actions. Complexity focus explains persisted
+cyclomatic-complexity decision sites as `1 base path + decision contribution`
+and highlights their exact inclusive UTF-16 token ranges without re-analyzing
+source in the browser. AI controls appear only when a provider is configured,
+and **Prepare AI preview** is always an explicit action separate from the
+one-time send confirmation.
+
 The viewer accepts a `city-model.json` through **Project > Open model**.
 **Export > Export print file** selects a generic, Prusa XL, or local custom
 printer profile, previews the exact exporter layout, and downloads direct

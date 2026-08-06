@@ -127,6 +127,44 @@ function withoutAvailableSourceStructure(
   };
 }
 
+function withoutDeclaredCallableComplexity(
+  retainExactEvidenceLink: boolean,
+): (model: CityModel) => CityModel {
+  return (model) => ({
+    ...model,
+    buildings: model.buildings.map((building) => {
+      if (building.path !== "src/context.ts" || building.sourceStructure === undefined) {
+        return building;
+      }
+      const callable = building.sourceStructure.callables.find(
+        ({ name }) => name === "run",
+      )!;
+      const units = building.units?.map((unit) => {
+        if (
+          retainExactEvidenceLink ||
+          unit.decisionEvidence?.callableId !== callable.id
+        ) return unit;
+        const { decisionEvidence: omittedEvidence, ...aggregateOnly } = unit;
+        void omittedEvidence;
+        return aggregateOnly;
+      });
+      return {
+        ...building,
+        sourceStructure: {
+          ...building.sourceStructure,
+          callables: building.sourceStructure.callables.map((candidate) => {
+            if (candidate.id !== callable.id) return candidate;
+            const { complexity: omittedComplexity, ...withoutComplexity } = candidate;
+            void omittedComplexity;
+            return withoutComplexity;
+          }),
+        },
+        ...(units === undefined ? {} : { units }),
+      };
+    }),
+  });
+}
+
 function guidanceContext(buildingId: string) {
   return { version: "codecity.ai-context/1", kind: "file", buildingId } as const;
 }
@@ -782,6 +820,88 @@ describe("source navigation HTTP API", () => {
     expect(forged.response.status).toBe(400);
     expect(providerPayloads).toHaveLength(1);
   });
+
+  it.each([
+    ["uses the exact decision-evidence link", true],
+    ["does not infer a match from the unit name or line range", false],
+  ] as const)(
+    "%s when a callable has no declared complexity",
+    async (_expectation, retainExactEvidenceLink) => {
+      const server = await fixture({
+        aiGuidance: {
+          version: 1,
+          enabled: true,
+          providers: [{
+            id: "local",
+            label: "Local",
+            endpoint: "http://localhost:11434/guidance",
+          }],
+        },
+      });
+      const imported = await publish(
+        server,
+        `callable-fallback-${String(retainExactEvidenceLink)}`,
+        contextualSnapshot(),
+        undefined,
+        withoutDeclaredCallableComplexity(retainExactEvidenceLink),
+      );
+      const building = imported.model.buildings.find(
+        ({ path: buildingPath }) => buildingPath === "src/context.ts",
+      )!;
+      const callable = building.sourceStructure!.callables.find(
+        ({ name }) => name === "run",
+      )!;
+      const matchingUnit = building.units!.find(
+        ({ name, line, endLine }) =>
+          name === callable.name &&
+          line === callable.range.startLine &&
+          (endLine ?? line) === callable.range.endLine,
+      )!;
+      expect(callable.complexity).toBeUndefined();
+      expect(matchingUnit.complexity).toBeGreaterThan(1);
+      expect(matchingUnit.decisionEvidence?.callableId).toBe(
+        retainExactEvidenceLink ? callable.id : undefined,
+      );
+
+      const response = await fetch(
+        new URL(
+          `/api/v1/ai/preview/${imported.job.id}/${building.id}/local`,
+          server.url,
+        ),
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "X-Code-City-Request": "1",
+          },
+          body: JSON.stringify({
+            version: "codecity.ai-context/1",
+            kind: "callable",
+            buildingId: building.id,
+            stableId: callable.id,
+          }),
+        },
+      );
+      expect(response.status).toBe(200);
+      const body = await response.json() as {
+        preview: {
+          transmission: {
+            findings: {
+              maximumComplexity: number;
+              decisionLoad: number;
+            };
+          };
+        };
+      };
+      const expectedComplexity = retainExactEvidenceLink
+        ? matchingUnit.complexity
+        : 0;
+      expect(body.preview.transmission.findings).toMatchObject({
+        maximumComplexity: expectedComplexity,
+        decisionLoad: Math.max(0, expectedComplexity - 1),
+      });
+    },
+  );
 
   it.each(["absent", "unavailable"] as const)(
     "rejects forged declaration IDs when source structure is %s",

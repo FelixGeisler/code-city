@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   extractSourceLineWindow,
   loadBuildingSource,
+  presentHighlightedSourceLine,
   sourceOmissionMarker,
   presentSourceLine,
   SOURCE_RENDERED_CHARACTER_LIMIT,
@@ -142,6 +143,55 @@ describe("viewer source navigation", () => {
       { kind: "string", text: '"<script>"' },
       { kind: "text", text: "; " },
       { kind: "comment", text: "// safe" },
+    ]);
+  });
+
+  it("splits multiple exact inclusive UTF-16 markers without losing syntax", () => {
+    const line = "😀if && value";
+    const presentation = presentHighlightedSourceLine(
+      line,
+      7,
+      [
+        {
+          id: "branch",
+          range: {
+            startLine: 7,
+            endLine: 7,
+            startColumn: 3,
+            endColumn: 4,
+          },
+        },
+        {
+          id: "operator",
+          range: {
+            startLine: 7,
+            endLine: 7,
+            startColumn: 6,
+            endColumn: 7,
+          },
+          selected: true,
+        },
+      ],
+      100,
+      100,
+    );
+
+    expect(presentation.tokens).toEqual([
+      { kind: "text", text: "😀", markerIds: [], selected: false },
+      {
+        kind: "keyword",
+        text: "if",
+        markerIds: ["branch"],
+        selected: false,
+      },
+      { kind: "text", text: " ", markerIds: [], selected: false },
+      {
+        kind: "text",
+        text: "&&",
+        markerIds: ["operator"],
+        selected: true,
+      },
+      { kind: "text", text: " value", markerIds: [], selected: false },
     ]);
   });
 

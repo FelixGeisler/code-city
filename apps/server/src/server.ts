@@ -2235,6 +2235,26 @@ function sourceSloc(text: string): number {
   return sourceSegments(text).reduce((count, segment) => count + (segment.content.trim().length === 0 ? 0 : 1), 0);
 }
 
+function callableContextComplexity(
+  building: CityBuilding,
+  stableCallableId: string,
+): number {
+  const callable = building.sourceStructure?.callables.find(
+    ({ id }) => id === stableCallableId,
+  );
+  if (callable?.complexity !== undefined) return callable.complexity;
+
+  // aiGuidanceSource validates the persisted model before reaching this path.
+  // Keep an explicit uniqueness check as defense in depth, and only trust the
+  // analyzer's stable evidence link: declaration names and lines are not IDs.
+  const linkedUnits = building.units?.filter(
+    ({ decisionEvidence }) =>
+      decisionEvidence?.scope === "callable" &&
+      decisionEvidence.callableId === stableCallableId,
+  ) ?? [];
+  return linkedUnits.length === 1 ? linkedUnits[0]!.complexity : 0;
+}
+
 function contextMetrics(
   building: CityBuilding,
   context: AiGuidanceResolvedContext,
@@ -2251,8 +2271,7 @@ function contextMetrics(
   }
   const structure = building.sourceStructure!;
   if (context.kind === "callable") {
-    const callable = structure.callables.find(({ id }) => id === context.stableId)!;
-    const complexity = callable.complexity ?? 0;
+    const complexity = callableContextComplexity(building, context.stableId);
     return Object.freeze({ sloc: sourceSloc(selectedText), maximumComplexity: complexity, decisionLoad: Math.max(0, complexity - 1) });
   }
   const childrenByParent = new Map<string, string[]>();

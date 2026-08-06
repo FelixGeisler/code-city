@@ -197,6 +197,7 @@ function controllerFixture(options: {
   const states: ImportControllerState[] = [];
   const modelReady = vi.fn();
   const signedOut = vi.fn();
+  const authorizationLost = vi.fn();
   const resultRemoved = vi.fn();
   const scheduled: Array<{
     readonly callback: () => void;
@@ -212,6 +213,7 @@ function controllerFixture(options: {
     },
     onModelReady: modelReady,
     onSignedOut: signedOut,
+    onAuthorizationLost: authorizationLost,
     onResultRemoved: resultRemoved,
     schedulePoll: (callback, delay) => {
       const entry = { callback, delay };
@@ -230,6 +232,7 @@ function controllerFixture(options: {
     states,
     modelReady,
     signedOut,
+    authorizationLost,
     resultRemoved,
     scheduled,
   };
@@ -845,6 +848,7 @@ describe("viewer import controller", () => {
       status: "authorization-required",
       resumeJobId: JOB_ID,
     });
+    expect(fixture.authorizationLost).toHaveBeenCalledTimes(1);
     expect(storage.value).toBe(JOB_ID);
   });
 
