@@ -148,6 +148,7 @@ interface PrintExportRequestFingerprint {
   readonly confirmCompactFit: boolean;
   readonly scale: number;
   readonly acknowledgeBelowProfileScale: boolean;
+  readonly wipeTowerReserveDepth: number;
   readonly maximumPlateCount?: number;
   readonly routePolicy: PrintExportGenerateOptions["routePolicy"];
   readonly labelPolicy: PrintExportGenerateOptions["labelPolicy"];
@@ -192,6 +193,8 @@ function requestFingerprint(
     scale: request.options.scale,
     acknowledgeBelowProfileScale:
       request.options.acknowledgeBelowProfileScale ?? false,
+    wipeTowerReserveDepth:
+      request.options.wipeTowerReserveDepth ?? 0,
     ...(request.options.maximumPlateCount === undefined
       ? {}
       : { maximumPlateCount: request.options.maximumPlateCount }),
@@ -217,6 +220,10 @@ function preflightMatchesRequest(
     (fingerprint.fitPolicy === "auto" ||
       preflight.fitPolicy === fingerprint.fitPolicy) &&
     sameScale(preflight.requestedScale, fingerprint.scale) &&
+    sameScale(
+      preflight.wipeTowerReserveDepth,
+      fingerprint.wipeTowerReserveDepth,
+    ) &&
     preflight.belowProfileScaleAcknowledged ===
       (fingerprint.fitPolicy === "auto" &&
       preflight.featureViolations.length > 0 &&

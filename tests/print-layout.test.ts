@@ -105,6 +105,7 @@ describe("deterministic physical print layout", () => {
     });
 
     expect(plan.fitPolicy).toBe("error");
+    expect(plan.reservedRearDepth).toBe(0);
     expect(plan.plates).toHaveLength(1);
     expect(plan.plates[0]).toMatchObject({
       id: "plate-01",
@@ -663,6 +664,41 @@ describe("deterministic physical print layout", () => {
     expect(planPrintLayout(printer, request)).toEqual(plan);
   });
 
+  it("auto-fits against a non-printable rear strip while maximizing the remaining surface", () => {
+    const printer = profile({ x: 100, y: 200, z: 100 });
+    const request = {
+      fitPolicy: "scale" as const,
+      requestedScale: 20,
+      reservedRearDepth: 20,
+      features,
+      districts: [district("city", 10, 10, 1)],
+    };
+    const plan = planPrintLayout(printer, request);
+
+    expect(plan.reservedRearDepth).toBe(20);
+    expect(plan.appliedScale).toBeCloseTo(8, 6);
+    expect(plan.appliedScale).toBeGreaterThan(7.99);
+    expect(plan.plates).toHaveLength(1);
+    expect(plan.plates[0]!.usableArea).toBe(8_000);
+    expect(plan.plates[0]!.base.bounds.maximum.z).toBeLessThanOrEqual(
+      plan.usableBuildBounds.maximum.z - plan.reservedRearDepth + 1e-7,
+    );
+    expect(
+      planPrintLayout(printer, {
+        ...request,
+        fitPolicy: "error",
+        requestedScale: 8,
+      }).appliedScale,
+    ).toBe(8);
+    expect(() =>
+      planPrintLayout(printer, {
+        ...request,
+        fitPolicy: "error",
+        requestedScale: 8.000001,
+      }),
+    ).toThrow(/district packing span/u);
+  });
+
   it("discovers the highest sampled fit across non-monotone greedy packing islands", () => {
     const printer = profile();
     const districts = [district("a", 22, 6), district("b", 25, 4)];
@@ -1113,6 +1149,7 @@ describe("deterministic physical print layout", () => {
     const request = {
       fitPolicy: "tile",
       requestedScale: 1,
+      reservedRearDepth: 10,
       features,
       rearReservation,
       districts: [
@@ -1135,6 +1172,7 @@ describe("deterministic physical print layout", () => {
     ).toEqual(plan);
 
     expect(plan.plates.length).toBeGreaterThan(1);
+    expect(plan.reservedRearDepth).toBe(10);
     for (const plate of plan.plates) {
       const apron = plate.reservations.find(
         ({ kind }) => kind === "external-apron",
@@ -1142,8 +1180,12 @@ describe("deterministic physical print layout", () => {
       expect(apron.virtual).toBe(true);
       expect(apron.bounds.maximum.z - apron.bounds.minimum.z).toBe(12);
       expect(plate.base.bounds.maximum.z).toBe(apron.bounds.maximum.z);
+      expect(plate.base.bounds.maximum.z).toBeLessThanOrEqual(
+        plan.usableBuildBounds.maximum.z - plan.reservedRearDepth + 1e-9,
+      );
       expect(plate.base.size.z).toBeLessThan(plan.usableBuildSpan.z);
       expect(plate.base.size.x).toBeLessThan(plan.usableBuildSpan.x);
+      expect(plate.usableArea).toBe(70 * (55 - 10));
       const externalBoxes = plate.reservations.filter(
         ({ kind }) => kind === "external-box",
       );
@@ -1230,6 +1272,39 @@ describe("deterministic physical print layout", () => {
         objectId: "plate-01-number",
       });
       expect((error as Error).message).toMatch(/Plate-number reservation/u);
+    }
+  });
+
+  it("rejects invalid or impossible non-printable rear depths", () => {
+    for (const reservedRearDepth of [
+      -1,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+    ]) {
+      expect(() =>
+        planPrintLayout(profile(), {
+          features,
+          districts: [],
+          reservedRearDepth,
+        }),
+      ).toThrow(/reservedRearDepth must be a non-negative finite number/u);
+    }
+
+    try {
+      planPrintLayout(profile(), {
+        features,
+        districts: [],
+        reservedRearDepth: 45,
+      });
+      throw new Error("Expected reserved rear depth to consume the plate.");
+    } catch (error) {
+      expect(error).toBeInstanceOf(PrintLayoutError);
+      expect((error as PrintLayoutError).issues[0]).toMatchObject({
+        code: "reservation-does-not-fit",
+        required: { x: 60, y: 0, z: 45 },
+        available: { x: 60, y: 30, z: 45 },
+      });
+      expect((error as Error).message).toMatch(/Reserved rear depth 45 mm/u);
     }
   });
 

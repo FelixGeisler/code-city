@@ -87,6 +87,7 @@ function preflight(
     requestedScale: 3,
     appliedScale: 3,
     minimumSafeScale: 3,
+    wipeTowerReserveDepth: 0,
     belowProfileScaleAcknowledged: false,
     featureViolations: [],
     plateCount: 1,
@@ -216,6 +217,7 @@ function bundlePreflight(
     requestedScale: 3,
     appliedScale: 3,
     minimumSafeScale: 3,
+    wipeTowerReserveDepth: 0,
     belowProfileScaleAcknowledged: false,
     featureViolations: [],
     plateCount: 2,
@@ -834,6 +836,16 @@ describe("viewer print export controller", () => {
           ...preflight(),
           legendIncluded: true,
         },
+      },
+      {
+        request: {
+          ...START_REQUEST,
+          options: {
+            ...START_REQUEST.options,
+            wipeTowerReserveDepth: 72,
+          },
+        },
+        value: preflight(),
       },
       {
         request: START_REQUEST,

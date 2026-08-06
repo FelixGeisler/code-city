@@ -24,6 +24,15 @@ describe("viewer print export UI", () => {
     expect(html).toContain('<option value="prusa-xl">');
     expect(html).toContain('<option value="custom">');
     expect(html).toContain('id="print-prusa-tools"');
+    expect(html).toContain('id="print-wipe-tower-wrap"');
+    expect(html).toContain('id="print-wipe-tower-strip"');
+    expect(html).toContain("Wipe tower strip (mm)");
+    expect(html).toMatch(
+      /id="print-wipe-tower-strip"[\s\S]*min="0"[\s\S]*max="359\.9"[\s\S]*step="0\.1"[\s\S]*value="72"[\s\S]*aria-describedby="print-wipe-tower-help"[\s\S]*required/u,
+    );
+    expect(html).toMatch(
+      /id="print-wipe-tower-help"[\s\S]*Reserves city depth for an empty strip along the rear of the[\s\S]*PrusaSlicer centers imported geometry[\s\S]*flush to the front edge[\s\S]*do not run Arrange[\s\S]*72 mm default[\s\S]*Use 0 if[\s\S]*sliced preview is wider/u,
+    );
     expect(html).toContain('id="print-custom-profile"');
     expect(html).toContain('id="print-format"');
     expect(html).toContain('<option value="3mf">3MF</option>');
@@ -106,6 +115,12 @@ describe("viewer print export UI", () => {
     expect(source).toContain("printManifestDownload.hidden = true");
     expect(source).not.toContain("belowProfileScaleAcknowledgement");
     expect(source).toContain("controller.confirmCompactFit()");
+    expect(source).toContain(
+      'wipeTowerReserveDepthInput.addEventListener("input", invalidateOutput)',
+    );
+    expect(source).toContain(
+      "wipeTowerReserveDepthInput.valueAsNumber",
+    );
     expect(source).toContain(
       "`${millimeters(violation.resultingValue)} mm resulting",
     );

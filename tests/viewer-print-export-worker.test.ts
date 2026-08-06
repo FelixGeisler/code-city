@@ -345,7 +345,7 @@ describe("viewer print export worker", () => {
     });
   });
 
-  it("selects direct output from the completed one-plate result", () => {
+  it("forwards the wipe-tower reservation into direct one-plate output", () => {
     const workerRequest = request({
       options: {
         scale: 3,
@@ -354,17 +354,18 @@ describe("viewer print export worker", () => {
         labelPolicy: "auto",
         routePolicy: "auto",
         includeLegend: true,
+        wipeTowerReserveDepth: 72,
       },
     });
     const shared = serializePreparedSinglePrintPlateExport(
       preparePrintPlateBundle({
-      format: workerRequest.format,
-      model: workerRequest.model,
-      profile: workerRequest.profile,
-      options: {
-        ...workerRequest.options,
-        fitPolicy: "scale",
-      },
+        format: workerRequest.format,
+        model: workerRequest.model,
+        profile: workerRequest.profile,
+        options: {
+          ...workerRequest.options,
+          fitPolicy: "scale",
+        },
       }),
     );
     const emitted: Array<{

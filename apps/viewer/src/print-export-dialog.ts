@@ -80,21 +80,41 @@ export interface PrintExportSubmitAvailability {
   readonly prusaToolCount: number;
   readonly fitPolicyValid: boolean;
   readonly maximumPlateCountValid: boolean;
+  readonly wipeTowerReserveDepthValid?: boolean;
+}
+
+export type PrintCalibrationSubmitAvailability = Pick<
+  PrintExportSubmitAvailability,
+  | "enabled"
+  | "busy"
+  | "formatSupported"
+  | "profileKind"
+  | "hasCustomProfile"
+  | "prusaToolCount"
+>;
+
+export function printCalibrationSubmitDisabled(
+  availability: PrintCalibrationSubmitAvailability,
+): boolean {
+  return (
+    availability.enabled === false ||
+    availability.busy ||
+    !availability.formatSupported ||
+    (availability.profileKind === "custom" &&
+      !availability.hasCustomProfile) ||
+    (availability.profileKind === "prusa-xl" &&
+      availability.prusaToolCount === 0)
+  );
 }
 
 export function printExportSubmitDisabled(
   availability: PrintExportSubmitAvailability,
 ): boolean {
   return (
-    availability.enabled === false ||
-    availability.busy ||
-    !availability.formatSupported ||
+    printCalibrationSubmitDisabled(availability) ||
     !availability.fitPolicyValid ||
     !availability.maximumPlateCountValid ||
-    (availability.profileKind === "custom" &&
-      !availability.hasCustomProfile) ||
-    (availability.profileKind === "prusa-xl" &&
-      availability.prusaToolCount === 0)
+    availability.wipeTowerReserveDepthValid === false
   );
 }
 
@@ -111,6 +131,38 @@ export interface PrintExportControlValues {
   readonly includeLegend: boolean;
   readonly fitPolicy: RequestedPrintFitPolicy;
   readonly maximumPlateCount?: number;
+  readonly profileKind: ProfileKind;
+  readonly format: PrintFormat;
+  readonly prusaToolCount: number;
+  readonly wipeTowerReserveDepth: number;
+}
+
+export function effectiveWipeTowerReserveDepth(
+  values: Pick<
+    PrintExportControlValues,
+    | "profileKind"
+    | "format"
+    | "prusaToolCount"
+    | "wipeTowerReserveDepth"
+  >,
+): number {
+  if (
+    values.profileKind !== "prusa-xl" ||
+    values.format !== "3mf" ||
+    values.prusaToolCount < 2
+  ) {
+    return 0;
+  }
+  if (
+    !Number.isFinite(values.wipeTowerReserveDepth) ||
+    values.wipeTowerReserveDepth < 0 ||
+    values.wipeTowerReserveDepth >= 360
+  ) {
+    throw new RangeError(
+      "Wipe tower strip must be a finite number from 0 up to, but not including, 360 mm.",
+    );
+  }
+  return values.wipeTowerReserveDepth;
 }
 
 export function printExportOptionsFromControls(
@@ -122,6 +174,7 @@ export function printExportOptionsFromControls(
     routePolicy: values.routePolicy,
     includeLegend: values.includeLegend,
     fitPolicy: values.fitPolicy,
+    wipeTowerReserveDepth: effectiveWipeTowerReserveDepth(values),
     ...((values.fitPolicy === "tile" || values.fitPolicy === "auto") &&
     values.maximumPlateCount !== undefined
       ? { maximumPlateCount: values.maximumPlateCount }
@@ -215,6 +268,15 @@ export function installPrintExportDialog(
     requiredElement<HTMLSelectElement>("print-profile-kind");
   const prusaTools =
     requiredElement<HTMLFieldSetElement>("print-prusa-tools");
+  const wipeTowerWrap = requiredElement<HTMLDivElement>(
+    "print-wipe-tower-wrap",
+  );
+  const wipeTowerReserveDepthInput = requiredElement<HTMLInputElement>(
+    "print-wipe-tower-strip",
+  );
+  const wipeTowerHelp = requiredElement<HTMLParagraphElement>(
+    "print-wipe-tower-help",
+  );
   const customProfileWrap =
     requiredElement<HTMLDivElement>("print-custom-profile-wrap");
   const customProfileInput =
@@ -344,6 +406,21 @@ export function installPrintExportDialog(
 
   function selectedMaximumPlateCount(): number {
     return maximumPlateCount(maximumPlateCountInput.value);
+  }
+
+  function wipeTowerControlValues(): Pick<
+    PrintExportControlValues,
+    | "profileKind"
+    | "format"
+    | "prusaToolCount"
+    | "wipeTowerReserveDepth"
+  > {
+    return {
+      profileKind: selectedProfileKind(),
+      format: selectedFormat(),
+      prusaToolCount: selectedPrusaTools().length,
+      wipeTowerReserveDepth: wipeTowerReserveDepthInput.valueAsNumber,
+    };
   }
 
   function publishPrintLayout(
@@ -757,6 +834,7 @@ export function installPrintExportDialog(
     let formatSupported = false;
     let fitPolicyValid = false;
     let maximumPlateCountValid = false;
+    let wipeTowerReserveDepthValid = false;
     try {
       const profile = resolveProfile();
       formatSupported = profile.supportedFormats.includes(selectedFormat());
@@ -777,18 +855,29 @@ export function installPrintExportDialog(
       fitPolicyValid = false;
       maximumPlateCountValid = false;
     }
-    const disabled = printExportSubmitDisabled({
+    try {
+      effectiveWipeTowerReserveDepth(wipeTowerControlValues());
+      wipeTowerReserveDepthValid = true;
+    } catch {
+      wipeTowerReserveDepthValid = false;
+    }
+    const commonAvailability = {
       enabled,
       busy: controller.state.status === "busy",
       formatSupported,
       profileKind: selectedProfileKind(),
       hasCustomProfile: customProfile !== undefined,
       prusaToolCount: selectedPrusaTools().length,
+    } as const;
+    submitButton.disabled = printExportSubmitDisabled({
+      ...commonAvailability,
       fitPolicyValid,
       maximumPlateCountValid,
+      wipeTowerReserveDepthValid,
     });
-    submitButton.disabled = disabled;
-    calibrationButton.disabled = disabled;
+    calibrationButton.disabled = printCalibrationSubmitDisabled(
+      commonAvailability,
+    );
   }
 
   function renderState(state: PrintExportControllerState): void {
@@ -906,8 +995,21 @@ export function installPrintExportDialog(
   function updateProfileControls(): void {
     const kind = selectedProfileKind();
     prusaTools.hidden = kind !== "prusa-xl";
+    wipeTowerWrap.hidden = kind !== "prusa-xl";
     customProfileWrap.hidden = kind !== "custom";
+    updateWipeTowerControls();
     updateSubmitAvailability();
+  }
+
+  function updateWipeTowerControls(): void {
+    const active =
+      selectedProfileKind() === "prusa-xl" &&
+      selectedFormat() === "3mf" &&
+      selectedPrusaTools().length >= 2;
+    wipeTowerReserveDepthInput.disabled = !active;
+    wipeTowerHelp.textContent = active
+      ? "Reserves city depth for an empty rear strip. PrusaSlicer centers imported geometry, so move the complete city flush to the front edge, do not run Arrange afterward, and place the wipe tower in the revealed strip. The 72 mm default covers its nominal 60 mm width, standard brim, and placement clearance. Use 0 if the tower is disabled; increase it when the sliced preview is wider."
+      : "This reservation applies only to Prusa XL 3MF exports with at least two enabled tools.";
   }
 
   function updateFitControls(): void {
@@ -1001,8 +1103,14 @@ export function installPrintExportDialog(
     invalidateOutput();
     updateProfileControls();
   });
-  prusaTools.addEventListener("change", invalidateOutput);
-  formatSelect.addEventListener("change", invalidateOutput);
+  prusaTools.addEventListener("change", () => {
+    invalidateOutput();
+    updateWipeTowerControls();
+  });
+  formatSelect.addEventListener("change", () => {
+    invalidateOutput();
+    updateWipeTowerControls();
+  });
   fitSelect.addEventListener("change", () => {
     invalidateOutput();
     updateFitControls();
@@ -1013,6 +1121,7 @@ export function installPrintExportDialog(
   });
   scaleInput.addEventListener("input", invalidateOutput);
   maximumPlateCountInput.addEventListener("input", invalidateOutput);
+  wipeTowerReserveDepthInput.addEventListener("input", invalidateOutput);
   labelsSelect.addEventListener("change", invalidateOutput);
   routesInput.addEventListener("change", invalidateOutput);
   legendInput.addEventListener("change", invalidateOutput);
@@ -1024,6 +1133,7 @@ export function installPrintExportDialog(
     let format: PrintFormat;
     let fitPolicy: RequestedPrintFitPolicy;
     let maximumPlates: number | undefined;
+    let exportOptions: PrintExportGenerateOptions;
     try {
       ({ profile, format } = resolveProfileForFormat());
       fitPolicy = selectedFitPolicy();
@@ -1031,6 +1141,20 @@ export function installPrintExportDialog(
         fitPolicy === "tile" || fitPolicy === "auto"
           ? selectedMaximumPlateCount()
           : undefined;
+      exportOptions = printExportOptionsFromControls({
+        scale: Number(scaleInput.value),
+        labelPolicy: labelsSelect.value === "off" ? "off" : "auto",
+        routePolicy: routesInput.checked ? "auto" : "off",
+        includeLegend: legendInput.checked,
+        fitPolicy,
+        profileKind: selectedProfileKind(),
+        format,
+        prusaToolCount: selectedPrusaTools().length,
+        wipeTowerReserveDepth: wipeTowerReserveDepthInput.valueAsNumber,
+        ...(maximumPlates === undefined
+          ? {}
+          : { maximumPlateCount: maximumPlates }),
+      });
     } catch (error) {
       renderErrors(issuesOf(error));
       return;
@@ -1040,16 +1164,7 @@ export function installPrintExportDialog(
       format,
       model: options.getModel(),
       profile,
-      options: printExportOptionsFromControls({
-        scale: Number(scaleInput.value),
-        labelPolicy: labelsSelect.value === "off" ? "off" : "auto",
-        routePolicy: routesInput.checked ? "auto" : "off",
-        includeLegend: legendInput.checked,
-        fitPolicy,
-        ...(maximumPlates === undefined
-          ? {}
-          : { maximumPlateCount: maximumPlates }),
-      }),
+      options: exportOptions,
     });
   }
   function startCalibration(): void {

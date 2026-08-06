@@ -533,6 +533,15 @@ the exact plates and below-limit measurements appear in preflight with a normal
 **Confirm compact fit** action. No artifact serialization or download occurs
 before confirmation; confirmation deterministically reruns the plan.
 
+For Prusa XL 3MF exports with at least two enabled tools, **Wipe tower strip**
+keeps an empty rear strip outside the continuous city base. The 72 mm default
+covers the link:https://github.com/prusa3d/PrusaSlicer/blob/master/resources/profiles/PrusaResearch.ini[official profile's 60 mm nominal tower width],
+its standard brim, and placement clearance. PrusaSlicer centers imported
+geometry, so move the complete city flush to the front edge, do not run Arrange
+afterward, and place the tower in the revealed rear strip. Verify the sliced
+G-code preview. Set the reservation to 0 when the tower is disabled, or
+increase it when the slicer preview is wider.
+
 **Print plates** previews the exporter geometry while export runs in a
 cancellable module worker. Preflight distinguishes requested Auto from the
 concrete applied policy and reports plate count, filenames, dimensions,
