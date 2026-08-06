@@ -46,6 +46,25 @@ export interface SourceFileFact {
   readonly imports: readonly StaticImportFact[];
 }
 
+/**
+ * Historical animation frames only need the stable source identity and the
+ * aggregate metrics used to render the city. Fine-grained inspection data is
+ * deliberately absent so a history import does not retain one complete code
+ * inspection graph per sampled revision.
+ */
+export type HistoricalSourceFileFact = Omit<
+  SourceFileFact,
+  "metricMethod" | "sourceStructure" | "units"
+> & {
+  readonly metricMethod?: never;
+  readonly sourceStructure?: never;
+  readonly units?: never;
+};
+
+export type HistorySourceFileFact =
+  | SourceFileFact
+  | HistoricalSourceFileFact;
+
 export interface LocalAnalysisFacts {
   readonly identity?: CityIdentity;
   readonly repositories: readonly CityRepository[];
@@ -54,6 +73,16 @@ export interface LocalAnalysisFacts {
   readonly sources: readonly SourceFileFact[];
   readonly dependencies: readonly CityDependency[];
   readonly warnings: readonly string[];
+}
+
+export interface HistoricalAnalysisFacts
+  extends Omit<LocalAnalysisFacts, "sources"> {
+  readonly sources: readonly HistoricalSourceFileFact[];
+}
+
+export interface HistoryAnalysisFacts
+  extends Omit<LocalAnalysisFacts, "sources"> {
+  readonly sources: readonly HistorySourceFileFact[];
 }
 
 export interface LocalAnalysisOptions extends SnapshotOptions {

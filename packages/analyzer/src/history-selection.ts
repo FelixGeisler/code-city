@@ -95,6 +95,19 @@ export interface CommitCountHistorySelectionRequest
   readonly commitCount: number;
 }
 
+/**
+ * Selects the complete available first-parent ancestry from the repository
+ * root through the immutable requested tip. The acquisition layer must prove
+ * that the root is inside the hard traversal ceiling before calling the
+ * selector.
+ */
+export interface RootToTipHistorySelectionRequest
+  extends HistoryAnalysisBounds {
+  readonly mode: "root-to-tip";
+  /** Maximum number of evenly distributed animation frames to retain. */
+  readonly maxFrames: number;
+}
+
 export interface DateRangeHistorySelectionRequest
   extends CommonHistorySelectionRequest {
   readonly mode: "date-range";
@@ -118,6 +131,7 @@ export interface TagRangeHistorySelectionRequest
 }
 
 export type HistorySelectionRequest =
+  | RootToTipHistorySelectionRequest
   | CommitCountHistorySelectionRequest
   | DateRangeHistorySelectionRequest
   | TagRangeHistorySelectionRequest;
@@ -125,7 +139,6 @@ export type HistorySelectionRequest =
 interface NormalizedHistorySelectionBase {
   readonly traversal: "first-parent";
   readonly order: "oldest-first";
-  readonly sampleEvery: number;
   readonly selectedCommitCount: number;
   readonly sampledCommitCount: number;
   readonly traversedCommitCount: number;
@@ -134,25 +147,38 @@ interface NormalizedHistorySelectionBase {
   readonly sampledCommitShas: readonly string[];
 }
 
-export interface NormalizedCommitCountHistorySelection
+export interface NormalizedRootToTipHistorySelection
   extends NormalizedHistorySelectionBase {
+  readonly mode: "root-to-tip";
+  readonly samplingStrategy: "evenly-spaced-v1";
+  readonly maxFrames: number;
+}
+
+interface NormalizedFixedIntervalHistorySelection
+  extends NormalizedHistorySelectionBase {
+  readonly sampleEvery: number;
+}
+
+export interface NormalizedCommitCountHistorySelection
+  extends NormalizedFixedIntervalHistorySelection {
   readonly mode: "commit-count";
   readonly requestedCommitCount: number;
 }
 
 export interface NormalizedDateRangeHistorySelection
-  extends NormalizedHistorySelectionBase {
+  extends NormalizedFixedIntervalHistorySelection {
   readonly mode: "date-range";
   readonly fromInclusive: string;
   readonly toInclusive: string;
 }
 
 export interface NormalizedTagRangeHistorySelection
-  extends NormalizedHistorySelectionBase {
+  extends NormalizedFixedIntervalHistorySelection {
   readonly mode: "tag-range";
 }
 
 export type NormalizedHistorySelection =
+  | NormalizedRootToTipHistorySelection
   | NormalizedCommitCountHistorySelection
   | NormalizedDateRangeHistorySelection
   | NormalizedTagRangeHistorySelection;
@@ -170,6 +196,7 @@ export interface HistorySelectionResult {
 export type HistorySelectionErrorCode =
   | "invalid-request"
   | "selection-unavailable"
+  | "history-too-long"
   | "limit-exceeded";
 
 export class HistorySelectionError extends Error {
@@ -187,10 +214,18 @@ interface ValidatedHistoryCommit {
   readonly committedAtMs: number;
 }
 
-interface ResolvedCommonSelection {
-  readonly sampleEvery: number;
+interface ResolvedSelectionBase {
   readonly requestedTagCount: number;
   readonly analysisBounds: ResolvedHistoryAnalysisBounds;
+}
+
+interface ResolvedCommonSelection extends ResolvedSelectionBase {
+  readonly sampleEvery: number;
+}
+
+interface ResolvedRootToTipSelection extends ResolvedSelectionBase {
+  readonly mode: "root-to-tip";
+  readonly maxFrames: number;
 }
 
 interface ResolvedCommitCountSelection extends ResolvedCommonSelection {
@@ -215,6 +250,7 @@ interface ResolvedTagRangeSelection extends ResolvedCommonSelection {
 }
 
 type ResolvedHistorySelection =
+  | ResolvedRootToTipSelection
   | ResolvedCommitCountSelection
   | ResolvedDateRangeSelection
   | ResolvedTagRangeSelection;
@@ -543,6 +579,47 @@ function resolveSelectionRequest(
 ): ResolvedHistorySelection {
   const record = requireRecord(request, "history selection request");
   const mode = record["mode"];
+  if (mode === "root-to-tip") {
+    const maxFrames = requirePositiveBound(
+      record["maxFrames"],
+      "maxFrames",
+      HISTORY_SELECTION_LIMITS.maxSampledFrames,
+    );
+    if (maxFrames < 2) {
+      fail(
+        "invalid-request",
+        "maxFrames must be at least 2 so root and tip can both be retained.",
+      );
+    }
+    return Object.freeze({
+      mode,
+      maxFrames,
+      requestedTagCount: 0,
+      analysisBounds: resolveHistoryAnalysisBounds({
+        ...(record["totalDeadlineMs"] === undefined
+          ? {}
+          : { totalDeadlineMs: record["totalDeadlineMs"] as number }),
+        ...(record["maxAggregateChangedPaths"] === undefined
+          ? {}
+          : { maxAggregateChangedPaths: record["maxAggregateChangedPaths"] as number }),
+        ...(record["maxAggregateChangedPathBytes"] === undefined
+          ? {}
+          : { maxAggregateChangedPathBytes: record["maxAggregateChangedPathBytes"] as number }),
+        ...(record["maxAggregateSemanticBytes"] === undefined
+          ? {}
+          : { maxAggregateSemanticBytes: record["maxAggregateSemanticBytes"] as number }),
+        ...(record["maxUniqueLineages"] === undefined
+          ? {}
+          : { maxUniqueLineages: record["maxUniqueLineages"] as number }),
+        ...(record["maxEvolutionOutputBytes"] === undefined
+          ? {}
+          : { maxEvolutionOutputBytes: record["maxEvolutionOutputBytes"] as number }),
+        ...(record["maxAggregateTreeEntries"] === undefined
+          ? {}
+          : { maxAggregateTreeEntries: record["maxAggregateTreeEntries"] as number }),
+      }),
+    });
+  }
   if (mode === "commit-count") {
     const common = resolveCommon(record, 0);
     return Object.freeze({
@@ -607,7 +684,7 @@ function resolveSelectionRequest(
   }
   fail(
     "invalid-request",
-    "history selection mode must be commit-count, date-range, or tag-range.",
+    "history selection mode must be root-to-tip, commit-count, date-range, or tag-range.",
   );
 }
 
@@ -715,6 +792,16 @@ function selectNewestFirst(
   chain: readonly ValidatedHistoryCommit[],
   request: ResolvedHistorySelection,
 ): readonly ValidatedHistoryCommit[] {
+  if (request.mode === "root-to-tip") {
+    const root = chain.at(-1);
+    if (root === undefined || root.commit.parents.length !== 0) {
+      fail(
+        "selection-unavailable",
+        "Complete mainline history requires a first-parent chain that reaches the repository root.",
+      );
+    }
+    return chain;
+  }
   if (request.mode === "commit-count") {
     return chain.slice(0, request.commitCount);
   }
@@ -765,6 +852,27 @@ function selectNewestFirst(
   return selected;
 }
 
+function sampleEvenlyOldestFirst(
+  selectedOldestFirst: readonly HistoryCommit[],
+  maximumFrames: number,
+): readonly HistoryCommit[] {
+  const frameCount = Math.min(
+    selectedOldestFirst.length,
+    maximumFrames,
+  );
+  if (frameCount === 1) {
+    return Object.freeze([selectedOldestFirst[0]!]);
+  }
+  const lastIndex = selectedOldestFirst.length - 1;
+  const sampled = Array.from({ length: frameCount }, (_, index) => {
+    const selectedIndex = Math.floor(
+      (index * lastIndex) / (frameCount - 1),
+    );
+    return selectedOldestFirst[selectedIndex]!;
+  });
+  return Object.freeze(sampled);
+}
+
 function sampleOldestFirst(
   selectedOldestFirst: readonly HistoryCommit[],
   sampleEvery: number,
@@ -811,7 +919,6 @@ function createSummary(
   const base = {
     traversal: "first-parent" as const,
     order: "oldest-first" as const,
-    sampleEvery: request.sampleEvery,
     selectedCommitCount: selectedOldestFirst.length,
     sampledCommitCount: sampledOldestFirst.length,
     traversedCommitCount,
@@ -821,23 +928,35 @@ function createSummary(
       sampledOldestFirst.map(({ sha }) => sha),
     ),
   };
-  if (request.mode === "commit-count") {
+  if (request.mode === "root-to-tip") {
     return Object.freeze({
       ...base,
+      mode: request.mode,
+      samplingStrategy: "evenly-spaced-v1" as const,
+      maxFrames: request.maxFrames,
+    });
+  }
+  const fixedIntervalBase = {
+    ...base,
+    sampleEvery: request.sampleEvery,
+  };
+  if (request.mode === "commit-count") {
+    return Object.freeze({
+      ...fixedIntervalBase,
       mode: request.mode,
       requestedCommitCount: request.commitCount,
     });
   }
   if (request.mode === "date-range") {
     return Object.freeze({
-      ...base,
+      ...fixedIntervalBase,
       mode: request.mode,
       fromInclusive: request.fromInclusive,
       toInclusive: request.toInclusive,
     });
   }
   return Object.freeze({
-    ...base,
+    ...fixedIntervalBase,
     mode: request.mode,
   });
 }
@@ -883,10 +1002,16 @@ export function selectHistory(
       .map(({ commit }) => commit)
       .reverse(),
   );
-  const sampledOldestFirst = sampleOldestFirst(
-    selectedOldestFirst,
-    resolvedRequest.sampleEvery,
-  );
+  const sampledOldestFirst =
+    resolvedRequest.mode === "root-to-tip"
+      ? sampleEvenlyOldestFirst(
+          selectedOldestFirst,
+          resolvedRequest.maxFrames,
+        )
+      : sampleOldestFirst(
+          selectedOldestFirst,
+          resolvedRequest.sampleEvery,
+        );
   return Object.freeze({
     selectedCommits: selectedOldestFirst,
     sampledCommits: sampledOldestFirst,

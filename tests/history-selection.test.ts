@@ -67,6 +67,72 @@ describe("bounded history selection", () => {
     expect(Object.isFrozen(HISTORY_SELECTION_LIMITS)).toBe(true);
   });
 
+  it("selects the entire mainline with evenly spaced root and tip frames", () => {
+    const result = selectHistory(chain(109), {
+      mode: "root-to-tip",
+      maxFrames: 20,
+    });
+
+    expect(result.selectedCommits).toHaveLength(109);
+    expect(result.sampledCommits).toHaveLength(20);
+    expect(result.sampledCommits.map(({ sha: value }) => value)).toEqual(
+      Array.from({ length: 20 }, (_, index) =>
+        sha(1 + Math.floor((index * 108) / 19)),
+      ),
+    );
+    expect(new Set(result.summary.sampledCommitShas)).toHaveProperty(
+      "size",
+      20,
+    );
+    expect(result.summary).toEqual({
+      mode: "root-to-tip",
+      traversal: "first-parent",
+      order: "oldest-first",
+      samplingStrategy: "evenly-spaced-v1",
+      maxFrames: 20,
+      selectedCommitCount: 109,
+      sampledCommitCount: 20,
+      traversedCommitCount: 109,
+      resolvedOldestSha: sha(1),
+      resolvedNewestSha: sha(109),
+      sampledCommitShas: Array.from({ length: 20 }, (_, index) =>
+        sha(1 + Math.floor((index * 108) / 19)),
+      ),
+    });
+  });
+
+  it.each([1, 2, 20, 100])(
+    "retains all %i commits when the entire mainline fits the frame maximum",
+    (count) => {
+      const result = selectHistory(chain(count), {
+        mode: "root-to-tip",
+        maxFrames: 100,
+      });
+      expect(result.sampledCommits.map(({ sha: value }) => value)).toEqual(
+        Array.from({ length: count }, (_, index) => sha(index + 1)),
+      );
+    },
+  );
+
+  it("requires complete root ancestry and at least two available frame slots", () => {
+    expectSelectionError(
+      () =>
+        selectHistory(chain(2).slice(0, 1), {
+          mode: "root-to-tip",
+          maxFrames: 2,
+        }),
+      "selection-unavailable",
+    );
+    expectSelectionError(
+      () =>
+        selectHistory(chain(2), {
+          mode: "root-to-tip",
+          maxFrames: 1,
+        }),
+      "invalid-request",
+    );
+  });
+
   it("selects recent commits including the tip and samples oldest-first", () => {
     const result = selectHistory(chain(6), {
       mode: "commit-count",

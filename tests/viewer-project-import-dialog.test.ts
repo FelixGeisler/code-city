@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   PROJECT_IMPORT_ANALYSIS_LIMITS,
+  PROJECT_IMPORT_HISTORY_DEFAULT_MAX_FRAMES,
   PROJECT_IMPORT_HISTORY_LIMITS,
   PROJECT_IMPORT_SOURCE_CHOICES,
   projectImportAnalysisOptions,
@@ -93,6 +94,7 @@ describe("viewer project import dialog state", () => {
       maxFrames: 100,
       maxTagNameBytes: 246,
     });
+    expect(PROJECT_IMPORT_HISTORY_DEFAULT_MAX_FRAMES).toBe(20);
   });
 
   it("keeps every accepted project source explicit", () => {
@@ -227,6 +229,7 @@ describe("viewer project import dialog state", () => {
     const common = {
       enabled: true,
       mode: "commit-count",
+      maxFrames: "20",
       commitCount: "500",
       fromInclusive: "",
       toInclusive: "",
@@ -236,6 +239,16 @@ describe("viewer project import dialog state", () => {
       tagMaxCommits: "",
       sampleEvery: "6",
     };
+    expect(
+      projectImportHistorySelection({
+        ...common,
+        mode: "root-to-tip",
+        sampleEvery: "not used for the recommended range",
+      }),
+    ).toEqual({
+      mode: "root-to-tip",
+      maxFrames: 20,
+    });
     const commitCount = projectImportHistorySelection(common);
     expect(commitCount).toEqual({
       mode: "commit-count",
@@ -304,6 +317,7 @@ describe("viewer project import dialog state", () => {
     const common = {
       enabled: true,
       mode: "commit-count",
+      maxFrames: "20",
       commitCount: "1",
       fromInclusive: "",
       toInclusive: "",
@@ -320,6 +334,9 @@ describe("viewer project import dialog state", () => {
       { ...common, sampleEvery: "501" },
       { ...common, commitCount: "101", sampleEvery: "1" },
       { ...common, commitCount: "500", sampleEvery: "5" },
+      { ...common, mode: "root-to-tip", maxFrames: "0" },
+      { ...common, mode: "root-to-tip", maxFrames: "1" },
+      { ...common, mode: "root-to-tip", maxFrames: "101" },
     ]) {
       expect(() => projectImportHistorySelection(values)).toThrow();
     }
@@ -520,6 +537,9 @@ describe("viewer project import dialog state", () => {
     ).toBe("history");
     expect(
       projectImportFieldForServerPath("$.history.sampleEvery"),
+    ).toBe("history");
+    expect(
+      projectImportFieldForServerPath("$.history.maxFrames"),
     ).toBe("history");
     expect(
       projectImportFieldForServerPath("$.identity.title"),

@@ -726,6 +726,16 @@ describe("viewer import API protocol", () => {
     expect(parseImportJob(completedHistoryJob())).toEqual(
       completedHistoryJob(),
     );
+    const historyFailure = {
+      ...queuedJob(),
+      state: "failed",
+      error: {
+        code: "history-too-long",
+        message:
+          "This mainline has more than 500 commits. Choose a custom history range.",
+      },
+    } as const;
+    expect(parseImportJob(historyFailure)).toEqual(historyFailure);
     expect(
       parseImportJob({
         ...completedJob(),

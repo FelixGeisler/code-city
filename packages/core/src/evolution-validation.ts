@@ -150,6 +150,14 @@ function validatePreparedEvolutionBundle(
     "baseline.commit",
     work,
   );
+  if (
+    selection.mode === "root-to-tip" &&
+    baselineCommit.parentShas.length !== 0
+  ) {
+    fail(
+      "baseline.commit.parentShas must be empty for a root-to-tip selection",
+    );
+  }
   validateCommitSelectionTime(
     baselineCommit,
     selection,
@@ -199,8 +207,12 @@ function validatePreparedEvolutionBundle(
       `${path}.commit`,
     );
     if (
-      selection.sampleEvery === 1 &&
-      selection.mode !== "date-range" &&
+      ((selection.mode === "root-to-tip" &&
+        selection.sampledCommitCount ===
+          selection.selectedCommitCount) ||
+        (selection.mode !== "root-to-tip" &&
+          selection.sampleEvery === 1 &&
+          selection.mode !== "date-range")) &&
       commit.parentShas[0] !== previousCommit.sha
     ) {
       fail(
@@ -861,14 +873,18 @@ function validateSelection(
   const selection = objectAt(value, "selection");
   const mode = enumString(
     selection.mode,
-    new Set(["commit-count", "date-range", "tag-range"]),
+    new Set([
+      "root-to-tip",
+      "commit-count",
+      "date-range",
+      "tag-range",
+    ]),
     "selection.mode",
   ) as NormalizedEvolutionSelection["mode"];
   const commonKeys = [
     "mode",
     "traversal",
     "order",
-    "sampleEvery",
     "selectedCommitCount",
     "sampledCommitCount",
     "traversedCommitCount",
@@ -877,10 +893,18 @@ function validateSelection(
     "sampledCommitShas",
   ];
   switch (mode) {
+    case "root-to-tip":
+      exactKeys(
+        selection,
+        [...commonKeys, "samplingStrategy", "maxFrames"],
+        [],
+        "selection",
+      );
+      break;
     case "commit-count":
       exactKeys(
         selection,
-        [...commonKeys, "requestedCommitCount"],
+        [...commonKeys, "sampleEvery", "requestedCommitCount"],
         [],
         "selection",
       );
@@ -888,13 +912,23 @@ function validateSelection(
     case "date-range":
       exactKeys(
         selection,
-        [...commonKeys, "fromInclusive", "toInclusive"],
+        [
+          ...commonKeys,
+          "sampleEvery",
+          "fromInclusive",
+          "toInclusive",
+        ],
         [],
         "selection",
       );
       break;
     case "tag-range":
-      exactKeys(selection, commonKeys, [], "selection");
+      exactKeys(
+        selection,
+        [...commonKeys, "sampleEvery"],
+        [],
+        "selection",
+      );
       break;
   }
 
@@ -904,11 +938,6 @@ function validateSelection(
   if (selection.order !== "oldest-first") {
     fail('selection.order must be "oldest-first"');
   }
-  const sampleEvery = boundedPositiveInteger(
-    selection.sampleEvery,
-    "selection.sampleEvery",
-    EVOLUTION_BUNDLE_LIMITS.sampleEvery,
-  );
   const selectedCommitCount = boundedPositiveInteger(
     selection.selectedCommitCount,
     "selection.selectedCommitCount",
@@ -929,8 +958,37 @@ function validateSelection(
       "selection.selectedCommitCount must not exceed traversedCommitCount",
     );
   }
+  const sampleEvery =
+    mode === "root-to-tip"
+      ? undefined
+      : boundedPositiveInteger(
+          selection.sampleEvery,
+          "selection.sampleEvery",
+          EVOLUTION_BUNDLE_LIMITS.sampleEvery,
+        );
+  const maxFrames =
+    mode === "root-to-tip"
+      ? boundedPositiveInteger(
+          selection.maxFrames,
+          "selection.maxFrames",
+          EVOLUTION_BUNDLE_LIMITS.frames,
+        )
+      : undefined;
+  if (maxFrames !== undefined && maxFrames < 2) {
+    fail("selection.maxFrames must be at least 2");
+  }
+  if (
+    mode === "root-to-tip" &&
+    selection.samplingStrategy !== "evenly-spaced-v1"
+  ) {
+    fail(
+      'selection.samplingStrategy must be "evenly-spaced-v1"',
+    );
+  }
   const expectedSampledCount =
-    Math.ceil((selectedCommitCount - 1) / sampleEvery) + 1;
+    maxFrames === undefined
+      ? Math.ceil((selectedCommitCount - 1) / sampleEvery!) + 1
+      : Math.min(selectedCommitCount, maxFrames);
   if (sampledCommitCount !== expectedSampledCount) {
     fail(
       "selection.sampledCommitCount must match endpoint-inclusive sampling",
@@ -976,7 +1034,6 @@ function validateSelection(
   const common = {
     traversal: "first-parent" as const,
     order: "oldest-first" as const,
-    sampleEvery,
     selectedCommitCount,
     sampledCommitCount,
     traversedCommitCount,
@@ -985,6 +1042,13 @@ function validateSelection(
     sampledCommitShas,
   };
   switch (mode) {
+    case "root-to-tip":
+      return {
+        ...common,
+        mode,
+        samplingStrategy: "evenly-spaced-v1",
+        maxFrames: maxFrames!,
+      };
     case "commit-count": {
       const requestedCommitCount = boundedPositiveInteger(
         selection.requestedCommitCount,
@@ -996,7 +1060,12 @@ function validateSelection(
           "selection.selectedCommitCount must not exceed requestedCommitCount",
         );
       }
-      return { ...common, mode, requestedCommitCount };
+      return {
+        ...common,
+        mode,
+        sampleEvery: sampleEvery!,
+        requestedCommitCount,
+      };
     }
     case "date-range": {
       const fromInclusive = canonicalInstant(
@@ -1012,10 +1081,16 @@ function validateSelection(
           "selection.fromInclusive must not be later than toInclusive",
         );
       }
-      return { ...common, mode, fromInclusive, toInclusive };
+      return {
+        ...common,
+        mode,
+        sampleEvery: sampleEvery!,
+        fromInclusive,
+        toInclusive,
+      };
     }
     case "tag-range":
-      return { ...common, mode };
+      return { ...common, mode, sampleEvery: sampleEvery! };
   }
 }
 

@@ -292,6 +292,54 @@ function evolve(
 }
 
 describe("history evolution analysis", () => {
+  it("animates compact historical facts while retaining newest inspection detail", async () => {
+    const before = await facts({
+      "src/main.ts":
+        "export function answer(known: boolean) { return known ? 42 : 0; }\n",
+    });
+    const after = await facts({
+      "src/main.ts":
+        "export function answer(known: boolean) { return known ? 43 : 0; }\n",
+    });
+    const compactBefore = Object.freeze({
+      ...before,
+      sources: Object.freeze(
+        before.sources.map((source) => {
+          const compact = { ...source } as Record<string, unknown>;
+          delete compact["metricMethod"];
+          delete compact["sourceStructure"];
+          delete compact["units"];
+          return Object.freeze(compact);
+        }),
+      ),
+      warnings: Object.freeze([]),
+    }) as unknown as HistoryEvolutionFrameInput["facts"];
+    const selected = selection([COMMITS.b, COMMITS.a], {
+      mode: "commit-count",
+      commitCount: 2,
+    });
+
+    const result = evolve(
+      selected,
+      [
+        { commit: COMMITS.a, facts: compactBefore },
+        { commit: COMMITS.b, facts: after },
+      ],
+      new Map([[B, [{ kind: "modified", path: "src/main.ts" }]]]),
+    );
+    const replayed = [...replayEvolutionBundle(result.bundle)];
+
+    expect(replayed).toHaveLength(2);
+    expect(replayed[0]!.model.buildings[0]!.units).toBeUndefined();
+    expect(
+      replayed[0]!.model.buildings[0]!.sourceStructure,
+    ).toBeUndefined();
+    expect(replayed[1]!.model.buildings[0]!.units).not.toBeUndefined();
+    expect(
+      replayed[1]!.model.buildings[0]!.sourceStructure,
+    ).not.toBeUndefined();
+  });
+
   it("keeps a building lineage and placement across an exact Git rename", async () => {
     const before = await facts({
       "src/old-name.ts":

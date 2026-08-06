@@ -1017,6 +1017,7 @@ export function parseImportHistory(
       ...HISTORY_COMMON_KEYS,
       "commitCount",
       "fromInclusive",
+      "maxFrames",
       "maxCommits",
       "newestTagName",
       "oldestTagName",
@@ -1025,17 +1026,25 @@ export function parseImportHistory(
   );
   const mode = required(initial, "mode", "$.history.mode");
   if (
+    mode !== "root-to-tip" &&
     mode !== "commit-count" &&
     mode !== "date-range" &&
     mode !== "tag-range"
   ) {
     fail(
       "$.history.mode",
-      'Must be "commit-count", "date-range", or "tag-range".',
+      'Must be "root-to-tip", "commit-count", "date-range", or "tag-range".',
     );
   }
   const modeKeys =
-    mode === "commit-count"
+    mode === "root-to-tip"
+      ? [
+          ...HISTORY_COMMON_KEYS.filter(
+            (key) => key !== "sampleEvery",
+          ),
+          "maxFrames",
+        ]
+      : mode === "commit-count"
       ? [...HISTORY_COMMON_KEYS, "commitCount"]
       : mode === "date-range"
         ? [
@@ -1052,6 +1061,27 @@ export function parseImportHistory(
           ];
   const object = jsonObject(value, "$.history", modeKeys);
   const bounds = historyBounds(object);
+  if (mode === "root-to-tip") {
+    const maxFrames = historyInteger(
+      object,
+      "maxFrames",
+      HISTORY_SELECTION_LIMITS.maxSampledFrames,
+      true,
+    )!;
+    if (maxFrames < 2) {
+      fail(
+        "$.history.maxFrames",
+        "Must be an integer from 2 to 100.",
+        "limit-exceeded",
+      );
+    }
+    const { sampleEvery: _unused, ...analysisBounds } = bounds;
+    return Object.freeze({
+      mode,
+      maxFrames,
+      ...analysisBounds,
+    });
+  }
   if (mode === "commit-count") {
     const commitCount = historyInteger(
       object,
@@ -1429,8 +1459,11 @@ type BoundCredentialProfile =
 
 function analysisTaskFailure(error: unknown): JobTaskFailure {
   if (error instanceof HistorySelectionError) {
+    if (error.code === "history-too-long") {
+      return new JobTaskFailure("history-too-long");
+    }
     if (error.code === "limit-exceeded") {
-      return new JobTaskFailure("import-limit-exceeded");
+      return new JobTaskFailure("history-limit-exceeded");
     }
     if (error.code === "selection-unavailable") {
       return new JobTaskFailure("revision-unavailable");
@@ -1442,7 +1475,7 @@ function analysisTaskFailure(error: unknown): JobTaskFailure {
       return new JobTaskFailure("deadline-exceeded");
     }
     if (error.code === "limit-exceeded") {
-      return new JobTaskFailure("import-limit-exceeded");
+      return new JobTaskFailure("history-limit-exceeded");
     }
     return new JobTaskFailure("analysis-failed");
   }

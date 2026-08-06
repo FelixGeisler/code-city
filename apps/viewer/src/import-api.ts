@@ -170,6 +170,10 @@ export interface RemoteImportHistoryBounds {
 }
 
 export type RemoteImportHistorySelection =
+  | (Omit<RemoteImportHistoryBounds, "sampleEvery"> & {
+      readonly mode: "root-to-tip";
+      readonly maxFrames: number;
+    })
   | (RemoteImportHistoryBounds & {
       readonly mode: "commit-count";
       readonly commitCount: number;
@@ -236,6 +240,8 @@ export type ImportJobErrorCode =
   | "city-model-invalid"
   | "deadline-exceeded"
   | "failed"
+  | "history-limit-exceeded"
+  | "history-too-long"
   | "import-limit-exceeded"
   | "interrupted"
   | "repository-content-rejected"
@@ -781,6 +787,8 @@ function isJobErrorCode(value: unknown): value is ImportJobErrorCode {
     value === "city-model-invalid" ||
     value === "deadline-exceeded" ||
     value === "failed" ||
+    value === "history-limit-exceeded" ||
+    value === "history-too-long" ||
     value === "import-limit-exceeded" ||
     value === "interrupted" ||
     value === "repository-content-rejected" ||

@@ -14,7 +14,7 @@ import {
   type RectanglePackingSearchMode,
 } from "../../core/src/index.js";
 
-import type { LocalAnalysisFacts } from "./types.js";
+import type { HistoryAnalysisFacts } from "./types.js";
 
 export interface CityModelFromFactsExecutionOptions {
   readonly layoutCheckpoint?: (operations: number) => void;
@@ -28,7 +28,7 @@ export interface CityModelFromFactsExecutionOptions {
 }
 
 export function cityModelFromFacts(
-  facts: LocalAnalysisFacts,
+  facts: HistoryAnalysisFacts,
   execution: CityModelFromFactsExecutionOptions = {},
 ): CityModel {
   const metricMapping =
@@ -70,8 +70,12 @@ export function cityModelFromFacts(
           path: source.path,
           language: source.language,
           metrics: source.metrics,
-          metricMethod: source.metricMethod,
-          units: source.units,
+          ...(source.units === undefined
+            ? {}
+            : {
+                metricMethod: source.metricMethod,
+                units: source.units,
+              }),
           ...(source.sourceStructure === undefined
             ? {}
             : { sourceStructure: source.sourceStructure }),

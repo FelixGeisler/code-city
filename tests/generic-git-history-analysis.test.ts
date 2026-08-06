@@ -238,10 +238,12 @@ function cacheHarness(
   readonly requests: HistorySemanticCacheRequestLike[];
   readonly leases: CacheLeaseState[];
   readonly active: () => number;
+  readonly maximumActive: () => number;
 } {
   const values = new Map(initial);
   const requests: HistorySemanticCacheRequestLike[] = [];
   const leases: CacheLeaseState[] = [];
+  let maximumActive = 0;
   const cache: HistorySemanticCacheLike = {
     async acquire(cacheRequest, compute) {
       requests.push(cacheRequest);
@@ -252,6 +254,10 @@ function cacheHarness(
         released: false,
       };
       leases.push(state);
+      maximumActive = Math.max(
+        maximumActive,
+        leases.filter(({ released }) => !released).length,
+      );
       return {
         hit,
         read: async () => values.get(cacheRequest.commitSha)!,
@@ -267,27 +273,42 @@ function cacheHarness(
     requests,
     leases,
     active: () => leases.filter(({ released }) => !released).length,
+    maximumActive: () => maximumActive,
   };
 }
 
 describe("Generic Git history analysis orchestration", () => {
-  it("resumes from semantic cache hits and pins every lease through evolution", async () => {
+  it("releases cache leases after owning each bounded history frame", async () => {
     const session = sessionHarness(3);
     const provider = providerHarness(session.session);
     const cache = cacheHarness(
-      new Map([[sha(1), facts("cached-oldest", { identity: true })]]),
+      new Map([
+        [sha(1), facts("cached-oldest", { identity: true, sources: 1 })],
+      ]),
     );
     const analyzeSnapshot = vi.fn(async (value: RepositorySnapshot) =>
-      facts(value.files[0]!.path, { identity: true }),
+      facts(value.files[0]!.path, { identity: true, sources: 1 }),
     );
     const createEvolution = vi.fn(
       (value: HistoryEvolutionRequest) => {
-        expect(cache.active()).toBe(3);
+        expect(cache.active()).toBe(0);
+        expect(cache.maximumActive()).toBe(1);
         expect(
           value.frames.every(({ facts: semanticFacts }) =>
             semanticFacts.identity?.title === "History City",
           ),
         ).toBe(true);
+        expect(
+          value.frames.slice(0, -1).every(
+            ({ facts: semanticFacts }) =>
+              semanticFacts.sources[0]?.units === undefined &&
+              semanticFacts.sources[0]?.metricMethod === undefined &&
+              semanticFacts.sources[0]?.sourceStructure === undefined,
+          ),
+        ).toBe(true);
+        expect(
+          value.frames.at(-1)?.facts.sources[0]?.units,
+        ).toEqual([]);
         return evolutionResult(value);
       },
     );
@@ -837,6 +858,64 @@ describe("Generic Git history analysis orchestration", () => {
     expect(createEvolution).toHaveBeenCalledOnce();
   });
 
+  it("covers the complete mainline with evenly spaced bounded frames", async () => {
+    const completeSession = sessionHarness(109);
+    const completeProvider = providerHarness(completeSession.session);
+    const createEvolution = vi.fn(evolutionResult);
+
+    const result = await analyzeGenericGitHistory(
+      request({
+        mode: "root-to-tip",
+        maxFrames: 20,
+      }),
+      {},
+      {
+        withHistoryRepository: completeProvider.provider,
+        analyzeSnapshot: async () => facts("full-history-frame"),
+        createEvolution,
+      },
+    );
+
+    expect(completeProvider.requests[0]?.maximumCommits).toBe(500);
+    expect(result.selection.summary).toMatchObject({
+      mode: "root-to-tip",
+      samplingStrategy: "evenly-spaced-v1",
+      maxFrames: 20,
+      selectedCommitCount: 109,
+      sampledCommitCount: 20,
+      resolvedOldestSha: sha(1),
+      resolvedNewestSha: sha(109),
+    });
+    expect(result.selection.sampledCommits).toHaveLength(20);
+    expect(completeSession.readChanges).toHaveBeenCalledTimes(108);
+    expect(completeSession.readSnapshot).toHaveBeenCalledTimes(20);
+    expect(createEvolution).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a complete-mainline overflow probe before repository reads", async () => {
+    const overflowSession = sessionHarness(501);
+    const overflowProvider = providerHarness(overflowSession.session);
+    const createEvolution = vi.fn(evolutionResult);
+
+    await expect(
+      analyzeGenericGitHistory(
+        request({
+          mode: "root-to-tip",
+          maxFrames: 20,
+        }),
+        {},
+        {
+          withHistoryRepository: overflowProvider.provider,
+          analyzeSnapshot: async () => facts("never"),
+          createEvolution,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "history-too-long" });
+    expect(overflowSession.readChanges).not.toHaveBeenCalled();
+    expect(overflowSession.readSnapshot).not.toHaveBeenCalled();
+    expect(createEvolution).not.toHaveBeenCalled();
+  });
+
   it("rejects incomplete bounded date and tag ranges before reading repository data", async () => {
     const dateSession = sessionHarness(4);
     const dateProvider = providerHarness(dateSession.session);
@@ -952,7 +1031,7 @@ describe("Generic Git history analysis orchestration", () => {
     expect(createEvolution).not.toHaveBeenCalled();
   });
 
-  it("bounds retained nested semantic facts before accumulating frames", async () => {
+  it("bounds newest-frame inspection detail after compact historical frames", async () => {
     const createEvolution = vi.fn(evolutionResult);
     const boundedSession = sessionHarness(3);
     const boundedProvider = providerHarness(boundedSession.session);
@@ -970,8 +1049,8 @@ describe("Generic Git history analysis orchestration", () => {
           analyzeSnapshot: async () =>
             facts("nested", {
               sources: 1,
-              units: 64,
-              warningCharacters: 2_048,
+              units: 256,
+              warningCharacters: 10_000,
             }),
           createEvolution,
         },
@@ -982,7 +1061,7 @@ describe("Generic Git history analysis orchestration", () => {
         "aggregate retained semantic bytes",
       ),
     });
-    expect(boundedSession.readSnapshot).toHaveBeenCalledOnce();
+    expect(boundedSession.readSnapshot).toHaveBeenCalledTimes(3);
     expect(createEvolution).not.toHaveBeenCalled();
   });
 
@@ -1002,7 +1081,7 @@ describe("Generic Git history analysis orchestration", () => {
         {
           withHistoryRepository: boundedProvider.provider,
           analyzeSnapshot: async () =>
-            facts("aggregate", { warningCharacters: 500 }),
+            facts("x".repeat(4_000)),
           createEvolution,
         },
       ),
@@ -1011,6 +1090,49 @@ describe("Generic Git history analysis orchestration", () => {
       1,
     );
     expect(createEvolution).not.toHaveBeenCalled();
+  });
+
+  it("keeps twenty detailed snapshots bounded by projecting historical inspection data", async () => {
+    const createEvolution = vi.fn(evolutionResult);
+    const boundedSession = sessionHarness(20);
+    const boundedProvider = providerHarness(boundedSession.session);
+    const cache = cacheHarness();
+
+    const result = await analyzeGenericGitHistory(
+      request({
+        mode: "commit-count",
+        commitCount: 20,
+        maxAggregateSemanticBytes: 300_000,
+      }),
+      {},
+      {
+        withHistoryRepository: boundedProvider.provider,
+        semanticCache: cache.cache,
+        analyzeSnapshot: async () =>
+          facts("detailed", {
+            sources: 1,
+            units: 64,
+            warningCharacters: 2_048,
+          }),
+        createEvolution,
+      },
+    );
+
+    expect(result.selection.summary.sampledCommitCount).toBe(20);
+    expect(createEvolution).toHaveBeenCalledOnce();
+    const frames = createEvolution.mock.calls[0]![0].frames;
+    expect(frames).toHaveLength(20);
+    expect(
+      frames.slice(0, -1).every(
+        ({ facts: semanticFacts }) =>
+          semanticFacts.sources[0]?.units === undefined &&
+          semanticFacts.warnings.length === 0,
+      ),
+    ).toBe(true);
+    expect(frames.at(-1)?.facts.sources[0]?.units).toHaveLength(64);
+    expect(frames.at(-1)?.facts.warnings).toHaveLength(1);
+    expect(cache.maximumActive()).toBe(1);
+    expect(cache.active()).toBe(0);
   });
 
   it("owns immutable semantic facts before metering and evolution", async () => {
@@ -1150,6 +1272,45 @@ describe("Generic Git history analysis orchestration", () => {
     const cached = missCache.values.get(sha(1));
     expect(Object.isFrozen(cached)).toBe(true);
     expect(Object.isFrozen(cached?.repositories)).toBe(true);
+  });
+
+  it("hardens older cache hits before projecting compact history facts", async () => {
+    const unsafeHistoricalHit = facts(
+      "unsafe-historical-hit",
+    ) as unknown as Record<string, unknown>;
+    let sourceReads = 0;
+    Object.defineProperty(unsafeHistoricalHit, "sources", {
+      enumerable: true,
+      get: () => {
+        sourceReads += 1;
+        return [];
+      },
+    });
+    const session = sessionHarness(2);
+    const provider = providerHarness(session.session);
+    const cache = cacheHarness(
+      new Map([
+        [
+          sha(1),
+          unsafeHistoricalHit as unknown as LocalAnalysisFacts,
+        ],
+      ]),
+    );
+
+    await expect(
+      analyzeGenericGitHistory(
+        request({ mode: "commit-count", commitCount: 2 }),
+        {},
+        {
+          withHistoryRepository: provider.provider,
+          semanticCache: cache.cache,
+          analyzeSnapshot: async () => facts("newest"),
+          createEvolution: vi.fn(evolutionResult),
+        },
+      ),
+    ).rejects.toMatchObject({ code: "invalid-input" });
+    expect(sourceReads).toBe(0);
+    expect(cache.leases[0]?.released).toBe(true);
   });
 
   it("charges snapshot files on misses and semantic entities on cache hits", async () => {

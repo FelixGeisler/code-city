@@ -359,6 +359,27 @@ describe("EvolutionBundle 1.0", () => {
   });
 
   it("accepts all normalized selection modes without persisting mutable tag names", () => {
+    const rootToTip = mutable(bundle());
+    rootToTip.selection = {
+      ...rootToTip.selection,
+      mode: "root-to-tip",
+      samplingStrategy: "evenly-spaced-v1",
+      maxFrames: 3,
+    };
+    delete rootToTip.selection.sampleEvery;
+    delete rootToTip.selection.requestedCommitCount;
+    expect(validateEvolutionBundle(rootToTip).selection).toMatchObject({
+      mode: "root-to-tip",
+      samplingStrategy: "evenly-spaced-v1",
+      maxFrames: 3,
+    });
+
+    const incompleteRootToTip = mutable(rootToTip);
+    incompleteRootToTip.baseline.commit.parentShas = [shaFor(9)];
+    expect(() =>
+      validateEvolutionBundle(incompleteRootToTip),
+    ).toThrow(/must be empty for a root-to-tip selection/u);
+
     const count = bundle();
     expect(validateEvolutionBundle(count).selection.mode).toBe(
       "commit-count",
