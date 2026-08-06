@@ -1580,6 +1580,9 @@ test("submits bounded history, validates both artifacts, and restores its recent
   await page.locator("#project-import-revision-value").fill("main");
   await page.locator("#project-import-history-enabled").check();
   await page
+    .locator("#project-import-history-mode")
+    .selectOption("commit-count");
+  await page
     .locator("#project-import-history-commit-count")
     .fill(HISTORY_COMMIT_COUNT.toString());
   await page
