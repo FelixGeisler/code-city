@@ -27,6 +27,8 @@ export interface JobError {
     | "city-model-invalid"
     | "deadline-exceeded"
     | "failed"
+    | "history-capability-unavailable"
+    | "history-incomplete"
     | "history-limit-exceeded"
     | "history-too-long"
     | "import-limit-exceeded"
@@ -41,6 +43,8 @@ export type JobTaskFailureCode =
   | "analysis-failed"
   | "city-model-invalid"
   | "deadline-exceeded"
+  | "history-capability-unavailable"
+  | "history-incomplete"
   | "history-limit-exceeded"
   | "history-too-long"
   | "import-limit-exceeded"
@@ -55,10 +59,14 @@ const JOB_TASK_FAILURE_MESSAGES: Readonly<
   "city-model-invalid": "The uploaded city model is invalid.",
   "deadline-exceeded":
     "The repository import exceeded its time limit.",
+  "history-capability-unavailable":
+    "Complete mainline history requires a Git server with filtered history fetch support. Choose a bounded custom history range.",
+  "history-incomplete":
+    "The selected history cannot be proven complete because the Git server supplied a shallow boundary. Choose an available bounded range or use a complete remote.",
   "history-limit-exceeded":
     "This repository is too detailed for the selected history. Reduce the maximum animation frames or choose a custom range.",
   "history-too-long":
-    "This mainline has more than 500 commits. Choose a custom history range.",
+    "This mainline has more than 100,000 commits. Choose a bounded custom history range.",
   "import-limit-exceeded":
     "The repository import exceeded a configured limit.",
   "repository-content-rejected":
@@ -76,6 +84,8 @@ function isJobTaskFailureCode(
     value === "analysis-failed" ||
     value === "city-model-invalid" ||
     value === "deadline-exceeded" ||
+    value === "history-capability-unavailable" ||
+    value === "history-incomplete" ||
     value === "history-limit-exceeded" ||
     value === "history-too-long" ||
     value === "import-limit-exceeded" ||

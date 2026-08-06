@@ -96,22 +96,26 @@ describe("EvolutionBundle JSON Schema", () => {
     expect(validateEvolutionBundle(value)).toBe(value);
   });
 
-  it("accepts the bounded complete-mainline selection variant", () => {
-    const value = fixture();
-    value.selection = {
-      ...value.selection,
-      mode: "root-to-tip",
-      samplingStrategy: "evenly-spaced-v1",
-      maxFrames: 20,
-    };
-    delete value.selection.sampleEvery;
+  it.each(["evenly-spaced-v1", "elapsed-time-v1"])(
+    "accepts the bounded complete-mainline %s selection variant",
+    (samplingStrategy) => {
+      const value = fixture();
+      value.selection = {
+        ...value.selection,
+        mode: "root-to-tip",
+        samplingStrategy,
+        maxFrames: 20,
+      };
+      delete value.selection.sampleEvery;
 
-    expect(validateSchema(value), errors()).toBe(true);
-    expect(validateEvolutionBundle(value).selection).toMatchObject({
-      mode: "root-to-tip",
-      maxFrames: 20,
-    });
-  });
+      expect(validateSchema(value), errors()).toBe(true);
+      expect(validateEvolutionBundle(value).selection).toMatchObject({
+        mode: "root-to-tip",
+        maxFrames: 20,
+        samplingStrategy,
+      });
+    },
+  );
 
   it("rejects author data, mutable tag labels, and excessive histories", () => {
     const author = fixture();
@@ -129,6 +133,13 @@ describe("EvolutionBundle JSON Schema", () => {
     const excessive = fixture();
     excessive.deltas = Array.from({ length: 100 }, () => ({}));
     expect(validateSchema(excessive)).toBe(false);
+
+    const excessiveCustomTraversal = fixture();
+    excessiveCustomTraversal.selection.traversedCommitCount = 501;
+    expect(validateSchema(excessiveCustomTraversal)).toBe(false);
+    expect(() => validateEvolutionBundle(excessiveCustomTraversal)).toThrow(
+      /traversedCommitCount must not exceed 500/u,
+    );
   });
 
   it("leaves replay and cross-reference invariants to the runtime validator", () => {

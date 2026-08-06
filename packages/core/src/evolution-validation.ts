@@ -977,12 +977,21 @@ function validateSelection(
   if (maxFrames !== undefined && maxFrames < 2) {
     fail("selection.maxFrames must be at least 2");
   }
+  const samplingStrategy =
+    mode === "root-to-tip"
+      ? enumString(
+          selection.samplingStrategy,
+          new Set(["evenly-spaced-v1", "elapsed-time-v1"]),
+          "selection.samplingStrategy",
+        ) as "evenly-spaced-v1" | "elapsed-time-v1"
+      : undefined;
   if (
-    mode === "root-to-tip" &&
-    selection.samplingStrategy !== "evenly-spaced-v1"
+    mode !== "root-to-tip" &&
+    (selectedCommitCount > EVOLUTION_BUNDLE_LIMITS.customSelectionCommits ||
+      traversedCommitCount > EVOLUTION_BUNDLE_LIMITS.customSelectionCommits)
   ) {
     fail(
-      'selection.samplingStrategy must be "evenly-spaced-v1"',
+      `selection selectedCommitCount and traversedCommitCount must not exceed ${EVOLUTION_BUNDLE_LIMITS.customSelectionCommits} for ${mode}`,
     );
   }
   const expectedSampledCount =
@@ -1046,14 +1055,14 @@ function validateSelection(
       return {
         ...common,
         mode,
-        samplingStrategy: "evenly-spaced-v1",
+        samplingStrategy: samplingStrategy!,
         maxFrames: maxFrames!,
       };
     case "commit-count": {
       const requestedCommitCount = boundedPositiveInteger(
         selection.requestedCommitCount,
         "selection.requestedCommitCount",
-        EVOLUTION_BUNDLE_LIMITS.traversedCommits,
+        EVOLUTION_BUNDLE_LIMITS.customSelectionCommits,
       );
       if (selectedCommitCount > requestedCommitCount) {
         fail(

@@ -6,6 +6,9 @@ import { strToU8, zipSync } from "fflate";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  GENERIC_GIT_HISTORY_INDEX_MAX_BYTES,
+  GENERIC_GIT_HISTORY_MAX_CHANGED_PATH_BYTES,
+  GENERIC_GIT_ROOT_TO_TIP_HISTORY_MAX_COMMITS,
   withGenericGitHistoryRepository,
   type GenericGitSnapshotDependencies,
   type GenericGitTemporaryWorkspace,
@@ -15,6 +18,7 @@ import {
 const TIP = "1111111111111111111111111111111111111111";
 const PARENT = "2222222222222222222222222222222222222222";
 const ROOT = "3333333333333333333333333333333333333333";
+const BLOB = "4444444444444444444444444444444444444444";
 const REMOTE =
   "https://dev.azure.example/Collection/Project/_git/History";
 const temporaryRoots: string[] = [];
@@ -55,6 +59,7 @@ async function workspace(options: {
 } = {}): Promise<{
   readonly value: GenericGitTemporaryWorkspace;
   readonly dispose: ReturnType<typeof vi.fn>;
+  readonly measureBytes: ReturnType<typeof vi.fn>;
 }> {
   const cleanupRoot = await fs.mkdtemp(
     path.join(os.tmpdir(), "code-city-history-session-"),
@@ -80,15 +85,17 @@ async function workspace(options: {
   const dispose = vi.fn(async () => {
     await fs.rm(cleanupRoot, { recursive: true, force: true });
   });
+  const measureBytes = vi.fn(async () => 4_096);
   return {
     value: {
       root,
       repositoryDirectory,
       templateDirectory,
-      measureBytes: async () => 4_096,
+      measureBytes,
       dispose,
     },
     dispose,
+    measureBytes,
   };
 }
 
@@ -98,6 +105,10 @@ interface FakeGitOptions {
   readonly changes?: Uint8Array;
   readonly history?: string;
   readonly version?: string;
+  readonly fetchDiagnostics?: Uint8Array;
+  readonly omitFetchDiagnostics?: boolean;
+  readonly partialCloneHasMissingObjects?: boolean;
+  readonly shallowFile?: string;
 }
 
 function fakeGit(options: FakeGitOptions = {}): {
@@ -151,6 +162,20 @@ function fakeGit(options: FakeGitOptions = {}): {
       return { exitCode: 0, stdout: bytes(`${TIP}\n`) };
     }
     if (operation === "rev-list") {
+      if (request.arguments.includes("--objects")) {
+        const omitted = request.arguments.includes(
+          "--filter-print-omitted",
+        );
+        const marker = omitted
+          ? "~"
+          : options.partialCloneHasMissingObjects === false
+            ? ""
+            : "?";
+        return {
+          exitCode: 0,
+          stdout: bytes(`${TIP}\n${marker}${BLOB}\n`),
+        };
+      }
       return {
         exitCode: 0,
         stdout: bytes(
@@ -159,6 +184,31 @@ function fakeGit(options: FakeGitOptions = {}): {
               `1735776000 ${PARENT} ${ROOT}\n` +
               `1735689600 ${ROOT}\n`,
         ),
+      };
+    }
+    if (operation === "fetch") {
+      if (options.shallowFile !== undefined) {
+        const repositoryIndex = request.arguments.indexOf("-C");
+        const repositoryDirectory =
+          request.arguments[repositoryIndex + 1];
+        if (repositoryIndex < 0 || repositoryDirectory === undefined) {
+          throw new Error("Missing fake repository directory.");
+        }
+        await fs.writeFile(
+          path.join(repositoryDirectory, "shallow"),
+          options.shallowFile,
+          "utf8",
+        );
+      }
+      return {
+        exitCode: 0,
+        stdout: new Uint8Array(),
+        ...(options.omitFetchDiagnostics === true
+          ? {}
+          : {
+              stderr:
+                options.fetchDiagnostics ?? new Uint8Array(),
+            }),
       };
     }
     if (operation === "diff-tree") {
@@ -218,11 +268,12 @@ describe("bounded Generic Git history sessions", () => {
           repository: "History",
           tipSha: TIP,
           transport: "https",
+          oldestCommitIsShallow: false,
           backend: {
             name: "git",
             version: "2.47.1.windows.2",
             renamePolicyRevision:
-              "diff-tree-renames-50-myers-v1",
+              "sampled-boundary-diff-tree-renames-50-myers-v2",
           },
           tags: [],
         });
@@ -230,19 +281,23 @@ describe("bounded Generic Git history sessions", () => {
           {
             sha: TIP,
             parents: [PARENT],
+            committedAtSeconds: 1_735_862_400,
             committedAt: "2025-01-03T00:00:00.000Z",
           },
           {
             sha: PARENT,
             parents: [ROOT],
+            committedAtSeconds: 1_735_776_000,
             committedAt: "2025-01-02T00:00:00.000Z",
           },
           {
             sha: ROOT,
             parents: [],
+            committedAtSeconds: 1_735_689_600,
             committedAt: "2025-01-01T00:00:00.000Z",
           },
         ]);
+        harness.measureBytes.mockClear();
         expect(await session.readChanges(TIP)).toEqual([
           {
             kind: "renamed",
@@ -251,6 +306,7 @@ describe("bounded Generic Git history sessions", () => {
           },
           { kind: "modified", path: "package.json" },
         ]);
+        expect(harness.measureBytes).toHaveBeenCalled();
         const snapshot = await session.readSnapshot(TIP);
         expect(snapshot.name).toBe("History");
         expect(snapshot.files.map(({ path }) => path)).toEqual([
@@ -280,9 +336,13 @@ describe("bounded Generic Git history sessions", () => {
         (request) => operationOf(request) === "ls-remote",
       ),
     ).toHaveLength(2);
-    const diffArguments = git.calls.find(
+    const diffRequest = git.calls.find(
       (request) => operationOf(request) === "diff-tree",
-    )?.arguments;
+    );
+    expect(diffRequest?.maximumStdoutBytes).toBe(
+      GENERIC_GIT_HISTORY_MAX_CHANGED_PATH_BYTES,
+    );
+    const diffArguments = diffRequest?.arguments;
     expect(diffArguments).toEqual(
       expect.arrayContaining([
         "core.bigFileThreshold=512m",
@@ -301,6 +361,254 @@ describe("bounded Generic Git history sessions", () => {
         "--ignore-submodules=none",
       ]),
     );
+  });
+
+  it("acquires root-to-tip metadata through a verified treeless promisor fetch", async () => {
+    const git = fakeGit();
+    const harness = await workspace();
+
+    await withGenericGitHistoryRepository(
+      {
+        repositoryUrl: REMOTE,
+        traversal: "root-to-tip",
+        maximumCommits:
+          GENERIC_GIT_ROOT_TO_TIP_HISTORY_MAX_COMMITS,
+      },
+      async (session) => {
+        expect(
+          session.commits.map(
+            ({ committedAtSeconds }) => committedAtSeconds,
+          ),
+        ).toEqual([
+          1_735_862_400,
+          1_735_776_000,
+          1_735_689_600,
+        ]);
+      },
+      {
+        runGit: git.runGit,
+        createTemporaryWorkspace: async () => harness.value,
+      },
+    );
+
+    const fetch = git.calls.find(
+      (request) => operationOf(request) === "fetch",
+    );
+    expect(fetch?.arguments).toEqual(
+      expect.arrayContaining([
+        `--depth=${GENERIC_GIT_ROOT_TO_TIP_HISTORY_MAX_COMMITS + 1}`,
+        "--filter=tree:0",
+        "codecity-history",
+        TIP,
+      ]),
+    );
+    expect(
+      git.calls.some(
+        ({ arguments: arguments_ }) =>
+          arguments_.includes("remote") &&
+          arguments_.includes("codecity-history") &&
+          arguments_.includes(REMOTE),
+      ),
+    ).toBe(true);
+    const historyIndex = git.calls.find(
+      ({ arguments: arguments_ }) =>
+        arguments_.includes("rev-list") &&
+        arguments_.includes("--first-parent"),
+    );
+    expect(historyIndex?.maximumStdoutBytes).toBe(
+      GENERIC_GIT_HISTORY_INDEX_MAX_BYTES,
+    );
+    const inventories = git.calls.filter(
+      ({ arguments: arguments_ }) =>
+        arguments_.includes("rev-list") &&
+        arguments_.includes("--objects"),
+    );
+    expect(inventories).toHaveLength(2);
+    expect(
+      inventories.every(
+        ({ maximumStdoutBytes }) =>
+          maximumStdoutBytes ===
+          GENERIC_GIT_HISTORY_INDEX_MAX_BYTES,
+      ),
+    ).toBe(true);
+    expect(harness.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("identifies only the indexed first-parent boundary in validated shallow metadata", async () => {
+    const cases = [
+      { shallowFile: `${BLOB}\n`, expected: false },
+      { shallowFile: `${BLOB}\n${ROOT}\n`, expected: true },
+    ] as const;
+    for (const { shallowFile, expected } of cases) {
+      const git = fakeGit({ shallowFile });
+      const harness = await workspace();
+      await withGenericGitHistoryRepository(
+        { repositoryUrl: REMOTE, maximumCommits: 3 },
+        async (session) => {
+          expect(session.oldestCommitIsShallow).toBe(expected);
+        },
+        {
+          runGit: git.runGit,
+          createTemporaryWorkspace: async () => harness.value,
+        },
+      );
+      expect(harness.dispose).toHaveBeenCalledOnce();
+    }
+
+    const malformed = fakeGit({ shallowFile: `${ROOT}\r\n` });
+    const malformedHarness = await workspace();
+    await expect(
+      withGenericGitHistoryRepository(
+        { repositoryUrl: REMOTE, maximumCommits: 3 },
+        async () => undefined,
+        {
+          runGit: malformed.runGit,
+          createTemporaryWorkspace: async () =>
+            malformedHarness.value,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "GIT_INVALID_RESPONSE" });
+    expect(malformedHarness.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when a remote ignores or cannot prove the partial-clone filter", async () => {
+    const cases: readonly FakeGitOptions[] = [
+      {
+        fetchDiagnostics: bytes(
+          "warning: filtering not recognized by server, ignoring\n",
+        ),
+      },
+      { omitFetchDiagnostics: true },
+      { partialCloneHasMissingObjects: false },
+    ];
+    for (const options of cases) {
+      const git = fakeGit(options);
+      const harness = await workspace();
+      await expect(
+        withGenericGitHistoryRepository(
+          {
+            repositoryUrl: REMOTE,
+            traversal: "root-to-tip",
+            maximumCommits: 3,
+          },
+          async () => undefined,
+          {
+            runGit: git.runGit,
+            createTemporaryWorkspace: async () => harness.value,
+          },
+        ),
+      ).rejects.toMatchObject({
+        code: "GIT_PARTIAL_CLONE_UNAVAILABLE",
+      });
+      expect(harness.dispose).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("diffs only requested sampled boundaries and validates ancestry order", async () => {
+    const git = fakeGit();
+    const harness = await workspace();
+
+    await withGenericGitHistoryRepository(
+      {
+        repositoryUrl: REMOTE,
+        maximumCommits: 3,
+      },
+      async (session) => {
+        harness.measureBytes.mockClear();
+        const expected = [
+          {
+            kind: "renamed",
+            previousPath: "src/old.ts",
+            path: "src/new.ts",
+          },
+          { kind: "modified", path: "package.json" },
+        ];
+        expect(await session.readChangesBetween(ROOT, TIP)).toEqual(
+          expected,
+        );
+        expect(harness.measureBytes).toHaveBeenCalled();
+        await expect(
+          session.readChangesBetween(TIP, ROOT),
+        ).rejects.toMatchObject({ code: "GIT_INVALID_REQUEST" });
+        await expect(
+          session.readChangesBetween(TIP, TIP),
+        ).rejects.toMatchObject({ code: "GIT_INVALID_REQUEST" });
+        await expect(
+          session.readChangesBetween("f".repeat(40), TIP),
+        ).rejects.toMatchObject({ code: "GIT_INVALID_REQUEST" });
+        expect(await session.readChangesBetween(ROOT, TIP)).toEqual(
+          expected,
+        );
+      },
+      {
+        runGit: git.runGit,
+        createTemporaryWorkspace: async () => harness.value,
+      },
+    );
+
+    const diffs = git.calls.filter(
+      (request) => operationOf(request) === "diff-tree",
+    );
+    expect(diffs).toHaveLength(2);
+    for (const diff of diffs) {
+      expect(diff.arguments.indexOf(ROOT)).toBeLessThan(
+        diff.arguments.indexOf(TIP),
+      );
+      expect(diff.arguments).not.toContain("--root");
+    }
+  });
+
+  it("admits multi-mebibyte boundary diffs within the remaining changed-path budget", async () => {
+    const pathCount = 10_000;
+    const largeChanges = bytes(
+      Array.from(
+        { length: pathCount },
+        (_, index) =>
+          `M\0src/${String(index).padStart(6, "0")}-${"x".repeat(160)}.ts\0`,
+      ).join(""),
+    );
+    expect(largeChanges.byteLength).toBeGreaterThan(1024 * 1024);
+    const git = fakeGit({ changes: largeChanges });
+    const harness = await workspace();
+    const configuredBytes = 4 * 1024 * 1024;
+
+    await withGenericGitHistoryRepository(
+      {
+        repositoryUrl: REMOTE,
+        maximumCommits: 3,
+        maximumChangedPathBytes: configuredBytes,
+      },
+      async (session) => {
+        expect(
+          await session.readChangesBetween(ROOT, TIP),
+        ).toHaveLength(pathCount);
+        await expect(
+          session.readChangesBetween(ROOT, TIP),
+        ).rejects.toMatchObject({ code: "GIT_OUTPUT_TOO_LARGE" });
+      },
+      {
+        runGit: git.runGit,
+        createTemporaryWorkspace: async () => harness.value,
+      },
+    );
+
+    const diffRequests = git.calls.filter(
+      (request) => operationOf(request) === "diff-tree",
+    );
+    expect(diffRequests).toHaveLength(2);
+    expect(diffRequests[0]?.maximumStdoutBytes).toBe(
+      configuredBytes,
+    );
+    expect(diffRequests[1]?.maximumStdoutBytes).toBeLessThan(
+      largeChanges.byteLength,
+    );
+    expect(
+      diffRequests.every(
+        ({ maximumStdoutBytes }) =>
+          maximumStdoutBytes <=
+          GENERIC_GIT_HISTORY_MAX_CHANGED_PATH_BYTES,
+      ),
+    ).toBe(true);
   });
 
   it("isolates ambient and ancestor Git configuration for anonymous GitHub history acquisition", async () => {
@@ -460,6 +768,18 @@ describe("bounded Generic Git history sessions", () => {
       withGenericGitHistoryRepository(
         {
           repositoryUrl: REMOTE,
+          traversal: "root-to-tip",
+          maximumCommits:
+            GENERIC_GIT_ROOT_TO_TIP_HISTORY_MAX_COMMITS + 1,
+        },
+        async () => undefined,
+        { runGit, createTemporaryWorkspace },
+      ),
+    ).rejects.toMatchObject({ code: "GIT_INVALID_REQUEST" });
+    await expect(
+      withGenericGitHistoryRepository(
+        {
+          repositoryUrl: REMOTE,
           maximumCommits: 3,
           tagNames: ["v1", "refs/tags/v1"],
         },
@@ -480,6 +800,45 @@ describe("bounded Generic Git history sessions", () => {
     ).rejects.toMatchObject({ code: "GIT_INVALID_REQUEST" });
     expect(runGit).not.toHaveBeenCalled();
     expect(createTemporaryWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("enforces the dedicated history index output bound against custom runners", async () => {
+    const base = fakeGit();
+    const harness = await workspace();
+    const runGit: NonNullable<
+      GenericGitSnapshotDependencies["runGit"]
+    > = async (request) => {
+      if (
+        operationOf(request) === "rev-list" &&
+        request.arguments.includes("--first-parent")
+      ) {
+        expect(request.maximumStdoutBytes).toBe(
+          GENERIC_GIT_HISTORY_INDEX_MAX_BYTES,
+        );
+        return {
+          exitCode: 0,
+          stdout: new Uint8Array(
+            GENERIC_GIT_HISTORY_INDEX_MAX_BYTES + 1,
+          ),
+        };
+      }
+      return await base.runGit(request);
+    };
+
+    await expect(
+      withGenericGitHistoryRepository(
+        {
+          repositoryUrl: REMOTE,
+          maximumCommits: 3,
+        },
+        async () => undefined,
+        {
+          runGit,
+          createTemporaryWorkspace: async () => harness.value,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "GIT_OUTPUT_TOO_LARGE" });
+    expect(harness.dispose).toHaveBeenCalledOnce();
   });
 
   it("rejects lowered changed-path caps while parsing Git output", async () => {

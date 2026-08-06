@@ -21,6 +21,7 @@ export const HISTORY_CHANGED_PATH_RECORD_OVERHEAD_BYTES = 128;
  */
 export const HISTORY_SELECTION_LIMITS = Object.freeze({
   maxTraversedCommits: 500,
+  maxIndexedCommits: 100_000,
   maxSampledFrames: 100,
   maxRequestedTags: 64,
   maxParentsPerCommit: 64,
@@ -98,13 +99,13 @@ export interface CommitCountHistorySelectionRequest
 /**
  * Selects the complete available first-parent ancestry from the repository
  * root through the immutable requested tip. The acquisition layer must prove
- * that the root is inside the hard traversal ceiling before calling the
- * selector.
+ * that the root is inside the hard complete-history index ceiling before it
+ * calls the selector.
  */
 export interface RootToTipHistorySelectionRequest
   extends HistoryAnalysisBounds {
   readonly mode: "root-to-tip";
-  /** Maximum number of evenly distributed animation frames to retain. */
+  /** Maximum number of elapsed-time-distributed animation frames to retain. */
   readonly maxFrames: number;
 }
 
@@ -150,7 +151,9 @@ interface NormalizedHistorySelectionBase {
 export interface NormalizedRootToTipHistorySelection
   extends NormalizedHistorySelectionBase {
   readonly mode: "root-to-tip";
-  readonly samplingStrategy: "evenly-spaced-v1";
+  readonly samplingStrategy:
+    | "evenly-spaced-v1"
+    | "elapsed-time-v1";
   readonly maxFrames: number;
 }
 
@@ -196,6 +199,7 @@ export interface HistorySelectionResult {
 export type HistorySelectionErrorCode =
   | "invalid-request"
   | "selection-unavailable"
+  | "history-incomplete"
   | "history-too-long"
   | "limit-exceeded";
 
@@ -212,6 +216,7 @@ export class HistorySelectionError extends Error {
 interface ValidatedHistoryCommit {
   readonly commit: HistoryCommit;
   readonly committedAtMs: number;
+  readonly committedAtSeconds: number;
 }
 
 interface ResolvedSelectionBase {
@@ -754,6 +759,7 @@ function validateHistoryChain(
           committedAt: instant.value,
         }),
         committedAtMs: instant.milliseconds,
+        committedAtSeconds: Math.floor(instant.milliseconds / 1_000),
       }),
     );
   }
@@ -852,24 +858,89 @@ function selectNewestFirst(
   return selected;
 }
 
-function sampleEvenlyOldestFirst(
-  selectedOldestFirst: readonly HistoryCommit[],
+function sampleElapsedTimeOldestFirst(
+  selectedOldestFirst: readonly ValidatedHistoryCommit[],
   maximumFrames: number,
 ): readonly HistoryCommit[] {
   const frameCount = Math.min(
     selectedOldestFirst.length,
     maximumFrames,
   );
-  if (frameCount === 1) {
-    return Object.freeze([selectedOldestFirst[0]!]);
-  }
-  const lastIndex = selectedOldestFirst.length - 1;
-  const sampled = Array.from({ length: frameCount }, (_, index) => {
-    const selectedIndex = Math.floor(
-      (index * lastIndex) / (frameCount - 1),
+  if (selectedOldestFirst.length <= maximumFrames) {
+    return Object.freeze(
+      selectedOldestFirst.map(({ commit }) => commit),
     );
-    return selectedOldestFirst[selectedIndex]!;
-  });
+  }
+
+  const lastIndex = selectedOldestFirst.length - 1;
+  const denominator = frameCount - 1;
+  const rootTime = selectedOldestFirst[0]!.committedAtSeconds;
+  const tipTime = selectedOldestFirst[lastIndex]!.committedAtSeconds;
+  const minimumEndpointTime = Math.min(rootTime, tipTime);
+  const maximumEndpointTime = Math.max(rootTime, tipTime);
+  const elapsedTimeIsUsable = tipTime > rootTime;
+  const sampled: HistoryCommit[] = [
+    selectedOldestFirst[0]!.commit,
+  ];
+  let previousIndex = 0;
+
+  for (let frameIndex = 1; frameIndex < denominator; frameIndex += 1) {
+    const targetTimeNumerator =
+      rootTime * (denominator - frameIndex) + tipTime * frameIndex;
+    const targetRankNumerator = frameIndex * lastIndex;
+    const firstCandidateIndex = previousIndex + 1;
+    const remainingFrameCount = denominator - frameIndex;
+    const lastCandidateIndex = lastIndex - remainingFrameCount;
+    let bestIndex = firstCandidateIndex;
+    let bestPrimaryDistance = Number.POSITIVE_INFINITY;
+    let bestSecondaryDistance = Number.POSITIVE_INFINITY;
+    let bestSha = "";
+
+    for (
+      let candidateIndex = firstCandidateIndex;
+      candidateIndex <= lastCandidateIndex;
+      candidateIndex += 1
+    ) {
+      const candidate = selectedOldestFirst[candidateIndex]!;
+      const candidateTime = candidate.committedAtSeconds;
+      const clampedCandidateTime = Math.min(
+        maximumEndpointTime,
+        Math.max(minimumEndpointTime, candidateTime),
+      );
+      const timeDistance = Math.abs(
+        clampedCandidateTime * denominator - targetTimeNumerator,
+      );
+      const rankDistance = Math.abs(
+        candidateIndex * denominator - targetRankNumerator,
+      );
+      const primaryDistance = elapsedTimeIsUsable
+        ? timeDistance
+        : rankDistance;
+      const secondaryDistance = elapsedTimeIsUsable
+        ? rankDistance
+        : timeDistance;
+      const candidateSha = candidate.commit.sha;
+      if (
+        primaryDistance < bestPrimaryDistance ||
+        (primaryDistance === bestPrimaryDistance &&
+          (secondaryDistance < bestSecondaryDistance ||
+            (secondaryDistance === bestSecondaryDistance &&
+              (candidateIndex < bestIndex ||
+                (candidateIndex === bestIndex &&
+                  candidateSha < bestSha)))))
+      ) {
+        bestIndex = candidateIndex;
+        bestPrimaryDistance = primaryDistance;
+        bestSecondaryDistance = secondaryDistance;
+        bestSha = candidateSha;
+      }
+    }
+
+    sampled.push(selectedOldestFirst[bestIndex]!.commit);
+    previousIndex = bestIndex;
+  }
+
+  sampled.push(selectedOldestFirst[lastIndex]!.commit);
   return Object.freeze(sampled);
 }
 
@@ -932,7 +1003,7 @@ function createSummary(
     return Object.freeze({
       ...base,
       mode: request.mode,
-      samplingStrategy: "evenly-spaced-v1" as const,
+      samplingStrategy: "elapsed-time-v1" as const,
       maxFrames: request.maxFrames,
     });
   }
@@ -965,8 +1036,8 @@ function createSummary(
  * Selects bounded frames from a pre-acquired first-parent commit chain.
  *
  * The input chain must be newest-to-oldest. This function performs no Git I/O
- * and rejects 501 commits from the array length alone, before inspecting any
- * commit metadata.
+ * and rejects the applicable traversal/index ceiling plus one from the array
+ * length alone, before inspecting any commit metadata.
  */
 export function selectHistory(
   chain: readonly HistoryCommit[],
@@ -975,10 +1046,15 @@ export function selectHistory(
   if (!Array.isArray(chain)) {
     fail("invalid-request", "history chain must be an array.");
   }
-  if (chain.length > HISTORY_SELECTION_LIMITS.maxTraversedCommits) {
+  const resolvedRequest = resolveSelectionRequest(request);
+  const maximumCommitCount =
+    resolvedRequest.mode === "root-to-tip"
+      ? HISTORY_SELECTION_LIMITS.maxIndexedCommits
+      : HISTORY_SELECTION_LIMITS.maxTraversedCommits;
+  if (chain.length > maximumCommitCount) {
     fail(
       "limit-exceeded",
-      `History traversal may not exceed ${HISTORY_SELECTION_LIMITS.maxTraversedCommits} commits; received ${chain.length}.`,
+      `History ${resolvedRequest.mode === "root-to-tip" ? "index" : "traversal"} may not exceed ${maximumCommitCount} commits; received ${chain.length}.`,
     );
   }
   if (chain.length === 0) {
@@ -988,7 +1064,6 @@ export function selectHistory(
     );
   }
 
-  const resolvedRequest = resolveSelectionRequest(request);
   const validatedChain = validateHistoryChain(chain);
   const selectedNewestFirst = selectNewestFirst(
     validatedChain,
@@ -997,15 +1072,16 @@ export function selectHistory(
   if (selectedNewestFirst.length === 0) {
     fail("selection-unavailable", "History selection is empty.");
   }
+  const selectedOldestFirstValidated = Object.freeze(
+    [...selectedNewestFirst].reverse(),
+  );
   const selectedOldestFirst = Object.freeze(
-    selectedNewestFirst
-      .map(({ commit }) => commit)
-      .reverse(),
+    selectedOldestFirstValidated.map(({ commit }) => commit),
   );
   const sampledOldestFirst =
     resolvedRequest.mode === "root-to-tip"
-      ? sampleEvenlyOldestFirst(
-          selectedOldestFirst,
+      ? sampleElapsedTimeOldestFirst(
+          selectedOldestFirstValidated,
           resolvedRequest.maxFrames,
         )
       : sampleOldestFirst(

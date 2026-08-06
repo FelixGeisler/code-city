@@ -1703,7 +1703,7 @@ export function installProjectImportDialog(
       const maxFrames = Number(historyControls.maxFrames.value);
       historyControls.frameHelp.textContent =
         Number.isSafeInteger(maxFrames) && maxFrames > 0
-          ? `First commit → selected revision · up to ${maxFrames.toLocaleString()} ${maxFrames === 1 ? "frame" : "frames"}`
+          ? `First commit → selected revision · up to ${maxFrames.toLocaleString()} representative time-spaced ${maxFrames === 1 ? "frame" : "frames"}; intermediate commits are not analyzed`
           : `Choose up to ${PROJECT_IMPORT_HISTORY_LIMITS.maxFrames.toLocaleString()} animation frames.`;
       return;
     }
@@ -1733,7 +1733,7 @@ export function installProjectImportDialog(
       if (selection === undefined) return "Single snapshot";
       switch (selection.mode) {
         case "root-to-tip":
-          return `First commit → selected revision · up to ${selection.maxFrames.toLocaleString()} ${selection.maxFrames === 1 ? "frame" : "frames"}`;
+          return `First commit → selected revision · up to ${selection.maxFrames.toLocaleString()} representative time-spaced ${selection.maxFrames === 1 ? "frame" : "frames"}; intermediate commits are not analyzed`;
         case "commit-count":
           return `${selection.commitCount.toLocaleString()} recent commits`;
         case "date-range":

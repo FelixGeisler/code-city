@@ -248,7 +248,7 @@ function selection(
 function evolve(
   selected: ReturnType<typeof selectHistory>,
   frames: readonly HistoryEvolutionFrameInput[],
-  changesByCommit: ReadonlyMap<
+  boundaryChangesByCommit: ReadonlyMap<
     string,
     readonly (
       | {
@@ -276,7 +276,7 @@ function evolve(
   return createHistoryEvolution({
     repositoryIdentity: "https://example.invalid/org/example.git",
     selection: selected,
-    changesByCommit,
+    boundaryChangesByCommit,
     frames,
     analyzerFingerprint: "semantic-analyzer-test-v1",
     historyBackend: {
@@ -723,7 +723,7 @@ describe("history evolution analysis", () => {
     );
   });
 
-  it("applies rename lineage changes from unsampled commits", async () => {
+  it("applies one direct rename diff across a sampled boundary", async () => {
     const before = await facts({
       "src/a.ts": "export const stable = true;\n",
     });
@@ -746,7 +746,7 @@ describe("history evolution analysis", () => {
       ],
       new Map([
         [
-          B,
+          C,
           [
             {
               kind: "renamed" as const,
@@ -755,13 +755,56 @@ describe("history evolution analysis", () => {
             },
           ],
         ],
-        [C, [{ kind: "modified" as const, path: "src/b.ts" }]],
       ]),
     );
     const frames = [...replayEvolutionBundle(result.bundle)];
 
     expect(frames[0]!.model.buildings[0]!.id).toBe(
       frames[1]!.model.buildings[0]!.id,
+    );
+  });
+
+  it("rejects the ambiguous legacy per-commit request property", async () => {
+    const snapshot = await facts({
+      "src/a.ts": "export const stable = true;\n",
+    });
+    const selected = selection([COMMITS.b, COMMITS.a], {
+      mode: "commit-count",
+      commitCount: 2,
+    });
+    const legacyRequest = {
+      repositoryIdentity: "https://example.invalid/org/example.git",
+      selection: selected,
+      changesByCommit: new Map([
+        [B, [{ kind: "modified" as const, path: "src/a.ts" }]],
+      ]),
+      frames: [
+        { commit: COMMITS.a, facts: snapshot },
+        { commit: COMMITS.b, facts: snapshot },
+      ],
+      analyzerFingerprint: "semantic-analyzer-test-v1",
+      historyBackend: {
+        name: "git" as const,
+        version: "2.47.1.windows.2",
+        renamePolicyRevision:
+          GENERIC_GIT_HISTORY_RENAME_POLICY_REVISION,
+      },
+      metricConfiguration: {
+        geometry: "default-v1",
+        metrics: "default-v1",
+      },
+    };
+
+    expect(() =>
+      createHistoryEvolution(
+        legacyRequest as unknown as Parameters<
+          typeof createHistoryEvolution
+        >[0],
+      ),
+    ).toThrowError(
+      expect.objectContaining<Partial<HistoryEvolutionError>>({
+        code: "invalid-input",
+      }),
     );
   });
 

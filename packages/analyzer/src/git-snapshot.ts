@@ -1,6 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { promises as fs, type BigIntStats } from "node:fs";
+import {
+  promises as fs,
+  type BigIntStats,
+  type Stats,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -39,11 +43,14 @@ const MAX_REF_CODE_UNITS = 1_024;
 const MAX_REF_BYTES = 256;
 const MAX_REPOSITORY_NAME_BYTES = 256;
 const MAX_GIT_OUTPUT_BYTES = MEBIBYTE;
+const MAX_GIT_HISTORY_INDEX_BYTES = 32 * MEBIBYTE;
 const MAX_GIT_DIAGNOSTIC_BYTES = 64 * 1024;
 const MAX_ARCHIVE_BYTES = 64 * MEBIBYTE;
 const MAX_TEMPORARY_BYTES = 2 * 1024 * MEBIBYTE;
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const ARCHIVE_FILE_NAME = "snapshot.zip";
+const HISTORY_PROMISOR_REMOTE = "codecity-history";
+const HISTORY_PARTIAL_CLONE_FILTER = "tree:0";
 const INTERNAL_ABORT = Object.freeze({ kind: "git-snapshot-abort" });
 
 export const GENERIC_GIT_SNAPSHOT_TIMEOUT_MS =
@@ -51,13 +58,16 @@ export const GENERIC_GIT_SNAPSHOT_TIMEOUT_MS =
 export const GENERIC_GIT_ARCHIVE_MAX_BYTES = MAX_ARCHIVE_BYTES;
 export const GENERIC_GIT_TEMPORARY_MAX_BYTES = MAX_TEMPORARY_BYTES;
 export const GENERIC_GIT_HISTORY_MAX_COMMITS = 500;
+export const GENERIC_GIT_ROOT_TO_TIP_HISTORY_MAX_COMMITS = 100_000;
+export const GENERIC_GIT_HISTORY_INDEX_MAX_BYTES =
+  MAX_GIT_HISTORY_INDEX_BYTES;
 export const GENERIC_GIT_HISTORY_MAX_CHANGED_PATHS = 500_000;
 export const GENERIC_GIT_HISTORY_MAX_CHANGED_PATH_BYTES =
   16 * MEBIBYTE;
 export const GENERIC_GIT_HISTORY_CHANGED_PATH_RECORD_OVERHEAD_BYTES =
   HISTORY_CHANGED_PATH_RECORD_OVERHEAD_BYTES;
 export const GENERIC_GIT_HISTORY_RENAME_POLICY_REVISION =
-  "diff-tree-renames-50-myers-v1" as const;
+  "sampled-boundary-diff-tree-renames-50-myers-v2" as const;
 export const GENERIC_GIT_PRESECURED_WINDOWS_ACL =
   "pre-secured-private-directory" as const;
 export const GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY =
@@ -111,6 +121,8 @@ export interface GitProcessRequest {
 export interface GitProcessResult {
   readonly exitCode: number;
   readonly stdout: Uint8Array;
+  /** Bounded diagnostics are retained only for explicit protocol checks. */
+  readonly stderr?: Uint8Array;
 }
 
 export type GenericGitRunGit = (
@@ -193,6 +205,8 @@ export interface GenericGitHistoryCommit {
   readonly sha: string;
   /** All parents in Git's canonical order. Traversal follows parents[0]. */
   readonly parents: readonly string[];
+  /** Exact non-negative Git committer timestamp in Unix seconds. */
+  readonly committedAtSeconds: number;
   readonly committedAt: string;
 }
 
@@ -204,6 +218,11 @@ export interface GenericGitHistoryTag {
 
 export interface GenericGitHistoryRequest
   extends Omit<GenericGitSnapshotRequest, "snapshotOptions"> {
+  /**
+   * Root traversal uses a larger metadata-only ceiling. Bounded is the safe
+   * backward-compatible default for recent/date/tag custom selections.
+   */
+  readonly traversal?: "bounded" | "root-to-tip";
   /** Bound for the selected first-parent chain, excluding the overflow probe. */
   readonly maximumCommits: number;
   /**
@@ -235,6 +254,8 @@ export interface GenericGitHistorySession {
   readonly repository: string;
   readonly tipSha: string;
   readonly transport: GenericGitTransport;
+  /** Whether the oldest indexed first-parent commit is a shallow boundary. */
+  readonly oldestCommitIsShallow: boolean;
   /** Output-affecting Git implementation and pinned rename-policy revision. */
   readonly backend: GenericGitHistoryBackend;
   /** Newest-to-oldest first-parent commits, including one overflow probe. */
@@ -242,6 +263,15 @@ export interface GenericGitHistorySession {
   readonly tags: readonly GenericGitHistoryTag[];
   readChanges(
     commitSha: string,
+  ): Promise<readonly GenericGitHistoryPathChange[]>;
+  /**
+   * Returns the aggregate tree delta from an older known first-parent commit
+   * to a newer known descendant. Intermediate commits are intentionally not
+   * materialized or retained.
+   */
+  readChangesBetween(
+    olderSha: string,
+    newerSha: string,
   ): Promise<readonly GenericGitHistoryPathChange[]>;
   readSnapshot(commitSha: string): Promise<RepositorySnapshot>;
 }
@@ -262,6 +292,7 @@ export type GenericGitSnapshotErrorCode =
   | "GIT_INVALID_RESPONSE"
   | "GIT_HISTORY_FAILED"
   | "GIT_OUTPUT_TOO_LARGE"
+  | "GIT_PARTIAL_CLONE_UNAVAILABLE"
   | "GIT_REF_AMBIGUOUS"
   | "GIT_REF_CHANGED"
   | "GIT_REF_UNAVAILABLE"
@@ -918,6 +949,7 @@ export const runInstalledGit: GenericGitRunGit = async (
     }
 
     const stdoutChunks: Uint8Array[] = [];
+    const stderrChunks: Uint8Array[] = [];
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let settled = false;
@@ -982,7 +1014,9 @@ export const runInstalledGit: GenericGitRunGit = async (
           "GIT_OUTPUT_TOO_LARGE",
           "Installed Git diagnostics exceeded their size limit.",
         );
+        return;
       }
+      stderrChunks.push(new Uint8Array(chunk));
     });
     child.once("error", () => {
       finish(() =>
@@ -1010,7 +1044,13 @@ export const runInstalledGit: GenericGitRunGit = async (
           stdout.set(chunk, offset);
           offset += chunk.byteLength;
         }
-        resolve({ exitCode: code ?? 1, stdout });
+        const stderr = new Uint8Array(stderrBytes);
+        offset = 0;
+        for (const chunk of stderrChunks) {
+          stderr.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        resolve({ exitCode: code ?? 1, stdout, stderr });
       });
     });
   });
@@ -1664,8 +1704,11 @@ export async function createGenericGitTemporaryWorkspace(
   }
 }
 
-function decodeGitOutput(output: Uint8Array): string {
-  if (output.byteLength > MAX_GIT_OUTPUT_BYTES) {
+function decodeGitOutput(
+  output: Uint8Array,
+  maximumBytes = MAX_GIT_OUTPUT_BYTES,
+): string {
+  if (output.byteLength > maximumBytes) {
     throw new GenericGitSnapshotError(
       "GIT_OUTPUT_TOO_LARGE",
       "Installed Git output exceeded its size limit.",
@@ -2095,6 +2138,11 @@ async function monitorTemporaryWorkspace(
   }
 }
 
+interface GitInvocationOptions {
+  readonly maximumStdoutBytes?: number;
+  readonly validateResult?: (result: GitProcessResult) => void;
+}
+
 async function invokeGit(
   runGit: GenericGitRunGit,
   executable: string,
@@ -2106,7 +2154,10 @@ async function invokeGit(
   monitorDisk = false,
   credentialHelper?: string,
   isolateCredentials = false,
+  options: GitInvocationOptions = {},
 ): Promise<Uint8Array> {
+  const maximumStdoutBytes =
+    options.maximumStdoutBytes ?? MAX_GIT_OUTPUT_BYTES;
   const commandController = new AbortController();
   const abortCommand = (): void => commandController.abort();
   deadline.signal.addEventListener("abort", abortCommand, {
@@ -2142,7 +2193,7 @@ async function invokeGit(
         shell: false,
         windowsHide: true,
         timeoutMs: deadline.remainingMilliseconds(),
-        maximumStdoutBytes: MAX_GIT_OUTPUT_BYTES,
+        maximumStdoutBytes,
         maximumStderrBytes: MAX_GIT_DIAGNOSTIC_BYTES,
         signal: commandController.signal,
       }),
@@ -2174,10 +2225,19 @@ async function invokeGit(
       runGit === runInstalledGit
         ? await boundedOperation
         : await withinDeadline(boundedOperation, deadline);
-    if (result.stdout.byteLength > MAX_GIT_OUTPUT_BYTES) {
+    if (result.stdout.byteLength > maximumStdoutBytes) {
       throw new GenericGitSnapshotError(
         "GIT_OUTPUT_TOO_LARGE",
         "Installed Git output exceeded its size limit.",
+      );
+    }
+    if (
+      result.stderr !== undefined &&
+      result.stderr.byteLength > MAX_GIT_DIAGNOSTIC_BYTES
+    ) {
+      throw new GenericGitSnapshotError(
+        "GIT_OUTPUT_TOO_LARGE",
+        "Installed Git diagnostics exceeded their size limit.",
       );
     }
     if (!Number.isInteger(result.exitCode) || result.exitCode !== 0) {
@@ -2186,6 +2246,7 @@ async function invokeGit(
         "Installed Git operation failed safely.",
       );
     }
+    options.validateResult?.(result);
     return result.stdout.slice();
   } catch (error) {
     commandController.abort();
@@ -2294,6 +2355,7 @@ async function invokeGitWithCredential(
   deadline: CombinedDeadline,
   operation: readonly string[],
   monitorDisk = false,
+  options: GitInvocationOptions = {},
 ): Promise<Uint8Array> {
   const operationController = new AbortController();
   const abortOperation = (): void => operationController.abort();
@@ -2352,6 +2414,7 @@ async function invokeGitWithCredential(
             monitorDisk,
             broker.helperCommand,
             true,
+            options,
           );
         } catch (error) {
           failure = error;
@@ -2488,6 +2551,85 @@ async function readArchive(
     );
   }
   return new Uint8Array(bytes);
+}
+
+function invalidShallowMetadata(): GenericGitSnapshotError {
+  return new GenericGitSnapshotError(
+    "GIT_INVALID_RESPONSE",
+    "Installed Git returned invalid shallow-boundary metadata.",
+  );
+}
+
+async function oldestCommitIsShallowBoundary(
+  workspace: GenericGitTemporaryWorkspace,
+  oldestCommitSha: string,
+  deadline: CombinedDeadline,
+): Promise<boolean> {
+  if (workspace.validateSecurityBoundary !== undefined) {
+    await withinDeadline(
+      workspace.validateSecurityBoundary(),
+      deadline,
+    );
+  }
+  const shallowPath = path.join(
+    workspace.repositoryDirectory,
+    "shallow",
+  );
+  let status: Stats;
+  try {
+    status = await withinDeadline(fs.lstat(shallowPath), deadline);
+  } catch (error) {
+    if (error === INTERNAL_ABORT) throw error;
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return false;
+    }
+    throw invalidShallowMetadata();
+  }
+  if (
+    status.isSymbolicLink() ||
+    !status.isFile() ||
+    !Number.isSafeInteger(status.size) ||
+    status.size < 1 ||
+    status.size > MAX_GIT_HISTORY_INDEX_BYTES
+  ) {
+    throw invalidShallowMetadata();
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = new Uint8Array(
+      await withinDeadline(fs.readFile(shallowPath), deadline),
+    );
+  } catch (error) {
+    if (error === INTERNAL_ABORT) throw error;
+    throw invalidShallowMetadata();
+  }
+  if (
+    bytes.byteLength < 1 ||
+    bytes.byteLength > MAX_GIT_HISTORY_INDEX_BYTES
+  ) {
+    throw invalidShallowMetadata();
+  }
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw invalidShallowMetadata();
+  }
+  if (!text.endsWith("\n")) throw invalidShallowMetadata();
+  const lines = text.slice(0, -1).split("\n");
+  const boundaries = new Set<string>();
+  for (const line of lines) {
+    if (!COMMIT_SHA.test(line) || boundaries.has(line)) {
+      throw invalidShallowMetadata();
+    }
+    boundaries.add(line);
+  }
+  return boundaries.has(oldestCommitSha);
 }
 
 async function enforceTemporaryLimit(
@@ -2808,15 +2950,33 @@ export async function snapshotGenericGitRepository(
   }
 }
 
-function historyMaximumCommits(value: number): number {
+function historyTraversal(
+  value: GenericGitHistoryRequest["traversal"],
+): "bounded" | "root-to-tip" {
+  if (value === undefined || value === "bounded") return "bounded";
+  if (value === "root-to-tip") return value;
+  throw new GenericGitSnapshotError(
+    "GIT_INVALID_REQUEST",
+    "Generic Git history traversal must be bounded or root-to-tip.",
+  );
+}
+
+function historyMaximumCommits(
+  value: number,
+  traversal: "bounded" | "root-to-tip",
+): number {
+  const maximum =
+    traversal === "root-to-tip"
+      ? GENERIC_GIT_ROOT_TO_TIP_HISTORY_MAX_COMMITS
+      : GENERIC_GIT_HISTORY_MAX_COMMITS;
   if (
     !Number.isSafeInteger(value) ||
     value < 1 ||
-    value > GENERIC_GIT_HISTORY_MAX_COMMITS
+    value > maximum
   ) {
     throw new GenericGitSnapshotError(
       "GIT_INVALID_REQUEST",
-      `Generic Git history must inspect between 1 and ${GENERIC_GIT_HISTORY_MAX_COMMITS.toLocaleString(
+      `Generic Git ${traversal} history must inspect between 1 and ${maximum.toLocaleString(
         "en-US",
       )} first-parent commits.`,
     );
@@ -3016,7 +3176,10 @@ function historyBackend(
 function parseHistoryCommits(
   output: Uint8Array,
 ): readonly GenericGitHistoryCommit[] {
-  const text = decodeGitOutput(output);
+  const text = decodeGitOutput(
+    output,
+    MAX_GIT_HISTORY_INDEX_BYTES,
+  );
   const commits: GenericGitHistoryCommit[] = [];
   const seen = new Set<string>();
   for (const rawLine of text.split("\n")) {
@@ -3067,6 +3230,7 @@ function parseHistoryCommits(
       Object.freeze({
         sha,
         parents: Object.freeze(parents),
+        committedAtSeconds: timestamp,
         committedAt,
       }),
     );
@@ -3086,6 +3250,132 @@ function parseHistoryCommits(
     }
   }
   return Object.freeze(commits);
+}
+
+function partialCloneUnavailable(): GenericGitSnapshotError {
+  return new GenericGitSnapshotError(
+    "GIT_PARTIAL_CLONE_UNAVAILABLE",
+    "The remote did not provide verifiable filtered history; complete root-to-tip import stopped safely.",
+  );
+}
+
+function validatePartialHistoryFetchResult(
+  result: GitProcessResult,
+): void {
+  if (result.stderr === undefined) throw partialCloneUnavailable();
+  let diagnostics: string;
+  try {
+    diagnostics = new TextDecoder("utf-8", { fatal: true }).decode(
+      result.stderr,
+    );
+  } catch {
+    throw partialCloneUnavailable();
+  }
+  if (
+    /(?:filtering not recognized by server|filtering is not supported by server|server does not support filter)[^\r\n]*(?:ignoring)?/iu.test(
+      diagnostics,
+    )
+  ) {
+    throw partialCloneUnavailable();
+  }
+}
+
+interface HistoryObjectMarkers {
+  readonly missing: ReadonlySet<string>;
+  readonly omitted: ReadonlySet<string>;
+}
+
+function historyObjectMarkers(
+  output: Uint8Array,
+): HistoryObjectMarkers {
+  const text = decodeGitOutput(
+    output,
+    MAX_GIT_HISTORY_INDEX_BYTES,
+  );
+  const missing = new Set<string>();
+  const omitted = new Set<string>();
+  for (const rawLine of text.split("\n")) {
+    const line = rawLine.endsWith("\r")
+      ? rawLine.slice(0, -1)
+      : rawLine;
+    if (line.length === 0) continue;
+    const match = /^([?~]?)([0-9a-f]{40})$/u.exec(line);
+    if (match === null) {
+      throw new GenericGitSnapshotError(
+        "GIT_INVALID_RESPONSE",
+        "Installed Git returned invalid partial-clone object metadata.",
+      );
+    }
+    if (match[1] === "?") missing.add(match[2]!);
+    if (match[1] === "~") omitted.add(match[2]!);
+  }
+  return Object.freeze({ missing, omitted });
+}
+
+function validatePartialHistoryObjectInventory(
+  reachable: Uint8Array,
+  filtered: Uint8Array,
+): void {
+  const reachableMarkers = historyObjectMarkers(reachable);
+  const filteredMarkers = historyObjectMarkers(filtered);
+  if (
+    [...reachableMarkers.missing].some(
+      (objectSha) => !filteredMarkers.omitted.has(objectSha),
+    )
+  ) {
+    throw new GenericGitSnapshotError(
+      "GIT_INVALID_RESPONSE",
+      "Filtered history omitted an object outside the declared partial-clone filter.",
+    );
+  }
+  if (
+    reachableMarkers.missing.size === 0 &&
+    filteredMarkers.omitted.size > 0
+  ) {
+    throw partialCloneUnavailable();
+  }
+}
+
+function historyDiffTreeOperation(
+  repositoryDirectory: string,
+  olderSha: string | undefined,
+  newerSha: string,
+): readonly string[] {
+  return Object.freeze([
+    "-C",
+    repositoryDirectory,
+    "-c",
+    "core.bigFileThreshold=512m",
+    "-c",
+    "diff.algorithm=myers",
+    "-c",
+    "diff.indentHeuristic=false",
+    "-c",
+    "diff.orderFile=",
+    "-c",
+    "diff.renameFromRewrite=false",
+    "-c",
+    "diff.renameLimit=10000",
+    "-c",
+    "diff.renames=false",
+    "diff-tree",
+    "--no-commit-id",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--name-status",
+    "-r",
+    "-z",
+    "--diff-algorithm=myers",
+    "--no-indent-heuristic",
+    "--find-renames=50%",
+    "--diff-filter=ADMRT",
+    "--ignore-submodules=none",
+    ...(olderSha === undefined
+      ? ["--root", newerSha]
+      : [olderSha, newerSha]),
+    "--",
+  ]);
 }
 
 function historyChangeKind(
@@ -3247,8 +3537,10 @@ export async function withGenericGitHistoryRepository<T>(
   const remote = parseRemote(request.repositoryUrl);
   const requestedRef =
     request.ref === undefined ? undefined : validateRef(request.ref);
+  const traversal = historyTraversal(request.traversal);
   const maximumCommits = historyMaximumCommits(
     request.maximumCommits,
+    traversal,
   );
   const maximumChangedPathEntries = historyMaximumChangedPaths(
     request.maximumChangedPathEntries,
@@ -3317,6 +3609,7 @@ export async function withGenericGitHistoryRepository<T>(
             operation: readonly string[],
             monitorDisk: boolean,
             operationDeadline: CombinedDeadline,
+            invocationOptions: GitInvocationOptions = {},
           ): Promise<Uint8Array> =>
             credentialProvider === undefined || target === undefined
               ? await invokeGit(
@@ -3328,6 +3621,9 @@ export async function withGenericGitHistoryRepository<T>(
                   operationDeadline,
                   operation,
                   monitorDisk,
+                  undefined,
+                  false,
+                  invocationOptions,
                 )
               : await invokeGitWithCredential(
                   credentialProvider,
@@ -3341,12 +3637,19 @@ export async function withGenericGitHistoryRepository<T>(
                   operationDeadline,
                   operation,
                   monitorDisk,
+                  invocationOptions,
                 );
           const run = async (
             operation: readonly string[],
             monitorDisk = false,
+            invocationOptions: GitInvocationOptions = {},
           ): Promise<Uint8Array> =>
-            await runWithDeadline(operation, monitorDisk, deadline);
+            await runWithDeadline(
+              operation,
+              monitorDisk,
+              deadline,
+              invocationOptions,
+            );
           const readTags = async (): Promise<
             readonly GenericGitHistoryTag[]
           > => {
@@ -3378,6 +3681,30 @@ export async function withGenericGitHistoryRepository<T>(
             `--template=${workspace.templateDirectory}`,
             workspace.repositoryDirectory,
           ]);
+          if (traversal === "root-to-tip") {
+            await run([
+              "-C",
+              workspace.repositoryDirectory,
+              "remote",
+              "add",
+              HISTORY_PROMISOR_REMOTE,
+              remote.value,
+            ]);
+            await run([
+              "-C",
+              workspace.repositoryDirectory,
+              "config",
+              `remote.${HISTORY_PROMISOR_REMOTE}.promisor`,
+              "true",
+            ]);
+            await run([
+              "-C",
+              workspace.repositoryDirectory,
+              "config",
+              `remote.${HISTORY_PROMISOR_REMOTE}.partialclonefilter`,
+              HISTORY_PARTIAL_CLONE_FILTER,
+            ]);
+          }
           await run(
             [
               "-C",
@@ -3385,16 +3712,24 @@ export async function withGenericGitHistoryRepository<T>(
               "fetch",
               "--quiet",
               `--depth=${maximumCommits + 1}`,
+              ...(traversal === "root-to-tip"
+                ? [`--filter=${HISTORY_PARTIAL_CLONE_FILTER}`]
+                : []),
               "--no-tags",
               "--no-recurse-submodules",
               "--no-write-fetch-head",
               "--no-auto-maintenance",
               "--no-auto-gc",
               "--no-write-commit-graph",
-              remote.value,
+              traversal === "root-to-tip"
+                ? HISTORY_PROMISOR_REMOTE
+                : remote.value,
               firstSelection.commitSha,
             ],
             true,
+            traversal === "root-to-tip"
+              ? { validateResult: validatePartialHistoryFetchResult }
+              : {},
           );
           await enforceTemporaryLimit(workspace, deadline);
 
@@ -3418,19 +3753,54 @@ export async function withGenericGitHistoryRepository<T>(
               "Fetched Generic Git history tip could not be verified.",
             );
           }
-
-          const commits = parseHistoryCommits(
-            await run([
+          if (traversal === "root-to-tip") {
+            const inventoryArguments = [
               "-C",
               workspace.repositoryDirectory,
               "rev-list",
-              "--first-parent",
-              "--topo-order",
-              `--max-count=${maximumCommits + 1}`,
-              "--parents",
-              "--timestamp",
+              "--objects",
+              "--no-object-names",
+              "--missing=print",
+              "--max-count=1",
               firstSelection.commitSha,
-            ]),
+            ] as const;
+            const reachable = await run(
+              inventoryArguments,
+              false,
+              { maximumStdoutBytes: MAX_GIT_HISTORY_INDEX_BYTES },
+            );
+            const filtered = await run(
+              [
+                ...inventoryArguments.slice(0, -1),
+                `--filter=${HISTORY_PARTIAL_CLONE_FILTER}`,
+                "--filter-print-omitted",
+                firstSelection.commitSha,
+              ],
+              false,
+              { maximumStdoutBytes: MAX_GIT_HISTORY_INDEX_BYTES },
+            );
+            validatePartialHistoryObjectInventory(
+              reachable,
+              filtered,
+            );
+          }
+
+          const commits = parseHistoryCommits(
+            await run(
+              [
+                "-C",
+                workspace.repositoryDirectory,
+                "rev-list",
+                "--first-parent",
+                "--topo-order",
+                `--max-count=${maximumCommits + 1}`,
+                "--parents",
+                "--timestamp",
+                firstSelection.commitSha,
+              ],
+              false,
+              { maximumStdoutBytes: MAX_GIT_HISTORY_INDEX_BYTES },
+            ),
           );
           if (commits[0]?.sha !== firstSelection.commitSha) {
             throw new GenericGitSnapshotError(
@@ -3438,14 +3808,26 @@ export async function withGenericGitHistoryRepository<T>(
               "Installed Git history did not start at the selected tip.",
             );
           }
+          const oldestCommit = commits.at(-1);
+          if (oldestCommit === undefined) {
+            throw new GenericGitSnapshotError(
+              "GIT_INVALID_RESPONSE",
+              "Installed Git returned no first-parent history boundary.",
+            );
+          }
+          const oldestCommitIsShallow =
+            await oldestCommitIsShallowBoundary(
+              workspace,
+              oldestCommit.sha,
+              deadline,
+            );
 
           const commitsBySha = new Map(
             commits.map((commit) => [commit.sha, commit]),
           );
-          const changeCache = new Map<
-            string,
-            readonly GenericGitHistoryPathChange[]
-          >();
+          const commitIndexBySha = new Map(
+            commits.map((commit, index) => [commit.sha, index]),
+          );
           const sessionController = new AbortController();
           const abortSession = (): void => sessionController.abort();
           deadline.signal.addEventListener("abort", abortSession, {
@@ -3462,17 +3844,28 @@ export async function withGenericGitHistoryRepository<T>(
           const sessionRun = async (
             operation: readonly string[],
             monitorDisk = false,
+            invocationOptions: GitInvocationOptions = {},
           ): Promise<Uint8Array> =>
             await runWithDeadline(
               operation,
               monitorDisk,
               sessionDeadline,
+              invocationOptions,
             );
           let changedPaths = 0;
           let changedPathBytes = 0;
           let active = true;
           let operationActive = false;
           let pendingOperation: Promise<unknown> | undefined;
+
+          const remainingDiffOutputBytes = (): number =>
+            Math.min(
+              GENERIC_GIT_HISTORY_MAX_CHANGED_PATH_BYTES,
+              Math.max(
+                0,
+                maximumChangedPathBytes - changedPathBytes,
+              ),
+            );
 
           const exclusive = async <Value>(
             operation: () => Promise<Value>,
@@ -3508,44 +3901,18 @@ export async function withGenericGitHistoryRepository<T>(
                   "History changes were requested for an unknown commit.",
                 );
               }
-              const cached = changeCache.get(commitSha);
-              if (cached !== undefined) return cached;
               const parent = commit.parents[0];
-              const output = await sessionRun([
-                "-C",
-                workspace.repositoryDirectory,
-                "-c",
-                "core.bigFileThreshold=512m",
-                "-c",
-                "diff.algorithm=myers",
-                "-c",
-                "diff.indentHeuristic=false",
-                "-c",
-                "diff.orderFile=",
-                "-c",
-                "diff.renameFromRewrite=false",
-                "-c",
-                "diff.renameLimit=10000",
-                "-c",
-                "diff.renames=false",
-                "diff-tree",
-                "--no-commit-id",
-                "--no-ext-diff",
-                "--no-textconv",
-                "--no-color",
-                "--name-status",
-                "-r",
-                "-z",
-                "--diff-algorithm=myers",
-                "--no-indent-heuristic",
-                "--find-renames=50%",
-                "--diff-filter=ADMRT",
-                "--ignore-submodules=none",
-                ...(parent === undefined
-                  ? ["--root", commit.sha]
-                  : [parent, commit.sha]),
-                "--",
-              ]);
+              const output = await sessionRun(
+                historyDiffTreeOperation(
+                  workspace.repositoryDirectory,
+                  parent,
+                  commit.sha,
+                ),
+                true,
+                {
+                  maximumStdoutBytes: remainingDiffOutputBytes(),
+                },
+              );
               const parsed = parseHistoryChanges(output, {
                 existingEntries: changedPaths,
                 existingBytes: changedPathBytes,
@@ -3554,7 +3921,48 @@ export async function withGenericGitHistoryRepository<T>(
               });
               changedPaths = parsed.entries;
               changedPathBytes = parsed.bytes;
-              changeCache.set(commitSha, parsed.changes);
+              return parsed.changes;
+            });
+            void pending.catch(() => undefined);
+            return pending;
+          };
+
+          const readChangesBetween = (
+            olderSha: string,
+            newerSha: string,
+          ): Promise<readonly GenericGitHistoryPathChange[]> => {
+            const pending = exclusive(async () => {
+              const olderIndex = commitIndexBySha.get(olderSha);
+              const newerIndex = commitIndexBySha.get(newerSha);
+              if (
+                olderIndex === undefined ||
+                newerIndex === undefined ||
+                olderIndex <= newerIndex
+              ) {
+                throw new GenericGitSnapshotError(
+                  "GIT_INVALID_REQUEST",
+                  "History change boundaries must be known older-to-newer first-parent ancestry.",
+                );
+              }
+              const output = await sessionRun(
+                historyDiffTreeOperation(
+                  workspace.repositoryDirectory,
+                  olderSha,
+                  newerSha,
+                ),
+                true,
+                {
+                  maximumStdoutBytes: remainingDiffOutputBytes(),
+                },
+              );
+              const parsed = parseHistoryChanges(output, {
+                existingEntries: changedPaths,
+                existingBytes: changedPathBytes,
+                maximumEntries: maximumChangedPathEntries,
+                maximumBytes: maximumChangedPathBytes,
+              });
+              changedPaths = parsed.entries;
+              changedPathBytes = parsed.bytes;
               return parsed.changes;
             });
             void pending.catch(() => undefined);
@@ -3639,10 +4047,12 @@ export async function withGenericGitHistoryRepository<T>(
             repository: remote.repository,
             tipSha: firstSelection.commitSha,
             transport: remote.transport,
+            oldestCommitIsShallow,
             backend,
             commits,
             tags: firstTags,
             readChanges,
+            readChangesBetween,
             readSnapshot,
           });
 

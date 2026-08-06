@@ -210,6 +210,10 @@ describe("viewer project import UI", () => {
     expect(dialogSource).toContain(
       'createHistoryLabel("Maximum animation frames", maxFrames)',
     );
+    expect(dialogSource).toContain("representative time-spaced");
+    expect(dialogSource).toContain(
+      "intermediate commits are not analyzed",
+    );
     expect(dialogSource).toContain(
       "First commit → selected revision · up to",
     );
