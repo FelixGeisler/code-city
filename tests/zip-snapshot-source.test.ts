@@ -106,6 +106,7 @@ describe("ZIP snapshot source", () => {
     try {
       const snapshot = await materializeRepositorySnapshot(source);
       expect(snapshot.files.map(({ path }) => path)).toEqual([
+        "package.json",
         "src/main.ts",
       ]);
     } finally {

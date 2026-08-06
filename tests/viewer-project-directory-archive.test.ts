@@ -151,18 +151,21 @@ describe("viewer project directory archive", () => {
       selectedFile("Project/src/ignored.ts", "ignored"),
       selectedFile("Project/node_modules/vendor.ts", "excluded"),
       selectedFile("Project/src/value.generated.cs", "excluded"),
+      selectedFile("Project/package.json", '{"name":"project"}'),
+      selectedFile("Project/package-lock.json", "not analyzed"),
       selectedFile("Project/App.csproj", "<Project />"),
     ]);
 
     expect(plan).toMatchObject({
       repositoryName: "Project",
       rootMode: "single-directory",
-      admittedFileCount: 6,
+      admittedFileCount: 7,
     });
     expect(plan.entries.map(({ path }) => path)).toEqual([
       ".codecityignore",
       ".gitignore",
       "App.csproj",
+      "package.json",
       "src/.gitignore",
       "src/ignored.ts",
       "src/z.ts",
@@ -179,6 +182,7 @@ describe("viewer project directory archive", () => {
       ["Project/src/ignored.ts", "export const ignored = true;\n"],
       ["Project/.gitignore", "src/ignored.ts\n"],
       ["Project/.codecityignore", "src/z.ts\n"],
+      ["Project/package.json", '{"name":"project"}\n'],
       ["Project/README.md", "filtered before upload"],
       ["Project/node_modules/vendor.ts", "hard excluded"],
     ] as const;
@@ -199,13 +203,14 @@ describe("viewer project directory archive", () => {
     expect(first).toMatchObject({
       repositoryName: "Project",
       rootMode: "single-directory",
-      admittedFileCount: 5,
+      admittedFileCount: 6,
     });
     expect(first.blob.type).toBe("application/zip");
     expect(Object.keys(unzipSync(firstBytes)).sort()).toEqual([
       "Project/",
       "Project/.codecityignore",
       "Project/.gitignore",
+      "Project/package.json",
       "Project/src/a.ts",
       "Project/src/ignored.ts",
       "Project/src/z.ts",
@@ -220,6 +225,7 @@ describe("viewer project directory archive", () => {
       const snapshot = await materializeRepositorySnapshot(source);
       expect(snapshot.name).toBe("Project");
       expect(snapshot.files.map(({ path }) => path)).toEqual([
+        "package.json",
         "src/a.ts",
       ]);
     } finally {
