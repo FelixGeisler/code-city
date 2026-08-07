@@ -91,6 +91,7 @@ export type SnapshotLimitName =
   | "diagnostics"
   | "entries"
   | "file-bytes"
+  | "modules"
   | "retained-files"
   | "source-buildings"
   | "total-bytes";
@@ -325,6 +326,7 @@ export function isAnalyzerInputPath(value: string): boolean {
     lowerName.endsWith(".sln") ||
     lowerName.endsWith(".slnx") ||
     lowerName === "angular.json" ||
+    lowerName === "package.json" ||
     TYPESCRIPT_CONFIG.test(name)
   );
 }

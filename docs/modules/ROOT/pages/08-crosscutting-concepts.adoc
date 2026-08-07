@@ -126,6 +126,17 @@ credentials in URLs, browser configuration, logs, or repository files.
 Repository = borough; build module = district; source file = building. A
 solution is a filter over modules, not a duplicated physical hierarchy.
 
+Module boundaries come from repository metadata. `.csproj` files define .NET
+modules, `angular.json` defines Angular projects, and each valid `package.json`
+defines an npm-package module. A valid npm name becomes its package identity;
+a missing or invalid name uses the repository or directory name for display
+without becoming a dependency identity. TypeScript and JavaScript sources
+belong to the nearest containing package manifest; an Angular project wins
+when both descriptors have the same root. Nested manifests become nested
+modules, while folders such as `apps` and `packages` are not treated as
+packages without their own manifest. Sources outside any compatible descriptor
+remain explicitly `Unassigned`.
+
 A metric mapping is data, not viewer-only styling. Mapping definition `1.0`
 has a stable ID and name, `built-in` or `custom` provenance with a description,
 and independent `footprint`, `height`, and `color` channels. The complete

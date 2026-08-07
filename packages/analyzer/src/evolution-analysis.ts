@@ -682,7 +682,8 @@ function seedFramePaths(
     budget.consume();
     if (
       module.kind === "dotnet-project" ||
-      module.kind === "angular-project"
+      module.kind === "angular-project" ||
+      module.kind === "npm-package"
     ) {
       paths.add(module.path);
     }
@@ -946,7 +947,8 @@ function modulePathToken(
 ): string | undefined {
   if (
     module.kind === "dotnet-project" ||
-    module.kind === "angular-project"
+    module.kind === "angular-project" ||
+    module.kind === "npm-package"
   ) {
     return state.tokens.get(module.path);
   }

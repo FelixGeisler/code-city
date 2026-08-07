@@ -113,6 +113,34 @@ function emptyAngularFacts(
   });
 }
 
+function emptyNpmPackageFacts(
+  id: string,
+  modulePath: string,
+): LocalAnalysisFacts {
+  return Object.freeze({
+    repositories: Object.freeze([
+      Object.freeze({
+        id: "raw-repository",
+        name: "Empty npm repository",
+      }),
+    ]),
+    solutions: Object.freeze([]),
+    modules: Object.freeze([
+      Object.freeze({
+        id,
+        repositoryId: "raw-repository",
+        kind: "npm-package" as const,
+        name: "Empty npm package",
+        path: modulePath,
+        solutionIds: Object.freeze([]),
+      }),
+    ]),
+    sources: Object.freeze([]),
+    dependencies: Object.freeze([]),
+    warnings: Object.freeze([]),
+  });
+}
+
 function moduleFact(
   id: string,
   kind: CityModule["kind"],
@@ -897,6 +925,51 @@ describe("history evolution lineage semantics", () => {
               kind: "renamed" as const,
               previousPath: "config/old-angular.json",
               path: "config/new-angular.json",
+            },
+          ],
+        ],
+      ]),
+    );
+    const frames = [...replayEvolutionBundle(result.bundle)];
+
+    expect(frames[0]!.model.modules[0]!.id).toBe(
+      frames[1]!.model.modules[0]!.id,
+    );
+    expect(result.bundle.deltas[0]!.changes.modules).toMatchObject({
+      added: [],
+      removed: [],
+      changed: [
+        {
+          id: frames[0]!.model.modules[0]!.id,
+          changeKinds: ["moved"],
+        },
+      ],
+    });
+  });
+
+  it("keeps an empty npm package across an available manifest move", () => {
+    const before = emptyNpmPackageFacts(
+      "raw-npm-before",
+      "packages/old/package.json",
+    );
+    const after = emptyNpmPackageFacts(
+      "raw-npm-after",
+      "packages/new/package.json",
+    );
+    const result = evolve(
+      [COMMITS.b, COMMITS.a],
+      [
+        { commit: COMMITS.a, facts: before },
+        { commit: COMMITS.b, facts: after },
+      ],
+      new Map([
+        [
+          B,
+          [
+            {
+              kind: "renamed" as const,
+              previousPath: "packages/old/package.json",
+              path: "packages/new/package.json",
             },
           ],
         ],

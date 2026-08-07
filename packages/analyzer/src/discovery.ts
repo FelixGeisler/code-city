@@ -46,6 +46,7 @@ import {
   assertRepositorySnapshots,
   DEFAULT_SNAPSHOT_LIMITS,
   SnapshotDeadlineError,
+  SnapshotLimitError,
 } from "./snapshot.js";
 import type {
   LocalAnalysisFacts,
@@ -96,11 +97,113 @@ interface AnalysisGuard {
   readonly signal?: AbortSignal;
 }
 
+interface ModuleDiscoveryBudget {
+  count: number;
+}
+
+interface ModuleRootCandidates {
+  readonly dotnetProjects: InternalModule[];
+  readonly angularProjects: InternalModule[];
+  readonly npmPackages: InternalModule[];
+}
+
+type ModuleRootIndex = ReadonlyMap<string, ModuleRootCandidates>;
+
 const VIRTUAL_WORKSPACE_ROOT = "/code-city";
+const NPM_LOGICAL_NAME_MAX_CHARACTERS = 214;
+const NPM_SCOPED_LOGICAL_NAME =
+  /^(?:@([^/]+?)\/)?([^/]+?)$/u;
+const NPM_SPECIAL_PACKAGE_SEGMENT_CHARACTER = /[~'!()*]/u;
+const NPM_BUILTIN_LOGICAL_NAMES = new Set([
+  "_http_agent",
+  "_http_client",
+  "_http_common",
+  "_http_incoming",
+  "_http_outgoing",
+  "_http_server",
+  "_stream_duplex",
+  "_stream_passthrough",
+  "_stream_readable",
+  "_stream_transform",
+  "_stream_wrap",
+  "_stream_writable",
+  "_tls_common",
+  "_tls_wrap",
+  "assert",
+  "assert/strict",
+  "async_hooks",
+  "buffer",
+  "child_process",
+  "cluster",
+  "console",
+  "constants",
+  "crypto",
+  "dgram",
+  "diagnostics_channel",
+  "dns",
+  "dns/promises",
+  "domain",
+  "events",
+  "fs",
+  "fs/promises",
+  "http",
+  "http2",
+  "https",
+  "inspector",
+  "inspector/promises",
+  "module",
+  "net",
+  "node:sea",
+  "node:sqlite",
+  "node:test",
+  "node:test/reporters",
+  "os",
+  "path",
+  "path/posix",
+  "path/win32",
+  "perf_hooks",
+  "process",
+  "punycode",
+  "querystring",
+  "readline",
+  "readline/promises",
+  "repl",
+  "stream",
+  "stream/consumers",
+  "stream/promises",
+  "stream/web",
+  "string_decoder",
+  "sys",
+  "timers",
+  "timers/promises",
+  "tls",
+  "trace_events",
+  "tty",
+  "url",
+  "util",
+  "util/types",
+  "v8",
+  "vm",
+  "wasi",
+  "worker_threads",
+  "zlib",
+]);
 const DECISION_EVIDENCE_TRUNCATED_REASON =
   "Decision-site evidence was truncated by analyzer retention limits.";
 const DECISION_EVIDENCE_OMITTED_WARNING =
   "Executable-unit decision evidence was omitted after serialized evidence limits were reached.";
+
+function consumeModuleDiscoveryBudget(budget: ModuleDiscoveryBudget): void {
+  const actual = budget.count + 1;
+  if (actual > CITY_MODEL_LIMITS.modules) {
+    throw new SnapshotLimitError(
+      "modules",
+      CITY_MODEL_LIMITS.modules,
+      actual,
+    );
+  }
+  budget.count = actual;
+}
 
 function retainedDecisionEvidence(
   evidence: ExecutableUnitDecisionEvidence,
@@ -568,6 +671,7 @@ async function discoverDotnetModules(
   context: RootContext,
   warnings: string[],
   guard: AnalysisGuard,
+  budget: ModuleDiscoveryBudget,
 ): Promise<readonly InternalModule[]> {
   const projectFiles = context.files.filter(
     (file) =>
@@ -619,6 +723,7 @@ async function discoverDotnetModules(
       ...(frameworks.length === 0 ? {} : { targetFrameworks: frameworks }),
       ...(packageId === undefined ? {} : { packageId }),
     };
+    consumeModuleDiscoveryBudget(budget);
     modules.push({
       module,
       rootPath: path.posix.dirname(projectFile),
@@ -640,10 +745,195 @@ function parseJsonFile(
     : (result.config as Record<string, unknown> | undefined);
 }
 
+function jsonObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function nonEmptyJsonString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function urlComponentIsStable(value: string): boolean {
+  try {
+    return encodeURIComponent(value) === value;
+  } catch {
+    return false;
+  }
+}
+
+function npmLogicalName(value: unknown): string | undefined {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.startsWith(".") ||
+    value.startsWith("-") ||
+    value.startsWith("_") ||
+    value.length > NPM_LOGICAL_NAME_MAX_CHARACTERS ||
+    value !== value.trim() ||
+    value.toLowerCase() !== value
+  ) {
+    return undefined;
+  }
+  const folded = value.toLowerCase();
+  if (
+    folded === "node_modules" ||
+    folded === "favicon.ico" ||
+    NPM_BUILTIN_LOGICAL_NAMES.has(folded)
+  ) {
+    return undefined;
+  }
+  const packageSegment = value.split("/").at(-1)!;
+  if (NPM_SPECIAL_PACKAGE_SEGMENT_CHARACTER.test(packageSegment)) {
+    return undefined;
+  }
+  if (urlComponentIsStable(value)) return value;
+
+  const scoped = NPM_SCOPED_LOGICAL_NAME.exec(value);
+  const scope = scoped?.[1];
+  const scopedPackage = scoped?.[2];
+  if (
+    scope === undefined ||
+    scopedPackage === undefined ||
+    scopedPackage.startsWith(".") ||
+    !urlComponentIsStable(scope) ||
+    !urlComponentIsStable(scopedPackage)
+  ) {
+    return undefined;
+  }
+  return value;
+}
+
+function parseNpmPackageReferences(
+  manifest: Readonly<Record<string, unknown>>,
+): readonly PackageReference[] {
+  const references = new Map<string, PackageReference>();
+  const sections = [
+    "dependencies",
+    "optionalDependencies",
+    "peerDependencies",
+  ] as const;
+  for (const section of sections) {
+    const entries = manifest[section];
+    if (!jsonObject(entries)) continue;
+    for (const rawPackageId of Object.keys(entries).sort(compareStable)) {
+      const rawVersion = entries[rawPackageId];
+      const packageId = npmLogicalName(rawPackageId);
+      if (packageId === undefined || !nonEmptyJsonString(rawVersion)) continue;
+      const version = sanitizeVersionText(rawVersion);
+      const key = `${packageId.toLocaleLowerCase("en-US")}\u0000${version}`;
+      if (!references.has(key)) {
+        references.set(key, { packageId, version });
+      }
+    }
+  }
+  return [...references.values()].sort(
+    (left, right) =>
+      compareStable(left.packageId, right.packageId) ||
+      compareStable(left.version ?? "", right.version ?? ""),
+  );
+}
+
+function parsePackageManifest(
+  text: string,
+): Record<string, unknown> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(text.replace(/^\uFEFF/u, ""));
+    return jsonObject(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function discoverNpmModules(
+  context: RootContext,
+  warnings: string[],
+  guard: AnalysisGuard,
+  budget: ModuleDiscoveryBudget,
+): Promise<readonly InternalModule[]> {
+  const manifestFiles = context.files
+    .filter(
+      (file) =>
+        path.posix.basename(file).toLocaleLowerCase("en-US") ===
+        "package.json",
+    )
+    .sort(compareStable);
+  const modules: InternalModule[] = [];
+
+  for (const manifestFile of manifestFiles) {
+    guard.check();
+    const relativeManifest = safeRepositoryRelativePath(
+      virtualRelative(context.virtualRoot, manifestFile),
+    );
+    const manifest = parsePackageManifest(snapshotText(context, manifestFile));
+    if (!manifest) {
+      warnings.push(
+        sanitizeWarningText(
+          `${relativeManifest}: malformed or non-object package.json skipped`,
+        ),
+      );
+      continue;
+    }
+
+    const moduleRoot = path.posix.dirname(manifestFile);
+    const packageId = npmLogicalName(manifest["name"]);
+    const fallbackName =
+      moduleRoot === context.virtualRoot
+        ? context.repository.name
+        : path.posix.basename(moduleRoot);
+    const module: CityModule = {
+      id: stableId(
+        "module",
+        context.repository.id,
+        "npm-package",
+        relativeManifest,
+      ),
+      repositoryId: context.repository.id,
+      kind: "npm-package",
+      name: sanitizeDisplayText(
+        packageId ?? fallbackName,
+        "Unnamed npm package",
+      ),
+      path: relativeManifest,
+      solutionIds: [],
+      ...(packageId === undefined ? {} : { packageId }),
+    };
+    consumeModuleDiscoveryBudget(budget);
+    modules.push({
+      module,
+      rootPath: moduleRoot,
+      projectReferences: [],
+      packageReferences: parseNpmPackageReferences(manifest),
+    });
+  }
+
+  const moduleByRoot = new Map(
+    modules.map((candidate) => [virtualKey(candidate.rootPath), candidate]),
+  );
+  for (const candidate of modules) {
+    guard.check();
+    let ancestorRoot = path.posix.dirname(candidate.rootPath);
+    let parent: InternalModule | undefined;
+    while (virtualIsWithin(context.virtualRoot, ancestorRoot)) {
+      parent = moduleByRoot.get(virtualKey(ancestorRoot));
+      if (parent) break;
+      if (ancestorRoot === context.virtualRoot) break;
+      ancestorRoot = path.posix.dirname(ancestorRoot);
+    }
+    if (parent) {
+      candidate.module = {
+        ...candidate.module,
+        parentModuleId: parent.module.id,
+      };
+    }
+  }
+  return modules;
+}
+
 async function discoverAngularModules(
   context: RootContext,
   warnings: string[],
   guard: AnalysisGuard,
+  budget: ModuleDiscoveryBudget,
 ): Promise<readonly InternalModule[]> {
   const workspaceFiles = context.files.filter(
     (file) =>
@@ -709,6 +999,7 @@ async function discoverAngularModules(
       const workspacePath = safeRepositoryRelativePath(
         virtualRelative(context.virtualRoot, workspaceFile),
       );
+      consumeModuleDiscoveryBudget(budget);
       modules.push({
         module: {
           id: stableId(
@@ -903,24 +1194,63 @@ function sanitizedImports(
     .sort((left, right) => compareStable(left.specifier, right.specifier));
 }
 
+function moduleRootIndex(
+  candidates: readonly InternalModule[],
+): ModuleRootIndex {
+  const index = new Map<string, ModuleRootCandidates>();
+  for (const candidate of candidates) {
+    const key = virtualKey(candidate.rootPath);
+    let atRoot = index.get(key);
+    if (!atRoot) {
+      atRoot = {
+        dotnetProjects: [],
+        angularProjects: [],
+        npmPackages: [],
+      };
+      index.set(key, atRoot);
+    }
+    if (candidate.module.kind === "dotnet-project") {
+      atRoot.dotnetProjects.push(candidate);
+    } else if (candidate.module.kind === "angular-project") {
+      atRoot.angularProjects.push(candidate);
+    } else if (candidate.module.kind === "npm-package") {
+      atRoot.npmPackages.push(candidate);
+    }
+  }
+  for (const atRoot of index.values()) {
+    atRoot.dotnetProjects.sort((left, right) =>
+      compareStable(left.module.id, right.module.id),
+    );
+    atRoot.angularProjects.sort((left, right) =>
+      compareStable(left.module.id, right.module.id),
+    );
+    atRoot.npmPackages.sort((left, right) =>
+      compareStable(left.module.id, right.module.id),
+    );
+  }
+  return index;
+}
+
 function chooseModule(
   sourcePath: string,
+  repositoryRoot: string,
   language: SourceLanguage,
-  candidates: readonly InternalModule[],
+  index: ModuleRootIndex,
+  guard: AnalysisGuard,
 ): InternalModule | undefined {
-  const expectedKind =
-    language === "csharp" ? "dotnet-project" : "angular-project";
-  return candidates
-    .filter(
-      (candidate) =>
-        candidate.module.kind === expectedKind &&
-        virtualIsWithin(candidate.rootPath, sourcePath),
-    )
-    .sort(
-      (left, right) =>
-        right.rootPath.length - left.rootPath.length ||
-        compareStable(left.module.id, right.module.id),
-    )[0];
+  let candidateRoot = path.posix.dirname(sourcePath);
+  while (virtualIsWithin(repositoryRoot, candidateRoot)) {
+    guard.check();
+    const atRoot = index.get(virtualKey(candidateRoot));
+    const selected =
+      language === "csharp"
+        ? atRoot?.dotnetProjects[0]
+        : atRoot?.angularProjects[0] ?? atRoot?.npmPackages[0];
+    if (selected) return selected;
+    if (candidateRoot === repositoryRoot) break;
+    candidateRoot = path.posix.dirname(candidateRoot);
+  }
+  return undefined;
 }
 
 function explicitIdentity(
@@ -1094,17 +1424,29 @@ async function analyzeSources(
   const pendingSources: PendingSource[] = [];
   const csharpSources: DeferredCSharpSource[] = [];
   const unassignedByRepository = new Map<string, InternalModule>();
+  const modulesByRepository = new Map<string, InternalModule[]>();
+  for (const candidate of modules) {
+    if (candidate.module.kind === "unassigned") continue;
+    const repositoryModules =
+      modulesByRepository.get(candidate.module.repositoryId) ?? [];
+    repositoryModules.push(candidate);
+    modulesByRepository.set(candidate.module.repositoryId, repositoryModules);
+  }
 
   for (const context of contexts) {
-    const repositoryModules = modules.filter(
-      (candidate) =>
-        candidate.module.repositoryId === context.repository.id &&
-        candidate.module.kind !== "unassigned",
+    const repositoryModuleIndex = moduleRootIndex(
+      modulesByRepository.get(context.repository.id) ?? [],
     );
     for (const sourcePath of context.files.filter(isSourceFile)) {
       guard.check();
       const language = languageOf(sourcePath);
-      let selected = chooseModule(sourcePath, language, repositoryModules);
+      let selected = chooseModule(
+        sourcePath,
+        context.virtualRoot,
+        language,
+        repositoryModuleIndex,
+        guard,
+      );
       if (!selected) {
         selected = unassignedByRepository.get(context.repository.id);
         if (!selected) {
@@ -1246,11 +1588,14 @@ async function analyzeSources(
   const orderedSources = pendingSources.sort((left, right) =>
     compareStable(left.fact.id, right.fact.id),
   );
+  const referencedModuleIds = new Set(
+    orderedSources.map((source) => source.fact.moduleId),
+  );
   return {
     sources: boundProjectDecisionEvidence(orderedSources, warnings),
-    unassignedModules: [...unassignedByRepository.values()].sort(
-      (left, right) => compareStable(left.module.id, right.module.id),
-    ),
+    unassignedModules: [...unassignedByRepository.values()]
+      .filter((candidate) => referencedModuleIds.has(candidate.module.id))
+      .sort((left, right) => compareStable(left.module.id, right.module.id)),
   };
 }
 
@@ -1409,70 +1754,76 @@ function buildDependencies(
         candidate.module,
       ]),
   );
-  const producerByPackage = new Map<string, CityModule>();
+  const producersByPackage = new Map<string, CityModule[]>();
   for (const candidate of [...modules].sort((left, right) =>
     compareStable(left.module.id, right.module.id),
   )) {
     if (candidate.module.packageId) {
-      producerByPackage.set(
-        candidate.module.packageId.toLocaleLowerCase("en-US"),
-        candidate.module,
-      );
+      const key = candidate.module.packageId.toLocaleLowerCase("en-US");
+      const producers = producersByPackage.get(key) ?? [];
+      producers.push(candidate.module);
+      producersByPackage.set(key, producers);
     }
   }
+  const uniqueProducerByPackage = new Map(
+    [...producersByPackage.entries()]
+      .filter(([, producers]) => producers.length === 1)
+      .map(([packageId, producers]) => [packageId, producers[0]!] as const),
+  );
 
   for (const candidate of modules) {
     guard.check();
-    if (!candidate.projectFile) continue;
-    for (const reference of candidate.projectReferences) {
-      guard.check();
-      const target =
-        reference.include === undefined
-          ? undefined
-          : moduleByProjectPath.get(
-              virtualKey(
-                virtualPath(
-                  path.posix.dirname(candidate.projectFile),
-                  reference.include,
+    if (candidate.projectFile) {
+      for (const reference of candidate.projectReferences) {
+        guard.check();
+        const target =
+          reference.include === undefined
+            ? undefined
+            : moduleByProjectPath.get(
+                virtualKey(
+                  virtualPath(
+                    path.posix.dirname(candidate.projectFile),
+                    reference.include,
+                  ),
                 ),
-              ),
-            );
-      if (target && target.id !== candidate.module.id) {
-        dependencies.push({
-          id: stableId(
-            "dependency",
-            "project-reference",
-            candidate.module.id,
-            target.id,
-          ),
-          repositoryId: candidate.module.repositoryId,
-          sourceId: candidate.module.id,
-          targetId: target.id,
-          resolution: "internal",
-          kind: "project-reference",
-          weight: 1,
-        });
-      } else {
-        const externalReference = reference.externalTarget;
-        dependencies.push({
-          id: stableId(
-            "dependency",
-            "project-reference",
-            candidate.module.id,
-            externalReference,
-          ),
-          repositoryId: candidate.module.repositoryId,
-          sourceId: candidate.module.id,
-          externalTarget: externalReference,
-          resolution: "unresolved",
-          kind: "project-reference",
-          weight: 1,
-        });
+              );
+        if (target && target.id !== candidate.module.id) {
+          dependencies.push({
+            id: stableId(
+              "dependency",
+              "project-reference",
+              candidate.module.id,
+              target.id,
+            ),
+            repositoryId: candidate.module.repositoryId,
+            sourceId: candidate.module.id,
+            targetId: target.id,
+            resolution: "internal",
+            kind: "project-reference",
+            weight: 1,
+          });
+        } else {
+          const externalReference = reference.externalTarget;
+          dependencies.push({
+            id: stableId(
+              "dependency",
+              "project-reference",
+              candidate.module.id,
+              externalReference,
+            ),
+            repositoryId: candidate.module.repositoryId,
+            sourceId: candidate.module.id,
+            externalTarget: externalReference,
+            resolution: "unresolved",
+            kind: "project-reference",
+            weight: 1,
+          });
+        }
       }
     }
     for (const reference of candidate.packageReferences) {
       guard.check();
-      const target = producerByPackage.get(
+      const target = uniqueProducerByPackage.get(
         reference.packageId.toLocaleLowerCase("en-US"),
       );
       if (target?.id === candidate.module.id) continue;
@@ -1692,14 +2043,45 @@ export async function analyzeRepositorySnapshotFacts(
       ),
     ),
   );
+  const moduleDiscoveryBudget: ModuleDiscoveryBudget = { count: 0 };
   const discoveredModules = (
     await Promise.all(
       contexts.map(async (context) => [
-        ...(await discoverDotnetModules(context, warnings, guard)),
-        ...(await discoverAngularModules(context, warnings, guard)),
+        ...(await discoverDotnetModules(
+          context,
+          warnings,
+          guard,
+          moduleDiscoveryBudget,
+        )),
+        ...(await discoverAngularModules(
+          context,
+          warnings,
+          guard,
+          moduleDiscoveryBudget,
+        )),
+        ...(await discoverNpmModules(
+          context,
+          warnings,
+          guard,
+          moduleDiscoveryBudget,
+        )),
       ]),
     )
   ).flat();
+  const sourceResult = await analyzeSources(
+    contexts,
+    discoveredModules,
+    warnings,
+    guard,
+  );
+  for (
+    let index = 0;
+    index < sourceResult.unassignedModules.length;
+    index += 1
+  ) {
+    guard.check();
+    consumeModuleDiscoveryBudget(moduleDiscoveryBudget);
+  }
   const { solutions, solutionIdsByModule } = await discoverSolutions(
     contexts,
     discoveredModules,
@@ -1711,12 +2093,6 @@ export async function analyzeRepositorySnapshotFacts(
     const solutionIds = solutionIdsByModule.get(candidate.module.id) ?? [];
     candidate.module = { ...candidate.module, solutionIds };
   }
-  const sourceResult = await analyzeSources(
-    contexts,
-    discoveredModules,
-    warnings,
-    guard,
-  );
   const allModules = [
     ...discoveredModules,
     ...sourceResult.unassignedModules,

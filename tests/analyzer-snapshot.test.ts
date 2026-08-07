@@ -338,6 +338,51 @@ describe("repository snapshot materialization", () => {
     ]);
   });
 
+  it("admits package manifests as bounded metadata without counting source buildings", async () => {
+    const manifestText = '{"name":"example"}';
+    const manifestBytes = encoder.encode(manifestText).byteLength;
+    const lockRead = vi.fn();
+    const entries = [
+      file("Package.JSON", manifestText),
+      file("package-lock.json", "not admitted", lockRead),
+    ];
+
+    const snapshot = await materializeRepositorySnapshot(source(entries), {
+      maxRetainedFiles: 1,
+      maxSourceBuildings: 0,
+      maxTotalBytes: manifestBytes,
+    });
+
+    expect(snapshot.files).toEqual([
+      {
+        path: "Package.JSON",
+        text: manifestText,
+        byteLength: manifestBytes,
+      },
+    ]);
+    expect(lockRead).not.toHaveBeenCalled();
+    await expect(
+      materializeRepositorySnapshot(source(entries), {
+        maxRetainedFiles: 0,
+        maxSourceBuildings: 0,
+      }),
+    ).rejects.toMatchObject({
+      limitName: "retained-files",
+      limit: 0,
+      actual: 1,
+    });
+    await expect(
+      materializeRepositorySnapshot(source(entries), {
+        maxSourceBuildings: 0,
+        maxTotalBytes: manifestBytes - 1,
+      }),
+    ).rejects.toMatchObject({
+      limitName: "total-bytes",
+      limit: manifestBytes - 1,
+      actual: manifestBytes,
+    });
+  });
+
   it("revalidates the admission contract for caller-provided snapshots", () => {
     const snapshot = (
       path: string,
@@ -359,6 +404,12 @@ describe("repository snapshot materialization", () => {
     ).toThrow(SnapshotPathError);
     expect(() =>
       assertRepositorySnapshots(snapshot("README.md")),
+    ).toThrow(SnapshotPathError);
+    expect(() =>
+      assertRepositorySnapshots(snapshot("Package.JSON", "{}")),
+    ).not.toThrow();
+    expect(() =>
+      assertRepositorySnapshots(snapshot("package-lock.json", "{}")),
     ).toThrow(SnapshotPathError);
     expect(() =>
       assertRepositorySnapshots(snapshot("binary.ts", "a\u0000b")),
