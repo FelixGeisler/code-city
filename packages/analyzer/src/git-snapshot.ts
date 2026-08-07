@@ -763,17 +763,17 @@ async function selectedCredentialEnvironment(
       deadline,
     );
   }
-  const isolationRoot = path.join(
-    workspace.root,
-    `.codecity-selected-git-${randomUUID()}`,
-  );
-  const globalConfig = path.join(isolationRoot, "global.gitconfig");
+  // The workspace root is already unique and private. Keep these descendants
+  // deliberately short so nested Windows import staging stays inside Git for
+  // Windows' native path budget before it can read core.longpaths.
+  const isolationRoot = path.join(workspace.root, ".g");
+  const globalConfig = path.join(isolationRoot, "c");
   const directories = Object.freeze({
-    home: path.join(isolationRoot, "home"),
-    xdg: path.join(isolationRoot, "xdg"),
-    userProfile: path.join(isolationRoot, "user-profile"),
-    appData: path.join(isolationRoot, "app-data"),
-    localAppData: path.join(isolationRoot, "local-app-data"),
+    home: path.join(isolationRoot, "h"),
+    xdg: path.join(isolationRoot, "x"),
+    userProfile: path.join(isolationRoot, "u"),
+    appData: path.join(isolationRoot, "a"),
+    localAppData: path.join(isolationRoot, "l"),
   });
   try {
     await withinDeadline(
@@ -843,6 +843,10 @@ function hardenedArguments(
     "http.sslVerify=true",
     "-c",
     "core.fsmonitor=false",
+    "-c",
+    // Git for Windows must enable this from the command line: deeply nested
+    // object paths can be opened before any repository config exists.
+    "core.longpaths=true",
     "-c",
     `core.hooksPath=${hooksPath}`,
     "-c",

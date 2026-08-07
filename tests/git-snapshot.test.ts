@@ -71,6 +71,8 @@ function expectedHardenedArguments(
     "-c",
     "core.fsmonitor=false",
     "-c",
+    "core.longpaths=true",
+    "-c",
     `core.hooksPath=${hooksPath}`,
     "-c",
     "maintenance.auto=false",

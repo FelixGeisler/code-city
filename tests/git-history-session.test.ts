@@ -663,12 +663,39 @@ describe("bounded Generic Git history sessions", () => {
       expect(request.env["SSH_AGENT_PID"]).toBeUndefined();
       expect(request.env["SSH_AUTH_SOCK"]).toBeUndefined();
       expect(request.env["GIT_CONFIG_NOSYSTEM"]).toBe("1");
-      expect(request.env["GIT_CONFIG_GLOBAL"]).toMatch(
-        /global\.gitconfig$/u,
-      );
-      expect(request.env["GIT_CONFIG_GLOBAL"]?.startsWith(
-        harness.value.root,
-      )).toBe(true);
+      expect(
+        path.relative(
+          harness.value.root,
+          request.env["GIT_CONFIG_GLOBAL"]!,
+        ),
+      ).toBe(path.join(".g", "c"));
+      expect(
+        path.relative(harness.value.root, request.env["HOME"]!),
+      ).toBe(path.join(".g", "h"));
+      expect(
+        path.relative(
+          harness.value.root,
+          request.env["XDG_CONFIG_HOME"]!,
+        ),
+      ).toBe(path.join(".g", "x"));
+      expect(
+        path.relative(
+          harness.value.root,
+          request.env["USERPROFILE"]!,
+        ),
+      ).toBe(path.join(".g", "u"));
+      expect(
+        path.relative(
+          harness.value.root,
+          request.env["APPDATA"]!,
+        ),
+      ).toBe(path.join(".g", "a"));
+      expect(
+        path.relative(
+          harness.value.root,
+          request.env["LOCALAPPDATA"]!,
+        ),
+      ).toBe(path.join(".g", "l"));
       expect(request.env["GIT_CEILING_DIRECTORIES"]).toBe(
         path.resolve(harness.value.root),
       );
