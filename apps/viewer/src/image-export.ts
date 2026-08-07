@@ -137,7 +137,7 @@ export function validateImageExportResolution(
   );
   if (width > maximumWidth || height > maximumHeight) {
     throw new RangeError(
-      `This device supports image dimensions up to ${maximumWidth.toLocaleString()}\u00d7${maximumHeight.toLocaleString()} pixels.`,
+      `This device supports image dimensions up to ${maximumWidth.toLocaleString("en-US")}\u00d7${maximumHeight.toLocaleString("en-US")} pixels.`,
     );
   }
   const pixels = width * height;
