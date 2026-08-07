@@ -16,6 +16,7 @@ import {
   DesignSmellSuppressionStore,
   type DesignSmellSuppressionStore as Store,
 } from "./design-smell-storage.js";
+import { DESIGN_SMELL_BUILDING_LEGEND } from "./design-smell-visualization.js";
 import { DesignSmellWorkerClient } from "./design-smell-worker-client.js";
 import type { MetricMappingStorage } from "./metric-mapping-storage.js";
 
@@ -33,7 +34,7 @@ export interface DesignSmellEvaluationClient {
 
 export interface DesignSmellPanelOptions {
   readonly onNavigate: (finding: DesignSmellFinding) => void;
-  readonly onOverlayChange?: (
+  readonly onVisibleFindingsChange?: (
     findings: readonly DesignSmellFinding[],
   ) => void;
   readonly onQueryFactsChange?: (
@@ -155,7 +156,7 @@ export function installDesignSmellPanel(
   const heading = element(document, "div");
   heading.className = "panel-heading";
   const titleBox = element(document, "div");
-  const eyebrow = element(document, "p", "Explainable overlay");
+  const eyebrow = element(document, "p", "Explainable findings");
   eyebrow.className = "eyebrow";
   const title = element(document, "h2", "Design smells");
   title.id = "design-smell-title";
@@ -193,6 +194,19 @@ export function installDesignSmellPanel(
   status.setAttribute("aria-live", "polite");
   status.setAttribute("aria-atomic", "true");
 
+  const colorLegend = element(document, "ul");
+  colorLegend.className = "design-smell-color-legend";
+  colorLegend.setAttribute("aria-label", "Building color legend");
+  for (const { label, color } of DESIGN_SMELL_BUILDING_LEGEND) {
+    const item = element(document, "li");
+    const swatch = element(document, "span");
+    swatch.className = "design-smell-color-swatch";
+    swatch.style.backgroundColor = color;
+    swatch.setAttribute("aria-hidden", "true");
+    item.append(swatch, element(document, "span", label));
+    colorLegend.append(item);
+  }
+
   const results = element(document, "ol");
   results.className = "design-smell-results";
   results.setAttribute("aria-label", "Design smell findings");
@@ -215,6 +229,7 @@ export function installDesignSmellPanel(
   root.replaceChildren(
     heading,
     status,
+    colorLegend,
     results,
     pagination,
     optionsDisclosure,
@@ -226,9 +241,11 @@ export function installDesignSmellPanel(
         !finding.suppressed && visibleRules.has(finding.ruleId),
     );
 
-  const renderResults = (): void => {
+  const renderResults = (notifyVisibleFindings = true): void => {
     const shown = filteredFindings();
-    options.onOverlayChange?.(shown);
+    if (notifyVisibleFindings) {
+      options.onVisibleFindingsChange?.(shown);
+    }
     const affected = new Set(
       shown.map(({ buildingId }) => buildingId),
     ).size;
@@ -392,7 +409,8 @@ export function installDesignSmellPanel(
         `${result.visibleFindings.length.toLocaleString("en-US")} ` +
         `unsuppressed findings. Rule catalog ` +
         `${result.ruleCatalogVersion}; exact active thresholds and ` +
-        "measured evidence are shown.";
+        "measured evidence are shown. Buildings use their highest visible " +
+        "severity; gray means no visible finding, not verified clean.";
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") {
         return;
@@ -401,7 +419,6 @@ export function installDesignSmellPanel(
         evaluation = undefined;
         options.onQueryFactsChange?.(undefined);
         visibleRules.clear();
-        options.onOverlayChange?.([]);
         renderResults();
         status.textContent =
           error instanceof Error
@@ -423,7 +440,7 @@ export function installDesignSmellPanel(
     input.disabled = rule.availability === "unavailable";
     input.setAttribute(
       "aria-label",
-      `${rule.name} design-smell overlay`,
+      `Show ${rule.name} findings`,
     );
     const name = element(
       document,
@@ -458,7 +475,7 @@ export function installDesignSmellPanel(
   previous.addEventListener("click", () => {
     if (page > 0) {
       page -= 1;
-      renderResults();
+      renderResults(false);
       results.querySelector<HTMLButtonElement>("button")?.focus();
     }
   });
@@ -468,7 +485,7 @@ export function installDesignSmellPanel(
     );
     if (page + 1 < pageCount) {
       page += 1;
-      renderResults();
+      renderResults(false);
       results.querySelector<HTMLButtonElement>("button")?.focus();
     }
   });
@@ -493,7 +510,6 @@ export function installDesignSmellPanel(
           requestedEnabled.has(rule.id);
         if (control.input.checked) visibleRules.add(rule.id);
       }
-      options.onOverlayChange?.([]);
       renderResults();
       void evaluate();
     },
@@ -502,7 +518,7 @@ export function installDesignSmellPanel(
       generation += 1;
       client.dispose();
       buildingsById = new Map();
-      options.onOverlayChange?.([]);
+      options.onVisibleFindingsChange?.([]);
       options.onQueryFactsChange?.(undefined);
       root.replaceChildren();
     },

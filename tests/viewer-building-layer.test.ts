@@ -286,6 +286,11 @@ describe("viewer building layer", () => {
   it("updates per-instance colors and disposes owned GPU resources once", () => {
     const layer = new ViewerBuildingLayer([building("a", 2)]);
     const batch = layer.batchObjects[0]!;
+    const matrixVersion = batch.instanceMatrix.version;
+    const boundingBox = batch.boundingBox;
+    const boundingSphere = batch.boundingSphere;
+    const computeBoundingBox = vi.spyOn(batch, "computeBoundingBox");
+    const computeBoundingSphere = vi.spyOn(batch, "computeBoundingSphere");
     const geometryDispose = vi.fn();
     const materialDispose = vi.fn();
     const instanceDispose = vi.fn();
@@ -299,6 +304,15 @@ describe("viewer building layer", () => {
     const color = new THREE.Color();
     batch.getColorAt(0, color);
     expect(color.getHexString()).toBe("00ffaa");
+    expect(batch.instanceMatrix.version).toBe(matrixVersion);
+    expect(batch.boundingBox).toBe(boundingBox);
+    expect(batch.boundingSphere).toBe(boundingSphere);
+    expect(computeBoundingBox).not.toHaveBeenCalled();
+    expect(computeBoundingSphere).not.toHaveBeenCalled();
+
+    layer.setColors(new Map([["a", "#36a3ff"]]));
+    batch.getColorAt(0, color);
+    expect(color.getHexString()).toBe("36a3ff");
 
     layer.dispose();
     layer.dispose();
@@ -307,6 +321,32 @@ describe("viewer building layer", () => {
     expect(instanceDispose).toHaveBeenCalledTimes(1);
     expect(() => layer.setVisibleBuildingIds(null)).toThrow(/disposed/u);
     expect(() => layer.selectionBounds(["a"])).toThrow(/disposed/u);
+  });
+
+  it("updates compacted visible instance colors without rewriting matrices", () => {
+    const layer = new ViewerBuildingLayer([
+      building("c", 6),
+      building("a", 2),
+      building("b", 4),
+    ]);
+    layer.setVisibleBuildingIds(["c", "a"]);
+    const batch = layer.batchObjects[0]!;
+    const matrixVersion = batch.instanceMatrix.version;
+
+    layer.setColors(
+      new Map([
+        ["a", "#f43f5e"],
+        ["b", "#64748b"],
+        ["c", "#facc15"],
+      ]),
+    );
+
+    const color = new THREE.Color();
+    batch.getColorAt(0, color);
+    expect(color.getHexString()).toBe("f43f5e");
+    batch.getColorAt(1, color);
+    expect(color.getHexString()).toBe("facc15");
+    expect(batch.instanceMatrix.version).toBe(matrixVersion);
   });
 
   it("validates duplicate identifiers, dimensions, styles, and benchmark counts", () => {

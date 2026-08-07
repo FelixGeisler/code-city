@@ -758,7 +758,7 @@ function optionalInteger(
     !Number.isSafeInteger(value * multiplier)
   ) {
     throw new Error(
-      `${label} must be a whole number from ${minimum.toLocaleString()} to ${maximum.toLocaleString()}.`,
+      `${label} must be a whole number from ${minimum.toLocaleString("en-US")} to ${maximum.toLocaleString("en-US")}.`,
     );
   }
   return value * multiplier;

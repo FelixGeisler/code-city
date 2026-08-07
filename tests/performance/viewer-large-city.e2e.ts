@@ -27,11 +27,17 @@ interface PerformanceSnapshot {
     readonly routeCount: number;
   };
   readonly designSmells: {
+    readonly active: boolean;
     readonly requestedFindings: number;
-    readonly candidateMarkers: number;
-    readonly visibleMarkers: number;
-    readonly omittedMarkers: number;
-    readonly batchCount: number;
+    readonly validFindings: number;
+    readonly buildingCount: number;
+    readonly affectedBuildings: number;
+    readonly coloredBuildings: number;
+    readonly severityBuildings: {
+      readonly moderate: number;
+      readonly high: number;
+      readonly critical: number;
+    };
   };
   readonly pickBenchmark: {
     readonly count: number;
@@ -398,17 +404,16 @@ test("25k hierarchy stays virtualized and synchronized with city state", async (
   );
 });
 
-test("design-smell overlay is accessible, paginated, and suppressible", async ({
+test("design-smell building colors are accessible, scoped, paginated, and suppressible", async ({
   page,
 }) => {
   // Rendering has a separate strict budget; this scenario also waits for two
   // worker evaluations and exercises cross-panel query synchronization.
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   await page.goto(`${viewerUrl}/?fixture=large-city-25k&performance=1`, {
     waitUntil: "domcontentloaded",
     timeout: 45_000,
   });
-  await openAnalyze(page, "findings");
   const panel = page.locator("#design-smell-panel");
   await expect(panel).toHaveAttribute("aria-busy", "false", {
     timeout: 45_000,
@@ -417,21 +422,69 @@ test("design-smell overlay is accessible, paginated, and suppressible", async ({
     "unsuppressed findings",
     { timeout: 45_000 },
   );
+  await page.waitForFunction(
+    () => {
+      const diagnostics = (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+        }
+      ).__CODE_CITY_PERFORMANCE__?.designSmells;
+      return (
+        diagnostics !== undefined &&
+        !diagnostics.active &&
+        diagnostics.requestedFindings > 2_000
+      );
+    },
+    undefined,
+    { timeout: 45_000 },
+  );
+  const exploreSnapshot = await page.evaluate(
+    () =>
+      (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+        }
+      ).__CODE_CITY_PERFORMANCE__!,
+  );
+  expect(exploreSnapshot.designSmells.coloredBuildings).toBe(0);
+
+  await openAnalyze(page, "findings");
+  await page.waitForFunction(
+    () =>
+      (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+        }
+      ).__CODE_CITY_PERFORMANCE__?.designSmells.active === true,
+    undefined,
+    { timeout: 45_000 },
+  );
+  await expect(page.locator("#scene canvas")).toHaveAttribute(
+    "aria-label",
+    /Visualization mode: Design smells · highest visible severity/u,
+  );
+  await expect(page.locator("#legend")).toHaveAttribute(
+    "aria-label",
+    /Design smells · highest visible severity legend/u,
+  );
+  await expect(panel.getByLabel("Building color legend")).toContainText(
+    /Critical.*High.*Moderate.*No visible finding/su,
+  );
 
   await expect(
-    panel.getByLabel("High-complexity method design-smell overlay"),
+    panel.getByLabel("Show High-complexity method findings"),
   ).toBeDisabled();
   await expect(panel.locator(".design-smell-unavailable")).toContainText(
     "Executable-unit complexity facts are not recorded",
   );
   await expect(
-    panel.getByLabel("Oversized class design-smell overlay"),
+    panel.getByLabel("Show Oversized class findings"),
   ).toBeDisabled();
   await expect(panel.locator(".design-smell-unavailable")).toContainText(
     "Per-class size facts are not present",
   );
   await expect(
-    panel.getByLabel("Excessive coupling design-smell overlay"),
+    panel.getByLabel("Show Excessive coupling findings"),
   ).toBeEnabled();
   await expect(panel.locator(".design-smell-filters")).toContainText(
     "C# 10; TypeScript 10; JavaScript 10",
@@ -447,7 +500,42 @@ test("design-smell overlay is accessible, paginated, and suppressible", async ({
   await expect(firstFinding).toContainText("⚠ Oversized file");
   expect(await firstFinding.textContent()).not.toMatch(/â|Â|Ã/u);
 
+  await firstFinding.click();
+  const selectionStatus = page.locator("#selection-status");
+  await expect(selectionStatus).toContainText(
+    /visible design-smell findings?; highest severity/u,
+  );
   await openAnalyze(page, "queries");
+  await expect(selectionStatus).not.toContainText("visible design-smell");
+  await openAnalyze(page, "findings");
+  await expect(selectionStatus).toContainText(
+    /visible design-smell findings?; highest severity/u,
+  );
+
+  await openAnalyze(page, "queries");
+  await page.waitForFunction(
+    () =>
+      (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+        }
+      ).__CODE_CITY_PERFORMANCE__?.designSmells.active === false,
+    undefined,
+    { timeout: 45_000 },
+  );
+  const querySnapshot = await page.evaluate(
+    () =>
+      (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+        }
+      ).__CODE_CITY_PERFORMANCE__!,
+  );
+  expect(querySnapshot.designSmells.coloredBuildings).toBe(0);
+  expect(querySnapshot.objectCount).toBe(exploreSnapshot.objectCount);
+  expect(querySnapshot.buildingBatchCount).toBe(
+    exploreSnapshot.buildingBatchCount,
+  );
   await page
     .locator("#advanced-query-preset")
     .selectOption("custom");
@@ -505,7 +593,8 @@ test("design-smell overlay is accessible, paginated, and suppressible", async ({
       return (
         diagnostics !== undefined &&
         diagnostics.requestedFindings > 2_000 &&
-        diagnostics.visibleMarkers > 0
+        diagnostics.active &&
+        diagnostics.affectedBuildings > 0
       );
     },
     undefined,
@@ -519,11 +608,15 @@ test("design-smell overlay is accessible, paginated, and suppressible", async ({
         }
       ).__CODE_CITY_PERFORMANCE__!.designSmells,
   );
-  expect(diagnostics.batchCount).toBeLessThanOrEqual(4);
-  expect(diagnostics.candidateMarkers).toBeGreaterThan(2_000);
-  expect(diagnostics.visibleMarkers).toBeGreaterThan(0);
-  expect(diagnostics.visibleMarkers).toBeLessThanOrEqual(2_000);
-  expect(diagnostics.omittedMarkers).toBeGreaterThan(0);
+  expect(diagnostics.validFindings).toBeGreaterThan(2_000);
+  expect(diagnostics.coloredBuildings).toBe(25_000);
+  expect(diagnostics.affectedBuildings).toBeGreaterThan(0);
+  expect(diagnostics.affectedBuildings).toBeLessThanOrEqual(25_000);
+  expect(
+    diagnostics.severityBuildings.moderate +
+      diagnostics.severityBuildings.high +
+      diagnostics.severityBuildings.critical,
+  ).toBe(diagnostics.affectedBuildings);
 });
 
 test("25k startup does not materialize fine detail for every file", async ({
