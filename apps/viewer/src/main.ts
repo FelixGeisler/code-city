@@ -4232,8 +4232,8 @@ function applyModel(
     nextExternalLayout.nodes,
     !options.preserveView,
   );
-  // Re-evaluate after the 3D buildings exist so the worker result can attach
-  // bounded markers to their current geometry (including metric previews).
+  // Re-evaluate after the active model and 3D building layer have both been
+  // replaced so the worker result colors only the current model's buildings.
   designSmellPanel.setProject(model);
   renderExternalNodeList();
   const title =
