@@ -49,6 +49,9 @@ describe("development toolchain contract", () => {
     expect(workflow).toContain("actions/setup-dotnet@v5");
     expect(workflow).toContain("dotnet-version: 10.0.302");
     expect(workflow).toContain("timeout-minutes: 20");
+    expect(workflow).toMatch(
+      /viewer-performance:[\s\S]*?timeout-minutes: 25/u,
+    );
     expect(workflow).toContain("- run: npm ci");
     expect(workflow).toContain("- run: npm run verify");
     expect(workflow).not.toContain("- run: npm install");
