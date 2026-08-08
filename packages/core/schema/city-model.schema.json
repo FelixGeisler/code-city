@@ -1338,6 +1338,7 @@
         "metricMethod": {
           "enum": [
             "typescript-compiler-api-v1",
+            "typescript-native-api-v2",
             "csharp-lexical-v1",
             "csharp-roslyn-v1"
           ]

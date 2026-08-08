@@ -626,11 +626,17 @@ function metricMethodPresentation(
   method: MetricMethod | undefined,
 ): { readonly label: string; readonly description: string } {
   switch (method) {
+    case "typescript-native-api-v2":
+      return {
+        label: "TypeScript 7 native analysis",
+        description:
+          "The bounded TypeScript 7 native API calculated these values.",
+      };
     case "typescript-compiler-api-v1":
       return {
-        label: "TypeScript compiler analysis",
+        label: "TypeScript compiler analysis (legacy)",
         description:
-          "Static TypeScript/JavaScript syntax analysis calculated these values.",
+          "The legacy TypeScript/JavaScript compiler API calculated these values.",
       };
     case "csharp-roslyn-v1":
       return {

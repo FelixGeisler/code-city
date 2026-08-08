@@ -632,6 +632,14 @@ The bundled Roslyn helper parses syntax only, receives opaque source IDs over a
 versioned bounded protocol, and runs once per analysis. It never loads a
 solution, project, MSBuild, NuGet, generators, or repository analyzers.
 
+The pinned TypeScript 7 native API likewise runs once per snapshot analysis.
+Its virtual filesystem admits only bounded snapshot JavaScript, TypeScript,
+JSON, and TypeScript config files and returns authoritative negative answers
+for every host path, including config extensions outside the snapshot. The
+analyzer requests syntax trees, syntax diagnostics, effective config options,
+and import symbols only; it never emits, runs plugins, executes source, or
+retains the native process after analysis.
+
 `codecity open` binds only to `127.0.0.1`, validates the exact Host header, and
 serves a startup-captured viewer allowlist plus one no-store in-memory model.
 

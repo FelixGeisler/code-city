@@ -1,9 +1,8 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import ts from "typescript";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   analyzeCSharpLexically,
@@ -473,7 +472,7 @@ EndProject
     ).toBe("csharp-roslyn-v1");
     expect(
       facts.sources.find(({ name }) => name === "main.ts")?.metricMethod,
-    ).toBe("typescript-compiler-api-v1");
+    ).toBe("typescript-native-api-v2");
     expect(facts.identity).toBeUndefined();
     expect(JSON.stringify(facts.sources)).not.toContain(path.resolve(hub));
   });
@@ -551,32 +550,15 @@ EndProject
       ),
     ).toBe(false);
 
-    const systemRead = vi
-      .spyOn(ts.sys, "readFile")
-      .mockImplementation(() => {
-        throw new Error("TypeScript attempted a host filesystem read.");
-      });
-    const systemExists = vi
-      .spyOn(ts.sys, "fileExists")
-      .mockImplementation(() => {
-        throw new Error("TypeScript attempted a host filesystem lookup.");
-      });
-    try {
-      const model = await analyzeRepositorySnapshots([snapshot]);
-      expect(
-        model.dependencies.find(
-          ({ kind }) => kind === "typescript-import",
-        ),
-      ).toMatchObject({
-        externalTarget: "@secret",
-        resolution: "external",
-      });
-      expect(systemRead).not.toHaveBeenCalled();
-      expect(systemExists).not.toHaveBeenCalled();
-    } finally {
-      systemRead.mockRestore();
-      systemExists.mockRestore();
-    }
+    const model = await analyzeRepositorySnapshots([snapshot]);
+    expect(
+      model.dependencies.find(
+        ({ kind }) => kind === "typescript-import",
+      ),
+    ).toMatchObject({
+      externalTarget: "@secret",
+      resolution: "external",
+    });
   });
 
   it("does not propagate adapter diagnostic text into the city model", async () => {

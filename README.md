@@ -581,10 +581,15 @@ returns at most 500 of the deterministically ranked matches while reporting
 the full total and any unavailable capability.
 
 C# is analyzed by the bundled, syntax-only Roslyn helper. TypeScript and
-JavaScript use the pinned TypeScript 6 compiler API. TypeScript 7 no longer
-exposes that stable API from its package root, so adopting its replacement
-requires a separately validated analyzer migration. Neither analyzer restores,
-builds, runs plugins, or executes repository content.
+JavaScript use the pinned TypeScript 7 native API through one bounded process
+per snapshot analysis. The native front end sees only admitted JavaScript,
+TypeScript, JSON, and config files through an isolated virtual filesystem; it
+cannot read the host or repository filesystem. Neither analyzer restores,
+builds, runs plugins, follows compiler plugins, or executes repository content.
+TypeScript 6 analyzer output remains readable as the legacy
+`typescript-compiler-api-v1` metric method; newly analyzed sources use
+`typescript-native-api-v2` because TypeScript 7 changed the stable callable-ID
+token encoding.
 
 `analyze-github` accepts canonical `https://github.com/owner/repository` URLs
 and normalizes an optional `.git` suffix. It resolves a public ref through
@@ -649,9 +654,9 @@ published at
 
 ## Development
 
-The supported local toolchain is **Node.js 24.x**, **npm 11.6.2**, and the
-**.NET SDK 10.0.302** used to build the trusted Roslyn and Git credential
-helpers. The repository pins these versions; use the committed
+The supported local toolchain is **Node.js 24.x**, **npm 11.6.2**,
+**TypeScript 7.0.2**, and the **.NET SDK 10.0.302** used to build the trusted
+Roslyn and Git credential helpers. The repository pins these versions; use the committed
 `package-lock.json` through `npm ci`.
 
 ```powershell

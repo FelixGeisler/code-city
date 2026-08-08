@@ -18,7 +18,7 @@ portable between browser, history, and print
 |Make untrusted repositories safe by default
 
 |Native language front ends
-|Use Roslyn and the TypeScript compiler API behind one fact schema
+|Use bounded native Roslyn and TypeScript 7 APIs behind one fact schema
 
 |Dependency overlay
 |Use surface-connected endpoints; show directed, bundled routes on demand
