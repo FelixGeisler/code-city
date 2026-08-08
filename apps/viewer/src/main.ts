@@ -713,6 +713,29 @@ const externalInspectorFields = {
   omitted: element<HTMLParagraphElement>("external-consumers-omitted"),
 };
 
+function createViewerRenderer(): THREE.WebGLRenderer {
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("webgl2", {
+    alpha: true,
+    antialias: true,
+    premultipliedAlpha: false,
+    powerPreference: "high-performance",
+  });
+  if (context === null) {
+    throw new Error(
+      "WebGL 2 is required by the current Three.js renderer, but this browser or GPU did not provide it.",
+    );
+  }
+  return new THREE.WebGLRenderer({
+    canvas,
+    context,
+    alpha: true,
+    antialias: true,
+    premultipliedAlpha: false,
+    powerPreference: "high-performance",
+  });
+}
+
 class CityScene {
   private readonly scene = new THREE.Scene();
   private readonly fog = new THREE.FogExp2(
@@ -736,14 +759,9 @@ class CityScene {
   private camera:
     | THREE.OrthographicCamera
     | THREE.PerspectiveCamera = this.perspectiveCamera;
-  private readonly renderer = new THREE.WebGLRenderer({
-    alpha: true,
-    antialias: true,
-    premultipliedAlpha: false,
-    powerPreference: "high-performance",
-  });
+  private readonly renderer = createViewerRenderer();
   private readonly instancingSupported = supportsViewerInstancing(
-    this.renderer.getContext(),
+    this.renderer.getContext() as WebGL2RenderingContext,
   );
   private readonly controls = new OrbitControls(
     this.camera,
@@ -2976,7 +2994,7 @@ class UnavailableCityScene {
     title.textContent = "3D viewer unavailable";
     const description = document.createElement("p");
     description.textContent =
-      "This browser could not start WebGL. Hardware acceleration or WebGL support may be disabled. Project data and non-visual exports remain available.";
+      "This browser could not start WebGL 2. Use a current browser and GPU with hardware acceleration enabled. Project data and non-visual exports remain available.";
     const detail = document.createElement("p");
     detail.className = "webgl-unavailable-detail";
     detail.textContent = reason;
@@ -2984,7 +3002,7 @@ class UnavailableCityScene {
     host.replaceChildren(fallback);
     imageExportOpenButton.disabled = true;
     imageExportOpenButton.title =
-      "Image export requires an available WebGL context.";
+      "Image export requires an available WebGL 2 context.";
     cameraFitCityButton.disabled = true;
     cameraFocusSelectionButton.disabled = true;
   }

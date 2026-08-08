@@ -7,7 +7,7 @@ import path from "node:path";
 interface PerformanceSnapshot {
   readonly ready: true;
   readonly firstInteractiveMilliseconds: number;
-  readonly buildingRenderMode: "instanced" | "legacy" | null;
+  readonly buildingRenderMode: "instanced" | "ordinary" | null;
   readonly buildingBatchCount: number;
   readonly visibleBuildingCount: number;
   readonly buildingVisibilityMaskActive: boolean;
@@ -682,10 +682,10 @@ test("25k removal cues stay bounded in reduced motion", async ({
   expect(wholeCity.renderCalls).toBeLessThanOrEqual(257);
 });
 
-test("WebGL 1 without ANGLE uses the bounded accessible fallback", async ({
+test("WebGL 2 without core instancing uses the bounded ordinary fallback", async ({
   page,
 }) => {
-  await disableBrowserInstancing(page);
+  await disableWebGL2Instancing(page);
   await page.goto(`${viewerUrl}/?performance=1`, {
     waitUntil: "domcontentloaded",
     timeout: 45_000,
@@ -709,7 +709,7 @@ test("WebGL 1 without ANGLE uses the bounded accessible fallback", async ({
         }
       ).__CODE_CITY_PERFORMANCE__!,
   );
-  expect(snapshot.buildingRenderMode).toBe("legacy");
+  expect(snapshot.buildingRenderMode).toBe("ordinary");
   expect(snapshot.buildingBatchCount).toBe(0);
   await expect(page.getByRole("alert")).toBeHidden();
 
@@ -721,6 +721,16 @@ test("WebGL 1 without ANGLE uses the bounded accessible fallback", async ({
   await expect(alert).toBeVisible();
   await expect(alert).toContainText("GPU instancing is unavailable");
   await expect(alert).toContainText("at most 500 buildings");
+});
+
+test("a WebGL 1-only environment gets the accessible WebGL 2 requirement", async ({
+  page,
+}) => {
+  await disableWebGL2(page);
+  await page.goto(`${viewerUrl}/?performance=1`, {
+    waitUntil: "domcontentloaded",
+    timeout: 45_000,
+  });
   await page.waitForFunction(
     () =>
       (
@@ -731,16 +741,22 @@ test("WebGL 1 without ANGLE uses the bounded accessible fallback", async ({
     undefined,
     { timeout: 45_000 },
   );
-  expect(
-    await page.evaluate(
-      () =>
-        (
-          window as Window & {
-            __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
-          }
-        ).__CODE_CITY_PERFORMANCE__?.buildingRenderMode,
-    ),
-  ).toBe("legacy");
+
+  const snapshot = await page.evaluate(
+    () =>
+      (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+        }
+      ).__CODE_CITY_PERFORMANCE__!,
+  );
+  expect(snapshot.buildingRenderMode).toBeNull();
+  expect(snapshot.buildingBatchCount).toBe(0);
+  const alert = page.getByRole("alert");
+  await expect(alert).toBeVisible();
+  await expect(alert).toContainText("3D viewer unavailable");
+  await expect(alert).toContainText("WebGL 2");
+  await expect(alert).toContainText("Project data and non-visual exports remain available");
 });
 
 test("metric mappings require an explicit preview and preserve named project configurations", async ({
@@ -1353,7 +1369,24 @@ async function selectionPerformanceSnapshot(
   });
 }
 
-async function disableBrowserInstancing(
+async function disableWebGL2Instancing(
+  page: import("@playwright/test").Page,
+): Promise<void> {
+  await page.addInitScript(() => {
+    for (const operation of [
+      "drawArraysInstanced",
+      "drawElementsInstanced",
+      "vertexAttribDivisor",
+    ]) {
+      Object.defineProperty(WebGL2RenderingContext.prototype, operation, {
+        configurable: true,
+        value: undefined,
+      });
+    }
+  });
+}
+
+async function disableWebGL2(
   page: import("@playwright/test").Page,
 ): Promise<void> {
   await page.addInitScript(() => {
@@ -1374,25 +1407,6 @@ async function disableBrowserInstancing(
         ]);
       },
     });
-
-    const originalGetExtension =
-      WebGLRenderingContext.prototype.getExtension;
-    Object.defineProperty(
-      WebGLRenderingContext.prototype,
-      "getExtension",
-      {
-        configurable: true,
-        value(
-          this: WebGLRenderingContext,
-          name: string,
-        ): unknown {
-          if (name === "ANGLE_instanced_arrays") {
-            return null;
-          }
-          return Reflect.apply(originalGetExtension, this, [name]);
-        },
-      },
-    );
   });
 }
 

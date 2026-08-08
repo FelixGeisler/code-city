@@ -8,7 +8,7 @@ import {
   type BuildingBvhRay,
 } from "./viewer-building-bvh.js";
 
-export const LEGACY_BUILDING_LIMIT = 500;
+export const ORDINARY_MESH_BUILDING_LIMIT = 500;
 
 export interface ViewerBuildingVector {
   readonly x: number;
@@ -39,10 +39,10 @@ export interface ViewerBuildingBatchPlan {
 
 export interface ViewerBuildingLayerOptions {
   readonly instancingSupported?: boolean;
-  readonly legacyLimit?: number;
+  readonly ordinaryMeshLimit?: number;
 }
 
-export type ViewerBuildingRenderMode = "instanced" | "legacy";
+export type ViewerBuildingRenderMode = "instanced" | "ordinary";
 export type ViewerBuildingHighlightSlot = "hovered" | "selected";
 
 export interface ViewerBuildingPickBenchmark {
@@ -75,12 +75,12 @@ const DEFAULT_STYLE: ViewerBuildingMaterialStyle = Object.freeze({
 });
 
 export class ViewerBuildingCapabilityError extends Error {
-  public constructor(buildingCount: number, legacyLimit: number) {
+  public constructor(buildingCount: number, ordinaryMeshLimit: number) {
     super(
       `This browser cannot render ${buildingCount.toLocaleString()} buildings ` +
         `because GPU instancing is unavailable. Use a browser or device with ` +
         `instancing support, or reduce it to at most ` +
-        `${legacyLimit.toLocaleString()} buildings.`,
+        `${ordinaryMeshLimit.toLocaleString()} buildings.`,
     );
     this.name = "ViewerBuildingCapabilityError";
   }
@@ -89,16 +89,18 @@ export class ViewerBuildingCapabilityError extends Error {
 export function assertViewerBuildingCapability(
   buildingCount: number,
   instancingSupported: boolean,
-  legacyLimit = LEGACY_BUILDING_LIMIT,
+  ordinaryMeshLimit = ORDINARY_MESH_BUILDING_LIMIT,
 ): void {
   if (!Number.isSafeInteger(buildingCount) || buildingCount < 0) {
     throw new RangeError("Building count must be a non-negative safe integer.");
   }
-  if (!Number.isSafeInteger(legacyLimit) || legacyLimit < 0) {
-    throw new RangeError("Legacy building limit must be a non-negative safe integer.");
+  if (!Number.isSafeInteger(ordinaryMeshLimit) || ordinaryMeshLimit < 0) {
+    throw new RangeError(
+      "Ordinary-mesh building limit must be a non-negative safe integer.",
+    );
   }
-  if (!instancingSupported && buildingCount > legacyLimit) {
-    throw new ViewerBuildingCapabilityError(buildingCount, legacyLimit);
+  if (!instancingSupported && buildingCount > ordinaryMeshLimit) {
+    throw new ViewerBuildingCapabilityError(buildingCount, ordinaryMeshLimit);
   }
 }
 
@@ -155,11 +157,11 @@ export class ViewerBuildingLayer {
   private readonly bvh: BuildingAabbBvh;
   private readonly batches: BuildingBatch[] = [];
   private readonly batchByMesh = new Map<THREE.InstancedMesh, BuildingBatch>();
-  private readonly legacyMeshes = new Map<
+  private readonly ordinaryMeshes = new Map<
     string,
     THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>
   >();
-  private readonly legacyMaterials = new Set<THREE.MeshStandardMaterial>();
+  private readonly ordinaryMaterials = new Set<THREE.MeshStandardMaterial>();
   private readonly highlights: Record<
     ViewerBuildingHighlightSlot,
     THREE.Mesh<THREE.BoxGeometry, THREE.MeshBasicMaterial>
@@ -185,11 +187,12 @@ export class ViewerBuildingLayer {
     options: ViewerBuildingLayerOptions = {},
   ) {
     const instancingSupported = options.instancingSupported ?? true;
-    const legacyLimit = options.legacyLimit ?? LEGACY_BUILDING_LIMIT;
+    const ordinaryMeshLimit =
+      options.ordinaryMeshLimit ?? ORDINARY_MESH_BUILDING_LIMIT;
     assertViewerBuildingCapability(
       definitions.length,
       instancingSupported,
-      legacyLimit,
+      ordinaryMeshLimit,
     );
 
     this.object.name = "code-city:buildings";
@@ -212,7 +215,7 @@ export class ViewerBuildingLayer {
       this.definitions.map(buildingBvhBounds),
     );
 
-    this.mode = instancingSupported ? "instanced" : "legacy";
+    this.mode = instancingSupported ? "instanced" : "ordinary";
     if (this.mode === "instanced") {
       this.createInstancedBatches();
     } else {
@@ -240,9 +243,9 @@ export class ViewerBuildingLayer {
   }
 
   public get visibleBuildingCount(): number {
-    if (this.mode === "legacy") {
+    if (this.mode === "ordinary") {
       let count = 0;
-      for (const mesh of this.legacyMeshes.values()) {
+      for (const mesh of this.ordinaryMeshes.values()) {
         if (mesh.visible) count += 1;
       }
       return count;
@@ -387,7 +390,7 @@ export class ViewerBuildingLayer {
     if (this.mode === "instanced") {
       this.populateBatches();
     } else {
-      for (const [buildingId, mesh] of this.legacyMeshes) {
+      for (const [buildingId, mesh] of this.ordinaryMeshes) {
         const building = this.definitionsById.get(buildingId)!;
         mesh.visible = this.isBuildingVisible(building);
       }
@@ -432,7 +435,7 @@ export class ViewerBuildingLayer {
     if (this.mode === "instanced") {
       this.populateBatchColors();
     } else {
-      this.legacyMeshes.get(id)?.material.color.setHex(colorValue);
+      this.ordinaryMeshes.get(id)?.material.color.setHex(colorValue);
     }
     this.refreshHighlight("hovered");
     this.refreshHighlight("selected");
@@ -450,7 +453,7 @@ export class ViewerBuildingLayer {
     if (this.mode === "instanced") {
       this.populateBatchColors();
     } else {
-      for (const [id, mesh] of this.legacyMeshes) {
+      for (const [id, mesh] of this.ordinaryMeshes) {
         mesh.material.color.setHex(
           this.definitionsById.get(id)!.colorValue,
         );
@@ -518,7 +521,7 @@ export class ViewerBuildingLayer {
         batch.mesh.computeBoundingSphere();
       }
     } else {
-      for (const [id, mesh] of this.legacyMeshes) {
+      for (const [id, mesh] of this.ordinaryMeshes) {
         const building = this.definitionsById.get(id);
         if (!building) continue;
         mesh.matrix.copy(matrixFor(building));
@@ -538,7 +541,7 @@ export class ViewerBuildingLayer {
       batch.mesh.dispose();
       batch.mesh.material.dispose();
     }
-    for (const material of this.legacyMaterials) {
+    for (const material of this.ordinaryMaterials) {
       material.dispose();
     }
     this.highlights.hovered.material.dispose();
@@ -548,8 +551,8 @@ export class ViewerBuildingLayer {
     this.geometry.dispose();
     this.batches.length = 0;
     this.batchByMesh.clear();
-    this.legacyMeshes.clear();
-    this.legacyMaterials.clear();
+    this.ordinaryMeshes.clear();
+    this.ordinaryMaterials.clear();
   }
 
   private createInstancedBatches(): void {
@@ -643,8 +646,8 @@ export class ViewerBuildingLayer {
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.raycast = () => undefined;
-      this.legacyMaterials.add(material);
-      this.legacyMeshes.set(building.id, mesh);
+      this.ordinaryMaterials.add(material);
+      this.ordinaryMeshes.set(building.id, mesh);
       this.object.add(mesh);
     }
   }

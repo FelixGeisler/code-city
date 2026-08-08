@@ -117,9 +117,10 @@ transparent background; and optional selected/hover labels, visualization
 legend, and current evolution-frame metadata. The image contains no viewer UI
 chrome. Width and height are each bounded from 256 through 8192 pixels, subject
 to the active GPU's texture, renderbuffer, and viewport limits and a 512 MiB
-sample-aware estimated working-memory ceiling. A lost or unavailable WebGL
-context disables image export with an accessible explanation; startup failure
-shows a dedicated fallback, and context restoration re-enables the controls.
+sample-aware estimated working-memory ceiling. The current Three.js renderer
+requires WebGL 2. A lost or unavailable context disables image export with an
+accessible explanation; startup failure shows a dedicated fallback, and
+context restoration re-enables the controls.
 
 Completed imports remain on the server until explicitly removed. An
 authenticated `GET /api/v1/jobs` enumerates all retained jobs; for each

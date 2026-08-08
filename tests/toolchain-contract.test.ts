@@ -7,6 +7,7 @@ interface PackageContract {
   readonly engines?: Readonly<Record<string, string>>;
   readonly scripts?: Readonly<Record<string, string>>;
   readonly dependencies?: Readonly<Record<string, string>>;
+  readonly devDependencies?: Readonly<Record<string, string>>;
 }
 
 describe("development toolchain contract", () => {
@@ -26,10 +27,14 @@ describe("development toolchain contract", () => {
     expect(packageContract.dependencies).toMatchObject({
       typescript: "7.0.2",
       "jsonc-parser": "3.3.1",
+      three: "0.185.1",
     });
     expect(packageContract.dependencies).not.toHaveProperty(
       "typescript-analyzer",
     );
+    expect(packageContract.devDependencies).toMatchObject({
+      "@types/three": "0.185.4",
+    });
   });
 
   it("uses the same bounded verification workflow on Linux and Windows", async () => {
