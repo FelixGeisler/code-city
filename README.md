@@ -54,10 +54,13 @@ existing city model, or queue public/private GitHub, Azure DevOps, HTTPS, SSH,
 and scp-style Git imports. Remote imports support the default revision, a
 branch, a tag, or one exact commit, plus optional city identity and bounded
 analysis settings. They can also opt into a bounded first-parent history. The
-recommended default follows the complete mainline from its first commit to the
-selected revision and distributes at most 20 animation frames across that
-span by elapsed time. These are representative snapshots: intermediate
-commits are indexed as lightweight metadata, but their source is not analyzed.
+recommended default follows the complete mainline from its technical Git root
+to the selected revision and distributes at most 20 animation frames across
+that span by elapsed time. It always retains the first commit containing a
+regular analyzer-candidate source path and starts normal playback there; the
+technical pre-project baseline remains available in the scrubber. These are
+representative snapshots: intermediate commits are indexed as lightweight
+metadata, but their source is not analyzed.
 Recent commit count, inclusive UTC date range, and two exact tag names remain
 available as custom ranges.
 Directory packaging runs in a cancellable browser worker,

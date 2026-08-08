@@ -519,6 +519,18 @@ export function summarizeEvolutionFrames(
   );
 }
 
+export function evolutionPlaybackStartIndex(
+  bundle: EvolutionBundle,
+): number {
+  const projectStartSha =
+    bundle.selection.mode === "root-to-tip"
+      ? bundle.selection.projectStartSha
+      : undefined;
+  if (projectStartSha === undefined) return 0;
+  const index = bundle.selection.sampledCommitShas.indexOf(projectStartSha);
+  return index < 0 ? 0 : index;
+}
+
 export function analyzeEvolutionBuildingHistory(
   bundle: EvolutionBundle,
 ): readonly EvolutionBuildingHistory[] {

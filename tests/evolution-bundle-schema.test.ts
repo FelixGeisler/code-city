@@ -117,6 +117,46 @@ describe("EvolutionBundle JSON Schema", () => {
     },
   );
 
+  it("accepts matching project-start selection and provenance", () => {
+    const value = fixture();
+    value.selection = {
+      ...value.selection,
+      mode: "root-to-tip",
+      samplingStrategy: "elapsed-time-project-start-v1",
+      maxFrames: 20,
+      projectStartDetectionPolicy: "analyzer-candidate-source-path-v1",
+      projectStartSha: value.selection.resolvedOldestSha,
+    };
+    delete value.selection.sampleEvery;
+    value.provenance.projectStart = {
+      detectionPolicyRevision: "analyzer-candidate-source-path-v1",
+      commitSha: value.selection.projectStartSha,
+    };
+
+    expect(validateSchema(value), errors()).toBe(true);
+    expect(validateEvolutionBundle(value).provenance.projectStart).toEqual(
+      value.provenance.projectStart,
+    );
+
+    const mismatched = fixture();
+    mismatched.selection = {
+      ...mismatched.selection,
+      mode: "root-to-tip",
+      samplingStrategy: "elapsed-time-project-start-v1",
+      maxFrames: 20,
+      projectStartDetectionPolicy: "analyzer-candidate-source-path-v1",
+      projectStartSha: mismatched.selection.resolvedOldestSha,
+    };
+    delete mismatched.selection.sampleEvery;
+    mismatched.provenance.projectStart = {
+      detectionPolicyRevision: "analyzer-candidate-source-path-v1",
+      commitSha: "f".repeat(40),
+    };
+    expect(() => validateEvolutionBundle(mismatched)).toThrow(
+      /project-start metadata must match/u,
+    );
+  });
+
   it("rejects author data, mutable tag labels, and excessive histories", () => {
     const author = fixture();
     author.baseline.commit.author = { name: "Private" };

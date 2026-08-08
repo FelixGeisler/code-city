@@ -126,6 +126,65 @@ describe("bounded history selection", () => {
     });
   });
 
+  it("always retains a detected project start without exceeding the frame bound", () => {
+    const result = selectHistory(chain(11), {
+      mode: "root-to-tip",
+      maxFrames: 4,
+      projectStartDetectionPolicy: "analyzer-candidate-source-path-v1",
+      projectStartSha: sha(6),
+    });
+
+    expect(result.summary).toMatchObject({
+      samplingStrategy: "elapsed-time-project-start-v1",
+      projectStartDetectionPolicy: "analyzer-candidate-source-path-v1",
+      projectStartSha: sha(6),
+      sampledCommitCount: 4,
+    });
+    expect(result.summary.sampledCommitShas).toEqual([
+      sha(1),
+      sha(6),
+      sha(8),
+      sha(11),
+    ]);
+  });
+
+  it("records a deterministic no-project result without inventing a frame", () => {
+    const result = selectHistory(chain(5), {
+      mode: "root-to-tip",
+      maxFrames: 3,
+      projectStartDetectionPolicy: "analyzer-candidate-source-path-v1",
+    });
+
+    expect(result.summary).toMatchObject({
+      samplingStrategy: "elapsed-time-project-start-v1",
+      projectStartDetectionPolicy: "analyzer-candidate-source-path-v1",
+    });
+    expect("projectStartSha" in result.summary).toBe(false);
+  });
+
+  it("rejects an unretained or foreign detected project start", () => {
+    expectSelectionError(
+      () =>
+        selectHistory(chain(5), {
+          mode: "root-to-tip",
+          maxFrames: 2,
+          projectStartDetectionPolicy: "analyzer-candidate-source-path-v1",
+          projectStartSha: sha(3),
+        }),
+      "invalid-request",
+    );
+    expectSelectionError(
+      () =>
+        selectHistory(chain(5), {
+          mode: "root-to-tip",
+          maxFrames: 3,
+          projectStartDetectionPolicy: "analyzer-candidate-source-path-v1",
+          projectStartSha: sha(99),
+        }),
+      "invalid-request",
+    );
+  });
+
   it("uses elapsed time before commit rank for uneven histories", () => {
     const result = selectHistory(
       chainAtDayOffsets([0, 0, 0, 0, 0, 90, 100]),

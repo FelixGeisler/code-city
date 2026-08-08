@@ -11,6 +11,7 @@ import {
 import {
   analyzeEvolutionBuildingHistory,
   EvolutionDependencyChangeCollector,
+  evolutionPlaybackStartIndex,
   summarizeEvolutionFrames,
   type EvolutionFrameAnalysis,
   type EvolutionTransition,
@@ -688,6 +689,8 @@ export class EvolutionTimelineWorkerRuntime {
     );
     const analysis = await analyzeFrame(bundle, 0, responseModel, work);
     work.assertCurrent();
+    const frames = summarizeEvolutionFrames(bundle);
+    const playbackStartIndex = evolutionPlaybackStartIndex(bundle);
     this.#activeBundle = bundle;
     this.#baselineModel = baselineModel;
     this.#activeFrameIndex = 0;
@@ -696,7 +699,8 @@ export class EvolutionTimelineWorkerRuntime {
     return {
       type: "loaded",
       requestId: request.requestId,
-      frames: summarizeEvolutionFrames(bundle),
+      frames,
+      playbackStartIndex,
       histories: analyzeEvolutionBuildingHistory(bundle),
       model: responseModel,
       analysis,

@@ -43,6 +43,8 @@ export interface EvolutionLoadResult {
   readonly type: "loaded";
   readonly requestId: number;
   readonly frames: readonly EvolutionFrameSummary[];
+  /** Default replay origin; earlier frames are the technical baseline. */
+  readonly playbackStartIndex: number;
   readonly histories: readonly EvolutionBuildingHistory[];
   readonly model: CityModel;
   readonly analysis: EvolutionFrameAnalysis;
@@ -543,6 +545,7 @@ export function isEvolutionWorkerResponse(
         "type",
         "requestId",
         "frames",
+        "playbackStartIndex",
         "histories",
         "model",
         "analysis",
@@ -551,6 +554,9 @@ export function isEvolutionWorkerResponse(
       candidate["frames"].length > 0 &&
       candidate["frames"].length <= MAXIMUM_FRAMES &&
       candidate["frames"].every(frameSummary) &&
+      Number.isSafeInteger(candidate["playbackStartIndex"]) &&
+      Number(candidate["playbackStartIndex"]) >= 0 &&
+      Number(candidate["playbackStartIndex"]) < candidate["frames"].length &&
       histories(candidate["histories"]) &&
       record(candidate["model"]) !== undefined &&
       analysis(candidate["analysis"])

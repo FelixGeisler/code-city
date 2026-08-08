@@ -1,4 +1,7 @@
-import { EVOLUTION_BUNDLE_LIMITS } from "../../core/src/evolution.js";
+import {
+  EVOLUTION_BUNDLE_LIMITS,
+  EVOLUTION_PROJECT_START_POLICY,
+} from "../../core/src/evolution.js";
 
 const MEBIBYTE = 1024 * 1024;
 const COMMIT_SHA = /^[0-9a-f]{40}$/u;
@@ -107,6 +110,12 @@ export interface RootToTipHistorySelectionRequest
   readonly mode: "root-to-tip";
   /** Maximum number of elapsed-time-distributed animation frames to retain. */
   readonly maxFrames: number;
+  /**
+   * Trusted acquisition result. Public request adapters must discard this
+   * field and derive it from the verified first-parent repository session.
+   */
+  readonly projectStartSha?: string;
+  readonly projectStartDetectionPolicy?: typeof EVOLUTION_PROJECT_START_POLICY;
 }
 
 export interface DateRangeHistorySelectionRequest
@@ -153,8 +162,11 @@ export interface NormalizedRootToTipHistorySelection
   readonly mode: "root-to-tip";
   readonly samplingStrategy:
     | "evenly-spaced-v1"
-    | "elapsed-time-v1";
+    | "elapsed-time-v1"
+    | "elapsed-time-project-start-v1";
   readonly maxFrames: number;
+  readonly projectStartDetectionPolicy?: typeof EVOLUTION_PROJECT_START_POLICY;
+  readonly projectStartSha?: string;
 }
 
 interface NormalizedFixedIntervalHistorySelection
@@ -231,6 +243,8 @@ interface ResolvedCommonSelection extends ResolvedSelectionBase {
 interface ResolvedRootToTipSelection extends ResolvedSelectionBase {
   readonly mode: "root-to-tip";
   readonly maxFrames: number;
+  readonly projectStartDetectionPolicy?: typeof EVOLUTION_PROJECT_START_POLICY;
+  readonly projectStartSha?: string;
 }
 
 interface ResolvedCommitCountSelection extends ResolvedCommonSelection {
@@ -596,9 +610,37 @@ function resolveSelectionRequest(
         "maxFrames must be at least 2 so root and tip can both be retained.",
       );
     }
+    const projectStartDetectionPolicy =
+      record["projectStartDetectionPolicy"];
+    if (
+      projectStartDetectionPolicy !== undefined &&
+      projectStartDetectionPolicy !== EVOLUTION_PROJECT_START_POLICY
+    ) {
+      fail(
+        "invalid-request",
+        `projectStartDetectionPolicy must be ${EVOLUTION_PROJECT_START_POLICY}.`,
+      );
+    }
+    const projectStartSha =
+      record["projectStartSha"] === undefined
+        ? undefined
+        : requireSha(record["projectStartSha"], "projectStartSha");
+    if (
+      projectStartSha !== undefined &&
+      projectStartDetectionPolicy === undefined
+    ) {
+      fail(
+        "invalid-request",
+        "projectStartSha requires projectStartDetectionPolicy.",
+      );
+    }
     return Object.freeze({
       mode,
       maxFrames,
+      ...(projectStartDetectionPolicy === undefined
+        ? {}
+        : { projectStartDetectionPolicy }),
+      ...(projectStartSha === undefined ? {} : { projectStartSha }),
       requestedTagCount: 0,
       analysisBounds: resolveHistoryAnalysisBounds({
         ...(record["totalDeadlineMs"] === undefined
@@ -944,6 +986,59 @@ function sampleElapsedTimeOldestFirst(
   return Object.freeze(sampled);
 }
 
+function sampleProjectStartAwareOldestFirst(
+  selectedOldestFirst: readonly ValidatedHistoryCommit[],
+  maximumFrames: number,
+  projectStartSha: string | undefined,
+): readonly HistoryCommit[] {
+  const sampled = sampleElapsedTimeOldestFirst(
+    selectedOldestFirst,
+    maximumFrames,
+  );
+  if (
+    projectStartSha === undefined ||
+    sampled.some(({ sha }) => sha === projectStartSha)
+  ) {
+    return sampled;
+  }
+
+  const projectStartIndex = selectedOldestFirst.findIndex(
+    ({ commit }) => commit.sha === projectStartSha,
+  );
+  if (projectStartIndex < 0) {
+    fail(
+      "invalid-request",
+      "The detected project start must belong to the selected first-parent mainline.",
+    );
+  }
+  if (sampled.length < 3) {
+    fail(
+      "invalid-request",
+      "maxFrames must be at least 3 when project start differs from root and tip.",
+    );
+  }
+
+  const indexBySha = new Map(
+    selectedOldestFirst.map(({ commit }, index) => [commit.sha, index]),
+  );
+  let replacementIndex = 1;
+  let replacementDistance = Number.POSITIVE_INFINITY;
+  for (let index = 1; index + 1 < sampled.length; index += 1) {
+    const candidateIndex = indexBySha.get(sampled[index]!.sha)!;
+    const distance = Math.abs(candidateIndex - projectStartIndex);
+    if (distance < replacementDistance) {
+      replacementIndex = index;
+      replacementDistance = distance;
+    }
+  }
+  const retained = sampled.filter((_, index) => index !== replacementIndex);
+  retained.push(selectedOldestFirst[projectStartIndex]!.commit);
+  retained.sort(
+    (left, right) => indexBySha.get(left.sha)! - indexBySha.get(right.sha)!,
+  );
+  return Object.freeze(retained);
+}
+
 function sampleOldestFirst(
   selectedOldestFirst: readonly HistoryCommit[],
   sampleEvery: number,
@@ -1003,8 +1098,20 @@ function createSummary(
     return Object.freeze({
       ...base,
       mode: request.mode,
-      samplingStrategy: "elapsed-time-v1" as const,
+      samplingStrategy:
+        request.projectStartDetectionPolicy === undefined
+          ? ("elapsed-time-v1" as const)
+          : ("elapsed-time-project-start-v1" as const),
       maxFrames: request.maxFrames,
+      ...(request.projectStartDetectionPolicy === undefined
+        ? {}
+        : {
+            projectStartDetectionPolicy:
+              request.projectStartDetectionPolicy,
+          }),
+      ...(request.projectStartSha === undefined
+        ? {}
+        : { projectStartSha: request.projectStartSha }),
     });
   }
   const fixedIntervalBase = {
@@ -1080,9 +1187,10 @@ export function selectHistory(
   );
   const sampledOldestFirst =
     resolvedRequest.mode === "root-to-tip"
-      ? sampleElapsedTimeOldestFirst(
+      ? sampleProjectStartAwareOldestFirst(
           selectedOldestFirstValidated,
           resolvedRequest.maxFrames,
+          resolvedRequest.projectStartSha,
         )
       : sampleOldestFirst(
           selectedOldestFirst,

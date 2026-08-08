@@ -501,7 +501,7 @@ function createProjectImportHistoryControls(
     "project-import-history-max-frames",
     "number",
   );
-  maxFrames.min = "2";
+  maxFrames.min = "3";
   maxFrames.max = PROJECT_IMPORT_HISTORY_LIMITS.maxFrames.toString();
   maxFrames.step = "1";
   maxFrames.inputMode = "numeric";
@@ -911,9 +911,9 @@ export function projectImportHistorySelection(
       "Maximum animation frames",
       PROJECT_IMPORT_HISTORY_LIMITS.maxFrames,
     );
-    if (maxFrames < 2) {
+    if (maxFrames < 3) {
       throw new Error(
-        "Maximum animation frames must be at least 2.",
+        "Maximum animation frames must be at least 3 so the Git root, project start, and selected revision can be retained.",
       );
     }
     return {
@@ -1703,7 +1703,7 @@ export function installProjectImportDialog(
       const maxFrames = Number(historyControls.maxFrames.value);
       historyControls.frameHelp.textContent =
         Number.isSafeInteger(maxFrames) && maxFrames > 0
-          ? `First commit → selected revision · up to ${maxFrames.toLocaleString()} representative time-spaced ${maxFrames === 1 ? "frame" : "frames"}; intermediate commits are not analyzed`
+          ? `Technical Git root → selected revision · up to ${maxFrames.toLocaleString()} representative time-spaced ${maxFrames === 1 ? "frame" : "frames"}; playback starts at the first source candidate; intermediate commits are not analyzed`
           : `Choose up to ${PROJECT_IMPORT_HISTORY_LIMITS.maxFrames.toLocaleString()} animation frames.`;
       return;
     }
@@ -1733,7 +1733,7 @@ export function installProjectImportDialog(
       if (selection === undefined) return "Single snapshot";
       switch (selection.mode) {
         case "root-to-tip":
-          return `First commit → selected revision · up to ${selection.maxFrames.toLocaleString()} representative time-spaced ${selection.maxFrames === 1 ? "frame" : "frames"}; intermediate commits are not analyzed`;
+          return `Technical Git root → selected revision · up to ${selection.maxFrames.toLocaleString()} representative time-spaced ${selection.maxFrames === 1 ? "frame" : "frames"}; playback starts at the first source candidate; intermediate commits are not analyzed`;
         case "commit-count":
           return `${selection.commitCount.toLocaleString()} recent commits`;
         case "date-range":

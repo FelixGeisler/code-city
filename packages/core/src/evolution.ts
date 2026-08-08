@@ -16,6 +16,8 @@ import type {
 
 export const EVOLUTION_BUNDLE_SCHEMA_VERSION = "1.0" as const;
 export const EVOLUTION_AUTHOR_POLICY = "omit-v1" as const;
+export const EVOLUTION_PROJECT_START_POLICY =
+  "analyzer-candidate-source-path-v1" as const;
 
 export const EVOLUTION_CHANGE_KINDS = Object.freeze([
   "renamed",
@@ -75,8 +77,13 @@ export type NormalizedEvolutionSelection =
       readonly mode: "root-to-tip";
       readonly samplingStrategy:
         | "evenly-spaced-v1"
-        | "elapsed-time-v1";
+        | "elapsed-time-v1"
+        | "elapsed-time-project-start-v1";
       readonly maxFrames: number;
+      /** Policy used to detect the first commit with candidate source. */
+      readonly projectStartDetectionPolicy?: typeof EVOLUTION_PROJECT_START_POLICY;
+      /** Detected project start, retained as an exact sampled frame. */
+      readonly projectStartSha?: GitObjectSha;
     })
   | (NormalizedEvolutionSelectionBase & {
       readonly mode: "commit-count";
@@ -117,6 +124,12 @@ export interface EvolutionHistoryBackendProvenance {
   readonly renamePolicyRevision: string;
 }
 
+export interface EvolutionProjectStartProvenance {
+  readonly detectionPolicyRevision: typeof EVOLUTION_PROJECT_START_POLICY;
+  /** Absent when no analyzer-candidate source exists on the mainline. */
+  readonly commitSha?: GitObjectSha;
+}
+
 export interface EvolutionProvenance {
   /** CityModel repository ID whose first-parent history was analyzed. */
   readonly repositoryId: string;
@@ -128,6 +141,8 @@ export interface EvolutionProvenance {
   readonly metricConfigurationFingerprint: EvolutionFingerprint;
   /** Fingerprint of the normalized immutable history selection. */
   readonly selectionFingerprint: EvolutionFingerprint;
+  /** Present on project-start-aware complete-mainline bundles. */
+  readonly projectStart?: EvolutionProjectStartProvenance;
 }
 
 export interface EvolutionCommitMetadata {

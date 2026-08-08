@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   EVOLUTION_AUTHOR_POLICY,
   EVOLUTION_BUNDLE_SCHEMA_VERSION,
+  EVOLUTION_PROJECT_START_POLICY,
   DEFAULT_METRIC_MAPPING,
   DEFAULT_VERSIONED_METRIC_MAPPING,
   DEFAULT_SEMANTIC_GROUPS,
@@ -2660,6 +2661,18 @@ export function createHistoryEvolution(
       "History evolution produced an unexpected extra frame.",
     );
   }
+  const projectStartProvenance =
+    request.selection.summary.mode !== "root-to-tip" ||
+    request.selection.summary.projectStartDetectionPolicy === undefined
+      ? undefined
+      : Object.freeze({
+          detectionPolicyRevision: EVOLUTION_PROJECT_START_POLICY,
+          ...(request.selection.summary.projectStartSha === undefined
+            ? {}
+            : {
+                commitSha: request.selection.summary.projectStartSha,
+              }),
+        });
   const bundle: EvolutionBundle = Object.freeze({
     schemaVersion: EVOLUTION_BUNDLE_SCHEMA_VERSION,
     generator: Object.freeze({
@@ -2684,6 +2697,9 @@ export function createHistoryEvolution(
       }),
       metricConfigurationFingerprint,
       selectionFingerprint,
+      ...(projectStartProvenance === undefined
+        ? {}
+        : { projectStart: projectStartProvenance }),
     }),
     baseline: Object.freeze({
       commit: commits[0]!,
