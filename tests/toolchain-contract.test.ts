@@ -6,6 +6,7 @@ interface PackageContract {
   readonly packageManager?: string;
   readonly engines?: Readonly<Record<string, string>>;
   readonly scripts?: Readonly<Record<string, string>>;
+  readonly dependencies?: Readonly<Record<string, string>>;
 }
 
 describe("development toolchain contract", () => {
@@ -22,6 +23,10 @@ describe("development toolchain contract", () => {
     expect(packageContract.scripts?.["verify"]).toBe(
       "npm run typecheck && npm test && npm run build && npm run docs:build",
     );
+    expect(packageContract.dependencies).toMatchObject({
+      typescript: "^7.0.2",
+      "typescript-analyzer": "npm:typescript@6.0.3",
+    });
   });
 
   it("uses the same bounded verification workflow on Linux and Windows", async () => {

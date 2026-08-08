@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import ts from "typescript";
+import ts from "typescript-analyzer";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
