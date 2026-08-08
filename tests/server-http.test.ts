@@ -196,21 +196,14 @@ async function publishCompletedCityModel(
       },
     },
   );
-  const terminal = await waitForJob(
-    server,
-    queued.id,
-    ({ state }) =>
-      state === "completed" ||
-      state === "failed" ||
-      state === "cancelled",
-  );
-  expect(terminal.state).toBe("completed");
-  expect(terminal.result).toEqual({
+  const terminal = await server.jobs.waitForTerminal(queued.id);
+  expect(terminal?.state).toBe("completed");
+  expect(terminal!.result).toEqual({
     kind: "city-model",
     artifactToken: queued.id,
     artifactUrl: `/api/v1/artifacts/${queued.id}/city-model.json`,
   });
-  return terminal;
+  return terminal!;
 }
 
 async function publishCompletedHistory(
@@ -244,16 +237,9 @@ async function publishCompletedHistory(
       },
     },
   );
-  const terminal = await waitForJob(
-    server,
-    queued.id,
-    ({ state }) =>
-      state === "completed" ||
-      state === "failed" ||
-      state === "cancelled",
-  );
-  expect(terminal.state).toBe("completed");
-  return terminal;
+  const terminal = await server.jobs.waitForTerminal(queued.id);
+  expect(terminal?.state).toBe("completed");
+  return terminal!;
 }
 
 function request(
