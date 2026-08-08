@@ -43,11 +43,20 @@ import {
   type HistorySelectionResult,
   type RootToTipHistorySelectionRequest,
 } from "./history-selection.js";
-import { analyzeRepositorySnapshotFacts } from "./discovery.js";
+import {
+  analyzeRepositorySnapshotFacts,
+  type RepositorySnapshotSourceAnalysisExecution,
+} from "./discovery.js";
 import {
   DEFAULT_SNAPSHOT_LIMITS,
   type RepositorySnapshot,
 } from "./snapshot.js";
+import {
+  HISTORY_SOURCE_ANALYSIS_CACHE_LIMITS,
+  HistorySourceAnalysisCache,
+  type SourceAnalysisCacheStats,
+  type SourceAnalysisDetailLevel,
+} from "./source-analysis-cache.js";
 import type {
   HistoryAnalysisFacts,
   LocalAnalysisFacts,
@@ -189,6 +198,8 @@ export interface HistorySnapshotAnalysisContext {
     Required<HistoryAnalysisSnapshotOptions>
   >;
   readonly timeoutMs: number;
+  readonly detailLevel: SourceAnalysisDetailLevel;
+  readonly sourceAnalysis?: RepositorySnapshotSourceAnalysisExecution;
   readonly signal?: AbortSignal;
 }
 
@@ -207,6 +218,8 @@ export interface GenericGitHistoryAnalysisDependencies {
   readonly withHistoryRepository?: GenericGitHistoryRepositoryProvider;
   readonly git?: GenericGitSnapshotDependencies;
   readonly semanticCache?: HistorySemanticCacheLike;
+  /** Optional lower run-local per-file cache bound for tests/deployments. */
+  readonly sourceAnalysisCacheMaximumBytes?: number;
   readonly analyzeSnapshot?: AnalyzeHistorySnapshot;
   readonly createEvolution?: (
     request: HistoryEvolutionRequest,
@@ -226,6 +239,7 @@ export interface GenericGitHistoryAnalysisResult {
   readonly costEstimate: GenericGitHistoryCostEstimate;
   readonly cacheHits: number;
   readonly cacheMisses: number;
+  readonly sourceAnalysisCache: SourceAnalysisCacheStats;
 }
 
 export interface GenericGitHistoryCostEstimate {
@@ -1397,17 +1411,29 @@ function historicalVisualizationFacts(
   });
 }
 
+function sourceAnalysisConfigurationFingerprint(value: unknown): string {
+  return createHash("sha256")
+    .update(JSON.stringify(value), "utf8")
+    .digest("hex");
+}
+
 async function defaultAnalyzeSnapshot(
   snapshot: RepositorySnapshot,
   context: HistorySnapshotAnalysisContext,
 ): Promise<LocalAnalysisFacts> {
-  return await analyzeRepositorySnapshotFacts([snapshot], {
-    ...context.analysisOptions,
-    timeoutMs: context.timeoutMs,
-    ...(context.signal === undefined
+  return await analyzeRepositorySnapshotFacts(
+    [snapshot],
+    {
+      ...context.analysisOptions,
+      timeoutMs: context.timeoutMs,
+      ...(context.signal === undefined
+        ? {}
+        : { signal: context.signal }),
+    },
+    context.sourceAnalysis === undefined
       ? {}
-      : { signal: context.signal }),
-  });
+      : { sourceAnalysis: context.sourceAnalysis },
+  );
 }
 
 function releaseLeases(
@@ -1482,6 +1508,20 @@ async function analyzeSession(
 
   const analyzeSnapshot =
     dependencies.analyzeSnapshot ?? defaultAnalyzeSnapshot;
+  const sourceAnalysisCache = new HistorySourceAnalysisCache(
+    Math.min(
+      dependencies.sourceAnalysisCacheMaximumBytes ??
+        HISTORY_SOURCE_ANALYSIS_CACHE_LIMITS.defaultBytes,
+      bounds.maxAggregateSemanticBytes,
+    ),
+  );
+  const sourceAnalysisConfiguration = Object.freeze({
+    cache: sourceAnalysisCache,
+    analyzerFingerprint,
+    configurationFingerprint: sourceAnalysisConfigurationFingerprint(
+      options.semanticConfiguration,
+    ),
+  });
   const createEvolutionResult =
     dependencies.createEvolution ?? createHistoryEvolution;
   const leases: HistorySemanticCacheLeaseLike[] = [];
@@ -1501,6 +1541,10 @@ async function analyzeSession(
     }[] = [];
     for (const commit of selection.sampledCommits) {
       checkpoint(clock);
+      const detailLevel: SourceAnalysisDetailLevel =
+        commit.sha === selection.summary.resolvedNewestSha
+          ? "full"
+          : "summary";
       let snapshotFileCount: number | undefined;
       let activeLease: HistorySemanticCacheLeaseLike | undefined;
       const compute = async (): Promise<LocalAnalysisFacts> => {
@@ -1520,6 +1564,11 @@ async function analyzeSession(
               metricConfiguration: options.metricConfiguration,
               analysisOptions: options.snapshotOptions,
               timeoutMs: remainingMilliseconds(clock),
+              detailLevel,
+              sourceAnalysis: Object.freeze({
+                ...sourceAnalysisConfiguration,
+                detailLevel,
+              }),
               ...(clock.signal === undefined
                 ? {}
                 : { signal: clock.signal }),
@@ -1549,7 +1598,10 @@ async function analyzeSession(
                 repositoryIdentity: request.repositoryIdentity,
                 commitSha: commit.sha,
                 analyzerFingerprint,
-                configuration: options.semanticConfiguration,
+                configuration: Object.freeze({
+                  semanticConfiguration: options.semanticConfiguration,
+                  detailLevel,
+                }),
               },
               compute,
               {
@@ -1686,6 +1738,7 @@ async function analyzeSession(
       }),
       cacheHits,
       cacheMisses,
+      sourceAnalysisCache: sourceAnalysisCache.stats(),
     });
   } catch (error) {
     failed = true;
@@ -1705,6 +1758,7 @@ async function analyzeSession(
       failure = releaseError;
     }
   }
+  sourceAnalysisCache.clear();
   if (failed) throw failure;
   if (value === undefined) {
     throw new HistoryEvolutionError(

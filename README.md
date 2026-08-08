@@ -60,7 +60,9 @@ that span by elapsed time. It always retains the first commit containing a
 regular analyzer-candidate source path and starts normal playback there; the
 technical pre-project baseline remains available in the scrubber. These are
 representative snapshots: intermediate commits are indexed as lightweight
-metadata, but their source is not analyzed.
+metadata, but their source is not analyzed. A byte-bounded run-local cache
+reuses unchanged path-independent source analysis while project ownership and
+dependency resolution are recomputed for every retained frame.
 Recent commit count, inclusive UTC date range, and two exact tag names remain
 available as custom ranges.
 Directory packaging runs in a cancellable browser worker,
