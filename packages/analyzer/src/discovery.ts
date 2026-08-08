@@ -1357,13 +1357,13 @@ function cachedSourceKey(
   );
 }
 
-function retainedTypeScriptAnalysis(
+async function retainedTypeScriptAnalysis(
   workspace: TypeScriptWorkspace,
   sourcePath: string,
   sourceText: string,
   detailLevel: SourceAnalysisDetailLevel,
-): UnboundSourceAnalysis {
-  const sourceFile = workspace.sourceFile(sourcePath);
+): Promise<UnboundSourceAnalysis> {
+  const sourceFile = await workspace.sourceFile(sourcePath);
   if (sourceFile === undefined) {
     return Object.freeze({
       status: "skipped" as const,
@@ -1372,7 +1372,7 @@ function retainedTypeScriptAnalysis(
   }
   const analysis = analyzeParsedTypeScriptSource(
     sourceFile,
-    workspace.hasSyntacticErrors(sourcePath),
+    await workspace.hasSyntacticErrors(sourcePath),
   );
   if (analysis.hasSyntaxErrors) {
     return Object.freeze({
@@ -1702,7 +1702,7 @@ async function analyzeSources(
       }
       const analysis =
         cached ??
-        retainedTypeScriptAnalysis(
+        await retainedTypeScriptAnalysis(
           typeScriptWorkspace!,
           sourcePath,
           sourceText,
@@ -1851,12 +1851,12 @@ function mergeDependencies(
   );
 }
 
-function buildDependencies(
+async function buildDependencies(
   typeScriptWorkspace: TypeScriptWorkspace | undefined,
   modules: readonly InternalModule[],
   sources: readonly PendingSource[],
   guard: AnalysisGuard,
-): readonly CityDependency[] {
+): Promise<readonly CityDependency[]> {
   const dependencies: CityDependency[] = [];
   const moduleByProjectPath = new Map(
     modules
@@ -1976,7 +1976,7 @@ function buildDependencies(
     if (source.fact.language === "csharp") continue;
     for (const imported of source.imports) {
       guard.check();
-      const resolved = typeScriptWorkspace?.resolveImport(
+      const resolved = await typeScriptWorkspace?.resolveImport(
         source.virtualPath,
         imported.specifier,
       );
@@ -2178,8 +2178,11 @@ export async function analyzeRepositorySnapshotFacts(
     ),
   );
   guard.check();
-  using typeScriptWorkspace = hasTypeScriptSources
-    ? new TypeScriptWorkspace(typeScriptFiles)
+  await using typeScriptWorkspace = hasTypeScriptSources
+    ? await TypeScriptWorkspace.create(typeScriptFiles, {
+        timeoutMs: guard.remainingMs(),
+        ...(guard.signal === undefined ? {} : { signal: guard.signal }),
+      })
     : undefined;
   guard.check();
   const sourceResult = await analyzeSources(
@@ -2213,7 +2216,7 @@ export async function analyzeRepositorySnapshotFacts(
     ...discoveredModules,
     ...sourceResult.unassignedModules,
   ].sort((left, right) => compareStable(left.module.id, right.module.id));
-  const dependencies = buildDependencies(
+  const dependencies = await buildDependencies(
     typeScriptWorkspace,
     allModules,
     sourceResult.sources,

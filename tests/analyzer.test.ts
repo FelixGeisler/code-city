@@ -50,8 +50,8 @@ afterEach(async () => {
 });
 
 describe("language metric front ends", () => {
-  it("measures TypeScript executable units independently", () => {
-    const result = analyzeTypeScriptSource(
+  it("measures TypeScript executable units independently", async () => {
+    const result = await analyzeTypeScriptSource(
       "example.ts",
       `const initial = input ?? 0;
 function choose(a: boolean, b: boolean) {
@@ -94,8 +94,8 @@ class Sample {
     );
   });
 
-  it("counts logical assignments as decisions in both front ends", () => {
-    const typeScript = analyzeTypeScriptSource(
+  it("counts logical assignments as decisions in both front ends", async () => {
+    const typeScript = await analyzeTypeScriptSource(
       "logical.ts",
       "function assign() { left &&= right; fallback ??= right; }\n",
     );
@@ -115,8 +115,8 @@ class Sample {
     );
   });
 
-  it("captures literal dynamic imports", () => {
-    const result = analyzeTypeScriptSource(
+  it("captures literal dynamic imports", async () => {
+    const result = await analyzeTypeScriptSource(
       "dynamic.ts",
       `const module = import("./feature"); import(variable);`,
     );

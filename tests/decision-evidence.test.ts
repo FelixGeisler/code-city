@@ -21,12 +21,12 @@ function textAtInclusiveRange(source: string, range: SourceRange): string {
   ].join("\n");
 }
 
-function callableEvidence(
+async function callableEvidence(
   fileName: string,
   source: string,
   name: string,
 ) {
-  const result = analyzeTypeScriptSource(fileName, source);
+  const result = await analyzeTypeScriptSource(fileName, source);
   const unit = result.units.find((candidate) => candidate.name === name)!;
   const evidence = unit.decisionEvidence!;
   const callable = result.sourceStructure.callables.find(
@@ -39,7 +39,7 @@ function callableEvidence(
 }
 
 describe("complexity decision-site evidence", () => {
-  it("records exact TypeScript branch, loop, switch, catch, conditional, and operator sites", () => {
+  it("records exact TypeScript branch, loop, switch, catch, conditional, and operator sites", async () => {
     const source = [
       "function decide(a: boolean, b: boolean, value?: number) {",
       "  for (let index = 0; index < 1; index += 1) {",
@@ -53,7 +53,11 @@ describe("complexity decision-site evidence", () => {
       "  } catch { return 0; }",
       "}",
     ].join("\n");
-    const { unit, evidence } = callableEvidence("decision.ts", source, "decide");
+    const { unit, evidence } = await callableEvidence(
+      "decision.ts",
+      source,
+      "decide",
+    );
 
     expect(evidence.status).toBe("complete");
     if (evidence.status !== "complete") throw new Error("Expected complete evidence.");
@@ -77,7 +81,7 @@ describe("complexity decision-site evidence", () => {
     ).toBe(unit.complexity - 1);
   });
 
-  it("uses the same exact contract for JavaScript logical assignments", () => {
+  it("uses the same exact contract for JavaScript logical assignments", async () => {
     const source = [
       "export function update(left, right) {",
       "  left &&= right;",
@@ -86,7 +90,11 @@ describe("complexity decision-site evidence", () => {
       "  return left ? right : null;",
       "}",
     ].join("\n");
-    const { unit, evidence } = callableEvidence("decision.js", source, "update");
+    const { unit, evidence } = await callableEvidence(
+      "decision.js",
+      source,
+      "update",
+    );
 
     expect(evidence.status).toBe("complete");
     expect(evidence.sites.map(({ kind }) => kind)).toEqual([
@@ -114,14 +122,14 @@ describe("complexity decision-site evidence", () => {
     expect(JSON.stringify(result.units)).not.toContain("totalContribution");
   });
 
-  it("truncates deterministically at per-unit and per-file limits", () => {
+  it("truncates deterministically at per-unit and per-file limits", async () => {
     const body = Array.from(
       { length: CITY_MODEL_LIMITS.decisionSitesPerUnit + 44 },
       (_, index) => `  if (values[${index}]) total += ${index};`,
     ).join("\n");
     const source = `function crowded(values: boolean[]) {\n  let total = 0;\n${body}\n  return total;\n}`;
-    const first = analyzeTypeScriptSource("crowded.ts", source);
-    const second = analyzeTypeScriptSource("crowded.ts", source);
+    const first = await analyzeTypeScriptSource("crowded.ts", source);
+    const second = await analyzeTypeScriptSource("crowded.ts", source);
     const evidence = first.units.find(({ name }) => name === "crowded")!
       .decisionEvidence!;
 
@@ -140,7 +148,7 @@ describe("complexity decision-site evidence", () => {
       ).join("\n");
       return `function f${functionIndex}(values: boolean[]) { let total = 0;\n${decisions}\nreturn total; }`;
     }).join("\n");
-    const bounded = analyzeTypeScriptSource("bounded.ts", functions);
+    const bounded = await analyzeTypeScriptSource("bounded.ts", functions);
     const retained = bounded.units.reduce(
       (total, unit) => total + (unit.decisionEvidence?.sites.length ?? 0),
       0,
