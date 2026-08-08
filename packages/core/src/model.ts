@@ -4,6 +4,7 @@ export type SourceLanguage = "csharp" | "typescript" | "javascript";
 export type RiskBand = "low" | "moderate" | "high" | "very-high";
 export type MetricMethod =
   | "typescript-compiler-api-v1"
+  | "typescript-native-api-v2"
   | "csharp-lexical-v1"
   | "csharp-roslyn-v1";
 export type ModuleKind =

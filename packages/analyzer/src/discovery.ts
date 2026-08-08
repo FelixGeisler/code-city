@@ -1,5 +1,6 @@
 import path from "node:path";
-import ts from "typescript";
+
+import { parse as parseJsonc, type ParseError } from "jsonc-parser";
 
 import type {
   CityDependency,
@@ -57,7 +58,11 @@ import type {
 import {
   acquireLocalLogoPrintRelief,
 } from "./local-logo-relief.js";
-import { analyzeTypeScriptSource } from "./typescript-metrics.js";
+import { analyzeParsedTypeScriptSource } from "./typescript-metrics.js";
+import {
+  TypeScriptWorkspace,
+  type TypeScriptWorkspaceFile,
+} from "./typescript-workspace.js";
 import {
   HistorySourceAnalysisCache,
   type SourceAnalysisDetailLevel,
@@ -742,13 +747,17 @@ async function discoverDotnetModules(
 }
 
 function parseJsonFile(
-  filePath: string,
   text: string,
 ): Record<string, unknown> | undefined {
-  const result = ts.parseConfigFileTextToJson(filePath, text);
-  return result.error
-    ? undefined
-    : (result.config as Record<string, unknown> | undefined);
+  const errors: ParseError[] = [];
+  const result: unknown = parseJsonc(text, errors, {
+    allowEmptyContent: false,
+    allowTrailingComma: true,
+    disallowComments: false,
+  });
+  return errors.length === 0 && jsonObject(result)
+    ? result
+    : undefined;
 }
 
 function jsonObject(value: unknown): value is Record<string, unknown> {
@@ -950,7 +959,7 @@ async function discoverAngularModules(
   for (const workspaceFile of workspaceFiles) {
     guard.check();
     const text = snapshotText(context, workspaceFile);
-    const config = parseJsonFile(workspaceFile, text);
+    const config = parseJsonFile(text);
     const projects =
       config?.["projects"] && typeof config["projects"] === "object"
         ? (config["projects"] as Record<string, unknown>)
@@ -1349,11 +1358,22 @@ function cachedSourceKey(
 }
 
 function retainedTypeScriptAnalysis(
+  workspace: TypeScriptWorkspace,
   sourcePath: string,
   sourceText: string,
   detailLevel: SourceAnalysisDetailLevel,
 ): UnboundSourceAnalysis {
-  const analysis = analyzeTypeScriptSource(sourcePath, sourceText);
+  const sourceFile = workspace.sourceFile(sourcePath);
+  if (sourceFile === undefined) {
+    return Object.freeze({
+      status: "skipped" as const,
+      reason: "typescript-syntax-errors" as const,
+    });
+  }
+  const analysis = analyzeParsedTypeScriptSource(
+    sourceFile,
+    workspace.hasSyntacticErrors(sourcePath),
+  );
   if (analysis.hasSyntaxErrors) {
     return Object.freeze({
       status: "skipped" as const,
@@ -1369,7 +1389,7 @@ function retainedTypeScriptAnalysis(
       maximumComplexity: analysis.maximumComplexity,
       executableUnitCount: analysis.executableUnitCount,
     }),
-    metricMethod: "typescript-compiler-api-v1" as const,
+    metricMethod: "typescript-native-api-v2" as const,
     imports,
     ...(detailLevel === "summary"
       ? {}
@@ -1585,6 +1605,7 @@ function bindSourceStructure(
 
 async function analyzeSources(
   contexts: readonly RootContext[],
+  typeScriptWorkspace: TypeScriptWorkspace | undefined,
   modules: InternalModule[],
   warnings: string[],
   guard: AnalysisGuard,
@@ -1676,9 +1697,13 @@ async function analyzeSources(
         continue;
       }
 
+      if (cached === undefined && typeScriptWorkspace === undefined) {
+        throw new Error("TypeScript workspace is unavailable.");
+      }
       const analysis =
         cached ??
         retainedTypeScriptAnalysis(
+          typeScriptWorkspace!,
           sourcePath,
           sourceText,
           sourceAnalysisExecution?.detailLevel ?? "full",
@@ -1782,99 +1807,6 @@ async function analyzeSources(
   };
 }
 
-type RestrictedTypeScriptHost = ts.ParseConfigHost & ts.ModuleResolutionHost;
-
-function snapshotTypeScriptHost(
-  contexts: readonly RootContext[],
-): RestrictedTypeScriptHost {
-  const files = new Map<string, string>();
-  const directories = new Set<string>();
-  for (const context of contexts) {
-    directories.add(virtualKey(context.virtualRoot));
-    for (const file of context.files) {
-      const key = virtualKey(file);
-      const text = context.textByPath.get(key);
-      if (text !== undefined) files.set(key, text);
-      let directory = path.posix.dirname(key);
-      while (virtualIsWithin(context.virtualRoot, directory)) {
-        directories.add(directory);
-        if (directory === context.virtualRoot) break;
-        directory = path.posix.dirname(directory);
-      }
-    }
-  }
-
-  function admittedFile(candidate: string): string | undefined {
-    return files.get(virtualKey(candidate));
-  }
-
-  return {
-    useCaseSensitiveFileNames: true,
-    fileExists: (fileName) => admittedFile(fileName) !== undefined,
-    readFile: (fileName) => admittedFile(fileName),
-    // Analysis consumes compiler options only. Config include/exclude expansion
-    // is intentionally disabled so it cannot widen the immutable snapshot.
-    readDirectory: () => [],
-    directoryExists: (directoryName) =>
-      directories.has(virtualKey(directoryName)),
-    getDirectories: () => [],
-    realpath: (candidate) => virtualKey(candidate),
-  };
-}
-
-function parseCompilerOptions(
-  configPath: string,
-  host: RestrictedTypeScriptHost,
-): ts.CompilerOptions {
-  const read = ts.readConfigFile(configPath, host.readFile);
-  if (read.error) return {};
-  return ts.parseJsonConfigFileContent(
-    read.config,
-    host,
-    path.posix.dirname(configPath),
-    undefined,
-    configPath,
-  ).options;
-}
-
-function compilerOptionsFor(
-  sourcePath: string,
-  repositoryRoot: string,
-  configFiles: readonly string[],
-  cache: Map<string, ts.CompilerOptions>,
-  host: RestrictedTypeScriptHost,
-): ts.CompilerOptions {
-  function directoryDepth(configPath: string): number {
-    const relative = path.posix.relative(
-      repositoryRoot,
-      path.posix.dirname(configPath),
-    );
-    if (relative === "") return 0;
-    return relative.split("/").filter(Boolean).length;
-  }
-
-  const selected = configFiles
-    .filter((config) =>
-      virtualIsWithin(path.posix.dirname(config), sourcePath),
-    )
-    .sort(
-      (left, right) =>
-        directoryDepth(right) - directoryDepth(left) ||
-        compareStable(left, right),
-    )[0];
-  if (!selected) {
-    return {
-      allowJs: true,
-      moduleResolution: ts.ModuleResolutionKind.Node10,
-    };
-  }
-  const cached = cache.get(selected);
-  if (cached) return cached;
-  const parsed = parseCompilerOptions(selected, host);
-  cache.set(selected, parsed);
-  return parsed;
-}
-
 function packageGateway(specifier: string): string {
   if (specifier.startsWith(".")) {
     return sanitizeExternalReference(specifier, "unresolved-module");
@@ -1920,7 +1852,7 @@ function mergeDependencies(
 }
 
 function buildDependencies(
-  contexts: readonly RootContext[],
+  typeScriptWorkspace: TypeScriptWorkspace | undefined,
   modules: readonly InternalModule[],
   sources: readonly PendingSource[],
   guard: AnalysisGuard,
@@ -2039,37 +1971,15 @@ function buildDependencies(
       source.fact,
     ]),
   );
-  const configsByRoot = new Map<string, readonly string[]>();
-  for (const context of contexts) {
-    configsByRoot.set(
-      context.virtualRoot,
-      context.files.filter((file) =>
-        /^tsconfig(?:\..+)?\.json$/iu.test(path.posix.basename(file)),
-      ),
-    );
-  }
-  const compilerOptionsCache = new Map<string, ts.CompilerOptions>();
-  const resolutionHost = snapshotTypeScriptHost(contexts);
-
   for (const source of sources) {
     guard.check();
     if (source.fact.language === "csharp") continue;
-    const configs = configsByRoot.get(source.repositoryRoot) ?? [];
-    const options = compilerOptionsFor(
-      source.virtualPath,
-      source.repositoryRoot,
-      configs,
-      compilerOptionsCache,
-      resolutionHost,
-    );
     for (const imported of source.imports) {
       guard.check();
-      const resolved = ts.resolveModuleName(
-        imported.specifier,
+      const resolved = typeScriptWorkspace?.resolveImport(
         source.virtualPath,
-        options,
-        resolutionHost,
-      ).resolvedModule?.resolvedFileName;
+        imported.specifier,
+      );
       const target = resolved
         ? sourceByPath.get(
             virtualKey(resolved),
@@ -2252,8 +2162,29 @@ export async function analyzeRepositorySnapshotFacts(
       ]),
     )
   ).flat();
+  const typeScriptFiles: TypeScriptWorkspaceFile[] = contexts.flatMap(
+    (context) =>
+      context.files
+        .filter((filePath) => /\.(?:[cm]?[jt]sx?|json)$/iu.test(filePath))
+        .map((filePath) => ({
+          path: filePath,
+          text: snapshotText(context, filePath),
+        })),
+  );
+  const hasTypeScriptSources = contexts.some((context) =>
+    context.files.some(
+      (filePath) =>
+        isSourceFile(filePath) && languageOf(filePath) !== "csharp",
+    ),
+  );
+  guard.check();
+  using typeScriptWorkspace = hasTypeScriptSources
+    ? new TypeScriptWorkspace(typeScriptFiles)
+    : undefined;
+  guard.check();
   const sourceResult = await analyzeSources(
     contexts,
+    typeScriptWorkspace,
     discoveredModules,
     warnings,
     guard,
@@ -2283,7 +2214,7 @@ export async function analyzeRepositorySnapshotFacts(
     ...sourceResult.unassignedModules,
   ].sort((left, right) => compareStable(left.module.id, right.module.id));
   const dependencies = buildDependencies(
-    contexts,
+    typeScriptWorkspace,
     allModules,
     sourceResult.sources,
     guard,

@@ -19,6 +19,7 @@ const LANGUAGES = new Set(["csharp", "typescript", "javascript"]);
 const RISKS = new Set(["low", "moderate", "high", "very-high"]);
 const METRIC_METHODS = new Set([
   "typescript-compiler-api-v1",
+  "typescript-native-api-v2",
   "csharp-lexical-v1",
   "csharp-roslyn-v1",
 ]);

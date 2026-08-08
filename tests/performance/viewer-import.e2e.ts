@@ -3125,7 +3125,7 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   await expect(metricPresentation).toContainText("Color");
   await expect(metricPresentation).toContainText("Measured with");
   await expect(page.locator("#building-metric-rows")).not.toContainText(
-    "typescript-compiler-api-v1",
+    "typescript-native-api-v2",
   );
   const technicalMetrics = page.locator(
     "#building-metric-technical-details",
@@ -3133,7 +3133,7 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   await expect(technicalMetrics).not.toHaveAttribute("open", "");
   await technicalMetrics.locator("summary").click();
   await expect(page.locator("#building-metric-technical")).toContainText(
-    "typescript-compiler-api-v1",
+    "typescript-native-api-v2",
   );
   await expect(page.locator("#building-metric-technical")).toContainText(
     "Mapping provenance",

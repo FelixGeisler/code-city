@@ -73,7 +73,7 @@
     ]
   },
   "web/main.ts": {
-    "metricMethod": "typescript-compiler-api-v1",
+    "metricMethod": "typescript-native-api-v2",
     "metrics": {
       "sloc": 7,
       "decisionLoad": 3,
@@ -103,9 +103,9 @@
         "complexity": 4,
         "decisionEvidence": {
           "version": "codecity.complexity-evidence/1",
-          "unitId": "building:3484f10461080e34:unit:callable:callable:953ca195da6b9a69",
+          "unitId": "building:3484f10461080e34:unit:callable:callable:762af7930e0ebc8b",
           "scope": "callable",
-          "callableId": "building:3484f10461080e34:callable:callable:953ca195da6b9a69",
+          "callableId": "building:3484f10461080e34:callable:callable:762af7930e0ebc8b",
           "status": "complete",
           "totalContribution": 3,
           "omittedContribution": 0,
@@ -146,7 +146,7 @@
     ]
   },
   "web/card.tsx": {
-    "metricMethod": "typescript-compiler-api-v1",
+    "metricMethod": "typescript-native-api-v2",
     "metrics": {
       "sloc": 9,
       "decisionLoad": 1,
@@ -176,9 +176,9 @@
         "complexity": 2,
         "decisionEvidence": {
           "version": "codecity.complexity-evidence/1",
-          "unitId": "building:a4ff97c43a1841cc:unit:callable:callable:a5d8e0c9580ace9f",
+          "unitId": "building:a4ff97c43a1841cc:unit:callable:callable:33dbc8905e22adbb",
           "scope": "callable",
-          "callableId": "building:a4ff97c43a1841cc:callable:callable:a5d8e0c9580ace9f",
+          "callableId": "building:a4ff97c43a1841cc:callable:callable:33dbc8905e22adbb",
           "status": "complete",
           "totalContribution": 1,
           "omittedContribution": 0,
@@ -203,9 +203,9 @@
         "complexity": 1,
         "decisionEvidence": {
           "version": "codecity.complexity-evidence/1",
-          "unitId": "building:a4ff97c43a1841cc:unit:callable:callable:7d5f19460a6c8153",
+          "unitId": "building:a4ff97c43a1841cc:unit:callable:callable:f712ad891ebba2b7",
           "scope": "callable",
-          "callableId": "building:a4ff97c43a1841cc:callable:callable:7d5f19460a6c8153",
+          "callableId": "building:a4ff97c43a1841cc:callable:callable:f712ad891ebba2b7",
           "status": "complete",
           "totalContribution": 0,
           "omittedContribution": 0,
@@ -215,7 +215,7 @@
     ]
   },
   "web/legacy.js": {
-    "metricMethod": "typescript-compiler-api-v1",
+    "metricMethod": "typescript-native-api-v2",
     "metrics": {
       "sloc": 4,
       "decisionLoad": 4,

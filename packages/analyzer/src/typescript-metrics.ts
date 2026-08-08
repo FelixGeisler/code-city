@@ -1,5 +1,6 @@
-import path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+
+import { withTypeScriptSource } from "./typescript-workspace.js";
 
 import type {
   ExecutableUnitMetric,
@@ -39,10 +40,14 @@ export interface TypeScriptMetricsResult {
   readonly sourceStructure: SourceStructure;
 }
 
-function sourceRange(node: ts.Node, source: ts.SourceFile) {
-  const start = source.getLineAndCharacterOfPosition(node.getStart(source));
+function sourceRangeAt(
+  startPosition: number,
+  endPosition: number,
+  source: ts.SourceFile,
+) {
+  const start = source.getLineAndCharacterOfPosition(startPosition);
   const end = source.getLineAndCharacterOfPosition(
-    Math.max(node.getStart(source), node.getEnd() - 1),
+    Math.max(startPosition, endPosition - 1),
   );
   return Object.freeze({
     startLine: start.line + 1,
@@ -50,6 +55,10 @@ function sourceRange(node: ts.Node, source: ts.SourceFile) {
     endLine: end.line + 1,
     endColumn: end.character + 1,
   });
+}
+
+function sourceRange(node: ts.Node, source: ts.SourceFile) {
+  return sourceRangeAt(node.getStart(source), node.getEnd(), source);
 }
 
 function sourceTypeKind(node: ts.Node): SourceTypeFact["kind"] | undefined {
@@ -93,7 +102,7 @@ function collectSourceStructure(source: ts.SourceFile): CollectedSourceStructure
     if (isExecutableUnit(node) && !ts.isSourceFile(node) && node.body) {
       rawCallables.push({ node, name: sanitizeSourceName(unitName(node, source), "<callable>"), kind: sourceCallableKind(node), range: sourceRange(node, source) });
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
   visit(source);
   const compareDeclaration = <T extends { readonly range: { readonly startLine: number; readonly startColumn: number }; readonly kind: string; readonly name: string }>(a: T, b: T) =>
@@ -174,7 +183,6 @@ function declarationIdentity(node: ts.Node, source: ts.SourceFile): string {
 function canonicalTokens(node: ts.Node | undefined, source: ts.SourceFile): string {
   if (node === undefined) return "unknown";
   const scanner = ts.createScanner(
-    source.languageVersion,
     true,
     source.languageVariant,
     node.getText(source),
@@ -182,7 +190,7 @@ function canonicalTokens(node: ts.Node | undefined, source: ts.SourceFile): stri
   const tokens: string[] = [];
   for (
     let kind = scanner.scan();
-    kind !== ts.SyntaxKind.EndOfFileToken;
+    kind !== ts.SyntaxKind.EndOfFile;
     kind = scanner.scan()
   ) {
     const semanticToken =
@@ -192,7 +200,9 @@ function canonicalTokens(node: ts.Node | undefined, source: ts.SourceFile): stri
     const text = (
       semanticToken ? scanner.getTokenValue() : scanner.getTokenText()
     ).normalize("NFC");
-    tokens.push(`${kind}:${text.length}:${text}`);
+    tokens.push(
+      `${ts.SyntaxKind[kind] ?? "Unknown"}:${text.length}:${text}`,
+    );
   }
   return tokens.join("|");
 }
@@ -213,7 +223,7 @@ function sanitizeSourceName(value: string | undefined, fallback: string): string
 }
 
 function callableComplexity(node: ts.Node, source: ts.SourceFile): number {
-  const body = (node as ts.FunctionLikeDeclarationBase).body;
+  const body = isExecutableUnit(node) ? node.body : undefined;
   if (!body) return 1;
   return 1 + collectDecisionAnalysis(body, source).totalContribution;
 }
@@ -223,7 +233,9 @@ function compareText(left: string, right: string): number {
 }
 
 function unitName(node: ts.FunctionLikeDeclaration, source: ts.SourceFile): string {
-  const explicitName = node.name?.getText(source);
+  const explicitName = "name" in node
+    ? node.name?.getText(source)
+    : undefined;
   let name = explicitName;
   const parent = node.parent;
   if (!name && (ts.isVariableDeclaration(parent) || ts.isPropertyDeclaration(parent) || ts.isPropertyAssignment(parent)) && parent.name) {
@@ -253,6 +265,7 @@ function decisionSite(
 ): ComplexityDecisionSite | undefined {
   let kind: ComplexityDecisionSite["kind"] | undefined;
   let marker: ts.Node | undefined;
+  let markerRange: ReturnType<typeof sourceRangeAt> | undefined;
   if (
     ts.isIfStatement(node) ||
     ts.isForStatement(node) ||
@@ -270,7 +283,21 @@ function decisionSite(
         : ts.isCaseClause(node)
           ? "switch-arm"
           : "loop";
-    marker = node.getFirstToken(source);
+    const keywordLength = ts.isIfStatement(node) || ts.isDoStatement(node)
+      ? 2
+      : ts.isForStatement(node) ||
+          ts.isForInStatement(node) ||
+          ts.isForOfStatement(node)
+        ? 3
+        : ts.isCaseClause(node)
+          ? 4
+          : 5;
+    const markerStart = node.getStart(source);
+    markerRange = sourceRangeAt(
+      markerStart,
+      markerStart + keywordLength,
+      source,
+    );
   } else if (ts.isConditionalExpression(node)) {
     kind = "conditional-expression";
     marker = node.questionToken;
@@ -292,8 +319,14 @@ function decisionSite(
       marker = node.operatorToken;
     }
   }
-  if (kind === undefined || marker === undefined) return undefined;
-  return Object.freeze({ kind, range: sourceRange(marker, source), contribution: 1 });
+  if (kind === undefined || (marker === undefined && markerRange === undefined)) {
+    return undefined;
+  }
+  return Object.freeze({
+    kind,
+    range: markerRange ?? sourceRange(marker!, source),
+    contribution: 1,
+  });
 }
 
 function compareDecisionSites(
@@ -338,7 +371,7 @@ function collectDecisionAnalysis(
       totalContribution += site.contribution;
       retainEarliestDecisionSite(sites, site);
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(body);
   return Object.freeze({
@@ -357,7 +390,6 @@ function countSloc(
       ? ts.LanguageVariant.JSX
       : ts.LanguageVariant.Standard;
   const scanner = ts.createScanner(
-    ts.ScriptTarget.Latest,
     true,
     languageVariant,
     source,
@@ -366,11 +398,11 @@ function countSloc(
 
   for (
     let token = scanner.scan();
-    token !== ts.SyntaxKind.EndOfFileToken;
+    token !== ts.SyntaxKind.EndOfFile;
     token = scanner.scan()
   ) {
-    const start = scanner.getTokenPos();
-    const end = Math.max(start, scanner.getTextPos() - 1);
+    const start = scanner.getTokenStart();
+    const end = Math.max(start, scanner.getTokenEnd() - 1);
     const firstLine = sourceFile.getLineAndCharacterOfPosition(start).line;
     const lastLine = sourceFile.getLineAndCharacterOfPosition(end).line;
     for (let line = firstLine; line <= lastLine; line += 1) occupied.add(line);
@@ -405,7 +437,7 @@ function collectUnits(
         analyzeBody(node.body, unitName(node, source), nestedLine, node);
         return;
       }
-      ts.forEachChild(node, visit);
+      node.forEachChild(visit);
     }
 
     visit(body);
@@ -496,14 +528,14 @@ function collectStaticImports(
     if (
       (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
       node.moduleSpecifier &&
-      ts.isStringLiteralLike(node.moduleSpecifier)
+      ts.isStringLiteralLikeNode(node.moduleSpecifier)
     ) {
       add(node.moduleSpecifier.text);
     } else if (
       ts.isImportEqualsDeclaration(node) &&
       ts.isExternalModuleReference(node.moduleReference) &&
       node.moduleReference.expression &&
-      ts.isStringLiteralLike(node.moduleReference.expression)
+      ts.isStringLiteralLikeNode(node.moduleReference.expression)
     ) {
       add(node.moduleReference.expression.text);
     } else if (
@@ -513,16 +545,16 @@ function collectStaticImports(
       node.arguments.length === 1
     ) {
       const argument = node.arguments[0];
-      if (argument && ts.isStringLiteralLike(argument)) add(argument.text);
+      if (argument && ts.isStringLiteralLikeNode(argument)) add(argument.text);
     } else if (
       ts.isCallExpression(node) &&
       node.expression.kind === ts.SyntaxKind.ImportKeyword &&
       node.arguments.length === 1
     ) {
       const argument = node.arguments[0];
-      if (argument && ts.isStringLiteralLike(argument)) add(argument.text);
+      if (argument && ts.isStringLiteralLikeNode(argument)) add(argument.text);
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   }
 
   visit(source);
@@ -531,39 +563,14 @@ function collectStaticImports(
     .map(([specifier, count]) => ({ specifier, count }));
 }
 
-function scriptKindFor(filePath: string): ts.ScriptKind {
-  switch (path.extname(filePath).toLocaleLowerCase("en-US")) {
-    case ".tsx":
-      return ts.ScriptKind.TSX;
-    case ".jsx":
-      return ts.ScriptKind.JSX;
-    case ".js":
-      return ts.ScriptKind.JS;
-    default:
-      return ts.ScriptKind.TS;
-  }
-}
-
-export function analyzeTypeScriptSource(
-  filePath: string,
-  sourceText: string,
+export function analyzeParsedTypeScriptSource(
+  source: ts.SourceFile,
+  hasSyntaxErrors: boolean,
 ): TypeScriptMetricsResult {
-  const scriptKind = scriptKindFor(filePath);
-  const source = ts.createSourceFile(
-    filePath,
-    sourceText,
-    ts.ScriptTarget.Latest,
-    true,
-    scriptKind,
-  );
+  const scriptKind = source.scriptKind;
+  const sourceText = source.text;
   const sourceStructure = collectSourceStructure(source);
   const units = collectUnits(source, sourceStructure.callableIdByNode);
-  const parseDiagnostics =
-    (
-      source as ts.SourceFile & {
-        readonly parseDiagnostics?: readonly ts.Diagnostic[];
-      }
-    ).parseDiagnostics ?? [];
   const decisionLoad = units.reduce(
     (total, unit) => total + unit.complexity - 1,
     0,
@@ -576,7 +583,20 @@ export function analyzeTypeScriptSource(
     executableUnitCount: units.length,
     units,
     imports: collectStaticImports(source),
-    hasSyntaxErrors: parseDiagnostics.length > 0,
+    hasSyntaxErrors,
     sourceStructure: sourceStructure.structure,
   };
+}
+
+
+export function analyzeTypeScriptSource(
+  filePath: string,
+  sourceText: string,
+): TypeScriptMetricsResult {
+  return withTypeScriptSource(
+    filePath,
+    sourceText,
+    (source, hasSyntaxErrors) =>
+      analyzeParsedTypeScriptSource(source, hasSyntaxErrors),
+  );
 }
