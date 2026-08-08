@@ -2,6 +2,8 @@ build/
 data/
 node_modules/
 .npm-cache/
+playwright-report/
+test-results/
 tools/roslyn-helper/bin/
 tools/roslyn-helper/obj/
 tools/git-credential-helper/bin/
