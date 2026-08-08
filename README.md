@@ -581,8 +581,10 @@ returns at most 500 of the deterministically ranked matches while reporting
 the full total and any unavailable capability.
 
 C# is analyzed by the bundled, syntax-only Roslyn helper. TypeScript and
-JavaScript use the pinned compiler API. Neither analyzer restores, builds, runs
-plugins, or executes repository content.
+JavaScript use the pinned TypeScript 6 compiler API. TypeScript 7 no longer
+exposes that stable API from its package root, so adopting its replacement
+requires a separately validated analyzer migration. Neither analyzer restores,
+builds, runs plugins, or executes repository content.
 
 `analyze-github` accepts canonical `https://github.com/owner/repository` URLs
 and normalizes an optional `.git` suffix. It resolves a public ref through
