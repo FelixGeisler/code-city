@@ -2,7 +2,9 @@
 
 . Normalize every source into a read-only repository snapshot.
 . Extract C# facts through the bundled syntax-only Roslyn helper and
-  TypeScript/JavaScript facts through the pinned compiler API.
+  TypeScript/JavaScript facts through the pinned TypeScript 6 compiler API.
+  TypeScript 7's replacement compiler APIs remain explicitly unstable and
+  require a separate analyzer migration.
 . Produce a deterministic hierarchical layout.
 . Persist the result as a versioned city model.
 . Render that model in Three.js.
