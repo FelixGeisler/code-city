@@ -92,6 +92,9 @@ describe("development toolchain contract", () => {
     ]);
 
     expect(workflow).toContain("- run: npm ci --ignore-scripts");
+    expect(workflow).toContain("actions/configure-pages@v6");
+    expect(workflow).toContain("actions/upload-pages-artifact@v5");
+    expect(workflow).toContain("actions/deploy-pages@v5");
     expect(workflow).toContain("timeout-minutes: 15");
     expect(readme).toContain("Node.js 24.x");
     expect(readme).toContain("npm 11.6.2");
