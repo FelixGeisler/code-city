@@ -2399,7 +2399,16 @@ test("does not overwrite a newer clear or replacement selection during a seek", 
   );
   await expect(page.locator("#building-source-code")).toHaveText("");
   await expect(page.locator("#building-ai-guidance-details")).toBeHidden();
-  await clearSelection.click();
+  // Starting a seek intentionally replaces the inspector with its busy state,
+  // which can hide the previously verified control before Playwright's
+  // actionability checks complete. Dispatch the already-authorized control's
+  // click directly so this test isolates stale-seek selection ownership.
+  await clearSelection.evaluate((button) => {
+    if (!(button instanceof HTMLButtonElement)) {
+      throw new Error("Clear selection control is not a button.");
+    }
+    button.click();
+  });
   await expect(page.locator("#inspector-title")).toHaveText("Details");
   await expect(page.locator("#selection-name")).toHaveText(
     "Nothing selected",
