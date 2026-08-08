@@ -57,6 +57,23 @@ describe("development toolchain contract", () => {
     expect(workflow).not.toContain("- run: npm install");
   });
 
+  it("keeps automated dependency updates isolated and bounded", async () => {
+    const [dependabot, readme] = await Promise.all([
+      fs.readFile(".github/dependabot.yml", "utf8"),
+      fs.readFile("README.md", "utf8"),
+    ]);
+
+    expect(dependabot).toContain("version: 2");
+    expect(dependabot).toContain("package-ecosystem: npm");
+    expect(dependabot).toContain("package-ecosystem: github-actions");
+    expect(dependabot.match(/interval: weekly/gu)).toHaveLength(2);
+    expect(dependabot).toContain("open-pull-requests-limit: 5");
+    expect(dependabot).toContain("open-pull-requests-limit: 3");
+    expect(dependabot).not.toMatch(/^\s*groups:/mu);
+    expect(readme).toMatch(/one dependency\s+per PR/u);
+    expect(readme).toContain("updates are never grouped");
+  });
+
   it("pins the SDK that supplies the trusted Roslyn assemblies", async () => {
     const sdk = JSON.parse(
       await fs.readFile("global.json", "utf8"),
