@@ -1982,7 +1982,7 @@ test("retains an exact building mask across evolution and intersects removed ide
         window as Window & {
           __CODE_CITY_PERFORMANCE__?: {
             readonly evolutionFrameIndex: number;
-            readonly buildingRenderMode: "instanced" | "legacy" | null;
+            readonly buildingRenderMode: "instanced" | "ordinary" | null;
             readonly buildingVisibilityMaskActive: boolean;
             readonly visibleBuildingCount: number;
           };

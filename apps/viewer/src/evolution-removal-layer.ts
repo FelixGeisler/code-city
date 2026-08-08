@@ -38,8 +38,8 @@ type EvolutionRemovalObject =
 const REMOVAL_OPACITY = 0.48;
 const IDENTITY_ROTATION = new THREE.Quaternion();
 
-// A non-indexed unit cube keeps the WebGL 1 fallback independent of
-// OES_element_index_uint. MeshBasicMaterial does not require normals.
+// A non-indexed unit cube keeps the bounded merged-mesh fallback compact.
+// MeshBasicMaterial does not require normals.
 const UNIT_BOX_TRIANGLES = new Float32Array([
   // Front.
   -0.5, -0.5, 0.5, 0.5, -0.5, 0.5, 0.5, 0.5, 0.5,

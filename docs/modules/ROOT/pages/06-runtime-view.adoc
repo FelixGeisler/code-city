@@ -406,12 +406,14 @@ box geometry. A building AABB BVH handles exact nearest picking, and pointer
 movement is coalesced to one pick per animation frame. Selection and hover use
 two reusable non-raycast overlays.
 
-The viewer deliberately pins Three.js r162, the final release with WebGL 1
-rendering support. It uses instanced batches when WebGL 2 core operations or
-the WebGL 1 `ANGLE_instanced_arrays` extension are available. Otherwise,
-models through 500 buildings use ordinary meshes; larger models produce an
-accessible capability error. Dependency arrows and gateways use the same
-bounded fallback.
+The viewer pins Three.js r185 and requires WebGL 2, the renderer's supported
+baseline since r163. A WebGL 1-only or unavailable context produces an
+accessible capability panel while project data and non-visual exports remain
+available. WebGL 2 core instancing drives normal rendering. If an initialized
+context lacks the required instancing operations, models through 500 buildings
+still use bounded ordinary meshes; larger models produce an accessible
+capability error. Dependency arrows and gateways use the same bounded
+non-instanced fallback.
 
 `?fixture=large-city-25k&performance=1` opens the public deterministic upper
 bound fixture: 25,000 buildings, 100 districts, and five visual styles.

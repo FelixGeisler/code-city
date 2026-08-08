@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  LEGACY_BUILDING_LIMIT,
+  ORDINARY_MESH_BUILDING_LIMIT,
   planViewerBuildingBatches,
   ViewerBuildingCapabilityError,
   ViewerBuildingLayer,
@@ -226,12 +226,12 @@ describe("viewer building layer", () => {
     expect(layer.groupHighlightObject.visible).toBe(false);
   });
 
-  it("supports bounded legacy meshes and rejects oversized fallback models", () => {
+  it("supports bounded ordinary meshes and rejects oversized fallback models", () => {
     const fallback = new ViewerBuildingLayer(
       [building("b", 4), building("a", 2)],
       { instancingSupported: false },
     );
-    expect(fallback.mode).toBe("legacy");
+    expect(fallback.mode).toBe("ordinary");
     expect(fallback.batchCount).toBe(0);
     expect(fallback.visibleBuildingCount).toBe(2);
     fallback.setVisibleBuildingIds(["b"]);
@@ -254,7 +254,7 @@ describe("viewer building layer", () => {
     expect(fallback.visibleBuildingCount).toBe(0);
 
     const oversized = Array.from(
-      { length: LEGACY_BUILDING_LIMIT + 1 },
+      { length: ORDINARY_MESH_BUILDING_LIMIT + 1 },
       (_, index) => building(`building-${index}`, index * 2),
     );
     expect(
