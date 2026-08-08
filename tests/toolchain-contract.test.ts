@@ -46,7 +46,7 @@ describe("development toolchain contract", () => {
     expect(workflow).toContain(
       "os: [ubuntu-latest, windows-latest]",
     );
-    expect(workflow).toContain("actions/setup-dotnet@v5");
+    expect(workflow).toContain("actions/setup-dotnet@v6");
     expect(workflow).toContain("dotnet-version: 10.0.302");
     expect(workflow).toContain("timeout-minutes: 20");
     expect(workflow).toMatch(
