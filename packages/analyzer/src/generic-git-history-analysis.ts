@@ -1862,7 +1862,7 @@ export async function analyzeGenericGitHistory(
           ),
         });
       } catch (error) {
-        return Object.freeze({ ok: false, error });
+        return Object.freeze({ ok: false as const, error });
       }
     },
     dependencies.git,

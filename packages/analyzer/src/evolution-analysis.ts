@@ -1900,6 +1900,20 @@ function remapFrame(
     if (id === undefined || moduleId === undefined) {
       fail("invalid-input", "A source lineage could not be resolved.");
     }
+    const districtId = stableId(
+      "district",
+      repositoryId,
+      moduleId,
+    );
+    if (source.units === undefined) {
+      return Object.freeze({
+        ...source,
+        id,
+        repositoryId,
+        moduleId,
+        districtId,
+      });
+    }
     const boundIdentities = remapSourceBoundIdentities(
       source,
       id,
@@ -1911,7 +1925,7 @@ function remapFrame(
       id,
       repositoryId,
       moduleId,
-      districtId: stableId("district", repositoryId, moduleId),
+      districtId,
     });
   });
   const endpointIds = new Map<string, string>([

@@ -27,6 +27,12 @@ describe("development toolchain contract", () => {
       typescript: "^7.0.2",
       "typescript-analyzer": "npm:typescript@6.0.3",
     });
+    expect(packageContract.scripts?.["typecheck"]).toBe(
+      "node node_modules/typescript/lib/tsc.js --noEmit",
+    );
+    expect(packageContract.scripts?.["compile"]).toBe(
+      "node node_modules/typescript/lib/tsc.js --project tsconfig.build.json",
+    );
   });
 
   it("uses the same bounded verification workflow on Linux and Windows", async () => {
