@@ -158,16 +158,16 @@ describe("viewer print export UI", () => {
     expect(css).toMatch(
       /#print-preview-status\s*\{[\s\S]*flex:\s*1 1 100%;[\s\S]*max-width:\s*100%;/u,
     );
-    const main = await fs.readFile(
-      path.join(viewerRoot, "src/main.ts"),
+    const cityScene = await fs.readFile(
+      path.join(viewerRoot, "src/city-scene.ts"),
       "utf8",
     );
-    expect(main).toContain(
+    expect(cityScene).toContain(
       "this.prePrintOverlayVisibility.dependencies = routes.length > 0",
     );
-    expect(main).toContain(
+    expect(cityScene).toContain(
       "this.prePrintOverlayVisibility.districtDependencies =",
     );
-    expect(main).toContain("viewerPrintMeshBatches(plate.entities");
+    expect(cityScene).toContain("viewerPrintMeshBatches(plate.entities");
   });
 });
