@@ -181,13 +181,20 @@
             "samplingStrategy": {
               "enum": [
                 "evenly-spaced-v1",
-                "elapsed-time-v1"
+                "elapsed-time-v1",
+                "elapsed-time-project-start-v1"
               ]
             },
             "maxFrames": {
               "type": "integer",
               "minimum": 2,
               "maximum": 100
+            },
+            "projectStartDetectionPolicy": {
+              "const": "analyzer-candidate-source-path-v1"
+            },
+            "projectStartSha": {
+              "$ref": "#/$defs/gitSha"
             }
           }
         }
@@ -369,6 +376,21 @@
         },
         "selectionFingerprint": {
           "$ref": "#/$defs/fingerprint"
+        },
+        "projectStart": {
+          "type": "object",
+          "required": [
+            "detectionPolicyRevision"
+          ],
+          "properties": {
+            "detectionPolicyRevision": {
+              "const": "analyzer-candidate-source-path-v1"
+            },
+            "commitSha": {
+              "$ref": "#/$defs/gitSha"
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false

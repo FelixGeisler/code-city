@@ -37,6 +37,7 @@ function operationOf(request: GitProcessRequest): string {
         "fetch",
         "init",
         "ls-remote",
+        "log",
         "rev-list",
         "rev-parse",
         "--version",
@@ -109,6 +110,7 @@ interface FakeGitOptions {
   readonly omitFetchDiagnostics?: boolean;
   readonly partialCloneHasMissingObjects?: boolean;
   readonly shallowFile?: string;
+  readonly projectStartMetadata?: Uint8Array;
 }
 
 function fakeGit(options: FakeGitOptions = {}): {
@@ -209,6 +211,12 @@ function fakeGit(options: FakeGitOptions = {}): {
               stderr:
                 options.fetchDiagnostics ?? new Uint8Array(),
             }),
+      };
+    }
+    if (operation === "log") {
+      return {
+        exitCode: 0,
+        stdout: options.projectStartMetadata ?? new Uint8Array(),
       };
     }
     if (operation === "diff-tree") {
@@ -431,6 +439,87 @@ describe("bounded Generic Git history sessions", () => {
           GENERIC_GIT_HISTORY_INDEX_MAX_BYTES,
       ),
     ).toBe(true);
+    expect(harness.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("detects the first regular analyzer-candidate source from bounded tree metadata", async () => {
+    const zero = "0".repeat(40);
+    const metadata = bytes(
+      `\0commit:${ROOT}\0\n:000000 100644 ${zero} ${BLOB} A\0obj/Generated.cs\0` +
+        `\0\0commit:${PARENT}\0\n:000000 100644 ${zero} ${BLOB} A\0src/main.ts\0` +
+        `\0\0commit:${TIP}\0\n:000000 120000 ${zero} ${BLOB} A\0src/link.ts\0`,
+    );
+    const git = fakeGit({ projectStartMetadata: metadata });
+    const harness = await workspace();
+
+    await withGenericGitHistoryRepository(
+      {
+        repositoryUrl: REMOTE,
+        traversal: "root-to-tip",
+        maximumCommits: 3,
+      },
+      async (session) => {
+        expect(await session.detectProjectStart()).toBe(PARENT);
+        expect(await session.detectProjectStart()).toBe(PARENT);
+      },
+      {
+        runGit: git.runGit,
+        createTemporaryWorkspace: async () => harness.value,
+      },
+    );
+
+    const detection = git.calls.find(
+      ({ arguments: arguments_ }) => arguments_.includes("log"),
+    );
+    expect(detection).toMatchObject({
+      maximumStdoutBytes: 16 * 1024 * 1024,
+    });
+    expect(harness.measureBytes).toHaveBeenCalled();
+    expect(
+      git.calls.filter(
+        ({ arguments: arguments_ }) => arguments_.includes("log"),
+      ),
+    ).toHaveLength(1);
+    expect(detection?.arguments).toEqual(
+      expect.arrayContaining([
+        "diff.renames=false",
+        "--first-parent",
+        "--full-history",
+        "--reverse",
+        "--raw",
+        "--no-renames",
+        "--diff-filter=AMT",
+        "--diff-merges=first-parent",
+        ":(icase,glob)**/*.cs",
+        ":(icase,glob)**/*.tsx",
+      ]),
+    );
+  });
+
+  it("bounds project-start path metadata independently of source analysis", async () => {
+    const zero = "0".repeat(40);
+    const metadata = bytes(
+      `\0commit:${ROOT}\0\n:000000 100644 ${zero} ${BLOB} A\0src/one.ts\0` +
+        `:000000 100644 ${zero} ${BLOB} A\0src/two.ts\0`,
+    );
+    const git = fakeGit({ projectStartMetadata: metadata });
+    const harness = await workspace();
+
+    await expect(
+      withGenericGitHistoryRepository(
+        {
+          repositoryUrl: REMOTE,
+          traversal: "root-to-tip",
+          maximumCommits: 3,
+          maximumChangedPathEntries: 1,
+        },
+        async (session) => await session.detectProjectStart(),
+        {
+          runGit: git.runGit,
+          createTemporaryWorkspace: async () => harness.value,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "GIT_OUTPUT_TOO_LARGE" });
     expect(harness.dispose).toHaveBeenCalledOnce();
   });
 

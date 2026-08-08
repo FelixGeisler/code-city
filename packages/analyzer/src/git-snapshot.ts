@@ -10,6 +10,7 @@ import path from "node:path";
 
 import {
   DEFAULT_SNAPSHOT_LIMITS,
+  isAnalyzerCandidateSourcePath,
   materializeRepositorySnapshot,
   normalizeSnapshotPath,
   type RepositorySnapshot,
@@ -64,6 +65,8 @@ export const GENERIC_GIT_HISTORY_INDEX_MAX_BYTES =
 export const GENERIC_GIT_HISTORY_MAX_CHANGED_PATHS = 500_000;
 export const GENERIC_GIT_HISTORY_MAX_CHANGED_PATH_BYTES =
   16 * MEBIBYTE;
+export const GENERIC_GIT_PROJECT_START_MAX_PATHS = 500_000;
+export const GENERIC_GIT_PROJECT_START_MAX_PATH_BYTES = 16 * MEBIBYTE;
 export const GENERIC_GIT_HISTORY_CHANGED_PATH_RECORD_OVERHEAD_BYTES =
   HISTORY_CHANGED_PATH_RECORD_OVERHEAD_BYTES;
 export const GENERIC_GIT_HISTORY_RENAME_POLICY_REVISION =
@@ -261,6 +264,8 @@ export interface GenericGitHistorySession {
   /** Newest-to-oldest first-parent commits, including one overflow probe. */
   readonly commits: readonly GenericGitHistoryCommit[];
   readonly tags: readonly GenericGitHistoryTag[];
+  /** Detects the oldest mainline commit containing candidate source. */
+  detectProjectStart(): Promise<string | undefined>;
   readChanges(
     commitSha: string,
   ): Promise<readonly GenericGitHistoryPathChange[]>;
@@ -3340,6 +3345,156 @@ function validatePartialHistoryObjectInventory(
   }
 }
 
+const PROJECT_START_PATHSPECS = Object.freeze(
+  ["cs", "js", "jsx", "ts", "tsx"].map(
+    (extension) => `:(icase,glob)**/*.${extension}`,
+  ),
+);
+
+function historyProjectStartOperation(
+  repositoryDirectory: string,
+  tipSha: string,
+): readonly string[] {
+  return Object.freeze([
+    "-C",
+    repositoryDirectory,
+    "-c",
+    "diff.renames=false",
+    "log",
+    "--first-parent",
+    "--full-history",
+    "--reverse",
+    "--topo-order",
+    "--no-abbrev",
+    "--format=format:%x00commit:%H%x00",
+    "--raw",
+    "-z",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-color",
+    "--no-renames",
+    "--diff-filter=AMT",
+    "--diff-merges=first-parent",
+    "--ignore-submodules=all",
+    "--root",
+    tipSha,
+    "--",
+    ...PROJECT_START_PATHSPECS,
+  ]);
+}
+
+function parseHistoryProjectStart(
+  output: Uint8Array,
+  commits: readonly GenericGitHistoryCommit[],
+  maximumEntries: number,
+  maximumBytes: number,
+): string | undefined {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(output);
+  } catch {
+    throw new GenericGitSnapshotError(
+      "GIT_INVALID_RESPONSE",
+      "Installed Git returned invalid project-start path metadata.",
+    );
+  }
+  const oldestIndexBySha = new Map(
+    [...commits]
+      .reverse()
+      .map(({ sha }, index) => [sha, index] as const),
+  );
+  let cursor = 0;
+  let currentCommit: string | undefined;
+  let previousCommitIndex = -1;
+  let entries = 0;
+  let retainedBytes = 0;
+  let detected: string | undefined;
+  const nextField = (): string | undefined => {
+    const terminator = text.indexOf("\0", cursor);
+    if (terminator < 0) return undefined;
+    const field = text.slice(cursor, terminator);
+    cursor = terminator + 1;
+    return field;
+  };
+  const admitPath = (rawPath: string): string => {
+    const path = normalizeSnapshotPath(rawPath);
+    const bytes =
+      Buffer.byteLength(path, "utf8") +
+      GENERIC_GIT_HISTORY_CHANGED_PATH_RECORD_OVERHEAD_BYTES;
+    if (
+      entries >= maximumEntries ||
+      retainedBytes > maximumBytes - bytes
+    ) {
+      throw new GenericGitSnapshotError(
+        "GIT_OUTPUT_TOO_LARGE",
+        "Generic Git project-start detection exceeded its path metadata limit.",
+      );
+    }
+    entries += 1;
+    retainedBytes += bytes;
+    return path;
+  };
+
+  while (cursor < text.length) {
+    const rawField = nextField();
+    if (rawField === undefined) break;
+    if (rawField === "") continue;
+    if (rawField.startsWith("commit:")) {
+      const sha = rawField.slice("commit:".length);
+      const commitIndex = oldestIndexBySha.get(sha);
+      if (
+        !COMMIT_SHA.test(sha) ||
+        commitIndex === undefined ||
+        commitIndex <= previousCommitIndex
+      ) {
+        throw new GenericGitSnapshotError(
+          "GIT_INVALID_RESPONSE",
+          "Installed Git returned invalid project-start commit metadata.",
+        );
+      }
+      currentCommit = sha;
+      previousCommitIndex = commitIndex;
+      continue;
+    }
+    const field = rawField.startsWith("\n")
+      ? rawField.slice(1)
+      : rawField;
+    const header =
+      /^:([0-7]{6}) ([0-7]{6}) [0-9a-f]{40} [0-9a-f]{40} ([AMT])$/u.exec(
+        field,
+      );
+    if (header === null || currentCommit === undefined) {
+      throw new GenericGitSnapshotError(
+        "GIT_INVALID_RESPONSE",
+        "Installed Git returned invalid project-start tree metadata.",
+      );
+    }
+    const currentPath = nextField();
+    if (currentPath === undefined) {
+      throw new GenericGitSnapshotError(
+        "GIT_INVALID_RESPONSE",
+        "Installed Git returned incomplete project-start path metadata.",
+      );
+    }
+    const normalizedCurrentPath = admitPath(currentPath);
+    const newMode = header[2]!;
+    if (
+      detected === undefined &&
+      (newMode === "100644" || newMode === "100755") &&
+      isAnalyzerCandidateSourcePath(normalizedCurrentPath)
+    ) {
+      detected = currentCommit;
+    }
+  }
+  if (cursor !== text.length) {
+    throw new GenericGitSnapshotError(
+      "GIT_INVALID_RESPONSE",
+      "Installed Git returned incomplete project-start metadata.",
+    );
+  }
+  return detected;
+}
+
 function historyDiffTreeOperation(
   repositoryDirectory: string,
   olderSha: string | undefined,
@@ -3858,6 +4013,8 @@ export async function withGenericGitHistoryRepository<T>(
             );
           let changedPaths = 0;
           let changedPathBytes = 0;
+          let projectStartResolved = false;
+          let projectStart: string | undefined;
           let active = true;
           let operationActive = false;
           let pendingOperation: Promise<unknown> | undefined;
@@ -3892,6 +4049,37 @@ export async function withGenericGitHistoryRepository<T>(
               }
               operationActive = false;
             }
+          };
+
+          const detectProjectStart = (): Promise<string | undefined> => {
+            const pending = exclusive(async () => {
+              if (projectStartResolved) return projectStart;
+              const maximumProjectStartBytes = Math.min(
+                maximumChangedPathBytes,
+                GENERIC_GIT_PROJECT_START_MAX_PATH_BYTES,
+              );
+              const output = await sessionRun(
+                historyProjectStartOperation(
+                  workspace.repositoryDirectory,
+                  firstSelection.commitSha,
+                ),
+                true,
+                { maximumStdoutBytes: maximumProjectStartBytes },
+              );
+              projectStart = parseHistoryProjectStart(
+                output,
+                commits,
+                Math.min(
+                  maximumChangedPathEntries,
+                  GENERIC_GIT_PROJECT_START_MAX_PATHS,
+                ),
+                maximumProjectStartBytes,
+              );
+              projectStartResolved = true;
+              return projectStart;
+            });
+            void pending.catch(() => undefined);
+            return pending;
           };
 
           const readChanges = (
@@ -4055,6 +4243,7 @@ export async function withGenericGitHistoryRepository<T>(
             backend,
             commits,
             tags: firstTags,
+            detectProjectStart,
             readChanges,
             readChangesBetween,
             readSnapshot,

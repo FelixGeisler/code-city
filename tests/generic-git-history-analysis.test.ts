@@ -148,6 +148,7 @@ function evolutionResult(
 
 interface SessionHarness {
   readonly session: GenericGitHistorySession;
+  readonly detectProjectStart: ReturnType<typeof vi.fn>;
   readonly readChanges: ReturnType<typeof vi.fn>;
   readonly readChangesBetween: ReturnType<typeof vi.fn>;
   readonly readSnapshot: ReturnType<typeof vi.fn>;
@@ -164,9 +165,11 @@ function sessionHarness(
     readonly snapshotFiles?: number;
     readonly backendVersion?: string;
     readonly oldestCommitIsShallow?: boolean;
+    readonly projectStartSha?: string;
   } = {},
 ): SessionHarness {
   const history = commits(count);
+  const detectProjectStart = vi.fn(async () => options.projectStartSha);
   const readChanges = vi.fn(async (commitSha: string) =>
     Object.freeze([
       ...(options.change?.(commitSha, commitSha) ?? [
@@ -200,10 +203,12 @@ function sessionHarness(
       }),
       commits: history,
       tags: options.tags ?? Object.freeze([]),
+      detectProjectStart,
       readChanges,
       readChangesBetween,
       readSnapshot,
     }),
+    detectProjectStart,
     readChanges,
     readChangesBetween,
     readSnapshot,
@@ -879,7 +884,9 @@ describe("Generic Git history analysis orchestration", () => {
   });
 
   it("covers the complete mainline with elapsed-time bounded frames", async () => {
-    const completeSession = sessionHarness(109);
+    const completeSession = sessionHarness(109, {
+      projectStartSha: sha(50),
+    });
     const completeProvider = providerHarness(completeSession.session);
     const createEvolution = vi.fn(evolutionResult);
 
@@ -887,7 +894,9 @@ describe("Generic Git history analysis orchestration", () => {
       request({
         mode: "root-to-tip",
         maxFrames: 20,
-      }),
+        // Untrusted clients cannot select or override this boundary.
+        projectStartSha: sha(1),
+      } as GenericGitHistoryAnalysisRequest["selection"]),
       {},
       {
         withHistoryRepository: completeProvider.provider,
@@ -900,7 +909,9 @@ describe("Generic Git history analysis orchestration", () => {
     expect(completeProvider.requests[0]?.traversal).toBe("root-to-tip");
     expect(result.selection.summary).toMatchObject({
       mode: "root-to-tip",
-      samplingStrategy: "elapsed-time-v1",
+      samplingStrategy: "elapsed-time-project-start-v1",
+      projectStartDetectionPolicy: "analyzer-candidate-source-path-v1",
+      projectStartSha: sha(50),
       maxFrames: 20,
       selectedCommitCount: 109,
       sampledCommitCount: 20,
@@ -908,6 +919,8 @@ describe("Generic Git history analysis orchestration", () => {
       resolvedNewestSha: sha(109),
     });
     expect(result.selection.sampledCommits).toHaveLength(20);
+    expect(result.selection.summary.sampledCommitShas).toContain(sha(50));
+    expect(completeSession.detectProjectStart).toHaveBeenCalledOnce();
     expect(completeSession.readChangesBetween).toHaveBeenCalledTimes(19);
     expect(completeSession.readSnapshot).toHaveBeenCalledTimes(20);
     expect(createEvolution).toHaveBeenCalledOnce();

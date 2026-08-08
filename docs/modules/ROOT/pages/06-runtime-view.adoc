@@ -124,8 +124,15 @@ choose ZIP or server-side Git when those details matter.
 Repository history defaults to *Entire mainline*: Code City follows the
 selected revision's first-parent ancestry to its root and distributes at most
 20 representative animation frames by elapsed time across the complete span,
-always including root and tip. Intermediate commits are indexed as lightweight
-metadata; their source is not analyzed. Complete-mainline indexing is capped at
+always including root, tip, and the detected project start. Project start is
+the first mainline commit whose bounded Git tree-change metadata introduces a
+regular `.cs`, `.js`, `.jsx`, `.ts`, or `.tsx` candidate outside generated C#
+and hard-excluded build/dependency directories. This versioned path policy does
+not read historical source or repository ignore-file content. Normal playback
+starts at project start; earlier frames remain available as the technical
+pre-project baseline. When no candidate is detected, playback starts at the
+Git root. Intermediate commits are indexed as lightweight metadata; their
+source is not analyzed. Complete-mainline indexing is capped at
 100,000 commits. If a root cannot be proven within that ceiling, the import is
 rejected instead of presenting a recent suffix as complete history. Complete
 mode also requires a verifiable treeless partial fetch; unsupported Git servers fail

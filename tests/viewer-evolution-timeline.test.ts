@@ -14,6 +14,7 @@ import {
   createEvolutionBuildingLineageSelection,
   evolutionDependencyEndpointKey,
   EvolutionDeferredSeekController,
+  evolutionPlaybackStartIndex,
   EvolutionSeekGate,
   resolveEvolutionBuildingLineage,
   summarizeEvolutionFrames,
@@ -105,6 +106,30 @@ function fixture(): EvolutionBundle {
 }
 
 describe("viewer evolution timeline analysis", () => {
+  it("starts normal playback at project start while retaining the baseline", () => {
+    const bundle = fixture();
+    const projectStartBundle = {
+      ...bundle,
+      selection: {
+        mode: "root-to-tip",
+        sampledCommitShas: [
+          bundle.baseline.commit.sha,
+          bundle.deltas[0]!.commit.sha,
+          bundle.deltas[1]!.commit.sha,
+        ],
+        projectStartSha: bundle.deltas[0]!.commit.sha,
+      },
+    } as unknown as EvolutionBundle;
+
+    expect(evolutionPlaybackStartIndex(projectStartBundle)).toBe(1);
+    expect(
+      evolutionPlaybackStartIndex({
+        ...bundle,
+        selection: { mode: "tag-range" },
+      } as unknown as EvolutionBundle),
+    ).toBe(0);
+  });
+
   it("returns to idle after cancelling a seek and accepts the next navigation", () => {
     const gate = new EvolutionSeekGate();
     const cancelled = gate.begin();

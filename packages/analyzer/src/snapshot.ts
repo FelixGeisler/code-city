@@ -331,6 +331,14 @@ export function isAnalyzerInputPath(value: string): boolean {
   );
 }
 
+export function isAnalyzerCandidateSourcePath(value: string): boolean {
+  return (
+    SOURCE_FILE.test(value) &&
+    !isHardExcludedSnapshotPath(value) &&
+    !GENERATED_CSHARP.test(value.slice(value.lastIndexOf("/") + 1))
+  );
+}
+
 function isSourceBuildingPath(value: string): boolean {
   return SOURCE_FILE.test(value);
 }

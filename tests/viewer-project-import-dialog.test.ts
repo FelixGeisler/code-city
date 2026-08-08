@@ -336,6 +336,7 @@ describe("viewer project import dialog state", () => {
       { ...common, commitCount: "500", sampleEvery: "5" },
       { ...common, mode: "root-to-tip", maxFrames: "0" },
       { ...common, mode: "root-to-tip", maxFrames: "1" },
+      { ...common, mode: "root-to-tip", maxFrames: "2" },
       { ...common, mode: "root-to-tip", maxFrames: "101" },
     ]) {
       expect(() => projectImportHistorySelection(values)).toThrow();

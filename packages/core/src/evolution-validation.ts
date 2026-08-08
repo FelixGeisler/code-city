@@ -4,6 +4,7 @@ import {
   EVOLUTION_BUNDLE_SCHEMA_VERSION,
   EVOLUTION_CHANGE_KINDS,
   EVOLUTION_ENTITY_COLLECTIONS,
+  EVOLUTION_PROJECT_START_POLICY,
   type EvolutionBundle,
   type EvolutionChangeKind,
   type EvolutionCommitMetadata,
@@ -123,6 +124,27 @@ function validatePreparedEvolutionBundle(
     bundle.provenance,
     generator.version,
   );
+  if (selection.mode === "root-to-tip") {
+    const selectionPolicy = selection.projectStartDetectionPolicy;
+    const provenanceProjectStart = provenance.projectStart;
+    if (
+      (selectionPolicy === undefined) !==
+      (provenanceProjectStart === undefined)
+    ) {
+      fail(
+        "selection and provenance project-start metadata must be present together",
+      );
+    }
+    if (
+      selectionPolicy !== undefined &&
+      (provenanceProjectStart!.detectionPolicyRevision !== selectionPolicy ||
+        provenanceProjectStart!.commitSha !== selection.projectStartSha)
+    ) {
+      fail("selection and provenance project-start metadata must match");
+    }
+  } else if (provenance.projectStart !== undefined) {
+    fail("project-start provenance requires a root-to-tip selection");
+  }
   const baseline = objectAt(bundle.baseline, "baseline");
   exactKeys(baseline, ["commit", "model"], [], "baseline");
 
@@ -897,7 +919,7 @@ function validateSelection(
       exactKeys(
         selection,
         [...commonKeys, "samplingStrategy", "maxFrames"],
-        [],
+        ["projectStartDetectionPolicy", "projectStartSha"],
         "selection",
       );
       break;
@@ -981,9 +1003,16 @@ function validateSelection(
     mode === "root-to-tip"
       ? enumString(
           selection.samplingStrategy,
-          new Set(["evenly-spaced-v1", "elapsed-time-v1"]),
+          new Set([
+            "evenly-spaced-v1",
+            "elapsed-time-v1",
+            "elapsed-time-project-start-v1",
+          ]),
           "selection.samplingStrategy",
-        ) as "evenly-spaced-v1" | "elapsed-time-v1"
+        ) as
+          | "evenly-spaced-v1"
+          | "elapsed-time-v1"
+          | "elapsed-time-project-start-v1"
       : undefined;
   if (
     mode !== "root-to-tip" &&
@@ -1040,6 +1069,45 @@ function validateSelection(
     fail("a single sampled frame must have identical resolved boundaries");
   }
 
+  const projectStartDetectionPolicy =
+    mode === "root-to-tip" &&
+    selection.projectStartDetectionPolicy !== undefined
+      ? enumString(
+          selection.projectStartDetectionPolicy,
+          new Set([EVOLUTION_PROJECT_START_POLICY]),
+          "selection.projectStartDetectionPolicy",
+        ) as typeof EVOLUTION_PROJECT_START_POLICY
+      : undefined;
+  const projectStartSha =
+    mode === "root-to-tip" && selection.projectStartSha !== undefined
+      ? gitSha(selection.projectStartSha, "selection.projectStartSha")
+      : undefined;
+  if (
+    samplingStrategy === "elapsed-time-project-start-v1" &&
+    projectStartDetectionPolicy === undefined
+  ) {
+    fail(
+      "selection.projectStartDetectionPolicy is required by project-start-aware sampling",
+    );
+  }
+  if (
+    samplingStrategy !== "elapsed-time-project-start-v1" &&
+    projectStartDetectionPolicy !== undefined
+  ) {
+    fail(
+      "selection.projectStartDetectionPolicy requires project-start-aware sampling",
+    );
+  }
+  if (
+    projectStartSha !== undefined &&
+    (projectStartDetectionPolicy === undefined ||
+      !sampledCommitShas.includes(projectStartSha))
+  ) {
+    fail(
+      "selection.projectStartSha must use the detection policy and identify a sampled commit",
+    );
+  }
+
   const common = {
     traversal: "first-parent" as const,
     order: "oldest-first" as const,
@@ -1057,6 +1125,10 @@ function validateSelection(
         mode,
         samplingStrategy: samplingStrategy!,
         maxFrames: maxFrames!,
+        ...(projectStartDetectionPolicy === undefined
+          ? {}
+          : { projectStartDetectionPolicy }),
+        ...(projectStartSha === undefined ? {} : { projectStartSha }),
       };
     case "commit-count": {
       const requestedCommitCount = boundedPositiveInteger(
@@ -1121,6 +1193,10 @@ function validateProvenance(
   };
   readonly metricConfigurationFingerprint: EvolutionFingerprint;
   readonly selectionFingerprint: EvolutionFingerprint;
+  readonly projectStart?: {
+    readonly detectionPolicyRevision: typeof EVOLUTION_PROJECT_START_POLICY;
+    readonly commitSha?: string;
+  };
 } {
   const provenance = objectAt(value, "provenance");
   exactKeys(
@@ -1133,9 +1209,29 @@ function validateProvenance(
       "metricConfigurationFingerprint",
       "selectionFingerprint",
     ],
-    [],
+    ["projectStart"],
     "provenance",
   );
+  const projectStart =
+    provenance.projectStart === undefined
+      ? undefined
+      : objectAt(provenance.projectStart, "provenance.projectStart");
+  if (projectStart !== undefined) {
+    exactKeys(
+      projectStart,
+      ["detectionPolicyRevision"],
+      ["commitSha"],
+      "provenance.projectStart",
+    );
+    if (
+      projectStart.detectionPolicyRevision !==
+      EVOLUTION_PROJECT_START_POLICY
+    ) {
+      fail(
+        `provenance.projectStart.detectionPolicyRevision must be "${EVOLUTION_PROJECT_START_POLICY}"`,
+      );
+    }
+  }
   const analyzer = objectAt(provenance.analyzer, "provenance.analyzer");
   exactKeys(
     analyzer,
@@ -1208,6 +1304,21 @@ function validateProvenance(
       provenance.selectionFingerprint,
       "provenance.selectionFingerprint",
     ),
+    ...(projectStart === undefined
+      ? {}
+      : {
+          projectStart: {
+            detectionPolicyRevision: EVOLUTION_PROJECT_START_POLICY,
+            ...(projectStart.commitSha === undefined
+              ? {}
+              : {
+                  commitSha: gitSha(
+                    projectStart.commitSha,
+                    "provenance.projectStart.commitSha",
+                  ),
+                }),
+          },
+        }),
   };
 }
 

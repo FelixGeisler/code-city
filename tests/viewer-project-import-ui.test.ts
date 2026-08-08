@@ -215,7 +215,7 @@ describe("viewer project import UI", () => {
       "intermediate commits are not analyzed",
     );
     expect(dialogSource).toContain(
-      "First commit → selected revision · up to",
+      "Technical Git root → selected revision · up to",
     );
     expect(dialogSource).toContain(
       "PROJECT_IMPORT_HISTORY_DEFAULT_MAX_FRAMES = 20",

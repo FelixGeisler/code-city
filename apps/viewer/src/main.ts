@@ -3227,6 +3227,7 @@ let activeEvolutionDependencyChanges:
   | undefined;
 let activeEvolutionTargetDependencyIds: ReadonlySet<string> = new Set();
 let activeEvolutionIndex = 0;
+let activeEvolutionPlaybackStartIndex = 0;
 let codeInspectionFrameAccessState: "terminal" | "historical" | "busy" =
   "terminal";
 let evolutionPlaying = false;
@@ -4327,6 +4328,7 @@ function resetEvolutionTimeline(recreateWorker = true): void {
   activeEvolutionDependencyChanges = undefined;
   activeEvolutionTargetDependencyIds = new Set();
   activeEvolutionIndex = 0;
+  activeEvolutionPlaybackStartIndex = 0;
   codeInspectionFrameAccessState = "terminal";
   evolutionLoading = false;
   imageExportDialog.invalidate();
@@ -4366,6 +4368,7 @@ async function startEvolutionTimeline(source: ModelSource): Promise<void> {
     activeEvolutionAnalysis = evolutionVisualizationData(loaded.analysis);
     synchronizeVisualizationModeOptions();
     activeEvolutionIndex = 0;
+    activeEvolutionPlaybackStartIndex = loaded.playbackStartIndex;
     evolutionRange.max = String(Math.max(0, loaded.frames.length - 1));
     evolutionLoading = false;
     imageExportDialog.invalidate();
@@ -4547,6 +4550,12 @@ function renderEvolutionTimeline(): void {
     evolutionSeekController.targetIndex ?? activeEvolutionIndex,
   );
   evolutionFirst.disabled = busy || activeEvolutionIndex === 0;
+  evolutionFirst.setAttribute(
+    "aria-label",
+    activeEvolutionPlaybackStartIndex > 0
+      ? "Reveal technical Git baseline"
+      : "First commit",
+  );
   evolutionPrevious.disabled = busy || activeEvolutionIndex === 0;
   evolutionNext.disabled =
     busy || activeEvolutionIndex >= lastIndex;
@@ -4563,7 +4572,16 @@ function renderEvolutionTimeline(): void {
       : "Play repository evolution",
   );
   if (!frame) return;
+  const projectStartLabel =
+    activeEvolutionPlaybackStartIndex > 0 &&
+    activeEvolutionIndex < activeEvolutionPlaybackStartIndex
+      ? "Technical pre-project baseline \u00b7 "
+      : activeEvolutionPlaybackStartIndex > 0 &&
+          activeEvolutionIndex === activeEvolutionPlaybackStartIndex
+        ? "Project start \u00b7 "
+        : "";
   evolutionCommit.textContent =
+    projectStartLabel +
     `${activeEvolutionIndex + 1}/${activeEvolutionFrames.length} \u00b7 ` +
     frame.sha.slice(0, 10);
   const transition = activeEvolutionTransition;
@@ -4632,7 +4650,7 @@ function startEvolutionPlayback(): void {
 async function advanceEvolutionPlayback(): Promise<void> {
   if (!evolutionPlaying) return;
   if (activeEvolutionIndex >= activeEvolutionFrames.length - 1) {
-    const reset = await seekEvolution(0);
+    const reset = await seekEvolution(activeEvolutionPlaybackStartIndex);
     if (!reset || !evolutionPlaying) return;
   } else {
     const advanced = await seekEvolution(activeEvolutionIndex + 1);

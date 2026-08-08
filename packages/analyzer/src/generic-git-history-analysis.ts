@@ -3,6 +3,7 @@ import { types as nodeUtilTypes } from "node:util";
 
 import {
   DEFAULT_VERSIONED_METRIC_MAPPING,
+  EVOLUTION_PROJECT_START_POLICY,
   normalizeAssetRelativePath,
   normalizeCityIdentity,
   type CityIdentity,
@@ -880,10 +881,10 @@ function resolvedSelectionRequest(
   });
 }
 
-function selectSessionHistory(
+async function selectSessionHistory(
   request: GenericGitHistorySelectionRequest,
   session: GenericGitHistorySession,
-): HistorySelectionResult {
+): Promise<HistorySelectionResult> {
   const maximumCommits = traversalMaximum(request);
   if (session.commits.length > maximumCommits + 1) {
     throw new HistorySelectionError(
@@ -945,9 +946,18 @@ function selectSessionHistory(
     }
   }
 
+  let projectStartAwareRequest: HistorySelectionRequest = resolvedRequest;
+  if (resolvedRequest.mode === "root-to-tip") {
+    const projectStartSha = await session.detectProjectStart();
+    projectStartAwareRequest = Object.freeze({
+      ...resolvedRequest,
+      projectStartDetectionPolicy: EVOLUTION_PROJECT_START_POLICY,
+      ...(projectStartSha === undefined ? {} : { projectStartSha }),
+    });
+  }
   return selectHistory(
     boundedCommits as readonly GenericGitHistoryCommit[],
-    resolvedRequest,
+    projectStartAwareRequest,
   );
 }
 
@@ -1432,7 +1442,10 @@ async function analyzeSession(
     options.analyzerFingerprint,
     session.backend,
   );
-  const selection = selectSessionHistory(request.selection, session);
+  const selection = await selectSessionHistory(
+    request.selection,
+    session,
+  );
   checkpoint(clock);
 
   const boundaryChangesByCommit = new Map<

@@ -292,6 +292,37 @@ function evolve(
 }
 
 describe("history evolution analysis", () => {
+  it("records verified project-start provenance in a retained frame", async () => {
+    const selected = selection([COMMITS.c, COMMITS.b, COMMITS.a], {
+      mode: "root-to-tip",
+      maxFrames: 3,
+      projectStartDetectionPolicy: "analyzer-candidate-source-path-v1",
+      projectStartSha: B,
+    });
+    const frameFacts = await facts({ "src/main.ts": "export const x = 1;" });
+    const result = evolve(
+      selected,
+      [
+        { commit: COMMITS.a, facts: frameFacts },
+        { commit: COMMITS.b, facts: frameFacts },
+        { commit: COMMITS.c, facts: frameFacts },
+      ],
+      new Map([
+        [B, Object.freeze([])],
+        [C, Object.freeze([])],
+      ]),
+    );
+
+    expect(result.bundle.selection).toMatchObject({
+      samplingStrategy: "elapsed-time-project-start-v1",
+      projectStartSha: B,
+    });
+    expect(result.bundle.provenance.projectStart).toEqual({
+      detectionPolicyRevision: "analyzer-candidate-source-path-v1",
+      commitSha: B,
+    });
+  });
+
   it("animates compact historical facts while retaining newest inspection detail", async () => {
     const before = await facts({
       "src/main.ts":
