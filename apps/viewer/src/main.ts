@@ -93,7 +93,7 @@ import {
   resetDistrictDependencyFilters,
   summarizeDistrictDependencies,
   toggleDistrictDependencyKind,
-} from "./district-dependency-explorer.js";
+} from "../../../packages/core/src/district-dependencies.js";
 import {
   districtBoundaryAnchor,
   type DistrictDependencyFootprint,
