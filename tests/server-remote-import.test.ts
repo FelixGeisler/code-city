@@ -298,19 +298,11 @@ async function waitForTerminal(
   server: CodeCityServerHandle,
   id: string,
 ): Promise<JobRecord> {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    const record = server.jobs.get(id);
-    if (
-      record?.state === "completed" ||
-      record?.state === "failed" ||
-      record?.state === "cancelled"
-    ) {
-      return record;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+  const record = await server.jobs.waitForTerminal(id);
+  if (record === undefined) {
+    throw new Error(`Import job '${id}' was not found.`);
   }
-  throw new Error(`Timed out waiting for import job '${id}'.`);
+  return record;
 }
 
 async function request(
@@ -1785,7 +1777,7 @@ describe("remote import HTTP API", () => {
         path.join(roots.dataDirectory, "tmp", "imports"),
       ),
     ).toEqual([]);
-  });
+  }, 10_000);
 
   it("uses an exact GitHub credential binding without persisting its selector or secret", async () => {
     const roots = await fixture();

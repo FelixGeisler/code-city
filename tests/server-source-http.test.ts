@@ -234,18 +234,13 @@ async function publish(
       },
     },
   );
-  const deadline = Date.now() + 2_000;
-  while (Date.now() < deadline) {
-    const job = server.jobs.get(queued.id)!;
-    if (job.state === "completed") {
-      return { job, model, building: model.buildings[0]! };
-    }
-    if (job.state === "failed" || job.state === "cancelled") {
-      throw new Error(`Source fixture job ${job.state}.`);
-    }
-    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  const job = await server.jobs.waitForTerminal(queued.id);
+  if (job?.state !== "completed") {
+    throw new Error(
+      `Source fixture job ${job?.state ?? "was not found"}.`,
+    );
   }
-  throw new Error("Source fixture job timed out.");
+  return { job, model, building: model.buildings[0]! };
 }
 
 function request(

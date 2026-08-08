@@ -137,6 +137,30 @@ afterEach(async () => {
   );
 });
 
+it("awaits durable terminal settlement without wall-clock polling", async () => {
+  const queue = await PersistentJobQueue.open({
+    dataDirectory: await temporaryDirectory(),
+  });
+  queues.push(queue);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = await queue.enqueue("analysis", async () => {
+    await gate;
+  });
+
+  const settlement = queue.waitForTerminal(queued.id);
+  release();
+  const terminal = await settlement;
+
+  expect(terminal?.state).toBe("completed");
+  await expect(queue.waitForTerminal(queued.id)).resolves.toBe(
+    terminal,
+  );
+  await expect(queue.waitForTerminal(randomUUID())).resolves.toBeUndefined();
+});
+
 it("does not expose a job whose initial record could not be persisted", async () => {
   const queue = await PersistentJobQueue.open({
     dataDirectory: await temporaryDirectory(),

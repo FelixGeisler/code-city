@@ -668,6 +668,27 @@ export class PersistentJobQueue {
     return this.#records.get(id);
   }
 
+  /**
+   * Resolves after a live job completes terminal-state settlement. This avoids
+   * wall-clock polling for in-process consumers while preserving an immediate
+   * lookup for missing and already-terminal records.
+   */
+  public waitForTerminal(
+    id: string,
+  ): Promise<JobRecord | undefined> {
+    const record = this.#records.get(id);
+    if (record === undefined || isTerminal(record)) {
+      return Promise.resolve(record);
+    }
+    const live = this.#live.get(id);
+    if (live === undefined) {
+      return Promise.reject(
+        new Error("A non-terminal job has no live settlement."),
+      );
+    }
+    return live.settlement;
+  }
+
   public enqueue(
     kind: string,
     task: JobTask,
