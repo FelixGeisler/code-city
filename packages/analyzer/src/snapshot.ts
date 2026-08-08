@@ -1,7 +1,4 @@
-import ignorePackage, {
-  type Ignore,
-  type Options as IgnoreOptions,
-} from "ignore";
+import createIgnore, { type Ignore } from "ignore";
 import { CITY_MODEL_LIMITS } from "../../core/src/model-validation.js";
 
 const MEBIBYTE = 1024 * 1024;
@@ -201,10 +198,6 @@ const SNAPSHOT_DIAGNOSTIC_CODES = new Set<SnapshotDiagnosticCode>([
   "symlink-skipped",
   "unreadable",
 ]);
-const createIgnore = ignorePackage.default as (
-  options?: IgnoreOptions,
-) => Ignore;
-
 function resolveNonNegativeInteger(
   value: number | undefined,
   fallback: number,
