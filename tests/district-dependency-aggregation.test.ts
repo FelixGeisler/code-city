@@ -8,7 +8,7 @@ import {
   resetDistrictDependencyFilters,
   summarizeDistrictDependencies,
   toggleDistrictDependencyKind,
-} from "../apps/viewer/src/district-dependency-explorer.js";
+} from "../packages/core/src/district-dependencies.js";
 import type {
   CityBuilding,
   CityDependency,

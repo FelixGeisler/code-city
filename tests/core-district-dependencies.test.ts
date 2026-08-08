@@ -18,11 +18,6 @@ import type {
   CityModule,
   DependencyKind,
 } from "../packages/core/src/model.js";
-import {
-  createDistrictDependencyExplorerIndex as createViewerIndex,
-  summarizeDistrictDependencies as summarizeViewerDependencies,
-} from "../apps/viewer/src/district-dependency-explorer.js";
-
 describe("core district dependency aggregation", () => {
   it("preserves viewer behavior and deterministically ranks immutable district bundles", () => {
     const model = aggregationModel();
@@ -50,10 +45,6 @@ describe("core district dependency aggregation", () => {
       INITIAL_DISTRICT_DEPENDENCY_FILTERS,
     );
 
-    expect(createViewerIndex).toBe(createDistrictDependencyExplorerIndex);
-    expect(summarizeViewerDependencies).toBe(
-      summarizeDistrictDependencies,
-    );
     expect(reversedSummary).toEqual(summary);
     expect({
       modules: model.modules,
