@@ -695,6 +695,11 @@ npm run server:start
 the production build, and the Antora documentation build. CI bounds each
 verification job to 20 minutes.
 
+Dependabot checks npm and GitHub Actions every Monday. It opens one dependency
+per PR with bounded open-PR limits; updates are never grouped. Major upgrades
+remain explicit maintenance work and must pass the same verification, security,
+container, and relevant browser-performance checks before merge.
+
 ## Status
 
 First executable vertical slice. The open-source license will be chosen before
