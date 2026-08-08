@@ -147,11 +147,19 @@ deterministic best effort. If the selected tip timestamp is not later than the
 root timestamp, sampling falls back to deterministic ancestry positions.
 
 Historical frames keep stable identities, aggregate metrics, and relationship
-inputs required by the city animation. Fine-grained callable and source-
-structure inspection detail is retained for the newest frame, whose immutable
-source snapshot is the one available to source navigation. Semantic memory is
-charged from explicit object-graph costs, bounded cumulatively across these
-retained frames, and cache leases are released after each owned frame copy.
+inputs required by the city animation. During one history run, a 64 MiB
+byte-bounded LRU reuses path-independent per-file analysis by source-content,
+language/source mode, analyzer, configuration, and detail fingerprints. It
+never retains source text, repository credentials, module ownership, districts,
+or resolved dependencies. Every frame rediscovers projects and recomputes
+ownership and dependency resolution. Changed files and the newest frame's full
+inspection detail use distinct cache entries; older frames retain only compact
+semantic summaries. The run-local cache is cleared before the analysis returns.
+Fine-grained callable and source-structure inspection detail is retained for the
+newest frame, whose immutable source snapshot is the one available to source
+navigation. Semantic memory is charged from explicit object-graph costs,
+bounded cumulatively across these retained frames, and persistent whole-commit
+cache leases are released after each owned frame copy.
 
 After a validated `202`, the browser retains only the opaque job UUID and polls
 one request at a time. Refresh resumes an active job or reopens a completed

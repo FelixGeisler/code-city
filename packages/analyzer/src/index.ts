@@ -38,6 +38,7 @@ export * from "./local-logo-relief.js";
 export * from "./logo-relief-converter.js";
 export * from "./roslyn-host.js";
 export * from "./snapshot.js";
+export * from "./source-analysis-cache.js";
 export * from "./typescript-metrics.js";
 export * from "./types.js";
 export * from "./zip-snapshot-source.js";

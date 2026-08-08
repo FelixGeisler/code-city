@@ -27,7 +27,7 @@ import {
   analyzeCSharpWithRoslyn,
   resolveBundledRoslynLaunch,
   ROSLYN_HOST_LIMITS,
-  type RoslynFileFact,
+  type RoslynFileOutcome,
 } from "./roslyn-host.js";
 import {
   safeRelativeInputPath,
@@ -58,6 +58,12 @@ import {
   acquireLocalLogoPrintRelief,
 } from "./local-logo-relief.js";
 import { analyzeTypeScriptSource } from "./typescript-metrics.js";
+import {
+  HistorySourceAnalysisCache,
+  type SourceAnalysisDetailLevel,
+  type SourceAnalysisLanguageMode,
+  type UnboundSourceAnalysis,
+} from "./source-analysis-cache.js";
 
 interface RootContext {
   readonly virtualRoot: string;
@@ -1287,6 +1293,17 @@ function explicitIdentity(
   });
 }
 
+export interface RepositorySnapshotSourceAnalysisExecution {
+  readonly cache: HistorySourceAnalysisCache;
+  readonly analyzerFingerprint: string;
+  readonly configurationFingerprint: string;
+  readonly detailLevel: SourceAnalysisDetailLevel;
+}
+
+export interface RepositorySnapshotAnalysisExecutionOptions {
+  readonly sourceAnalysis?: RepositorySnapshotSourceAnalysisExecution;
+}
+
 interface DeferredCSharpSource {
   readonly id: string;
   readonly context: RootContext;
@@ -1294,6 +1311,109 @@ interface DeferredCSharpSource {
   readonly sourcePath: string;
   readonly relativePath: string;
   readonly sourceText: string;
+  readonly cacheKey?: string;
+}
+
+function sourceAnalysisLanguageMode(
+  sourcePath: string,
+  language: SourceLanguage,
+): SourceAnalysisLanguageMode {
+  if (language === "csharp") return "csharp";
+  const extension = path.posix.extname(sourcePath).toLocaleLowerCase("en-US");
+  if (language === "javascript") {
+    return extension === ".jsx" ? "javascript-jsx" : "javascript-js";
+  }
+  if (sourcePath.toLocaleLowerCase("en-US").endsWith(".d.ts")) {
+    return "typescript-dts";
+  }
+  return extension === ".tsx" ? "typescript-tsx" : "typescript-ts";
+}
+
+function cachedSourceKey(
+  execution: RepositorySnapshotSourceAnalysisExecution | undefined,
+  sourcePath: string,
+  sourceText: string,
+  language: SourceLanguage,
+  guard: AnalysisGuard,
+): string | undefined {
+  return execution?.cache.key(
+    {
+      sourceText,
+      languageMode: sourceAnalysisLanguageMode(sourcePath, language),
+      analyzerFingerprint: execution.analyzerFingerprint,
+      configurationFingerprint: execution.configurationFingerprint,
+      detailLevel: execution.detailLevel,
+    },
+    () => guard.check(),
+  );
+}
+
+function retainedTypeScriptAnalysis(
+  sourcePath: string,
+  sourceText: string,
+  detailLevel: SourceAnalysisDetailLevel,
+): UnboundSourceAnalysis {
+  const analysis = analyzeTypeScriptSource(sourcePath, sourceText);
+  if (analysis.hasSyntaxErrors) {
+    return Object.freeze({
+      status: "skipped" as const,
+      reason: "typescript-syntax-errors" as const,
+    });
+  }
+  const imports = Object.freeze(sanitizedImports(analysis.imports));
+  return Object.freeze({
+    status: "valid" as const,
+    metrics: Object.freeze({
+      sloc: analysis.sloc,
+      decisionLoad: analysis.decisionLoad,
+      maximumComplexity: analysis.maximumComplexity,
+      executableUnitCount: analysis.executableUnitCount,
+    }),
+    metricMethod: "typescript-compiler-api-v1" as const,
+    imports,
+    ...(detailLevel === "summary"
+      ? {}
+      : {
+          units: analysis.units,
+          sourceStructure: analysis.sourceStructure,
+        }),
+    warnings: Object.freeze([]),
+  });
+}
+
+function retainedCSharpAnalysis(
+  outcome: RoslynFileOutcome,
+  detailLevel: SourceAnalysisDetailLevel,
+): UnboundSourceAnalysis {
+  if (outcome.status === "skipped") {
+    return Object.freeze({
+      status: "skipped" as const,
+      reason: "csharp-unit-limit" as const,
+    });
+  }
+  if (outcome.warnings.includes("syntax-errors-present")) {
+    return Object.freeze({
+      status: "skipped" as const,
+      reason: "csharp-syntax-errors" as const,
+    });
+  }
+  return Object.freeze({
+    status: "valid" as const,
+    metrics: outcome.metrics,
+    metricMethod: outcome.metricMethod,
+    imports: Object.freeze([]),
+    ...(detailLevel === "summary"
+      ? {}
+      : {
+          units: outcome.units,
+          sourceStructure: outcome.sourceStructure,
+        }),
+    warnings: Object.freeze(
+      outcome.warnings.includes("decision-evidence-byte-limit")
+        ? (["csharp-decision-evidence-byte-limit"] as const)
+        : [],
+    ),
+  });
 }
 
 function pendingSource(
@@ -1378,6 +1498,57 @@ function pendingSource(
   };
 }
 
+function appendAnalyzedSource(
+  pendingSources: PendingSource[],
+  warnings: string[],
+  context: RootContext,
+  selected: InternalModule,
+  sourcePath: string,
+  relativePath: string,
+  sourceText: string,
+  language: SourceLanguage,
+  analysis: UnboundSourceAnalysis,
+): void {
+  if (analysis.status === "skipped") {
+    const message =
+      analysis.reason === "typescript-syntax-errors"
+        ? "TypeScript/JavaScript syntax errors; source skipped"
+        : analysis.reason === "csharp-syntax-errors"
+          ? "C# syntax errors; source skipped"
+          : "C# source exceeded the Roslyn unit limit and was skipped";
+    warnings.push(
+      sanitizeWarningText(`${relativePath}: ${message}`),
+    );
+    return;
+  }
+  if (
+    analysis.warnings.includes(
+      "csharp-decision-evidence-byte-limit",
+    )
+  ) {
+    warnings.push(
+      sanitizeWarningText(
+        `${relativePath}: C# ${DECISION_EVIDENCE_OMITTED_WARNING}`,
+      ),
+    );
+  }
+  pendingSources.push(
+    pendingSource(
+      context,
+      selected,
+      sourcePath,
+      relativePath,
+      sourceText,
+      language,
+      analysis.metrics,
+      analysis.metricMethod,
+      analysis.units ?? [],
+      analysis.imports,
+      analysis.sourceStructure,
+    ),
+  );
+}
+
 /** Prefix file-local analyzer keys so every persisted fine identity is global. */
 function bindSourceStructure(
   buildingId: string,
@@ -1417,12 +1588,14 @@ async function analyzeSources(
   modules: InternalModule[],
   warnings: string[],
   guard: AnalysisGuard,
+  sourceAnalysisExecution?: RepositorySnapshotSourceAnalysisExecution,
 ): Promise<{
   readonly sources: readonly PendingSource[];
   readonly unassignedModules: readonly InternalModule[];
 }> {
   const pendingSources: PendingSource[] = [];
   const csharpSources: DeferredCSharpSource[] = [];
+  const csharpAnalysisById = new Map<string, UnboundSourceAnalysis>();
   const unassignedByRepository = new Map<string, InternalModule>();
   const modulesByRepository = new Map<string, InternalModule[]>();
   for (const candidate of modules) {
@@ -1476,57 +1649,74 @@ async function analyzeSources(
         virtualRelative(context.virtualRoot, sourcePath),
       );
       const sourceText = snapshotText(context, sourcePath);
+      const cacheKey = cachedSourceKey(
+        sourceAnalysisExecution,
+        sourcePath,
+        sourceText,
+        language,
+        guard,
+      );
+      const cached =
+        cacheKey === undefined
+          ? undefined
+          : sourceAnalysisExecution!.cache.get(cacheKey);
       if (language === "csharp") {
+        const id =
+          `source-${String(csharpSources.length + 1).padStart(6, "0")}.cs`;
         csharpSources.push({
-          id: `source-${String(csharpSources.length + 1).padStart(6, "0")}.cs`,
+          id,
           context,
           selected,
           sourcePath,
           relativePath,
           sourceText,
+          ...(cacheKey === undefined ? {} : { cacheKey }),
         });
+        if (cached !== undefined) csharpAnalysisById.set(id, cached);
         continue;
       }
 
-      const analysis = analyzeTypeScriptSource(sourcePath, sourceText);
-      if (analysis.hasSyntaxErrors) {
-        warnings.push(
-          sanitizeWarningText(
-            `${relativePath}: TypeScript/JavaScript syntax errors; source skipped`,
-          ),
-        );
-        continue;
-      }
-      const imports = sanitizedImports(analysis.imports);
-      pendingSources.push(
-        pendingSource(
-          context,
-          selected,
+      const analysis =
+        cached ??
+        retainedTypeScriptAnalysis(
           sourcePath,
-          relativePath,
           sourceText,
-          language,
-          {
-            sloc: analysis.sloc,
-            decisionLoad: analysis.decisionLoad,
-            maximumComplexity: analysis.maximumComplexity,
-            executableUnitCount: analysis.executableUnitCount,
-          },
-          "typescript-compiler-api-v1",
-          analysis.units,
-          imports,
-          analysis.sourceStructure,
-        ),
+          sourceAnalysisExecution?.detailLevel ?? "full",
+        );
+      guard.check();
+      if (cached === undefined && cacheKey !== undefined) {
+        sourceAnalysisExecution!.cache.set(
+          cacheKey,
+          analysis,
+          () => guard.check(),
+        );
+      }
+      appendAnalyzedSource(
+        pendingSources,
+        warnings,
+        context,
+        selected,
+        sourcePath,
+        relativePath,
+        sourceText,
+        language,
+        analysis,
       );
     }
   }
 
-  if (csharpSources.length > 0) {
+  const uncachedCSharpSources = csharpSources.filter(
+    ({ id }) => !csharpAnalysisById.has(id),
+  );
+  if (uncachedCSharpSources.length > 0) {
     guard.check();
     const launch = await resolveBundledRoslynLaunch();
     guard.check();
     const outcomes = await analyzeCSharpWithRoslyn(
-      csharpSources.map(({ id, sourceText }) => ({ id, source: sourceText })),
+      uncachedCSharpSources.map(({ id, sourceText }) => ({
+        id,
+        source: sourceText,
+      })),
       launch,
       {
         timeoutMs: Math.min(
@@ -1536,53 +1726,46 @@ async function analyzeSources(
         ...(guard.signal === undefined ? {} : { signal: guard.signal }),
       },
     );
-    const byId = new Map(csharpSources.map((source) => [source.id, source]));
+    const uncachedById = new Map(
+      uncachedCSharpSources.map((source) => [source.id, source]),
+    );
     for (const outcome of outcomes) {
       guard.check();
-      const source = byId.get(outcome.id);
+      const source = uncachedById.get(outcome.id);
       if (!source) {
         throw new Error("Roslyn helper returned an unknown source identifier.");
       }
-      if (outcome.status === "skipped") {
-        warnings.push(
-          sanitizeWarningText(
-            `${source.relativePath}: C# source exceeded the Roslyn unit limit and was skipped`,
-          ),
-        );
-        continue;
-      }
-      if (outcome.warnings.includes("syntax-errors-present")) {
-        warnings.push(
-          sanitizeWarningText(
-            `${source.relativePath}: C# syntax errors; source skipped`,
-          ),
-        );
-        continue;
-      }
-      if (outcome.warnings.includes("decision-evidence-byte-limit")) {
-        warnings.push(
-          sanitizeWarningText(
-            `${source.relativePath}: C# ${DECISION_EVIDENCE_OMITTED_WARNING}`,
-          ),
-        );
-      }
-      const result: RoslynFileFact = outcome;
-      pendingSources.push(
-        pendingSource(
-          source.context,
-          source.selected,
-          source.sourcePath,
-          source.relativePath,
-          source.sourceText,
-          "csharp",
-          result.metrics,
-          result.metricMethod,
-          result.units,
-          [],
-          result.sourceStructure,
-        ),
+      const analysis = retainedCSharpAnalysis(
+        outcome,
+        sourceAnalysisExecution?.detailLevel ?? "full",
       );
+      csharpAnalysisById.set(source.id, analysis);
+      if (source.cacheKey !== undefined) {
+        sourceAnalysisExecution!.cache.set(
+          source.cacheKey,
+          analysis,
+          () => guard.check(),
+        );
+      }
     }
+  }
+  for (const source of csharpSources) {
+    guard.check();
+    const analysis = csharpAnalysisById.get(source.id);
+    if (analysis === undefined) {
+      throw new Error("Roslyn helper omitted a requested source result.");
+    }
+    appendAnalyzedSource(
+      pendingSources,
+      warnings,
+      source.context,
+      source.selected,
+      source.sourcePath,
+      source.relativePath,
+      source.sourceText,
+      "csharp",
+      analysis,
+    );
   }
 
   const orderedSources = pendingSources.sort((left, right) =>
@@ -1987,6 +2170,7 @@ export async function analyzeLocalFacts(
 export async function analyzeRepositorySnapshotFacts(
   requestedSnapshots: readonly RepositorySnapshot[],
   options: LocalAnalysisOptions = {},
+  execution: RepositorySnapshotAnalysisExecutionOptions = {},
 ): Promise<LocalAnalysisFacts> {
   if (requestedSnapshots.length === 0) {
     throw new Error("At least one repository snapshot is required.");
@@ -2073,6 +2257,7 @@ export async function analyzeRepositorySnapshotFacts(
     discoveredModules,
     warnings,
     guard,
+    execution.sourceAnalysis,
   );
   for (
     let index = 0;

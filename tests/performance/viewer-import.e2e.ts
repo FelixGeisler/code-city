@@ -288,6 +288,15 @@ function createHistoryAnalysisResult(
     },
     cacheHits: 0,
     cacheMisses: 2,
+    sourceAnalysisCache: {
+      hits: 0,
+      misses: 0,
+      insertions: 0,
+      evictions: 0,
+      entries: 0,
+      retainedBytes: 0,
+      maximumBytes: 64 * 1024 * 1024,
+    },
   };
 }
 

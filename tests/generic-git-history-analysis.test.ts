@@ -163,6 +163,7 @@ function sessionHarness(
       newerSha: string,
     ) => readonly GenericGitHistoryPathChange[];
     readonly snapshotFiles?: number;
+    readonly snapshotForCommit?: (commitSha: string) => RepositorySnapshot;
     readonly backendVersion?: string;
     readonly oldestCommitIsShallow?: boolean;
     readonly projectStartSha?: string;
@@ -186,6 +187,7 @@ function sessionHarness(
       ]),
   );
   const readSnapshot = vi.fn(async (commitSha: string) =>
+    options.snapshotForCommit?.(commitSha) ??
     snapshot(commitSha, options.snapshotFiles),
   );
   return {
@@ -371,16 +373,19 @@ describe("Generic Git history analysis orchestration", () => {
         /^sha256:[0-9a-f]{64}$/u,
       ),
       configuration: {
-        metricConfiguration: {
-          metrics: ["loc", "complexity"],
-        },
-        snapshotOptions: {
-          maxEntries: 100_000,
-          maxRetainedFiles: 50_000,
-          maxSourceBuildings: 25_000,
-          maxFileBytes: 2 * 1024 * 1024,
-          maxTotalBytes: 256 * 1024 * 1024,
-          maxDiagnostics: 1_000,
+        detailLevel: "summary",
+        semanticConfiguration: {
+          metricConfiguration: {
+            metrics: ["loc", "complexity"],
+          },
+          snapshotOptions: {
+            maxEntries: 100_000,
+            maxRetainedFiles: 50_000,
+            maxSourceBuildings: 25_000,
+            maxFileBytes: 2 * 1024 * 1024,
+            maxTotalBytes: 256 * 1024 * 1024,
+            maxDiagnostics: 1_000,
+          },
         },
       },
     });
@@ -489,13 +494,17 @@ describe("Generic Git history analysis orchestration", () => {
 
     expect(configurations).toHaveLength(2);
     expect(configurations[0]).toMatchObject({
-      metricConfiguration: {
-        metricMapping: { id: "complexity" },
+      semanticConfiguration: {
+        metricConfiguration: {
+          metricMapping: { id: "complexity" },
+        },
       },
     });
     expect(configurations[1]).toMatchObject({
-      metricConfiguration: {
-        metricMapping: { id: "maintenance" },
+      semanticConfiguration: {
+        metricConfiguration: {
+          metricMapping: { id: "maintenance" },
+        },
       },
     });
     expect(JSON.stringify(configurations[0])).not.toBe(
@@ -697,12 +706,16 @@ describe("Generic Git history analysis orchestration", () => {
     ]);
     expect(configurations).toHaveLength(2);
     expect(configurations[0]).toMatchObject({
-      metricConfiguration: { metric: "default" },
-      snapshotOptions: { maxFileBytes: 1_024 },
+      semanticConfiguration: {
+        metricConfiguration: { metric: "default" },
+        snapshotOptions: { maxFileBytes: 1_024 },
+      },
     });
     expect(configurations[1]).toMatchObject({
-      metricConfiguration: { metric: "default" },
-      snapshotOptions: { maxFileBytes: 2_048 },
+      semanticConfiguration: {
+        metricConfiguration: { metric: "default" },
+        snapshotOptions: { maxFileBytes: 2_048 },
+      },
     });
     expect(JSON.stringify(configurations[0])).not.toBe(
       JSON.stringify(configurations[1]),
@@ -881,6 +894,72 @@ describe("Generic Git history analysis orchestration", () => {
     expect(overflowSession.readChangesBetween).toHaveBeenCalledOnce();
     expect(overflowSession.readSnapshot).toHaveBeenCalledTimes(2);
     expect(createEvolution).toHaveBeenCalledOnce();
+  });
+
+  it("reuses unchanged renamed files and emits byte-identical cached and uncached bundles", async () => {
+    const sourceText =
+      "export function choose(value: boolean) { return value ? 1 : 0; }";
+    const snapshotForCommit = (commitSha: string): RepositorySnapshot => ({
+      name: "History",
+      files: [
+        {
+          path: commitSha === sha(1) ? "src/old.ts" : "src/new.ts",
+          text: sourceText,
+          byteLength: Buffer.byteLength(sourceText, "utf8"),
+        },
+      ],
+      diagnostics: [],
+    });
+    const change = (olderSha: string): readonly GenericGitHistoryPathChange[] =>
+      olderSha === sha(1)
+        ? [
+            {
+              kind: "renamed" as const,
+              previousPath: "src/old.ts",
+              path: "src/new.ts",
+            },
+          ]
+        : [{ kind: "modified" as const, path: "src/new.ts" }];
+    const analyze = async (maximumBytes?: number) => {
+      const session = sessionHarness(3, {
+        snapshotForCommit,
+        change,
+      });
+      return await analyzeGenericGitHistory(
+        request({
+          mode: "commit-count",
+          commitCount: 3,
+          sampleEvery: 1,
+        }),
+        {},
+        {
+          withHistoryRepository: providerHarness(session.session).provider,
+          ...(maximumBytes === undefined
+            ? {}
+            : { sourceAnalysisCacheMaximumBytes: maximumBytes }),
+          now: () => 0,
+        },
+      );
+    };
+
+    const cached = await analyze();
+    const uncached = await analyze(1);
+
+    expect(cached.sourceAnalysisCache).toMatchObject({
+      hits: 1,
+      misses: 2,
+      entries: 2,
+    });
+    expect(uncached.sourceAnalysisCache).toMatchObject({
+      hits: 0,
+      misses: 3,
+      entries: 0,
+    });
+    expect(JSON.stringify(cached.evolution.bundle)).toBe(
+      JSON.stringify(uncached.evolution.bundle),
+    );
+    expect(cached.model).toEqual(uncached.model);
+    expect(cached.model.buildings[0]?.path).toBe("src/new.ts");
   });
 
   it("covers the complete mainline with elapsed-time bounded frames", async () => {
