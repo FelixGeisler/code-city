@@ -589,10 +589,10 @@ export function analyzeParsedTypeScriptSource(
 }
 
 
-export function analyzeTypeScriptSource(
+export async function analyzeTypeScriptSource(
   filePath: string,
   sourceText: string,
-): TypeScriptMetricsResult {
+): Promise<TypeScriptMetricsResult> {
   return withTypeScriptSource(
     filePath,
     sourceText,

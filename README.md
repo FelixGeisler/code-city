@@ -583,7 +583,9 @@ the full total and any unavailable capability.
 
 C# is analyzed by the bundled, syntax-only Roslyn helper. TypeScript and
 JavaScript use the pinned TypeScript 7 native API through one bounded process
-per snapshot analysis. The native front end sees only admitted JavaScript,
+per snapshot analysis. Every native request shares the caller's hard deadline
+and cancellation signal; interruption force-terminates the process before the
+workspace is closed. The native front end sees only admitted JavaScript,
 TypeScript, JSON, and config files through an isolated virtual filesystem; it
 cannot read the host or repository filesystem. Neither analyzer restores,
 builds, runs plugins, follows compiler plugins, or executes repository content.
