@@ -46,6 +46,21 @@ it("serves the documented development viewer with a real same-origin API", async
   expect(viewerResponse.status).toBe(200);
   expect(await viewerResponse.text()).toContain("Code City");
 
+  const citySceneResponse = await fetch(new URL("src/city-scene.ts", handle.url));
+  expect(citySceneResponse.status).toBe(200);
+  const citySceneSource = await citySceneResponse.text();
+  const orbitControlsPath = citySceneSource.match(
+    /["'](\/[^"']+three_addons_controls_OrbitControls__js\.js\?v=[^"']+)/u,
+  )?.[1];
+  expect(orbitControlsPath).toBeDefined();
+  const orbitControlsResponse = await fetch(
+    new URL(orbitControlsPath as string, handle.url),
+  );
+  expect(orbitControlsResponse.status).toBe(200);
+  expect(orbitControlsResponse.headers.get("content-type")).toContain(
+    "text/javascript",
+  );
+
   const apiResponse = await fetch(
     new URL("api/v1/auth/session", handle.url),
   );
