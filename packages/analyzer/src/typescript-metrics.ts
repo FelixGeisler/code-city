@@ -182,27 +182,37 @@ function declarationIdentity(node: ts.Node, source: ts.SourceFile): string {
 
 function canonicalTokens(node: ts.Node | undefined, source: ts.SourceFile): string {
   if (node === undefined) return "unknown";
+  const scannedText = node.getText(source);
   const scanner = ts.createScanner(
     true,
     source.languageVariant,
-    node.getText(source),
+    scannedText,
   );
   const tokens: string[] = [];
-  for (
-    let kind = scanner.scan();
-    kind !== ts.SyntaxKind.EndOfFile;
-    kind = scanner.scan()
-  ) {
-    const semanticToken =
-      scanner.isIdentifier() ||
-      (kind >= ts.SyntaxKind.FirstLiteralToken &&
-        kind <= ts.SyntaxKind.LastLiteralToken);
-    const text = (
-      semanticToken ? scanner.getTokenValue() : scanner.getTokenText()
-    ).normalize("NFC");
-    tokens.push(
-      `${ts.SyntaxKind[kind] ?? "Unknown"}:${text.length}:${text}`,
-    );
+  for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFile;) {
+    const start = scanner.getTokenStart();
+    const end = scanner.getTokenEnd();
+    if (end <= start) {
+      // The TypeScript 7 unstable scanner can return a zero-width Identifier
+      // for characters such as `#` while it is lexing a regular-expression
+      // character class. Always force progress for untrusted source text.
+      if (start >= scannedText.length) break;
+      const text = scannedText.slice(start, start + 1).normalize("NFC");
+      tokens.push(`Unknown:${text.length}:${text}`);
+      scanner.resetTokenState(start + 1);
+    } else {
+      const semanticToken =
+        scanner.isIdentifier() ||
+        (kind >= ts.SyntaxKind.FirstLiteralToken &&
+          kind <= ts.SyntaxKind.LastLiteralToken);
+      const text = (
+        semanticToken ? scanner.getTokenValue() : scanner.getTokenText()
+      ).normalize("NFC");
+      tokens.push(
+        `${ts.SyntaxKind[kind] ?? "Unknown"}:${text.length}:${text}`,
+      );
+    }
+    kind = scanner.scan();
   }
   return tokens.join("|");
 }
@@ -396,16 +406,18 @@ function countSloc(
   );
   const occupied = new Set<number>();
 
-  for (
-    let token = scanner.scan();
-    token !== ts.SyntaxKind.EndOfFile;
-    token = scanner.scan()
-  ) {
+  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFile;) {
     const start = scanner.getTokenStart();
-    const end = Math.max(start, scanner.getTokenEnd() - 1);
+    const tokenEnd = scanner.getTokenEnd();
+    const end = Math.max(start, tokenEnd - 1);
     const firstLine = sourceFile.getLineAndCharacterOfPosition(start).line;
     const lastLine = sourceFile.getLineAndCharacterOfPosition(end).line;
     for (let line = firstLine; line <= lastLine; line += 1) occupied.add(line);
+    if (tokenEnd <= start) {
+      if (start >= source.length) break;
+      scanner.resetTokenState(start + 1);
+    }
+    token = scanner.scan();
   }
   return occupied.size;
 }

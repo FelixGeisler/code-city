@@ -157,6 +157,31 @@ describe("persistent history semantic cache", () => {
     expect(persisted).not.toContain('"identity"');
   });
 
+  it("accepts compact historical facts without inventing inspection units", async () => {
+    const dataDirectory = await temporaryData();
+    const cache = await HistorySemanticCache.open({ dataDirectory });
+    const full = await facts();
+    const compact: LocalAnalysisFacts = {
+      ...full,
+      sources: full.sources.map((source) => {
+        const { sourceStructure: _sourceStructure, ...aggregate } = source;
+        return { ...aggregate, units: [] };
+      }),
+    };
+
+    const cold = await cache.acquire(request(), async () => compact);
+    const sanitized = await cold.read();
+    expect(sanitized.sources[0]?.metrics.executableUnitCount).toBeGreaterThan(0);
+    expect(sanitized.sources[0]?.units).toBeUndefined();
+    expect(sanitized.sources[0]?.metricMethod).toBeUndefined();
+    cold.release();
+
+    const warm = await cache.acquire(request(), async () => full);
+    expect(warm.hit).toBe(true);
+    expect((await warm.read()).sources[0]?.units).toBeUndefined();
+    warm.release();
+  });
+
   it("keeps commit and semantic configurations in distinct cryptographic keys", async () => {
     const dataDirectory = await temporaryData();
     const cache = await HistorySemanticCache.open({ dataDirectory });

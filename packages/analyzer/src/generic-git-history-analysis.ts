@@ -172,7 +172,7 @@ export interface HistorySemanticCacheRequestLike {
 
 export interface HistorySemanticCacheLeaseLike {
   readonly hit: boolean;
-  read(): Promise<LocalAnalysisFacts>;
+  read(): Promise<HistoryAnalysisFacts>;
   release(): void;
 }
 
@@ -187,7 +187,7 @@ export interface HistorySemanticCacheExecutionOptionsLike {
 export interface HistorySemanticCacheLike {
   acquire(
     request: HistorySemanticCacheRequestLike,
-    compute: () => Promise<LocalAnalysisFacts>,
+    compute: () => Promise<HistoryAnalysisFacts>,
     execution?: HistorySemanticCacheExecutionOptionsLike,
   ): Promise<HistorySemanticCacheLeaseLike>;
 }
@@ -1378,7 +1378,7 @@ function snapshotRetainedSemanticFacts<
  * history memory and output budget without adding an animation capability.
  */
 function historicalVisualizationFacts(
-  facts: LocalAnalysisFacts,
+  facts: HistoryAnalysisFacts,
 ): HistoryAnalysisFacts {
   return Object.freeze({
     repositories: facts.repositories,
@@ -1547,7 +1547,7 @@ async function analyzeSession(
           : "summary";
       let snapshotFileCount: number | undefined;
       let activeLease: HistorySemanticCacheLeaseLike | undefined;
-      const compute = async (): Promise<LocalAnalysisFacts> => {
+      const compute = async (): Promise<HistoryAnalysisFacts> => {
         checkpoint(clock);
         const snapshot = await session.readSnapshot(commit.sha);
         if (
@@ -1586,7 +1586,7 @@ async function analyzeSession(
         return facts;
       };
 
-      let semanticFacts: LocalAnalysisFacts;
+      let semanticFacts: HistoryAnalysisFacts;
       if (dependencies.semanticCache === undefined) {
         cacheMisses += 1;
         semanticFacts = await compute();
