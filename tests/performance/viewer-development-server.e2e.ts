@@ -7,6 +7,7 @@ import {
   startViewerDevelopmentServer,
   type ViewerDevelopmentServerHandle,
 } from "../../apps/viewer/src/development-server.js";
+import { ViewerImportApiClient } from "../../apps/viewer/src/import-api.js";
 
 let handle: ViewerDevelopmentServerHandle;
 let testRoot: string;
@@ -20,6 +21,7 @@ test.beforeAll(async () => {
     host: "127.0.0.1",
     port: 0,
     apiPort: 0,
+    trustWindowsGitWorkspace: true,
   });
 });
 
@@ -57,4 +59,50 @@ test("integrated development viewer executes its complete startup graph", async 
   await expect(page.locator("#project-import-steps")).toBeVisible();
   expect(pageErrors).toEqual([]);
   expect(serverErrors).toEqual([]);
+});
+
+test("imports real public GitHub history through the development server", async () => {
+  test.setTimeout(120_000);
+  const client = new ViewerImportApiClient(handle.url);
+  const queued = await client.createRemoteImport({
+    source: {
+      kind: "github",
+      repositoryUrl: "https://github.com/FelixGeisler/code-city",
+    },
+    history: {
+      mode: "commit-count",
+      commitCount: 2,
+      sampleEvery: 1,
+      totalDeadlineMs: 90_000,
+    },
+    identity: { title: "Code City public history smoke test" },
+  });
+
+  let current = queued;
+  await expect.poll(
+    async () => {
+      current = await client.getJob(queued.id);
+      if (current.state === "failed") {
+        throw new Error(
+          `Public history import failed: ${current.error?.code ?? "unknown"}: ${current.error?.message ?? "No diagnostic"}`,
+        );
+      }
+      return current.state;
+    },
+    { timeout: 100_000, intervals: [250, 500, 1_000] },
+  ).toBe("completed");
+  expect(current.result?.evolution?.artifactUrl).toContain(
+    `/api/v1/artifacts/${queued.id}/evolution.json`,
+  );
+
+  const modelResponse = await fetch(
+    new URL(`api/v1/artifacts/${queued.id}/city-model.json`, handle.url),
+  );
+  expect(modelResponse.status).toBe(200);
+  const model = await modelResponse.json() as {
+    readonly repositories?: readonly unknown[];
+    readonly buildings?: readonly unknown[];
+  };
+  expect(model.repositories?.length).toBeGreaterThan(0);
+  expect(model.buildings?.length).toBeGreaterThan(0);
 });

@@ -10,8 +10,9 @@ import path from "node:path";
 import {
   HISTORY_SEMANTIC_ANALYZER_FINGERPRINT,
   cityModelFromFacts,
+  type HistoryAnalysisFacts,
+  type HistorySourceFileFact,
   type LocalAnalysisFacts,
-  type SourceFileFact,
 } from "../../../packages/analyzer/src/index.js";
 import type {
   CityBuilding,
@@ -60,7 +61,7 @@ export interface HistorySemanticCacheRequest {
 export interface HistorySemanticCacheLease {
   readonly key: string;
   readonly hit: boolean;
-  read(): Promise<LocalAnalysisFacts>;
+  read(): Promise<HistoryAnalysisFacts>;
   release(): void;
 }
 
@@ -89,11 +90,11 @@ interface CacheKey {
 
 interface CacheEntry extends CacheKey {
   readonly version: typeof CACHE_CONTRACT_VERSION;
-  readonly facts: LocalAnalysisFacts;
+  readonly facts: HistoryAnalysisFacts;
 }
 
 interface CacheResolution {
-  readonly facts: LocalAnalysisFacts;
+  readonly facts: HistoryAnalysisFacts;
   readonly persisted: boolean;
   readonly wasCached: boolean;
 }
@@ -397,10 +398,10 @@ function sourceFact(
   >,
   importsValue: unknown,
   checkpoint: CacheCheckpoint,
-): SourceFileFact {
+): HistorySourceFileFact {
   checkpoint.step();
   const district = districtsById.get(building.districtId);
-  if (district === undefined || building.metricMethod === undefined) {
+  if (district === undefined) {
     throw new HistoryCacheCorruptionError(
       "History cache semantic facts are incomplete.",
     );
@@ -452,8 +453,12 @@ function sourceFact(
     path: building.path,
     language: building.language,
     metrics: building.metrics,
-    metricMethod: building.metricMethod,
-    units: Object.freeze([...(building.units ?? [])]),
+    ...(building.metricMethod === undefined
+      ? {}
+      : { metricMethod: building.metricMethod }),
+    ...(building.units === undefined
+      ? {}
+      : { units: Object.freeze([...building.units]) }),
     ...(building.sourceLocation === undefined
       ? {}
       : {
@@ -478,7 +483,7 @@ function sourceFact(
 function sanitizedFacts(
   value: unknown,
   callback?: () => void,
-): LocalAnalysisFacts {
+): HistoryAnalysisFacts {
   const checkpoint = new CacheCheckpoint(callback);
   checkpoint.force();
   if (
@@ -495,10 +500,36 @@ function sanitizedFacts(
       "History cache facts have an invalid shape.",
     );
   }
+  const rawSourcesForValidation = value["sources"];
+  const validationValue = Array.isArray(rawSourcesForValidation)
+    ? {
+        ...value,
+        sources: rawSourcesForValidation.map((source) => {
+          if (
+            typeof source !== "object" ||
+            source === null ||
+            !Array.isArray((source as { readonly units?: unknown }).units) ||
+            (source as { readonly units: readonly unknown[] }).units.length !== 0 ||
+            Object.hasOwn(source, "sourceStructure")
+          ) {
+            return source;
+          }
+          // Compact historical facts intentionally retain only aggregate
+          // metrics. Treat their empty unit marker as omitted inspection data
+          // before applying the normal semantic model validator.
+          const {
+            units: _units,
+            metricMethod: _metricMethod,
+            ...summary
+          } = source as Readonly<Record<string, unknown>>;
+          return summary;
+        }),
+      }
+    : value;
   let model: CityModel;
   try {
     model = cityModelFromFacts(
-      value as unknown as LocalAnalysisFacts,
+      validationValue as unknown as LocalAnalysisFacts,
       callback === undefined
         ? {}
         : {
@@ -549,7 +580,7 @@ function sanitizedFacts(
     }
     rawSourcesById.set(id, record);
   }
-  const sources: SourceFileFact[] = [];
+  const sources: HistorySourceFileFact[] = [];
   for (const building of model.buildings) {
     checkpoint.step();
     sources.push(
@@ -574,7 +605,7 @@ function sanitizedFacts(
 
 function entryJson(
   key: CacheKey,
-  facts: LocalAnalysisFacts,
+  facts: HistoryAnalysisFacts,
   checkpoint?: () => void,
 ): string {
   return (
@@ -708,7 +739,7 @@ async function removeEntry(
 async function publishEntry(
   directory: TrustedDirectory,
   key: CacheKey,
-  facts: LocalAnalysisFacts,
+  facts: HistoryAnalysisFacts,
   checkpoint?: () => void,
 ): Promise<boolean> {
   const text = entryJson(key, facts, checkpoint);
@@ -847,7 +878,7 @@ export class HistorySemanticCache {
 
   async #resolve(
     key: CacheKey,
-    compute: () => Promise<LocalAnalysisFacts>,
+    compute: () => Promise<HistoryAnalysisFacts>,
     execution: HistorySemanticCacheExecutionOptions,
   ): Promise<CacheResolution> {
     const checkpoint = execution.checkpoint;
@@ -923,7 +954,7 @@ export class HistorySemanticCache {
 
   public async acquire(
     request: HistorySemanticCacheRequest,
-    compute: () => Promise<LocalAnalysisFacts>,
+    compute: () => Promise<HistoryAnalysisFacts>,
     execution: HistorySemanticCacheExecutionOptions = {},
   ): Promise<HistorySemanticCacheLease> {
     if (typeof compute !== "function") {

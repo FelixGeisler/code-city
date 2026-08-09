@@ -26,7 +26,10 @@ import {
 } from "../packages/analyzer/src/git-snapshot.js";
 import { HISTORY_SELECTION_LIMITS } from "../packages/analyzer/src/history-selection.js";
 import type { RepositorySnapshot } from "../packages/analyzer/src/snapshot.js";
-import type { LocalAnalysisFacts } from "../packages/analyzer/src/types.js";
+import type {
+  HistoryAnalysisFacts,
+  LocalAnalysisFacts,
+} from "../packages/analyzer/src/types.js";
 
 const REMOTE =
   "https://dev.azure.example/Collection/Project/_git/History";
@@ -257,10 +260,10 @@ interface CacheLeaseState {
 }
 
 function cacheHarness(
-  initial: ReadonlyMap<string, LocalAnalysisFacts> = new Map(),
+  initial: ReadonlyMap<string, HistoryAnalysisFacts> = new Map(),
 ): {
   readonly cache: HistorySemanticCacheLike;
-  readonly values: Map<string, LocalAnalysisFacts>;
+  readonly values: Map<string, HistoryAnalysisFacts>;
   readonly requests: HistorySemanticCacheRequestLike[];
   readonly leases: CacheLeaseState[];
   readonly active: () => number;

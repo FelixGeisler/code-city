@@ -124,6 +124,19 @@ class Sample {
     expect(result.imports).toEqual([{ specifier: "./feature", count: 1 }]);
   });
 
+  it("bounds scanner progress for regular-expression character classes", async () => {
+    const result = await analyzeTypeScriptSource(
+      "authorization.ts",
+      String.raw`export function valid(authority: string): boolean {
+  return !/[\u0000-\u0020\u007F/@%?#\\]/u.test(authority);
+}
+`,
+    );
+
+    expect(result.sloc).toBe(3);
+    expect(result.executableUnitCount).toBe(2);
+  });
+
   it("separates nullable annotations from ternaries and measures modern callables", () => {
     const result = analyzeCSharpLexically(`
 class Sample {
