@@ -9,8 +9,10 @@ import {
 
 import { DEMO_MODEL } from "../apps/viewer/src/demo-model.js";
 import {
+  applyMetricMapping,
   createPrusaXLProfile,
   createSingleChannelProfile,
+  DEFAULT_VERSIONED_METRIC_MAPPING,
   parsePrinterProfileJson,
   PRINT_FIDELITY_EPSILON,
   PrintLayoutError,
@@ -707,6 +709,82 @@ describe("physical print-plate orchestration", () => {
     },
     25_000,
   );
+
+  it("reports the actual five-tool allocation before serialization", () => {
+    const profile = createPrusaXLProfile([1, 2, 3, 4, 5]);
+    const prepared = preparePrintPlateBundle({
+      format: "3mf",
+      model: applyMetricMapping(
+        DEMO_MODEL,
+        DEFAULT_VERSIONED_METRIC_MAPPING,
+      ),
+      profile,
+      options: {
+        scale: 3,
+        fitPolicy: "tile",
+        labelPolicy: "off",
+        routePolicy: "off",
+        includeLegend: false,
+      },
+    });
+
+    expect(
+      prepared.preflight.toolAssignments.map(({ channelId }) => channelId),
+    ).toEqual(
+      profile.printChannels
+        .map(({ id }) => id)
+        .filter((id) =>
+          prepared.plates.some(({ artifacts }) =>
+            artifacts.city.parts.some(({ channelId }) => channelId === id),
+          ),
+        ),
+    );
+    const structural = prepared.preflight.toolAssignments.find(
+      ({ semanticGroupIds }) =>
+        semanticGroupIds.includes("base") &&
+        semanticGroupIds.includes("identity"),
+    );
+    expect(structural).toMatchObject({
+      channelId: "tool-1",
+      channelLabel: "Tool 1",
+    });
+    expect(structural?.semanticGroupLabels).toEqual(
+      expect.arrayContaining(["Base", "Identity"]),
+    );
+    for (const assignment of prepared.preflight.toolAssignments) {
+      expect(assignment.semanticGroupIds).toHaveLength(
+        assignment.semanticGroupLabels.length,
+      );
+    }
+
+    const serialized = serializePreparedPrintPlateBundle(prepared);
+    const structuralPlateIndex = prepared.plates.findIndex(({ artifacts }) =>
+      artifacts.city.parts.some(({ semanticGroupIds }) =>
+        semanticGroupIds.includes("base") &&
+        semanticGroupIds.includes("identity"),
+      ),
+    );
+    expect(structuralPlateIndex).toBeGreaterThanOrEqual(0);
+    const artifact = serialized.artifacts[structuralPlateIndex]!;
+    expect(artifact.format).toBe("3mf");
+    if (artifact.format !== "3mf") throw new Error("Expected 3MF artifact.");
+    const archive = unzipSync(artifact.bytes);
+    const modelXml = new TextDecoder().decode(
+      archive["3D/3dmodel.model"],
+    );
+    const orderedParts = [
+      ...prepared.plates[structuralPlateIndex]!.artifacts.city.parts,
+    ].sort((left, right) => left.channelId.localeCompare(right.channelId));
+    expect(modelXml.match(/<base name=/gu)).toHaveLength(orderedParts.length);
+    for (const [materialIndex, part] of orderedParts.entries()) {
+      expect(modelXml).toContain(`name="${part.name}"`);
+      expect(modelXml).toContain(`p1="${materialIndex}"`);
+    }
+    expect(orderedParts[0]).toMatchObject({
+      channelId: "tool-1",
+      semanticGroupIds: expect.arrayContaining(["base", "identity"]),
+    });
+  });
 
   it("is independent of input order and preserves stable ties and required rotation", () => {
     const profile = createSingleChannelProfile({

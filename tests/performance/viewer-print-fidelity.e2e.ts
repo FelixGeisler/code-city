@@ -82,6 +82,13 @@ test("Auto compact fit requires confirmation before exact fidelity downloads", a
   await expect(
     dialog.locator("#print-export-compact-confirmation-summary"),
   ).toContainText("No print file has been created yet");
+  await expect(dialog.locator("#print-export-channels-title")).toHaveText(
+    "Tool allocation",
+  );
+  const firstAllocation = dialog.locator("#print-export-channels li").first();
+  await expect(firstAllocation).toContainText(/^(?:Tool|Channel) 1:/u);
+  await expect(firstAllocation).toContainText("Base");
+  await expect(firstAllocation).toContainText("Identity");
   await expect(dialog.locator("#print-export-fidelity-wrap")).toBeVisible();
   await expect(
     dialog.locator("#print-export-fidelity-summary"),
