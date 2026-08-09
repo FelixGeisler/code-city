@@ -12,6 +12,7 @@ import {
   type ImportCredentialProvider,
   type ImportFieldError,
   type ImportIdentityOptions,
+  type ImportJob,
   type ImportRevision,
   type RemoteImportHistorySelection,
   type RemoteImportSubmission,
@@ -248,6 +249,22 @@ export function projectImportPersistenceWarning(
     return undefined;
   }
   return "This browser cannot save import recovery state. Keep this page open while importing; reloading may lose access to the job or its result.";
+}
+
+export function projectImportTerminalMessages(
+  job: ImportJob,
+): readonly string[] {
+  const failureMessage =
+    job.error?.message ??
+    (job.state === "cancelled"
+      ? "The import was cancelled."
+      : "The import failed.");
+  return Object.freeze([
+    failureMessage,
+    ...(job.state === "failed" && job.error !== undefined
+      ? [`Diagnostic code: ${job.error.code}`]
+      : []),
+  ]);
 }
 
 export function projectImportProvidersForSource(
@@ -1975,26 +1992,24 @@ export function installProjectImportDialog(
         }
         break;
       }
-      case "terminal":
+      case "terminal": {
         setStep("progress");
         scrubAcceptedSubmission(state.job.id);
+        const failureMessages = projectImportTerminalMessages(state.job);
+        const failureMessage = failureMessages[0]!;
         setMeasuredProgress(
           state.job.state === "cancelled"
             ? "Import cancelled"
             : "Import failed",
           1,
           1,
-          state.job.error?.message ?? "",
+          failureMessage,
         );
-        showSummaryErrors([
-          state.job.error?.message ??
-            (state.job.state === "cancelled"
-              ? "The import was cancelled."
-              : "The import failed."),
-        ]);
+        showSummaryErrors(failureMessages);
         retryButton.textContent = "Start another import";
         retryButton.hidden = false;
         break;
+      }
       case "artifact-failed":
         setStep("progress");
         scrubAcceptedSubmission(state.job.id);

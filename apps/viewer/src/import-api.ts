@@ -243,6 +243,7 @@ export type ImportJobErrorCode =
   | "history-capability-unavailable"
   | "history-incomplete"
   | "history-limit-exceeded"
+  | "history-response-invalid"
   | "history-too-long"
   | "import-limit-exceeded"
   | "interrupted"
@@ -792,6 +793,7 @@ function isJobErrorCode(value: unknown): value is ImportJobErrorCode {
     value === "history-capability-unavailable" ||
     value === "history-incomplete" ||
     value === "history-limit-exceeded" ||
+    value === "history-response-invalid" ||
     value === "history-too-long" ||
     value === "import-limit-exceeded" ||
     value === "interrupted" ||

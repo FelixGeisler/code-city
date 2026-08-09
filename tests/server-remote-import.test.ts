@@ -1539,6 +1539,12 @@ describe("remote import HTTP API", () => {
             "secret remote diagnostics",
           );
         }
+        if (requestValue.repositoryUrl.endsWith("/invalid-history")) {
+          throw new GenericGitSnapshotError(
+            "GIT_INVALID_RESPONSE",
+            "secret unsupported Git response bytes",
+          );
+        }
         throw new HistoryEvolutionError(
           "limit-exceeded",
           "secret retained semantic internals",
@@ -1579,10 +1585,16 @@ describe("remote import HTTP API", () => {
           "Complete mainline history requires a Git server with filtered history fetch support. Choose a bounded custom history range.",
       },
       {
+        repository: "invalid-history",
+        code: "history-response-invalid",
+        message:
+          "Git returned unsupported history metadata. Update the server's Git installation and retry. If it still fails, report the diagnostic code without sharing repository URLs or credentials.",
+      },
+      {
         repository: "too-detailed",
         code: "history-limit-exceeded",
         message:
-          "This repository is too detailed for the selected history. Reduce the maximum animation frames or choose a custom range.",
+          "This repository is too detailed for the selected history. Select fewer commits or increase Sample every N commits (start with 2 and double it if needed). For root-to-tip history, reduce the maximum animation frames.",
       },
     ] as const) {
       const response = await request(

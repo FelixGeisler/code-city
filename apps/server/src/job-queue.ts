@@ -30,6 +30,7 @@ export interface JobError {
     | "history-capability-unavailable"
     | "history-incomplete"
     | "history-limit-exceeded"
+    | "history-response-invalid"
     | "history-too-long"
     | "import-limit-exceeded"
     | "interrupted"
@@ -46,6 +47,7 @@ export type JobTaskFailureCode =
   | "history-capability-unavailable"
   | "history-incomplete"
   | "history-limit-exceeded"
+  | "history-response-invalid"
   | "history-too-long"
   | "import-limit-exceeded"
   | "repository-content-rejected"
@@ -64,7 +66,9 @@ const JOB_TASK_FAILURE_MESSAGES: Readonly<
   "history-incomplete":
     "The selected history cannot be proven complete because the Git server supplied a shallow boundary. Choose an available bounded range or use a complete remote.",
   "history-limit-exceeded":
-    "This repository is too detailed for the selected history. Reduce the maximum animation frames or choose a custom range.",
+    "This repository is too detailed for the selected history. Select fewer commits or increase Sample every N commits (start with 2 and double it if needed). For root-to-tip history, reduce the maximum animation frames.",
+  "history-response-invalid":
+    "Git returned unsupported history metadata. Update the server's Git installation and retry. If it still fails, report the diagnostic code without sharing repository URLs or credentials.",
   "history-too-long":
     "This mainline has more than 100,000 commits. Choose a bounded custom history range.",
   "import-limit-exceeded":
@@ -87,6 +91,7 @@ function isJobTaskFailureCode(
     value === "history-capability-unavailable" ||
     value === "history-incomplete" ||
     value === "history-limit-exceeded" ||
+    value === "history-response-invalid" ||
     value === "history-too-long" ||
     value === "import-limit-exceeded" ||
     value === "repository-content-rejected" ||
