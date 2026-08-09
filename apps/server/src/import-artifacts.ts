@@ -8,12 +8,26 @@ import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 
 import {
-  EVOLUTION_BUNDLE_LIMITS,
-  iterateCanonicalEvolutionBundleBytes,
-  iteratePreparedEvolutionBundleBytes,
   validateCityModel,
   type PreparedEvolutionSerialization,
 } from "../../../packages/core/src/index.js";
+import {
+  IMPORT_CITY_MODEL_MAX_BYTES,
+  IMPORT_EVOLUTION_MAX_BYTES,
+  ImportArtifactStoreError,
+} from "./import-artifact-contract.js";
+export {
+  IMPORT_CITY_MODEL_MAX_BYTES,
+  IMPORT_EVOLUTION_MAX_BYTES,
+  ImportArtifactStoreError,
+} from "./import-artifact-contract.js";
+export type { ImportArtifactStoreErrorCode } from "./import-artifact-contract.js";
+import {
+  mappedEvolutionChunks,
+  prepareEvolutionSerialization,
+  publicationCheckpoint,
+  serializeValidatedCityModel,
+} from "./import-artifact-serialization.js";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -30,31 +44,6 @@ const EVOLUTION_TEMPORARY_FILE_PATTERN =
   /^\.evolution-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/u;
 const EVOLUTION_DELETION_FILE_PATTERN =
   /^\.evolution-delete-([0-9a-f]{1,32})-([0-9a-f]{1,32})-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/u;
-
-export const IMPORT_CITY_MODEL_MAX_BYTES = 128 * 1024 * 1024;
-export const IMPORT_EVOLUTION_MAX_BYTES =
-  EVOLUTION_BUNDLE_LIMITS.serializedBytes;
-
-export type ImportArtifactStoreErrorCode =
-  | "INVALID_TOKEN"
-  | "FILESYSTEM_POLICY"
-  | "CITY_MODEL_INVALID"
-  | "CITY_MODEL_TOO_LARGE"
-  | "EVOLUTION_INVALID"
-  | "EVOLUTION_TOO_LARGE"
-  | "ARTIFACT_ALREADY_EXISTS";
-
-export class ImportArtifactStoreError extends Error {
-  public override readonly name = "ImportArtifactStoreError";
-
-  public constructor(
-    public readonly code: ImportArtifactStoreErrorCode,
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-  }
-}
 
 export interface ImportArtifactStoreOptions {
   readonly dataDirectory: string;
@@ -552,157 +541,6 @@ async function inspectPrivateFile(
     throw policyError(`${description} resolves outside its fixed path.`);
   }
   return { canonicalPath, status };
-}
-
-function publicationCheckpoint(
-  signal?: AbortSignal,
-  checkpoint?: () => void,
-): void {
-  signal?.throwIfAborted();
-  checkpoint?.();
-  signal?.throwIfAborted();
-}
-
-function serializeValidatedCityModel(
-  value: unknown,
-  signal?: AbortSignal,
-  checkpoint?: () => void,
-): Buffer {
-  let serialized: string;
-  let propertiesSinceCheckpoint = 0;
-  try {
-    publicationCheckpoint(signal, checkpoint);
-    const result = JSON.stringify(
-      value,
-      (_key, item) => {
-        propertiesSinceCheckpoint += 1;
-        if (propertiesSinceCheckpoint >= 256) {
-          propertiesSinceCheckpoint = 0;
-          publicationCheckpoint(signal, checkpoint);
-        }
-        return item;
-      },
-      2,
-    );
-    publicationCheckpoint(signal, checkpoint);
-    if (result === undefined) throw new TypeError("Not JSON serializable.");
-    serialized = result;
-  } catch (error) {
-    publicationCheckpoint(signal, checkpoint);
-    throw new ImportArtifactStoreError(
-      "CITY_MODEL_INVALID",
-      "City model could not be serialized as JSON.",
-      { cause: error },
-    );
-  }
-
-  const bytes = Buffer.from(`${serialized}\n`, "utf8");
-  publicationCheckpoint(signal, checkpoint);
-  if (bytes.byteLength > IMPORT_CITY_MODEL_MAX_BYTES) {
-    throw new ImportArtifactStoreError(
-      "CITY_MODEL_TOO_LARGE",
-      `City model exceeds the ${IMPORT_CITY_MODEL_MAX_BYTES}-byte limit.`,
-    );
-  }
-
-  try {
-    const parsed = JSON.parse(serialized) as unknown;
-    publicationCheckpoint(signal, checkpoint);
-    validateCityModel(parsed, {
-      checkpoint: () =>
-        publicationCheckpoint(signal, checkpoint),
-    });
-    publicationCheckpoint(signal, checkpoint);
-  } catch (error) {
-    publicationCheckpoint(signal, checkpoint);
-    throw new ImportArtifactStoreError(
-      "CITY_MODEL_INVALID",
-      "City model failed schema validation.",
-      { cause: error },
-    );
-  }
-  return bytes;
-}
-
-function evolutionSerializationError(
-  error: unknown,
-): ImportArtifactStoreError {
-  if (error instanceof ImportArtifactStoreError) return error;
-  if (
-    error instanceof Error &&
-    error.message.includes("serialized bundle must not exceed")
-  ) {
-    return new ImportArtifactStoreError(
-      "EVOLUTION_TOO_LARGE",
-      `Evolution bundle exceeds the ${IMPORT_EVOLUTION_MAX_BYTES}-byte limit.`,
-      { cause: error },
-    );
-  }
-  return new ImportArtifactStoreError(
-    "EVOLUTION_INVALID",
-    "Evolution bundle failed schema validation.",
-    { cause: error },
-  );
-}
-
-function prepareEvolutionSerialization(
-  value: unknown,
-  signal?: AbortSignal,
-  prepared?: PreparedEvolutionSerialization,
-  checkpoint?: () => void,
-): {
-  readonly chunks: Iterable<Uint8Array>;
-  readonly expectedBytes?: number;
-} {
-  try {
-    if (prepared !== undefined && prepared.bundle !== value) {
-      throw new TypeError(
-        "Prepared evolution serialization does not match the supplied bundle.",
-      );
-    }
-    const iterationOptions =
-      signal === undefined && checkpoint === undefined
-        ? {}
-        : {
-            checkpoint: () =>
-              publicationCheckpoint(signal, checkpoint),
-          };
-    return Object.freeze({
-      chunks:
-        prepared === undefined
-          ? iterateCanonicalEvolutionBundleBytes(
-              value,
-              iterationOptions,
-            )
-          : iteratePreparedEvolutionBundleBytes(
-              prepared,
-              iterationOptions,
-            ),
-      ...(prepared === undefined
-        ? {}
-        : { expectedBytes: prepared.measuredBytes }),
-    });
-  } catch (error) {
-    publicationCheckpoint(signal, checkpoint);
-    throw evolutionSerializationError(error);
-  }
-}
-
-async function* mappedEvolutionChunks(
-  chunks: Iterable<Uint8Array>,
-  signal?: AbortSignal,
-  checkpoint?: () => void,
-): AsyncGenerator<Uint8Array, void, undefined> {
-  try {
-    for (const chunk of chunks) {
-      publicationCheckpoint(signal, checkpoint);
-      yield chunk;
-    }
-    publicationCheckpoint(signal, checkpoint);
-  } catch (error) {
-    publicationCheckpoint(signal, checkpoint);
-    throw evolutionSerializationError(error);
-  }
 }
 
 function positiveByteLimit(value: number, description: string): number {
