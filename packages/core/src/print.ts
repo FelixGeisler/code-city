@@ -589,12 +589,23 @@ function validateRequest(
   return issues;
 }
 
+function scarceChannelPriority(group: SemanticGroup): number {
+  // The identity relief is structural decoration and already has an explicit
+  // base fallback. Do not spend a scarce tool on it before preserving all
+  // four metric colors; plate and identity can safely share one filament.
+  if (group.id === "identity") {
+    return Math.min(group.priority, 59);
+  }
+  return group.priority;
+}
+
 function rankGroups(
   groups: readonly SemanticGroup[],
 ): readonly SemanticGroup[] {
   return [...groups].sort(
     (left, right) =>
-      right.priority - left.priority || compare(left.id, right.id),
+      scarceChannelPriority(right) - scarceChannelPriority(left) ||
+      compare(left.id, right.id),
   );
 }
 
@@ -640,10 +651,14 @@ function assignGroups(
     .map((group): SemanticGroupAssignment => {
       let target = group;
       const visited = new Set<string>();
-      while (!retainedIds.has(target.id) && target.mergeInto !== undefined) {
-        if (visited.has(target.id)) break;
+      while (!retainedIds.has(target.id)) {
+        const mergeTargetId =
+          target.id === "identity" && byId.has("base")
+            ? "base"
+            : target.mergeInto;
+        if (mergeTargetId === undefined || visited.has(target.id)) break;
         visited.add(target.id);
-        const next = byId.get(target.mergeInto);
+        const next = byId.get(mergeTargetId);
         if (!next) break;
         target = next;
       }

@@ -424,26 +424,22 @@ describe("versioned metric mapping contract", () => {
         assignment,
       ]),
     );
-    for (const id of [
+    const metricGroupIds = [
+      "metric-color-complexity-low",
       "metric-color-complexity-moderate",
       "metric-color-complexity-high",
       "metric-color-complexity-very-high",
-    ]) {
+    ];
+    for (const id of metricGroupIds) {
       expect(byId.get(id)?.mergedIntoSemanticGroupId).toBeUndefined();
     }
+    expect(byId.get("identity")).toMatchObject({
+      channelId: byId.get("base")?.channelId,
+      mergedIntoSemanticGroupId: "base",
+    });
     expect(
-      byId.get("metric-color-complexity-low")
-        ?.mergedIntoSemanticGroupId,
-    ).toBe("metric-color-complexity-moderate");
-    expect(
-      new Set(
-        [
-          "metric-color-complexity-moderate",
-          "metric-color-complexity-high",
-          "metric-color-complexity-very-high",
-        ].map((id) => byId.get(id)?.channelId),
-      ).size,
-    ).toBe(3);
+      new Set(metricGroupIds.map((id) => byId.get(id)?.channelId)).size,
+    ).toBe(4);
   });
 
   it("exposes a deterministic legend, provenance, and summary", () => {
