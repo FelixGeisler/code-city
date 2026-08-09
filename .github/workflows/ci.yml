@@ -41,8 +41,8 @@ jobs:
     - run: npm run verify
 
   viewer-performance:
-    # The protected 45-scenario browser suite can exceed 15 minutes on a cold,
-    # single-worker hosted runner; retain full coverage with bounded headroom.
+    # Keep synthetic browser scenarios isolated from the resource-intensive
+    # real-repository lifecycle so one cannot perturb the other's timings.
     timeout-minutes: 25
     runs-on: ubuntu-latest
     steps:
@@ -57,3 +57,19 @@ jobs:
     - run: npm ci
     - run: npx playwright install --with-deps chromium
     - run: npm run test:viewer-performance
+
+  viewer-real-import:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: actions/setup-node@v6
+      with:
+        node-version: 24
+        cache: npm
+    - uses: actions/setup-dotnet@v6
+      with:
+        dotnet-version: 10.0.302
+    - run: npm ci
+    - run: npx playwright install --with-deps chromium
+    - run: npm run test:viewer-real-import

@@ -69,6 +69,10 @@ describe("development toolchain contract", () => {
     expect(workflow).toMatch(
       /viewer-performance:[\s\S]*?timeout-minutes: 25/u,
     );
+    expect(workflow).toMatch(
+      /viewer-real-import:[\s\S]*?timeout-minutes: 15/u,
+    );
+    expect(workflow).toContain("- run: npm run test:viewer-real-import");
     expect(workflow).toContain("- run: npm ci");
     expect(workflow).toContain("- run: npm run verify");
     expect(workflow).not.toContain("- run: npm install");
