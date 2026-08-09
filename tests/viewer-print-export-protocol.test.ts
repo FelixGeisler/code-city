@@ -55,6 +55,7 @@ function samplePreflight(): PrintPlateBundlePreflight {
     belowProfileScaleAcknowledged: false,
     featureViolations: [],
     plateCount: 1,
+    toolAssignments: [],
     plates: [{
       number: 1,
       id: "plate-01",
@@ -1083,6 +1084,20 @@ describe("viewer print export protocol", () => {
             index === 0
               ? { ...plate, channelIds: ["unexpected-channel"] }
               : plate,
+          ),
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isPrintExportWorkerResponse({
+        ...preflightResponse,
+        preflight: {
+          ...prepared.preflight,
+          toolAssignments: prepared.preflight.toolAssignments.map(
+            (assignment, index) =>
+              index === 0
+                ? { ...assignment, semanticGroupLabels: [] }
+                : assignment,
           ),
         },
       }),

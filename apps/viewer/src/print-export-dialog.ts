@@ -588,29 +588,16 @@ export function installPrintExportDialog(
       `${printedLabels.toLocaleString()} labels \u00b7 ` +
       `${preflight.routes.printedCount.toLocaleString()} routes`;
     trianglesWrap.hidden = true;
-    channelsTitle.textContent = "Plate summary";
-    const visiblePlates = preflight.plates.slice(0, 6);
-    const plateItems = visiblePlates.map((plate) => {
+    channelsTitle.textContent = "Tool allocation";
+    const toolItems = preflight.toolAssignments.map((assignment) => {
       const item = document.createElement("li");
-      const utilization = Math.round(plate.utilization * 100);
+      item.dataset["channelId"] = assignment.channelId;
       item.textContent =
-        `Plate ${plate.number.toLocaleString()}: ` +
-        `${utilization.toLocaleString()}% used \u00b7 ` +
-        `${plate.channelIds.length.toLocaleString()} ` +
-        `${plate.channelIds.length === 1 ? "channel" : "channels"} \u00b7 ` +
-        `${millimeters(plate.dimensions.width)} \u00d7 ` +
-        `${millimeters(plate.dimensions.depth)} \u00d7 ` +
-        `${millimeters(plate.dimensions.height)} mm`;
+        `${assignment.channelLabel}: ` +
+        assignment.semanticGroupLabels.join(" + ");
       return item;
     });
-    if (preflight.plates.length > visiblePlates.length) {
-      const remaining = document.createElement("li");
-      remaining.textContent =
-        `${(preflight.plates.length - visiblePlates.length).toLocaleString()} ` +
-        "more plates are listed in manifest.json.";
-      plateItems.push(remaining);
-    }
-    channelsList.replaceChildren(...plateItems);
+    channelsList.replaceChildren(...toolItems);
     fidelitySummary.textContent = awaitingConfirmation
       ? `The proposed applied scale ${millimeters(preflight.appliedScale)} is ` +
         `below the profile-safe scale ${millimeters(preflight.minimumSafeScale)}. ` +

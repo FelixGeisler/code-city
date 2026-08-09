@@ -91,6 +91,7 @@ function preflight(
     belowProfileScaleAcknowledged: false,
     featureViolations: [],
     plateCount: 1,
+    toolAssignments: [],
     plates: [{
       number: 1,
       id: "plate-01",
@@ -221,6 +222,12 @@ function bundlePreflight(
     belowProfileScaleAcknowledged: false,
     featureViolations: [],
     plateCount: 2,
+    toolAssignments: [{
+      channelId: "base",
+      channelLabel: "Base",
+      semanticGroupIds: ["base"],
+      semanticGroupLabels: ["Base"],
+    }],
     plates: [
       {
         number: 1,

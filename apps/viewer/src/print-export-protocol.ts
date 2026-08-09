@@ -481,6 +481,40 @@ function bundleUnplacedObjects(value: unknown): boolean {
   return true;
 }
 
+function bundleToolAssignments(value: unknown): boolean {
+  if (!Array.isArray(value) || value.length > BUNDLE_CHANNEL_LIMIT) {
+    return false;
+  }
+  const channelIds = new Set<string>();
+  for (const raw of value) {
+    const assignment = record(raw);
+    if (
+      assignment === undefined ||
+      !boundedText(assignment["channelId"]) ||
+      !boundedText(assignment["channelLabel"]) ||
+      (assignment["color"] !== undefined &&
+        (typeof assignment["color"] !== "string" ||
+          !/^#[0-9a-f]{6}(?:[0-9a-f]{2})?$/iu.test(assignment["color"]))) ||
+      !boundedStringArray(
+        assignment["semanticGroupIds"],
+        BUNDLE_CHANNEL_LIMIT,
+      ) ||
+      !boundedStringArray(
+        assignment["semanticGroupLabels"],
+        BUNDLE_CHANNEL_LIMIT,
+      ) ||
+      (assignment["semanticGroupIds"] as readonly string[]).length === 0 ||
+      (assignment["semanticGroupIds"] as readonly string[]).length !==
+        (assignment["semanticGroupLabels"] as readonly string[]).length ||
+      channelIds.has(assignment["channelId"] as string)
+    ) {
+      return false;
+    }
+    channelIds.add(assignment["channelId"] as string);
+  }
+  return true;
+}
+
 function bundlePlatePreflight(
   value: unknown,
   format: "3mf" | "stl",
@@ -532,6 +566,7 @@ function bundlePreflight(
     !featureViolations(candidate["featureViolations"]) ||
     !positiveInteger(candidate["plateCount"]) ||
     Number(candidate["plateCount"]) > BUNDLE_PLATE_LIMIT ||
+    !bundleToolAssignments(candidate["toolAssignments"]) ||
     !Array.isArray(candidate["plates"]) ||
     candidate["plates"].length !== candidate["plateCount"] ||
     candidate["plates"].length > BUNDLE_PLATE_LIMIT ||
@@ -563,6 +598,13 @@ function bundlePreflight(
     String(fileName).toLocaleLowerCase("en-US"),
   );
   const normalized = candidate as unknown as PrintPlateBundlePreflight;
+  const assignedChannelIds = normalized.toolAssignments.map(
+    ({ channelId }) => channelId,
+  );
+  const usedChannelIds = normalized.plates.flatMap(
+    ({ channelIds }) => channelIds,
+  );
+  if (!equalStringSets(assignedChannelIds, usedChannelIds)) return false;
   const belowSafe =
     normalized.appliedScale + PRINT_FIDELITY_EPSILON <
     normalized.minimumSafeScale;

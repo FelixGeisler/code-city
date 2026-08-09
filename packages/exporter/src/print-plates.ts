@@ -128,6 +128,14 @@ export interface PrintPlateBundlePreflight {
   readonly belowProfileScaleAcknowledged: boolean;
   readonly featureViolations: readonly PrintFeatureViolation[];
   readonly plateCount: number;
+  /** Actual slicer-visible channel allocation, ordered by printer channel. */
+  readonly toolAssignments: readonly {
+    readonly channelId: string;
+    readonly channelLabel: string;
+    readonly color?: string;
+    readonly semanticGroupIds: readonly string[];
+    readonly semanticGroupLabels: readonly string[];
+  }[];
   readonly plates: readonly {
     readonly number: number;
     readonly id: string;
@@ -1604,6 +1612,35 @@ export function preparePrintPlateBundle(
       parts: artifacts.city.parts,
     })),
   };
+  const semanticGroupLabels = new Map(
+    model.semanticGroups.map(({ id, label }) => [id, label]),
+  );
+  const semanticGroupsByChannel = new Map<string, Set<string>>();
+  for (const { artifacts } of preparedPlates) {
+    for (const part of artifacts.city.parts) {
+      const groupIds = semanticGroupsByChannel.get(part.channelId) ?? new Set();
+      for (const groupId of part.semanticGroupIds) groupIds.add(groupId);
+      semanticGroupsByChannel.set(part.channelId, groupIds);
+    }
+  }
+  const toolAssignments = profile.printChannels.flatMap((channel) => {
+    const groupIds = semanticGroupsByChannel.get(channel.id);
+    if (groupIds === undefined || groupIds.size === 0) return [];
+    const semanticGroupIds = [...groupIds].sort(compare);
+    return [
+      Object.freeze({
+        channelId: channel.id,
+        channelLabel: channel.label,
+        ...(channel.color === undefined ? {} : { color: channel.color }),
+        semanticGroupIds: Object.freeze(semanticGroupIds),
+        semanticGroupLabels: Object.freeze(
+          semanticGroupIds.map(
+            (groupId) => semanticGroupLabels.get(groupId) ?? groupId,
+          ),
+        ),
+      }),
+    ];
+  });
   const preflight: PrintPlateBundlePreflight = {
     format: request.format,
     title,
@@ -1618,6 +1655,7 @@ export function preparePrintPlateBundle(
       layout.belowProfileScaleAcknowledged,
     featureViolations: layout.featureViolations,
     plateCount: preparedPlates.length,
+    toolAssignments,
     plates: preparedPlates.map(
       ({ layout: plate, artifacts, bundlePlate }) => ({
         number: plate.index,
