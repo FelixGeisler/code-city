@@ -133,11 +133,10 @@ import {
   ViewerLoadGateway,
 } from "./model-source.js";
 import { validateCityModel } from "./model-validation.js";
-import {
-  ViewerImportApiClient,
-  type ViewerAiGuidanceContext,
-} from "./import-api.js";
+import { ViewerImportApiClient } from "./import-api.js";
 import { AiProviderDiscoveryController } from "./ai-provider-discovery.js";
+import { AiGuidanceController } from "./ai-guidance-controller.js";
+import { RetainedSourceController } from "./retained-source-controller.js";
 import {
   codeInspectionAiContext,
   codeInspectionFocusKey,
@@ -547,18 +546,7 @@ let activeModelSource: ModelSource = { label: "Built-in demo" };
 let safeExtensionBaseModel: CityModel = activeModel;
 let activeSafeExtensionEvaluation: ExtensionEvaluation | undefined;
 let suppressSafeExtensionRestore = false;
-let sourceRequest:
-  | Readonly<{
-      buildingId: string;
-      controller: AbortController;
-      promise: Promise<BuildingSource>;
-    }>
-  | undefined;
-let aiGuidanceRequest: AbortController | undefined;
-let aiGuidanceGeneration = 0;
-let loadedBuildingSource:
-  | { readonly buildingId: string; readonly source: BuildingSource }
-  | undefined;
+const retainedSourceController = new RetainedSourceController();
 let visualizationMode: ViewerVisualizationMode = "semantic";
 let activeVisualizationLabel = "Semantic groups";
 let activeLegendEntries: readonly ImageExportLegendEntry[] = [];
@@ -771,6 +759,33 @@ const sourceApi = new ViewerImportApiClient(
 const aiProviderDiscovery = new AiProviderDiscoveryController(() =>
   sourceApi.aiGuidanceProviders(),
 );
+const aiGuidanceController = new AiGuidanceController({
+  elements: {
+    details: inspectorFields.aiDetails,
+    summary: inspectorFields.aiSummary,
+    status: inspectorFields.aiStatus,
+    providerLabel: inspectorFields.aiProviderLabel,
+    provider: inspectorFields.aiProvider,
+    prepare: inspectorFields.aiPrepare,
+    preview: inspectorFields.aiPreview,
+    request: inspectorFields.aiRequest,
+    suggestions: inspectorFields.aiSuggestions,
+  },
+  api: sourceApi,
+  providerDiscovery: aiProviderDiscovery,
+  selectedBuilding: () => selectedInspectionBuilding(),
+  currentJobId: () => activeModelSource.jobId,
+  sourceAvailable: () => retainedSourceActionAvailable(),
+  sourceBoundToCurrentFrame: () => sourceIsBoundToCurrentEvolutionFrame(),
+  contextFor: (building) => {
+    const focus = codeInspectionFocus;
+    return focus === undefined ? undefined : codeInspectionAiContext(building, focus);
+  },
+  focusKey: () =>
+    codeInspectionFocus === undefined
+      ? undefined
+      : codeInspectionFocusKey(codeInspectionFocus),
+});
 const automaticModelLoadGate = new AutomaticModelLoadGate();
 const logoLoadGate = new AutomaticModelLoadGate();
 let loadedModelLogo: LoadedViewerImage | undefined;
@@ -952,8 +967,9 @@ const designSmellPanel = installDesignSmellPanel(
         });
         if (focus.range === undefined) {
           setCodeInspectionFocus(building, focus);
-          if (loadedBuildingSource?.buildingId === building.id) {
-            renderSourceCode(building, loadedBuildingSource.source);
+          const loadedSource = retainedSourceController.sourceFor(building.id);
+          if (loadedSource !== undefined) {
+            renderSourceCode(building, loadedSource);
           }
         } else {
           revealBuildingSource(building, focus);
@@ -4176,9 +4192,7 @@ function refreshSelectedCodeInspectionFrameAccess(): void {
 }
 
 function scrubBuildingSource(closeDetails = true): void {
-  sourceRequest?.controller.abort();
-  sourceRequest = undefined;
-  loadedBuildingSource = undefined;
+  retainedSourceController.clear();
   if (closeDetails) inspectorFields.sourceDetails.open = false;
   inspectorFields.sourceSummary.textContent =
     activeModelSource.sourceAvailability === "retained" &&
@@ -4211,45 +4225,6 @@ function scrubBuildingSource(closeDetails = true): void {
   inspectorFields.sourceContent.hidden = true;
 }
 
-function resetAiGuidancePresentation(): void {
-  aiGuidanceGeneration += 1;
-  aiGuidanceRequest?.abort();
-  aiGuidanceRequest = undefined;
-  inspectorFields.aiDetails.open = false;
-  inspectorFields.aiDetails.hidden = true;
-  inspectorFields.aiSummary.textContent = "";
-  inspectorFields.aiStatus.textContent = "";
-  inspectorFields.aiPreview.hidden = true;
-  inspectorFields.aiPreview.textContent = "";
-  inspectorFields.aiPrepare.hidden = true;
-  inspectorFields.aiPrepare.disabled = false;
-  inspectorFields.aiPrepare.onclick = null;
-  inspectorFields.aiRequest.hidden = true;
-  inspectorFields.aiRequest.disabled = false;
-  inspectorFields.aiRequest.onclick = null;
-  inspectorFields.aiProviderLabel.hidden = true;
-  inspectorFields.aiProvider.disabled = false;
-  inspectorFields.aiProvider.onchange = null;
-  inspectorFields.aiProvider.replaceChildren();
-  inspectorFields.aiSuggestions.hidden = true;
-  inspectorFields.aiSuggestions.replaceChildren();
-}
-
-function clearAiGuidanceResult(): void {
-  aiGuidanceGeneration += 1;
-  aiGuidanceRequest?.abort();
-  aiGuidanceRequest = undefined;
-  inspectorFields.aiPreview.hidden = true;
-  inspectorFields.aiPreview.textContent = "";
-  inspectorFields.aiRequest.hidden = true;
-  inspectorFields.aiRequest.disabled = false;
-  inspectorFields.aiRequest.onclick = null;
-  inspectorFields.aiProvider.disabled = false;
-  inspectorFields.aiPrepare.disabled = false;
-  inspectorFields.aiSuggestions.hidden = true;
-  inspectorFields.aiSuggestions.replaceChildren();
-}
-
 function selectedInspectionBuilding(): CityBuilding | undefined {
   const selectedId = selectedExplorerBuildingId(explorerState);
   return selectedId === null
@@ -4257,83 +4232,20 @@ function selectedInspectionBuilding(): CityBuilding | undefined {
     : activeBuildingsById.get(selectedId);
 }
 
+function resetAiGuidancePresentation(): void {
+  aiGuidanceController.reset();
+}
+
+function clearAiGuidanceResult(): void {
+  aiGuidanceController.clearResult();
+}
+
 function renderAiGuidanceCapability(building: CityBuilding): void {
-  const capability = aiProviderDiscovery.capability;
-  const wasOpen = inspectorFields.aiDetails.open;
-  const selectedProvider = inspectorFields.aiProvider.value;
-  clearAiGuidanceResult();
-  if (
-    capability.state !== "configured" ||
-    selectedInspectionBuilding()?.id !== building.id
-  ) {
-    inspectorFields.aiDetails.hidden = true;
-    inspectorFields.aiDetails.open = false;
-    inspectorFields.aiProviderLabel.hidden = true;
-    inspectorFields.aiPrepare.hidden = true;
-    return;
-  }
-
-  if (!sourceIsBoundToCurrentEvolutionFrame()) {
-    inspectorFields.aiDetails.hidden = true;
-    inspectorFields.aiDetails.open = false;
-    inspectorFields.aiSummary.textContent = "";
-    inspectorFields.aiStatus.textContent = "";
-    inspectorFields.aiProviderLabel.hidden = true;
-    inspectorFields.aiProvider.replaceChildren();
-    inspectorFields.aiPrepare.hidden = true;
-    inspectorFields.aiPrepare.onclick = null;
-    return;
-  }
-
-  inspectorFields.aiDetails.hidden = false;
-  inspectorFields.aiDetails.open = wasOpen;
-  inspectorFields.aiSummary.textContent = "Available";
-  inspectorFields.aiProvider.replaceChildren();
-  for (const provider of capability.providers) {
-    const option = document.createElement("option");
-    option.value = provider.id;
-    option.textContent = provider.label;
-    inspectorFields.aiProvider.append(option);
-  }
-  if (capability.providers.some(({ id }) => id === selectedProvider)) {
-    inspectorFields.aiProvider.value = selectedProvider;
-  }
-  inspectorFields.aiProviderLabel.hidden = false;
-  const focus = codeInspectionFocus;
-  const context = focus === undefined
-    ? undefined
-    : codeInspectionAiContext(building, focus);
-  const eligible =
-    retainedSourceActionAvailable() &&
-    context !== undefined;
-  inspectorFields.aiPrepare.hidden = !eligible;
-  inspectorFields.aiStatus.textContent = eligible
-    ? "Prepare an exact server-verified preview explicitly. No source is sent to the provider until you confirm the one-time send. Code City does not persist prompts; provider retention depends on your configured provider."
-    : "AI guidance is available, but this focus has no exact server-resolvable retained-source context. Deterministic findings remain available.";
-  inspectorFields.aiProvider.onchange = () => {
-    clearAiGuidanceResult();
-    inspectorFields.aiSummary.textContent = "Available";
-    inspectorFields.aiPrepare.hidden = !eligible;
-    inspectorFields.aiStatus.textContent = eligible
-      ? "Provider changed. Prepare a new exact preview explicitly before sending."
-      : "This focus has no exact server-resolvable retained-source context.";
-  };
-  inspectorFields.aiPrepare.onclick = eligible && context !== undefined
-    ? () => prepareAiGuidancePreview(building, context)
-    : null;
+  aiGuidanceController.render(building);
 }
 
 function discoverAiGuidanceCapability(building: CityBuilding): void {
-  if (!sourceIsBoundToCurrentEvolutionFrame()) {
-    renderAiGuidanceCapability(building);
-    return;
-  }
-  inspectorFields.aiDetails.hidden = true;
-  void aiProviderDiscovery.discover().then(() => {
-    if (selectedInspectionBuilding()?.id === building.id) {
-      renderAiGuidanceCapability(building);
-    }
-  });
+  aiGuidanceController.discover(building);
 }
 
 function markActiveSourceResultRemoved(jobId: string): void {
@@ -4461,134 +4373,6 @@ function renderSourceCode(
     ?.scrollIntoView({ block: "center" });
 }
 
-function prepareAiGuidancePreview(
-  building: CityBuilding,
-  context: ViewerAiGuidanceContext,
-): void {
-  const jobId = activeModelSource.jobId;
-  const focus = codeInspectionFocus;
-  if (
-    jobId === undefined ||
-    !retainedSourceActionAvailable() ||
-    focus === undefined ||
-    codeInspectionAiContext(building, focus) === undefined
-  ) return;
-  clearAiGuidanceResult();
-  const controller = new AbortController();
-  aiGuidanceRequest = controller;
-  inspectorFields.aiPrepare.disabled = true;
-  const focusGeneration = ++aiGuidanceGeneration;
-  const focusKey = codeInspectionFocusKey(focus);
-  const stillCurrent = (): boolean =>
-    !controller.signal.aborted &&
-    aiGuidanceRequest === controller &&
-    aiGuidanceGeneration === focusGeneration &&
-    codeInspectionFocus !== undefined &&
-    codeInspectionFocusKey(codeInspectionFocus) === focusKey;
-  let previewRequest: AbortController | undefined;
-  let previewGeneration = 0;
-  controller.signal.addEventListener("abort", () => previewRequest?.abort(), { once: true });
-  inspectorFields.aiSummary.textContent = "Preparing preview";
-  inspectorFields.aiDetails.open = true;
-  inspectorFields.aiStatus.textContent = "No source has been sent to an AI provider.";
-  const loadPreview = (providerId: string): void => {
-    previewRequest?.abort();
-    const generation = ++previewGeneration;
-    const previewController = new AbortController();
-    previewRequest = previewController;
-    if (controller.signal.aborted) previewController.abort();
-    inspectorFields.aiRequest.hidden = true;
-    inspectorFields.aiRequest.onclick = null;
-    inspectorFields.aiPreview.hidden = true;
-    inspectorFields.aiStatus.textContent = "Preparing exact server-verified preview…";
-    void sourceApi.aiGuidancePreview(jobId, context, providerId, previewController.signal)
-      .then((value) => {
-        if (!stillCurrent() || previewController.signal.aborted || generation !== previewGeneration || inspectorFields.aiProvider.value !== providerId) return;
-        const preview = value.preview;
-        if (!preview.enabled) {
-          resetAiGuidancePresentation();
-          return;
-        }
-        if (preview.provider.id !== providerId) throw new Error("AI guidance preview was invalid.");
-        if (preview.availability === "unavailable") {
-          inspectorFields.aiSummary.textContent = "Context unavailable";
-          inspectorFields.aiStatus.textContent = `${preview.reason} No source was sent to an AI provider.`;
-          inspectorFields.aiPreview.textContent = JSON.stringify({ context: preview.context, availability: preview.availability, reason: preview.reason }, null, 2);
-          inspectorFields.aiPreview.hidden = false;
-          return;
-        }
-        const grant = preview.grant;
-        if (preview.transmission.providerId !== providerId) throw new Error("AI guidance transmission did not match its provider.");
-        inspectorFields.aiSummary.textContent = "Preview ready";
-        inspectorFields.aiPrepare.disabled = false;
-        inspectorFields.aiStatus.textContent = `This exact server-verified source and findings will be sent once to ${preview.provider.label} after you confirm.`;
-        inspectorFields.aiPreview.textContent = JSON.stringify(preview.transmission, null, 2);
-        inspectorFields.aiPreview.hidden = false;
-        inspectorFields.aiRequest.hidden = false;
-        inspectorFields.aiRequest.disabled = false;
-        inspectorFields.aiRequest.onclick = () => {
-          if (!stillCurrent() || generation !== previewGeneration || inspectorFields.aiProvider.value !== providerId) return;
-          inspectorFields.aiRequest.onclick = null;
-          inspectorFields.aiRequest.disabled = true;
-          inspectorFields.aiProvider.disabled = true;
-          inspectorFields.aiStatus.textContent = "Requesting optional suggestions…";
-          const expectedTransmission = preview.transmission;
-          void sourceApi.aiGuidanceRequest(
-            grant,
-            preview.limits.timeoutMs,
-            controller.signal,
-          )
-          .then((result) => {
-            if (!stillCurrent() || generation !== previewGeneration) return;
-            if (
-              result.result.provider.id !== providerId ||
-              result.result.contextDigest !== expectedTransmission.contextDigest ||
-              result.result.findingDigest !== expectedTransmission.findingDigest ||
-              JSON.stringify(result.result.context) !== JSON.stringify(expectedTransmission.context) ||
-              result.result.suggestions.some(({ citation }) => citation.path !== expectedTransmission.source.path || citation.startLine !== expectedTransmission.context.range.startLine || citation.endLine !== expectedTransmission.context.range.endLine)
-            ) throw new Error("AI provider response did not match the selected context.");
-            const suggestions = result.result.suggestions;
-            inspectorFields.aiSuggestions.replaceChildren();
-            for (const suggestion of suggestions) {
-              if (typeof suggestion.title !== "string" || typeof suggestion.detail !== "string") continue;
-              const item = document.createElement("li");
-              const citation = suggestion.citation;
-              item.textContent = `${suggestion.title}: ${suggestion.detail}` + (citation?.path === undefined ? "" : ` (${citation.path}:${citation.startLine}–${citation.endLine})`);
-              inspectorFields.aiSuggestions.append(item);
-            }
-            inspectorFields.aiSuggestions.hidden = false;
-            inspectorFields.aiRequest.hidden = true;
-            inspectorFields.aiSummary.textContent = "Suggestions";
-            inspectorFields.aiStatus.textContent = "Suggestions are optional; deterministic findings above are unchanged.";
-          })
-          .catch(() => {
-            if (stillCurrent()) {
-              clearAiGuidanceResult();
-              inspectorFields.aiDetails.hidden = false;
-              inspectorFields.aiDetails.open = true;
-              inspectorFields.aiPrepare.hidden = false;
-              inspectorFields.aiPrepare.disabled = false;
-              inspectorFields.aiSummary.textContent = "Preview required";
-              inspectorFields.aiStatus.textContent = "AI suggestions are unavailable; deterministic analysis and source navigation remain available.";
-            }
-          });
-        };
-      })
-      .catch(() => {
-        if (stillCurrent() && !previewController.signal.aborted && generation === previewGeneration) {
-          clearAiGuidanceResult();
-          inspectorFields.aiDetails.hidden = false;
-          inspectorFields.aiDetails.open = true;
-          inspectorFields.aiPrepare.hidden = false;
-          inspectorFields.aiPrepare.disabled = false;
-          inspectorFields.aiSummary.textContent = "Preview required";
-          inspectorFields.aiStatus.textContent = "AI guidance preview is unavailable; retry requires another explicit preview.";
-        }
-      });
-  };
-  loadPreview(inspectorFields.aiProvider.value);
-}
-
 function revealBuildingSource(
   building: CityBuilding,
   focus: CodeInspectionFocus,
@@ -4601,8 +4385,9 @@ function revealBuildingSource(
     inspectorFields.sourceContent.hidden = true;
     return;
   }
-  if (loadedBuildingSource?.buildingId === building.id) {
-    presentLoadedBuildingSource(building, loadedBuildingSource.source);
+  const loadedSource = retainedSourceController.sourceFor(building.id);
+  if (loadedSource !== undefined) {
+    presentLoadedBuildingSource(building, loadedSource);
     return;
   }
   const jobId = activeModelSource.jobId;
@@ -4615,14 +4400,11 @@ function revealBuildingSource(
       sourceAvailabilityMessage();
     return;
   }
-  if (sourceRequest?.buildingId === building.id) return;
-  sourceRequest?.controller.abort();
-  sourceRequest = undefined;
-  loadedBuildingSource = undefined;
+  if (retainedSourceController.isLoading(building.id)) return;
+  retainedSourceController.clear();
   codeInspectionBuildingId = undefined;
   inspectorFields.sourceCode.replaceChildren();
   inspectorFields.sourceContent.hidden = true;
-  const controller = new AbortController();
   inspectorFields.sourceSummary.textContent = "Loading";
   const provenance = activeModel.sourceProvenance?.repositories.find(
     ({ repositoryId }) => repositoryId === building.repositoryId,
@@ -4635,62 +4417,42 @@ function revealBuildingSource(
   }
   inspectorFields.sourceStatus.textContent =
     `Loading ${building.path}…`;
-  const promise = loadBuildingSource(
-    jobId,
-    {
-      buildingId: building.id,
-      repositoryId: building.repositoryId,
-      path: building.path,
-      language: building.language,
-      ...(building.sourceLocation === undefined
-        ? {}
-        : { location: building.sourceLocation }),
-      provenance,
-    },
-    (requestedJobId, requestedBuildingId, signal) =>
-      sourceApi.buildingSource(
-        requestedJobId,
-        requestedBuildingId,
-        signal,
+  retainedSourceController.load(
+    building.id,
+    (signal) => loadBuildingSource(
+      jobId,
+      {
+        buildingId: building.id,
+        repositoryId: building.repositoryId,
+        path: building.path,
+        language: building.language,
+        ...(building.sourceLocation === undefined
+          ? {}
+          : { location: building.sourceLocation }),
+        provenance,
+      },
+      (requestedJobId, requestedBuildingId, requestSignal) =>
+        sourceApi.buildingSource(
+          requestedJobId,
+          requestedBuildingId,
+          requestSignal,
+        ),
+      signal,
     ),
-    controller.signal,
+    () => selectedInspectionBuilding()?.id === building.id,
+    {
+      loaded: (source) => presentLoadedBuildingSource(building, source),
+      failed: (error) => {
+        inspectorFields.sourceCode.replaceChildren();
+        inspectorFields.sourceContent.hidden = true;
+        inspectorFields.sourceSummary.textContent = "Unavailable";
+        inspectorFields.sourceStatus.textContent =
+          error instanceof Error
+            ? error.message
+            : "Source code could not be loaded.";
+      },
+    },
   );
-  const request = Object.freeze({
-    buildingId: building.id,
-    controller,
-    promise,
-  });
-  sourceRequest = request;
-  void promise
-    .then((source) => {
-      if (
-        controller.signal.aborted ||
-        sourceRequest !== request ||
-        selectedInspectionBuilding()?.id !== building.id
-      ) {
-        return;
-      }
-      sourceRequest = undefined;
-      loadedBuildingSource = { buildingId: building.id, source };
-      presentLoadedBuildingSource(building, source);
-    })
-    .catch((error: unknown) => {
-      if (
-        controller.signal.aborted ||
-        sourceRequest !== request
-      ) {
-        return;
-      }
-      sourceRequest = undefined;
-      loadedBuildingSource = undefined;
-      inspectorFields.sourceCode.replaceChildren();
-      inspectorFields.sourceContent.hidden = true;
-      inspectorFields.sourceSummary.textContent = "Unavailable";
-      inspectorFields.sourceStatus.textContent =
-        error instanceof Error
-          ? error.message
-          : "Source code could not be loaded.";
-    });
 }
 
 function presentLoadedBuildingSource(
@@ -4797,8 +4559,9 @@ function renderDecisionEvidence(building: CityBuilding): void {
         focus.localUnitIndex,
       );
       setCodeInspectionFocus(building, nextFocus);
-      if (loadedBuildingSource?.buildingId === building.id) {
-        renderSourceCode(building, loadedBuildingSource.source);
+      const loadedSource = retainedSourceController.sourceFor(building.id);
+      if (loadedSource !== undefined) {
+        renderSourceCode(building, loadedSource);
       }
       const replacement =
         inspectorFields.decisionSites.querySelector<HTMLButtonElement>(
