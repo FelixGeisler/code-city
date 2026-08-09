@@ -62,7 +62,7 @@ test("integrated development viewer executes its complete startup graph", async 
 });
 
 test("imports real public GitHub history through the development server", async () => {
-  test.setTimeout(120_000);
+  test.setTimeout(240_000);
   const client = new ViewerImportApiClient(handle.url);
   const queued = await client.createRemoteImport({
     source: {
@@ -71,11 +71,11 @@ test("imports real public GitHub history through the development server", async 
     },
     history: {
       mode: "commit-count",
-      commitCount: 2,
-      sampleEvery: 1,
-      totalDeadlineMs: 90_000,
+      commitCount: 100,
+      sampleEvery: 10,
+      totalDeadlineMs: 210_000,
     },
-    identity: { title: "Code City public history smoke test" },
+    identity: { title: "Code City 100-commit public history smoke test" },
   });
 
   let current = queued;
@@ -89,7 +89,7 @@ test("imports real public GitHub history through the development server", async 
       }
       return current.state;
     },
-    { timeout: 100_000, intervals: [250, 500, 1_000] },
+    { timeout: 220_000, intervals: [250, 500, 1_000] },
   ).toBe("completed");
   expect(current.result?.evolution?.artifactUrl).toContain(
     `/api/v1/artifacts/${queued.id}/evolution.json`,
