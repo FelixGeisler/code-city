@@ -780,7 +780,7 @@ export class ImportController {
         this.updateIdle();
         return;
       }
-      await this.pollJob(resumeJobId, controller, generation);
+      await this.pollJob(resumeJobId, controller, generation, true);
     } catch (error) {
       if (!this.isCurrent(controller, generation)) return;
       if (isAuthorizationFailure(error)) {
@@ -936,27 +936,37 @@ export class ImportController {
     job: ImportJob,
     controller: AbortController,
     generation: number,
+    recoveredFromStorage = false,
   ): void {
     this.retryAction = undefined;
     this.activeJob = job;
-    this.persistenceAvailable = this.storage.write(job.id);
     this.recoveryFailures = 0;
-    if (isCompletedJob(job)) {
-      if (this.cancellationRequestedJobId === job.id) {
-        this.cancellationRequestedJobId = undefined;
-      }
-      this.beginArtifactOpen(job, controller, generation);
-      return;
-    }
     if (isFailedJob(job)) {
       if (this.cancellationRequestedJobId === job.id) {
         this.cancellationRequestedJobId = undefined;
+      }
+      // A terminal failure has nothing left to recover. Keep it visible for
+      // the submission that observed it, but never reopen it on every future
+      // browser/server restart as though it were a new failure.
+      this.storage.clear();
+      if (recoveredFromStorage) {
+        this.activeJob = undefined;
+        this.updateIdle();
+        return;
       }
       this.updateState({
         status: "terminal",
         job,
         persistenceAvailable: this.persistenceAvailable,
       });
+      return;
+    }
+    this.persistenceAvailable = this.storage.write(job.id);
+    if (isCompletedJob(job)) {
+      if (this.cancellationRequestedJobId === job.id) {
+        this.cancellationRequestedJobId = undefined;
+      }
+      this.beginArtifactOpen(job, controller, generation);
       return;
     }
     this.updateState({
@@ -1012,6 +1022,7 @@ export class ImportController {
     id: string,
     controller: AbortController,
     generation: number,
+    recoveredFromStorage = false,
   ): Promise<void> {
     try {
       const job = await this.api.getJob(id, controller.signal);
@@ -1023,7 +1034,12 @@ export class ImportController {
         this.cancelAcceptedJob(job, controller, generation);
         return;
       }
-      this.acceptJob(job, controller, generation);
+      this.acceptJob(
+        job,
+        controller,
+        generation,
+        recoveredFromStorage,
+      );
     } catch (error) {
       if (!this.isCurrent(controller, generation)) return;
       if (isAuthorizationFailure(error)) {
