@@ -4,11 +4,15 @@ import { RetainedSourceController } from "../apps/viewer/src/retained-source-con
 import type { BuildingSource } from "../apps/viewer/src/source-navigation.js";
 
 const source = (path: string): BuildingSource => ({
+  buildingId: "building",
+  repositoryId: "repository",
   path,
   text: "source",
   language: "typescript",
+  location: { startLine: 1, endLine: 1 },
   provenance: {
-    provider: "git",
+    repositoryId: "repository",
+    provider: "github",
     revision: { kind: "commit", value: "a".repeat(40) },
   },
 });
