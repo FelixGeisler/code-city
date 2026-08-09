@@ -700,7 +700,6 @@ describe("viewer print export protocol", () => {
       options: {
         scale: 0.5,
         fitPolicy: "error",
-        acknowledgeBelowProfileScale: true,
         labelPolicy: "off",
         routePolicy: "off",
         includeLegend: false,
@@ -711,7 +710,7 @@ describe("viewer print export protocol", () => {
       ...request,
       options: {
         ...request.options,
-        acknowledgeBelowProfileScale: "yes",
+        acknowledgeBelowProfileScale: true,
       },
     })).toBe(false);
   });
