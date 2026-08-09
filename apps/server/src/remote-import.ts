@@ -1513,6 +1513,9 @@ function analysisTaskFailure(error: unknown): JobTaskFailure {
     return new JobTaskFailure("analysis-failed");
   }
   if (error instanceof GenericGitSnapshotError) {
+    if (error.code === "GIT_INVALID_RESPONSE") {
+      return new JobTaskFailure("history-response-invalid");
+    }
     if (error.code === "GIT_PARTIAL_CLONE_UNAVAILABLE") {
       return new JobTaskFailure("history-capability-unavailable");
     }

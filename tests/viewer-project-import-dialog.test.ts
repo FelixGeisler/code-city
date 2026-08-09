@@ -18,6 +18,7 @@ import {
   projectImportRepositoryZipSubmission,
   projectImportRevision,
   projectImportShouldResetOnOpen,
+  projectImportTerminalMessages,
   projectImportUploadSizeError,
 } from "../apps/viewer/src/project-import-dialog.js";
 import type {
@@ -588,6 +589,23 @@ describe("viewer project import dialog state", () => {
     expect(projectImportShouldResetOnOpen("completed")).toBe(false);
     expect(projectImportShouldResetOnOpen("terminal")).toBe(false);
     expect(projectImportShouldResetOnOpen("artifact-failed")).toBe(false);
+  });
+
+  it("shows a stable safe diagnostic code with terminal failures", () => {
+    expect(projectImportTerminalMessages({
+      id: "11111111-1111-4111-8111-111111111111",
+      kind: "project-import",
+      state: "failed",
+      createdAt: "2026-08-09T00:00:00.000Z",
+      updatedAt: "2026-08-09T00:00:01.000Z",
+      error: {
+        code: "history-response-invalid",
+        message: "Git returned unsupported history metadata.",
+      },
+    })).toEqual([
+      "Git returned unsupported history metadata.",
+      "Diagnostic code: history-response-invalid",
+    ]);
   });
 
   it("keeps persistence warnings visible throughout accepted job states", () => {
