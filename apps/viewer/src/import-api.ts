@@ -1324,6 +1324,11 @@ async function readJsonResponse(
     contentType === null ||
     !/^application\/json(?:\s*;\s*charset=utf-8)?$/iu.test(contentType)
   ) {
+    if (contentType?.toLowerCase().startsWith("text/html") === true) {
+      throw protocolError(
+        "Code City API is unavailable; the viewer received an HTML page instead of an API response.",
+      );
+    }
     throw protocolError("API response is not UTF-8 JSON.");
   }
   const bytes = await readBoundedBytes(response, signal, maximumBytes);

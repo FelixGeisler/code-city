@@ -29,7 +29,8 @@
     "roslyn:build": "dotnet build tools/roslyn-helper/CodeCity.RoslynHelper.csproj --configuration Release --no-restore --nologo --verbosity quiet",
     "server:start": "node build/app/apps/server/src/main.js",
     "viewer:build": "vite build --config apps/viewer/vite.config.ts",
-    "viewer:dev": "vite --config apps/viewer/vite.config.ts"
+    "previewer:dev": "npm run build --silent",
+    "viewer:dev": "node build/app/apps/viewer/src/development-server.js"
   },
   "devDependencies": {
     "@antora/cli": "3.1.15",

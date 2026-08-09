@@ -500,7 +500,8 @@ npm run cli -- analyze-git https://dev.azure.example/Collection/Project/_git/Rep
   --trusted-workspace-parent C:\CodeCity\presecured-git-workspaces `
   --output build\remote-city-model.json
 
-# Run the browser viewer
+# Run the functional development application. This starts both the real
+# self-hosted import API and a Vite viewer that proxies same-origin /api calls.
 npm run viewer:dev
 
 # Build and open a local repository through the bundled production viewer
@@ -524,6 +525,13 @@ npm run cli -- export `
   --legend build\print\code-city-demo.legend.json `
   --output build\print\code-city-demo.stl
 ```
+
+`viewer:dev` performs the required build, starts the API on an ephemeral
+loopback port, and serves the Vite viewer at `http://127.0.0.1:5173/`. Its
+persistent development imports live under `.code-city-dev/` unless
+`CODECITY_DATA_DIR` is set. Stopping the command closes both servers. The
+**Import project** wizard is therefore functional from the documented
+development entrypoint; it is not a static-viewer-only command.
 
 The viewer starts in **Explore**, where overview, color mode, search, and the
 synchronized repository tree share one task-oriented workspace. Selecting a

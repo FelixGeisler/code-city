@@ -37,6 +37,23 @@ describe("development toolchain contract", () => {
     });
   });
 
+  it("keeps the documented viewer development command functional", async () => {
+    const [rawPackage, readme] = await Promise.all([
+      fs.readFile("package.json", "utf8"),
+      fs.readFile("README.md", "utf8"),
+    ]);
+    const packageContract = JSON.parse(rawPackage) as PackageContract;
+
+    expect(packageContract.scripts?.["previewer:dev"]).toBe(
+      "npm run build --silent",
+    );
+    expect(packageContract.scripts?.["viewer:dev"]).toBe(
+      "node build/app/apps/viewer/src/development-server.js",
+    );
+    expect(readme).toContain("starts both the real");
+    expect(readme).toContain("same-origin /api calls");
+  });
+
   it("uses the same bounded verification workflow on Linux and Windows", async () => {
     const workflow = await fs.readFile(
       ".github/workflows/ci.yml",

@@ -89,6 +89,22 @@ function headersOf(init: RequestInit): Record<string, string> {
 }
 
 describe("viewer import API protocol", () => {
+  it("reports an unavailable backend when a static viewer returns HTML", async () => {
+    const client = new ViewerImportApiClient(
+      new URL("http://127.0.0.1:5173/"),
+      {
+        fetch: async () => new Response("<!doctype html><title>Viewer</title>", {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        }),
+      },
+    );
+
+    await expect(client.authorizationStatus()).rejects.toThrow(
+      "Code City API is unavailable; the viewer received an HTML page instead of an API response.",
+    );
+  });
+
   it("loads an exact same-origin evolution artifact with a strict size bound", async () => {
     const bytes = new TextEncoder().encode('{"schemaVersion":"1.0"}');
     const calls: string[] = [];
