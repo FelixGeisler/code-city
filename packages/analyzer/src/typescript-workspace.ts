@@ -317,7 +317,14 @@ export class TypeScriptWorkspace implements AsyncDisposable {
     try {
       if (!this.#interrupted) await this.#snapshot?.dispose();
     } finally {
-      await this.#api.close();
+      if (this.#interrupted) {
+        // The hard-deadline path has already killed the native transport.
+        // Closing that destroyed stream may reject; it must not replace the
+        // authoritative timeout/cancellation that triggered interruption.
+        await this.#api.close().catch(() => undefined);
+      } else {
+        await this.#api.close();
+      }
     }
   }
 

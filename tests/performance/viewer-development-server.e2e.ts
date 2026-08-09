@@ -62,7 +62,7 @@ test("integrated development viewer executes its complete startup graph", async 
 });
 
 test("imports real public GitHub history through the development server", async () => {
-  test.setTimeout(240_000);
+  test.setTimeout(600_000);
   const client = new ViewerImportApiClient(handle.url);
   const queued = await client.createRemoteImport({
     source: {
@@ -72,10 +72,9 @@ test("imports real public GitHub history through the development server", async 
     history: {
       mode: "commit-count",
       commitCount: 100,
-      sampleEvery: 10,
-      totalDeadlineMs: 210_000,
+      sampleEvery: 1,
     },
-    identity: { title: "Code City 100-commit public history smoke test" },
+    identity: { title: "Code City 100-frame public history smoke test" },
   });
 
   let current = queued;
@@ -89,7 +88,7 @@ test("imports real public GitHub history through the development server", async 
       }
       return current.state;
     },
-    { timeout: 220_000, intervals: [250, 500, 1_000] },
+    { timeout: 580_000, intervals: [250, 500, 1_000] },
   ).toBe("completed");
   expect(current.result?.evolution?.artifactUrl).toContain(
     `/api/v1/artifacts/${queued.id}/evolution.json`,
@@ -105,4 +104,21 @@ test("imports real public GitHub history through the development server", async 
   };
   expect(model.repositories?.length).toBeGreaterThan(0);
   expect(model.buildings?.length).toBeGreaterThan(0);
+
+  const evolutionResponse = await fetch(
+    new URL(`api/v1/artifacts/${queued.id}/evolution.json`, handle.url),
+  );
+  expect(evolutionResponse.status).toBe(200);
+  const evolution = await evolutionResponse.json() as {
+    readonly deltas?: readonly unknown[];
+    readonly selection?: {
+      readonly sampledCommitCount?: number;
+      readonly sampleEvery?: number;
+    };
+  };
+  expect(evolution.selection).toMatchObject({
+    sampledCommitCount: 100,
+    sampleEvery: 1,
+  });
+  expect(evolution.deltas).toHaveLength(99);
 });
