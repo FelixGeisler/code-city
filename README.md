@@ -528,10 +528,16 @@ npm run cli -- export `
 
 `viewer:dev` performs the required build, starts the API on an ephemeral
 loopback port, and serves the Vite viewer at `http://127.0.0.1:5173/`. Its
-persistent development imports live under `.code-city-dev/` unless
-`CODECITY_DATA_DIR` is set. Stopping the command closes both servers. The
-**Import project** wizard is therefore functional from the documented
-development entrypoint; it is not a static-viewer-only command.
+persistent development imports live under `.code-city-dev/` on POSIX unless
+`CODECITY_DATA_DIR` is set. On Windows, the launcher automatically creates an
+application-owned workspace under `%LOCALAPPDATA%\CodeCity\development-data`,
+removes inherited access, grants inheritable full control only to the current
+user, `SYSTEM`, and local administrators, and enables server-side history
+imports. No PowerShell setup or trust environment variable is required for the
+default development workflow. An explicitly configured data directory retains
+the production fail-closed trust contract. Stopping the command closes both
+servers. The **Import project** wizard is therefore functional from the
+documented development entrypoint; it is not a static-viewer-only command.
 
 The viewer starts in **Explore**, where overview, color mode, search, and the
 synchronized repository tree share one task-oriented workspace. Selecting a

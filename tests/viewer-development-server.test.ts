@@ -2,9 +2,10 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 
 import {
+  developmentWorkspaceOptions,
   startViewerDevelopmentServer,
   type ViewerDevelopmentServerHandle,
 } from "../apps/viewer/src/development-server.js";
@@ -20,6 +21,30 @@ afterEach(async () => {
       fs.rm(directory, { recursive: true, force: true }),
     ),
   );
+});
+
+it("automatically trusts only the provisioned default Windows workspace", async () => {
+  const provision = vi.fn(async () => ({
+    dataDirectory: "C:\\Users\\developer\\AppData\\Local\\CodeCity\\development-data",
+    trustWindowsGitWorkspace: true as const,
+  }));
+
+  await expect(
+    developmentWorkspaceOptions({}, "win32", provision),
+  ).resolves.toEqual({
+    dataDirectory: "C:\\Users\\developer\\AppData\\Local\\CodeCity\\development-data",
+    trustWindowsGitWorkspace: true,
+  });
+  expect(provision).toHaveBeenCalledOnce();
+
+  await expect(
+    developmentWorkspaceOptions(
+      { CODECITY_DATA_DIR: "C:\\custom" },
+      "win32",
+      provision,
+    ),
+  ).resolves.toEqual({ dataDirectory: "C:\\custom" });
+  expect(provision).toHaveBeenCalledOnce();
 });
 
 it("serves the documented development viewer with a real same-origin API", async () => {
