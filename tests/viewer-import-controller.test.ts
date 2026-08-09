@@ -663,6 +663,23 @@ describe("viewer import controller", () => {
     },
   );
 
+  it("does not reopen a stored terminal failure after restart", async () => {
+    const storage = new MemoryJobStorage(JOB_ID);
+    const getJob = vi.fn(async () => job("failed"));
+    const fixture = controllerFixture({
+      storage,
+      api: fakeApi({ getJob }),
+    });
+
+    fixture.controller.initialize();
+    await settle();
+
+    expect(getJob).toHaveBeenCalledWith(JOB_ID, expect.any(AbortSignal));
+    expect(storage.value).toBeUndefined();
+    expect(storage.clearCount).toBe(1);
+    expect(fixture.controller.state).toMatchObject({ status: "idle" });
+  });
+
   it("keeps not-captured generic when the model has source provenance", async () => {
     const fixture = controllerFixture({
       storage: new MemoryJobStorage(JOB_ID),
@@ -1156,7 +1173,7 @@ describe("viewer import controller", () => {
     resolveRemote?.(job("queued"));
     await settle();
 
-    expect(storage.value).toBe(JOB_ID);
+    expect(storage.value).toBeUndefined();
     expect(cancelJob).toHaveBeenCalledWith(
       JOB_ID,
       expect.any(AbortSignal),
@@ -1254,7 +1271,7 @@ describe("viewer import controller", () => {
     resolveUpload?.(job("queued"));
     await settle();
 
-    expect(storage.value).toBe(JOB_ID);
+    expect(storage.value).toBeUndefined();
     expect(cancelJob).toHaveBeenCalledWith(
       JOB_ID,
       expect.any(AbortSignal),
