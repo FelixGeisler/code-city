@@ -26,27 +26,52 @@ import {
   HISTORY_CHANGED_PATH_RECORD_OVERHEAD_BYTES,
 } from "./history-selection.js";
 import {
+  GENERIC_GIT_ARCHIVE_MAX_BYTES,
+  genericGitZipOptions as zipOptions,
+  gitMaterializationOptions as materializationOptions,
+  readGenericGitArchive as readArchive,
+} from "./git-archive-materialization.js";
+export { GENERIC_GIT_ARCHIVE_MAX_BYTES } from "./git-archive-materialization.js";
+import {
+  decodeGitOutput,
+  lsRemoteOperation,
+  oneRecord,
+  parseLsRemote,
+  sameSelection,
+  selectRef,
+  type RefSelection,
+} from "./git-ref-protocol.js";
+import {
+  genericGitRepositoryOrigin,
+  parseGenericGitRemote as parseRemote,
+  validateGenericGitRef as validateRef,
+  validateGenericGitRef,
+  validateGenericGitRepositoryUrl,
+  type GenericGitRemoteOrigin,
+  type GenericGitTransport,
+  type ParsedGenericGitRemote as ParsedRemote,
+} from "./git-remote-validation.js";
+export {
+  genericGitRepositoryOrigin,
+  validateGenericGitRef,
+  validateGenericGitRepositoryUrl,
+} from "./git-remote-validation.js";
+export type { GenericGitRemoteOrigin, GenericGitTransport } from "./git-remote-validation.js";
+import { GenericGitSnapshotError } from "./git-snapshot-error.js";
+export { GenericGitSnapshotError } from "./git-snapshot-error.js";
+export type { GenericGitSnapshotErrorCode } from "./git-snapshot-error.js";
+
+import {
   openZipSnapshotSource,
   type DisposableSnapshotSource,
-  type ZipSnapshotSourceOptions,
 } from "./zip-snapshot-source.js";
 
 const MEBIBYTE = 1024 * 1024;
 const COMMIT_SHA = /^[0-9a-f]{40}$/u;
 const INVALID_INPUT_CHARACTERS = /[\p{Cc}\p{Cf}\p{Cs}]/u;
-const INVALID_REF_CHARACTERS =
-  /[\s\\~^:?*]|\[|\]|\p{Cc}|\p{Cf}|\p{Cs}/u;
-const SCP_REMOTE =
-  /^(?:([A-Za-z0-9][A-Za-z0-9._-]*)@)?(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?):(.+)$/u;
-const MAX_REMOTE_CODE_UNITS = 4_096;
-const MAX_REMOTE_BYTES = 8_192;
-const MAX_REF_CODE_UNITS = 1_024;
-const MAX_REF_BYTES = 256;
-const MAX_REPOSITORY_NAME_BYTES = 256;
 const MAX_GIT_OUTPUT_BYTES = MEBIBYTE;
 const MAX_GIT_HISTORY_INDEX_BYTES = 32 * MEBIBYTE;
 const MAX_GIT_DIAGNOSTIC_BYTES = 64 * 1024;
-const MAX_ARCHIVE_BYTES = 64 * MEBIBYTE;
 const MAX_TEMPORARY_BYTES = 2 * 1024 * MEBIBYTE;
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const ARCHIVE_FILE_NAME = "snapshot.zip";
@@ -56,7 +81,6 @@ const INTERNAL_ABORT = Object.freeze({ kind: "git-snapshot-abort" });
 
 export const GENERIC_GIT_SNAPSHOT_TIMEOUT_MS =
   DEFAULT_SNAPSHOT_LIMITS.timeoutMs;
-export const GENERIC_GIT_ARCHIVE_MAX_BYTES = MAX_ARCHIVE_BYTES;
 export const GENERIC_GIT_TEMPORARY_MAX_BYTES = MAX_TEMPORARY_BYTES;
 export const GENERIC_GIT_HISTORY_MAX_COMMITS = 500;
 export const GENERIC_GIT_ROOT_TO_TIP_HISTORY_MAX_COMMITS = 100_000;
@@ -75,14 +99,6 @@ export const GENERIC_GIT_PRESECURED_WINDOWS_ACL =
   "pre-secured-private-directory" as const;
 export const GENERIC_GIT_PRESECURED_CANONICAL_ANCESTRY =
   "pre-secured-canonical-entry-and-ancestry-against-rename-delete" as const;
-
-export type GenericGitTransport = "https" | "ssh";
-
-export interface GenericGitRemoteOrigin {
-  readonly scheme: GenericGitTransport;
-  readonly hostname: string;
-  readonly port: number;
-}
 
 export interface GenericGitSnapshotRequest {
   readonly repositoryUrl: string;
@@ -285,58 +301,9 @@ export type GenericGitHistoryConsumer<T> = (
   session: GenericGitHistorySession,
 ) => Promise<T>;
 
-export type GenericGitSnapshotErrorCode =
-  | "GIT_ABORTED"
-  | "GIT_ARCHIVE_TOO_LARGE"
-  | "GIT_CLEANUP_FAILED"
-  | "GIT_COMMAND_FAILED"
-  | "GIT_DEADLINE_EXCEEDED"
-  | "GIT_INVALID_REQUEST"
-  | "GIT_INVALID_REF"
-  | "GIT_INVALID_REMOTE"
-  | "GIT_INVALID_RESPONSE"
-  | "GIT_HISTORY_FAILED"
-  | "GIT_OUTPUT_TOO_LARGE"
-  | "GIT_PARTIAL_CLONE_UNAVAILABLE"
-  | "GIT_REF_AMBIGUOUS"
-  | "GIT_REF_CHANGED"
-  | "GIT_REF_UNAVAILABLE"
-  | "GIT_SNAPSHOT_FAILED"
-  | "GIT_TEMPORARY_LIMIT"
-  | "GIT_TEMPORARY_WORKSPACE_INVALID";
-
-export class GenericGitSnapshotError extends Error {
-  public constructor(
-    readonly code: GenericGitSnapshotErrorCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = "GenericGitSnapshotError";
-  }
-}
-
-interface ParsedRemote {
-  readonly value: string;
-  readonly repository: string;
-  readonly transport: GenericGitTransport;
-  readonly origin: GenericGitRemoteOrigin;
-}
-
 interface GitCredentialTarget {
   readonly host: string;
   readonly path: string;
-}
-
-interface RefRecord {
-  readonly objectSha: string;
-  readonly name: string;
-}
-
-interface RefSelection {
-  readonly commitSha: string;
-  readonly objectSha: string;
-  readonly remoteRef?: string;
-  readonly requestedRef?: string;
 }
 
 interface CombinedDeadline {
@@ -346,227 +313,6 @@ interface CombinedDeadline {
 
 function utf8Length(value: string): number {
   return new TextEncoder().encode(value).byteLength;
-}
-
-function invalidRemote(): GenericGitSnapshotError {
-  return new GenericGitSnapshotError(
-    "GIT_INVALID_REMOTE",
-    "Generic Git remote must be a credential-free HTTPS, SSH, or scp-style repository.",
-  );
-}
-
-function repositoryName(rawPath: string): string {
-  const candidate = rawPath
-    .replaceAll("\\", "/")
-    .replace(/\/+$/u, "")
-    .split("/")
-    .at(-1);
-  if (!candidate) throw invalidRemote();
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(candidate);
-  } catch {
-    throw invalidRemote();
-  }
-  decoded = decoded.replace(/\.git$/iu, "").normalize("NFC");
-  if (
-    decoded.length === 0 ||
-    decoded === "." ||
-    decoded === ".." ||
-    decoded.includes("/") ||
-    decoded.includes("\\") ||
-    INVALID_INPUT_CHARACTERS.test(decoded) ||
-    utf8Length(decoded) > MAX_REPOSITORY_NAME_BYTES
-  ) {
-    throw invalidRemote();
-  }
-  return decoded;
-}
-
-function parseUrlRemote(value: string): ParsedRemote | undefined {
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
-    return undefined;
-  }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "ssh:") {
-    throw invalidRemote();
-  }
-  if (
-    parsed.hostname.length === 0 ||
-    !/^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?|\[[0-9A-Fa-f:.]+\])$/u.test(
-      parsed.hostname,
-    ) ||
-    parsed.password.length > 0 ||
-    parsed.search.length > 0 ||
-    parsed.hash.length > 0 ||
-    value.includes("?") ||
-    value.includes("#") ||
-    value.includes("\\")
-  ) {
-    throw invalidRemote();
-  }
-  let decodedPath: string;
-  try {
-    decodedPath = decodeURIComponent(parsed.pathname);
-  } catch {
-    throw invalidRemote();
-  }
-  if (
-    decodedPath.includes("\\") ||
-    INVALID_INPUT_CHARACTERS.test(decodedPath)
-  ) {
-    throw invalidRemote();
-  }
-  if (parsed.protocol === "https:" && parsed.username.length > 0) {
-    throw invalidRemote();
-  }
-  if (
-    parsed.protocol === "ssh:" &&
-    (parsed.username.length > 0 &&
-      !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(parsed.username))
-  ) {
-    throw invalidRemote();
-  }
-  if (parsed.pathname === "" || parsed.pathname === "/") {
-    throw invalidRemote();
-  }
-  if (
-    parsed.protocol === "ssh:" &&
-    !/^\/[A-Za-z0-9._/-]+$/u.test(parsed.pathname)
-  ) {
-    throw invalidRemote();
-  }
-  const port = Number(
-    parsed.port ||
-      (parsed.protocol === "https:" ? "443" : "22"),
-  );
-  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
-    throw invalidRemote();
-  }
-  return Object.freeze({
-    value,
-    repository: repositoryName(parsed.pathname),
-    transport: parsed.protocol === "https:" ? "https" : "ssh",
-    origin: Object.freeze({
-      scheme: parsed.protocol === "https:" ? "https" : "ssh",
-      hostname: parsed.hostname
-        .replace(/^\[|\]$/gu, "")
-        .toLocaleLowerCase("en-US"),
-      port,
-    }),
-  });
-}
-
-function parseRemote(value: string): ParsedRemote {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > MAX_REMOTE_CODE_UNITS ||
-    utf8Length(value) > MAX_REMOTE_BYTES ||
-    value !== value.trim() ||
-    value.startsWith("-") ||
-    INVALID_INPUT_CHARACTERS.test(value)
-  ) {
-    throw invalidRemote();
-  }
-  const normalized = value.normalize("NFC");
-  const url = parseUrlRemote(normalized);
-  if (url !== undefined) return url;
-
-  const scp = SCP_REMOTE.exec(normalized);
-  if (scp === null || scp[0] !== normalized) throw invalidRemote();
-  const remotePath = scp[3] ?? "";
-  if (
-    remotePath.length === 0 ||
-    remotePath.startsWith("-") ||
-    remotePath.includes("\\") ||
-    remotePath.includes("?") ||
-    remotePath.includes("#") ||
-    /\s/u.test(remotePath) ||
-    !/^[A-Za-z0-9._/-]+$/u.test(remotePath) ||
-    INVALID_INPUT_CHARACTERS.test(remotePath)
-  ) {
-    throw invalidRemote();
-  }
-  return Object.freeze({
-    value: normalized,
-    repository: repositoryName(remotePath),
-    transport: "ssh",
-    origin: Object.freeze({
-      scheme: "ssh",
-      hostname: (scp[2] ?? "")
-        .replace(/^\[|\]$/gu, "")
-        .toLocaleLowerCase("en-US"),
-      port: 22,
-    }),
-  });
-}
-
-function validateRef(value: string): string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > MAX_REF_CODE_UNITS
-  ) {
-    throw new GenericGitSnapshotError(
-      "GIT_INVALID_REF",
-      `Generic Git ref must be valid and no larger than ${MAX_REF_BYTES} UTF-8 bytes.`,
-    );
-  }
-  const normalized = value.normalize("NFC");
-  const components = normalized.split("/");
-  if (
-    normalized.length === 0 ||
-    utf8Length(normalized) > MAX_REF_BYTES ||
-    INVALID_REF_CHARACTERS.test(normalized) ||
-    normalized === "@" ||
-    normalized.startsWith("-") ||
-    normalized.includes("..") ||
-    normalized.includes("@{") ||
-    (normalized.startsWith("refs/") &&
-      !normalized.startsWith("refs/heads/") &&
-      !normalized.startsWith("refs/tags/")) ||
-    components.some(
-      (component) =>
-        component.length === 0 ||
-        component.startsWith(".") ||
-        component.endsWith(".") ||
-        component.toLocaleLowerCase("en-US").endsWith(".lock"),
-    )
-  ) {
-    throw new GenericGitSnapshotError(
-      "GIT_INVALID_REF",
-      `Generic Git ref must be valid and no larger than ${MAX_REF_BYTES} UTF-8 bytes.`,
-    );
-  }
-  return normalized;
-}
-
-/**
- * Validates and normalizes a credential-free Generic Git remote without
- * starting Git or touching the filesystem.
- */
-export function validateGenericGitRepositoryUrl(value: string): string {
-  return parseRemote(value).value;
-}
-
-/**
- * Returns the exact outbound origin of an already-valid Generic Git remote.
- * scp-style remotes are represented as SSH on port 22.
- */
-export function genericGitRepositoryOrigin(
-  value: string,
-): GenericGitRemoteOrigin {
-  return parseRemote(value).origin;
-}
-
-/**
- * Validates a Generic Git ref without contacting the remote.
- */
-export function validateGenericGitRef(value: string): string {
-  return validateRef(value);
 }
 
 function invalidCredentialProvider(): GenericGitSnapshotError {
@@ -1713,278 +1459,6 @@ export async function createGenericGitTemporaryWorkspace(
   }
 }
 
-function decodeGitOutput(
-  output: Uint8Array,
-  maximumBytes = MAX_GIT_OUTPUT_BYTES,
-): string {
-  if (output.byteLength > maximumBytes) {
-    throw new GenericGitSnapshotError(
-      "GIT_OUTPUT_TOO_LARGE",
-      "Installed Git output exceeded its size limit.",
-    );
-  }
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(output);
-  } catch {
-    throw new GenericGitSnapshotError(
-      "GIT_INVALID_RESPONSE",
-      "Installed Git returned invalid reference data.",
-    );
-  }
-}
-
-function parseLsRemote(output: Uint8Array): {
-  readonly symbolicHead?: string;
-  readonly records: readonly RefRecord[];
-} {
-  const text = decodeGitOutput(output);
-  const records: RefRecord[] = [];
-  let symbolicHead: string | undefined;
-  for (const rawLine of text.split("\n")) {
-    const line = rawLine.endsWith("\r")
-      ? rawLine.slice(0, -1)
-      : rawLine;
-    if (line.length === 0) continue;
-    const separator = line.indexOf("\t");
-    if (separator <= 0 || separator === line.length - 1) {
-      throw new GenericGitSnapshotError(
-        "GIT_INVALID_RESPONSE",
-        "Installed Git returned invalid reference data.",
-      );
-    }
-    const left = line.slice(0, separator);
-    const name = line.slice(separator + 1);
-    if (left.startsWith("ref: ")) {
-      const target = left.slice(5);
-      if (
-        name !== "HEAD" ||
-        symbolicHead !== undefined ||
-        !target.startsWith("refs/heads/")
-      ) {
-        throw new GenericGitSnapshotError(
-          "GIT_INVALID_RESPONSE",
-          "Installed Git returned invalid reference data.",
-        );
-      }
-      try {
-        validateRef(target);
-      } catch {
-        throw new GenericGitSnapshotError(
-          "GIT_INVALID_RESPONSE",
-          "Installed Git returned invalid reference data.",
-        );
-      }
-      symbolicHead = target;
-      continue;
-    }
-    const objectSha = left.toLocaleLowerCase("en-US");
-    const peeled = name.endsWith("^{}");
-    const baseName = peeled ? name.slice(0, -3) : name;
-    if (
-      !COMMIT_SHA.test(objectSha) ||
-      name.length === 0 ||
-      INVALID_INPUT_CHARACTERS.test(name) ||
-      (name !== "HEAD" &&
-        (!baseName.startsWith("refs/") ||
-          (peeled && !baseName.startsWith("refs/tags/"))))
-    ) {
-      throw new GenericGitSnapshotError(
-        "GIT_INVALID_RESPONSE",
-        "Installed Git returned invalid reference data.",
-      );
-    }
-    if (name !== "HEAD") {
-      try {
-        validateRef(baseName);
-      } catch {
-        throw new GenericGitSnapshotError(
-          "GIT_INVALID_RESPONSE",
-          "Installed Git returned invalid reference data.",
-        );
-      }
-    }
-    records.push(Object.freeze({ objectSha, name }));
-  }
-  return Object.freeze({
-    ...(symbolicHead === undefined ? {} : { symbolicHead }),
-    records: Object.freeze(records),
-  });
-}
-
-function oneRecord(
-  records: readonly RefRecord[],
-  name: string,
-): RefRecord | undefined {
-  const matches = records.filter((record) => record.name === name);
-  if (matches.length > 1) {
-    throw new GenericGitSnapshotError(
-      "GIT_INVALID_RESPONSE",
-      "Installed Git returned duplicate reference data.",
-    );
-  }
-  return matches[0];
-}
-
-function selectRef(
-  requestedRef: string | undefined,
-  output: Uint8Array,
-): RefSelection {
-  const parsed = parseLsRemote(output);
-  if (requestedRef === undefined) {
-    if (parsed.symbolicHead === undefined) {
-      throw new GenericGitSnapshotError(
-        "GIT_REF_UNAVAILABLE",
-        "Generic Git default branch is unavailable.",
-      );
-    }
-    const head = oneRecord(parsed.records, "HEAD");
-    const branch = oneRecord(parsed.records, parsed.symbolicHead);
-    const expectedNames = new Set(["HEAD", parsed.symbolicHead]);
-    if (
-      head === undefined ||
-      parsed.records.some(
-        (record) => !expectedNames.has(record.name),
-      ) ||
-      (branch !== undefined && head.objectSha !== branch.objectSha)
-    ) {
-      throw new GenericGitSnapshotError(
-        "GIT_INVALID_RESPONSE",
-        "Generic Git default branch could not be verified.",
-      );
-    }
-    return Object.freeze({
-      commitSha: head.objectSha,
-      objectSha: head.objectSha,
-      remoteRef: parsed.symbolicHead,
-    });
-  }
-
-  if (COMMIT_SHA.test(requestedRef.toLocaleLowerCase("en-US"))) {
-    const commitSha = requestedRef.toLocaleLowerCase("en-US");
-    if (!parsed.records.some((record) => record.objectSha === commitSha)) {
-      throw new GenericGitSnapshotError(
-        "GIT_REF_UNAVAILABLE",
-        "Requested Generic Git commit is not advertised.",
-      );
-    }
-    return Object.freeze({
-      commitSha,
-      objectSha: commitSha,
-      requestedRef,
-    });
-  }
-
-  const qualifiedBranch = requestedRef.startsWith("refs/heads/");
-  const qualifiedTag = requestedRef.startsWith("refs/tags/");
-  const branchRef = qualifiedTag
-    ? undefined
-    : qualifiedBranch
-      ? requestedRef
-      : `refs/heads/${requestedRef}`;
-  const tagRef = qualifiedBranch
-    ? undefined
-    : qualifiedTag
-      ? requestedRef
-      : `refs/tags/${requestedRef}`;
-  const branch =
-    branchRef === undefined
-      ? undefined
-      : oneRecord(parsed.records, branchRef);
-  const tag =
-    tagRef === undefined ? undefined : oneRecord(parsed.records, tagRef);
-  const peeled =
-    tagRef === undefined
-      ? undefined
-      : oneRecord(parsed.records, `${tagRef}^{}`);
-  const expectedNames = new Set([
-    ...(branchRef === undefined ? [] : [branchRef]),
-    ...(tagRef === undefined ? [] : [tagRef, `${tagRef}^{}`]),
-  ]);
-  if (
-    parsed.symbolicHead !== undefined ||
-    parsed.records.some(
-      (record) => !expectedNames.has(record.name),
-    ) ||
-    (peeled !== undefined && tag === undefined)
-  ) {
-    throw new GenericGitSnapshotError(
-      "GIT_INVALID_RESPONSE",
-      "Installed Git returned unexpected reference data.",
-    );
-  }
-  if (
-    !requestedRef.startsWith("refs/") &&
-    branch !== undefined &&
-    tag !== undefined
-  ) {
-    throw new GenericGitSnapshotError(
-      "GIT_REF_AMBIGUOUS",
-      "Requested Generic Git ref is ambiguous.",
-    );
-  }
-  if (branch !== undefined) {
-    return Object.freeze({
-      commitSha: branch.objectSha,
-      objectSha: branch.objectSha,
-      remoteRef: branchRef!,
-      requestedRef,
-    });
-  }
-  if (tag !== undefined) {
-    return Object.freeze({
-      commitSha: peeled?.objectSha ?? tag.objectSha,
-      objectSha: tag.objectSha,
-      remoteRef: tagRef!,
-      requestedRef,
-    });
-  }
-  throw new GenericGitSnapshotError(
-    "GIT_REF_UNAVAILABLE",
-    "Requested Generic Git ref is unavailable.",
-  );
-}
-
-function sameSelection(
-  first: RefSelection,
-  second: RefSelection,
-): boolean {
-  return (
-    first.commitSha === second.commitSha &&
-    first.objectSha === second.objectSha &&
-    first.remoteRef === second.remoteRef
-  );
-}
-
-function lsRemoteOperation(
-  remote: ParsedRemote,
-  requestedRef: string | undefined,
-): readonly string[] {
-  if (requestedRef === undefined) {
-    return ["ls-remote", "--symref", remote.value, "HEAD"];
-  }
-  if (COMMIT_SHA.test(requestedRef.toLocaleLowerCase("en-US"))) {
-    return ["ls-remote", remote.value];
-  }
-  const qualifiedBranch = requestedRef.startsWith("refs/heads/");
-  const qualifiedTag = requestedRef.startsWith("refs/tags/");
-  const branchRef = qualifiedTag
-    ? undefined
-    : qualifiedBranch
-      ? requestedRef
-      : `refs/heads/${requestedRef}`;
-  const tagRef = qualifiedBranch
-    ? undefined
-    : qualifiedTag
-      ? requestedRef
-      : `refs/tags/${requestedRef}`;
-  return [
-    "ls-remote",
-    remote.value,
-    ...(branchRef === undefined ? [] : [branchRef]),
-    ...(tagRef === undefined ? [] : [tagRef, `${tagRef}^{}`]),
-  ];
-}
-
 async function withCombinedDeadline<T>(
   timeoutMs: number,
   signals: readonly (AbortSignal | undefined)[],
@@ -2516,52 +1990,6 @@ async function invokeGitWithCredential(
   }
 }
 
-function materializationOptions(
-  requested: SnapshotOptions | undefined,
-  deadline: CombinedDeadline,
-): SnapshotOptions {
-  const remaining = deadline.remainingMilliseconds();
-  const {
-    signal: _callerSignal,
-    timeoutMs: requestedTimeout,
-    ...options
-  } = requested ?? {};
-  return {
-    ...options,
-    timeoutMs:
-      requestedTimeout === undefined
-        ? remaining
-        : Math.min(requestedTimeout, remaining),
-    signal: deadline.signal,
-  };
-}
-
-async function readArchive(
-  archivePath: string,
-  deadline: CombinedDeadline,
-): Promise<Uint8Array> {
-  const stat = await withinDeadline(fs.lstat(archivePath), deadline);
-  if (
-    stat.isSymbolicLink() ||
-    !stat.isFile() ||
-    stat.size < 0 ||
-    stat.size > MAX_ARCHIVE_BYTES
-  ) {
-    throw new GenericGitSnapshotError(
-      "GIT_ARCHIVE_TOO_LARGE",
-      "Generic Git archive exceeded its size limit.",
-    );
-  }
-  const bytes = await withinDeadline(fs.readFile(archivePath), deadline);
-  if (bytes.byteLength > MAX_ARCHIVE_BYTES) {
-    throw new GenericGitSnapshotError(
-      "GIT_ARCHIVE_TOO_LARGE",
-      "Generic Git archive exceeded its size limit.",
-    );
-  }
-  return new Uint8Array(bytes);
-}
-
 function invalidShallowMetadata(): GenericGitSnapshotError {
   return new GenericGitSnapshotError(
     "GIT_INVALID_RESPONSE",
@@ -2659,18 +2087,6 @@ async function enforceTemporaryLimit(
       "Temporary Git data exceeded the disk size limit.",
     );
   }
-}
-
-function zipOptions(
-  snapshotOptions: SnapshotOptions | undefined,
-  signal: AbortSignal,
-): ZipSnapshotSourceOptions {
-  return {
-    maxArchiveBytes: MAX_ARCHIVE_BYTES,
-    maxEntries:
-      snapshotOptions?.maxEntries ?? DEFAULT_SNAPSHOT_LIMITS.maxEntries,
-    signal,
-  };
 }
 
 export async function snapshotGenericGitRepository(
@@ -2916,7 +2332,7 @@ export async function snapshotGenericGitRepository(
             true,
           );
           await enforceTemporaryLimit(workspace, deadline);
-          const archive = await readArchive(archivePath, deadline);
+          const archive = await readArchive(archivePath, deadline, withinDeadline);
 
           await workspace.dispose();
           workspaceDisposed = true;
@@ -4196,6 +3612,7 @@ export async function withGenericGitHistoryRepository<T>(
                 const archive = await readArchive(
                   archivePath,
                   sessionDeadline,
+                  withinDeadline,
                 );
                 try {
                   await withinDeadline(
