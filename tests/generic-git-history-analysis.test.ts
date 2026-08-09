@@ -1285,7 +1285,7 @@ describe("Generic Git history analysis orchestration", () => {
     expect(createEvolution).not.toHaveBeenCalled();
   });
 
-  it("enforces the semantic bound across individually admissible frames", async () => {
+  it("shares repeated immutable strings across retained frames", async () => {
     const createEvolution = vi.fn(evolutionResult);
     const boundedSession = sessionHarness(3);
     const boundedProvider = providerHarness(boundedSession.session);
@@ -1300,8 +1300,42 @@ describe("Generic Git history analysis orchestration", () => {
         {},
         {
           withHistoryRepository: boundedProvider.provider,
-          analyzeSnapshot: async () =>
-            facts("x".repeat(4_000)),
+          analyzeSnapshot: async () => facts("x".repeat(4_000)),
+          createEvolution,
+        },
+      ),
+    ).resolves.toBeDefined();
+    expect(boundedSession.readSnapshot).toHaveBeenCalledTimes(3);
+    expect(createEvolution).toHaveBeenCalledOnce();
+    const retainedFrames = createEvolution.mock.calls[0]![0].frames;
+    expect(retainedFrames[1]!.facts.repositories[0]).toBe(
+      retainedFrames[0]!.facts.repositories[0],
+    );
+    expect(retainedFrames[2]!.facts.repositories[0]).toBe(
+      retainedFrames[0]!.facts.repositories[0],
+    );
+  });
+
+  it("enforces the semantic bound across individually admissible unique frames", async () => {
+    const createEvolution = vi.fn(evolutionResult);
+    const boundedSession = sessionHarness(3);
+    const boundedProvider = providerHarness(boundedSession.session);
+    let frame = 0;
+
+    await expect(
+      analyzeGenericGitHistory(
+        request({
+          mode: "commit-count",
+          commitCount: 3,
+          maxAggregateSemanticBytes: 15_000,
+        }),
+        {},
+        {
+          withHistoryRepository: boundedProvider.provider,
+          analyzeSnapshot: async () => {
+            frame += 1;
+            return facts(`${frame}:${"x".repeat(4_000)}`);
+          },
           createEvolution,
         },
       ),

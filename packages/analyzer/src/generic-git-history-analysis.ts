@@ -1109,6 +1109,40 @@ const SEMANTIC_STRING_OVERHEAD_BYTES = 48;
 const SEMANTIC_MAX_DEPTH = 64;
 const SEMANTIC_MAX_VALUES = 2_000_000;
 const SEMANTIC_MAX_TEXT_CHARACTERS = 65_536;
+const SEMANTIC_INTERN_ENTRY_OVERHEAD_BYTES = 64;
+
+interface SemanticSnapshotValue {
+  readonly value: unknown;
+  readonly digest: string;
+}
+
+interface SemanticSnapshotPool {
+  readonly strings: Map<string, SemanticSnapshotValue>;
+  readonly nodes: Map<string, SemanticSnapshotValue>;
+}
+
+function createSemanticSnapshotPool(): SemanticSnapshotPool {
+  return {
+    strings: new Map<string, SemanticSnapshotValue>(),
+    nodes: new Map<string, SemanticSnapshotValue>(),
+  };
+}
+
+function semanticSnapshotDigest(
+  kind: string,
+  values: readonly string[],
+): string {
+  const hash = createHash("sha256");
+  hash.update(kind, "utf8");
+  hash.update("\0", "utf8");
+  for (const value of values) {
+    hash.update(value.length.toString(10), "utf8");
+    hash.update(":", "utf8");
+    hash.update(value, "utf8");
+  }
+  return hash.digest("hex");
+}
+
 const SEMANTIC_FACT_KEYS = Object.freeze([
   "dependencies",
   "modules",
@@ -1126,6 +1160,7 @@ function snapshotRetainedSemanticFacts<
   accumulated: number,
   maximum: number,
   clock: AnalysisClock,
+  pool?: SemanticSnapshotPool,
 ): {
   readonly facts: TFacts;
   readonly bytes: number;
@@ -1226,6 +1261,52 @@ function snapshotRetainedSemanticFacts<
     }
     return result;
   };
+  const retainedString = (value: string): SemanticSnapshotValue => {
+    const existing = pool?.strings.get(value);
+    if (existing !== undefined) return existing;
+    const digest = semanticSnapshotDigest("string", [value]);
+    charge(
+      SEMANTIC_STRING_OVERHEAD_BYTES +
+        Buffer.byteLength(value, "utf8") +
+        (pool === undefined
+          ? 0
+          : SEMANTIC_INTERN_ENTRY_OVERHEAD_BYTES +
+            SEMANTIC_STRING_OVERHEAD_BYTES +
+            Buffer.byteLength(digest, "utf8")),
+    );
+    const retained = Object.freeze({ value, digest });
+    pool?.strings.set(value, retained);
+    return retained;
+  };
+  const retainedContainer = (
+    kind: "array" | "object",
+    result: unknown,
+    tokens: readonly string[],
+    retainedBytes: number,
+  ): SemanticSnapshotValue => {
+    if (pool === undefined) {
+      charge(retainedBytes);
+      return Object.freeze({
+        value: Object.freeze(result),
+        digest: "",
+      });
+    }
+    const digest = semanticSnapshotDigest(kind, tokens);
+    const existing = pool.nodes.get(digest);
+    if (existing !== undefined) return existing;
+    charge(
+      retainedBytes +
+        SEMANTIC_INTERN_ENTRY_OVERHEAD_BYTES +
+        SEMANTIC_STRING_OVERHEAD_BYTES +
+        Buffer.byteLength(digest, "utf8"),
+    );
+    const retained = Object.freeze({
+      value: Object.freeze(result),
+      digest,
+    });
+    pool.nodes.set(digest, retained);
+    return retained;
+  };
   const dataValue = (
     descriptor: PropertyDescriptor | undefined,
   ): unknown => {
@@ -1240,7 +1321,7 @@ function snapshotRetainedSemanticFacts<
     item: unknown,
     path: string,
     depth: number,
-  ): unknown => {
+  ): SemanticSnapshotValue => {
     step();
     values += 1;
     if (values > SEMANTIC_MAX_VALUES || depth > SEMANTIC_MAX_DEPTH) {
@@ -1254,21 +1335,27 @@ function snapshotRetainedSemanticFacts<
       ) {
         invalidFacts();
       }
-      charge(
-        SEMANTIC_STRING_OVERHEAD_BYTES +
-          Buffer.byteLength(item, "utf8"),
-      );
-      return item;
+      return retainedString(item);
     }
-    if (
-      item === null ||
-      typeof item === "boolean"
-    ) {
-      return item;
+    if (item === null) {
+      return Object.freeze({
+        value: item,
+        digest: semanticSnapshotDigest("null", []),
+      });
+    }
+    if (typeof item === "boolean") {
+      return Object.freeze({
+        value: item,
+        digest: semanticSnapshotDigest("boolean", [item ? "1" : "0"]),
+      });
     }
     if (typeof item === "number") {
       if (!Number.isFinite(item)) invalidFacts();
-      return Object.is(item, -0) ? 0 : item;
+      const value = Object.is(item, -0) ? 0 : item;
+      return Object.freeze({
+        value,
+        digest: semanticSnapshotDigest("number", [value.toString()]),
+      });
     }
     if (typeof item !== "object" || item === undefined) {
       invalidFacts();
@@ -1282,49 +1369,56 @@ function snapshotRetainedSemanticFacts<
         const length = dataValue(sourceDescriptors.length);
         if (typeof length !== "number") invalidFacts();
         const arrayLength = length as number;
-        charge(
-          SEMANTIC_ARRAY_OVERHEAD_BYTES +
-            arrayLength * SEMANTIC_REFERENCE_BYTES,
-        );
         const result = new Array<unknown>(arrayLength);
+        const tokens: string[] = [];
         for (let index = 0; index < arrayLength; index += 1) {
-          result[index] = snapshot(
+          const retained = snapshot(
             dataValue(sourceDescriptors[String(index)]),
             `${path}[${index}]`,
             depth + 1,
           );
+          result[index] = retained.value;
+          tokens.push(retained.digest);
         }
-        return Object.freeze(result);
+        return retainedContainer(
+          "array",
+          result,
+          tokens,
+          SEMANTIC_ARRAY_OVERHEAD_BYTES +
+            arrayLength * SEMANTIC_REFERENCE_BYTES,
+        );
       }
       const keys = Reflect.ownKeys(sourceDescriptors).filter(
         (key): key is string => typeof key === "string",
-      );
-      charge(
-        SEMANTIC_OBJECT_OVERHEAD_BYTES +
-          keys.length * SEMANTIC_REFERENCE_BYTES,
       );
       const result = Object.create(
         Object.getPrototypeOf(objectItem) === null
           ? null
           : Object.prototype,
       ) as Record<string, unknown>;
+      const tokens: string[] = [];
       for (const key of keys) {
-        charge(
-          SEMANTIC_STRING_OVERHEAD_BYTES +
-            Buffer.byteLength(key, "utf8"),
+        const retainedKey = retainedString(key);
+        const retainedValue = snapshot(
+          dataValue(sourceDescriptors[key]),
+          `${path}.${key}`,
+          depth + 1,
         );
-        Object.defineProperty(result, key, {
+        tokens.push(retainedKey.digest, retainedValue.digest);
+        Object.defineProperty(result, retainedKey.value as string, {
           configurable: false,
           enumerable: true,
-          value: snapshot(
-            dataValue(sourceDescriptors[key]),
-            `${path}.${key}`,
-            depth + 1,
-          ),
+          value: retainedValue.value,
           writable: false,
         });
       }
-      return Object.freeze(result);
+      return retainedContainer(
+        "object",
+        result,
+        tokens,
+        SEMANTIC_OBJECT_OVERHEAD_BYTES +
+          keys.length * SEMANTIC_REFERENCE_BYTES,
+      );
     } finally {
       active.delete(objectItem);
     }
@@ -1363,7 +1457,7 @@ function snapshotRetainedSemanticFacts<
     semanticRoot,
     "facts",
     0,
-  ) as TFacts;
+  ).value as TFacts;
   checkpoint(clock);
   return Object.freeze({
     facts,
@@ -1529,6 +1623,7 @@ async function analyzeSession(
   let cacheMisses = 0;
   let treeEntries = 0;
   let semanticBytes = 0;
+  const semanticSnapshotPool = createSemanticSnapshotPool();
   let sourceSnapshot: RepositorySnapshot | undefined;
   let value: SessionAnalysisResult | undefined;
   let failed = false;
@@ -1644,6 +1739,7 @@ async function analyzeSession(
         semanticBytes,
         bounds.maxAggregateSemanticBytes,
         clock,
+        semanticSnapshotPool,
       );
       const facts = retained.facts;
       semanticBytes = retained.bytes;

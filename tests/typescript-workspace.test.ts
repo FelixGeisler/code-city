@@ -88,6 +88,27 @@ describe("TypeScript 7 native workspace", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("preserves the deadline when closing the killed transport rejects", async () => {
+    const kill = vi.fn(() => true);
+    const close = vi.fn(async () => {
+      throw new Error("Cannot call write after a stream was destroyed");
+    });
+    const api = {
+      client: { process: { exitCode: null, kill } },
+      updateSnapshot: () => new Promise(() => undefined),
+      close,
+    } as unknown as API;
+
+    await expect(
+      TypeScriptWorkspace.create(
+        [{ path: `${root}/source.ts`, text: "export {};" }],
+        { timeoutMs: 10, nativeApiFactory: () => api },
+      ),
+    ).rejects.toThrow("exceeded its deadline");
+    expect(kill).toHaveBeenCalledWith("SIGKILL");
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it("closes the native API after initialization crashes", async () => {
     const close = vi.fn(async () => undefined);
     const api = {
