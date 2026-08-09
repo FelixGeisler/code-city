@@ -225,7 +225,7 @@ function fakeGit(options: FakeGitOptions = {}): {
         stdout:
           options.changes ??
           bytes(
-            "R100\0src/old.ts\0src/new.ts\0" +
+            "R099\0src/old.ts\0src/new.ts\0" +
               "M\0package.json\0",
           ),
       };
@@ -1078,6 +1078,10 @@ describe("bounded Generic Git history sessions", () => {
     const base = fakeGit();
     const harness = await workspace();
     const events: string[] = [];
+    let markOperationStarted: (() => void) | undefined;
+    const operationStarted = new Promise<void>((resolve) => {
+      markOperationStarted = resolve;
+    });
     const runGit: NonNullable<
       GenericGitSnapshotDependencies["runGit"]
     > = async (request) => {
@@ -1085,6 +1089,7 @@ describe("bounded Generic Git history sessions", () => {
         return await base.runGit(request);
       }
       events.push("operation-started");
+      markOperationStarted?.();
       return await new Promise<never>((_resolve, reject) => {
         const abort = () => {
           events.push("operation-aborted");
@@ -1101,8 +1106,9 @@ describe("bounded Generic Git history sessions", () => {
       await harness.value.dispose();
     });
 
-    await expect(
-      withGenericGitHistoryRepository(
+    vi.useFakeTimers();
+    try {
+      const result = withGenericGitHistoryRepository(
         {
           repositoryUrl: REMOTE,
           maximumCommits: 3,
@@ -1118,8 +1124,15 @@ describe("bounded Generic Git history sessions", () => {
             dispose,
           }),
         },
-      ),
-    ).rejects.toMatchObject({ code: "GIT_DEADLINE_EXCEEDED" });
+      );
+      await operationStarted;
+      await vi.advanceTimersByTimeAsync(50);
+      await expect(result).rejects.toMatchObject({
+        code: "GIT_DEADLINE_EXCEEDED",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
 
     expect(events).toEqual([
       "operation-started",

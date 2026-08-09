@@ -2960,7 +2960,9 @@ function historyChangeKind(
   if (status === "D") return "deleted";
   if (status === "M") return "modified";
   if (status === "T") return "type-changed";
-  if (/^R(?:100|[0-9]{1,2})$/u.test(status)) return "renamed";
+  // Git's --name-status protocol always pads similarity scores below 100
+  // to three decimal digits (for example, R099 and R050).
+  if (/^R(?:100|0[0-9]{2})$/u.test(status)) return "renamed";
   throw new GenericGitSnapshotError(
     "GIT_INVALID_RESPONSE",
     "Installed Git returned an unsupported history change.",
