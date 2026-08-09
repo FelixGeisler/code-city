@@ -375,7 +375,7 @@ export function runPrintExportRequest(
     const prepared = prepareConcretePrintExport(
       request,
       requestedPolicy,
-      request.options.acknowledgeBelowProfileScale ?? false,
+      false,
       emit,
     );
     serializePreparedOutput(

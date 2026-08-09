@@ -147,7 +147,6 @@ interface PrintExportRequestFingerprint {
   readonly fitPolicy: "auto" | "error" | "scale" | "tile";
   readonly confirmCompactFit: boolean;
   readonly scale: number;
-  readonly acknowledgeBelowProfileScale: boolean;
   readonly wipeTowerReserveDepth: number;
   readonly maximumPlateCount?: number;
   readonly routePolicy: PrintExportGenerateOptions["routePolicy"];
@@ -191,8 +190,6 @@ function requestFingerprint(
     fitPolicy: request.options.fitPolicy ?? "auto",
     confirmCompactFit: request.options.confirmCompactFit ?? false,
     scale: request.options.scale,
-    acknowledgeBelowProfileScale:
-      request.options.acknowledgeBelowProfileScale ?? false,
     wipeTowerReserveDepth:
       request.options.wipeTowerReserveDepth ?? 0,
     ...(request.options.maximumPlateCount === undefined
@@ -226,10 +223,9 @@ function preflightMatchesRequest(
     ) &&
     preflight.belowProfileScaleAcknowledged ===
       (fingerprint.fitPolicy === "auto" &&
-      preflight.featureViolations.length > 0 &&
-      (fingerprint.confirmCompactFit || allowUnconfirmedCompactProposal)
-        ? true
-        : fingerprint.acknowledgeBelowProfileScale) &&
+        preflight.featureViolations.length > 0 &&
+        (fingerprint.confirmCompactFit ||
+          allowUnconfirmedCompactProposal)) &&
     preflight.routes.policy === fingerprint.routePolicy &&
     preflight.legendIncluded === fingerprint.includeLegend &&
     !labelsDisabled &&

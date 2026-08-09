@@ -31,8 +31,6 @@ export type PrintExportGenerateOptions = Omit<
    * run. The worker still recomputes the plan before serializing it.
    */
   readonly confirmCompactFit?: boolean;
-  /** @deprecated Browser UI uses the normal Auto compact-fit confirmation. */
-  readonly acknowledgeBelowProfileScale?: boolean;
 };
 
 export type PrintExportPreviewSource = PrintBundlePreviewSource;
@@ -310,8 +308,7 @@ function exportOptions(value: unknown): value is PrintExportGenerateOptions {
       (finiteNumber(candidate["wipeTowerReserveDepth"]) &&
         candidate["wipeTowerReserveDepth"] >= 0 &&
         candidate["wipeTowerReserveDepth"] < 360)) &&
-    (candidate["acknowledgeBelowProfileScale"] === undefined ||
-      typeof candidate["acknowledgeBelowProfileScale"] === "boolean") &&
+    candidate["acknowledgeBelowProfileScale"] === undefined &&
     (candidate["confirmCompactFit"] === undefined ||
       typeof candidate["confirmCompactFit"] === "boolean") &&
     (candidate["fitPolicy"] === undefined ||
