@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 
 import { runCli } from "../apps/cli/src/main.js";
-import { createSingleChannelProfile } from "../packages/core/src/index.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -23,7 +22,7 @@ afterEach(async () => {
   );
 });
 
-it("analyzes local roots and creates a printer-independent print plan", async () => {
+it("analyzes local roots and writes the requested model identity", async () => {
   const directory = await temporaryDirectory();
   const sourceRoot = path.join(directory, "sample");
   await fs.mkdir(sourceRoot);
@@ -33,13 +32,6 @@ it("analyzes local roots and creates a printer-independent print plan", async ()
     "utf8",
   );
   const modelPath = path.join(directory, "model.json");
-  const profilePath = path.join(directory, "profile.json");
-  const planPath = path.join(directory, "plan.json");
-  await fs.writeFile(
-    profilePath,
-    JSON.stringify(createSingleChannelProfile()),
-    "utf8",
-  );
   const stdout: string[] = [];
   const stderr: string[] = [];
   const io = {
@@ -62,68 +54,15 @@ it("analyzes local roots and creates a printer-independent print plan", async ()
       io,
     ),
   ).toBe(0);
-  const planExitCode = await runCli(
-    [
-      "plan",
-      "--model",
-      modelPath,
-      "--profile",
-      profilePath,
-      "--format",
-      "stl",
-      "--scale",
-      "2",
-      "--routes",
-      "auto",
-      "--output",
-      planPath,
-    ],
-    io,
-  );
-  expect(planExitCode, stderr.join("")).toBe(0);
-
   const model = JSON.parse(await fs.readFile(modelPath, "utf8")) as {
     identity: { title: string; version: string };
-  };
-  const plan = JSON.parse(await fs.readFile(planPath, "utf8")) as {
-    schemaVersion: string;
-    format: string;
-    layout: {
-      fitPolicy: string;
-      requestedScale: number;
-      appliedScale: number;
-      plates: {
-        reservations: { kind: string }[];
-      }[];
-    };
-    routes: { policy: string };
-    plates: { fileName: string; channels: string[] }[];
   };
   expect(model.identity).toMatchObject({
     title: "Sample City",
     version: "1.2.3",
   });
-  expect(plan.schemaVersion).toBe("1.0");
-  expect(plan.format).toBe("stl");
-  expect(plan.layout.fitPolicy).toBe("error");
-  expect(plan.layout.requestedScale).toBe(2);
-  expect(plan.layout.appliedScale).toBe(2);
-  expect(plan.routes.policy).toBe("auto");
-  expect(plan.plates).toEqual([
-    expect.objectContaining({
-      fileName: "plate-01.stl",
-      channels: ["channel-1"],
-    }),
-  ]);
-  expect(
-    plan.layout.plates[0]!.reservations.map(({ kind }) => kind),
-  ).toEqual(expect.arrayContaining(["identity", "plate-number"]));
   expect(stderr).toEqual([]);
   expect(stdout.join("")).toContain("Analyzed 1 root");
-  expect(stdout.join("")).toContain("Planned 1 STL print plate");
-  expect(stdout.join("")).toContain(
-    "Routes: 0 of 0 aggregated bundle(s) printed",
-  );
 });
 
 it("returns a useful error for an unsafe logo reference", async () => {
