@@ -9,11 +9,13 @@ export default defineConfig({
   base: "./",
   publicDir: false,
   optimizeDeps: {
-    // Pre-bundle every browser dependency and subpath before serving modules.
-    // Late discovery otherwise invalidates an already-served URL with a 504.
-    noDiscovery: true,
+    // OrbitControls must be known before modules are served; discovering that
+    // subpath late invalidates its already-served URL with a 504. Keep normal
+    // discovery enabled so transitive CommonJS packages are also optimized.
     include: [
       "fflate",
+      "ignore",
+      "jsonc-parser",
       "three",
       "three/addons/controls/OrbitControls.js",
     ],
