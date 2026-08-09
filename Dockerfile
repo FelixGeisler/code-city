@@ -1,9 +1,11 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:24-bookworm-slim AS node-runtime
+# Application artifacts and framework-dependent .NET helpers are portable.
+# Build them natively instead of repeating compilation under target emulation.
+FROM --platform=$BUILDPLATFORM node:24-bookworm-slim AS node-build
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0.302-noble AS build
-COPY --from=node-runtime /usr/local/ /usr/local/
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0.302-noble AS build
+COPY --from=node-build /usr/local/ /usr/local/
 WORKDIR /app
 
 COPY package.json package-lock.json ./
@@ -12,6 +14,8 @@ RUN npm ci
 COPY . .
 RUN npm run build
 RUN npm prune --omit=dev
+
+FROM node:24-bookworm-slim AS node-runtime
 
 FROM mcr.microsoft.com/dotnet/runtime:10.0-noble AS runtime
 COPY --from=node-runtime /usr/local/ /usr/local/
