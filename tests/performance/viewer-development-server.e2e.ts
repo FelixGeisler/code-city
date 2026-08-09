@@ -7,10 +7,23 @@ import {
   startViewerDevelopmentServer,
   type ViewerDevelopmentServerHandle,
 } from "../../apps/viewer/src/development-server.js";
-import { ViewerImportApiClient } from "../../apps/viewer/src/import-api.js";
 
 let handle: ViewerDevelopmentServerHandle;
 let testRoot: string;
+
+async function waitForViewer(page: import("@playwright/test").Page): Promise<void> {
+  await page.goto(new URL("?performance=1", handle.url).href, {
+    waitUntil: "domcontentloaded",
+  });
+  await page.waitForFunction(
+    () =>
+      (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: { readonly ready?: boolean };
+        }
+      ).__CODE_CITY_PERFORMANCE__?.ready === true,
+  );
+}
 
 test.beforeAll(async () => {
   testRoot = await fs.mkdtemp(
@@ -42,18 +55,7 @@ test("integrated development viewer executes its complete startup graph", async 
     }
   });
 
-  await page.goto(new URL("?performance=1", handle.url).href, {
-    waitUntil: "domcontentloaded",
-  });
-  await page.waitForFunction(
-    () =>
-      (
-        window as Window & {
-          __CODE_CITY_PERFORMANCE__?: { readonly ready?: boolean };
-        }
-      ).__CODE_CITY_PERFORMANCE__?.ready === true,
-  );
-
+  await waitForViewer(page);
   await page.locator("#project-import-open").click();
   await expect(page.locator("#project-import-dialog")).toBeVisible();
   await expect(page.locator("#project-import-steps")).toBeVisible();
@@ -61,41 +63,60 @@ test("integrated development viewer executes its complete startup graph", async 
   expect(serverErrors).toEqual([]);
 });
 
-test("imports real public GitHub history through the development server", async () => {
+test("@real-import imports, opens, and prepares a real 100-frame GitHub city through the UI", async ({
+  page,
+}) => {
   test.setTimeout(600_000);
-  const client = new ViewerImportApiClient(handle.url);
-  const queued = await client.createRemoteImport({
-    source: {
-      kind: "github",
-      repositoryUrl: "https://github.com/FelixGeisler/code-city",
-    },
-    history: {
-      mode: "commit-count",
-      commitCount: 100,
-      sampleEvery: 1,
-    },
-    identity: { title: "Code City 100-frame public history smoke test" },
+  const pageErrors: string[] = [];
+  const serverErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("response", (response) => {
+    if (response.status() >= 500) {
+      serverErrors.push(`${String(response.status())} ${response.url()}`);
+    }
   });
 
-  let current = queued;
-  await expect.poll(
-    async () => {
-      current = await client.getJob(queued.id);
-      if (current.state === "failed") {
-        throw new Error(
-          `Public history import failed: ${current.error?.code ?? "unknown"}: ${current.error?.message ?? "No diagnostic"}`,
-        );
-      }
-      return current.state;
-    },
-    { timeout: 580_000, intervals: [250, 500, 1_000] },
-  ).toBe("completed");
-  expect(current.result?.evolution?.artifactUrl).toContain(
-    `/api/v1/artifacts/${queued.id}/evolution.json`,
-  );
+  await waitForViewer(page);
+  await page.getByRole("button", { name: "Import project" }).click();
+  await page
+    .locator('input[name="project-import-source"][value="github-public"]')
+    .check();
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page
+    .locator("#project-import-repository-url")
+    .fill("https://github.com/FelixGeisler/code-city");
+  await page.locator("#project-import-history-enabled").check();
+  await page
+    .locator("#project-import-history-mode")
+    .selectOption("commit-count");
+  await page.locator("#project-import-history-commit-count").fill("100");
+  await page.locator("#project-import-history-sample-every").fill("1");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page
+    .locator("#project-import-identity-title")
+    .fill("Code City 100-frame UI contract");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await page.getByRole("button", { name: "Start import" }).click();
 
+  await expect(page.locator("#project-import-dialog")).toBeHidden({
+    timeout: 580_000,
+  });
+  await expect(page.locator("#model-name")).toHaveText(
+    "Code City 100-frame UI contract",
+  );
+  await expect(page.locator("#evolution-timeline")).toBeVisible();
+  await expect(page.locator("#evolution-commit")).toContainText("100/100", {
+    timeout: 120_000,
+  });
+
+  const jobId = await page.evaluate(() =>
+    localStorage.getItem("code-city.last-import-job.v1"),
+  );
+  expect(jobId).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+  );
   const modelResponse = await fetch(
-    new URL(`api/v1/artifacts/${queued.id}/city-model.json`, handle.url),
+    new URL(`api/v1/artifacts/${jobId}/city-model.json`, handle.url),
   );
   expect(modelResponse.status).toBe(200);
   const model = await modelResponse.json() as {
@@ -106,7 +127,7 @@ test("imports real public GitHub history through the development server", async 
   expect(model.buildings?.length).toBeGreaterThan(0);
 
   const evolutionResponse = await fetch(
-    new URL(`api/v1/artifacts/${queued.id}/evolution.json`, handle.url),
+    new URL(`api/v1/artifacts/${jobId}/evolution.json`, handle.url),
   );
   expect(evolutionResponse.status).toBe(200);
   const evolution = await evolutionResponse.json() as {
@@ -121,4 +142,38 @@ test("imports real public GitHub history through the development server", async 
     sampleEvery: 1,
   });
   expect(evolution.deltas).toHaveLength(99);
+
+  await page.locator("#export-actions-menu > summary").click();
+  await page.getByRole("button", { name: "Export print file" }).click();
+  const printDialog = page.getByRole("dialog", { name: "Export print file" });
+  await printDialog.locator("#print-profile-kind").selectOption("prusa-xl");
+  await printDialog.locator("#print-legend-download-enabled").uncheck();
+  await printDialog.getByRole("button", { name: "Prepare export" }).click();
+  await expect(printDialog.locator("#print-export-preflight")).toBeVisible({
+    timeout: 120_000,
+  });
+  await expect(printDialog.locator("#print-export-channels-title")).toHaveText(
+    "Tool allocation",
+  );
+  await expect(
+    printDialog.locator('[data-channel-id="tool-1"]'),
+  ).toContainText(/Base.*Identity/iu);
+  for (const [channelId, label] of [
+    ["tool-2", "Very high complexity"],
+    ["tool-3", "High complexity"],
+    ["tool-4", "Moderate complexity"],
+    ["tool-5", "Low complexity"],
+  ] as const) {
+    await expect(
+      printDialog.locator(`[data-channel-id="${channelId}"]`),
+    ).toContainText(label);
+  }
+  await expect(printDialog.locator("#print-export-download")).toBeVisible();
+  await expect(printDialog.locator("#print-export-download")).toHaveAttribute(
+    "href",
+    /^blob:/u,
+  );
+
+  expect(pageErrors).toEqual([]);
+  expect(serverErrors).toEqual([]);
 });

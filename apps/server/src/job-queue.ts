@@ -293,8 +293,8 @@ function readProgress(value: unknown): JobProgress | undefined {
   }
 }
 
-function validError(value: unknown): value is JobError {
-  if (typeof value !== "object" || value === null) return false;
+function readError(value: unknown): JobError | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
   const candidate = value as Record<string, unknown>;
   const keys = Object.keys(candidate).sort(compareText);
   const code = candidate["code"];
@@ -304,17 +304,26 @@ function validError(value: unknown): value is JobError {
     code === "cancelled" ||
     code === "failed" ||
     code === "interrupted";
-  return (
-    keys.length === 2 &&
-    keys[0] === "code" &&
-    keys[1] === "message" &&
-    recognizedCode &&
-    typeof message === "string" &&
-    message.length > 0 &&
-    message.length <= 1_024 &&
-    (!isJobTaskFailureCode(code) ||
-      message === JOB_TASK_FAILURE_MESSAGES[code])
-  );
+  if (
+    keys.length !== 2 ||
+    keys[0] !== "code" ||
+    keys[1] !== "message" ||
+    !recognizedCode ||
+    typeof message !== "string" ||
+    message.length === 0 ||
+    message.length > 1_024
+  ) {
+    return undefined;
+  }
+  // Persisted messages are presentation text, not protocol identity. Always
+  // regenerate task-failure prose from its stable code so wording upgrades do
+  // not make older private queues unreadable or expose edited file contents.
+  return Object.freeze({
+    code,
+    message: isJobTaskFailureCode(code)
+      ? JOB_TASK_FAILURE_MESSAGES[code]
+      : message,
+  });
 }
 
 function readResult(
@@ -469,6 +478,7 @@ function parseJobRecord(value: unknown): JobRecord {
     result === undefined || typeof id !== "string"
       ? undefined
       : readResult(result, id);
+  const parsedError = error === undefined ? undefined : readError(error);
   const parsedProgress =
     progress === undefined ? undefined : readProgress(progress);
   if (
@@ -486,7 +496,7 @@ function parseJobRecord(value: unknown): JobRecord {
   if (progress !== undefined && parsedProgress === undefined) {
     throw new Error("Invalid persisted job progress.");
   }
-  if (error !== undefined && !validError(error)) {
+  if (error !== undefined && parsedError === undefined) {
     throw new Error("Invalid persisted job error.");
   }
   if (result !== undefined && parsedResult === undefined) {
@@ -505,9 +515,7 @@ function parseJobRecord(value: unknown): JobRecord {
     ...(parsedProgress === undefined
       ? {}
       : { progress: parsedProgress }),
-    ...(error === undefined
-      ? {}
-      : { error: Object.freeze({ ...error }) }),
+    ...(parsedError === undefined ? {} : { error: parsedError }),
     ...(parsedResult === undefined
       ? {}
       : { result: parsedResult }),

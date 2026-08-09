@@ -107,9 +107,13 @@ it("validates, persists, and reloads structured task failures", async () => {
     `${JSON.stringify(malformed)}\n`,
     "utf8",
   );
-  await expect(
-    PersistentJobQueue.open({ dataDirectory }),
-  ).rejects.toThrow("Invalid persisted job error.");
+  const wordingUpgrade = await PersistentJobQueue.open({ dataDirectory });
+  queues.push(wordingUpgrade);
+  expect(wordingUpgrade.get(queued.id)?.error).toEqual({
+    code: "repository-unavailable",
+    message: "The repository is unavailable to the server identity.",
+  });
+  await wordingUpgrade.close();
 
   await fs.writeFile(
     persistedPath,
