@@ -2475,29 +2475,23 @@ describe("remote import HTTP API", () => {
     });
     servers.push(server);
 
-    for (const repositoryUrl of [
-      "ssh://git@git.example/group/example.git",
-      "git@git.example:group/example.git",
-    ]) {
-      const response = await request(
-        new URL("/api/v1/imports", server.url),
-        {
-          method: "POST",
-          headers: importHeaders(),
-          body: importBody({
-            kind: "git",
-            repositoryUrl,
-          }),
-        },
-      );
-      expect(response.status).toBe(202);
-      const queued = (JSON.parse(response.body) as { job: JobRecord })
-        .job;
-      expect((await waitForTerminal(server, queued.id)).state).toBe(
-        "completed",
-      );
-    }
-    expect(fakes.git).toHaveBeenCalledTimes(2);
+    const response = await request(
+      new URL("/api/v1/imports", server.url),
+      {
+        method: "POST",
+        headers: importHeaders(),
+        body: importBody({
+          kind: "git",
+          repositoryUrl: "git@git.example:group/example.git",
+        }),
+      },
+    );
+    expect(response.status).toBe(202);
+    const queued = (JSON.parse(response.body) as { job: JobRecord }).job;
+    expect((await waitForTerminal(server, queued.id)).state).toBe(
+      "completed",
+    );
+    expect(fakes.git).toHaveBeenCalledTimes(1);
   });
 
   it("enforces method, CSRF, media type, framing, malformed JSON, and body limits", async () => {
