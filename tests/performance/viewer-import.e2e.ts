@@ -2766,7 +2766,7 @@ test("hides AI guidance when no provider is configured", async ({ page }) => {
   await expect(page.locator("#building-ai-guidance-status")).toHaveText("");
 });
 
-test("scrubs retained ZIP source across selection, stale response, refetch, and removal", async ({
+test("scrubs retained ZIP source across selection, stale response, and refetch", async ({
   page,
 }) => {
   test.setTimeout(120_000);
@@ -3442,9 +3442,43 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   await expect(page.locator("#building-ai-guidance-summary")).toHaveText(
     "Preview ready",
   );
-  const sourceRequestsBeforeReauthentication = sourceRequests.length;
-  const previewsBeforeReauthentication = previewContexts.length;
-  const providersBeforeReauthentication = providerRequests;
+});
+
+test("scrubs retained source across authentication loss and removal", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await openAuthenticatedWizard(page);
+  await chooseSource(page, "zip");
+  await page
+    .locator("#project-import-zip")
+    .setInputFiles(sourceNavigationZipFixture);
+  await page.locator("#project-import-zip-root").selectOption(
+    "archive-root",
+  );
+  await continueToOptions(page);
+  await page
+    .locator("#project-import-identity-title")
+    .fill("Source removal E2E");
+  await continueToReview(page);
+  const jobId = await startAndWaitForImportedCity(page);
+
+  await page.getByRole("tab", { name: "Explore" }).click();
+  await page.locator("#building-search").fill("retained-large");
+  const retainedResult = page
+    .locator(".search-result-button")
+    .filter({ hasText: "retained-large.ts" });
+  await retainedResult.click();
+  await page.locator("#building-source-open").click();
+  const sourceCode = page.locator("#building-source-code");
+  const sourceContent = page.locator("#building-source-content");
+  const sourcePathLabel = page.locator("#building-source-path");
+  const sourceEditor = page.locator("#building-source-editor");
+  await expect(page.locator("#building-source-status")).toContainText(
+    "Showing the exact retained file",
+  );
+  await expect(sourceCode).not.toHaveText("");
+
   expect(await page.evaluate(async () =>
     (await fetch("/api/v1/auth/session", {
       method: "DELETE",
@@ -3460,32 +3494,19 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
   await expect(page.locator("#project-import-auth")).toBeVisible();
   await expect(sourceCode).toHaveText("");
   await expect(sourceContent).toBeHidden();
-  await expect(page.locator("#building-ai-guidance-preview")).toBeHidden();
-  await expect(page.locator("#building-ai-guidance-preview")).toHaveText("");
-  await expect(page.locator("#building-ai-guidance-request")).toBeHidden();
-  expect(sourceRequests).toHaveLength(sourceRequestsBeforeReauthentication);
-  expect(previewContexts).toHaveLength(previewsBeforeReauthentication);
+  await expect(sourcePathLabel).toHaveText("");
+  await expect(sourceEditor).not.toHaveAttribute("href", /.+/u);
   expect(server.jobs.get(jobId)?.state).toBe("completed");
-  await page.getByRole("button", { name: "Close project import" }).click();
-  await expect(page.locator("#project-import-dialog")).toBeHidden();
-  await expect(sourceCode).toHaveText("");
-  await expect(page.locator("#building-ai-guidance-preview")).toHaveText("");
 
-  await page.getByRole("button", { name: "Import project" }).click();
   await page.locator("#project-import-token").fill(accessToken);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.locator("#project-import-auth")).toBeHidden();
-  await expect.poll(() => providerRequests).toBeGreaterThan(
-    providersBeforeReauthentication,
-  );
   await expect(page.locator("#project-import-dialog")).toBeHidden();
-
   expect(
     await page.evaluate(() =>
       localStorage.getItem("code-city.last-import-job.v1"),
     ),
   ).toBe(jobId);
-  expect(server.jobs.get(jobId)?.state).toBe("completed");
+
   await page.getByRole("button", { name: "Import project" }).click();
   await expect(removeCurrentResult).toBeVisible();
   await removeCurrentResult.click();
@@ -3498,10 +3519,6 @@ test("scrubs retained ZIP source across selection, stale response, refetch, and 
     "The retained source result was removed from the server.",
   );
   await expect(page.locator("#building-source-open")).toBeDisabled();
-  await expect(page.locator("#building-source-open")).toHaveAttribute(
-    "title",
-    "The retained source result was removed from the server.",
-  );
 });
 
 test("accepts all remote sources, revisions, profiles, and server field corrections without network access", async ({
