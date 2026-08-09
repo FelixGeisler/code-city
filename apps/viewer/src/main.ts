@@ -658,6 +658,7 @@ let activeDesignSmellQueryFacts:
     }
   | undefined;
 let applyingAdvancedSelection = false;
+let performanceDiagnosticsGeneration = 0;
 const cityScene = createCityScene({
   host: sceneHost,
   controls: {
@@ -1459,7 +1460,6 @@ window.addEventListener("beforeunload", () => {
   loadedModelLogo = undefined;
 });
 
-let performanceDiagnosticsGeneration = 0;
 const initialParameters = new URL(window.location.href).searchParams;
 if (initialParameters.get("fixture") === LARGE_CITY_FIXTURE_NAME) {
   try {
