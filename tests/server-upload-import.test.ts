@@ -448,28 +448,27 @@ describe("upload import HTTP jobs", () => {
     });
   });
 
-  it("analyzes a bounded repository ZIP in either explicit root mode", async () => {
-    const server = await startCodeCityServer({
-      host: "127.0.0.1",
-      port: 0,
-      ...(await fixture()),
-    });
-    servers.push(server);
-    for (const [rootMode, archive] of [
-      [
-        "single-directory",
-        zipSync({
-          "Example/src/main.ts": strToU8("export const value = 1;\n"),
-        }),
-      ],
-      [
-        "archive-root",
-        zipSync({
-          "src/main.ts": strToU8("export const value = 1;\n"),
-        }),
-      ],
-    ] as const) {
-      const bytes = Buffer.from(archive);
+  it.each([
+    [
+      "single-directory",
+      "Example/src/main.ts",
+    ],
+    [
+      "archive-root",
+      "src/main.ts",
+    ],
+  ] as const)(
+    "analyzes a bounded repository ZIP in %s root mode",
+    async (rootMode, sourcePath) => {
+      const server = await startCodeCityServer({
+        host: "127.0.0.1",
+        port: 0,
+        ...(await fixture()),
+      });
+      servers.push(server);
+      const bytes = Buffer.from(zipSync({
+        [sourcePath]: strToU8("export const value = 1;\n"),
+      }));
       const reservation = await reserve(server, {
         source: {
           kind: "repository-zip",
@@ -496,8 +495,8 @@ describe("upload import HTTP jobs", () => {
           }
         ).repositories[0]?.name,
       ).toBe(`Example-${rootMode}`);
-    }
-  });
+    },
+  );
 
   it("keeps cancellation classification while retained-source publication is active", async () => {
     const roots = await fixture();
