@@ -140,6 +140,45 @@ describe("capability-driven printer profiles", () => {
     );
   });
 
+  it("shares the five-tool base channel with identity and preserves every risk color", () => {
+    const assignments = assignSemanticGroups(
+      createPrusaXLProfile([1, 2, 3, 4, 5]),
+      DEFAULT_SEMANTIC_GROUPS,
+    );
+    const byGroup = new Map(
+      assignments.map((assignment) => [
+        assignment.semanticGroupId,
+        assignment,
+      ]),
+    );
+
+    expect(byGroup.get("base")).toMatchObject({ channelId: "tool-1" });
+    expect(byGroup.get("identity")).toMatchObject({
+      channelId: "tool-1",
+      mergedIntoSemanticGroupId: "base",
+    });
+    expect(byGroup.get("risk-very-high")).toMatchObject({
+      channelId: "tool-2",
+    });
+    expect(byGroup.get("risk-high")).toMatchObject({
+      channelId: "tool-3",
+    });
+    expect(byGroup.get("risk-moderate")).toMatchObject({
+      channelId: "tool-4",
+    });
+    expect(byGroup.get("risk-low")).toMatchObject({
+      channelId: "tool-5",
+    });
+    for (const risk of [
+      "risk-very-high",
+      "risk-high",
+      "risk-moderate",
+      "risk-low",
+    ]) {
+      expect(byGroup.get(risk)?.mergedIntoSemanticGroupId).toBeUndefined();
+    }
+  });
+
   it.each([
     [[1], ["tool-1"]],
     [[1, 5], ["tool-1", "tool-5"]],
@@ -226,23 +265,26 @@ describe("deterministic print planning", () => {
         channelId: "tool-1",
         mergedIntoSemanticGroupId: "base",
       },
-      { semanticGroupId: "identity", channelId: "tool-2" },
+      {
+        semanticGroupId: "identity",
+        channelId: "tool-1",
+        mergedIntoSemanticGroupId: "base",
+      },
       {
         semanticGroupId: "risk-high",
-        channelId: "tool-4",
+        channelId: "tool-3",
       },
       {
         semanticGroupId: "risk-low",
         channelId: "tool-5",
-        mergedIntoSemanticGroupId: "risk-moderate",
       },
       {
         semanticGroupId: "risk-moderate",
-        channelId: "tool-5",
+        channelId: "tool-4",
       },
       {
         semanticGroupId: "risk-very-high",
-        channelId: "tool-3",
+        channelId: "tool-2",
       },
       {
         semanticGroupId: "routes",
