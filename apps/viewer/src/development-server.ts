@@ -9,6 +9,7 @@ import {
   startCodeCityServer,
   type CodeCityServerHandle,
 } from "../../server/src/server.js";
+import { provisionWindowsDevelopmentWorkspace } from "./windows-development-workspace.js";
 
 export interface ViewerDevelopmentServerOptions {
   readonly dataDirectory?: string;
@@ -16,6 +17,7 @@ export interface ViewerDevelopmentServerOptions {
   readonly host?: string;
   readonly port?: number;
   readonly apiPort?: number;
+  readonly trustWindowsGitWorkspace?: boolean;
   readonly log?: (message: string) => void;
 }
 
@@ -82,6 +84,7 @@ export async function startViewerDevelopmentServer(
       dataDirectory: path.resolve(options.dataDirectory ?? ".code-city-dev"),
       viewerRoot,
       sourceRetention: "retain",
+      trustWindowsGitWorkspace: options.trustWindowsGitWorkspace ?? false,
     });
     viewer = await createViteServer({
       configFile: path.resolve("apps/viewer/vite.config.ts"),
@@ -117,6 +120,39 @@ export async function startViewerDevelopmentServer(
   }
 }
 
+export async function developmentWorkspaceOptions(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+  platform: NodeJS.Platform = process.platform,
+  provisionWindows = provisionWindowsDevelopmentWorkspace,
+): Promise<Pick<
+  ViewerDevelopmentServerOptions,
+  "dataDirectory" | "trustWindowsGitWorkspace"
+>> {
+  const configuredDataDirectory = environment["CODECITY_DATA_DIR"];
+  const automaticWorkspace =
+    platform === "win32" && configuredDataDirectory === undefined
+      ? await provisionWindows()
+      : undefined;
+  const configuredTrust =
+    environment["CODECITY_TRUST_WINDOWS_GIT_WORKSPACE"];
+  if (configuredTrust !== undefined && configuredTrust !== "1") {
+    throw new Error(
+      "CODECITY_TRUST_WINDOWS_GIT_WORKSPACE must be exactly 1 when enabled.",
+    );
+  }
+  return {
+    ...(automaticWorkspace === undefined
+      ? configuredDataDirectory === undefined
+        ? {}
+        : { dataDirectory: configuredDataDirectory }
+      : { dataDirectory: automaticWorkspace.dataDirectory }),
+    ...(automaticWorkspace?.trustWindowsGitWorkspace === true ||
+    configuredTrust === "1"
+      ? { trustWindowsGitWorkspace: true }
+      : {}),
+  };
+}
+
 async function runViewerDevelopmentServer(): Promise<void> {
   const controller = new AbortController();
   const stop = (): void => controller.abort();
@@ -125,9 +161,7 @@ async function runViewerDevelopmentServer(): Promise<void> {
   let handle: ViewerDevelopmentServerHandle | undefined;
   try {
     handle = await startViewerDevelopmentServer({
-      ...(process.env["CODECITY_DATA_DIR"] === undefined
-        ? {}
-        : { dataDirectory: process.env["CODECITY_DATA_DIR"] }),
+      ...(await developmentWorkspaceOptions()),
       log: (message) => process.stdout.write(`${message}\n`),
     });
     await new Promise<void>((resolve) => {
