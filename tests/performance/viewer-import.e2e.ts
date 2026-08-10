@@ -1038,11 +1038,27 @@ async function chooseSource(
     | "azure-devops"
     | "git",
 ): Promise<void> {
+  const concept = source === "directory" || source === "zip"
+    ? "source-files"
+    : "git-repository";
   await page
-    .locator(`input[name="project-import-source"][value="${source}"]`)
+    .locator(`input[name="project-import-source"][value="${concept}"]`)
     .check();
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.locator("#project-import-details-title")).toBeVisible();
+  if (source === "zip") {
+    await page
+      .locator('input[name="project-import-source-files-kind"][value="zip"]')
+      .check();
+  } else if (
+    source === "github-authenticated" ||
+    source === "azure-devops" ||
+    source === "git"
+  ) {
+    await page
+      .locator('input[name="project-import-git-access"][value="profile"]')
+      .check();
+  }
 }
 
 async function continueToOptions(page: Page): Promise<void> {
@@ -1652,7 +1668,7 @@ test("submits bounded history, validates both artifacts, and restores its recent
     .fill((HISTORY_TIMEOUT_MS / 1_000).toString());
   await continueToReview(page);
   await expect(page.locator("#project-import-review-source")).toHaveText(
-    "Public GitHub",
+    "Git repository (GitHub, public)",
   );
   await expect(page.locator("#project-import-review-input")).toHaveText(
     PUBLIC_GITHUB_URL,
@@ -2746,7 +2762,7 @@ test("imports a browser directory and repository ZIP with identity and analysis 
   await page.locator("#project-import-max-total-mib").fill("2");
   await continueToReview(page);
   await expect(page.locator("#project-import-review-source")).toHaveText(
-    "Local directory",
+    "Source files (folder)",
   );
   await expect(page.locator("#project-import-review-input")).toHaveText(
     path.basename(directoryFixture),
@@ -2778,7 +2794,7 @@ test("imports a browser directory and repository ZIP with identity and analysis 
     .fill("zip-v1");
   await continueToReview(page);
   await expect(page.locator("#project-import-review-source")).toHaveText(
-    "ZIP archive",
+    "Source files (ZIP)",
   );
   await expect(page.locator("#project-import-review-input")).toHaveText(
     path.basename(zipFixture),
@@ -3587,6 +3603,19 @@ test("accepts all remote sources, revisions, profiles, and server field correcti
   await page
     .locator("#project-import-repository-url")
     .fill(`${PUBLIC_GITHUB_URL}/tree/main`);
+  await expect(page.locator("#project-import-detected-provider")).toHaveText(
+    "Detected provider: GitHub.",
+  );
+  await page
+    .locator('input[name="project-import-git-access"][value="profile"]')
+    .check();
+  await page
+    .locator("#project-import-profile")
+    .selectOption({ label: "E2E GitHub profile" });
+  await page
+    .locator('input[name="project-import-git-access"][value="anonymous"]')
+    .check();
+  await expect(page.locator("#project-import-profile-wrap")).toBeHidden();
   await page
     .locator('input[name="project-import-revision"][value="branch"]')
     .check();
@@ -3628,7 +3657,9 @@ test("accepts all remote sources, revisions, profiles, and server field correcti
   await expect(page.locator("#model-name")).toHaveText(
     "Public GitHub E2E",
   );
-  expect(lastRemoteInvocation(PUBLIC_GITHUB_URL)).toMatchObject({
+  const publicInvocation = lastRemoteInvocation(PUBLIC_GITHUB_URL);
+  expect(publicInvocation).not.toHaveProperty("credentialProvider");
+  expect(publicInvocation).toMatchObject({
     kind: "github",
     repositoryUrl: PUBLIC_GITHUB_URL,
     ref: "heads/feature/e2e",
@@ -3651,7 +3682,7 @@ test("accepts all remote sources, revisions, profiles, and server field correcti
   await page.locator("#project-import-revision-value").fill("abc");
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.locator("#project-import-error-profile")).toContainText(
-    "Choose a configured GitHub profile.",
+    "Choose a compatible server credential profile.",
   );
   await expect(page.locator("#project-import-error-revision")).toContainText(
     "Enter an exact 40-character commit SHA.",
@@ -3681,6 +3712,9 @@ test("accepts all remote sources, revisions, profiles, and server field correcti
   await page
     .locator("#project-import-repository-url")
     .fill(AZURE_DEVOPS_URL);
+  await expect(page.locator("#project-import-detected-provider")).toHaveText(
+    "Detected provider: Azure DevOps.",
+  );
   await page
     .locator("#project-import-profile")
     .selectOption({ label: "E2E Azure DevOps profile" });
@@ -3710,6 +3744,9 @@ test("accepts all remote sources, revisions, profiles, and server field correcti
   await page
     .locator("#project-import-repository-url")
     .fill(GENERIC_GIT_URL);
+  await expect(page.locator("#project-import-detected-provider")).toHaveText(
+    "Detected provider: Generic Git.",
+  );
   await page
     .locator("#project-import-profile")
     .selectOption({ label: "E2E Generic Git profile" });
