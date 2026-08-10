@@ -1,5 +1,6 @@
 import {
   CITY_MODEL_SCHEMA_VERSION,
+  CODE_CITY_VERSION,
   DEFAULT_VERSIONED_METRIC_MAPPING,
   DEFAULT_SEMANTIC_GROUPS,
   LEGACY_BUILDING_METRIC_SEMANTIC_GROUP_IDS,
@@ -110,7 +111,7 @@ export function cityModelFromFacts(
       schemaVersion: CITY_MODEL_SCHEMA_VERSION,
       generator: {
         name: "code-city",
-        version: "0.1.0",
+        version: CODE_CITY_VERSION,
       },
       repositories: facts.repositories,
       solutions: facts.solutions,

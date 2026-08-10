@@ -2,7 +2,7 @@
   "schemaVersion": "1.0",
   "generator": {
     "name": "code-city",
-    "version": "0.1.0-demo"
+    "version": "1.0.0"
   },
   "repositories": [
     {
@@ -94,7 +94,7 @@
   ],
   "identity": {
     "title": "Code City",
-    "version": "Demo 0.1"
+    "version": "Demo 1.0"
   },
   "identityPanel": {
     "id": "identity-panel:demo",

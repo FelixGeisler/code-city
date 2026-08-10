@@ -1,4 +1,5 @@
 import {
+  CODE_CITY_VERSION,
   parsePrinterProfile,
   resolvePrinterGeometryLimits,
   type PrintFormat,
@@ -21,7 +22,6 @@ import {
 import { serializeBinaryStl } from "./stl.js";
 import { serializeThreeMf } from "./three-mf.js";
 
-const APPLICATION_VERSION = "0.1.0";
 const MANIFEST_VERSION = "1.0";
 export const MAXIMUM_CALIBRATION_CHANNELS = 64;
 const FALLBACK_COLORS = [
@@ -1151,7 +1151,7 @@ function prepareCalibrationExport(
   const primitives = [base, ...coupons];
   const printableParts = parts(primitives, profile);
   const printable: PrintableCity = {
-    application: { name: "Code City", version: APPLICATION_VERSION },
+    application: { name: "Code City", version: CODE_CITY_VERSION },
     profileId: profile.id,
     title: `Code City calibration - ${profile.name}`,
     unit: "millimeter",

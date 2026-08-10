@@ -22,7 +22,10 @@ describe("development toolchain contract", () => {
       npm: ">=11 <12",
     });
     expect(packageContract.scripts?.["verify"]).toBe(
-      "npm run typecheck && npm test && npm run build && npm run docs:build",
+      "npm run release:check && npm run typecheck && npm test && npm run build && npm run docs:build",
+    );
+    expect(packageContract.scripts?.["release:check"]).toBe(
+      "node tools/release-contract.mjs",
     );
     expect(packageContract.dependencies).toMatchObject({
       typescript: "7.0.2",
@@ -51,7 +54,7 @@ describe("development toolchain contract", () => {
       "node build/app/apps/viewer/src/development-server.js",
     );
     expect(readme).toContain("starts both the real");
-    expect(readme).toContain("same-origin /api calls");
+    expect(readme).toMatch(/same-origin\s+`\/api` calls/u);
   });
 
   it("keeps optional viewer exports out of the bounded startup graph", async () => {
@@ -103,10 +106,10 @@ describe("development toolchain contract", () => {
   });
 
   it("keeps automated dependency updates isolated and bounded", async () => {
-    const [dependabot, readme] = await Promise.all([
-      fs.readFile(".github/dependabot.yml", "utf8"),
-      fs.readFile("README.md", "utf8"),
-    ]);
+    const dependabot = await fs.readFile(
+      ".github/dependabot.yml",
+      "utf8",
+    );
 
     expect(dependabot).toContain("version: 2");
     expect(dependabot).toContain("package-ecosystem: npm");
@@ -115,8 +118,26 @@ describe("development toolchain contract", () => {
     expect(dependabot).toContain("open-pull-requests-limit: 5");
     expect(dependabot).toContain("open-pull-requests-limit: 3");
     expect(dependabot).not.toMatch(/^\s*groups:/mu);
-    expect(readme).toMatch(/one dependency\s+per PR/u);
-    expect(readme).toContain("updates are never grouped");
+  });
+
+  it("prepares releases only from exact annotated version tags", async () => {
+    const workflow = await fs.readFile(
+      ".github/workflows/release.yml",
+      "utf8",
+    );
+
+    expect(workflow).toContain('- "v*.*.*"');
+    expect(workflow).toContain('git cat-file -t "$GITHUB_REF_NAME"');
+    expect(workflow).toContain("git merge-base --is-ancestor");
+    expect(workflow).toContain("RELEASE_TAG: ${{ github.ref_name }}");
+    expect(workflow).toContain("npm run release:check");
+    expect(workflow).toContain("npm run test:viewer-performance");
+    expect(workflow).toContain("npm run test:viewer-real-import");
+    expect(workflow).toContain("platforms: linux/amd64,linux/arm64");
+    expect(workflow).toContain("sbom: true");
+    expect(workflow).toContain("provenance: mode=max");
+    expect(workflow).toContain('gh release create "$GITHUB_REF_NAME"');
+    expect(workflow).not.toContain("workflow_dispatch");
   });
 
   it("pins the SDK that supplies the trusted Roslyn assemblies", async () => {

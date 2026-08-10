@@ -580,6 +580,7 @@ describe("shared-secret authorization", () => {
     expect(JSON.parse(health.body)).toEqual({
       status: "ok",
       service: "code-city",
+      version: "1.0.0",
       apiVersion: "v1",
     });
     expect((await request(server.url)).status).toBe(200);

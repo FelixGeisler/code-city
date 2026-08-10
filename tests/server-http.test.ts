@@ -354,6 +354,7 @@ it("serves the viewer and a versioned health API with secure defaults", async ()
   expect(JSON.parse(health.body)).toEqual({
     status: "ok",
     service: "code-city",
+    version: "1.0.0",
     apiVersion: "v1",
   });
 
