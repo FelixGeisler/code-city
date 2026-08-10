@@ -49,9 +49,14 @@ top-level directory or paths already relative to the archive root. This is the
 protocol used by the viewer's **Import project** wizard; multipart uploads and
 browser-supplied filenames are deliberately not accepted by the server.
 
-The wizard can package a browser-selected local directory, upload a ZIP or
-existing city model, or queue public/private GitHub, Azure DevOps, HTTPS, SSH,
-and scp-style Git imports. Remote imports support the default revision, a
+The wizard presents three source concepts: **Git repository**, **Source files**
+(folder or ZIP), and **Generated Code City model**. It detects GitHub and Azure
+DevOps from the entered remote URL and otherwise uses Generic Git validation.
+Repository access is an explicit choice between anonymous/server-identity
+access and a compatible server credential profile; credentials are never
+selected or sent speculatively. The transports still support public/private
+GitHub, Azure DevOps, HTTPS, SSH, and scp-style Git imports. Remote imports
+support the default revision, a
 branch, a tag, or one exact commit, plus optional city identity and bounded
 analysis settings. They can also opt into a bounded first-parent history. The
 recommended default follows the complete mainline from its technical Git root

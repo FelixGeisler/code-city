@@ -1864,67 +1864,26 @@
                 <input
                   type="radio"
                   name="project-import-source"
-                  value="directory"
+                  value="source-files"
                   checked
                 />
                 <span>
-                  <strong>Local directory</strong>
-                  <small>Package a browser-selected repository folder.</small>
+                  <strong>Source files</strong>
+                  <small>Choose a repository folder or ZIP archive.</small>
                 </span>
               </label>
               <label>
                 <input
                   type="radio"
                   name="project-import-source"
-                  value="zip"
+                  value="git-repository"
                 />
                 <span>
-                  <strong>ZIP archive</strong>
-                  <small>Upload an existing repository archive.</small>
-                </span>
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="project-import-source"
-                  value="github-public"
-                />
-                <span>
-                  <strong>Public GitHub</strong>
-                  <small>Analyze a public github.com repository.</small>
-                </span>
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="project-import-source"
-                  value="github-authenticated"
-                />
-                <span>
-                  <strong>Authenticated GitHub</strong>
-                  <small>Use a server-side GitHub credential profile.</small>
-                </span>
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="project-import-source"
-                  value="azure-devops"
-                />
-                <span>
-                  <strong>Azure DevOps</strong>
-                  <small>Clone an allowed Azure Repos Git URL.</small>
-                </span>
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="project-import-source"
-                  value="git"
-                />
-                <span>
-                  <strong>Generic Git</strong>
-                  <small>HTTPS, SSH, or scp-style remote.</small>
+                  <strong>Git repository</strong>
+                  <small>
+                    GitHub, Azure DevOps, or another Git remote, with an
+                    optional server credential profile.
+                  </small>
                 </span>
               </label>
               <label>
@@ -1934,8 +1893,8 @@
                   value="city-model"
                 />
                 <span>
-                  <strong>Existing city model</strong>
-                  <small>Upload a generated city-model.json.</small>
+                  <strong>Generated Code City model</strong>
+                  <small>Open a previously generated city-model.json.</small>
                 </span>
               </label>
             </fieldset>
@@ -1951,6 +1910,30 @@
             <h3 id="project-import-details-title" tabindex="-1">
               Source details
             </h3>
+
+            <fieldset
+              id="project-import-source-files-kind"
+              class="project-import-revision"
+            >
+              <legend>Source file format</legend>
+              <label>
+                <input
+                  type="radio"
+                  name="project-import-source-files-kind"
+                  value="directory"
+                  checked
+                />
+                Folder
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="project-import-source-files-kind"
+                  value="zip"
+                />
+                ZIP archive
+              </label>
+            </fieldset>
 
             <div data-import-source-panel="directory">
               <label
@@ -2056,6 +2039,32 @@
             </div>
 
             <div data-import-source-panel="remote" hidden>
+              <fieldset
+                id="project-import-git-access"
+                class="project-import-revision"
+              >
+                <legend>Repository access</legend>
+                <label>
+                  <input
+                    type="radio"
+                    name="project-import-git-access"
+                    value="anonymous"
+                    checked
+                  />
+                  Public or server-identity access
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="project-import-git-access"
+                    value="profile"
+                  />
+                  Configured credential profile
+                </label>
+              </fieldset>
+              <p id="project-import-detected-provider" class="project-import-help">
+                Provider is detected from the repository URL.
+              </p>
               <label
                 class="project-import-field"
                 for="project-import-repository-url"

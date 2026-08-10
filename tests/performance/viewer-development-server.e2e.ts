@@ -79,7 +79,7 @@ test("@real-import imports, opens, and prepares a real 100-frame GitHub city thr
   await waitForViewer(page);
   await page.getByRole("button", { name: "Import project" }).click();
   await page
-    .locator('input[name="project-import-source"][value="github-public"]')
+    .locator('input[name="project-import-source"][value="git-repository"]')
     .check();
   await page.getByRole("button", { name: "Continue" }).click();
   await page

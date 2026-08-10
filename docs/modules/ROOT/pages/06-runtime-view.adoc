@@ -112,14 +112,21 @@ reuse the bounded ZIP snapshot source and the same snapshot-analysis pipeline
 as other sources. Explicit `single-directory` and `archive-root` modes avoid
 guessing which path prefix represents the project root.
 
-The viewer's *Import project* wizard drives those same-origin APIs. Public and
-credentialed GitHub, Azure DevOps, and Generic Git inputs submit a remote job
-directly. A local directory is normalized, filtered to analyzer inputs and
-ignore controls, and packed into a deterministic bounded ZIP in a cancellable
-module worker before reservation. Existing ZIP and city-model selections are
-uploaded as raw fixed-size bodies. The browser never sends an absolute local
-path and cannot observe empty directories or reliable symlink metadata; users
-choose ZIP or server-side Git when those details matter.
+The viewer's *Import project* wizard drives those same-origin APIs through
+three user-facing concepts: *Git repository*, *Source files* (folder or ZIP),
+and *Generated Code City model*. A repository URL selects GitHub or Azure
+DevOps validation only for those canonical provider hosts and otherwise uses
+Generic Git validation. Repository access is separately explicit:
+anonymous/server-identity access does not select a credential, while credential
+profile access requires one compatible configured profile. The browser never
+speculatively sends credentials.
+
+A local directory is normalized, filtered to analyzer inputs and ignore
+controls, and packed into a deterministic bounded ZIP in a cancellable module
+worker before reservation. Existing ZIP and city-model selections are uploaded
+as raw fixed-size bodies. The browser never sends an absolute local path and
+cannot observe empty directories or reliable symlink metadata; users choose
+ZIP or server-side Git when those details matter.
 
 Repository history defaults to *Entire mainline*: Code City follows the
 selected revision's first-parent ancestry to its root and distributes at most

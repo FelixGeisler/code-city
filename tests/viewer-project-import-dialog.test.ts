@@ -10,6 +10,7 @@ import {
   projectImportFieldForServerPath,
   projectImportHistoryRevisionError,
   projectImportHistorySelection,
+  projectImportGitSource,
   projectImportIdentityOptions,
   projectImportNavigationLocked,
   projectImportPersistenceWarning,
@@ -108,6 +109,33 @@ describe("viewer project import dialog state", () => {
       "git",
       "city-model",
     ]);
+  });
+
+  it("detects repository providers without treating lookalike hosts as trusted providers", () => {
+    expect(
+      projectImportGitSource("https://github.com/example/project", false),
+    ).toBe("github-public");
+    expect(
+      projectImportGitSource("https://GITHUB.COM/example/project", true),
+    ).toBe("github-authenticated");
+    expect(
+      projectImportGitSource(
+        "https://dev.azure.com/example/project/_git/repository",
+        true,
+      ),
+    ).toBe("azure-devops");
+    expect(
+      projectImportGitSource(
+        "https://example.visualstudio.com/project/_git/repository",
+        false,
+      ),
+    ).toBe("azure-devops");
+    expect(
+      projectImportGitSource("https://github.com.evil.example/project", true),
+    ).toBe("git");
+    expect(projectImportGitSource("git@example:project.git", false)).toBe(
+      "git",
+    );
   });
 
   it("exposes only provider-appropriate credential profiles", () => {

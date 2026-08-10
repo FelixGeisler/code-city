@@ -67,6 +67,11 @@ export const PROJECT_IMPORT_SOURCE_CHOICES = Object.freeze([
 export type ProjectImportSource =
   (typeof PROJECT_IMPORT_SOURCE_CHOICES)[number];
 
+type ProjectImportSourceConcept =
+  | "source-files"
+  | "git-repository"
+  | "city-model";
+
 export const PROJECT_IMPORT_STEPS = Object.freeze([
   "source",
   "details",
@@ -142,13 +147,14 @@ interface FormValidationFailure {
 
 const SOURCE_LABELS: Readonly<Record<ProjectImportSource, string>> =
   Object.freeze({
-    directory: "Local directory",
-    zip: "ZIP archive",
-    "github-public": "Public GitHub",
-    "github-authenticated": "Authenticated GitHub",
-    "azure-devops": "Azure DevOps",
-    git: "Generic Git",
-    "city-model": "Existing city model",
+    directory: "Source files (folder)",
+    zip: "Source files (ZIP)",
+    "github-public": "Git repository (GitHub, public)",
+    "github-authenticated":
+      "Git repository (GitHub, credential profile)",
+    "azure-devops": "Git repository (Azure DevOps)",
+    git: "Git repository (generic)",
+    "city-model": "Generated Code City model",
   });
 
 const SERVER_FIELD_KEYS: Readonly<
@@ -683,20 +689,66 @@ function checkedValue(name: string): string {
   return checked?.value ?? "";
 }
 
-function isProjectImportSource(value: string): value is ProjectImportSource {
-  return PROJECT_IMPORT_SOURCE_CHOICES.some((choice) => choice === value);
-}
-
 function isProjectImportStep(value: string): value is ProjectImportStep {
   return PROJECT_IMPORT_STEPS.some((step) => step === value);
 }
 
-function sourceChoice(): ProjectImportSource {
+function sourceConceptChoice(): ProjectImportSourceConcept {
   const value = checkedValue("project-import-source");
-  if (!isProjectImportSource(value)) {
+  if (
+    value !== "source-files" &&
+    value !== "git-repository" &&
+    value !== "city-model"
+  ) {
     throw new Error("Choose a project source.");
   }
   return value;
+}
+
+export function projectImportGitSource(
+  repositoryUrl: string,
+  credentialProfile: boolean,
+): Extract<
+  ProjectImportSource,
+  "github-public" | "github-authenticated" | "azure-devops" | "git"
+> {
+  try {
+    const url = new URL(repositoryUrl.trim());
+    const host = url.hostname.toLowerCase();
+    if (host === "github.com") {
+      return credentialProfile
+        ? "github-authenticated"
+        : "github-public";
+    }
+    if (
+      host === "dev.azure.com" ||
+      host.endsWith(".visualstudio.com")
+    ) {
+      return "azure-devops";
+    }
+  } catch {
+    // Generic Git validation owns incomplete, SSH, and scp-style URLs.
+  }
+  return "git";
+}
+
+function sourceChoice(repositoryUrl?: string): ProjectImportSource {
+  const concept = sourceConceptChoice();
+  if (concept === "city-model") return "city-model";
+  if (concept === "source-files") {
+    return checkedValue("project-import-source-files-kind") === "zip"
+      ? "zip"
+      : "directory";
+  }
+
+  const credentialProfile =
+    checkedValue("project-import-git-access") === "profile";
+  const candidateUrl = repositoryUrl ??
+    document.querySelector<HTMLInputElement>(
+      "#project-import-repository-url",
+    )?.value ??
+    "";
+  return projectImportGitSource(candidateUrl, credentialProfile);
 }
 
 function revisionChoice(): string {
@@ -1116,6 +1168,11 @@ export function installProjectImportDialog(
       'input[name="project-import-source"]',
     ),
   ];
+  const sourceDetailInputs = [
+    ...form.querySelectorAll<HTMLInputElement>(
+      'input[name="project-import-source-files-kind"], input[name="project-import-git-access"]',
+    ),
+  ];
   const revisionInputs = [
     ...form.querySelectorAll<HTMLInputElement>(
       'input[name="project-import-revision"]',
@@ -1168,6 +1225,15 @@ export function installProjectImportDialog(
   );
   const repositoryUrlInput = requiredElement<HTMLInputElement>(
     "project-import-repository-url",
+  );
+  const sourceFilesKind = requiredElement<HTMLElement>(
+    "project-import-source-files-kind",
+  );
+  const gitAccess = requiredElement<HTMLElement>(
+    "project-import-git-access",
+  );
+  const detectedProvider = requiredElement<HTMLElement>(
+    "project-import-detected-provider",
   );
   const profileWrap = requiredElement<HTMLElement>(
     "project-import-profile-wrap",
@@ -1592,13 +1658,16 @@ export function installProjectImportDialog(
   }
 
   function renderSourcePanels(): void {
-    const source = sourceChoice();
+    const concept = sourceConceptChoice();
+    const source = sourceChoice(repositoryUrlInput.value);
     const panel =
       source === "directory" ||
       source === "zip" ||
       source === "city-model"
         ? source
         : "remote";
+    sourceFilesKind.hidden = concept !== "source-files";
+    gitAccess.hidden = concept !== "git-repository";
     for (const sourcePanel of sourcePanels) {
       sourcePanel.hidden =
         sourcePanel.dataset["importSourcePanel"] !== panel;
@@ -1607,41 +1676,41 @@ export function installProjectImportDialog(
     switch (source) {
       case "github-public":
       case "github-authenticated":
-        repositoryUrlInput.placeholder =
-          "https://github.com/owner/repository";
+        detectedProvider.textContent = "Detected provider: GitHub.";
         break;
       case "azure-devops":
-        repositoryUrlInput.placeholder =
-          "https://dev.azure.com/organization/project/_git/repository";
+        detectedProvider.textContent = "Detected provider: Azure DevOps.";
         break;
       case "git":
-        repositoryUrlInput.placeholder =
-          "https://git.example/project/repository.git";
+        detectedProvider.textContent = "Detected provider: Generic Git.";
         break;
       case "directory":
       case "zip":
       case "city-model":
         break;
     }
+    repositoryUrlInput.placeholder =
+      "https://github.com/owner/repository";
     renderProfiles();
   }
 
   function renderProfiles(): void {
-    const source = sourceChoice();
+    const source = sourceChoice(repositoryUrlInput.value);
+    const useProfile =
+      checkedValue("project-import-git-access") === "profile";
     const providers = projectImportProvidersForSource(
       source,
       repositoryUrlInput.value,
     );
-    profileWrap.hidden = providers.length === 0;
+    profileWrap.hidden = !useProfile;
     const previous = profileSelect.value;
     profileSelect.replaceChildren();
-    if (providers.length === 0) return;
-    const required = source === "github-authenticated";
+    if (!useProfile) return;
     const emptyOption = document.createElement("option");
     emptyOption.value = "";
-    emptyOption.textContent = required
-      ? "Choose a configured profile"
-      : "Use the server identity";
+    emptyOption.textContent = providers.length === 0
+      ? "No compatible profile for this URL"
+      : "Choose a configured profile";
     profileSelect.append(emptyOption);
     for (const provider of providers) {
       const group = document.createElement("optgroup");
@@ -2202,13 +2271,13 @@ export function installProjectImportDialog(
       });
     }
     if (
-      source === "github-authenticated" &&
+      checkedValue("project-import-git-access") === "profile" &&
       profileSelect.value === ""
     ) {
       failures.push({
         field: "credentialProfileId",
         message:
-          "Choose a configured GitHub profile. Ask the server administrator to add one if the list is empty.",
+          "Choose a compatible server credential profile. Ask the server administrator to add one if the list is empty.",
       });
     }
     let revision: ImportRevision | undefined;
@@ -2305,7 +2374,10 @@ export function installProjectImportDialog(
     return projectImportRemoteSubmission({
       source,
       repositoryUrl: repositoryUrlInput.value,
-      credentialProfileId: profileSelect.value,
+      credentialProfileId:
+        checkedValue("project-import-git-access") === "profile"
+          ? profileSelect.value
+          : "",
       revisionKind: revisionChoice(),
       revisionValue: revisionValueInput.value,
       ...(history === undefined ? {} : { history }),
@@ -2471,13 +2543,13 @@ export function installProjectImportDialog(
     event.preventDefault();
     close();
   });
-  sourceInputs.forEach((input) => {
+  for (const input of [...sourceInputs, ...sourceDetailInputs]) {
     input.addEventListener("change", () => {
       clearErrors();
       renderSourcePanels();
       updateReview();
     });
-  });
+  }
   revisionInputs.forEach((input) => {
     input.addEventListener("change", () => {
       clearErrors();
@@ -2512,7 +2584,7 @@ export function installProjectImportDialog(
     });
   }
   repositoryUrlInput.addEventListener("input", () => {
-    if (sourceChoice() === "git") renderProfiles();
+    renderSourcePanels();
     updateReview();
   });
   zipInput.addEventListener("change", () => {

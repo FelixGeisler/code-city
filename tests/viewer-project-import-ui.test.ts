@@ -43,16 +43,22 @@ describe("viewer project import UI", () => {
       /<dialog[\s\S]*id="project-import-dialog"[\s\S]*aria-labelledby="project-import-title"[\s\S]*aria-describedby="project-import-privacy"/u,
     );
     for (const source of [
-      "directory",
-      "zip",
-      "github-public",
-      "github-authenticated",
-      "azure-devops",
-      "git",
+      "source-files",
+      "git-repository",
       "city-model",
     ]) {
-      expect(html).toContain(`value="${source}"`);
+      expect(html).toMatch(
+        new RegExp(
+          `name="project-import-source"\\s+value="${source}"`,
+          "u",
+        ),
+      );
     }
+    expect(html.match(/name="project-import-source"/gu)).toHaveLength(3);
+    expect(html).toContain(
+      'name="project-import-source-files-kind"',
+    );
+    expect(html).toContain('name="project-import-git-access"');
     expect(html).toMatch(
       /id="project-import-directory"[\s\S]*type="file"[\s\S]*webkitdirectory[\s\S]*multiple/u,
     );
