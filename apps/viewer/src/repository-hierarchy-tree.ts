@@ -935,6 +935,7 @@ class RepositoryHierarchyTree
   }
 
   #render(): void {
+    const intendedScrollTop = this.#tree.scrollTop;
     const viewportHeight =
       this.#tree.clientHeight || REPOSITORY_TREE_ROW_HEIGHT * 10;
     const window = repositoryTreeVirtualWindow(
@@ -1032,6 +1033,13 @@ class RepositoryHierarchyTree
       `${this.#rows.length.toLocaleString()} visible of ` +
       `${this.#index.nodeCount.toLocaleString()} nodes \u00b7 ` +
       `${renderedIndexes.size.toLocaleString()} rendered`;
+
+    // The active descendant intentionally remains mounted outside the virtual
+    // window. Force layout after row replacement, then restore the scroller's
+    // requested position so browser anchoring cannot pull it back to that row.
+    void this.#content.offsetHeight;
+    this.#tree.scrollTop = intendedScrollTop;
+    this.#lastHandledScrollTop = this.#tree.scrollTop;
   }
 
   #renderRow(

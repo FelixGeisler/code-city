@@ -354,13 +354,6 @@ test("25k hierarchy stays virtualized and synchronized with city state", async (
   );
   expect(activeDescendant).toBe(await selected.getAttribute("id"));
 
-  await expect
-    .poll(() =>
-      tree.evaluate(
-        (element) => getComputedStyle(element).overflowAnchor,
-      ),
-    )
-    .toBe("none");
   const requestedScrollTop = Math.max(0, selectedScrollTop - 1_024);
   await tree.evaluate((element, scrollTop) => {
     element.scrollTo({ top: scrollTop, behavior: "auto" });
