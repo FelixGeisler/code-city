@@ -231,6 +231,30 @@ production build validates both dynamic-entry identities and explicit raw and
 compressed eager-JavaScript budgets; increasing or suppressing Vite's generic
 chunk warning is not a substitute for that contract.
 
+== Published city snapshots
+
+An authorized user may publish the current completed import from **Project >
+Published cities**. Publication copies the validated city model and optional
+evolution bundle into an independent immutable version, so deleting the import
+job does not break shared links. Publication removes source-navigation
+provenance, including repository URLs, from both the model and evolution
+baseline. It never copies retained source, credentials, AI results, or the
+original submission.
+
+`/?published=\{publication-id\}` resolves the latest explicitly published
+version. `/?published=\{publication-id\}&version=\{version-id\}` is an
+immutable version link. Republishing appends a version; it never edits prior
+bytes. The gallery displays generation and publication times, model revision,
+size counts, version history, and **Not automatically updated**. Updating a
+publication therefore requires an explicit republish operation.
+
+Published metadata and immutable artifacts are public reads even when inbound
+authorization protects the rest of the API. Publish, republish, and unpublish
+remain same-origin authorized mutations with the explicit mutation header.
+Opening a publication uses no browser credentials and exposes no retained
+source or AI actions. A published evolution artifact still passes the normal
+worker digest, schema, replay, and frame-count validation before display.
+
 == Advanced queries and selections
 
 The **Analyze > Queries** view defines versioned, exact query data over building names,

@@ -7,6 +7,7 @@ const MAXIMUM_REQUEST_TARGET_CHARACTERS = 2_048;
 
 export interface ParsedTarget {
   readonly path: string;
+  readonly query?: string;
 }
 
 export function validPort(port: number | undefined): number {
@@ -86,14 +87,18 @@ export function parseTarget(rawTarget: string | undefined): ParsedTarget | undef
     rawTarget === undefined || rawTarget.length === 0 ||
     rawTarget.length > MAXIMUM_REQUEST_TARGET_CHARACTERS ||
     !rawTarget.startsWith("/") || rawTarget.startsWith("//") ||
-    rawTarget.includes("%") || /[\u0000-\u001F\u007F\\]/u.test(rawTarget)
+    /[\u0000-\u001F\u007F\\#]/u.test(rawTarget)
   ) return undefined;
   const queryIndex = rawTarget.indexOf("?");
-  if (queryIndex >= 0 && queryIndex !== rawTarget.length - 1) return undefined;
   const rawPath = queryIndex < 0 ? rawTarget : rawTarget.slice(0, queryIndex);
+  const query = queryIndex < 0 ? undefined : rawTarget.slice(queryIndex + 1);
+  if (rawPath.includes("%")) return undefined;
   const segments = rawPath.split("/").slice(1);
   if (segments.some((segment, index) =>
     segment === "." || segment === ".." || (segment === "" && index !== segments.length - 1)
   )) return undefined;
-  return { path: rawPath };
+  return {
+    path: rawPath,
+    ...(query === undefined ? {} : { query }),
+  };
 }

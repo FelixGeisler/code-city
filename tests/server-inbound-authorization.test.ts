@@ -570,7 +570,7 @@ describe("strict startup configuration", () => {
 });
 
 describe("shared-secret authorization", () => {
-  it("keeps health and viewer public but protects every other API route", async () => {
+  it("keeps health, viewer, and published reads public but protects other APIs", async () => {
     const { server } = await authorizedServer();
 
     const health = await request(
@@ -583,14 +583,41 @@ describe("shared-secret authorization", () => {
       apiVersion: "v1",
     });
     expect((await request(server.url)).status).toBe(200);
+    const published = await request(
+      new URL("/api/v1/published", server.url),
+      { host: AUTHORITY },
+    );
+    expect(published.status).toBe(200);
+    expect(JSON.parse(published.body)).toEqual({ publications: [] });
 
     const uuid = "00000000-0000-4000-8000-000000000000";
+    expect(
+      (
+        await request(
+          new URL(`/api/v1/published/${uuid}`, server.url),
+          { host: AUTHORITY },
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await request(
+          new URL(
+            `/api/v1/published/${uuid}/versions/${uuid}/city-model.json`,
+            server.url,
+          ),
+          { host: AUTHORITY },
+        )
+      ).status,
+    ).toBe(404);
     for (const [method, pathName] of [
       ["GET", "/api"],
       ["GET", "/api/v1/jobs"],
       ["GET", `/api/v1/jobs/${uuid}`],
       ["GET", `/api/v1/artifacts/${uuid}/city-model.json`],
       ["GET", `/api/v1/artifacts/${uuid}/evolution.json`],
+      ["POST", "/api/v1/published"],
+      ["DELETE", `/api/v1/published/${uuid}`],
       ["POST", "/api/v1/imports"],
       ["DELETE", `/api/v1/imports/${uuid}/result`],
       ["POST", "/api/v1/imports/uploads"],

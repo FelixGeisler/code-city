@@ -1453,6 +1453,29 @@ test("uploads, opens, and restores a city model through the real browser API", a
   );
   await expect(page.getByRole("alert")).toBeHidden();
 
+  await page.locator("#project-actions-menu > summary").click();
+  await page.getByRole("button", { name: "Published cities" }).click();
+  const publishedDialog = page.getByRole("dialog", {
+    name: "Published cities",
+  });
+  await expect(publishedDialog).toBeVisible();
+  await publishedDialog.locator("#published-city-title").fill(
+    "Shared uploaded city",
+  );
+  await publishedDialog
+    .getByRole("button", { name: "Publish snapshot" })
+    .click();
+  await expect(publishedDialog.locator("#published-city-status")).toContainText(
+    "Published Shared uploaded city",
+  );
+  const publishedHref = await publishedDialog
+    .getByRole("link", { name: "Open share link" })
+    .getAttribute("href");
+  expect(publishedHref).toMatch(/^\/\?published=/u);
+  await publishedDialog
+    .getByRole("button", { name: "Close published cities" })
+    .click();
+
   await page.getByRole("button", { name: "Import project" }).click();
   await expect(
     page.getByRole("button", { name: "Sign out" }),
@@ -1468,6 +1491,18 @@ test("uploads, opens, and restores a city model through the real browser API", a
       localStorage.getItem("code-city.last-import-job.v1"),
     ),
   ).toBeNull();
+
+  await page.goto(new URL(publishedHref!, server.url).href, {
+    waitUntil: "domcontentloaded",
+  });
+  await expect(page.locator("#model-name")).toHaveText(
+    "Code City",
+    { timeout: 30_000 },
+  );
+  await expect(page.locator("#status")).toContainText(
+    "not automatically updated",
+  );
+  expect(await page.evaluate(() => document.cookie)).toBe("");
 });
 
 test("keeps explicit unavailable fine detail visible after initial selection", async ({

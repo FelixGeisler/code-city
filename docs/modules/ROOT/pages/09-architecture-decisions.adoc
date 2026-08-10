@@ -10,6 +10,11 @@
 |Versioned city model
 |Decouple analysis from rendering and printing
 
+|Immutable published snapshots
+|Share validated model and evolution artifacts without rerunning analysis;
+retain permanent version links while a stable project link resolves to the
+latest explicitly published version
+
 |Versioned metric mapping
 |Keep independent geometry and color choices deterministic, inspectable, and
 portable between browser, history, and print

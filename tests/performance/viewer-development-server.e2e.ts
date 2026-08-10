@@ -173,6 +173,44 @@ test("@real-import imports, opens, and prepares a real 100-frame GitHub city thr
     "href",
     /^blob:/u,
   );
+  await printDialog.locator("#print-export-close").click();
+
+  await page.locator("#project-actions-menu > summary").click();
+  await page.getByRole("button", { name: "Published cities" }).click();
+  const publishedDialog = page.getByRole("dialog", {
+    name: "Published cities",
+  });
+  await expect(publishedDialog).toBeVisible();
+  await publishedDialog
+    .locator("#published-city-description")
+    .fill("Public immutable 100-frame browser contract.");
+  await publishedDialog
+    .getByRole("button", { name: "Publish snapshot" })
+    .click();
+  await expect(publishedDialog.locator("#published-city-status")).toContainText(
+    "Published Code City 100-frame UI contract",
+    { timeout: 120_000 },
+  );
+  const shareLink = publishedDialog.getByRole("link", {
+    name: "Open share link",
+  });
+  await expect(shareLink).toHaveAttribute("href", /^\/\?published=/u);
+  const shareHref = await shareLink.getAttribute("href");
+  expect(shareHref).not.toBeNull();
+
+  await page.goto(new URL(shareHref!, handle.url).href, {
+    waitUntil: "domcontentloaded",
+  });
+  await expect(page.locator("#model-name")).toHaveText(
+    "Code City 100-frame UI contract",
+    { timeout: 120_000 },
+  );
+  await expect(page.locator("#status")).toContainText(
+    "not automatically updated",
+  );
+  await expect(page.locator("#evolution-commit")).toContainText("100/100", {
+    timeout: 120_000,
+  });
 
   expect(pageErrors).toEqual([]);
   expect(serverErrors).toEqual([]);

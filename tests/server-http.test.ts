@@ -1740,6 +1740,14 @@ it("rejects malformed hosts, encoded targets, and unsupported API methods", asyn
     new URL("/assets/%252e%252e/secret", server.url),
   );
   expect(encoded.status).toBe(400);
+  const viewerQuery = await request(
+    new URL("/?published=00000000-0000-4000-8000-000000000000", server.url),
+  );
+  expect(viewerQuery.status).toBe(200);
+  const apiQuery = await request(
+    new URL("/api/v1/health?unexpected=1", server.url),
+  );
+  expect(apiQuery.status).toBe(400);
 
   const method = await request(
     new URL("/api/v1/health", server.url),
@@ -1806,4 +1814,99 @@ it("does not load retained source for a disabled AI preview", async () => {
   expect(JSON.parse(response.body)).toEqual({
     preview: expect.objectContaining({ enabled: false }),
   });
+});
+
+it("publishes immutable public snapshots independently of import retention", async () => {
+  const roots = await fixture();
+  const server = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...roots,
+  });
+  servers.push(server);
+  const job = await publishCompletedHistory(
+    server,
+    evolutionBundleFixture(),
+    "project-import",
+  );
+
+  const created = await request(new URL("/api/v1/published", server.url), {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "X-Code-City-Request": "1",
+    },
+    body: JSON.stringify({
+      jobId: job.id,
+      title: "Published history",
+      description: "A fixed snapshot.",
+    }),
+  });
+  expect(created.status, created.body).toBe(201);
+  const publication = JSON.parse(created.body).publication;
+  expect(publication).toMatchObject({
+    title: "Published history",
+    latestUrl: `/?published=${publication.id}`,
+  });
+  expect(publication.versions[0]).toMatchObject({
+    buildingCount: 0,
+    evolution: { frameCount: 1, deltaCount: 0 },
+  });
+
+  const listed = await request(new URL("/api/v1/published", server.url));
+  expect(listed.status).toBe(200);
+  expect(JSON.parse(listed.body).publications).toHaveLength(1);
+
+  const modelUrl = new URL(publication.versions[0].modelUrl, server.url);
+  const evolutionUrl = new URL(
+    publication.versions[0].evolutionUrl,
+    server.url,
+  );
+  const publishedModel = await request(modelUrl);
+  const publishedEvolution = await request(evolutionUrl);
+  expect(publishedModel.status).toBe(200);
+  expect(publishedEvolution.status).toBe(200);
+  expect(publishedModel.headers["cache-control"]).toBe("no-store");
+
+  const removedImport = await waitForArtifactResponseGate(
+    new URL(`/api/v1/imports/${job.id}/result`, server.url),
+    {
+      method: "DELETE",
+      headers: { "X-Code-City-Request": "1" },
+    },
+  );
+  expect(removedImport.status, removedImport.body).toBe(200);
+  expect((await request(modelUrl)).status).toBe(200);
+  expect((await request(evolutionUrl)).status).toBe(200);
+
+  await server.close();
+  const restarted = await startCodeCityServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...roots,
+  });
+  servers.push(restarted);
+  const persisted = await request(
+    new URL(`/api/v1/published/${publication.id}`, restarted.url),
+  );
+  expect(persisted.status).toBe(200);
+  expect(JSON.parse(persisted.body).publication.title).toBe(
+    "Published history",
+  );
+
+  const removed = await request(
+    new URL(`/api/v1/published/${publication.id}`, restarted.url),
+    {
+      method: "DELETE",
+      headers: { "X-Code-City-Request": "1" },
+    },
+  );
+  expect(removed.status).toBe(204);
+  expect(
+    (
+      await request(
+        new URL(`/api/v1/published/${publication.id}`, restarted.url),
+      )
+    ).status,
+  ).toBe(404);
 });

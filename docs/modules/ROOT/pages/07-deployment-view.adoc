@@ -138,6 +138,18 @@ contains only a server-chosen fixed filename, and is swept during startup.
 Size and concurrency limits are intentionally hard deployment safety limits,
 not client-controlled analysis options.
 
+Published snapshots are stored beneath `CODECITY_DATA_DIR/published` under the
+same private filesystem boundary, but their validated model and evolution
+responses are intentionally public. Publication strips all source-navigation
+provenance and repository URLs before writing. Retained source, credentials,
+submission values, and AI data are never copied. Authorized same-origin
+mutations may retain at most 100 publications, 20 immutable versions per
+publication, and 2 GiB in aggregate. Operators must include this directory in
+backup and deletion policies. Unpublishing removes the public index entry
+before deleting version bytes. Public metadata and artifacts remain `no-store`
+so unpublishing takes effect at the server boundary without a long-lived shared
+cache retaining revoked snapshots.
+
 `CODECITY_SOURCE_RETENTION` accepts exactly `retain` or `disabled`; the
 production entrypoint and Compose default to `disabled`. Only the exact
 `retain` value opts in. Retained files may contain private repository source
