@@ -29,7 +29,7 @@
     "pretest": "npm run native:build --silent",
     "roslyn:build": "dotnet build tools/roslyn-helper/CodeCity.RoslynHelper.csproj --configuration Release --no-restore --nologo --verbosity quiet",
     "server:start": "node build/app/apps/server/src/main.js",
-    "viewer:build": "vite build --config apps/viewer/vite.config.ts",
+    "viewer:build": "vite build --config apps/viewer/vite.config.ts && node tools/viewer-bundle-budget.mjs",
     "previewer:dev": "npm run build --silent",
     "viewer:dev": "node build/app/apps/viewer/src/development-server.js"
   },

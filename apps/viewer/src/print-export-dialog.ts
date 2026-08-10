@@ -44,9 +44,11 @@ export interface PrintExportDialogOptions {
   readonly onProfilePreviewChange?: (
     profile: PrinterProfile | undefined,
   ) => void;
+  readonly bindOpenButton?: boolean;
 }
 
 export interface PrintExportDialogHandle {
+  open(): void;
   invalidate(): void;
   setEnabled(enabled: boolean): void;
   dispose(): void;
@@ -1068,14 +1070,19 @@ export function installPrintExportDialog(
     openButton.focus({ preventScroll: true });
   }
 
-  openButton.addEventListener("click", () => {
+  function openDialog(): void {
     if (!enabled) return;
     if (!shouldRetainPrintLayoutOnDialogClose(controller.state.status)) {
       invalidateOutput();
     }
     updateProfileControls();
     dialog.showModal();
-  });
+  }
+
+  const bindOpenButton = options.bindOpenButton !== false;
+  if (bindOpenButton) {
+    openButton.addEventListener("click", openDialog);
+  }
   closeButton.addEventListener("click", closeDialog);
   cancelButton.addEventListener("click", () => {
     invalidateOutput();
@@ -1188,6 +1195,7 @@ export function installPrintExportDialog(
   renderState(controller.state);
 
   return {
+    open: openDialog,
     invalidate(): void {
       invalidateCustomProfileRead();
       invalidateOutput();
@@ -1207,6 +1215,9 @@ export function installPrintExportDialog(
       updateSubmitAvailability();
     },
     dispose(): void {
+      if (bindOpenButton) {
+        openButton.removeEventListener("click", openDialog);
+      }
       invalidateCustomProfileRead();
       controller.dispose();
       downloads.dispose();

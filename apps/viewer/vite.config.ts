@@ -22,6 +22,7 @@ export default defineConfig({
   },
   build: {
     assetsInlineLimit: 0,
+    manifest: true,
     outDir: fileURLToPath(new URL("../../build/viewer", import.meta.url)),
     emptyOutDir: true,
   },

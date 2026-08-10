@@ -57,6 +57,56 @@ test.afterAll(async () => {
   });
 });
 
+test("optional viewer workflows stay split from the core startup entry", async ({ page }) => {
+  const scripts: string[] = [];
+  page.on("response", (response) => {
+    const pathname = new URL(response.url()).pathname;
+    if (pathname.endsWith(".js")) scripts.push(pathname);
+  });
+
+  await page.goto(viewerUrl, { waitUntil: "domcontentloaded" });
+  await expect(page.locator("#image-export-open")).toBeEnabled();
+  for (const workflow of [
+    "advanced-query-panel-",
+    "image-export-dialog-",
+    "metric-mapping-panel-",
+    "print-export-dialog-",
+    "safe-extension-panel-",
+  ]) {
+    expect(scripts.some((url) => url.includes(workflow))).toBe(false);
+  }
+
+  await page.locator("#viewer-tab-analyze").click();
+  await expect(page.locator("#design-smell-panel")).toBeVisible();
+  expect(scripts.some((url) => url.includes("advanced-query-panel-"))).toBe(false);
+
+  await page.locator("#analyze-tab-queries").click();
+  await expect(page.locator("#advanced-query-panel")).not.toHaveAttribute(
+    "aria-busy",
+    "true",
+  );
+  expect(scripts.some((url) => url.includes("advanced-query-panel-"))).toBe(true);
+
+  await page.locator("#project-actions-menu > summary").click();
+  await page.locator("#advanced-project-settings-open").click();
+  await expect(page.locator("#advanced-project-settings-dialog")).toBeVisible();
+  expect(scripts.some((url) => url.includes("metric-mapping-panel-"))).toBe(true);
+  expect(scripts.some((url) => url.includes("safe-extension-panel-"))).toBe(true);
+  await page.keyboard.press("Escape");
+
+  await page.locator("#export-actions-menu > summary").click();
+  await page.getByRole("button", { name: "Export image" }).click();
+  await expect(page.locator("#image-export-dialog")).toBeVisible();
+  expect(scripts.some((url) => url.includes("image-export-dialog-"))).toBe(true);
+  expect(scripts.some((url) => url.includes("print-export-dialog-"))).toBe(false);
+  await page.keyboard.press("Escape");
+
+  await page.locator("#export-actions-menu > summary").click();
+  await page.getByRole("button", { name: "Export print file" }).click();
+  await expect(page.locator("#print-export-dialog")).toBeVisible();
+  expect(scripts.some((url) => url.includes("print-export-dialog-"))).toBe(true);
+});
+
 test("Auto compact fit requires confirmation before exact fidelity downloads", async ({
   page,
 }) => {

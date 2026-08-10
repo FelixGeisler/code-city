@@ -62,11 +62,12 @@ describe("viewer metric mapping UI", () => {
     expect(main).toContain(
       "printExportOpenButton.disabled = active",
     );
+    expect(main).toContain("printExportEnabled = !active");
     expect(main).toContain(
-      "printExportDialog.setEnabled(!active)",
+      "printExportDialog?.setEnabled(printExportEnabled)",
     );
     expect(main).toContain("metricPreviewBanner.hidden = !active");
-    expect(main).toContain("metricMappingPanel.setProject(model)");
+    expect(main).toContain("metricMappingPanel?.setProject(model)");
     expect(main).toMatch(
       /onModelChange: \(model\) => \{\s*setSafeExtensionProject\(model\);\s*applyModel\(model, activeModelSource\);/u,
     );
