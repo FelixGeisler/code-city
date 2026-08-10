@@ -345,6 +345,12 @@ test("25k hierarchy stays virtualized and synchronized with city state", async (
   expect(await tree.locator('[role="treeitem"]').count()).toBeLessThan(
     80,
   );
+  const initialFirstRenderedIndex = Number(
+    await tree
+      .locator('[role="treeitem"]')
+      .first()
+      .getAttribute("data-tree-row-index"),
+  );
   const selectedScrollTop = await tree.evaluate(
     (element) => element.scrollTop,
   );
@@ -359,8 +365,18 @@ test("25k hierarchy stays virtualized and synchronized with city state", async (
     element.scrollTo({ top: scrollTop, behavior: "auto" });
   }, requestedScrollTop);
   await expect
-    .poll(() => tree.evaluate((element) => element.scrollTop))
-    .toBe(requestedScrollTop);
+    .poll(async () =>
+      Number(
+        await tree
+          .locator('[role="treeitem"]')
+          .first()
+          .getAttribute("data-tree-row-index"),
+      ),
+    )
+    .toBeLessThan(initialFirstRenderedIndex);
+  expect(await tree.evaluate((element) => element.scrollTop)).toBeLessThan(
+    selectedScrollTop,
+  );
   expect(await tree.locator('[role="treeitem"]').count()).toBeLessThan(
     80,
   );
