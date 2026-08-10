@@ -68,6 +68,38 @@ async function openAnalyze(
   }
 }
 
+async function loadLargeCityDesignSmells(page: Page) {
+  await page.goto(`${viewerUrl}/?fixture=large-city-25k&performance=1`, {
+    waitUntil: "domcontentloaded",
+    timeout: 45_000,
+  });
+  const panel = page.locator("#design-smell-panel");
+  await expect(panel).toHaveAttribute("aria-busy", "false", {
+    timeout: 45_000,
+  });
+  await expect(panel.locator(".design-smell-status")).toContainText(
+    "unsuppressed findings",
+    { timeout: 45_000 },
+  );
+  await page.waitForFunction(
+    () => {
+      const diagnostics = (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+        }
+      ).__CODE_CITY_PERFORMANCE__?.designSmells;
+      return (
+        diagnostics !== undefined &&
+        !diagnostics.active &&
+        diagnostics.requestedFindings > 2_000
+      );
+    },
+    undefined,
+    { timeout: 45_000 },
+  );
+  return panel;
+}
+
 async function openAdvancedProjectSettings(page: Page): Promise<void> {
   await page.locator("#project-actions-menu > summary").click();
   await page.locator("#advanced-project-settings-open").click();
@@ -422,40 +454,13 @@ test("25k hierarchy stays virtualized and synchronized with city state", async (
   );
 });
 
-test("design-smell building colors are accessible, scoped, paginated, and suppressible", async ({
+test("design-smell building colors are accessible, scoped, and synchronized", async ({
   page,
 }) => {
-  // Rendering has a separate strict budget; this scenario also waits for two
-  // worker evaluations and exercises cross-panel query synchronization.
-  test.setTimeout(180_000);
-  await page.goto(`${viewerUrl}/?fixture=large-city-25k&performance=1`, {
-    waitUntil: "domcontentloaded",
-    timeout: 45_000,
-  });
-  const panel = page.locator("#design-smell-panel");
-  await expect(panel).toHaveAttribute("aria-busy", "false", {
-    timeout: 45_000,
-  });
-  await expect(panel.locator(".design-smell-status")).toContainText(
-    "unsuppressed findings",
-    { timeout: 45_000 },
-  );
-  await page.waitForFunction(
-    () => {
-      const diagnostics = (
-        window as Window & {
-          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
-        }
-      ).__CODE_CITY_PERFORMANCE__?.designSmells;
-      return (
-        diagnostics !== undefined &&
-        !diagnostics.active &&
-        diagnostics.requestedFindings > 2_000
-      );
-    },
-    undefined,
-    { timeout: 45_000 },
-  );
+  // Rendering has a separate strict budget. This lifecycle covers the
+  // initial evaluation, accessibility, color, and panel synchronization.
+  test.setTimeout(120_000);
+  const panel = await loadLargeCityDesignSmells(page);
   const exploreSnapshot = await page.evaluate(
     () =>
       (
@@ -553,6 +558,37 @@ test("design-smell building colors are accessible, scoped, paginated, and suppre
   expect(querySnapshot.objectCount).toBe(exploreSnapshot.objectCount);
   expect(querySnapshot.buildingBatchCount).toBe(
     exploreSnapshot.buildingBatchCount,
+  );
+});
+
+test("design-smell query suppression stays synchronized and paginated", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  const panel = await loadLargeCityDesignSmells(page);
+  await openAnalyze(page, "findings");
+  await page.waitForFunction(
+    () =>
+      (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+        }
+      ).__CODE_CITY_PERFORMANCE__?.designSmells.active === true,
+    undefined,
+    { timeout: 45_000 },
+  );
+  const resultRows = panel.locator(".design-smell-finding");
+  await expect(resultRows).toHaveCount(100);
+  await openAnalyze(page, "queries");
+  await page.waitForFunction(
+    () =>
+      (
+        window as Window & {
+          __CODE_CITY_PERFORMANCE__?: PerformanceSnapshot;
+        }
+      ).__CODE_CITY_PERFORMANCE__?.designSmells.active === false,
+    undefined,
+    { timeout: 45_000 },
   );
   await page
     .locator("#advanced-query-preset")
