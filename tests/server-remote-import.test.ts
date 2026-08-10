@@ -1707,6 +1707,8 @@ describe("remote import HTTP API", () => {
 
   it("checks the history deadline during temporary-data cleanup", async () => {
     const roots = await fixture();
+    let currentTime = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => currentTime);
     const history = vi.fn(
       async (): Promise<GenericGitHistoryAnalysisResult> =>
         historyAnalysisResultFixture(),
@@ -1737,15 +1739,8 @@ describe("remote import HTTP API", () => {
         options.checkpoint !== undefined
       ) {
         guardedCleanupCalls += 1;
-        await new Promise<void>((resolve) => {
-          if (options.signal!.aborted) {
-            resolve();
-            return;
-          }
-          options.signal!.addEventListener("abort", () => resolve(), {
-            once: true,
-          });
-        });
+        currentTime +=
+          HISTORY_SELECTION_LIMITS.minTotalDeadlineMs;
         options.checkpoint();
       }
       await cleanupOriginal(token, options);
