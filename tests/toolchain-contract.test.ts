@@ -136,8 +136,25 @@ describe("development toolchain contract", () => {
     expect(workflow).toContain("platforms: linux/amd64,linux/arm64");
     expect(workflow).toContain("sbom: true");
     expect(workflow).toContain("provenance: mode=max");
+    expect(workflow).toContain("tools/container-runtime-smoke.mjs import");
+    expect(workflow).toContain("tools/container-runtime-smoke.mjs restore");
     expect(workflow).toContain('gh release create "$GITHUB_REF_NAME"');
     expect(workflow).not.toContain("workflow_dispatch");
+  });
+
+  it("exercises import and restart persistence through the production image", async () => {
+    const [workflow, smoke] = await Promise.all([
+      fs.readFile(".github/workflows/container.yml", "utf8"),
+      fs.readFile("tools/container-runtime-smoke.mjs", "utf8"),
+    ]);
+
+    expect(workflow).toContain("--volume \"$volume:/data\"");
+    expect(workflow).toContain("tools/container-runtime-smoke.mjs import");
+    expect(workflow).toContain("tools/container-runtime-smoke.mjs restore");
+    expect(smoke).toContain('kind: "repository-zip"');
+    expect(smoke).toContain('languages.has("typescript")');
+    expect(smoke).toContain('languages.has("csharp")');
+    expect(smoke).toContain("/api/v1/artifacts/${id}/city-model.json");
   });
 
   it("pins the SDK that supplies the trusted Roslyn assemblies", async () => {
