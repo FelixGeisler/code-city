@@ -652,9 +652,18 @@ failure. The viewer uses one explicit-load gateway: 128 MiB model, 1 MiB local
 profile, 2 MiB logo, and 30 seconds. It rejects redirects and credentialed URLs,
 sends no credentials or referrer, and exposes fetched images only through local
 Blob URLs. CSP restricts assets to the application and Blob images; executable
-checks permit network primitives only in the explicit gateway and prohibit
-bundled telemetry, CDN, upload, frame, or object paths. Print workers have a
-60-second watchdog and are terminated on every exit.
+checks permit network primitives only in explicit gateways and prohibit
+bundled telemetry, CDN, upload, frame, or object paths. Print workers have a 60-second
+watchdog and are terminated on every exit.
+
+Publishing is an explicit declassification boundary. The server reparses the
+completed immutable artifact, removes the complete source-navigation
+provenance object from the model and evolution baseline, validates the public
+model again, and writes new digest-bound bytes. Public records contain only a
+publisher-supplied title and description, timestamps, model revision and
+counts, artifact sizes and digests, and opaque publication/version IDs. Public
+GET and HEAD routes require no credentials; every lifecycle mutation retains
+the normal authorization, origin, media-type, body, and request-header checks.
 
 Residual risks are platform filesystem races that cannot be removed by portable
 Node APIs, browser/DNS behavior below the fetch boundary, and slicer behavior.

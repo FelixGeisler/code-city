@@ -58,6 +58,13 @@
                 Load demo
               </button>
               <button
+                id="published-cities-open"
+                class="button"
+                type="button"
+              >
+                Published cities
+              </button>
+              <button
                 id="advanced-project-settings-open"
                 class="button"
                 type="button"
@@ -2965,6 +2972,81 @@
             </a>
           </div>
         </form>
+      </dialog>
+
+      <dialog
+        id="published-cities-dialog"
+        class="project-import-dialog"
+        aria-labelledby="published-cities-title"
+        aria-describedby="published-cities-freshness"
+      >
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">Immutable snapshots</p>
+            <h2 id="published-cities-title">Published cities</h2>
+            <p id="published-cities-freshness">
+              Publications are snapshots and are not automatically updated.
+            </p>
+          </div>
+          <button
+            id="published-cities-close"
+            class="icon-button"
+            type="button"
+            aria-label="Close published cities"
+          >
+            ×
+          </button>
+        </div>
+
+        <section aria-labelledby="publish-current-title">
+          <h3 id="publish-current-title">Publish current city</h3>
+          <p>
+            Anyone who can reach this Code City deployment can open published
+            model and evolution data. Source files and repository URLs are
+            removed.
+          </p>
+          <label for="published-city-title">Title</label>
+          <input
+            id="published-city-title"
+            type="text"
+            maxlength="120"
+            required
+          />
+          <label for="published-city-description">Description</label>
+          <textarea
+            id="published-city-description"
+            maxlength="1000"
+            rows="3"
+          ></textarea>
+          <button
+            id="published-city-submit"
+            class="button button-primary"
+            type="button"
+          >
+            Publish snapshot
+          </button>
+          <p id="published-city-status" role="status" aria-live="polite"></p>
+        </section>
+
+        <section aria-labelledby="published-city-list-title">
+          <h3 id="published-city-list-title">Available snapshots</h3>
+          <label for="published-city-search">Search</label>
+          <input
+            id="published-city-search"
+            type="search"
+            maxlength="120"
+            placeholder="Find a published city"
+          />
+          <label for="published-city-sort">Sort</label>
+          <select id="published-city-sort">
+            <option value="updated">Latest publication</option>
+            <option value="title">Title</option>
+          </select>
+          <p id="published-city-list-status" role="status" aria-live="polite">
+            Loading published cities…
+          </p>
+          <ul id="published-city-list" class="project-import-summary"></ul>
+        </section>
       </dialog>
     </div>
 

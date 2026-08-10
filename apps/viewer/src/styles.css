@@ -3392,6 +3392,38 @@ button,
   line-height: 1.5;
 }
 
+#published-cities-dialog > section {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 1rem;
+}
+
+#published-city-list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+#published-city-list > li {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 0.65rem;
+}
+
+#published-city-list > li > .button,
+#published-city-list > li > details {
+  width: fit-content;
+}
+
+#published-city-list > li > span,
+#published-city-list > li > small {
+  display: block;
+}
+
 .project-import-errors {
   padding: 14px;
   border: 1px solid rgba(255, 128, 144, 0.38);

@@ -71,6 +71,8 @@ test("optional viewer workflows stay split from the core startup entry", async (
     "image-export-dialog-",
     "metric-mapping-panel-",
     "print-export-dialog-",
+    "published-cities-api-",
+    "published-cities-",
     "safe-extension-panel-",
   ]) {
     expect(scripts.some((url) => url.includes(workflow))).toBe(false);
@@ -86,6 +88,19 @@ test("optional viewer workflows stay split from the core startup entry", async (
     "true",
   );
   expect(scripts.some((url) => url.includes("advanced-query-panel-"))).toBe(true);
+
+  await page.locator("#project-actions-menu > summary").click();
+  await page.locator("#published-cities-open").click();
+  await expect(page.locator("#published-cities-dialog")).toBeVisible();
+  expect(scripts.some((url) => url.includes("published-cities-api-"))).toBe(true);
+  expect(
+    scripts.some(
+      (url) =>
+        url.includes("published-cities-") &&
+        !url.includes("published-cities-api-"),
+    ),
+  ).toBe(true);
+  await page.locator("#published-cities-close").click();
 
   await page.locator("#project-actions-menu > summary").click();
   await page.locator("#advanced-project-settings-open").click();

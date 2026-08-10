@@ -71,6 +71,8 @@ describe("development toolchain contract", () => {
     expect(budget).toContain('"src/image-export-dialog.ts"');
     expect(budget).toContain('"src/metric-mapping-panel.ts"');
     expect(budget).toContain('"src/print-export-dialog.ts"');
+    expect(budget).toContain('"src/published-cities-api.ts"');
+    expect(budget).toContain('"src/published-cities.ts"');
     expect(budget).toContain('"src/safe-extension-panel.ts"');
     expect(budget).toContain("includeEagerChunk(\"index.html\")");
     expect(budget).toContain("ENTRY_GZIP_MAX_BYTES");

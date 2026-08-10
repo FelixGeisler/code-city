@@ -561,6 +561,13 @@ and **Prepare AI preview** is always an explicit action separate from the
 one-time send confirmation.
 
 The viewer accepts a `city-model.json` through **Project > Open model**.
+After opening a completed import, **Project > Published cities** creates an
+immutable public snapshot and optional evolution history. The stable latest
+link opens `/?published=<id>`; version-history links add an immutable
+`&version=<id>`. Published snapshots show when they were generated and clearly
+state that they are not automatically updated. Publishing never copies retained
+source, repository URLs, credentials, submission values, or AI data.
+
 **Export > Export print file** selects a generic, Prusa XL, or local custom
 printer profile, previews the exact exporter layout, and downloads direct
 3MF/STL or a deterministic multi-plate ZIP.

@@ -103,6 +103,12 @@ import type {
 } from "./image-export-dialog.js";
 import { installProjectImportDialog } from "./project-import-dialog.js";
 import type { PrintExportDialogHandle } from "./print-export-dialog.js";
+import type {
+  PublishedCitiesApi,
+  PublishedCityVersionView,
+  PublishedCityView,
+} from "./published-cities-api.js";
+import type { PublishedCitiesDialogHandle } from "./published-cities.js";
 import {
   createLargeCityFixture,
   LARGE_CITY_FIXTURE_NAME,
@@ -213,6 +219,7 @@ interface ModelSource {
     readonly artifactUrl: string;
     readonly size: number;
     readonly sha256: string;
+    readonly published?: true;
   };
 }
 
@@ -253,6 +260,8 @@ const viewerWorkspace = installViewerWorkspace(
 const fileInput = element<HTMLInputElement>("model-file");
 const fileOpenButton = element<HTMLButtonElement>("model-file-open");
 const demoButton = element<HTMLButtonElement>("demo-button");
+const publishedCitiesOpenButton =
+  element<HTMLButtonElement>("published-cities-open");
 const imageExportOpenButton =
   element<HTMLButtonElement>("image-export-open");
 const printExportOpenButton =
@@ -807,7 +816,8 @@ const projectImportDialog = installProjectImportDialog({
   loadGateway: viewerLoadGateway,
   autoResume:
     importParameters.get("fixture") !== LARGE_CITY_FIXTURE_NAME &&
-    importParameters.get("model") === null,
+    importParameters.get("model") === null &&
+    importParameters.get("published") === null,
   onModelReady: (model, source) => {
     automaticModelLoadGate.invalidate();
     activateImportedModel(model, {
@@ -937,6 +947,70 @@ function loadImageExportDialog(): Promise<ImageExportDialog> {
     });
   return imageExportDialogLoad;
 }
+
+let publishedCitiesApi: PublishedCitiesApi | undefined;
+let publishedCitiesDialog: PublishedCitiesDialogHandle | undefined;
+let publishedCitiesLoad: Promise<PublishedCitiesDialogHandle> | undefined;
+
+async function openPublishedVersion(
+  publication: PublishedCityView,
+  version: PublishedCityVersionView,
+): Promise<void> {
+  const module = await import("./published-cities-api.js");
+  publishedCitiesApi ??= new module.PublishedCitiesApi();
+  const loaded = await viewerLoadGateway.loadRemoteModel(
+    new URL(version.modelUrl, window.location.href),
+  );
+  publishedCitiesDialog?.dispose();
+  publishedCitiesDialog = undefined;
+  publishedCitiesLoad = undefined;
+  activateImportedModel(validateCityModel(loaded.model), {
+    label: `${publication.title} · generated ${new Date(version.generatedAt).toLocaleString()}`,
+    assetRoot: assetRootFromResponseUrl(loaded.responseUrl.href),
+    ...(version.evolution === undefined || version.evolutionUrl === undefined
+      ? {}
+      : {
+          evolution: {
+            artifactUrl: version.evolutionUrl,
+            size: version.evolution.size,
+            sha256: version.evolution.sha256,
+            published: true as const,
+          },
+        }),
+  });
+  setStatus(`Opened published snapshot ${publication.title}. This snapshot is not automatically updated.`);
+}
+
+function loadPublishedCitiesDialog(): Promise<PublishedCitiesDialogHandle> {
+  publishedCitiesLoad ??= Promise.all([
+    import("./published-cities-api.js"),
+    import("./published-cities.js"),
+  ])
+    .then(([apiModule, dialogModule]) => {
+      const api = publishedCitiesApi ??= new apiModule.PublishedCitiesApi();
+      const handle = dialogModule.installPublishedCitiesDialog({
+        api,
+        currentModel: () => ({
+          ...(activeModelSource.jobId === undefined
+            ? {}
+            : { jobId: activeModelSource.jobId }),
+          title:
+            activeModel.identity?.title ??
+            activeModel.repositories[0]?.name ??
+            "Published Code City",
+        }),
+        onOpen: openPublishedVersion,
+      });
+      publishedCitiesDialog = handle;
+      return handle;
+    })
+    .catch((error: unknown) => {
+      publishedCitiesLoad = undefined;
+      throw error;
+    });
+  return publishedCitiesLoad;
+}
+
 function setOptionalWorkflowLoading(
   host: HTMLElement,
   loading: boolean,
@@ -1276,6 +1350,19 @@ exportActionsMenu.addEventListener("toggle", () => {
   if (exportActionsMenu.open) projectActionsMenu.open = false;
 });
 
+publishedCitiesOpenButton.addEventListener("click", () => {
+  projectActionsMenu.open = false;
+  publishedCitiesOpenButton.disabled = true;
+  publishedCitiesOpenButton.setAttribute("aria-busy", "true");
+  void loadPublishedCitiesDialog()
+    .then((dialog) => dialog.open())
+    .catch(() => showError("Published cities could not be loaded. Try again."))
+    .finally(() => {
+      publishedCitiesOpenButton.removeAttribute("aria-busy");
+      publishedCitiesOpenButton.disabled = false;
+    });
+});
+
 advancedProjectSettingsOpen.addEventListener("click", () => {
   projectActionsMenu.open = false;
   advancedProjectSettingsOpen.disabled = true;
@@ -1303,6 +1390,10 @@ advancedProjectSettingsDialog.addEventListener("close", () => {
   restoreDisclosureFocus(projectActionsSummary);
 });
 
+element<HTMLDialogElement>("published-cities-dialog").addEventListener(
+  "close",
+  () => restoreDisclosureFocus(projectActionsSummary),
+);
 element<HTMLDialogElement>("image-export-dialog").addEventListener(
   "close",
   () => restoreDisclosureFocus(exportActionsSummary),
@@ -1571,6 +1662,7 @@ window.addEventListener("beforeunload", () => {
   repositoryHierarchyTree.dispose();
   printPlateToolbar.dispose();
   projectImportDialog.dispose();
+  publishedCitiesDialog?.dispose();
   metricMappingPanel?.dispose();
   advancedQueryPanel?.dispose();
   imageExportDialog?.dispose();
@@ -1600,7 +1692,11 @@ if (initialParameters.get("fixture") === LARGE_CITY_FIXTURE_NAME) {
   }
 } else {
   activateImportedModel(DEMO_MODEL, { label: "Built-in demo" });
-  void loadModelFromQuery();
+  if (initialParameters.has("published")) {
+    void loadPublishedFromQuery();
+  } else {
+    void loadModelFromQuery();
+  }
 }
 
 function largeCityRemovalTransition(
@@ -1634,6 +1730,24 @@ function largeCityRemovalTransition(
       affectedRouteKeys: Object.freeze([]),
     }),
   });
+}
+
+async function loadPublishedFromQuery(): Promise<void> {
+  const parameters = new URL(window.location.href).searchParams;
+  const publicationId = parameters.get("published");
+  if (publicationId === null) return;
+  try {
+    const module = await import("./published-cities-api.js");
+    const api = publishedCitiesApi ??= new module.PublishedCitiesApi();
+    const publication = await api.get(publicationId);
+    const requestedVersion = parameters.get("version");
+    const versionId = requestedVersion ?? publication.latestVersionId;
+    const version = publication.versions.find(({ id }) => id === versionId);
+    if (version === undefined) throw new Error("Published city version not found.");
+    await openPublishedVersion(publication, version);
+  } catch {
+    showError("Published city could not be opened. It may have been unpublished.");
+  }
 }
 
 async function loadModelFromQuery(): Promise<void> {
@@ -1890,7 +2004,10 @@ function resetEvolutionTimeline(recreateWorker = true): void {
 
 async function startEvolutionTimeline(source: ModelSource): Promise<void> {
   const artifact = source.evolution;
-  if (artifact === undefined || source.jobId === undefined) return;
+  if (
+    artifact === undefined ||
+    (artifact.published !== true && source.jobId === undefined)
+  ) return;
   const generation = evolutionGeneration;
   const controller = new AbortController();
   evolutionLoadController = controller;
@@ -1901,11 +2018,21 @@ async function startEvolutionTimeline(source: ModelSource): Promise<void> {
     "Verifying and preparing deterministic timeline frames\u2026";
   renderEvolutionTimeline();
   try {
-    const bytes = await sourceApi.evolutionArtifact(
-      source.jobId,
-      artifact,
-      controller.signal,
-    );
+    const bytes = artifact.published === true
+      ? await (async () => {
+          const module = await import("./published-cities-api.js");
+          const api = publishedCitiesApi ??= new module.PublishedCitiesApi();
+          return await api.evolution(
+            artifact.artifactUrl,
+            artifact.size,
+            controller.signal,
+          );
+        })()
+      : await sourceApi.evolutionArtifact(
+          source.jobId!,
+          artifact,
+          controller.signal,
+        );
     if (generation !== evolutionGeneration) return;
     const loaded = await evolutionWorker.load(bytes, artifact);
     if (generation !== evolutionGeneration) return;

@@ -25,13 +25,17 @@ describe("viewer security boundary", () => {
     );
   });
 
-  it("keeps network primitives inside the two explicit load gateways", async () => {
+  it("keeps network primitives inside the three explicit load gateways", async () => {
     const sourceDirectory = path.join(viewerRoot, "src");
     const sourceNames = (await fs.readdir(sourceDirectory))
       .filter((name) => name.endsWith(".ts"));
     const networkPattern =
       /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|sendBeacon)\b/u;
-    const gateways = new Set(["import-api.ts", "model-source.ts"]);
+    const gateways = new Set([
+      "import-api.ts",
+      "model-source.ts",
+      "published-cities-api.ts",
+    ]);
 
     for (const name of sourceNames) {
       const source = await fs.readFile(

@@ -11,6 +11,8 @@ const REQUIRED_LAZY_WORKFLOWS = Object.freeze([
   "src/image-export-dialog.ts",
   "src/metric-mapping-panel.ts",
   "src/print-export-dialog.ts",
+  "src/published-cities-api.ts",
+  "src/published-cities.ts",
   "src/safe-extension-panel.ts",
 ]);
 

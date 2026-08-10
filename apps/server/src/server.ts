@@ -48,6 +48,10 @@ import {
 } from "./source-artifact-store.js";
 import { HistorySemanticCache } from "./history-cache.js";
 import {
+  PublishedCityStore,
+  type PublishedCity,
+} from "./published-cities.js";
+import {
   InboundAuthorization,
   type InboundAuthorizationMethod,
   type InboundAuthorizationOptions,
@@ -104,6 +108,11 @@ const AI_GUIDANCE_PREVIEW_PATH_PATTERN =
   /^\/api\/v1\/ai\/preview\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/([a-z0-9-]+:[0-9a-f]{16})\/([a-z][a-z0-9-]{0,63})$/u;
 const AI_GUIDANCE_REQUEST_PATH = "/api/v1/ai/requests";
 const AI_GUIDANCE_PROVIDERS_PATH = "/api/v1/ai/providers";
+const PUBLISHED_CITIES_PATH = "/api/v1/published";
+const PUBLISHED_CITY_PATH_PATTERN =
+  /^\/api\/v1\/published\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/u;
+const PUBLISHED_CITY_ARTIFACT_PATH_PATTERN =
+  /^\/api\/v1\/published\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/versions\/([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/(city-model|evolution)\.json$/u;
 const AI_GUIDANCE_GRANT_BYTES = 32;
 const AI_GUIDANCE_GRANT_TTL_MS = 2 * 60_000;
 const AI_GUIDANCE_MAXIMUM_GRANTS = 256;
@@ -158,6 +167,7 @@ export interface CodeCityServerHandle {
   readonly jobs: PersistentJobQueue;
   readonly artifacts: ImportArtifactStore;
   readonly sources: SourceArtifactStore;
+  readonly published: PublishedCityStore;
   readonly closed: Promise<void>;
   close(): Promise<void>;
 }
@@ -275,6 +285,32 @@ function sendMethodNotAllowed(
 
 function publicJob(record: JobRecord): JobRecord {
   return record;
+}
+
+function publicPublishedCity(publication: PublishedCity): unknown {
+  return {
+    id: publication.id,
+    title: publication.title,
+    ...(publication.description === undefined
+      ? {}
+      : { description: publication.description }),
+    createdAt: publication.createdAt,
+    updatedAt: publication.updatedAt,
+    latestVersionId: publication.latestVersionId,
+    latestUrl: `/?published=${publication.id}`,
+    versions: publication.versions.map((version) => ({
+      ...version,
+      modelUrl:
+        `/api/v1/published/${publication.id}/versions/${version.id}/city-model.json`,
+      ...(version.evolution === undefined
+        ? {}
+        : {
+            evolutionUrl:
+              `/api/v1/published/${publication.id}/versions/${version.id}/evolution.json`,
+          }),
+      viewerUrl: `/?published=${publication.id}&version=${version.id}`,
+    })),
+  };
 }
 
 function completedImportArtifactSets(
@@ -424,6 +460,7 @@ function routeConsumesRequestBody(
   path: string,
 ): boolean {
   return (
+    (method === "POST" && path === PUBLISHED_CITIES_PATH) ||
     (method === "POST" && path === "/api/v1/imports") ||
     (method === "POST" && path === AI_GUIDANCE_REQUEST_PATH) ||
     (method === "POST" && AI_GUIDANCE_PREVIEW_PATH_PATTERN.test(path)) ||
@@ -2164,6 +2201,7 @@ function apiHandler(
   grants: AiGuidanceGrantRegistry,
   guidanceJobs: AiGuidanceJobCoordinator,
   authorization: InboundAuthorization,
+  published: PublishedCityStore,
 ): boolean {
   if (target.path === "/api/v1/health") {
     if (request.method !== "GET" && request.method !== "HEAD") {
@@ -2175,6 +2213,228 @@ function apiHandler(
       service: "code-city",
       apiVersion: "v1",
     });
+    return true;
+  }
+  if (target.path === PUBLISHED_CITIES_PATH) {
+    if (request.method === "GET" || request.method === "HEAD") {
+      sendJson(request, response, 200, {
+        publications: published.list().map(publicPublishedCity),
+      });
+      return true;
+    }
+    if (request.method !== "POST") {
+      sendMethodNotAllowed(request, response, ["GET", "HEAD", "POST"]);
+      return true;
+    }
+    if (!hasMutationHeader(request)) {
+      rejectMissingMutationHeader(request, response);
+      return true;
+    }
+    if (!validJsonContentType(request.headers["content-type"] ?? "")) {
+      sendJson(request, response, 415, {
+        error: {
+          code: "unsupported-media-type",
+          message: "Publishing requires a JSON request.",
+        },
+      });
+      return true;
+    }
+    void readBoundedRequestBody(request)
+      .then(async (body) => {
+        if (body.kind !== "ok" || response.destroyed) {
+          if (body.kind !== "disconnected" && !response.destroyed) {
+            sendJson(request, response, 400, {
+              error: {
+                code: "invalid-publication",
+                message: "Published city settings could not be read.",
+              },
+            });
+          }
+          return;
+        }
+        let candidate: Record<string, unknown>;
+        try {
+          const parsed = JSON.parse(body.text) as unknown;
+          if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error();
+          candidate = parsed as Record<string, unknown>;
+          const allowed = new Set(["description", "jobId", "publicationId", "title"]);
+          if (Object.keys(candidate).some((key) => !allowed.has(key))) throw new Error();
+        } catch {
+          sendJson(request, response, 400, {
+            error: { code: "invalid-publication", message: "Published city settings are invalid." },
+          });
+          return;
+        }
+        const jobId = candidate["jobId"];
+        if (
+          typeof jobId !== "string" ||
+          (candidate["publicationId"] !== undefined &&
+            typeof candidate["publicationId"] !== "string") ||
+          (candidate["title"] !== undefined &&
+            typeof candidate["title"] !== "string") ||
+          (candidate["description"] !== undefined &&
+            typeof candidate["description"] !== "string")
+        ) {
+          sendJson(request, response, 400, {
+            error: { code: "invalid-publication", message: "A completed import job and valid publication settings are required." },
+          });
+          return;
+        }
+        const job = jobs.get(jobId);
+        if (job === undefined) {
+          sendJson(request, response, 404, {
+            error: { code: "job-not-found", message: "Import job not found." },
+          });
+          return;
+        }
+        try {
+          const publication = await artifactResponses.runExclusiveMutation(
+            () => published.publish(job, artifacts, {
+              ...(candidate["publicationId"] === undefined
+                ? {}
+                : { publicationId: candidate["publicationId"] as string }),
+              ...(candidate["title"] === undefined
+                ? {}
+                : { title: candidate["title"] as string }),
+              ...(candidate["description"] === undefined
+                ? {}
+                : { description: candidate["description"] as string }),
+            }),
+          );
+          response.setHeader("Location", `/?published=${publication.id}`);
+          sendJson(request, response, 201, {
+            publication: publicPublishedCity(publication),
+          });
+        } catch {
+          if (!response.destroyed) {
+            sendJson(request, response, 400, {
+              error: {
+                code: "publication-failed",
+                message: "The completed city could not be published.",
+              },
+            });
+          }
+        }
+      })
+      .catch(() => {
+        if (!response.destroyed) {
+          sendJson(request, response, 500, {
+            error: { code: "publication-failed", message: "The city could not be published." },
+          });
+        }
+      });
+    return true;
+  }
+  const publishedArtifact = PUBLISHED_CITY_ARTIFACT_PATH_PATTERN.exec(target.path);
+  if (publishedArtifact) {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      sendMethodNotAllowed(request, response, ["GET", "HEAD"]);
+      return true;
+    }
+    const artifactResponse = artifactResponses.tryAcquire(response);
+    if (artifactResponse === undefined) {
+      response.setHeader("Retry-After", "1");
+      sendJson(request, response, 503, {
+        error: {
+          code: "artifact-busy",
+          message: "Another city artifact response is in progress.",
+        },
+      });
+      return true;
+    }
+    const [, publicationId, versionId, kind] = publishedArtifact;
+    void (kind === "city-model"
+      ? published.readModel(
+          publicationId!,
+          versionId!,
+          artifactResponse.signal,
+        )
+      : published.readEvolution(
+          publicationId!,
+          versionId!,
+          artifactResponse.signal,
+        ))
+      .then((bytes) => {
+        if (response.destroyed) return;
+        artifactResponse.touch();
+        if (bytes === undefined) {
+          sendJson(request, response, 404, {
+            error: {
+              code: "published-artifact-not-found",
+              message: "Published city artifact not found.",
+            },
+          });
+          return;
+        }
+        send(
+          request,
+          response,
+          200,
+          bytes,
+          "application/json; charset=utf-8",
+          "no-store",
+        );
+      })
+      .catch(() => {
+        if (!response.destroyed) {
+          artifactResponse.touch();
+          sendJson(request, response, 500, {
+            error: {
+              code: "published-artifact-invalid",
+              message: "Published city artifact verification failed.",
+            },
+          });
+        }
+      })
+      .finally(() => artifactResponse.settle());
+    return true;
+  }
+  const publishedCity = PUBLISHED_CITY_PATH_PATTERN.exec(target.path);
+  if (publishedCity) {
+    if (request.method === "GET" || request.method === "HEAD") {
+      const publication = published.get(publishedCity[1]!);
+      if (publication === undefined) {
+        sendJson(request, response, 404, {
+          error: { code: "publication-not-found", message: "Published city not found." },
+        });
+      } else {
+        sendJson(request, response, 200, {
+          publication: publicPublishedCity(publication),
+        });
+      }
+      return true;
+    }
+    if (request.method !== "DELETE") {
+      sendMethodNotAllowed(request, response, ["GET", "HEAD", "DELETE"]);
+      return true;
+    }
+    if (!hasMutationHeader(request)) {
+      rejectMissingMutationHeader(request, response);
+      return true;
+    }
+    void artifactResponses
+      .runExclusiveMutation(() => published.remove(publishedCity[1]!))
+      .then(
+      (removed) => {
+        if (response.destroyed) return;
+        if (!removed) {
+          sendJson(request, response, 404, {
+            error: { code: "publication-not-found", message: "Published city not found." },
+          });
+          return;
+        }
+        response.statusCode = 204;
+        securityHeaders(response, "application/json; charset=utf-8", "no-store");
+        response.end();
+      },
+      () => {
+        if (!response.destroyed) {
+          sendJson(request, response, 500, {
+            error: { code: "publication-removal-failed", message: "Published city could not be removed." },
+          });
+        }
+      },
+    );
     return true;
   }
   if (target.path === "/api/v1/imports/capabilities") {
@@ -2743,6 +3003,7 @@ function requestHandler(
   guidanceJobs: AiGuidanceJobCoordinator,
   allowedHosts: ReadonlySet<string>,
   authorization: InboundAuthorization,
+  published: PublishedCityStore,
 ): (request: IncomingMessage, response: ServerResponse) => void {
   return (request, response) => {
     if (!hostHeaderIsAllowed(request, allowedHosts)) {
@@ -2770,10 +3031,24 @@ function requestHandler(
       (request.method === "GET" || request.method === "HEAD");
     const apiNamespace =
       target.path === "/api" || target.path.startsWith("/api/");
+    const publicPublishedRead =
+      (request.method === "GET" || request.method === "HEAD") &&
+      (target.path === PUBLISHED_CITIES_PATH ||
+        PUBLISHED_CITY_PATH_PATTERN.test(target.path) ||
+        PUBLISHED_CITY_ARTIFACT_PATH_PATTERN.test(target.path));
+    if (apiNamespace && target.query !== undefined) {
+      if (hasUnexpectedRequestBody(request)) {
+        rejectUnexpectedRequestBody(request, response);
+      } else {
+        send(request, response, 400, "Bad request.\n", "text/plain; charset=utf-8");
+      }
+      return;
+    }
     const protectedApi =
       apiNamespace &&
       target.path !== AUTHORIZATION_SESSION_PATH &&
-      !publicHealthRead;
+      !publicHealthRead &&
+      !publicPublishedRead;
     if (protectedApi) {
       const authorized = authorization.authorize(request);
       if (!authorized.authorized || authorized.method === undefined) {
@@ -2835,6 +3110,7 @@ function requestHandler(
           grants,
           guidanceJobs,
           authorization,
+          published,
         )
       ) {
         sendJson(request, response, 404, {
@@ -2959,6 +3235,7 @@ export async function startCodeCityServer(
   let sources: SourceArtifactStore;
   let historyCache: HistorySemanticCache;
   let jobs: PersistentJobQueue;
+  let published: PublishedCityStore;
   const viewerRoot =
     options.viewerRoot ?? productionViewerRoot();
   try {
@@ -2979,6 +3256,9 @@ export async function startCodeCityServer(
       dataDirectory: options.dataDirectory,
     });
     historyCache = await HistorySemanticCache.open({
+      dataDirectory: options.dataDirectory,
+    });
+    published = await PublishedCityStore.open({
       dataDirectory: options.dataDirectory,
     });
     jobs = await PersistentJobQueue.open({
@@ -3038,6 +3318,7 @@ export async function startCodeCityServer(
         aiGuidanceJobs,
         allowedHosts,
         authorization,
+        published,
       ),
     );
     server.requestTimeout =
@@ -3114,6 +3395,7 @@ export async function startCodeCityServer(
       jobs,
       artifacts,
       sources,
+      published,
       closed: closedPromise,
       close: async () => {
         options.signal?.removeEventListener("abort", onAbort);
