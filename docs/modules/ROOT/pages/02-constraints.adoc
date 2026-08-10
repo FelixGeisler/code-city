@@ -1,13 +1,17 @@
 = 2. Constraints
 
-* The analyzer does not execute repository code.
-* Local analysis and viewing work without network access.
-* GitHub ingestion is anonymous and limited to public repositories.
-* Generic remote ingestion trusts the installed Git client and the user's
-  existing credential, SSH, and certificate configuration.
-* .NET/C# and TypeScript are the first analyzer targets.
-* Browser and print output use one `city-model.json`.
-* Export emits multi-part 3MF or single-material binary STL.
-* Printer profiles declare configured print channels; no global channel limit
-  exists.
-* Browser export, safe scaling, and complete-district tiling are local-only.
+* Repository content is untrusted data and is never built or executed.
+* Local analysis and viewing must work without a network connection.
+* Remote access is explicit and bounded by provider validation and deployment
+  policy.
+* C#, TypeScript, and JavaScript are the supported source languages in 1.0.
+* The versioned city model is the contract between analysis, viewing, history,
+  publication, and export.
+* The production deployment is one non-root AMD64/ARM64 container with a
+  persistent data directory and no mandatory external database or queue.
+* Browser rendering requires WebGL 2. Chromium is the automated browser baseline
+  for 1.0; unsupported rendering must fail accessibly without losing the model.
+* Print output is printer-profile driven and must remain within declared physical
+  capabilities.
+* Inputs, work, persisted artifacts, and outputs are subject to hard resource
+  ceilings.

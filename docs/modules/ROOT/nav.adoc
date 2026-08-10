@@ -8,7 +8,7 @@
 * xref:07-deployment-view.adoc[7. Deployment View]
 * xref:08-crosscutting-concepts.adoc[8. Cross-cutting Concepts]
 * xref:09-architecture-decisions.adoc[9. Architecture Decisions]
-* xref:10-quality-requirements.adoc[10. Quality Requirements]
+* xref:10-quality-requirements.adoc[10. Quality Requirements and Test Evidence]
 * xref:11-risks-and-technical-debt.adoc[11. Risks and Technical Debt]
 * xref:12-glossary.adoc[12. Glossary]
 * xref:13-safe-extensions.adoc[13. Safe Extensions]

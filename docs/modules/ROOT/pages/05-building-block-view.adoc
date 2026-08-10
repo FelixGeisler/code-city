@@ -1,31 +1,47 @@
 = 5. Building Block View
 
+[source,text]
+----
+apps/cli ----\
+               packages/analyzer --> packages/core --> packages/exporter
+apps/server --/          |                 |                  |
+       |                 +---- snapshots   +---- model -------+
+       +---- jobs/artifacts/publications          |
+                                                 v
+                                         apps/viewer
+----
+
 [cols="1,2"]
 |===
 |Block |Responsibility
 
-|Repository source
-|Materialize local, GitHub, or generic Git snapshots
+|`packages/core`
+|Versioned city/evolution contracts, validation, metric mapping, deterministic
+layout semantics, and print planning
 
-|Analyzer
-|Emit shared facts through pinned TypeScript and syntax-only Roslyn front ends
+|`packages/analyzer`
+|Source discovery, snapshot normalization, Git adapters, language analysis,
+history analysis, and credential-isolated acquisition
 
-|Metric mapping
-|Validate a versioned mapping, evaluate independent geometry and color
-channels, and emit inspectable provenance
+|`packages/exporter`
+|Format-neutral printable geometry plus deterministic STL, 3MF, plate, legend,
+and calibration serialization
 
-|Layout
-|Place districts and buildings deterministically from the evaluated geometry
+|`apps/server`
+|Same-origin HTTP boundary, authorization, durable jobs, uploads, artifacts,
+retained source, published snapshots, and optional provider adapters
 
-|City model
-|Versioned contract between all blocks
+|`apps/viewer`
+|3D exploration, import orchestration, evolution playback, findings, source
+inspection, publication, and local image/print export
 
-|Viewer
-|Render and inspect the city
+|`apps/cli`
+|Local analysis, serving, and export commands over the same packages
 
-|Print planner
-|Validate geometry and map semantic groups to printer capabilities
-
-|Exporters
-|Write 3MF or binary STL plus a private code legend
+|Native helpers
+|Bundled Roslyn analysis and ephemeral Git credential exchange behind bounded
+process protocols
 |===
+
+Dependencies point inward through explicit contracts: applications orchestrate;
+core does not depend on UI, server, Git, or exporter implementations.

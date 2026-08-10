@@ -1,11 +1,16 @@
 = 4. Solution Strategy
 
-. Normalize every source into a read-only repository snapshot.
-. Extract C# facts through the bundled syntax-only Roslyn helper and
-  TypeScript/JavaScript facts through the pinned TypeScript 7 native API. The
-  native process receives only admitted snapshot files through an isolated
-  virtual filesystem and is closed after each snapshot analysis.
-. Produce a deterministic hierarchical layout.
-. Persist the result as a versioned city model.
-. Render that model in Three.js.
-. Convert the same coordinates through a printer-aware print planner.
+. Normalize every source transport into the same bounded, read-only repository
+  snapshot.
+. Extract language facts with isolated syntax-aware TypeScript and Roslyn front
+  ends; never load or execute repository tooling.
+. Evaluate one versioned metric mapping and produce a deterministic hierarchical
+  city model.
+. Persist imports as durable jobs and immutable, validated artifacts.
+. Render the model in a WebGL 2 viewer; isolate expensive optional workflows in
+  cancellable workers and lazy modules.
+. Replay representative history as validated evolution deltas over the same model
+  contract.
+. Feed the model's coordinates and semantic groups into printer-profile-aware
+  planning and deterministic exporters.
+. Treat publication as an explicit sanitization and declassification boundary.

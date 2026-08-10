@@ -1,232 +1,77 @@
 = 7. Deployment View
 
+== Supported shape
+
+[source,text]
+----
+Browser --HTTP/HTTPS--> Code City container --optional--> Git providers
+                              |
+                              +--> /data (private persistent volume)
+                              +--> administrator secret files (read-only)
+----
+
+The supported release artifact is one non-root Linux container for AMD64 and
+ARM64. It serves the viewer and API, runs one bounded job queue, and stores jobs,
+artifacts, optional retained source, and publications under
+`CODECITY_DATA_DIR` (`/data` in the release image). It needs no external database,
+message broker, CDN, or telemetry service.
+
+A reverse proxy may terminate HTTPS, but proxy identity headers are not
+application authorization. Preserve the external Host, isolate the backend, and
+redact authorization and cookie headers from logs.
+
+== Trust modes
+
+The default is convenient trusted-network mode: the API is open to clients that
+can reach it. Bind or firewall this mode to a private network.
+
+For broader access, configure a private `CODECITY_AUTH_TOKEN_FILE` and exact
+`CODECITY_PUBLIC_ORIGIN`. The root token can authorize automation or be exchanged
+for a bounded browser session. Health remains public. Credential profiles are
+allowed only inside this authorization boundary.
+
+`CODECITY_CREDENTIAL_PROFILES_FILE` names an administrator-owned manifest whose
+secrets are private files, not environment values or browser inputs. Profiles
+are provider-compatible and scoped to exact repositories. Generic Git is
+separately default-denied until `CODECITY_ALLOWED_GIT_ORIGINS` lists exact
+origins. An unprofiled Generic Git import may use the explicitly configured
+service identity; profiled HTTPS imports isolate ambient repository credentials.
+
+The server validates protected files and directories as far as portable APIs
+allow. Windows deployments require explicit trust attestations after an
+administrator applies private ACLs. These attestations do not create or repair
+ACLs.
+
+== Data boundaries
+
+* `/app` is immutable and root-owned in the release image.
+* `/data` is writable only by the unprivileged runtime identity and must be
+  included in cold backup, retention, and deletion policy.
+* Authorization and repository secret files are mounted separately, read-only,
+  with restrictive ownership and permissions.
+* Source retention is disabled by default. Enabling it makes `/data` contain
+  private repository source.
+* Published model/evolution bytes are intentionally public, but remain sanitized
+  and separate from imports and retained source.
+
+== Deployment modes
+
 [cols="1,2"]
 |===
-|Mode |Deployment
+|Mode |Use
 
-|Offline
-|Self-contained CLI and static viewer with an export worker
+|Local development
+|`npm run viewer:dev` starts the real viewer and API on loopback with private
+local development data
 
-|Raspberry Pi
-|One non-root ARM64 container serves the viewer and API and provides a bounded
-persistent job queue backed by a mounted data directory
+|Self-hosted container
+|Recommended production shape on a workstation, server, or Raspberry Pi-class
+ARM64 host
 
-|Hosted
-|The same AMD64 container runs on a web host; the initial single process can be
-split into web and worker commands later without changing the API or job model
-
-|Enterprise
-|CLI or container on a self-hosted build agent
-
-|Documentation
-|Antora site deployed by GitHub Actions to GitHub Pages
+|Build agent / CLI
+|Analyze an already authorized checkout and emit artifacts without running the
+shared server
 |===
 
-The initial self-hosted deployment uses `docker compose up --build`, publishes
-container port 3000 as host port 8080, and mounts the `code-city-data` volume at
-`/data`. It has no mandatory database, message queue, reverse proxy, or cloud
-dependency.
-
-Authorization is disabled by default. Publish that trusted-network mode only
-on a private network. IP-literal requests and `localhost` are accepted by
-default. Set `CODECITY_ALLOWED_HOSTS` to a comma-separated list when clients
-use DNS names; other hostnames are rejected to prevent DNS-rebinding access.
-
-Application-owned authorization uses no database or identity provider. Set
-`CODECITY_AUTH_TOKEN_FILE` to an absolute private file containing one canonical
-32-byte base64url token and set `CODECITY_PUBLIC_ORIGIN` to the one externally
-visible HTTPS origin. The configured origin hostname is admitted by the Host
-policy; a non-default public port must also occur explicitly in the Host
-header. The server then protects the complete versioned API except health reads
-and the session bootstrap. The long-lived bearer can authorize automation or
-be exchanged for one bounded opaque browser session. Repository credential
-profiles must not be configured unless this mode is active.
-
-Set `CODECITY_CREDENTIAL_PROFILES_FILE` to one absolute version-1 manifest path
-only after inbound authorization is enabled. The manifest and all referenced
-one-line UTF-8 secret files must be direct children of the same private
-directory. POSIX requires a process-owned mode-`0700` directory and
-process-owned, single-link regular files with mode `0400` or `0600`. Windows
-requires equivalent private ACLs and protected canonical ancestry plus
-`CODECITY_TRUST_WINDOWS_CREDENTIAL_FILES=1`. Reads are size-bounded and verify
-canonical path and file identity before, during, and after opening.
-The canonical credential directory and viewer asset root must not contain one
-another; startup rejects either overlap before collecting public viewer assets.
-The collector binds this exclusion to opened directory and file identities,
-revalidates the root and parent during traversal, and rejects mount, hard-link,
-reparse, or rename aliases before reading asset bodies.
-
-Profiles allow only `github`, `azure-devops`, or `generic-https` and enumerate
-exact repositories. GitHub repository identity is case-insensitive after its
-canonical public URL is validated. Azure cloud, legacy `visualstudio.com`, and
-on-premises forms require one literal penultimate `_git`. Generic HTTPS
-normalizes only a valid canonical authority; its raw path, case, uppercase
-percent encoding, and terminal `.git` remain exact. The authenticated
-`/api/v1/imports/capabilities` projection contains only ID, display label, and
-provider.
-GitHub profiles are bearer-only and accept one ASCII RFC 6750 `b64token` secret
-line. Azure DevOps and Generic HTTPS profiles are Basic-only; the
-visible-ASCII username cannot contain a colon, and they require a one-line UTF-8
-secret.
-
-An authenticated GitHub or canonical HTTPS Generic Git import may select one
-profile through the optional, strict `source.credentialProfileId` field.
-GitHub sources require a GitHub profile; HTTPS Git sources require an Azure
-DevOps or Generic HTTPS profile. Provider and exact repository scope must match
-before staging. At execution, the server reopens the secret and revalidates its
-protected path and security-relevant startup snapshot: file identity, mode and
-ownership, link count, size, and modification and change times. The operation
-callback receives only a callback-scoped mutable credential buffer;
-protected-read, validation, and callback-scoped buffers are overwritten after
-use, including failure, abort, or registry close. Profile secret replacement
-therefore requires a server restart.
-
-Bearer authorization is sent only to exact HTTPS `api.github.com` requests. A
-token used for private or internal archive access needs repository
-`Contents: read` permission. Automatic redirect following remains disabled.
-Code City accepts the documented zipball API's single `302` only when its target
-is `codeload.github.com` with the exact path
-`/\{owner\}/\{repo\}/legacy.zip/\{sha\}`. An opaque query string is accepted;
-the second request sends no `Authorization` header. All other redirects are
-rejected. This supports private and internal GitHub repositories without
-disclosing a profile credential to the archive host.
-
-Selected Azure DevOps and Generic HTTPS imports clear inherited Git
-configuration and ambient credential helpers, then expose the chosen Basic
-credential only through an ephemeral owner-restricted process pipe for each
-remote command. The selected username and secret never enter URLs, arguments,
-environment values, Git configuration, jobs, artifacts, or temporary files.
-Anonymous GitHub and unselected Generic Git behavior are unchanged. Installed
-Git, the resolved .NET runtime, and configured proxy and certificate
-environment settings remain trusted local dependencies.
-The Compose file forwards the manifest path and Windows attestation only; it
-does not mount secrets. Supply an explicit read-only private mount owned by
-runtime UID 10001 and never use environment values, remote URLs, repository
-files, or Git config for secret material. Profile selectors, secrets, remote
-URLs, requested symbolic refs, and source bytes are not persisted in jobs or
-artifacts. The resolved immutable commit SHA may be stored as the generated
-model's default version.
-
-On POSIX, the token file must be process-owned, mode `0400` or `0600`, regular,
-non-symlinked, and have one link. Its identity is checked around a bounded
-read. Docker mounts must make the file readable only by the runtime UID 10001;
-the Compose environment value names the path inside the container and does not
-mount a host secret automatically. On Windows/IIS, apply a service-private ACL
-to the file and protected canonical ancestry, then set
-`CODECITY_TRUST_WINDOWS_AUTH_TOKEN_FILE=1`. Portable Node APIs cannot verify
-that ACL. Raw secrets are not accepted in environment variables. Rotate the
-file through a restart, which also revokes all sessions.
-
-The Node server remains HTTP internally. Azure Web App and IIS normally
-terminate external TLS. A credential-enabled Raspberry Pi deployment likewise
-needs an HTTPS terminator; unauthenticated trusted-LAN mode does not. Bind or
-firewall the backend so only the terminator can reach it, preserve the external
-Host, and do not treat `Forwarded`, `X-Forwarded-*`,
-`X-MS-CLIENT-PRINCIPAL`, or Windows identity headers as authorization. Any
-future trusted-proxy identity mode needs a separate backend-isolation trust
-boundary. Redact `Authorization`, `Cookie`, and `Set-Cookie` from ingress and
-platform logs.
-
-Upload reservations share the same trusted-network or configured authorization
-boundary as the rest of the API.
-The server admits at most four reservations and 256 MiB of staged data across
-reserved, receiving, queued, and running uploads. Individual city-model and
-ZIP bodies are limited to 128 MiB and 64 MiB respectively. Unused reservations
-expire after five minutes; body idle and total deadlines are 30 seconds and ten
-minutes. Staging is owner-private beneath `CODECITY_DATA_DIR/tmp/imports`,
-contains only a server-chosen fixed filename, and is swept during startup.
-Size and concurrency limits are intentionally hard deployment safety limits,
-not client-controlled analysis options.
-
-Published snapshots are stored beneath `CODECITY_DATA_DIR/published` under the
-same private filesystem boundary, but their validated model and evolution
-responses are intentionally public. Publication strips all source-navigation
-provenance and repository URLs before writing. Retained source, credentials,
-submission values, and AI data are never copied. Authorized same-origin
-mutations may retain at most 100 publications, 20 immutable versions per
-publication, and 2 GiB in aggregate. Operators must include this directory in
-backup and deletion policies. Unpublishing removes the public index entry
-before deleting version bytes. Public metadata and artifacts remain `no-store`
-so unpublishing takes effect at the server boundary without a long-lived shared
-cache retaining revoked snapshots.
-
-`CODECITY_SOURCE_RETENTION` accepts exactly `retain` or `disabled`; the
-production entrypoint and Compose default to `disabled`. Only the exact
-`retain` value opts in. Retained files may contain private repository source
-and must be covered by the deployment's private storage, backup, and deletion
-policy. They are bounded to
-16 MiB each and 128 MiB per source artifact beneath
-`CODECITY_DATA_DIR/sources`, share completed-job lifecycle cleanup, and require
-the same private filesystem boundary as uploads and city artifacts. Set
-`disabled` where source persistence is prohibited. The optional
-`CODECITY_EDITOR_URL_TEMPLATE` must be an absolute `https`, `vscode`, or
-`vscode-insiders` URL without credentials, contain `\{path\}`, and may contain
-`\{line\}`. It is a deployment adapter only; Code City never derives or exposes
-a server-local checkout path.
-
-Windows/IIS deployments must protect `CODECITY_DATA_DIR` for uploads and
-artifacts even when Generic Git is disabled. Its ACL and inherited child ACLs
-must admit only the service identity and trusted administrators. The data
-directory entry and canonical ancestors must also prevent untrusted rename,
-delete, and delete-child access. Code City uses create-exclusive files and
-portable fixed-path/handle identity checks, but cannot create, repair, or prove
-these Windows ACL guarantees.
-
-Generic Git imports are default-denied. Set `CODECITY_ALLOWED_GIT_ORIGINS` to a
-comma-separated list of exact origin-only URLs such as
-`https://dev.azure.example,ssh://git.example:22`. There are no wildcards;
-scheme and effective port are part of the match. The Compose file forwards this
-variable with an empty default.
-
-This allowlist is egress control, not per-repository authorization, and selected
-profiles do not replace it. In default trusted-network mode, every Code City
-network client can request any repository/user at an enabled origin.
-Unselected HTTPS and SSH/scp imports may invoke the service identity's ambient
-Git credential helper, SSH agent/configuration, and trusted CAs. Selected HTTPS
-imports additionally require an exact profile scope and isolate ambient Git
-configuration. Enable Generic Git only when every network client is authorized,
-or enable the application authorization boundary, and grant each service or
-profile identity only the minimum repository access it needs.
-
-For Azure Pipelines, prefer the already authorized local checkout:
-
-[source,yaml]
-----
-steps:
-  - checkout: self
-    persistCredentials: false
-  - powershell: >
-      npm run cli -- analyze "$(Build.SourcesDirectory)"
-      --output build/city-model.json
-----
-
-The convenience `analyze-git` flow uses the agent's installed Git credential
-helper, SSH agent, and enterprise certificate configuration. Do not place
-credentials in the remote URL. Configure SSH host keys and the agent for
-non-interactive access first; HTTPS enterprise CAs must already be trusted by
-Git.
-
-On Windows, provision a dedicated workspace directory before using
-`analyze-git`, restrict its ACL and inherited child ACLs to the Code City
-service identity and trusted administrators, and protect its canonical
-directory entry plus every ancestor from untrusted rename, delete, and
-delete-child rights. Then pass it with
-`--trusted-workspace-parent <directory>`. This flag explicitly attests those
-deployment properties; Code City does not create the directory or repair its
-ACL. Ancestors may remain readable or traversable; their protected child entries
-must not be replaceable or removable by untrusted identities. Do not point the
-option at a generally writable `%TEMP%`, shared build directory, or upload
-directory.
-
-For the Windows/IIS server endpoint, set
-`CODECITY_TRUST_WINDOWS_GIT_WORKSPACE=1` only after applying the same controls
-to `CODECITY_DATA_DIR`, its `tmp/imports` descendants and inherited child ACLs,
-and protected canonical ancestors. A non-empty Git-origin allowlist makes
-Windows startup fail unless this explicit attestation is present.
-Outbound-origin approval does not imply filesystem trust.
-
-On POSIX, an explicit workspace parent must already exist, be owned by the
-effective process user, and have exact mode `0700`. The implicit OS temporary
-directory remains available only when Code City can verify stable filesystem
-identities and a protected canonical ancestry; unsafe environment overrides
-fail closed.
+Release, backup, restore, upgrade, rollback, and acceptance steps are in
+xref:14-release-and-operations.adoc[Release and operations].
