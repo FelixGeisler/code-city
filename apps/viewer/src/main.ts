@@ -31,10 +31,7 @@ import {
   type ExtensionEvaluation,
 } from "../../../packages/core/src/extensions.js";
 import type { PrinterProfile } from "../../../packages/core/src/print.js";
-import {
-  installAdvancedQueryPanel,
-  type AdvancedQueryPanelController,
-} from "./advanced-query-panel.js";
+import type { AdvancedQueryPanelController } from "./advanced-query-panel.js";
 import type {
   AdvancedQueryChangeKind,
   AdvancedQueryContext,
@@ -100,17 +97,17 @@ import {
   imageExportFileName,
   type ImageExportLegendEntry,
 } from "./image-export.js";
-import {
-  installImageExportDialog,
-  type PreparedImageExport,
+import type {
+  ImageExportDialog,
+  PreparedImageExport,
 } from "./image-export-dialog.js";
 import { installProjectImportDialog } from "./project-import-dialog.js";
-import { installPrintExportDialog } from "./print-export-dialog.js";
+import type { PrintExportDialogHandle } from "./print-export-dialog.js";
 import {
   createLargeCityFixture,
   LARGE_CITY_FIXTURE_NAME,
 } from "./large-city-fixture.js";
-import { installMetricMappingPanel } from "./metric-mapping-panel.js";
+import type { MetricMappingPanelController } from "./metric-mapping-panel.js";
 import { installDesignSmellPanel } from "./design-smell-panel.js";
 import {
   createDesignSmellBuildingVisualization,
@@ -118,10 +115,7 @@ import {
   designSmellBuildingDiagnostics,
   type DesignSmellBuildingVisualization,
 } from "./design-smell-visualization.js";
-import {
-  installSafeExtensionPanel,
-  type SafeExtensionPanelController,
-} from "./safe-extension-panel.js";
+import type { SafeExtensionPanelController } from "./safe-extension-panel.js";
 import { installPrintPlateToolbar } from "./print-plate-toolbar.js";
 import {
   AutomaticModelLoadGate,
@@ -242,6 +236,9 @@ let synchronizeHierarchyWorkspace = (
 let synchronizeFindingsWorkspace = (
   _state: ViewerWorkspaceState,
 ): void => {};
+let synchronizeOptionalAnalyzeWorkflow = (
+  _state: ViewerWorkspaceState,
+): void => {};
 const viewerWorkspace = installViewerWorkspace(
   element<HTMLElement>("viewer-workspace"),
   element<HTMLElement>("viewer-workspace-scroll"),
@@ -249,6 +246,7 @@ const viewerWorkspace = installViewerWorkspace(
     onStateChange: (state) => {
       synchronizeHierarchyWorkspace(state);
       synchronizeFindingsWorkspace(state);
+      synchronizeOptionalAnalyzeWorkflow(state);
     },
   },
 );
@@ -644,7 +642,10 @@ let activeExternalNodes: readonly ExternalSceneNode[] =
   activeExternalLayout.nodes;
 let requestCityPresentation = (): void => {};
 let advancedQueryPanel: AdvancedQueryPanelController | undefined;
+let advancedQueryPanelLoad: Promise<AdvancedQueryPanelController> | undefined;
+let metricMappingPanel: MetricMappingPanelController | undefined;
 let safeExtensionPanel: SafeExtensionPanelController | undefined;
+let advancedSettingsLoad: Promise<void> | undefined;
 let activeDesignSmellQueryFacts:
   | {
       readonly ruleIdsByBuildingId: ReadonlyMap<
@@ -670,7 +671,18 @@ const cityScene = createCityScene({
   onStateChange: synchronizeExplorerState,
   requestCityPresentation: () => requestCityPresentation(),
   onPointerSelection: (entity, intent) => {
-    if (advancedQueryPanel === undefined) return false;
+    if (advancedQueryPanel === undefined) {
+      if (entity?.kind === "building" && (intent.additive || intent.range)) {
+        void loadAdvancedQueryPanel()
+          .then((panel) => panel.selectFromScene(entity.id, {
+            ...intent,
+            orderedBuildingIds: activeBuildingSelectionOrder,
+          }))
+          .catch(() => showError("Selection tools could not be loaded. Try again."));
+        return true;
+      }
+      return false;
+    }
     if (entity?.kind === "building") {
       advancedQueryPanel.selectFromScene(entity.id, {
         ...intent,
@@ -705,7 +717,7 @@ synchronizeFindingsWorkspace = (state): void => {
     state.activeAnalyzeView === "findings";
   if (nextActive === designSmellWorkspaceActive) return;
   designSmellWorkspaceActive = nextActive;
-  imageExportDialog.invalidate();
+  imageExportDialog?.invalidate();
   applyVisualization();
   const selected = explorerState.selectedEntity;
   if (selected?.kind === "building") {
@@ -836,118 +848,152 @@ const projectImportDialog = installProjectImportDialog({
     markActiveSourceResultRemoved(jobId);
   },
 });
-const printExportDialog = installPrintExportDialog({
-  getModel: () => activeModel,
-  loadGateway: viewerLoadGateway,
-  onPrintLayoutPlan: (plan) => {
-    printPlateToolbar.setPlan(plan);
-    if (plan !== undefined) {
-      printPlateToolbar.show("plates");
-    }
-  },
-  onProfilePreviewChange: (profile) => {
-    previewPrinterProfile = profile;
-    if (!printVisualizationContextActive) return;
-    const modeChanged = synchronizeVisualizationModeOptions();
-    if (modeChanged || visualizationMode === "print") {
-      applyVisualization();
-    }
-  },
-});
-const imageExportDialog = installImageExportDialog({
-  context: () => {
-    const frame = currentEvolutionExportFrame();
-    return {
-      projection: cityScene.projection,
-      selectedEntityAvailable: cityScene.selectedEntityAvailable,
-      ...(frame === undefined ? {} : { evolutionFrame: frame }),
-    };
-  },
-  exportImage: async (request): Promise<PreparedImageExport> => {
-    if (evolutionLoading || evolutionSeekController.busy) {
-      throw new Error(
-        "Wait for the active evolution frame to finish loading before exporting.",
-      );
-    }
-    stopEvolutionPlayback();
-    settleEvolutionTransition();
-    const frame = request.includeEvolutionFrame
-      ? currentEvolutionExportFrame()
-      : undefined;
-    const title =
-      activeModel.identity?.title ??
-      activeModel.repositories[0]?.name ??
-      "Code City";
-    const rendered = await cityScene.exportPng(request, {
-      title,
-      ...(frame === undefined
-        ? {}
-        : { subtitle: frame.label }),
-      legendTitle: activeVisualizationLabel,
-      legend: activeLegendEntries,
+let printExportDialog: PrintExportDialogHandle | undefined;
+let printExportDialogLoad: Promise<PrintExportDialogHandle> | undefined;
+let printExportEnabled = true;
+
+function loadPrintExportDialog(): Promise<PrintExportDialogHandle> {
+  printExportDialogLoad ??= import("./print-export-dialog.js")
+    .then(({ installPrintExportDialog }) => {
+      const handle = installPrintExportDialog({
+        getModel: () => activeModel,
+        loadGateway: viewerLoadGateway,
+        bindOpenButton: false,
+        onPrintLayoutPlan: (plan) => {
+          printPlateToolbar.setPlan(plan);
+          if (plan !== undefined) {
+            printPlateToolbar.show("plates");
+          }
+        },
+        onProfilePreviewChange: (profile) => {
+          previewPrinterProfile = profile;
+          if (!printVisualizationContextActive) return;
+          const modeChanged = synchronizeVisualizationModeOptions();
+          if (modeChanged || visualizationMode === "print") {
+            applyVisualization();
+          }
+        },
+      });
+      handle.setEnabled(printExportEnabled);
+      printExportDialog = handle;
+      return handle;
+    })
+    .catch((error: unknown) => {
+      printExportDialogLoad = undefined;
+      throw error;
     });
-    return {
-      blob: rendered.blob,
-      resolution: rendered.resolution,
-      fileName: imageExportFileName(
-        title,
-        request,
-        frame?.sha,
-      ),
-    };
-  },
-});
-const metricMappingPanel = installMetricMappingPanel(
-  element<HTMLElement>("metric-mapping-panel"),
-  {
-    onModelChange: (model) => {
-      setSafeExtensionProject(model);
-      applyModel(model, activeModelSource);
-    },
-    onPreviewStateChange: (active) => {
-      printExportDialog.setEnabled(!active);
-      printExportOpenButton.disabled = active;
-      printExportOpenButton.title = active
-        ? "Apply or cancel the metric mapping preview before exporting."
-        : "";
-      metricPreviewBanner.hidden = !active;
-    },
-  },
-);
-advancedQueryPanel = installAdvancedQueryPanel(
-  element<HTMLElement>("advanced-query-panel"),
-  {
-    context: advancedQueryPanelContext,
-    onSelectionChange: applyAdvancedSelection,
-    onFocus: (buildingIds) => {
-      cityScene.focusBuildings(buildingIds);
-    },
-    onInspect: () => {
-      viewerWorkspace.showDetails({ intent: "explicit", focus: true });
-    },
-    onIsolate: (buildingIds) => {
-      applyingAdvancedSelection = true;
-      try {
-        if (cityScene.buildingSelectionIsolated) {
-          cityScene.showAllBuildings();
-        } else {
-          cityScene.isolateBuildings(buildingIds);
-        }
-      } finally {
-        applyingAdvancedSelection = false;
+  return printExportDialogLoad;
+}
+
+let imageExportDialog: ImageExportDialog | undefined;
+let imageExportDialogLoad: Promise<ImageExportDialog> | undefined;
+
+function loadImageExportDialog(): Promise<ImageExportDialog> {
+  imageExportDialogLoad ??= import("./image-export-dialog.js")
+    .then(({ installImageExportDialog }) => {
+      const handle = installImageExportDialog({
+        context: () => {
+          const frame = currentEvolutionExportFrame();
+          return {
+            projection: cityScene.projection,
+            selectedEntityAvailable: cityScene.selectedEntityAvailable,
+            ...(frame === undefined ? {} : { evolutionFrame: frame }),
+          };
+        },
+        exportImage: async (request): Promise<PreparedImageExport> => {
+          if (evolutionLoading || evolutionSeekController.busy) {
+            throw new Error(
+              "Wait for the active evolution frame to finish loading before exporting.",
+            );
+          }
+          stopEvolutionPlayback();
+          settleEvolutionTransition();
+          const frame = request.includeEvolutionFrame
+            ? currentEvolutionExportFrame()
+            : undefined;
+          const title =
+            activeModel.identity?.title ??
+            activeModel.repositories[0]?.name ??
+            "Code City";
+          const rendered = await cityScene.exportPng(request, {
+            title,
+            ...(frame === undefined ? {} : { subtitle: frame.label }),
+            legendTitle: activeVisualizationLabel,
+            legend: activeLegendEntries,
+          });
+          return {
+            blob: rendered.blob,
+            resolution: rendered.resolution,
+            fileName: imageExportFileName(title, request, frame?.sha),
+          };
+        },
+      });
+      imageExportDialog = handle;
+      return handle;
+    })
+    .catch((error: unknown) => {
+      imageExportDialogLoad = undefined;
+      throw error;
+    });
+  return imageExportDialogLoad;
+}
+function setOptionalWorkflowLoading(
+  host: HTMLElement,
+  loading: boolean,
+): void {
+  host.inert = loading;
+  if (loading) host.setAttribute("aria-busy", "true");
+  else host.removeAttribute("aria-busy");
+}
+
+function loadAdvancedQueryPanel(): Promise<AdvancedQueryPanelController> {
+  if (advancedQueryPanelLoad !== undefined) return advancedQueryPanelLoad;
+  const host = element<HTMLElement>("advanced-query-panel");
+  setOptionalWorkflowLoading(host, true);
+  advancedQueryPanelLoad = import("./advanced-query-panel.js")
+    .then(({ installAdvancedQueryPanel }) => {
+      const handle = installAdvancedQueryPanel(host, {
+        context: advancedQueryPanelContext,
+        onSelectionChange: applyAdvancedSelection,
+        onFocus: (buildingIds) => cityScene.focusBuildings(buildingIds),
+        onInspect: () => {
+          viewerWorkspace.showDetails({ intent: "explicit", focus: true });
+        },
+        onIsolate: (buildingIds) => {
+          applyingAdvancedSelection = true;
+          try {
+            if (cityScene.buildingSelectionIsolated) {
+              cityScene.showAllBuildings();
+            } else {
+              cityScene.isolateBuildings(buildingIds);
+            }
+          } finally {
+            applyingAdvancedSelection = false;
+          }
+        },
+      });
+      const selectedBuildingId = selectedExplorerBuildingId(explorerState);
+      advancedQueryPanel = handle;
+      handle.setProject(activeModel);
+      if (selectedBuildingId !== null) {
+        handle.selectFromScene(selectedBuildingId);
       }
-    },
-  },
-);
-advancedQueryPanel.setProject(activeModel);
+      setOptionalWorkflowLoading(host, false);
+      return handle;
+    })
+    .catch((error: unknown) => {
+      advancedQueryPanelLoad = undefined;
+      setOptionalWorkflowLoading(host, false);
+      throw error;
+    });
+  return advancedQueryPanelLoad;
+}
+
 const designSmellPanel = installDesignSmellPanel(
   element<HTMLElement>("design-smell-panel"),
   {
     onNavigate: (finding) => {
-      viewerWorkspace.showDetails({
-        intent: "explicit",
-        focus: true,
-      });
+      viewerWorkspace.showDetails({ intent: "explicit", focus: true });
       selectBuildingFromExplorer(finding.buildingId);
       const building = activeBuildingsById.get(finding.buildingId);
       if (building !== undefined) {
@@ -961,17 +1007,14 @@ const designSmellPanel = installDesignSmellPanel(
             : {
               range: Object.freeze({
                 startLine: finding.evidence.line,
-                endLine:
-                  finding.evidence.endLine ?? finding.evidence.line,
+                endLine: finding.evidence.endLine ?? finding.evidence.line,
               }),
             }),
         });
         if (focus.range === undefined) {
           setCodeInspectionFocus(building, focus);
-          const loadedSource = retainedSourceController.sourceFor(building.id);
-          if (loadedSource !== undefined) {
-            renderSourceCode(building, loadedSource);
-          }
+          const source = retainedSourceController.sourceFor(building.id);
+          if (source !== undefined) renderSourceCode(building, source);
         } else {
           revealBuildingSource(building, focus);
         }
@@ -979,17 +1022,16 @@ const designSmellPanel = installDesignSmellPanel(
     },
     onVisibleFindingsChange: (findings) => {
       activeDesignSmellFindings = Object.freeze([...findings]);
-      activeDesignSmellVisualization =
-        createDesignSmellBuildingVisualization(
-          activeModel.buildings.map(({ id }) => id),
-          activeDesignSmellFindings,
-        );
+      activeDesignSmellVisualization = createDesignSmellBuildingVisualization(
+        activeModel.buildings.map(({ id }) => id),
+        activeDesignSmellFindings,
+      );
       activeDesignSmellDiagnostics = designSmellBuildingDiagnostics(
         activeDesignSmellVisualization,
         designSmellWorkspaceActive,
       );
       if (designSmellWorkspaceActive) {
-        imageExportDialog.invalidate();
+        imageExportDialog?.invalidate();
         applyVisualization();
         const selected = explorerState.selectedEntity;
         if (selected?.kind === "building") {
@@ -1004,48 +1046,98 @@ const designSmellPanel = installDesignSmellPanel(
     onQueryFactsChange: updateAdvancedQueryDesignSmells,
   },
 );
-safeExtensionPanel = installSafeExtensionPanel(
-  element<HTMLElement>("safe-extension-panel"),
-  {
-    onPreview: (review) => {
-      const projected = applySafeExtensionEvaluation(
-        safeExtensionBaseModel,
-        review.evaluation,
-        review.application,
+designSmellPanel.setProject(activeModel);
+
+function loadAdvancedSettings(): Promise<void> {
+  advancedSettingsLoad ??= Promise.all([
+    import("./metric-mapping-panel.js"),
+    import("./safe-extension-panel.js"),
+  ])
+    .then(([metricModule, extensionModule]) => {
+      metricMappingPanel = metricModule.installMetricMappingPanel(
+        element<HTMLElement>("metric-mapping-panel"),
+        {
+          onModelChange: (model) => {
+            setSafeExtensionProject(model);
+            applyModel(model, activeModelSource);
+          },
+          onPreviewStateChange: (active) => {
+            printExportEnabled = !active;
+            printExportDialog?.setEnabled(printExportEnabled);
+            printExportOpenButton.disabled = active;
+            printExportOpenButton.title = active
+              ? "Apply or cancel the metric mapping preview before exporting."
+              : "";
+            metricPreviewBanner.hidden = !active;
+          },
+        },
       );
-      activeSafeExtensionEvaluation = review.evaluation;
-      if (projected === activeModel) {
-        printExportDialog.invalidate();
-        imageExportDialog.invalidate();
-        printPlateToolbar.setPlan(undefined);
-        applyVisualization();
-        return;
-      }
-      applyModel(projected, activeModelSource, {
-        preserveView: true,
-        preserveSelection: true,
-      });
-    },
-    onInvalidate: () => {
-      activeSafeExtensionEvaluation = undefined;
-      if (
-        !suppressSafeExtensionRestore &&
-        activeModel !== safeExtensionBaseModel
-      ) {
-        applyModel(safeExtensionBaseModel, activeModelSource, {
-          preserveView: true,
-          preserveSelection: true,
-        });
-      } else if (!suppressSafeExtensionRestore) {
-        printExportDialog.invalidate();
-        imageExportDialog.invalidate();
-        printPlateToolbar.setPlan(undefined);
-        applyVisualization();
-      }
-    },
-  },
-);
-setSafeExtensionProject(activeModel);
+      safeExtensionPanel = extensionModule.installSafeExtensionPanel(
+        element<HTMLElement>("safe-extension-panel"),
+        {
+          onPreview: (review) => {
+            const projected = applySafeExtensionEvaluation(
+              safeExtensionBaseModel,
+              review.evaluation,
+              review.application,
+            );
+            activeSafeExtensionEvaluation = review.evaluation;
+            if (projected === activeModel) {
+              printExportDialog?.invalidate();
+              imageExportDialog?.invalidate();
+              printPlateToolbar.setPlan(undefined);
+              applyVisualization();
+              return;
+            }
+            applyModel(projected, activeModelSource, {
+              preserveView: true,
+              preserveSelection: true,
+            });
+          },
+          onInvalidate: () => {
+            activeSafeExtensionEvaluation = undefined;
+            if (
+              !suppressSafeExtensionRestore &&
+              activeModel !== safeExtensionBaseModel
+            ) {
+              applyModel(safeExtensionBaseModel, activeModelSource, {
+                preserveView: true,
+                preserveSelection: true,
+              });
+            } else if (!suppressSafeExtensionRestore) {
+              printExportDialog?.invalidate();
+              imageExportDialog?.invalidate();
+              printPlateToolbar.setPlan(undefined);
+              applyVisualization();
+            }
+          },
+        },
+      );
+      metricMappingPanel.setProject(activeModel);
+      setSafeExtensionProject(activeModel);
+    })
+    .catch((error: unknown) => {
+      advancedSettingsLoad = undefined;
+      throw error;
+    });
+  return advancedSettingsLoad;
+}
+
+synchronizeOptionalAnalyzeWorkflow = (state): void => {
+  if (
+    state.activeView !== "analyze" ||
+    state.activeAnalyzeView !== "queries"
+  ) return;
+  void loadAdvancedQueryPanel().catch(() =>
+    showError("Analysis tools could not be loaded. Try again."),
+  );
+};
+synchronizeOptionalAnalyzeWorkflow({
+  activeView: viewerWorkspace.activeView,
+  activeAnalyzeView: viewerWorkspace.activeAnalyzeView,
+  detailsOpen: viewerWorkspace.detailsOpen,
+  sheetState: viewerWorkspace.sheetState,
+});
 
 visualizationModeSelect.addEventListener("change", () => {
   const selected = visualizationModeSelect.value;
@@ -1064,12 +1156,12 @@ visualizationModeSelect.addEventListener("change", () => {
   }
   visualizationMode = selected as ViewerVisualizationMode;
   applyVisualization();
-  imageExportDialog.invalidate();
+  imageExportDialog?.invalidate();
 });
 
 cameraFitCityButton.addEventListener("click", () => {
   if (cityScene.fitCity()) {
-    imageExportDialog.invalidate();
+    imageExportDialog?.invalidate();
   }
 });
 cameraFocusSelectionButton.addEventListener("click", () => {
@@ -1077,15 +1169,36 @@ cameraFocusSelectionButton.addEventListener("click", () => {
     showError("Select an entity before focusing the camera.");
     return;
   }
-  imageExportDialog.invalidate();
+  imageExportDialog?.invalidate();
 });
+printExportOpenButton.addEventListener("click", () => {
+  exportActionsMenu.open = false;
+  printExportOpenButton.disabled = true;
+  printExportOpenButton.setAttribute("aria-busy", "true");
+  void loadPrintExportDialog()
+    .then((dialog) => dialog.open())
+    .catch(() => showError("Print export could not be loaded. Try again."))
+    .finally(() => {
+      printExportOpenButton.removeAttribute("aria-busy");
+      printExportOpenButton.disabled = !printExportEnabled;
+    });
+});
+
 imageExportOpenButton.addEventListener("click", () => {
   exportActionsMenu.open = false;
   stopEvolutionPlayback(false);
   if (!evolutionLoading && !evolutionSeekController.busy) {
     settleEvolutionTransition();
   }
-  imageExportDialog.open();
+  imageExportOpenButton.disabled = true;
+  imageExportOpenButton.setAttribute("aria-busy", "true");
+  void loadImageExportDialog()
+    .then((dialog) => dialog.open())
+    .catch(() => showError("Image export could not be loaded. Try again."))
+    .finally(() => {
+      imageExportOpenButton.removeAttribute("aria-busy");
+      imageExportOpenButton.disabled = false;
+    });
 });
 
 evolutionFirst.addEventListener("click", () => {
@@ -1165,7 +1278,15 @@ exportActionsMenu.addEventListener("toggle", () => {
 
 advancedProjectSettingsOpen.addEventListener("click", () => {
   projectActionsMenu.open = false;
-  advancedProjectSettingsDialog.showModal();
+  advancedProjectSettingsOpen.disabled = true;
+  advancedProjectSettingsOpen.setAttribute("aria-busy", "true");
+  void loadAdvancedSettings()
+    .then(() => advancedProjectSettingsDialog.showModal())
+    .catch(() => showError("Advanced settings could not be loaded. Try again."))
+    .finally(() => {
+      advancedProjectSettingsOpen.removeAttribute("aria-busy");
+      advancedProjectSettingsOpen.disabled = false;
+    });
 });
 
 advancedProjectSettingsClose.addEventListener("click", () => {
@@ -1450,9 +1571,9 @@ window.addEventListener("beforeunload", () => {
   repositoryHierarchyTree.dispose();
   printPlateToolbar.dispose();
   projectImportDialog.dispose();
-  metricMappingPanel.dispose();
+  metricMappingPanel?.dispose();
   advancedQueryPanel?.dispose();
-  imageExportDialog.dispose();
+  imageExportDialog?.dispose();
   designSmellPanel.dispose();
   safeExtensionPanel?.dispose();
   logoLoadGate.invalidate();
@@ -1553,7 +1674,7 @@ function activateImportedModel(
 ): void {
   resetEvolutionTimeline();
   activeModelSource = source;
-  metricMappingPanel.setProject(model);
+  metricMappingPanel?.setProject(model);
   setSafeExtensionProject(model);
   applyModel(model, source);
   void startEvolutionTimeline(source);
@@ -1598,8 +1719,8 @@ function applyModel(
   const preservedSearchResultLimit = options.preserveSelection
     ? searchResultLimit
     : DEFAULT_REPOSITORY_EXPLORER_RESULT_LIMIT;
-  printExportDialog.invalidate();
-  imageExportDialog.invalidate();
+  printExportDialog?.invalidate();
+  imageExportDialog?.invalidate();
   printPlateToolbar.setPlan(undefined);
   const buildingsById = new Map(
     model.buildings.map((building) => [building.id, building]),
@@ -1758,7 +1879,7 @@ function resetEvolutionTimeline(recreateWorker = true): void {
   activeEvolutionPlaybackStartIndex = 0;
   codeInspectionFrameAccessState = "terminal";
   evolutionLoading = false;
-  imageExportDialog.invalidate();
+  imageExportDialog?.invalidate();
   evolutionTimeline.hidden = true;
   evolutionRange.max = "0";
   evolutionRange.value = "0";
@@ -1798,7 +1919,7 @@ async function startEvolutionTimeline(source: ModelSource): Promise<void> {
     activeEvolutionPlaybackStartIndex = loaded.playbackStartIndex;
     evolutionRange.max = String(Math.max(0, loaded.frames.length - 1));
     evolutionLoading = false;
-    imageExportDialog.invalidate();
+    imageExportDialog?.invalidate();
     renderEvolutionTimeline();
     if (loaded.frames.length > 1) {
       await seekEvolution(loaded.frames.length - 1, true);
@@ -1814,7 +1935,7 @@ async function startEvolutionTimeline(source: ModelSource): Promise<void> {
       return;
     }
     evolutionLoading = false;
-    imageExportDialog.invalidate();
+    imageExportDialog?.invalidate();
     evolutionCommit.textContent = "Repository history unavailable";
     evolutionStatus.textContent =
       error instanceof Error ? error.message : "Evolution could not be loaded.";
@@ -2384,6 +2505,15 @@ function renderBuildingSearch(): void {
             orderedBuildingIds: visibleBuildingOrder,
           });
           if (additive || range) return;
+        } else if (additive || range) {
+          void loadAdvancedQueryPanel()
+            .then((panel) => panel.selectFromScene(result.buildingId, {
+              additive,
+              range,
+              orderedBuildingIds: visibleBuildingOrder,
+            }))
+            .catch(() => showError("Selection tools could not be loaded. Try again."));
+          return;
         }
         viewerWorkspace.showDetails({
           intent: "explicit",
@@ -2478,6 +2608,15 @@ function activateRepositoryTreeEntity(
           intent.orderedBuildingIds ?? activeBuildingSelectionOrder,
       });
       if (intent.additive || intent.range) return;
+    } else if (intent.additive || intent.range) {
+      void loadAdvancedQueryPanel()
+        .then((panel) => panel.selectFromScene(entity.id, {
+          ...intent,
+          orderedBuildingIds:
+            intent.orderedBuildingIds ?? activeBuildingSelectionOrder,
+        }))
+        .catch(() => showError("Selection tools could not be loaded. Try again."));
+      return;
     }
     const next = selectExplorerBuilding(
       explorerState,
@@ -2802,7 +2941,7 @@ function synchronizeExplorerState(state: ExplorerState): void {
     dependencyRouteVisibleLimit = INITIAL_ROUTE_RESULT_LIMIT;
   }
   synchronizeCameraFocusControl();
-  imageExportDialog.invalidate();
+  imageExportDialog?.invalidate();
   for (const button of searchResultButtons()) {
     if (
       button.dataset["buildingId"] === selectedBuildingId ||

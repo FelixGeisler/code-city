@@ -26,7 +26,7 @@ describe("safe extension viewer flow", () => {
       "utf8",
     );
     expect(main).toMatch(
-      /activeSafeExtensionEvaluation = review\.evaluation;\s*if \(projected === activeModel\) \{\s*printExportDialog\.invalidate\(\);\s*imageExportDialog\.invalidate\(\);\s*printPlateToolbar\.setPlan\(undefined\);\s*applyVisualization\(\);\s*return;\s*\}\s*applyModel\(projected,/u,
+      /activeSafeExtensionEvaluation = review\.evaluation;\s*if \(projected === activeModel\) \{\s*printExportDialog\?\.invalidate\(\);\s*imageExportDialog\?\.invalidate\(\);\s*printPlateToolbar\.setPlan\(undefined\);\s*applyVisualization\(\);\s*return;\s*\}\s*applyModel\(projected,/u,
     );
   });
 });

@@ -219,6 +219,18 @@ History color modes are offered only while verified evolution facts exist,
 and print-assignment color is offered only while a valid printer profile is
 available.
 
+Image and print export, Queries, metric mapping, and safe extensions are
+optional runtime workflows. Their controllers and workflow-specific
+dependencies are separate production chunks loaded on first activation.
+Findings remains eagerly prepared because its bounded large-model evaluation
+must progress in the background rather than become a minute-long first-open
+operation. Controls remain accessible while loading, report a safe generic
+failure if a chunk cannot be loaded, and preserve the existing focus lifecycle
+afterward. The
+production build validates both dynamic-entry identities and explicit raw and
+compressed eager-JavaScript budgets; increasing or suppressing Vite's generic
+chunk warning is not a substitute for that contract.
+
 == Advanced queries and selections
 
 The **Analyze > Queries** view defines versioned, exact query data over building names,

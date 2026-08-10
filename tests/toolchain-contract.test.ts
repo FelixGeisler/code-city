@@ -54,6 +54,28 @@ describe("development toolchain contract", () => {
     expect(readme).toContain("same-origin /api calls");
   });
 
+  it("keeps optional viewer exports out of the bounded startup graph", async () => {
+    const [rawPackage, viteConfiguration, budget] = await Promise.all([
+      fs.readFile("package.json", "utf8"),
+      fs.readFile("apps/viewer/vite.config.ts", "utf8"),
+      fs.readFile("tools/viewer-bundle-budget.mjs", "utf8"),
+    ]);
+    const packageContract = JSON.parse(rawPackage) as PackageContract;
+
+    expect(packageContract.scripts?.["viewer:build"]).toContain(
+      "node tools/viewer-bundle-budget.mjs",
+    );
+    expect(viteConfiguration).toContain("manifest: true");
+    expect(viteConfiguration).not.toContain("chunkSizeWarningLimit");
+    expect(budget).toContain('"src/advanced-query-panel.ts"');
+    expect(budget).toContain('"src/image-export-dialog.ts"');
+    expect(budget).toContain('"src/metric-mapping-panel.ts"');
+    expect(budget).toContain('"src/print-export-dialog.ts"');
+    expect(budget).toContain('"src/safe-extension-panel.ts"');
+    expect(budget).toContain("includeEagerChunk(\"index.html\")");
+    expect(budget).toContain("ENTRY_GZIP_MAX_BYTES");
+  });
+
   it("uses the same bounded verification workflow on Linux and Windows", async () => {
     const workflow = await fs.readFile(
       ".github/workflows/ci.yml",
