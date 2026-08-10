@@ -1,50 +1,71 @@
-= 10. Quality Requirements
+= 10. Quality Requirements and Test Evidence
 
-[cols="1,2"]
+== Critical passages
+
+[cols="2,3,2"]
 |===
-|Quality |Acceptance
+|Passage |Required behavior |Automated evidence
 
-|Determinism
-|Same revision, canonical metric mapping, and input order variants produce
-identical semantic groups, layout, legend, and bundle bytes
+|Untrusted source to model
+|Every transport reaches bounded snapshot analysis; C# and TypeScript facts,
+validation, and deterministic layout complete without running repository code
+|Analyzer, snapshot, Git, model-validation, and golden tests
 
-|Privacy
-|Local analysis succeeds with networking disabled
+|Authorized import to durable artifact
+|Requests are authorized before staging; credentials remain isolated; terminal
+jobs, cancellation, cleanup, restart recovery, and artifacts stay consistent
+|Server authorization, credential, upload, queue, artifact, and source tests
 
-|Explainability
-|Every visual dimension links to its metric, formula, normalization, cap,
-missing-value policy, scale, and mapping provenance
+|Real repository through the UI
+|The documented launcher imports 100 real GitHub commits, opens 100 frames, and
+produces valid model/evolution artifacts
+|`npm run test:viewer-real-import`
 
-|Printability
-|Every artifact fits the usable profile volume and contains no unplaced
-objects; browser Auto fit stays profile-safe when possible and requires an
-exact normal confirmation before a compact below-profile plan is serialized;
-tiling keeps districts whole; print consumes the mapping applied in the viewer
+|Model to interactive viewer
+|Selection, hierarchy, findings, queries, source detail, evolution, capability
+failure, accessibility, and bounded 25k rendering remain synchronized
+|`npm run test:viewer-performance` and viewer unit/integration tests
 
-|Atomic reconfiguration
-|Cancellation or invalid input preserves the active city; an applied
-geometry change cannot retain stale routes, bounds, picking data, or print
-previews
+|Model to physical artifact
+|Planning respects profile limits and deterministic geometry; STL, 3MF, plates,
+materials, labels, routes, and manifests agree
+|Core print, exporter, CLI, geometry, and browser print tests
 
-|Evolution playback
-|Direct seeking is path-independent; a superseded seek cannot publish a stale
-frame; reduced-motion mode performs no spatial interpolation; stable
-selections and route controls survive while their lineage or route exists;
-dependency changes and rebuilt route geometry describe the target frame
+|Private import to public snapshot
+|Publication strips private provenance, creates immutable versions, opens without
+credentials, survives import removal, and can be revoked
+|Published-city server, security, viewer, and real-import browser tests
 
-|Query interaction
-|Every match explains itself; deterministic ordering synchronizes one bounded
-selection across scene, hierarchy, and result views; unavailable capabilities
-and truncated totals remain explicit; exact building-mask isolation may span
-districts;
-multi-selection focus and dependency routes include every selected endpoint;
-and accessible per-building comparisons remain globally bounded
+|Production image and persistence
+|The non-root AMD64 image serves the app, analyzes C# and TypeScript through the
+public API, survives container recreation on one volume, and also builds for
+ARM64
+|Container workflow and `tools/container-runtime-smoke.mjs`
 
-|Image export
-|Semantic bounds make preset framing repeatable; output has the exact accepted
-pixel dimensions and requested scene annotations but no viewer chrome; GPU,
-memory, legend-fit, and WebGL failures are explicit
-
-|Performance
-|Viewer input is bounded; instancing is required before raising the limits
+|Release publication
+|Only an exact annotated version tag on `main` can publish; verification, audit,
+browser tests, multi-architecture build, SBOM, provenance, immutable-image smoke,
+and GitHub release occur in order
+|`npm run release:check`, toolchain contracts, and tag-only Release workflow
 |===
+
+== Verification layers
+
+`npm run verify` is the local structural gate: release identity, type checking,
+unit/integration tests, production builds, bundle budgets, and documentation.
+CI runs it on Linux and Windows, audits production dependencies, and runs the two
+Chromium browser suites separately. Container CI validates the packaged runtime.
+The tag workflow repeats release-critical checks before creating a GitHub
+release.
+
+The suites favor observable contracts and deterministic barriers over retries or
+inflated timeouts. Platform-conditioned tests run on the corresponding Linux or
+Windows matrix member. Chromium with WebGL 2 is the automated browser baseline;
+other browsers are not claimed as tested 1.0 targets.
+
+== Operator acceptance
+
+Automation cannot validate a particular reverse proxy, filesystem ACL, backup
+location, slicer, or printer. Before production use, the operator must run the
+clean-deployment, persistence, backup/restore, and print checks in
+xref:14-release-and-operations.adoc[Release and operations].

@@ -1,99 +1,57 @@
 = 9. Architecture Decisions
 
+Only decisions that constrain future implementation belong here. Exact protocol
+fields, UI structure, and numeric limits belong in schemas, code, and tests.
+
 [cols="1,2"]
 |===
-|Decision |Rationale
+|Decision |Reason
 
-|TypeScript monorepo
-|Share model and logic across CLI, web, and workers
+|TypeScript monorepo with small native helpers
+|Share contracts and orchestration while using trusted language tooling behind
+bounded process protocols
 
-|Versioned city model
-|Decouple analysis from rendering and printing
-
-|Immutable published snapshots
-|Share validated model and evolution artifacts without rerunning analysis;
-retain permanent version links while a stable project link resolves to the
-latest explicitly published version
-
-|Versioned metric mapping
-|Keep independent geometry and color choices deterministic, inspectable, and
-portable between browser, history, and print
+|Versioned city and evolution contracts
+|Decouple acquisition and analysis from browser, publication, and export
 
 |Static analysis only
-|Make untrusted repositories safe by default
+|Treat repositories as untrusted data and avoid executing project behavior
 
-|Native language front ends
-|Use bounded native Roslyn and TypeScript 7 APIs behind one fact schema
+|Transport-independent snapshots
+|Make folders, ZIPs, hosted providers, and generic Git converge before analysis
 
-|Dependency overlay
-|Use surface-connected endpoints; show directed, bundled routes on demand
+|Deterministic layout and serialization
+|Support reproducible comparison, caching, history, and physical output
 
-|Shared dependency grammar v1
-|Share aggregation and placement; use browser arcs and printable raised traces
+|Durable filesystem jobs before external infrastructure
+|Provide restart recovery and modest self-hosting without requiring a database or
+message broker
 
-|External dependency nodes
-|Use fixed black boxes without code metrics; cap excess targets as `Others`
+|Same-origin viewer and API
+|Keep browser authorization, artifact access, and deployment policy in one clear
+boundary
 
-|Bounded labels
-|Show full browser details, but print stable short codes with a private legend
+|Explicit credential profiles and outbound policy
+|Prevent speculative credential use and separate caller, destination, and
+repository authorization
 
-|Semantic camera bounds
-|Make camera presets and image framing independent of transient render objects
+|WebGL 2 with accessible failure
+|Use the maintained Three.js baseline while preserving nonvisual capabilities
 
-|Direct scene PNG export
-|Render at an independently bounded GPU resolution and compose only requested
-scene annotations, never DOM chrome
+|Workers are isolation, not trust authorities
+|Keep expensive work cancellable and responsive while validating every result
+before use
 
-|Local directory as canonical input
-|Keep offline and remote paths identical after materialization
+|Printer-profile-driven planning
+|Keep semantic roles independent of any particular printer or tool count
 
-|Multi-part 3MF
-|Preserve aligned parts and their semantic material roles
+|Immutable sanitized publication
+|Make sharing deliberate, versioned, revocable, and independent of private import
+storage
 
-|Capability-driven printer profiles
-|Support arbitrary printer configurations without tool-count assumptions
+|Declarative extensions only
+|Permit portable customization without creating an executable plug-in boundary
 
-|Antora with arc42
-|Keep architecture concise, structured, and publishable
+|Single release container
+|Keep the supported deployment understandable and portable across AMD64 and ARM64
 |===
-
-== CityModel 1.0 compatibility
-
-Readers accept additive optional fields in schema `1.0` and reject unknown
-incompatible versions. Legacy dependencies infer `internal` from `targetId`
-and `external` from `externalTarget`; explicit `unresolved` edges retain their
-`externalTarget`. Dependencies point from consumer to provider. Formula IDs,
-normalization caps, normalized values, and clamped or unavailable states remain
-part of the model.
-
-The exact original fixed metric mapping remains valid. Readers do not broaden
-its formula IDs or caps; a different mapping must use mapping-definition
-version `1.0`. New analysis writes the complete built-in Complexity definition
-instead of relying on an implicit default. Thus an old model renders as before,
-while new and custom mappings are self-describing.
-
-== Mapping and history
-
-Metric mapping consumes analyzer facts and produces geometry, semantic groups,
-and provenance before layout. The viewer and print planner consume that same
-derived model. They do not maintain independent formula or palette
-implementations.
-
-A history analysis resolves one complete mapping before sampling commits and
-uses it for every frame. The canonical mapping contributes to the
-metric-configuration fingerprint. The legacy history token
-`metricMapping: "default-v1"` resolves only to the exact fixed mapping; direct
-and wrapped versioned definitions are accepted, and other claims fail closed.
-Browser previews do not rewrite immutable history provenance.
-
-== Dependency and label grammar v1
-
-The semantic edge is independent of presentation. Browser routes use elevated
-curves joined to explicit surface contacts. Print routes use profile-safe raised
-traces on the connected base. Both consume the same deterministic aggregation,
-external-node placement, direction, capping, and omission report.
-
-External boxes are infrastructure, not source buildings: fixed geometry, fixed
-semantic color, reference counts only. Screen labels are pooled and bounded.
-Print uses same-channel codes and a separate repository-relative legend. No
-dependency geometry is allowed to make an otherwise disconnected base printable.

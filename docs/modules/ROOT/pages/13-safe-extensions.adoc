@@ -1,104 +1,22 @@
-= Safe declarative extensions
+= 13. Safe Extensions
 
-Code City extensions are versioned JSON data, not plug-ins. They can declare
-derived metrics, color and geometry mappings, filters, legends, one bounded
-layout strategy, query result sets, and overlays. The public contract is
-`packages/core/schema/safe-extension.schema.json`; the strict runtime validator
-is the compatibility authority.
+Safe extensions are versioned JSON data, not executable plug-ins. They may define
+bounded derived metrics, mappings, filters, legends, query results, overlays,
+and an approved layout choice.
 
-== What a preview applies
+The extension boundary has no script, package, filesystem, network, credential,
+or environment capability. Input is strictly validated before an isolated,
+time-bounded worker evaluates a small expression language over a minimal model
+projection. The main thread validates and binds the complete result to the exact
+configuration and model before one application.
 
-**Project > Advanced settings > Safe extensions** provides a labelled JSON
-import, preview, and export flow without placing extension configuration ahead
-of Analyze findings. A
-successful preview projects the current city from an immutable base model. It
-applies every declared height, footprint, and color mapping; the optional
-`group-by-module` layout; declared legend endpoints; bounded query results; and
-all overlays. Later overlays deterministically win when several overlays color
-the same building. Editing the JSON, changing projects, changing an evolution
-frame, or starting a metric-mapping projection invalidates the preview and
-restores the base city.
+A preview starts from the immutable imported model and either applies atomically
+or leaves the active city unchanged. Changing the project, frame, configuration,
+or another projection invalidates it. Project-scoped configurations can be
+reviewed and exported; administrator scope additionally requires deployment
+approval bound to that exact configuration and model.
 
-The module layout keeps each district as a separate horizontal group, including
-when one module spans several districts. Height-only mappings preserve the
-existing district and base footprints. Derived metric identifiers cannot shadow
-built-in metric names.
-
-A footprint mapping that changes horizontal geometry needs collision-safe
-placement. With no declared layout, preview applies a deterministic module and
-district relayout and reports that decision as a diagnostic. An explicit
-`preserve-city` layout instead fails the preview when footprints change; choose
-`group-by-module` to authorize relayout. Relayouts retain the original city
-center and front edge so an identity panel remains at the front of the city.
-
-Mapping inputs outside their declared range are clamped and reported. Query
-and overlay result sets are sorted and capped at 500 building IDs, with an
-explicit omitted-row diagnostic. Invalid arithmetic is not coerced: division
-by zero, `log1p` outside its domain, non-finite results, and results outside the
-numeric range fail the complete preview and leave the city unchanged.
-
-== Safety boundary
-
-An extension has no JavaScript, TypeScript, WASM, command, URL, package,
-filesystem, network, credential, or environment capability. Derived metrics use
-only a small typed expression tree (`constant`, built-in metric, arithmetic,
-min/max, `log1p`, absolute value, and negation). Runtime validation rejects
-unknown properties, accessors, exotic prototypes, cycles, sparse arrays,
-prototype-pollution keys, unsupported versions, duplicate IDs, bad references,
-and incompatible models before interpretation.
-
-Configuration input is limited to 128 KiB, 32 total definitions, 64 nodes per
-expression, 256 expression nodes in aggregate, and depth 12. Evaluation has a
-200,000-operation budget. The worker receives only a validated model snapshot
-containing building IDs, module/district IDs, metrics, position, and size--never
-source text or unrelated project metadata. Snapshots are limited to 25,000
-buildings and 32 MiB; responses have their own deep graph and 32 MiB limits.
-
-Evaluation runs in a dedicated, time-bounded browser module worker. Cancellation
-terminates that worker, which interrupts synchronous interpretation immediately.
-The main thread deeply validates the response and checks its SHA-256 bindings
-against the exact canonical configuration and minimal project snapshot. The
-trusted worker client then issues an opaque, short-lived, one-use application
-receipt bound to the complete result and both input digests. Application
-consumes that receipt. Project-scoped results are also deterministically
-re-evaluated within the same operation budget and must match byte-for-byte, so
-even finite, well-shaped worker-result tampering is rejected rather than
-rendered. The worker is therefore a responsiveness boundary, not an integrity
-authority. Although browser workers expose platform APIs, extension data is
-never executed and the evaluator contains no I/O path.
-
-Scripting is deliberately outside this format. Adding scripts would require a
-separate sandbox and threat model; arbitrary code is not hidden behind a
-declarative field.
-
-== Sharing, scope, and approval
-
-`scope.kind: project` is the portable, stock-viewer scope.
-`scope.kind: administrator` fails closed unless a trusted deployment supplies
-an approval authority. That authority allowlists the requested `approvalId` and
-issues an opaque grant bound to both the canonical configuration digest and the
-project-model digest. A grant expires, is consumed on its first attempt, and
-cannot be copied or structurally forged. The resulting administrator evaluation
-is recorded by exact object identity in module-private state and can itself be
-applied once; a structured clone or replay fails even when every visible field
-matches. The separate application receipt is required as well. The stock
-browser worker owns no administrator authority, so imported data cannot grant
-itself administrator scope.
-
-Configurations declare the exact `codecity.extensions/1` format and `1.x`
-city-model family. This implementation accepts only the known `1.0` model
-snapshot; unknown minor or major versions fail closed instead of receiving a
-best-effort interpretation.
-
-Export is reviewed-only. Immediately before every download, the viewer parses
-and validates the current raw text again, recomputes both digests, and validates
-the complete reviewed result. A successful review authorizes one download; a
-second download requires another preview. This prevents a programmatic textarea
-change that omitted an `input` event from exporting unreviewed data.
-
-== Migration
-
-The migration API accepts only the immediately preceding data-only
-`codecity.extensions/0` shape and rewrites its version before strict validation.
-All other versions are rejected. Consumers that require an audit record should
-store the original JSON separately from the canonical evaluated configuration.
+This boundary is for portable data-driven customization. Arbitrary code would
+require a separate sandbox and threat model and is intentionally unsupported.
+The schema and runtime validator, not this overview, are the compatibility
+authority.

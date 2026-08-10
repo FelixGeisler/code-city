@@ -1,10 +1,14 @@
 = Code City Architecture
 
-Code City converts a repository into one versioned city model.
-The browser viewer and print exporter consume that same model.
+Code City converts untrusted repository data into one validated, versioned city
+model. The browser, history workflow, publication store, and print exporter all
+consume that model.
 
-This documentation follows arc42 and records only decisions that constrain the
-implementation.
+These pages describe only the enduring boundaries, data flow, deployment shape,
+quality goals, and decisions. Source code, schemas, and tests are authoritative
+for protocol fields, numeric limits, and UI details that change more often.
 
-Start with xref:01-introduction-and-goals.adoc[goals] and
-xref:04-solution-strategy.adoc[solution strategy].
+Start with xref:03-context-and-scope.adoc[context and scope],
+xref:05-building-block-view.adoc[building blocks], and
+xref:06-runtime-view.adoc[runtime view]. Operational procedures are kept
+separately in xref:14-release-and-operations.adoc[release and operations].

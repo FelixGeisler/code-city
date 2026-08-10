@@ -149,6 +149,10 @@ For a clean candidate deployment:
 . Confirm logs and persisted job records contain no repository URL, credential,
   source text, raw analyzer diagnostics, or AI context.
 
-The mandatory real-import browser job automates the import, print, publication,
-and anonymous-share portion. The deployment backup/restore drill remains an
-operator acceptance step because it validates the actual storage environment.
+The mandatory real-import browser job automates the public GitHub history,
+print-preparation, publication, and anonymous-share passage. Container CI also
+analyzes C# and TypeScript through the packaged production API, recreates the
+container on the same volume, and verifies the durable job and model. The
+candidate-image backup/restore, reverse-proxy, slicer, and filesystem-policy
+drills remain operator acceptance steps because they depend on the actual
+deployment environment.

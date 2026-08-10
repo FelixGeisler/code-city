@@ -13,7 +13,7 @@ changes, and export it as an image or physical model.**
 ## What it can do
 
 - Import a **Git repository**, **source folder or ZIP**, or generated Code City
-  model. GitHub, Azure DevOps, HTTPS, SSH, and scp-style Git are supported.
+  model. GitHub, Azure DevOps, and operator-approved HTTPS or SSH Git are supported.
 - Explore solutions, modules, districts, buildings, dependencies, source
   hierarchy, metrics, findings, saved queries, and representative history.
 - Export documentation images, STL, deterministic 3MF, multi-plate layouts,
@@ -21,7 +21,8 @@ changes, and export it as an image or physical model.**
 - Publish sanitized immutable city snapshots with latest and permanent public
   links, version history, republishing, and revocation.
 - Keep analysis self-hosted. Repository code is inspected, never built or
-  executed, and credentials stay in administrator-controlled server profiles.
+  executed. Credentials use explicit administrator profiles or a configured
+  Git service identity; they are never accepted in repository URLs.
 - Run on AMD64 or ARM64 from one non-root container with one persistent volume.
 
 ## Start Code City
@@ -33,7 +34,8 @@ API with persistent storage:
 docker run --detach --name code-city --restart unless-stopped --publish 8080:3000 --volume code-city-data:/data ghcr.io/felixgeisler/code-city:1.0.0
 ```
 
-Open **http://localhost:8080**.
+Open **http://localhost:8080** in a current Chromium-based browser with WebGL 2.
+Other browsers may work but are not part of the automated 1.0 baseline.
 
 Authorization is disabled by default for convenient trusted-network use. Do
 not expose that mode directly to the public Internet. Configure authorization,
@@ -63,7 +65,7 @@ local; see the deployment documentation before using production credentials.
 
 ## Documentation and release information
 
-- [Architecture and operating documentation](docs/modules/ROOT/pages/index.adoc)
+- [Concise architecture overview](docs/modules/ROOT/pages/index.adoc)
 - [Release, backup, restore, upgrade, and rollback procedure](docs/modules/ROOT/pages/14-release-and-operations.adoc)
 - [1.0.0 release notes](RELEASE_NOTES.md) and [changelog](CHANGELOG.md)
 - [Security policy](SECURITY.md) and [third-party notices](THIRD_PARTY_NOTICES.md)

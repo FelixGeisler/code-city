@@ -1,649 +1,79 @@
 = 6. Runtime View
 
-== Self-hosted server
+== Import and analysis
 
-The production server loads the built viewer once, serves it with same-origin
-security headers, and exposes a versioned `/api/v1` surface. Its persistent job
-queue keeps records beneath the configured data directory. Single concurrency
-is the safe Raspberry Pi default, and queued or active jobs can be cancelled.
-If the process restarts, unfinished records become explicitly failed with an
-interrupted reason instead of remaining permanently active.
-
-`GET /api/v1/health` provides a cache-free health check. `GET /api/v1/jobs` and
-`GET` or `DELETE /api/v1/jobs/\{id\}` expose bounded job state and cancellation.
-`DELETE /api/v1/imports/\{id\}/result` is the distinct, authenticated removal
-operation for a completed project import. It durably revokes the job before
-waiting for open artifact responses and deleting the city model plus any
-evolution companion. A retry resumes an interrupted removal, while startup
-reconciliation finishes a committed deletion before serving requests.
-Removal can wait for the artifact response's 30-minute total deadline; the
-viewer allows 31 minutes so a legitimate drain is not reported as a timeout.
-`POST /api/v1/imports` accepts one exact-shape JSON request for an anonymous
-public or exact-scope credentialed GitHub repository, or an operator-allowed
-Generic Git remote with optional exact-scope HTTPS credentials. It requires
-`X-Code-City-Request: 1`, accepts at most 32 KiB within five seconds, creates a
-private server-owned staging directory, and returns `202 Accepted` plus the
-persisted job under `Location`. Branches and tags are discriminated from exact
-commit SHAs. A completed job owns
-`/api/v1/artifacts/\{id\}/city-model.json`.
-
-When source retention is explicitly enabled, analysis also publishes a separate,
-owner-private source artifact keyed by the same opaque job UUID. A source read
-at `/api/v1/artifacts/\{id\}/sources/\{building-id\}` is authorized before
-processing and reads only a bounded indexed manifest plus the selected,
-digest-verified file. It succeeds only when the completed job, model repository,
-building ID, path, language, location, and provenance all agree. The response contains one exact
-file, immutable repository provenance, and optional commit-pinned provider and
-explicitly configured editor links. Executable-unit rows scroll to their
-recorded line range. Source text is never copied into city/evolution models,
-print artifacts, or legends. Disabled retention returns an explicit reduced
-state rather than refetching a mutable branch.
-
-The default trusted-network mode preserves this unauthenticated API. When an
-operator supplies one private authorization-token file and exact public
-origin, the request dispatcher authorizes every API route before its body or
-route-specific processing. Only `GET` or `HEAD /api/v1/health` and
-`/api/v1/auth/session` remain public; viewer assets are not private data.
-Automation presents the root bearer directly. A browser presents it once to
-`POST /api/v1/auth/session`, receives an opaque in-memory-backed session cookie,
-and then polls the same-origin job and artifact routes without retaining the
-root token. Sessions are bounded, expire after eight hours, and disappear on
-logout or restart.
-
-All credential failures use one fixed `401` response. Token comparison decodes
-to fixed 32-byte values and uses a constant-time comparison. The session cookie
-is `HttpOnly`, `SameSite=Strict`, scoped to `/api/v1`, and `Secure` outside an
-explicit loopback-only development origin. Mutations retain the non-simple
-`X-Code-City-Request: 1` header. Cookie mutations also require an exact
-configured `Origin`; a supplied Origin on bearer automation must match.
-Health remains anonymous and unchanged for container and platform probes.
-
-An authenticated `GET` or `HEAD /api/v1/imports/capabilities` returns only
-configured credential-profile `id`, `label`, and `provider` values with
-`Cache-Control: no-store`. Repository scopes, authentication usernames,
-secret filenames, and secret contents remain server-private. An authenticated
-GitHub or canonical HTTPS Generic Git source may include one optional, strictly
-validated `credentialProfileId`. GitHub requires a GitHub profile; HTTPS Git
-requires an Azure DevOps or Generic HTTPS profile. The selected profile must be
-scoped to that exact repository; this check completes before staging or job
-persistence. Private and internal repositories are supported when that
-credential grants access.
-
-GitHub profiles are bearer-only and require one ASCII RFC 6750 `b64token`
-secret line. Azure DevOps and Generic HTTPS profiles are Basic-only, with a
-visible-ASCII username that contains no colon and a one-line UTF-8 secret.
-
-Execution reopens the selected secret per job and revalidates its protected
-path and security-relevant startup snapshot: file identity, mode and ownership,
-link count, size, and modification and change times. A callback owns the
-credential only for the bounded network operation. Callback-scoped mutable
-credential buffers are overwritten on success, failure, abort, or registry
-close.
-
-Bearer authorization is attached only to exact HTTPS `api.github.com` requests.
-A token used for private or internal archive access needs repository
-`Contents: read` permission. Redirect following is disabled. The documented
-zipball endpoint must return one `302` whose path is exactly
-`/\{owner\}/\{repo\}/legacy.zip/\{sha\}` on `codeload.github.com`; an opaque
-query string is accepted, and that second fetch carries no `Authorization`
-header.
-
-Anonymous GitHub imports and Generic Git's ambient credential behavior remain
-unchanged. A selected HTTPS Git import instead isolates system, global, and
-user Git configuration, clears ambient repository credential helpers, and uses
-the chosen profile as its only repository credential helper through an
-ephemeral owner-restricted broker. The helper command line contains trusted
-executable paths, a random pipe name, and Git's operation; credential queries
-and responses cross bounded process pipes and never enter a URL, process
-argument, environment variable, Git configuration, or file. Broker cleanup is
-awaited before the credential callback returns; failure to confirm closure
-fails the import after a bounded force-termination attempt. Configured proxy
-and certificate environment settings remain in effect.
-
-Raw browser uploads use a two-step protocol without multipart parsing.
-`POST /api/v1/imports/uploads` validates exact-shape metadata and allocates a
-short-lived, one-use reservation. `PUT /api/v1/imports/uploads/\{token\}`
-requires the reserved media type and exact `Content-Length`, streams into the
-fixed private name `upload.bin`, flushes and identity-checks it, and only then
-returns a durable job. `DELETE` abandons an unused reservation. Existing city
-models are decoded as fatal UTF-8, parsed, validated, and re-published through
-the artifact store; their raw bytes are never promoted. Repository archives
-reuse the bounded ZIP snapshot source and the same snapshot-analysis pipeline
-as other sources. Explicit `single-directory` and `archive-root` modes avoid
-guessing which path prefix represents the project root.
-
-The viewer's *Import project* wizard drives those same-origin APIs through
-three user-facing concepts: *Git repository*, *Source files* (folder or ZIP),
-and *Generated Code City model*. A repository URL selects GitHub or Azure
-DevOps validation only for those canonical provider hosts and otherwise uses
-Generic Git validation. Repository access is separately explicit:
-anonymous/server-identity access does not select a credential, while credential
-profile access requires one compatible configured profile. The browser never
-speculatively sends credentials.
-
-A local directory is normalized, filtered to analyzer inputs and ignore
-controls, and packed into a deterministic bounded ZIP in a cancellable module
-worker before reservation. Existing ZIP and city-model selections are uploaded
-as raw fixed-size bodies. The browser never sends an absolute local path and
-cannot observe empty directories or reliable symlink metadata; users choose
-ZIP or server-side Git when those details matter.
-
-Repository history defaults to *Entire mainline*: Code City follows the
-selected revision's first-parent ancestry to its root and distributes at most
-20 representative animation frames by elapsed time across the complete span,
-always including root, tip, and the detected project start. Project start is
-the first mainline commit whose bounded Git tree-change metadata introduces a
-regular `.cs`, `.js`, `.jsx`, `.ts`, or `.tsx` candidate outside generated C#
-and hard-excluded build/dependency directories. This versioned path policy does
-not read historical source or repository ignore-file content. Normal playback
-starts at project start; earlier frames remain available as the technical
-pre-project baseline. When no candidate is detected, playback starts at the
-Git root. Intermediate commits are indexed as lightweight metadata; their
-source is not analyzed. Complete-mainline indexing is capped at
-100,000 commits. If a root cannot be proven within that ceiling, the import is
-rejected instead of presenting a recent suffix as complete history. Complete
-mode also requires a verifiable treeless partial fetch; unsupported Git servers fail
-closed and direct the user to a bounded custom range. Custom
-recent-commit, UTC-date, and exact-tag ranges remain capped at 500 traversed
-commits and retain an advanced fixed sampling interval.
-
-The overview retains one net path diff between adjacent sampled frames instead
-of every intermediate commit's changes. This keeps acquisition and lineage work
-bounded by the frame count; rename detection across a sampled gap is Git's
-deterministic best effort. If the selected tip timestamp is not later than the
-root timestamp, sampling falls back to deterministic ancestry positions.
-
-Historical frames keep stable identities, aggregate metrics, and relationship
-inputs required by the city animation. During one history run, a 64 MiB
-byte-bounded LRU reuses path-independent per-file analysis by source-content,
-language/source mode, analyzer, configuration, and detail fingerprints. It
-never retains source text, repository credentials, module ownership, districts,
-or resolved dependencies. Every frame rediscovers projects and recomputes
-ownership and dependency resolution. Changed files and the newest frame's full
-inspection detail use distinct cache entries; older frames retain only compact
-semantic summaries. The run-local cache is cleared before the analysis returns.
-Fine-grained callable and source-structure inspection detail is retained for the
-newest frame, whose immutable source snapshot is the one available to source
-navigation. Semantic memory is charged from explicit object-graph costs,
-bounded cumulatively across these retained frames, and persistent whole-commit
-cache leases are released after each owned frame copy.
-
-After a validated `202`, the browser retains only the opaque job UUID and polls
-one request at a time. Refresh resumes an active job or reopens a completed
-artifact; explicit query-model and performance-fixture loads take precedence.
-Closing the dialog cancels unfinished local-directory packaging; otherwise it
-only hides the wizard while submission, upload, or polling continues, and
-reopening shows the current state. Closing or navigating away from the page
-stops browser requests and polling without issuing server cancellation. An
-already accepted job keeps running and is resumed from its opaque stored UUID
-on return. The explicit *Cancel import* action abandons a live reservation or,
-once acceptance is known, requests cancellation of a queued or running job.
-After completion, reopening the wizard exposes *Remove stored import*, which
-uses the separate result-removal operation without changing cancellation
-semantics. Completion validates the fixed job/artifact relationship, fetches
-the artifact through the credentialed
-same-origin gateway, runs the established model validator, and applies the city
-once. The root access token is cleared immediately after the one-time session
-exchange and never enters controller state or browser storage. In shared-secret
-mode, the wizard's explicit *Sign out* action revokes the HttpOnly browser
-session, clears the saved import-job UUID, cancels a known live job, and restores
-the built-in demo city.
-
-The job reports only fixed progress phases and fixed, non-reflective failure
-codes. Cancellation, analysis failure, publication failure, finalizer failure,
-and terminal-state persistence failure all run idempotent staging and artifact
-cleanup. Job files never contain a credential-profile selector, remote URL,
-requested symbolic ref, credential, source byte, host path, or raw analyzer
-diagnostic. The resolved immutable commit SHA may be stored as the generated
-model's default version.
-
-== Local
-
-`codecity open .` reads a checkout, builds the city model, and serves the viewer
-on an ephemeral `127.0.0.1` port. It prints the URL and does not launch a
-browser. The server exposes only bundled viewer assets and one in-memory model;
-SIGINT, SIGTERM, or explicit close stops it.
-
-== Viewer workspace
-
-The workspace has two primary destinations: **Explore** and **Analyze**.
-Explore is the default and combines the whole-city overview, available color modes,
-search, and the repository tree in one scrolling surface. Analyze opens on
-**Findings** and groups **Routes** and **Queries** behind nested, keyboard-
-navigable tabs. Selecting a building, district, or dependency opens
-contextual **Details** instead of adding another permanent destination; the
-back action restores the prior primary and nested view with its scroll state.
-
-On desktop the workspace is a resizable side dock; below 1100 px it becomes a
-collapsed, peek, or expanded bottom sheet. Passive scene selection does not
-steal keyboard focus, while explicit finding, query, or source navigation may
-focus the contextual details region. Exact building selections can still be
-focused or isolated from **Analyze > Queries** without changing the city-wide
-overview. **Import project** remains the one visible primary header action.
-**Project** groups local model, demo, and
-Advanced settings actions; **Export** groups image and print export.
-History color modes are offered only while verified evolution facts exist,
-and print-assignment color is offered only while a valid printer profile is
-available.
-
-Image and print export, Queries, metric mapping, and safe extensions are
-optional runtime workflows. Their controllers and workflow-specific
-dependencies are separate production chunks loaded on first activation.
-Findings remains eagerly prepared because its bounded large-model evaluation
-must progress in the background rather than become a minute-long first-open
-operation. Controls remain accessible while loading, report a safe generic
-failure if a chunk cannot be loaded, and preserve the existing focus lifecycle
-afterward. The
-production build validates both dynamic-entry identities and explicit raw and
-compressed eager-JavaScript budgets; increasing or suppressing Vite's generic
-chunk warning is not a substitute for that contract.
-
-== Published city snapshots
-
-An authorized user may publish the current completed import from **Project >
-Published cities**. Publication copies the validated city model and optional
-evolution bundle into an independent immutable version, so deleting the import
-job does not break shared links. Publication removes source-navigation
-provenance, including repository URLs, from both the model and evolution
-baseline. It never copies retained source, credentials, AI results, or the
-original submission.
-
-`/?published=\{publication-id\}` resolves the latest explicitly published
-version. `/?published=\{publication-id\}&version=\{version-id\}` is an
-immutable version link. Republishing appends a version; it never edits prior
-bytes. The gallery displays generation and publication times, model revision,
-size counts, version history, and **Not automatically updated**. Updating a
-publication therefore requires an explicit republish operation.
-
-Published metadata and immutable artifacts are public reads even when inbound
-authorization protects the rest of the API. Publish, republish, and unpublish
-remain same-origin authorized mutations with the explicit mutation header.
-Opening a publication uses no browser credentials and exposes no retained
-source or AI actions. A published evolution artifact still passes the normal
-worker digest, schema, replay, and frame-count validation before display.
-
-== Advanced queries and selections
-
-The **Analyze > Queries** view defines versioned, exact query data over building names,
-paths, languages, risk bands, source metrics, dependency counts and
-neighborhoods, the active evolution transition, and available design-smell
-rules. Built-in queries rank highest complexity and dependency hubs, inspect
-the incoming or outgoing neighborhood of the primary building, show recent
-changes, or scope results to the selected district. Stable path and building
-identity tie-breakers keep every result order deterministic. Each result lists
-the conditions that matched; missing transition or rule data produces an
-explicit unavailable or partial state instead of silently returning no match.
-
-Query evaluation is isolated in a fresh, cancellable worker. A query has at
-most 16 conditions, inspects at most 25,000 buildings and 250,000 dependency
-facts, and returns at most 500 results. The response reports the evaluated and
-total counts plus truncation. The main thread validates exact response fields,
-bounds, state/count consistency, unique result identities, and explanation
-limits before publishing it. Starting another query or model frame terminates
-the obsolete worker.
-
-Pointer, query-result, search, and hierarchy selection share one primary
-building and one bounded selection set. Ctrl/Command toggles membership; Shift
-selects the range in the current deterministic list; arrow keys move through
-query results. The screen-reader result list exposes each membership through
-`aria-selected`, while the live status announces counts and capability
-failures. Up to 500 buildings may be selected. Their instanced overlay remains
-one bounded draw object and can be disabled without losing membership.
-
-Focus frames the combined bounds of every selected building. Isolation applies
-an exact building-ID mask, including selections that span districts, and the
-same mask governs instanced rendering, legacy rendering, highlighting, and
-picking. Enabled dependency directions gather routes from every selected
-endpoint, deduplicate internal relationships selected at both ends, and apply
-one global 80-route limit. Compare reports aggregate ranges and exposes an
-accessible per-building metric table capped at 100 rows with explicit omitted
-counts. Export downloads the versioned query, selection set, and selected
-building facts as JSON. Named queries and selection sets use versioned
-project-local browser storage keyed by stable project identity. Each query
-records its model, metric, and optional rule schema capability; incompatible or
-malformed stored data is ignored. Evolution frames retain surviving identities
-and rerun the active query, while loading a different project clears the
-selection.
-
-**Explore** contains a deterministic repository, solution, module, district,
-and file tree synchronized with the 3D scene and search results. A scene or
-search selection expands only its ancestor path and reveals the matching row;
-tree activation selects and frames the same district or building while
-remaining in Explore. Repository, solution, module, directory, and source-file
-rows use consistent inline SVG marks instead of platform-dependent font glyphs.
-Arrow keys navigate or expand the hierarchy, Home and End jump to its bounds,
-and Enter or Space activates the current row. The flat ARIA tree reports level,
-set position, expansion, selection, and active-descendant state. Fixed
-32-pixel rows are virtualized with a hard limit of 160 mounted rows, and the
-viewer retains expansion, active row, and scroll state for the eight most
-recent project identities.
-
-The analyzer also persists deterministic class/type and callable declarations
-with exact one-based line/column ranges for C#, TypeScript, and JavaScript.
-Columns count UTF-16 code units, and both endpoints are inclusive, so equal
-start and end columns identify one character.
-Only syntactically certain declaration ownership is represented. Call targets
-and cross-file type relationships require a semantic binding context and are
-therefore explicitly recorded as unavailable rather than guessed. Fine detail
-is deliberately not printable; closing it leaves the file-level city selection
-and camera context intact.
-
-== Metric configuration
-
-**Project > Advanced settings > Metric mapping** lists the curated presets and
-saved custom configurations for the loaded project. Complexity, Maintenance, and Print are
-available. Dependencies, Ownership, and Evolution stay visible but disabled
-with the missing-fact reason described in
-xref:08-crosscutting-concepts.adoc#_curated_presets[Curated presets].
-Footprint, height, and color are edited independently, and the legend exposes
-the complete formula, normalization, cap, missing-value, color-scale, and
-provenance contract before application.
-
-**Preview** validates the complete candidate and derives its result in a
-cancellable worker without committing it. A successful result is shown
-temporarily in the scene, labelled as a preview, and print export stays disabled
-until the user applies or cancels it. Editing again or canceling supersedes the
-in-flight request; a late result from an older request cannot become current.
-**Apply** is available only for the latest successful preview. Invalid fields
-and unavailable metrics fail with a specific reason and leave the committed
-mapping untouched.
-
-Every preview starts from the immutable imported model and performs a full
-deterministic relayout, including a color-only candidate. Building positions
-and dimensions, districts, base and identity geometry, bounds, picking data,
-route contacts and anchors, semantic groups, and derived overview state are
-replaced together; partial results are never published. Every successful apply
-invalidates stale print preflight and export data, so the next print preview is
-generated from the exact mapping visible in the browser.
-
-Users may name and save a valid custom configuration. Browser persistence is
-origin-local and scoped by the loaded project's stable identity: a
-configuration from one repository or imported model is not offered silently
-for another. Only a derived project identity, the name, and the canonical
-mapping definition are retained; no source text, repository credential, remote
-URL, local path, or generated model is added to browser storage. Deleting
-browser data removes these saved configurations without changing the
-city-model artifact.
-
-During evolution analysis, one selected mapping is evaluated for every frame
-against that frame's raw facts, including its per-frame missing-value behavior.
-The resulting bundle therefore never mixes layouts or legends from different
-configurations. The bundle's analysis-time metric-configuration fingerprint
-remains provenance and is not rewritten by a browser-only preview.
-
-== Repository evolution playback
-
-After a history import opens, the viewer reads the evolution companion through
-the same-origin artifact API. The response must have the exact declared byte
-length and JSON media type. A dedicated persistent worker verifies the SHA-256
-digest, validates the bounded bundle, owns its replay state, and returns only
-the requested full frame plus bounded transition and visualization facts.
-
-First, previous, play/pause, next, last, speed, and range controls all use the
-same direct-seek path. Each seek replays from the validated baseline, so the
-stable scene for a commit is independent of prior playback. Request IDs make a
-new scrub cancel the pending UI result; late worker frames cannot become
-current. The worker retains one bundle and materializes only the source and
-target replay frames needed for a transition rather than retaining all full
-models.
-
-Scene reloads preserve the orbit camera and reselect a stable building,
-district, or external-dependency ID when it still exists. A removed selected
-building becomes a historical tombstone with its last known metrics, path,
-first frame, change count, and removal frame. Additions rise from their base,
-removals shrink and fade as red ghosts, renames are cyan, moved or resized
-buildings are amber, and other changes are violet. These temporary cues expire
-to the frame's path-independent visualization. With `prefers-reduced-motion`,
-the full target geometry is published immediately and only static change cues
-are shown.
-
-Dependency comparison uses stable endpoint and route identities to distinguish
-additions, removals, metadata changes, and retargets in either seek direction.
-  The timeline reports the actual relationship counts and marks affected
-  target-frame endpoints and visible routes in pink until the next seek
-  replaces that transition context.
-Building-route direction toggles and limits, together with
-cross-district visibility, kind filters, limits, and a still-valid selected
-route, survive direct and arbitrary seeks. Both overlays are rebuilt from the
-target model, so preserved controls never retain stale route content or
-geometry; only a route selection that no longer matches the target frame is
-dropped.
-
-The **Building age** mode counts frames since a lineage first appeared.
-**Historical churn** counts its additions, replacements, and removals through
-the selected commit. Both modes are unavailable, with an explicit explanation,
-for model-only imports.
-
-== Camera and image export
-
-The live viewer uses one perspective, three-quarter 3D camera with orbit,
-zoom, and pan navigation. **Fit city** and contextual **Focus selection** keep
-the current orientation while framing the corresponding semantic bounds.
-**Focus selection** remains hidden until a building, district, or external
-dependency is selected.
-
-**Export PNG** creates a new scene render whose resolution, projection, and
-framing are independent of the browser viewport and current camera projection.
-The user chooses an isometric, top-down, selected-entity, or whole-city frame,
-the scene or a transparent background, and optional selected/hover labels and
-visualization legend. Optional evolution metadata adds the current frame
-ordinal, commit SHA, and timestamp. Export pauses playback, finishes an active
-transition at its stable target frame, and does not capture panels, controls,
-the timeline, or other DOM chrome.
-
-Framing uses cached bounds derived only from the base, districts, buildings,
-external nodes, and identity panel. Hover and selection overlays, dependency
-routes, hidden render helpers, and evolution-removal ghosts cannot change the
-frame. Each dimension must be a whole number from 256 through 8192 pixels.
-Preflight may lower that maximum to the active WebGL texture, renderbuffer, or
-viewport capability and rejects an estimated working set above 512 MiB. The
-estimate includes the actual framebuffer sample count. A lost context disables
-the camera-framing and image controls until restoration; failure to create
-WebGL at startup shows an accessible fallback while project data and non-visual
-exports remain available.
-
-== Viewer performance
-
-Buildings render as deterministic, color-per-instance batches over one shared
-box geometry. A building AABB BVH handles exact nearest picking, and pointer
-movement is coalesced to one pick per animation frame. Selection and hover use
-two reusable non-raycast overlays.
-
-The viewer pins Three.js r185 and requires WebGL 2, the renderer's supported
-baseline since r163. A WebGL 1-only or unavailable context produces an
-accessible capability panel while project data and non-visual exports remain
-available. WebGL 2 core instancing drives normal rendering. If an initialized
-context lacks the required instancing operations, models through 500 buildings
-still use bounded ordinary meshes; larger models produce an accessible
-capability error. Dependency arrows and gateways use the same bounded
-non-instanced fallback.
-
-`?fixture=large-city-25k&performance=1` opens the public deterministic upper
-bound fixture: 25,000 buildings, 100 districts, and five visual styles.
-`npm run test:viewer-performance` builds the production viewer and checks its
-Chromium startup, scene-object, draw-call, and warmed-pick budgets within 45
-seconds.
-
-== Public GitHub
-
-`codecity analyze-github https://github.com/owner/repository --ref main
---output build/city-model.json` resolves one public ref to an immutable commit
-through GitHub's anonymous API. It downloads that commit archive, validates and
-analyzes it through the same snapshot boundary as local input, then discards
-the archive. No checkout, temporary directory, credential, or cache is created.
-
-== Generic Git
-
-`codecity analyze-git <remote> --ref <ref> --output <model>
---trusted-workspace-parent <directory>` validates an HTTPS, SSH, or scp-style
-remote, resolves one advertised branch, tag, or exact commit, and shallow
-fetches it into a private temporary bare repository. The trusted-parent option
-is required on Windows. It is an explicit assertion that an existing directory
-has a private inherited ACL and that its canonical entry and ancestry prevent
-untrusted rename, delete, and delete-child operations; the command does not
-create or secure that boundary.
-
-On POSIX, a configured parent must be process-owned mode `0700`. Without the
-option, the OS temporary directory is used only after stable device/inode,
-ownership, permission, sticky-directory, and complete canonical-ancestry checks
-succeed. Windows has no implicit temporary-directory fallback because portable
-Node APIs cannot verify those ACL guarantees.
-
-The adapter verifies the advertised object and commit, creates a bounded
-temporary `snapshot/` ZIP, reads it, atomically quarantines and removes the
-complete workspace, then uses the shared snapshot and analyzer pipeline. It
-never checks out files, runs hooks, filters, submodules, or LFS, or stores a
-derived cache.
-
-The server endpoint adds two independent gates above this adapter. Generic Git
-is disabled unless the operator lists an exact HTTPS or SSH origin; scheme,
-normalized hostname or IP, and effective port must all match. scp-style
-remotes map to SSH port 22. A selected HTTPS profile must independently match
-the provider and exact repository scope. The origin list prevents a network
-caller from choosing an arbitrary destination for the server identity; it does
-not authorize individual repositories or callers. In default trusted-network
-mode every Code City client can request any repository/user at an enabled
-origin. Unselected HTTPS and SSH/scp imports may use the service account's
-ambient credentials, while selected HTTPS imports isolate repository
-credential helpers and use the chosen Basic profile for repository
-authentication. Configured proxy and certificate environment settings remain
-trusted dependencies. Deploy with only authorized trusted clients or enable
-inbound authorization, and use a least-privileged service identity.
-
-== Print
-
-== Progressive source detail
-
-The file-level city remains the startup level of detail.  Analyzer-produced
-models may add the backwards-compatible
-`codecity.source-structure/1` building extension, containing deterministic
-class/type and callable identities plus exact one-based line/column ranges.
-Semantic IDs are derived from declaration ancestry, kind, name, signature, and
-same-key occurrence rather than source order, so unrelated insertions do not
-renumber existing declarations. Callable complexity remains an analyzer fact
-with the declaration instead of being recomputed by the viewer.
-Versioned executable-unit decision evidence links back to that callable ID and
-retains only validated, bounded source sites; consumers never need to infer
-branches from retained text.
-The contextual **Code inspection** area calls this declaration projection the
-**Code outline** because it describes types and callables inside one file, not
-filesystem hierarchy. Selecting a building and expanding the outline perform
-no retained-source request. **Open retained source**, hotspot/unit source links,
-declaration links, and finding navigation are explicit source actions and share
-one stale-selection-guarded, per-building in-flight request. Selecting another
-building immediately scrubs the prior source, links, highlights, grants, and
-suggestions.
-
-Unit focus presents `CC = 1 base path + persisted decision contribution` from
-the versioned analyzer facts. Complete, truncated, explicitly unavailable, and
-legacy aggregate-only states remain distinct; truncated evidence reports both
-retained and omitted contribution. At most 20 sites render initially and 256
-after progressive reveal. Every retained site uses its exact inclusive UTF-16
-token range. Choosing a site retains the other markers while emphasizing and
-scrolling to that token; the viewer never derives complexity from how many
-sites remain after a bound. **Clear declaration focus** returns to file focus
-without closing source or outline, changing selection/camera, moving the
-workspace, or preparing AI guidance.
-Fine detail is explicitly `not-printable`; print exports retain file/district
-geometry only.
-
-For C#, TypeScript, and JavaScript, declarations are syntax-derived. Cross-file
-type references and call targets are not guessed: the model persists a
-per-language `unavailable` explanation whenever a compilation/binding context
-is absent. Older schema-1.0 models and older Roslyn helper responses remain
-readable and show that same explicit unavailability rather than fabricated
-facts.
-
-`npm run print:demo` writes a labelled 3MF with aggregated dependency traces
-and a private JSON legend. PrusaSlicer imports it as one object with five
-aligned tool parts; the command reports its profile-derived size.
-`npm run print:connector-comparison` writes the profile-derived connector test
-and its measurement instructions.
-`npm run print:calibration` writes a deterministic Prusa XL calibration 3MF
-and its exact measurement manifest.
-
-[source,powershell]
+[source,text]
 ----
-npm run cli -- export `
-  --model examples\demo-city.json `
-  --profile profiles\prusa-xl-5t.json `
-  --format 3mf `
-  --scale 3 `
-  --labels auto `
-  --routes auto `
-  --legend build\print\code-city-demo.legend.json `
-  --output build\print\code-city-demo.3mf
+User -> Viewer -> Server job -> Source adapter -> Snapshot -> Analyzer
+                                      |                         |
+                                      +---- private staging     v
+                                                        validated city model
+                                                                |
+                                      durable job <---- artifact store
 ----
 
-Routes default to `off`; select `--routes auto` to print capped,
-district-aggregated dependencies.
+The viewer submits a Git source, source upload, or generated model through the
+same-origin API. The server validates authorization and the complete request
+before creating private staging or a durable job. Source adapters normalize all
+transports into the same read-only snapshot. The analyzer emits facts, evaluates
+the chosen mapping, lays out the city, validates the result, and atomically
+publishes the artifact.
 
-Use `--fit error` for one direct 3MF or STL. `--fit scale` reduces the model no
-further than the profile-safe feature scale and still requires one plate.
-`--fit tile` preserves the requested scale and assigns complete districts to
-at most `--max-plates` (default `99`). Scale and tile CLI exports are
-deterministic ZIP bundles.
+Jobs have bounded progress and safe terminal errors. Cancellation and shutdown
+clean owned staging data. A restart recovers durable completed work and marks
+interrupted active work explicitly rather than leaving it active forever.
+Repository URLs, credentials, source bytes, and raw analyzer diagnostics are not
+part of job records.
 
-The expert-only `--acknowledge-below-profile-scale` flag permits an explicit
-lower scale and lets `--fit scale` search below the profile-safe floor. Without
-that flag the existing rejection is unchanged. The acknowledgement means that
-thin walls, gaps, labels, relief, routes, or connectors may lose fidelity; it
-does not indicate printer hardware danger and never bypasses usable build-volume
-checks. Preflight records requested, applied, and safe scales and lists each
-violated feature with its resulting and minimum millimetres. Direct exports
-write a deterministic `.print-manifest.json` sidecar; ZIP exports carry the
-same fields in `manifest.json`.
+== Repository history
 
-[source,powershell]
+A history import selects bounded representative commits from one mainline. Each
+selected snapshot is analyzed with the same mapping and converted into stable
+identity-based deltas. The resulting evolution bundle is digest-bound to its
+baseline model.
+
+The browser gives the bundle to a dedicated worker. Every seek reconstructs the
+requested frame from the validated baseline, so results do not depend on prior
+playback. Request identities and worker termination prevent obsolete seeks from
+publishing stale state.
+
+== Viewer interaction and export
+
+The viewer loads only validated model data. Three.js renders bounded building
+batches while the hierarchy, findings, queries, source inspection, and
+accessibility views provide nonvisual access to the same entities. Optional
+expensive workflows are lazy modules or cancellable workers. Unsupported or lost
+WebGL leaves project data and nonvisual exports available.
+
+Image export renders the scene independently from page chrome. Print export
+passes the active model and printer profile through the shared print planner,
+then serializes STL, 3MF, or a multi-plate bundle locally. Both paths validate
+resource and output bounds before publishing a download.
+
+== Publication
+
+[source,text]
 ----
-npm run cli -- export `
-  --model examples\demo-city.json `
-  --profile profiles\generic-multi-channel.json `
-  --format 3mf `
-  --scale 3 `
-  --fit tile `
-  --output build\print\code-city-demo.zip
+completed import -> sanitize -> validate -> immutable publication version
+                                             |              |
+                                             v              v
+                                         latest link   permanent link
 ----
 
-The ZIP contains `manifest.json` and numbered `plate-01` artifacts. The
-manifest reports applied scale, bounds, warnings, unplaced objects, and omitted
-cross-plate routes with both endpoint IDs and plate numbers.
+Publishing is an explicit declassification operation. The server removes source
+provenance and private workflow data, validates the reduced model and evolution
+bundle, and writes independent digest-verified bytes. Republishing appends a
+version; it never edits an existing version. Public reads require no repository
+credential, while publish, republish, and unpublish remain authorized actions.
 
-In the viewer, **Auto fit (recommended)** is the default and the entered scale
-is a target/maximum. Auto tries the requested one-plate layout, a profile-safe
-one-plate fit, viable complete-district tiling, and finally an exact compact
-one-plate proposal. It never recommends whole-district Tile for a district
-that is itself oversized. If the compact proposal has real detail violations,
-the exact plates and below-limit measurements appear in preflight with a normal
-**Confirm compact fit** action. No artifact serialization or download occurs
-before confirmation; confirmation deterministically reruns the plan.
+== Optional retained source and AI guidance
 
-For Prusa XL 3MF exports with at least two enabled tools, **Wipe tower strip**
-keeps an empty rear strip outside the continuous city base. The 72 mm default
-covers the link:https://github.com/prusa3d/PrusaSlicer/blob/master/resources/profiles/PrusaResearch.ini[official profile's 60 mm nominal tower width],
-its standard brim, and placement clearance. PrusaSlicer centers imported
-geometry, so move the complete city flush to the front edge, do not run Arrange
-afterward, and place the tower in the revealed rear strip. Verify the sliced
-G-code preview. Set the reservation to 0 when the tower is disabled, or
-increase it when the slicer preview is wider.
+Retained source is private, opt-in, and stored separately from city and evolution
+artifacts. A source request must agree with the completed job, model provenance,
+building identity, and indexed file digest.
 
-**Print plates** previews the exporter geometry while export runs in a
-cancellable module worker. Preflight distinguishes requested Auto from the
-concrete applied policy and reports plate count, filenames, dimensions,
-utilization, target/applied scale, warnings, and omissions. Export rejects any
-non-empty unplaced set. The browser selects direct 3MF/STL for one completed
-plate and a ZIP for multiple completed plates. Select 3MF or STL and a bundled
-or local JSON profile; no input is sent over the network.
-
-After the concrete scale is selected, the exporter regenerates the shared
-plate base and each exposed district foundation as physical supports. A shared
-base is clamped to `minimumBaseThickness`; a district foundation is clamped to
-the greater of `minimumBaseThickness` and `minimumRaisedFeatureHeight`. These
-support thicknesses do not contribute to the scalable-detail safety floor.
-The planner records any extra district thickness as a foundation lift and
-applies that same lift to the district's buildings, keeping them seated on the
-adjusted foundation.
-
-**Prepare calibration** uses the selected profile without repository content
-and downloads the deterministic calibration plate in the selected format plus
-its manifest.
+AI guidance is disabled unless an administrator configures a provider. The
+browser requests an exact preview first; a short-lived one-use grant authorizes
+only that reviewed context. Provider credentials remain server-side, and Code
+City does not persist prompts or responses. Deterministic findings continue to
+work without AI.

@@ -5,25 +5,33 @@
 |Risk |Response
 
 |Metrics imply false precision
-|Expose formulas, raw and normalized values, caps, scales, and provenance
+|Expose formulas, evidence, missing facts, caps, and provenance; call findings
+heuristics rather than verdicts
 
-|A custom mapping hides or distorts missing data
-|Record and enforce its missing-value policy; preview before an atomic apply
+|Large or hostile inputs exhaust resources
+|Validate before use, isolate work, enforce hard byte/count/time ceilings, and
+cancel obsolete operations
 
-|Large repositories exhaust resources
-|Apply file, time, memory, and archive limits
+|Remote access leaks credentials or reaches unintended hosts
+|Require explicit origins and profiles, isolate credentials, reject redirects and
+unsafe URLs, and persist neither source requests nor secrets
 
-|Meshes slice differently across tools
-|Validate and smoke-test representative exports
+|Published data reveals private context
+|Republish only sanitized validated artifacts; keep publication immutable and
+revocable
 
-|Browser GPU limits or context loss prevent image export
-|Preflight dimensions against GPU capabilities and a 512 MiB sample-aware
-working-memory estimate; disable image controls during loss and show an
-accessible fallback when WebGL cannot start
+|Browser or GPU behavior varies
+|Use a tested WebGL 2 baseline, bounded fallbacks, explicit capability errors, and
+nonvisual export paths
 
-|Remote inputs enable SSRF or traversal
-|Allowlist hosted providers and validate archives
+|Slicers interpret geometry differently
+|Validate generated structure, provide calibration artifacts, and require an
+operator print/slicer acceptance check
 
-|Language coverage is incomplete
-|Report unavailable metrics explicitly
+|Portable filesystem APIs cannot prove every platform ACL property
+|Fail closed where possible and require explicit administrator attestations for
+Windows trust boundaries
+
+|Language and semantic coverage is incomplete
+|Report unsupported facts explicitly instead of guessing
 |===

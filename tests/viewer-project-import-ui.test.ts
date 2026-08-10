@@ -6,31 +6,6 @@ import { describe, expect, it } from "vitest";
 const viewerRoot = path.resolve("apps/viewer");
 
 describe("viewer project import UI", () => {
-  it("documents close and cancellation as distinct lifecycle actions", async () => {
-    const runtimeGuide = await fs.readFile(
-      path.resolve(
-        "docs/modules/ROOT/pages/06-runtime-view.adoc",
-      ),
-      "utf8",
-    );
-
-    expect(runtimeGuide).toMatch(
-      /Closing the dialog cancels unfinished local-directory packaging; otherwise it\s+only hides the wizard/u,
-    );
-    expect(runtimeGuide).toMatch(
-      /Closing or navigating away from the page\s+stops browser requests and polling without issuing server cancellation/u,
-    );
-    expect(runtimeGuide).toMatch(
-      /explicit \*Cancel import\* action abandons a live reservation or,\s+once acceptance is known, requests cancellation/u,
-    );
-    expect(runtimeGuide).toMatch(
-      /reopening the wizard exposes \*Remove stored import\*/u,
-    );
-    expect(runtimeGuide).toMatch(
-      /explicit \*Sign out\* action revokes the HttpOnly browser\s+session, clears the saved import-job UUID/u,
-    );
-  });
-
   it("exposes an accessible import wizard and every supported source", async () => {
     const html = await fs.readFile(
       path.join(viewerRoot, "index.html"),
