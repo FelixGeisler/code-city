@@ -1,0 +1,154 @@
+= Release and operations
+
+== Release identity
+
+Code City follows Semantic Versioning beginning with `1.0.0`. A release tag is
+an annotated tag named exactly `v<package-version>`. The tag-triggered workflow
+accepts only a tag matching `package.json`, the lockfile, the runtime version
+constant, changelog, and release notes. Pull requests and ordinary `main`
+updates never publish an image or create a GitHub release.
+
+The supported deployment artifact is the multi-architecture image at
+`ghcr.io/felixgeisler/code-city`. Immutable `1.0.0` and `1.0` tags identify the
+release line; `1` and `latest` are moving convenience tags. Production
+deployments should pin `1.0.0` or, for maximum reproducibility, the image digest
+reported by the registry.
+
+No npm package is published. The CLI is available inside the container and from
+a verified source checkout.
+
+== Pre-release checklist
+
+Before creating `v1.0.0`:
+
+. Confirm the release commit is on `main` and the working tree is clean.
+. Run `npm ci`, `npm run verify`, `npm audit --audit-level=high`,
+  `npm run test:viewer-performance`, and `npm run test:viewer-real-import`.
+. Confirm the Documentation and multi-architecture Container workflows pass for
+  that exact commit.
+. Run `npm run release:check`; then run
+  `RELEASE_TAG=v1.0.0 npm run release:check` on POSIX or set the equivalent
+  environment variable in PowerShell.
+. Review `CHANGELOG.md`, `RELEASE_NOTES.md`, `SECURITY.md`, `LICENSE`, `NOTICE`,
+  and `THIRD_PARTY_NOTICES.md`.
+. Perform the clean-deployment smoke test below.
+. Create and push the annotated tag only after all checks pass. Sign it when
+  the maintainer's signing key and verification policy are configured.
+
+Pushing the tag starts the release workflow. It repeats verification and both
+browser contracts, builds the AMD64/ARM64 image with SBOM and provenance
+attestations, makes the package publicly readable, smoke-tests the published
+immutable digest, and creates the GitHub release from `RELEASE_NOTES.md`. A
+visibility-update or smoke-test failure stops before GitHub release creation.
+Do not create the release manually in parallel.
+
+== Persistent-data boundary
+
+`CODECITY_DATA_DIR` contains private jobs, generated artifacts, optional retained
+source, published snapshots, and server-managed temporary state. The release
+container uses `/data`, backed by the Compose `code-city-data` volume. Credential
+secret files and the inbound authorization token are administrator-managed
+inputs and may be outside this directory; back them up separately under their
+original restrictive permissions.
+
+A filesystem copy is supported only while the Code City process is stopped.
+Copying a live data directory can capture mismatched atomic generations even
+though individual writes are crash-safe. Never place a backup archive inside
+the data directory itself.
+
+== Cold backup with Docker Compose
+
+From the deployment directory, create a private host backup directory and stop
+the application without deleting its container or volume:
+
+[source,bash]
+----
+mkdir -p backups
+chmod 700 backups
+docker compose stop code-city
+container="$(docker compose ps --all --quiet code-city)"
+test -n "$container"
+docker run --rm --user 0 \
+  --volumes-from "$container":ro \
+  --volume "$PWD/backups:/backup" \
+  alpine:3.22 \
+  tar -C /data -czf /backup/code-city-data-1.0.0.tgz .
+sha256sum backups/code-city-data-1.0.0.tgz \
+  > backups/code-city-data-1.0.0.tgz.sha256
+chmod 600 backups/code-city-data-1.0.0.tgz*
+docker compose start code-city
+----
+
+Store the archive, checksum, credential-profile manifest, credential secret
+files, authorization token, Compose configuration, and exact image digest in a
+protected backup location. A backup is not established until a restore drill
+has succeeded.
+
+For a bind-mounted `CODECITY_DATA_DIR`, stop Code City and archive the directory
+with a tool that preserves ownership, modes, symlinks, and regular-file
+identities. Do not follow links while archiving.
+
+== Restore
+
+Restore into an empty stopped data volume. The following destructive command
+removes the current volume contents first; verify `container` and the archive
+path before running it:
+
+[source,bash]
+----
+docker compose stop code-city
+container="$(docker compose ps --all --quiet code-city)"
+test -n "$container"
+(cd backups && sha256sum --check code-city-data-1.0.0.tgz.sha256)
+docker run --rm --user 0 \
+  --volumes-from "$container" \
+  --volume "$PWD/backups:/backup:ro" \
+  alpine:3.22 sh -eu -c '
+    find /data -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+    tar -C /data -xzf /backup/code-city-data-1.0.0.tgz
+    chown -R 10001:10001 /data
+  '
+docker compose start code-city
+----
+
+Restore external credential and authorization files separately with the private
+ownership and permissions required by the deployment guide. Start with the same
+image digest that created the backup, verify the smoke test, and only then
+perform an upgrade.
+
+== Upgrade and rollback
+
+. Create and verify a cold backup.
+. Pull the exact target tag or digest.
+. Stop and recreate only the application container; do not remove the data
+  volume.
+. Run the smoke test.
+. Keep the previous image digest and backup until operational acceptance.
+
+Application rollback uses the previous immutable image digest. If a future
+release changes persisted-data semantics incompatibly, restore the matching
+cold backup before starting the older image; never assume a downgraded binary
+can read data written by a newer release.
+
+== Release smoke test
+
+For a clean candidate deployment:
+
+. Start the exact candidate image and wait for `/api/v1/health` to return
+  `status: "ok"`, `version: "1.0.0"`, and `apiVersion: "v1"`.
+. Open the viewer and complete a real public Git repository import with 100
+  representative history frames.
+. Seek to the final timeline frame and prepare a five-tool Prusa XL 3MF.
+. Publish the city, open its latest and immutable links in a credential-free
+  browser context, and verify the published evolution reaches frame 100.
+. Restart the container and confirm the import and publication remain
+  available.
+. Unpublish the city and verify both public artifact links return 404.
+. Stop the deployment, complete a cold backup and restore into an empty volume,
+  restart, and repeat the health and persistence checks.
+. Confirm logs and persisted job records contain no repository URL, credential,
+  source text, raw analyzer diagnostics, or AI context.
+
+The mandatory real-import browser job automates the import, print, publication,
+and anonymous-share portion. The deployment backup/restore drill remains an
+operator acceptance step because it validates the actual storage environment.

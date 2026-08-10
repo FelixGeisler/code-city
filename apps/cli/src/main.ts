@@ -12,6 +12,7 @@ import {
   type LocalAnalysisOptions,
 } from "../../../packages/analyzer/src/index.js";
 import {
+  CODE_CITY_VERSION,
   parsePrinterProfile,
   parsePrintLabelPolicy,
   parsePrintRoutePolicy,
@@ -99,6 +100,7 @@ Print options:
 
 General:
   -h, --help           Show this help
+  -V, --version        Show the Code City application version
 
 Local analysis reads only explicitly supplied roots and never uses the network.
 GitHub analysis is anonymous, public-only, and resolves an immutable commit.
@@ -985,6 +987,14 @@ export async function runCli(
   dependencies: CliDependencies = {},
 ): Promise<number> {
   const command = args[0];
+  if (
+    command === "--version" ||
+    command === "-V" ||
+    command === "version"
+  ) {
+    io.stdout(`Code City ${CODE_CITY_VERSION}\n`);
+    return 0;
+  }
   if (
     command === undefined ||
     command === "--help" ||

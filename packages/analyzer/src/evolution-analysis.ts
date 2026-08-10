@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 
 import {
+  CODE_CITY_VERSION,
   EVOLUTION_AUTHOR_POLICY,
   EVOLUTION_BUNDLE_SCHEMA_VERSION,
   EVOLUTION_PROJECT_START_POLICY,
@@ -59,7 +60,6 @@ import type {
   LocalAnalysisFacts,
 } from "./types.js";
 
-const GENERATOR_VERSION = "0.1.0";
 const SOURCE_LINEAGE_PREFIX = "history-building";
 const MODULE_LINEAGE_PREFIX = "history-module";
 const SOLUTION_LINEAGE_PREFIX = "history-solution";
@@ -2623,7 +2623,7 @@ export function createHistoryEvolution(
       sha: commit.sha,
       committedAt: commit.committedAt,
       parentShas: Object.freeze([...commit.parents]),
-      analyzerVersion: GENERATOR_VERSION,
+      analyzerVersion: CODE_CITY_VERSION,
       analysisFingerprint: fingerprint(
         {
           analyzerFingerprint,
@@ -2691,7 +2691,7 @@ export function createHistoryEvolution(
     schemaVersion: EVOLUTION_BUNDLE_SCHEMA_VERSION,
     generator: Object.freeze({
       name: "code-city",
-      version: GENERATOR_VERSION,
+      version: CODE_CITY_VERSION,
     }),
     authorPolicy: EVOLUTION_AUTHOR_POLICY,
     selection: request.selection.summary,
@@ -2700,7 +2700,7 @@ export function createHistoryEvolution(
       repositoryFingerprint,
       analyzer: Object.freeze({
         name: "code-city",
-        version: GENERATOR_VERSION,
+        version: CODE_CITY_VERSION,
         fingerprint: analyzerFingerprint,
       }),
       historyBackend: Object.freeze({

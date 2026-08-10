@@ -5,6 +5,9 @@ on:
     paths:
     - .dockerignore
     - Dockerfile
+    - LICENSE
+    - NOTICE
+    - THIRD_PARTY_NOTICES.md
     - package.json
     - package-lock.json
     - apps/**
@@ -16,6 +19,9 @@ on:
     paths:
     - .dockerignore
     - Dockerfile
+    - LICENSE
+    - NOTICE
+    - THIRD_PARTY_NOTICES.md
     - package.json
     - package-lock.json
     - apps/**
@@ -85,6 +91,9 @@ jobs:
           test -w /data
           test -w /tmp
           test -r /app/build/app/apps/server/src/main.js
+          test -r /app/LICENSE
+          test -r /app/NOTICE
+          test -r /app/THIRD_PARTY_NOTICES.md
           test -r /app/tools/roslyn-helper/bin/Release/net10.0/codecity-roslyn-helper.dll
           test -r /app/tools/git-credential-helper/bin/Release/net10.0/codecity-git-credential-helper.dll
 
@@ -97,6 +106,9 @@ jobs:
           test "$roslyn_status" = 2
           test "$credential_status" = 1
         '
+
+        test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' code-city:ci-smoke)" = 1.0.0
+        test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.licenses" }}' code-city:ci-smoke)" = Apache-2.0
     - name: Build multi-architecture image
       uses: docker/build-push-action@v7
       with:

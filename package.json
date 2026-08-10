@@ -1,6 +1,17 @@
 {
   "name": "code-city",
+  "version": "1.0.0",
+  "description": "Self-hosted software repository visualization and print export",
   "private": true,
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FelixGeisler/code-city.git"
+  },
+  "bugs": {
+    "url": "https://github.com/FelixGeisler/code-city/issues"
+  },
+  "homepage": "https://felixgeisler.github.io/code-city/",
   "type": "module",
   "packageManager": "npm@11.6.2",
   "engines": {
@@ -15,11 +26,12 @@
     "print:calibration": "npm run compile --silent && node build/app/apps/cli/src/main.js calibrate --profile profiles/prusa-xl-5t.json --output build/print/prusa-xl-calibration.3mf --manifest build/print/prusa-xl-calibration.json",
     "print:connector-comparison": "npm run compile --silent && node build/app/apps/cli/src/main.js compare-connectors --profile profiles/prusa-xl-5t.json --output build/print/dependency-connector-comparison.3mf --instructions build/print/dependency-connector-comparison.instructions.txt",
     "print:demo": "npm run compile --silent && node build/app/apps/cli/src/main.js export --model examples/demo-city.json --profile profiles/prusa-xl-5t.json --format 3mf --scale 3 --labels auto --routes auto --legend build/print/code-city-demo.legend.json --output build/print/code-city-demo.3mf",
+    "release:check": "node tools/release-contract.mjs",
     "test": "vitest run",
     "test:viewer-performance": "npm run native:build --silent && npm run viewer:build --silent && playwright test --config playwright.config.ts --grep-invert @real-import",
     "test:viewer-real-import": "npm run native:build --silent && npm run viewer:build --silent && playwright test --config playwright.config.ts --grep @real-import",
     "typecheck": "tsc --noEmit",
-    "verify": "npm run typecheck && npm test && npm run build && npm run docs:build",
+    "verify": "npm run release:check && npm run typecheck && npm test && npm run build && npm run docs:build",
     "precli": "npm run compile --silent",
     "precompile": "npm run native:build --silent",
     "native:build": "npm run roslyn:build --silent && npm run git-credential-helper:build --silent",

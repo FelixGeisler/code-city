@@ -8,6 +8,7 @@ import net from "node:net";
 import path from "node:path";
 
 import {
+  CODE_CITY_VERSION,
   evaluateDesignSmells,
   validateCityModel,
   type CityBuilding,
@@ -2211,6 +2212,7 @@ function apiHandler(
     sendJson(request, response, 200, {
       status: "ok",
       service: "code-city",
+      version: CODE_CITY_VERSION,
       apiVersion: "v1",
     });
     return true;

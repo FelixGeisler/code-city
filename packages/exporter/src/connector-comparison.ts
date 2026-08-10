@@ -1,3 +1,4 @@
+import { CODE_CITY_VERSION } from "../../core/src/version.js";
 import {
   resolvePrinterGeometryLimits,
   validatePrinterProfile,
@@ -493,7 +494,7 @@ export function buildDependencyConnectorComparison(
   const comparisonParts = parts(profile, primitives);
   const measuredGap = minimumPositiveHorizontalGap(primitives, EPSILON);
   const printable: PrintableCity = {
-    application: { name: "Code City", version: "1.0" },
+    application: { name: "Code City", version: CODE_CITY_VERSION },
     profileId: profile.id,
     title: "Dependency Connector Comparison",
     version: DEPENDENCY_CONNECTOR_DECISION,

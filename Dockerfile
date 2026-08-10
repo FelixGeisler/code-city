@@ -18,6 +18,12 @@ RUN npm prune --omit=dev
 FROM node:24-bookworm-slim AS node-runtime
 
 FROM mcr.microsoft.com/dotnet/runtime:10.0-noble AS runtime
+ARG CODECITY_VERSION=1.0.0
+LABEL org.opencontainers.image.title="Code City" \
+      org.opencontainers.image.description="Self-hosted software repository visualization and print export" \
+      org.opencontainers.image.version="$CODECITY_VERSION" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.source="https://github.com/FelixGeisler/code-city"
 COPY --from=node-runtime /usr/local/ /usr/local/
 
 RUN apt-get update \
@@ -32,6 +38,7 @@ WORKDIR /app
 COPY --from=build /app/build ./build
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/LICENSE /app/NOTICE /app/THIRD_PARTY_NOTICES.md ./
 COPY --from=build /app/tools/roslyn-helper/bin/Release/net10.0 ./tools/roslyn-helper/bin/Release/net10.0
 COPY --from=build /app/tools/git-credential-helper/bin/Release/net10.0 ./tools/git-credential-helper/bin/Release/net10.0
 RUN chown --recursive root:root /app \

@@ -103,10 +103,10 @@ describe("Demo printable geometry", () => {
 
     expect(city.application).toEqual({
       name: "Code City",
-      version: "0.1.0-demo",
+      version: "1.0.0",
     });
     expect(city.title).toBe("Code City");
-    expect(city.version).toBe("Demo 0.1");
+    expect(city.version).toBe("Demo 1.0");
     expect(city.scale).toBe(3);
     expect(city.unit).toBe("millimeter");
     expect(city.bounds.minimum).toEqual({ x: 0, y: 0, z: 0 });

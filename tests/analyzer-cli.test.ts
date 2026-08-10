@@ -405,6 +405,19 @@ it("rejects unsupported export formats and invalid scale values", async () => {
   expect(messages.join("")).toContain("--routes must be either");
 });
 
+it("reports the application version without starting a command", async () => {
+  for (const argument of ["--version", "-V", "version"]) {
+    const stdout: string[] = [];
+    expect(
+      await runCli([argument], {
+        stdout: (message) => stdout.push(message),
+        stderr: () => undefined,
+      }),
+    ).toBe(0);
+    expect(stdout).toEqual(["Code City 1.0.0\n"]);
+  }
+});
+
 it("documents both dependency-route policy values", async () => {
   const stdout: string[] = [];
   expect(
