@@ -82,3 +82,16 @@ channels, and either produces a complete plan or fails explicitly. STL and 3MF
 serialize the same validated geometry. Multi-plate planning keeps district
 placement deterministic and reports omissions; calibration remains an operator
 responsibility.
+
+== Safe extensions
+
+Safe extensions are versioned JSON data, not executable plug-ins. They can add
+bounded metrics, mappings, filters, legends, queries, overlays, and an approved
+layout choice. They have no script, package, filesystem, network, credential, or
+environment access.
+
+An isolated, time-bounded worker evaluates validated extension data over a
+minimal copy of the model. The main thread validates the result and binds it to
+the exact model and configuration before applying it. A preview either applies
+completely or leaves the active city unchanged. Arbitrary code is intentionally
+unsupported because it would require a separate sandbox and threat model.

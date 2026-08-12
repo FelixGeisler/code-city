@@ -25,7 +25,7 @@ describe("development toolchain contract", () => {
       "npm run release:check && npm run typecheck && npm test && npm run build && npm run docs:build",
     );
     expect(packageContract.scripts?.["release:check"]).toBe(
-      "node tools/release-contract.mjs",
+      "node tools/release-contract.mjs && node tools/verify-production-licenses.mjs",
     );
     expect(packageContract.dependencies).toMatchObject({
       typescript: "7.0.2",

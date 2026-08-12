@@ -15,7 +15,7 @@ changes, and export it as an image or physical model.**
 - Import a **Git repository**, **source folder or ZIP**, or generated Code City
   model. GitHub, Azure DevOps, and operator-approved HTTPS or SSH Git are supported.
 - Explore solutions, modules, districts, buildings, dependencies, source
-  hierarchy, metrics, findings, saved queries, and representative history.
+  hierarchy, metrics, findings, saved queries, and changes over time.
 - Export documentation images, STL, deterministic 3MF, multi-plate layouts,
   physical labels, dependency routes, and Prusa XL five-tool models.
 - Publish sanitized immutable city snapshots with latest and permanent public
@@ -27,8 +27,7 @@ changes, and export it as an image or physical model.**
 
 ## Start Code City
 
-After the 1.0.0 image is published, one command starts the complete viewer and
-API with persistent storage:
+One command starts the complete viewer and API with persistent storage:
 
 ```bash
 docker run --detach --name code-city --restart unless-stopped --publish 8080:3000 --volume code-city-data:/data ghcr.io/felixgeisler/code-city:1.0.0
@@ -67,10 +66,11 @@ local; see the deployment documentation before using production credentials.
 
 - [Concise architecture overview](docs/modules/ROOT/pages/index.adoc)
 - [Release, backup, restore, upgrade, and rollback procedure](docs/modules/ROOT/pages/14-release-and-operations.adoc)
-- [1.0.0 release notes](RELEASE_NOTES.md) and [changelog](CHANGELOG.md)
-- [Security policy](SECURITY.md) and [third-party notices](THIRD_PARTY_NOTICES.md)
+- [1.0.0 release notes](RELEASE_NOTES.md)
+- [Security policy](SECURITY.md)
 
-Code City is an independent implementation of the established “code city”
-software-visualization concept. It is licensed under the
-[Apache License 2.0](LICENSE); the license does not grant trademark rights. See
-[NOTICE](NOTICE) for the project-name boundary.
+The visualization concept is described by Richard Wettel and Michele Lanza in
+[*CodeCity* (2008)](https://doi.org/10.1145/1370175.1370188).
+
+Code City is licensed under the [Apache License 2.0](LICENSE). Project identity
+and trademark information is in [NOTICE](NOTICE).

@@ -2,10 +2,9 @@
 
 ## Supported versions
 
-Before the first release is published, only the current `main` branch receives
-security fixes. After 1.0.0, the latest released minor line will receive
-security fixes; unsupported versions should be upgraded before reporting a
-version-specific problem.
+Security fixes are provided for the latest released minor line. The current
+`main` branch may contain fixes intended for the next release. Users of older
+release lines should upgrade before reporting a version-specific problem.
 
 ## Reporting a vulnerability
 

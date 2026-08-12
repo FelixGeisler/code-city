@@ -38,7 +38,7 @@ WORKDIR /app
 COPY --from=build /app/build ./build
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
-COPY --from=build /app/LICENSE /app/NOTICE /app/THIRD_PARTY_NOTICES.md ./
+COPY --from=build /app/LICENSE /app/NOTICE ./
 COPY --from=build /app/tools/roslyn-helper/bin/Release/net10.0 ./tools/roslyn-helper/bin/Release/net10.0
 COPY --from=build /app/tools/git-credential-helper/bin/Release/net10.0 ./tools/git-credential-helper/bin/Release/net10.0
 RUN chown --recursive root:root /app \
