@@ -131,14 +131,23 @@ jobs:
         provenance: mode=max
         cache-from: type=gha
         cache-to: type=gha,mode=max
-    - name: Make the public release image anonymously readable
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Verify the release image is anonymously readable
       shell: bash
+      env:
+        DIGEST: ${{ steps.build.outputs.digest }}
       run: |
-        package_name="${GITHUB_REPOSITORY#*/}"
-        gh api --method PATCH "/user/packages/container/$package_name" \
-          --field visibility=public
+        set -euo pipefail
+        repository="${GITHUB_REPOSITORY,,}"
+        token="$(curl --fail --silent --show-error \
+          "https://ghcr.io/token?service=ghcr.io&scope=repository:$repository:pull" \
+          | node -e 'let value=""; process.stdin.on("data", chunk => value += chunk).on("end", () => process.stdout.write(JSON.parse(value).token))')"
+        actual="$(curl --fail --silent --show-error --head \
+          --header "Authorization: Bearer $token" \
+          --header "Accept: application/vnd.oci.image.index.v1+json" \
+          "https://ghcr.io/v2/$repository/manifests/$GITHUB_REF_NAME" \
+          | tr -d '\r' \
+          | awk -F ': ' 'tolower($1) == "docker-content-digest" { print $2 }')"
+        test "$actual" = "$DIGEST"
 
   release-smoke:
     needs: [contract, publish-image]
