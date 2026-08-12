@@ -40,9 +40,29 @@ describe("public documentation contract", () => {
     expect(readme).toContain("Authorization is disabled by default");
   });
 
+  it("keeps release information organized by reader goals", async () => {
+    const [releaseNotes, operations] = await Promise.all([
+      fs.readFile("RELEASE_NOTES.md", "utf8"),
+      fs.readFile(`${pagesRoot}/14-release-and-operations.adoc`, "utf8"),
+    ]);
+
+    for (const heading of [
+      "## What you can do",
+      "## Deployment",
+      "## Security notes",
+      "## Compatibility and limitations",
+    ]) {
+      expect(releaseNotes).toContain(heading);
+    }
+    expect(operations).toContain("|Goal |Go to");
+    expect(operations).toContain("[#pre-release-checklist]");
+    expect(operations).toContain("[#cold-backup]");
+    expect(operations).toContain("[#release-smoke-test]");
+  });
+
   it("keeps architecture pages rough and operations separate", async () => {
     const names = (await fs.readdir(pagesRoot))
-      .filter((name) => /^(?:index|(?:0[1-9]|1[0-3])-.+)\.adoc$/u.test(name));
+      .filter((name) => name.endsWith(".adoc") && name !== "14-release-and-operations.adoc");
     const documents = await Promise.all(
       names.map(async (name) => ({
         name,
@@ -54,14 +74,16 @@ describe("public documentation contract", () => {
       0,
     );
 
-    expect(names).toHaveLength(14);
-    expect(architectureLineCount).toBeLessThanOrEqual(650);
+    expect(names).toHaveLength(9);
+    expect(architectureLineCount).toBeLessThanOrEqual(600);
     for (const document of documents) {
       expect(lines(document.text).length, document.name).toBeLessThanOrEqual(100);
     }
-    expect(documents.find(({ name }) => name === "index.adoc")?.text).toContain(
-      "protocol fields, numeric limits, and UI details",
-    );
+    const overview = documents.find(({ name }) => name === "index.adoc")?.text;
+    expect(overview).toContain("== Purpose");
+    expect(overview).toContain("== Constraints");
+    expect(overview).toContain("== Quality goals");
+    expect(overview).toContain("protocol fields, numeric limits, and UI details");
     expect(await fs.readFile(`${pagesRoot}/14-release-and-operations.adoc`, "utf8"))
       .toContain("== Cold backup with Docker Compose");
   });

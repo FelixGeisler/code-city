@@ -1,11 +1,35 @@
 = Release and operations
 
+This page contains procedures for release maintainers and deployment
+administrators. Start with the relevant section; most users do not need to read
+the complete page.
+
+[cols="1,2"]
+|===
+|Goal |Go to
+
+|Prepare and publish a release
+|<<pre-release-checklist,Pre-release checklist>>
+
+|Back up persistent data
+|<<cold-backup,Cold backup with Docker Compose>>
+
+|Restore a backup
+|<<restore,Restore>>
+
+|Upgrade or roll back
+|<<upgrade-and-rollback,Upgrade and rollback>>
+
+|Accept a deployment
+|<<release-smoke-test,Release smoke test>>
+|===
+
 == Release identity
 
 Code City follows Semantic Versioning beginning with `1.0.0`. A release tag is
 an annotated tag named exactly `v<package-version>`. The tag-triggered workflow
 accepts only a tag matching `package.json`, the lockfile, the runtime version
-constant, changelog, and release notes. Pull requests and ordinary `main`
+constant, and release notes. Pull requests and ordinary `main`
 updates never publish an image or create a GitHub release.
 
 The supported deployment artifact is the multi-architecture image at
@@ -17,9 +41,13 @@ reported by the registry.
 No npm package is published. The CLI is available inside the container and from
 a verified source checkout.
 
+[#pre-release-checklist]
 == Pre-release checklist
 
-Before creating `v1.0.0`:
+The short version is: verify the exact release commit, review the public
+release information, test a clean deployment, and only then push the version
+tag. For each release, complete the steps below and replace `<version>` with the
+version from `package.json`.
 
 . Confirm the release commit is on `main` and the working tree is clean.
 . Run `npm ci`, `npm run verify`, `npm audit --audit-level=high`,
@@ -27,13 +55,13 @@ Before creating `v1.0.0`:
 . Confirm the Documentation and multi-architecture Container workflows pass for
   that exact commit.
 . Run `npm run release:check`; then run
-  `RELEASE_TAG=v1.0.0 npm run release:check` on POSIX or set the equivalent
+  `RELEASE_TAG=v<version> npm run release:check` on POSIX or set the equivalent
   environment variable in PowerShell.
-. Review `CHANGELOG.md`, `RELEASE_NOTES.md`, `SECURITY.md`, `LICENSE`, `NOTICE`,
-  and `THIRD_PARTY_NOTICES.md`.
+. Review `RELEASE_NOTES.md`, `SECURITY.md`, `LICENSE`, and `NOTICE`.
 . Perform the clean-deployment smoke test below.
-. Create and push the annotated tag only after all checks pass. Sign it when
-  the maintainer's signing key and verification policy are configured.
+. Create and push the annotated `v<version>` tag only after all checks pass.
+  Sign it when the maintainer's signing key and verification policy are
+  configured.
 
 Pushing the tag starts the release workflow. It repeats verification and both
 browser contracts, builds the AMD64/ARM64 image with SBOM and provenance
@@ -56,6 +84,7 @@ Copying a live data directory can capture mismatched atomic generations even
 though individual writes are crash-safe. Never place a backup archive inside
 the data directory itself.
 
+[#cold-backup]
 == Cold backup with Docker Compose
 
 From the deployment directory, create a private host backup directory and stop
@@ -88,6 +117,7 @@ For a bind-mounted `CODECITY_DATA_DIR`, stop Code City and archive the directory
 with a tool that preserves ownership, modes, symlinks, and regular-file
 identities. Do not follow links while archiving.
 
+[#restore]
 == Restore
 
 Restore into an empty stopped data volume. The following destructive command
@@ -116,6 +146,7 @@ ownership and permissions required by the deployment guide. Start with the same
 image digest that created the backup, verify the smoke test, and only then
 perform an upgrade.
 
+[#upgrade-and-rollback]
 == Upgrade and rollback
 
 . Create and verify a cold backup.
@@ -130,6 +161,7 @@ release changes persisted-data semantics incompatibly, restore the matching
 cold backup before starting the older image; never assume a downgraded binary
 can read data written by a newer release.
 
+[#release-smoke-test]
 == Release smoke test
 
 For a clean candidate deployment:

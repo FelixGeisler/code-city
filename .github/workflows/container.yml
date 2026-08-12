@@ -7,7 +7,6 @@ on:
     - Dockerfile
     - LICENSE
     - NOTICE
-    - THIRD_PARTY_NOTICES.md
     - package.json
     - package-lock.json
     - apps/**
@@ -21,7 +20,6 @@ on:
     - Dockerfile
     - LICENSE
     - NOTICE
-    - THIRD_PARTY_NOTICES.md
     - package.json
     - package-lock.json
     - apps/**
@@ -101,7 +99,8 @@ jobs:
           test -r /app/build/app/apps/server/src/main.js
           test -r /app/LICENSE
           test -r /app/NOTICE
-          test -r /app/THIRD_PARTY_NOTICES.md
+          test -r /app/node_modules/three/LICENSE
+          test -r /app/node_modules/typescript/NOTICE.txt
           test -r /app/tools/roslyn-helper/bin/Release/net10.0/codecity-roslyn-helper.dll
           test -r /app/tools/git-credential-helper/bin/Release/net10.0/codecity-git-credential-helper.dll
 

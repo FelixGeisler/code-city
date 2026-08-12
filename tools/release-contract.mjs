@@ -13,12 +13,10 @@ const packageJson = JSON.parse(await text("package.json"));
 const packageLock = JSON.parse(await text("package-lock.json"));
 const readme = await text("README.md");
 const versionSource = await text("packages/core/src/version.ts");
-const changelog = await text("CHANGELOG.md");
 const releaseNotes = await text("RELEASE_NOTES.md");
 const license = await text("LICENSE");
 const notice = await text("NOTICE");
 const security = await text("SECURITY.md");
-const thirdPartyNotices = await text("THIRD_PARTY_NOTICES.md");
 const dockerfile = await text("Dockerfile");
 const releaseWorkflow = await text(".github/workflows/release.yml");
 const screenshotPaths = [
@@ -47,9 +45,6 @@ if (
 ) {
   throw new Error("The runtime version source does not match package.json.");
 }
-if (!changelog.includes(`## [${version}]`)) {
-  throw new Error("CHANGELOG.md does not contain the release version.");
-}
 if (
   !readme.includes(`ghcr.io/felixgeisler/code-city:${version}`) ||
   !readme.includes("code-city-overview.webp") ||
@@ -76,30 +71,6 @@ if (!security.includes("privately report a security vulnerability")) {
   throw new Error("SECURITY.md does not provide private reporting guidance.");
 }
 
-const expectedProductionLicenses = new Map([
-  ["fflate", "MIT"],
-  ["ignore", "MIT"],
-  ["jsonc-parser", "MIT"],
-  ["three", "MIT"],
-  ["typescript", "Apache-2.0"],
-]);
-for (const [name, expectedLicense] of expectedProductionLicenses) {
-  const dependencyVersion = packageJson.dependencies?.[name];
-  const locked = packageLock.packages?.[`node_modules/${name}`];
-  if (
-    dependencyVersion === undefined ||
-    locked?.license !== expectedLicense ||
-    typeof locked.version !== "string"
-  ) {
-    throw new Error(`Production dependency ${name} has an unexpected license contract.`);
-  }
-  if (
-    !thirdPartyNotices.includes(`| \`${name}\``) ||
-    !thirdPartyNotices.includes(`| ${locked.version} | ${expectedLicense} |`)
-  ) {
-    throw new Error(`THIRD_PARTY_NOTICES.md does not cover ${name}.`);
-  }
-}
 if (!dockerfile.includes(`ARG CODECITY_VERSION=${version}`)) {
   throw new Error("Dockerfile version does not match package.json.");
 }
