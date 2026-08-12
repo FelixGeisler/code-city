@@ -81,10 +81,11 @@ if (!releaseWorkflow.includes("sbom: true") || !releaseWorkflow.includes("proven
   throw new Error("Release workflow does not produce supply-chain attestations.");
 }
 if (
-  !releaseWorkflow.includes("visibility=public") ||
+  !releaseWorkflow.includes("https://ghcr.io/token?service=ghcr.io&scope=repository:") ||
+  !releaseWorkflow.includes("Verify the release image is anonymously readable") ||
   !releaseWorkflow.includes("Smoke the published immutable digest")
 ) {
-  throw new Error("Release workflow does not publish and smoke a public image.");
+  throw new Error("Release workflow does not verify and smoke a public image.");
 }
 
 const releaseTag = process.env.RELEASE_TAG;
