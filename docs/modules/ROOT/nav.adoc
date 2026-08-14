@@ -1,14 +1,1 @@
 * xref:index.adoc[Code City v2]
-.Product
-* xref:01-charter.adoc[Charter]
-* xref:02-feature-inventory.adoc[Feature inventory]
-* xref:03-functional-requirements.adoc[Functional requirements]
-* xref:04-quality-requirements.adoc[Quality requirements]
-* xref:05-constraints.adoc[Constraints]
-.Architecture
-* xref:06-architecture.adoc[Architecture]
-* xref:07-architecture-decisions.adoc[Architecture decisions]
-.Verification and comparison
-* xref:08-acceptance-scenarios.adoc[Acceptance scenarios]
-* xref:09-comparison-method.adoc[Comparison method]
-* xref:10-v1-baseline.adoc[Version 1 baseline]
