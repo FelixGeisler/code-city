@@ -1,14 +1,4 @@
 Code City
 Copyright 2026 Felix Geisler
 
-This project is an independent software implementation of the established
-software-visualization concept commonly described as a "code city". It is not
-affiliated with or endorsed by any other project, researcher, organization, or
-product using that descriptive term.
-
-The Apache License 2.0 applies to the original material in this repository and
-does not grant permission to use trade names, trademarks, service marks, or
-product names except as described in Section 6 of that license.
-
-Third-party components remain subject to their respective licenses. Their
-license and notice files are included with the distributed components.
+Licensed under the Apache License, Version 2.0.
