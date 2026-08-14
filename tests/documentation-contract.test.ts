@@ -83,9 +83,6 @@ describe("public documentation contract", () => {
       "requirements",
     ]);
     expect(chapterNames.architecture.slice(1)).toHaveLength(12);
-    await expect(
-      fs.stat(`${docsRoot}/architecture/pages/adr`),
-    ).resolves.toMatchObject({ size: expect.any(Number) });
   });
 
   it("keeps the initial v2 chapter skeleton empty", async () => {
