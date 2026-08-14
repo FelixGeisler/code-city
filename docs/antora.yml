@@ -1,6 +1,7 @@
 name: code-city
 title: Code City
-version: ~
+version: '2.0'
+display_version: '2.x'
 start_page: ROOT:index.adoc
 nav:
 - modules/ROOT/nav.adoc
