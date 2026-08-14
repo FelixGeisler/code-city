@@ -106,6 +106,9 @@ The `v2` branch is the integration branch for the reimplementation.
 * Keep commits focused and use clear conventional commit messages.
 * Commit completed work, push the branch, and create or update a pull request
   targeting `v2` automatically.
+* A pull request is not ready for review until all required checks have completed
+  successfully. Monitor its checks, investigate failures, push fixes, and wait
+  for the replacement checks before handing the pull request to the user.
 * Never merge a pull request. The user controls every merge into `v2` and any
   future default branch.
 * Do not push directly to `v2` or rewrite shared history.
