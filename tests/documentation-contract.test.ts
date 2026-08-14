@@ -4,10 +4,43 @@ import { describe, expect, it } from "vitest";
 
 interface PackageContract {
   readonly version: string;
-  readonly scripts: Readonly<Record<string, string>>;
 }
 
-const pagesRoot = "docs/modules/ROOT/pages";
+const docsRoot = "docs/modules";
+
+const chapterNames = {
+  ROOT: ["index.adoc"],
+  requirements: [
+    "index.adoc",
+    "01-product-scope.adoc",
+    "02-stakeholders-and-use-cases.adoc",
+    "03-feature-inventory.adoc",
+    "04-functional-requirements.adoc",
+    "05-acceptance-criteria.adoc",
+  ],
+  architecture: [
+    "index.adoc",
+    "01-introduction-and-goals.adoc",
+    "02-architecture-constraints.adoc",
+    "03-context-and-scope.adoc",
+    "04-solution-strategy.adoc",
+    "05-building-block-view.adoc",
+    "06-runtime-view.adoc",
+    "07-deployment-view.adoc",
+    "08-crosscutting-concepts.adoc",
+    "09-architecture-decisions.adoc",
+    "10-quality-requirements.adoc",
+    "11-risks-and-technical-debt.adoc",
+    "12-glossary.adoc",
+  ],
+  comparison: [
+    "index.adoc",
+    "01-comparison-method.adoc",
+    "02-version-1-baseline.adoc",
+    "03-version-2-measurements.adoc",
+    "04-results-and-conclusions.adoc",
+  ],
+} as const;
 
 function lines(text: string): readonly string[] {
   return text.replaceAll("\r\n", "\n").split("\n");
@@ -40,94 +73,58 @@ describe("public documentation contract", () => {
     expect(readme).toContain("Authorization is disabled by default");
   });
 
-  it("keeps release information organized by reader goals", async () => {
-    const [releaseNotes, operations] = await Promise.all([
-      fs.readFile("RELEASE_NOTES.md", "utf8"),
-      fs.readFile(`${pagesRoot}/14-release-and-operations.adoc`, "utf8"),
-    ]);
+  it("separates requirements, arc42 architecture, and comparison material", async () => {
+    const moduleNames = (await fs.readdir(docsRoot)).sort();
 
-    for (const heading of [
-      "## What you can do",
-      "## Deployment",
-      "## Security notes",
-      "## Compatibility and limitations",
-    ]) {
-      expect(releaseNotes).toContain(heading);
-    }
-    expect(operations).toContain("|Goal |Go to");
-    expect(operations).toContain("[#pre-release-checklist]");
-    expect(operations).toContain("[#cold-backup]");
-    expect(operations).toContain("[#release-smoke-test]");
+    expect(moduleNames).toEqual([
+      "ROOT",
+      "architecture",
+      "comparison",
+      "requirements",
+    ]);
+    expect(chapterNames.architecture.slice(1)).toHaveLength(12);
+    await expect(
+      fs.stat(`${docsRoot}/architecture/pages/adr`),
+    ).resolves.toMatchObject({ size: expect.any(Number) });
   });
 
-  it("keeps architecture pages rough and operations separate", async () => {
-    const names = (await fs.readdir(pagesRoot))
-      .filter((name) => name.endsWith(".adoc") && name !== "14-release-and-operations.adoc");
-    const documents = await Promise.all(
-      names.map(async (name) => ({
-        name,
-        text: await fs.readFile(`${pagesRoot}/${name}`, "utf8"),
-      })),
-    );
-    const architectureLineCount = documents.reduce(
-      (total, document) => total + lines(document.text).length,
-      0,
-    );
+  it("keeps the initial v2 chapter skeleton empty", async () => {
+    for (const [moduleName, expectedNames] of Object.entries(chapterNames)) {
+      const pagesRoot = `${docsRoot}/${moduleName}/pages`;
+      const actualNames = (await fs.readdir(pagesRoot))
+        .filter((name) => name.endsWith(".adoc"))
+        .sort();
 
-    expect(names).toHaveLength(9);
-    expect(architectureLineCount).toBeLessThanOrEqual(600);
-    for (const document of documents) {
-      expect(lines(document.text).length, document.name).toBeLessThanOrEqual(100);
+      expect(actualNames).toEqual([...expectedNames].sort());
+      for (const name of actualNames) {
+        const page = (await fs.readFile(`${pagesRoot}/${name}`, "utf8"))
+          .replaceAll("\r\n", "\n");
+        expect(page, `${moduleName}/${name}`).toMatch(/^= [^\n]+\n$/u);
+      }
     }
-    const overview = documents.find(({ name }) => name === "index.adoc")?.text;
-    expect(overview).toContain("== Purpose");
-    expect(overview).toContain("== Constraints");
-    expect(overview).toContain("== Quality goals");
-    expect(overview).toContain("protocol fields, numeric limits, and UI details");
-    expect(await fs.readFile(`${pagesRoot}/14-release-and-operations.adoc`, "utf8"))
-      .toContain("== Cold backup with Docker Compose");
   });
 
-  it("keeps navigation, building blocks, and critical evidence synchronized", async () => {
-    const [nav, buildingBlocks, quality, rawPackage] = await Promise.all([
-      fs.readFile("docs/modules/ROOT/nav.adoc", "utf8"),
-      fs.readFile(`${pagesRoot}/05-building-block-view.adoc`, "utf8"),
-      fs.readFile(`${pagesRoot}/10-quality-requirements.adoc`, "utf8"),
-      fs.readFile("package.json", "utf8"),
-    ]);
-    const packageContract = JSON.parse(rawPackage) as PackageContract;
-    const references = [...nav.matchAll(/xref:([^[]+)\[/gu)].map(
-      (match) => match[1]!,
-    );
+  it("keeps Antora component navigation synchronized with the modules", async () => {
+    const component = await fs.readFile("docs/antora.yml", "utf8");
 
-    expect(new Set(references).size).toBe(references.length);
-    for (const reference of references) {
-      await expect(fs.stat(`${pagesRoot}/${reference}`)).resolves.toMatchObject({
-        size: expect.any(Number),
-      });
+    expect(component).toContain("version: '2.0'");
+    expect(component).toContain("display_version: '2.x'");
+    expect(component).toContain("start_page: ROOT:index.adoc");
+
+    for (const moduleName of Object.keys(chapterNames)) {
+      const navPath = `modules/${moduleName}/nav.adoc`;
+      expect(component).toContain(`- ${navPath}`);
+
+      const nav = await fs.readFile(`docs/${navPath}`, "utf8");
+      const references = [...nav.matchAll(/xref:([^[]+)\[/gu)].map(
+        (match) => match[1]!,
+      );
+      expect(new Set(references).size).toBe(references.length);
+      for (const reference of references) {
+        await expect(
+          fs.stat(`${docsRoot}/${moduleName}/pages/${reference}`),
+        ).resolves.toMatchObject({ size: expect.any(Number) });
+      }
     }
-    for (const block of [
-      "packages/core",
-      "packages/analyzer",
-      "packages/exporter",
-      "apps/server",
-      "apps/viewer",
-      "apps/cli",
-    ]) {
-      await expect(fs.stat(block)).resolves.toMatchObject({
-        size: expect.any(Number),
-      });
-      expect(buildingBlocks).toContain(`\`${block}\``);
-    }
-    for (const script of [
-      "verify",
-      "test:viewer-performance",
-      "test:viewer-real-import",
-      "release:check",
-    ]) {
-      expect(packageContract.scripts).toHaveProperty(script);
-      expect(quality).toContain(`npm run ${script}`);
-    }
-    expect(quality).toContain("tools/container-runtime-smoke.mjs");
   });
 });
