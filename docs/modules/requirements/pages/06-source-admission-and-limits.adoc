@@ -729,9 +729,10 @@ proposed M1 product ceilings, not claims about a chosen technology's capacity,
 and no value is copied or inferred from Code City v1. Equal numeric values in
 different rows remain separate limits because their data, counting bases, or
 measurement stages differ; no threshold is implicitly shared. Related
-admission and processing ceilings are intentionally unequal where the same
-immutable datum crosses stages, so every named category has a reachable
-boundary.
+admission, processing, and city-construction ceilings are intentionally unequal
+where the same module cardinality crosses stages, and
+related content ceilings are intentionally unequal where normalized source
+crosses stages. Every named category therefore has a reachable boundary.
 
 The conceptual stages are:
 
@@ -883,13 +884,14 @@ contractual intervals.
 
 |SP-01
 |Admitted modules presented for processing
-|`2,000 modules`
+|`3,000 modules`
 |The complete ordered admitted set is presented once. Count each canonical
 module identity once at static-processing entry. A missing, additional, or
 repeated identity is contradictory processing data and `Source processing
 failed`, not a way to change the count. This is measured after admission and
-before source consumption. Its `2,000` maximum is intentionally lower than
-RA-07's `4,000`; the limits remain separate and neither threshold is shared.
+before source consumption. Its `3,000` maximum is intentionally lower than
+RA-07's `4,000` and higher than CC-01's `2,000`; the limits remain separate
+and no threshold is shared.
 
 |SP-02
 |Normalized source size consumed per module
@@ -928,10 +930,15 @@ city construction, presentation, and user time outside the interval.
 |CC-01
 |Building count
 |`2,000 buildings`
-|Count each building occurrence in the complete renderer-independent city
-model once after city construction and before presentation. A repeated
-building occurrence counts again; a reference to shared descriptive data does
-not create another building.
+|A valid complete city contains exactly one building for each distinct module
+that completed static processing, preserving that module's identity. Count
+each such building occurrence once after city construction and before
+presentation. Re-reading or referencing the same occurrence counts it only
+once, and shared descriptive data does not create another building. A missing
+building, two occurrences for one module, or an occurrence without one
+matching processed module is contradictory city data and `City construction
+failed`, not a way to reach CC-01. Its `2,000` maximum is intentionally lower
+than SP-01's `3,000`.
 
 |CC-02
 |Repository-derived label count
@@ -1011,27 +1018,36 @@ outside the interval. Its equal numeric value does not share CC-09.
 The same admitted identity and normalized content are measured again when they
 become static-processing input. Admission normalization never increases raw
 content size, and processing receives the complete admitted set without
-changing its identities or source octets. The ceilings therefore form these
-strict, intentional envelopes rather than equal-threshold conflicts:
+changing its identities or source octets. City construction then preserves
+successful module cardinality: the one-building-per-module requirement in
+https://github.com/FelixGeisler/code-city/issues/444[#444] and
+https://github.com/FelixGeisler/code-city/issues/457[#457] permits exactly one
+identity-matched building for each successfully processed module. A different
+cardinality is `City construction failed`, not a CC-01 limit witness. The
+ceilings therefore form these strict, intentional envelopes rather than
+equal-threshold conflicts:
 
-[cols="3,2,2,2",options="header"]
+[cols="3,2,2,2,2",options="header"]
 |===
-|Related data |Outer repository envelope |Admission envelope |Processing envelope
+|Related data |Outer repository envelope |Admission envelope |Processing envelope |City-construction envelope
 
-|Entry/module occurrences
+|Entry/module/building occurrences
 |RA-06: `5,000` candidates
 |RA-07: `4,000` admitted modules
-|SP-01: `2,000` presented modules
+|SP-01: `3,000` presented modules
+|CC-01: `2,000` identity-matched buildings
 
 |One module's content
 |RA-04: `4,194,304` raw bytes
 |RA-08: `2,097,152` normalized bytes
 |SP-02: `1,048,576` normalized bytes
+|Not remeasured by a CC content limit
 
 |Aggregate content
 |RA-05: `52,428,800` raw bytes
 |RA-09: `41,943,040` normalized bytes
 |SP-03: `20,971,520` normalized bytes
+|Not remeasured by a CC content limit
 |===
 
 These are separate product limits, not shared safeguards. An upstream Below or
@@ -1071,7 +1087,7 @@ content below RA-09.
 aggregate content below RA-05.
 
 |SP-01
-|`2,001` distinct admitted empty modules: below RA-07, then above SP-01 when the
+|`3,001` distinct admitted empty modules: below RA-07, then above SP-01 when the
 complete set is presented.
 
 |SP-02
@@ -1082,6 +1098,13 @@ above SP-02 when consumed.
 |Twenty presented modules of `1,048,576` bytes plus one one-byte module:
 `20,971,521` bytes in aggregate, with every module at or below SP-02 and the
 aggregate below RA-09.
+
+|CC-01
+|`2,001` distinct empty modules complete static processing below SP-01's
+`3,000` maximum and produce exactly one identity-matched building each. Short
+identity labels and no unrelated elements keep CC-02 through CC-05 below their
+maxima; finite compact coordinates and an in-limit duration keep CC-06 through
+CC-09 below their maxima. No additional, repeated, or missing building is used.
 |===
 
 The corresponding At and Below witnesses remove one and two units respectively
@@ -1117,7 +1140,7 @@ later produce that downstream category exactly as
 |RA-09 |`41,943,039 normalized bytes` |`41,943,040 normalized bytes` |`41,943,041 normalized bytes` |`Repository/admission limit exceeded (RA-09)`
 |RA-10 |`59,999 milliseconds` |`60,000 milliseconds` |`60,001 milliseconds` |`Repository/admission limit exceeded (RA-10)`
 |RA-11 |`9,999 milliseconds` |`10,000 milliseconds` |`10,001 milliseconds` |`Repository/admission limit exceeded (RA-11)`
-|SP-01 |`1,999 modules` |`2,000 modules` |`2,001 modules` |`Static-processing limit exceeded (SP-01)`
+|SP-01 |`2,999 modules` |`3,000 modules` |`3,001 modules` |`Static-processing limit exceeded (SP-01)`
 |SP-02 |`1,048,575 normalized bytes` |`1,048,576 normalized bytes` |`1,048,577 normalized bytes` |`Static-processing limit exceeded (SP-02)`
 |SP-03 |`20,971,519 normalized bytes` |`20,971,520 normalized bytes` |`20,971,521 normalized bytes` |`Static-processing limit exceeded (SP-03)`
 |SP-04 |`29,999 milliseconds` |`30,000 milliseconds` |`30,001 milliseconds` |`Static-processing limit exceeded (SP-04)`

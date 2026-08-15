@@ -169,13 +169,29 @@ scenario.
 
 [source,gherkin]
 ----
-Scenario: Related admission and processing boundaries are all reachable
-  Given the strict RA/SP envelopes and exact witnesses in "Reachability of related limits"
-  When each RA-08 and SP-01, SP-02, and SP-03 Below, At, and Above value is evaluated
+Scenario: Related admission, processing, and construction boundaries are all reachable
+  Given the strict RA/SP/CC envelopes and exact witnesses in "Reachability of related limits"
+  When each RA-07, RA-08, RA-09, SP-01, SP-02, SP-03, and CC-01
+       Below, At, and Above value is evaluated
   Then every prerequisite upstream dimension remains compliant
   And each Below and At value passes its named stage without a separate status
   And each Above value produces its own named category
   And no equal upstream threshold or earlier-stage failure masks that category
+----
+
+[source,gherkin]
+----
+Scenario: CC-01 uses only valid one-building-per-module models
+  Given 1,999, 2,000, or 2,001 distinct modules complete static processing
+  And the complete city contains exactly one identity-matched building per module
+  And every other CC dimension is below its maximum
+  When CC-01 evaluates each model
+  Then 1,999 buildings is Below and creates no separate status
+  And 2,000 buildings is At and creates no separate status
+  And 2,001 buildings is Above with category "City-construction limit exceeded (CC-01)"
+  And every module count remains at or below SP-01's 3,000-module maximum
+  But any missing, additional, or repeated module-to-building mapping is
+      "City construction failed", not a CC-01 boundary result
 ----
 
 [source,gherkin]
@@ -393,7 +409,7 @@ boundaries, and precedence.
 |Exact admission interval, rounded-millisecond boundaries, terminal-horizon
 behavior, no-module precedence, and simultaneous established-RA precedence.
 
-|SP-01: `1,999 / 2,000 / 2,001 modules`
+|SP-01: `2,999 / 3,000 / 3,001 modules`
 |https://github.com/FelixGeisler/code-city/issues/455[#455]
 |Exact complete-set presentation count, RA-07-compliant below/at/above
 reachability, and precedence among SP-01 through SP-03.
@@ -415,7 +431,9 @@ SP-01 through SP-04 and `Source processing failed`.
 
 |CC-01: `1,999 / 2,000 / 2,001 buildings`
 |https://github.com/FelixGeisler/code-city/issues/457[#457]
-|Exact occurrence count, boundaries, and precedence among CC IDs.
+|Exact one-building-per-processed-module count; below/at/above reachability
+under SP-01's `3,000`-module maximum; rejection of missing, additional, or
+repeated mappings as `City construction failed`; and precedence among CC IDs.
 
 |CC-02: `3,999 / 4,000 / 4,001 labels`
 |https://github.com/FelixGeisler/code-city/issues/457[#457]
