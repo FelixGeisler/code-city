@@ -1,0 +1,65 @@
+= ADR 0001: Keep core dependencies inward
+
+Status:: Proposed
+
+== Context
+
+Repository access, visualization, framework integration, and storage sit at
+Code City's system edges. Coupling application or domain logic to those
+concerns would make the core depend on its delivery and infrastructure
+mechanisms.
+
+In this ADR, the *core* is the application and domain layers. *Repository
+access* means I/O used to obtain source-repository content; it does not define
+a persistence abstraction or interface.
+
+== Proposed decision
+
+Use the following static source-dependency direction. An arrow means "may
+depend on"; it does not represent a runtime call or data flow.
+
+[source,text]
+----
++----------------------------------------------------------------+
+| adapters                                                       |
+| repository access / visualization / frameworks / storage       |
++----------------------------------------------------------------+
+          |                                      |
+          v                                      v
++-----------------+                     +-----------------+
+| application     | ------------------> | domain          |
++-----------------+                     +-----------------+
+----
+
+The allowed inter-layer dependencies are:
+
+* adapters to application or domain; the direct adapter-to-domain dependency
+  shown above is allowed;
+* application to domain.
+
+All other inter-layer source dependencies are forbidden. In particular, domain
+must not depend on application or adapters, application must not depend on
+adapters, and neither core layer may depend on repository access,
+visualization, frameworks, or storage. Those external concerns stay in
+adapters.
+
+This proposal does not choose runtime collaboration mechanisms, interfaces,
+package structure, frameworks, storage technology, or automated dependency
+enforcement.
+
+== Rationale
+
+An inward dependency direction isolates core policy from change-prone input,
+output, and infrastructure mechanisms. Adapters can use core behavior while
+repository access, visualization, frameworks, and storage can change without
+requiring the core to import them.
+
+== Consequences
+
+* The core can be developed and checked without adapter technologies.
+* Adapters own integration and translation at the system edges and may use
+  either core layer.
+* A runtime interaction initiated by the core will require a mechanism that
+  preserves the source-dependency direction; this ADR does not select one.
+* The boundary may require translation code in adapters.
+* While this ADR remains `Proposed`, it is not approved for implementation.
