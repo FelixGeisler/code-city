@@ -1,1 +1,69 @@
 = Feature Inventory
+
+This inventory classifies M1 capabilities without redefining their contracts.
+The xref:01-product-scope.adoc#non-goals[Product Scope non-goals] are
+authoritative for exclusions.
+
+[cols="2,1,4",options="header"]
+|===
+|Capability |M1 status |Contract or owner
+
+|Single canonical public GitHub repository URL
+|Included
+|Exact grammar and normalization are in
+xref:04-functional-requirements.adoc#canonical-url[Canonical URL input].
+
+|Anonymous public-repository access
+|Included
+|No user or service credentials; private and non-public repositories are
+excluded by xref:04-functional-requirements.adoc#anonymous-access[Anonymous
+public access].
+
+|Automatic immutable revision
+|Included
+|The default branch tip is selected once and identified by the full commit ID;
+see xref:04-functional-requirements.adoc#immutable-revision[Immutable revision
+selection and identity].
+
+|Initial, loading, success, failure, replacement, and cancellation behavior
+|Included
+|The state machine and no-stale/no-partial invariant are in
+xref:04-functional-requirements.adoc#states[Observable states and transitions].
+
+|Supported-source admission and resource limits
+|Contract pending
+|https://github.com/FelixGeisler/code-city/issues/442[#442] owns exact module
+admission, thresholds, and limit outcomes.
+
+|Fixed metric semantics
+|Contract pending
+|https://github.com/FelixGeisler/code-city/issues/443[#443] owns SLOC,
+executable-unit, and complexity semantics.
+
+|Fixed city, layout, and presentation
+|Contract pending
+|https://github.com/FelixGeisler/code-city/issues/444[#444] owns mapping,
+layout, palette, framing, and permitted presentation interaction.
+
+|Authentication, private repositories, or credentials
+|Excluded
+|M1 accepts neither credential input nor authenticated operation.
+
+|Other repository inputs or revision controls
+|Excluded
+|There is no non-GitHub/local/archive input and no branch, tag, commit, or
+second-input control.
+
+|Configuration, exploration, history, persistence, or export
+|Excluded
+|These capability families are listed in the authoritative
+xref:01-product-scope.adoc#non-goals[non-goals].
+
+|v1 compatibility or feature parity
+|Excluded
+|Code City v1 is comparison evidence only, not the M1 specification.
+|===
+
+Architecture choices are not product features in this inventory. Their owners
+are linked from xref:04-functional-requirements.adoc#decision-boundary[Decision
+boundary], and no choice is implied by an `Included` row above.

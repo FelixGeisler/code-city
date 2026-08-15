@@ -1,1 +1,401 @@
 = Functional Requirements
+
+This page is normative for the M1 canonical-input, immutable-revision, and
+observable-state contract.
+
+== Terms
+
+Input draft:: The current value in the single editable URL field. An edit
+changes only this draft; the edited value is unsubmitted until the user invokes
+submit.
+
+Submission:: The input draft present when the user invokes the single URL
+submit action. Editing the field without invoking that action is not a
+submission.
+
+Normalized submitted URL:: The submission after the only pre-validation
+normalization permitted by <<url-normalization,M1-URL-2>>.
+
+Attempt:: The work caused by one submission. The most recent submission is the
+*current attempt*, including when that submission is invalid.
+
+Canonical repository URL:: The URL constructed in canonical form from the
+owner and repository spelling established by a successful anonymous GitHub
+resolution.
+
+Selected revision:: The one immutable commit chosen for the current attempt
+under <<revision-selection,M1-REV-1>>.
+
+Complete city:: A city for which every required M1 stage has succeeded. Output
+from an unfinished or failed stage is not a city that may be shown.
+
+[[canonical-url]]
+== Canonical URL input
+
+[[url-grammar]]
+=== M1-URL-1: Exact grammar
+
+After the edge-whitespace normalization in <<url-normalization,M1-URL-2>>, an
+accepted input must match this ASCII grammar exactly:
+
+[source,abnf]
+----
+canonical-url = "https://github.com/" owner "/" repository
+owner         = owner-edge / owner-edge *37owner-char owner-edge
+owner-edge    = ALPHA / DIGIT
+owner-char    = ALPHA / DIGIT / "-"
+repository    = 1*100repository-char
+repository-char = ALPHA / DIGIT / "-" / "_" / "."
+ALPHA         = %x41-5A / %x61-7A
+DIGIT         = %x30-39
+----
+
+The following additional constraints apply:
+
+* `owner` is 1 through 39 characters, starts and ends with an ASCII letter or
+  digit, and contains no adjacent hyphens.
+* `repository` is 1 through 100 characters and contains at least one ASCII
+  letter or digit.
+* `repository` must not end in `.git`, compared ASCII case-insensitively. The
+  clone suffix is not part of the accepted web URL.
+* The URL contains exactly the two path segments shown. It has no trailing
+  slash, user information, port, query, fragment, percent encoding, path
+  parameter, or additional path segment.
+* Scheme and host are the exact lowercase literals `https` and `github.com`.
+  `http`, `www.github.com`, another GitHub host, SSH/scp syntax, and clone URLs
+  are not aliases.
+
+A value that fails any rule is invalid/non-canonical input. It must fail before
+any provider interaction. Syntactic acceptance means only that resolution may
+start; it does not assert that the repository exists or is publicly available.
+
+[[url-normalization]]
+=== M1-URL-2: Normalization and canonical display
+
+Before grammar validation, Code City removes zero or more of only these
+characters from each end of the whole submission:
+
+* horizontal tab (`U+0009`);
+* line feed (`U+000A`);
+* carriage return (`U+000D`); and
+* space (`U+0020`).
+
+No other transformation may make an input acceptable. In particular, Code City
+must not decode percent escapes, collapse or remove slashes, remove `.git`,
+remove a query or fragment, perform Unicode normalization, replace a host, or
+repair owner/repository punctuation. Any whitespace left inside the normalized
+value makes it invalid.
+
+ASCII letter case in the submitted `owner` and `repository` segments is allowed
+by the grammar and is preserved while resolution is pending. After successful
+resolution, Code City constructs the canonical repository URL from GitHub's
+canonical owner and repository spelling and uses that URL for the result
+identity. If the input draft has not been edited since submit, Code City also
+places the canonical URL in the field. Resolution must not overwrite a draft
+edited after submit. This case canonicalization does not define whether any
+provider redirect or renamed/transferred-repository alias is followed; that
+mechanism and redirect policy belong to
+https://github.com/FelixGeisler/code-city/issues/448[#448].
+
+[[single-input]]
+=== M1-URL-3: One input
+
+The repository URL is the only user-supplied value in M1. Concatenated URLs,
+multiple lines, owner/repository fields, local paths, archives, pasted source,
+and any other second value are invalid. Cancel and submit are actions, not
+additional inputs.
+
+[[anonymous-access]]
+== Anonymous public access
+
+=== M1-ANON-1: No credentials
+
+Code City must not request, accept, read, retain, or transmit a user credential
+or a service credential for M1 repository resolution or processing. Provider
+interaction must be anonymous: no authorization token, authenticated cookie,
+SSH key, or other credential may be attached implicitly or explicitly.
+
+A repository succeeds only if the information required by M1 is available
+anonymously. Authentication must never be offered as recovery from a failure.
+
+=== M1-ANON-2: Unavailable repository privacy
+
+Missing, private, access-denied, and otherwise anonymously unavailable
+repositories all produce the same *repository unavailable for anonymous access*
+outcome. The UI must not claim which of those conditions applies and must not
+confirm that a private repository exists.
+
+[[immutable-revision]]
+== Immutable revision selection and identity
+
+[[revision-selection]]
+=== M1-REV-1: Automatic selection
+
+For each syntactically accepted submission, Code City must:
+
+. use the repository's GitHub-designated default branch at the time resolution
+  occurs;
+. select that branch's tip commit exactly once for the attempt; and
+. pin every later result of that attempt to the selected commit.
+
+There is no fallback to a branch named `main` or `master`, another branch, a
+tag, an earlier commit, a prior successful revision, or a cached city. If a
+public repository has no designated default branch with a resolvable tip
+commit, the attempt has a revision-unavailable failure.
+
+Movement of the default branch after selection must not change an in-progress
+or completed attempt. A later submission, including the same URL, is a new
+attempt and may therefore select a newer tip.
+
+=== M1-REV-2: Canonical identity
+
+The selected revision identity is the full 40-character Git commit object ID,
+normalized to lowercase ASCII hexadecimal: exactly 40 characters, each in
+`0` through `9` or `a` through `f`. An abbreviated ID, branch name, tag,
+symbolic reference, timestamp, or mutable URL is not the revision identity.
+
+The result identity is the tuple:
+
+[source,text]
+----
+(canonical repository URL, full lowercase commit ID)
+----
+
+Once resolution establishes both values, loading and any later failure for that
+attempt must label the attempted revision with the tuple. Success must show the
+tuple next to, or as part of, the complete city identity. If the input has not
+been edited since submit, it contains the canonical repository URL; otherwise
+the separately displayed tuple continues to identify the city while the edited
+draft is preserved. Before a revision is established, Code City must show no
+guessed, partial, or prior commit identity.
+
+The default branch name may be used to make the automatic selection, but it is
+not retained or presented as the result identity. The full commit ID is output
+only; it must not become an editable commit control.
+
+[[states]]
+== Observable states and transitions
+
+=== M1-STATE-1: Stable states
+
+At most one of these states is current:
+
+[cols="1,2,2,2,2",options="header"]
+|===
+|State |Single URL input |Status/actions |Revision identity |City
+
+|Initial
+|Current draft; empty after a fresh open or reload, editable, and permitted to
+be non-empty before submit
+|Submit is available; typing alone shows no loading, cancellation, success, or
+failure message
+|None
+|None
+
+|Loading
+|Current draft; initially the normalized submitted URL, canonicalized after
+resolution only if it has not been edited, and editable for a replacement
+|Visible loading status and a cancel action for the submitted attempt; editing
+alone does not replace it, while another submit does
+|None until selected; then the canonical repository URL and full commit ID
+|None
+
+|Success
+|Current draft; the canonical repository URL if untouched since submit, or a
+preserved post-submit edit
+|No loading, cancel, or failure status; submit may start a replacement
+|Canonical repository URL and full commit ID
+|Exactly one complete city for that identity
+
+|Failure
+|Current draft; the normalized submission or resolved canonical URL if
+untouched, or a preserved post-submit edit
+|Visible failure category/explanation and submit for correction or retry; edit
+does not clear the failure; no loading or cancel action
+|The attempted tuple only if it had already been selected; otherwise none
+|None
+
+|Cancelled
+|Current draft preserved from Loading and editable
+|Visible neutral cancellation confirmation and submit; edit does not clear the
+confirmation; no loading or cancel action
+|None
+|None
+|===
+
+A fresh open or reload starts in `Initial` with an empty draft. State is
+session-only: reloading resets the draft and must not restore an attempt,
+result, error, or history.
+
+Editing the input alone in any state changes only the input draft. It does not
+change the state, current attempt, visible status or actions, revision identity,
+or city. Any displayed status, identity, or city continues to describe the last
+submission, not the unsubmitted draft. In particular:
+
+* typing in `Initial` leaves a non-empty draft in `Initial` with no status;
+* editing in `Loading` leaves the submitted attempt running with its loading
+  status and cancel action;
+* editing in `Success` does not replace or relabel its result;
+* editing in `Failure` leaves its explanation associated with the failed
+  submission; and
+* editing in `Cancelled` leaves the neutral cancellation confirmation visible.
+
+Resolution, success, or failure of the current Loading attempt must preserve an
+input draft edited after submit. If there has been no such edit, successful
+resolution replaces the normalized submitted URL with the canonical repository
+URL under <<url-normalization,M1-URL-2>>. Cancellation preserves the current
+draft. A late outcome from a replaced or cancelled attempt changes nothing,
+including the draft. Only submit starts a replacement; only reload resets the
+session to an empty draft.
+
+=== M1-STATE-2: Submission and replacement
+
+Invoking submit in any state makes the current input draft the only current
+attempt. The field is set to the normalized submission, and the prior attempt or
+result is immediately invalidated. Any prior city, revision identity, status,
+and failure are removed as part of that transition.
+
+* If the normalized value is invalid, the next stable state is `Failure` and no
+  provider interaction occurs.
+* If it is syntactically accepted, the next state is `Loading`.
+* Submitting while loading replaces the old attempt before the new value is
+  validated. A late success or failure from the replaced attempt has no
+  observable effect.
+
+This rule also applies when replacement input is invalid or when the new
+attempt later fails: an earlier city is never retained as fallback.
+
+=== M1-STATE-3: Completion and failure
+
+Loading changes to `Success` only when the entire current M1 journey has
+completed. The complete city and its exact result identity must become visible
+together. No building, partial scene, prior city, or unlabelled city may be
+visible before that transition.
+
+Any failure of the current attempt changes loading to `Failure`. The loading
+indicator and cancel action disappear, the applicable explanation appears, and
+no city is visible. A failure remains until the user resubmits or reloads;
+editing only creates an unsubmitted draft and does not clear it. There is no
+automatic retry, branch fallback, revision fallback, or stale-city fallback.
+
+=== M1-STATE-4: Cancellation
+
+Cancel is available only in `Loading`. Invoking it immediately changes the
+observable state to `Cancelled`, clears any selected revision identity, and
+makes the attempt permanently ineligible to publish a city or later status. The
+current input draft is preserved, whether it still contains the submitted URL
+or has been edited. A late outcome from that attempt has no observable effect
+and cannot overwrite the draft. Editing in `Cancelled` changes only the draft;
+submit starts a new attempt and reload returns to empty `Initial`.
+
+This requirement defines the user-visible cancellation result, not which
+runtime node, component, or port stops work or performs cleanup.
+
+=== M1-STATE-5: No stale or partial city
+
+A city may be visible only in `Success` and only for the result identity shown
+with it. Initial, loading, failure, and cancelled states contain no city. Every
+submission or cancellation removes the prior successful city before any result
+for the new attempt is known. Only the current attempt may publish, and it must
+publish one complete city atomically.
+
+These are observable invariants. They do not choose a concurrency primitive,
+request identifier, process boundary, cancellation protocol, or cleanup owner.
+
+== Failure outcomes
+
+=== M1-FAIL-1: Required categories
+
+[cols="2,3,3",options="header"]
+|===
+|Category |Condition |Required observable distinction
+
+|Invalid/non-canonical input
+|The normalized submission fails <<url-grammar,M1-URL-1>> or contains more than
+one input.
+|Explain the canonical form; fail before provider interaction.
+
+|Repository unavailable for anonymous access
+|The repository is missing, private, access denied, or otherwise unavailable
+without credentials.
+|Use one privacy-preserving outcome for all listed conditions.
+
+|Revision unavailable
+|A public repository has no GitHub-designated default branch with a resolvable
+tip commit.
+|Explain that no immutable default-branch revision could be selected; do not
+fall back.
+
+|Provider/resolution failure
+|Anonymous resolution is interrupted, rate-limited, unavailable, ambiguous, or
+returns invalid identity evidence.
+|Explain that GitHub resolution failed and permit explicit resubmission; do not
+invent an identity or retry automatically.
+
+|Downstream processing or presentation failure
+|A later admitted-source, metric, city, or presentation stage fails.
+|Use the owning contract's explanation. If selection completed, retain the
+attempted tuple, but show no city.
+|===
+
+Every category obeys <<states,M1-STATE-5>>. Detailed source-admission, limit,
+metric, and rendering conditions are intentionally not defined by this issue.
+
+== M1-EX-1: Excluded controls and retained data
+
+M1 exposes no authentication control; owner/repository split fields; branch,
+tag, or commit selector; source/building selector; configuration; history;
+saved project; sharing; or export control. It retains only the current
+session's input, state, and, when selected, canonical result identity. It
+presents no recent-repository or prior-revision list and restores nothing after
+reload.
+
+[[decision-boundary]]
+== Decision boundary
+
+The requirements above do not decide implementation or architecture ownership.
+The deferred choices and their authoritative downstream locations are:
+
+[cols="3,3,4",options="header"]
+|===
+|Deferred choice |Owning issue |Affected architecture views
+
+|M1 drivers, logical context/trust boundaries, and measurable quality scenarios
+|https://github.com/FelixGeisler/code-city/issues/461[#461]
+|xref:architecture:01-introduction-and-goals.adoc[Introduction and Goals],
+xref:architecture:03-context-and-scope.adoc[Context and Scope], and
+xref:architecture:10-quality-requirements.adoc[Quality Requirements]
+
+|Runtime/deployment topology, trust-boundary placement, production target, and
+cleanup ownership
+|https://github.com/FelixGeisler/code-city/issues/446[#446]
+|xref:architecture:03-context-and-scope.adoc[Context and Scope],
+xref:architecture:06-runtime-view.adoc[Runtime View],
+xref:architecture:07-deployment-view.adoc[Deployment View], and
+xref:architecture:09-architecture-decisions.adoc[Architecture Decisions]
+
+|Minimum building blocks, ports, state-orchestration responsibility, and
+component-level cancellation/cleanup ownership
+|https://github.com/FelixGeisler/code-city/issues/462[#462]
+|xref:architecture:04-solution-strategy.adoc[Solution Strategy],
+xref:architecture:05-building-block-view.adoc[Building Block View], and
+xref:architecture:09-architecture-decisions.adoc[Architecture Decisions]
+
+|Anonymous GitHub provider/API mechanism, origins, requests, redirects, identity
+evidence, trust handling, and resolution cancellation/failure mechanism
+|https://github.com/FelixGeisler/code-city/issues/448[#448]
+|xref:architecture:03-context-and-scope.adoc[Context and Scope],
+xref:architecture:06-runtime-view.adoc[Runtime View], and
+xref:architecture:09-architecture-decisions.adoc[Architecture Decisions]
+
+|Synthesis of accepted success, failure, replacement, cancellation, cleanup,
+and deployment flow
+|https://github.com/FelixGeisler/code-city/issues/463[#463]
+|xref:architecture:06-runtime-view.adoc[Runtime View] and
+xref:architecture:07-deployment-view.adoc[Deployment View]
+|===
+
+Source-admission and resource-limit semantics remain with
+https://github.com/FelixGeisler/code-city/issues/442[#442]. Nothing in this page
+assigns those rules, the state machine, cancellation, or cleanup to a provider,
+process, node, component, or port.

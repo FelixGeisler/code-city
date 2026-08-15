@@ -1,1 +1,69 @@
 = Stakeholders and Use Cases
+
+== Primary stakeholder
+
+The primary stakeholder is a user who wants a reproducible visual summary of a
+public GitHub repository without signing in, configuring analysis, or choosing
+a revision. The user needs to know which repository revision the city
+represents and whether the current attempt is still running, succeeded, failed,
+was replaced, or was cancelled.
+
+A human product decision-maker is responsible for explicitly accepting the
+contract choices. Automated review or a passing documentation build does not
+substitute for that acceptance.
+
+== UC-1: Create a city from a public GitHub repository
+
+Preconditions:: Code City is open in its initial state. The user knows the
+canonical-form URL of a repository that GitHub makes available anonymously.
+
+Trigger:: The user invokes the submit action for the single URL input.
+
+Main flow::
+
+. Code City normalizes and validates the submitted value against the exact
+  xref:04-functional-requirements.adoc#canonical-url[canonical URL contract].
+. For accepted syntax, Code City enters loading with no city visible.
+. The repository's GitHub-designated default branch tip is selected once and
+  pinned by its full immutable commit identity.
+. Code City shows the canonical repository identity and selected commit
+  identity as soon as both are known; loading continues without a partial city.
+. The later M1 stages admit source, derive fixed metrics, construct the city,
+  and prepare its initial presentation.
+. Only after every stage succeeds, one complete city appears atomically with
+  the exact repository and commit identity it represents.
+
+Postcondition:: The success state contains exactly one complete city for the
+shown immutable revision. No authentication, revision-selection, configuration,
+or second-input control has been introduced.
+
+== Alternative flows
+
+Invalid or non-canonical input:: The attempt fails before provider interaction.
+The submitted value remains available for correction, an input explanation is
+shown, and no previous or partial city remains.
+
+Repository unavailable anonymously:: A missing, private, or otherwise
+anonymously unavailable repository produces the same unavailable outcome, with
+no city and no claim about whether a private repository exists.
+
+Revision or provider failure:: An absent default-branch commit, invalid
+resolution evidence, rate limit, network failure, or provider failure ends the
+current attempt without falling back to another branch, a prior revision, or a
+prior city.
+
+Replacement:: Submitting again makes the new submission the only current
+attempt. The previous city and identity disappear immediately; a late outcome
+from the replaced attempt cannot alter the new attempt's state.
+
+Cancellation:: Cancelling loading makes that attempt ineligible to publish.
+The URL remains available to edit or resubmit, while its resolved identity and
+all city output disappear. A late outcome cannot change the cancelled state.
+
+Downstream failure:: Any source, analysis, city-construction, or presentation
+failure uses the common failure invariant: the attempt may explain the failure
+and identify a revision already selected, but it shows no stale or partial
+city. Detailed downstream causes belong to their owning M0 contracts.
+
+The exact stable states and transitions are normative in
+xref:04-functional-requirements.adoc#states[Observable states and transitions].
