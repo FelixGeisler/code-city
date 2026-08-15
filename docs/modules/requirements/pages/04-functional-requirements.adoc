@@ -5,8 +5,13 @@ observable-state contract.
 
 == Terms
 
-Submission:: The value present when the user invokes the single URL submit
-action. Editing the field without invoking that action is not a submission.
+Input draft:: The current value in the single editable URL field. An edit
+changes only this draft; the edited value is unsubmitted until the user invokes
+submit.
+
+Submission:: The input draft present when the user invokes the single URL
+submit action. Editing the field without invoking that action is not a
+submission.
 
 Normalized submitted URL:: The submission after the only pre-validation
 normalization permitted by <<url-normalization,M1-URL-2>>.
@@ -85,9 +90,11 @@ ASCII letter case in the submitted `owner` and `repository` segments is allowed
 by the grammar and is preserved while resolution is pending. After successful
 resolution, Code City constructs the canonical repository URL from GitHub's
 canonical owner and repository spelling and uses that URL for the result
-identity and successful input value. This case canonicalization does not define
-whether any provider redirect or renamed/transferred-repository alias is
-followed; that mechanism and redirect policy belong to
+identity. If the input draft has not been edited since submit, Code City also
+places the canonical URL in the field. Resolution must not overwrite a draft
+edited after submit. This case canonicalization does not define whether any
+provider redirect or renamed/transferred-repository alias is followed; that
+mechanism and redirect policy belong to
 https://github.com/FelixGeisler/code-city/issues/448[#448].
 
 [[single-input]]
@@ -156,9 +163,11 @@ The result identity is the tuple:
 
 Once resolution establishes both values, loading and any later failure for that
 attempt must label the attempted revision with the tuple. Success must show the
-tuple next to, or as part of, the complete city identity and place the canonical
-repository URL in the single input. Before a revision is established, Code City
-must show no guessed, partial, or prior commit identity.
+tuple next to, or as part of, the complete city identity. If the input has not
+been edited since submit, it contains the canonical repository URL; otherwise
+the separately displayed tuple continues to identify the city while the edited
+draft is preserved. Before a revision is established, Code City must show no
+guessed, partial, or prior commit identity.
 
 The default branch name may be used to make the automatic selection, but it is
 not retained or presented as the result identity. The full commit ID is output
@@ -176,51 +185,75 @@ At most one of these states is current:
 |State |Single URL input |Status/actions |Revision identity |City
 
 |Initial
-|Empty and editable
-|Submit is available; no loading, cancellation, success, or failure message
+|Current draft; empty after a fresh open or reload, editable, and permitted to
+be non-empty before submit
+|Submit is available; typing alone shows no loading, cancellation, success, or
+failure message
 |None
 |None
 
 |Loading
-|Normalized submitted URL, editable for a replacement
-|Visible loading status and a cancel action; another submit replaces the
-attempt
+|Current draft; initially the normalized submitted URL, canonicalized after
+resolution only if it has not been edited, and editable for a replacement
+|Visible loading status and a cancel action for the submitted attempt; editing
+alone does not replace it, while another submit does
 |None until selected; then the canonical repository URL and full commit ID
 |None
 
 |Success
-|Canonical repository URL, editable
+|Current draft; the canonical repository URL if untouched since submit, or a
+preserved post-submit edit
 |No loading, cancel, or failure status; submit may start a replacement
 |Canonical repository URL and full commit ID
 |Exactly one complete city for that identity
 
 |Failure
-|Latest normalized submitted value, editable
-|Visible failure category/explanation and submit for correction or retry; no
-loading or cancel action
+|Current draft; the normalized submission or resolved canonical URL if
+untouched, or a preserved post-submit edit
+|Visible failure category/explanation and submit for correction or retry; edit
+does not clear the failure; no loading or cancel action
 |The attempted tuple only if it had already been selected; otherwise none
 |None
 
 |Cancelled
-|Latest normalized submitted URL, editable
-|Visible neutral cancellation confirmation and submit; no loading or cancel
-action
+|Current draft preserved from Loading and editable
+|Visible neutral cancellation confirmation and submit; edit does not clear the
+confirmation; no loading or cancel action
 |None
 |None
 |===
 
-A fresh open or reload starts in `Initial`. State is session-only: reloading
-must not restore an input, attempt, result, error, or history.
+A fresh open or reload starts in `Initial` with an empty draft. State is
+session-only: reloading resets the draft and must not restore an attempt,
+result, error, or history.
 
-Editing the input alone does not replace a successful result. Until submit is
-invoked, the city remains explicitly associated with its separately displayed
-result identity. The edited field must not relabel that city.
+Editing the input alone in any state changes only the input draft. It does not
+change the state, current attempt, visible status or actions, revision identity,
+or city. Any displayed status, identity, or city continues to describe the last
+submission, not the unsubmitted draft. In particular:
+
+* typing in `Initial` leaves a non-empty draft in `Initial` with no status;
+* editing in `Loading` leaves the submitted attempt running with its loading
+  status and cancel action;
+* editing in `Success` does not replace or relabel its result;
+* editing in `Failure` leaves its explanation associated with the failed
+  submission; and
+* editing in `Cancelled` leaves the neutral cancellation confirmation visible.
+
+Resolution, success, or failure of the current Loading attempt must preserve an
+input draft edited after submit. If there has been no such edit, successful
+resolution replaces the normalized submitted URL with the canonical repository
+URL under <<url-normalization,M1-URL-2>>. Cancellation preserves the current
+draft. A late outcome from a replaced or cancelled attempt changes nothing,
+including the draft. Only submit starts a replacement; only reload resets the
+session to an empty draft.
 
 === M1-STATE-2: Submission and replacement
 
-Invoking submit in any state makes that submission the only current attempt and
-immediately invalidates the prior attempt or result. Any prior city, revision
-identity, status, and failure are removed as part of that transition.
+Invoking submit in any state makes the current input draft the only current
+attempt. The field is set to the normalized submission, and the prior attempt or
+result is immediately invalidated. Any prior city, revision identity, status,
+and failure are removed as part of that transition.
 
 * If the normalized value is invalid, the next stable state is `Failure` and no
   provider interaction occurs.
@@ -241,17 +274,19 @@ visible before that transition.
 
 Any failure of the current attempt changes loading to `Failure`. The loading
 indicator and cancel action disappear, the applicable explanation appears, and
-no city is visible. A failure remains until the user edits/resubmits or reloads;
-there is no automatic retry, branch fallback, revision fallback, or stale-city
-fallback.
+no city is visible. A failure remains until the user resubmits or reloads;
+editing only creates an unsubmitted draft and does not clear it. There is no
+automatic retry, branch fallback, revision fallback, or stale-city fallback.
 
 === M1-STATE-4: Cancellation
 
 Cancel is available only in `Loading`. Invoking it immediately changes the
 observable state to `Cancelled`, clears any selected revision identity, and
-makes the attempt permanently ineligible to publish a city or later status. A
-late outcome from that attempt has no observable effect. The normalized
-submitted URL remains so the user can edit or resubmit it.
+makes the attempt permanently ineligible to publish a city or later status. The
+current input draft is preserved, whether it still contains the submitted URL
+or has been edited. A late outcome from that attempt has no observable effect
+and cannot overwrite the draft. Editing in `Cancelled` changes only the draft;
+submit starts a new attempt and reload returns to empty `Initial`.
 
 This requirement defines the user-visible cancellation result, not which
 runtime node, component, or port stops work or performs cleanup.

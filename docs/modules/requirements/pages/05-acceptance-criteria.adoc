@@ -44,6 +44,18 @@ Scenario: A fresh session is empty
   And no status, revision identity, history, or city is visible
 ----
 
+[source,gherkin]
+----
+Scenario: Typing creates a draft without leaving Initial
+  Given Code City is Initial with an empty URL input
+  When the user types "https://github.com/acme/city" without invoking submit
+  Then the state remains Initial
+  And the input contains that URL as an unsubmitted draft
+  And submit remains available
+  And no loading, cancellation, success, or failure status appears
+  And no provider interaction, revision identity, or city appears
+----
+
 == Accepted input and successful identity
 
 [source,gherkin]
@@ -143,6 +155,19 @@ Scenario: Invalid replacement cannot leave a stale city
   And no city or commit identity is visible
 ----
 
+[source,gherkin]
+----
+Scenario: Editing a failed submission does not clear its status
+  Given the state is Failure for a submitted "https://github.com/acme/city.git"
+  And the invalid/non-canonical explanation describes that failed submission
+  When the user edits the input to "https://github.com/acme/city"
+       without invoking submit
+  Then the edited URL is preserved as an unsubmitted draft
+  And the state remains Failure
+  And the explanation remains associated with the failed ".git" submission
+  And no loading status, cancel action, provider interaction, identity, or city appears
+----
+
 == Anonymous unavailable repository
 
 [source,gherkin]
@@ -187,6 +212,25 @@ Scenario Outline: Provider failure has no fallback result
 
 [source,gherkin]
 ----
+Scenario Outline: A loading outcome preserves a post-submission draft
+  Given "https://github.com/acme/repository-a" is the current Loading attempt
+  When the user edits the input to "https://github.com/acme/repository-b"
+       without invoking submit
+  Then repository B is an unsubmitted draft
+  And repository A remains the current attempt with loading status and cancel available
+  When the repository A attempt <outcome>
+  Then the state becomes <state>
+  And the input still contains the unsubmitted repository B draft
+  And every visible status, identity, or city describes repository A, not repository B
+
+  Examples:
+    | outcome                                    | state   |
+    | completes successfully at revision-a       | Success |
+    | has a provider/resolution failure           | Failure |
+----
+
+[source,gherkin]
+----
 Scenario: Only the latest replacement may publish
   Given Success shows repository A at revision-a
   When the user submits an accepted URL for repository B
@@ -221,11 +265,30 @@ Scenario: Cancelling loading is final for that attempt
   And its identity has resolved to revision-b
   When the user invokes cancel
   Then the state is Cancelled
-  And the normalized submitted URL remains editable
+  And the current input draft remains editable
   And the loading status, cancel action, revision-b identity, and every city are absent
   When any late success or failure for the cancelled attempt arrives
   Then the visible state remains Cancelled
   And no city or new status appears
+----
+
+[source,gherkin]
+----
+Scenario: Editing during loading and cancellation changes only the draft
+  Given repository A is the current Loading attempt
+  When the user edits the input to a URL for repository B without invoking submit
+  Then repository A remains Loading with its loading status and cancel action
+  And repository B is only an unsubmitted draft
+  When the user invokes cancel
+  Then the state is Cancelled
+  And the repository B draft is preserved
+  And the neutral cancellation confirmation is visible
+  When the user edits the input to a URL for repository C without invoking submit
+  Then the state remains Cancelled with the same cancellation confirmation
+  And repository C is the preserved unsubmitted draft
+  When any late outcome for repository A arrives
+  Then the repository C draft and Cancelled state remain unchanged
+  And no revision identity, city, or new status appears
 ----
 
 == No partial publication
@@ -269,8 +332,9 @@ Scenario: M1 has one input and no credentials or configuration
 [source,gherkin]
 ----
 Scenario: Reload does not restore state
-  Given a success, failure, or cancelled state exists in the current session
+  Given any input draft, attempt, result, failure, or cancellation exists in the current session
   When the user reloads Code City
   Then the state is Initial
-  And no prior input, identity, error, city, recent repository, or history is restored
+  And the input is empty
+  And no prior identity, status, city, recent repository, or history is restored
 ----
