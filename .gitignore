@@ -1,11 +1,3 @@
 build/
-data/
 node_modules/
 .npm-cache/
-playwright-report/
-test-results/
-.code-city-dev/
-tools/roslyn-helper/bin/
-tools/roslyn-helper/obj/
-tools/git-credential-helper/bin/
-tools/git-credential-helper/obj/
