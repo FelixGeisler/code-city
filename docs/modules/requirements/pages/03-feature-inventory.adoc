@@ -31,9 +31,11 @@ selection and identity].
 xref:04-functional-requirements.adoc#states[Observable states and transitions].
 
 |Supported-source admission and resource limits
-|Contract pending
-|https://github.com/FelixGeisler/code-city/issues/442[#442] owns exact module
-admission, thresholds, and limit outcomes.
+|Included; exact contract proposed
+|xref:06-source-admission-and-limits.adoc[] defines the closed module-admission
+matrix, fixed thresholds, and observable limit outcomes under
+https://github.com/FelixGeisler/code-city/issues/442[#442]. Exact-revision human
+acceptance is required before that proposal joins the accepted baseline.
 
 |Fixed metric semantics
 |Contract pending

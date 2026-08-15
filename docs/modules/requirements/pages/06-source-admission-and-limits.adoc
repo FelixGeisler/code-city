@@ -1,0 +1,1180 @@
+= Source Admission and Resource Limits
+
+This page is normative for the M1 source-admission and resource-limit contract.
+It applies only after the current attempt has selected the immutable repository
+identity defined by xref:04-functional-requirements.adoc#immutable-revision[].
+It defines product data and observable stages, not a process, component, port,
+API, parser, renderer, thread, device, or enforcement owner.
+
+The choices on this page are a product-contract proposal. They become part of
+the accepted M1 baseline only when a human explicitly approves the exact
+revision that contains them. A passing build or automated review is not that
+approval.
+
+[[admission-terms]]
+== Terms
+
+Raw repository entry:: One reported entry at the selected commit, consisting
+of its raw repository-relative path, entry kind, and content octets when this
+contract requires content. A repository root placeholder is not an entry.
+
+Canonical path:: A valid raw path after the path normalization in
+<<canonical-paths,M1-ADM-1>>.
+
+Eligible source candidate:: An entry outside a submodule boundary whose valid
+canonical path has one of the eight allowed extensions. This classification is
+made before its entry kind or content can admit or skip it.
+
+Normalized content:: A candidate regular file's content after the exact
+transformation in <<content-normalization,M1-ADM-4>>.
+
+Admitted module:: A candidate that is a regular file and has valid normalized
+content. Its canonical module identity is its canonical path.
+
+Contract stage:: One of retrieval, admission, static processing, city
+construction, or presentation as delimited in <<measurement-stages>>. A stage
+is an observable product interval, not an architecture boundary.
+
+City unit:: The renderer-independent coordinate unit supplied by the city
+contract. This page limits measured coordinates but does not choose how source
+or metrics map to them.
+
+Byte:: One octet. Every byte threshold below is an exact integer count, not an
+approximation.
+
+[[untrusted-source]]
+== M1-ADM-0: Untrusted source invariant
+
+Repository metadata, paths, entry content, and source text are untrusted data.
+Admission must never execute, evaluate, import, dynamically load, or otherwise
+run any of them. A filename, media-type claim, executable bit, generated/vendor
+label, or claimed count or size has no authority to override this contract.
+Static processing may inspect normalized source under its accepted contract,
+but it must not execute the source.
+
+[[canonical-paths]]
+== M1-ADM-1: Canonical paths and module identity
+
+A raw path must be a sequence of Unicode scalar values. It is valid only when
+all of the following hold:
+
+. It is non-empty and repository-relative.
+. It does not begin with `/`, a drive prefix such as `C:/`, or a UNC prefix
+  such as `//server/` or `\\server\`.
+. It contains `/` as its only separator. A backslash is invalid and is never
+  changed to `/`.
+. Splitting on `/` produces only non-empty segments. No segment is `.` or
+  `..`; separators are never removed, inserted, collapsed, or resolved.
+. It contains no C0 or C1 control character: `U+0000` through `U+001F`,
+  `U+007F`, or `U+0080` through `U+009F`.
+. Each segment is normalized to Unicode Normalization Form C (NFC), and the
+  segments are rejoined with one `/`. The resulting canonical path satisfies
+  the path-length and depth limits in <<repository-admission-limits>>.
+
+All other Unicode scalar values are allowed. NFC is the only path text
+normalization. Letter case, spaces, punctuation, and extension spelling are
+preserved. In particular, no locale-sensitive or Unicode case folding is
+performed.
+
+The canonical module identity of an admitted module is exactly its canonical
+path. Generated and vendor path segments have no special meaning and are not
+excluded.
+
+Two reported entries collide when their canonical paths are equal, including
+when the raw paths are exact duplicates or distinct canonically equivalent
+Unicode strings. A collision is a `Source admission failed` outcome for the
+whole attempt; no entry wins. ASCII case-only variants do not collide because
+case is preserved. These are all possible collision classes because NFC is the
+only identity-changing path operation.
+
+[[extension-allow-list]]
+== M1-ADM-2: Closed extension allow-list
+
+Only these final-segment extensions are eligible:
+
+[source,text]
+----
+.js  .jsx  .mjs  .cjs  .ts  .tsx  .mts  .cts
+----
+
+The extension is the suffix beginning at the final `.` in the final path
+segment. The segment `.ts` therefore has the allowed `.ts` extension, and
+`name.d.ts` has the allowed `.ts` extension. Eligibility compares only ASCII
+letters in the suffix case-insensitively, so `.TS` and `.TsX` are eligible.
+The canonical path and module identity retain their original case. No other
+extension or compound format is inferred, and no Unicode case mapping is used.
+
+[[entry-kinds]]
+== M1-ADM-3: Entry kinds and submodule boundaries
+
+Only a regular file can be admitted. An ordinary directory/tree entry is
+skipped, even when its name ends in an allowed extension. Every symbolic link
+is skipped without interpreting or following its target; this includes an
+in-repository target, an absolute or escaping target, and a dangling target.
+A submodule entry and every reported entry beneath its canonical path prefix
+are skipped. Submodule content is not part of the selected repository's
+admitted module set.
+
+A missing, unknown, contradictory, or malformed entry kind is not silently
+skipped; it is `Source admission failed`. The regular-file executable bit and
+other mode metadata do not affect admission.
+
+[[content-normalization]]
+== M1-ADM-4: Content validity and normalization
+
+The raw content of each candidate regular file is transformed exactly once in
+this order:
+
+. Decode the complete octet sequence as strict UTF-8. An ill-formed sequence is
+  `Source admission failed`.
+. Remove exactly one leading `U+FEFF` byte-order mark when present. An interior
+  `U+FEFF`, or a second leading one, remains source text.
+. Reject content containing `U+0000` with `Source admission failed`.
+. Replace every CRLF pair (`U+000D U+000A`) with LF (`U+000A`), then replace
+  every remaining CR with LF.
+. Perform no other transformation: do not normalize Unicode, trim whitespace,
+  add or remove a final newline, decode escapes, or rewrite source.
+. Encode the resulting scalar-value sequence as UTF-8. Those octets are the
+  normalized content counted by the normalized-content limits.
+
+Empty content and valid non-ASCII text are admissible. For M1, content is
+binary precisely when it is not strict UTF-8 or contains `U+0000`; there is no
+filename, media-type, printable-character, or other binary heuristic. An
+untrusted `binary` label cannot reject otherwise valid content or admit invalid
+content.
+
+Admission does not parse language syntax or decide whether code is executable.
+Executable source, declaration-only source such as `name.d.ts`, comments-only
+source, and otherwise non-executable source are all admitted. Syntactically
+malformed source with otherwise valid path and content is admitted first, then
+produces `Source processing failed` when fixed static processing evaluates it;
+it is never reclassified or silently skipped by admission.
+
+[[admission-composition]]
+== M1-ADM-5: Composition, collision handling, and order
+
+The closed matrix in <<admission-matrix>> uses this composition rule. Each row
+assumes all conditions not stated in that row match the admissible baseline:
+a unique regular file at `src/example.ts`, valid UTF-8 content `export {};`
+with LF newlines, and every limit below its threshold.
+
+For a current, non-cancelled attempt, admission applies these conceptual gates:
+
+. validate essential entry data and canonicalize every inspected path;
+. reject every canonical-path collision across inspected entries, including
+  entries that would later be skipped;
+. identify submodule boundaries, apply the extension allow-list, and count
+  eligible candidates;
+. apply the entry-kind rule;
+. for each candidate regular file, measure raw content and apply content
+  normalization;
+. enforce the remaining repository/admission limits;
+. if no module was admitted, fail as `No supported modules`; otherwise sort the
+  complete admitted set.
+
+A `fail` is terminal for the whole attempt. It produces no admitted-module set.
+A `skip` excludes only that entry. An `admit` adds exactly one module unless
+another row causes a whole-attempt failure. When more than one failure or limit
+is true, <<outcome-precedence>> selects the one visible result.
+
+The total module order is ascending lexicographic order of the unsigned UTF-8
+octets of canonical module identity. If one identity is an exact byte prefix
+of another, the shorter identity sorts first. This ordering uses no provider
+response order, traversal order, filesystem behavior, or locale. Reordering
+raw entries therefore cannot change a successful admitted set or order, and
+cannot change a collision into a winner.
+
+[[admission-matrix]]
+== Closed admission matrix
+
+In the `Observable` column, `No` means the row creates no separate user-visible
+status; only the eventual complete success or a later aggregate failure is
+visible. Every `Yes` result enters the Failure state, retains the current
+attempt's selected identity, and publishes none of the partial or stale data
+forbidden by <<failure-invariants>>.
+
+[cols="1,3,3,3,2,1,3",options="header"]
+|===
+|ID |Raw condition |Normalization result |Canonical module identity |Collision result |Outcome |Observable
+
+|EXT-01
+|Regular file `src/example.js`
+|Path and content unchanged
+|`src/example.js`
+|None
+|`admit`
+|No
+
+|EXT-02
+|Regular file `src/example.jsx`
+|Path and content unchanged
+|`src/example.jsx`
+|None
+|`admit`
+|No
+
+|EXT-03
+|Regular file `src/example.mjs`
+|Path and content unchanged
+|`src/example.mjs`
+|None
+|`admit`
+|No
+
+|EXT-04
+|Regular file `src/example.cjs`
+|Path and content unchanged
+|`src/example.cjs`
+|None
+|`admit`
+|No
+
+|EXT-05
+|Regular file `src/example.ts`
+|Path and content unchanged
+|`src/example.ts`
+|None
+|`admit`
+|No
+
+|EXT-06
+|Regular file `src/example.tsx`
+|Path and content unchanged
+|`src/example.tsx`
+|None
+|`admit`
+|No
+
+|EXT-07
+|Regular file `src/example.mts`
+|Path and content unchanged
+|`src/example.mts`
+|None
+|`admit`
+|No
+
+|EXT-08
+|Regular file `src/example.cts`
+|Path and content unchanged
+|`src/example.cts`
+|None
+|`admit`
+|No
+
+|EXT-09
+|Upper-case suffix `src/example.TS`
+|ASCII-insensitive suffix match; path case retained
+|`src/example.TS`
+|None
+|`admit`
+|No
+
+|EXT-10
+|Mixed-case suffix `src/example.TsX`
+|ASCII-insensitive suffix match; path case retained
+|`src/example.TsX`
+|None
+|`admit`
+|No
+
+|EXT-11
+|Ordinary unsupported suffix `src/example.txt`
+|Path canonicalizes unchanged; content is not inspected
+|None
+|None
+|`skip`
+|No; if every entry is skipped, ADM-06 is visible
+
+|EXT-12
+|Framework-specific single-file format `src/example.vue`
+|Path canonicalizes unchanged; content is not inspected
+|None
+|None
+|`skip`
+|No; if every entry is skipped, ADM-06 is visible
+
+|PATH-01
+|Root path `main.ts`
+|One segment, `main.ts`
+|`main.ts`
+|None
+|`admit`
+|No
+
+|PATH-02
+|Nested path `src/lib/main.ts`
+|Three segments joined by `/`
+|`src/lib/main.ts`
+|None
+|`admit`
+|No
+
+|PATH-03
+|Path-segment casing `Src/Lib/Main.ts`
+|Case retained exactly
+|`Src/Lib/Main.ts`
+|None
+|`admit`
+|No
+
+|PATH-04
+|Generated path `generated/out.ts`
+|No generated-path exclusion
+|`generated/out.ts`
+|None
+|`admit`
+|No
+
+|PATH-05
+|Vendor path `vendor/pkg/index.ts`
+|No vendor-path exclusion
+|`vendor/pkg/index.ts`
+|None
+|`admit`
+|No
+
+|PATH-06
+|Empty path
+|Invalid; no repair
+|None
+|Not evaluated
+|`fail`
+|Yes: `Source admission failed`
+
+|PATH-07
+|Leading-slash path `/src/a.ts`
+|Invalid; leading slash is not removed
+|None
+|Not evaluated
+|`fail`
+|Yes: `Source admission failed`
+
+|PATH-08
+|Drive-prefixed path `C:/src/a.ts`
+|Invalid; drive prefix is not made relative
+|None
+|Not evaluated
+|`fail`
+|Yes: `Source admission failed`
+
+|PATH-09
+|UNC-prefixed path `//server/share/a.ts` or `\\server\share\a.ts`
+|Invalid; prefix and separators are not rewritten
+|None
+|Not evaluated
+|`fail`
+|Yes: `Source admission failed`
+
+|PATH-10
+|Backslash path `src\a.ts`
+|Invalid; backslash is not a separator alias
+|None
+|Not evaluated
+|`fail`
+|Yes: `Source admission failed`
+
+|PATH-11
+|Empty, repeated, or trailing segment in `src//a.ts` or `src/a.ts/`
+|Invalid; separators are not collapsed or removed
+|None
+|Not evaluated
+|`fail`
+|Yes: `Source admission failed`
+
+|PATH-12
+|Dot segment `./src/a.ts`
+|Invalid; `.` is not resolved
+|None
+|Not evaluated
+|`fail`
+|Yes: `Source admission failed`
+
+|PATH-13
+|Parent segment `src/../a.ts`
+|Invalid; `..` is not resolved
+|None
+|Not evaluated
+|`fail`
+|Yes: `Source admission failed`
+
+|PATH-14
+|Path containing `U+0000`
+|Invalid control character
+|None
+|Not evaluated
+|`fail`
+|Yes: `Source admission failed`
+
+|PATH-15
+|Path containing another C0/C1 control, such as `U+001F` or `U+0085`
+|Invalid control character
+|None
+|Not evaluated
+|`fail`
+|Yes: `Source admission failed`
+
+|PATH-16
+|NFC non-ASCII path `src/café.ts`
+|Remains `src/café.ts`
+|`src/café.ts`
+|None
+|`admit`
+|No
+
+|PATH-17
+|Decomposed path `src/cafe` plus `U+0301` plus `.ts`, with no equivalent peer
+|NFC produces `src/café.ts`
+|`src/café.ts`
+|None
+|`admit`
+|No
+
+|PATH-18
+|Two exact duplicate raw paths `src/a.ts`
+|Both produce `src/a.ts`
+|None; the candidate identity is rejected
+|Exact canonical-path collision
+|`fail`
+|Yes: `Source admission failed`
+
+|PATH-19
+|Case-only peers `src/A.ts` and `src/a.ts`
+|Case retained; two distinct paths
+|`src/A.ts` and `src/a.ts`
+|None; identities are distinct
+|`admit`
+|No; both modules sort by unsigned UTF-8 bytes
+
+|PATH-20
+|NFC peer paths `src/café.ts` and decomposed `src/cafe` plus `U+0301` plus `.ts`
+|Both produce `src/café.ts`
+|None; the candidate identity is rejected
+|NFC canonical-path collision
+|`fail`
+|Yes: `Source admission failed`
+
+|KIND-01
+|Regular file with an allowed extension
+|Path and valid content follow ADM-1 and ADM-4
+|Its canonical path
+|None
+|`admit`
+|No
+
+|KIND-02
+|Ordinary directory/tree entry `src`
+|Path canonicalizes; no content is inspected
+|None
+|None
+|`skip`
+|No
+
+|KIND-03
+|Ordinary directory/tree entry `types.ts`
+|Allowed suffix does not change its directory kind
+|None
+|None
+|`skip`
+|No; if no regular module is admitted, ADM-06 is visible
+
+|KIND-04
+|In-repository symlink `alias.ts` targeting `src/a.ts`
+|Link path canonicalizes; target is neither normalized nor followed
+|None
+|None unless the link path itself collides
+|`skip`
+|No; if no regular module is admitted, ADM-06 is visible
+
+|KIND-05
+|Symlink `alias.ts` with `../outside.ts` target
+|Link path canonicalizes; escaping target is ignored
+|None
+|None unless the link path itself collides
+|`skip`
+|No; no target content or identity can appear
+
+|KIND-06
+|Symlink `alias.ts` with an absolute target
+|Link path canonicalizes; absolute target is ignored
+|None
+|None unless the link path itself collides
+|`skip`
+|No; no target content or identity can appear
+
+|KIND-07
+|Dangling symlink `alias.ts`
+|Link path canonicalizes; target existence is irrelevant
+|None
+|None unless the link path itself collides
+|`skip`
+|No; if no regular module is admitted, ADM-06 is visible
+
+|KIND-08
+|Submodule entry `packages/external`
+|Entry path canonicalizes; submodule is a boundary
+|None
+|None unless its path collides
+|`skip`
+|No
+
+|KIND-09
+|Reported regular file `packages/external/src/a.ts` beneath that submodule
+|Path canonicalizes but remains beneath the boundary; content is not inspected
+|None
+|None unless its path collides
+|`skip`
+|No; if no in-repository module is admitted, ADM-06 is visible
+
+|KIND-10
+|Missing, unknown, contradictory, or malformed entry kind
+|Essential entry data cannot be established
+|None
+|Not evaluated, or collision if already established
+|`fail`
+|Yes: `Source admission failed`
+
+|CONTENT-01
+|Strict UTF-8 without a BOM and with LF newlines
+|Scalar values and UTF-8 octets remain unchanged
+|Canonical path
+|None
+|`admit`
+|No
+
+|CONTENT-02
+|Strict UTF-8 with one leading BOM
+|Exactly one leading `U+FEFF` is removed
+|Canonical path
+|None
+|`admit`
+|No
+
+|CONTENT-03
+|Strict UTF-8 non-ASCII text
+|Text is preserved; no Unicode content normalization
+|Canonical path
+|None
+|`admit`
+|No
+
+|CONTENT-04
+|Zero content octets
+|Empty normalized content
+|Canonical path
+|None
+|`admit`
+|No
+
+|CONTENT-05
+|CRLF newlines
+|Every CRLF pair becomes one LF
+|Canonical path
+|None
+|`admit`
+|No
+
+|CONTENT-06
+|Bare CR newlines, or a mixture of LF, CRLF, and CR
+|CRLF becomes LF, then every remaining CR becomes LF
+|Canonical path
+|None
+|`admit`
+|No
+
+|CONTENT-07
+|Ill-formed UTF-8 content
+|Decode fails; no normalized content
+|None
+|None
+|`fail`
+|Yes: `Source admission failed`
+
+|CONTENT-08
+|Strict UTF-8 content containing `U+0000`, including NUL-bearing binary data
+|Rejected after decode; no normalized content
+|None
+|None
+|`fail`
+|Yes: `Source admission failed`
+
+|CONTENT-09
+|Untrusted metadata says `binary`, but bytes are strict UTF-8 without `U+0000`
+|The label is ignored; bytes follow the ordinary normalization rule
+|Canonical path
+|None
+|`admit`
+|No
+
+|SOURCE-01
+|Executable source text
+|No execution and no syntax change during admission
+|Canonical path
+|None
+|`admit`
+|No
+
+|SOURCE-02
+|Declaration-only source such as `types.d.ts`
+|Final `.ts` is allowed; content remains declaration-only
+|Canonical path
+|None
+|`admit`
+|No
+
+|SOURCE-03
+|Comments-only, empty, or otherwise non-executable module
+|No executability filter
+|Canonical path
+|None
+|`admit`
+|No
+
+|SOURCE-04
+|Syntactically malformed source with valid path and content encoding
+|Content normalization still completes
+|Canonical path
+|None
+|`admit`
+|No at admission; the later terminal result is visibly `Source processing failed`
+
+|ADM-06
+|No entry has an allowed extension after valid paths and submodule boundaries
+|No eligible candidate and no module identity
+|None
+|None
+|`fail`
+|Yes: `No supported modules`
+
+|ADM-07
+|Allowed-extension entries exist, but all are skipped kinds, such as directories or symlinks
+|Candidates produce no admitted module
+|None
+|None
+|`fail`
+|Yes: `No supported modules`
+
+|ORDER-01
+|The same distinct admissible entries arrive in different orders
+|Each path/content normalization is unchanged
+|The same set of identities
+|None
+|`admit`
+|No; every order yields the same UTF-8-byte-sorted module order
+
+|ORDER-02
+|Exact-duplicate or NFC-equivalent colliding entries arrive in different orders
+|The same canonical collision exists in every order
+|None
+|Collision; no winner
+|`fail`
+|Yes: `Source admission failed`, independent of arrival order
+|===
+
+[[measurement-stages]]
+== M1-LIM-0: Measurement stages and boundary rule
+
+The limit inventory is closed: no configurable, inferred, provider-declared,
+or implementation-specific product limit can change the M1 outcome. These are
+proposed M1 product ceilings, not claims about a chosen technology's capacity,
+and no value is copied or inferred from Code City v1. Equal numeric values in
+different rows remain separate limits because their data, counting bases, or
+measurement stages differ; no threshold is implicitly shared.
+
+The conceptual stages are:
+
+Retrieval:: Begins when obtaining repository entry data for the already
+selected commit begins. It ends when the last repository datum required to
+decide admission is available, or when retrieval reaches a terminal outcome.
+It includes elapsed waiting for that data and excludes URL/revision resolution.
+
+Admission:: Begins when the first retrieved entry is evaluated. It ends when
+the complete normalized, collision-free, ordered admitted set is decided, or
+when admission reaches a terminal outcome. Retrieval and admission intervals
+may overlap; their limits remain independent.
+
+Static processing:: Begins when the ordered admitted set is presented for the
+fixed M1 processing result. It ends when the complete result, or a terminal
+processing outcome, is established.
+
+City construction:: Begins when the complete fixed processing result is
+available for city construction. It ends when the complete
+renderer-independent city/scene model, or a terminal construction outcome, is
+established.
+
+Presentation:: Begins when the complete renderer-independent model is
+available for initial presentation. It ends when the complete initial
+presentation is ready for atomic publication, or a terminal presentation
+outcome is established.
+
+Every threshold is an inclusive maximum. A value immediately below or exactly
+at the threshold is allowed; merely reaching the threshold is not a failure.
+A value exceeds the threshold only when it is greater than the stated value.
+Counts and byte sizes are exact non-negative integers. Duration is elapsed time
+rounded up to a whole millisecond; zero elapsed time is zero, completion at the
+exact threshold is allowed, and any positive fraction beyond it is counted as
+the next millisecond and fails. Coordinate accounting is defined with the axis
+rows below.
+
+A stage may stop once an above-threshold fact is established, but that
+permission assigns no stopping mechanism or owner. Stopping cannot publish a
+partial result.
+
+[[repository-admission-limits]]
+== Repository and admission limits
+
+[cols="1,3,2,6",options="header"]
+|===
+|ID |Dimension |Inclusive maximum |Counting basis and measurement
+
+|RA-01
+|Repository entries inspected
+|`10,000 entries`
+|Count each raw entry record once as it enters inspection, including regular
+files, directories, symlinks, submodules, descendants reported beneath a
+submodule, unsupported names, and duplicates. Exclude only a repository-root
+placeholder. A repeated record counts again and may also cause a collision.
+Measurement is before path and content normalization.
+
+|RA-02
+|Canonical repository-relative path length
+|`1,024 UTF-8 bytes per path`
+|For each valid path, encode its NFC canonical path, including `/` separators,
+as UTF-8 and count its octets once. Raw spelling and content bytes are excluded.
+Measurement is after path normalization and before extension admission. An
+invalid path is an admission failure rather than a path-length result.
+
+|RA-03
+|Path-segment depth
+|`64 segments per path`
+|Count the non-empty canonical segments separated by `/`; a root-level file has
+depth one. Repeated segment text counts at each occurrence. Measurement is
+after path validation/NFC and before extension admission.
+
+|RA-04
+|One repository entry's content size
+|`1,048,576 raw bytes`
+|For each candidate regular file whose content is inspected, count its actual
+raw octets once before UTF-8 decode, BOM removal, or newline normalization.
+Repeated reads do not add bytes; identical content at distinct paths is counted
+separately. Skipped kinds and unsupported paths have no inspected content.
+
+|RA-05
+|Cumulative repository content inspected
+|`52,428,800 raw bytes`
+|Sum the RA-04 raw size of every candidate regular file inspected in the
+current attempt, once per canonical entry. Identical or shared content at
+distinct paths is added once for each path. Metadata, paths, skipped-entry
+content, and repeated reads are excluded. Measurement is during retrieval,
+before content normalization.
+
+|RA-06
+|Eligible source-candidate count
+|`5,000 candidates`
+|Count each valid, allowed-extension entry outside a submodule boundary once,
+after path normalization and before entry-kind/content admission. Thus an
+allowed-extension directory or symlink counts as a candidate and is later
+skipped. A repeated candidate record counts again and also causes collision
+failure under the precedence rule.
+
+|RA-07
+|Admitted-module count
+|`2,000 modules`
+|Count each unique regular candidate with valid normalized content once after
+admission and before sorting. Skipped entries are excluded. Distinct identities
+with identical content count separately; collisions admit none.
+
+|RA-08
+|Normalized content size per admitted module
+|`1,048,576 UTF-8 bytes`
+|Count the UTF-8 octets of one module after BOM removal and newline
+normalization. Raw bytes, module identity, and later processing data are
+excluded. Each module is measured once even if its data is later consumed more
+than once.
+
+|RA-09
+|Aggregate normalized admitted-content size
+|`20,971,520 UTF-8 bytes`
+|Sum RA-08 for every admitted identity once after normalization and before
+static processing. Equal or shared text under distinct identities contributes
+once per identity; repeated consumption contributes nothing further.
+
+|RA-10
+|Retrieval duration
+|`60,000 milliseconds`
+|Measure the Retrieval interval defined in M1-LIM-0, including waits and all
+entry/content data needed for admission. Exclude URL validation, immutable
+revision resolution, later admission-only work, and user time outside the
+interval.
+
+|RA-11
+|Admission duration
+|`10,000 milliseconds`
+|Measure the Admission interval defined in M1-LIM-0, including path/content
+normalization, collision evaluation, limit accounting, no-module decision, and
+deterministic ordering. Exclude earlier URL/revision resolution and later
+static processing. Overlap with retrieval is included independently in both
+contractual intervals.
+|===
+
+[[processing-limits]]
+== Static-processing limits
+
+[cols="1,3,2,6",options="header"]
+|===
+|ID |Dimension |Inclusive maximum |Counting basis and measurement
+
+|SP-01
+|Admitted modules presented for processing
+|`2,000 modules`
+|The complete ordered admitted set is presented once. Count each canonical
+module identity once at static-processing entry. A missing, additional, or
+repeated identity is contradictory processing data and `Source processing
+failed`, not a way to change the count. This is measured after admission and
+before source consumption; its equal numeric value does not share RA-07.
+
+|SP-02
+|Normalized source size consumed per module
+|`1,048,576 UTF-8 bytes`
+|For each presented identity, count its complete normalized-content octets once
+as contract input, regardless of repeated internal reads. Identity bytes and
+derived facts are excluded. Measurement is after admission and before the
+module's processing result. Its equal value does not share RA-08.
+
+|SP-03
+|Aggregate normalized source size consumed
+|`20,971,520 UTF-8 bytes`
+|Sum SP-02 once per presented identity. Distinct modules with equal/shared text
+count separately; repeated reads do not. Measurement is over the complete
+static-processing input before the complete processing result. Its equal value
+does not share RA-09.
+
+|SP-04
+|Static-processing duration
+|`30,000 milliseconds`
+|Measure the Static processing interval defined in M1-LIM-0, including all work
+and waiting needed for the complete fixed result. Exclude retrieval/admission,
+city construction, presentation, and user time outside the interval.
+|===
+
+[[city-presentation-limits]]
+== City-construction and presentation limits
+
+[cols="1,3,2,6",options="header"]
+|===
+|ID |Dimension |Inclusive maximum |Counting basis and measurement
+
+|CC-01
+|Building count
+|`2,000 buildings`
+|Count each building occurrence in the complete renderer-independent city
+model once after city construction and before presentation. A repeated
+building occurrence counts again; a reference to shared descriptive data does
+not create another building.
+
+|CC-02
+|Repository-derived label count
+|`4,000 labels`
+|Count each label occurrence whose final text derives wholly or partly from
+repository data, after label derivation and before presentation. Repeated equal
+text at different label occurrences counts once per occurrence. Non-repository
+presentation text is excluded.
+
+|CC-03
+|Individual repository-derived label-text size
+|`256 UTF-8 bytes per label`
+|Encode the exact final Unicode scalar-value sequence of one repository-derived
+label as UTF-8 and count its octets, with no additional normalization. Count
+text once per label occurrence; glyphs, styling, geometry, and shared storage
+are excluded. Invalid text is `City construction failed`, not a size result.
+
+|CC-04
+|Aggregate repository-derived label-text size
+|`524,288 UTF-8 bytes`
+|Sum CC-03 over every repository-derived label occurrence. Equal or shared text
+is counted once for each occurrence; non-repository text and presentation-only
+styling are excluded. Measurement is after label derivation and before
+presentation.
+
+|CC-05
+|Renderer-independent city/scene element count
+|`20,000 elements`
+|Count every independently presentable element occurrence in the complete
+renderer-independent model once, including every building and
+repository-derived label plus any other element. Parent and child occurrences
+each count; a reference to shared payload does not add an occurrence. This is a
+model count, not a draw-call, object, node, triangle, glyph, or device count.
+
+|CC-06
+|City/scene x-axis bounds
+|`100,000 whole city units from zero`
+|After construction, take the minimum and maximum x extent over every scene
+element, then take the larger absolute value and round upward to a whole city
+unit. The resulting non-negative integer is limited to `100,000`, equivalent
+to an inclusive envelope from `-100,000` through `100,000` on x. Shared
+element data is measured at every element occurrence.
+
+|CC-07
+|City/scene y-axis bounds
+|`10,000 whole city units from zero`
+|Apply the CC-06 rule independently to y, with an inclusive envelope from
+`-10,000` through `10,000`. The y threshold and result are independent of x
+and z.
+
+|CC-08
+|City/scene z-axis bounds
+|`100,000 whole city units from zero`
+|Apply the CC-06 rule independently to z, with an inclusive envelope from
+`-100,000` through `100,000`. The equal numeric value does not share the x
+limit.
+
+|CC-09
+|City-construction duration
+|`10,000 milliseconds`
+|Measure the City construction interval defined in M1-LIM-0, including all work
+and waiting needed for the complete renderer-independent model. Exclude prior
+processing, later presentation, and user time outside the interval.
+
+|PR-01
+|Presentation duration
+|`10,000 milliseconds`
+|Measure the Presentation interval defined in M1-LIM-0 through readiness of the
+complete initial presentation for atomic publication. Exclude city
+construction, time after initial readiness, later interaction, and user time
+outside the interval. Its equal numeric value does not share CC-09.
+|===
+
+[[limit-boundary-examples]]
+== Closed boundary examples
+
+The comma in these decimal literals is a thousands separator. For every row,
+the `Below` and `At` examples continue without a separate externally observable
+limit status; they may still encounter another contract outcome. Every `Above`
+example enters Failure and is externally observable under the exact category
+shown. The examples alter only the named dimension and keep every other datum
+valid and below its threshold.
+
+[cols="1,3,3,3,4",options="header"]
+|===
+|ID |Immediately below: continue, not separately observable |Exactly at: continue, not separately observable |Immediately above: Failure, observable |Visible category
+
+|RA-01 |`9,999 entries` |`10,000 entries` |`10,001 entries` |`Repository/admission limit exceeded (RA-01)`
+|RA-02 |`1,023 UTF-8 path bytes` |`1,024 UTF-8 path bytes` |`1,025 UTF-8 path bytes` |`Repository/admission limit exceeded (RA-02)`
+|RA-03 |`63 path segments` |`64 path segments` |`65 path segments` |`Repository/admission limit exceeded (RA-03)`
+|RA-04 |`1,048,575 raw bytes` |`1,048,576 raw bytes` |`1,048,577 raw bytes` |`Repository/admission limit exceeded (RA-04)`
+|RA-05 |`52,428,799 raw bytes` |`52,428,800 raw bytes` |`52,428,801 raw bytes` |`Repository/admission limit exceeded (RA-05)`
+|RA-06 |`4,999 candidates` |`5,000 candidates` |`5,001 candidates` |`Repository/admission limit exceeded (RA-06)`
+|RA-07 |`1,999 modules` |`2,000 modules` |`2,001 modules` |`Repository/admission limit exceeded (RA-07)`
+|RA-08 |`1,048,575 normalized bytes` |`1,048,576 normalized bytes` |`1,048,577 normalized bytes` |`Repository/admission limit exceeded (RA-08)`
+|RA-09 |`20,971,519 normalized bytes` |`20,971,520 normalized bytes` |`20,971,521 normalized bytes` |`Repository/admission limit exceeded (RA-09)`
+|RA-10 |`59,999 milliseconds` |`60,000 milliseconds` |`60,001 milliseconds` |`Repository/admission limit exceeded (RA-10)`
+|RA-11 |`9,999 milliseconds` |`10,000 milliseconds` |`10,001 milliseconds` |`Repository/admission limit exceeded (RA-11)`
+|SP-01 |`1,999 modules` |`2,000 modules` |`2,001 modules` |`Static-processing limit exceeded (SP-01)`
+|SP-02 |`1,048,575 normalized bytes` |`1,048,576 normalized bytes` |`1,048,577 normalized bytes` |`Static-processing limit exceeded (SP-02)`
+|SP-03 |`20,971,519 normalized bytes` |`20,971,520 normalized bytes` |`20,971,521 normalized bytes` |`Static-processing limit exceeded (SP-03)`
+|SP-04 |`29,999 milliseconds` |`30,000 milliseconds` |`30,001 milliseconds` |`Static-processing limit exceeded (SP-04)`
+|CC-01 |`1,999 buildings` |`2,000 buildings` |`2,001 buildings` |`City-construction limit exceeded (CC-01)`
+|CC-02 |`3,999 labels` |`4,000 labels` |`4,001 labels` |`City-construction limit exceeded (CC-02)`
+|CC-03 |`255 UTF-8 label bytes` |`256 UTF-8 label bytes` |`257 UTF-8 label bytes` |`City-construction limit exceeded (CC-03)`
+|CC-04 |`524,287 UTF-8 label bytes` |`524,288 UTF-8 label bytes` |`524,289 UTF-8 label bytes` |`City-construction limit exceeded (CC-04)`
+|CC-05 |`19,999 elements` |`20,000 elements` |`20,001 elements` |`City-construction limit exceeded (CC-05)`
+|CC-06 |x bound `99,999` |x bound `100,000` |x bound `100,001` |`City-construction limit exceeded (CC-06)`
+|CC-07 |y bound `9,999` |y bound `10,000` |y bound `10,001` |`City-construction limit exceeded (CC-07)`
+|CC-08 |z bound `99,999` |z bound `100,000` |z bound `100,001` |`City-construction limit exceeded (CC-08)`
+|CC-09 |`9,999 milliseconds` |`10,000 milliseconds` |`10,001 milliseconds` |`City-construction limit exceeded (CC-09)`
+|PR-01 |`9,999 milliseconds` |`10,000 milliseconds` |`10,001 milliseconds` |`Presentation limit exceeded (PR-01)`
+|===
+
+[[metadata-policy]]
+== M1-LIM-1: Absent and untrusted measurement metadata
+
+Limit compliance is established from the contract data defined in each row,
+not from a provider or repository's claimed count, size, duration, encoding,
+media type, bound, or completion status.
+
+* An absent, malformed, negative, contradictory, overflowing, or otherwise
+  untrusted numeric claim neither proves compliance nor creates a limit
+  failure. The actual sequence, octets, text, model, bounds, and elapsed
+  interval are measured. A well-formed claim above a threshold is not enough by
+  itself to fail, and a claim at or below is never enough to pass.
+* Missing or malformed data essential to establish a raw entry--its path, kind,
+  or a candidate regular file's actual content--is `Source admission failed`.
+  An explicit zero-octet content sequence is valid and is distinct from absent
+  content. Contradictory entry records and content are admission failures.
+* Counts and byte sums are checked no later than the first datum beyond the
+  threshold, so arithmetic cannot wrap. If only an overflowing claim is
+  supplied and the actual bounded data is unavailable, the data is absent and
+  the applicable stage failure is used; the claim is never truncated,
+  saturated, or treated as a measured value.
+* A repository's symlink-target metadata and content beneath a known submodule
+  are not needed for admission and cannot make those skipped entries admissible.
+* Static-processing input that is missing, extra, repeated, malformed, or
+  inconsistent with the complete admitted set is `Source processing failed`.
+  No repository-provided summary may replace the normalized source.
+* A label, element, or axis extent that cannot be established as valid Unicode
+  text or finite ordered numeric data is `City construction failed`; it is not
+  guessed, clamped, or called a limit violation. Presentation data that cannot
+  establish a complete initial presentation is `Presentation failed`.
+* Durations are measured over the contractual intervals; repository/provider
+  timing claims are ignored. If a stage cannot establish its own valid
+  completion data, it uses that stage's non-limit failure category and may not
+  assume that its duration passed.
+
+These rules permit downstream safeguards to avoid consuming unbounded data,
+but no safeguard may admit data, change a threshold, expose a partial result,
+or return a different visible category than this contract and
+<<outcome-precedence>> require.
+
+[[failure-categories]]
+== M1-OUT-1: Observable categories
+
+These exact labels refine the downstream failure outcome in
+xref:04-functional-requirements.adoc#failure-outcomes[]. They are the
+user-visible categories for this contract:
+
+[cols="3,5,5",options="header"]
+|===
+|Category |Trigger |Required visible result
+
+|`No supported modules`
+|ADM-06 or ADM-07 after all higher-precedence admission outcomes are absent
+|Failure identifies the selected repository/commit and explains that the
+selected revision contains no admitted module under the M1 contract.
+
+|`Source admission failed`
+|A matrix `fail`, essential repository datum failure, or contradictory
+admission data
+|Failure identifies the selected revision and explains that its source set
+could not be admitted. No entry or partial admitted set is exposed.
+
+|`Repository/admission limit exceeded (ID)`
+|An RA row is above its inclusive maximum
+|Failure identifies the selected revision and the winning RA dimension ID; it
+must not imply that changing the user-configurable limit is possible.
+
+|`Source processing failed`
+|Malformed admitted source prevents the required fixed processing result, or
+processing input/result data is missing, contradictory, or malformed
+|Failure identifies the selected revision and explains that fixed source
+processing did not complete. No metric result is exposed.
+
+|`Static-processing limit exceeded (ID)`
+|An SP row is above its inclusive maximum
+|Failure identifies the selected revision and winning SP dimension ID. No
+metric result or later output is exposed.
+
+|`City construction failed`
+|A complete valid renderer-independent city/scene model cannot be established
+for a non-limit reason relevant to this contract's measurements
+|Failure identifies the selected revision. No city/scene model or presentation
+is exposed.
+
+|`City-construction limit exceeded (ID)`
+|A CC row is above its inclusive maximum
+|Failure identifies the selected revision and winning CC dimension ID. No
+partial model or presentation is exposed.
+
+|`Presentation failed`
+|A complete initial presentation cannot be established for a non-limit reason
+relevant to this contract's measurements
+|Failure identifies the selected revision. No old, partial, or unlabeled city
+is exposed.
+
+|`Presentation limit exceeded (PR-01)`
+|PR-01 is above its inclusive maximum
+|Failure identifies the selected revision and PR-01. No late presentation may
+publish.
+|===
+
+[[outcome-precedence]]
+== M1-OUT-2: Deterministic precedence
+
+Detection timing, provider order, and traversal order never select the visible
+outcome. Apply this precedence to all facts established for one attempt:
+
+. A newer submission or reload first makes every prior attempt ineligible to
+  publish. Its late facts have no result at all.
+. For the current Loading attempt, a cancellation invoked before or at the
+  same contractual instant as completion or failure wins and produces the
+  `Cancelled` state from xref:04-functional-requirements.adoc#states[]. It
+  clears the selected identity. If Failure or Success was already stable,
+  cancel is unavailable.
+. Input, anonymous-access, revision, or resolution outcomes that occur before
+  immutable selection use the precedence and categories in
+  xref:04-functional-requirements.adoc#failure-outcomes[]; this source contract
+  has not started.
+. `Source admission failed` wins over every RA limit and the no-module
+  condition.
+. Simultaneous RA limit violations use ascending ID order: RA-01 through RA-11.
+. `No supported modules` follows all source-admission failures and RA limits.
+. `Source processing failed` wins over SP limits. Simultaneous SP limits use
+  ascending ID order: SP-01 through SP-04.
+. `City construction failed` wins over CC limits. Simultaneous CC limits use
+  ascending ID order: CC-01 through CC-09.
+. `Presentation failed` wins over PR-01.
+. When facts from different completed stage data are simultaneously available,
+  the earlier stage in this list wins: repository/admission, static processing,
+  city construction, then presentation.
+
+A lower-precedence fact is not shown as a second category. This ordering is a
+product classification rule, not an instruction to perform unsafe extra work
+or a choice of orchestration mechanism.
+
+[[failure-invariants]]
+== M1-OUT-3: Identity retention and no partial or stale result
+
+Every failure on this page occurs after immutable selection. It therefore
+retains only the current attempt's canonical repository URL and full lowercase
+commit ID in the Failure state. It never shows an identity from a prior
+attempt. Cancellation is different: it clears the identity exactly as required
+by xref:04-functional-requirements.adoc#states[].
+
+An admission or limit failure publishes no admitted-module set, metric result,
+renderer-independent city/scene model, partial city, or stale city. A
+non-limit processing, construction, or presentation failure publishes none of
+those stage or later results either. Success remains atomic: only the complete
+city and its current identity may appear together.
+
+A replacement invalidates the prior city, identity, status, and all partial
+work before the new submission is classified. A late admit, metric result,
+model, presentation, failure, or limit observation from the replaced or
+cancelled attempt has no observable effect and can never make the invalidated
+result reappear.
+
+[[decision-boundary-source-limits]]
+== Decision boundary and downstream evidence
+
+This contract selects observable product data, thresholds, categories, and
+precedence only. It assigns no acquisition mechanism, topology, process,
+component, port, parser/static-analysis technology, visualization technology,
+clock, cancellation mechanism, safeguard location, enforcement owner, or
+cleanup owner. It does not depend on or accept
+xref:architecture:adr/0001-core-dependency-boundary.adoc[Proposed ADR 0001].
+
+Feasibility and mechanism/enforcement decisions remain with
+https://github.com/FelixGeisler/code-city/issues/446[#446],
+https://github.com/FelixGeisler/code-city/issues/449[#449],
+https://github.com/FelixGeisler/code-city/issues/450[#450], and
+https://github.com/FelixGeisler/code-city/issues/451[#451]. Responsibility and
+cross-cutting synthesis remain with
+https://github.com/FelixGeisler/code-city/issues/462[#462] and
+https://github.com/FelixGeisler/code-city/issues/464[#464].
+
+Architecture views consume this contract without redefining it:
+https://github.com/FelixGeisler/code-city/issues/461[#461] consumes it in
+xref:architecture:03-context-and-scope.adoc[Context and Scope] and
+xref:architecture:10-quality-requirements.adoc[Quality Requirements];
+https://github.com/FelixGeisler/code-city/issues/450[#450],
+https://github.com/FelixGeisler/code-city/issues/462[#462], and
+https://github.com/FelixGeisler/code-city/issues/464[#464] consume it in
+xref:architecture:04-solution-strategy.adoc[Solution Strategy],
+xref:architecture:05-building-block-view.adoc[Building Block View],
+xref:architecture:08-crosscutting-concepts.adoc[Cross-cutting Concepts], and
+xref:architecture:09-architecture-decisions.adoc[Architecture Decisions]; and
+https://github.com/FelixGeisler/code-city/issues/463[#463] consumes accepted
+decisions in xref:architecture:06-runtime-view.adoc[Runtime View] and
+xref:architecture:07-deployment-view.adoc[Deployment View].
+
+The exact non-executable evidence allocation for every matrix row, boundary
+example, and precedence rule is in
+xref:07-source-admission-and-limit-acceptance.adoc[]. That allocation assigns
+validation evidence, not enforcement ownership.

@@ -1,0 +1,408 @@
+= Source Admission and Limit Acceptance
+
+These are inert documentary scenarios and traceability assignments for
+xref:06-source-admission-and-limits.adoc[]. They are not executable fixtures,
+test scaffolds, provider stubs, technology choices, or assignments of an
+enforcement location.
+
+The source-admission and limit contract is acceptable only when all of these
+gates hold:
+
+* every row in the closed admission matrix has the stated result, identity,
+  collision decision, ordering effect, and observability;
+* every exact below/at/above example has the stated result, and simultaneous
+  facts use the documented precedence rather than discovery order;
+* failures retain only the current selected identity and expose no admitted
+  set, metrics, model, partial city, or stale city;
+* the downstream evidence allocation in <<evidence-allocation>> remains
+  complete without making those issues enforcement owners;
+* a human comment names the exact current pull-request head SHA and explicitly
+  approves that head's admission, identity/collision/order, limit
+  value/unit/counting/measurement/boundary/precedence, and observable-failure
+  choices; and
+* `npm run docs:build` succeeds for that same documentation revision.
+
+A generic issue approval, approval of an earlier head, automated `PASS`, or a
+passing build does not satisfy the human-acceptance gate.
+
+== Admission classification
+
+[source,gherkin]
+----
+Scenario: Every closed-matrix row has one deterministic admission result
+  Given the current attempt has selected its canonical repository URL and full commit ID
+  And every unmentioned condition is the admissible baseline
+  When any one row from EXT-01 through ORDER-02 is evaluated
+  Then its normalization, canonical module identity or absence, and collision result
+       are exactly those stated in the row
+  And its only admission outcome is the row's admit, skip, or fail value
+  And its externally observable result is exactly the value in the Observable column
+  And no repository metadata or source is executed, evaluated, imported, or dynamically loaded
+----
+
+[source,gherkin]
+----
+Scenario: Extension recognition does not change canonical identity
+  Given distinct regular files are named "src/a.TS", "src/a.TsX", and "src/a.vue"
+  And their paths and UTF-8 content are otherwise valid
+  When admission completes
+  Then "src/a.TS" and "src/a.TsX" are admitted with their spelling retained
+  And "src/a.vue" is skipped
+  And no Unicode or locale-sensitive case mapping occurs
+----
+
+[source,gherkin]
+----
+Scenario: Canonically equivalent paths fail without an order-dependent winner
+  Given one entry has NFC path "src/café.ts"
+  And another has the canonically equivalent decomposed path from PATH-20
+  When the entries are supplied in either order
+  Then the outcome is Failure with category "Source admission failed"
+  And no module with either spelling is admitted
+  And no admitted-module set or city is visible
+----
+
+[source,gherkin]
+----
+Scenario: Case-only peers remain distinct and have a total order
+  Given valid modules "src/a.ts" and "src/A.ts" arrive in either order
+  When admission completes
+  Then both canonical identities retain case
+  And "src/A.ts" precedes "src/a.ts" by unsigned UTF-8 byte order
+  And provider order, traversal order, filesystem behavior, and locale change nothing
+----
+
+[source,gherkin]
+----
+Scenario: A repository with no admitted module has an explicit outcome
+  Given immutable selection completed for the current attempt
+  And the repository either has no allowed-extension entry
+      or has only allowed-extension directories, symlinks, or submodule content
+  And no higher-precedence failure or limit applies
+  When admission reaches its terminal outcome
+  Then the state is Failure with category "No supported modules"
+  And the current canonical repository URL and full commit ID remain visible
+  And no admitted set, metric result, city/scene model, partial city, or stale city is visible
+----
+
+[source,gherkin]
+----
+Scenario: Malformed syntax is admitted as text and fails only required processing
+  Given a regular ".ts" file has a valid canonical path and valid normalized UTF-8 content
+  But its syntax cannot produce the required fixed processing result
+  When admission evaluates the file
+  Then the admission outcome is admit
+  When static processing reaches its terminal outcome
+  Then the state is Failure with category "Source processing failed"
+  And the current selected identity remains visible
+  And no metric result or city is visible
+----
+
+== Limit boundaries
+
+[source,gherkin]
+----
+Scenario Outline: Every limit uses an inclusive maximum
+  Given all contract data other than <dimension> is valid and below its limit
+  When <dimension> has the exact Below value in its boundary row
+  Then that limit creates no separate externally observable status
+  When <dimension> has the exact At value in its boundary row
+  Then merely reaching the threshold creates no separate externally observable status
+  When <dimension> has the exact Above value in its boundary row
+  Then the state is Failure with the exact visible category and ID in that row
+  And the current selected identity remains visible
+  And no result from that stage or a later stage is published
+
+  Examples:
+    | dimension |
+    | RA-01 |
+    | RA-02 |
+    | RA-03 |
+    | RA-04 |
+    | RA-05 |
+    | RA-06 |
+    | RA-07 |
+    | RA-08 |
+    | RA-09 |
+    | RA-10 |
+    | RA-11 |
+    | SP-01 |
+    | SP-02 |
+    | SP-03 |
+    | SP-04 |
+    | CC-01 |
+    | CC-02 |
+    | CC-03 |
+    | CC-04 |
+    | CC-05 |
+    | CC-06 |
+    | CC-07 |
+    | CC-08 |
+    | CC-09 |
+    | PR-01 |
+----
+
+The exact Below, At, and Above values used by this scenario are the 75 numeric
+examples in
+xref:06-source-admission-and-limits.adoc#limit-boundary-examples[Closed boundary
+examples]. Referring to a limit only by a rounded unit name, a different
+boundary value, or an implementation safeguard is not evidence for this
+scenario.
+
+[source,gherkin]
+----
+Scenario Outline: Untrusted numeric metadata cannot pass or fail a limit
+  Given repository metadata claims a count or size that is <claim>
+  And the actual contract data can be measured
+  When the applicable limit is evaluated
+  Then the claim is ignored
+  And only the actual sequence, bytes, text, model, bounds, or elapsed interval
+       selects Below, At, or Above
+
+  Examples:
+    | claim         |
+    | absent        |
+    | negative      |
+    | malformed     |
+    | contradictory |
+    | overflowing   |
+    | above limit   |
+    | at limit      |
+----
+
+[source,gherkin]
+----
+Scenario: Essential missing content is not confused with an empty file
+  Given one allowed-extension regular entry reports an explicit zero-octet sequence
+  And another allowed-extension regular entry has no actual content datum
+  When each condition is evaluated independently
+  Then the zero-octet file is admitted with zero normalized bytes
+  And the absent-content condition is Failure with category "Source admission failed"
+  And no claimed content size can replace the missing octets
+----
+
+== Simultaneous-outcome precedence
+
+[source,gherkin]
+----
+Scenario: Cancellation wins a boundary tie
+  Given the current attempt is Loading and has selected its immutable identity
+  And a limit failure would become complete at the same contractual instant
+  When the user invokes cancel at that instant
+  Then the state is Cancelled
+  And the selected identity and every partial or prior result are absent
+  And the tied limit failure and every late completion have no observable effect
+----
+
+[source,gherkin]
+----
+Scenario Outline: Same-stage facts use category and ID precedence
+  Given all listed facts are established for the same current non-cancelled attempt
+  When the terminal outcome is classified
+  Then only <winner> is visible
+  And discovery order does not change it
+
+  Examples:
+    | facts                                           | winner                                      |
+    | invalid path and RA-01 above                    | Source admission failed                     |
+    | RA-01 above and RA-02 above                     | Repository/admission limit exceeded (RA-01) |
+    | RA-11 above and no admitted module              | Repository/admission limit exceeded (RA-11) |
+    | malformed required processing and SP-01 above   | Source processing failed                    |
+    | SP-01 above and SP-04 above                     | Static-processing limit exceeded (SP-01)    |
+    | malformed city bound and CC-01 above            | City construction failed                    |
+    | CC-01 above and CC-09 above                     | City-construction limit exceeded (CC-01)    |
+    | presentation failure and PR-01 above            | Presentation failed                         |
+----
+
+[source,gherkin]
+----
+Scenario: Earlier stage wins when cross-stage facts are available together
+  Given static-processing limit SP-04 and city-construction limit CC-01
+        are both reported for the same current attempt
+  When the terminal outcome is classified
+  Then only "Static-processing limit exceeded (SP-04)" is visible
+  And no metric result, city model, or presentation is published
+----
+
+== Identity, replacement, and atomic publication
+
+[source,gherkin]
+----
+Scenario Outline: Every source or limit failure retains only the current identity
+  Given Success previously showed repository A at revision-a
+  When a replacement selects repository B at revision-b
+  And the replacement reaches <failure>
+  Then the state is Failure with <category>
+  And repository B and the full revision-b identity remain visible
+  And repository A, revision-a, every admitted set, metric result, city/scene model,
+      partial city, stale city, and presentation are absent
+
+  Examples:
+    | failure                         | category                                  |
+    | no admitted module              | No supported modules                      |
+    | canonical path collision        | Source admission failed                   |
+    | RA-04 immediately above         | Repository/admission limit exceeded (RA-04) |
+    | malformed required source       | Source processing failed                  |
+    | SP-03 immediately above         | Static-processing limit exceeded (SP-03)  |
+    | CC-08 immediately above         | City-construction limit exceeded (CC-08)  |
+    | PR-01 immediately above         | Presentation limit exceeded (PR-01)       |
+----
+
+[source,gherkin]
+----
+Scenario: A replaced or cancelled attempt cannot republish late data
+  Given an attempt has produced internal admitted modules or later-stage data
+  When a new submission replaces it or the user cancels it while Loading
+  Then all data and any prior city from that attempt are invalidated
+  When its late admission, metric, model, presentation, failure, or limit result arrives
+  Then the current state and input draft do not change
+  And no invalidated identity, partial result, stale city, or late status reappears
+----
+
+[source,gherkin]
+----
+Scenario: Successful publication uses the complete deterministic module order
+  Given all matrix rows and limits for the current selected revision permit continuation
+  And static processing, city construction, and presentation complete
+  When the attempt enters Success
+  Then the admitted modules used the ascending unsigned-UTF-8 identity order
+  And exactly one complete city appears atomically with the current canonical repository URL
+      and full lowercase commit ID
+  And no admission decision, internal metric result, or partial model is separately exposed
+----
+
+[[evidence-allocation]]
+== Downstream validation evidence allocation
+
+The linked implementation slices must preserve these exact contract examples.
+The assignment is evidence traceability only. It neither modifies the linked
+issue bodies nor selects a mechanism, component, safeguard, enforcement
+location, or owner.
+
+[cols="2,3,6",options="header"]
+|===
+|Contract evidence |Evidence issue |Required downstream evidence
+
+|EXT-01 through ORDER-02
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Every admission row's exact normalization, identity/absence, collision,
+`admit`/`skip`/`fail`, observability, and order independence, including the
+aggregate ADM-06 and ADM-07 outcomes.
+
+|RA-01: `9,999 / 10,000 / 10,001 entries`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Exact below/at/above results and RA-01's precedence over simultaneous RA IDs.
+
+|RA-02: `1,023 / 1,024 / 1,025 UTF-8 path bytes`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Exact post-NFC byte measurement, boundaries, and precedence.
+
+|RA-03: `63 / 64 / 65 path segments`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Exact canonical-depth measurement, boundaries, and precedence.
+
+|RA-04: `1,048,575 / 1,048,576 / 1,048,577 raw bytes`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Exact per-entry pre-normalization measurement, boundaries, and precedence.
+
+|RA-05: `52,428,799 / 52,428,800 / 52,428,801 raw bytes`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Exact cumulative inspected-content measurement, boundaries, and precedence.
+
+|RA-06: `4,999 / 5,000 / 5,001 candidates`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Exact pre-kind candidate counting, boundaries, and precedence.
+
+|RA-07: `1,999 / 2,000 / 2,001 modules`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Exact post-admission module counting, boundaries, and precedence.
+
+|RA-08: `1,048,575 / 1,048,576 / 1,048,577 normalized bytes`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Exact per-module post-normalization measurement, boundaries, and precedence.
+
+|RA-09: `20,971,519 / 20,971,520 / 20,971,521 normalized bytes`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Exact aggregate normalized-content measurement, boundaries, and precedence.
+
+|RA-10: `59,999 / 60,000 / 60,001 milliseconds`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Exact retrieval interval, rounded-millisecond boundaries, and precedence.
+
+|RA-11: `9,999 / 10,000 / 10,001 milliseconds`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Exact admission interval, rounded-millisecond boundaries, no-module
+precedence, and simultaneous RA precedence.
+
+|SP-01: `1,999 / 2,000 / 2,001 modules`
+|https://github.com/FelixGeisler/code-city/issues/455[#455]
+|Exact complete-set presentation count, boundaries, and precedence among
+SP-01 through SP-03.
+
+|SP-02: `1,048,575 / 1,048,576 / 1,048,577 normalized bytes`
+|https://github.com/FelixGeisler/code-city/issues/455[#455]
+|Exact per-module processing-input measurement, boundaries, and precedence.
+
+|SP-03: `20,971,519 / 20,971,520 / 20,971,521 normalized bytes`
+|https://github.com/FelixGeisler/code-city/issues/455[#455]
+|Exact aggregate processing-input measurement, boundaries, and precedence.
+
+|SP-04: `29,999 / 30,000 / 30,001 milliseconds`
+|https://github.com/FelixGeisler/code-city/issues/456[#456]
+|Exact static-processing interval and boundaries, plus precedence among
+SP-01 through SP-04 and `Source processing failed`.
+
+|CC-01: `1,999 / 2,000 / 2,001 buildings`
+|https://github.com/FelixGeisler/code-city/issues/457[#457]
+|Exact occurrence count, boundaries, and precedence among CC IDs.
+
+|CC-02: `3,999 / 4,000 / 4,001 labels`
+|https://github.com/FelixGeisler/code-city/issues/457[#457]
+|Exact repository-derived label count, boundaries, and precedence.
+
+|CC-03: `255 / 256 / 257 UTF-8 label bytes`
+|https://github.com/FelixGeisler/code-city/issues/457[#457]
+|Exact individual final-text measurement, boundaries, and precedence.
+
+|CC-04: `524,287 / 524,288 / 524,289 UTF-8 label bytes`
+|https://github.com/FelixGeisler/code-city/issues/457[#457]
+|Exact aggregate per-occurrence text measurement, boundaries, and precedence.
+
+|CC-05: `19,999 / 20,000 / 20,001 elements`
+|https://github.com/FelixGeisler/code-city/issues/457[#457]
+|Exact renderer-independent occurrence count, boundaries, and precedence.
+
+|CC-06: x bound `99,999 / 100,000 / 100,001`
+|https://github.com/FelixGeisler/code-city/issues/457[#457]
+|Exact x-envelope/rounding measurement, boundaries, and precedence.
+
+|CC-07: y bound `9,999 / 10,000 / 10,001`
+|https://github.com/FelixGeisler/code-city/issues/457[#457]
+|Exact y-envelope/rounding measurement, boundaries, and precedence.
+
+|CC-08: z bound `99,999 / 100,000 / 100,001`
+|https://github.com/FelixGeisler/code-city/issues/457[#457]
+|Exact z-envelope/rounding measurement, boundaries, and precedence.
+
+|CC-09: `9,999 / 10,000 / 10,001 milliseconds`
+|https://github.com/FelixGeisler/code-city/issues/457[#457]
+|Exact city-construction interval and boundaries, plus simultaneous CC and
+`City construction failed` precedence.
+
+|PR-01: `9,999 / 10,000 / 10,001 milliseconds`
+|https://github.com/FelixGeisler/code-city/issues/458[#458]
+|Exact presentation interval and boundaries, plus precedence with
+`Presentation failed`.
+
+|All categories, stages, and attempt transitions
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Integrated cross-stage simultaneous precedence; exact visible category and
+winning ID; current selected-identity retention; cancellation; replacement;
+and no admitted set, metric, model, partial city, stale city, or late
+publication for every mapped failure.
+|===
+
+No downstream evidence may substitute a different threshold, counting basis,
+stage boundary, category, precedence, or prior identity. A feasibility finding
+that requires such a change must return to this product contract for explicit
+human acceptance rather than silently changing implementation behavior.
