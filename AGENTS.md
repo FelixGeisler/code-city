@@ -109,7 +109,9 @@ The `v2` branch is the integration branch for the reimplementation.
 * A pull request is not ready for review until all required checks have completed
   successfully. Monitor its checks, investigate failures, push fixes, and wait
   for the replacement checks before handing the pull request to the user.
-* Never merge a pull request. The user controls every merge into `v2` and any
-  future default branch.
+* The Software Developer may merge a pull request only after every implementation
+  CI job is green and the Software Architect, Tester, and Requirements Engineer
+  all return `PASS` for the same exact head. Never bypass repository protection
+  or merge using a stale verdict.
 * Do not push directly to `v2` or rewrite shared history.
 * Do not include unrelated, generated, local, or secret files in a commit.
