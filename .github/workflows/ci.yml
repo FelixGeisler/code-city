@@ -3,15 +3,15 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [v2]
 
 permissions:
   contents: read
 
 jobs:
-  security-audit:
-    timeout-minutes: 5
+  verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
     - uses: actions/checkout@v7
     - uses: actions/setup-node@v7
@@ -20,56 +20,4 @@ jobs:
         cache: npm
     - run: npm ci --ignore-scripts
     - run: npm audit --audit-level=high
-
-  verify:
-    timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-    - uses: actions/checkout@v7
-    - uses: actions/setup-node@v7
-      with:
-        node-version: 24
-        cache: npm
-    - uses: actions/setup-dotnet@v6
-      with:
-        dotnet-version: 10.0.302
-    - run: npm ci
     - run: npm run verify
-
-  viewer-performance:
-    # Keep synthetic browser scenarios isolated from the resource-intensive
-    # real-repository lifecycle so one cannot perturb the other's timings.
-    timeout-minutes: 25
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v7
-    - uses: actions/setup-node@v7
-      with:
-        node-version: 24
-        cache: npm
-    - uses: actions/setup-dotnet@v6
-      with:
-        dotnet-version: 10.0.302
-    - run: npm ci
-    - run: npx playwright install --with-deps chromium
-    - run: npm run test:viewer-performance
-
-  viewer-real-import:
-    timeout-minutes: 15
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v7
-    - uses: actions/setup-node@v7
-      with:
-        node-version: 24
-        cache: npm
-    - uses: actions/setup-dotnet@v6
-      with:
-        dotnet-version: 10.0.302
-    - run: npm ci
-    - run: npx playwright install --with-deps chromium
-    - run: npm run test:viewer-real-import

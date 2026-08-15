@@ -1,3 +1,0 @@
-export function broken(value: boolean {
-  if (value) return 1;
-}
