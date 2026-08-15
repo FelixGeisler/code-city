@@ -11,7 +11,8 @@ gates hold:
 * every row in the closed admission matrix has the stated result, identity,
   collision decision, ordering effect, and observability;
 * every exact below/at/above example has the stated result, and simultaneous
-  facts use the documented precedence rather than discovery order;
+  established facts use the documented bounded horizons and precedence rather
+  than provider response or discovery order;
 * failures retain only the current selected identity and expose no admitted
   set, metrics, model, partial city, or stale city;
 * the downstream evidence allocation in <<evidence-allocation>> remains
@@ -64,6 +65,22 @@ Scenario: Canonically equivalent paths fail without an order-dependent winner
 
 [source,gherkin]
 ----
+Scenario Outline: Structural path validity is separate from path limits
+  Given one allowed-extension regular file has a structurally valid NFC path
+  And only <dimension> has its exact Above value
+  When the bounded path horizon classifies the entry
+  Then the state is Failure with category <category>
+  And the result is not "Source admission failed"
+  And no module identity or admitted-module set is published
+
+  Examples:
+    | dimension | category                                      |
+    | RA-02     | Repository/admission limit exceeded (RA-02)   |
+    | RA-03     | Repository/admission limit exceeded (RA-03)   |
+----
+
+[source,gherkin]
+----
 Scenario: Case-only peers remain distinct and have a total order
   Given valid modules "src/a.ts" and "src/A.ts" arrive in either order
   When admission completes
@@ -103,7 +120,8 @@ Scenario: Malformed syntax is admitted as text and fails only required processin
 [source,gherkin]
 ----
 Scenario Outline: Every limit uses an inclusive maximum
-  Given all contract data other than <dimension> is valid and below its limit
+  Given prerequisite and independently variable same-stage contract data is valid and below its limit
+  And a downstream stage is outside this named boundary assertion
   When <dimension> has the exact Below value in its boundary row
   Then that limit creates no separate externally observable status
   When <dimension> has the exact At value in its boundary row
@@ -148,6 +166,17 @@ xref:06-source-admission-and-limits.adoc#limit-boundary-examples[Closed boundary
 examples]. Referring to a limit only by a rounded unit name, a different
 boundary value, or an implementation safeguard is not evidence for this
 scenario.
+
+[source,gherkin]
+----
+Scenario: Related admission and processing boundaries are all reachable
+  Given the strict RA/SP envelopes and exact witnesses in "Reachability of related limits"
+  When each RA-08 and SP-01, SP-02, and SP-03 Below, At, and Above value is evaluated
+  Then every prerequisite upstream dimension remains compliant
+  And each Below and At value passes its named stage without a separate status
+  And each Above value produces its own named category
+  And no equal upstream threshold or earlier-stage failure masks that category
+----
 
 [source,gherkin]
 ----
@@ -196,22 +225,44 @@ Scenario: Cancellation wins a boundary tie
 
 [source,gherkin]
 ----
-Scenario Outline: Same-stage facts use category and ID precedence
-  Given all listed facts are established for the same current non-cancelled attempt
+Scenario Outline: Same-stage established facts use category and ID precedence
+  Given all listed facts are established inside the same completed contract
+        horizon or complete stage data for the current non-cancelled attempt
   When the terminal outcome is classified
   Then only <winner> is visible
   And discovery order does not change it
 
   Examples:
-    | facts                                           | winner                                      |
-    | invalid path and RA-01 above                    | Source admission failed                     |
-    | RA-01 above and RA-02 above                     | Repository/admission limit exceeded (RA-01) |
-    | RA-11 above and no admitted module              | Repository/admission limit exceeded (RA-11) |
-    | malformed required processing and SP-01 above   | Source processing failed                    |
-    | SP-01 above and SP-04 above                     | Static-processing limit exceeded (SP-01)    |
-    | malformed city bound and CC-01 above            | City construction failed                    |
-    | CC-01 above and CC-09 above                     | City-construction limit exceeded (CC-01)    |
-    | presentation failure and PR-01 above            | Presentation failed                         |
+    | facts                                                 | winner                                      |
+    | structurally invalid path and RA-02 above             | Source admission failed                     |
+    | canonical collision and RA-06 above                   | Source admission failed                     |
+    | malformed content and RA-04 above inside the horizon  | Source admission failed                     |
+    | RA-02 above and RA-03 above                           | Repository/admission limit exceeded (RA-02) |
+    | RA-11 above and no admitted module                    | Repository/admission limit exceeded (RA-11) |
+    | malformed required processing and SP-01 above         | Source processing failed                    |
+    | SP-01 above and SP-04 above                           | Static-processing limit exceeded (SP-01)    |
+    | malformed city bound and CC-01 above                  | City construction failed                    |
+    | CC-01 above and CC-09 above                           | City-construction limit exceeded (CC-01)    |
+    | presentation failure and PR-01 above                  | Presentation failed                         |
+----
+
+[source,gherkin]
+----
+Scenario Outline: A terminal admission horizon excludes later higher-category data
+  Given equivalent repository records are supplied in any provider response order
+  And <cutoff> is established by the deterministic bounded horizon
+  And <outside> exists only outside that closed horizon
+  When the terminal outcome is classified
+  Then only <winner> is visible
+  And the outside datum is not an established competing fact
+  And no inspection beyond <bound> is required
+
+  Examples:
+    | cutoff                                | outside                                      | winner                                      | bound                                      |
+    | existence of opaque entry 10,001      | malformed kind or colliding path fields      | Repository/admission limit exceeded (RA-01) | 10,001 opaque records                      |
+    | structurally valid path byte 1,025    | collision requiring the later metadata round | Repository/admission limit exceeded (RA-02) | the bounded path horizon for every record  |
+    | raw byte 4,194,305 in one candidate   | NUL in that candidate's unread suffix        | Repository/admission limit exceeded (RA-04) | 4,194,305 bytes for that candidate         |
+    | aggregate raw byte 52,428,801         | malformed content in a later identity        | Repository/admission limit exceeded (RA-05) | 52,428,801 aggregate content bytes         |
 ----
 
 [source,gherkin]
@@ -291,39 +342,47 @@ aggregate ADM-06 and ADM-07 outcomes.
 
 |RA-01: `9,999 / 10,000 / 10,001 entries`
 |https://github.com/FelixGeisler/code-city/issues/454[#454]
-|Exact below/at/above results and RA-01's precedence over simultaneous RA IDs.
+|Exact below/at/above results, the `10,001`-opaque-record horizon, and stable
+RA-01 classification despite later malformed or colliding fields.
 
 |RA-02: `1,023 / 1,024 / 1,025 UTF-8 path bytes`
 |https://github.com/FelixGeisler/code-city/issues/454[#454]
-|Exact post-NFC byte measurement, boundaries, and precedence.
+|Exact post-NFC byte measurement, structural-validity separation, boundaries,
+bounded path classification, and precedence.
 
 |RA-03: `63 / 64 / 65 path segments`
 |https://github.com/FelixGeisler/code-city/issues/454[#454]
-|Exact canonical-depth measurement, boundaries, and precedence.
+|Exact canonical-depth measurement, structural-validity separation, boundaries,
+bounded path classification, and precedence.
 
-|RA-04: `1,048,575 / 1,048,576 / 1,048,577 raw bytes`
+|RA-04: `4,194,303 / 4,194,304 / 4,194,305 raw bytes`
 |https://github.com/FelixGeisler/code-city/issues/454[#454]
-|Exact per-entry pre-normalization measurement, boundaries, and precedence.
+|Exact per-entry pre-normalization measurement, CRLF/BOM reachability witness,
+bounded unread-suffix classification, boundaries, and precedence.
 
 |RA-05: `52,428,799 / 52,428,800 / 52,428,801 raw bytes`
 |https://github.com/FelixGeisler/code-city/issues/454[#454]
-|Exact cumulative inspected-content measurement, boundaries, and precedence.
+|Exact cumulative inspected-content measurement, canonical-order aggregate
+horizon, later-malformed-content cutoff, boundaries, and precedence.
 
 |RA-06: `4,999 / 5,000 / 5,001 candidates`
 |https://github.com/FelixGeisler/code-city/issues/454[#454]
 |Exact pre-kind candidate counting, boundaries, and precedence.
 
-|RA-07: `1,999 / 2,000 / 2,001 modules`
+|RA-07: `3,999 / 4,000 / 4,001 modules`
 |https://github.com/FelixGeisler/code-city/issues/454[#454]
-|Exact post-admission module counting, boundaries, and precedence.
+|Exact post-admission module counting, independently reachable boundaries, and
+precedence.
 
-|RA-08: `1,048,575 / 1,048,576 / 1,048,577 normalized bytes`
+|RA-08: `2,097,151 / 2,097,152 / 2,097,153 normalized bytes`
 |https://github.com/FelixGeisler/code-city/issues/454[#454]
-|Exact per-module post-normalization measurement, boundaries, and precedence.
+|Exact per-module post-normalization measurement, RA-04-compliant reachability,
+boundaries, and precedence.
 
-|RA-09: `20,971,519 / 20,971,520 / 20,971,521 normalized bytes`
+|RA-09: `41,943,039 / 41,943,040 / 41,943,041 normalized bytes`
 |https://github.com/FelixGeisler/code-city/issues/454[#454]
-|Exact aggregate normalized-content measurement, boundaries, and precedence.
+|Exact aggregate normalized-content measurement, RA-05-compliant reachability,
+boundaries, and precedence.
 
 |RA-10: `59,999 / 60,000 / 60,001 milliseconds`
 |https://github.com/FelixGeisler/code-city/issues/454[#454]
@@ -331,21 +390,23 @@ aggregate ADM-06 and ADM-07 outcomes.
 
 |RA-11: `9,999 / 10,000 / 10,001 milliseconds`
 |https://github.com/FelixGeisler/code-city/issues/454[#454]
-|Exact admission interval, rounded-millisecond boundaries, no-module
-precedence, and simultaneous RA precedence.
+|Exact admission interval, rounded-millisecond boundaries, terminal-horizon
+behavior, no-module precedence, and simultaneous established-RA precedence.
 
 |SP-01: `1,999 / 2,000 / 2,001 modules`
 |https://github.com/FelixGeisler/code-city/issues/455[#455]
-|Exact complete-set presentation count, boundaries, and precedence among
-SP-01 through SP-03.
+|Exact complete-set presentation count, RA-07-compliant below/at/above
+reachability, and precedence among SP-01 through SP-03.
 
 |SP-02: `1,048,575 / 1,048,576 / 1,048,577 normalized bytes`
 |https://github.com/FelixGeisler/code-city/issues/455[#455]
-|Exact per-module processing-input measurement, boundaries, and precedence.
+|Exact per-module processing-input measurement, RA-08-compliant below/at/above
+reachability, and precedence.
 
 |SP-03: `20,971,519 / 20,971,520 / 20,971,521 normalized bytes`
 |https://github.com/FelixGeisler/code-city/issues/455[#455]
-|Exact aggregate processing-input measurement, boundaries, and precedence.
+|Exact aggregate processing-input measurement, RA-09-compliant below/at/above
+reachability, and precedence.
 
 |SP-04: `29,999 / 30,000 / 30,001 milliseconds`
 |https://github.com/FelixGeisler/code-city/issues/456[#456]
@@ -396,10 +457,11 @@ SP-01 through SP-04 and `Source processing failed`.
 
 |All categories, stages, and attempt transitions
 |https://github.com/FelixGeisler/code-city/issues/460[#460]
-|Integrated cross-stage simultaneous precedence; exact visible category and
-winning ID; current selected-identity retention; cancellation; replacement;
-and no admitted set, metric, model, partial city, stale city, or late
-publication for every mapped failure.
+|Integrated bounded-horizon and cross-stage simultaneous precedence; provider-
+order-independent cutoff classification; exact visible category and winning
+ID; current selected-identity retention; cancellation; replacement; and no
+admitted set, metric, model, partial city, stale city, or late publication for
+every mapped failure.
 |===
 
 No downstream evidence may substitute a different threshold, counting basis,

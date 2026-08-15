@@ -18,12 +18,14 @@ Raw repository entry:: One reported entry at the selected commit, consisting
 of its raw repository-relative path, entry kind, and content octets when this
 contract requires content. A repository root placeholder is not an entry.
 
-Canonical path:: A valid raw path after the path normalization in
-<<canonical-paths,M1-ADM-1>>.
+Canonical path:: A structurally valid raw path after the path normalization in
+<<canonical-paths,M1-ADM-1>>. Structural validity is independent of the RA-02
+path-length and RA-03 depth ceilings.
 
-Eligible source candidate:: An entry outside a submodule boundary whose valid
-canonical path has one of the eight allowed extensions. This classification is
-made before its entry kind or content can admit or skip it.
+Eligible source candidate:: An entry outside a submodule boundary whose
+canonical path has passed RA-02 and RA-03 and has one of the eight allowed
+extensions. This classification is made before its entry kind or content can
+admit or skip it.
 
 Normalized content:: A candidate regular file's content after the exact
 transformation in <<content-normalization,M1-ADM-4>>.
@@ -55,8 +57,8 @@ but it must not execute the source.
 [[canonical-paths]]
 == M1-ADM-1: Canonical paths and module identity
 
-A raw path must be a sequence of Unicode scalar values. It is valid only when
-all of the following hold:
+A raw path must be a sequence of Unicode scalar values. It is structurally
+valid only when all of the following hold:
 
 . It is non-empty and repository-relative.
 . It does not begin with `/`, a drive prefix such as `C:/`, or a UNC prefix
@@ -68,24 +70,33 @@ all of the following hold:
 . It contains no C0 or C1 control character: `U+0000` through `U+001F`,
   `U+007F`, or `U+0080` through `U+009F`.
 . Each segment is normalized to Unicode Normalization Form C (NFC), and the
-  segments are rejoined with one `/`. The resulting canonical path satisfies
-  the path-length and depth limits in <<repository-admission-limits>>.
+  segments are rejoined with one `/`.
 
 All other Unicode scalar values are allowed. NFC is the only path text
 normalization. Letter case, spaces, punctuation, and extension spelling are
 preserved. In particular, no locale-sensitive or Unicode case folding is
 performed.
 
+Structural validity does not include resource-limit compliance. After NFC,
+RA-02 measures canonical-path UTF-8 bytes and RA-03 measures canonical depth.
+A structurally valid path with `1,025` bytes or `65` segments therefore produces
+the applicable `Repository/admission limit exceeded` fact, not `Source
+admission failed`. If both facts are established, RA-02 wins by ascending ID.
+No module identity is admitted from an above-threshold path.
+
 The canonical module identity of an admitted module is exactly its canonical
 path. Generated and vendor path segments have no special meaning and are not
 excluded.
 
-Two reported entries collide when their canonical paths are equal, including
-when the raw paths are exact duplicates or distinct canonically equivalent
-Unicode strings. A collision is a `Source admission failed` outcome for the
-whole attempt; no entry wins. ASCII case-only variants do not collide because
-case is preserved. These are all possible collision classes because NFC is the
-only identity-changing path operation.
+Collision assessment occurs only after the bounded entry and path horizons in
+<<admission-composition>> pass. At that point two complete canonical paths
+collide when they are equal, including when the raw paths are exact duplicates
+or distinct canonically equivalent Unicode strings. A collision is a `Source
+admission failed` outcome for the whole attempt; no entry wins. ASCII case-only
+variants do not collide because case is preserved. These are all possible
+collision classes because NFC is the only identity-changing path operation.
+A path suffix outside a terminal RA horizon is not inspected merely to seek a
+collision.
 
 [[extension-allow-list]]
 == M1-ADM-2: Closed extension allow-list
@@ -158,24 +169,60 @@ assumes all conditions not stated in that row match the admissible baseline:
 a unique regular file at `src/example.ts`, valid UTF-8 content `export {};`
 with LF newlines, and every limit below its threshold.
 
-For a current, non-cancelled attempt, admission applies these conceptual gates:
+Provider delivery order is not classification order. Admission uses these
+finite conceptual horizons; they define product classification without
+selecting a buffering, retrieval, or enforcement mechanism:
 
-. validate essential entry data and canonicalize every inspected path;
-. reject every canonical-path collision across inspected entries, including
-  entries that would later be skipped;
-. identify submodule boundaries, apply the extension allow-list, and count
-  eligible candidates;
-. apply the entry-kind rule;
-. for each candidate regular file, measure raw content and apply content
-  normalization;
-. enforce the remaining repository/admission limits;
-. if no module was admitted, fail as `No supported modules`; otherwise sort the
-  complete admitted set.
+. *Entry-count horizon:* establish whether the repository-entry sequence is
+  complete within RA-01 by observing at most `10,001` opaque entry records. If
+  the `10,001`st record exists, RA-01 is the terminal result and entry fields
+  are not classified. Otherwise, at most `10,000` records enter the next
+  horizon. A permutation cannot change this count.
+. *Path horizon:* for every record inside the entry-count horizon, inspect each
+  path only through the first structural-invalid condition or the point at
+  which RA-02 or RA-03 excess is irrevocably established. Continue this bounded
+  path classification for every record. A structural path failure established
+  inside the horizon wins over established path-limit facts; otherwise
+  simultaneous path limits use ascending ID. A suffix beyond an individual
+  path cutoff is not inspected and supplies no later structural or collision
+  fact.
+. *Complete-metadata horizon:* only when every path passes RA-02 and RA-03,
+  compare all complete canonical paths for collisions, identify submodule
+  boundaries, apply the extension and entry-kind rules, and count RA-06. This
+  horizon contains at most `10,000` paths of at most `1,024` bytes and `64`
+  segments each. Established essential-data or collision failures win over
+  RA-06. If this horizon has a terminal result, no content horizon starts.
+. *Content horizon:* only when metadata passes and RA-06 permits at most
+  `5,000` candidates, consider candidate regular files in ascending unsigned
+  UTF-8 order of canonical path, the same order used for successful modules. Inspect no more than RA-04 plus one actual octet for any one candidate
+  and no more than RA-05 plus one actual octet in aggregate. After an
+  individual RA-04 cutoff, its unread suffix is excluded and classification
+  continues with later canonical identities only while the aggregate horizon
+  remains. Validate and normalize every complete content sequence inside this
+  horizon. An established content failure wins over established RA facts;
+  simultaneous RA facts use ascending ID. The unread suffix after RA-04 and
+  every datum after the RA-05 aggregate cutoff are outside the horizon and are
+  not examined merely to seek a higher category.
+. *Complete-set horizon:* when the raw-content horizon completes without a raw
+  cutoff, all candidate content is bounded and available. Establish content
+  failures, RA-07 through RA-09, the no-module condition, and finally the
+  complete sorted admitted set in that order and under
+  <<outcome-precedence>>.
+
+RA-10 or RA-11 may close the active horizon when its contractual interval is
+above threshold. No later datum is inspected merely to seek a category that
+would otherwise have higher semantic precedence. Facts outside a closed
+horizon are not established facts and cannot compete. Facts fully established
+inside the same completed horizon still use <<outcome-precedence>>. This makes
+the visible result finite and stable for every permutation of equivalent
+provider records while allowing duration limits to measure actual elapsed
+contract time.
 
 A `fail` is terminal for the whole attempt. It produces no admitted-module set.
 A `skip` excludes only that entry. An `admit` adds exactly one module unless
-another row causes a whole-attempt failure. When more than one failure or limit
-is true, <<outcome-precedence>> selects the one visible result.
+another row causes a whole-attempt failure. The first limit discovered in
+provider order is not automatically the winner; only the horizons and
+<<outcome-precedence>> select the result.
 
 The total module order is ascending lexicographic order of the unsigned UTF-8
 octets of canonical module identity. If one identity is an exact byte prefix
@@ -191,7 +238,10 @@ In the `Observable` column, `No` means the row creates no separate user-visible
 status; only the eventual complete success or a later aggregate failure is
 visible. Every `Yes` result enters the Failure state, retains the current
 attempt's selected identity, and publishes none of the partial or stale data
-forbidden by <<failure-invariants>>.
+forbidden by <<failure-invariants>>. PATH-06 through PATH-15 are structural
+path failures. A structurally valid above-threshold path is instead classified
+by RA-02 or RA-03 under <<limit-boundary-examples>> and is never turned into a
+matrix `fail`.
 
 [cols="1,3,3,3,2,1,3",options="header"]
 |===
@@ -335,7 +385,7 @@ forbidden by <<failure-invariants>>.
 
 |PATH-06
 |Empty path
-|Invalid; no repair
+|Structurally invalid; no repair
 |None
 |Not evaluated
 |`fail`
@@ -343,7 +393,7 @@ forbidden by <<failure-invariants>>.
 
 |PATH-07
 |Leading-slash path `/src/a.ts`
-|Invalid; leading slash is not removed
+|Structurally invalid; leading slash is not removed
 |None
 |Not evaluated
 |`fail`
@@ -351,7 +401,7 @@ forbidden by <<failure-invariants>>.
 
 |PATH-08
 |Drive-prefixed path `C:/src/a.ts`
-|Invalid; drive prefix is not made relative
+|Structurally invalid; drive prefix is not made relative
 |None
 |Not evaluated
 |`fail`
@@ -359,7 +409,7 @@ forbidden by <<failure-invariants>>.
 
 |PATH-09
 |UNC-prefixed path `//server/share/a.ts` or `\\server\share\a.ts`
-|Invalid; prefix and separators are not rewritten
+|Structurally invalid; prefix and separators are not rewritten
 |None
 |Not evaluated
 |`fail`
@@ -367,7 +417,7 @@ forbidden by <<failure-invariants>>.
 
 |PATH-10
 |Backslash path `src\a.ts`
-|Invalid; backslash is not a separator alias
+|Structurally invalid; backslash is not a separator alias
 |None
 |Not evaluated
 |`fail`
@@ -375,7 +425,7 @@ forbidden by <<failure-invariants>>.
 
 |PATH-11
 |Empty, repeated, or trailing segment in `src//a.ts` or `src/a.ts/`
-|Invalid; separators are not collapsed or removed
+|Structurally invalid; separators are not collapsed or removed
 |None
 |Not evaluated
 |`fail`
@@ -383,7 +433,7 @@ forbidden by <<failure-invariants>>.
 
 |PATH-12
 |Dot segment `./src/a.ts`
-|Invalid; `.` is not resolved
+|Structurally invalid; `.` is not resolved
 |None
 |Not evaluated
 |`fail`
@@ -391,7 +441,7 @@ forbidden by <<failure-invariants>>.
 
 |PATH-13
 |Parent segment `src/../a.ts`
-|Invalid; `..` is not resolved
+|Structurally invalid; `..` is not resolved
 |None
 |Not evaluated
 |`fail`
@@ -399,7 +449,7 @@ forbidden by <<failure-invariants>>.
 
 |PATH-14
 |Path containing `U+0000`
-|Invalid control character
+|Structurally invalid control character
 |None
 |Not evaluated
 |`fail`
@@ -407,7 +457,7 @@ forbidden by <<failure-invariants>>.
 
 |PATH-15
 |Path containing another C0/C1 control, such as `U+001F` or `U+0085`
-|Invalid control character
+|Structurally invalid control character
 |None
 |Not evaluated
 |`fail`
@@ -638,7 +688,7 @@ forbidden by <<failure-invariants>>.
 |No at admission; the later terminal result is visibly `Source processing failed`
 
 |ADM-06
-|No entry has an allowed extension after valid paths and submodule boundaries
+|No entry has an allowed extension after structural path checks, RA-02/RA-03, and submodule boundaries
 |No eligible candidate and no module identity
 |None
 |None
@@ -678,7 +728,10 @@ or implementation-specific product limit can change the M1 outcome. These are
 proposed M1 product ceilings, not claims about a chosen technology's capacity,
 and no value is copied or inferred from Code City v1. Equal numeric values in
 different rows remain separate limits because their data, counting bases, or
-measurement stages differ; no threshold is implicitly shared.
+measurement stages differ; no threshold is implicitly shared. Related
+admission and processing ceilings are intentionally unequal where the same
+immutable datum crosses stages, so every named category has a reachable
+boundary.
 
 The conceptual stages are:
 
@@ -715,9 +768,11 @@ exact threshold is allowed, and any positive fraction beyond it is counted as
 the next millisecond and fails. Coordinate accounting is defined with the axis
 rows below.
 
-A stage may stop once an above-threshold fact is established, but that
-permission assigns no stopping mechanism or owner. Stopping cannot publish a
-partial result.
+A stage may stop only at a terminal bounded horizon defined in
+<<admission-composition>>, or when its own duration becomes terminal. Merely
+encountering the first excess in provider response order is not permission to
+choose that category. No stop publishes a partial result, and this rule assigns
+no stopping mechanism or owner.
 
 [[repository-admission-limits]]
 == Repository and admission limits
@@ -732,27 +787,30 @@ partial result.
 |Count each raw entry record once as it enters inspection, including regular
 files, directories, symlinks, submodules, descendants reported beneath a
 submodule, unsupported names, and duplicates. Exclude only a repository-root
-placeholder. A repeated record counts again and may also cause a collision.
-Measurement is before path and content normalization.
+placeholder. A repeated record counts again and, when the RA-01 horizon
+passes so fields are classified, may also cause a collision. Measurement is
+before path and content normalization.
 
 |RA-02
 |Canonical repository-relative path length
 |`1,024 UTF-8 bytes per path`
-|For each valid path, encode its NFC canonical path, including `/` separators,
-as UTF-8 and count its octets once. Raw spelling and content bytes are excluded.
-Measurement is after path normalization and before extension admission. An
-invalid path is an admission failure rather than a path-length result.
+|For each structurally valid path, encode its NFC canonical path, including `/`
+separators, as UTF-8 and count its octets once. Raw spelling and content bytes
+are excluded. Measurement is after path normalization and before extension
+admission. Structural invalidity is an admission failure; a structurally valid
+path above this maximum is RA-02, not an admission failure.
 
 |RA-03
 |Path-segment depth
 |`64 segments per path`
 |Count the non-empty canonical segments separated by `/`; a root-level file has
 depth one. Repeated segment text counts at each occurrence. Measurement is
-after path validation/NFC and before extension admission.
+after structural path validation/NFC and before extension admission. A
+structurally valid path above this maximum is RA-03, not an admission failure.
 
 |RA-04
 |One repository entry's content size
-|`1,048,576 raw bytes`
+|`4,194,304 raw bytes`
 |For each candidate regular file whose content is inspected, count its actual
 raw octets once before UTF-8 decode, BOM removal, or newline normalization.
 Repeated reads do not add bytes; identical content at distinct paths is counted
@@ -778,14 +836,14 @@ failure under the precedence rule.
 
 |RA-07
 |Admitted-module count
-|`2,000 modules`
+|`4,000 modules`
 |Count each unique regular candidate with valid normalized content once after
 admission and before sorting. Skipped entries are excluded. Distinct identities
 with identical content count separately; collisions admit none.
 
 |RA-08
 |Normalized content size per admitted module
-|`1,048,576 UTF-8 bytes`
+|`2,097,152 UTF-8 bytes`
 |Count the UTF-8 octets of one module after BOM removal and newline
 normalization. Raw bytes, module identity, and later processing data are
 excluded. Each module is measured once even if its data is later consumed more
@@ -793,7 +851,7 @@ than once.
 
 |RA-09
 |Aggregate normalized admitted-content size
-|`20,971,520 UTF-8 bytes`
+|`41,943,040 UTF-8 bytes`
 |Sum RA-08 for every admitted identity once after normalization and before
 static processing. Equal or shared text under distinct identities contributes
 once per identity; repeated consumption contributes nothing further.
@@ -830,7 +888,8 @@ contractual intervals.
 module identity once at static-processing entry. A missing, additional, or
 repeated identity is contradictory processing data and `Source processing
 failed`, not a way to change the count. This is measured after admission and
-before source consumption; its equal numeric value does not share RA-07.
+before source consumption. Its `2,000` maximum is intentionally lower than
+RA-07's `4,000`; the limits remain separate and neither threshold is shared.
 
 |SP-02
 |Normalized source size consumed per module
@@ -838,15 +897,18 @@ before source consumption; its equal numeric value does not share RA-07.
 |For each presented identity, count its complete normalized-content octets once
 as contract input, regardless of repeated internal reads. Identity bytes and
 derived facts are excluded. Measurement is after admission and before the
-module's processing result. Its equal value does not share RA-08.
+module's processing result. Its `1,048,576` maximum is intentionally lower than
+RA-08's `2,097,152`; the limits remain separate and neither threshold is
+shared.
 
 |SP-03
 |Aggregate normalized source size consumed
 |`20,971,520 UTF-8 bytes`
 |Sum SP-02 once per presented identity. Distinct modules with equal/shared text
 count separately; repeated reads do not. Measurement is over the complete
-static-processing input before the complete processing result. Its equal value
-does not share RA-09.
+static-processing input before the complete processing result. Its
+`20,971,520` maximum is intentionally lower than RA-09's `41,943,040`; the
+limits remain separate and neither threshold is shared.
 
 |SP-04
 |Static-processing duration
@@ -943,15 +1005,102 @@ construction, time after initial readiness, later interaction, and user time
 outside the interval. Its equal numeric value does not share CC-09.
 |===
 
+[[limit-reachability]]
+== Reachability of related limits
+
+The same admitted identity and normalized content are measured again when they
+become static-processing input. Admission normalization never increases raw
+content size, and processing receives the complete admitted set without
+changing its identities or source octets. The ceilings therefore form these
+strict, intentional envelopes rather than equal-threshold conflicts:
+
+[cols="3,2,2,2",options="header"]
+|===
+|Related data |Outer repository envelope |Admission envelope |Processing envelope
+
+|Entry/module occurrences
+|RA-06: `5,000` candidates
+|RA-07: `4,000` admitted modules
+|SP-01: `2,000` presented modules
+
+|One module's content
+|RA-04: `4,194,304` raw bytes
+|RA-08: `2,097,152` normalized bytes
+|SP-02: `1,048,576` normalized bytes
+
+|Aggregate content
+|RA-05: `52,428,800` raw bytes
+|RA-09: `41,943,040` normalized bytes
+|SP-03: `20,971,520` normalized bytes
+|===
+
+These are separate product limits, not shared safeguards. An upstream Below or
+At result permits transition from that stage; it does not promise that the
+same larger datum also passes a deliberately smaller downstream ceiling. The
+following exact Above witnesses prove the formerly conflicting categories are
+independently reachable while every prerequisite limit remains compliant:
+
+[cols="1,6",options="header"]
+|===
+|Winning limit |Compliant witness for its Above boundary
+
+|RA-02
+|One structurally valid one-segment ASCII `.ts` path of exactly `1,025` UTF-8
+bytes; depth remains one. Its size is a limit fact, not structural invalidity.
+
+|RA-03
+|One structurally valid `.ts` path of exactly `65` short non-empty segments and
+fewer than `1,024` UTF-8 bytes.
+
+|RA-04
+|`4,194,305` raw bytes made from one leading three-byte UTF-8 BOM followed by
+`2,097,151` CRLF pairs. If normalization were reached, it would contain
+`2,097,151` bytes, below RA-08.
+
+|RA-07
+|`4,001` distinct admitted empty modules: below RA-06 and independent of every
+content ceiling.
+
+|RA-08
+|One valid ASCII module of `2,097,153` bytes: below RA-04 and with aggregate
+content below RA-09.
+
+|RA-09
+|Twenty modules of `2,097,152` normalized bytes plus one one-byte module:
+`41,943,041` bytes in aggregate, with every module at or below RA-08 and raw
+aggregate content below RA-05.
+
+|SP-01
+|`2,001` distinct admitted empty modules: below RA-07, then above SP-01 when the
+complete set is presented.
+
+|SP-02
+|One admitted ASCII module of `1,048,577` normalized bytes: below RA-08, then
+above SP-02 when consumed.
+
+|SP-03
+|Twenty presented modules of `1,048,576` bytes plus one one-byte module:
+`20,971,521` bytes in aggregate, with every module at or below SP-02 and the
+aggregate below RA-09.
+|===
+
+The corresponding At and Below witnesses remove one and two units respectively
+from the named Above value while preserving the stated prerequisite
+relationships. No downstream architecture or enforcement owner is implied.
+
 [[limit-boundary-examples]]
 == Closed boundary examples
 
 The comma in these decimal literals is a thousands separator. For every row,
-the `Below` and `At` examples continue without a separate externally observable
-limit status; they may still encounter another contract outcome. Every `Above`
-example enters Failure and is externally observable under the exact category
-shown. The examples alter only the named dimension and keep every other datum
-valid and below its threshold.
+the `Below` and `At` examples continue beyond the named limit without a
+separate externally observable status; they may still encounter another
+contract outcome. Every `Above` example enters Failure and is externally
+observable under the exact category shown. Each example keeps prerequisite and
+independently variable same-stage data valid and below threshold. A downstream
+stage is outside an upstream boundary assertion; where it remeasures the same
+immutable datum against a smaller ceiling, a permitted upstream value may
+later produce that downstream category exactly as
+<<limit-reachability>> states.
 
 [cols="1,3,3,3,4",options="header"]
 |===
@@ -960,12 +1109,12 @@ valid and below its threshold.
 |RA-01 |`9,999 entries` |`10,000 entries` |`10,001 entries` |`Repository/admission limit exceeded (RA-01)`
 |RA-02 |`1,023 UTF-8 path bytes` |`1,024 UTF-8 path bytes` |`1,025 UTF-8 path bytes` |`Repository/admission limit exceeded (RA-02)`
 |RA-03 |`63 path segments` |`64 path segments` |`65 path segments` |`Repository/admission limit exceeded (RA-03)`
-|RA-04 |`1,048,575 raw bytes` |`1,048,576 raw bytes` |`1,048,577 raw bytes` |`Repository/admission limit exceeded (RA-04)`
+|RA-04 |`4,194,303 raw bytes` |`4,194,304 raw bytes` |`4,194,305 raw bytes` |`Repository/admission limit exceeded (RA-04)`
 |RA-05 |`52,428,799 raw bytes` |`52,428,800 raw bytes` |`52,428,801 raw bytes` |`Repository/admission limit exceeded (RA-05)`
 |RA-06 |`4,999 candidates` |`5,000 candidates` |`5,001 candidates` |`Repository/admission limit exceeded (RA-06)`
-|RA-07 |`1,999 modules` |`2,000 modules` |`2,001 modules` |`Repository/admission limit exceeded (RA-07)`
-|RA-08 |`1,048,575 normalized bytes` |`1,048,576 normalized bytes` |`1,048,577 normalized bytes` |`Repository/admission limit exceeded (RA-08)`
-|RA-09 |`20,971,519 normalized bytes` |`20,971,520 normalized bytes` |`20,971,521 normalized bytes` |`Repository/admission limit exceeded (RA-09)`
+|RA-07 |`3,999 modules` |`4,000 modules` |`4,001 modules` |`Repository/admission limit exceeded (RA-07)`
+|RA-08 |`2,097,151 normalized bytes` |`2,097,152 normalized bytes` |`2,097,153 normalized bytes` |`Repository/admission limit exceeded (RA-08)`
+|RA-09 |`41,943,039 normalized bytes` |`41,943,040 normalized bytes` |`41,943,041 normalized bytes` |`Repository/admission limit exceeded (RA-09)`
 |RA-10 |`59,999 milliseconds` |`60,000 milliseconds` |`60,001 milliseconds` |`Repository/admission limit exceeded (RA-10)`
 |RA-11 |`9,999 milliseconds` |`10,000 milliseconds` |`10,001 milliseconds` |`Repository/admission limit exceeded (RA-11)`
 |SP-01 |`1,999 modules` |`2,000 modules` |`2,001 modules` |`Static-processing limit exceeded (SP-01)`
@@ -996,10 +1145,12 @@ media type, bound, or completion status.
   failure. The actual sequence, octets, text, model, bounds, and elapsed
   interval are measured. A well-formed claim above a threshold is not enough by
   itself to fail, and a claim at or below is never enough to pass.
-* Missing or malformed data essential to establish a raw entry--its path, kind,
-  or a candidate regular file's actual content--is `Source admission failed`.
-  An explicit zero-octet content sequence is valid and is distinct from absent
-  content. Contradictory entry records and content are admission failures.
+* Missing or malformed data essential to establish a raw entry inside the
+  applicable bounded horizon--its path, kind, or a candidate regular file's
+  actual content--is `Source admission failed`. An explicit zero-octet content
+  sequence is valid and is distinct from absent content. Contradictory entry
+  records and content are admission failures. Data beyond a closed limit
+  horizon is intentionally not required and is not reclassified as absent.
 * Counts and byte sums are checked no later than the first datum beyond the
   threshold, so arithmetic cannot wrap. If only an overflowing claim is
   supplied and the actual bounded data is unavailable, the data is absent and
@@ -1019,10 +1170,11 @@ media type, bound, or completion status.
   completion data, it uses that stage's non-limit failure category and may not
   assume that its duration passed.
 
-These rules permit downstream safeguards to avoid consuming unbounded data,
-but no safeguard may admit data, change a threshold, expose a partial result,
-or return a different visible category than this contract and
-<<outcome-precedence>> require.
+These rules and the finite horizons in <<admission-composition>> permit
+downstream safeguards to avoid consuming unbounded data. No safeguard may
+admit data, change a threshold, expose a partial result, inspect outside a
+closed horizon merely to seek another category, or return a different visible
+category than this contract and <<outcome-precedence>> require.
 
 [[failure-categories]]
 == M1-OUT-1: Observable categories
@@ -1042,12 +1194,12 @@ selected revision contains no admitted module under the M1 contract.
 
 |`Source admission failed`
 |A matrix `fail`, essential repository datum failure, or contradictory
-admission data
+admission data established inside the applicable bounded horizon
 |Failure identifies the selected revision and explains that its source set
 could not be admitted. No entry or partial admitted set is exposed.
 
 |`Repository/admission limit exceeded (ID)`
-|An RA row is above its inclusive maximum
+|An RA row is above its inclusive maximum and wins the bounded classification
 |Failure identifies the selected revision and the winning RA dimension ID; it
 must not imply that changing the user-configurable limit is possible.
 
@@ -1088,8 +1240,12 @@ publish.
 [[outcome-precedence]]
 == M1-OUT-2: Deterministic precedence
 
-Detection timing, provider order, and traversal order never select the visible
-outcome. Apply this precedence to all facts established for one attempt:
+Detection timing, provider response order, and traversal order never select
+the visible outcome. First establish facts only inside the finite horizons in
+<<admission-composition>> and the completed data of later stages. A cutoff
+closes its horizon; an unread suffix, opaque entry field, later canonical
+identity, or unfinished later-stage result is not an established competing
+fact. Apply this precedence to the established facts for one attempt:
 
 . A newer submission or reload first makes every prior attempt ineligible to
   publish. Its late facts have no result at all.
@@ -1102,22 +1258,34 @@ outcome. Apply this precedence to all facts established for one attempt:
   immutable selection use the precedence and categories in
   xref:04-functional-requirements.adoc#failure-outcomes[]; this source contract
   has not started.
-. `Source admission failed` wins over every RA limit and the no-module
-  condition.
-. Simultaneous RA limit violations use ascending ID order: RA-01 through RA-11.
-. `No supported modules` follows all source-admission failures and RA limits.
-. `Source processing failed` wins over SP limits. Simultaneous SP limits use
-  ascending ID order: SP-01 through SP-04.
-. `City construction failed` wins over CC limits. Simultaneous CC limits use
-  ascending ID order: CC-01 through CC-09.
-. `Presentation failed` wins over PR-01.
+. Inside one completed repository/admission horizon, `Source admission failed`
+  wins over established RA facts and the no-module condition.
+. Simultaneous established RA limit violations use ascending ID order: RA-01
+  through RA-11.
+. `No supported modules` follows all established source-admission failures and
+  RA limits.
+. `Source processing failed` wins over established SP limits. Simultaneous SP
+  limits use ascending ID order: SP-01 through SP-04.
+. `City construction failed` wins over established CC limits. Simultaneous CC
+  limits use ascending ID order: CC-01 through CC-09.
+. `Presentation failed` wins over established PR-01.
 . When facts from different completed stage data are simultaneously available,
   the earlier stage in this list wins: repository/admission, static processing,
   city construction, then presentation.
 
-A lower-precedence fact is not shown as a second category. This ordering is a
-product classification rule, not an instruction to perform unsafe extra work
-or a choice of orchestration mechanism.
+Consequently, the existence of a `10,001`st opaque record always produces
+RA-01 without inspecting record fields for a possible malformed kind or
+collision. If RA-01 passes, the bounded path and complete-metadata horizons do
+find every structural failure and collision they are required to classify
+before content starts. Content classification then uses canonical identity
+order and the fixed RA-04/RA-05 horizon, so a malformed suffix or later module
+outside that horizon cannot change the category when provider records are
+permuted. A higher semantic category already established inside the completed
+horizon still wins.
+
+A lower-precedence established fact is not shown as a second category. This
+ordering and the cutoff rule are product classification, not an instruction to
+perform unsafe extra work or a choice of orchestration mechanism.
 
 [[failure-invariants]]
 == M1-OUT-3: Identity retention and no partial or stale result
