@@ -1,1 +1,67 @@
 = Product Scope
+
+== M1 outcome
+
+A user opens the approved Code City delivery target, enters one canonical URL
+for an anonymously accessible public GitHub repository, and sees a
+deterministic, non-configurable Code City for supported JavaScript and
+TypeScript modules from one immutable repository revision.
+
+For the input and state part of that outcome, xref:04-functional-requirements.adoc[]
+is authoritative. In particular, it defines which URL form is accepted, how the
+revision is selected and identified, and when a city may be visible.
+
+== Included in M1
+
+M1 includes only the smallest complete path needed for that outcome:
+
+* one canonical GitHub repository URL as the only user-supplied input;
+* anonymous use of a public repository, without user or service credentials;
+* automatic selection of the GitHub-designated default branch tip and retention
+  of its immutable commit identity for the attempt;
+* deterministic admission and static measurement of the supported
+  JavaScript/TypeScript module family;
+* one deterministic city and its fixed initial presentation; and
+* observable initial, loading, success, failure, replacement, and cancellation
+  behavior with no stale or partial city.
+
+The exact source-admission and resource rules, metric semantics, and city
+mapping are separate M0 contracts. Their inclusion here does not define those
+rules ahead of their owning issues.
+
+[[non-goals]]
+== Non-goals
+
+The following are outside M1. They are not implied future commitments.
+
+* Authentication, private repositories, credential entry, or credential
+  handling.
+* Non-GitHub repositories, local directories, ZIP or archive uploads, and every
+  other input form.
+* Branch, tag, or commit selection, or any second input beyond the repository
+  URL. Displaying the automatically selected commit identity is output, not a
+  selector.
+* Languages or formats outside the source-admission contract, including
+  framework-specific single-file formats not admitted by that contract.
+* Metric configuration, aggregate decision load, findings, or higher-level
+  analysis.
+* Building or source selection, search, dependency exploration, and
+  history/evolution views.
+* Persistence, saved projects, recent-project history, sharing, publication,
+  image/model/data export, and print workflows.
+* User configuration of metrics, city mapping, layout, palette, rendering, or
+  resource limits.
+* Compatibility with, feature parity with, or default copying/porting from Code
+  City v1.
+* Support beyond the fixed, human-approved M1 source, processing, and rendering
+  limits.
+
+== Contract boundary
+
+This requirements slice defines observable product behavior only. Source
+admission and limits are owned by
+https://github.com/FelixGeisler/code-city/issues/442[#442]. The provider/API
+mechanism, runtime topology and trust placement, port/component ownership, and
+cancellation/cleanup ownership remain undecided here; their exact downstream
+owners and affected architecture views are listed in
+xref:04-functional-requirements.adoc#decision-boundary[Decision boundary].

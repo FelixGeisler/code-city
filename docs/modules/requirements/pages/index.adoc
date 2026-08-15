@@ -1,1 +1,34 @@
 = Requirements
+
+The requirements module is the authoritative source for Code City product scope
+and observable behavior. Architecture documentation explains how accepted
+requirements are realized; it does not redefine them.
+
+== M1 baseline
+
+M1 delivers one journey: a user submits one canonical public GitHub repository
+URL and receives a deterministic Code City for one automatically selected,
+immutable repository revision.
+
+The first part of that baseline is the input, revision-identity, and user-state
+contract defined by issue
+https://github.com/FelixGeisler/code-city/issues/441[#441]. Its product choices
+require explicit human acceptance of the exact documentation revision before
+they can serve as the accepted M1 baseline. This page is not an approval record.
+
+== Reading order
+
+. xref:01-product-scope.adoc[Product Scope] defines the M1 outcome and the
+  authoritative non-goals.
+. xref:02-stakeholders-and-use-cases.adoc[Stakeholders and Use Cases] describes
+  the single user journey and its alternatives.
+. xref:03-feature-inventory.adoc[Feature Inventory] shows what is included,
+  excluded, or owned by a later M0 contract.
+. xref:04-functional-requirements.adoc[Functional Requirements] contains the
+  normative URL grammar, immutable-revision identity, and state machine.
+. xref:05-acceptance-criteria.adoc[Acceptance Criteria] provides documentary
+  Given/When/Then examples for reviewing that contract.
+
+The words *must*, *must not*, *required*, and *only* are normative on these
+pages. Examples clarify the normative rules but do not create executable test
+fixtures or select an implementation mechanism.
