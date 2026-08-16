@@ -40,9 +40,12 @@ construction, presentation, and duration limit choices remain explicitly
 deferred to their linked owners.
 
 |Fixed metric semantics
-|Contract pending
-|https://github.com/FelixGeisler/code-city/issues/443[#443] owns SLOC,
-executable-unit, and complexity semantics.
+|Included; accepted contract
+|xref:08-fixed-metric-semantics.adoc[] defines lexical physical-line SLOC,
+executable units, per-unit and maximum complexity, canonical facts, and atomic
+metric failure under https://github.com/FelixGeisler/code-city/issues/443[#443].
+Analyzer technology, analysis responsibility, and city mapping remain with
+their linked downstream owners.
 
 |Fixed city, layout, and presentation
 |Contract pending

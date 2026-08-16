@@ -124,6 +124,10 @@ Scenario: Malformed syntax remains admitted text
   And no downstream syntax result is selected by this contract
 ----
 
+The downstream result is defined independently by
+xref:08-fixed-metric-semantics.adoc#metric-failure[Atomic metric failure]; this
+admission scenario remains an `admit` result.
+
 == RA-01 through RA-09 boundaries
 
 [source,gherkin]

@@ -1,0 +1,626 @@
+= Fixed Metric Acceptance
+
+These closed matrices and examples are inert documentation for reviewing
+xref:08-fixed-metric-semantics.adoc[]. They are not executable fixtures, test
+scaffolds, analyzer probes, parser or AST assumptions, architecture choices, or
+assignments of an enforcement location.
+
+Unless an example says otherwise, its content is already the strict UTF-8,
+BOM-removed, LF-normalized content supplied by
+xref:06-source-admission-and-limits.adoc[]. A displayed source block that
+states an exact byte length has no leading bytes and no final LF after its last
+shown source character.
+
+The contract is acceptable only when all of these gates hold:
+
+* every SLOC matrix row has its exact lexical inclusion or exclusion;
+* every body-bearing, bodyless, modifier, conditional-top-level, and zero-unit
+  row has its stated canonical unit result;
+* every included occurrence contributes once, every excluded construct
+  contributes zero itself, and nested ownership is exclusive;
+* derived counts, complexities, maxima, ties, spans, identities, and ordering
+  match the exact examples and canonical-key table;
+* all eight suffixes and their ASCII case variants select only the four stated
+  syntax families, and every grammar failure has only the accepted atomic
+  result;
+* reordered admitted modules and repeated evaluation produce the same exact
+  canonical facts without excluded fields;
+* no example selects analyzer technology, architecture, city behavior, or an
+  executable evidence mechanism; and
+* `npm run docs:build` succeeds.
+
+[[sloc-matrix]]
+== Closed lexical SLOC matrix
+
+Each ordinary row below describes one physical line unless it explicitly
+describes content splitting. `Source line` means SLOC `1`; `excluded line`
+means SLOC `0`.
+
+[cols="1,4,2,5",options="header"]
+|===
+|ID |Normalized condition |Expected SLOC |Required interpretation
+
+|SLOC-01 |Empty content |`0` |There are no physical lines.
+|SLOC-02 |Non-empty source after the last LF |`1` |The non-empty suffix is the final physical line.
+|SLOC-03 |One source line followed by a final LF |`1` |The final LF creates no additional line.
+|SLOC-04 |Two source lines separated by LF, with no final LF |`2` |Both lines exist; the second is the non-empty suffix.
+|SLOC-05 |A blank line |`0` |No non-whitespace source character exists.
+|SLOC-06 |A whitespace-only line |`0` |Whitespace alone is excluded.
+|SLOC-07 |A line-comment-only line |`0` |The comment is interpreted lexically.
+|SLOC-08 |A block-comment-only line, including an interior line of a multiline block comment |`0` |Comment text and delimiters alone are excluded.
+|SLOC-09 |A JSDoc-only line |`0` |JSDoc is comment syntax for SLOC.
+|SLOC-10 |A triple-slash-directive-only line |`0` |The directive line is excluded.
+|SLOC-11 |A hashbang-only line |`0` |The hashbang line is excluded.
+|SLOC-12 |A JSX-comment-only line |`0` |The JSX comment is excluded.
+|SLOC-13 |A comment followed by source on the same line |`1` |A leading comment does not hide or duplicate the source line.
+|SLOC-14 |Source followed by a comment on the same line |`1` |A trailing comment does not hide or duplicate the source line.
+|SLOC-15 |Source with an embedded comment on the same line |`1` |The physical line is counted once, never twice.
+|SLOC-16 |A line containing a string delimiter or string text |`1` |String syntax and text are source.
+|SLOC-17 |A line containing a template delimiter or non-whitespace template raw text |`1` |Template syntax and raw text are source.
+|SLOC-18 |A line containing a regular-expression literal |`1` |The literal is source.
+|SLOC-19 |A line containing a JSX opening, closing, or self-closing tag |`1` |JSX tag structure is source for SLOC.
+|SLOC-20 |A line containing a JSX attribute |`1` |The attribute is source for SLOC.
+|SLOC-21 |A line containing non-whitespace JSX text |`1` |The text is source.
+|SLOC-22 |A line containing TypeScript type syntax |`1` |Erasure at runtime does not exclude it from lexical SLOC.
+|SLOC-23 |A line containing a TypeScript declaration |`1` |Declaration syntax is source even when it creates no unit.
+|SLOC-24 |Comment-looking text inside a string |`1` |The text remains string source, not a comment.
+|SLOC-25 |Comment-looking text inside template raw text |`1` |The text remains template source, not a comment.
+|SLOC-26 |Comment-looking text inside a regular expression |`1` |The text remains literal source, not a comment.
+|SLOC-27 |Comment-looking text inside JSX text |`1` |The text remains JSX source, not a comment.
+|SLOC-28 |A blank line inside a multiline template |`0` |Template context does not make an empty physical line non-whitespace.
+|SLOC-29 |An indentation-only line inside a multiline template |`0` |Template context does not make whitespace count.
+|SLOC-30 |A blank line inside a multiline JSX fragment |`0` |JSX context does not make an empty physical line count.
+|SLOC-31 |An indentation-only line inside a multiline JSX fragment |`0` |JSX context does not make whitespace count.
+|SLOC-32 |Decision-looking text only in a comment |`0` |It is neither SLOC nor a decision contribution.
+|SLOC-33 |Decision-looking text in a string, template raw text, regular expression, or JSX text |`1` |It is lexical source, but contributes `0` complexity.
+|===
+
+[[view-example]]
+=== Required `src/view.tsx` example
+
+The normalized source is:
+
+[source,tsx]
+----
+// comment
+const marker = "/* source */"; // tail
+const re = /\/\*/;
+const text = `
+
+value`;
+<div>
+  {/* comment */}
+  text
+</div>;
+interface T {
+  x: string;
+}
+----
+
+[cols="1,4,1,4",options="header"]
+|===
+|Line |Relevant lexical content |SLOC |Reason
+|1 |Line comment only |`0` |Comment-only
+|2 |String source and trailing comment |`1` |Counted once
+|3 |Regular-expression source |`1` |Comment-looking characters remain literal source
+|4 |Template delimiter |`1` |Source
+|5 |Blank template raw line |`0` |Blank
+|6 |Template raw text and closing delimiter |`1` |Source
+|7 |JSX opening tag |`1` |Source
+|8 |JSX comment only |`0` |Comment-only
+|9 |Non-whitespace JSX text |`1` |Source
+|10 |JSX closing tag and statement terminator |`1` |Source
+|11 |TypeScript interface declaration |`1` |Source
+|12 |TypeScript member type |`1` |Source
+|13 |Declaration closing token |`1` |Source
+|===
+
+The exact module facts are: identity `src/view.tsx`, SLOC `10`, executable-unit
+count `1`, maximum complexity `1`, and one ordered unit
+`(src/view.tsx, top-level)` with no span and complexity `1`. The template blank
+line and both comment-only lines count `0`; no comment-looking or
+decision-looking literal text contributes complexity.
+
+[[declaration-only-example]]
+=== Required declaration-only example
+
+`types.d.ts` contains these three source lines:
+
+[source,typescript]
+----
+interface T {}
+export type U = T;
+export {};
+----
+
+Its exact module facts are identity `types.d.ts`, SLOC `3`, executable-unit
+count `0`, maximum complexity `0`, and an empty ordered unit list. The admitted
+zero-unit module still yields those module facts.
+
+[[unit-matrix]]
+== Closed explicit-unit matrix
+
+This table states only the explicit-unit result. The separate
+<<top-level-matrix,conditional top-level matrix>> determines whether the same
+module also has `top-level`.
+
+[cols="1,5,3,4",options="header"]
+|===
+|ID |Grammar form |Explicit-unit result |Required distinction
+
+|UNIT-01 |Body-bearing function declaration |One `function` |The declaration form is included.
+|UNIT-02 |Body-bearing function expression |One `function` |The expression form has the same kind.
+|UNIT-03 |Arrow with a block body |One `arrow` |The block is an implementation body.
+|UNIT-04 |Arrow with a concise-expression body |One `arrow` |The concise expression is an implementation body.
+|UNIT-05 |Body-bearing ordinary object method |One `method` |Object and class methods share the kind.
+|UNIT-06 |Body-bearing ordinary class method |One `method` |No class-specific method kind is added.
+|UNIT-07 |Explicit class constructor with a body |One `constructor` |Only an explicit body-bearing constructor counts.
+|UNIT-08 |Body-bearing getter |One `getter` |It is not an ordinary `method`.
+|UNIT-09 |Body-bearing setter |One `setter` |It is not an ordinary `method`.
+|UNIT-10 |Class static initialization block |One `static-block` |The block is its own explicit unit.
+|UNIT-11 |Async function or async arrow |The base `function` or `arrow` only |`async` creates no additional kind or unit.
+|UNIT-12 |Generator function or generator method |The base `function` or `method` only |Generator spelling creates no additional kind or unit.
+|UNIT-13 |Async generator function or method |The base kind only |Combined modifiers still add nothing.
+|UNIT-14 |Static ordinary method |One `method` |`static` does not change the kind.
+|UNIT-15 |Private ordinary method |One `method` |`private` spelling does not change the kind.
+|UNIT-16 |Exported body-bearing function |One `function` |`export` does not change the kind.
+|UNIT-17 |Any other non-decorator modifier on a body-bearing form |The form's one base kind |No modifier-derived kind exists.
+|UNIT-18 |Function overload signature |No explicit unit |There is no implementation body.
+|UNIT-19 |`declare` or ambient function |No explicit unit |Ambient/signature-only forms are excluded.
+|UNIT-20 |Abstract method |No explicit unit |There is no implementation body.
+|UNIT-21 |Interface method |No explicit unit |There is no implementation body.
+|UNIT-22 |Call signature |No explicit unit |A signature is not a callable implementation.
+|UNIT-23 |Construct signature |No explicit unit |A signature is not a constructor implementation.
+|UNIT-24 |Bodyless accessor |No explicit unit |An accessor signature is not an implementation.
+|UNIT-25 |Implicit constructor |No explicit unit |No source form exists to identify or span.
+|UNIT-26 |Class field |No unit for the field |A nested body-bearing function or arrow still creates its own unit.
+|UNIT-27 |Decorator |No unit for the decorator |Its expression follows the ownership matrix.
+|UNIT-28 |Computed member name |No unit for the name |Its expression follows the ownership matrix.
+|UNIT-29 |Class heritage clause |No unit for the clause |Its expression follows the ownership matrix.
+|UNIT-30 |Function or arrow inside an initializer |One unit for that nested body-bearing form |The surrounding initializer is not another unit.
+|===
+
+[[top-level-matrix]]
+== Conditional `top-level` and zero-unit matrix
+
+[cols="1,5,3,2,2",options="header"]
+|===
+|ID |Complete module condition |Explicit units |`top-level` |Unit count
+
+|TOP-01 |Empty content |None |Absent |`0`
+|TOP-02 |Comments-only content |None |Absent |`0`
+|TOP-03 |Only `import type` |None |Absent |`0`
+|TOP-04 |Only `export type` |None |Absent |`0`
+|TOP-05 |Only import/export lists whose specifiers are all type-only |None |Absent |`0`
+|TOP-06 |Only interfaces |None |Absent |`0`
+|TOP-07 |Only type aliases |None |Absent |`0`
+|TOP-08 |Only ambient or signature-only declarations |None |Absent |`0`
+|TOP-09 |Only the empty module marker `export {}` |None |Absent |`0`
+|TOP-10 |Any combination of TOP-01 through TOP-09, including a declaration-only `.d.ts` module |None |Absent |`0`
+|TOP-11 |A plain JavaScript statement or declaration |None unless it contains a nested body-bearing form |Present |At least `1`
+|TOP-12 |An empty statement |None |Present |`1`
+|TOP-13 |A top-level function declaration |One `function` |Present |`2`
+|TOP-14 |A top-level initializer containing a function expression |One `function` |Present |`2`
+|TOP-15 |A top-level initializer containing an arrow |One `arrow` |Present |`2`
+|TOP-16 |A side-effect import |None |Present |`1`
+|TOP-17 |A normal syntactically value-bearing import |None |Present |`1`
+|TOP-18 |A normal syntactically value-bearing export |None unless it exports a body-bearing declaration |Present |At least `1`
+|TOP-19 |An import/export list containing at least one syntactically value-bearing specifier |None |Present |`1`
+|TOP-20 |A non-ambient runtime TypeScript enum |None |Present |`1`
+|TOP-21 |A non-ambient runtime TypeScript namespace |None unless it contains a body-bearing form |Present |At least `1`
+|TOP-22 |A top-level JSX expression |None unless it contains a body-bearing form |Present |At least `1`
+|TOP-23 |A class declaration containing one static block |One `static-block` |Present |`2`
+|TOP-24 |A class field initializer containing one arrow |One `arrow` |Present |`2`
+|===
+
+TOP-17 through TOP-19 are classified from syntax alone. Binding or type
+analysis cannot turn a normal import/export into a type-only row after the
+fact.
+
+[[included-matrix]]
+== Included decision-occurrence matrix
+
+Each row is per syntactic occurrence in an owning region.
+
+[cols="1,5,2,5",options="header"]
+|===
+|ID |Occurrence |Contribution |Required counting
+
+|INC-01 |`if` |`1` |Each occurrence counts.
+|INC-02 |`else if` |`1` for its own `if` |An `if`/`else if` chain has two contributions.
+|INC-03 |Plain `for` loop |`1` |The loop form counts once.
+|INC-04 |`for…in` loop |`1` |The loop form counts once.
+|INC-05 |`for…of` loop |`1` |The loop form counts once.
+|INC-06 |`for await…of` loop |`1` |The loop form counts once.
+|INC-07 |`while` loop |`1` |The loop form counts once.
+|INC-08 |`do…while` loop |`1` |The complete loop form counts once.
+|INC-09 |Non-default `case` label |`1` |Each such label counts; `switch` does not.
+|INC-10 |`catch` with a binding |`1` |The binding does not alter the result.
+|INC-11 |`catch` without a binding |`1` |The omitted binding does not alter the result.
+|INC-12 |Runtime conditional expression |`1` |One runtime `?:` occurrence counts.
+|INC-13 |Logical-AND `&&` |`1` |Each operator occurrence counts.
+|INC-14 |Logical-OR `\|\|` |`1` |Each operator occurrence counts.
+|INC-15 |Logical-AND assignment `&&=` |`1` |It is not split into two contributions.
+|INC-16 |Logical-OR assignment `\|\|=` |`1` |It is not split into two contributions.
+|INC-17 |Nullish coalescing `??` |`1` |Each operator occurrence counts.
+|INC-18 |Nullish assignment `??=` |`1` |It is one listed occurrence.
+|INC-19 |An included operator inside a loop header |`1` plus the loop |For example, one loop and one logical operator total `2`.
+|INC-20 |An included operator inside a non-default case expression |`1` plus the case label |The nested operator and label both count.
+|INC-21 |An included operator inside a parameter or destructuring default initializer |`1` |Default selection adds nothing; the operator belongs to the callable.
+|INC-22 |An included operator inside template `${…}` |`1` |Template structure adds nothing.
+|INC-23 |An included operator inside JSX `{…}` |`1` |JSX structure adds nothing.
+|===
+
+[[zero-low-seventeen]]
+== Exact zero-, low-, and 17-contribution facts
+
+=== Zero contributions
+
+`src/zero.js` has no final LF and contains:
+
+[source,javascript]
+----
+function zero() { return 0; }
+----
+
+Its normalized byte length is `29`. Its exact facts are SLOC `1`, unit count
+`2`, maximum complexity `1`, and these ordered units:
+
+. `(src/zero.js, top-level)`, no span, complexity `1`;
+. `(src/zero.js, function, 0, 29)`, complexity `1`.
+
+`return` contributes `0`; the explicit function owns zero contributions.
+
+=== One contribution
+
+`src/low.js` has no final LF and contains:
+
+[source,javascript]
+----
+function low(x) { if (x) return 1; }
+----
+
+Its normalized byte length is `36`. Its exact facts are SLOC `1`, unit count
+`2`, maximum complexity `2`, and these ordered units:
+
+. `(src/low.js, top-level)`, no span, complexity `1`;
+. `(src/low.js, function, 0, 36)`, complexity `2` from its one `if`.
+
+=== Every included occurrence
+
+`src/all.js` has no final LF and contains exactly one of every included
+occurrence, with the `if`/`else if` pair supplying two `if` occurrences and the
+six loop spellings supplying six loop occurrences:
+
+[source,javascript]
+----
+async function all(x, items) {
+  if (x) {}
+  else if (x) {}
+  for (;;) {}
+  for (const key in items) {}
+  for (const value of items) {}
+  for await (const value of items) {}
+  while (x) {}
+  do {} while (x);
+  switch (x) {
+    case 1:
+      break;
+    default:
+      break;
+  }
+  try {} catch {}
+  x ? 1 : 0;
+  x && x;
+  x || x;
+  x &&= x;
+  x ||= x;
+  x ?? x;
+  x ??= x;
+}
+----
+
+The contributions are `2` from `if`, `6` from loops, `1` from the non-default
+case, `1` from `catch`, `1` from the runtime conditional, and `6` from the
+listed logical/nullish operators and assignments: exactly `17`. `else`,
+`switch`, `default`, `try`, and `break` add `0`. Each logical assignment is one
+occurrence.
+
+The normalized byte length is `373`. Exact facts are SLOC `24`, unit count `2`,
+maximum complexity `18`, and these ordered units:
+
+. `(src/all.js, top-level)`, no span, complexity `1`;
+. `(src/all.js, function, 0, 373)`, complexity `18`.
+
+[[excluded-pairs]]
+== Paired exclusion matrix
+
+Every row holds the stated included control occurrence constant. The added
+construct contributes `0` itself. The final column separately shows what
+happens when a listed runtime operator can be nested in that construct; its
+`+1` is the operator's contribution, never the excluded construct's.
+
+[cols="1,3,4,2,4",options="header"]
+|===
+|ID |Excluded construct |Inert control and paired form |Both forms |Nested included occurrence
+
+|EX-01 |`else` |One `if` without and with an `else` branch |`1` |Logical AND in the `else` body makes the paired total `2`.
+|EX-02 |`switch` |One `if` alone and the same `if` plus a switch with no non-default case |`1` |Logical AND in the switch expression makes the paired total `2`.
+|EX-03 |`default` |One `if` plus an empty switch, without and with a default label |`1` |Logical AND in the default body makes the paired total `2`.
+|EX-04 |`try` |One `if` alone and the same `if` inside a try block |`1` |Logical AND in the try block makes the paired total `2`.
+|EX-05 |`finally` |One `if` in a try/catch form without and with finally |`2` because `if` and `catch` are held constant |Logical AND in finally makes the paired total `3`.
+|EX-06 |Optional property chain |One `if` reading a direct property and the same `if` reading an optional property |`1` |Logical AND in the optional chain's base makes the paired total `2`.
+|EX-07 |Optional element chain |One `if` reading a direct element and the same `if` reading an optional element |`1` |Logical AND in the index expression makes the paired total `2`.
+|EX-08 |Optional call chain |One `if` with a direct call and the same `if` with an optional call |`1` |Logical AND in an argument makes the paired total `2`.
+|EX-09 |Parameter default selection |A function with one `if`, without and with a plain parameter default |`1` |Logical AND in the default initializer makes the function total `2`.
+|EX-10 |Destructuring default selection |A function with one `if`, without and with a plain destructuring default |`1` |Logical AND in the default initializer makes the function total `2`.
+|EX-11 |Unary `!` |`if (x)` paired with `if (!x)` |`1` |Logical AND inside the unary operand makes the paired total `2`.
+|EX-12 |Comparison |One `if` with a value condition paired with the same `if` using a comparison |`1` |Logical AND in a comparison operand makes the paired total `2`.
+|EX-13 |Bitwise operator |One `if` with a value condition paired with the same `if` using a bitwise operation |`1` |Logical AND in a bitwise operand makes the paired total `2`.
+|EX-14 |`return` |One `if` with an empty body paired with the same `if` returning a value |`1` |Logical AND in the returned expression makes the paired total `2`.
+|EX-15 |`throw` |One `if` with an empty body paired with the same `if` throwing a value |`1` |Logical AND in the thrown expression makes the paired total `2`.
+|EX-16 |`break` |One loop containing one `if`, without and with `break` in that branch |`2` |A break has no expression; any listed occurrence elsewhere still counts separately.
+|EX-17 |`continue` |One loop containing one `if`, without and with `continue` in that branch |`2` |A continue has no expression; any listed occurrence elsewhere still counts separately.
+|EX-18 |Ordinary call |One `if` evaluating a value paired with the same `if` making a call |`1` |Logical AND in an argument makes the paired total `2`.
+|EX-19 |`await` |One `if` in an async function, without and with awaiting a value |`1` |Logical AND in the awaited expression makes the paired total `2`.
+|EX-20 |`yield` |One `if` in a generator, without and with yielding a value |`1` |Logical AND in the yielded expression makes the paired total `2`.
+|EX-21 |TypeScript conditional type |One runtime `if` plus a simple type alias, paired with the same `if` plus a conditional type |`1` |The type-level conditional remains `0`; it cannot become a runtime conditional contribution.
+|EX-22 |TypeScript optional marker |One runtime `if` plus a required declaration member, paired with the same `if` plus an optional member |`1` |The marker has no runtime expression; listed runtime occurrences elsewhere count separately.
+|EX-23 |TypeScript assertion |One `if` on a value paired with one `if` on an asserted value |`1` |Logical AND in the asserted expression makes the paired total `2`.
+|EX-24 |TypeScript non-null assertion |One `if` on a value paired with one `if` on a non-null-asserted value |`1` |Logical AND inside the asserted expression makes the paired total `2`.
+|EX-25 |Other erased TypeScript syntax |One runtime `if` without and with an otherwise erased TypeScript form |`1` |Logical AND in a runtime expression wrapped by erased syntax contributes `1`, for total `2`.
+|EX-26 |JSX structure |One runtime `if` alone and the same `if` plus JSX tags, attributes, and text |`1` |Logical AND inside JSX braces makes the paired total `2`.
+|===
+
+[[ownership-matrix]]
+== Exclusive ownership and initializer matrix
+
+All complexities below include the base `1`. `top-level` is present in these
+complete-module examples because each has value-level declaration syntax.
+
+[cols="1,5,5",options="header"]
+|===
+|ID |Inert source condition |Exact ownership result
+
+|OWN-01 |A function parameter default contains one logical AND |`function` complexity `2`; `top-level` complexity `1`.
+|OWN-02 |A function parameter destructuring default contains one logical AND |`function` complexity `2`; default selection adds nothing.
+|OWN-03 |An arrow concise expression contains one logical AND |`arrow` complexity `2`; `top-level` complexity `1`.
+|OWN-04 |A callable body contains one `if` |That callable has complexity `2`.
+|OWN-05 |A static block body contains one `if` |`static-block` complexity `2`; `top-level` complexity `1`.
+|OWN-06 |An outer function and a nested function each contain one `if` |Both `function` units have complexity `2`; the outer does not count the nested `if`.
+|OWN-07 |An outer function contains one `if` and returns an arrow containing one logical AND |Outer `function` complexity `2`; nested `arrow` complexity `2`; `return` adds nothing.
+|OWN-08 |A static block contains one `if` and a nested arrow containing one logical AND |`static-block` complexity `2`; `arrow` complexity `2`; neither counts the other's occurrence.
+|OWN-09 |A top-level decorator expression contains one logical AND |The occurrence belongs to `top-level`, complexity `2`; the decorator is not a unit.
+|OWN-10 |A top-level computed member name contains one logical AND |The occurrence belongs to `top-level`, complexity `2`; the body-bearing member retains its own base complexity.
+|OWN-11 |A top-level class heritage expression contains one logical AND |The occurrence belongs to `top-level`, complexity `2`; the heritage clause is not a unit.
+|OWN-12 |A top-level class field initializer contains one logical AND |The occurrence belongs to `top-level`, complexity `2`; the field is not a unit.
+|OWN-13 |The same decorator, computed-name, heritage, or field-initializer occurrence appears inside an outer callable |The nearest lexically enclosing outer callable owns it instead of `top-level`.
+|OWN-14 |A class field initializer contains an arrow whose body has one logical AND |The nested `arrow` has complexity `2`; `top-level` remains complexity `1` and does not own the arrow region.
+|OWN-15 |A decorator, computed name, heritage expression, or field initializer contains a nested body-bearing function with one `if` |The nested `function` has complexity `2`; the nearest outer existing unit does not count that nested region.
+|===
+
+[[required-span-example]]
+== Required `src/a.js` span and ownership example
+
+There are no bytes before `function`, no final LF after `}`, and the normalized
+source is:
+
+[source,javascript]
+----
+function f(a = x && y) {
+  if (a) return () => a ?? y;
+  return a;
+}
+----
+
+The normalized UTF-8 byte length is exactly `68`, and SLOC is `4`. The exact
+ordered facts are unit count `3`, maximum complexity `3`, and:
+
+. `(src/a.js, top-level)`, no span, complexity `1`;
+. `(src/a.js, function, 0, 68)`, complexity `3` from parameter `&&` plus its
+  own `if`;
+. `(src/a.js, arrow, 41, 53)`, complexity `2` from `??`.
+
+The half-open arrow span is exactly the bytes for `() => a ?? y`. Its `??` is
+excluded from the parent function's contribution count.
+
+[[derived-matrix]]
+== Counts, maxima, ties, and exact arithmetic
+
+[cols="1,5,5",options="header"]
+|===
+|ID |Module condition |Exact derived result
+
+|DER-01 |No units |Unit count `0`; maximum complexity `0`.
+|DER-02 |Only `top-level`, with no decisions |Unit count `1`; unit complexity and maximum are `1`.
+|DER-03 |`top-level` plus two functions that each own one `if` |Unit count `3`; complexities are `1`, `2`, and `2`; numeric maximum is `2`.
+|DER-04 |The two functions in DER-03 tie |No winning unit, winner identity, or tie-break is selected or retained.
+|DER-05 |The 17-contribution function above |Complexity is exactly `18`; no clamp changes it.
+|DER-06 |Any canonical unit list |Executable-unit count is exactly that list's length, including conditional `top-level` when present.
+|DER-07 |Any successful module |No aggregate decision load is calculated, retained, or exposed.
+|===
+
+[[canonical-key-table]]
+== Canonical span and key table
+
+The ordering rows are inert comparisons of canonical keys. They do not imply a
+parser traversal or require the compared synthetic keys to be discovered in
+that written order.
+
+[cols="1,5,5",options="header"]
+|===
+|ID |Compared identities or span condition |Required result
+
+|KEY-01 |`(p, top-level)` and any explicit identity for `p` |`top-level` is first and has no span.
+|KEY-02 |`(p, method, 20, 30)` and `(p, function, 5, 15)` |The `function` key is first by ascending `start`.
+|KEY-03 |`(p, arrow, 5, 20)` and `(p, function, 5, 40)` |The `function` key is first by descending `end` after equal starts.
+|KEY-04 |`(p, method, 5, 20)` and `(p, arrow, 5, 20)` |The `arrow` key is first by ascending ASCII kind identifier after equal spans.
+|KEY-05 |Top-level plus `(p, arrow, 5, 20)`, `(p, function, 5, 40)`, `(p, method, 20, 30)` |The complete order is top-level, function, arrow, method by the hierarchical keys above.
+|KEY-06 |Two copies of `(p, function, 5, 20)` |The whole metric stage fails as `Metric processing failed` / `M1-MET-1`; neither copy wins and no facts are published.
+|KEY-07 |A body-bearing form with attached decorators or exterior whitespace/comments |Those attached or exterior regions are excluded from its explicit span.
+|KEY-08 |A body-bearing form with async, generator, static, private, exported, or other non-decorator modifiers |The modifiers are included in the complete explicit span.
+|KEY-09 |A body-bearing form through its implementation body or arrow concise expression |Every token through that body or expression is included; the end remains half-open.
+|KEY-10 |Any explicit span |Offsets are zero-based UTF-8 bytes in #442-normalized content, not characters, raw pre-normalization bytes, or source locations from another representation.
+|KEY-11 |Keys reached under different parser traversal, locale, concurrency, names, or inferred signatures |The identities and canonical order remain unchanged.
+|===
+
+No traversal-generated suffix is permitted in any key.
+
+[[suffix-matrix]]
+== Closed suffix-to-family matrix
+
+The full canonical path retains its spelling. Only final-suffix ASCII letters
+are compared case-insensitively.
+
+[cols="1,3,3,4",options="header"]
+|===
+|ID |Lowercase suffix |ASCII case examples |Only selected family
+
+|FAM-01 |`.js` |`.JS`, `.Js`, `.jS` |JavaScript
+|FAM-02 |`.mjs` |`.MJS`, `.MjS`, `.mJs` |JavaScript
+|FAM-03 |`.cjs` |`.CJS`, `.CjS`, `.cJs` |JavaScript
+|FAM-04 |`.jsx` |`.JSX`, `.JsX`, `.jSx` |JavaScript with JSX
+|FAM-05 |`.ts` |`.TS`, `.Ts`, `.tS`; also the final suffix of `name.d.ts` |TypeScript
+|FAM-06 |`.mts` |`.MTS`, `.MtS`, `.mTs` |TypeScript
+|FAM-07 |`.cts` |`.CTS`, `.CtS`, `.cTs` |TypeScript
+|FAM-08 |`.tsx` |`.TSX`, `.TsX`, `.tSx` |TypeScript with JSX
+|===
+
+`m` and `c` spellings add no metric behavior, and no path, package, project,
+module-resolution, type, binding, import, or lint evidence can select a
+different family.
+
+[[four-family-matrix]]
+== Four-family grammar and failure matrix
+
+[cols="2,3,5",options="header"]
+|===
+|Selected family |Accepted syntax example |Grammar-diagnostic examples
+
+|JavaScript |Ordinary JavaScript such as `const x = 1;` |A TypeScript type annotation; JSX; malformed JavaScript text
+|JavaScript with JSX |Ordinary JavaScript and JSX such as `const view = <div />;` |A TypeScript type annotation; malformed JavaScript/JSX text
+|TypeScript |TypeScript such as `const x: number = 1;` |JSX; malformed TypeScript text
+|TypeScript with JSX |TypeScript and JSX such as `const view: JSX.Element = <div />;` |Malformed TSX text
+|===
+
+Thus TypeScript syntax fails in both JavaScript families, JSX fails in each
+non-JSX family, and malformed text fails in every family. Every grammar-
+diagnostic cell, whether it affects one module or many, has exactly this
+complete outcome:
+
+* category `Metric processing failed`;
+* code `M1-MET-1`;
+* the current selected canonical repository URL and full lowercase commit ID
+  retained under #441; and
+* no exposed source path, raw analyzer text, module metric fact, partial module
+  set, partial city, stale city, or city.
+
+No malformed module is skipped, and parser recovery cannot turn any grammar
+row into approximate facts.
+
+[[non-grammar-matrix]]
+== Grammar versus non-grammar diagnostics
+
+[cols="1,4,3,5",options="header"]
+|===
+|ID |Condition |Metric-stage result |Required boundary
+
+|DIAG-01 |Any grammar diagnostic in the selected family |Atomic `Metric processing failed` / `M1-MET-1` |One or many diagnostics have the same path-free, analyzer-text-free result.
+|DIAG-02 |A type diagnostic on otherwise grammar-valid TypeScript, such as assigning string text to a number annotation |No `M1-MET-1` from that diagnostic |The metric contract performs no type acceptance test.
+|DIAG-03 |A binding diagnostic, such as a grammar-valid reference with no binding |No `M1-MET-1` from that diagnostic |Binding analysis is not a metric-failure input.
+|DIAG-04 |A grammar-valid import whose target cannot be resolved |No `M1-MET-1` from that diagnostic |Module resolution is not a metric-failure input.
+|DIAG-05 |A lint diagnostic on grammar-valid source |No `M1-MET-1` from that diagnostic |Lint policy is not a metric-failure input.
+|DIAG-06 |Duplicate canonical explicit-unit identity |Atomic `Metric processing failed` / `M1-MET-1` |No traversal suffix or winner repairs the duplicate.
+|===
+
+A non-grammar diagnostic does not suppress ordinary canonical facts when the
+selected-family grammar and every other metric rule succeed.
+
+[[deterministic-facts]]
+== Deterministic canonical fact sequence
+
+Consider the same two modules originating in either upstream discovery order:
+
+* `src/a.ts` with empty content; and
+* `src/b.js` containing only the empty statement `;`.
+
+In either case #442 supplies the metric stage the same complete admitted
+sequence in ascending unsigned-UTF-8 order. Every evaluation, including a
+repeated evaluation after either upstream permutation, produces exactly this
+canonical sequence:
+
+[source,text]
+----
+module identity: src/a.ts
+SLOC: 0
+executable-unit count: 0
+maximum complexity: 0
+ordered units: []
+
+module identity: src/b.js
+SLOC: 1
+executable-unit count: 1
+maximum complexity: 1
+ordered units:
+  identity: (src/b.js, top-level)
+  kind: top-level
+  complexity: 1
+----
+
+The `top-level` unit has no span field. `src/a.ts` precedes `src/b.js` by
+#442's unsigned-UTF-8 module order. The empty
+statement creates `top-level` from syntax alone. Provider order, evaluator
+invocation order, concurrency, locale, and repetition change no module, unit,
+field, value, or order.
+
+[[fact-exclusion-matrix]]
+== Closed fact-set exclusions
+
+[cols="1,4,5",options="header"]
+|===
+|ID |Excluded from canonical facts |Required result
+
+|FACT-01 |Decision-site list |Only the derived unit complexity is retained.
+|FACT-02 |Unit name |Identity uses path, kind, and span only.
+|FACT-03 |Inferred signature |It is neither identity nor output.
+|FACT-04 |Selected maximum winner |Only the numeric maximum is retained, including on a tie.
+|FACT-05 |Aggregate decision load |It is not calculated, retained, or exposed.
+|FACT-06 |Finding or diagnostic list |It is not a successful canonical metric fact.
+|FACT-07 |Dependency or unresolved-import information |It is not a canonical metric fact.
+|FACT-08 |Higher-level analysis |It remains outside this contract.
+|FACT-09 |City, building, layout, or presentation data |It belongs to #444 and later accepted contracts, not the metric fact set.
+|FACT-10 |Traversal suffix, parser node name, locale key, or concurrency key |It cannot enter identity or order.
+|===
+
+[[evidence-allocation]]
+== Evidence allocation and deferred choices
+
+[cols="3,3,5",options="header"]
+|===
+|Contract evidence |Evidence owner |Required evidence boundary
+
+|Lexical SLOC, explicit units, conditional top-level, zero-unit modules, spans,
+and canonical unit order
+|https://github.com/FelixGeisler/code-city/issues/455[#455]
+|Extraction evidence conforming to this exact contract without changing its
+facts or selecting city behavior.
+
+|Every included/excluded contribution, exclusive ownership, exact per-unit
+complexity, count, maximum, and ties
+|https://github.com/FelixGeisler/code-city/issues/456[#456]
+|Extraction and arithmetic evidence conforming to this exact contract, with no
+aggregate load or maximum winner.
+
+|Grammar failure, duplicate identity, retained current selected identity, and
+no module/metric set or stale/partial city
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Integrated exact-category/code and #441 state evidence.
+|===
+
+The analyzer and version remain owned by
+https://github.com/FelixGeisler/code-city/issues/450[#450], analysis
+responsibility and port boundaries by
+https://github.com/FelixGeisler/code-city/issues/462[#462], and city existence
+and mapping by https://github.com/FelixGeisler/code-city/issues/444[#444]. These
+inert examples assign none of those choices and require no additional product
+decision to document the accepted metric contract.

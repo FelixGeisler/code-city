@@ -1,0 +1,365 @@
+= Fixed Metric Semantics
+
+This page is the one authoritative, parser-neutral M1 contract for lexical
+physical-line SLOC, executable units, per-unit complexity, and module maximum
+complexity. It applies only after source admission has produced the complete
+ordered module sequence defined by
+xref:06-source-admission-and-limits.adoc[]. A successful metric stage derives
+one deterministic canonical fact sequence from that input.
+
+The rules define product facts and failure behavior. They do not select an
+analyzer or version, parser API, AST shape, traversal, type checker, module
+resolver, component, port, topology, enforcement location, or city mapping.
+
+[[metric-terms]]
+== Terms
+
+Physical line:: One line obtained by splitting a module's normalized content
+on LF under <<physical-lines,Physical lines and lexical SLOC>>.
+
+Explicit unit:: One body-bearing grammar form in the closed unit-kind table.
+
+Owned decision contribution:: One included syntactic occurrence in the region
+owned exclusively by a unit under <<ownership,Exclusive ownership>>.
+
+Canonical metric facts:: The exact successful fact set and order defined in
+<<canonical-facts,Canonical facts and exclusions>>. These facts are not a city
+or a separately specified user-visible output.
+
+[[metric-input]]
+== Input boundary
+
+The metric stage consumes only the complete admitted-module sequence from
+xref:06-source-admission-and-limits.adoc#admission-composition[M1-ADM-5]:
+canonical module paths in ascending unsigned-UTF-8 order and strict UTF-8
+content after one leading-BOM removal and CRLF/bare-CR conversion to LF. It
+must not discover or readmit entries, execute or evaluate source, import a
+module, or dynamically load source.
+
+Module identity and module order remain exactly the NFC canonical path
+and unsigned-UTF-8 order established by
+xref:06-source-admission-and-limits.adoc#canonical-paths[M1-ADM-1] and
+xref:06-source-admission-and-limits.adoc#admission-composition[M1-ADM-5]. The
+metric stage does not rename, renormalize, filter, or reorder that successful
+module set except by preserving its canonical order.
+
+[[physical-lines]]
+== Physical lines and lexical SLOC
+
+Split normalized content on LF. Empty content has no physical lines. In
+non-empty content, a suffix after the last LF is the final physical line. A
+final LF does not create another physical line.
+
+Count a physical line exactly once when it contains at least one
+non-whitespace character belonging to non-comment source syntax. Whitespace
+and comments are interpreted lexically in the syntax family selected under
+<<syntax-families,Syntax families>>.
+
+The following lines count `0`:
+
+* blank or whitespace-only lines;
+* line-comment-only lines;
+* block-comment-only lines;
+* JSDoc-only lines;
+* triple-slash-directive-only lines;
+* hashbang-only lines; and
+* JSX-comment-only lines.
+
+A line containing source and a leading, trailing, or embedded comment counts
+`1`, never twice. String and template delimiters or text, regular-expression
+literals, JSX tags, JSX attributes, non-whitespace JSX text, and TypeScript
+type or declaration syntax are source and count when present.
+
+Comment-looking text inside a string, template raw text, regular expression,
+or JSX text remains source. A blank or indentation-only line inside a
+multiline template or JSX fragment counts `0`. Decision-looking text in a
+comment or literal remains lexical text and never creates a complexity
+contribution.
+
+[[executable-units]]
+== Executable units and conditional top level
+
+[[explicit-unit-kinds]]
+=== Closed explicit-unit kinds
+
+The only explicit unit kinds and canonical ASCII kind identifiers are:
+
+[cols="2,5",options="header"]
+|===
+|Kind identifier |Body-bearing form
+
+|`function`
+|Function declaration or function expression
+
+|`arrow`
+|Arrow function with a block or concise-expression body
+
+|`method`
+|Ordinary object or class method
+
+|`constructor`
+|Explicit class constructor
+
+|`getter`
+|Getter
+
+|`setter`
+|Setter
+
+|`static-block`
+|Class static initialization block
+|===
+
+Async, generator, static, private, exported, and other non-decorator modifiers
+do not create another kind. Count only a form with its implementation body.
+Overload signatures, `declare` or ambient functions, abstract or interface
+methods, call or construct signatures, bodyless accessors, and implicit
+constructors are not units.
+
+Class fields, decorators, computed names, and heritage clauses are not
+separate units. A body-bearing arrow or function inside an initializer remains
+its own explicit unit.
+
+[[conditional-top-level]]
+=== Conditional `top-level`
+
+Create exactly one `top-level` unit when value-level syntax exists outside
+callable parameter, callable body, callable concise-expression, and
+static-block body regions. Value-level syntax includes:
+
+* plain JavaScript statements and declarations, including an empty statement;
+* declarations or expressions that create an explicit unit;
+* side-effect imports and syntactically value-bearing imports or exports;
+* non-ambient runtime TypeScript declarations, including enums and namespaces;
+  and
+* top-level JSX expressions.
+
+A top-level normal function declaration therefore produces both `top-level`
+and `function` units. A normal import or export is treated as value-bearing
+from syntax alone even when later binding analysis could prove otherwise.
+
+Do not create `top-level` for empty or comments-only source; `import type`,
+`export type`, or import/export lists whose specifiers are all type-only;
+interfaces, type aliases, ambient or signature-only declarations; or the empty
+module marker `export {}`. Empty, comments-only, and declaration-only `.d.ts`
+modules can therefore have zero units. Every admitted zero-unit module still
+retains its module facts.
+
+[[decision-contributions]]
+== Decision contributions
+
+Each syntactic occurrence below contributes exactly `1` to its owning unit:
+
+* each `if`; an `else if` contributes through its own `if`;
+* each `for`, `for…in`, `for…of`, `for await…of`, `while`, and `do…while`
+  loop;
+* each non-default `case` label;
+* each `catch`, with or without a binding;
+* each runtime conditional (`?:`) expression;
+* each `&&`, `||`, `&&=`, and `||=` occurrence; and
+* each `??` and `??=` occurrence.
+
+A logical assignment is one listed occurrence, not a logical operator plus a
+second assignment contribution. An included occurrence inside a loop header,
+case expression, default initializer, template `${…}`, or JSX `{…}` counts in
+addition to an enclosing included construct when applicable.
+
+The following constructs contribute `0` themselves:
+
+* `else`, `switch`, `default`, `try`, and `finally`;
+* optional property, element, and call chaining (`?.`);
+* parameter and destructuring default selection;
+* unary `!`, comparisons, and bitwise operators;
+* `return`, `throw`, `break`, and `continue`;
+* calls, `await`, and `yield`;
+* TypeScript conditional types, optional markers, assertions, non-null
+  assertions, and other erased TypeScript syntax; and
+* JSX structure.
+
+An included operator nested inside one of those constructs still contributes
+normally. Optional chaining and default selection never substitute for a
+listed occurrence.
+
+[[ownership]]
+== Exclusive ownership
+
+A callable owns contributions in its parameter default or destructuring
+initializers and in its implementation body or concise expression. A static
+block owns contributions in its body.
+
+Every nested callable or static block exclusively owns its own region. Its
+contributions are not counted again by an enclosing unit.
+
+Decorator expressions, computed member names, class heritage expressions, and
+class field initializers belong to the nearest lexically enclosing existing
+unit outside the declaration they decorate or name. When no such unit exists,
+they belong to `top-level`. A nested explicit unit inside one of those
+expressions still owns its own region exclusively.
+
+[[derived-values]]
+== Derived values
+
+For every unit:
+
+[source,text]
+----
+complexity = 1 + owned decision contributions
+----
+
+Use exact integer arithmetic with no minimum or maximum clamp. Executable-unit
+count is exactly the canonical unit-list length. Module maximum complexity is
+only the numeric maximum of its unit complexities; a tie selects no winning
+unit. When a module has no units, executable-unit count and maximum complexity
+are both `0`.
+
+Aggregate decision load is not calculated, retained, or exposed as a canonical
+fact.
+
+[[syntax-families]]
+== Syntax families
+
+Select exactly one syntax family solely from the canonical path's final suffix,
+compared ASCII case-insensitively:
+
+[cols="3,3",options="header"]
+|===
+|Suffixes |Syntax family
+
+|`.js`, `.mjs`, `.cjs`
+|JavaScript
+
+|`.jsx`
+|JavaScript with JSX
+
+|`.ts`, `.mts`, `.cts`, including compound names such as `.d.ts`
+|TypeScript
+
+|`.tsx`
+|TypeScript with JSX
+|===
+
+The `m` or `c` spelling changes no metric rule. Do not infer syntax or behavior
+from `package.json`, `tsconfig`, module resolution, types, bindings, imports, or
+lint results. TypeScript syntax in a JavaScript family and JSX outside a JSX or
+TSX family are grammar errors.
+
+The exact analyzer and version that provide the four grammar modes are selected
+and human-accepted in https://github.com/FelixGeisler/code-city/issues/450[#450],
+not by this contract or its documentation implementation.
+
+[[metric-failure]]
+== Atomic metric failure
+
+If any admitted module has any grammar diagnostic in its selected family, the
+complete metric stage fails with exactly:
+
+[cols="2,2",options="header"]
+|===
+|Category |Code
+|`Metric processing failed` |`M1-MET-1`
+|===
+
+Parser recovery must not publish approximate facts. No malformed module is
+skipped, and no partial module sequence, metric fact set, or city is published.
+Type, binding, unresolved-import, and lint diagnostics do not cause this
+result.
+
+M1 exposes neither a raw analyzer message nor a source path for this failure.
+One grammar failure and multiple grammar failures therefore have the same
+observable result. A duplicate explicit-unit identity under
+<<canonical-identities,Canonical identities and order>> produces this same
+category and code.
+
+Apply xref:04-functional-requirements.adoc#states[M1-STATE-1 through
+M1-STATE-5] unchanged: this post-selection failure retains the current
+canonical repository URL and full lowercase commit ID, while no partial or
+stale city is visible.
+
+[[canonical-identities]]
+== Canonical identities and order
+
+`top-level` identity is the pair `(canonical path, "top-level")` and has no
+source span.
+
+Every explicit-unit identity is the tuple:
+
+[source,text]
+----
+(canonical path, kind identifier, start, end)
+----
+
+`start` and `end` are zero-based UTF-8 byte offsets into the normalized content
+and form a half-open `[start, end)` span. The span is the complete source extent
+of the body-bearing grammar form. It excludes attached decorators and exterior
+whitespace or comments. It includes non-decorator modifiers and every token
+through the implementation body or concise expression. Interior trivia does
+not alter its boundaries.
+
+Canonical unit order is:
+
+. `top-level` first when present;
+. then explicit units by ascending `start`;
+. then by descending `end`; and
+. then by ascending ASCII kind identifier.
+
+A duplicate unit identity fails the complete metric stage under
+<<metric-failure,Atomic metric failure>>. No traversal-dependent suffix or
+winner is permitted. Names, inferred signatures, parser traversal order,
+locale, and concurrency are not identity or ordering inputs.
+
+[[canonical-facts]]
+== Canonical facts and exclusions
+
+Successful canonical metric facts are exactly the ordered module sequence in
+which each module contains:
+
+* module identity;
+* SLOC;
+* executable-unit count;
+* numeric maximum complexity; and
+* its canonical ordered units.
+
+Each unit contains its identity, canonical kind, and complexity. An explicit
+unit also contains its half-open span; `top-level` has no span.
+
+The canonical fact set excludes decision-site lists, names or inferred
+signatures, a selected maximum-complexity winner, aggregate decision load,
+findings, dependencies, higher-level analysis, and every city or presentation
+choice.
+
+[[metric-decision-boundary]]
+== Decision authority, boundary, and evidence owners
+
+The human decision-maker accepted the complete SLOC, unit/top-level,
+contribution, ownership/derivation, syntax/failure, and identity/fact policies
+above. Under delegated authority, the Requirements Engineer fixed the canonical
+ASCII kind identifiers, syntax-only treatment of ordinary value imports,
+exports, and empty statements, and the one metric-failure result for duplicate
+identities. Parser node names and traversal-generated suffixes were rejected
+because they would make canonical facts analyzer-dependent.
+
+The accepted package uses one lexical rule across all eight extensions,
+represents only visible execution scopes, avoids nested double counting, and
+preserves the complete-city-or-none invariant. Executable-only SLOC, an
+unconditional top-level unit, implicit constructor or initializer units,
+optional-chain/default-selection contributions, parent-inclusive nested
+decisions, parser recovery, skipped malformed modules, path disclosure, and
+name/signature-derived identities are not alternatives left open by this
+contract.
+
+This page assigns no architecture or implementation responsibility.
+https://github.com/FelixGeisler/code-city/issues/450[#450] owns the
+human-accepted analyzer/version choice;
+https://github.com/FelixGeisler/code-city/issues/462[#462] owns the analysis
+responsibility and port-boundary decision; and
+https://github.com/FelixGeisler/code-city/issues/444[#444] owns city existence
+and metric-to-city mapping.
+
+Implementation evidence is allocated without selecting a mechanism:
+
+* https://github.com/FelixGeisler/code-city/issues/455[#455] owns SLOC and
+  executable-unit extraction evidence;
+* https://github.com/FelixGeisler/code-city/issues/456[#456] owns per-unit and
+  maximum-complexity extraction evidence; and
+* https://github.com/FelixGeisler/code-city/issues/460[#460] owns integrated
+  `M1-MET-1`, retained-current-identity, and no-partial/no-stale-state evidence.

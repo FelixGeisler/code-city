@@ -134,8 +134,8 @@ applies.
 
 Executable, declaration-only, comments-only, empty, otherwise non-executable,
 and syntactically malformed source text is admitted when its path, kind, and
-content are valid. Syntax behavior is decided downstream. Repository data is
-never run.
+content are valid. Downstream syntax and metric behavior are defined only by
+xref:08-fixed-metric-semantics.adoc[]. Repository data is never run.
 
 [[admission-composition]]
 == M1-ADM-5: Bounded classification, collision handling, and order
