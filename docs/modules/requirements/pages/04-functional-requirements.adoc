@@ -1,8 +1,9 @@
 = Functional Requirements
 
 This page is normative for the M1 canonical-input, immutable-revision, and
-observable-state contract. The downstream source-admission and fixed-limit
-refinement is normative in xref:06-source-admission-and-limits.adoc[].
+observable-state contract. The downstream source-admission and approved
+RA-01 through RA-09 refinement is normative in
+xref:06-source-admission-and-limits.adoc[].
 
 == Terms
 
@@ -399,7 +400,7 @@ and deployment flow
 xref:architecture:07-deployment-view.adoc[Deployment View]
 |===
 
-Source-admission and resource-limit semantics are defined in
+Source-admission and RA-01 through RA-09 semantics are defined in
 xref:06-source-admission-and-limits.adoc[] under
 https://github.com/FelixGeisler/code-city/issues/442[#442]. Their feasibility,
 mechanism, enforcement, and evidence boundaries remain with the linked

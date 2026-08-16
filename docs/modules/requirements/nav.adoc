@@ -5,5 +5,5 @@
 * xref:03-feature-inventory.adoc[Feature Inventory]
 * xref:04-functional-requirements.adoc[Functional Requirements]
 * xref:05-acceptance-criteria.adoc[Input and State Acceptance]
-* xref:06-source-admission-and-limits.adoc[Source Admission and Resource Limits]
+* xref:06-source-admission-and-limits.adoc[Source Admission and Repository Limits]
 * xref:07-source-admission-and-limit-acceptance.adoc[Source Admission and Limit Acceptance]

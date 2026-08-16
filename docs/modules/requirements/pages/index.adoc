@@ -11,12 +11,11 @@ URL and receives a deterministic Code City for one automatically selected,
 immutable repository revision.
 
 The baseline begins with the input, revision-identity, and user-state contract
-from https://github.com/FelixGeisler/code-city/issues/441[#441] and the
-source-admission and fixed-limit contract proposed by
-https://github.com/FelixGeisler/code-city/issues/442[#442]. Product-contract
-choices require explicit human acceptance of the exact documentation revision
-that contains them. Requirements pages and automated checks are not approval
-records.
+from https://github.com/FelixGeisler/code-city/issues/441[#441] and the accepted
+source-admission and RA-01 through RA-09 contract from
+https://github.com/FelixGeisler/code-city/issues/442[#442]. Decisions for
+possible later processing, construction, presentation, and duration limits
+remain deferred to their owning issues and the #464 hard gate.
 
 == Reading order
 
@@ -30,9 +29,9 @@ records.
   normative URL grammar, immutable-revision identity, and state machine.
 . xref:05-acceptance-criteria.adoc[Input and State Acceptance] provides
   documentary Given/When/Then examples for reviewing that contract.
-. xref:06-source-admission-and-limits.adoc[Source Admission and Resource Limits]
-  contains the closed admission matrix, fixed limit inventory, and observable
-  outcome rules.
+. xref:06-source-admission-and-limits.adoc[Source Admission and Repository Limits]
+  contains the closed admission matrix, approved RA-01 through RA-09 inventory,
+  bounded classification, and observable category/code rules.
 . xref:07-source-admission-and-limit-acceptance.adoc[Source Admission and Limit
   Acceptance] provides documentary scenarios and downstream evidence mapping
   for that contract.

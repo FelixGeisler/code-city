@@ -312,8 +312,8 @@ Scenario Outline: An unfinished journey never exposes a partial city
     | presentation fails            |
 ----
 
-The detailed source-admission and resource-limit causes and wording are in
-xref:06-source-admission-and-limits.adoc[] under
+The detailed source-admission and approved repository/intake-limit causes,
+codes, and wording are in xref:06-source-admission-and-limits.adoc[] under
 https://github.com/FelixGeisler/code-city/issues/442[#442]. Metric and city
 mapping details remain with https://github.com/FelixGeisler/code-city/issues/443[#443]
 and https://github.com/FelixGeisler/code-city/issues/444[#444]. This scenario
