@@ -4,7 +4,8 @@ These Given/When/Then scenarios are inert documentation examples for the input,
 revision, and state contract. They define reviewable behavior but are not
 executable fixtures, test scaffolds, provider stubs, or a choice of test
 technology. Source-admission and limit scenarios are in
-xref:07-source-admission-and-limit-acceptance.adoc[].
+xref:07-source-admission-and-limit-acceptance.adoc[]. Fixed metric matrices and
+examples are in xref:09-fixed-metric-acceptance.adoc[].
 
 The input/revision/state contract is acceptable only when all scenarios below
 agree with xref:04-functional-requirements.adoc[] and all of these gates hold:
@@ -314,9 +315,11 @@ Scenario Outline: An unfinished journey never exposes a partial city
 
 The detailed source-admission and approved repository/intake-limit causes,
 codes, and wording are in xref:06-source-admission-and-limits.adoc[] under
-https://github.com/FelixGeisler/code-city/issues/442[#442]. Metric and city
-mapping details remain with https://github.com/FelixGeisler/code-city/issues/443[#443]
-and https://github.com/FelixGeisler/code-city/issues/444[#444]. This scenario
+https://github.com/FelixGeisler/code-city/issues/442[#442]. Fixed metric rules
+and their inert review examples are in xref:08-fixed-metric-semantics.adoc[] and
+xref:09-fixed-metric-acceptance.adoc[] under
+https://github.com/FelixGeisler/code-city/issues/443[#443]. City mapping remains
+with https://github.com/FelixGeisler/code-city/issues/444[#444]. This scenario
 fixes the common observable state invariant without redefining those contracts.
 
 == Excluded controls and retention

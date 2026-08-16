@@ -11,11 +11,14 @@ URL and receives a deterministic Code City for one automatically selected,
 immutable repository revision.
 
 The baseline begins with the input, revision-identity, and user-state contract
-from https://github.com/FelixGeisler/code-city/issues/441[#441] and the accepted
+from https://github.com/FelixGeisler/code-city/issues/441[#441], the accepted
 source-admission and RA-01 through RA-09 contract from
-https://github.com/FelixGeisler/code-city/issues/442[#442]. Decisions for
-possible later processing, construction, presentation, and duration limits
-remain deferred to their owning issues and the #464 hard gate.
+https://github.com/FelixGeisler/code-city/issues/442[#442], and the accepted
+fixed metric contract from
+https://github.com/FelixGeisler/code-city/issues/443[#443]. Decisions for the
+analyzer/version, possible later processing limits, city construction,
+presentation, and duration limits remain with their owning issues and the #464
+hard gate.
 
 == Reading order
 
@@ -35,6 +38,12 @@ remain deferred to their owning issues and the #464 hard gate.
 . xref:07-source-admission-and-limit-acceptance.adoc[Source Admission and Limit
   Acceptance] provides documentary scenarios and downstream evidence mapping
   for that contract.
+. xref:08-fixed-metric-semantics.adoc[Fixed Metric Semantics] defines lexical
+  physical-line SLOC, executable units, complexity, canonical metric facts,
+  and atomic metric failure.
+. xref:09-fixed-metric-acceptance.adoc[Fixed Metric Acceptance] provides the
+  closed inert matrices, exact examples, and evidence allocation for that
+  contract.
 
 The words *must*, *must not*, *required*, and *only* are normative on these
 pages. Examples clarify the normative rules but do not create executable test

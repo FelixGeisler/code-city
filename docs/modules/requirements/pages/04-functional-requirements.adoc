@@ -3,7 +3,8 @@
 This page is normative for the M1 canonical-input, immutable-revision, and
 observable-state contract. The downstream source-admission and approved
 RA-01 through RA-09 refinement is normative in
-xref:06-source-admission-and-limits.adoc[].
+xref:06-source-admission-and-limits.adoc[]. Fixed metric semantics and metric
+failure are normative in xref:08-fixed-metric-semantics.adoc[].
 
 == Terms
 
@@ -338,13 +339,15 @@ invent an identity or retry automatically.
 |Downstream source, limit, processing, construction, or presentation failure
 |A later admitted-source, metric, city, or presentation stage fails.
 |Use the exact visible category in
-xref:06-source-admission-and-limits.adoc#failure-categories[] when that contract
-applies, or the later owning contract's accepted refinement. If selection
-completed, retain only the current attempted tuple and show no city.
+xref:06-source-admission-and-limits.adoc#failure-categories[] for its failures,
+xref:08-fixed-metric-semantics.adoc#metric-failure[] for metric failures, or the
+later owning contract's accepted refinement. If selection completed, retain
+only the current attempted tuple and show no city.
 |===
 
 Every category obeys <<states,M1-STATE-5>>. Detailed source-admission, limit,
-metric, and rendering conditions are intentionally not defined by this issue.
+metric, and rendering conditions are defined only by their linked owning
+contracts, not by this input and state page.
 
 == M1-EX-1: Excluded controls and retained data
 
@@ -402,7 +405,9 @@ xref:architecture:07-deployment-view.adoc[Deployment View]
 
 Source-admission and RA-01 through RA-09 semantics are defined in
 xref:06-source-admission-and-limits.adoc[] under
-https://github.com/FelixGeisler/code-city/issues/442[#442]. Their feasibility,
-mechanism, enforcement, and evidence boundaries remain with the linked
-downstream issues. Nothing in this page assigns those rules, the state machine,
-cancellation, or cleanup to a provider, process, node, component, or port.
+https://github.com/FelixGeisler/code-city/issues/442[#442]. Fixed metric
+semantics are defined in xref:08-fixed-metric-semantics.adoc[] under
+https://github.com/FelixGeisler/code-city/issues/443[#443]. Their mechanisms,
+enforcement, and evidence boundaries remain with the linked downstream issues.
+Nothing in this page assigns those rules, the state machine, cancellation, or
+cleanup to a provider, analyzer, process, node, component, or port.
