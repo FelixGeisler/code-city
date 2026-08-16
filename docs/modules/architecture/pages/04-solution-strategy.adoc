@@ -5,9 +5,10 @@ xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
 xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002],
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
 xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004],
-and
 xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
-0005].
+0005], and
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006].
 The ADRs remain authoritative where this summary omits detail.
 
 == One core with two strata
@@ -111,11 +112,42 @@ atomic or concurrent-provider-state warranty.
 Both response bodies have the inclusive 4 MiB post-content-decoding cap and
 the application-controlled reader/chunk/text/parsed-object cleanup boundary in
 ADR 0005. The mechanism makes at most two application GETs, retrieves no
-source, has no credential, retry, fallback, backend, or dependency, and leaves
-selected-revision retrieval and admission to
-https://github.com/FelixGeisler/code-city/issues/449[#449]. This is an accepted
+source, has no credential, retry, fallback, backend, or dependency, and hands
+its immutable tuple only to ADR 0006 retrieval/admission. This is an accepted
 documented strategy, not current product traffic;
 https://github.com/FelixGeisler/code-city/issues/453[#453] owns implementation.
+
+== Accepted selected-revision retrieval/admission strategy
+
+ADR 0006 consumes that tuple without resolving another ref. Native worker Fetch
+requests the selected commit object and its validated root tree recursively at
+`api.github.com`, completes #442's bounded path and metadata horizons through
+own-field primitive projection, then requests candidate bytes one at a time in
+canonical unsigned-UTF-8 identity order from `raw.githubusercontent.com`.
+Retrieval/admission alone returns one complete admitted-module sequence or one
+accepted terminal result.
+
+The strategy fixes inclusive 4 MiB commit and 8 MiB tree transformations,
+complete inventory evidence, prototype-safe path lookup, four closed Git
+mode/type pairs, exact raw-segment encoding, and expected Git blob identity
+before strict source decoding. One exact `4,194,317`-byte raw/hash workspace
+reuses the RA-04 content buffer and Git-header prefix without a second whole
+preimage; RA-04+1 is counted but neither stored nor hashed. Globally, at most
+one retrieval/admission provider request and one workspace exist, and a
+replacement starts only after old work and application-owned cleanup settle.
+There is no SDK, credential, archive, retry, wait, fallback, or second path.
+RA-10 and RA-11 are explicitly unnecessary, so bounded resources do not imply
+an elapsed-time promise.
+
+Tree plus sequential raw content accepts a potentially high request count in
+exchange for a complete Git kind/submodule inventory, exact per-blob
+consistency, bounded unsupported-content exposure, and no archive parser. The
+cost is up to `5,000` sequential raw requests, undocumented raw capacity, and a
+provider-valid tree possibly exceeding the selected 8 MiB cap. The observed
+codeload path is not readable from the production origin and would add
+archive/decompression/reconciliation risk; throttling or compatibility drift
+is terminal rather than a fallback trigger. #454 owns controlled evidence,
+#459 packaged-path evidence, and #460 hosted renewal.
 
 == Selected trade-off
 
@@ -139,5 +171,5 @@ bypass.
 The minimum responsibilities and conceptual collaborations are documented in
 xref:05-building-block-view.adoc[Building Block View]. Concrete source mapping,
 general same-stratum policy, packages, interfaces, schemas, and every remaining
-mechanism or technology not accepted in ADRs 0004 and 0005 remain with their
-stated downstream owners.
+mechanism or technology not accepted in ADRs 0004 through 0006 remain with
+their stated downstream owners.

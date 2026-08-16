@@ -4,12 +4,17 @@ This page is normative for M1 source admission and the approved repository and
 intake limits RA-01 through RA-09. It applies after the current attempt has
 selected the immutable repository identity defined by
 xref:04-functional-requirements.adoc#immutable-revision[]. Repository metadata,
-paths, and source remain untrusted data.
+paths, and source remain untrusted data. It also normatively adopts the narrow
+selected-revision completeness outcomes accepted in
+xref:architecture:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006].
 
-The rules below define observable classification. They do not select a
-retrieval or buffering mechanism, topology, process, component, port, parser,
-renderer, clock, cancellation mechanism, safeguard location, enforcement
-owner, or cleanup owner.
+The RA-01 through RA-09 product rules below remain mechanism-neutral and define
+observable classification rather than a buffering design. Except for the
+explicit mechanism-visible completeness boundaries below, they do not select a
+retrieval mechanism, topology, process, component, port, parser, renderer,
+clock, cancellation primitive, safeguard location, enforcement owner, or
+cleanup owner. ADR 0006 remains authoritative for its exact GitHub request,
+projection, resource, integrity, and lifecycle mechanism.
 
 [[admission-terms]]
 == Terms
@@ -32,6 +37,47 @@ Admitted module:: A candidate that is a regular file and has valid normalized
 content. Its canonical module identity is its canonical path.
 
 Byte:: One octet. Every byte maximum is an exact integer count.
+
+[[selected-revision-completeness]]
+== Selected-revision completeness boundaries
+
+The accepted retrieval/admission capability consumes only the immutable tuple
+from ADR 0005 and is the sole creator of the complete ordered admitted-module
+set. ADR 0006's bounded commit-object and recursive-tree evidence must be
+complete before the existing path, metadata, and content horizons can succeed.
+The following post-HTTP-content-decoding body boundaries are normative:
+
+[cols="3,3,3,5",options="header"]
+|===
+|REST evidence |Cap-1 |Inclusive cap |First byte above the cap
+
+|Commit-object body
+|`4,194,303 bytes`: may continue when all other evidence is valid
+|`4,194,304 bytes`: may continue when all other evidence is valid
+|Byte `4,194,305`: `Source admission failed` / `M1-ADM-1`
+
+|Recursive-tree body
+|`8,388,607 bytes`: may continue when all other evidence is valid
+|`8,388,608 bytes`: may continue when all other evidence is valid
+|Byte `8,388,609`: `Source admission failed` / `M1-ADM-1`
+|===
+
+The first two values in each row create no separate visible result. They do not
+waive media, UTF-8, JSON, identity, schema, path, kind, content, or RA rules.
+Actual stream bytes establish the boundary; a `Content-Length` or provider
+claim does not.
+
+Count recursive-tree items under M1-ADM-5's entry horizon. At most `10,000`
+items with `truncated: false` is potentially complete and may enter the
+remaining horizons. At most `10,000` items with `truncated: true` is incomplete
+evidence and is `Source admission failed` / `M1-ADM-1`. There is no
+non-recursive subtree fallback. The `10,001`st opaque item still establishes
+RA-01 before any item-field inspection exactly as M1-ADM-5 specifies.
+
+These two transport caps and the incomplete-inventory behavior are
+completeness evidence, not RA limits. They create no category, stable code,
+retry, wait, fallback, or lower repository limit. Their full request, response,
+projection, and cleanup contract remains in ADR 0006.
 
 [[untrusted-source]]
 == M1-ADM-0: Untrusted source invariant
@@ -447,7 +493,7 @@ provider or implementation wording is non-normative.
 |Category |Stable code |Governing condition
 |`No supported modules` |`ADM-06` |No eligible candidate exists after all higher-precedence results are absent.
 |`No supported modules` |`ADM-07` |Eligible candidates exist, but every one is skipped.
-|`Source admission failed` |`M1-ADM-1` |An in-horizon path is invalid or missing, identities collide, or canonical identity cannot be established.
+|`Source admission failed` |`M1-ADM-1` |Selected-revision REST completeness evidence fails under <<selected-revision-completeness>>, an in-horizon path is invalid or missing, identities collide, or canonical identity cannot be established.
 |`Source admission failed` |`M1-ADM-3` |Required in-horizon kind data is missing, malformed, unknown, or contradictory.
 |`Source admission failed` |`M1-ADM-4` |Complete in-horizon candidate content is absent, invalid UTF-8, or contains `U+0000`.
 |`Repository/admission limit exceeded` |`RA-01` through `RA-09` |The winning RA dimension is one unit or more above its inclusive maximum.
@@ -497,14 +543,28 @@ unchanged:
 A late result from a replaced or cancelled attempt has no observable effect.
 
 [[deferred-limits]]
-== Downstream limit decisions and dispositions
+== RA timing disposition and downstream limit decisions
+
+RA-10 retrieval duration and RA-11 admission duration are explicitly
+unnecessary for M1. Neither has a value, unit, timer, clock, category, stable
+code, precedence, interval, cutoff, or boundary. The historical `60,000 ms`
+and `10,000 ms` proposals are rejected as uncalibrated network- and
+device-dependent outcomes. No RA-10/RA-11 T-1/T/T+1 scenario or timing-boundary
+table is approved.
+
+While no provider or browser failure and no user lifecycle action occurs,
+arbitrary elapsed time alone starts no timer, changes no state, and creates no
+category or code. A stalled request may remain `Loading` until provider or
+browser failure, user cancellation, replacement, or reload. Cancellation,
+replacement, and provider/browser failure still follow the accepted state and
+failure contracts. M1 makes no completion-time promise; ADR 0006 separately
+bounds data, request count and concurrency, and application-owned retained
+resources.
 
 This admission contract continues to approve no existence, value, unit,
-measurement, boundary, precedence, or diagnostic for these deferred choices:
+measurement, boundary, precedence, or diagnostic for these still-deferred
+choices:
 
-* RA-10 and RA-11 remain with
-  https://github.com/FelixGeisler/code-city/issues/449[#449] after
-  retrieval/admission mechanism evidence.
 * SP-01 through SP-04 remain with
   https://github.com/FelixGeisler/code-city/issues/450[#450] using the accepted
   metric contract and relevant topology, shell, and port evidence.
@@ -550,24 +610,28 @@ additional, or repeated mapping or malformed or unrepresentable metric fact is
 `City construction failed` / `M1-CITY-1`; a private implementation capacity is
 a conformance defect, not an undeclared limit.
 
-No strict RA > SP > CC taper is required. A still-deferred choice may be lower,
-equal, higher, or explicitly unnecessary only after the accepted decision in
-its owning issue. The human delegation and Requirements Engineer decision
-record in #444 supply #442's required evidence and decision for CC-01 through
-CC-08. https://github.com/FelixGeisler/code-city/issues/464[#464] must verify
-that delegation and each exercise, together with every still-deferred choice,
-before M1 implementation handoff.
+No strict RA > SP > CC taper is required. RA-10 and RA-11 are settled as
+unnecessary rather than as limits. A still-deferred SP, CC, or PR choice may be
+lower, equal, higher, or explicitly unnecessary only after the accepted
+decision in its owning issue. The human delegation and Requirements Engineer
+decision record in #444 supply #442's required evidence and decision for CC-01
+through CC-08. https://github.com/FelixGeisler/code-city/issues/464[#464] must
+verify that delegation and each exercise, ADR 0006's RA-10/RA-11 disposition,
+and every still-deferred choice before M1 implementation handoff.
 
 [[decision-boundary-source-limits]]
 == Decision boundary and evidence consumers
 
-This product contract remains topology-, component-, mechanism-, and
-technology-neutral and assigns no enforcement owner or location. It neither
+The RA-01 through RA-09 product rules remain topology-, component-, mechanism-,
+and technology-neutral and assign no enforcement owner or location. The narrow
+completeness outcomes in <<selected-revision-completeness>> normatively expose
+only behavior made necessary by accepted
+xref:architecture:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006];
+that ADR remains authoritative for the mechanism. This contract neither
 restates nor changes
 xref:architecture:adr/0001-core-dependency-boundary.adoc[Accepted ADR 0001].
 The architecture work in
 https://github.com/FelixGeisler/code-city/issues/446[#446],
-https://github.com/FelixGeisler/code-city/issues/449[#449],
 https://github.com/FelixGeisler/code-city/issues/450[#450],
 https://github.com/FelixGeisler/code-city/issues/451[#451],
 https://github.com/FelixGeisler/code-city/issues/461[#461],
@@ -575,14 +639,21 @@ https://github.com/FelixGeisler/code-city/issues/462[#462], and
 https://github.com/FelixGeisler/code-city/issues/463[#463] may consume accepted
 requirements without redefining them.
 
-https://github.com/FelixGeisler/code-city/issues/454[#454] validates the closed
-admission matrix and RA-01 through RA-09 boundaries and precedence.
+https://github.com/FelixGeisler/code-city/issues/454[#454] uses controlled
+transports to validate the closed admission matrix, RA-01 through RA-09
+boundaries and precedence, both REST cap-1/cap/cap+1 boundaries, incomplete
+inventory, bounded own-field and prototype-safe projection, lifecycle-phase
+eligibility checks, global request/workspace serialization, and complete
+application-owned cleanup. Maximum-cardinality evidence does not require 5,000
+live CDN calls.
 https://github.com/FelixGeisler/code-city/issues/457[#457] validates the exact
 CC-01 through CC-08 dispositions with construction geometry, layout, bounds,
 and `M1-CITY-1` evidence.
 https://github.com/FelixGeisler/code-city/issues/458[#458] validates complete
 presentation and the absence of labels, controls, and extra geometry.
 https://github.com/FelixGeisler/code-city/issues/460[#460] validates integrated
-approved failure, replacement, cancellation, identity-retention, and atomic
-publication behavior. #451 retains all CC-09/PR-01 decision and feasibility
-evidence.
+and hosted provider/browser failure, arbitrary elapsed-time inertness,
+replacement, cancellation, identity retention, atomic publication, no retry or
+persistence, unexpected traffic, and final-head REST/raw CORS renewal. #450
+retains SP-01 through SP-04 decision evidence; #451 retains CC-09 and PR-01
+decision and feasibility evidence.

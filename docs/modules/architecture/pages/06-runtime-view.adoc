@@ -9,11 +9,13 @@ ES-module worker used by this topology; it does not make that package current
 repository behavior. Vite development and preview servers are local tools, not
 runtime nodes.
 xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
-0005] accepts the exact anonymous revision-resolution REST boundary but does
-not make it current runtime traffic. Outside that decision, this view does not
-select a message or port schema, retrieval API or GitHub mechanism, broader
-worker lifecycle or bridge cancellation primitive, parser, analyzer, renderer,
-or full accepted-mechanism flow. That synthesis remains with
+0005] accepts the exact anonymous revision-resolution REST boundary.
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006] accepts the exact selected-revision retrieval/admission boundary. Neither
+decision makes product traffic current. Outside those decisions, this view does
+not select a message or port schema, broader worker lifecycle or bridge
+cancellation primitive, parser, analyzer, renderer, or full accepted-mechanism
+flow. That synthesis remains with
 https://github.com/FelixGeisler/code-city/issues/463[#463].
 
 == Runtime topology
@@ -86,25 +88,28 @@ output; current-session retention and empty reload reset.
 
 |Processing worker
 |Direct anonymous repository resolution; canonical identity validation;
-one-time immutable-revision selection and pinning; selected-revision retrieval;
-the sole admission path and actual-data limit enforcement; deterministic
-ordering and metrics; pure renderer-neutral city construction; transient
-confinement of provider records, paths, source, admitted modules, counters,
-metrics, and construction intermediates; stage termination and downstream
-suppression; resolution cancellation under ADR 0005 and later-stage network or
-processing cancellation where its owning mechanism permits it; release of
-transient processing references.
+one-time immutable-revision selection and pinning; ADR 0006's sequential
+selected-commit, recursive-root-tree, and canonical raw retrieval; the sole
+admission path and actual-data limit enforcement; deterministic ordering and
+metrics; pure renderer-neutral city construction; transient confinement of
+provider records, paths, source, admitted modules, counters, metrics, and
+construction intermediates; globally one retrieval/admission request and one
+raw/hash workspace; stage termination and downstream suppression; attempt
+cancellation, latest-only replacement settlement, and application-owned cleanup
+under ADRs 0005 and 0006; release of transient processing references.
 |===
 
 Repository data remains inert and is never executed, evaluated, imported, or
-dynamically loaded. For revision resolution, ADR 0005 fixes at most two native
-Fetch GETs, strict case-only identity and response validation, primitive-only
-evidence, immutable-SHA pinning, an inclusive 4 MiB bound for each `200` body,
-and application-controlled cleanup. It retrieves no source and makes no atomic
-or concurrent-provider-state warranty. UI rejection of a late result is
-authoritative even when underlying work could not be stopped. Any still-
-deferred downstream worker-side product limit is enforced only after its owning
-issue accepts its exact value and semantics; browser memory, request behavior,
+dynamically loaded. ADR 0005 fixes at most two native Fetch GETs, strict
+case-only resolution evidence, immutable-SHA pinning, inclusive 4 MiB bodies,
+and application-controlled cleanup. ADR 0006 then fixes two capped REST GETs,
+no more than `5,000` sequential raw GETs, bounded own-field/prototype-safe
+projection, exact Git blob comparison, one `4,194,317`-byte raw/hash workspace,
+and complete cleanup before another request or replacement. Neither ADR makes
+a malicious-provider, atomic-provider-state, latency, or compatibility
+warranty. UI rejection of a late result remains authoritative. Any
+still-deferred downstream worker-side product limit is enforced only after its
+owner accepts its exact value and semantics; browser memory, request behavior,
 and renderer capacity create no undeclared product limit.
 
 == Enforcement placement
@@ -113,9 +118,12 @@ and renderer capacity create no undeclared product limit.
 |===
 |Rules |Runtime boundary |Owning decision
 
-|RA-01 through RA-09 and any later accepted RA-10/RA-11
+|RA-01 through RA-09 and selected-revision completeness
 |Worker retrieval/admission boundary
-|https://github.com/FelixGeisler/code-city/issues/449[#449]
+|xref:requirements:06-source-admission-and-limits.adoc[] and
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006]; evidence https://github.com/FelixGeisler/code-city/issues/454[#454] and
+https://github.com/FelixGeisler/code-city/issues/460[#460]
 
 |SP-01 through SP-04
 |Worker analysis boundary
@@ -140,9 +148,12 @@ and final-head execution in
 https://github.com/FelixGeisler/code-city/issues/460[#460]
 |===
 
-RA-10/RA-11, SP-01 through SP-04, CC-09, and PR-01 retain no value, unit,
-interval, threshold, precedence, or diagnostic until their owning issues accept
-one.
+RA-10 retrieval duration and RA-11 admission duration are explicitly
+unnecessary for M1: they have no value, unit, timer, clock, category, code,
+interval, cutoff, boundary, or precedence. A request may remain `Loading` until
+provider/browser failure, cancellation, replacement, or reload; elapsed time
+alone changes nothing. SP-01 through SP-04, CC-09, and PR-01 remain deferred
+without a value, unit, interval, threshold, precedence, or diagnostic.
 
 == Generic handoffs
 
@@ -179,11 +190,12 @@ available.
 
 |Worker and Public GitHub
 |Direct anonymous resolution and selected-revision retrieval.
-|ADR 0005 fixes resolution at `https://api.github.com`: metadata first, then
-the canonical repository's one-item commit list with omitted `sha`, exact
-headers and Fetch options, redirect refusal, body-free status classification,
-bounded response handling, and attempt-signal cleanup. Retrieval origins,
-requests, limits, and mechanisms remain with #449.
+|ADR 0005 fixes resolution at `https://api.github.com`. ADR 0006 consumes the
+resulting immutable tuple, requests its commit object and exact recursive root
+tree at `https://api.github.com`, then requests in-horizon candidate bytes
+sequentially from `https://raw.githubusercontent.com`. Exact options, URL and
+identity checks, caps, canonical order, global no-overlap, no retry/fallback,
+and current-attempt cleanup apply.
 |===
 
 Raw or normalized source, repository entry content, admitted modules,
@@ -218,6 +230,34 @@ mechanism/port synthesis:
   or publishes no city. Every stale, replaced, cancelled, partial, or late
   result is rejected.
 
+== Selected-revision retrieval/admission sequence
+
+Within step 5, ADR 0006 fixes this worker-side order:
+
+. Consume only ADR 0005's canonical owner/repository URL and selected full
+  lowercase commit. Never resolve another ref.
+. Use the single global request slot for the selected-commit REST GET; validate
+  the normalized selected identity and project its full root-tree identity.
+. Use that slot for the exact recursive-root-tree REST GET. Enforce the 4 MiB
+  and 8 MiB REST caps, complete-inventory rule, own-field primitive projection,
+  #442 entry/path/metadata horizons, and candidate-SHA projection. Provider
+  tree representations are gone before raw retrieval.
+. In canonical unsigned-UTF-8 candidate order, use the same slot for at most one
+  raw GET per candidate and at most `5,000` per journey. While the content
+  horizon remains open, validate the expected blob SHA, stream into the single
+  global workspace, apply RA-04/RA-05, compare exact Git blob identity, then
+  strictly decode and normalize once only after agreement.
+. Return one complete ordered admitted-module set or one accepted terminal
+  result. A failure cancels unread work where feasible, cleans application-owned
+  state, starts no later request or stage, and publishes no admitted set.
+
+Each REST/raw request, tree projection, hash, decode, and normalization phase
+uses ADR 0006's explicit eligibility checks and release order. Globally no
+replacement or other attempt starts retrieval/admission work until the old
+request, read/cancel operations, non-abortable JSON/digest/decode work, reader
+lock, workspace, inventory, and unpublished output have settled and been
+cleaned. Submissions waiting during settlement coalesce to the latest only.
+
 == Replacement, cancellation, failure, and cleanup
 
 === Replacement or cancellation
@@ -228,13 +268,16 @@ mechanism/port synthesis:
   the new submission before its validation result.
 . Generic lifecycle control may tell the worker that the attempt is no longer
   current. This view selects no bridge message, port, or broader lifecycle
-  primitive; ADR 0005's current-attempt `AbortSignal` is limited to resolution.
+  primitive; ADRs 0005 and 0006 require the current-attempt `AbortSignal` for
+  their exact resolution and retrieval Fetches.
 . The worker stops feasible network and processing work where the accepted
   mechanisms permit it, suppresses every downstream stage, and releases
-  transient references for the old attempt. ADR 0005 specifically requires
-  aborting the resolution attempt signal, feasible response-reader
-  cancellation, settled cleanup, and suppression of request two or downstream
-  work.
+  transient references for the old attempt. ADRs 0005 and 0006 require signal
+  abort, feasible active-reader cancellation, handled settlement and
+  rejections, reader-lock release in `finally`, post-non-abortable eligibility
+  checks, complete application-owned cleanup, and suppression of every later
+  request or stage. ADR 0006 also prevents replacement overlap and starts only
+  the latest submission after old settlement.
 . Any tied or late identity, failure, or scene outcome is ignored. UI
   ineligibility remains authoritative even if underlying work completes.
 
@@ -252,9 +295,12 @@ After a successful complete-scene handoff, worker processing intermediates do
 not become retained product state and are released. Reload discards all
 application-managed session state and starts a fresh empty session.
 
-Cleanup has no accepted latency or secure-erasure promise. This view does not
-redefine provider, browser, operating-system, network, or platform caching or
-garbage-collection internals.
+Cleanup has no accepted latency or secure-erasure promise. Cancellation and
+replacement revoke publication eligibility immediately but promise no
+computation or network stop time. A stalled old settlement may delay replacement
+provider work without creating an RA-10/RA-11 timing failure. This view does
+not redefine provider, browser, operating-system, network, or platform caching
+or garbage-collection internals.
 
 == Feasibility and deferred synthesis
 
@@ -269,9 +315,12 @@ cleanup, compatibility, security, or privacy warranties. #453 revalidates the
 pin and endpoint contract before implementation, and #460 renews hosted-origin
 evidence on the final head.
 
-#449 must separately establish the applicable documentary/read-only feasibility
-for selected-revision retrieval. If retrieval cannot satisfy ADR 0002, or if
-ADR 0005's renewal/stop conditions fail, implementation stops and
+ADR 0006 records #449's dated documentary/read-only selected-revision
+feasibility for exact-origin REST/tree and simple raw GETs, immutable-SHA bytes,
+Git blob and LFS behavior, Web Crypto, and the codeload rejection. The evidence
+is point-in-time only. #454 revalidates before implementation and #460 renews
+hosted final-head REST/raw evidence. On ADR 0005 or ADR 0006's stop condition,
+implementation stops; #449 is reopened for retrieval drift and
 https://github.com/FelixGeisler/code-city/issues/446[#446] is reopened when
 topology feasibility is affected. No proxy, relay, backend, serverless
 function, credential, persistent cache, opaque unbounded response,
@@ -287,10 +336,10 @@ their successful-path integration, and #460 their renewed final-head production
 evidence; no dependency, source, configuration, or production artifact exists
 yet.
 
-Selected-revision retrieval, parser/analyzer, renderer, message and port
-schemas, concrete source mapping, broader worker and bridge primitives, Pages
-workflow and route, and the full success/failure/replacement/cancellation flow
-remain with their stated owners in #449 through #460 and #463.
+Parser/analyzer and renderer mechanisms, message and port schemas, concrete
+source mapping, broader worker and bridge primitives, Pages workflow and route,
+and the complete cross-mechanism success/failure/replacement/cancellation
+synthesis remain with their stated owners in #450 through #460 and #463.
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains authoritative
-for the outer source-dependency boundary, and ADR 0005 remains authoritative
-for resolution only.
+for the outer source-dependency boundary, ADR 0005 for resolution, and ADR 0006
+for selected-revision retrieval/admission.

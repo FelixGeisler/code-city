@@ -197,14 +197,26 @@ This is an accepted documented decision, not current product behavior;
 https://github.com/FelixGeisler/code-city/issues/453[#453] owns implementation,
 #459 packaged-path evidence, and #460 final hosted renewal.
 
-Content retrieval and admission, analysis, and visualization mechanisms and
-technologies owned by https://github.com/FelixGeisler/code-city/issues/449[#449]
-through https://github.com/FelixGeisler/code-city/issues/451[#451] remain
-*deferred/not accepted here*. Neither this page nor ADR 0005 selects a Pages
-source, action, workflow or deployment mechanism, application route, retrieval
-endpoint or request policy, parser or analyzer, renderer, exact message or port
-schema, concrete package or source map, broader worker lifecycle or bridge
-cancellation primitive, or deferred threshold.
+Bounded immutable selected-revision retrieval and sole admission, owned by
+https://github.com/FelixGeisler/code-city/issues/449[#449], are accepted in
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006]. The worker uses the selected commit's validated root tree and sequential
+immutable-commit raw bytes, exact bounded projection and Git-blob identity,
+global request/workspace serialization, and the #442 horizons to create one
+complete ordered admitted-module set or one terminal result. RA-10 retrieval
+duration and RA-11 admission duration are explicitly unnecessary; M1 makes no
+elapsed-time promise. #452 owns edge-type conformance, #454 controlled
+implementation evidence, #459 the packaged successful path, #460 final hosted
+renewal, and #463/#464 synthesis and readiness evidence.
+
+Analysis and visualization mechanisms and technologies owned by
+https://github.com/FelixGeisler/code-city/issues/450[#450] and
+https://github.com/FelixGeisler/code-city/issues/451[#451] remain deferred.
+Neither this page nor ADR 0006 selects a Pages source, action, workflow or
+deployment mechanism, application route, parser or analyzer, renderer, exact
+message or port schema, concrete package or source map, broader worker
+lifecycle or bridge cancellation primitive, or remaining deferred SP, CC, or
+PR threshold.
 
 https://github.com/FelixGeisler/code-city/issues/463[#463] and
 https://github.com/FelixGeisler/code-city/issues/464[#464] are later synthesis

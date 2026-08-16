@@ -1,1 +1,37 @@
 = 8. Cross-cutting Concepts
+
+== Bounded untrusted selected-revision retrieval and admission
+
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006] consumes only ADR 0005's immutable canonical repository/full-commit
+tuple. Provider objects, metadata, paths, and bytes remain inert and untrusted:
+required JSON evidence must be own fields projected one primitive at a time;
+prototype-named additive fields are ignored; path-keyed state is prototype-free;
+and no provider locator, source, or repository-derived value is executed,
+logged, used as markup, or transferred to the UI.
+
+Identity and transport spelling remain distinct. Segment-wise NFC canonical
+paths own collision, horizon, and unsigned-UTF-8 ordering semantics, while the
+validated raw path alone forms an independently percent-encoded
+immutable-commit raw URL. Required commit, root-tree, and in-horizon candidate blob IDs
+are normalized full 40-hex identities at their specified horizons. Raw bytes
+are decoded only after the exact Git blob SHA-1 agrees. That comparison detects
+inconsistent or transformed bytes; it is not collision resistance or a
+malicious-provider security warranty.
+
+Every application reservoir is explicit and bounded: one capped REST
+transformation; at most `10,001` primitive projected inventory records; only
+RA-bounded unpublished modules; and, globally across attempts, one active
+retrieval/admission request plus one exact `4,194,317`-byte raw/hash workspace.
+RA-04+1 is counted without storage or digest, tree provider representations are
+gone before raw retrieval, and each raw/hash/decoded temporary is gone before
+the next request. Retrieval/admission is the sole creator of one complete
+ordered admitted-module set or one terminal result.
+
+Cancellation or replacement revokes publication eligibility immediately.
+Application-owned fetch, reader, response, provider-object, inventory,
+workspace, decoded, and unpublished-output references are settled and removed
+in ADR 0006's phase order before only the latest replacement may begin. The UI
+publication gate rejects every late outcome. This promises neither cleanup or
+replacement latency, secure erasure, garbage-collection timing, immediate
+network stop, worker isolation, nor an RA-10/RA-11 elapsed-time outcome.

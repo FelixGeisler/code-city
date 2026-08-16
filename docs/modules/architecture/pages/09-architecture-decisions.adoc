@@ -29,3 +29,12 @@
   delegation recorded in #444. The decision needs no later generic human
   acceptance; #453 owns implementation, #459 packaged-path evidence, and #460
   renewed final-head hosted evidence.
+* xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006: Bounded selected-revision retrieval via GitHub tree and raw content]
+  is `Accepted`. https://github.com/FelixGeisler/code-city/issues/449[#449]
+  records the clear Software Architect recommendation, incorporated Security
+  Reviewer controls, and Requirements Engineer acceptance under #444's human
+  delegation for accepted issue-body SHA-256
+  `94498dc88433cbada4fd71223374c66c8e6ae7ba69c83a11045f199989a987dd`.
+  The decision needs no later generic human-acceptance gate; #454 owns focused
+  mechanism evidence, #459 packaged-path evidence, #460 final hosted renewal,
+  and #463/#464 synthesis and readiness evidence.
