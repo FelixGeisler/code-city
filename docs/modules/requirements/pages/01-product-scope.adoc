@@ -16,8 +16,9 @@ xref:06-source-admission-and-limits.adoc[] is authoritative. For lexical SLOC,
 executable-unit, complexity, canonical metric facts, and the exact
 pinned-grammar acceptance boundary,
 xref:08-fixed-metric-semantics.adoc[] is authoritative. For exact building
-geometry and color, city content, layout and bounds, the fixed initial view,
-interaction policy, and construction/presentation failure,
+geometry and color, city content, layout and bounds, the fixed view,
+interaction policy, source-free presentation boundary, passive resize, and
+initial or post-`Success` construction/presentation failure,
 xref:10-fixed-city-layout-and-presentation.adoc[] is authoritative.
 
 == Included in M1
@@ -31,9 +32,11 @@ M1 includes only the smallest complete path needed for that outcome:
 * deterministic admission and non-executing static measurement of the
   supported JavaScript/TypeScript module family with the pinned Tree-sitter
   grammars;
-* one deterministic city and its fixed initial presentation; and
-* observable initial, loading, success, failure, replacement, and cancellation
-  behavior with no stale or partial city.
+* one deterministic city presented through the accepted fixed browser-native
+  WebGL2 mechanism, including passive resize; and
+* observable initial, loading, success, failure, replacement, cancellation,
+  current-context-loss, and required-resize-failure behavior with no stale or
+  partial city.
 
 The exact source-admission and approved repository/intake limit rules are in
 xref:06-source-admission-and-limits.adoc[]. The exact fixed metric and grammar
@@ -41,8 +44,11 @@ rules are in xref:08-fixed-metric-semantics.adoc[]. The exact fixed city,
 layout, and initial presentation rules are in
 xref:10-fixed-city-layout-and-presentation.adoc[]. SP-01 through SP-04 are
 unnecessary: every module and byte permitted by RA-07 through RA-09 reaches
-analysis and elapsed analysis time creates no outcome. Visualization technology
-and construction/presentation duration choices remain separate contracts.
+analysis and elapsed analysis time creates no outcome. CC-09 and PR-01 are also
+explicitly unnecessary: elapsed construction or presentation time alone
+creates no outcome. The accepted visualization mechanism is defined by
+xref:architecture:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR
+0008].
 
 [[non-goals]]
 == Non-goals
@@ -79,10 +85,14 @@ semantics are specified by xref:08-fixed-metric-semantics.adoc[] under
 https://github.com/FelixGeisler/code-city/issues/443[#443]. Fixed city, layout,
 and initial-presentation semantics are specified by
 xref:10-fixed-city-layout-and-presentation.adoc[] under
-https://github.com/FelixGeisler/code-city/issues/444[#444]. The provider/API and renderer mechanisms, runtime topology and trust placement,
-port/component ownership, enforcement location, and cancellation/cleanup
-ownership remain outside this page. The accepted static-syntax mechanism and
-phase lifecycle are fixed by
+https://github.com/FelixGeisler/code-city/issues/444[#444]. Provider/API
+details, runtime topology and trust placement, port/component ownership,
+enforcement location, and executable cancellation/cleanup mechanisms remain
+outside this page. Browser-native WebGL2 and its fixed
+presentation constraints are accepted in
+xref:architecture:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR
+0008] without changing the product facts owned by this module. The accepted
+static-syntax mechanism and phase lifecycle are fixed by
 xref:architecture:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007].
 Exact downstream owners are linked from the authoritative contracts and
 xref:04-functional-requirements.adoc#decision-boundary[Decision boundary].

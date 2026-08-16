@@ -2,8 +2,11 @@
 
 These closed tables and examples are inert documentation for reviewing
 xref:10-fixed-city-layout-and-presentation.adoc[]. They are not executable
-fixtures, tests, renderer probes, screenshots, architecture choices, or
-assignments of a component, port, object, or enforcement location.
+fixtures, tests, renderer probes, or screenshots. They apply the fixed
+presentation boundary accepted in
+xref:architecture:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR
+0008] without changing its architecture ownership or selecting a test
+technology.
 
 The contract is acceptable only when all of these gates hold:
 
@@ -21,8 +24,9 @@ The contract is acceptable only when all of these gates hold:
   tolerance;
 * each construction or presentation failure has only its accepted category and
   code and preserves the #441 state invariants;
-* no example selects visualization technology, renderer objects, architecture,
-  labels, exploration, or an executable evidence mechanism; and
+* every presentation example uses only ADR 0008's accepted browser-native
+  WebGL2 mechanism and adds no renderer object to canonical scene equality,
+  label, exploration feature, fallback, or executable evidence mechanism; and
 * `npm run docs:build` succeeds.
 
 [[required-city-fixture]]
@@ -212,13 +216,70 @@ an inert key.
 |SCENE-17 |Identity used as a material or shader name |Absent; identity remains
 an inert key.
 |SCENE-18 |Mesh, triangle, draw-call, lighting, background, antialiasing,
-device-color-management, or camera-object fact |Not a canonical fact. This
-contract neither selects nor tests a renderer implementation object.
+device-color-management, or camera-object fact |Not a canonical fact. ADR 0008
+fixes the renderer realization separately; its implementation facts never
+enter canonical-scene equality.
 |===
 
 The canonical scene contains no unlisted product element. SCENE-18 excludes
-implementation details from semantic equality without selecting whether or how
-a future accepted renderer realizes the canonical facts.
+ADR 0008 implementation details from canonical-scene equality without making
+them optional.
+
+[[source-free-handoff-review]]
+== Source-free handoff and failure-boundary review
+
+[cols="2,5,6",options="header"]
+|===
+|ID |Defensive handoff condition |Only accepted result
+
+|HANDOFF-01
+|Every required root, collection, building, vector, color, bounds, and view
+field is an own data property of the expected primitive or bounded collection
+type; `N` equals the unique complete building count in `1..4,000`; all #444
+facts agree.
+|The complete scene may be source-freely projected before WebGL staging.
+
+|HANDOFF-02
+|A required field is missing, inherited instead of own, accessor-backed,
+sparse, wrong-count, wrong-typed, non-finite, unsafe, duplicate, inconsistent,
+or unrepresentable.
+|No WebGL resource is created; local staging is cleaned; only
+`City construction failed` / `M1-CITY-1` propagates.
+
+|HANDOFF-03
+|A descriptor lookup or other defensive model-validation operation throws.
+|Treat it as the same upstream construction-contract breach; expose no raw
+exception or diagnostic and create no WebGL resource.
+
+|HANDOFF-04
+|An additional own noncanonical field has a value or accessor.
+|Ignore it without evaluating it merely for diagnostics or making it control
+state. It cannot authorize an additional canonical mapping or collection
+entry.
+
+|HANDOFF-05
+|A building identity equals `__proto__`, `constructor`, `prototype`, markup, a
+URL-like value, or another hostile source-derived string.
+|Keep it only in an array and `Map` or equivalent prototype-safe map. It never
+becomes a normal-object key, DOM or WebGL name/text/attribute/label, shader
+input, resource locator, or log content.
+
+|HANDOFF-06
+|A malformed handoff reaches the nonclassifying bridge or UI coordinator.
+|The bridge transports the fixed `M1-CITY-1` outcome unchanged; it does not
+classify an exception. Only the UI coordinator may commit visible `Failure`.
+
+|HANDOFF-07
+|An already-valid complete scene passed every defensive check and a required
+canvas/context/GPU/shader/upload/draw/framing/resize/context operation fails.
+|Only `Presentation failed` / `M1-PRES-1`; no failure is reclassified across
+the boundary.
+|===
+
+Projection never repairs, reorders, clamps, truncates, reconstructs, or
+reclassifies canonical data. The presentation handoff contains no repository
+source, admitted module, parser/analyzer object, metric intermediate, partial
+scene, repository URL, or selected commit ID.
 
 [[interaction-exclusions]]
 == Closed initial-presentation and interaction table
@@ -241,12 +302,137 @@ clip-plane mechanism stay noncanonical.
 |VIEW-10 |Click |Absent.
 |VIEW-11 |Selection |Absent.
 |VIEW-12 |Camera controls |Absent.
-|VIEW-13 |Passive resize to another positive aspect |Reapply only the fit formula;
-do not rebuild, reorder, animate, or persist the city.
+|VIEW-13 |Passive resize to another positive integer host size |Use the same
+canvas, context, program, VAO, and buffers; verify drawing-buffer equality;
+recompute only aspect-dependent projection and viewport; reapply state, clear,
+and draw exactly once without rebuild, reupload, reorder, animation, timer,
+debounce, retry, or persistence.
+|VIEW-14 |Unchanged observed host dimensions |No draw.
+|VIEW-15 |Platform batches intermediate resize reports |Accept batching and use
+the latest reported host size; make no promise to draw every intermediate size.
 |===
 
 VIEW-13 is a passive presentation response, not exploration or a user-supplied
 configuration value.
+
+[[webgl-review]]
+== Fixed WebGL2 realization review
+
+[cols="2,5,7",options="header"]
+|===
+|ID |Compared mechanism fact |Required result
+
+|WEBGL-01 |Unit-prism position and index data |Exactly eight ordered corners,
+24 `float32` / 96 position bytes, and ADR 0008's exact 36 outward-CCW `uint8`
+indices / 36 bytes.
+
+|WEBGL-02 |Per-instance data |One interleaved buffer, 28-byte stride: target-
+relative minimum at location `1`/offset `0` as three `float32`; dimensions at
+location `2`/offset `12` as three `float32`; normalized RGBA bytes at location
+`3`/offset `24`. Exactly `112,000` bytes at `N=4,000`.
+
+|WEBGL-03 |Active resources and draw |Exactly one linked program, one VAO, one
+position buffer, one index buffer, one instance buffer, and temporarily the two
+required shaders. Initial or resize drawing calls exactly
+`drawElementsInstanced(TRIANGLES, 36, UNSIGNED_BYTE, 0, N)` once.
+
+|WEBGL-04 |Shaders |The two ADR 0008 ASCII/LF/final-LF GLSL ES 3.00 literals
+byte-for-byte, with no interpolation, define, variant, source-derived text,
+lighting, normal, texture, tone map, fog, or color interpolation.
+
+|WEBGL-05 |Canvas and context request |One detached canvas; only `"webgl2"`;
+all ten exact requested options; behavior-critical returned attributes equal;
+default sRGB; effective DPR `1`; positive integer backing size exactly equals
+host `clientWidth`/`clientHeight`.
+
+|WEBGL-06 |Drawing-buffer dimensions |Read both properties after context
+creation and every backing-size change. Each exactly equals the corresponding
+positive integer host/client and canvas backing dimension before draw or
+publication. A mismatch is `M1-PRES-1`, never an assumption, clamp, or adapted
+backing size.
+
+|WEBGL-07 |Draw state and API |Every draw re-establishes ADR 0008's exact white
+clear, depth, color/depth masks, culling, disabled states, verified viewport,
+clear mask, program/VAO/uniform, and one draw. Property and method use equals
+only ADR 0008's closed whitelist; no extension, log, diagnostic, readback,
+framebuffer, texture, timer, sync, query, telemetry, or generic state query.
+
+|WEBGL-08 |Camera and float representation |Use ADR 0008's exact `E_d`, world-
+camera, near/far, orthographic and target-relative matrix mechanism. Canonical
+scalars remain JavaScript `Number`; only #444's camera tolerance applies.
+Full-envelope integer/half-integer values satisfy the documented `<2^24` and
+`<2^23` proof before `float32` upload; screenshot equality remains excluded.
+
+|WEBGL-09 |Object and draw exclusions |No per-building WebGL/DOM object or
+matrix, normal, texture, framebuffer, material, scene graph, cache, second
+program, second VAO, extra canvas/context, or second draw call.
+|===
+
+[[atomic-presentation-review]]
+== Atomic staging, resize, context loss, and cleanup
+
+[source,gherkin]
+----
+Scenario: Observer setup and the final host-size check precede publication
+  Given a complete current-generation canonical scene passes defensive validation
+  When the presentation candidate is staged
+  Then its canvas remains detached while the context, fixed resources, and first draw complete
+  And one passive once-only context-loss listener is already registered
+  And one asynchronous generation-guarded ResizeObserver is constructed
+  And observe(host) succeeds while the canvas remains detached
+  And the host's positive integer client dimensions are reread immediately before commit
+  And any backing-size difference causes verified drawing-buffer equality,
+      projection/viewport recomputation, state reapplication, and exactly one detached redraw
+  And post-operation checks and current-attempt eligibility pass
+  And only then one synchronous no-yield commit publishes canvas, identity, and Success
+----
+
+Constructor or `observe` failure disconnects any constructed observer and
+disposes the candidate as `M1-PRES-1`; no canvas or city is published. Observer
+setup and final reread through commit have no yield. No timer, animation frame,
+microtask yield, retry, debounce, or network operation is added. The observer
+callback is asynchronous, generation-guarded, cannot publish, and does not
+replace the final reread.
+
+[source,gherkin]
+----
+Scenario Outline: A current published presentation fails closed
+  Given Success shows the current identity and complete WebGL city
+  And the current input draft may contain a post-submit edit
+  When <event> occurs
+  Then the UI synchronously enters Failure
+  And the category is "Presentation failed" and the code is "M1-PRES-1"
+  And the city and canvas are removed and the presentation is disposed
+  And the current canonical repository URL, full commit ID, and draft remain
+  And no restore, retry, replacement, alternate renderer, or fallback starts
+  And editing alone cannot leave Failure
+
+  Examples:
+    | event                                                    |
+    | the current published WebGL context is lost              |
+    | a required positive-size passive-resize presentation fails |
+----
+
+The loss listener never calls `preventDefault`; there is no restored listener,
+restoration, extension-induced loss, retry, or fallback. A stale queued loss or
+resize callback performs only local idempotent disposal and changes no visible
+state.
+
+[source,gherkin]
+----
+Scenario: Presentation resources are disposed exactly once
+  Given candidate or published presentation resources exist
+  When failure, replacement, cancellation, reload, or post-Success loss disposes them
+  Then the ResizeObserver is disconnected
+  And the loss listener and canvas are removed
+  And each live shader, program, buffer, and VAO is deleted exactly once
+  And adapter-owned typed data and references are cleared
+  And a context already lost adds no driver-release claim
+----
+
+Cleanup makes no secure-erasure, immediate network/computation stop, driver-
+release latency, garbage-collection timing, physical-browser teardown, or
+operating-system-process teardown promise.
 
 [[cc-review-table]]
 == Closed CC and PR disposition review
@@ -265,14 +451,19 @@ bounds and view descriptors are not elements; no independent cap.
 |CC-06 |X coordinate bound |Exact derived X bound; no independent maximum.
 |CC-07 |Y coordinate bound |Exact derived Y bound; no independent maximum.
 |CC-08 |Z coordinate bound |Exact derived Z bound; no independent maximum.
-|CC-09 |City-construction duration |No value, interval, threshold, or limit
-result here; #451 owns the decision.
-|PR-01 |Presentation duration |No value, interval, threshold, or limit result
-here; #451 owns the decision.
+|CC-09 |City-construction duration |Explicitly unnecessary: no value, unit,
+timer, clock, deadline, interval, cutoff, category, code, precedence,
+threshold, boundary, or T-1/T/T+1 scenario.
+|PR-01 |Presentation duration |Explicitly unnecessary: no value, unit, timer,
+clock, deadline, interval, cutoff, category, code, precedence, threshold,
+boundary, or T-1/T/T+1 scenario.
 |===
 
 A missing, additional, or repeated mapping is `M1-CITY-1`, not a CC limit. A
-private capacity cannot add a lower cap or another code.
+private capacity cannot add a lower cap or another code. Arbitrary elapsed
+construction or presentation time alone leaves the attempt `Loading`; actual
+failures retain their accepted stage code. M1 makes no completion, startup,
+frame-time, throughput, latency, or preemption promise.
 
 [[precision-review]]
 == Precision and semantic repeatability
@@ -317,21 +508,40 @@ absent from every expected result.
 |FAIL-CITY-06 |Missing, additional, or repeated model mapping |`City construction failed` |`M1-CITY-1`
 |FAIL-CITY-07 |Complete exact model cannot be produced |`City construction failed` |`M1-CITY-1`
 |FAIL-CITY-08 |Arithmetic or model corruption |`City construction failed` |`M1-CITY-1`
-|FAIL-PRES-01 |A valid complete canonical model cannot instantiate every
-building |`Presentation failed` |`M1-PRES-1`
-|FAIL-PRES-02 |The complete required initial presentation cannot be established
+|FAIL-CITY-09 |A required handoff field is inherited, accessor-backed, sparse,
+wrong-count, wrong-typed, non-finite, unsafe, inconsistent, or unrepresentable
+|`City construction failed` |`M1-CITY-1`
+|FAIL-CITY-10 |A defensive descriptor or model-validation operation throws
+|`City construction failed` |`M1-CITY-1`
+|FAIL-PRES-01 |After valid-model validation, fixed GPU representation or
+allocation fails |`Presentation failed` |`M1-PRES-1`
+|FAIL-PRES-02 |Canvas/context creation, returned attributes, shader/program,
+upload, draw, or framing fails |`Presentation failed` |`M1-PRES-1`
+|FAIL-PRES-03 |Initial or changed host dimensions are non-positive or
+non-integer |`Presentation failed` |`M1-PRES-1`
+|FAIL-PRES-04 |A drawing-buffer dimension differs from host/client or backing
+size |`Presentation failed` |`M1-PRES-1`
+|FAIL-PRES-05 |A WebGL API throws, an error is observed, or context is lost
+before publication |`Presentation failed` |`M1-PRES-1`
+|FAIL-PRES-06 |`ResizeObserver` construction or `observe(host)` fails before
+publication |`Presentation failed` |`M1-PRES-1`
+|FAIL-PRES-07 |A required passive resize throws, observes mismatch/error/loss,
+or cannot complete its one draw |`Presentation failed` |`M1-PRES-1`
+|FAIL-PRES-08 |The current published context is lost after `Success`
 |`Presentation failed` |`M1-PRES-1`
 |===
 
-The construction/presentation boundary in FAIL-CITY-06 and FAIL-PRES-01 is
-observable: an invalid or incomplete canonical model is construction failure;
-failure to adapt an already valid complete model into all required presented
-buildings is presentation failure. The examples do not assign either stage to
-a component or port.
+The construction/presentation boundary is observable: every invalid,
+incomplete, unsafe, inconsistent, or throwing canonical-model validation is
+construction failure before WebGL; `M1-PRES-1` starts only after an already-
+valid complete model passes defensive validation. The bridge never classifies
+or reclassifies the outcome, and the UI coordinator alone commits visible
+state.
 
 Every row has all of these shared invariants:
 
-* no module path, raw fact, or implementation diagnostic is exposed;
+* no module path, raw fact, raw exception, WebGL log, or implementation
+diagnostic is exposed or logged;
 * no partial model, partial scene, skipped or clamped building, fallback
   layout/palette/camera, prior city, stale city, or late result is visible;
 * after selection, only the current canonical repository URL and full lowercase
@@ -355,7 +565,8 @@ Scenario: A valid accepted input exceeds a private implementation capacity
 ----
 
 This scenario creates no capacity value, threshold, boundary, or permission for
-a safeguard. CC-09 and PR-01 remain exclusively deferred to #451.
+a safeguard. CC-09 and PR-01 are explicitly unnecessary under #451 and ADR
+0008.
 
 [[acceptance-evidence-allocation]]
 == Evidence traceability
@@ -371,23 +582,28 @@ focused construction failure
 |Exact pure-construction and `M1-CITY-1` evidence without changing the contract
 or selecting visualization technology.
 
-|Every prism/color/transform adaptation, initial fit, passive resize, inert
-identity, absence of extra scene/interaction items, semantic repeatability, and
-focused presentation failure
+|Every fixed prism/color/target-relative transform, buffer, shader, context,
+API/state, camera, float, drawing-buffer, initial/resize draw, inert identity,
+atomic staging, observer/final-reread order, context loss, cleanup, absence,
+semantic repeatability, and focused presentation failure
 |https://github.com/FelixGeisler/code-city/issues/458[#458]
-|Complete presentation and `M1-PRES-1` evidence without pixel hashes or added
-labels, controls, or geometry.
+|Complete source-free WebGL2 and `M1-PRES-1` evidence without malformed data
+reaching WebGL, model-failure reclassification, pixel hashes, renderer
+packages, fallbacks, added labels, controls, or geometry.
 
-|Integrated categories/codes, current-identity retention, replacement,
-cancellation, atomic success, and no stale, partial, or late publication
+|Integrated categories/codes, nonclassifying propagation, current-identity
+retention, replacement, cancellation, post-`Success` failure, cleanup, atomic
+success, and no stale, partial, or late publication
 |https://github.com/FelixGeisler/code-city/issues/460[#460]
-|Observable #441 state evidence across the accepted stages.
+|Observable #441 state and final hosted drawing-buffer/context-loss evidence
+across the accepted stages.
 
-|Visualization technology and CC-09/PR-01 feasibility and decisions
+|Accepted visualization technology, CC-09/PR-01 disposition, feasibility,
+renewal, and stop rules
 |https://github.com/FelixGeisler/code-city/issues/451[#451]
-|Technology and duration decisions only; the accepted city contract and these
-inert examples cannot be altered.
+|ADR 0008 documentary evidence only; realization remains with #458 and final
+renewal with #460.
 |===
 
-No additional product, architecture, technology, or evidence-mechanism decision
-is assigned by these examples.
+No additional product, architecture, technology, fallback, or evidence-
+mechanism decision is assigned by these examples.

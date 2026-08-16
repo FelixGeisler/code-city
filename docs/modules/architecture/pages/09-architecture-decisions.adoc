@@ -51,3 +51,17 @@
   lifecycle evidence, and #463/#464 synthesis and readiness evidence. The
   xref:adr/0007-static-syntax-evidence-appendix.adoc[inert appendix] records the
   canonical WASM inventory without granting parser API permission.
+* xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008: Browser-native WebGL2 instanced city presentation]
+  is `Accepted`. https://github.com/FelixGeisler/code-city/issues/451[#451]
+  records the clear Software Architect recommendation, incorporated Security
+  Reviewer constraints, and Requirements Engineer acceptance under #444's
+  human delegation for accepted issue-body SHA-256
+  `617c8eb9ff5671ca399eb3ed4f0656e76feb06c211fe880bdb399011826d3126`.
+  The decision needs no later generic human-acceptance gate. It keeps city
+  construction renderer-neutral, confines fixed raw WebGL2 to the UI-main
+  presentation edge, resolves CC-09/PR-01 as unnecessary, and fixes source-
+  free projection, failure ownership, resources, shaders, context, API/state,
+  camera/float proof, atomic staging, resize, context loss, cleanup, evidence,
+  and stop rules. #452 remains renderer-free, #457 owns canonical construction
+  and float-bound renewal, #458 owns all renderer realization, #459 integrates,
+  #460 renews final hosted evidence, and #463/#464 own synthesis/readiness.

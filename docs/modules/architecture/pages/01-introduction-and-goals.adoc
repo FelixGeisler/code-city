@@ -13,13 +13,14 @@ redefine them.
 
 == Prioritized architecture drivers
 
-Every accepted requirement in
+The accepted requirements in
 https://github.com/FelixGeisler/code-city/issues/441[#441],
 https://github.com/FelixGeisler/code-city/issues/442[#442],
-https://github.com/FelixGeisler/code-city/issues/443[#443],
-https://github.com/FelixGeisler/code-city/issues/444[#444], and the accepted
-static-syntax decision in https://github.com/FelixGeisler/code-city/issues/450[#450]
-is a mandatory gate.
+https://github.com/FelixGeisler/code-city/issues/443[#443], and
+https://github.com/FelixGeisler/code-city/issues/444[#444], the accepted static-
+syntax decision in https://github.com/FelixGeisler/code-city/issues/450[#450],
+and the accepted visualization decision in
+https://github.com/FelixGeisler/code-city/issues/451[#451] are mandatory gates.
 The following priority applies only when alternatives conform equally to all
 of those requirements. It is a reversible documentation synthesis made by the
 Requirements Engineer under the human delegation recorded in
@@ -33,15 +34,17 @@ numerical promise or architecture or technology selection.
 |1
 |Exact contract fidelity and reproducibility
 |Preserve the exact immutable identity, deterministic sequence of admitted
-modules, canonical metric facts, canonical scene facts, and semantic
-repeatability defined by
+modules, canonical metric facts, canonical scene facts, fixed source-free
+WebGL2 presentation contract, and semantic repeatability defined by
 xref:requirements:04-functional-requirements.adoc#immutable-revision[Immutable
 revision selection and identity],
 xref:requirements:06-source-admission-and-limits.adoc#admission-composition[M1-ADM-5],
 xref:requirements:08-fixed-metric-semantics.adoc#canonical-facts[Canonical
 metric facts], and
 xref:requirements:10-fixed-city-layout-and-presentation.adoc#precision-repeatability[Precision
-and repeatability]. Evidence belongs to
+and repeatability] and
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008].
+Evidence belongs to
 https://github.com/FelixGeisler/code-city/issues/453[#453] through
 https://github.com/FelixGeisler/code-city/issues/459[#459].
 
@@ -71,16 +74,19 @@ xref:requirements:04-functional-requirements.adoc#decision-boundary[Decision
 boundary]. The governing source-conformance decisions are accepted in
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
-and
 xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004],
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007],
 and
-xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007]
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
 through https://github.com/FelixGeisler/code-city/issues/445[#445],
-https://github.com/FelixGeisler/code-city/issues/462[#462], and
-https://github.com/FelixGeisler/code-city/issues/447[#447]. Initial automated
-evidence belongs to https://github.com/FelixGeisler/code-city/issues/452[#452],
-and final-head execution belongs to
-https://github.com/FelixGeisler/code-city/issues/460[#460].
+https://github.com/FelixGeisler/code-city/issues/447[#447],
+https://github.com/FelixGeisler/code-city/issues/450[#450],
+https://github.com/FelixGeisler/code-city/issues/451[#451], and
+https://github.com/FelixGeisler/code-city/issues/462[#462]. Initial automated
+boundary evidence belongs to
+https://github.com/FelixGeisler/code-city/issues/452[#452], focused renderer
+conformance to https://github.com/FelixGeisler/code-city/issues/458[#458], and
+final-head execution to https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |4
 |The smallest one-journey solution without speculative flexibility
@@ -101,7 +107,7 @@ https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |Exact canonical results over heuristics or fallback
 |Do not repair input, select a fallback revision, approximate metric facts, or
-substitute a layout, palette, camera, or prior city.
+substitute a layout, palette, camera, renderer, fallback, or prior city.
 |xref:requirements:04-functional-requirements.adoc#revision-selection[M1-REV-1],
 xref:requirements:08-fixed-metric-semantics.adoc#canonical-facts[Canonical
 metric facts], and
@@ -149,10 +155,10 @@ convenience.
 https://github.com/FelixGeisler/code-city/issues/461[#461].
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
-and
 xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004],
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007],
 and
-xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007]
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
 are accepted constraints, with initial automated evidence in
 https://github.com/FelixGeisler/code-city/issues/452[#452] and final-head
 execution in https://github.com/FelixGeisler/code-city/issues/460[#460].
@@ -230,14 +236,30 @@ reaches analysis and elapsed analysis time creates no result. #455 owns
 parser/SLOC/unit realization, #456 decision/complexity and the combined rerun,
 and #460 final renewal and integrated lifecycle evidence.
 
-Visualization technology and CC-09/PR-01 remain with
-https://github.com/FelixGeisler/code-city/issues/451[#451]. Neither this page nor
-ADR 0007 selects a Pages source, action, workflow or deployment mechanism,
-application route, renderer, general message or port schema, concrete source
-map, test technology, or those remaining duration decisions.
+Visualization technology owned by
+https://github.com/FelixGeisler/code-city/issues/451[#451] is accepted in
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008].
+It selects browser-native WebGL2 and fixed GLSL ES 3.00 only in the UI-main
+presentation edge adapter, while worker city construction remains renderer-
+neutral. It fixes source-free defensive projection and `M1-CITY-1` propagation;
+one program, VAO, position/index/instance-buffer representation and one
+instanced draw; exact shaders, context, drawing-buffer equality, API/state,
+camera and float proof; observer-before-publication staging and final detached
+host reread/redraw; passive resize, context loss, post-`Success` failure, and
+exactly-once application cleanup. CC-09 and PR-01 are explicitly unnecessary,
+so elapsed construction or presentation time alone creates no outcome.
+
+ADR 0008 selects no renderer package, add-on, fallback, external asset,
+additional context, source layout, schema, or test technology. #452 owns only a
+renderer-free shell baseline, #457 renderer-neutral canonical scenes, #458 all
+renderer realization and focused evidence, #459 successful integration, and
+#460 final hosted renewal. Neither this page nor ADR 0008 selects a Pages
+source, action, workflow or deployment mechanism, application route, general
+message or port schema, concrete source map, or test technology.
 
 https://github.com/FelixGeisler/code-city/issues/463[#463] synthesizes the
-accepted provider/static lifecycle without adding a port or owner, and
+accepted provider, static, presentation, and post-`Success` lifecycle without
+adding a port or owner, and
 https://github.com/FelixGeisler/code-city/issues/464[#464] verifies the accepted
 decisions and evidence owners. `npm run docs:build` validates this
 documentation; it is not executable parser evidence.

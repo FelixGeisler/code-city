@@ -543,7 +543,7 @@ unchanged:
 A late result from a replaced or cancelled attempt has no observable effect.
 
 [[deferred-limits]]
-== RA and static-processing limit dispositions
+== RA, static-processing, city, and presentation limit dispositions
 
 RA-10 retrieval duration and RA-11 admission duration are explicitly
 unnecessary for M1. Neither has a value, unit, timer, clock, category, stable
@@ -597,9 +597,21 @@ conformance defect that reopens #450, not `M1-MET-1`, an SP result, or an
 implicit product limit. A lower cap, retry, fallback, or alternate parser
 cannot hide it.
 
-CC-09 and PR-01 remain exclusively with
-https://github.com/FelixGeisler/code-city/issues/451[#451]. No value, interval,
-threshold, or limit result is approved for either duration here.
+https://github.com/FelixGeisler/code-city/issues/451[#451] explicitly resolves
+CC-09 city-construction duration and PR-01 presentation duration as unnecessary
+for M1. Neither has a value, unit, timer, clock, deadline, interval, cutoff,
+category, stable code, precedence, threshold, boundary, or T-1/T/T+1 scenario.
+Arbitrary elapsed construction or presentation time alone creates no outcome;
+while work has produced neither a browser/platform failure nor a lifecycle
+result, the attempt remains `Loading`.
+
+M1 makes no completion, startup, frame-time, throughput, latency, or preemption
+promise. Feasibility follows from the complete accepted envelope, fixed
+resource counts, renderer `O(N)` projection/upload for `N <= 4,000`, one draw
+call, and the accepted float-representation proof, not an uncalibrated timer.
+Actual construction and presentation failures retain `M1-CITY-1` and
+`M1-PRES-1`; elapsed time alone is neither. There is no CC-09/PR-01 limit
+result, taper, private capacity, retry, or fallback.
 
 The accepted https://github.com/FelixGeisler/code-city/issues/444[#444] contract
 resolves CC-01 through CC-08 exactly as follows without changing admission,
@@ -644,7 +656,9 @@ settled as unnecessary rather than as limits. The human delegation and
 Requirements Engineer decision records in #444 and #450 supply #442's required
 CC and SP dispositions. https://github.com/FelixGeisler/code-city/issues/464[#464]
 must verify both delegations and exercises, ADR 0006's RA-10/RA-11 disposition,
-ADR 0007's static decision, and the remaining CC-09/PR-01 choices before M1
+ADR 0007's static decision, and
+xref:architecture:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR
+0008]'s accepted CC-09/PR-01 and visualization decisions before M1
 implementation handoff.
 
 [[decision-boundary-source-limits]]
@@ -677,8 +691,11 @@ live CDN calls.
 https://github.com/FelixGeisler/code-city/issues/457[#457] validates the exact
 CC-01 through CC-08 dispositions with construction geometry, layout, bounds,
 and `M1-CITY-1` evidence.
-https://github.com/FelixGeisler/code-city/issues/458[#458] validates complete
-presentation and the absence of labels, controls, and extra geometry.
+https://github.com/FelixGeisler/code-city/issues/458[#458] validates source-free
+defensive handoff projection, the fixed browser-native WebGL2 representation,
+initial and resize drawing-buffer equality, fail-closed mismatch, observer-
+before-publication staging, final detached host reread/redraw, context loss,
+cleanup, and the absence of labels, controls, and extra geometry.
 https://github.com/FelixGeisler/code-city/issues/455[#455] proves that the full
 RA-07/RA-08/RA-09 envelope reaches parser, SLOC, and unit processing with no
 lower private capacity; https://github.com/FelixGeisler/code-city/issues/456[#456]
@@ -686,7 +703,8 @@ reruns the complete combined envelope after decision and complexity mapping.
 https://github.com/FelixGeisler/code-city/issues/460[#460] validates integrated
 and hosted provider/browser failure, provider-to-static phase ordering,
 arbitrary elapsed-time inertness, replacement, cancellation, identity
-retention, atomic publication, no retry or persistence, unexpected traffic,
-and final-head REST/raw and parser-asset renewal. #450 retains the accepted
-SP-01 through SP-04 decision evidence; #451 retains CC-09 and PR-01 decision
-and feasibility evidence.
+retention, atomic publication, post-`Success` context-loss/resize failure, no
+retry or persistence, unexpected traffic, and final-head REST/raw, parser-
+asset, and WebGL presentation renewal. #450 retains the accepted SP-01 through
+SP-04 decision evidence; #451 records accepted ADR 0008, CC-09/PR-01,
+feasibility, renewal, and stop-rule evidence.

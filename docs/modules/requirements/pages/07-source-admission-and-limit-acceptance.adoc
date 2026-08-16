@@ -19,8 +19,9 @@ The contract is acceptable only when all of these gates hold:
 * CC-01 through CC-08 use only their accepted #444 dispositions; RA-10 and
   RA-11 use only ADR 0006's explicitly-unnecessary disposition and inert
   elapsed-time case; SP-01 through SP-04 use only ADR 0007's
-  explicitly-unnecessary full-envelope disposition; and CC-09 and PR-01 remain
-  without a value or scenario here; and
+  explicitly-unnecessary full-envelope disposition; and CC-09 and PR-01 use
+  only ADR 0008's explicitly-unnecessary disposition and inert elapsed-time
+  case; and
 * `npm run docs:build` succeeds.
 
 == Admission classification
@@ -247,6 +248,21 @@ Scenario: The complete admitted envelope reaches static analysis
   And elapsed analysis time alone leaves the attempt Loading
   And a grammar-valid failure within this envelope is a conformance defect,
       not M1-MET-1 or an SP result
+----
+
+[source,gherkin]
+----
+Scenario: Arbitrary construction or presentation time is inert
+  Given complete accepted work is in city construction or presentation
+  And no browser or platform failure occurs
+  And the user does not cancel, replace, reload, or otherwise end the attempt
+  When arbitrary elapsed time passes
+  Then no CC-09 or PR-01 timer or clock starts
+  And the state remains Loading
+  And no deadline, interval, cutoff, category, code, precedence, threshold,
+      boundary, or T-1/T/T+1 result is created
+  And M1 makes no completion, startup, frame-time, throughput, latency,
+      or preemption promise
 ----
 
 [source,gherkin]
@@ -494,6 +510,13 @@ without a lower private capacity or performance assertion.
 |After decision and complexity projection, rerun the complete grammar, SLOC,
 unit, complexity, lifecycle, full-envelope, and exact-fact matrix.
 
+|Fixed full-envelope WebGL presentation
+|https://github.com/FelixGeisler/code-city/issues/458[#458]
+|Source-free defensive projection, no malformed model reaching WebGL, exact
+resource and draw counts, initial/resize drawing-buffer equality, fail-closed
+mismatch, observer-before-publication setup, final detached host reread/redraw,
+context loss, post-`Success` failure, and exactly-once cleanup under ADR 0008.
+
 |Approved categories, horizons, timing disposition, and attempt transitions
 |https://github.com/FelixGeisler/code-city/issues/460[#460]
 |Integrated and hosted provider-order-independent classification, one
@@ -525,9 +548,13 @@ seconds` proposals are rejected. Controlled parser/SLOC/unit evidence belongs
 to #455, the complete combined rerun to #456, and integrated lifecycle and
 renewal evidence to #460.
 
-CC-09 and PR-01 still have no value, interval, threshold, or limit result here;
-visualization feasibility and both duration decisions remain exclusively with
-https://github.com/FelixGeisler/code-city/issues/451[#451].
+CC-09 and PR-01 are explicitly unnecessary for M1. They have no value, unit,
+timer, clock, deadline, interval, cutoff, category, stable code, precedence,
+threshold, boundary, or T-1/T/T+1 scenario. Elapsed construction or
+presentation time alone leaves the attempt `Loading` and creates no outcome.
+xref:architecture:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR
+0008] records the fixed-envelope feasibility basis and #451's accepted
+decision.
 
 CC-01 through CC-08 are no longer deferred. Their only accepted dispositions
 are the exact table in
@@ -540,11 +567,12 @@ remain `M1-CITY-1`; private capacity remains a conformance defect.
 
 https://github.com/FelixGeisler/code-city/issues/457[#457] owns focused CC,
 construction, and `M1-CITY-1` evidence;
-https://github.com/FelixGeisler/code-city/issues/458[#458] owns complete
-presentation and absence evidence; and
+https://github.com/FelixGeisler/code-city/issues/458[#458] owns complete fixed
+WebGL presentation, defensive handoff, drawing-buffer, staging, resize,
+context-loss, cleanup, and absence evidence; and
 https://github.com/FelixGeisler/code-city/issues/460[#460] retains integrated
-state evidence. The hard gate in
+and hosted state and lifecycle evidence. The hard gate in
 https://github.com/FelixGeisler/code-city/issues/464[#464] verifies the recorded
-human delegation, its #444 and #450 exercises, accepted ADR 0007, and the exact
-evidence ownership before M1 implementation handoff. No
+human delegation, its #444, #450, and #451 exercises, accepted ADRs 0007 and 0008,
+and the exact evidence ownership before M1 implementation handoff. No
 downstream issue body is changed by this documentation allocation.

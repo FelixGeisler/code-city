@@ -86,3 +86,70 @@ Observable no-overlap means at most one usable worker handle, parser set,
 provider slot, and raw/hash workspace. SP-01 through SP-04 are unnecessary; the
 full RA-07/RA-08/RA-09 envelope reaches analysis and elapsed static time alone
 creates no outcome.
+
+== Source-free fixed presentation
+
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
+confines browser-native WebGL2 and GLSL ES 3.00 to the UI-main presentation
+edge adapter. The worker constructor remains the authoritative owner of the
+complete renderer-neutral canonical scene. The adapter receives no source,
+admitted module, parser/analyzer object, metric intermediate, partial scene, or
+result identity.
+
+Before any WebGL resource, defensive projection requires own data properties,
+expected primitive and bounded collection values, complete unique `1..4,000`
+buildings, exact canonical geometry/palette/order/bounds/view, and prototype-
+safe identity handling. It ignores additive fields without evaluating them for
+diagnostics and never repairs, reorders, clamps, truncates, reconstructs, or
+reclassifies. A model breach or validation throw creates no WebGL and remains
+`M1-CITY-1`; the bridge transports it unchanged and the UI coordinator alone
+commits state. `M1-PRES-1` starts only after the valid complete model passes.
+Identity and source-derived values never become normal-object keys, DOM or
+WebGL names/text/attributes/labels, shader text/defines, locators, diagnostics,
+or logs.
+
+The fixed representation has one eight-corner/36-index prism, one interleaved
+28-byte-stride instance buffer, one program, one VAO, three buffers, two exact
+trusted shader literals during setup, and one instanced draw. One detached
+canvas requests only WebGL2 with fixed attributes. Effective DPR is one; host,
+backing, and read drawing-buffer dimensions must be exactly equal positive
+integers before draw/publication. Each draw restores the closed state, API,
+viewport, matrix, clear, and one-call sequence. No extension, renderer package,
+external asset, dynamic shader, diagnostic/log API, readback, texture,
+framebuffer, fallback, retry, restoration, or second rendering object set is
+permitted.
+
+The target-relative orthographic matrix uses ADR 0008's exact camera/clipping
+mechanism. The complete accepted envelope proves each uploaded integer or half-
+integer endpoint exactly representable in `float32`; this is not a lower
+product cap. Canonical scene and camera-tolerance acceptance remains semantic,
+not pixel or screenshot equality.
+
+== Atomic presentation lifecycle and disposal
+
+The candidate stays detached through loss-listener registration, context and
+fixed draw, post-operation eligibility, successful construction and attachment
+of one generation-guarded `ResizeObserver`, and the mandatory final no-yield
+host-size reread and any verified redraw. Only then may the UI coordinator
+synchronously commit canvas, identity, and `Success`. The observer cannot
+publish. Synchronous WebGL work need not be preemptible, but post-operation
+generation checks prevent stale publication; timers, animation frames,
+microtask yields, retries, debounces, and network work are absent.
+
+A changed valid host size reuses all GPU resources, rereads and verifies
+host/backing/drawing-buffer equality, recomputes only aspect projection and
+viewport, restores state, and draws once. Unchanged size does not draw. The
+once/passive loss listener does not prevent default, and no restoration path
+exists. Current context loss or required resize failure synchronously enters
+`Presentation failed` / `M1-PRES-1`, retains current tuple and draft, removes
+city/canvas, and remains until resubmit or reload. A stale callback only
+disposes locally.
+
+Failure, replacement, cancellation, reload, loss, and resize failure disconnect
+observation, remove loss listener/canvas, delete every live shader, program,
+buffer, and VAO once, and clear typed data/references. A context already lost
+adds no driver-release claim. Cleanup makes no latency, secure-erasure,
+garbage-collection, physical-browser, or process-teardown promise. CC-09 and
+PR-01 are unnecessary: elapsed construction or presentation time alone leaves
+the attempt `Loading` without a completion, startup, frame-time, throughput,
+latency, or preemption promise.

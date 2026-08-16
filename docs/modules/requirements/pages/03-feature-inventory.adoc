@@ -42,8 +42,9 @@ ordered admitted-module set. RA-10 retrieval duration and RA-11 admission
 duration are explicitly unnecessary for M1 and have no timer, value, boundary,
 or outcome. SP-01 through SP-04 are likewise explicitly unnecessary: all
 RA-07/RA-08/RA-09-admitted work reaches analysis and no static-processing timer
-or lower processing limit exists. CC-09/PR-01 remain with their linked owner;
-CC-01 through CC-08 retain the fixed #444 dispositions.
+or lower processing limit exists. CC-09 and PR-01 are explicitly unnecessary:
+neither construction nor presentation has a timer, elapsed-time outcome, or
+lower private limit. CC-01 through CC-08 retain the fixed #444 dispositions.
 
 |Fixed metric semantics
 |Included; accepted contract
@@ -58,13 +59,17 @@ phase-aware lifecycle. Analysis responsibility remains with the accepted core
 and port owners; city mapping is fixed by the next contract.
 
 |Fixed city, layout, and presentation
-|Included; accepted contract
+|Included; accepted contract and ADR-owned mechanism
 |xref:10-fixed-city-layout-and-presentation.adoc[] defines exact prism mapping,
 palette, scene exclusions, unsigned-UTF-8 square shelves and bounds,
-orthographic framing, no interaction, precision, CC-01 through CC-08
-dispositions, and atomic stage failures under
-https://github.com/FelixGeisler/code-city/issues/444[#444]. Visualization
-technology and CC-09/PR-01 remain with #451.
+orthographic framing, no interaction, precision, all CC/PR dispositions, the
+`M1-CITY-1`/`M1-PRES-1` boundary, and post-`Success` context-loss/resize-failure
+behavior under https://github.com/FelixGeisler/code-city/issues/444[#444] and
+https://github.com/FelixGeisler/code-city/issues/451[#451].
+xref:architecture:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR
+0008] accepts the fixed browser-native WebGL2 UI-edge realization, including
+source-free projection, one instanced draw, passive resize, atomic staging, and
+cleanup.
 
 |Authentication, private repositories, or credentials
 |Excluded

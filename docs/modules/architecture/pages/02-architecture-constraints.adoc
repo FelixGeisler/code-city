@@ -59,8 +59,9 @@ https://github.com/FelixGeisler/code-city/issues/459[#459], and
 https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |The accepted admission and ordering rules and RA-01 through RA-09, canonical
-metric facts and metric failure, and city, scene, presentation, and CC-01
-through CC-08 dispositions are exact and non-configurable.
+metric facts and metric failure, and city, scene, presentation, all CC/PR
+dispositions, and post-`Success` presentation-failure behavior are exact and
+non-configurable.
 |https://github.com/FelixGeisler/code-city/issues/442[#442]:
 xref:requirements:06-source-admission-and-limits.adoc#admission-composition[M1-ADM-5],
 xref:requirements:06-source-admission-and-limits.adoc#limit-rule[M1-LIM-0], and
@@ -92,6 +93,24 @@ xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[AD
 |https://github.com/FelixGeisler/code-city/issues/455[#455],
 https://github.com/FelixGeisler/code-city/issues/456[#456], and
 https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|Presentation uses only ADR 0008's browser-native WebGL2 UI-edge adapter. The
+worker and canonical scene stay renderer-neutral; defensive handoff validation
+precedes all WebGL; resources, shaders, context, drawing-buffer equality,
+API/state, camera, draw, observer-before-publication, resize, context loss,
+post-`Success` failure, and cleanup are fixed. No renderer package, source-
+derived active value, extension, fallback, restoration, retry, or private lower
+capacity exists. CC-09 and PR-01 are unnecessary.
+|xref:requirements:10-fixed-city-layout-and-presentation.adoc#presentation-boundary[Construction
+and source-free presentation boundary],
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#post-success-presentation-failure[Published
+presentation lifecycle], and
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008].
+|Renderer-neutral construction and float-bound renewal in
+https://github.com/FelixGeisler/code-city/issues/457[#457], focused renderer
+evidence in https://github.com/FelixGeisler/code-city/issues/458[#458],
+integration in https://github.com/FelixGeisler/code-city/issues/459[#459], and
+final hosted renewal in https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |Submission, replacement, cancellation, failure, success, identity retention,
 and complete-city publication obey the current-attempt invariant: no stale,
@@ -183,8 +202,14 @@ termination before zero or during active static operations. Ordinary terminal
 paths delete parser handles before `ATTEMPT_DRAINED`. At most one usable worker,
 parser set, provider slot, and raw/hash workspace overlap observably.
 
-Pages source/action/workflow and deployment mechanism, visualization
-technology, concrete source mapping, general message and port schemas, and
-CC-09/PR-01 stay with their owners in #451 through #460 and #463. Static syntax,
-SP-01 through SP-04, selected-revision retrieval, and RA-10/RA-11 are no longer
-deferred.
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
+is the accepted visualization and UI-presentation lifecycle constraint. The
+presentation adapter alone may use its exact browser-native WebGL2 surface and
+fixed trusted shaders; the UI coordinator alone publishes or commits visible
+failure. #452's walking shell remains renderer-free, #457 construction remains
+renderer-neutral, and #458 owns every renderer declaration and focused check.
+
+Pages source/action/workflow and deployment mechanism, concrete source mapping,
+general message and port schemas, and test technology stay with their owners.
+Static syntax, SP-01 through SP-04, selected-revision retrieval, RA-10/RA-11,
+visualization technology, and CC-09/PR-01 are no longer deferred.

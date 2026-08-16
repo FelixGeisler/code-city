@@ -8,9 +8,10 @@ xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004],
 xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
 0005], and
 xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
-0006], and
+0006],
 xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
-0007].
+0007], and
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008].
 The ADRs remain authoritative where this summary omits detail.
 
 == One core with two strata
@@ -189,6 +190,68 @@ conformance defect and stop condition, not `M1-MET-1` or an undeclared limit.
 combined matrix, and #460 renews the exact assets, supply-chain evidence, and
 integrated lifecycle.
 
+== Accepted browser-native WebGL2 presentation strategy
+
+ADR 0008 selects raw browser-native WebGL2 and fixed GLSL ES 3.00 only in the
+UI-main presentation edge adapter. Worker-side city construction stays pure,
+renderer-neutral domain policy. The bridge carries only one complete canonical
+scene; no source, admitted module, parser/analyzer value, metric intermediate,
+partial scene, or result identity enters the adapter.
+
+Before WebGL, the adapter validates every required own data field and bounded
+collection, exact `1..4,000` building count, identity/order, geometry, palette,
+bounds, view, and no-interaction fact. It ignores additive noncanonical own
+fields without evaluating them for diagnostics, uses only arrays and `Map` or
+equivalent prototype-safe maps, and never uses identity as a normal-object key
+or active DOM/WebGL value. A malformed, unsafe, throwing, incomplete, or
+inconsistent model creates no WebGL and propagates `M1-CITY-1`; the bridge does
+not classify it. `M1-PRES-1` begins only after a valid complete model passes.
+
+The GPU mechanism is closed: one eight-corner/36-index unit prism; one
+96-byte position buffer, one 36-byte index buffer, and one 28-byte-stride
+interleaved instance buffer (`112,000` bytes at `N=4,000`); one program, VAO,
+and instanced draw. The two shaders are exact trusted ASCII LF/final-LF
+literals. One detached canvas requests only `webgl2` with ADR 0008's ten exact
+options. Returned critical attributes must agree. Effective DPR is one; host,
+backing, and read drawing-buffer dimensions must be the same positive integers
+before every draw or publication. A mismatch fails closed without clamping.
+
+Every draw restores the complete fixed white-clear, depth/cull/mask/disabled-
+state, verified viewport, clear, program/VAO, matrix, and one-draw sequence.
+Only ADR 0008's closed property/method list is used; there is no extension,
+query, info log, readback, texture, framebuffer, dynamic shader, diagnostic,
+logging, or telemetry surface. The target-relative orthographic matrix uses
+ADR 0008's exact basis, `E_d`, camera, near/far, and fit equations. The full
+accepted envelope proves exact `float32` integer/half-integer representation;
+pixels remain non-acceptance facts.
+
+Initial presentation is staged entirely while detached. Its once/passive
+context-loss listener precedes context creation. The fixed draw and post-
+operation eligibility checks precede successful construction and
+`observe(host)` of one asynchronous generation-guarded `ResizeObserver`. A
+mandatory final no-yield host-size reread, any required verified detached
+redraw, and another eligibility check precede one synchronous commit of canvas,
+identity, and `Success`. Observer setup after publication, timers, animation
+frames, microtask yields, retries, debounces, and network work are prohibited.
+
+A changed positive integer size reuses canvas, context, program, VAO, and
+buffers, rereads drawing-buffer dimensions, recomputes only aspect-dependent
+projection/viewport, reapplies state, and draws once. Unchanged dimensions do
+not draw. Context restoration, alternate renderers, retry, and fallback do not
+exist. Current published context loss or required resize failure synchronously
+enters `Presentation failed` / `M1-PRES-1`, retains the current tuple and draft,
+removes city/canvas, disposes once, and remains until resubmit or reload. Stale
+callbacks only dispose locally.
+
+Normal failure, replacement, cancellation, reload, or post-`Success` failure
+disconnects observation, removes listener/canvas, deletes each live shader,
+program, buffer, and VAO once, and clears adapter data/references. A lost
+context adds no driver-release claim. CC-09 and PR-01 are unnecessary; elapsed
+construction/presentation time alone remains `Loading`, with no performance or
+preemption promise. #452 owns no renderer material, #457 owns renderer-neutral
+scenes and float-bound renewal, #458 owns every renderer declaration and
+focused check, #459 integrates, and #460 renews final hosted evidence.
+
 == Selected trade-off
 
 Separating mutable orchestration from pure deterministic policy makes the
@@ -211,5 +274,5 @@ bypass.
 The minimum responsibilities and conceptual collaborations are documented in
 xref:05-building-block-view.adoc[Building Block View]. Concrete source mapping,
 general same-stratum policy, packages, interfaces, schemas, and every remaining
-mechanism or technology not accepted in ADRs 0004 through 0007 remain with
+mechanism or technology not accepted in ADRs 0004 through 0008 remain with
 their stated downstream owners.
