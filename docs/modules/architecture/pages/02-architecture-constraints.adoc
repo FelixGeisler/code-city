@@ -113,8 +113,22 @@ enforcement and cleanup ownership without changing ADR 0001.
 
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
 is the accepted internal core-strata, minimum-block, conceptual-port, bridge,
-and exclusive-ownership constraint. Shell/build and Pages mechanism, provider
-origins and requests, analysis and visualization technology, concrete source
-mapping, exact message and port schemas, worker lifecycle/cancellation and
-physical cleanup mechanisms, and deferred limits remain *deferred/not accepted
-here* with their owners in #447 through #460 and #463.
+and exclusive-ownership constraint.
+
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
+is the accepted shell/build constraint: future framework-free TypeScript
+source is packaged by exact-pinned Vite as a `/code-city/` static entry with a
+separate, non-inline, same-origin ES-module worker, while Vite, UI-framework,
+and concrete DOM/Worker mechanisms remain outside application and domain
+core. This is an accepted documented decision, not current implementation.
+https://github.com/FelixGeisler/code-city/issues/452[#452] owns the initial
+package and evidence, https://github.com/FelixGeisler/code-city/issues/459[#459]
+owns successful integration, and
+https://github.com/FelixGeisler/code-city/issues/460[#460] owns renewed
+final-head production evidence.
+
+Pages source/action/workflow and deployment mechanism, provider origins and
+requests, analysis and visualization technology, concrete source mapping,
+exact message and port schemas, worker lifecycle/cancellation and physical
+cleanup mechanisms, and deferred limits remain *deferred/not accepted here*
+with their owners in #448 through #460 and #463.

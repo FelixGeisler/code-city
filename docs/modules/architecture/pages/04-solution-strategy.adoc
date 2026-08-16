@@ -3,8 +3,9 @@
 The accepted structural strategy is defined by
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
 xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002],
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
 and
-xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003].
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004].
 The ADRs remain authoritative where this summary omits detail.
 
 == One core with two strata
@@ -67,6 +68,32 @@ grant a source dependency. UI-worker messages create no trust crossing.
 Driving and driven labels denote conceptual roles only; they require no
 interface, package, or one-component-per-port design.
 
+== Accepted shell and package strategy
+
+ADR 0004 selects framework-free TypeScript with plain HTML, standards CSS, and
+browser ES modules. Exact `vite@8.2.1` packages the future application, and
+exact `typescript@7.0.2` performs a separate strict, no-emit,
+isolated-modules check. Future direct dependencies are exact-pinned and their
+committed closure and evidence are renewed after dependency, closure, or build
+input changes.
+
+The future static production entry uses the exact `/code-city/` public base and
+one statically addressed, separate, non-inline, same-origin ES-module worker.
+Vite, a UI framework, and concrete DOM/Worker mechanisms remain build or
+edge/adapter concerns; application and domain core may not import or depend on
+them, instantiate their concrete values, or expose their mechanism types in
+core-owned contracts. ADRs 0001 and 0003 still govern source direction, and
+ADR 0002 still governs runtime placement.
+
+This is an accepted documented strategy now, not implemented repository
+behavior. https://github.com/FelixGeisler/code-city/issues/452[#452] owns the
+initial dependencies, walking shell, package, enforcement, and evidence;
+https://github.com/FelixGeisler/code-city/issues/459[#459] owns successful-path
+integration; and https://github.com/FelixGeisler/code-city/issues/460[#460]
+renews canonical production evidence on the final head. ADR 0004 selects no
+Pages workflow or deployment mechanism, provider, parser, renderer, source
+layout, schema, lifecycle primitive, or threshold.
+
 == Selected trade-off
 
 Separating mutable orchestration from pure deterministic policy makes the
@@ -88,5 +115,6 @@ bypass.
 
 The minimum responsibilities and conceptual collaborations are documented in
 xref:05-building-block-view.adoc[Building Block View]. Concrete source mapping,
-general same-stratum policy, packages, interfaces, schemas, mechanisms, and
-technologies remain with their stated downstream owners.
+general same-stratum policy, packages, interfaces, schemas, and every mechanism
+or technology not accepted in ADR 0004 remain with their stated downstream
+owners.

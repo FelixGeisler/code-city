@@ -1,12 +1,16 @@
 = 7. Deployment View
 
-This view records only the production nodes, origin, artifact placement, and
+This view records the production nodes, origin, artifact placement, and
 runtime-data placement accepted in
 xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002].
-It does not select a shell, framework, build, package, Pages source,
-action/workflow, application route, deployment mechanism, GitHub endpoint,
-request mechanism, parser, renderer, port, schema, or worker lifecycle
-primitive.
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
+accepts the future framework-free TypeScript and Vite static-package contract:
+the exact `/code-city/` base and one separately emitted, non-inline,
+same-origin ES-module worker. That documented decision is accepted now, but no
+shell, dependency, configuration, production artifact, or deployment workflow
+exists yet. This view does not select a Pages source, action/workflow,
+application route, deployment mechanism, GitHub endpoint, request mechanism,
+parser, renderer, port, schema, or worker lifecycle primitive.
 
 == Production topology
 
@@ -45,8 +49,9 @@ primitive.
 The production delivery URL is exactly
 `https://felixgeisler.github.io/code-city/`, and requests originating from the
 application have the exact production origin `https://felixgeisler.github.io`.
-Adopting this existing target does not adopt its current Pages source,
-action/workflow, application route, or build and deployment mechanism.
+ADR 0004 fixes `/code-city/` as the future package's public base. Adopting this
+existing target and base does not adopt its current Pages source,
+action/workflow, application route, or deployment mechanism.
 
 == Nodes and origins
 
@@ -166,15 +171,23 @@ be reopened. No proxy, relay, backend, serverless function, credential,
 persistent cache, opaque unbounded response, automatic-retry workaround,
 second retrieval path, or other fallback may be introduced silently.
 
-https://github.com/FelixGeisler/code-city/issues/447[#447] still owns the shell,
-build, packaging, Pages source/action/workflow, application route, and
-deployment mechanism. #448 and #449 own all GitHub origins and mechanisms; #450
-and #451 own analyzer and renderer technology and their deferred limits; #462
-owns blocks and conceptual ports; and #463 owns the full accepted-mechanism and
-port synthesis. This view selects no endpoint, API, redirect/request policy,
-retry, parser, renderer, package, port, schema, worker primitive, workflow,
-route, threshold, or fallback.
+ADR 0004 now owns the accepted shell/build and package constraints.
+https://github.com/FelixGeisler/code-city/issues/452[#452] later implements the
+initial exact dependencies, walking shell, package, and evidence;
+https://github.com/FelixGeisler/code-city/issues/459[#459] integrates the
+successful path; and https://github.com/FelixGeisler/code-city/issues/460[#460]
+renews canonical production evidence against the final head. Pages
+source/action/workflow, application route, and deployment mechanism remain
+unselected. #448 and #449 own all GitHub origins and mechanisms; #450 and #451
+own analyzer and renderer technology and their deferred limits; #462 owns
+blocks and conceptual ports; and #463 owns the full accepted-mechanism and port
+synthesis. This view selects no endpoint, API, redirect/request policy, retry,
+parser, renderer, concrete package or source map, port, schema, worker
+primitive, workflow, route, threshold, or fallback.
 
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains unchanged and
-authoritative for source dependencies. Runtime placement grants no new source
+authoritative for the outer source boundary;
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
+remains authoritative for the internal graph; and ADR 0004 adds only its
+build/edge mechanism constraints. Runtime placement grants no new source
 dependency.

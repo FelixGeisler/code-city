@@ -6,7 +6,11 @@ xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002].
 The internal strata, minimum blocks, conceptual ports, bridge boundary, and
 ownership mapping are accepted in
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003].
-Provider mechanisms, exact message and port schemas, and the full
+The future framework-free TypeScript and Vite static-package contract is
+accepted in
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004],
+but its dependencies, source, configuration, package, and evidence do not exist
+yet. Provider mechanisms, exact message and port schemas, and the full
 accepted-mechanism runtime synthesis remain deferred to their owning issues.
 
 == Local terms
@@ -90,8 +94,11 @@ and https://github.com/FelixGeisler/code-city/issues/454[#454].
 payload, admitted source, metric facts, city or scene data, attempt state, or
 credential.
 |xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002];
-packaged-shell evidence belongs to
-https://github.com/FelixGeisler/code-city/issues/452[#452].
+initial packaged-shell evidence belongs to
+https://github.com/FelixGeisler/code-city/issues/452[#452], successful
+integration to https://github.com/FelixGeisler/code-city/issues/459[#459], and
+renewed final-head production evidence to
+https://github.com/FelixGeisler/code-city/issues/460[#460].
 |===
 
 == Accepted runtime placement
@@ -157,9 +164,11 @@ scene and exclusions].
 
 |GitHub Pages to browser
 |Trusted static UI and worker artifacts only.
-|The shell, build, Pages source, action/workflow, application route, and
- deployment mechanism remain with
-https://github.com/FelixGeisler/code-city/issues/447[#447].
+|ADR 0004 accepts the future `/code-city/` Vite package with one separate
+same-origin ES-module worker. #452 implements it initially, #459 integrates the
+successful path, and #460 renews final-head production evidence. No such
+package exists yet; Pages source, action/workflow, application route, and
+deployment mechanism remain unselected.
 
 |UI main context to processing worker
 |Only a current normalized, syntactically accepted submission and lifecycle
@@ -227,8 +236,9 @@ or transmitted.
 |GitHub Pages delivery node
 |Static UI and worker artifacts only; no repository payload, source, derived
 fact, city/scene data, attempt state, or credential.
-|Static-package inspection belongs to
-https://github.com/FelixGeisler/code-city/issues/452[#452].
+|Initial static-package inspection belongs to
+https://github.com/FelixGeisler/code-city/issues/452[#452]; renewed final-head
+inspection belongs to https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |UI main context: current-session state
 |Input draft, stable state and status, selected repository/revision tuple where
@@ -280,13 +290,20 @@ xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
 is authoritative for internal strata, minimum blocks, conceptual ports, the
 bridge boundary, and exclusive ownership.
 
-The following remain deferred: shell/build and Pages mechanism in
-https://github.com/FelixGeisler/code-city/issues/447[#447]; GitHub origins and
-resolution/retrieval mechanisms in #448 and #449; analyzer and renderer
-technology and deferred limits in #450 and #451; exact message and port schemas
-in #453 through #460; and the complete accepted-mechanism/port runtime
-synthesis in https://github.com/FelixGeisler/code-city/issues/463[#463]. This
-view selects no endpoint, API, redirect/request policy, shell, parser,
-analyzer, renderer, concrete package or source map, executable interface,
-message or port schema, worker lifecycle or cancellation primitive, Pages
-workflow, route, threshold, or fallback.
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
+is authoritative for the accepted framework-free TypeScript, Vite, public-base,
+separate-worker, output, reproducibility, dependency, and source-mechanism
+constraints. #452 owns their initial implementation, #459 successful
+integration, and #460 canonical final-head production evidence; none is current
+repository behavior yet.
+
+The following remain deferred: Pages source/action/workflow and deployment
+mechanism; GitHub origins and resolution/retrieval mechanisms in #448 and #449;
+analyzer and renderer technology and deferred limits in #450 and #451; exact
+message and port schemas in #453 through #460; and the complete
+accepted-mechanism/port runtime synthesis in
+https://github.com/FelixGeisler/code-city/issues/463[#463]. This view selects no
+endpoint, API, redirect/request policy, parser, analyzer, renderer, concrete
+package or source map, executable interface, message or port schema, worker
+lifecycle or cancellation primitive, Pages workflow, route, threshold, or
+fallback.
