@@ -187,14 +187,24 @@ documented decision now, not an implemented shell: #452 owns the initial
 walking shell and evidence, #459 owns successful integration through it, and
 #460 owns renewed final-head production evidence.
 
-The GitHub, analysis, and visualization mechanism and technology choices owned
-by https://github.com/FelixGeisler/code-city/issues/448[#448] through
-https://github.com/FelixGeisler/code-city/issues/451[#451] remain
-*deferred/not accepted here*. Neither this page nor ADR 0004 selects a Pages
-source, action, workflow or deployment mechanism, application route, GitHub
+The anonymous GitHub default-branch-tip resolution mechanism owned by
+https://github.com/FelixGeisler/code-city/issues/448[#448] is accepted in
+xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
+0005]. It fixes the exact `api.github.com` metadata and one-item commit-list
+requests, omitted-selector default-tip selection, strict evidence and status
+validation, inclusive 4 MiB body bound, and application-controlled cleanup.
+This is an accepted documented decision, not current product behavior;
+https://github.com/FelixGeisler/code-city/issues/453[#453] owns implementation,
+#459 packaged-path evidence, and #460 final hosted renewal.
+
+Content retrieval and admission, analysis, and visualization mechanisms and
+technologies owned by https://github.com/FelixGeisler/code-city/issues/449[#449]
+through https://github.com/FelixGeisler/code-city/issues/451[#451] remain
+*deferred/not accepted here*. Neither this page nor ADR 0005 selects a Pages
+source, action, workflow or deployment mechanism, application route, retrieval
 endpoint or request policy, parser or analyzer, renderer, exact message or port
-schema, concrete package or source map, worker lifecycle or cancellation
-primitive, or deferred threshold.
+schema, concrete package or source map, broader worker lifecycle or bridge
+cancellation primitive, or deferred threshold.
 
 https://github.com/FelixGeisler/code-city/issues/463[#463] and
 https://github.com/FelixGeisler/code-city/issues/464[#464] are later synthesis

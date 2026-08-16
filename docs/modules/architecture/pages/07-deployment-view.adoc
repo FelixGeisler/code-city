@@ -8,9 +8,13 @@ accepts the future framework-free TypeScript and Vite static-package contract:
 the exact `/code-city/` base and one separately emitted, non-inline,
 same-origin ES-module worker. That documented decision is accepted now, but no
 shell, dependency, configuration, production artifact, or deployment workflow
-exists yet. This view does not select a Pages source, action/workflow,
-application route, deployment mechanism, GitHub endpoint, request mechanism,
-parser, renderer, port, schema, or worker lifecycle primitive.
+exists yet.
+xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
+0005] accepts the exact `api.github.com` revision-resolution deployment
+exchange, but no product request exists yet. Outside that decision, this view
+does not select a Pages source, action/workflow, application route, deployment
+mechanism, selected-revision retrieval endpoint or request mechanism, parser,
+renderer, port, schema, or broader worker lifecycle primitive.
 
 == Production topology
 
@@ -41,8 +45,8 @@ parser, renderer, port, schema, or worker lifecycle primitive.
                                                                  v
                                              +========================================+
                                              || Public GitHub                        ||
-                                             || sole external information system     ||
-                                             || exact origins/mechanisms deferred    ||
+                                             || resolution: api.github.com            ||
+                                             || selected-revision retrieval deferred ||
                                              +========================================+
 ----
 
@@ -84,8 +88,9 @@ source-dependency rule.
 |Public GitHub
 |External to the user device and the sole external information system.
 |Resolution and selected-revision retrieval are direct and anonymous from the
-processing worker. Exact GitHub origins, endpoints, redirects, requests, and
-mechanisms remain with #448 and #449.
+processing worker. ADR 0005 fixes the resolution origin, endpoints, redirect
+refusal, requests, and bounded evidence contract. Retrieval origins and
+mechanisms remain with #449.
 |===
 
 No additional Code City application runtime context or deployment node exists.
@@ -139,9 +144,11 @@ worker*, and no user or service credential crosses either boundary.
 * Replacement or cancellation immediately revokes the old attempt's
   publication eligibility in the UI and clears identity, city, and
   presentation state according to the accepted state contract.
-* The worker stops feasible network and processing work where later accepted
-  mechanisms permit it, suppresses downstream stages, and releases transient
-  current-attempt references. Any late outcome is ignored by the UI.
+* The worker applies ADR 0005's resolution abort, feasible body cancellation,
+  downstream suppression, and application-controlled response cleanup. It
+  stops later network and processing work where those owning mechanisms permit
+  it and releases transient current-attempt references. Any late outcome is
+  ignored by the UI.
 * A worker-stage failure stops downstream work and releases transient
   processing references. A presentation failure is owned by the UI, which
   cleans up incomplete presentation resources.
@@ -155,21 +162,25 @@ garbage-collection internals.
 
 == Feasibility gate and deferred deployment detail
 
-https://github.com/FelixGeisler/code-city/issues/448[#448] and
-https://github.com/FelixGeisler/code-city/issues/449[#449] must each establish
-documentary/read-only feasibility for its selected direct anonymous
-worker-to-GitHub mechanism from the exact origin
-`https://felixgeisler.github.io`. Together they must cover every selected
-endpoint and redirect target, required cross-origin methods, statuses, body and
-header visibility, anonymous request and rate-limit policy, immutable-identity
-evidence, bounded retrieval and early-stop behavior, and cancellation and
-release behavior.
+ADR 0005 records https://github.com/FelixGeisler/code-city/issues/448[#448]'s
+dated documentary/read-only feasibility for direct
+anonymous revision resolution from exact origin
+`https://felixgeisler.github.io` to `https://api.github.com`. It covers the two
+selected paths, redirect refusal, preflights, CORS and response visibility,
+anonymous request and rate policy, immutable identity evidence, bounded body
+handling, cancellation, and application-controlled release. The observations
+are point-in-time evidence only. #453 revalidates the pin and endpoint contract
+before implementation, and #460 renews hosted-origin evidence on the final
+head.
 
-If either issue cannot establish all applicable evidence, it remains
-unaccepted and https://github.com/FelixGeisler/code-city/issues/446[#446] must
-be reopened. No proxy, relay, backend, serverless function, credential,
-persistent cache, opaque unbounded response, automatic-retry workaround,
-second retrieval path, or other fallback may be introduced silently.
+#449 must separately establish the applicable retrieval feasibility. If that
+mechanism cannot satisfy ADR 0002, or ADR 0005's renewal/stop conditions fail,
+implementation stops and
+https://github.com/FelixGeisler/code-city/issues/446[#446] is reopened when
+topology feasibility is affected. No proxy, relay, backend, serverless
+function, credential, persistent cache, opaque unbounded response,
+automatic-retry workaround, second retrieval path, or other fallback may be
+introduced silently.
 
 ADR 0004 now owns the accepted shell/build and package constraints.
 https://github.com/FelixGeisler/code-city/issues/452[#452] later implements the
@@ -178,16 +189,17 @@ https://github.com/FelixGeisler/code-city/issues/459[#459] integrates the
 successful path; and https://github.com/FelixGeisler/code-city/issues/460[#460]
 renews canonical production evidence against the final head. Pages
 source/action/workflow, application route, and deployment mechanism remain
-unselected. #448 and #449 own all GitHub origins and mechanisms; #450 and #451
-own analyzer and renderer technology and their deferred limits; #462 owns
-blocks and conceptual ports; and #463 owns the full accepted-mechanism and port
-synthesis. This view selects no endpoint, API, redirect/request policy, retry,
-parser, renderer, concrete package or source map, port, schema, worker
+unselected. ADR 0005 owns the accepted resolution origin and mechanism; #449
+owns retrieval, #450 and #451 own analyzer and renderer technology and their
+deferred limits, #462 owns blocks and conceptual ports, and #463 owns the full
+accepted-mechanism and port synthesis. Outside the ADR 0005 summary, this view
+selects no retrieval endpoint, API, redirect/request policy, retry, parser,
+renderer, concrete package or source map, port, schema, broader worker
 primitive, workflow, route, threshold, or fallback.
 
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains unchanged and
 authoritative for the outer source boundary;
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
-remains authoritative for the internal graph; and ADR 0004 adds only its
-build/edge mechanism constraints. Runtime placement grants no new source
-dependency.
+remains authoritative for the internal graph; ADR 0004 adds only its build/edge
+mechanism constraints; and ADR 0005 governs resolution only. Runtime placement
+grants no new source dependency.
