@@ -16,13 +16,18 @@ a revision; the user may later resubmit.
 submission.
 |The current attempt remains pinned to its full selected commit ID; only the
 later attempt may select the newer tip.
-|Controlled resolution evidence fixes the first handoff despite branch movement
-and permits a new handoff only after resubmission.
+|Controlled resolution evidence proves ADR 0005's second request omits every
+selector parameter and does not reuse metadata `default_branch`; the validated
+returned SHA fixes the first handoff and a new handoff occurs only after
+resubmission. The evidence makes no atomic-selection or concurrent-provider-
+state claim.
 |https://github.com/FelixGeisler/code-city/issues/441[#441]
 xref:requirements:04-functional-requirements.adoc#revision-selection[M1-REV-1]
 and
-xref:requirements:04-functional-requirements.adoc#immutable-revision[M1-REV-2];
-evidence https://github.com/FelixGeisler/code-city/issues/453[#453] and
+xref:requirements:04-functional-requirements.adoc#immutable-revision[M1-REV-2],
+plus
+xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
+0005]; evidence https://github.com/FelixGeisler/code-city/issues/453[#453] and
 https://github.com/FelixGeisler/code-city/issues/459[#459].
 
 |2. Canonical repeatability
@@ -60,9 +65,11 @@ private, access denied, or otherwise anonymously unavailable.
 |Invalid input causes no provider interaction. Accepted input sends no user or
 service credential. Unavailable cases remain indistinguishable and never offer
 authentication recovery.
-|Boundary evidence proves no interaction for invalid input, no authorization
-material for accepted interactions, and one privacy-preserving unavailable
-outcome.
+|Boundary evidence proves no interaction for invalid input and no authorization
+material for accepted interactions. Resolution evidence maps metadata `404`
+and valid `private === true` to the same unavailable outcome, maps ambiguous
+body-free metadata `403` to provider failure, and parses no error body to infer
+repository existence.
 |https://github.com/FelixGeisler/code-city/issues/441[#441]
 xref:requirements:04-functional-requirements.adoc#url-grammar[M1-URL-1],
 xref:requirements:04-functional-requirements.adoc#anonymous-access[M1-ANON-1
@@ -126,10 +133,14 @@ https://github.com/FelixGeisler/code-city/issues/460[#460].
 |Current attempt may or may not already have a selected identity; the input
 draft may have been edited.
 |The exact `Cancelled` state is observable: draft preserved, identity and city
-absent, and every late outcome rejected. No elapsed-time target or physical
-cleanup mechanism is defined.
+absent, and every late outcome rejected. No elapsed-time target is defined;
+ADR 0005 alone fixes the resolution response and application-owned cleanup
+mechanism summarized by this view.
 |A controlled race or tie scenario proves cancellation wins observable
-publication and late results change nothing.
+publication and late results change nothing. For either resolution response
+stream, instrumented evidence observes attempt-signal abort, feasible body
+cancellation, reader-lock release in `finally`, application-owned cleanup, and
+suppression of request two or downstream work without reclassifying the abort.
 |https://github.com/FelixGeisler/code-city/issues/441[#441]
 xref:requirements:04-functional-requirements.adoc#states[M1-STATE-4 and
 M1-STATE-5] and the downstream atomicity invariants; integrated evidence
@@ -187,6 +198,15 @@ are the accepted source-conformance rules. Initial automated evidence belongs
 to https://github.com/FelixGeisler/code-city/issues/452[#452]; final-head
 execution belongs to https://github.com/FelixGeisler/code-city/issues/460[#460].
 |===
+
+xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
+0005] is the accepted quality source for resolution's exact two-request
+traffic, case-only identity boundary, body-free status and privacy mapping,
+inclusive `4,194,304`-byte cap, primitive-only projection, cancellation, and
+application-controlled cleanup. https://github.com/FelixGeisler/code-city/issues/453[#453]
+owns focused implementation evidence, #459 the packaged successful path, and
+#460 final hosted-origin renewal. The dated ADR observations are no warranty,
+and this documentation is not evidence that product traffic exists.
 
 Scenario 8 applies to xref:adr/0001-core-dependency-boundary.adoc[accepted ADR
 0001],

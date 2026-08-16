@@ -127,8 +127,18 @@ owns successful integration, and
 https://github.com/FelixGeisler/code-city/issues/460[#460] owns renewed
 final-head production evidence.
 
-Pages source/action/workflow and deployment mechanism, provider origins and
-requests, analysis and visualization technology, concrete source mapping,
-exact message and port schemas, worker lifecycle/cancellation and physical
-cleanup mechanisms, and deferred limits remain *deferred/not accepted here*
-with their owners in #448 through #460 and #463.
+xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
+0005] is the accepted anonymous revision-resolution constraint. Native worker
+Fetch makes exactly the bounded sequential GitHub metadata and omitted-`sha`
+one-item commit-list requests, permits only case canonicalization, projects the
+full lowercase 40-hex identity, and applies the fixed privacy, status, quota,
+cancellation, and application-controlled cleanup policy. It retrieves no
+source. This is an accepted documented decision, not current implementation;
+https://github.com/FelixGeisler/code-city/issues/453[#453] owns its realization.
+
+Pages source/action/workflow and deployment mechanism, selected-revision
+retrieval/admission origins and requests, analysis and visualization
+technology, concrete source mapping, exact message and port schemas, broader
+worker lifecycle and bridge cancellation mechanisms, retrieval and later-stage
+cleanup mechanisms, and the remaining deferred limits stay with #449 through
+#460 and #463.

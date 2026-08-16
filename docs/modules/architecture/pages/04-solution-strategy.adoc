@@ -4,8 +4,10 @@ The accepted structural strategy is defined by
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
 xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002],
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004],
 and
-xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004].
+xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
+0005].
 The ADRs remain authoritative where this summary omits detail.
 
 == One core with two strata
@@ -94,6 +96,27 @@ renews canonical production evidence on the final head. ADR 0004 selects no
 Pages workflow or deployment mechanism, provider, parser, renderer, source
 layout, schema, lifecycle primitive, or threshold.
 
+== Accepted revision-resolution strategy
+
+ADR 0005 selects native worker Fetch for one bounded sequential metadata GET
+and one bounded omitted-`sha` one-item commit-list GET to `api.github.com`.
+The edge adapter rejects redirects and non-case-only aliases, validates only
+the admitted CORS, media, UTF-8, JSON, identity, and status evidence, discards
+`default_branch`, and projects primitive scalars. The core-owned
+revision-resolution capability alone classifies outcomes and constructs the
+canonical repository/full-lowercase-40-hex tuple. Request two is the sole
+default-tip selector; the returned SHA is immutable once pinned, without an
+atomic or concurrent-provider-state warranty.
+
+Both response bodies have the inclusive 4 MiB post-content-decoding cap and
+the application-controlled reader/chunk/text/parsed-object cleanup boundary in
+ADR 0005. The mechanism makes at most two application GETs, retrieves no
+source, has no credential, retry, fallback, backend, or dependency, and leaves
+selected-revision retrieval and admission to
+https://github.com/FelixGeisler/code-city/issues/449[#449]. This is an accepted
+documented strategy, not current product traffic;
+https://github.com/FelixGeisler/code-city/issues/453[#453] owns implementation.
+
 == Selected trade-off
 
 Separating mutable orchestration from pure deterministic policy makes the
@@ -115,6 +138,6 @@ bypass.
 
 The minimum responsibilities and conceptual collaborations are documented in
 xref:05-building-block-view.adoc[Building Block View]. Concrete source mapping,
-general same-stratum policy, packages, interfaces, schemas, and every mechanism
-or technology not accepted in ADR 0004 remain with their stated downstream
-owners.
+general same-stratum policy, packages, interfaces, schemas, and every remaining
+mechanism or technology not accepted in ADRs 0004 and 0005 remain with their
+stated downstream owners.

@@ -1,0 +1,646 @@
+= ADR 0005: Anonymous GitHub default-branch-tip resolution via REST
+
+Status:: Accepted
+
+== Context
+
+The accepted M1 contract requires each syntactically accepted public-GitHub
+submission to resolve the repository's GitHub-designated default-branch tip
+exactly once, retain the full immutable commit identity, preserve anonymous
+privacy behavior, and make no fallback selection. The exact product contract
+remains in
+xref:requirements:04-functional-requirements.adoc#immutable-revision[Immutable
+revision selection and identity].
+
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] keeps GitHub I/O outside
+the core.
+xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
+places direct anonymous resolution in the same-origin processing worker and
+requires documentary feasibility from the exact production origin.
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
+makes the edge-owned GitHub resolution adapter supply primitive evidence to the
+core-owned revision-resolution capability without retrieving source.
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
+requires a browser-compatible mechanism without a backend, runtime polyfill, or
+unapproved dependency.
+
+This ADR selects that resolution mechanism and its complete validation,
+classification, resource, cleanup, evidence, and renewal boundary. It does not
+implement the mechanism. At acceptance, the repository still contains no M1
+product source, provider request, fixture, captured provider payload, or
+resolution dependency.
+
+== Authority
+
+The human governance decision recorded in
+https://github.com/FelixGeisler/code-city/issues/444[#444] delegates a decision
+to the Requirements Engineer when one recommendation is clear,
+evidence-backed, deterministic, reversible through normal revision, and inside
+the accepted outcome, scope, and non-goals. An architecture or technology
+choice under that delegation also requires a clear evidence-backed Software
+Architect recommendation.
+
+For original issue-body SHA-256
+`ea917a43ec84cb2d6e2aade71dd25f776e5c1c79eca3bf02c4f5fbd506e36d5d`,
+the independent Software Architect recommended native Fetch with the GitHub
+REST mechanism below and, after additional evidence, the exact response cap.
+The human then explicitly instructed the Requirements Engineer to look up the
+remaining evidence and make the decision. Acting on that recommendation,
+instruction, and delegation, the Requirements Engineer accepted this exact
+decision in https://github.com/FelixGeisler/code-city/issues/448[#448], whose
+accepted issue-body SHA-256 is
+`d9ece12e68f2ae3f4d731d240bfecaa639d4781c7e0588befaf8152e81b094d8`.
+
+The choice conforms to
+https://github.com/FelixGeisler/code-city/issues/441[#441] and ADRs 0001
+through 0004, stays inside M1, and is reversible by reopening #448 and revising
+or superseding this ADR. It adds no credential, backend, persistence,
+source-retrieval path, unsupported product capability, or unresolved
+implementation choice. Its numerical boundary is calibrated by the evidence
+below, with its compatibility downside explicit.
+
+This ADR is accepted through that recorded authority and is not pending a
+later generic human-acceptance gate. A semantic deviation requires
+requirements clarification before implementation or merge.
+
+== Decision
+
+=== Selection point and immutable handoff
+
+After #441 input validation succeeds and before any source retrieval, the
+edge-owned GitHub resolution adapter in the processing worker performs exactly
+these operations, sequentially:
+
+[source,text]
+----
+1. GET https://api.github.com/repos/{submitted-owner}/{submitted-repository}
+2. GET https://api.github.com/repos/{canonical-owner}/{canonical-repository}/commits?per_page=1&page=1
+----
+
+The resolution target origin is exactly `https://api.github.com`. Request two
+is constructed only after valid metadata establishes case-only canonical owner
+and repository spelling. It omits `sha`, `path`, `author`, `committer`, `since`,
+and `until`. GitHub documents the omitted `sha` default as the repository's
+default branch and documents the pagination parameters. Request two is the
+sole default-tip selection operation: the provider's documented omitted-`sha`
+semantics make that call select from the repository's default branch.
+
+Every valid metadata object must contain a string `default_branch`. After all
+metadata validation, when `private === false`, the adapter calls request two
+whether that string is empty or non-empty. The value is discarded; it never
+produces an early revision result, is not interpolated into request two, and is
+never reused as a ref or URL.
+This prevents the adapter from carrying a potentially stale metadata branch
+name into the later selection. In particular, an empty metadata value does not
+cause the adapter itself to miss a default-branch designation created between
+the two calls.
+
+GitHub exposes no linearization point for concurrent default-branch
+designation or tip movement. This decision therefore makes no warranty about
+which concurrent provider state the commit response reflects. Conformance
+checks only that selector parameters are omitted, no metadata branch name is
+reused, and the validated returned SHA is pinned and handed off as the
+attempt's immutable identity. Movement after selection cannot repoint that
+identity; this is not an atomic-selection or broader provider-consistency
+claim.
+
+The edge adapter projects only validated provider scalars as resolution
+evidence. The core-owned revision-resolution capability remains the sole
+classification owner and constructs and hands off only this #441 tuple:
+
+[source,text]
+----
+(canonical repository URL, full lowercase 40-hex commit ID)
+----
+
+The metadata `default_branch` field is shape evidence only. Empty and non-empty
+strings are both discarded and are never retained, displayed, projected, or
+handed to retrieval. https://github.com/FelixGeisler/code-city/issues/449[#449]
+must consume the selected immutable tuple and must not re-resolve a branch or
+tip.
+
+=== Exact Fetch request contract
+
+Both requests use native worker `fetch` with exactly:
+
+[source,text]
+----
+method: GET
+Accept: application/vnd.github+json
+X-GitHub-Api-Version: 2026-03-10
+mode: cors
+credentials: omit
+cache: no-store
+redirect: error
+referrerPolicy: no-referrer
+keepalive: false
+signal: the current attempt's AbortSignal
+----
+
+The application sets only the two named request headers. It sets no
+`Authorization`, cookie, request `Content-Type`, cache-control header,
+`Origin`, or `User-Agent`; browser-controlled headers may still appear on the
+wire. The application makes at most two GETs per attempt. The browser may make
+zero, one, or two CORS `OPTIONS` preflights; these are not application fallback
+paths and may consume provider quota.
+
+There is no application timeout, automatic wait or retry, fallback endpoint or
+version, auxiliary `/rate_limit` request, `HEAD`, source request, credential
+prompt, service credential, proxy, relay, backend, persistent cache, or second
+resolution path.
+
+=== Redirect, CORS, media, decoding, and JSON admission
+
+Every inbound provider value remains untrusted. For each fetch:
+
+. CORS must succeed and expose a normal CORS response, not an opaque response.
+. `Response.url` must equal the exact constructed request URL byte-for-byte.
+  Any redirect or different final URL fails even if a browser or provider
+  would otherwise expose it.
+. Status is classified before any body read. For a non-success response, body
+  cancellation is requested where feasible without parsing or retaining the
+  body.
+. For status `200`, the `Content-Type` media-type essence must be
+  `application/json`, compared ASCII case-insensitively. Well-formed parameters
+  do not change admission. If a `charset` parameter is present, it must be one
+  single `utf-8` value, compared ASCII case-insensitively. A missing or
+  malformed media type or another charset fails.
+. The bounded bytes are decoded with
+  `TextDecoder("utf-8", { fatal: true })`, without replacement characters. The
+  complete decoded text must parse as exactly one JSON value. `JSON.parse`
+  permits trailing JSON whitespace; trailing non-whitespace data fails.
+
+No error body is parsed to refine a status classification.
+
+=== Metadata identity validation and case-only canonicalization
+
+A metadata `200` may continue only when its root is a non-null, non-array JSON
+object and all of this evidence is present:
+
+* `private` is a JSON boolean. `true` maps to the privacy-preserving unavailable
+  outcome; only `false` proceeds.
+* `owner` is a non-null, non-array object and `owner.login` is a string that
+  satisfies the #441 owner grammar.
+* `name` is a string that satisfies the #441 repository grammar.
+* `full_name` is a string exactly equal to `owner.login + "/" + name`, with the
+  returned spelling.
+* `html_url` is a string exactly equal to
+  `"https://github.com/" + owner.login + "/" + name`.
+* Submitted and returned owner/repository segments are equal under ASCII-only
+  case folding. Every non-letter and the string length must already be
+  identical.
+* `default_branch` is a string. Empty and non-empty strings are both allowed
+  and discarded after validation; neither causes an early result or is used as
+  a ref or URL. A missing or non-string value is invalid provider evidence.
+
+This permits only case canonicalization. A renamed or transferred alias, a
+spelling change beyond ASCII letter case, or any redirect fails. The canonical
+repository URL is constructed from validated `owner.login` and `name`; no
+provider-returned URL, template, link, or location is followed, loaded,
+executed, or retained.
+
+=== Commit identity validation and primitive-only projection
+
+A commit-list `200` may continue only when the JSON root is an array of exactly
+one item, that item is a non-null, non-array object, and `sha` is a string
+matching exactly `^[0-9A-Fa-f]\{40}$`. The projected commit ID is converted
+with ASCII-only lowercase and therefore matches exactly
+`^[0-9a-f]\{40}$`. Every
+other field and every additive response field is ignored.
+
+For both responses, the edge adapter's output projection contains only the
+validated primitive scalar values needed by the core-owned
+resolution-evidence port. No raw or nested provider object crosses the port.
+The revision-resolution capability constructs the canonical tuple and owns
+every category below. Implementations must not merge, spread, recursively copy,
+execute, use provider data as markup or a resource locator, expose a provider
+object through the port, or retain the parsed provider object after the
+applicable cleanup boundary.
+
+=== Exact status, privacy, rate, and cancellation policy
+
+[cols="4,8",options="header"]
+|===
+|Condition |Required result
+
+|Metadata `404`
+|`Repository unavailable for anonymous access`; do not parse the body or
+distinguish missing, private, or access-denied conditions.
+
+|Valid metadata `200` with `private === true`
+|The same `Repository unavailable for anonymous access` outcome, with no
+existence detail.
+
+|Commit-list `409`, or commit-list `200` whose parsed root is exactly `[]`
+|`Revision unavailable`; make no fallback selection.
+
+|Explicit cancellation of the current `Loading` attempt
+|`Cancelled` under #441. Abort the current signal, request cancellation of any
+active body reader where feasible, clear application-owned state through the
+cleanup policy below, suppress request two and downstream work, and do not
+reclassify the abort as provider failure.
+
+|Replacement of an attempt
+|Revoke its publication eligibility, abort or cancel feasible work, clear
+application-owned state through the cleanup policy below, and publish no
+terminal result for the replaced attempt.
+
+|Metadata `403`
+|`Provider/resolution failure`. GitHub documents this status for both
+Forbidden and rate limiting, and body-free classification cannot disambiguate
+it.
+
+|Commit-list `403`; either endpoint `429` or `410`; commit-list `404`; any other
+non-`200` status not mapped above; network, CORS, or redirect failure; malformed
+media, UTF-8, JSON, or scalars; invalid identity evidence; or an over-cap body
+|`Provider/resolution failure`; perform no body parsing, automatic retry, wait,
+credential recovery, or fallback.
+|===
+
+A missing or non-boolean `private`, missing or non-object `owner`, invalid
+owner/login/name/full-name/URL evidence, non-case-only mismatch, missing or
+non-string `default_branch`, non-array commit-list root, commit-list length
+greater than one, malformed sole item, or invalid SHA is invalid identity
+evidence and therefore `Provider/resolution failure`. The exact empty
+commit-list array is excluded from that rule and maps to `Revision unavailable`
+as stated above.
+
+This policy reconciles the mechanism with #441. Anonymous access denial maps
+to `Repository unavailable for anonymous access` when GitHub represents it
+through the privacy-preserving metadata `404` or valid metadata evidence with
+`private === true`. A metadata `403` cannot be identified as access denial
+from status alone because GitHub documents it for both Forbidden and rate
+limiting; it is therefore the ambiguous `Provider/resolution failure`
+category. No error body is parsed to make a finer distinction.
+
+GitHub documents an anonymous REST primary limit of 60 requests per hour
+associated with the originating IP and separately changeable secondary limits.
+The resolution GETs, #449 retrieval calls, other anonymous GitHub REST use from
+that IP, and any provider-counted preflights share provider capacity; Code City
+reserves or partitions none of it. Metadata or commit-list `403` and either
+endpoint's `429` are terminal for the current attempt even when rate headers
+are visible. Rate values, reset times, retry hints, request IDs, bodies, and
+repository-existence details are neither displayed nor persisted. A user may
+explicitly resubmit; that is a new #441 attempt, not an automatic retry.
+
+=== Inclusive decoded-body bound
+
+Each status-`200` response has an inclusive `4,194,304`
+post-HTTP-content-decoding-byte cap. The adapter counts the actual
+`ReadableStream` chunk bytes delivered by Fetch before UTF-8 decoding or JSON
+parsing:
+
+* cumulative bytes less than or equal to `4,194,304`, including exactly
+  `4,194,304`, may proceed after end-of-stream;
+* observing byte `4,194,305` requests reader cancellation where feasible and
+  produces `Provider/resolution failure`;
+* the over-cap path handles stream cleanup to settlement, releases an acquired
+  reader lock in `finally`, clears application-owned response/body state, and
+  suppresses request two and all downstream work; and
+* admission never relies on `Content-Length` and never uses unbounded
+  `response.json()`, `response.text()`, `response.arrayBuffer()`, `blob()`, or
+  an equivalent unbounded helper.
+
+=== Application-controlled cleanup
+
+The lifetime requirement is limited to application-controlled reachability.
+For each status-`200` response, the implementation has identifiable
+application-owned roles; local identifier names may differ:
+
+* the *body-reader reference*;
+* the *raw-chunk accumulator*;
+* the *decoded-text variable*;
+* the *parsed-root object variable*; and
+* the *primitive-only output projection*.
+
+After successful status-`200` body processing, including a valid body that maps
+to an unavailable outcome:
+
+. The body reader feeds only the bounded raw-chunk accumulator, and every
+  `read()` is handled through settlement.
+. The acquired reader lock is released in `finally` when stream handling ends.
+. After fatal UTF-8 decoding creates the decoded-text value, the chunk
+  accumulator is emptied and application-owned raw-chunk references are
+  cleared or dropped before JSON parsing.
+. After `JSON.parse` creates the parsed root, the decoded-text variable is
+  cleared or dropped before scalar validation and projection.
+. After validation, any output projection contains only validated primitive
+  scalars and no raw or nested provider object. Whether processing produces a
+  projection or a mapped unavailable outcome, the parsed-root, response, and
+  body-reader references are then cleared or dropped.
+. For metadata, all earlier application-owned body containers and variables
+  are cleared or dropped no later than before request two or the unavailable
+  return, as applicable. For the commit response, they are cleared or dropped
+  no later than before the projection, tuple, or unavailable result is
+  returned or handed downstream. A successful primitive-only projection
+  remains reachable as the intended output.
+
+On a non-success status, cap breach, read/decode/parse/validation failure,
+explicit cancellation, or replacement, the current signal is aborted for
+explicit cancellation or replacement and `reader.cancel()` or
+`response.body.cancel()` is requested where feasible. Affected
+fetch/read/abort/cancel outcomes are handled through settlement, including
+rejections; an acquired reader lock is released in `finally`; the raw-chunk
+accumulator is emptied; decoded text, parsed root, unpublished projection,
+response, and reader references are cleared or dropped; and request two or
+downstream work is suppressed as applicable.
+
+Clearing or dropping a reference means only removing application-owned
+reachability. This contract does not claim fresh primitive storage, removal of
+every JavaScript-engine or browser-internal reference, immediate
+fetch/read/abort/cancel settlement, a cleanup-latency bound, any
+garbage-collection timing, secure erasure, immediate network stop, or a
+security sandbox.
+
+=== Inert conformance examples
+
+The following are documentary review cases, not executable fixtures or a test
+technology selection:
+
+[cols="4,8",options="header"]
+|===
+|Given boundary |Required observation
+
+|Either response has a non-`200` status
+|Classification occurs before a body read; feasible body cancellation is
+requested, no error body is parsed, and no later request or stage starts.
+
+|Valid public metadata has `default_branch: ""` or a non-empty string
+|The value passes string-shape validation, is discarded, and request two still
+uses exactly `commits?per_page=1&page=1` without any selector parameter.
+
+|Returned owner/repository spelling differs only by ASCII letter case
+|Canonicalization may proceed. A redirect, rename/transfer alias, punctuation,
+length, or other spelling difference fails.
+
+|Either status-`200` stream yields `4,194,303`, `4,194,304`, or `4,194,305`
+post-HTTP-content-decoding bytes
+|The first two sizes may proceed after end-of-stream. The third requests
+feasible cancellation, fails resolution, releases the reader lock in
+`finally`, and suppresses request two or downstream work.
+
+|Cancellation occurs during the metadata stream or commit-list stream
+|The current signal is aborted, feasible reader cancellation and cleanup are
+settled, no applicable second request or downstream work occurs, and the abort
+is not reclassified as provider failure.
+
+|The commit endpoint returns `409`, exact JSON `[]`, or an array longer than
+one
+|The first two cases are `Revision unavailable`; length greater than one is
+`Provider/resolution failure`.
+
+|The sole commit item's SHA contains uppercase ASCII hexadecimal
+|It is admitted only if all 40 characters match the exact mixed-case grammar,
+then projected as the full lowercase 40-hex identity.
+
+|Either valid body has been decoded and parsed
+|Chunks are cleared before parsing, text before scalar projection, and parsed
+objects plus response/reader references before request two or return. Only the
+validated primitive projection may remain reachable.
+|===
+
+These cases verify application-owned boundaries only. They do not attempt to
+prove fresh primitive storage, all engine references, immediate abort
+settlement, garbage collection, secure erasure, atomic provider selection, or
+which concurrently changing provider state was observed.
+
+== Rationale
+
+Native Fetch is the smallest mechanism compatible with the accepted browser
+worker. It directly supports redirect refusal, omitted credentials, no-store
+requests, streaming, cancellation, and application-owned cleanup without a
+dependency.
+
+Four MiB matches M1's existing single-raw-file resource posture, leaves
+substantial room above the atypical response and 1 MB Git-object guidance for
+JSON escaping, envelope, verification-payload, and signature expansion, and
+remains bounded for a browser worker.
+
+== Rejected alternatives
+
+* *`@octokit/rest` or broader Octokit.* It adds a dependency and transitive
+  abstraction surface while the same custom cap, streaming, redirect, retry,
+  and cancellation policy remains necessary.
+* *Metadata `default_branch` followed by a named-ref or `/commits/\{ref}`
+  request.* It carries a metadata branch name into a later lookup even though
+  that name may be stale if designation changes. Omitting `sha` delegates
+  documented default-branch semantics to request two without claiming an
+  atomic provider snapshot.
+* *GraphQL `defaultBranchRef.target.oid`.* It requires authentication, contrary
+  to #441.
+* *GitHub HTML, Smart HTTP/ref advertisement, or archive shortcuts.* They lack
+  the selected bounded anonymous CORS metadata contract, can expose unbounded
+  advertisements, follow another origin, or retrieve source.
+* *Follow redirects or provider-returned URLs.* That admits a renamed or
+  transferred alias or another provider-controlled path instead of strict
+  case-only canonicalization.
+* *A 1 MiB response cap.* It leaves unnecessarily little room for JSON
+  envelope, escaping, verification payload, and signature expansion around
+  provider-accepted objects.
+* *A 100 MiB response cap or no cap.* It can create hundreds of MiB of
+  simultaneous byte, string, and object memory across representations and
+  still cannot guarantee compatibility.
+
+== Downside
+
+The decision rejects renamed or transferred aliases, fail-safely rejects a
+rare provider-valid response above 4 MiB, depends on anonymous per-IP quota,
+and relies on point-in-time CORS and API-version behavior. It makes no
+compatibility or service-availability promise and has no automatic recovery.
+
+== Dated documentary and read-only evidence
+
+All observations in this section were made on `2026-08-16` UTC and are
+point-in-time decision inputs, not provider guarantees.
+
+=== Official sources
+
+The decision relies on and distinguishes these official sources:
+
+* GitHub's https://docs.github.com/en/rest/repos/repos?apiVersion=2026-03-10#get-a-repository[Get a repository] endpoint contract.
+* GitHub's https://docs.github.com/en/rest/commits/commits?apiVersion=2026-03-10#list-commits[List commits] endpoint contract, including the omitted-`sha` default and pagination semantics.
+* The https://github.com/github/rest-api-description/blob/67c14c7efb01cdeeac0ecd8cee9fae8d7a80e2aa/descriptions/api.github.com/api.github.com.yaml[GitHub REST API description at observed commit `67c14c7`]. Its relevant response schemas specify field types but no whole-response, message, payload, or signature maximum.
+* GitHub's https://docs.github.com/en/rest/using-the-rest-api/using-cors-and-jsonp-to-make-cross-origin-requests[Using CORS and JSONP to make cross-origin requests] documentation.
+* GitHub's https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api[Rate limits for the REST API] documentation.
+* GitHub's https://docs.github.com/en/rest/about-the-rest-api/api-versions[API Versions] documentation.
+* GitHub's https://docs.github.com/en/repositories/creating-and-managing-repositories/repository-limits[Repository limits] guidance.
+
+The repository guidance recommends a 1 MB maximum single Git object and reports
+enforcement at 100 MB. This is context for atypical commit fields, not a REST
+decoded-response maximum or support warranty. The API schemas publish no
+maximum that can substitute for the selected cap.
+
+=== Exact-origin and version observations
+
+* Exact-origin preflights for both REST paths returned `204`,
+  `Access-Control-Allow-Origin: *`, allowed `GET`, and allowed
+  `X-GitHub-Api-Version`. Anonymous GET responses exposed a readable status,
+  exact response URL, JSON body, and `Content-Type`. Exposure metadata also
+  made relevant location, retry, rate, media-version, deprecation, sunset, and
+  content-length headers browser-visible. The decision does not rely on
+  `Content-Length`, rate values, redirect locations, or retry hints.
+* `X-GitHub-Api-Version: 2026-03-10` was the documented latest supported
+  version. GitHub documents at least 24 months of support after a newer
+  version, unversioned fallback to `2022-11-28`, and `410 Gone` after
+  retirement. “Latest” is only the dated observation; the decision is the
+  fixed version pin.
+
+=== Fixed-shape repository observations
+
+Fifteen public repositories were queried anonymously with the exact two GET
+shapes:
+
+* `torvalds/linux`;
+* `chromium/chromium`;
+* `llvm/llvm-project`;
+* `mozilla/gecko-dev`;
+* `microsoft/vscode`;
+* `microsoft/TypeScript`;
+* `tensorflow/tensorflow`;
+* `kubernetes/kubernetes`;
+* `rust-lang/rust`;
+* `NixOS/nixpkgs`;
+* `Homebrew/homebrew-core`;
+* `DefinitelyTyped/DefinitelyTyped`;
+* `openjdk/jdk`;
+* `apache/spark`; and
+* `elastic/elasticsearch`.
+
+Their GitHub-reported repository `size` values ranged from `593,704` to
+`65,989,294 KiB`, with median `1,541,381 KiB`; Chromium was the maximum.
+Metadata bodies ranged from `4,973` to `7,023` decoded bytes, with median
+`6,411`. One-item commit bodies ranged from `2,932` to `5,415` decoded bytes,
+with median `4,461`, including signed tips.
+
+Repository size, history length, and file count are not enumerated in these
+fixed-shape resolution responses. Variable default-tip commit message and
+verification payload/signature fields dominate the practical tail risk.
+
+The deliberately atypical public `jakecoffman/large-commit-message`
+observation returned `5,631` metadata bytes and a `69,358`-byte one-item commit
+response containing a `65,538`-byte commit message. The selected cap is about
+60 times that response.
+
+=== Reproducible read-only procedure
+
+To renew the observation without adding a repository fixture or payload:
+
+. Record the UTC time and the official schema and documentation revision.
+. Issue exactly two non-mutating `OPTIONS` preflights, one for each selected
+  REST path, with `Origin: https://felixgeisler.github.io`,
+  `Access-Control-Request-Method: GET`, and
+  `Access-Control-Request-Headers: X-GitHub-Api-Version`.
+. For each named public repository, issue only the two selected anonymous GET
+  forms with the exact version and media headers and request options. Record
+  final URL, status, CORS allow/expose evidence, media type, decoded byte
+  count, required identity scalars, default-branch shape evidence, and SHA
+  shape.
+. Repeat the two-GET observation for
+  `jakecoffman/large-commit-message` and record the same fields and byte counts.
+
+The procedure fetches no repository source and mutates nothing. It adds no
+script, captured provider payload, test fixture, package, dependency, or
+generated evidence file to the repository.
+
+=== Evidence limits
+
+The observations do not warrant future availability, CORS or header stability,
+ordering, response size, repository compatibility, browser support, service
+correctness, or rate capacity. They make no atomic-selection or
+concurrent-provider-state warranty, no JavaScript storage-lifetime or cleanup
+warranty beyond the application-owned contract, no legal or terms-of-service
+conclusion, no comprehensive privacy or security claim, and no claim that the
+worker is a security boundary.
+
+== Version renewal and stop rule
+
+`2026-03-10` is not a floating “current” alias. A newer API release causes no
+automatic upgrade.
+https://github.com/FelixGeisler/code-city/issues/453[#453] revalidates the pin
+and endpoint contract before implementation, and
+https://github.com/FelixGeisler/code-city/issues/460[#460] renews exact-origin
+hosted evidence on the final head.
+
+A deprecation or sunset notice, `410`, CORS drift, anonymous-access change,
+incompatible schema or media change, changed omitted-`sha` semantics, inability
+to preserve the cap or cancellation boundary, or loss of full 40-hex identity
+requires reopening #448 and, when topology feasibility is affected,
+https://github.com/FelixGeisler/code-city/issues/446[#446]. Do not silently
+change the version, endpoint, redirect policy, dependency, credential model,
+topology, cap, retry policy, or fallback.
+
+== Consequences and downstream ownership
+
+[cols="2,8",options="header"]
+|===
+|Owner |Required implication or evidence
+
+|https://github.com/FelixGeisler/code-city/issues/449[#449]
+|Consume the selected immutable tuple; own content retrieval, sole admission,
+extension/path/content rules, retrieval limits including any timing decisions,
+and physical resources. Its anonymous requests share the originating-IP quota.
+It must not re-resolve the default branch or change this response cap.
+
+|https://github.com/FelixGeisler/code-city/issues/452[#452]
+|Map and enforce the GitHub resolution adapter as edge-side under ADRs 0001 and
+0003, and keep concrete Fetch, Response, stream, and provider mechanism types
+out of application/domain core and core-owned contracts. It adds no provider
+implementation or fixture.
+
+|https://github.com/FelixGeisler/code-city/issues/453[#453]
+|Implement the resolution-evidence port and cover the exact two requests and
+options, including request two after an empty-string `default_branch`; omitted
+selector parameters and immutable validated-SHA pin and handoff without a
+concurrent-state or atomic-selection claim; pre-provider rejection; case-only
+canonicalization and alias refusal; every status mapping, including metadata
+`403`, commit-list `409` and exact `[]`, and length greater than one; 40-hex
+projection; malformed-data isolation; and no provider-URL following. Code
+review verifies the named application-owned cleanup points and primitive-only
+output. Instrumented streams observe feasible `cancel()`, `releaseLock()` in
+`finally`, no second request or downstream work after an applicable failure or
+cancellation, no provider object in output, cancellation during either stream,
+and `cap−1`, exact-cap, and `cap+1` boundaries for each successful response;
+they do not attempt to prove garbage collection or engine lifetime.
+
+|https://github.com/FelixGeisler/code-city/issues/459[#459]
+|Prove only that the packaged worker resolves anonymously, hands the selected
+tuple into the successful path, pins the SHA, shares no source during
+resolution, and makes no retry, fallback, UI request, or backend call.
+
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Renew the pinned-version and exact hosted-origin CORS/preflight evidence;
+cover rate and provider failures, replacement and cancellation, cap behavior,
+no stale result, and absence of credentials, persistence, retry, fallback, and
+unexpected traffic on the final head.
+
+|https://github.com/FelixGeisler/code-city/issues/463[#463]
+|Synthesize this accepted two-call resolution and selected tuple into the full
+runtime/deployment flow without adding a port, owner, request, retry, or
+resolution path.
+
+|https://github.com/FelixGeisler/code-city/issues/464[#464]
+|Verify this ADR's `Accepted` status, delegated authority, one owner and
+enforcement boundary, stop and renewal rule, and objective #452, #453, #459,
+and #460 fitness evidence before M1 handoff. It does not add a generic
+human-acceptance gate.
+|===
+
+== Exclusions
+
+This ADR does not select or change:
+
+* content retrieval or admission, RA limits, source formats, or parser,
+  analyzer, or renderer choices;
+* global or retrieval timing limits, UI controls, authentication, message or
+  port schemas, concrete source layout, Pages source/action/workflow,
+  application route, or deployment mechanism;
+* product source, a request from product code, an executable fixture or probe,
+  provider payload, dependency, manifest, lockfile, configuration, workflow,
+  generated artifact, or captured evidence; or
+* any provider behavior, compatibility, security, privacy, storage lifetime,
+  cleanup, atomicity, concurrency, availability, or support warranty not
+  stated above.
+
+#449 remains the sole content-retrieval/admission decision owner. This ADR
+selects only anonymous default-tip resolution and its bounded evidence
+projection; it retrieves no source and creates no implemented product behavior.

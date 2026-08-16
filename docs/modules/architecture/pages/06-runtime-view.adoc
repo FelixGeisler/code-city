@@ -7,9 +7,13 @@ xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
 accepts the future `/code-city/` static package and separate same-origin
 ES-module worker used by this topology; it does not make that package current
 repository behavior. Vite development and preview servers are local tools, not
-runtime nodes. This view does not select a message or port schema, API, GitHub
-mechanism, worker lifecycle or cancellation primitive, parser, analyzer,
-renderer, or full accepted-mechanism flow. That synthesis remains with
+runtime nodes.
+xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
+0005] accepts the exact anonymous revision-resolution REST boundary but does
+not make it current runtime traffic. Outside that decision, this view does not
+select a message or port schema, retrieval API or GitHub mechanism, broader
+worker lifecycle or bridge cancellation primitive, parser, analyzer, renderer,
+or full accepted-mechanism flow. That synthesis remains with
 https://github.com/FelixGeisler/code-city/issues/463[#463].
 
 == Runtime topology
@@ -87,16 +91,21 @@ the sole admission path and actual-data limit enforcement; deterministic
 ordering and metrics; pure renderer-neutral city construction; transient
 confinement of provider records, paths, source, admitted modules, counters,
 metrics, and construction intermediates; stage termination and downstream
-suppression; network and processing cancellation where a later accepted
-mechanism permits it; release of transient processing references.
+suppression; resolution cancellation under ADR 0005 and later-stage network or
+processing cancellation where its owning mechanism permits it; release of
+transient processing references.
 |===
 
 Repository data remains inert and is never executed, evaluated, imported, or
-dynamically loaded. UI rejection of a late result is authoritative even when
-underlying work could not be stopped. A worker-side deferred limit is enforced
-only after its owning issue accepts its exact value and semantics; browser
-memory, request behavior, and renderer capacity create no undeclared product
-limit.
+dynamically loaded. For revision resolution, ADR 0005 fixes at most two native
+Fetch GETs, strict case-only identity and response validation, primitive-only
+evidence, immutable-SHA pinning, an inclusive 4 MiB bound for each `200` body,
+and application-controlled cleanup. It retrieves no source and makes no atomic
+or concurrent-provider-state warranty. UI rejection of a late result is
+authoritative even when underlying work could not be stopped. Any still-
+deferred downstream worker-side product limit is enforced only after its owning
+issue accepts its exact value and semantics; browser memory, request behavior,
+and renderer capacity create no undeclared product limit.
 
 == Enforcement placement
 
@@ -170,9 +179,11 @@ available.
 
 |Worker and Public GitHub
 |Direct anonymous resolution and selected-revision retrieval.
-|Origins, endpoints, methods, statuses, headers, redirects, request and rate
-behavior, bounded-read mechanism, and cancellation/release mechanism remain
-with #448 and #449.
+|ADR 0005 fixes resolution at `https://api.github.com`: metadata first, then
+the canonical repository's one-item commit list with omitted `sha`, exact
+headers and Fetch options, redirect refusal, body-free status classification,
+bounded response handling, and attempt-signal cleanup. Retrieval origins,
+requests, limits, and mechanisms remain with #449.
 |===
 
 Raw or normalized source, repository entry content, admitted modules,
@@ -216,11 +227,14 @@ mechanism/port synthesis:
   requires. Cancellation preserves the editable draft; replacement installs
   the new submission before its validation result.
 . Generic lifecycle control may tell the worker that the attempt is no longer
-  current. This ADR selects no message, port, request, or cancellation
-  primitive.
-. The worker stops feasible network and processing work where the later
-  accepted mechanisms permit it, suppresses every downstream stage, and
-  releases transient references for the old attempt.
+  current. This view selects no bridge message, port, or broader lifecycle
+  primitive; ADR 0005's current-attempt `AbortSignal` is limited to resolution.
+. The worker stops feasible network and processing work where the accepted
+  mechanisms permit it, suppresses every downstream stage, and releases
+  transient references for the old attempt. ADR 0005 specifically requires
+  aborting the resolution attempt signal, feasible response-reader
+  cancellation, settled cleanup, and suppression of request two or downstream
+  work.
 . Any tied or late identity, failure, or scene outcome is ignored. UI
   ineligibility remains authoritative even if underlying work completes.
 
@@ -244,19 +258,25 @@ garbage-collection internals.
 
 == Feasibility and deferred synthesis
 
-#448 and #449 must each establish documentary/read-only feasibility for its
-selected direct anonymous worker-to-GitHub mechanism from the exact production
-origin `https://felixgeisler.github.io`. Together they must cover every selected
-endpoint and redirect target, required cross-origin methods, statuses, body and
-header visibility, anonymous request and rate-limit policy, immutable-identity
-evidence, bounded retrieval and early-stop behavior, and cancellation and
-release behavior.
+ADR 0005 records https://github.com/FelixGeisler/code-city/issues/448[#448]'s
+dated documentary/read-only feasibility for the exact
+anonymous resolution calls from production origin
+`https://felixgeisler.github.io`, including CORS/preflight and exposed response
+evidence, the fixed API version, strict redirect and identity handling, body
+bounds, rate behavior, cancellation, and application-controlled release. Its
+observations are point-in-time evidence, not service, CORS, size, concurrency,
+cleanup, compatibility, security, or privacy warranties. #453 revalidates the
+pin and endpoint contract before implementation, and #460 renews hosted-origin
+evidence on the final head.
 
-If either issue cannot establish all applicable evidence, it remains
-unaccepted and https://github.com/FelixGeisler/code-city/issues/446[#446] must
-be reopened. No proxy, relay, backend, serverless function, credential,
-persistent cache, opaque unbounded response, automatic-retry workaround,
-second retrieval path, or other fallback may be introduced silently.
+#449 must separately establish the applicable documentary/read-only feasibility
+for selected-revision retrieval. If retrieval cannot satisfy ADR 0002, or if
+ADR 0005's renewal/stop conditions fail, implementation stops and
+https://github.com/FelixGeisler/code-city/issues/446[#446] is reopened when
+topology feasibility is affected. No proxy, relay, backend, serverless
+function, credential, persistent cache, opaque unbounded response,
+automatic-retry workaround, second retrieval path, or other fallback may be
+introduced silently.
 
 The minimum blocks, conceptual ports, bridge boundary, and exclusive ownership
 are accepted in
@@ -267,9 +287,10 @@ their successful-path integration, and #460 their renewed final-head production
 evidence; no dependency, source, configuration, or production artifact exists
 yet.
 
-Provider mechanisms, parser/analyzer, renderer, message and port schemas,
-concrete source mapping, worker primitive, Pages workflow and route, and the
-full success/failure/replacement/cancellation flow remain with their stated
-owners in #448 through #460 and #463.
+Selected-revision retrieval, parser/analyzer, renderer, message and port
+schemas, concrete source mapping, broader worker and bridge primitives, Pages
+workflow and route, and the full success/failure/replacement/cancellation flow
+remain with their stated owners in #449 through #460 and #463.
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains authoritative
-for the outer source-dependency boundary.
+for the outer source-dependency boundary, and ADR 0005 remains authoritative
+for resolution only.

@@ -13,6 +13,7 @@
 ** xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002: Browser-only M1 runtime and GitHub Pages deployment topology]
 ** xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003: M1 core strata, building blocks, and conceptual ports]
 ** xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004: Framework-free TypeScript shell built with Vite]
+** xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR 0005: Anonymous GitHub default-branch-tip resolution via REST]
 * xref:10-quality-requirements.adoc[10. Quality Requirements]
 * xref:11-risks-and-technical-debt.adoc[11. Risks and Technical Debt]
 * xref:12-glossary.adoc[12. Glossary]

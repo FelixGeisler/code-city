@@ -7,7 +7,10 @@ They fit the source strategy in xref:04-solution-strategy.adoc[Solution
 Strategy] and the placement in
 xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002].
 They are exclusive responsibility boundaries, not package or component counts,
-and do not prescribe interfaces, schemas, mechanisms, or technologies.
+and do not prescribe interfaces or schemas. The GitHub resolution adapter is
+the one mechanism in this view now constrained by
+xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
+0005]; the decision is documented but not yet implemented.
 
 == Minimum logical blocks
 
@@ -69,9 +72,10 @@ performs no validation, orchestration, classification, or admission.
 |GitHub resolution adapter
 |Edge, worker
 |Realizes the resolution-evidence port in
-https://github.com/FelixGeisler/code-city/issues/453[#453] using the mechanism
-selected by https://github.com/FelixGeisler/code-city/issues/448[#448]. It
-retrieves no source.
+https://github.com/FelixGeisler/code-city/issues/453[#453] using ADR 0005's
+exact bounded native-Fetch metadata and omitted-`sha` commit-list calls. It
+validates and projects only primitive evidence, owns its response-stream
+resources, and retrieves no source.
 
 |GitHub retrieval adapter
 |Edge, worker
@@ -193,7 +197,8 @@ classifies or reclassifies it.
 
 |Resolution outcome
 |Revision-resolution capability
-|The resolution adapter supplies evidence only.
+|The resolution adapter supplies only ADR 0005's validated primitive evidence;
+it neither constructs the tuple nor reclassifies an outcome.
 
 |Admission and RA outcome
 |Retrieval/admission capability
@@ -242,6 +247,15 @@ Cancellation and cleanup are partitioned exactly once:
 . The UI-worker bridge releases transport references.
 . The presentation adapter disposes incomplete or replaced presentation
   resources.
+
+For resolution, ADR 0005 refines the adapter part of step 3: each status-`200`
+response has the inclusive 4 MiB stream bound, reader-lock release in
+`finally`, and ordered removal of application-owned chunk, text, parsed-object,
+response, and reader reachability before request two or return. Cancellation
+or replacement aborts the attempt signal, requests feasible body cancellation,
+settles cleanup, and suppresses later work. Only a validated primitive
+projection may remain reachable; no engine-lifetime, cleanup-latency, secure-
+erasure, immediate-network-stop, or worker-sandbox warranty follows.
 
 Late output is harmless because the UI publication gate remains authoritative.
 Reload discards all application-managed session state. No cleanup latency,

@@ -22,3 +22,10 @@
   Engineer's acceptance under the human delegation recorded in #444. This is
   the accepted documented decision; #452 owns initial implementation, #459
   successful integration, and #460 renewed final-head production evidence.
+* xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR 0005: Anonymous GitHub default-branch-tip resolution via REST]
+  is `Accepted`. https://github.com/FelixGeisler/code-city/issues/448[#448]
+  records the clear Software Architect recommendation, calibrated cap evidence,
+  and Requirements Engineer acceptance under the human instruction and
+  delegation recorded in #444. The decision needs no later generic human
+  acceptance; #453 owns implementation, #459 packaged-path evidence, and #460
+  renewed final-head hosted evidence.
