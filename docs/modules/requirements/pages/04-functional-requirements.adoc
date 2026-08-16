@@ -1,7 +1,9 @@
 = Functional Requirements
 
 This page is normative for the M1 canonical-input, immutable-revision, and
-observable-state contract.
+observable-state contract. The downstream source-admission and approved
+RA-01 through RA-09 refinement is normative in
+xref:06-source-admission-and-limits.adoc[].
 
 == Terms
 
@@ -302,6 +304,7 @@ publish one complete city atomically.
 These are observable invariants. They do not choose a concurrency primitive,
 request identifier, process boundary, cancellation protocol, or cleanup owner.
 
+[[failure-outcomes]]
 == Failure outcomes
 
 === M1-FAIL-1: Required categories
@@ -332,10 +335,12 @@ returns invalid identity evidence.
 |Explain that GitHub resolution failed and permit explicit resubmission; do not
 invent an identity or retry automatically.
 
-|Downstream processing or presentation failure
+|Downstream source, limit, processing, construction, or presentation failure
 |A later admitted-source, metric, city, or presentation stage fails.
-|Use the owning contract's explanation. If selection completed, retain the
-attempted tuple, but show no city.
+|Use the exact visible category in
+xref:06-source-admission-and-limits.adoc#failure-categories[] when that contract
+applies, or the later owning contract's accepted refinement. If selection
+completed, retain only the current attempted tuple and show no city.
 |===
 
 Every category obeys <<states,M1-STATE-5>>. Detailed source-admission, limit,
@@ -395,7 +400,9 @@ and deployment flow
 xref:architecture:07-deployment-view.adoc[Deployment View]
 |===
 
-Source-admission and resource-limit semantics remain with
-https://github.com/FelixGeisler/code-city/issues/442[#442]. Nothing in this page
-assigns those rules, the state machine, cancellation, or cleanup to a provider,
-process, node, component, or port.
+Source-admission and RA-01 through RA-09 semantics are defined in
+xref:06-source-admission-and-limits.adoc[] under
+https://github.com/FelixGeisler/code-city/issues/442[#442]. Their feasibility,
+mechanism, enforcement, and evidence boundaries remain with the linked
+downstream issues. Nothing in this page assigns those rules, the state machine,
+cancellation, or cleanup to a provider, process, node, component, or port.

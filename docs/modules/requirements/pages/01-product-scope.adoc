@@ -7,9 +7,12 @@ for an anonymously accessible public GitHub repository, and sees a
 deterministic, non-configurable Code City for supported JavaScript and
 TypeScript modules from one immutable repository revision.
 
-For the input and state part of that outcome, xref:04-functional-requirements.adoc[]
-is authoritative. In particular, it defines which URL form is accepted, how the
-revision is selected and identified, and when a city may be visible.
+For the input and state part of that outcome,
+xref:04-functional-requirements.adoc[] is authoritative. In particular, it
+defines which URL form is accepted, how the revision is selected and identified,
+and when a city may be visible. For supported-source admission and the approved
+M1 repository/intake limits RA-01 through RA-09,
+xref:06-source-admission-and-limits.adoc[] is authoritative.
 
 == Included in M1
 
@@ -25,8 +28,10 @@ M1 includes only the smallest complete path needed for that outcome:
 * observable initial, loading, success, failure, replacement, and cancellation
   behavior with no stale or partial city.
 
-The exact source-admission and resource rules, metric semantics, and city
-mapping are separate M0 contracts. Their inclusion here does not define those
+The exact source-admission and approved repository/intake limit rules are in
+xref:06-source-admission-and-limits.adoc[]. Metric semantics, city mapping, and
+all deferred processing, construction, presentation, and duration limit
+choices remain separate contracts; their inclusion in M1 does not define those
 rules ahead of their owning issues.
 
 [[non-goals]]
@@ -53,15 +58,15 @@ The following are outside M1. They are not implied future commitments.
   resource limits.
 * Compatibility with, feature parity with, or default copying/porting from Code
   City v1.
-* Support beyond the fixed, human-approved M1 source, processing, and rendering
-  limits.
 
 == Contract boundary
 
 This requirements slice defines observable product behavior only. Source
-admission and limits are owned by
+admission and RA-01 through RA-09 are specified by
+xref:06-source-admission-and-limits.adoc[] under
 https://github.com/FelixGeisler/code-city/issues/442[#442]. The provider/API
-mechanism, runtime topology and trust placement, port/component ownership, and
-cancellation/cleanup ownership remain undecided here; their exact downstream
-owners and affected architecture views are listed in
-xref:04-functional-requirements.adoc#decision-boundary[Decision boundary].
+mechanism, runtime topology and trust placement, port/component ownership,
+enforcement location, and cancellation/cleanup ownership remain undecided
+here; their exact downstream owners and affected architecture views are listed
+in xref:04-functional-requirements.adoc#decision-boundary[Decision boundary]
+and xref:06-source-admission-and-limits.adoc#decision-boundary-source-limits[].

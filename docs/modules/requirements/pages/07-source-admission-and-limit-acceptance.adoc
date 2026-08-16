@@ -1,0 +1,394 @@
+= Source Admission and Limit Acceptance
+
+These inert documentary scenarios and traceability assignments review
+xref:06-source-admission-and-limits.adoc[]. They are not executable fixtures,
+test scaffolds, provider stubs, technology choices, or assignments of an
+enforcement location.
+
+The contract is acceptable only when all of these gates hold:
+
+* every closed-matrix row has its stated normalization, identity or absence,
+  collision result, `admit`/`skip`/`fail` result, and category/code where
+  applicable;
+* every RA-01 through RA-09 T-1, T, and T+1 example has its stated inclusive
+  result with compliant prerequisites;
+* permutations and combined facts use the bounded horizons, stable codes, and
+  precedence rather than provider response or discovery order;
+* replacement, cancellation, failure, late completion, identity retention, and
+  atomic publication preserve the accepted #441 invariants;
+* no deferred limit receives a value, requirement, scenario, or evidence
+  assumption here; and
+* `npm run docs:build` succeeds.
+
+== Admission classification
+
+[source,gherkin]
+----
+Scenario: Every closed-matrix row has one deterministic admission result
+  Given the current attempt selected its canonical repository URL and full commit ID
+  And every unmentioned condition is valid and every applicable limit is below its maximum
+  When any row in the closed admission matrix is evaluated
+  Then its normalization and canonical identity or absence are exactly those stated
+  And its collision result is exactly the one stated
+  And its only admission result is the row's admit, skip, or fail value
+  And any visible result has exactly the row's simple category and stable code
+  And no repository metadata, path, or source is executed, evaluated, imported,
+      or dynamically loaded
+----
+
+[source,gherkin]
+----
+Scenario: Extension matching is closed and preserves identity
+  Given valid regular files use each of ".js", ".jsx", ".mjs", ".cjs",
+      ".ts", ".tsx", ".mts", and ".cts"
+  And equivalent examples use upper- or mixed-case ASCII suffix letters
+  And valid files are also named ".ts" and "name.d.ts"
+  And unsupported files include "example.txt" and "example.vue"
+  When admission classifies their extensions
+  Then every allowed suffix and ASCII case variant is eligible
+  And the complete canonical path spelling and case are retained
+  And the final segment ".ts" and compound name "name.d.ts" are eligible
+  And the unsupported and framework-specific files are skipped
+  And no other extension, compound format, Unicode case mapping, or locale rule is inferred
+----
+
+[source,gherkin]
+----
+Scenario: Canonically equivalent paths fail without an order-dependent winner
+  Given one entry has NFC path "src/café.ts"
+  And another entry has the canonically equivalent decomposed path
+  When those entries are supplied in either order
+  Then the state is Failure with category "Source admission failed"
+  And the governing code is "M1-ADM-1"
+  And neither spelling wins or becomes an admitted identity
+  And no admitted-module set or city is visible
+----
+
+[source,gherkin]
+----
+Scenario Outline: Structural path validity is separate from path limits
+  Given one allowed-extension regular file has a structurally valid NFC path
+  And only <code> has its exact T+1 value
+  When the bounded path horizon classifies the entry
+  Then the state is Failure with category "Repository/admission limit exceeded"
+  And the governing code is <code>
+  And the result is not "Source admission failed"
+  And no module identity or admitted-module set is published
+
+  Examples:
+    | code  |
+    | RA-02 |
+    | RA-03 |
+----
+
+[source,gherkin]
+----
+Scenario: Case and prefix peers have a Git-faithful total order
+  Given valid modules "src/a.ts" and "src/A.ts" arrive in either order
+  And valid modules "a.ts" and "a.tsx" arrive in either order
+  When admission completes
+  Then every canonical identity retains case
+  And "src/A.ts" precedes "src/a.ts" by unsigned UTF-8 octets
+  And the shorter prefix identity "a.ts" precedes "a.tsx"
+  And provider, traversal, filesystem, and locale order change nothing
+----
+
+[source,gherkin]
+----
+Scenario Outline: No-module results distinguish absence from all-skipped candidates
+  Given immutable selection completed for the current attempt
+  And <condition>
+  And no higher-precedence failure or limit applies
+  When admission reaches its terminal result
+  Then the state is Failure with category "No supported modules"
+  And the governing code is <code>
+  And the current canonical repository URL and full commit ID remain visible
+  And no admitted set, metric result, city model, partial city, or stale city is visible
+
+  Examples:
+    | condition                                                  | code    |
+    | no eligible candidate exists                               | ADM-06  |
+    | eligible candidates exist but every one is a skipped kind  | ADM-07  |
+----
+
+[source,gherkin]
+----
+Scenario: Malformed syntax remains admitted text
+  Given a regular allowed-extension file has a valid canonical path and kind
+  And its complete content is valid normalized UTF-8 text
+  But its source syntax is malformed
+  When admission evaluates the file
+  Then the admission result is admit
+  And the canonical identity and normalized content join the admitted set
+  And admission neither parses nor executes the source
+  And no downstream syntax result is selected by this contract
+----
+
+== RA-01 through RA-09 boundaries
+
+[source,gherkin]
+----
+Scenario Outline: Every approved limit uses an inclusive maximum
+  Given actual prerequisite data is valid
+  And independently variable same-horizon limits remain compliant
+  When <code> has the exact T-1 value in its boundary row
+  Then that limit creates no separate visible result
+  When <code> has the exact T value in its boundary row
+  Then merely reaching the maximum creates no separate visible result
+  When <code> has the exact T+1 value in its boundary row
+  Then the state is Failure with category "Repository/admission limit exceeded"
+  And the governing code is <code>
+  And the current selected identity remains visible
+  And no admitted set or later result is published
+
+  Examples:
+    | code  |
+    | RA-01 |
+    | RA-02 |
+    | RA-03 |
+    | RA-04 |
+    | RA-05 |
+    | RA-06 |
+    | RA-07 |
+    | RA-08 |
+    | RA-09 |
+----
+
+The exact 27 values are in
+xref:06-source-admission-and-limits.adoc#limit-boundary-examples[T-1, T, and T+1
+boundary examples]. A rounded unit, provider claim, different value, or
+implementation safeguard is not evidence for a boundary.
+
+[source,gherkin]
+----
+Scenario: Every T+1 result is reachable with compliant prerequisites
+  Given the exact Above witnesses in "Reachability with compliant prerequisites"
+  When each RA-01 through RA-09 witness is classified independently
+  Then its named code governs
+  And every prerequisite and independently variable same-horizon limit remains compliant
+  And no deferred downstream limit or artificial taper is assumed
+----
+
+[source,gherkin]
+----
+Scenario Outline: Untrusted measurement claims cannot pass or fail a limit
+  Given repository or provider metadata makes a <claim> count, size, or encoding claim
+  And actual bounded records and octets can be measured
+  When the applicable RA limit is evaluated
+  Then the claim is ignored
+  And only actual contract data establishes compliance or excess
+
+  Examples:
+    | claim         |
+    | absent        |
+    | negative      |
+    | malformed     |
+    | contradictory |
+    | overflowing   |
+    | above limit   |
+    | at limit      |
+----
+
+[source,gherkin]
+----
+Scenario: Essential missing content differs from an empty file
+  Given one allowed-extension regular entry has an explicit zero-octet sequence
+  And another allowed-extension regular entry has no actual in-horizon content datum
+  When each condition is evaluated independently
+  Then the zero-octet file is admitted with zero normalized octets
+  And the absent-content condition is Failure with category "Source admission failed"
+  And its governing code is "M1-ADM-4"
+  And no claimed content size can replace the missing octets
+----
+
+== Bounded precedence and provider-order independence
+
+[source,gherkin]
+----
+Scenario: Cancellation wins a boundary tie while Loading
+  Given the current attempt is Loading and has selected its immutable identity
+  And an admission or RA failure becomes complete at the same contractual instant
+  When the user invokes cancel at that instant
+  Then the state is Cancelled
+  And the selected identity and every partial or prior result are absent
+  And the tied failure and every late completion have no observable effect
+----
+
+[source,gherkin]
+----
+Scenario Outline: Established facts select one category and code
+  Given all listed facts are established inside the same completed admission horizon
+  When the terminal result is classified
+  Then only <category> is visible
+  And the governing code is <code>
+  And provider response and discovery order do not change the result
+
+  Examples:
+    | facts                                                  | category                                | code       |
+    | structural path failure and RA-02 excess               | Source admission failed                 | M1-ADM-1   |
+    | collision, kind-data failure, and RA-06 excess         | Source admission failed                 | M1-ADM-1   |
+    | kind-data failure and RA-06 excess                     | Source admission failed                 | M1-ADM-3   |
+    | complete invalid content and RA-04 excess              | Source admission failed                 | M1-ADM-4   |
+    | RA-02 and RA-03 excess                                 | Repository/admission limit exceeded     | RA-02      |
+    | RA-04 and RA-05 excess                                 | Repository/admission limit exceeded     | RA-04      |
+    | RA-08 and RA-09 excess                                 | Repository/admission limit exceeded     | RA-08      |
+    | RA-06 excess and every candidate is a skipped kind     | Repository/admission limit exceeded     | RA-06      |
+----
+
+[source,gherkin]
+----
+Scenario Outline: A terminal horizon excludes later data
+  Given equivalent repository records are supplied in any provider response order
+  And <cutoff> is established by the bounded horizon
+  And <outside> exists only outside that closed horizon
+  When the terminal result is classified
+  Then only "Repository/admission limit exceeded" is visible
+  And the governing code is <code>
+  And the outside datum is not an established competing fact
+  And inspection does not exceed <bound>
+
+  Examples:
+    | cutoff                              | outside                                      | code  | bound                                      |
+    | opaque entry record 10,001          | malformed kind or colliding path fields      | RA-01 | 10,001 opaque records                      |
+    | structurally valid path octet 1,025 | collision requiring the metadata horizon     | RA-02 | the bounded path horizon for every record  |
+    | raw octet 4,194,305 in one candidate| NUL in that candidate's unread suffix        | RA-04 | 4,194,305 octets for that candidate        |
+    | aggregate raw octet 52,428,801      | malformed content in a later identity        | RA-05 | 52,428,801 aggregate content octets        |
+----
+
+[source,gherkin]
+----
+Scenario: Equivalent provider permutations classify identically
+  Given one bounded repository record set is permuted without changing any record
+  When each permutation passes through the entry, path, metadata, content,
+      and complete-set horizons
+  Then each permutation has the same admitted set and unsigned-UTF-8 order on success
+  Or each permutation has the same single failure category and stable code
+  And no permutation inspects beyond a closed horizon to seek another result
+----
+
+== Identity, replacement, and atomic publication
+
+[source,gherkin]
+----
+Scenario Outline: Every admission result retains only the current selected identity
+  Given Success previously showed repository A at revision-a
+  When a replacement selects repository B at revision-b
+  And the replacement reaches <condition>
+  Then the state is Failure with category <category>
+  And the governing code is <code>
+  And only repository B and the full lowercase revision-b identity remain visible
+  And repository A, revision-a, every admitted set, metric result, city model,
+      partial city, stale city, and presentation are absent
+
+  Examples:
+    | condition                         | category                                | code       |
+    | no eligible candidate             | No supported modules                    | ADM-06     |
+    | all eligible candidates skipped   | No supported modules                    | ADM-07     |
+    | canonical path collision          | Source admission failed                 | M1-ADM-1   |
+    | missing required kind             | Source admission failed                 | M1-ADM-3   |
+    | invalid UTF-8 content              | Source admission failed                 | M1-ADM-4   |
+    | RA-04 at T+1                      | Repository/admission limit exceeded     | RA-04      |
+----
+
+[source,gherkin]
+----
+Scenario: A replaced or cancelled attempt cannot publish late data
+  Given an attempt has produced internal admission or later-stage data
+  When a new submission replaces it or the user cancels it while Loading
+  Then that attempt and its prior city are immediately ineligible to publish
+  When any late success, failure, admitted set, metric result, model, or presentation arrives
+  Then the current state and input draft do not change
+  And no invalidated identity, partial result, stale city, or late status appears
+----
+
+[source,gherkin]
+----
+Scenario: Successful publication uses the complete deterministic module order
+  Given the current selected revision passes every admission rule and RA limit
+  And all downstream M1 stages complete under their accepted contracts
+  When the attempt enters Success
+  Then admitted modules use ascending unsigned-UTF-8 identity order
+  And exactly one complete city appears atomically with the current canonical repository URL
+      and full lowercase commit ID
+  And no admission decision, admitted set, metric result, or partial model is separately exposed
+----
+
+[[evidence-allocation]]
+== Approved downstream evidence allocation
+
+The assignment below is traceability only. It does not modify a downstream
+issue body or select a mechanism, component, safeguard, enforcement location,
+or owner.
+
+[cols="2,3,6",options="header"]
+|===
+|Contract evidence |Evidence issue |Required evidence
+
+|Every closed admission-matrix row
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Exact normalization, identity or absence, collision, `admit`/`skip`/`fail`,
+category/code, no-module distinction, and provider-independent order.
+
+|RA-01: `9,999 / 10,000 / 10,001 entries`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Actual-record counting, opaque-record cutoff, inclusive boundary, and stable
+classification without later field inspection.
+
+|RA-02: `1,023 / 1,024 / 1,025 UTF-8 path bytes`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Post-NFC measurement, structural-validity separation, bounded path horizon,
+and precedence.
+
+|RA-03: `63 / 64 / 65 path segments`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Canonical-depth measurement, structural-validity separation, bounded path
+horizon, and precedence.
+
+|RA-04: `4,194,303 / 4,194,304 / 4,194,305 raw bytes`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Per-candidate pre-normalization measurement, compliant reachability, unread
+suffix cutoff, and precedence.
+
+|RA-05: `52,428,799 / 52,428,800 / 52,428,801 raw bytes`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Aggregate inspected-content measurement, compliant reachability,
+canonical-order cutoff, and precedence.
+
+|RA-06: `4,999 / 5,000 / 5,001 candidates`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Pre-kind candidate counting, skipped-kind reachability, collision behavior,
+and precedence.
+
+|RA-07: `3,999 / 4,000 / 4,001 modules`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Post-admission unique-module counting, compliant reachability, and precedence.
+
+|RA-08: `2,097,151 / 2,097,152 / 2,097,153 normalized bytes`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Per-module post-normalization measurement, RA-04-compliant reachability, and
+precedence.
+
+|RA-09: `41,943,039 / 41,943,040 / 41,943,041 normalized bytes`
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Aggregate normalized-content measurement, RA-05-compliant reachability, and
+precedence.
+
+|Approved categories, horizons, and attempt transitions
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Integrated provider-order-independent classification, one category/code,
+current-identity retention, cancellation, replacement, and no admitted set,
+metric result, model, partial city, stale city, or late publication.
+|===
+
+[[deferred-evidence]]
+== Deferred decisions have no evidence assumptions here
+
+RA-10/RA-11, SP-01 through SP-04, CC-01 through CC-09, and PR-01 have no
+approved values, boundary scenarios, precedence cases, diagnostics, or evidence
+mapping in this change. Their decision owners are
+https://github.com/FelixGeisler/code-city/issues/449[#449],
+https://github.com/FelixGeisler/code-city/issues/450[#450],
+https://github.com/FelixGeisler/code-city/issues/444[#444], and
+https://github.com/FelixGeisler/code-city/issues/451[#451], with the hard gate
+in https://github.com/FelixGeisler/code-city/issues/464[#464]. No downstream
+body is changed by this allocation.

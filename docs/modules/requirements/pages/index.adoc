@@ -10,11 +10,12 @@ M1 delivers one journey: a user submits one canonical public GitHub repository
 URL and receives a deterministic Code City for one automatically selected,
 immutable repository revision.
 
-The first part of that baseline is the input, revision-identity, and user-state
-contract defined by issue
-https://github.com/FelixGeisler/code-city/issues/441[#441]. Its product choices
-require explicit human acceptance of the exact documentation revision before
-they can serve as the accepted M1 baseline. This page is not an approval record.
+The baseline begins with the input, revision-identity, and user-state contract
+from https://github.com/FelixGeisler/code-city/issues/441[#441] and the accepted
+source-admission and RA-01 through RA-09 contract from
+https://github.com/FelixGeisler/code-city/issues/442[#442]. Decisions for
+possible later processing, construction, presentation, and duration limits
+remain deferred to their owning issues and the #464 hard gate.
 
 == Reading order
 
@@ -26,8 +27,14 @@ they can serve as the accepted M1 baseline. This page is not an approval record.
   excluded, or owned by a later M0 contract.
 . xref:04-functional-requirements.adoc[Functional Requirements] contains the
   normative URL grammar, immutable-revision identity, and state machine.
-. xref:05-acceptance-criteria.adoc[Acceptance Criteria] provides documentary
-  Given/When/Then examples for reviewing that contract.
+. xref:05-acceptance-criteria.adoc[Input and State Acceptance] provides
+  documentary Given/When/Then examples for reviewing that contract.
+. xref:06-source-admission-and-limits.adoc[Source Admission and Repository Limits]
+  contains the closed admission matrix, approved RA-01 through RA-09 inventory,
+  bounded classification, and observable category/code rules.
+. xref:07-source-admission-and-limit-acceptance.adoc[Source Admission and Limit
+  Acceptance] provides documentary scenarios and downstream evidence mapping
+  for that contract.
 
 The words *must*, *must not*, *required*, and *only* are normative on these
 pages. Examples clarify the normative rules but do not create executable test

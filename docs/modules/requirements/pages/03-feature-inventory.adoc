@@ -30,10 +30,14 @@ selection and identity].
 |The state machine and no-stale/no-partial invariant are in
 xref:04-functional-requirements.adoc#states[Observable states and transitions].
 
-|Supported-source admission and resource limits
-|Contract pending
-|https://github.com/FelixGeisler/code-city/issues/442[#442] owns exact module
-admission, thresholds, and limit outcomes.
+|Supported-source admission and repository/intake limits
+|Included; accepted contract
+|xref:06-source-admission-and-limits.adoc[] defines the closed module-admission
+matrix, approved RA-01 through RA-09 maxima, deterministic classification, and
+observable category/code pairs under
+https://github.com/FelixGeisler/code-city/issues/442[#442]. Later processing,
+construction, presentation, and duration limit choices remain explicitly
+deferred to their linked owners.
 
 |Fixed metric semantics
 |Contract pending
