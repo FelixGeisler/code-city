@@ -16,8 +16,10 @@ redefine them.
 Every accepted requirement in
 https://github.com/FelixGeisler/code-city/issues/441[#441],
 https://github.com/FelixGeisler/code-city/issues/442[#442],
-https://github.com/FelixGeisler/code-city/issues/443[#443], and
-https://github.com/FelixGeisler/code-city/issues/444[#444] is a mandatory gate.
+https://github.com/FelixGeisler/code-city/issues/443[#443],
+https://github.com/FelixGeisler/code-city/issues/444[#444], and the accepted
+static-syntax decision in https://github.com/FelixGeisler/code-city/issues/450[#450]
+is a mandatory gate.
 The following priority applies only when alternatives conform equally to all
 of those requirements. It is a reversible documentation synthesis made by the
 Requirements Engineer under the human delegation recorded in
@@ -70,7 +72,9 @@ boundary]. The governing source-conformance decisions are accepted in
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
 and
-xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004],
+and
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007]
 through https://github.com/FelixGeisler/code-city/issues/445[#445],
 https://github.com/FelixGeisler/code-city/issues/462[#462], and
 https://github.com/FelixGeisler/code-city/issues/447[#447]. Initial automated
@@ -146,8 +150,10 @@ https://github.com/FelixGeisler/code-city/issues/461[#461].
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
 and
-xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
-are accepted source constraints, with initial automated evidence in
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004],
+and
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007]
+are accepted constraints, with initial automated evidence in
 https://github.com/FelixGeisler/code-city/issues/452[#452] and final-head
 execution in https://github.com/FelixGeisler/code-city/issues/460[#460].
 
@@ -209,16 +215,29 @@ elapsed-time promise. #452 owns edge-type conformance, #454 controlled
 implementation evidence, #459 the packaged successful path, #460 final hosted
 renewal, and #463/#464 synthesis and readiness evidence.
 
-Analysis and visualization mechanisms and technologies owned by
-https://github.com/FelixGeisler/code-city/issues/450[#450] and
-https://github.com/FelixGeisler/code-city/issues/451[#451] remain deferred.
-Neither this page nor ADR 0006 selects a Pages source, action, workflow or
-deployment mechanism, application route, parser or analyzer, renderer, exact
-message or port schema, concrete package or source map, broader worker
-lifecycle or bridge cancellation primitive, or remaining deferred SP, CC, or
-PR threshold.
+Static syntax owned by
+https://github.com/FelixGeisler/code-city/issues/450[#450] is accepted in
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007]. It fixes exact `web-tree-sitter@0.26.12` and
+`@vscode/tree-sitter-wasm@0.3.1` assets, closed suffix-to-grammar behavior,
+complete fact-free validation before primitive projection, cursor-only
+iterative traversal, deterministic UTF offsets, fixed `/code-city/` asset
+loading, and a provider-drained/static-entry worker barrier compatible with
+ADRs 0005 and 0006. Matching barrier receipt permits hard termination with zero
+or active static operations; ordinary paths delete parser handles. SP-01
+through SP-04 are unnecessary, so the complete RA-07/RA-08/RA-09 envelope
+reaches analysis and elapsed analysis time creates no result. #455 owns
+parser/SLOC/unit realization, #456 decision/complexity and the combined rerun,
+and #460 final renewal and integrated lifecycle evidence.
 
-https://github.com/FelixGeisler/code-city/issues/463[#463] and
-https://github.com/FelixGeisler/code-city/issues/464[#464] are later synthesis
-and fitness consumers only. `npm run docs:build` validates this documentation;
-it is not an M1 runtime-technology constraint.
+Visualization technology and CC-09/PR-01 remain with
+https://github.com/FelixGeisler/code-city/issues/451[#451]. Neither this page nor
+ADR 0007 selects a Pages source, action, workflow or deployment mechanism,
+application route, renderer, general message or port schema, concrete source
+map, test technology, or those remaining duration decisions.
+
+https://github.com/FelixGeisler/code-city/issues/463[#463] synthesizes the
+accepted provider/static lifecycle without adding a port or owner, and
+https://github.com/FelixGeisler/code-city/issues/464[#464] verifies the accepted
+decisions and evidence owners. `npm run docs:build` validates this
+documentation; it is not executable parser evidence.

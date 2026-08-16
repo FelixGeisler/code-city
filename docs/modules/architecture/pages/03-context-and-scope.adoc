@@ -15,9 +15,13 @@ xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
 0005] accepts the bounded anonymous revision-resolution mechanism.
 xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
 0006] accepts bounded immutable selected-revision retrieval and sole admission
-through GitHub tree and raw content. Both are documented decisions, not
-implemented traffic. Exact message and port schemas and the full
-accepted-mechanism runtime synthesis remain deferred to their owning issues.
+through GitHub tree and raw content.
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007] accepts the exact worker-side Tree-sitter runtime/grammars, static-syntax
+projection, full-envelope no-SP disposition, and provider-drained/static-phase
+lifecycle. These are documented decisions, not implemented traffic or parser
+behavior. General message and port schemas and the full accepted-mechanism
+runtime synthesis remain with their owning issues.
 
 == Local terms
 
@@ -192,12 +196,16 @@ view selects no communication or cancellation primitive.
 |The selected canonical repository/revision tuple while `Loading`, one terminal
 failure outcome, or one complete canonical scene. A complete scene crosses
 without raw or normalized source, repository entry content, admitted modules,
-parser/analyzer objects, or metric intermediates; building identities are inert
-model keys.
+parser objects, or metric intermediates; building identities are inert model
+keys. Separately, the worker may post only ADR 0007's
+`PROVIDER_DRAINED_STATIC_ENTERED` and `ATTEMPT_DRAINED` internal attestations,
+each with only its discriminator and existing opaque attempt/generation
+correlation.
 |State and source-free presentation contracts are in
 xref:requirements:04-functional-requirements.adoc#states[] and
 xref:requirements:10-fixed-city-layout-and-presentation.adoc#canonical-scene[].
-Exact handoff schemas remain deferred.
+The two bridge-only attestations never enter outcome intake, visible state,
+status, or classification. General handoff schemas remain with their owners.
 
 |Processing worker and Public GitHub
 |Two direct anonymous exchanges: resolution for canonical repository spelling
@@ -273,16 +281,18 @@ and https://github.com/FelixGeisler/code-city/issues/460[#460].
 than `10,001` primitive projected inventory records; one globally exclusive
 `4,194,317`-byte raw/hash workspace plus ADR 0006's bounded phase temporaries;
 paths, raw and normalized source, admitted modules, counters, canonical metric
-facts, parser/analyzer objects, and city-construction intermediates. Provider
-tree representations are gone before raw retrieval, each raw/hash/decoded
-temporary is gone before the next request, and none becomes persisted or
-server-side product state. ADR 0005's `default_branch` is discarded before
-retrieval.
+facts, one parser/tree/cursor set, and city-construction intermediates. Before
+ADR 0007's static-entry post, every provider operation, lock, gate, workspace,
+provider object, and provider transient is settled and gone. During static
+processing only fixed same-origin runtime/grammar assets may be loaded; no
+provider operation can restart. None becomes persisted or server-side product
+state.
 |The worker owns the sole admission path, one-request/one-workspace global
-serialization, processing-stage termination, replacement coalescing,
-downstream suppression, feasible cancellation, and application-owned cleanup.
-Focused stage evidence belongs to #453 through #457; hosted renewal belongs to
-#460.
+serialization, processing-stage suppression and core-reference release.
+Provider adapters own ADR 0005/0006 settlement; the parser adapter owns
+ordinary parser deletion; the main bridge owns the sole worker handle and hard
+static termination. Focused stage evidence belongs to #453 through #457;
+hosted renewal belongs to #460.
 
 |UI presentation boundary
 |One complete canonical scene may arrive without source or analysis objects.
@@ -296,14 +306,19 @@ of stale, replaced, cancelled, partial, or late output belong to #458 through
 
 Replacement or cancellation immediately revokes the old attempt's publication
 eligibility in the UI and clears its identity, city, and presentation state.
-The worker stops feasible work, suppresses downstream stages, and releases
-transient references; a late outcome is ignored. Any stage failure stops
-subsequent work. After successful complete-scene handoff, worker intermediates
-are released rather than retained as product state.
+Before the main bridge receives matching `PROVIDER_DRAINED_STATIC_ENTERED`, it
+must not terminate the worker: provider work settles, gates and references are
+released, the worker posts `ATTEMPT_DRAINED`, and only then may the bridge
+terminate, clear its handle, and create the latest replacement. After matching
+static-entry receipt, the bridge hard-terminates and clears the sole worker
+before replacement without waiting for parser acknowledgement; zero static
+operations before termination is valid. Ordinary terminal paths delete cursor,
+tree, and parser, release core references, post the one business result and
+`ATTEMPT_DRAINED`, then terminate. Late outcomes remain rejected.
 
-This placement makes no cleanup-latency or secure-erasure promise and does not
-redefine provider, browser, operating-system, network, or platform caching or
-garbage-collection internals.
+This placement makes no cleanup-latency, secure-erasure, garbage-collection,
+physical browser teardown, or operating-system-process teardown promise.
+Provider work never relies on hard termination.
 
 == Decision boundary
 
@@ -333,17 +348,22 @@ xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-conten
 0006] is authoritative for the exact selected-commit/root-tree/raw exchanges,
 trust admission, sole admitted-set ownership, exact workspace and
 application-owned cleanup, global serialization and replacement settlement,
-RA-10/RA-11
-disposition, and retrieval renewal/stop rule. #454 owns focused controlled
-evidence, #459 the packaged success path, and #460 hosted renewal; no product
-request exists yet.
+RA-10/RA-11 disposition, and retrieval renewal/stop rule. #454 owns focused
+controlled evidence, #459 the packaged success path, and #460 hosted renewal;
+no product request exists yet.
 
-The following remain deferred: Pages source/action/workflow and deployment
-mechanism; analyzer and renderer technology and SP-01 through SP-04, CC-09, and
-PR-01 decisions in #450 and #451; exact message and port schemas in #453
-through #460; and the complete accepted-mechanism/port runtime synthesis in
-https://github.com/FelixGeisler/code-city/issues/463[#463]. Outside the accepted
-ADR 0005 and ADR 0006 summaries, this view selects no parser, analyzer,
-renderer, concrete package or source map, executable interface, message or port
-schema, broader worker lifecycle or bridge cancellation primitive, Pages
-workflow, route, threshold, or fallback.
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007] is authoritative for parser assets and API, primitive projection,
+provider/static phase separation, the two source-free attestations,
+ordinary-delete versus hard-realm-release paths, observable no-overlap,
+SP-01 through SP-04, and static renewal/stop rules. #455 owns parser/SLOC/unit
+realization, #456 complexity and the combined rerun, and #460 integrated
+renewal; no parser package or asset exists yet.
+
+The following remain unselected: Pages source/action/workflow and deployment
+mechanism; renderer technology and CC-09/PR-01 in #451; concrete source mapping;
+general message and port schemas in #453 through #460; and the complete
+accepted-mechanism/port runtime synthesis in
+https://github.com/FelixGeisler/code-city/issues/463[#463]. This view adds no
+renderer, executable interface, general schema, Pages workflow, route,
+threshold, fallback, or source-derived capability.

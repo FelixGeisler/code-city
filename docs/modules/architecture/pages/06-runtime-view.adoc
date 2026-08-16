@@ -11,11 +11,13 @@ runtime nodes.
 xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
 0005] accepts the exact anonymous revision-resolution REST boundary.
 xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
-0006] accepts the exact selected-revision retrieval/admission boundary. Neither
-decision makes product traffic current. Outside those decisions, this view does
-not select a message or port schema, broader worker lifecycle or bridge
-cancellation primitive, parser, analyzer, renderer, or full accepted-mechanism
-flow. That synthesis remains with
+0006] accepts the exact selected-revision retrieval/admission boundary.
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007] accepts exact static-syntax assets and behavior, the provider/static phase
+barrier, two bridge-only lifecycle attestations, and ordinary versus hard-stop
+cleanup. None makes product traffic or parser behavior current. This view adds
+no general message or port schema, renderer, or complete accepted-mechanism
+flow; synthesis remains with
 https://github.com/FelixGeisler/code-city/issues/463[#463].
 
 == Runtime topology
@@ -90,13 +92,15 @@ output; current-session retention and empty reload reset.
 |Direct anonymous repository resolution; canonical identity validation;
 one-time immutable-revision selection and pinning; ADR 0006's sequential
 selected-commit, recursive-root-tree, and canonical raw retrieval; the sole
-admission path and actual-data limit enforcement; deterministic ordering and
-metrics; pure renderer-neutral city construction; transient confinement of
-provider records, paths, source, admitted modules, counters, metrics, and
-construction intermediates; globally one retrieval/admission request and one
-raw/hash workspace; stage termination and downstream suppression; attempt
-cancellation, latest-only replacement settlement, and application-owned cleanup
-under ADRs 0005 and 0006; release of transient processing references.
+admission path and actual-data limit enforcement; deterministic ordering;
+ADR 0007's exact same-origin runtime/grammar loading, complete fact-free syntax
+validation, primitive metric projection, and phase attestations; pure renderer-
+neutral city construction; transient confinement of provider records, paths,
+source, admitted modules, parser handles, counters, metrics, and construction
+intermediates; globally one retrieval/admission request and one raw/hash
+workspace; at most one parser set; stage suppression; ADR 0005/0006 provider
+settlement before static entry; ordinary cleanup or hard static realm release;
+and release of transient processing references.
 |===
 
 Repository data remains inert and is never executed, evaluated, imported, or
@@ -107,10 +111,11 @@ no more than `5,000` sequential raw GETs, bounded own-field/prototype-safe
 projection, exact Git blob comparison, one `4,194,317`-byte raw/hash workspace,
 and complete cleanup before another request or replacement. Neither ADR makes
 a malicious-provider, atomic-provider-state, latency, or compatibility
-warranty. UI rejection of a late result remains authoritative. Any
-still-deferred downstream worker-side product limit is enforced only after its
-owner accepts its exact value and semantics; browser memory, request behavior,
-and renderer capacity create no undeclared product limit.
+warranty. UI rejection of a late result remains authoritative. SP-01 through
+SP-04 are unnecessary: the complete RA-07/RA-08/RA-09 envelope reaches static
+analysis and elapsed analysis time creates no outcome. Browser memory, parser
+capacity, request behavior, and renderer capacity create no undeclared product
+limit.
 
 == Enforcement placement
 
@@ -126,8 +131,11 @@ xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-conten
 https://github.com/FelixGeisler/code-city/issues/460[#460]
 
 |SP-01 through SP-04
-|Worker analysis boundary
-|https://github.com/FelixGeisler/code-city/issues/450[#450]
+|No lower worker-analysis boundary or timer exists; every RA-07/RA-08/RA-09-
+compliant admitted set reaches sequential analysis
+|xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007]; parser/SLOC/unit evidence #455, combined exact-fact rerun #456, and final
+renewal #460
 
 |Renderer-neutral city construction and CC-09
 |Worker city boundary
@@ -152,8 +160,10 @@ RA-10 retrieval duration and RA-11 admission duration are explicitly
 unnecessary for M1: they have no value, unit, timer, clock, category, code,
 interval, cutoff, boundary, or precedence. A request may remain `Loading` until
 provider/browser failure, cancellation, replacement, or reload; elapsed time
-alone changes nothing. SP-01 through SP-04, CC-09, and PR-01 remain deferred
-without a value, unit, interval, threshold, precedence, or diagnostic.
+alone changes nothing. SP-01 through SP-04 are also explicitly unnecessary:
+they have no value, timer, category, code, boundary, precedence, or diagnostic,
+and `Static-processing limit exceeded` does not exist. CC-09 and PR-01 remain
+with #451 without a value, interval, threshold, or limit result.
 
 == Generic handoffs
 
@@ -185,8 +195,13 @@ available.
 |Exact identity handoff shape remains deferred.
 
 |Worker to UI at a terminal processing result
-|One terminal failure outcome or one complete canonical scene.
-|No partial-stage handoff or alternate result is accepted.
+|One terminal failure outcome or one complete canonical scene. Separately, the
+worker may post exactly `PROVIDER_DRAINED_STATIC_ENTERED` and `ATTEMPT_DRAINED`,
+each containing only its discriminator and existing opaque bridge-generated
+attempt/generation correlation.
+|No partial-stage handoff or alternate result is accepted. The internal
+attestations carry no business, source, parser, timing, or count data and never
+enter worker-outcome intake, visible state, status, or classification.
 
 |Worker and Public GitHub
 |Direct anonymous resolution and selected-revision retrieval.
@@ -258,6 +273,77 @@ request, read/cancel operations, non-abortable JSON/digest/decode work, reader
 lock, workspace, inventory, and unpublished output have settled and been
 cleaned. Submissions waiting during settlement coalesce to the latest only.
 
+== Provider-to-static phase sequence
+
+Every worker generation begins provider-capable. No dynamic parser-runtime
+import, grammar or runtime asset fetch/load, `Parser.init`, parse, or traversal
+may begin in that phase. After successful admission the worker retains only the
+core-owned complete admitted-module handoff; settles every ADR 0005/0006 fetch,
+read, abort, reader cancellation, rejection, JSON parse, Web Crypto, strict
+decode, and normalization; releases reader locks; clears every response,
+reader, chunk, provider object, inventory, hash view, digest, workspace, and
+provider transient; releases the global request and workspace gates; and makes
+provider restart impossible for that generation.
+
+The worker then posts `PROVIDER_DRAINED_STATIC_ENTERED`. Unless terminated, it
+does not wait for acknowledgement before its first static operation. The
+following orders are mandatory:
+
+[source,text]
+----
+provider settlement/global-gate release < post PROVIDER_DRAINED_STATIC_ENTERED
+post PROVIDER_DRAINED_STATIC_ENTERED < every parser/runtime/asset operation, if any
+----
+
+Matching receipt by the main bridge makes the generation hard-termination-
+safe. Receipt can race ahead of the worker's first static operation.
+
+Before matching receipt, cancellation or replacement follows only this order:
+
+[source,text]
+----
+revoke < provider settlement < lock/global-gate release < ATTEMPT_DRAINED < terminate old < clear handle < create new < first new provider request
+----
+
+The main bridge posts lifecycle stop and must not terminate early. The pipeline
+suppresses downstream work, provider adapters settle and release their exact
+resources in `finally`, the pipeline clears admitted modules and unpublished
+output, and then posts `ATTEMPT_DRAINED`. The bridge marks the generation
+closing, terminates exactly once, releases listeners/transport references,
+clears its sole handle, and only then creates the latest coalesced replacement.
+Pending settlement may delay replacement without limit or timing outcome.
+
+After matching receipt, cancellation or replacement uses the static path even
+when a lifecycle-stop message is queued but unhandled:
+
+[source,text]
+----
+provider settlement/global-gate release < post PROVIDER_DRAINED_STATIC_ENTERED < bridge receipt < hard terminate < clear handle < create replacement
+----
+
+The UI first revokes publication eligibility. The main bridge then terminates
+the sole worker without parser acknowledgement, clears its handle, and only
+then creates the latest replacement. Zero static operations before hard
+termination is valid; otherwise termination may occur during runtime loading,
+parsing, or traversal. No cooperative parser-stop, progress callback, immediate
+computation-stop, or browser teardown-latency claim exists.
+
+On an ordinary terminal path, the worker deletes the applicable cursor, tree,
+and parser; clears source, endpoint, slice, projection, metric, admitted-module,
+and other core references; posts only one source-free terminal outcome or one
+complete canonical scene; then posts `ATTEMPT_DRAINED`. The bridge applies or
+rejects the business payload through the publication gate and, after matching
+drain receipt, terminates exactly once and clears its handle. Realm-held
+language modules are released by that termination.
+
+Hard static termination may prevent JavaScript `finally` and parser deletion.
+Evidence must not claim delete-spy observation on that path. Realm termination
+releases static resources without timing, secure-erasure, garbage-collection,
+physical-browser, or operating-system-process teardown claims. Provider work
+never relies on hard termination. Observable no-overlap means at most one
+bridge-owned usable worker handle, parser set, provider slot, and raw/hash
+workspace, not physical teardown.
+
 == Replacement, cancellation, failure, and cleanup
 
 === Replacement or cancellation
@@ -265,44 +351,41 @@ cleaned. Submissions waiting during settlement coalesce to the latest only.
 . The UI immediately revokes the old attempt's publication eligibility and
   clears identity, city, and presentation state as the accepted state contract
   requires. Cancellation preserves the editable draft; replacement installs
-  the new submission before its validation result.
-. Generic lifecycle control may tell the worker that the attempt is no longer
-  current. This view selects no bridge message, port, or broader lifecycle
-  primitive; ADRs 0005 and 0006 require the current-attempt `AbortSignal` for
-  their exact resolution and retrieval Fetches.
-. The worker stops feasible network and processing work where the accepted
-  mechanisms permit it, suppresses every downstream stage, and releases
-  transient references for the old attempt. ADRs 0005 and 0006 require signal
-  abort, feasible active-reader cancellation, handled settlement and
-  rejections, reader-lock release in `finally`, post-non-abortable eligibility
-  checks, complete application-owned cleanup, and suppression of every later
-  request or stage. ADR 0006 also prevents replacement overlap and starts only
-  the latest submission after old settlement.
-. Any tied or late identity, failure, or scene outcome is ignored. UI
-  ineligibility remains authoritative even if underlying work completes.
+  the new submission before its validation result and coalesces to the latest.
+. The main bridge selects the pre-receipt or post-receipt path solely from its
+  matching `PROVIDER_DRAINED_STATIC_ENTERED` receipt gate. Its sole worker-
+  generation handle and hard-stop gate are transport-resource ownership, not a
+  second orchestrator.
+. The selected path follows the exact phase order above. Pre-receipt provider
+  operations settle cooperatively through `ATTEMPT_DRAINED`; post-receipt
+  static work is hard-terminated without acknowledgement. Handle clearing
+  always precedes replacement creation.
+. Any tied or late identity, failure, scene, or lifecycle message is ignored.
+  UI ineligibility remains authoritative even if underlying work completes.
 
 === Stage or presentation failure
 
-. A worker-stage failure terminates that stage, suppresses all downstream work,
-  and releases its transient processing references.
-. The worker may return only the one terminal failure outcome. The UI applies
-  it only for the current eligible attempt; no stale or partial city is
-  published.
+. A worker-stage failure suppresses all downstream work and enters the ordinary
+  terminal cleanup path above.
+. The worker may return only the one terminal failure outcome, followed by
+  `ATTEMPT_DRAINED`. The UI applies the outcome only for the current eligible
+  attempt; no stale or partial city is published.
 . If adaptation of a complete canonical scene fails, the UI owns presentation
   failure and cleanup of every incomplete presentation resource.
 
 After a successful complete-scene handoff, worker processing intermediates do
-not become retained product state and are released. Reload discards all
-application-managed session state and starts a fresh empty session.
+not become retained product state and are released before `ATTEMPT_DRAINED`.
+Reload discards all application-managed session state and starts a fresh empty
+session.
 
 Cleanup has no accepted latency or secure-erasure promise. Cancellation and
 replacement revoke publication eligibility immediately but promise no
-computation or network stop time. A stalled old settlement may delay replacement
-provider work without creating an RA-10/RA-11 timing failure. This view does
-not redefine provider, browser, operating-system, network, or platform caching
-or garbage-collection internals.
+computation, network-stop, browser-teardown, or physical-process timing. A
+stalled old provider settlement may delay replacement without creating an RA
+or SP timing failure. This view does not redefine provider, browser, operating-
+system, network, platform caching, or garbage-collection internals.
 
-== Feasibility and deferred synthesis
+== Feasibility and remaining synthesis
 
 ADR 0005 records https://github.com/FelixGeisler/code-city/issues/448[#448]'s
 dated documentary/read-only feasibility for the exact
@@ -336,10 +419,19 @@ their successful-path integration, and #460 their renewed final-head production
 evidence; no dependency, source, configuration, or production artifact exists
 yet.
 
-Parser/analyzer and renderer mechanisms, message and port schemas, concrete
-source mapping, broader worker and bridge primitives, Pages workflow and route,
-and the complete cross-mechanism success/failure/replacement/cancellation
-synthesis remain with their stated owners in #450 through #460 and #463.
+ADR 0007 records #450's immutable package, asset, provenance, WASM inventory,
+full-envelope, projection, capability, lifecycle, and stop evidence. #455 must
+revalidate and realize parser/SLOC/units and both phase races; #456 adds
+complexity and reruns the combined full-envelope matrix; #460 renews final-head
+assets, closure, provenance, traffic/logging exclusions, and integrated
+lifecycle. A selected version, asset, API, grammar, URL, capability, inventory,
+or lifecycle deviation stops implementation and reopens #450; no fallback may
+be introduced.
+
+Renderer mechanisms, general message and port schemas, concrete source mapping,
+Pages workflow and route, and the complete cross-mechanism synthesis remain
+with their stated owners in #451 through #460 and #463.
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains authoritative
-for the outer source-dependency boundary, ADR 0005 for resolution, and ADR 0006
-for selected-revision retrieval/admission.
+for the outer source-dependency boundary, ADR 0005 for resolution, ADR 0006 for
+selected-revision retrieval/admission, and ADR 0007 for static syntax and
+phase-aware worker lifecycle.

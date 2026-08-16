@@ -18,8 +18,9 @@ The contract is acceptable only when all of these gates hold:
   atomic publication preserve the accepted #441 invariants;
 * CC-01 through CC-08 use only their accepted #444 dispositions; RA-10 and
   RA-11 use only ADR 0006's explicitly-unnecessary disposition and inert
-  elapsed-time case; and the still-deferred SP-01 through SP-04, CC-09, and
-  PR-01 choices remain without a value or scenario here; and
+  elapsed-time case; SP-01 through SP-04 use only ADR 0007's
+  explicitly-unnecessary full-envelope disposition; and CC-09 and PR-01 remain
+  without a value or scenario here; and
 * `npm run docs:build` succeeds.
 
 == Admission classification
@@ -229,7 +230,23 @@ Scenario: Every T+1 result is reachable with compliant prerequisites
   When each RA-01 through RA-09 witness is classified independently
   Then its named code governs
   And every prerequisite and independently variable same-horizon limit remains compliant
-  And no deferred downstream limit or artificial taper is assumed
+  And no lower static-processing limit or artificial taper is assumed
+----
+
+[source,gherkin]
+----
+Scenario: The complete admitted envelope reaches static analysis
+  Given admission succeeds with up to 4,000 modules
+  And each module is at or below 2,097,152 normalized UTF-8 bytes
+  And aggregate normalized content is at or below 41,943,040 UTF-8 bytes
+  When static metric processing begins
+  Then every admitted module reaches analysis in canonical order
+  And no lower module, per-module, aggregate, syntax-node, nesting,
+      parser-memory, allocation, or private-capacity product limit applies
+  And no "Static-processing limit exceeded" category or SP code exists
+  And elapsed analysis time alone leaves the attempt Loading
+  And a grammar-valid failure within this envelope is a conformance defect,
+      not M1-MET-1 or an SP result
 ----
 
 [source,gherkin]
@@ -465,17 +482,30 @@ cleanup proves eligibility checks, latest-only coalescing, settlement before
 replacement work, complete application-owned cleanup, and no later old-attempt
 request, stage, or publication.
 
+|Full RA-07/RA-08/RA-09 static-processing envelope
+|https://github.com/FelixGeisler/code-city/issues/455[#455]
+|Packaged-browser parser, SLOC, unit, two-pass, UTF-offset, ordinary-cleanup,
+and lifecycle evidence covers `4,000` modules and `41,943,040` normalized
+bytes, including twenty exact RA-08 modules and `3,980` zero-byte modules,
+without a lower private capacity or performance assertion.
+
+|Combined full-envelope canonical facts
+|https://github.com/FelixGeisler/code-city/issues/456[#456]
+|After decision and complexity projection, rerun the complete grammar, SLOC,
+unit, complexity, lifecycle, full-envelope, and exact-fact matrix.
+
 |Approved categories, horizons, timing disposition, and attempt transitions
 |https://github.com/FelixGeisler/code-city/issues/460[#460]
 |Integrated and hosted provider-order-independent classification, one
-category/code, arbitrary elapsed-time inertness, current-identity retention,
-cancellation, replacement, no retry or persistence, unexpected-traffic
-inspection, final-head REST/raw CORS renewal, and no admitted set, metric
-result, model, partial city, stale city, or late publication.
+category/code, provider-to-static lifecycle order, arbitrary elapsed-time
+inertness, current-identity retention, cancellation, replacement, no retry or
+persistence, unexpected-traffic inspection, final-head REST/raw and
+parser-asset renewal, and no admitted set, metric result, model, partial city,
+stale city, or late publication.
 |===
 
 [[deferred-evidence]]
-== Downstream dispositions and evidence boundaries
+== Accepted downstream dispositions and evidence boundaries
 
 RA-10 retrieval duration and RA-11 admission duration are no longer deferred.
 They are explicitly unnecessary for M1 and have no value, unit, timer, clock,
@@ -486,10 +516,16 @@ evidence belongs to https://github.com/FelixGeisler/code-city/issues/454[#454];
 integrated and hosted evidence belongs to
 https://github.com/FelixGeisler/code-city/issues/460[#460].
 
-SP-01 through SP-04 still have no approved values, boundary scenarios,
-precedence cases, diagnostics, or evidence mapping here; their decision owner
-remains https://github.com/FelixGeisler/code-city/issues/450[#450]. CC-09 and
-PR-01 likewise have no value, interval, threshold, or limit result here;
+SP-01 through SP-04 are no longer deferred. They are explicitly unnecessary
+and have no value, unit, timer, clock, cutoff, category, stable code,
+precedence, interval, boundary, or T-1/T/T+1 scenario. All `4,000` RA-07
+modules, every RA-08-sized module, and all `41,943,040` RA-09 normalized bytes
+reach analysis. The historical `2,000` modules, `1 MiB`, `20 MiB`, and `30
+seconds` proposals are rejected. Controlled parser/SLOC/unit evidence belongs
+to #455, the complete combined rerun to #456, and integrated lifecycle and
+renewal evidence to #460.
+
+CC-09 and PR-01 still have no value, interval, threshold, or limit result here;
 visualization feasibility and both duration decisions remain exclusively with
 https://github.com/FelixGeisler/code-city/issues/451[#451].
 
@@ -509,5 +545,6 @@ presentation and absence evidence; and
 https://github.com/FelixGeisler/code-city/issues/460[#460] retains integrated
 state evidence. The hard gate in
 https://github.com/FelixGeisler/code-city/issues/464[#464] verifies the recorded
-human delegation and its #444 exercises before M1 implementation handoff. No
+human delegation, its #444 and #450 exercises, accepted ADR 0007, and the exact
+evidence ownership before M1 implementation handoff. No
 downstream issue body is changed by this documentation allocation.

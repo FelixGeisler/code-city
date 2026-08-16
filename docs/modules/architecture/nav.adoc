@@ -15,6 +15,8 @@
 ** xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004: Framework-free TypeScript shell built with Vite]
 ** xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR 0005: Anonymous GitHub default-branch-tip resolution via REST]
 ** xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006: Bounded selected-revision retrieval via GitHub tree and raw content]
+** xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007: Static syntax with pinned Tree-sitter WebAssembly grammars]
+*** xref:adr/0007-static-syntax-evidence-appendix.adoc[ADR 0007 evidence appendix]
 * xref:10-quality-requirements.adoc[10. Quality Requirements]
 * xref:11-risks-and-technical-debt.adoc[11. Risks and Technical Debt]
 * xref:12-glossary.adoc[12. Glossary]

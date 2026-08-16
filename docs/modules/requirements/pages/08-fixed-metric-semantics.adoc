@@ -1,15 +1,18 @@
 = Fixed Metric Semantics
 
-This page is the one authoritative, parser-neutral M1 contract for lexical
-physical-line SLOC, executable units, per-unit complexity, and module maximum
-complexity. It applies only after source admission has produced the complete
-ordered module sequence defined by
+This page is the one authoritative M1 contract for lexical physical-line SLOC,
+executable units, per-unit complexity, module maximum complexity, and concrete
+grammar acceptance. It applies only after source admission has produced the
+complete ordered module sequence defined by
 xref:06-source-admission-and-limits.adoc[]. A successful metric stage derives
 one deterministic canonical fact sequence from that input.
 
-The rules define product facts and failure behavior. They do not select an
-analyzer or version, parser API, AST shape, traversal, type checker, module
-resolver, component, port, topology, enforcement location, or city mapping.
+The rules define product facts and failure behavior. The exact non-executing
+Tree-sitter mechanism, safe API, projection boundary, assets, and lifecycle are
+accepted in
+xref:architecture:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007].
+No type checker, module resolver, contextual validator, city mapping, or second
+analyzer is selected.
 
 [[metric-terms]]
 == Terms
@@ -75,6 +78,13 @@ or JSX text remains source. A blank or indentation-only line inside a
 multiline template or JSX fragment counts `0`. Decision-looking text in a
 comment or literal remains lexical text and never creates a complexity
 contribution.
+
+The concrete lexical exclusions use exact Tree-sitter node types `comment`,
+`html_comment`, and `hash_bang_line`. JSX expression-container braces are
+excluded only when the expression contains a comment and every remaining
+character is whitespace. Empty `{}` remains source. The normalized source
+string--never node text--distinguishes whitespace from string, template,
+regular-expression, and JSX text.
 
 [[executable-units]]
 == Executable units and conditional top level
@@ -216,42 +226,68 @@ Aggregate decision load is not calculated, retained, or exposed as a canonical
 fact.
 
 [[syntax-families]]
-== Syntax families
+== Closed pinned-grammar families
 
-Select exactly one syntax family solely from the canonical path's final suffix,
+Select exactly one grammar solely from the canonical path's final suffix,
 compared ASCII case-insensitively:
 
-[cols="3,3",options="header"]
+[cols="3,7",options="header"]
 |===
-|Suffixes |Syntax family
+|Suffixes |Pinned grammar and required additional validation
 
 |`.js`, `.mjs`, `.cjs`
-|JavaScript
+|The JavaScript grammar, followed by rejection of every visible node whose
+exact type is `jsx_attribute`, `jsx_closing_element`, `jsx_element`,
+`jsx_expression`, `jsx_namespace_name`, `jsx_opening_element`,
+`jsx_self_closing_element`, or `jsx_text`.
 
 |`.jsx`
-|JavaScript with JSX
+|The same JavaScript grammar without forbidden-JSX rejection.
 
-|`.ts`, `.mts`, `.cts`, including compound names such as `.d.ts`
-|TypeScript
+|`.ts`, `.mts`, `.cts`
+|The TypeScript grammar.
 
 |`.tsx`
-|TypeScript with JSX
+|The TSX grammar.
 |===
 
-The `m` or `c` spelling changes no metric rule. Do not infer syntax or behavior
+ADR 0007 pins `web-tree-sitter@0.26.12` and the JavaScript, TypeScript, and TSX
+WASM assets supplied by `@vscode/tree-sitter-wasm@0.3.1`. The `m` and `c`
+spellings add no grammar behavior. `name.d.ts` uses ordinary TypeScript grammar;
+there is no declaration-file or `d.ts` mode. Do not infer syntax or behavior
 from `package.json`, `tsconfig`, module resolution, types, bindings, imports, or
-lint results. TypeScript syntax in a JavaScript family and JSX outside a JSX or
-TSX family are grammar errors.
+lint results.
 
-The exact analyzer and version that provide the four grammar modes are selected
-and human-accepted in https://github.com/FelixGeisler/code-city/issues/450[#450],
-not by this contract or its documentation implementation.
+[[complete-syntax-validation]]
+=== Complete fact-free validation
+
+For every admitted module, before any semantic observation or metric fact:
+
+. inspect `rootNode.hasError`;
+. iteratively inspect the complete tree for an `ERROR` node, any missing
+  recovery node, and, for `.js`/`.mjs`/`.cjs`, every forbidden JSX node above;
+  and
+. begin projection only after the complete validation pass succeeds.
+
+Validation and projection are two iterative passes over one tree. The first is
+fact-free. A recovered tree, including one with a missing node, produces no
+facts. TypeScript syntax fails in both JavaScript families, JSX fails in each
+non-JSX family, and malformed source fails in every family.
+
+Contextual or static-semantic errors accepted by the pinned grammar do not fail
+metric processing. The pinned grammar accepts top-level `return`, `break`, and
+`continue`; each is grammar-valid and then follows the ordinary metric rules.
+Conversely, valid TypeScript 5.9-and-later `import defer` syntax is rejected by
+the pinned TypeScript grammar and produces `M1-MET-1`. M1 promises no
+TypeScript 7, latest-TypeScript, current-ECMAScript, or future grammar
+compatibility and adds no contextual or static-semantic validator.
 
 [[metric-failure]]
 == Atomic metric failure
 
-If any admitted module has any grammar diagnostic in its selected family, the
-complete metric stage fails with exactly:
+If `rootNode.hasError`, any complete-tree `ERROR` or missing recovery node, or
+any forbidden non-JSX JavaScript node is present, the complete metric stage
+fails with exactly:
 
 [cols="2,2",options="header"]
 |===
@@ -259,16 +295,18 @@ complete metric stage fails with exactly:
 |`Metric processing failed` |`M1-MET-1`
 |===
 
-Parser recovery must not publish approximate facts. No malformed module is
-skipped, and no partial module sequence, metric fact set, or city is published.
-Type, binding, unresolved-import, and lint diagnostics do not cause this
-result.
+No malformed module is skipped, and no partial module sequence, semantic
+observation, metric fact set, or city is published. Type, binding,
+unresolved-import, lint, and other contextual/static-semantic diagnostics do
+not cause this result when the pinned grammar accepts the source.
 
-M1 exposes neither a raw analyzer message nor a source path for this failure.
-One grammar failure and multiple grammar failures therefore have the same
+M1 exposes neither a raw parser message nor a source path for this failure. One
+grammar failure and multiple grammar failures therefore have the same
 observable result. A duplicate explicit-unit identity under
 <<canonical-identities,Canonical identities and order>> produces this same
-category and code.
+category and code. A trap, allocation failure, or private parser capacity on
+grammar-valid input within the accepted RA-07/RA-08/RA-09 envelope is instead
+a conformance defect that reopens #450; it is not `M1-MET-1` or an SP result.
 
 Apply xref:04-functional-requirements.adoc#states[M1-STATE-1 through
 M1-STATE-5] unchanged: this post-selection failure retains the current
@@ -347,20 +385,24 @@ decisions, parser recovery, skipped malformed modules, path disclosure, and
 name/signature-derived identities are not alternatives left open by this
 contract.
 
-This page assigns no architecture or implementation responsibility.
-https://github.com/FelixGeisler/code-city/issues/450[#450] owns the
-human-accepted analyzer/version choice;
-https://github.com/FelixGeisler/code-city/issues/462[#462] owns the analysis
-responsibility and port-boundary decision; and city existence and
-metric-to-city mapping are defined by
+https://github.com/FelixGeisler/code-city/issues/450[#450] accepted the exact
+Tree-sitter technology, grammar/failure behavior, primitive static-syntax
+projection, full-envelope no-SP disposition, and phase-aware lifecycle in ADR
+0007. https://github.com/FelixGeisler/code-city/issues/462[#462] remains the
+accepted analysis-responsibility and port-boundary owner. City existence and
+metric-to-city mapping remain defined by
 xref:10-fixed-city-layout-and-presentation.adoc[] under
 https://github.com/FelixGeisler/code-city/issues/444[#444].
 
-Implementation evidence is allocated without selecting a mechanism:
+Implementation evidence is allocated exactly as follows:
 
-* https://github.com/FelixGeisler/code-city/issues/455[#455] owns SLOC and
-  executable-unit extraction evidence;
-* https://github.com/FelixGeisler/code-city/issues/456[#456] owns per-unit and
-  maximum-complexity extraction evidence; and
-* https://github.com/FelixGeisler/code-city/issues/460[#460] owns integrated
-  `M1-MET-1`, retained-current-identity, and no-partial/no-stale-state evidence.
+* https://github.com/FelixGeisler/code-city/issues/455[#455] owns the pinned
+  parser, complete validation, SLOC, executable units, conditional top level,
+  spans, astral UTF-8 offsets, full RA envelope, lifecycle barrier, and ordinary
+  cleanup evidence;
+* https://github.com/FelixGeisler/code-city/issues/456[#456] owns decision and
+  complexity projection and reruns the complete combined grammar, SLOC, unit,
+  lifecycle, full-envelope, and exact-fact matrix; and
+* https://github.com/FelixGeisler/code-city/issues/460[#460] owns final asset and
+  provenance renewal, integrated lifecycle races, `M1-MET-1`, retained-current-
+  identity, and no-partial/no-stale-state evidence.

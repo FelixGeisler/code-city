@@ -38,3 +38,16 @@
   The decision needs no later generic human-acceptance gate; #454 owns focused
   mechanism evidence, #459 packaged-path evidence, #460 final hosted renewal,
   and #463/#464 synthesis and readiness evidence.
+* xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007: Static syntax with pinned Tree-sitter WebAssembly grammars]
+  is `Accepted`. https://github.com/FelixGeisler/code-city/issues/450[#450]
+  records the clear Software Architect recommendation, incorporated Security
+  Reviewer constraints, and Requirements Engineer acceptance under #444's
+  human delegation for accepted issue-body SHA-256
+  `78a0d1949cb8d6a254556b21c982830e17ccf3ce83af5ec99bc26a1eae570f19`.
+  The decision needs no later generic human-acceptance gate. It narrowly amends
+  ADR 0003's bridge payload and parser cleanup while remaining compatible with
+  ADRs 0005/0006. #455 owns parser/SLOC/unit realization, #456 complexity and
+  the combined full-envelope rerun, #460 final renewal and integrated
+  lifecycle evidence, and #463/#464 synthesis and readiness evidence. The
+  xref:adr/0007-static-syntax-evidence-appendix.adoc[inert appendix] records the
+  canonical WASM inventory without granting parser API permission.

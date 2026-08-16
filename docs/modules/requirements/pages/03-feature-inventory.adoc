@@ -40,16 +40,22 @@ xref:architecture:adr/0006-bounded-selected-revision-retrieval-via-github-tree-a
 owns bounded retrieval of the immutable selected revision and the sole complete
 ordered admitted-module set. RA-10 retrieval duration and RA-11 admission
 duration are explicitly unnecessary for M1 and have no timer, value, boundary,
-or outcome. SP-01 through SP-04 and CC-09/PR-01 remain explicitly deferred to
-their linked owners; CC-01 through CC-08 retain the fixed #444 dispositions.
+or outcome. SP-01 through SP-04 are likewise explicitly unnecessary: all
+RA-07/RA-08/RA-09-admitted work reaches analysis and no static-processing timer
+or lower processing limit exists. CC-09/PR-01 remain with their linked owner;
+CC-01 through CC-08 retain the fixed #444 dispositions.
 
 |Fixed metric semantics
 |Included; accepted contract
 |xref:08-fixed-metric-semantics.adoc[] defines lexical physical-line SLOC,
-executable units, per-unit and maximum complexity, canonical facts, and atomic
-metric failure under https://github.com/FelixGeisler/code-city/issues/443[#443].
-Analyzer technology and analysis responsibility remain with their linked
-downstream owners; city mapping is fixed by the next contract.
+executable units, per-unit and maximum complexity, canonical facts, the exact
+suffix-to-grammar behavior, recovered-tree rejection, and atomic metric failure
+under https://github.com/FelixGeisler/code-city/issues/443[#443] and
+https://github.com/FelixGeisler/code-city/issues/450[#450].
+xref:architecture:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007]
+fixes the non-executing Tree-sitter mechanism, primitive projection, and
+phase-aware lifecycle. Analysis responsibility remains with the accepted core
+and port owners; city mapping is fixed by the next contract.
 
 |Fixed city, layout, and presentation
 |Included; accepted contract

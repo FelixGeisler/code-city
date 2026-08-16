@@ -2,8 +2,9 @@
 
 These closed matrices and examples are inert documentation for reviewing
 xref:08-fixed-metric-semantics.adoc[]. They are not executable fixtures, test
-scaffolds, analyzer probes, parser or AST assumptions, architecture choices, or
-assignments of an enforcement location.
+scaffolds, parser probes, new architecture choices, or assignments of an
+enforcement location. The already-accepted mechanism and lifecycle are in
+xref:architecture:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007].
 
 Unless an example says otherwise, its content is already the strict UTF-8,
 BOM-removed, LF-normalized content supplied by
@@ -20,13 +21,17 @@ The contract is acceptable only when all of these gates hold:
   contributes zero itself, and nested ownership is exclusive;
 * derived counts, complexities, maxima, ties, spans, identities, and ordering
   match the exact examples and canonical-key table;
-* all eight suffixes and their ASCII case variants select only the four stated
-  syntax families, and every grammar failure has only the accepted atomic
-  result;
+* all eight suffixes and their ASCII case variants select only the pinned
+  JavaScript, TypeScript, or TSX grammar behavior, complete recovery and
+  forbidden-JSX validation precedes projection, and every grammar failure has
+  only the accepted atomic result;
+* top-level `return`/`break`/`continue`, pinned `import defer` rejection, the
+  full admitted envelope, and the two-pass/UTF-offset boundaries have their
+  exact stated results;
 * reordered admitted modules and repeated evaluation produce the same exact
   canonical facts without excluded fields;
-* no example selects analyzer technology, architecture, city behavior, or an
-  executable evidence mechanism; and
+* no example changes the accepted parser technology, architecture, city
+  behavior, or evidence mechanism; and
 * `npm run docs:build` succeeds.
 
 [[sloc-matrix]]
@@ -491,32 +496,120 @@ module-resolution, type, binding, import, or lint evidence can select a
 different family.
 
 [[four-family-matrix]]
-== Four-family grammar and failure matrix
+== Pinned-grammar and failure matrix
 
 [cols="2,3,5",options="header"]
 |===
-|Selected family |Accepted syntax example |Grammar-diagnostic examples
+|Selected grammar behavior |Accepted syntax example |Rejected examples
 
-|JavaScript |Ordinary JavaScript such as `const x = 1;` |A TypeScript type annotation; JSX; malformed JavaScript text
-|JavaScript with JSX |Ordinary JavaScript and JSX such as `const view = <div />;` |A TypeScript type annotation; malformed JavaScript/JSX text
-|TypeScript |TypeScript such as `const x: number = 1;` |JSX; malformed TypeScript text
-|TypeScript with JSX |TypeScript and JSX such as `const view: JSX.Element = <div />;` |Malformed TSX text
+|JavaScript grammar plus forbidden-JSX validation for `.js`, `.mjs`, and `.cjs`
+|Ordinary JavaScript such as `const x = 1;`
+|A TypeScript type annotation; any visible `jsx_attribute`,
+`jsx_closing_element`, `jsx_element`, `jsx_expression`, `jsx_namespace_name`,
+`jsx_opening_element`, `jsx_self_closing_element`, or `jsx_text`; malformed
+JavaScript text
+
+|The same JavaScript grammar without forbidden-JSX validation for `.jsx`
+|Ordinary JavaScript and JSX such as `const view = <div />;`
+|A TypeScript type annotation; malformed JavaScript/JSX text
+
+|TypeScript grammar for `.ts`, `.mts`, and `.cts`
+|TypeScript such as `const x: number = 1;`; ordinary `name.d.ts` spelling
+|JSX; valid TypeScript 5.9-and-later `import defer`; malformed TypeScript text
+
+|TSX grammar for `.tsx`
+|TypeScript and JSX such as `const view: JSX.Element = <div />;`
+|Malformed TSX text
 |===
 
-Thus TypeScript syntax fails in both JavaScript families, JSX fails in each
-non-JSX family, and malformed text fails in every family. Every grammar-
-diagnostic cell, whether it affects one module or many, has exactly this
+For each row, inspect `rootNode.hasError`, then iteratively inspect the complete
+tree for every `ERROR` node, every missing recovery node, and the applicable
+forbidden JSX nodes before projection. The complete first pass is fact-free;
+projection is a second iterative pass only after validation succeeds.
+
+Every rejected cell, whether it affects one module or many, has exactly this
 complete outcome:
 
 * category `Metric processing failed`;
 * code `M1-MET-1`;
 * the current selected canonical repository URL and full lowercase commit ID
   retained under #441; and
-* no exposed source path, raw analyzer text, module metric fact, partial module
-  set, partial city, stale city, or city.
+* no exposed source path, raw parser text, semantic observation, module metric
+  fact, partial module set, partial city, stale city, or city.
 
-No malformed module is skipped, and parser recovery cannot turn any grammar
-row into approximate facts.
+No malformed module is skipped, and parser recovery cannot turn any row into
+approximate facts. Top-level `return`, `break`, and `continue` are accepted by
+the pinned grammars and do not create `M1-MET-1`; their ordinary metric
+contribution is `0`.
+
+[[pinned-parser-acceptance]]
+== Pinned parser, envelope, and projection acceptance
+
+[cols="1,5,6",options="header"]
+|===
+|ID |Documentary condition |Required result
+
+|PARSE-01
+|`rootNode.hasError`, an `ERROR` node, or any missing node occurs anywhere in
+the complete tree.
+|Fact-free validation completes and the attempt produces only atomic
+`M1-MET-1`; projection never begins.
+
+|PARSE-02
+|A `.js`, `.mjs`, or `.cjs` tree contains any one of the eight exact forbidden
+JSX node types, including a deeply nested occurrence.
+|Complete iterative validation rejects it as `M1-MET-1`; `.jsx` uses the same
+JavaScript grammar without this additional rejection.
+
+|PARSE-03
+|Pinned grammar accepts top-level `return`, `break`, or `continue`.
+|Metric processing proceeds. No contextual/static-semantic validator is added,
+and each construct contributes `0` itself.
+
+|PARSE-04
+|Pinned TypeScript grammar receives valid TypeScript 5.9-and-later `import
+defer`.
+|The grammar rejects it and the complete result is `M1-MET-1`; no latest-
+TypeScript compatibility is inferred.
+
+|PARSE-05
+|Astral characters occur before and inside explicit-unit spans.
+|Required UTF-16 endpoints are sorted, deduplicated, range- and surrogate-
+validated, then converted in one Unicode-scalar scan to exact half-open UTF-8
+byte offsets; no whole-file lookup table exists.
+
+|PARSE-06
+|Grammar-valid parentheses reach `100,000` nesting levels at the exact
+per-module envelope; equivalent deep TypeScript and TSX are processed.
+|Both passes remain iterative and produce exact facts without recursive
+JavaScript traversal, trap, fallback, retry, or private lower capacity.
+
+|PARSE-07
+|One grammar-valid module contains one million empty statements; exact-bound
+long-token and comment modules are also processed.
+|The selected grammar and two passes produce exact SLOC/unit facts within the
+accepted envelope; elapsed time alone creates no result.
+
+|PARSE-08
+|Admission supplies exactly `4,000` modules totaling `41,943,040` normalized
+bytes, including twenty modules of exactly `2,097,152` bytes and `3,980`
+zero-byte modules.
+|Every module reaches analysis sequentially. No SP-01/SP-02/SP-03 limit,
+syntax-node/nesting/parser-memory/allocation limit, or `Static-processing limit
+exceeded` outcome exists.
+
+|PARSE-09
+|Cancellation or replacement occurs immediately after bridge receipt of
+`PROVIDER_DRAINED_STATIC_ENTERED`, before the first static operation, or during
+active parse/traversal.
+|Zero static operations is valid in the first race; the sole worker is hard-
+terminated and cleared before replacement. No cooperative parser-stop or
+ordinary-path delete-spy claim is made.
+|===
+
+Any grammar-valid trap, allocation failure, private capacity, or incorrect fact
+inside this matrix is a conformance defect that reopens #450. It is not
+`M1-MET-1`, an SP result, or evidence for a lower product limit.
 
 [[non-grammar-matrix]]
 == Grammar versus non-grammar diagnostics
@@ -531,6 +624,8 @@ row into approximate facts.
 |DIAG-04 |A grammar-valid import whose target cannot be resolved |No `M1-MET-1` from that diagnostic |Module resolution is not a metric-failure input.
 |DIAG-05 |A lint diagnostic on grammar-valid source |No `M1-MET-1` from that diagnostic |Lint policy is not a metric-failure input.
 |DIAG-06 |Duplicate canonical explicit-unit identity |Atomic `Metric processing failed` / `M1-MET-1` |No traversal suffix or winner repairs the duplicate.
+|DIAG-07 |Pinned grammar accepts top-level `return`, `break`, or `continue` |No `M1-MET-1` from that condition |No contextual or static-semantic validator is added.
+|DIAG-08 |Pinned TypeScript grammar rejects valid TypeScript 5.9-and-later `import defer` |Atomic `Metric processing failed` / `M1-MET-1` |Pinned grammar acceptance, not a latest-TypeScript promise, governs.
 |===
 
 A non-grammar diagnostic does not suppress ordinary canonical facts when the
@@ -593,35 +688,41 @@ field, value, or order.
 |===
 
 [[evidence-allocation]]
-== Evidence allocation and deferred choices
+== Evidence allocation
 
 [cols="3,3,5",options="header"]
 |===
 |Contract evidence |Evidence owner |Required evidence boundary
 
-|Lexical SLOC, explicit units, conditional top-level, zero-unit modules, spans,
-and canonical unit order
+|Pinned grammar mapping and failure; lexical SLOC; explicit units;
+conditional top-level; zero-unit modules; spans; canonical unit order; two
+iterative passes; astral UTF offsets; full envelope; ordinary cleanup; and both
+lifecycle races
 |https://github.com/FelixGeisler/code-city/issues/455[#455]
-|Extraction evidence conforming to this exact contract without changing its
-facts or selecting city behavior.
+|Repeatable packaged-browser evidence for every PARSE row, all suffix and ASCII
+case variants, complete recovery rejection, exact facts, sequential parser
+handles, no lower capacity, and the accepted lifecycle attestations without
+selecting city behavior.
 
 |Every included/excluded contribution, exclusive ownership, exact per-unit
 complexity, count, maximum, and ties
 |https://github.com/FelixGeisler/code-city/issues/456[#456]
 |Extraction and arithmetic evidence conforming to this exact contract, with no
-aggregate load or maximum winner.
+aggregate load or maximum winner, followed by the complete combined grammar,
+SLOC, unit, complexity, lifecycle, full-envelope, and exact-fact rerun.
 
 |Grammar failure, duplicate identity, retained current selected identity, and
 no module/metric set or stale/partial city
 |https://github.com/FelixGeisler/code-city/issues/460[#460]
-|Integrated exact-category/code and #441 state evidence.
+|Integrated exact-category/code and #441 state evidence, provider/static phase
+ordering, cancellation/replacement races, emitted asset and provenance renewal,
+and no stale, partial, or late publication.
 |===
 
-The analyzer and version remain owned by
-https://github.com/FelixGeisler/code-city/issues/450[#450], analysis
-responsibility and port boundaries by
+https://github.com/FelixGeisler/code-city/issues/450[#450] has accepted the
+exact parser technology and no-SP decision in ADR 0007. Analysis responsibility
+and port boundaries remain owned by
 https://github.com/FelixGeisler/code-city/issues/462[#462], and city existence
 and mapping by xref:10-fixed-city-layout-and-presentation.adoc[] under
 https://github.com/FelixGeisler/code-city/issues/444[#444]. These inert examples
-assign none of those choices and require no additional product decision to
-document the accepted metric contract.
+require no additional product or parser decision.

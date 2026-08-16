@@ -15,10 +15,13 @@ exchange.
 xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
 0006] accepts worker-originated selected-commit/root-tree exchanges at
 `api.github.com` and immutable-commit content at `raw.githubusercontent.com`.
-Neither decision creates current product traffic or adds a deployment node or
-path. Outside those decisions, this view does not select a Pages source,
-action/workflow, application route, deployment mechanism, parser, renderer,
-port, schema, or broader worker lifecycle primitive.
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007] accepts five statically addressed parser assets beneath `/code-city/`,
+worker-only parsing, and the worker-generation lifecycle without another node
+or provider path. None creates current product traffic, dependency, asset, or
+deployment node. This view adds no Pages source, action/workflow, application
+route, deployment mechanism, renderer, general port/schema, or additional
+worker primitive.
 
 == Production topology
 
@@ -112,9 +115,14 @@ path.
 |Placement |Present |Prohibited or absent
 
 |GitHub Pages
-|Trusted static UI and worker artifacts.
+|Trusted static UI and worker artifacts. The future ADR 0007 package includes
+only its exact build-generated same-origin runtime JavaScript URL, runtime
+WASM, and JavaScript/TypeScript/TSX grammar WASMs, all statically addressed
+beneath `/code-city/`.
 |Repository payload, admitted source, metrics, city/scene data, attempt state,
-credential, server runtime, and server-side product state.
+credential, server runtime, server-side product state, Node shim, browser
+polyfill, older runtime, unused grammar, query asset, native binding, or parser
+plugin.
 
 |UI main context
 |Input draft; current state and status; selected identity where permitted; one
@@ -125,9 +133,11 @@ modules, parser/analyzer objects, and canonical metric intermediates.
 
 |Processing worker
 |Transient current-attempt provider records, paths, raw and normalized source,
-admitted modules, counters, metrics, parser/analyzer objects, and
-renderer-neutral city-construction intermediates.
-|Persisted product/history state, credential, presentation resources, and any
+admitted modules, counters, metrics, one parser/tree/cursor set, and renderer-
+neutral city-construction intermediates. Provider resources are gone before
+ADR 0007 static entry; fixed same-origin parser assets may then load.
+|Persisted product/history state, credential, presentation resources,
+provider/static overlap, source-derived asset URL or capability, and any
 execution, evaluation, import, or dynamic loading of repository data.
 
 |Worker-to-UI handoff
@@ -156,16 +166,23 @@ worker*, and no user or service credential crosses either boundary.
   Across all attempts, at most one retrieval/admission request and one raw/hash
   workspace exist; only the latest replacement can start after old work and
   cleanup settle. Any late outcome is ignored by the UI.
-* A worker-stage failure stops downstream work and releases transient
-  processing references. A presentation failure is owned by the UI, which
-  cleans up incomplete presentation resources.
-* After a successful complete-scene handoff, worker intermediates do not become
-  retained product state and are released. Reload discards all
-  application-managed session state.
+* Before matching `PROVIDER_DRAINED_STATIC_ENTERED` receipt, the bridge must
+  not terminate: provider settlement and global-gate release precede
+  `ATTEMPT_DRAINED`, termination, handle clearing, and replacement. After
+  matching receipt, it hard-terminates and clears the sole worker before
+  replacement; zero static operations is valid.
+* On an ordinary worker terminal path, the parser adapter deletes cursor, tree,
+  and parser, core references are released, one business payload and then
+  `ATTEMPT_DRAINED` are posted, and only then does the bridge terminate and
+  clear the worker. Hard static termination may bypass deletion and relies on
+  realm release, never for provider cleanup.
+* A presentation failure is owned by the UI, which cleans up incomplete
+  presentation resources. Reload discards all application-managed session
+  state.
 
-This placement promises no cleanup latency or secure erasure and does not
-redefine provider, browser, operating-system, network, or platform caching or
-garbage-collection internals.
+This placement promises no cleanup latency, secure erasure, physical browser
+or process teardown, or garbage-collection timing and does not redefine
+provider, browser, operating-system, network, or platform caching internals.
 
 == Feasibility gate and deferred deployment detail
 
@@ -200,17 +217,18 @@ successful path; and https://github.com/FelixGeisler/code-city/issues/460[#460]
 renews canonical production evidence against the final head. Pages
 source/action/workflow, application route, and deployment mechanism remain
 unselected. ADR 0005 owns the accepted resolution origin and mechanism; ADR
-0006 owns selected-revision retrieval/admission at the two named origins; #450
-and #451 own analyzer and renderer technology and their deferred limits; #462
-owns blocks and conceptual ports; and #463 owns the full accepted-mechanism and
-port synthesis. Outside the ADR 0005 and ADR 0006 summaries, this view selects
-no parser, renderer, concrete package or source map, port, schema, broader
-worker primitive, workflow, route, threshold, or fallback.
+0006 owns selected-revision retrieval/admission at the two named origins; ADR
+0007 owns exact static assets, fixed same-origin URLs, no-SP disposition, and
+phase-aware worker termination; #451 owns renderer technology and CC-09/PR-01;
+#462 owns blocks and conceptual ports; and #463 owns full accepted-mechanism and
+port synthesis. This view adds no renderer, concrete source map, general port
+or schema, workflow, route, fallback, or source-derived capability.
 
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains unchanged and
 authoritative for the outer source boundary;
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
 remains authoritative for the internal graph; ADR 0004 adds only its build/edge
-mechanism constraints; ADR 0005 governs resolution; and ADR 0006 governs
-selected-revision retrieval/admission. Runtime placement grants no new source
-dependency and ADR 0006 adds no node or product-data path.
+mechanism constraints; ADR 0005 governs resolution; ADR 0006 governs selected-
+revision retrieval/admission; and ADR 0007 governs static syntax and the
+worker-generation phase gate. Runtime placement grants no new source dependency,
+and ADRs 0006/0007 add no node or product-data path.

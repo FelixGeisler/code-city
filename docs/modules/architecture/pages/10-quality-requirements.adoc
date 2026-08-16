@@ -184,8 +184,8 @@ evidence https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |8. Dependency conformance
 |A source-dependency edge, concrete mechanism dependency or value use, or
-core-owned contract governed by accepted ADR 0001, ADR 0003, or ADR 0004 is
-added or changed.
+core-owned contract governed by accepted ADR 0001, ADR 0003, ADR 0004, or ADR
+0007 is added or changed.
 |Mapped M1 source graph and shell boundaries. TypeScript language use, runtime
 calls, messages, data flow, and ADR 0002 placement are considered separately
 from source direction and concrete mechanism dependence.
@@ -196,8 +196,11 @@ permitted. Out-of-capability edge-to-domain access and every named forbidden
 dependency are rejected. Application core and domain core import or depend on
 no Vite, UI-framework, or concrete DOM/Worker mechanism module, instantiate or
 otherwise depend on no concrete DOM/Worker mechanism value, and expose no
-DOM/Worker mechanism type in a core-owned contract. No general same-stratum
-rule is inferred.
+DOM/Worker mechanism type in a core-owned contract. The parser adapter alone
+may depend on ADR 0007's exact parser assets and API; no parser object/type or
+source-derived key crosses into core, and the main bridge's worker-generation
+gate remains transport-resource ownership rather than orchestration. No
+general same-stratum rule is inferred.
 |#452's initial automated evidence accepts representative
 `edge→application`, capability-authorized `edge→domain`, and
 `application→domain` cross-stratum dependencies plus
@@ -208,14 +211,70 @@ rejects representative out-of-capability `edge→domain`, `application→edge`,
 application core and domain core, it also rejects representative imports or
 dependencies on Vite, a UI framework, and concrete DOM/Worker mechanisms,
 concrete DOM/Worker mechanism value dependence or instantiation, and
-DOM/Worker mechanism types in core-owned contracts. #460 executes the complete
-check against its final head after all M1 dependency and build-input changes.
+DOM/Worker mechanism types in core-owned contracts. It also verifies ADR
+0007's parser-adapter-only dependency, fixed asset locators, primitive static-
+syntax boundary, and sole main-bridge worker handle/generation gate without
+adding a parser dependency or implementation. #460 executes the complete check
+against its final head after all M1 dependency and build-input changes.
 |xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
-and xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
-are the accepted source-conformance rules. Initial automated evidence belongs
-to https://github.com/FelixGeisler/code-city/issues/452[#452]; final-head
-execution belongs to https://github.com/FelixGeisler/code-city/issues/460[#460].
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004],
+and
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007] are the accepted conformance rules. Initial automated evidence belongs to
+https://github.com/FelixGeisler/code-city/issues/452[#452]; final-head execution
+belongs to https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|9. Pinned static syntax at the full envelope
+|Any admitted suffix/ASCII-case family is processed; recovery, forbidden JSX,
+top-level contextual errors, pinned `import defer`, deep/wide/long input,
+astral spans, or the exact RA-07/RA-08/RA-09 envelope is present.
+|Repeatable packaged browser using only ADR 0007's exact runtime, grammar
+assets, and safe parser API.
+|Complete iterative validation precedes primitive projection. Recovered or
+forbidden syntax is atomic `M1-MET-1`; top-level `return`/`break`/`continue`
+proceeds; pinned `import defer` fails; UTF-8 facts are exact. Every grammar-
+valid full-envelope input produces exact facts without a lower SP or private
+capacity, fallback, retry, or performance claim.
+|#455 proves all suffixes, complete-tree recovery/JSX rejection, both passes,
+SLOC/units, astral offsets, ordinary handle deletion, `100,000` nesting, one
+million empty statements, exact-bound token/comment input, deep TS/TSX, and
+`4,000` modules totaling `41,943,040` bytes including twenty exact RA-08
+modules. #456 reruns the complete combined matrix after complexity mapping;
+#460 renews emitted asset hashes, inventory, closure, provenance, and forbidden-
+artifact/traffic/logging absence.
+|xref:requirements:08-fixed-metric-semantics.adoc#syntax-families[Closed pinned
+grammars],
+xref:requirements:09-fixed-metric-acceptance.adoc#pinned-parser-acceptance[parser
+acceptance], and
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007]; evidence #455, #456, and #460.
+
+|10. Provider/static lifecycle and replacement
+|Cancellation, replacement, ordinary completion, or failure occurs before
+static-entry receipt, immediately after receipt before the first static
+operation, during parse/traversal, or after a terminal business payload exists.
+|One current attempt, at most one bridge-owned usable worker, and ADR 0005/0006
+provider work that may still be settling.
+|Before matching receipt, publication revocation precedes provider settlement,
+global-gate release, `ATTEMPT_DRAINED`, termination, handle clearing,
+replacement creation, and its first provider request. After matching receipt,
+hard termination and handle clearing precede replacement; zero static
+operations is valid. Ordinary paths delete parser handles and clear references,
+then post one business payload and `ATTEMPT_DRAINED`, then terminate. No
+physical-teardown or delete-spy claim is made for hard termination.
+|Controlled call-order evidence covers active provider work, pending settlement,
+barrier receipt racing before first static work, synchronous parse, traversal,
+ordinary deletion, realm release, late-output rejection, both source-free
+attestations, and at most one usable worker/parser/provider/workspace set. Every
+implementation CI job and final asset/provenance renewal succeeds on the exact
+head.
+|xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
+0005],
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006], and
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007]; focused evidence #455 and integrated final evidence #460.
 |===
 
 xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
@@ -238,9 +297,11 @@ product traffic exists.
 Scenario 8 applies to xref:adr/0001-core-dependency-boundary.adoc[accepted ADR
 0001],
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[accepted
-ADR 0003], and
+ADR 0003],
 xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[accepted ADR
-0004]. https://github.com/FelixGeisler/code-city/issues/452[#452] owns the
+0004], and
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[accepted
+ADR 0007]. https://github.com/FelixGeisler/code-city/issues/452[#452] owns the
 initial complete positive and negative automated source-conformance check;
 https://github.com/FelixGeisler/code-city/issues/460[#460] owns its execution
 against the final head. Runtime direction, messages, data flow, ADR 0002
@@ -263,11 +324,20 @@ acceptance, those evidence owners, and their readiness checks before M1
 implementation handoff. This documentation is not implementation evidence and
 does not claim that the shell or artifact exists now.
 
-RA-10 retrieval duration and RA-11 admission duration are no longer deferred:
-they are explicitly unnecessary and have no value, unit, timer, clock,
-category, code, interval, cutoff, boundary, or precedence. Scenario 6 has no
-elapsed-time target, and arbitrary time alone may leave an attempt `Loading`
-without creating an outcome. SP-01 through SP-04, CC-09, and PR-01 remain
-deferred to their linked owners in
-xref:requirements:06-source-admission-and-limits.adoc#deferred-limits[RA timing
-disposition and downstream limit decisions].
+ADR 0007 is the accepted quality source for exact parser packages/assets and
+ABI, safe cursor-only API, two-pass primitive projection, UTF conversion, fixed
+same-origin Vite loading, capability exclusions, canonical WASM inventory,
+provider/static lifecycle, full-envelope no-SP disposition, evidence renewal,
+and stop rules. #455 owns parser/SLOC/unit and focused lifecycle evidence, #456
+the complexity and combined rerun, and #460 final closure, asset, provenance,
+traffic/logging, lifecycle, and publication renewal. This documentation and its
+inert appendix are not executable parser evidence.
+
+RA-10 retrieval duration, RA-11 admission duration, and SP-01 through SP-04 are
+no longer deferred: each is explicitly unnecessary and has no value, unit,
+timer, clock, category, code, interval, cutoff, boundary, or precedence.
+Scenarios 6 and 10 have no elapsed-time target, and arbitrary provider or static
+time alone may leave an attempt `Loading` without creating an outcome. CC-09
+and PR-01 remain with #451 as linked from
+xref:requirements:06-source-admission-and-limits.adoc#deferred-limits[accepted
+limit dispositions].

@@ -79,6 +79,20 @@ failure].
 |https://github.com/FelixGeisler/code-city/issues/454[#454] through
 https://github.com/FelixGeisler/code-city/issues/460[#460].
 
+|Static syntax uses only ADR 0007's exact pinned runtime and three grammar
+assets, complete iterative validation before primitive projection, permitted
+cursor-only API, fixed same-origin `/code-city/` locators, and phase-aware
+worker lifecycle. SP-01 through SP-04 are unnecessary; no lower processing
+limit or static-duration outcome exists.
+|xref:requirements:08-fixed-metric-semantics.adoc#syntax-families[Closed
+pinned-grammar families],
+xref:requirements:06-source-admission-and-limits.adoc#deferred-limits[static-processing
+dispositions], and
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007].
+|https://github.com/FelixGeisler/code-city/issues/455[#455],
+https://github.com/FelixGeisler/code-city/issues/456[#456], and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
 |Submission, replacement, cancellation, failure, success, identity retention,
 and complete-city publication obey the current-attempt invariant: no stale,
 partial, or late result may be published.
@@ -160,9 +174,17 @@ global no-overlap, cleanup, replacement-coalescing, stop, and no-timing-promise
 rules are mandatory. #454 owns focused evidence, #459 packaged-path evidence,
 and #460 hosted renewal.
 
-Pages source/action/workflow and deployment mechanism, analysis and
-visualization technology, concrete source mapping, exact message and port
-schemas, broader worker lifecycle and bridge cancellation mechanisms, and the
-remaining SP-01 through SP-04, CC-09, and PR-01 decisions stay with their
-owners in #450 through #460 and #463. Selected-revision retrieval and
-RA-10/RA-11 are no longer deferred.
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007] is the accepted static-syntax and phase-lifecycle constraint. Its
+provider-drained barrier precedes every runtime, grammar, parse, and traversal
+operation; pre-barrier cancellation waits for provider settlement and
+`ATTEMPT_DRAINED`, while matching barrier receipt permits immediate hard
+termination before zero or during active static operations. Ordinary terminal
+paths delete parser handles before `ATTEMPT_DRAINED`. At most one usable worker,
+parser set, provider slot, and raw/hash workspace overlap observably.
+
+Pages source/action/workflow and deployment mechanism, visualization
+technology, concrete source mapping, general message and port schemas, and
+CC-09/PR-01 stay with their owners in #451 through #460 and #463. Static syntax,
+SP-01 through SP-04, selected-revision retrieval, and RA-10/RA-11 are no longer
+deferred.

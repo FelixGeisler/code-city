@@ -16,10 +16,12 @@ source-admission and RA-01 through RA-09 contract from
 https://github.com/FelixGeisler/code-city/issues/442[#442], the accepted fixed
 metric contract from https://github.com/FelixGeisler/code-city/issues/443[#443],
 and the accepted fixed city, layout, and initial-presentation contract from
-https://github.com/FelixGeisler/code-city/issues/444[#444]. Analyzer/version,
-possible later retrieval and processing limits, visualization technology, and
-CC-09/PR-01 duration decisions remain with their owning issues and the #464
-hard gate.
+https://github.com/FelixGeisler/code-city/issues/444[#444].
+https://github.com/FelixGeisler/code-city/issues/450[#450] fixes the exact
+Tree-sitter runtime and grammars, recovered-tree failure behavior, and the
+full-envelope disposition that SP-01 through SP-04 are unnecessary. Only
+visualization technology and the CC-09/PR-01 duration decisions remain with
+their owning issue and the #464 hard gate.
 
 == Reading order
 
@@ -41,7 +43,7 @@ hard gate.
   for that contract.
 . xref:08-fixed-metric-semantics.adoc[Fixed Metric Semantics] defines lexical
   physical-line SLOC, executable units, complexity, canonical metric facts,
-  and atomic metric failure.
+  the exact pinned-grammar boundary, and atomic metric failure.
 . xref:09-fixed-metric-acceptance.adoc[Fixed Metric Acceptance] provides the
   closed inert matrices, exact examples, and evidence allocation for that
   contract.

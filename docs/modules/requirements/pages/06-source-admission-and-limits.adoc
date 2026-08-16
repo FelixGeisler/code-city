@@ -543,7 +543,7 @@ unchanged:
 A late result from a replaced or cancelled attempt has no observable effect.
 
 [[deferred-limits]]
-== RA timing disposition and downstream limit decisions
+== RA and static-processing limit dispositions
 
 RA-10 retrieval duration and RA-11 admission duration are explicitly
 unnecessary for M1. Neither has a value, unit, timer, clock, category, stable
@@ -561,17 +561,45 @@ failure contracts. M1 makes no completion-time promise; ADR 0006 separately
 bounds data, request count and concurrency, and application-owned retained
 resources.
 
-This admission contract continues to approve no existence, value, unit,
-measurement, boundary, precedence, or diagnostic for these still-deferred
-choices:
+https://github.com/FelixGeisler/code-city/issues/450[#450] explicitly resolves
+SP-01 through SP-04 as unnecessary for M1:
 
-* SP-01 through SP-04 remain with
-  https://github.com/FelixGeisler/code-city/issues/450[#450] using the accepted
-  metric contract and relevant topology, shell, and port evidence.
-* CC-09 and PR-01 remain exclusively with
-  https://github.com/FelixGeisler/code-city/issues/451[#451] after the accepted
-  city contract and visualization feasibility evidence. No value, interval,
-  threshold, or limit result is approved for either duration here.
+[cols="3,7",options="header"]
+|===
+|Dimension |Accepted disposition
+
+|SP-01 lower static-processing module count
+|None. All `4,000` modules permitted by RA-07 reach analysis.
+
+|SP-02 lower per-module processing-content limit
+|None. Every module through RA-08's inclusive `2,097,152` normalized UTF-8
+bytes reaches analysis.
+
+|SP-03 lower aggregate processing-content limit
+|None. The complete RA-09 inclusive `41,943,040` normalized UTF-8 bytes reaches
+analysis.
+
+|SP-04 static-processing duration
+|None. No timer or elapsed-time result exists.
+|===
+
+SP-01 through SP-04 have no value, unit, timer, clock, cutoff, category,
+stable code, precedence, interval, boundary, or T-1/T/T+1 scenario.
+`Static-processing limit exceeded` does not exist in M1. There is no independent
+syntax-node, nesting, parser-memory, allocation, or private parser-capacity
+limit. The historical `2,000` modules, `1 MiB` per module, `20 MiB` aggregate,
+and `30 seconds` proposals are rejected as uncalibrated.
+
+While no browser failure or lifecycle action occurs, elapsed analysis time
+alone leaves the attempt `Loading` and creates no outcome. A grammar-valid
+failure anywhere inside the complete RA-07/RA-08/RA-09 envelope is a
+conformance defect that reopens #450, not `M1-MET-1`, an SP result, or an
+implicit product limit. A lower cap, retry, fallback, or alternate parser
+cannot hide it.
+
+CC-09 and PR-01 remain exclusively with
+https://github.com/FelixGeisler/code-city/issues/451[#451]. No value, interval,
+threshold, or limit result is approved for either duration here.
 
 The accepted https://github.com/FelixGeisler/code-city/issues/444[#444] contract
 resolves CC-01 through CC-08 exactly as follows without changing admission,
@@ -584,7 +612,8 @@ RA-01 through RA-09, canonical module identity, or unsigned-UTF-8 module order:
 |CC-01 building count
 |No independent city cap. The city has exactly `N` identity-matched buildings
 for the complete metric set reaching construction. RA-07 prevents more than
-`4,000` admitted modules; #450 may stop an attempt earlier.
+`4,000` admitted modules, and every permitted module reaches static analysis;
+only an accepted metric failure can prevent a complete metric set.
 
 |CC-02 repository-derived labels
 |Exactly `0`.
@@ -610,14 +639,13 @@ additional, or repeated mapping or malformed or unrepresentable metric fact is
 `City construction failed` / `M1-CITY-1`; a private implementation capacity is
 a conformance defect, not an undeclared limit.
 
-No strict RA > SP > CC taper is required. RA-10 and RA-11 are settled as
-unnecessary rather than as limits. A still-deferred SP, CC, or PR choice may be
-lower, equal, higher, or explicitly unnecessary only after the accepted
-decision in its owning issue. The human delegation and Requirements Engineer
-decision record in #444 supply #442's required evidence and decision for CC-01
-through CC-08. https://github.com/FelixGeisler/code-city/issues/464[#464] must
-verify that delegation and each exercise, ADR 0006's RA-10/RA-11 disposition,
-and every still-deferred choice before M1 implementation handoff.
+No strict RA > SP > CC taper exists. RA-10, RA-11, and SP-01 through SP-04 are
+settled as unnecessary rather than as limits. The human delegation and
+Requirements Engineer decision records in #444 and #450 supply #442's required
+CC and SP dispositions. https://github.com/FelixGeisler/code-city/issues/464[#464]
+must verify both delegations and exercises, ADR 0006's RA-10/RA-11 disposition,
+ADR 0007's static decision, and the remaining CC-09/PR-01 choices before M1
+implementation handoff.
 
 [[decision-boundary-source-limits]]
 == Decision boundary and evidence consumers
@@ -651,9 +679,14 @@ CC-01 through CC-08 dispositions with construction geometry, layout, bounds,
 and `M1-CITY-1` evidence.
 https://github.com/FelixGeisler/code-city/issues/458[#458] validates complete
 presentation and the absence of labels, controls, and extra geometry.
+https://github.com/FelixGeisler/code-city/issues/455[#455] proves that the full
+RA-07/RA-08/RA-09 envelope reaches parser, SLOC, and unit processing with no
+lower private capacity; https://github.com/FelixGeisler/code-city/issues/456[#456]
+reruns the complete combined envelope after decision and complexity mapping.
 https://github.com/FelixGeisler/code-city/issues/460[#460] validates integrated
-and hosted provider/browser failure, arbitrary elapsed-time inertness,
-replacement, cancellation, identity retention, atomic publication, no retry or
-persistence, unexpected traffic, and final-head REST/raw CORS renewal. #450
-retains SP-01 through SP-04 decision evidence; #451 retains CC-09 and PR-01
-decision and feasibility evidence.
+and hosted provider/browser failure, provider-to-static phase ordering,
+arbitrary elapsed-time inertness, replacement, cancellation, identity
+retention, atomic publication, no retry or persistence, unexpected traffic,
+and final-head REST/raw and parser-asset renewal. #450 retains the accepted
+SP-01 through SP-04 decision evidence; #451 retains CC-09 and PR-01 decision
+and feasibility evidence.
