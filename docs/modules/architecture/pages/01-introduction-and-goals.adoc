@@ -66,10 +66,17 @@ a decision, that ADR is the conformance source. Source-dependency direction is
 distinct from runtime calls and data flow. The decision boundary is recorded
 in
 xref:requirements:04-functional-requirements.adoc#decision-boundary[Decision
-boundary]. The core-dependency decision is accepted in
-xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] through
-https://github.com/FelixGeisler/code-city/issues/445[#445]; its automated
-evidence belongs to https://github.com/FelixGeisler/code-city/issues/452[#452].
+boundary]. The governing source-conformance decisions are accepted in
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
+and
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
+through https://github.com/FelixGeisler/code-city/issues/445[#445],
+https://github.com/FelixGeisler/code-city/issues/462[#462], and
+https://github.com/FelixGeisler/code-city/issues/447[#447]. Initial automated
+evidence belongs to https://github.com/FelixGeisler/code-city/issues/452[#452],
+and final-head execution belongs to
+https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |4
 |The smallest one-journey solution without speculative flexibility
@@ -136,9 +143,13 @@ not weaken an accepted decision or pre-accept a deferred one for implementation
 convenience.
 |The delegated synthesis is recorded in
 https://github.com/FelixGeisler/code-city/issues/461[#461].
-xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] is accepted through
-https://github.com/FelixGeisler/code-city/issues/445[#445], with automated
-evidence in https://github.com/FelixGeisler/code-city/issues/452[#452].
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
+and
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
+are accepted source constraints, with initial automated evidence in
+https://github.com/FelixGeisler/code-city/issues/452[#452] and final-head
+execution in https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |M1 scope over extensibility
 |Add no authentication, configuration, exploration, persistence, compatibility
@@ -166,14 +177,24 @@ The internal core strata, minimum logical blocks, conceptual ports, bridge
 boundary, and ownership mapping owned by
 https://github.com/FelixGeisler/code-city/issues/462[#462] are accepted in
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003].
-The mechanism and technology choices owned by
-https://github.com/FelixGeisler/code-city/issues/447[#447] through
+The framework-free TypeScript shell and Vite build choice owned by
+https://github.com/FelixGeisler/code-city/issues/447[#447] is accepted in
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004].
+It fixes exact future tool versions, `/code-city/` static packaging with one
+separate same-origin ES-module worker, reproducibility and evidence-renewal
+obligations, and build/edge mechanism exclusions. This is an accepted
+documented decision now, not an implemented shell: #452 owns the initial
+walking shell and evidence, #459 owns successful integration through it, and
+#460 owns renewed final-head production evidence.
+
+The GitHub, analysis, and visualization mechanism and technology choices owned
+by https://github.com/FelixGeisler/code-city/issues/448[#448] through
 https://github.com/FelixGeisler/code-city/issues/451[#451] remain
-*deferred/not accepted here*. Neither this page nor ADR 0002 or ADR 0003
-selects a shell, build or Pages workflow, application route, GitHub endpoint or
-request policy, parser, analyzer, renderer, exact message or port schema,
-concrete package or source map, worker lifecycle or cancellation primitive, or
-deferred threshold.
+*deferred/not accepted here*. Neither this page nor ADR 0004 selects a Pages
+source, action, workflow or deployment mechanism, application route, GitHub
+endpoint or request policy, parser or analyzer, renderer, exact message or port
+schema, concrete package or source map, worker lifecycle or cancellation
+primitive, or deferred threshold.
 
 https://github.com/FelixGeisler/code-city/issues/463[#463] and
 https://github.com/FelixGeisler/code-city/issues/464[#464] are later synthesis

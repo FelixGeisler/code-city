@@ -16,3 +16,9 @@
   records the clear Software Architect recommendation and the Requirements
   Engineer's acceptance under the human delegation recorded in
   https://github.com/FelixGeisler/code-city/issues/444[#444].
+* xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004: Framework-free TypeScript shell built with Vite]
+  is `Accepted`. https://github.com/FelixGeisler/code-city/issues/447[#447]
+  records the clear Software Architect recommendation and the Requirements
+  Engineer's acceptance under the human delegation recorded in #444. This is
+  the accepted documented decision; #452 owns initial implementation, #459
+  successful integration, and #460 renewed final-head production evidence.

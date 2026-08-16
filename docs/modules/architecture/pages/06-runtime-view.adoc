@@ -3,9 +3,13 @@
 This view records only the execution-context ownership, generic handoffs,
 publication gate, and lifecycle cleanup accepted in
 xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002].
-It does not select a message or port schema, API, GitHub mechanism, worker
-lifecycle or cancellation primitive, parser, analyzer, renderer, or full
-accepted-mechanism flow. That synthesis remains with
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
+accepts the future `/code-city/` static package and separate same-origin
+ES-module worker used by this topology; it does not make that package current
+repository behavior. Vite development and preview servers are local tools, not
+runtime nodes. This view does not select a message or port schema, API, GitHub
+mechanism, worker lifecycle or cancellation primitive, parser, analyzer,
+renderer, or full accepted-mechanism flow. That synthesis remains with
 https://github.com/FelixGeisler/code-city/issues/463[#463].
 
 == Runtime topology
@@ -116,10 +120,15 @@ limit.
 |UI presentation boundary
 |https://github.com/FelixGeisler/code-city/issues/451[#451]
 
-|xref:adr/0001-core-dependency-boundary.adoc[ADR 0001]
-source-dependency conformance
-|Build-time evidence; runtime placement grants no dependency
-|https://github.com/FelixGeisler/code-city/issues/452[#452]
+|xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
+and xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
+source and core-mechanism conformance
+|Build-time evidence; runtime placement and TypeScript syntax grant no source
+dependency
+|Initial evidence in https://github.com/FelixGeisler/code-city/issues/452[#452]
+and final-head execution in
+https://github.com/FelixGeisler/code-city/issues/460[#460]
 |===
 
 RA-10/RA-11, SP-01 through SP-04, CC-09, and PR-01 retain no value, unit,
@@ -134,8 +143,11 @@ one.
 
 |Pages to browser
 |Trusted static UI and worker artifacts.
-|Shell, build, Pages source/action/workflow, application route, and deployment
-mechanism remain with #447.
+|ADR 0004 accepts the future Vite package, `/code-city/` base, and separate
+same-origin ES-module worker. #452 implements the initial package, #459
+integrates the success path, and #460 renews final-head evidence. The package
+does not exist yet; Pages source/action/workflow, application route, and
+deployment mechanism remain unselected.
 
 |User to UI
 |Untrusted URL draft and submit, cancel, and reload actions.
@@ -249,9 +261,15 @@ second retrieval path, or other fallback may be introduced silently.
 The minimum blocks, conceptual ports, bridge boundary, and exclusive ownership
 are accepted in
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003].
-The exact shell, provider mechanisms, parser/analyzer, renderer, message and
-port schemas, concrete source mapping, worker primitive, workflow, route, and
+ADR 0004 is authoritative for the accepted shell/build, base, worker-output,
+and core-mechanism constraints. #452 owns their initial implementation, #459
+their successful-path integration, and #460 their renewed final-head production
+evidence; no dependency, source, configuration, or production artifact exists
+yet.
+
+Provider mechanisms, parser/analyzer, renderer, message and port schemas,
+concrete source mapping, worker primitive, Pages workflow and route, and the
 full success/failure/replacement/cancellation flow remain with their stated
-owners in #447 through #460 and #463.
+owners in #448 through #460 and #463.
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains authoritative
 for the outer source-dependency boundary.

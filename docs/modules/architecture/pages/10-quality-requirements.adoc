@@ -153,36 +153,71 @@ https://github.com/FelixGeisler/code-city/issues/444[#444] atomic failures; evid
 and https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |8. Dependency conformance
-|A source-dependency edge governed by accepted ADR 0001 or ADR 0003 is added
-or changed.
-|Mapped M1 source graph; runtime calls, messages, data flow, and ADR 0002
-placement are considered separately from source direction.
+|A source-dependency edge, concrete mechanism dependency or value use, or
+core-owned contract governed by accepted ADR 0001, ADR 0003, or ADR 0004 is
+added or changed.
+|Mapped M1 source graph and shell boundaries. TypeScript language use, runtime
+calls, messages, data flow, and ADR 0002 placement are considered separately
+from source direction and concrete mechanism dependence.
 |The cross-stratum graph contains only `edge→application`,
 capability-authorized `edge→domain`, and `application→domain`. The named
 worker-pipeline coordinator→worker-stage application-capability dependency is
 permitted. Out-of-capability edge-to-domain access and every named forbidden
-dependency are rejected. No general same-stratum rule is inferred.
-|#452's automated evidence accepts representative `edge→application`,
-capability-authorized `edge→domain`, and `application→domain` cross-stratum
-dependencies plus
+dependency are rejected. Application core and domain core import or depend on
+no Vite, UI-framework, or concrete DOM/Worker mechanism module, instantiate or
+otherwise depend on no concrete DOM/Worker mechanism value, and expose no
+DOM/Worker mechanism type in a core-owned contract. No general same-stratum
+rule is inferred.
+|#452's initial automated evidence accepts representative
+`edge→application`, capability-authorized `edge→domain`, and
+`application→domain` cross-stratum dependencies plus
 `worker-pipeline coordinator→named worker-stage application capability`. It
 rejects representative out-of-capability `edge→domain`, `application→edge`,
 `domain→edge`, `domain→application`, UI↔worker implementation, and
-`stage capability→predecessor-stage implementation` dependencies.
-|xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] and
-xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
-are the accepted source-conformance rules. Automated evidence belongs to
-https://github.com/FelixGeisler/code-city/issues/452[#452].
+`stage capability→predecessor-stage implementation` dependencies. For both
+application core and domain core, it also rejects representative imports or
+dependencies on Vite, a UI framework, and concrete DOM/Worker mechanisms,
+concrete DOM/Worker mechanism value dependence or instantiation, and
+DOM/Worker mechanism types in core-owned contracts. #460 executes the complete
+check against its final head after all M1 dependency and build-input changes.
+|xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
+and xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
+are the accepted source-conformance rules. Initial automated evidence belongs
+to https://github.com/FelixGeisler/code-city/issues/452[#452]; final-head
+execution belongs to https://github.com/FelixGeisler/code-city/issues/460[#460].
 |===
 
 Scenario 8 applies to xref:adr/0001-core-dependency-boundary.adoc[accepted ADR
-0001] and
+0001],
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[accepted
-ADR 0003]. https://github.com/FelixGeisler/code-city/issues/452[#452] owns the
-complete positive and negative source-conformance evidence. Runtime direction,
-messages, and placement are not source direction, and no general same-stratum
-rule is inferred. RA-10 and RA-11, SP-01 through SP-04, CC-09, and PR-01 remain
-deferred to their linked owners in
+ADR 0003], and
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[accepted ADR
+0004]. https://github.com/FelixGeisler/code-city/issues/452[#452] owns the
+initial complete positive and negative automated source-conformance check;
+https://github.com/FelixGeisler/code-city/issues/460[#460] owns its execution
+against the final head. Runtime direction, messages, data flow, ADR 0002
+placement, and TypeScript language syntax are not source direction or concrete
+mechanism permission, and no general same-stratum rule is inferred.
+
+The broader ADR 0004 shell and artifact evidence has distinct future owners.
+#452 owns the initial walking shell, actual committed dependency closure,
+license and notice metadata and applicable notices, current point-in-time
+vulnerability results, integrity metadata, byte-identical artifact-tree
+comparison, `/code-city/` base, separate same-origin ES-module worker, and
+exclusion evidence. https://github.com/FelixGeisler/code-city/issues/459[#459]
+owns successful integration through that package. #460 owns canonical final
+production renewal of the closure, license and notice metadata and applicable
+notices, current vulnerability results, integrity, source-conformance,
+artifact-tree, base-path, separate-worker, and exclusion evidence after every
+M1 dependency and build-input change.
+https://github.com/FelixGeisler/code-city/issues/464[#464] verifies ADR 0004
+acceptance, those evidence owners, and their readiness checks before M1
+implementation handoff. This documentation is not implementation evidence and
+does not claim that the shell or artifact exists now.
+
+RA-10 and RA-11, SP-01 through SP-04, CC-09, and PR-01 remain deferred to their
+linked owners in
 xref:requirements:06-source-admission-and-limits.adoc#deferred-limits[Downstream
 limit decisions and dispositions]; this page gives them no scenario, value,
 unit, interval, precedence rule, or diagnostic.
