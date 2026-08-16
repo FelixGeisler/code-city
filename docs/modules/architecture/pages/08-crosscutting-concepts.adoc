@@ -35,3 +35,54 @@ in ADR 0006's phase order before only the latest replacement may begin. The UI
 publication gate rejects every late outcome. This promises neither cleanup or
 replacement latency, secure erasure, garbage-collection timing, immediate
 network stop, worker isolation, nor an RA-10/RA-11 elapsed-time outcome.
+
+== Pinned static syntax and primitive projection
+
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007] confines exact `web-tree-sitter@0.26.12` and the three selected grammar
+WASMs from exact `@vscode/tree-sitter-wasm@0.3.1` to the worker-side parser
+adapter. The canonical suffix selects only JavaScript, TypeScript, or TSX;
+non-JSX JavaScript also rejects the closed visible-JSX node list. Complete
+iterative recovery validation is fact-free and precedes a separate iterative
+projection pass. A recovered tree is atomic `M1-MET-1`; grammar-valid failure
+inside the full accepted envelope is a conformance defect instead.
+
+Only ADR 0007's cursor movement/getter subset is permitted. Queries, recursive
+JavaScript traversal, node convenience helpers, node text/stringification,
+old-tree reuse, callbacks, logging, and source-derived keys are prohibited.
+The adapter validates fields individually and emits only fresh primitive
+observations in arrays, `Map`, or equivalent prototype-safe structures. Core
+alone owns top level, unit ownership, arithmetic, canonical identities/order,
+and facts. Required UTF-16 endpoints are sorted, deduplicated, range- and
+surrogate-validated, then converted to UTF-8 offsets in one scalar scan without
+a whole-file lookup table.
+
+Runtime and grammar URLs are fixed Vite imports, same-origin, and beneath
+`/code-city/`; repository data cannot construct or select them. Parser loading
+adds no filesystem, configuration, module resolution, source import/execution,
+DOM, storage, telemetry, logging, provider request, general WASI host, thread,
+nested worker, plugin, or fallback capability. The inert
+xref:adr/0007-static-syntax-evidence-appendix.adoc[evidence appendix] records
+the complete 217-row WASM inventory without granting API permission.
+
+== Provider/static lifecycle separation
+
+Every generation is provider-capable until all ADR 0005/0006 operations,
+locks, gates, workspaces, provider objects, and references have settled and
+been released. Only then may the worker post
+`PROVIDER_DRAINED_STATIC_ENTERED`; every parser runtime, asset, or parser
+operation follows that post. Before matching bridge receipt, cancellation
+waits for cooperative provider settlement and `ATTEMPT_DRAINED` before
+termination and replacement. After matching receipt, the main bridge hard-
+terminates and clears its sole worker before replacement, including the valid
+race with zero static operations.
+
+Ordinary terminal paths explicitly delete parser handles, release static/core
+references, post one business payload and `ATTEMPT_DRAINED`, then terminate.
+Hard static termination may bypass `finally` and deletion and instead releases
+the realm without timing, delete-spy, secure-erasure, garbage-collection, or
+physical-teardown claims. Provider work never relies on hard termination.
+Observable no-overlap means at most one usable worker handle, parser set,
+provider slot, and raw/hash workspace. SP-01 through SP-04 are unnecessary; the
+full RA-07/RA-08/RA-09 envelope reaches analysis and elapsed static time alone
+creates no outcome.

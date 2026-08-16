@@ -13,7 +13,9 @@ xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
 0005], and the GitHub retrieval adapter and retrieval/admission collaboration
 are constrained by
 xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
-0006]. The decisions are documented but not yet implemented.
+0006]. The parser adapter and worker-generation lifecycle are constrained by
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007]. The decisions are documented but not yet implemented.
 
 == Minimum logical blocks
 
@@ -92,9 +94,11 @@ or fallback.
 
 |Parser adapter
 |Edge, worker
-|Translates parser-specific grammar and syntax into core-owned semantic
-observations. It owns no metric policy and performs no execution, import, or
-provider access.
+|Owns ADR 0007's exact pinned Tree-sitter runtime/grammar loading, complete
+fact-free iterative validation, second cursor-only iterative projection,
+UTF-16-to-UTF-8 endpoint conversion, and ordinary parser-handle deletion. It
+passes only fresh primitive observations, owns no metric policy, and performs
+no source execution/import, configuration discovery, or provider access.
 |===
 
 Resolution and retrieval are distinct. Retrieval/admission alone validates the
@@ -173,15 +177,22 @@ application or domain semantic owners; no contracts layer exists.
 The bridge may transport only:
 
 * toward the worker, one normalized, syntactically accepted submission and
-  lifecycle control; and
+  lifecycle control;
 * toward the UI, selected identity, one terminal failure, or one complete
-  canonical scene.
+  canonical scene; and
+* internally toward the main bridge, exactly
+  `PROVIDER_DRAINED_STATIC_ENTERED` or `ATTEMPT_DRAINED`, carrying only its
+  discriminator and existing opaque bridge-generated attempt/generation
+  correlation.
 
 Raw or normalized repository source or content, admitted modules, parser
 objects, metric intermediates, and partial scenes never cross the bridge.
-Building identities may cross only as inert model keys. Runtime messages may
-move in both directions but grant no source dependency and create no trust
-crossing. Exact message and port schemas remain with #453 through #460.
+Building identities may cross only as inert model keys. The two lifecycle
+attestations carry no identity, provider, source, admitted-module, parser,
+metric, scene, diagnostic, timing, or count and never enter worker-outcome
+intake, visible state, status, or classification. Runtime messages grant no
+source dependency and create no trust crossing. General message and port
+schemas remain with #453 through #460.
 
 == Exclusive outcome and lifecycle ownership
 
@@ -236,10 +247,13 @@ bytes.
 |A stage capability returns its terminal outcome; the pipeline suppresses
 later stages and releases core transients.
 
-|Bridge transport
+|Bridge transport and worker-generation resource gate
 |UI-worker bridge
-|It transports outcomes unchanged and never validates, classifies, admits, or
-reclassifies them.
+|It transports business outcomes unchanged, consumes ADR 0007's two internal
+lifecycle attestations, and owns the sole concrete worker handle, generation
+correlation, hard-stop gate, listeners, and transport references. This
+resource ownership is not a second orchestrator; the bridge never validates,
+classifies, admits, or reclassifies.
 |===
 
 An outcome from the worker is applied only while its attempt remains
@@ -250,11 +264,17 @@ Cancellation and cleanup are partitioned exactly once:
 . The UI attempt coordinator immediately revokes publication eligibility,
   wins ties, and clears identity, city, and presentation state while preserving
   the draft required by #441.
-. The worker pipeline coordinator coordinates feasible stopping, suppresses
-  downstream stages, and releases core transient references.
-. Each provider or parser adapter releases only the physical resources it
-  owns.
-. The UI-worker bridge releases transport references.
+. The worker pipeline coordinator suppresses downstream stages, completes the
+  current lifecycle phase, and releases core transient references.
+. Provider adapters settle and release only their ADR 0005/0006 physical
+  resources; provider work never relies on worker termination.
+. The parser adapter deletes cursor, tree, and parser on ordinary paths. Hard
+  static termination may prevent `finally` and deletion; worker-realm
+  termination then releases static resources without a timing or delete-spy
+  claim.
+. The main bridge owns the sole worker handle, generation correlation,
+  hard-stop gate, listener/transport release, exactly-once termination, and
+  handle clearing.
 . The presentation adapter disposes incomplete or replaced presentation
   resources.
 
@@ -276,7 +296,17 @@ non-abortable phases, and cleans projected inventory and unpublished output.
 Replacement work is latest-only and cannot start until old operations,
 non-abortable work, locks, and application-owned cleanup settle.
 
+ADR 0007 adds a strict phase boundary. Before matching
+`PROVIDER_DRAINED_STATIC_ENTERED` receipt, the main bridge must not terminate:
+provider settlement and gate release precede `ATTEMPT_DRAINED`, termination,
+handle clearing, replacement creation, and its first provider request. After
+matching receipt, hard termination and handle clearing precede replacement;
+zero static operations is valid. Ordinary completion posts one business
+payload and `ATTEMPT_DRAINED` only after parser deletion and reference release,
+then the bridge terminates. At most one usable worker handle, parser set,
+provider slot, and raw/hash workspace overlaps observably.
+
 Late output is harmless because the UI publication gate remains authoritative.
 Reload discards all application-managed session state. No cleanup latency,
-secure erasure, platform-cache behavior, or garbage-collection behavior is
-promised.
+secure erasure, physical teardown, platform-cache behavior, or garbage-
+collection behavior is promised.

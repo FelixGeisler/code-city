@@ -8,7 +8,9 @@ xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004],
 xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
 0005], and
 xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
-0006].
+0006], and
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007].
 The ADRs remain authoritative where this summary omits detail.
 
 == One core with two strata
@@ -149,6 +151,44 @@ archive/decompression/reconciliation risk; throttling or compatibility drift
 is terminal rather than a fallback trigger. #454 owns controlled evidence,
 #459 packaged-path evidence, and #460 hosted renewal.
 
+== Accepted static-syntax and phase strategy
+
+ADR 0007 selects exact `web-tree-sitter@0.26.12` and three grammar WASMs from
+exact `@vscode/tree-sitter-wasm@0.3.1`. The final ASCII-insensitive suffix
+selects JavaScript, TypeScript, or TSX; non-JSX JavaScript additionally rejects
+the closed visible-JSX node list. A complete iterative, fact-free recovery
+validation pass must succeed before a second iterative projection pass creates
+only fresh primitive core observations. Parser nodes and source-derived keys
+stay edge-side; core alone owns top level, unit ownership, arithmetic,
+identities, order, and facts.
+
+The parser adapter uses only ADR 0007's cursor subset and fixed same-origin
+`/code-city/` Vite asset URLs. There is no query, recursive JavaScript walk,
+old-tree reuse, fallback parser, source execution, provider-selected locator,
+Node shim, logging, telemetry, or provider request. Required UTF-16 endpoints
+are converted to UTF-8 in one deterministic scalar scan without a whole-file
+lookup table.
+
+Every worker generation begins provider-capable. ADR 0005/0006 operations,
+locks, gates, workspaces, provider values, and references settle before the
+worker posts `PROVIDER_DRAINED_STATIC_ENTERED`; every static asset or parser
+operation follows that post. Pre-receipt cancellation uses cooperative provider
+settlement and `ATTEMPT_DRAINED` before termination. After matching receipt,
+the main bridge may hard-terminate the sole worker before zero or during active
+static operations, clear its handle, then create the latest replacement.
+Ordinary paths delete cursor/tree/parser and clear core references before the
+terminal payload and `ATTEMPT_DRAINED`. This observable sequencing allows at
+most one usable worker, parser set, provider slot, and raw/hash workspace
+without promising physical teardown.
+
+SP-01 through SP-04 are unnecessary. All `4,000` RA-07 modules, each RA-08
+maximum, and the RA-09 aggregate reach sequential analysis; elapsed static time
+alone creates no outcome. A grammar-valid full-envelope failure is a
+conformance defect and stop condition, not `M1-MET-1` or an undeclared limit.
+#455 realizes parser/SLOC/units, #456 adds decisions/complexity and reruns the
+combined matrix, and #460 renews the exact assets, supply-chain evidence, and
+integrated lifecycle.
+
 == Selected trade-off
 
 Separating mutable orchestration from pure deterministic policy makes the
@@ -171,5 +211,5 @@ bypass.
 The minimum responsibilities and conceptual collaborations are documented in
 xref:05-building-block-view.adoc[Building Block View]. Concrete source mapping,
 general same-stratum policy, packages, interfaces, schemas, and every remaining
-mechanism or technology not accepted in ADRs 0004 through 0006 remain with
+mechanism or technology not accepted in ADRs 0004 through 0007 remain with
 their stated downstream owners.

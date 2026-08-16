@@ -13,7 +13,8 @@ defines which URL form is accepted, how the revision is selected and identified,
 and when a city may be visible. For supported-source admission and the approved
 M1 repository/intake limits RA-01 through RA-09,
 xref:06-source-admission-and-limits.adoc[] is authoritative. For lexical SLOC,
-executable-unit, complexity, and canonical metric facts,
+executable-unit, complexity, canonical metric facts, and the exact
+pinned-grammar acceptance boundary,
 xref:08-fixed-metric-semantics.adoc[] is authoritative. For exact building
 geometry and color, city content, layout and bounds, the fixed initial view,
 interaction policy, and construction/presentation failure,
@@ -27,20 +28,21 @@ M1 includes only the smallest complete path needed for that outcome:
 * anonymous use of a public repository, without user or service credentials;
 * automatic selection of the GitHub-designated default branch tip and retention
   of its immutable commit identity for the attempt;
-* deterministic admission and static measurement of the supported
-  JavaScript/TypeScript module family;
+* deterministic admission and non-executing static measurement of the
+  supported JavaScript/TypeScript module family with the pinned Tree-sitter
+  grammars;
 * one deterministic city and its fixed initial presentation; and
 * observable initial, loading, success, failure, replacement, and cancellation
   behavior with no stale or partial city.
 
 The exact source-admission and approved repository/intake limit rules are in
-xref:06-source-admission-and-limits.adoc[]. The exact fixed metric rules are in
-xref:08-fixed-metric-semantics.adoc[]. The exact fixed city, layout, and initial
-presentation rules are in
-xref:10-fixed-city-layout-and-presentation.adoc[]. Deferred analyzer/version,
-later retrieval and processing limits, visualization technology, and
-construction/presentation duration choices remain separate contracts; their
-inclusion in M1 does not define those rules ahead of their owning issues.
+xref:06-source-admission-and-limits.adoc[]. The exact fixed metric and grammar
+rules are in xref:08-fixed-metric-semantics.adoc[]. The exact fixed city,
+layout, and initial presentation rules are in
+xref:10-fixed-city-layout-and-presentation.adoc[]. SP-01 through SP-04 are
+unnecessary: every module and byte permitted by RA-07 through RA-09 reaches
+analysis and elapsed analysis time creates no outcome. Visualization technology
+and construction/presentation duration choices remain separate contracts.
 
 [[non-goals]]
 == Non-goals
@@ -77,9 +79,10 @@ semantics are specified by xref:08-fixed-metric-semantics.adoc[] under
 https://github.com/FelixGeisler/code-city/issues/443[#443]. Fixed city, layout,
 and initial-presentation semantics are specified by
 xref:10-fixed-city-layout-and-presentation.adoc[] under
-https://github.com/FelixGeisler/code-city/issues/444[#444]. The provider/API,
-analyzer, or renderer mechanism, runtime topology and trust placement,
+https://github.com/FelixGeisler/code-city/issues/444[#444]. The provider/API and renderer mechanisms, runtime topology and trust placement,
 port/component ownership, enforcement location, and cancellation/cleanup
-ownership remain outside this page; their exact downstream owners are linked
-from the authoritative contracts and
+ownership remain outside this page. The accepted static-syntax mechanism and
+phase lifecycle are fixed by
+xref:architecture:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007].
+Exact downstream owners are linked from the authoritative contracts and
 xref:04-functional-requirements.adoc#decision-boundary[Decision boundary].

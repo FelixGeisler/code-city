@@ -1,0 +1,867 @@
+= ADR 0007: Static syntax with pinned Tree-sitter WebAssembly grammars
+
+Status:: Accepted
+
+== Context
+
+M1 must derive the exact lexical SLOC, explicit-unit, decision, ownership,
+and canonical-fact contract in
+xref:requirements:08-fixed-metric-semantics.adoc[Fixed Metric Semantics] from
+every admitted JavaScript and TypeScript module without executing repository
+source. The admitted envelope is the complete RA-07/RA-08/RA-09 envelope in
+xref:requirements:06-source-admission-and-limits.adoc[Source Admission and
+Repository Limits]. A recovered or partial syntax tree cannot satisfy the
+complete-city-or-none invariant.
+
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] keeps parser mechanisms
+outside core.
+xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
+places parser work in the same-origin processing worker.
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
+assigns parser translation to the edge-side static-syntax adapter and metric
+policy to core.
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
+fixes exact `vite@8.2.1`, the `/code-city/` public base, and a separate
+same-origin ES-module worker.
+xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR 0005]
+and
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006]
+fix provider work, resource ownership, cancellation, and cleanup before static
+processing.
+
+This ADR selects the parser runtime and grammar assets; their exact behavior,
+API and capability boundary; parser-to-core projection; phase-aware worker
+lifecycle; the disposition of SP-01 through SP-04; immutable supply-chain and
+WASM evidence; downstream evidence ownership; and stop rules. It adds no
+package, source, configuration, manifest, executable fixture, parser asset, or
+product artifact.
+
+== Authority, provenance, and relationships
+
+The human governance delegation recorded in
+https://github.com/FelixGeisler/code-city/issues/444[#444] permits the
+Requirements Engineer to resolve a choice when one recommendation clearly
+dominates, is evidence-backed, deterministic, reversible through normal
+revision, and remains inside accepted scope. A technology or architecture
+choice under that delegation also requires a clear Software Architect
+recommendation.
+
+The decision was refined against repository head
+https://github.com/FelixGeisler/code-city/commit/990e157709f33c2f653e6d7e39d073aabda1f721[`990e157709f33c2f653e6d7e39d073aabda1f721`]
+from published issue-body SHA-256
+`0b8c8009b8e796ebeb370117ced2b1eb3d31bba0ba786fcd36b546306586a97e`.
+For that artifact, the Software Architect's cycle-2 recommendation clearly
+selected Tree-sitter and the Security Reviewer's constraints were
+incorporated. Acting under #444, the Requirements Engineer resolved the
+choice.
+
+The correction derives from immutable candidate SHA-256
+`378bdc68e7d457e82ce2e80afd0e581c2d16b85674ab5861eecdd9965197414d`
+and its four independent review artifacts:
+
+* Software Architect:
+  `8ad23094834ca1550186715fb683e8f57dbd24077570b05ede4732ec3d0a8680`;
+* Software Tester:
+  `2e936471e90828ee602edd88c683d0d18963a56332f71e7ebc04f0826292f4cb`;
+* Software Developer:
+  `c2d62652c98578c7e79bfb3f56abd9acae70312fb831d133f588ba81d3435150`;
+  and
+* Security Reviewer:
+  `8a368a33358685d371a95bb3fecd69136e6b1d1a3f96af8d831fedf9635af5db`.
+
+The final accepted https://github.com/FelixGeisler/code-city/issues/450[#450]
+revision and consolidated readiness attestation use issue-body SHA-256
+`78a0d1949cb8d6a254556b21c982830e17ccf3ce83af5ec99bc26a1eae570f19`.
+The decision is `Accepted` through that recorded authority and is not pending a
+later generic human-acceptance or conformity gate.
+
+This ADR:
+
+* refines and, only where the lifecycle rules below conflict, supersedes ADR
+  0003's bridge-payload and parser-cleanup statements;
+* traces to and remains compatible with ADRs 0005 and 0006;
+* leaves ADR 0003 `Accepted` with only the narrow amendment recorded there;
+  and
+* leaves ADRs 0001, 0002, 0004, 0005, and 0006 unchanged.
+
+A semantic deviation requires implementation to stop and #450 to reopen.
+
+== Decision
+
+=== Exact runtime, packages, assets, and ABI
+
+The only parser-related direct dependencies added by
+https://github.com/FelixGeisler/code-city/issues/455[#455] are exact:
+
+* `web-tree-sitter@0.26.12` for the runtime; and
+* `@vscode/tree-sitter-wasm@0.3.1` only as the source of the three selected
+  grammar WASMs.
+
+No floating direct range is permitted. Never import the `@vscode` package root
+or use its older runtime.
+
+[cols="5,5",options="header"]
+|===
+|Required asset |SHA-256
+
+|`web-tree-sitter` runtime JavaScript
+|`0c868236a47296b4ff3c1570f20e0899e4a784ff6e5cd7bfc9c3a55225463e4a`
+
+|`web-tree-sitter` runtime WASM
+|`ba5c7a539603f251f380e4d6ce26ee954ffca7bda8b2e13744dc4c87d6ce6041`
+
+|JavaScript grammar WASM
+|`5fb488d0cabb4775a594bab85682de5ad6ce83c0d6ac997a9f82dd084d571240`
+
+|TypeScript grammar WASM
+|`778025db5a8be0e70f8ccc3671e486dfeddd048c25d9e8a70c26de2e1bf6f97d`
+
+|TSX grammar WASM
+|`79e5da75ea62855a0cd67177685f0164eac87d5f630b3cbe1e0a099751ad30f8`
+|===
+
+The runtime accepts Tree-sitter language ABI versions 13 through 15. The
+JavaScript asset uses ABI 15; the TypeScript and TSX assets use ABI 14.
+
+There is no Tree-sitter query library or asset, generic analyzer layer, second
+or fallback parser, custom grammar build, incremental old-tree reuse, runtime
+plugin, native binding, CDN dependency, or repository-selected asset URL.
+
+=== Closed suffix-to-grammar and failure contract
+
+Compare the canonical path's final suffix ASCII case-insensitively:
+
+[cols="3,7",options="header"]
+|===
+|Suffixes |Grammar and additional validation
+
+|`.js`, `.mjs`, `.cjs`
+|JavaScript grammar, followed by iterative rejection of every visible node
+whose exact type is `jsx_attribute`, `jsx_closing_element`, `jsx_element`,
+`jsx_expression`, `jsx_namespace_name`, `jsx_opening_element`,
+`jsx_self_closing_element`, or `jsx_text`.
+
+|`.jsx`
+|The same JavaScript grammar without forbidden-JSX rejection.
+
+|`.ts`, `.mts`, `.cts`
+|TypeScript grammar.
+
+|`.tsx`
+|TSX grammar.
+|===
+
+The `m` and `c` spellings add no grammar behavior. `name.d.ts` uses the
+ordinary TypeScript grammar; there is no declaration-file or `d.ts` parser
+mode.
+
+Before producing any semantic observation or metric fact for a module:
+
+. inspect `rootNode.hasError`;
+. iteratively inspect the complete tree for an `ERROR` node, any missing
+  recovery node, and, for a non-JSX JavaScript family, every forbidden JSX
+  node; and
+. project only after complete validation succeeds.
+
+Any such failure produces the existing atomic `Metric processing failed` /
+`M1-MET-1` outcome. A recovered tree produces no facts, no malformed module is
+skipped, and no partial metric set or city is published.
+
+Contextual or static-semantic errors accepted by the pinned grammar do not
+fail metric processing. The known accepted examples include top-level
+`return`, `break`, and `continue`. Conversely, valid TypeScript 5.9-and-later
+`import defer` syntax is rejected by the pinned TypeScript grammar and produces
+`M1-MET-1`. These are normative acceptance examples.
+
+M1 promises no TypeScript 7, latest-TypeScript, current-ECMAScript, or future
+grammar compatibility and adds no contextual or static-semantic validator.
+
+A trap, allocation failure, or private parser capacity on grammar-valid input
+within the accepted RA envelope is a conformance defect. It is not
+`M1-MET-1`, an SP result, or an implicit product limit.
+
+=== Safe API, two passes, and cleanup
+
+Parser use is confined to the worker-side parser adapter. The permitted surface
+is exactly:
+
+* `Parser.init`, with the fixed `locateFile`, `print`, and `printErr` options
+  below;
+* `Language.load(Uint8Array)`;
+* parser construction, `setLanguage`, `parse(normalizedSource)` without an old
+  tree or progress callback, and `delete`;
+* `tree.rootNode`, `rootNode.hasError`, `rootNode.walk()`, and `tree.delete()`;
+  and
+* only the TreeCursor movement/getter subset required for iterative traversal:
+  current node type, named/missing status, current field name, start/end
+  indices, first-child movement, next-sibling movement, parent movement, and
+  cursor deletion.
+
+The following surfaces are prohibited:
+
+* Tree-sitter queries or query cursors;
+* recursive JavaScript walking or a generic recursive AST traversal;
+* node parent, child, sibling, descendant, or convenience helpers;
+* `childWithDescendant`;
+* whole-child arrays;
+* node text, stringification, tree/debug graphs, or source callbacks;
+* parser helper APIs implicated by
+  https://github.com/tree-sitter/tree-sitter/issues/5807[tree-sitter#5807];
+* old-tree or incremental parsing; and
+* parser logging or a progress callback.
+
+Each module uses two iterative passes over one tree:
+
+. a complete fact-free validation pass; then
+. a projection pass only after validation succeeds.
+
+At most one source module, parser, tree, and cursor are active at a time. The
+validation cursor is deleted before the projection cursor is created. On
+ordinary completion or failure, cursor, tree, and parser handles are deleted
+in `finally`, and adapter-held source, endpoint, slice, and projection
+transients are dropped before the next module. Language modules expose no
+deletion operation and are released by worker-realm termination. Hard static
+termination has the explicit exception in <<phase-lifecycle>>.
+
+=== Parser/core projection, SLOC, and UTF offsets
+
+Every parser-specific object remains edge-side. Projection validates fields
+individually and creates only fresh primitive, core-owned observations held in
+arrays, `Map`, or equivalent prototype-safe structures:
+
+* source-ordered explicit-unit observations;
+* decorator, computed-name, heritage, and field-initializer regions;
+* decision occurrences;
+* value-level and type-only observations; and
+* lexical exclusion spans.
+
+No parser node, token, comment object, name, diagnostic, callback, getter,
+parser object or type, or source-derived object key crosses the static-syntax
+port. Core remains the sole owner of conditional `top-level`, unit ownership,
+complexity arithmetic, canonical identities and order, and final facts.
+
+The parser receives only normalized source and the already-selected closed
+grammar family. The repository path is not passed as a filename, configuration
+key, resource locator, or source-derived object key.
+
+Except for fixed trusted runtime and grammar loading, the parser mechanism
+performs no configuration discovery, filesystem access, module resolution,
+source import or transform, execution, evaluation, DOM access, storage,
+telemetry, logging, provider request, or network request.
+
+Lexical SLOC exclusions use exact node types `comment`, `html_comment`, and
+`hash_bang_line`. JSX expression-container braces are excluded only when the
+expression contains a comment and all remaining content is whitespace. Empty
+`{}` remains source. The normalized source string--not node text--distinguishes
+whitespace from string, template, regular-expression, and JSX text.
+
+The web binding's indices and columns are UTF-16 code units. For every endpoint
+needed by core observations, the adapter must:
+
+. collect only required endpoints;
+. sort and deduplicate them;
+. validate every range and ensure no endpoint bisects a surrogate pair;
+. translate every endpoint in one deterministic Unicode-scalar scan into a
+  zero-based, half-open UTF-8 byte offset; and
+. release the transient endpoint collection.
+
+A whole-file UTF-16-to-UTF-8 lookup table is prohibited. Acceptance evidence
+includes astral characters before and inside explicit-unit spans.
+
+=== Exact Vite imports and runtime initialization
+
+With exact `vite@8.2.1`, use only these fixed asset imports:
+
+[source,text]
+----
+web-tree-sitter?url
+web-tree-sitter/web-tree-sitter.wasm?url
+@vscode/tree-sitter-wasm/wasm/tree-sitter-javascript.wasm?url
+@vscode/tree-sitter-wasm/wasm/tree-sitter-typescript.wasm?url
+@vscode/tree-sitter-wasm/wasm/tree-sitter-tsx.wasm?url
+----
+
+Dynamically import only the build-generated same-origin runtime URL:
+
+[source,javascript]
+----
+await import(/* @vite-ignore */ runtimeJavaScriptUrl)
+----
+
+Initialize with these fixed semantics:
+
+[source,javascript]
+----
+Parser.init({
+  locateFile(requestedPath, scriptDirectory) {
+    if (requestedPath === "web-tree-sitter.wasm") {
+      return runtimeWasmUrl
+    }
+    throw new Error("Unexpected Tree-sitter runtime asset request")
+  },
+  print: noOp,
+  printErr: noOp
+})
+----
+
+`scriptDirectory` is ignored. Matching is exact over the complete string.
+There is no basename or suffix match, normalization, concatenation, fallback,
+or fetch inside `locateFile`. Any unknown request is a conformance stop, not
+`M1-MET-1`.
+
+Grammar bytes come only from their fixed imported URLs and are passed to
+`Language.load(Uint8Array)`. Grammar loading never uses `locateFile`.
+
+All emitted URLs are statically addressed beneath `/code-city/`. Repository
+data cannot construct, alter, or select an asset URL. Ordinary bundling of the
+runtime JavaScript is prohibited because the recorded Vite evidence emits a
+browser-external Node shim.
+
+The final artifact contains no Node shim, browser polyfill, older `@vscode`
+runtime, unused grammar, query asset, native binding, parser plugin, or
+source-derived capability.
+
+The runtime WASM imports exactly these `wasi_snapshot_preview1` functions:
+
+* `fd_write`;
+* `fd_seek`; and
+* `fd_close`.
+
+`print` and `printErr` are no-ops and parser logging remains disabled. The
+pinned glue's `fd_seek` and `fd_close` stubs return `ESPIPE` and `ENOSYS`. No
+general WASI host, filesystem, socket or provider fetch, thread, shared memory,
+nested worker, or source-derived capability is introduced.
+
+[[phase-lifecycle]]
+=== ADR 0005/0006-compatible phase-aware lifecycle
+
+==== Fixed lifecycle attestations
+
+The bridge may carry exactly two additional source-free internal lifecycle
+attestations:
+
+* `PROVIDER_DRAINED_STATIC_ENTERED`; and
+* `ATTEMPT_DRAINED`.
+
+Each carries only its discriminator plus the existing opaque bridge-generated
+attempt/generation correlation. It carries no identity, provider value,
+source, admitted module, parser value, metric, scene, diagnostic, timing, or
+count.
+
+These are internal lifecycle evidence, not UI outcomes, cryptographic
+attestations, or physical teardown guarantees. Existing bridge transports
+remain unchanged. The main bridge consumes them; they are never forwarded to
+worker-outcome intake, visible state, status, or classification.
+
+==== Provider-capable phase and barrier
+
+Every generation begins provider-capable. No parser runtime import,
+`Parser.init`, grammar fetch/load, parse, or traversal may begin before the
+barrier.
+
+After successful admission, the worker must:
+
+. retain only the core-owned complete admitted-module handoff;
+. settle all ADR 0005/0006 fetch, read, abort, reader-cancellation, rejection,
+  JSON parsing, Web Crypto, strict decoding, and normalization work;
+. release reader locks;
+. clear every `Response`, reader, chunk, provider object, projected inventory,
+  hash view, digest, raw/hash workspace, and other provider transient;
+. release the global provider request and workspace gates; and
+. establish that no provider operation can restart in that generation.
+
+The worker pipeline then posts `PROVIDER_DRAINED_STATIC_ENTERED` and, unless
+terminated, proceeds without waiting for acknowledgement to its first dynamic
+runtime import, parser-asset fetch/load, `Parser.init`, or parser operation. No
+provider operation occurs after the post and no parser operation before it.
+Receipt of the matching attestation by the main bridge makes the generation
+hard-termination-safe; the bridge may terminate immediately, before the worker
+executes its first static operation.
+
+==== Cancellation or replacement before barrier receipt
+
+Before matching `PROVIDER_DRAINED_STATIC_ENTERED` receipt:
+
+. the UI attempt coordinator immediately revokes publication eligibility and
+  visible old-attempt state and coalesces replacements to the latest;
+. the main bridge posts lifecycle stop and *must not* call `terminate()`;
+. the worker pipeline suppresses downstream work;
+. provider adapters abort/cancel and settle their exact ADR 0005/0006
+  operations and release locks, gates, workspaces, and references in `finally`;
+. the pipeline clears admitted modules and unpublished output and posts
+  `ATTEMPT_DRAINED`;
+. the main bridge marks the generation closing, calls `terminate()` exactly
+  once, releases listeners and transport references, and clears its sole
+  handle; and
+. only after that clearing may it create the latest replacement and dispatch
+  the first new provider request.
+
+Required observable order:
+
+[source,text]
+----
+revoke < provider settlement < lock/global-gate release < ATTEMPT_DRAINED < terminate old < clear handle < create new < first new provider request
+----
+
+Replacement delay while provider settlement remains pending is unbounded and
+accepted. It creates no timing outcome.
+
+==== Barrier race and hard static termination
+
+Once the main bridge receives matching `PROVIDER_DRAINED_STATIC_ENTERED`, it
+uses the static-phase path even when a lifecycle-stop message is queued but not
+yet handled by the worker.
+
+Cancellation or replacement then:
+
+. revokes publication eligibility;
+. calls `terminate()` on the sole worker without waiting for parser
+  acknowledgement;
+. clears the handle; and
+. only then creates the latest replacement.
+
+Required observable order:
+
+[source,text]
+----
+provider settlement/global-gate release < post PROVIDER_DRAINED_STATIC_ENTERED < bridge receipt < hard terminate < clear handle < create replacement
+post PROVIDER_DRAINED_STATIC_ENTERED < every parser/runtime/asset operation, if any
+----
+
+Zero static operations before hard termination is valid. If static work has
+begun, termination may occur during any such operation. No cooperative
+parser-stop, progress-callback, immediate computation-stop, or browser
+teardown-latency claim is made.
+
+==== Ordinary terminal path
+
+On an ordinary terminal path:
+
+. delete the validation or projection cursor as applicable, tree, and parser;
+. clear source, endpoint, slice, projection, metric, admitted-module, and other
+  core references;
+. post only one source-free terminal outcome or one complete canonical scene;
+. post `ATTEMPT_DRAINED`;
+. let the main bridge apply or reject the terminal business payload through the
+  publication gate; and
+. after matching `ATTEMPT_DRAINED`, terminate the worker exactly once and clear
+  its handle.
+
+`ATTEMPT_DRAINED` means no operation remains and every explicitly releasable
+handle, lock, gate, workspace, and reference is settled or released.
+Realm-held language modules are released by the following worker termination.
+
+Hard static termination may prevent JavaScript `finally` blocks and parser
+`delete` calls from running. Evidence must not claim delete-spy observations on
+that path. Realm termination releases parser, language, runtime, source, and
+static transients without promising timing, secure erasure, garbage
+collection, or operating-system process teardown. Provider work never relies
+on hard termination.
+
+==== Ownership and observable non-overlap
+
+[cols="3,7",options="header"]
+|===
+|Owner |Exclusive lifecycle responsibility
+
+|UI attempt coordinator
+|Current attempt, publication eligibility, visible state, and latest
+replacement.
+
+|Main bridge
+|Sole concrete `Worker` handle, generation correlation, hard-stop gate, and
+transport/listener release.
+
+|Worker pipeline
+|Stage suppression, phase completion, and core-reference release.
+
+|Provider adapters
+|Physical provider resources and ADR 0005/0006 settlement.
+
+|Parser adapter
+|Ordinary-path parser handles.
+
+|Worker termination
+|Hard static realm release.
+|===
+
+“No overlap” means observable call order and at most one bridge-owned usable
+worker handle, parser-handle set, provider slot, and raw/hash workspace. It
+makes no claim about physical browser or operating-system teardown. The main
+bridge's worker-generation gate is transport-resource ownership, not a second
+orchestrator.
+
+=== SP-01 through SP-04 and the full accepted envelope
+
+SP-01 through SP-04 are explicitly unnecessary for M1:
+
+[cols="4,6",options="header"]
+|===
+|Dimension |Accepted disposition
+
+|SP-01 lower static-processing module count
+|None. All `4,000` modules permitted by RA-07 reach analysis.
+
+|SP-02 lower per-module processing-content limit
+|None. The full RA-08 maximum of `2,097,152` normalized UTF-8 bytes per module
+reaches analysis.
+
+|SP-03 lower aggregate processing-content limit
+|None. The full RA-09 maximum of `41,943,040` normalized UTF-8 bytes reaches
+analysis.
+
+|SP-04 static-processing duration
+|None. No timer or elapsed-time result exists.
+|===
+
+There is no independent syntax-node, nesting, parser-memory, or allocation
+limit. Analysis processes one tree at a time.
+
+SP-01 through SP-04 have no value, timer, clock, cutoff, category, stable code,
+precedence, interval, boundary, or T-1/T/T+1 scenario. `Static-processing limit
+exceeded` does not exist in M1. The historical `2,000` modules, `1 MiB` per
+module, `20 MiB` aggregate, and `30 seconds` proposals are rejected as
+uncalibrated.
+
+While no browser failure or lifecycle action occurs, elapsed analysis time
+alone leaves the attempt `Loading` and creates no outcome. Any grammar-valid
+full-envelope trap, allocation failure, private capacity, or failure to produce
+exact facts is a conformance defect that reopens #450; it must not be hidden by
+a lower limit, retry, fallback, or different parser.
+
+== Immutable provenance and supply-chain evidence
+
+=== Direct consumer packages
+
+* *`web-tree-sitter@0.26.12`:*
+  https://github.com/tree-sitter/tree-sitter/tree/v0.26.12[tag `v0.26.12`],
+  https://github.com/tree-sitter/tree-sitter/commit/808e4b1fc06e269a107c4bd8bd936cc6fde18b00[commit `808e4b1fc06e269a107c4bd8bd936cc6fde18b00`],
+  https://registry.npmjs.org/web-tree-sitter/0.26.12[npm metadata],
+  https://registry.npmjs.org/web-tree-sitter/-/web-tree-sitter-0.26.12.tgz[tarball],
+  tarball SHA-256
+  `3bd96883c95ca6c5cb652f265a1563a2987651cdd4687f24967453c6fcbfdfce`,
+  npm SHA-1 `a7e598cc6266f038a667c7f9d22c1da915ef7624`, integrity
+  `sha512-fvqTNZQBGUgUgfP0mHw+iHf9Yf6bRQrp0A3pSf2v/hSKxkT1beCoIWoLVmlPL7O6dmySfSb/t1aJoJvrgTRStw==`,
+  and
+  https://registry.npmjs.org/-/npm/v1/attestations/web-tree-sitter@0.26.12[npm provenance attestation].
+* *`@vscode/tree-sitter-wasm@0.3.1`:*
+  https://github.com/microsoft/vscode-tree-sitter-wasm/tree/v0.3.1[tag `v0.3.1`],
+  https://github.com/microsoft/vscode-tree-sitter-wasm/commit/78c97c860ddd965b9617f0e30962ad1da08c4c91[commit `78c97c860ddd965b9617f0e30962ad1da08c4c91`],
+  https://registry.npmjs.org/%40vscode%2Ftree-sitter-wasm/0.3.1[npm metadata],
+  https://registry.npmjs.org/@vscode/tree-sitter-wasm/-/tree-sitter-wasm-0.3.1.tgz[tarball],
+  tarball SHA-256
+  `985684b2cfbe5e8f90499a9f36e37519887c7d4e2697d0457d0f1e923ce5184c`,
+  npm SHA-1 `81d046fb37c09a1e950a20a1f233e8d868d76c77`, and integrity
+  `sha512-RJFoomET6FajjG511fmQxeBQfU6M24a0aFZPqpid+ttIxanWf1VGytBG0UmsGjt07qmIPJS8U31D+aecuCucsQ==`.
+  No npm provenance attestation was present.
+
+=== Grammar, generator, and source-closure identities
+
+* *`tree-sitter-javascript@0.25.0`:*
+  https://github.com/tree-sitter/tree-sitter-javascript/tree/v0.25.0[tag],
+  https://github.com/tree-sitter/tree-sitter-javascript/commit/44c892e0be055ac465d5eeddae6d3e194424e7de[commit `44c892e0be055ac465d5eeddae6d3e194424e7de`],
+  https://registry.npmjs.org/tree-sitter-javascript/0.25.0[metadata],
+  https://registry.npmjs.org/tree-sitter-javascript/-/tree-sitter-javascript-0.25.0.tgz[tarball],
+  SHA-256
+  `6214ce23d03aba525ba8edd6ca7caf365c969f2c2dbfc353e376ca54507ffb92`,
+  integrity
+  `sha512-1fCbmzAskZkxcZzN41sFZ2br2iqTYP3tKls1b/HKGNPQUVOpsUxpmGxdN/wMqAk3jYZnYBR1dd/y/0avMeU7dw==`.
+* *`tree-sitter-typescript@0.23.2`:*
+  https://github.com/tree-sitter/tree-sitter-typescript/tree/v0.23.2[tag],
+  https://github.com/tree-sitter/tree-sitter-typescript/commit/f975a621f4e7f532fe322e13c4f79495e0a7b2e7[commit `f975a621f4e7f532fe322e13c4f79495e0a7b2e7`],
+  https://registry.npmjs.org/tree-sitter-typescript/0.23.2[metadata],
+  https://registry.npmjs.org/tree-sitter-typescript/-/tree-sitter-typescript-0.23.2.tgz[tarball],
+  SHA-256
+  `0fdf63c35930a75885145d75ee63cb879da2d49db9bfe454bd8e60b08ba778a1`,
+  integrity
+  `sha512-e04JUUKxTT53/x3Uq1zIL45DoYKVfHH4CZqwgZhPg5qYROl5nQjV+85ruFzFGZxu+QeFVbRTPDRnqL9UbU4VeA==`.
+* *`tree-sitter-cli@0.25.10`:*
+  https://github.com/tree-sitter/tree-sitter/tree/v0.25.10[tag],
+  https://github.com/tree-sitter/tree-sitter/commit/da6fe9beb4f7f67beb75914ca8e0d48ae48d6406[commit `da6fe9beb4f7f67beb75914ca8e0d48ae48d6406`],
+  https://registry.npmjs.org/tree-sitter-cli/0.25.10[metadata],
+  https://registry.npmjs.org/tree-sitter-cli/-/tree-sitter-cli-0.25.10.tgz[tarball],
+  SHA-256
+  `351b439451769d7e883c24c852e9f2b6e219f429221ad42d7da0bf35145da261`,
+  integrity
+  `sha512-KoebQguKMCIghisEOdA372TIbrUl0kdnfZ9YQIBRAeOvNSKe85XbU4LuFW7hduRUwJj0rAG7pX5wo9sZhbBF1g==`.
+* *Recorded source closure `tree-sitter-javascript@0.23.1`:*
+  https://github.com/tree-sitter/tree-sitter-javascript/tree/v0.23.1[tag],
+  https://github.com/tree-sitter/tree-sitter-javascript/commit/3a837b6f3658ca3618f2022f8707e29739c91364[commit `3a837b6f3658ca3618f2022f8707e29739c91364`],
+  https://registry.npmjs.org/tree-sitter-javascript/0.23.1[metadata],
+  https://registry.npmjs.org/tree-sitter-javascript/-/tree-sitter-javascript-0.23.1.tgz[tarball],
+  SHA-256
+  `90e80b25a67517a4daf6ad751557bee21efbda7b7a5a554897933245d1734398`,
+  integrity
+  `sha512-/bnhbrTD9frUYHQTiYnPcxyHORIw157ERBa6dqzaKxvR/x3PC4Yzd+D1pZIMS6zNg2v3a8BZ0oK7jHqsQo9fWA==`.
+
+Only `web-tree-sitter@0.26.12` had an npm SLSA provenance attestation. The
+other five records did not.
+
+=== Immutable recipe and correspondence evidence
+
+The immutable `@vscode` recipe evidence is:
+
+* https://github.com/microsoft/vscode-tree-sitter-wasm/blob/78c97c860ddd965b9617f0e30962ad1da08c4c91/package-lock.json[`package-lock.json`],
+  SHA-256
+  `3f28ad83692a2595a1f4f13f2781e36e5ffde2a6eab7ca95bcbf40bd16a6e63c`;
+* https://github.com/microsoft/vscode-tree-sitter-wasm/blob/78c97c860ddd965b9617f0e30962ad1da08c4c91/build/main.ts[`build/main.ts`];
+* https://github.com/microsoft/vscode-tree-sitter-wasm/blob/78c97c860ddd965b9617f0e30962ad1da08c4c91/build/compileGrammarWasm.ts[`build/compileGrammarWasm.ts`];
+  and
+* https://github.com/microsoft/vscode-tree-sitter-wasm/blob/78c97c860ddd965b9617f0e30962ad1da08c4c91/build/setup-emsdk.sh[`build/setup-emsdk.sh`],
+  pinning
+  https://github.com/emscripten-core/emsdk/commit/20edf6614564cd76acac8107d746ca1182d6f3c5[emsdk commit `20edf6614564cd76acac8107d746ca1182d6f3c5`]
+  and Emscripten `3.1.64`.
+
+No `cgmanifest` is claimed complete. The five selected asset hashes are hashes
+of exact files shipped in the two selected consumer tarballs. The JavaScript
+asset is byte-identical to its corresponding grammar-package WASM; TypeScript
+and TSX are likewise byte-identical to their corresponding grammar-package
+WASMs. This establishes artifact correspondence, not a reproducible-build
+warranty.
+
+The two selected consumer packages declare no production, optional, or peer
+dependencies and no lifecycle `preinstall`, `install`, or `postinstall` hook.
+The runtime exposes only build/test/pack-related scripts. The `@vscode` package
+exposes `build-wasm` and a custom, non-lifecycle `install-emsdk` script.
+#455 must establish the actual committed product lock closure. The grammar,
+generator, and source-closure packages are provenance records and must not
+become product lock dependencies.
+
+Both direct packages declare MIT and ship `LICENSE` without `NOTICE`:
+
+* runtime `LICENSE` SHA-256
+  `c5cfb43042b6b72045f4ba997834d0a7786d2793d91680868b5815b39f14fc78`;
+  and
+* `@vscode` `LICENSE` SHA-256
+  `c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383`.
+
+All six recorded package versions declare MIT. This is evidence, not legal
+clearance.
+
+On `2026-08-16`, exact OSV queries to `https://api.osv.dev/v1/query` for these
+npm package/version pairs returned exactly `{}`:
+
+* `web-tree-sitter` / `0.26.12`;
+* `@vscode/tree-sitter-wasm` / `0.3.1`;
+* `tree-sitter-javascript` / `0.25.0`;
+* `tree-sitter-typescript` / `0.23.2`;
+* `tree-sitter-cli` / `0.25.10`; and
+* `tree-sitter-javascript` / `0.23.1`.
+
+Release-time and maintenance observations must cite the npm time roots for
+https://registry.npmjs.org/web-tree-sitter[`web-tree-sitter`],
+https://registry.npmjs.org/%40vscode%2Ftree-sitter-wasm[`@vscode/tree-sitter-wasm`],
+https://registry.npmjs.org/tree-sitter-javascript[`tree-sitter-javascript`],
+https://registry.npmjs.org/tree-sitter-typescript[`tree-sitter-typescript`], and
+https://registry.npmjs.org/tree-sitter-cli[`tree-sitter-cli`], plus the GitHub
+API repository records for
+https://api.github.com/repos/tree-sitter/tree-sitter[`tree-sitter/tree-sitter`],
+https://api.github.com/repos/microsoft/vscode-tree-sitter-wasm[`microsoft/vscode-tree-sitter-wasm`],
+https://api.github.com/repos/tree-sitter/tree-sitter-javascript[`tree-sitter/tree-sitter-javascript`],
+and
+https://api.github.com/repos/tree-sitter/tree-sitter-typescript[`tree-sitter/tree-sitter-typescript`].
+
+These are dated observations, not vulnerability, legal, maintenance, security,
+integrity, or support warranties. `npm audit` is deferred until #455 creates
+the actual lock closure and is renewed by #460.
+
+=== Canonical WASM inventory
+
+The complete canonical inventory and inert reproduction listing are in
+xref:adr/0007-static-syntax-evidence-appendix.adoc[ADR 0007 Static Syntax
+Evidence Appendix]. Inventory presence grants no parser API permission.
+
+Its canonical TSV is UTF-8 without BOM, uses literal TAB field separators and
+LF line endings including one final LF, and has exactly `10,103` bytes, `217`
+rows, and SHA-256
+`b4b6e4528e5147ef618593b2504f204de6a3aac2ce06d9cfe2a3661f435756bb`.
+Its rows comprise `4 ASSET + 12 headers + 36 imports + 161 exports + 4 memory`.
+
+[cols="4,3,5",options="header"]
+|===
+|Asset |Imports / exports / memory |Section SHA-256
+
+|Runtime
+|`17 / 152 / 1`
+|`b6e4749bc29183121e441f6266629a09a12521171b535cab32eb3989fb092682`
+
+|JavaScript
+|`7 / 3 / 1`
+|`041491faa34a6bec5d9ecd756a935e12467b6229fca191632ec2a02ecbfbc933`
+
+|TypeScript
+|`6 / 3 / 1`
+|`1286cf36e039d35299737e5d08e43653790bae081412cb8f206aeff4b5937d63`
+
+|TSX
+|`6 / 3 / 1`
+|`e08ee9f71a4012451d8b4d61017c992621669cda89926c6172bfea848b1af595`
+|===
+
+The runtime imports unshared, non-memory64 `env.memory` with `512` initial and
+`32,768` maximum pages: 32 MiB initial and 2 GiB maximum. JavaScript imports 6
+pages without a declared maximum; TypeScript and TSX each import 22 pages
+without a declared maximum. Runtime import modules are exactly `GOT.mem`,
+`env`, and `wasi_snapshot_preview1`. Grammar exports are their named language
+function plus constructors and data relocations.
+
+== Rationale, rejected alternatives, and downsides
+
+Tree-sitter is selected because the pinned browser runtime and grammars support
+the closed four-family contract, iterative cursor-only projection, and
+evidence at the full accepted envelope. Recorded feasibility includes
+grammar-valid input with `100,000` nesting levels without recursive JavaScript
+helpers.
+
+Rejected alternatives are:
+
+* *Babel:* recorded valid input at approximately 500 nesting levels throws
+  `RangeError`.
+* *Lezer:* the evaluated path has hidden stack capacities that do not establish
+  the full accepted envelope.
+
+Accepted costs and limitations are:
+
+* 32-bit parser coordinates;
+* growing WASM memory with a 2 GiB runtime maximum;
+* six retained parse-stack versions internally;
+* approximately 3.5 MB of WASM assets;
+* version-coupled grammar-to-semantic mapping;
+* same-origin runtime and grammar fetches during worker startup or first use;
+* worker recreation after every terminal result, cancellation, or replacement;
+* rejection of valid newer syntax such as TypeScript `import defer`;
+* acceptance of some contextual/static-semantic early errors; and
+* exact-pin and evidence-renewal work.
+
+M1 makes no parser compatibility, browser availability, completion-time,
+throughput, startup-time, or memory-performance promise.
+
+== Downstream ownership and acceptance evidence
+
+https://github.com/FelixGeisler/code-city/issues/450[#450] is documentation
+only. Its evidence is this accepted ADR, its requirements and architecture
+links, the immutable appendix, and a successful documentation build. It adds
+no executable parser evidence.
+
+[cols="2,8",options="header"]
+|===
+|Owner |Exact responsibility
+
+|https://github.com/FelixGeisler/code-city/issues/452[#452]
+|Map the parser adapter, fixed asset locators, static-syntax port, main-bridge
+worker ownership and generation gate, and parser/core restrictions into ADR
+0001 through ADR 0004 boundary enforcement. Add no parser dependency, source,
+grammar asset, or implementation.
+
+|https://github.com/FelixGeisler/code-city/issues/455[#455]
+|Add the two exact dependencies, committed closure, five selected assets,
+parser and lifecycle barrier, validation and projection passes, SLOC, explicit
+units, conditional-top-level observations, UTF conversion, and ordinary
+cleanup. Its PR evidence proves parser/SLOC/unit/error behavior across the full
+envelope and excludes decision ownership and complexity.
+
+|https://github.com/FelixGeisler/code-city/issues/456[#456]
+|Add decision observations, exclusive ownership, exact complexity arithmetic,
+maxima, and canonical facts using only the accepted primitive projection. Its
+PR evidence reruns the complete combined full-envelope matrix and exact-fact
+checks.
+
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|On the final head, renew exact closure, integrity, scripts, provenance,
+licenses/notices, OSV and WASM inventory evidence; verify emitted assets and
+imports; and prove integrated provider/static lifecycle, cancellation,
+replacement, no-overlap, traffic/logging exclusions, atomicity, and
+complete-scene-only publication.
+
+|https://github.com/FelixGeisler/code-city/issues/463[#463]
+|Synthesize the accepted provider drain, static entry, parser/core handoff,
+ordinary terminal, cancellation, replacement, and cleanup flow without adding
+a port, owner, request, or general schema.
+
+|https://github.com/FelixGeisler/code-city/issues/464[#464]
+|Verify this accepted ADR, the narrow ADR 0003 amendment, exact documentation,
+evidence owners, and stop rules. It is documentation readiness only and does
+not re-decide technology or add a generic acceptance gate.
+|===
+
+#455 repeatable packaged-browser evidence must cover grammar-valid deeply
+nested parentheses at the exact per-module envelope, including the recorded
+`100,000`-nesting case; a wide/left-associative module containing one million
+empty statements; exact-bound long-token and comment cases; recovery-heavy
+malformed source; deep TypeScript and TSX; all eight suffixes and ASCII-case
+variants across all four families; forbidden non-JSX nodes; declaration-file
+spelling; top-level `return`/`break`/`continue`; pinned `import defer`
+rejection; the exact `4,000`-module/`41,943,040`-normalized-byte matrix
+including twenty `2,097,152`-byte modules and `3,980` zero-byte modules; both
+complete passes; exact SLOC, units, spans, ordering, duplicate handling, and
+astral-offset facts; at most one source module/parser/tree/cursor at a time,
+ordinary handle deletion, sequential release, and repeated attempts; both
+lifecycle attestations, termination immediately after barrier receipt before
+first static work, and termination during active static work; and absence of
+trap, private lower limit, fallback, retry, approximation, or performance
+claim.
+
+#456 must prove every included and excluded decision; exclusive nested,
+decorator, computed-name, heritage, and field-initializer ownership; exact
+complexities, counts, maxima, ties, identities, ordering, and duplicate
+behavior; maximum-density units and decisions; and a complete combined rerun
+of grammar, SLOC, unit, complexity, full-envelope, lifecycle, and exact-fact
+evidence.
+
+#460 must additionally prove cancellation or replacement during active ADR
+0005/0006 provider work; post-barrier cancellation immediately after receipt
+before first static work and during synchronous parse or active traversal;
+ordinary deletion versus hard realm release without a delete-spy claim;
+observable resource order and no overlap; emitted hashes, complete inventory
+and per-table digests, fixed `/code-city/` URLs, `locateFile`, Node-branch
+handling, and forbidden-artifact/traffic/logging absence; source-free terminal
+and lifecycle handoffs; and renewed closure, licenses/notices, OSV, npm audit,
+provenance, and maintenance evidence.
+
+Every grammar-valid failure inside the accepted envelope reopens #450. A
+smaller successful fixture is not substitute evidence.
+
+== Stop and reopen rules
+
+Stop implementation or merge and reopen #450 if:
+
+* any selected runtime, package, asset, version, parser option, API use, grammar
+  mapping, hash, generator, ABI, or canonical WASM inventory changes;
+* `locateFile` requires anything other than the exact full-string mapping or
+  receives an unknown request;
+* implementation needs an API outside the permitted cursor-only surface;
+* an expected grammar node cannot be mapped to accepted metric semantics;
+* selected asset correspondence or immutable provenance cannot be verified;
+* an unselected asset, older runtime, Node shim, browser polyfill, native
+  binding, parser plugin, query asset, unexpected import, traffic, telemetry,
+  or logging enters the artifact;
+* fixed asset URLs cannot remain same-origin, statically addressed, and beneath
+  `/code-city/`, or repository/source data can select an asset URL or
+  capability;
+* a grammar-valid full-envelope case traps, exhausts a private capacity, or
+  produces incorrect facts;
+* either iterative pass, primitive projection, UTF conversion, or ordinary
+  cleanup cannot be demonstrated;
+* ADR 0005/0006 provider settlement cannot complete before the static barrier;
+* either lifecycle discriminator, payload restriction, barrier, drain,
+  hard-stop, sole-handle, call-order, or publication invariant cannot be
+  demonstrated;
+* implementation would require changing ADR 0005 or ADR 0006, another
+  dependency, parser, fallback, runtime context, product limit, compatibility
+  layer, source-derived capability, or weaker security boundary; or
+* #450's 22-file documentation boundary cannot be preserved.
+
+No workaround may be introduced silently. A selected version, asset, API,
+grammar, option, hash, ABI, lifecycle, or inventory change revises or
+supersedes this ADR. A lockfile-closure-only change that leaves every selected
+item and asset unchanged renews ADR 0004 dependency/artifact evidence without
+reopening #450.
+
+== Exclusions
+
+This decision selects no repository retrieval behavior, city or renderer
+technology, test framework, concrete source layout, general message or port
+schema, Pages workflow, application route, or deployment mechanism. It adds no
+second runtime context, provider path, credential, persistence, source-derived
+capability, plugin, extension point, fallback, compatibility layer, product
+limit, or timing outcome.

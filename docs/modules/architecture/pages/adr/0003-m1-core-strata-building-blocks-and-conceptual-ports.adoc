@@ -285,14 +285,31 @@ observations cross the static-syntax boundary.
 The bridge may carry only:
 
 * toward the worker: one normalized, syntactically accepted submission and
-  lifecycle control; and
+  lifecycle control;
 * toward the UI: selected identity, one terminal failure, or one complete
-  canonical scene.
+  canonical scene; and
+* toward the main bridge: exactly the two attempt-correlated, source-free
+  internal lifecycle attestations `PROVIDER_DRAINED_STATIC_ENTERED` and
+  `ATTEMPT_DRAINED` accepted by
+  xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+  0007].
+
+Each lifecycle attestation carries only its discriminator and the existing
+opaque bridge-generated attempt/generation correlation. It carries no identity,
+provider value, source, admitted module, parser value, metric, scene,
+diagnostic, timing, or count. The main bridge consumes it; it never enters
+worker-outcome intake, visible state, status, or classification. The
+attestations are internal lifecycle evidence, not UI outcomes, cryptographic
+attestations, or physical-teardown guarantees, and they change no existing
+bridge transport.
 
 Raw or normalized repository source or content, admitted modules, parser
 objects, metric intermediates, and partial scenes must not cross. Building
-identities may cross only as inert model keys. Exact message and port schemas
-remain with #453 through #460.
+identities may cross only as inert model keys. The main bridge's worker-
+generation gate owns the sole concrete worker transport resource and is not a
+second orchestrator. General message and port schemas remain with #453 through
+#460. Every other bridge block, port, owner, dependency, and bypass rule in this
+ADR remains unchanged.
 
 === Sole state, failure, admission, cancellation, and cleanup ownership
 
@@ -308,8 +325,11 @@ remain with #453 through #460.
 * *Presentation failure:* the presentation adapter detects it and cleans its
   resources; the UI coordinator alone commits visible `Failure`.
 * *Worker sequencing and suppression:* the worker pipeline coordinator only.
-* *Bridge behavior:* transport outcomes unchanged; never validate, classify,
-  admit, or reclassify them.
+* *Bridge behavior:* transport business outcomes unchanged; consume only ADR
+  0007's two internal lifecycle attestations; own generation correlation, the
+  sole concrete worker handle and hard-stop gate, and transport/listener
+  release without becoming an orchestrator; never validate, classify, admit,
+  or reclassify.
 
 On a worker-stage failure, the owning capability returns its terminal outcome,
 the pipeline suppresses later stages and releases core transients, and the UI
@@ -320,17 +340,33 @@ Cancellation and cleanup are partitioned exactly once:
 . The UI coordinator immediately revokes publication eligibility, wins ties,
   and clears identity, city, and presentation state while preserving the draft
   required by #441.
-. The worker pipeline coordinates feasible stopping, suppresses downstream
+. The worker pipeline coordinates phase completion, suppresses downstream
   stages, and releases core transient references.
-. Each provider or parser adapter releases only the physical resources it
-  owns.
-. The bridge releases transport references.
+. Each provider adapter settles and releases only its ADR 0005/0006 physical
+  resources; provider work never relies on worker termination.
+. The parser adapter explicitly deletes its cursor, tree, and parser on
+  ordinary paths. ADR 0007's hard-static path may prevent `finally` and those
+  deletes; worker-realm termination then owns static-resource release without
+  a delete-spy or timing claim.
+. The main bridge terminates its sole worker exactly once when ADR 0007 permits,
+  then releases listeners and transport references and clears its handle.
 . The presentation adapter disposes incomplete or replaced presentation
   resources.
 
+Before matching `PROVIDER_DRAINED_STATIC_ENTERED` receipt, the main bridge must
+not terminate: provider settlement and global-gate release precede
+`ATTEMPT_DRAINED`, termination, handle clearing, and replacement. After matching
+receipt, the bridge may hard-terminate and clear the sole worker before
+replacement even when zero static operations occurred. On an ordinary terminal
+path, parser deletion and reference release precede the business payload and
+`ATTEMPT_DRAINED`; matching drain receipt then permits termination. These ADR
+0007 refinements supersede only conflicting bridge-payload and parser-cleanup
+statements in this ADR.
+
 Late output is harmless because the UI publication gate remains authoritative.
 Reload discards all application-managed session state. This decision adds no
-cleanup-latency, secure-erasure, platform-cache, or garbage-collection promise.
+cleanup-latency, secure-erasure, physical-teardown, platform-cache, or garbage-
+collection promise.
 
 == Rationale
 

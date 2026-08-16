@@ -7,9 +7,11 @@ xref:08-fixed-metric-semantics.adoc[] has produced the complete canonical facts
 for the admitted modules.
 
 The rules define product facts, exclusions, and failure behavior. They do not
-select a renderer or analyzer, library or version, mesh, material, shader,
-scene-graph or camera object, component, port, topology, enforcement location,
-or executable evidence mechanism.
+select a renderer, mesh, material, shader, scene-graph or camera object,
+component, port, topology, enforcement location, or executable evidence
+mechanism. Static syntax is already fixed independently by
+xref:architecture:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007]
+and is not redefined here.
 
 [[city-terms]]
 == Terms
@@ -161,8 +163,8 @@ maximum = (max_i(x_i + b_i), max_i(S_i + 1), max_i(z_i + b_i))
 |CC-01 building count
 |There is no independent city cap. The city has exactly `N` identity-matched
 buildings for the complete metric set reaching construction. RA-07 prevents
-more than `4,000` admitted modules; https://github.com/FelixGeisler/code-city/issues/450[#450]
-may stop an attempt earlier.
+more than `4,000` admitted modules, and ADR 0007 permits that complete envelope
+to reach static analysis without a lower processing limit.
 
 |CC-02 repository-derived labels
 |Exactly `0`.
@@ -358,7 +360,7 @@ city would publish misleading, partial, or stale output.
 |===
 
 [[city-evidence-allocation]]
-== Evidence ownership and deferred technology
+== Evidence ownership and visualization technology
 
 This allocation selects no evidence mechanism:
 
