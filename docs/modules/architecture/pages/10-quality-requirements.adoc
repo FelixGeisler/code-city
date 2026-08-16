@@ -1,1 +1,175 @@
 = 10. Quality Requirements
+
+The matrix below is the closed M1 quality-scenario set. Numerical limits and
+detailed contracts are linked to their normative requirements rather than
+copied. No elapsed-time target, tool-specific test prescription, or screenshot
+equality is introduced.
+
+[cols="2,5,4,6,6,6",options="header"]
+|===
+|Scenario |Stimulus |Environment |Required response |Objective evidence |Traceability
+
+|1. Immutable pinning
+|GitHub's designated default-branch tip moves after the current attempt selected
+a revision; the user may later resubmit.
+|Current attempt is loading or complete, followed by a separate later
+submission.
+|The current attempt remains pinned to its full selected commit ID; only the
+later attempt may select the newer tip.
+|Controlled resolution evidence fixes the first handoff despite branch movement
+and permits a new handoff only after resubmission.
+|https://github.com/FelixGeisler/code-city/issues/441[#441]
+xref:requirements:04-functional-requirements.adoc#revision-selection[M1-REV-1]
+and
+xref:requirements:04-functional-requirements.adoc#immutable-revision[M1-REV-2];
+evidence https://github.com/FelixGeisler/code-city/issues/453[#453] and
+https://github.com/FelixGeisler/code-city/issues/459[#459].
+
+|2. Canonical repeatability
+|The same selected identity and equivalent bounded repository data are
+processed repeatedly while provider or carrier order, locale, time,
+concurrency, or device order varies.
+|Successful accepted M1 journey.
+|Admission result, canonical metric facts, and canonical scene facts are
+identical. Exact equality applies except only the camera-evaluation tolerance
+accepted in #444; screenshots are not evidence.
+|Permutation and repetition evidence compares the canonical admitted-module
+sequence, metric facts, scene facts, and semantic presentation result.
+|https://github.com/FelixGeisler/code-city/issues/442[#442]
+xref:requirements:06-source-admission-and-limits.adoc#admission-composition[M1-ADM-5]
+and
+xref:requirements:06-source-admission-and-limits.adoc#outcome-precedence[M1-OUT-2];
+https://github.com/FelixGeisler/code-city/issues/443[#443]
+xref:requirements:08-fixed-metric-semantics.adoc#canonical-identities[canonical
+identities/order] and
+xref:requirements:08-fixed-metric-semantics.adoc#canonical-facts[canonical
+facts]; https://github.com/FelixGeisler/code-city/issues/444[#444]
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#precision-repeatability[precision
+and repeatability]. Evidence:
+https://github.com/FelixGeisler/code-city/issues/454[#454],
+https://github.com/FelixGeisler/code-city/issues/455[#455],
+https://github.com/FelixGeisler/code-city/issues/456[#456],
+https://github.com/FelixGeisler/code-city/issues/457[#457],
+https://github.com/FelixGeisler/code-city/issues/458[#458], and
+https://github.com/FelixGeisler/code-city/issues/459[#459].
+
+|3. Anonymous operation
+|The user submits invalid input or an accepted URL whose repository is missing,
+private, access denied, or otherwise anonymously unavailable.
+|Fresh or replacement attempt without credentials.
+|Invalid input causes no provider interaction. Accepted input sends no user or
+service credential. Unavailable cases remain indistinguishable and never offer
+authentication recovery.
+|Boundary evidence proves no interaction for invalid input, no authorization
+material for accepted interactions, and one privacy-preserving unavailable
+outcome.
+|https://github.com/FelixGeisler/code-city/issues/441[#441]
+xref:requirements:04-functional-requirements.adoc#url-grammar[M1-URL-1],
+xref:requirements:04-functional-requirements.adoc#anonymous-access[M1-ANON-1
+and M1-ANON-2], and
+xref:requirements:04-functional-requirements.adoc#failure-outcomes[M1-FAIL-1];
+evidence https://github.com/FelixGeisler/code-city/issues/453[#453],
+https://github.com/FelixGeisler/code-city/issues/454[#454],
+https://github.com/FelixGeisler/code-city/issues/459[#459], and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|4. No source execution
+|Adversarial metadata or source is received, including a side-effect sentinel
+or malformed supported-family syntax.
+|Admission, static metric processing, and presentation of the current attempt.
+|Every value remains inert data: no execution, evaluation, import, or dynamic
+loading occurs. Malformed syntax produces `M1-MET-1`; repository-derived model
+identities remain inert and never become markup or resource locators.
+|Adversarial fixtures observe no sentinel side effect or active interpretation
+and verify the exact atomic malformed-source outcome.
+|https://github.com/FelixGeisler/code-city/issues/442[#442]
+xref:requirements:06-source-admission-and-limits.adoc#untrusted-source[M1-ADM-0];
+https://github.com/FelixGeisler/code-city/issues/443[#443]
+xref:requirements:08-fixed-metric-semantics.adoc#metric-input[input boundary]
+and
+xref:requirements:08-fixed-metric-semantics.adoc#metric-failure[M1-MET-1]; and
+https://github.com/FelixGeisler/code-city/issues/444[#444]
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#canonical-scene[canonical-scene
+exclusions]. Evidence: https://github.com/FelixGeisler/code-city/issues/454[#454],
+https://github.com/FelixGeisler/code-city/issues/455[#455],
+https://github.com/FelixGeisler/code-city/issues/458[#458], and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|5. Bounded admission
+|Actual repository or intake data reaches T-1, T, or T+1 for any RA-01 through
+RA-09 dimension, or combines or permutes cutoff and failure conditions; valid
+metric input reaches city construction.
+|Current attempt, with equivalent provider orders and untrusted measurement
+claims.
+|The exact horizon, inclusive-boundary, precedence, and category/code result
+from #442 applies to actual data; no partial admitted set is published. Valid
+city input follows #444's CC-01 through CC-08 dispositions without a private
+cap.
+|Closed boundary, cutoff, precedence, and permutation evidence covers every RA
+row; city evidence covers the fixed CC dispositions and integrated failure
+state.
+|https://github.com/FelixGeisler/code-city/issues/442[#442]
+xref:requirements:06-source-admission-and-limits.adoc#limit-rule[M1-LIM-0],
+xref:requirements:06-source-admission-and-limits.adoc#metadata-policy[M1-LIM-1],
+and
+xref:requirements:06-source-admission-and-limits.adoc#failure-categories[M1-OUT-1]
+through
+xref:requirements:06-source-admission-and-limits.adoc#failure-invariants[M1-OUT-3],
+plus https://github.com/FelixGeisler/code-city/issues/444[#444]
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#city-limit-dispositions[CC
+dispositions]; evidence https://github.com/FelixGeisler/code-city/issues/454[#454],
+https://github.com/FelixGeisler/code-city/issues/457[#457], and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|6. Cancellation
+|The user cancels `Loading`, including when cancellation and a result are tied.
+|Current attempt may or may not already have a selected identity; the input
+draft may have been edited.
+|The exact `Cancelled` state is observable: draft preserved, identity and city
+absent, and every late outcome rejected. No elapsed-time target or physical
+cleanup mechanism is defined.
+|A controlled race or tie scenario proves cancellation wins observable
+publication and late results change nothing.
+|https://github.com/FelixGeisler/code-city/issues/441[#441]
+xref:requirements:04-functional-requirements.adoc#states[M1-STATE-4 and
+M1-STATE-5] and the downstream atomicity invariants; integrated evidence
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|7. Replacement and atomic publication
+|A user submits again while any prior state or attempt exists, and the
+replacement succeeds or fails at any stage.
+|Current session with a prior loading, success, failure, or cancelled state.
+|The new submission invalidates prior work before validation; only the current
+attempt can publish. Failure shows no stale or partial city; success publishes
+the complete city and identity together.
+|End-to-end replacement, late-result, stage-failure, and
+successful-publication evidence proves one current outcome and no partial or
+stale output.
+|https://github.com/FelixGeisler/code-city/issues/441[#441]
+xref:requirements:04-functional-requirements.adoc#states[M1-STATE-2,
+M1-STATE-3, and M1-STATE-5], plus
+https://github.com/FelixGeisler/code-city/issues/442[#442] through
+https://github.com/FelixGeisler/code-city/issues/444[#444] atomic failures; evidence https://github.com/FelixGeisler/code-city/issues/459[#459]
+and https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|8. Dependency conformance
+|A source-dependency edge is added or changed after #445 has produced exactly
+one accepted core-dependency ADR.
+|Packaged M1 source graph; runtime calls and data flow are considered
+separately.
+|The graph conforms to that accepted ADR; runtime direction is not treated as
+source-dependency direction.
+|#452's automated evidence accepts a conforming graph and rejects one
+representative forbidden edge.
+|The decision in https://github.com/FelixGeisler/code-city/issues/445[#445] is
+*deferred/not accepted here*. Conditional evidence belongs to
+https://github.com/FelixGeisler/code-city/issues/452[#452].
+|===
+
+Scenario 8 becomes applicable only after #445 produces an accepted ADR;
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains `Proposed` and is
+not treated as that decision. RA-10 and RA-11, SP-01 through SP-04, CC-09, and
+PR-01 remain deferred to their linked owners in
+xref:requirements:06-source-admission-and-limits.adoc#deferred-limits[Downstream
+limit decisions and dispositions]; this page gives them no scenario, value,
+unit, interval, precedence rule, or diagnostic.

@@ -1,1 +1,109 @@
 = 2. Architecture Constraints
+
+The following set is closed for this baseline. Each constraint links to its
+normative requirement instead of copying detailed grammar, matrices, formulas,
+precedence tables, or numerical thresholds.
+
+[cols="5,6,4",options="header"]
+|===
+|Accepted constraint |Normative source |Evidence owner
+
+|One canonical public-GitHub URL is the sole user input. Each syntactically
+accepted current attempt selects and identifies one immutable selected
+revision at the GitHub-designated default-branch tip.
+|https://github.com/FelixGeisler/code-city/issues/441[#441]:
+xref:requirements:04-functional-requirements.adoc#canonical-url[Canonical URL
+input] and
+xref:requirements:04-functional-requirements.adoc#immutable-revision[Immutable
+revision selection and identity].
+|https://github.com/FelixGeisler/code-city/issues/453[#453] and
+https://github.com/FelixGeisler/code-city/issues/459[#459].
+
+|Operation is anonymous. User and service credentials are prohibited, and
+anonymously unavailable conditions preserve the accepted privacy behavior.
+|https://github.com/FelixGeisler/code-city/issues/441[#441]:
+xref:requirements:04-functional-requirements.adoc#anonymous-access[Anonymous
+public access] and
+xref:requirements:04-functional-requirements.adoc#failure-outcomes[Required
+failure categories].
+|https://github.com/FelixGeisler/code-city/issues/453[#453] and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|User values, GitHub values, repository metadata, paths, entry content, and
+source remain untrusted data. Repository data is never executed, evaluated,
+imported, or dynamically loaded.
+|https://github.com/FelixGeisler/code-city/issues/442[#442]:
+xref:requirements:06-source-admission-and-limits.adoc#untrusted-source[M1-ADM-0];
+https://github.com/FelixGeisler/code-city/issues/443[#443]:
+xref:requirements:08-fixed-metric-semantics.adoc#metric-input[Input boundary];
+and https://github.com/FelixGeisler/code-city/issues/444[#444]:
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#canonical-scene[Canonical
+scene and exclusions].
+|https://github.com/FelixGeisler/code-city/issues/454[#454],
+https://github.com/FelixGeisler/code-city/issues/455[#455],
+https://github.com/FelixGeisler/code-city/issues/458[#458], and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|The accepted admission and ordering rules and RA-01 through RA-09, canonical
+metric facts and metric failure, and city, scene, presentation, and CC-01
+through CC-08 dispositions are exact and non-configurable.
+|https://github.com/FelixGeisler/code-city/issues/442[#442]:
+xref:requirements:06-source-admission-and-limits.adoc#admission-composition[M1-ADM-5],
+xref:requirements:06-source-admission-and-limits.adoc#limit-rule[M1-LIM-0], and
+xref:requirements:06-source-admission-and-limits.adoc#outcome-precedence[M1-OUT-2];
+https://github.com/FelixGeisler/code-city/issues/443[#443]:
+xref:requirements:08-fixed-metric-semantics.adoc#canonical-facts[Canonical
+facts] and
+xref:requirements:08-fixed-metric-semantics.adoc#metric-failure[Atomic metric
+failure]; https://github.com/FelixGeisler/code-city/issues/444[#444]:
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#canonical-scene[Canonical
+scene],
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#city-limit-dispositions[CC
+dispositions], and
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#city-failure[stage
+failure].
+|https://github.com/FelixGeisler/code-city/issues/454[#454] through
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|Submission, replacement, cancellation, failure, success, identity retention,
+and complete-city publication obey the current-attempt invariant: no stale,
+partial, or late result may be published.
+|https://github.com/FelixGeisler/code-city/issues/441[#441]:
+xref:requirements:04-functional-requirements.adoc#states[M1-STATE-1 through
+M1-STATE-5]; https://github.com/FelixGeisler/code-city/issues/442[#442]:
+xref:requirements:06-source-admission-and-limits.adoc#failure-invariants[M1-OUT-3];
+https://github.com/FelixGeisler/code-city/issues/443[#443]:
+xref:requirements:08-fixed-metric-semantics.adoc#metric-failure[Atomic metric
+failure]; and https://github.com/FelixGeisler/code-city/issues/444[#444]:
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#city-failure[Atomic
+construction and presentation failure].
+|https://github.com/FelixGeisler/code-city/issues/459[#459] and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|Product state is current-session only and reload resets it. M1 creates no
+persisted product or history record; repository payloads and derived
+intermediates are not persisted product records.
+|https://github.com/FelixGeisler/code-city/issues/441[#441]:
+xref:requirements:04-functional-requirements.adoc#states[Observable states and
+transitions] and
+xref:requirements:04-functional-requirements.adoc#_m1_ex_1_excluded_controls_and_retained_data[M1-EX-1];
+xref:requirements:01-product-scope.adoc#non-goals[Non-goals].
+|https://github.com/FelixGeisler/code-city/issues/459[#459] and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|M1 has no authentication or other input, configuration, exploration, history,
+persistence, export, compatibility promise, or speculative extension point.
+|xref:requirements:01-product-scope.adoc#non-goals[Non-goals] and
+https://github.com/FelixGeisler/code-city/issues/441[#441]
+xref:requirements:04-functional-requirements.adoc#_m1_ex_1_excluded_controls_and_retained_data[M1-EX-1].
+|https://github.com/FelixGeisler/code-city/issues/459[#459] and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+|===
+
+Topology, dependency direction, ownership, delivery, provider and request
+mechanisms, analysis, visualization, enforcement, and physical cleanup remain
+*deferred/not accepted here*. Their owners are
+https://github.com/FelixGeisler/code-city/issues/445[#445] through
+https://github.com/FelixGeisler/code-city/issues/451[#451] and
+https://github.com/FelixGeisler/code-city/issues/462[#462]; none of those open
+choices is an accepted constraint on this page.

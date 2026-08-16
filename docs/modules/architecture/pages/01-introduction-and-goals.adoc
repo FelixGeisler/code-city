@@ -1,1 +1,171 @@
 = 1. Introduction and Goals
+
+== M1 outcome
+
+The M1 architecture serves one accepted outcome: a user opens the approved
+Code City delivery target, submits one canonical URL for an anonymously
+accessible public GitHub repository, and receives one deterministic,
+non-configurable city for supported JavaScript and TypeScript modules from one
+immutable selected revision. The normative outcome and its exclusions remain in
+xref:requirements:01-product-scope.adoc#_m1_outcome[M1 outcome] and
+xref:requirements:01-product-scope.adoc#non-goals[Non-goals]; this page does not
+redefine them.
+
+== Prioritized architecture drivers
+
+Every accepted requirement in
+https://github.com/FelixGeisler/code-city/issues/441[#441],
+https://github.com/FelixGeisler/code-city/issues/442[#442],
+https://github.com/FelixGeisler/code-city/issues/443[#443], and
+https://github.com/FelixGeisler/code-city/issues/444[#444] is a mandatory gate.
+The following priority applies only when alternatives conform equally to all
+of those requirements. It is a reversible documentation synthesis made by the
+Requirements Engineer under the human delegation recorded in
+https://github.com/FelixGeisler/code-city/issues/461[#461]; it introduces no
+numerical promise or architecture or technology selection.
+
+[cols="1,4,7",options="header"]
+|===
+|Priority |Driver |Contract and evidence
+
+|1
+|Exact contract fidelity and reproducibility
+|Preserve the exact immutable identity, deterministic sequence of admitted
+modules, canonical metric facts, canonical scene facts, and semantic
+repeatability defined by
+xref:requirements:04-functional-requirements.adoc#immutable-revision[Immutable
+revision selection and identity],
+xref:requirements:06-source-admission-and-limits.adoc#admission-composition[M1-ADM-5],
+xref:requirements:08-fixed-metric-semantics.adoc#canonical-facts[Canonical
+metric facts], and
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#precision-repeatability[Precision
+and repeatability]. Evidence belongs to
+https://github.com/FelixGeisler/code-city/issues/453[#453] through
+https://github.com/FelixGeisler/code-city/issues/459[#459].
+
+|2
+|Fail-closed handling of untrusted, bounded, current-attempt work
+|Keep anonymous inputs and repository data inert, inspect only the accepted
+bounded horizons, and publish no stale, partial, or late result. The governing
+contracts are
+xref:requirements:04-functional-requirements.adoc#anonymous-access[Anonymous
+public access],
+xref:requirements:04-functional-requirements.adoc#states[Observable states and
+transitions],
+xref:requirements:06-source-admission-and-limits.adoc#untrusted-source[M1-ADM-0],
+and
+xref:requirements:06-source-admission-and-limits.adoc#outcome-precedence[M1-OUT-2].
+Evidence belongs to https://github.com/FelixGeisler/code-city/issues/453[#453],
+https://github.com/FelixGeisler/code-city/issues/454[#454], and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|3
+|Objectively enforceable conformance to whatever architecture decisions are
+later accepted
+|Enforce only architecture decisions that are later accepted; where an
+accepted ADR records a decision, that ADR is the conformance source.
+Source-dependency direction is distinct from runtime calls and data flow. The
+decision boundary is recorded in
+xref:requirements:04-functional-requirements.adoc#decision-boundary[Decision
+boundary]. The core-dependency decision in
+https://github.com/FelixGeisler/code-city/issues/445[#445] is *deferred/not
+accepted here*; its conditional automated evidence belongs to
+https://github.com/FelixGeisler/code-city/issues/452[#452].
+
+|4
+|The smallest one-journey solution without speculative flexibility
+|Implement only the included path in
+xref:requirements:01-product-scope.adoc#_included_in_m1[Included in M1] and the
+excluded-control boundary in
+xref:requirements:04-functional-requirements.adoc#_m1_ex_1_excluded_controls_and_retained_data[M1-EX-1].
+Successful-path and integrated evidence belong to
+https://github.com/FelixGeisler/code-city/issues/459[#459] and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+|===
+
+== Explicit trade-offs
+
+[cols="4,6,5",options="header"]
+|===
+|Prefer |Consequence |Traceability
+
+|Exact canonical results over heuristics or fallback
+|Do not repair input, select a fallback revision, approximate metric facts, or
+substitute a layout, palette, camera, or prior city.
+|xref:requirements:04-functional-requirements.adoc#revision-selection[M1-REV-1],
+xref:requirements:08-fixed-metric-semantics.adoc#canonical-facts[Canonical
+metric facts], and
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#canonical-scene[Canonical
+scene facts]; evidence
+https://github.com/FelixGeisler/code-city/issues/453[#453],
+https://github.com/FelixGeisler/code-city/issues/455[#455] through
+https://github.com/FelixGeisler/code-city/issues/459[#459].
+
+|Bounded inspection over exhaustive diagnostics
+|Stop at the accepted inspection horizon and classify only established facts;
+do not inspect excluded data to seek another diagnostic.
+|xref:requirements:06-source-admission-and-limits.adoc#admission-composition[Bounded
+classification] and
+xref:requirements:06-source-admission-and-limits.adoc#outcome-precedence[Deterministic
+precedence]; evidence https://github.com/FelixGeisler/code-city/issues/454[#454].
+
+|Current-attempt atomicity over progressive or stale display
+|Only the current attempt may publish, and it publishes the complete city and
+identity together or no city at all.
+|xref:requirements:04-functional-requirements.adoc#states[M1-STATE-1 through
+M1-STATE-5],
+xref:requirements:06-source-admission-and-limits.adoc#failure-invariants[M1-OUT-3],
+and
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#city-failure[Atomic
+construction and presentation failure]; evidence
+https://github.com/FelixGeisler/code-city/issues/459[#459] and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|Anonymous non-executing processing over broader repository access
+|Accept no credential and never execute, evaluate, import, or dynamically load
+repository metadata or source.
+|xref:requirements:04-functional-requirements.adoc#anonymous-access[Anonymous
+public access] and
+xref:requirements:06-source-admission-and-limits.adoc#untrusted-source[M1-ADM-0];
+evidence https://github.com/FelixGeisler/code-city/issues/453[#453],
+https://github.com/FelixGeisler/code-city/issues/454[#454], and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|Later-accepted dependency rules over avoiding translation cost
+|Accept translation work when a future accepted dependency decision requires
+it; do not weaken or pre-accept that decision for implementation convenience.
+|The delegated synthesis is recorded in
+https://github.com/FelixGeisler/code-city/issues/461[#461]. The decision remains
+*deferred/not accepted here* in
+https://github.com/FelixGeisler/code-city/issues/445[#445], with conditional
+evidence in https://github.com/FelixGeisler/code-city/issues/452[#452].
+
+|M1 scope over extensibility
+|Add no authentication, configuration, exploration, persistence, compatibility
+layer, generic extension point, or other capability outside the one journey.
+|xref:requirements:01-product-scope.adoc#non-goals[Non-goals] and
+xref:requirements:04-functional-requirements.adoc#_m1_ex_1_excluded_controls_and_retained_data[M1-EX-1];
+evidence https://github.com/FelixGeisler/code-city/issues/459[#459] and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+|===
+
+== Decision boundary
+
+The choices owned by https://github.com/FelixGeisler/code-city/issues/445[#445],
+https://github.com/FelixGeisler/code-city/issues/446[#446],
+https://github.com/FelixGeisler/code-city/issues/447[#447],
+https://github.com/FelixGeisler/code-city/issues/448[#448],
+https://github.com/FelixGeisler/code-city/issues/449[#449],
+https://github.com/FelixGeisler/code-city/issues/450[#450],
+https://github.com/FelixGeisler/code-city/issues/451[#451], and
+https://github.com/FelixGeisler/code-city/issues/462[#462] are all
+*deferred/not accepted here*. In particular, this page selects no topology,
+deployment target or node, process, component, port, API or provider mechanism,
+origin/request/redirect policy, shell, analyzer, renderer, enforcement
+location, technology, or physical cleanup mechanism.
+
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains `Proposed` and is
+not relied upon. https://github.com/FelixGeisler/code-city/issues/463[#463] and
+https://github.com/FelixGeisler/code-city/issues/464[#464] are later synthesis
+and fitness consumers only. `npm run docs:build` validates this documentation;
+it is not an M1 runtime-technology constraint.
