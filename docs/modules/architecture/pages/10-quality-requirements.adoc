@@ -148,8 +148,8 @@ stale output.
 |https://github.com/FelixGeisler/code-city/issues/441[#441]
 xref:requirements:04-functional-requirements.adoc#states[M1-STATE-2,
 M1-STATE-3, and M1-STATE-5], plus
-https://github.com/FelixGeisler/code-city/issues/442[#442]–https://github.com/FelixGeisler/code-city/issues/444[#444]
-atomic failures; evidence https://github.com/FelixGeisler/code-city/issues/459[#459]
+https://github.com/FelixGeisler/code-city/issues/442[#442] through
+https://github.com/FelixGeisler/code-city/issues/444[#444] atomic failures; evidence https://github.com/FelixGeisler/code-city/issues/459[#459]
 and https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |8. Dependency conformance

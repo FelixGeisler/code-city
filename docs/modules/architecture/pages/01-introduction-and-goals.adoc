@@ -98,7 +98,8 @@ metric facts], and
 xref:requirements:10-fixed-city-layout-and-presentation.adoc#canonical-scene[Canonical
 scene facts]; evidence
 https://github.com/FelixGeisler/code-city/issues/453[#453],
-https://github.com/FelixGeisler/code-city/issues/455[#455]–https://github.com/FelixGeisler/code-city/issues/459[#459].
+https://github.com/FelixGeisler/code-city/issues/455[#455] through
+https://github.com/FelixGeisler/code-city/issues/459[#459].
 
 |Bounded inspection over exhaustive diagnostics
 |Stop at the accepted inspection horizon and classify only established facts;
