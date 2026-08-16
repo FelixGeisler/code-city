@@ -12,10 +12,12 @@ xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004],
 but its dependencies, source, configuration, package, and evidence do not exist
 yet.
 xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
-0005] accepts the bounded anonymous revision-resolution mechanism; it is a
-documented decision, not implemented traffic. Selected-revision retrieval,
-exact message and port schemas, and the full accepted-mechanism runtime
-synthesis remain deferred to their owning issues.
+0005] accepts the bounded anonymous revision-resolution mechanism.
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006] accepts bounded immutable selected-revision retrieval and sole admission
+through GitHub tree and raw content. Both are documented decisions, not
+implemented traffic. Exact message and port schemas and the full
+accepted-mechanism runtime synthesis remain deferred to their owning issues.
 
 == Local terms
 
@@ -85,13 +87,18 @@ https://github.com/FelixGeisler/code-city/issues/460[#460].
 |The sole external information system. Resolution evidence is distinct from
 selected-revision repository data. Both exchanges are direct and anonymous
 between Public GitHub and the processing worker. ADR 0005 fixes resolution at
-`https://api.github.com` through its exact two-call REST contract; retrieval
-origins and mechanisms remain with #449.
+`https://api.github.com`. ADR 0006 fixes selected-commit and recursive-root-tree
+REST GETs at `https://api.github.com`, followed by sequential canonical
+immutable-commit bytes from `https://raw.githubusercontent.com`; no
+provider-returned locator or alternate origin is used.
 |xref:requirements:04-functional-requirements.adoc#immutable-revision[Immutable
-revision selection and identity] and
+revision selection and identity],
 xref:requirements:06-source-admission-and-limits.adoc[Source admission and
-repository limits]; evidence https://github.com/FelixGeisler/code-city/issues/453[#453]
-and https://github.com/FelixGeisler/code-city/issues/454[#454].
+repository limits], and
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006]; evidence https://github.com/FelixGeisler/code-city/issues/453[#453],
+https://github.com/FelixGeisler/code-city/issues/454[#454], and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |GitHub Pages delivery node
 |Serves trusted static UI and worker artifacts at
@@ -196,11 +203,13 @@ Exact handoff schemas remain deferred.
 |Two direct anonymous exchanges: resolution for canonical repository spelling
 and designated default-branch-tip evidence, then selected-revision repository
 data. The UI is not on this path.
-|ADR 0005 fixes the resolution target, exact metadata and omitted-`sha`
-commit-list requests, redirect refusal, headers, bounded response admission,
-status mapping, and primitive evidence projection. Retrieval origins,
-endpoints, requests, and mechanisms remain with
-https://github.com/FelixGeisler/code-city/issues/449[#449].
+|ADR 0005 fixes resolution. ADR 0006 then uses exactly the selected commit REST
+GET and its validated root-tree recursive REST GET at `api.github.com`, followed
+only after complete bounded projection by at most one sequential raw GET per
+in-horizon candidate at `raw.githubusercontent.com`. Requests use the accepted
+headers, redirect refusal, caps, current-attempt signal, exact URL checks, and
+global no-overlap policy; no archive, alternate retrieval path, retry, or
+fallback exists.
 |===
 
 == Logical trust crossings
@@ -219,11 +228,14 @@ public access] and
 xref:requirements:06-source-admission-and-limits.adoc#untrusted-source[M1-ADM-0].
 
 |Public GitHub to processing worker
-|Resolution evidence, repository metadata, paths, entry content, and source.
+|Resolution evidence, selected commit and root-tree envelopes, projected entry
+metadata and paths, raw entry bytes, and source.
 |All inbound values remain untrusted and inert, and no credential crosses the
-boundary. GitHub is authoritative only for canonical repository spelling and
-its designated default-branch tip, subject to ADR 0005's accepted case-only
-identity, response, and immutable-SHA validation. Repository data is never
+boundary. GitHub supplies only evidence admitted by ADRs 0005 and 0006: strict
+own-field primitive projection prevents provider objects and prototype keys
+from becoming application control state, and expected Git blob identity is
+checked before source decoding. The hash is consistency evidence, not a
+malicious-provider or collision-resistance warranty. Repository data is never
 executed, evaluated, imported, or dynamically loaded.
 |===
 
@@ -257,16 +269,20 @@ evidence belongs to https://github.com/FelixGeisler/code-city/issues/459[#459]
 and https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |Processing worker: transient current-attempt data
-|Bounded resolution metadata and commit evidence, later retrieval records,
+|Bounded resolution evidence; one capped retrieval REST transformation; no more
+than `10,001` primitive projected inventory records; one globally exclusive
+`4,194,317`-byte raw/hash workspace plus ADR 0006's bounded phase temporaries;
 paths, raw and normalized source, admitted modules, counters, canonical metric
-facts, parser/analyzer objects, and city-construction intermediates. They remain
-confined to the current attempt and do not become persisted or server-side
-product state. ADR 0005's metadata `default_branch` value is discarded and
-never reaches retrieval.
-|The worker owns the sole admission path, processing-stage termination,
-downstream suppression, feasible work cancellation, and release of transient
-processing references. ADR 0005 fixes application-controlled response cleanup
-for resolution; stage evidence belongs to #453 through #457.
+facts, parser/analyzer objects, and city-construction intermediates. Provider
+tree representations are gone before raw retrieval, each raw/hash/decoded
+temporary is gone before the next request, and none becomes persisted or
+server-side product state. ADR 0005's `default_branch` is discarded before
+retrieval.
+|The worker owns the sole admission path, one-request/one-workspace global
+serialization, processing-stage termination, replacement coalescing,
+downstream suppression, feasible cancellation, and application-owned cleanup.
+Focused stage evidence belongs to #453 through #457; hosted renewal belongs to
+#460.
 
 |UI presentation boundary
 |One complete canonical scene may arrive without source or analysis objects.
@@ -313,13 +329,21 @@ application-controlled cleanup, and renewal rule. #453 owns implementation,
 #459 packaged-path evidence, and #460 final hosted renewal; no product request
 exists yet.
 
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006] is authoritative for the exact selected-commit/root-tree/raw exchanges,
+trust admission, sole admitted-set ownership, exact workspace and
+application-owned cleanup, global serialization and replacement settlement,
+RA-10/RA-11
+disposition, and retrieval renewal/stop rule. #454 owns focused controlled
+evidence, #459 the packaged success path, and #460 hosted renewal; no product
+request exists yet.
+
 The following remain deferred: Pages source/action/workflow and deployment
-mechanism; selected-revision retrieval origins and mechanisms in #449; analyzer
-and renderer technology and deferred limits in #450 and #451; exact message and
-port schemas in #453 through #460; and the complete accepted-mechanism/port
-runtime synthesis in
-https://github.com/FelixGeisler/code-city/issues/463[#463]. Outside ADR 0005's
-accepted resolution summary, this view selects no retrieval endpoint, API,
-redirect/request policy, parser, analyzer, renderer, concrete package or source
-map, executable interface, message or port schema, broader worker lifecycle or
-bridge cancellation primitive, Pages workflow, route, threshold, or fallback.
+mechanism; analyzer and renderer technology and SP-01 through SP-04, CC-09, and
+PR-01 decisions in #450 and #451; exact message and port schemas in #453
+through #460; and the complete accepted-mechanism/port runtime synthesis in
+https://github.com/FelixGeisler/code-city/issues/463[#463]. Outside the accepted
+ADR 0005 and ADR 0006 summaries, this view selects no parser, analyzer,
+renderer, concrete package or source map, executable interface, message or port
+schema, broader worker lifecycle or bridge cancellation primitive, Pages
+workflow, route, threshold, or fallback.

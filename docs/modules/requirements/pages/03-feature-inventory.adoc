@@ -30,14 +30,18 @@ selection and identity].
 |The state machine and no-stale/no-partial invariant are in
 xref:04-functional-requirements.adoc#states[Observable states and transitions].
 
-|Supported-source admission and repository/intake limits
-|Included; accepted contract
+|Selected-revision retrieval, supported-source admission, and repository/intake limits
+|Included; accepted contract and ADR-owned capability
 |xref:06-source-admission-and-limits.adoc[] defines the closed module-admission
 matrix, approved RA-01 through RA-09 maxima, deterministic classification, and
 observable category/code pairs under
-https://github.com/FelixGeisler/code-city/issues/442[#442]. RA-10/RA-11,
-SP-01 through SP-04, and CC-09/PR-01 remain explicitly deferred to their linked
-owners; CC-01 through CC-08 have the fixed #444 dispositions.
+https://github.com/FelixGeisler/code-city/issues/442[#442].
+xref:architecture:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006]
+owns bounded retrieval of the immutable selected revision and the sole complete
+ordered admitted-module set. RA-10 retrieval duration and RA-11 admission
+duration are explicitly unnecessary for M1 and have no timer, value, boundary,
+or outcome. SP-01 through SP-04 and CC-09/PR-01 remain explicitly deferred to
+their linked owners; CC-01 through CC-08 retain the fixed #444 dispositions.
 
 |Fixed metric semantics
 |Included; accepted contract

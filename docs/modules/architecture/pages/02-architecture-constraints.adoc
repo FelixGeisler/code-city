@@ -44,6 +44,20 @@ https://github.com/FelixGeisler/code-city/issues/455[#455],
 https://github.com/FelixGeisler/code-city/issues/458[#458], and
 https://github.com/FelixGeisler/code-city/issues/460[#460].
 
+|The immutable selected revision is retrieved only through ADR 0006's bounded
+commit-object, recursive-root-tree, and sequential raw-content path. Retrieval
+and admission alone create one complete ordered admitted-module set; no second
+path, retry, wait, credential, backend, or fallback exists. Globally, at most
+one retrieval/admission request and one exact raw/hash workspace exist at a
+time.
+|xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006]
+and
+xref:requirements:06-source-admission-and-limits.adoc#selected-revision-completeness[Selected-revision
+completeness boundaries].
+|https://github.com/FelixGeisler/code-city/issues/454[#454],
+https://github.com/FelixGeisler/code-city/issues/459[#459], and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
 |The accepted admission and ordering rules and RA-01 through RA-09, canonical
 metric facts and metric failure, and city, scene, presentation, and CC-01
 through CC-08 dispositions are exact and non-configurable.
@@ -136,9 +150,19 @@ cancellation, and application-controlled cleanup policy. It retrieves no
 source. This is an accepted documented decision, not current implementation;
 https://github.com/FelixGeisler/code-city/issues/453[#453] owns its realization.
 
-Pages source/action/workflow and deployment mechanism, selected-revision
-retrieval/admission origins and requests, analysis and visualization
-technology, concrete source mapping, exact message and port schemas, broader
-worker lifecycle and bridge cancellation mechanisms, retrieval and later-stage
-cleanup mechanisms, and the remaining deferred limits stay with #449 through
-#460 and #463.
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006] is the accepted immutable selected-revision retrieval and sole-admission
+constraint. Native worker Fetch obtains the selected commit object, its exact
+recursive root tree, and at most one sequential immutable-commit raw response
+per in-horizon candidate; bounded own-field projection, exact Git blob identity,
+and #442's canonical horizons govern one complete set or terminal result. Its
+global no-overlap, cleanup, replacement-coalescing, stop, and no-timing-promise
+rules are mandatory. #454 owns focused evidence, #459 packaged-path evidence,
+and #460 hosted renewal.
+
+Pages source/action/workflow and deployment mechanism, analysis and
+visualization technology, concrete source mapping, exact message and port
+schemas, broader worker lifecycle and bridge cancellation mechanisms, and the
+remaining SP-01 through SP-04, CC-09, and PR-01 decisions stay with their
+owners in #450 through #460 and #463. Selected-revision retrieval and
+RA-10/RA-11 are no longer deferred.

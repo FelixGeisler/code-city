@@ -16,9 +16,10 @@ The contract is acceptable only when all of these gates hold:
   precedence rather than provider response or discovery order;
 * replacement, cancellation, failure, late completion, identity retention, and
   atomic publication preserve the accepted #441 invariants;
-* CC-01 through CC-08 use only their accepted #444 dispositions, while every
-  still-deferred RA-10/RA-11, SP-01 through SP-04, CC-09, and PR-01 choice
-  remains without a value or scenario here; and
+* CC-01 through CC-08 use only their accepted #444 dispositions; RA-10 and
+  RA-11 use only ADR 0006's explicitly-unnecessary disposition and inert
+  elapsed-time case; and the still-deferred SP-01 through SP-04, CC-09, and
+  PR-01 choices remain without a value or scenario here; and
 * `npm run docs:build` succeeds.
 
 == Admission classification
@@ -163,6 +164,63 @@ The exact 27 values are in
 xref:06-source-admission-and-limits.adoc#limit-boundary-examples[T-1, T, and T+1
 boundary examples]. A rounded unit, provider claim, different value, or
 implementation safeguard is not evidence for a boundary.
+
+== Selected-revision completeness and elapsed-time disposition
+
+[source,gherkin]
+----
+Scenario Outline: Each REST completeness cap is inclusive
+  Given a normal readable status-200 CORS response for the <evidence> request
+  And every non-size response condition is valid
+  When the post-HTTP-content-decoding stream ends at <cap_minus_1>
+  Then the body size may continue and creates no separate visible result
+  When an otherwise equivalent stream ends at <cap>
+  Then the body size may continue and creates no separate visible result
+  When an otherwise equivalent stream establishes <cap_plus_1>
+  Then the state is Failure with category "Source admission failed"
+  And the governing code is "M1-ADM-1"
+  And the body is cancelled where feasible and no later request or stage starts
+  And none of these transport values is an RA limit or creates another code
+
+  Examples:
+    | evidence              | cap_minus_1       | cap               | cap_plus_1         |
+    | commit-object body    | 4,194,303 bytes   | 4,194,304 bytes   | byte 4,194,305     |
+    | recursive-tree body   | 8,388,607 bytes   | 8,388,608 bytes   | byte 8,388,609     |
+----
+
+[source,gherkin]
+----
+Scenario: A truncated bounded inventory is incomplete
+  Given the validated recursive-tree envelope contains at most 10,000 opaque records
+  And its own "truncated" value is true
+  When selected-revision completeness is classified
+  Then the state is Failure with category "Source admission failed"
+  And the governing code is "M1-ADM-1"
+  And no non-recursive subtree fallback or raw-content request starts
+  And the condition is not reclassified as an RA limit
+----
+
+The `10,001`st opaque record remains RA-01 and is not inspected. At most
+`10,000` records with `truncated: false` is only potentially complete; every
+other envelope, admission, and RA rule still applies.
+
+[source,gherkin]
+----
+Scenario: Arbitrary elapsed time is inert while Loading
+  Given the current selected-revision attempt is Loading
+  And no provider or browser failure occurs
+  And the user does not cancel, replace, reload, or otherwise end the attempt
+  When arbitrary elapsed time passes
+  Then no timer or clock is started for RA-10 or RA-11
+  And the state remains Loading
+  And no category, stable code, interval, cutoff, precedence fact, or boundary is created
+  And M1 makes no completion-time promise
+----
+
+Cancellation, replacement, reload, and provider or browser failure still
+follow the accepted state and failure contracts. These are lifecycle outcomes,
+not elapsed-time boundaries. There is no timing boundary table and no RA-10 or
+RA-11 T-1/T/T+1 scenario.
 
 [source,gherkin]
 ----
@@ -378,22 +436,61 @@ precedence.
 |Aggregate normalized-content measurement, RA-05-compliant reachability, and
 precedence.
 
-|Approved categories, horizons, and attempt transitions
+|Selected-revision REST caps and inventory completeness
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Controlled transports prove both cap-1/cap/cap+1 rows, actual decoded-byte
+counting, feasible suffix cancellation, no later stage, at-most-`10,000`
+`truncated: true` failure, and absence of an RA reclassification or subtree
+fallback.
+
+|Bounded projection and hostile names
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Controlled projection proves required own fields, primitive field-by-field
+records, inherited-field rejection, inert additive `__proto__`, `constructor`,
+and `prototype` fields, prototype-safe path-key lookup, the closed kind pairs,
+and the specified candidate-SHA horizons and precedence.
+
+|Raw integrity and resource boundaries
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Controlled streams prove path encoding, SHA case normalization, Git blob hash
+and LFS behavior, RA-04+1 no-store/no-digest, the exact workspace and phase
+peaks, globally one request/workspace, and the per-journey request maximum
+without making 5,000 live CDN calls.
+
+|Lifecycle phases, replacement, and cleanup
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Controlled cancellation and replacement at REST streaming, post-JSON, raw
+streaming and cap cutoff, post-digest, decode, normalization, and pending
+cleanup proves eligibility checks, latest-only coalescing, settlement before
+replacement work, complete application-owned cleanup, and no later old-attempt
+request, stage, or publication.
+
+|Approved categories, horizons, timing disposition, and attempt transitions
 |https://github.com/FelixGeisler/code-city/issues/460[#460]
-|Integrated provider-order-independent classification, one category/code,
-current-identity retention, cancellation, replacement, and no admitted set,
-metric result, model, partial city, stale city, or late publication.
+|Integrated and hosted provider-order-independent classification, one
+category/code, arbitrary elapsed-time inertness, current-identity retention,
+cancellation, replacement, no retry or persistence, unexpected-traffic
+inspection, final-head REST/raw CORS renewal, and no admitted set, metric
+result, model, partial city, stale city, or late publication.
 |===
 
 [[deferred-evidence]]
 == Downstream dispositions and evidence boundaries
 
-RA-10/RA-11 and SP-01 through SP-04 still have no approved values, boundary
-scenarios, precedence cases, diagnostics, or evidence mapping here. Their
-decision owners remain https://github.com/FelixGeisler/code-city/issues/449[#449]
-and https://github.com/FelixGeisler/code-city/issues/450[#450]. CC-09 and PR-01
-likewise have no value, interval, threshold, or limit result here; visualization
-feasibility and both duration decisions remain exclusively with
+RA-10 retrieval duration and RA-11 admission duration are no longer deferred.
+They are explicitly unnecessary for M1 and have no value, unit, timer, clock,
+category, stable code, precedence, interval, cutoff, boundary, or T-1/T/T+1
+scenario. The historical `60,000 ms` and `10,000 ms` proposals remain rejected
+as uncalibrated network- and device-dependent outcomes. Controlled mechanism
+evidence belongs to https://github.com/FelixGeisler/code-city/issues/454[#454];
+integrated and hosted evidence belongs to
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+SP-01 through SP-04 still have no approved values, boundary scenarios,
+precedence cases, diagnostics, or evidence mapping here; their decision owner
+remains https://github.com/FelixGeisler/code-city/issues/450[#450]. CC-09 and
+PR-01 likewise have no value, interval, threshold, or limit result here;
+visualization feasibility and both duration decisions remain exclusively with
 https://github.com/FelixGeisler/code-city/issues/451[#451].
 
 CC-01 through CC-08 are no longer deferred. Their only accepted dispositions

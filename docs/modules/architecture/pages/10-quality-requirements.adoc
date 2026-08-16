@@ -38,8 +38,12 @@ concurrency, or device order varies.
 |Admission result, canonical metric facts, and canonical scene facts are
 identical. Exact equality applies except only the camera-evaluation tolerance
 accepted in #444; screenshots are not evidence.
-|Permutation and repetition evidence compares the canonical admitted-module
-sequence, metric facts, scene facts, and semantic presentation result.
+|Controlled retrieval proves the selected commit projects its exact root tree,
+provider order cannot affect canonical candidate order, each raw URL uses the
+immutable commit and retained raw path, and each in-horizon expected Git blob
+identity agrees before decode. Permutation and repetition evidence compares the
+canonical admitted-module sequence, metric facts, scene facts, and semantic
+presentation result.
 |https://github.com/FelixGeisler/code-city/issues/442[#442]
 xref:requirements:06-source-admission-and-limits.adoc#admission-composition[M1-ADM-5]
 and
@@ -104,17 +108,21 @@ https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |5. Bounded admission
 |Actual repository or intake data reaches T-1, T, or T+1 for any RA-01 through
-RA-09 dimension, or combines or permutes cutoff and failure conditions; valid
-metric input reaches city construction.
+RA-09 dimension; a selected-revision REST body reaches cap-1, cap, or cap+1;
+tree completeness, projection, or resource evidence is adversarial; or cutoff
+and failure conditions combine. Valid metric input reaches city construction.
 |Current attempt, with equivalent provider orders and untrusted measurement
 claims.
-|The exact horizon, inclusive-boundary, precedence, and category/code result
-from #442 applies to actual data; no partial admitted set is published. Valid
-city input follows #444's CC-01 through CC-08 dispositions without a private
-cap.
-|Closed boundary, cutoff, precedence, and permutation evidence covers every RA
-row; city evidence covers the fixed CC dispositions and integrated failure
-state.
+|The exact #442 horizon, inclusive boundary, precedence, and category/code
+applies to actual data. ADR 0006's inclusive REST caps, incomplete-inventory
+failure, own-field/prototype-safe bounded projection, one global
+request/workspace, exact raw/hash peak, and cleanup apply without a private
+lower limit or partial admitted set. Valid city input follows #444's CC-01
+through CC-08 dispositions.
+|Controlled cap, truncation, projection, hostile-key, SHA-horizon, raw/hash
+workspace, RA-04+1, request/workspace serialization, cutoff, precedence, and
+permutation evidence covers the selected retrieval/admission path; city
+evidence covers the fixed CC dispositions and integrated failure state.
 |https://github.com/FelixGeisler/code-city/issues/442[#442]
 xref:requirements:06-source-admission-and-limits.adoc#limit-rule[M1-LIM-0],
 xref:requirements:06-source-admission-and-limits.adoc#metadata-policy[M1-LIM-1],
@@ -122,7 +130,8 @@ and
 xref:requirements:06-source-admission-and-limits.adoc#failure-categories[M1-OUT-1]
 through
 xref:requirements:06-source-admission-and-limits.adoc#failure-invariants[M1-OUT-3],
-plus https://github.com/FelixGeisler/code-city/issues/444[#444]
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006], plus https://github.com/FelixGeisler/code-city/issues/444[#444]
 xref:requirements:10-fixed-city-layout-and-presentation.adoc#city-limit-dispositions[CC
 dispositions]; evidence https://github.com/FelixGeisler/code-city/issues/454[#454],
 https://github.com/FelixGeisler/code-city/issues/457[#457], and
@@ -133,18 +142,22 @@ https://github.com/FelixGeisler/code-city/issues/460[#460].
 |Current attempt may or may not already have a selected identity; the input
 draft may have been edited.
 |The exact `Cancelled` state is observable: draft preserved, identity and city
-absent, and every late outcome rejected. No elapsed-time target is defined;
-ADR 0005 alone fixes the resolution response and application-owned cleanup
-mechanism summarized by this view.
+absent, and every late outcome rejected. No elapsed-time target is defined.
+ADRs 0005 and 0006 fix their resolution/retrieval response and
+application-owned cleanup mechanisms; cancellation remains a lifecycle result,
+not a timing failure.
 |A controlled race or tie scenario proves cancellation wins observable
-publication and late results change nothing. For either resolution response
-stream, instrumented evidence observes attempt-signal abort, feasible body
-cancellation, reader-lock release in `finally`, application-owned cleanup, and
-suppression of request two or downstream work without reclassifying the abort.
+publication and late results change nothing. Instrumented evidence cancels
+during each REST stream, raw streaming and cutoff, post-JSON, post-digest,
+decode, normalization, and pending cleanup; it observes attempt-signal abort,
+feasible body cancellation, reader-lock release in `finally`, required
+eligibility checks, complete application-owned cleanup, and suppression of
+every later request or stage without reclassifying the abort.
 |https://github.com/FelixGeisler/code-city/issues/441[#441]
 xref:requirements:04-functional-requirements.adoc#states[M1-STATE-4 and
-M1-STATE-5] and the downstream atomicity invariants; integrated evidence
-https://github.com/FelixGeisler/code-city/issues/460[#460].
+M1-STATE-5] and the downstream atomicity invariants; focused retrieval evidence
+https://github.com/FelixGeisler/code-city/issues/454[#454] and integrated
+evidence https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |7. Replacement and atomic publication
 |A user submits again while any prior state or attempt exists, and the
@@ -155,13 +168,19 @@ attempt can publish. Failure shows no stale or partial city; success publishes
 the complete city and identity together.
 |End-to-end replacement, late-result, stage-failure, and
 successful-publication evidence proves one current outcome and no partial or
-stale output.
+stale output. Controlled retrieval evidence also proves pending submissions
+coalesce to the latest and no replacement provider request or workspace starts
+until old reads, cancellation, non-abortable work, locks, and application-owned
+cleanup settle.
 |https://github.com/FelixGeisler/code-city/issues/441[#441]
 xref:requirements:04-functional-requirements.adoc#states[M1-STATE-2,
 M1-STATE-3, and M1-STATE-5], plus
 https://github.com/FelixGeisler/code-city/issues/442[#442] through
-https://github.com/FelixGeisler/code-city/issues/444[#444] atomic failures; evidence https://github.com/FelixGeisler/code-city/issues/459[#459]
-and https://github.com/FelixGeisler/code-city/issues/460[#460].
+https://github.com/FelixGeisler/code-city/issues/444[#444] atomic failures;
+controlled retrieval evidence
+https://github.com/FelixGeisler/code-city/issues/454[#454], packaged evidence
+https://github.com/FelixGeisler/code-city/issues/459[#459], and integrated
+evidence https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |8. Dependency conformance
 |A source-dependency edge, concrete mechanism dependency or value use, or
@@ -205,8 +224,16 @@ traffic, case-only identity boundary, body-free status and privacy mapping,
 inclusive `4,194,304`-byte cap, primitive-only projection, cancellation, and
 application-controlled cleanup. https://github.com/FelixGeisler/code-city/issues/453[#453]
 owns focused implementation evidence, #459 the packaged successful path, and
-#460 final hosted-origin renewal. The dated ADR observations are no warranty,
-and this documentation is not evidence that product traffic exists.
+#460 final hosted-origin renewal.
+
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006] is the accepted quality source for canonical selected-commit/root-tree/raw
+retrieval; exact-byte Git identity; bounded completeness, projection,
+reservoirs, and global overlap; sole admission; cancellation/replacement; and
+renewal/stop rules. #454 owns controlled mechanism evidence, #459 the packaged
+successful path, and #460 hosted final-head renewal. Both ADRs' dated
+observations are no warranty, and this documentation is not evidence that
+product traffic exists.
 
 Scenario 8 applies to xref:adr/0001-core-dependency-boundary.adoc[accepted ADR
 0001],
@@ -236,8 +263,11 @@ acceptance, those evidence owners, and their readiness checks before M1
 implementation handoff. This documentation is not implementation evidence and
 does not claim that the shell or artifact exists now.
 
-RA-10 and RA-11, SP-01 through SP-04, CC-09, and PR-01 remain deferred to their
-linked owners in
-xref:requirements:06-source-admission-and-limits.adoc#deferred-limits[Downstream
-limit decisions and dispositions]; this page gives them no scenario, value,
-unit, interval, precedence rule, or diagnostic.
+RA-10 retrieval duration and RA-11 admission duration are no longer deferred:
+they are explicitly unnecessary and have no value, unit, timer, clock,
+category, code, interval, cutoff, boundary, or precedence. Scenario 6 has no
+elapsed-time target, and arbitrary time alone may leave an attempt `Loading`
+without creating an outcome. SP-01 through SP-04, CC-09, and PR-01 remain
+deferred to their linked owners in
+xref:requirements:06-source-admission-and-limits.adoc#deferred-limits[RA timing
+disposition and downstream limit decisions].

@@ -8,9 +8,12 @@ Strategy] and the placement in
 xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002].
 They are exclusive responsibility boundaries, not package or component counts,
 and do not prescribe interfaces or schemas. The GitHub resolution adapter is
-the one mechanism in this view now constrained by
+constrained by
 xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
-0005]; the decision is documented but not yet implemented.
+0005], and the GitHub retrieval adapter and retrieval/admission collaboration
+are constrained by
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006]. The decisions are documented but not yet implemented.
 
 == Minimum logical blocks
 
@@ -79,10 +82,13 @@ resources, and retrieves no source.
 
 |GitHub retrieval adapter
 |Edge, worker
-|Realizes selected-revision records and bytes in
-https://github.com/FelixGeisler/code-city/issues/454[#454] using the mechanism
-selected by https://github.com/FelixGeisler/code-city/issues/449[#449] and owns
-its physical network resources. It performs no independent admission.
+|Realizes ADR 0006's exact selected-commit and recursive-root-tree REST GETs,
+own-field bounded primitive projection, canonical immutable-commit raw GETs,
+stream caps, raw/hash workspace, Web Crypto Git-blob comparison, and physical
+request/reader/response/hash cleanup for
+https://github.com/FelixGeisler/code-city/issues/454[#454]. It supplies records
+and bytes only and performs no independent admission, classification, retry,
+or fallback.
 
 |Parser adapter
 |Edge, worker
@@ -91,11 +97,13 @@ observations. It owns no metric policy and performs no execution, import, or
 provider access.
 |===
 
-Resolution and retrieval are distinct. Retrieval/admission alone creates or
-readmits admitted modules. Analysis consumes admitted modules rather than
-retrieval implementation. Parser-specific objects remain edge-side. City
-construction is pure domain, and presentation receives only a complete,
-source-free canonical scene.
+Resolution and retrieval are distinct. Retrieval/admission alone validates the
+selected-revision evidence, applies every admission horizon, and creates or
+readmits one complete ordered module set. The retrieval adapter cannot bypass
+that owner. Analysis consumes admitted modules rather than retrieval
+implementation. Parser-specific objects remain edge-side. City construction is
+pure domain, and presentation receives only a complete, source-free canonical
+scene.
 
 == Conceptual port roles
 
@@ -202,8 +210,10 @@ it neither constructs the tuple nor reclassifies an outcome.
 
 |Admission and RA outcome
 |Retrieval/admission capability
-|No other block creates or readmits admitted modules. The retrieval adapter
-supplies selected-revision records and bytes only.
+|No other block creates or readmits admitted modules. It returns one complete
+ordered set or one accepted terminal result. The retrieval adapter supplies
+only ADR 0006's bounded selected-revision records, expected identities, and
+bytes.
 
 |Metric failure
 |Static-metrics capability
@@ -254,8 +264,17 @@ response has the inclusive 4 MiB stream bound, reader-lock release in
 response, and reader reachability before request two or return. Cancellation
 or replacement aborts the attempt signal, requests feasible body cancellation,
 settles cleanup, and suppresses later work. Only a validated primitive
-projection may remain reachable; no engine-lifetime, cleanup-latency, secure-
-erasure, immediate-network-stop, or worker-sandbox warranty follows.
+projection may remain reachable.
+
+For retrieval, ADR 0006 further refines step 3. Across all attempts the adapter
+holds at most one retrieval/admission provider request and one exact
+`4,194,317`-byte raw/hash workspace. It removes each capped REST transformation
+before the next request, the provider tree before raw retrieval, and each
+raw/hash/decoded temporary before another request. It releases reader locks in
+`finally`, handles abort/cancel/read/digest settlement, checks eligibility after
+non-abortable phases, and cleans projected inventory and unpublished output.
+Replacement work is latest-only and cannot start until old operations,
+non-abortable work, locks, and application-owned cleanup settle.
 
 Late output is harmless because the UI publication gate remains authoritative.
 Reload discards all application-managed session state. No cleanup latency,
