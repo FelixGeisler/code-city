@@ -153,23 +153,22 @@ https://github.com/FelixGeisler/code-city/issues/444[#444] atomic failures; evid
 and https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |8. Dependency conformance
-|A source-dependency edge is added or changed after #445 has produced exactly
-one accepted core-dependency ADR.
+|A source-dependency edge governed by accepted ADR 0001 is added or changed.
 |Packaged M1 source graph; runtime calls and data flow are considered
 separately.
 |The graph conforms to that accepted ADR; runtime direction is not treated as
 source-dependency direction.
 |#452's automated evidence accepts a conforming graph and rejects one
 representative forbidden edge.
-|The decision in https://github.com/FelixGeisler/code-city/issues/445[#445] is
-*deferred/not accepted here*. Conditional evidence belongs to
-https://github.com/FelixGeisler/code-city/issues/452[#452].
+|xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] is accepted through
+https://github.com/FelixGeisler/code-city/issues/445[#445]. Automated evidence
+belongs to https://github.com/FelixGeisler/code-city/issues/452[#452].
 |===
 
-Scenario 8 becomes applicable only after #445 produces an accepted ADR;
-xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains `Proposed` and is
-not treated as that decision. RA-10 and RA-11, SP-01 through SP-04, CC-09, and
-PR-01 remain deferred to their linked owners in
+Scenario 8 applies to xref:adr/0001-core-dependency-boundary.adoc[accepted ADR
+0001], and https://github.com/FelixGeisler/code-city/issues/452[#452] owns its
+automated evidence. RA-10 and RA-11, SP-01 through SP-04, CC-09, and PR-01
+remain deferred to their linked owners in
 xref:requirements:06-source-admission-and-limits.adoc#deferred-limits[Downstream
 limit decisions and dispositions]; this page gives them no scenario, value,
 unit, interval, precedence rule, or diagnostic.

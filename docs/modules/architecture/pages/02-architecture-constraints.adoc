@@ -100,10 +100,11 @@ xref:requirements:04-functional-requirements.adoc#_m1_ex_1_excluded_controls_and
 https://github.com/FelixGeisler/code-city/issues/460[#460].
 |===
 
-Topology, dependency direction, ownership, delivery, provider and request
-mechanisms, analysis, visualization, enforcement, and physical cleanup remain
-*deferred/not accepted here*. Their owners are
-https://github.com/FelixGeisler/code-city/issues/445[#445] through
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] is the accepted
+source-dependency constraint. Topology, internal dependency direction and
+ownership, delivery, provider and request mechanisms, analysis, visualization,
+enforcement, and physical cleanup remain *deferred/not accepted here*. Their
+owners are https://github.com/FelixGeisler/code-city/issues/446[#446] through
 https://github.com/FelixGeisler/code-city/issues/451[#451] and
 https://github.com/FelixGeisler/code-city/issues/462[#462]; none of those open
 choices is an accepted constraint on this page.

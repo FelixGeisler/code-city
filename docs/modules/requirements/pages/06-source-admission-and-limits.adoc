@@ -563,8 +563,8 @@ before M1 implementation handoff.
 
 This product contract remains topology-, component-, mechanism-, and
 technology-neutral and assigns no enforcement owner or location. It neither
-changes nor depends on
-xref:architecture:adr/0001-core-dependency-boundary.adoc[Proposed ADR 0001].
+restates nor changes
+xref:architecture:adr/0001-core-dependency-boundary.adoc[Accepted ADR 0001].
 The architecture work in
 https://github.com/FelixGeisler/code-city/issues/446[#446],
 https://github.com/FelixGeisler/code-city/issues/449[#449],
