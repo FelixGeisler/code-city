@@ -1,1 +1,180 @@
 = 7. Deployment View
+
+This view records only the production nodes, origin, artifact placement, and
+runtime-data placement accepted in
+xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002].
+It does not select a shell, framework, build, package, Pages source,
+action/workflow, application route, deployment mechanism, GitHub endpoint,
+request mechanism, parser, renderer, port, schema, or worker lifecycle
+primitive.
+
+== Production topology
+
+[source,text]
+----
++---------------------------------------------------------------+
+| GitHub Pages delivery node                                    |
+| target URL:  https://felixgeisler.github.io/code-city/        |
+| exact origin: https://felixgeisler.github.io                  |
+| trusted static UI and worker artifacts only                   |
++-------------------------------+-------------------------------+
+                                |
+                                | HTTPS artifact delivery only
+                                v
++=====================================================================================+
+|| User device: browser                                                             ||
+||                                                                                   ||
+||  +----------------------------------+       +-----------------------------------+  ||
+||  | one UI/presentation main context|<----->| at most one same-origin dedicated|  ||
+||  | current-session product state   |generic| processing worker context         |  ||
+||  | sole publication gate           |handoff| transient current-attempt data    |  ||
+||  +----------------------------------+       +-----------------+-----------------+  ||
++================================================================|====================+
+                                                                 |
+                                                                 | direct anonymous
+                                                                 | resolution and
+                                                                 | selected-revision retrieval
+                                                                 v
+                                             +========================================+
+                                             || Public GitHub                        ||
+                                             || sole external information system     ||
+                                             || exact origins/mechanisms deferred    ||
+                                             +========================================+
+----
+
+The production delivery URL is exactly
+`https://felixgeisler.github.io/code-city/`, and requests originating from the
+application have the exact production origin `https://felixgeisler.github.io`.
+Adopting this existing target does not adopt its current Pages source,
+action/workflow, application route, or build and deployment mechanism.
+
+== Nodes and origins
+
+[cols="3,5,7",options="header"]
+|===
+|Node or context |Accepted placement |Boundary
+
+|GitHub Pages delivery node
+|The existing public HTTPS target at
+`https://felixgeisler.github.io/code-city/`, exact origin
+`https://felixgeisler.github.io`.
+|Serves trusted static UI and worker artifacts only. It receives no repository
+payload, admitted source, metric facts, city or scene data, attempt state, or
+credential. It is not a product-data trust boundary.
+
+|Browser UI/presentation main context
+|One main context on the user device, loaded from the accepted Pages target.
+|Owns input and current-session product state, state and attempt eligibility,
+presentation adaptation and cleanup, and the sole atomic publication gate. It
+makes no provider or repository request.
+
+|Browser processing worker context
+|At most one dedicated context, same-origin with the UI.
+|Owns direct anonymous provider interaction and all retrieval, admission,
+analysis, and renderer-neutral city processing. Its current-attempt repository
+and derived data is transient. It is not an operating-system-process guarantee,
+security sandbox, trust crossing, component count, package boundary, or
+source-dependency rule.
+
+|Public GitHub
+|External to the user device and the sole external information system.
+|Resolution and selected-revision retrieval are direct and anonymous from the
+processing worker. Exact GitHub origins, endpoints, redirects, requests, and
+mechanisms remain with #448 and #449.
+|===
+
+No additional Code City application runtime context or deployment node exists.
+In particular, M1 has no Code City backend, relay, proxy, serverless function,
+server runtime, database, queue, service credential, server-side product state,
+product persistence, application-managed persistent cache, or second retrieval
+path.
+
+== Artifact and data placement
+
+[cols="3,7,6",options="header"]
+|===
+|Placement |Present |Prohibited or absent
+
+|GitHub Pages
+|Trusted static UI and worker artifacts.
+|Repository payload, admitted source, metrics, city/scene data, attempt state,
+credential, server runtime, and server-side product state.
+
+|UI main context
+|Input draft; current state and status; selected identity where permitted; one
+complete city only in `Success`; renderer adaptation resources. State is
+current-session only and reload starts empty.
+|Provider records, repository requests, raw or normalized source, admitted
+modules, parser/analyzer objects, and canonical metric intermediates.
+
+|Processing worker
+|Transient current-attempt provider records, paths, raw and normalized source,
+admitted modules, counters, metrics, parser/analyzer objects, and
+renderer-neutral city-construction intermediates.
+|Persisted product/history state, credential, presentation resources, and any
+execution, evaluation, import, or dynamic loading of repository data.
+
+|Worker-to-UI handoff
+|The selected canonical repository/revision tuple while `Loading`, one terminal
+failure outcome, or one complete canonical scene. Canonical building identities
+may cross only as inert model keys.
+|Raw or normalized source, repository entry content, admitted modules,
+parser/analyzer objects, canonical metric intermediates, or a partial scene.
+|===
+
+The UI is the sole publication-eligibility gate. It atomically publishes the
+complete city and selected identity only for the current eligible attempt and
+rejects every stale, replaced, cancelled, partial, or late worker result.
+Same-origin UI/worker communication is not a trust crossing. The only logical
+trust crossings remain *User → UI main context* and *Public GitHub → processing
+worker*, and no user or service credential crosses either boundary.
+
+== Cleanup placement
+
+* Replacement or cancellation immediately revokes the old attempt's
+  publication eligibility in the UI and clears identity, city, and
+  presentation state according to the accepted state contract.
+* The worker stops feasible network and processing work where later accepted
+  mechanisms permit it, suppresses downstream stages, and releases transient
+  current-attempt references. Any late outcome is ignored by the UI.
+* A worker-stage failure stops downstream work and releases transient
+  processing references. A presentation failure is owned by the UI, which
+  cleans up incomplete presentation resources.
+* After a successful complete-scene handoff, worker intermediates do not become
+  retained product state and are released. Reload discards all
+  application-managed session state.
+
+This placement promises no cleanup latency or secure erasure and does not
+redefine provider, browser, operating-system, network, or platform caching or
+garbage-collection internals.
+
+== Feasibility gate and deferred deployment detail
+
+https://github.com/FelixGeisler/code-city/issues/448[#448] and
+https://github.com/FelixGeisler/code-city/issues/449[#449] must each establish
+documentary/read-only feasibility for its selected direct anonymous
+worker-to-GitHub mechanism from the exact origin
+`https://felixgeisler.github.io`. Together they must cover every selected
+endpoint and redirect target, required cross-origin methods, statuses, body and
+header visibility, anonymous request and rate-limit policy, immutable-identity
+evidence, bounded retrieval and early-stop behavior, and cancellation and
+release behavior.
+
+If either issue cannot establish all applicable evidence, it remains
+unaccepted and https://github.com/FelixGeisler/code-city/issues/446[#446] must
+be reopened. No proxy, relay, backend, serverless function, credential,
+persistent cache, opaque unbounded response, automatic-retry workaround,
+second retrieval path, or other fallback may be introduced silently.
+
+https://github.com/FelixGeisler/code-city/issues/447[#447] still owns the shell,
+build, packaging, Pages source/action/workflow, application route, and
+deployment mechanism. #448 and #449 own all GitHub origins and mechanisms; #450
+and #451 own analyzer and renderer technology and their deferred limits; #462
+owns blocks and conceptual ports; and #463 owns the full accepted-mechanism and
+port synthesis. This view selects no endpoint, API, redirect/request policy,
+retry, parser, renderer, package, port, schema, worker primitive, workflow,
+route, threshold, or fallback.
+
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains unchanged and
+authoritative for source dependencies. Runtime placement grants no new source
+dependency.

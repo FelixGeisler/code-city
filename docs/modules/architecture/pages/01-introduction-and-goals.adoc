@@ -153,18 +153,23 @@ https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 The core-dependency choice owned by
 https://github.com/FelixGeisler/code-city/issues/445[#445] is accepted in
-xref:adr/0001-core-dependency-boundary.adoc[ADR 0001]. The choices owned by
-https://github.com/FelixGeisler/code-city/issues/446[#446],
-https://github.com/FelixGeisler/code-city/issues/447[#447],
-https://github.com/FelixGeisler/code-city/issues/448[#448],
-https://github.com/FelixGeisler/code-city/issues/449[#449],
-https://github.com/FelixGeisler/code-city/issues/450[#450],
-https://github.com/FelixGeisler/code-city/issues/451[#451], and
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001]. The runtime and deployment
+topology owned by https://github.com/FelixGeisler/code-city/issues/446[#446] is
+accepted in
+xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002].
+It fixes the existing `https://felixgeisler.github.io/code-city/` target, one
+browser UI/presentation main context, at most one same-origin dedicated processing worker,
+direct anonymous worker-to-Public-GitHub communication, and the absence of a
+Code City backend, credential, and persistent product state.
+
+The mechanism and technology choices owned by
+https://github.com/FelixGeisler/code-city/issues/447[#447] through
+https://github.com/FelixGeisler/code-city/issues/451[#451] and
 https://github.com/FelixGeisler/code-city/issues/462[#462] remain
-*deferred/not accepted here*. In particular, this page selects no topology,
-deployment target or node, process, component, port, API or provider mechanism,
-origin/request/redirect policy, shell, analyzer, renderer, enforcement
-location, technology, or physical cleanup mechanism.
+*deferred/not accepted here*. Neither this page nor ADR 0002 selects a shell,
+build or Pages workflow, application route, GitHub endpoint or request policy,
+parser, analyzer, renderer, internal block, port, schema, package, worker
+lifecycle or cancellation primitive, or deferred threshold.
 
 https://github.com/FelixGeisler/code-city/issues/463[#463] and
 https://github.com/FelixGeisler/code-city/issues/464[#464] are later synthesis

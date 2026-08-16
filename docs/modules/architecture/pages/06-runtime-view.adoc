@@ -1,1 +1,253 @@
 = 6. Runtime View
+
+This view records only the execution-context ownership, generic handoffs,
+publication gate, and lifecycle cleanup accepted in
+xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002].
+It does not select a message schema, port, API, GitHub mechanism, worker
+lifecycle or cancellation primitive, parser, analyzer, renderer, or full
+accepted-mechanism flow. That synthesis remains with
+https://github.com/FelixGeisler/code-city/issues/463[#463].
+
+== Runtime topology
+
+[source,text]
+----
++-----------------------------------------------------------+
+| GitHub Pages production target                            |
+| https://felixgeisler.github.io/code-city/                 |
+| exact origin: https://felixgeisler.github.io              |
+| serves trusted static UI and worker artifacts only        |
++------------------------------+----------------------------+
+                               |
+                               v
++--------+       trust crossing       +=============================================================+
+| User   | =========================> || User's browser: Code City                                  ||
++--------+   untrusted URL/actions     ||                                                             ||
+                                       ||  +--------------------------+   generic handoffs   +-------+ ||
+                                       ||  | one UI/presentation      |<-------------------->| 0..1  | ||
+                                       ||  | main context             |                      | same- | ||
+                                       ||  +--------------------------+                      | origin| ||
+                                       ||                                                    | proc. | ||
+                                       ||                                                    | worker| ||
+                                       ||                                                    +---+---+ ||
+                                       +=========================================================|=====+
+                                                                                                 |
+                                                                                                 | direct anonymous
+                                                                                                 | resolution/retrieval
+                                                                                                 v
+                                                                                +===============================+
+                                                                                || Public GitHub               ||
+                                                                                || sole external information  ||
+                                                                                || system                     ||
+                                                                                +===============================+
+                                                                                     trust crossing on inbound data
+----
+
+Code City has one UI/presentation main context and at most one same-origin
+dedicated processing worker context. It has no additional application runtime
+context. The UI makes no provider or repository request. Pages receives no
+product data, and no Code City backend, relay, proxy, serverless function,
+server runtime, database, queue, service credential, server-side product state,
+product persistence, application-managed persistent cache, or second retrieval
+path exists.
+
+The only logical trust crossings are *User → UI main context* and *Public
+GitHub → processing worker*. Same-origin UI-to-worker communication is not a
+trust crossing, Pages introduces no product-data trust boundary, and no user or
+service credential crosses any boundary.
+
+The UI/worker split is an execution and lifecycle boundary, not an
+operating-system-process guarantee, security sandbox, trust crossing, component
+count, package boundary, or source-dependency rule.
+
+== Runtime responsibilities
+
+[cols="3,8",options="header"]
+|===
+|Context |Accepted ownership
+
+|UI/presentation main context
+|Input draft, permitted normalization, canonical grammar validation before
+worker dispatch or provider interaction; current-attempt identity and
+observable states; replacement and cancellation precedence; canonical URL
+updates that preserve post-submission edits; the sole publication-eligibility
+gate; presentation adaptation and failure; inert building identities;
+presentation-resource cleanup; atomic publication of the complete city and
+selected identity; rejection of stale, replaced, cancelled, partial, or late
+output; current-session retention and empty reload reset.
+
+|Processing worker
+|Direct anonymous repository resolution; canonical identity validation;
+one-time immutable-revision selection and pinning; selected-revision retrieval;
+the sole admission path and actual-data limit enforcement; deterministic
+ordering and metrics; pure renderer-neutral city construction; transient
+confinement of provider records, paths, source, admitted modules, counters,
+metrics, and construction intermediates; stage termination and downstream
+suppression; network and processing cancellation where a later accepted
+mechanism permits it; release of transient processing references.
+|===
+
+Repository data remains inert and is never executed, evaluated, imported, or
+dynamically loaded. UI rejection of a late result is authoritative even when
+underlying work could not be stopped. A worker-side deferred limit is enforced
+only after its owning issue accepts its exact value and semantics; browser
+memory, request behavior, and renderer capacity create no undeclared product
+limit.
+
+== Enforcement placement
+
+[cols="4,5,5",options="header"]
+|===
+|Rules |Runtime boundary |Owning decision
+
+|RA-01 through RA-09 and any later accepted RA-10/RA-11
+|Worker retrieval/admission boundary
+|https://github.com/FelixGeisler/code-city/issues/449[#449]
+
+|SP-01 through SP-04
+|Worker analysis boundary
+|https://github.com/FelixGeisler/code-city/issues/450[#450]
+
+|Renderer-neutral city construction and CC-09
+|Worker city boundary
+|https://github.com/FelixGeisler/code-city/issues/451[#451]
+
+|Presentation and PR-01
+|UI presentation boundary
+|https://github.com/FelixGeisler/code-city/issues/451[#451]
+
+|xref:adr/0001-core-dependency-boundary.adoc[ADR 0001]
+source-dependency conformance
+|Build-time evidence; runtime placement grants no dependency
+|https://github.com/FelixGeisler/code-city/issues/452[#452]
+|===
+
+RA-10/RA-11, SP-01 through SP-04, CC-09, and PR-01 retain no value, unit,
+interval, threshold, precedence, or diagnostic until their owning issues accept
+one.
+
+== Generic handoffs
+
+[cols="4,7,5",options="header"]
+|===
+|Handoff |Only accepted content |Deferred detail
+
+|Pages to browser
+|Trusted static UI and worker artifacts.
+|Shell, build, Pages source/action/workflow, application route, and deployment
+mechanism remain with #447.
+
+|User to UI
+|Untrusted URL draft and submit, cancel, and reload actions.
+|The product contract is authoritative; this view adds no input or action.
+
+|UI to worker
+|A current normalized, syntactically accepted submission and lifecycle control.
+Invalid input never crosses this handoff.
+|Exact message, schema, port, dispatch, and cancellation mechanisms remain
+deferred.
+
+|Worker to UI while `Loading`
+|The selected canonical repository URL and immutable revision tuple, when
+available.
+|Exact identity handoff shape remains deferred.
+
+|Worker to UI at a terminal processing result
+|One terminal failure outcome or one complete canonical scene.
+|No partial-stage handoff or alternate result is accepted.
+
+|Worker and Public GitHub
+|Direct anonymous resolution and selected-revision retrieval.
+|Origins, endpoints, methods, statuses, headers, redirects, request and rate
+behavior, bounded-read mechanism, and cancellation/release mechanism remain
+with #448 and #449.
+|===
+
+Raw or normalized source, repository entry content, admitted modules,
+parser/analyzer objects, and canonical metric intermediates never cross into
+presentation. A complete canonical scene may cross without those values;
+canonical building identities cross only as inert model keys.
+
+== Current-attempt and publication sequence
+
+The following is a topology-level ownership sequence, not #463's later
+mechanism/port synthesis:
+
+. On submit, the UI makes the new submission the only current attempt and
+  immediately revokes every prior attempt's publication eligibility before
+  validating the new value.
+. The UI performs the permitted normalization and canonical grammar validation.
+  Invalid input ends in the accepted failure state without worker dispatch or
+  provider interaction.
+. For accepted syntax, the UI enters `Loading` and hands only the current
+  normalized submission to the worker. The worker owns the direct anonymous
+  provider and processing stages.
+. The worker may hand back the selected canonical repository/revision tuple
+  while processing continues. The UI applies it only to the current eligible
+  attempt and never overwrites a draft edited after submission.
+. Each worker stage either supplies its complete input to the next worker stage
+  or terminates the attempt. No admitted set, metric facts, or partial scene is
+  published to presentation.
+. A complete canonical scene crosses to the UI only after all worker stages
+  succeed. The UI owns renderer adaptation and presentation failure.
+. The UI's sole publication-eligibility gate admits only the current complete
+  result. It atomically publishes the complete city with the selected identity,
+  or publishes no city. Every stale, replaced, cancelled, partial, or late
+  result is rejected.
+
+== Replacement, cancellation, failure, and cleanup
+
+=== Replacement or cancellation
+
+. The UI immediately revokes the old attempt's publication eligibility and
+  clears identity, city, and presentation state as the accepted state contract
+  requires. Cancellation preserves the editable draft; replacement installs
+  the new submission before its validation result.
+. Generic lifecycle control may tell the worker that the attempt is no longer
+  current. This ADR selects no message, port, request, or cancellation
+  primitive.
+. The worker stops feasible network and processing work where the later
+  accepted mechanisms permit it, suppresses every downstream stage, and
+  releases transient references for the old attempt.
+. Any tied or late identity, failure, or scene outcome is ignored. UI
+  ineligibility remains authoritative even if underlying work completes.
+
+=== Stage or presentation failure
+
+. A worker-stage failure terminates that stage, suppresses all downstream work,
+  and releases its transient processing references.
+. The worker may return only the one terminal failure outcome. The UI applies
+  it only for the current eligible attempt; no stale or partial city is
+  published.
+. If adaptation of a complete canonical scene fails, the UI owns presentation
+  failure and cleanup of every incomplete presentation resource.
+
+After a successful complete-scene handoff, worker processing intermediates do
+not become retained product state and are released. Reload discards all
+application-managed session state and starts a fresh empty session.
+
+Cleanup has no accepted latency or secure-erasure promise. This view does not
+redefine provider, browser, operating-system, network, or platform caching or
+garbage-collection internals.
+
+== Feasibility and deferred synthesis
+
+#448 and #449 must each establish documentary/read-only feasibility for its
+selected direct anonymous worker-to-GitHub mechanism from the exact production
+origin `https://felixgeisler.github.io`. Together they must cover every selected
+endpoint and redirect target, required cross-origin methods, statuses, body and
+header visibility, anonymous request and rate-limit policy, immutable-identity
+evidence, bounded retrieval and early-stop behavior, and cancellation and
+release behavior.
+
+If either issue cannot establish all applicable evidence, it remains
+unaccepted and https://github.com/FelixGeisler/code-city/issues/446[#446] must
+be reopened. No proxy, relay, backend, serverless function, credential,
+persistent cache, opaque unbounded response, automatic-retry workaround,
+second retrieval path, or other fallback may be introduced silently.
+
+The exact shell, provider mechanisms, parser/analyzer, renderer, minimum blocks,
+conceptual ports, messages, schemas, package mapping, worker primitive,
+workflow, route, and full success/failure/replacement/cancellation flow remain
+with #447 through #451, #462, and #463. xref:adr/0001-core-dependency-boundary.adoc[ADR
+0001] remains authoritative for source dependencies.

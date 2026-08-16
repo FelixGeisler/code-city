@@ -1,20 +1,28 @@
 = 3. Context and Scope
 
-This view describes logical roles and exchanges only. It assigns no internal
-owner or mechanism.
+This view preserves the accepted logical system context and realizes only the
+runtime, delivery, trust, transient-data, and cleanup placement accepted in
+xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002].
+Provider mechanisms, internal blocks and ports, handoff schemas, and the full
+accepted-mechanism runtime synthesis remain deferred to their owning issues.
 
 == Local terms
 
-logical system boundary:: The topology- and technology-neutral boundary around
-all accepted Code City behavior. It states what is inside the system, not where
-or how that behavior runs.
+logical system boundary:: The boundary around all accepted Code City behavior.
+It identifies what belongs to Code City independently of its internal source
+or component structure.
 
 logical trust crossing:: An inbound handoff from an external role to Code City
-at which the received values remain untrusted. It is not a physical trust zone
-or deployment boundary.
+at which the received values remain untrusted. It is not an operating-system
+process boundary, security sandbox, or source-dependency arrow.
 
-delivery-target role:: The environmental role through which Code City is
-opened and presented. It is not a selected deployment node or trust zone.
+production delivery target:: The public HTTPS GitHub Pages site
+`https://felixgeisler.github.io/code-city/`, whose exact origin is
+`https://felixgeisler.github.io`.
+
+processing data:: Inert provider and repository data and derived intermediates
+used only while producing the current attempt's outcome. It is neither a
+persisted product/history record nor presentation output.
 
 == Logical context
 
@@ -26,17 +34,21 @@ opened and presented. It is not a selected deployment node or trust zone.
                                               || boundary             ||
                                               +=======================+
                                                           :
-                                                          : opened and presented through
-                                            . . . . . . . . . . . . . . .
-                                            .    delivery-target role     .
-                                            . . . . . . . . . . . . . . .
+                                                          : opened through trusted static artifacts from
+                                                          v
+                                    +----------------------------------------------------+
+                                    | GitHub Pages:                                      |
+                                    | https://felixgeisler.github.io/code-city/          |
+                                    +----------------------------------------------------+
 ----
 
-The arrows denote logical interactions, not processes, ports, APIs, runtime
-calls, network routes, or physical placement. The dotted environmental role is
-not another system or trust zone.
+The horizontal arrows denote logical interactions, not components, ports,
+APIs, runtime calls, network routes, or source dependencies. Public GitHub
+remains the sole external information system. GitHub Pages is the accepted
+static delivery node, not another repository-information system or a
+product-data trust crossing.
 
-[cols="2,6,5",options="header"]
+[cols="2,7,6",options="header"]
 |===
 |Role |Responsibility in this view |Contract and evidence
 
@@ -51,72 +63,126 @@ https://github.com/FelixGeisler/code-city/issues/459[#459], and
 https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |Code City
-|One logical system boundary covering the accepted journey. This view contains
-no internal node, process, component, adapter, or port.
+|One logical system boundary covering the accepted journey. ADR 0002 realizes
+it entirely in the user's browser, with one UI/presentation main context and at
+most one same-origin dedicated processing worker context.
 |xref:requirements:01-product-scope.adoc#_m1_outcome[M1 outcome]; integrated
 evidence https://github.com/FelixGeisler/code-city/issues/459[#459] and
 https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |Public GitHub
-|The sole known external information system. Resolution evidence is distinct
-from selected-revision repository data; no API, origin, request, or redirect
-policy is selected.
+|The sole external information system. Resolution evidence is distinct from
+selected-revision repository data. Both exchanges are direct and anonymous
+between Public GitHub and the processing worker; their origins and mechanisms
+remain with #448 and #449.
 |xref:requirements:04-functional-requirements.adoc#immutable-revision[Immutable
 revision selection and identity] and
 xref:requirements:06-source-admission-and-limits.adoc[Source admission and
 repository limits]; evidence https://github.com/FelixGeisler/code-city/issues/453[#453]
 and https://github.com/FelixGeisler/code-city/issues/454[#454].
 
-|Delivery target
-|Dashed environmental role through which Code City is opened and presented. Its
-realization and placement remain *deferred/not accepted here* in
-https://github.com/FelixGeisler/code-city/issues/446[#446].
-|xref:requirements:01-product-scope.adoc#_m1_outcome[M1 outcome]. The packaged
-shell evidence consumer is https://github.com/FelixGeisler/code-city/issues/452[#452].
+|GitHub Pages delivery node
+|Serves trusted static UI and worker artifacts at
+`https://felixgeisler.github.io/code-city/` only. It receives no repository
+payload, admitted source, metric facts, city or scene data, attempt state, or
+credential.
+|xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002];
+packaged-shell evidence belongs to
+https://github.com/FelixGeisler/code-city/issues/452[#452].
 |===
 
-== Interactions
+== Accepted runtime placement
 
-[cols="3,6,6",options="header"]
+[source,text]
+----
+                             static UI and worker artifacts only
++----------------------+  ----------------------------------------->  +==========================================+
+| GitHub Pages         |                                             || User's browser: Code City               ||
+| production target    |                                             ||                                          ||
+| exact origin:        |                                             ||  +------------------+   generic         ||
+| https://felixgeisler |                                             ||  | UI/presentation  |<------------->    ||
+| .github.io           |                                             ||  | main context     |   handoffs         ||
++----------------------+                                             ||  +------------------+                   ||
+                                                                     ||            ^             +------------+ ||
++--------+   untrusted URL/actions                                  ||            |             | 0..1 same- | ||
+| User   | ========================================================> ||            +-------------| origin     | ||
++--------+       logical trust crossing                              ||                          | processing | ||
+                                                                     ||                          | worker     | ||
+                                                                     ||                          +------------+ ||
+                                                                     +================================|=========+
+                                                                                                      |
+                                                                                                      | direct anonymous
+                                                                                                      | resolution/retrieval
+                                                                                                      v
+                                                                                      +=============================+
+                                                                                      || Public GitHub             ||
+                                                                                      || untrusted inbound values  ||
+                                                                                      +=============================+
+----
+
+The browser contains no other Code City application runtime context. The
+processing context is an execution and lifecycle boundary, not an
+operating-system-process guarantee, security sandbox, logical trust crossing,
+component count, package boundary, or source-dependency rule. The UI makes no
+provider or repository request.
+
+There is no Code City backend, relay, proxy, serverless function, server
+runtime, database, queue, service credential, server-side product state,
+product persistence, application-managed persistent cache, or second retrieval
+path.
+
+== Interactions and handoff boundary
+
+[cols="3,7,6",options="header"]
 |===
-|Direction |Logical exchange |Contract and evidence
+|Direction |Accepted exchange |Contract and deferred detail
 
-|User to Code City
+|User to UI main context
 |URL draft plus submit, cancel, and reload actions.
 |xref:requirements:04-functional-requirements.adoc#canonical-url[Canonical URL
 input] and
 xref:requirements:04-functional-requirements.adoc#states[Observable states and
-transitions]; evidence https://github.com/FelixGeisler/code-city/issues/453[#453]
-and https://github.com/FelixGeisler/code-city/issues/460[#460].
+transitions].
 
-|Code City to User
+|UI main context to User
 |Stable state and status, the canonical repository/revision identity where
 permitted, one failure outcome, or the complete city only in `Success`.
 |xref:requirements:04-functional-requirements.adoc#states[Observable states and
-transitions],
-xref:requirements:04-functional-requirements.adoc#failure-outcomes[Failure
-outcomes], and
+transitions] and
 xref:requirements:10-fixed-city-layout-and-presentation.adoc#canonical-scene[Canonical
-scene and exclusions]; evidence
-https://github.com/FelixGeisler/code-city/issues/459[#459] and
-https://github.com/FelixGeisler/code-city/issues/460[#460].
+scene and exclusions].
 
-|Code City and Public GitHub
-|Anonymous resolution exchange for canonical repository spelling and the
-designated default-branch-tip evidence.
-|xref:requirements:04-functional-requirements.adoc#anonymous-access[Anonymous
-public access] and
-xref:requirements:04-functional-requirements.adoc#immutable-revision[Immutable
-revision selection and identity]; evidence
-https://github.com/FelixGeisler/code-city/issues/453[#453].
+|GitHub Pages to browser
+|Trusted static UI and worker artifacts only.
+|The shell, build, Pages source, action/workflow, application route, and
+ deployment mechanism remain with
+https://github.com/FelixGeisler/code-city/issues/447[#447].
 
-|Code City and Public GitHub
-|Selected-revision repository-data exchange, separately from resolution
-evidence.
-|xref:requirements:06-source-admission-and-limits.adoc[Source admission and
-repository limits] and
-xref:requirements:06-source-admission-and-limits.adoc#admission-composition[bounded
-classification]; evidence https://github.com/FelixGeisler/code-city/issues/454[#454].
+|UI main context to processing worker
+|Only a current normalized, syntactically accepted submission and lifecycle
+control. Invalid input is rejected before dispatch or provider interaction.
+|Exact messages, schemas, and ports remain deferred to their owning issues;
+this view selects no communication or cancellation primitive.
+
+|Processing worker to UI main context
+|The selected canonical repository/revision tuple while `Loading`, one terminal
+failure outcome, or one complete canonical scene. A complete scene crosses
+without raw or normalized source, repository entry content, admitted modules,
+parser/analyzer objects, or metric intermediates; building identities are inert
+model keys.
+|State and source-free presentation contracts are in
+xref:requirements:04-functional-requirements.adoc#states[] and
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#canonical-scene[].
+Exact handoff schemas remain deferred.
+
+|Processing worker and Public GitHub
+|Two direct anonymous exchanges: resolution for canonical repository spelling
+and designated default-branch-tip evidence, then selected-revision repository
+data. The UI is not on this path.
+|The GitHub origins, endpoints, redirects, requests, headers, and mechanisms
+remain with https://github.com/FelixGeisler/code-city/issues/448[#448] and
+https://github.com/FelixGeisler/code-city/issues/449[#449], subject to ADR
+0002's unconditional feasibility stop rule.
 |===
 
 == Logical trust crossings
@@ -125,88 +191,97 @@ classification]; evidence https://github.com/FelixGeisler/code-city/issues/454[#
 |===
 |Crossing |Inbound values |Trust and authority
 
-|User to Code City
-|The URL draft and submitted value.
-|All inbound data remains untrusted, and no user or service credential crosses
-the boundary. See
+|User to UI main context
+|The URL draft, submitted value, and lifecycle actions.
+|All inbound values remain untrusted. Canonical grammar validation occurs in
+the UI before worker dispatch or provider interaction. No user or service
+credential crosses the boundary. See
 xref:requirements:04-functional-requirements.adoc#anonymous-access[Anonymous
 public access] and
-xref:requirements:06-source-admission-and-limits.adoc#untrusted-source[M1-ADM-0];
-evidence https://github.com/FelixGeisler/code-city/issues/453[#453] and
-https://github.com/FelixGeisler/code-city/issues/460[#460].
-
-|Public GitHub to Code City
-|Resolution evidence, repository metadata, paths, entry content, and source.
-|All inbound data remains untrusted, and no credential crosses the boundary.
-GitHub is authoritative only for canonical repository spelling and its
-designated default-branch tip, subject to later accepted identity validation.
-See xref:requirements:04-functional-requirements.adoc#url-normalization[M1-URL-2],
-xref:requirements:04-functional-requirements.adoc#revision-selection[M1-REV-1],
-and
 xref:requirements:06-source-admission-and-limits.adoc#untrusted-source[M1-ADM-0].
-Identity validation remains *deferred/not accepted here* in
-https://github.com/FelixGeisler/code-city/issues/448[#448]; evidence belongs to
-https://github.com/FelixGeisler/code-city/issues/453[#453] and
-https://github.com/FelixGeisler/code-city/issues/454[#454].
+
+|Public GitHub to processing worker
+|Resolution evidence, repository metadata, paths, entry content, and source.
+|All inbound values remain untrusted and inert, and no credential crosses the
+boundary. GitHub is authoritative only for canonical repository spelling and
+its designated default-branch tip, subject to #448's later accepted identity
+validation. Repository data is never executed, evaluated, imported, or
+dynamically loaded.
 |===
 
-These are the only logical trust crossings. The delivery-target role creates no
-additional crossing in this view, and no credential crosses any boundary.
-Runtime trust placement remains *deferred/not accepted here* in
-https://github.com/FelixGeisler/code-city/issues/446[#446].
+The only logical trust crossings are *User → UI main context* and *Public
+GitHub → processing worker*. Same-origin UI-to-worker communication is not a
+trust crossing. The Pages delivery node introduces no
+product-data trust boundary, and no credential is requested, read, retained,
+or transmitted.
 
-== Data lifecycle
+== Data placement and lifecycle
 
-current-session state:: The logical product state retained only for the open
-session and reset by reload.
-
-processing data:: Inert data used while producing the current attempt's
-outcome; it is neither a persisted product/history record nor user output.
-
-[cols="3,7,5",options="header"]
+[cols="3,7,6",options="header"]
 |===
-|Data class |Contents and lifecycle |Contract and evidence
+|Placement |Contents and lifecycle |Ownership and evidence
 
-|Prohibited
-|User and service credentials are never requested, accepted, read, retained, or
-transmitted.
-|xref:requirements:04-functional-requirements.adoc#anonymous-access[Anonymous
-public access]; evidence https://github.com/FelixGeisler/code-city/issues/453[#453]
+|GitHub Pages delivery node
+|Static UI and worker artifacts only; no repository payload, source, derived
+fact, city/scene data, attempt state, or credential.
+|Static-package inspection belongs to
+https://github.com/FelixGeisler/code-city/issues/452[#452].
+
+|UI main context: current-session state
+|Input draft, stable state and status, selected repository/revision tuple where
+permitted, and the complete city only in `Success`. Replacement,
+cancellation, failure, success, and reload clear or retain these exactly as the
+accepted state contract specifies. Reload starts empty and restores nothing.
+|The UI owns current-attempt identity, state transitions, the sole
+publication-eligibility gate, and current-session retention. Integrated
+evidence belongs to https://github.com/FelixGeisler/code-city/issues/459[#459]
 and https://github.com/FelixGeisler/code-city/issues/460[#460].
 
-|Current-session state
-|Input draft, stable state and status, the selected repository/revision tuple
-where permitted, and the complete city only in `Success`. Submission,
-replacement, cancellation, failure, success, and reload change or clear these
-exactly as the accepted state contract specifies.
-|xref:requirements:04-functional-requirements.adoc#states[M1-STATE-1 through
-M1-STATE-5] and
-xref:requirements:04-functional-requirements.adoc#_m1_ex_1_excluded_controls_and_retained_data[M1-EX-1];
-evidence https://github.com/FelixGeisler/code-city/issues/459[#459] and
-https://github.com/FelixGeisler/code-city/issues/460[#460].
+|Processing worker: transient current-attempt data
+|Provider records, branch evidence, paths, raw and normalized source, admitted
+modules, counters, canonical metric facts, parser/analyzer objects, and city
+construction intermediates. They remain confined to the current attempt and do
+not become persisted or server-side product state.
+|The worker owns the sole admission path, processing-stage termination,
+downstream suppression, feasible work cancellation, and release of transient
+processing references. Stage evidence belongs to #453 through #457.
 
-|Processing data
-|Branch designation and evidence, provider records, paths, raw and normalized
-source, admitted modules, canonical metric facts, limit counters, and
-city-construction intermediates. They are neither persisted/history records
-nor user output. Their physical lifetime and cleanup mechanism remain
-deferred.
-|xref:requirements:04-functional-requirements.adoc#_m1_ex_1_excluded_controls_and_retained_data[M1-EX-1],
-xref:requirements:06-source-admission-and-limits.adoc#admission-composition[M1-ADM-5],
-xref:requirements:08-fixed-metric-semantics.adoc#canonical-facts[Canonical
-metric facts], and
-xref:requirements:10-fixed-city-layout-and-presentation.adoc#canonical-scene[Canonical
-scene facts]; stage evidence
-https://github.com/FelixGeisler/code-city/issues/453[#453] through
-https://github.com/FelixGeisler/code-city/issues/458[#458]. Physical lifecycle
-and cleanup remain *deferred/not accepted here* in
-https://github.com/FelixGeisler/code-city/issues/446[#446].
+|UI presentation boundary
+|One complete canonical scene may arrive without source or analysis objects.
+Building identities remain inert model keys. The UI adapts only the complete
+model and publishes the complete city and selected identity atomically when
+the attempt remains eligible.
+|UI presentation adaptation, failure, incomplete-resource cleanup, and rejection
+of stale, replaced, cancelled, partial, or late output belong to #458 through
+#460.
 |===
 
-No secure-erasure promise, cleanup latency, or physical cleanup behavior is
-accepted here. Runtime topology and placement are deferred to
-https://github.com/FelixGeisler/code-city/issues/446[#446], provider and request
-mechanisms to https://github.com/FelixGeisler/code-city/issues/448[#448] and
-https://github.com/FelixGeisler/code-city/issues/449[#449], and internal
-responsibilities and ports to
-https://github.com/FelixGeisler/code-city/issues/462[#462].
+Replacement or cancellation immediately revokes the old attempt's publication
+eligibility in the UI and clears its identity, city, and presentation state.
+The worker stops feasible work, suppresses downstream stages, and releases
+transient references; a late outcome is ignored. Any stage failure stops
+subsequent work. After successful complete-scene handoff, worker intermediates
+are released rather than retained as product state.
+
+This placement makes no cleanup-latency or secure-erasure promise and does not
+redefine provider, browser, operating-system, network, or platform caching or
+garbage-collection internals.
+
+== Decision boundary
+
+xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
+is authoritative for the placement above and its feasibility stop rule.
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains independently
+authoritative for source dependencies.
+
+The following remain deferred: shell/build and Pages mechanism in
+https://github.com/FelixGeisler/code-city/issues/447[#447]; GitHub origins and
+resolution/retrieval mechanisms in #448 and #449; analyzer and renderer
+technology and deferred limits in #450 and #451; internal blocks, conceptual
+ports, and ownership mapping in
+https://github.com/FelixGeisler/code-city/issues/462[#462]; and the complete
+accepted-mechanism/port runtime synthesis in
+https://github.com/FelixGeisler/code-city/issues/463[#463]. This view selects no
+endpoint, API, redirect/request policy, shell, parser, analyzer, renderer,
+package, schema, port, worker lifecycle or cancellation primitive, Pages
+workflow, route, threshold, or fallback.
