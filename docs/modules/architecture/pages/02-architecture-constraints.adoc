@@ -101,10 +101,20 @@ https://github.com/FelixGeisler/code-city/issues/460[#460].
 |===
 
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] is the accepted
-source-dependency constraint. Topology, internal dependency direction and
-ownership, delivery, provider and request mechanisms, analysis, visualization,
-enforcement, and physical cleanup remain *deferred/not accepted here*. Their
-owners are https://github.com/FelixGeisler/code-city/issues/446[#446] through
+source-dependency constraint.
+xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
+is the accepted runtime and deployment constraint: the exact production target
+is `https://felixgeisler.github.io/code-city/` at origin
+`https://felixgeisler.github.io`; Code City runs in one browser
+UI/presentation main context and at most one same-origin dedicated processing worker,
+with direct anonymous worker-to-Public-GitHub communication and no backend,
+credential, or persistent product state. ADR 0002 also fixes topology-level
+enforcement and cleanup ownership without changing ADR 0001.
+
+Shell/build and Pages mechanism, provider origins and requests, analysis and
+visualization technology, internal blocks and ports, exact handoff schemas,
+worker lifecycle/cancellation and physical cleanup mechanisms, and deferred
+limits remain *deferred/not accepted here*. Their owners are
+https://github.com/FelixGeisler/code-city/issues/447[#447] through
 https://github.com/FelixGeisler/code-city/issues/451[#451] and
-https://github.com/FelixGeisler/code-city/issues/462[#462]; none of those open
-choices is an accepted constraint on this page.
+https://github.com/FelixGeisler/code-city/issues/462[#462].

@@ -10,6 +10,7 @@
 * xref:08-crosscutting-concepts.adoc[8. Cross-cutting Concepts]
 * xref:09-architecture-decisions.adoc[9. Architecture Decisions]
 ** xref:adr/0001-core-dependency-boundary.adoc[ADR 0001: Core/edge source-dependency boundary]
+** xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002: Browser-only M1 runtime and GitHub Pages deployment topology]
 * xref:10-quality-requirements.adoc[10. Quality Requirements]
 * xref:11-risks-and-technical-debt.adoc[11. Risks and Technical Debt]
 * xref:12-glossary.adoc[12. Glossary]

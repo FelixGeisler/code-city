@@ -6,3 +6,8 @@
   is `Accepted`. https://github.com/FelixGeisler/code-city/issues/445[#445]
   records the Requirements Engineer's acceptance under the human delegation
   recorded in https://github.com/FelixGeisler/code-city/issues/444[#444].
+* xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002: Browser-only M1 runtime and GitHub Pages deployment topology]
+  is `Accepted`. https://github.com/FelixGeisler/code-city/issues/446[#446]
+  records the clear Software Architect recommendation and the Requirements
+  Engineer's acceptance under the human delegation recorded in
+  https://github.com/FelixGeisler/code-city/issues/444[#444].
