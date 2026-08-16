@@ -1,1 +1,212 @@
 = 3. Context and Scope
+
+This view describes logical roles and exchanges only. It assigns no internal
+owner or mechanism.
+
+== Local terms
+
+logical system boundary:: The topology- and technology-neutral boundary around
+all accepted Code City behavior. It states what is inside the system, not where
+or how that behavior runs.
+
+logical trust crossing:: An inbound handoff from an external role to Code City
+at which the received values remain untrusted. It is not a physical trust zone
+or deployment boundary.
+
+delivery-target role:: The environmental role through which Code City is
+opened and presented. It is not a selected deployment node or trust zone.
+
+== Logical context
+
+[source,text]
+----
++--------+       accepted user journey       +=======================+       two distinct exchanges       +---------------+
+|  User  | <-------------------------------> ||      Code City      || <-------------------------------> | Public GitHub |
++--------+                                    || logical system       ||                                   +---------------+
+                                              || boundary             ||
+                                              +=======================+
+                                                          :
+                                                          : opened and presented through
+                                            . . . . . . . . . . . . . . .
+                                            .    delivery-target role     .
+                                            . . . . . . . . . . . . . . .
+----
+
+The arrows denote logical interactions, not processes, ports, APIs, runtime
+calls, network routes, or physical placement. The dotted environmental role is
+not another system or trust zone.
+
+[cols="2,6,5",options="header"]
+|===
+|Role |Responsibility in this view |Contract and evidence
+
+|User
+|External actor supplying the URL draft and submit, cancel, and reload actions;
+receives state and status, the selected identity where permitted, a failure
+outcome, or the complete city.
+|xref:requirements:04-functional-requirements.adoc#single-input[M1-URL-3] and
+xref:requirements:04-functional-requirements.adoc#states[Observable states and
+transitions]; evidence https://github.com/FelixGeisler/code-city/issues/453[#453],
+https://github.com/FelixGeisler/code-city/issues/459[#459], and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|Code City
+|One logical system boundary covering the accepted journey. This view contains
+no internal node, process, component, adapter, or port.
+|xref:requirements:01-product-scope.adoc#_m1_outcome[M1 outcome]; integrated
+evidence https://github.com/FelixGeisler/code-city/issues/459[#459] and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|Public GitHub
+|The sole known external information system. Resolution evidence is distinct
+from selected-revision repository data; no API, origin, request, or redirect
+policy is selected.
+|xref:requirements:04-functional-requirements.adoc#immutable-revision[Immutable
+revision selection and identity] and
+xref:requirements:06-source-admission-and-limits.adoc[Source admission and
+repository limits]; evidence https://github.com/FelixGeisler/code-city/issues/453[#453]
+and https://github.com/FelixGeisler/code-city/issues/454[#454].
+
+|Delivery target
+|Dashed environmental role through which Code City is opened and presented. Its
+realization and placement remain *deferred/not accepted here* in
+https://github.com/FelixGeisler/code-city/issues/446[#446].
+|xref:requirements:01-product-scope.adoc#_m1_outcome[M1 outcome]. The packaged
+shell evidence consumer is https://github.com/FelixGeisler/code-city/issues/452[#452].
+|===
+
+== Interactions
+
+[cols="3,6,6",options="header"]
+|===
+|Direction |Logical exchange |Contract and evidence
+
+|User to Code City
+|URL draft plus submit, cancel, and reload actions.
+|xref:requirements:04-functional-requirements.adoc#canonical-url[Canonical URL
+input] and
+xref:requirements:04-functional-requirements.adoc#states[Observable states and
+transitions]; evidence https://github.com/FelixGeisler/code-city/issues/453[#453]
+and https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|Code City to User
+|Stable state and status, the canonical repository/revision identity where
+permitted, one failure outcome, or the complete city only in `Success`.
+|xref:requirements:04-functional-requirements.adoc#states[Observable states and
+transitions],
+xref:requirements:04-functional-requirements.adoc#failure-outcomes[Failure
+outcomes], and
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#canonical-scene[Canonical
+scene and exclusions]; evidence
+https://github.com/FelixGeisler/code-city/issues/459[#459] and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|Code City and Public GitHub
+|Anonymous resolution exchange for canonical repository spelling and the
+designated default-branch-tip evidence.
+|xref:requirements:04-functional-requirements.adoc#anonymous-access[Anonymous
+public access] and
+xref:requirements:04-functional-requirements.adoc#immutable-revision[Immutable
+revision selection and identity]; evidence
+https://github.com/FelixGeisler/code-city/issues/453[#453].
+
+|Code City and Public GitHub
+|Selected-revision repository-data exchange, separately from resolution
+evidence.
+|xref:requirements:06-source-admission-and-limits.adoc[Source admission and
+repository limits] and
+xref:requirements:06-source-admission-and-limits.adoc#admission-composition[bounded
+classification]; evidence https://github.com/FelixGeisler/code-city/issues/454[#454].
+|===
+
+== Logical trust crossings
+
+[cols="3,5,7",options="header"]
+|===
+|Crossing |Inbound values |Trust and authority
+
+|User to Code City
+|The URL draft and submitted value.
+|All inbound data remains untrusted, and no user or service credential crosses
+the boundary. See
+xref:requirements:04-functional-requirements.adoc#anonymous-access[Anonymous
+public access] and
+xref:requirements:06-source-admission-and-limits.adoc#untrusted-source[M1-ADM-0];
+evidence https://github.com/FelixGeisler/code-city/issues/453[#453] and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|Public GitHub to Code City
+|Resolution evidence, repository metadata, paths, entry content, and source.
+|All inbound data remains untrusted, and no credential crosses the boundary.
+GitHub is authoritative only for canonical repository spelling and its
+designated default-branch tip, subject to later accepted identity validation.
+See xref:requirements:04-functional-requirements.adoc#url-normalization[M1-URL-2],
+xref:requirements:04-functional-requirements.adoc#revision-selection[M1-REV-1],
+and
+xref:requirements:06-source-admission-and-limits.adoc#untrusted-source[M1-ADM-0].
+Identity validation remains *deferred/not accepted here* in
+https://github.com/FelixGeisler/code-city/issues/448[#448]; evidence belongs to
+https://github.com/FelixGeisler/code-city/issues/453[#453] and
+https://github.com/FelixGeisler/code-city/issues/454[#454].
+|===
+
+These are the only logical trust crossings. The delivery-target role creates no
+additional crossing in this view, and no credential crosses any boundary.
+Runtime trust placement remains *deferred/not accepted here* in
+https://github.com/FelixGeisler/code-city/issues/446[#446].
+
+== Data lifecycle
+
+current-session state:: The logical product state retained only for the open
+session and reset by reload.
+
+processing data:: Inert data used while producing the current attempt's
+outcome; it is neither a persisted product/history record nor user output.
+
+[cols="3,7,5",options="header"]
+|===
+|Data class |Contents and lifecycle |Contract and evidence
+
+|Prohibited
+|User and service credentials are never requested, accepted, read, retained, or
+transmitted.
+|xref:requirements:04-functional-requirements.adoc#anonymous-access[Anonymous
+public access]; evidence https://github.com/FelixGeisler/code-city/issues/453[#453]
+and https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|Current-session state
+|Input draft, stable state and status, the selected repository/revision tuple
+where permitted, and the complete city only in `Success`. Submission,
+replacement, cancellation, failure, success, and reload change or clear these
+exactly as the accepted state contract specifies.
+|xref:requirements:04-functional-requirements.adoc#states[M1-STATE-1 through
+M1-STATE-5] and
+xref:requirements:04-functional-requirements.adoc#_m1_ex_1_excluded_controls_and_retained_data[M1-EX-1];
+evidence https://github.com/FelixGeisler/code-city/issues/459[#459] and
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
+|Processing data
+|Branch designation and evidence, provider records, paths, raw and normalized
+source, admitted modules, canonical metric facts, limit counters, and
+city-construction intermediates. They are neither persisted/history records
+nor user output. Their physical lifetime and cleanup mechanism remain
+deferred.
+|xref:requirements:04-functional-requirements.adoc#_m1_ex_1_excluded_controls_and_retained_data[M1-EX-1],
+xref:requirements:06-source-admission-and-limits.adoc#admission-composition[M1-ADM-5],
+xref:requirements:08-fixed-metric-semantics.adoc#canonical-facts[Canonical
+metric facts], and
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#canonical-scene[Canonical
+scene facts]; stage evidence
+https://github.com/FelixGeisler/code-city/issues/453[#453] through
+https://github.com/FelixGeisler/code-city/issues/458[#458]. Physical lifecycle
+and cleanup remain *deferred/not accepted here* in
+https://github.com/FelixGeisler/code-city/issues/446[#446].
+|===
+
+No secure-erasure promise, cleanup latency, or physical cleanup behavior is
+accepted here. Runtime topology and placement are deferred to
+https://github.com/FelixGeisler/code-city/issues/446[#446], provider and request
+mechanisms to https://github.com/FelixGeisler/code-city/issues/448[#448] and
+https://github.com/FelixGeisler/code-city/issues/449[#449], and internal
+responsibilities and ports to
+https://github.com/FelixGeisler/code-city/issues/462[#462].
