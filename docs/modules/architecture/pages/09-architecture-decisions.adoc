@@ -1,1 +1,8 @@
 = 9. Architecture Decisions
+
+== Accepted decisions
+
+* xref:adr/0001-core-dependency-boundary.adoc[ADR 0001: Core/edge source-dependency boundary]
+  is `Accepted`. https://github.com/FelixGeisler/code-city/issues/445[#445]
+  records the Requirements Engineer's acceptance under the human delegation
+  recorded in https://github.com/FelixGeisler/code-city/issues/444[#444].

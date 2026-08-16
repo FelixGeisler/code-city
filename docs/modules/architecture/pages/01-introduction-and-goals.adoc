@@ -60,17 +60,16 @@ https://github.com/FelixGeisler/code-city/issues/454[#454], and
 https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |3
-|Objectively enforceable conformance to whatever architecture decisions are
-later accepted
-|Enforce only architecture decisions that are later accepted; where an
-accepted ADR records a decision, that ADR is the conformance source.
-Source-dependency direction is distinct from runtime calls and data flow. The
-decision boundary is recorded in
+|Objectively enforceable conformance to accepted architecture decisions
+|Enforce only accepted architecture decisions; where an accepted ADR records
+a decision, that ADR is the conformance source. Source-dependency direction is
+distinct from runtime calls and data flow. The decision boundary is recorded
+in
 xref:requirements:04-functional-requirements.adoc#decision-boundary[Decision
-boundary]. The core-dependency decision in
-https://github.com/FelixGeisler/code-city/issues/445[#445] is *deferred/not
-accepted here*; its conditional automated evidence belongs to
-https://github.com/FelixGeisler/code-city/issues/452[#452].
+boundary]. The core-dependency decision is accepted in
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] through
+https://github.com/FelixGeisler/code-city/issues/445[#445]; its automated
+evidence belongs to https://github.com/FelixGeisler/code-city/issues/452[#452].
 
 |4
 |The smallest one-journey solution without speculative flexibility
@@ -131,13 +130,14 @@ evidence https://github.com/FelixGeisler/code-city/issues/453[#453],
 https://github.com/FelixGeisler/code-city/issues/454[#454], and
 https://github.com/FelixGeisler/code-city/issues/460[#460].
 
-|Later-accepted dependency rules over avoiding translation cost
-|Accept translation work when a future accepted dependency decision requires
-it; do not weaken or pre-accept that decision for implementation convenience.
+|Accepted dependency rules over avoiding translation cost
+|Accept translation work when an accepted dependency decision requires it; do
+not weaken an accepted decision or pre-accept a deferred one for implementation
+convenience.
 |The delegated synthesis is recorded in
-https://github.com/FelixGeisler/code-city/issues/461[#461]. The decision remains
-*deferred/not accepted here* in
-https://github.com/FelixGeisler/code-city/issues/445[#445], with conditional
+https://github.com/FelixGeisler/code-city/issues/461[#461].
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] is accepted through
+https://github.com/FelixGeisler/code-city/issues/445[#445], with automated
 evidence in https://github.com/FelixGeisler/code-city/issues/452[#452].
 
 |M1 scope over extensibility
@@ -151,21 +151,22 @@ https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 == Decision boundary
 
-The choices owned by https://github.com/FelixGeisler/code-city/issues/445[#445],
+The core-dependency choice owned by
+https://github.com/FelixGeisler/code-city/issues/445[#445] is accepted in
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001]. The choices owned by
 https://github.com/FelixGeisler/code-city/issues/446[#446],
 https://github.com/FelixGeisler/code-city/issues/447[#447],
 https://github.com/FelixGeisler/code-city/issues/448[#448],
 https://github.com/FelixGeisler/code-city/issues/449[#449],
 https://github.com/FelixGeisler/code-city/issues/450[#450],
 https://github.com/FelixGeisler/code-city/issues/451[#451], and
-https://github.com/FelixGeisler/code-city/issues/462[#462] are all
+https://github.com/FelixGeisler/code-city/issues/462[#462] remain
 *deferred/not accepted here*. In particular, this page selects no topology,
 deployment target or node, process, component, port, API or provider mechanism,
 origin/request/redirect policy, shell, analyzer, renderer, enforcement
 location, technology, or physical cleanup mechanism.
 
-xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains `Proposed` and is
-not relied upon. https://github.com/FelixGeisler/code-city/issues/463[#463] and
+https://github.com/FelixGeisler/code-city/issues/463[#463] and
 https://github.com/FelixGeisler/code-city/issues/464[#464] are later synthesis
 and fitness consumers only. `npm run docs:build` validates this documentation;
 it is not an M1 runtime-technology constraint.
