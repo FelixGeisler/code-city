@@ -351,9 +351,10 @@ This page assigns no architecture or implementation responsibility.
 https://github.com/FelixGeisler/code-city/issues/450[#450] owns the
 human-accepted analyzer/version choice;
 https://github.com/FelixGeisler/code-city/issues/462[#462] owns the analysis
-responsibility and port-boundary decision; and
-https://github.com/FelixGeisler/code-city/issues/444[#444] owns city existence
-and metric-to-city mapping.
+responsibility and port-boundary decision; and city existence and
+metric-to-city mapping are defined by
+xref:10-fixed-city-layout-and-presentation.adoc[] under
+https://github.com/FelixGeisler/code-city/issues/444[#444].
 
 Implementation evidence is allocated without selecting a mechanism:
 

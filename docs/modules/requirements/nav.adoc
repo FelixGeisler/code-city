@@ -9,3 +9,5 @@
 * xref:07-source-admission-and-limit-acceptance.adoc[Source Admission and Limit Acceptance]
 * xref:08-fixed-metric-semantics.adoc[Fixed Metric Semantics]
 * xref:09-fixed-metric-acceptance.adoc[Fixed Metric Acceptance]
+* xref:10-fixed-city-layout-and-presentation.adoc[Fixed City Layout and Presentation]
+* xref:11-fixed-city-layout-and-presentation-acceptance.adoc[Fixed City Layout and Presentation Acceptance]

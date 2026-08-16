@@ -497,34 +497,66 @@ unchanged:
 A late result from a replaced or cancelled attempt has no observable effect.
 
 [[deferred-limits]]
-== Explicitly deferred limit decisions
+== Downstream limit decisions and dispositions
 
-This contract does not approve the existence, values, units, measurement,
-boundaries, precedence, or diagnostics of these possible future limits:
+This admission contract continues to approve no existence, value, unit,
+measurement, boundary, precedence, or diagnostic for these deferred choices:
 
-* RA-10 and RA-11 are deferred to
+* RA-10 and RA-11 remain with
   https://github.com/FelixGeisler/code-city/issues/449[#449] after
   retrieval/admission mechanism evidence.
-* SP-01 through SP-04 are deferred to
+* SP-01 through SP-04 remain with
   https://github.com/FelixGeisler/code-city/issues/450[#450] using the accepted
   metric contract and relevant topology, shell, and port evidence.
-* CC-01 through CC-08 are deferred to
-  https://github.com/FelixGeisler/code-city/issues/444[#444] when the city,
-  labels, model, layout, and bounds are defined.
-* CC-09 and PR-01 are deferred to
+* CC-09 and PR-01 remain exclusively with
   https://github.com/FelixGeisler/code-city/issues/451[#451] after the accepted
-  city contract and visualization feasibility evidence.
+  city contract and visualization feasibility evidence. No value, interval,
+  threshold, or limit result is approved for either duration here.
 
-No strict RA > SP > CC taper is required. A deferred choice may be lower,
-equal, higher, or explicitly unnecessary only after evidence and a human
-decision in its owning issue. No value, boundary example, diagnostic, or
-downstream evidence assumption for those identifiers is defined here.
+The accepted https://github.com/FelixGeisler/code-city/issues/444[#444] contract
+resolves CC-01 through CC-08 exactly as follows without changing admission,
+RA-01 through RA-09, canonical module identity, or unsigned-UTF-8 module order:
 
-https://github.com/FelixGeisler/code-city/issues/464[#464] is the hard gate that
-must verify every deferred choice is explicitly human-approved, or explicitly
-human-approved as unnecessary, before any M1 implementation issue receives
-Developer handoff. The deferred owners and #464 are related future work, not
-direct blockers of this admission contract.
+[cols="2,7",options="header"]
+|===
+|Dimension |Accepted disposition
+
+|CC-01 building count
+|No independent city cap. The city has exactly `N` identity-matched buildings
+for the complete metric set reaching construction. RA-07 prevents more than
+`4,000` admitted modules; #450 may stop an attempt earlier.
+
+|CC-02 repository-derived labels
+|Exactly `0`.
+
+|CC-03 individual label bytes
+|Not applicable because no label exists.
+
+|CC-04 aggregate label bytes
+|Exactly `0`.
+
+|CC-05 renderer-independent scene elements
+|Exactly `N` building prisms. Bounds and view descriptors are not independently
+presentable elements. There is no independent cap.
+
+|CC-06/CC-07/CC-08 X/Y/Z bounds
+|No independent coordinate maxima. The exact bounds derived by
+xref:10-fixed-city-layout-and-presentation.adoc#square-shelf-layout[] define and
+bound the scene.
+|===
+
+CC-01 through CC-08 create no independent limit-exceeded outcome. A missing,
+additional, or repeated mapping or malformed or unrepresentable metric fact is
+`City construction failed` / `M1-CITY-1`; a private implementation capacity is
+a conformance defect, not an undeclared limit.
+
+No strict RA > SP > CC taper is required. A still-deferred choice may be lower,
+equal, higher, or explicitly unnecessary only after the accepted decision in
+its owning issue. The human delegation and Requirements Engineer decision
+record in #444 supply #442's required evidence and decision for CC-01 through
+CC-08. https://github.com/FelixGeisler/code-city/issues/464[#464] must verify
+that delegation and each exercise, together with every still-deferred choice,
+before M1 implementation handoff.
 
 [[decision-boundary-source-limits]]
 == Decision boundary and evidence consumers
@@ -545,7 +577,12 @@ requirements without redefining them.
 
 https://github.com/FelixGeisler/code-city/issues/454[#454] validates the closed
 admission matrix and RA-01 through RA-09 boundaries and precedence.
+https://github.com/FelixGeisler/code-city/issues/457[#457] validates the exact
+CC-01 through CC-08 dispositions with construction geometry, layout, bounds,
+and `M1-CITY-1` evidence.
+https://github.com/FelixGeisler/code-city/issues/458[#458] validates complete
+presentation and the absence of labels, controls, and extra geometry.
 https://github.com/FelixGeisler/code-city/issues/460[#460] validates integrated
 approved failure, replacement, cancellation, identity-retention, and atomic
-publication behavior. Evidence for deferred choices is assigned only after its
-owning decision is human-approved.
+publication behavior. #451 retains all CC-09/PR-01 decision and feasibility
+evidence.

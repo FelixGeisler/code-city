@@ -1,0 +1,390 @@
+= Fixed City Layout and Presentation
+
+This page is the one authoritative, renderer-neutral M1 contract that turns a
+complete successful canonical module-metric sequence into one deterministic
+city and fixed initial presentation. It applies only after
+xref:08-fixed-metric-semantics.adoc[] has produced the complete canonical facts
+for the admitted modules.
+
+The rules define product facts, exclusions, and failure behavior. They do not
+select a renderer or analyzer, library or version, mesh, material, shader,
+scene-graph or camera object, component, port, topology, enforcement location,
+or executable evidence mechanism.
+
+[[city-terms]]
+== Terms
+
+City unit:: The abstract exact unit used for building dimensions, positions,
+gaps, and bounds. It is not a device pixel or a renderer-specific unit.
+
+Building identity:: Exactly the module's NFC canonical path from
+xref:06-source-admission-and-limits.adoc#canonical-paths[M1-ADM-1].
+
+Canonical scene facts:: Only the successful facts listed under
+<<canonical-scene,Canonical scene and exclusions>>. Renderer implementation
+facts are not added to this set.
+
+Initial-view descriptor:: The renderer-neutral orthographic target, basis,
+projection extents, and fit rule under <<initial-view,Fixed initial view and
+interaction>>.
+
+[[city-input]]
+== Input boundary
+
+The city stage consumes only the complete successful canonical module sequence
+defined by xref:08-fixed-metric-semantics.adoc#canonical-facts[]. For each
+module, `S` is SLOC, `U` is executable-unit count, and `M` is numeric maximum
+complexity. Module identity and those three values remain exactly the facts
+defined by #442 and #443; this stage does not rename, normalize, clamp, or
+recalculate them.
+
+For `N >= 1`, one and only one building must correspond to each input identity.
+A duplicate identity or invalid #443 fact, or any missing, additional, or
+repeated model mapping, fails construction under <<city-failure,Atomic
+construction and presentation failure>>.
+
+[[building-geometry]]
+== Coordinate system and building geometry
+
+Use a right-handed coordinate system with the X/Z ground plane and positive Y
+vertical. Each module produces one axis-aligned, unrotated, closed rectangular
+prism resting at `y = 0`.
+
+Its dimensions in exact city units are:
+
+[source,text]
+----
+height = S + 1
+width = depth = U + 1
+----
+
+Consequently `(S,U) = (0,0)` produces a visible `1 × 1 × 1` prism, and every
+later integer value remains distinct. No scaling, normalization, logarithm,
+minimum or maximum clamp, repository-relative adjustment, or geometry rounding
+is permitted.
+
+[[fixed-palette]]
+== Fixed opaque sRGB palette
+
+Apply the following RGBA byte value to every face. Do not interpolate or apply
+repository-relative normalization.
+
+[cols="3,3",options="header"]
+|===
+|Maximum complexity `M` |RGBA
+
+|`0` |`#440154FF`
+|`1` |`#414487FF`
+|`2–3` |`#2A788EFF`
+|`4–7` |`#22A884FF`
+|`8–15` |`#7AD151FF`
+|`16+` |`#FDE725FF`
+|===
+
+The final band saturates only displayed color. The canonical maximum-complexity
+fact remains unclamped.
+
+[[canonical-scene]]
+== Canonical scene and exclusions
+
+A building identity is an inert model key. It is never display text, markup, a
+URL, a material or shader name, or a resource locator. The canonical repository
+URL and full lowercase commit ID required by
+xref:04-functional-requirements.adoc#immutable-revision[] remain outside the
+city scene.
+
+Canonical scene facts are exactly:
+
+. the ordered buildings, each with its identity, minimum corner, dimensions,
+  and palette RGBA;
+. the city axis-aligned bounds;
+. the initial-view descriptor under <<initial-view>>; and
+. the fixed no-interaction policy.
+
+M1 has no building labels, tooltips, legend, ground plane, roads, districts,
+hierarchy, decorative geometry, or unit-level objects. Renderer meshes,
+triangles, draw calls, lighting, background, antialiasing, device color
+management, and camera implementation objects are not canonical facts.
+
+[[square-shelf-layout]]
+== Unsigned-UTF-8 square-shelf layout and bounds
+
+Disregard carrier iteration order and sort the `N` unique building identities
+in #442 ascending unsigned-UTF-8 order. Let `C` be the smallest positive integer
+for which `C^2 >= N`. For zero-based building index `i`, let:
+
+[source,text]
+----
+r = floor(i/C)
+k = i mod C
+b_i = U_i + 1
+----
+
+Place buildings row-major with `C` slots per row and a fixed edge-to-edge gap
+`g = 1` city unit. For row `r`, its present indices are:
+
+[source,text]
+----
+J_r = {rC, ..., min(N,(r+1)C)-1}
+D_r = max(b_j) for j in J_r
+----
+
+The minimum corner of building `i` is calculated exactly as:
+
+[source,text]
+----
+x_i = sum(b_j + g) for j = rC through i-1
+z_i = sum(D_q + g) for q = 0 through r-1
+minimum corner_i = (x_i, 0, z_i)
+----
+
+An empty sum is `0`. The first building starts at the world origin, and rows
+advance in positive Z. The one-unit gap and each preceding row's maximum depth
+prevent overlap for unequal footprints. No size sort, packing heuristic,
+hierarchy, or repository-dependent placement may replace this order or layout.
+
+The city axis-aligned bounds are exactly:
+
+[source,text]
+----
+minimum = (0, 0, 0)
+maximum = (max_i(x_i + b_i), max_i(S_i + 1), max_i(z_i + b_i))
+----
+
+[[city-limit-dispositions]]
+== CC-01 through CC-09 and PR-01 dispositions
+
+[cols="2,7",options="header"]
+|===
+|Dimension from #442 |M1 disposition
+
+|CC-01 building count
+|There is no independent city cap. The city has exactly `N` identity-matched
+buildings for the complete metric set reaching construction. RA-07 prevents
+more than `4,000` admitted modules; https://github.com/FelixGeisler/code-city/issues/450[#450]
+may stop an attempt earlier.
+
+|CC-02 repository-derived labels
+|Exactly `0`.
+
+|CC-03 individual label bytes
+|Not applicable because no label exists.
+
+|CC-04 aggregate label bytes
+|Exactly `0`.
+
+|CC-05 renderer-independent scene elements
+|Exactly `N` building prisms. Bounds and view descriptors are not independently
+presentable elements. There is no independent cap.
+
+|CC-06/CC-07/CC-08 X/Y/Z bounds
+|There are no independent coordinate maxima. The exact derived bounds under
+<<square-shelf-layout>> define and bound the scene.
+
+|CC-09 city-construction duration
+|Deferred exclusively to https://github.com/FelixGeisler/code-city/issues/451[#451].
+This contract sets no value, interval, threshold, or limit result.
+
+|PR-01 presentation duration
+|Deferred exclusively to https://github.com/FelixGeisler/code-city/issues/451[#451].
+This contract sets no value, interval, threshold, or limit result.
+|===
+
+CC-01 through CC-08 create no independent limit-exceeded outcome. Missing,
+additional, or repeated mappings and malformed or unrepresentable facts use
+`M1-CITY-1` under <<city-failure>>. A private implementation capacity cannot
+create an undeclared product limit.
+
+[[initial-view]]
+== Fixed initial view and interaction
+
+Use one orthographic three-quarter view. Let `Lx`, `Ly`, and `Lz` be the exact
+city-bounds lengths, and let target `T` be the exact bounds center. The
+initial-view descriptor is:
+
+[source,text]
+----
+target-to-viewer direction D = (1, 1, 1) / sqrt(3)
+screen-right R              = (1, 0, -1) / sqrt(2)
+screen-up V                 = (-1, 2, -1) / sqrt(6)
+E_r                          = (Lx + Lz) / (2 * sqrt(2))
+E_v                          = (Lx + 2*Ly + Lz) / (2 * sqrt(6))
+----
+
+For every positive viewport aspect `a = width/height`, the orthographic
+vertical and horizontal half-sizes are:
+
+[source,text]
+----
+H = (11/10) * max(E_v, E_r/a)
+horizontal half-size = aH
+----
+
+Physical camera distance and the clip-plane mechanism are noncanonical, but
+every city bound must remain unclipped. Initial publication has no camera
+animation. Orbit, pan, zoom, auto-rotation, focus, hover, click, selection, and
+camera controls are all absent.
+
+A passive viewport resize only reapplies this fit formula for the new positive
+aspect. It does not rebuild, reorder, or persist the city.
+
+[[precision-repeatability]]
+== Precision and repeatability
+
+Building dimensions, positions, gaps, and bounds are exact integer city units;
+derived centers are exact half-integers. They permit no construction tolerance
+or rounding. Identity, sequence, dimensions, positions, bounds, palette bytes,
+and view-policy fields require exact equality.
+
+Only scalar numerical evaluation of the normalized camera vectors and
+projection formulas permits this component-wise tolerance:
+
+[source,text]
+----
+|actual - expected| <= 10^-9 * max(1, |expected|)
+----
+
+Pixel hashes and screenshot equality are not renderer-independent evidence.
+For the same canonical input and positive viewport aspect, repeatability means
+exact canonical-scene equality and the same camera evaluation within only that
+tolerance. Time, locale, randomness, concurrency, carrier order, and device
+order cannot enter the result.
+
+[[city-failure]]
+== Atomic construction and presentation failure
+
+[cols="3,2,6",options="header"]
+|===
+|Category |Code |Governing condition
+
+|`City construction failed`
+|`M1-CITY-1`
+|Invalid, duplicate, incomplete, empty-at-this-stage, or otherwise
+nonconforming #443 input; inability to produce the complete exact model; or
+arithmetic/model corruption.
+
+|`Presentation failed`
+|`M1-PRES-1`
+|Failure to instantiate every canonical building or establish the required
+complete initial presentation.
+|===
+
+Each failed stage produces only its one category and code. Neither result
+exposes a module path, partial model, partial scene, fallback
+layout/palette/camera, prior city, or late result. No building is skipped or
+clamped, and no alternate presentation is substituted.
+
+A post-selection failure retains only the current canonical repository URL and
+full lowercase commit ID. Replacement and cancellation preserve
+xref:04-functional-requirements.adoc#states[M1-STATE-1 through M1-STATE-5],
+including latest-attempt precedence and atomic publication, unchanged.
+
+If a valid accepted input exceeds a private implementation capacity, that is a
+conformance defect. It does not permit truncation or an undeclared limit or
+failure result.
+
+[[city-decision-record]]
+== Decision authority and rationale
+
+After #442, the human decision-maker established: “These are not difficult
+decisions and do not need human intervention. If there is a clear
+recommendation then it is the Requirements Engineer's job to make decisions.”
+That governance decision delegates exact requirements choices when one
+recommendation is clear, evidence-backed, deterministic, reversible through
+normal requirements revision, inside the accepted outcome, scope, and
+non-goals, and neither an excluded high-impact decision nor an unresolved
+architecture or technology trade-off.
+
+The accepted https://github.com/FelixGeisler/code-city/issues/444[#444] records
+the choices below as exercises of that human delegation, supported by #441
+through #443 and their recorded evidence and rationale. They satisfy #442's
+required decision for CC-01 through CC-08; the M1 implementation gate in
+https://github.com/FelixGeisler/code-city/issues/464[#464] must verify both the
+delegation and each exercise before implementation handoff.
+
+[cols="2,4,3,4",options="header"]
+|===
+|Choice |Rationale |Downside |Rejected alternatives
+
+|Integer prism geometry
+|Smallest exact mapping; preserves every metric difference without
+renderer-specific rounding.
+|Footprint area grows quadratically with executable-unit count, so large modules
+can dominate.
+|Area-linear square roots and logarithmic compression add rounding or aesthetic
+policy.
+
+|Fixed complexity bands
+|Equal complexity has the same color across repositories, and power-of-two
+bands cover an unbounded metric.
+|Values at or above `16` are not distinguished by color.
+|Repository-relative gradients make a module depend on peers; red/green risk
+semantics are unsupported.
+
+|Buildings only, with inert identities
+|Avoids untrusted-label, clutter, hierarchy, and extra model-limit decisions
+while retaining exact traceability.
+|M1 cannot identify an individual module to the user.
+|Static or hover labels add text safety, overlap/layout, and exploration
+behavior.
+
+|Canonical square-shelf layout and no independent CC-01 through CC-08 caps
+|Preserves canonical order, prevents overlap, is more compact than one row, and
+needs no packing heuristic; upstream limits already bound input.
+|Rows can be ragged and non-optimal, and #451 must prove visualization
+feasibility.
+|Size sorting, bin packing, hierarchy, and arbitrary lower city caps add
+unstable heuristics or unsupported thresholds.
+
+|Fixed orthographic view with no interaction
+|Shows height and both footprint axes, preserves comparisons, and avoids
+perspective, field-of-view, and input choices.
+|There is no exploration, and unusually tall cities can leave blank space.
+|Perspective with orbit or zoom expands M1 into exploration.
+
+|Exact scene facts with camera-only numerical tolerance
+|Integer facts avoid cross-runtime drift while a narrow tolerance permits
+square-root evaluation.
+|Evidence is semantic rather than device-pixel identity.
+|Rounded geometry loses distinctions; screenshot hashes bind acceptance to
+renderer and device behavior.
+
+|One failure per construction or presentation stage
+|Preserves #441 atomicity and gives #457 through #460 objective evidence
+ownership.
+|The user receives no module-specific diagnostic.
+|Skipping or clamping buildings, alternate presentation, or retaining an old
+city would publish misleading, partial, or stale output.
+|===
+
+[[city-evidence-allocation]]
+== Evidence ownership and deferred technology
+
+This allocation selects no evidence mechanism:
+
+[cols="2,7",options="header"]
+|===
+|Owner |Required evidence
+
+|https://github.com/FelixGeisler/code-city/issues/457[#457]
+|Exact pure construction, permutation invariance, geometry, palette, layout,
+bounds, view descriptor, zero/boundary fixture, CC dispositions, and focused
+`M1-CITY-1`.
+
+|https://github.com/FelixGeisler/code-city/issues/458[#458]
+|Complete prism/color/transform adaptation, initial fit and passive resize,
+absence of labels, controls, and extra geometry, inert identity handling,
+semantic repeatability, and focused `M1-PRES-1`.
+
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Integrated category/code, retained current identity, replacement/cancellation
+precedence, atomic success, and no stale, partial, or late publication.
+
+|https://github.com/FelixGeisler/code-city/issues/451[#451]
+|Visualization technology and CC-09/PR-01 feasibility and decisions only. It
+may not alter this contract.
+|===
+
+No architecture page or ADR is selected by this requirements contract.
+Visualization technology, any resulting architecture decision, and the two
+duration decisions remain exclusively with #451.

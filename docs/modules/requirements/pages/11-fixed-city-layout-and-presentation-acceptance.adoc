@@ -1,0 +1,393 @@
+= Fixed City Layout and Presentation Acceptance
+
+These closed tables and examples are inert documentation for reviewing
+xref:10-fixed-city-layout-and-presentation.adoc[]. They are not executable
+fixtures, tests, renderer probes, screenshots, architecture choices, or
+assignments of a component, port, object, or enforcement location.
+
+The contract is acceptable only when all of these gates hold:
+
+* every successful example derives exactly one identity-matched prism per
+  complete #443 module fact;
+* zero and positive metrics, every palette boundary, canonical ordering,
+  single and ragged shelves, unequal footprints, exact gaps, bounds, target,
+  and projection fit have the values below;
+* carrier permutations and repeated evaluation preserve the exact canonical
+  scene;
+* every excluded scene and interaction item remains absent, and identities
+  remain inert;
+* exact scene facts have no tolerance, while only normalized camera and
+  projection scalar evaluation uses the accepted `10^-9` relative/absolute
+  tolerance;
+* each construction or presentation failure has only its accepted category and
+  code and preserves the #441 state invariants;
+* no example selects visualization technology, renderer objects, architecture,
+  labels, exploration, or an executable evidence mechanism; and
+* `npm run docs:build` succeeds.
+
+[[required-city-fixture]]
+== Required four-module fixture
+
+The complete #443 module facts below are shown in their #442 ascending
+unsigned-UTF-8 identity order. `N = 4`, so the smallest positive `C` with
+`C^2 >= N` is `2`.
+
+[cols="3,2,2,2,3",options="header"]
+|===
+|Building identity |`(S,U,M)` |Minimum corner |Size `(x,y,z)` |RGBA
+
+|`src/a.js` |`(4,3,3)` |`(0,0,0)` |`(4,5,4)` |`#2A788EFF`
+|`src/all.js` |`(24,2,18)` |`(5,0,0)` |`(3,25,3)` |`#FDE725FF`
+|`src/view.tsx` |`(10,1,1)` |`(0,0,5)` |`(2,11,2)` |`#414487FF`
+|`types.d.ts` |`(3,0,0)` |`(3,0,5)` |`(1,4,1)` |`#440154FF`
+|===
+
+The first row's maximum footprint depth is `4`, so the second row starts at
+`z = 4 + 1 = 5`. Each row's second building starts one unit after its
+predecessor's positive X edge. The exact bounds are:
+
+[source,text]
+----
+minimum = (0,0,0)
+maximum = (8,25,7)
+target T = (4,12.5,3.5)
+----
+
+For these bounds, `Lx = 8`, `Ly = 25`, and `Lz = 7`. At aspect `a = 16/9`:
+
+[source,text]
+----
+E_r/a = 135/(32*sqrt(2))
+E_v   = 65/(2*sqrt(6))
+E_v > E_r/a
+H     = (11/10) * E_v = 715/(20*sqrt(6))
+----
+
+The vertical half-size is exactly `715/(20*sqrt(6))` before only the permitted
+camera-evaluation tolerance. No geometry, position, bounds, target, identity,
+order, or color tolerance follows from that camera tolerance.
+
+[[geometry-examples]]
+== Zero, positive, and single-building mapping
+
+[cols="2,3,2,2,2,3",options="header"]
+|===
+|ID |Canonical input |`C` |Minimum corner |Size |Exact result
+
+|GEOM-01
+|One module `zero.ts` with `(S,U,M) = (0,0,0)`
+|`1`
+|`(0,0,0)`
+|`(1,1,1)`
+|Visible prism; bounds `(0,0,0)` through `(1,1,1)` and RGBA `#440154FF`.
+
+|GEOM-02
+|One module `only.ts` with `(S,U,M) = (6,2,4)`
+|`1`
+|`(0,0,0)`
+|`(3,7,3)`
+|One prism; bounds `(0,0,0)` through `(3,7,3)`, target `(1.5,3.5,1.5)`, and
+RGBA `#22A884FF`.
+
+|GEOM-03
+|The four positive and zero-valued module facts under
+<<required-city-fixture>>
+|`2`
+|Exactly the four listed corners
+|Exactly the four listed sizes
+|Every SLOC and unit-count difference is retained without scaling, clamp, or
+rounding.
+|===
+
+GEOM-01 proves that no zero metric makes a building invisible. GEOM-02 proves
+that a one-building city still uses the same layout, bounds, target, palette,
+and view rules rather than a special presentation.
+
+[[palette-boundaries]]
+== Closed palette-boundary table
+
+Each input is the unchanged numeric maximum-complexity fact; only displayed
+color saturates in the final band.
+
+[cols="2,2,3",options="header"]
+|===
+|ID |`M` |Exact RGBA on every face
+
+|PAL-01 |`0` |`#440154FF`
+|PAL-02 |`1` |`#414487FF`
+|PAL-03 |`2` |`#2A788EFF`
+|PAL-04 |`3` |`#2A788EFF`
+|PAL-05 |`4` |`#22A884FF`
+|PAL-06 |`7` |`#22A884FF`
+|PAL-07 |`8` |`#7AD151FF`
+|PAL-08 |`15` |`#7AD151FF`
+|PAL-09 |`16` |`#FDE725FF`
+|===
+
+No row permits interpolation, a repository-relative gradient, a red/green risk
+meaning, opacity change, or modification of `M`.
+
+[[ragged-shelf-example]]
+== Partially filled unequal-footprint shelf
+
+These five identities are in ascending unsigned-UTF-8 order. `N = 5`, so
+`C = 3`. The last row has only two of three slots, and its footprints are
+unequal.
+
+[cols="2,2,2,2,2",options="header"]
+|===
+|Identity |`(S,U,M)` |`b = U + 1` |Minimum corner |Size `(x,y,z)`
+
+|`a.js` |`(0,0,0)` |`1` |`(0,0,0)` |`(1,1,1)`
+|`b.js` |`(1,2,1)` |`3` |`(2,0,0)` |`(3,2,3)`
+|`c.js` |`(2,1,2)` |`2` |`(6,0,0)` |`(2,3,2)`
+|`d.js` |`(3,3,4)` |`4` |`(0,0,4)` |`(4,4,4)`
+|`e.js` |`(4,1,8)` |`2` |`(5,0,4)` |`(2,5,2)`
+|===
+
+The first-row X intervals are `[0,1]`, `[2,5]`, and `[6,8]`; the second-row
+intervals are `[0,4]` and `[5,7]`. Adjacent footprints therefore have an exact
+one-unit edge gap. The first row has maximum depth `D_0 = 3`, so the next row
+starts at `z = 4`, also an exact one-unit gap after the deepest first-row
+building. The exact bounds are `(0,0,0)` through `(8,5,8)`.
+
+A size sort, best-fit packing, empty-slot prism, row padding element, or special
+ragged-row centering would not match this example.
+
+[[permutation-invariance]]
+== Carrier-order permutation invariance
+
+[cols="2,5,5",options="header"]
+|===
+|ID |Carrier iteration order |Required canonical output
+
+|ORDER-01
+|`a.js, b.js, c.js, d.js, e.js`
+|Exactly the ordered buildings, corners, dimensions, colors, and bounds under
+<<ragged-shelf-example>>.
+
+|ORDER-02
+|`e.js, c.js, a.js, d.js, b.js`
+|Exactly the same output as ORDER-01.
+
+|ORDER-03
+|`d.js, b.js, e.js, a.js, c.js`
+|Exactly the same output as ORDER-01.
+|===
+
+Locale, provider order, traversal order, concurrency, and repetition cannot
+select one permutation as a different scene. A duplicate identity is not a
+permutation and fails as `M1-CITY-1`.
+
+[[scene-exclusions]]
+== Closed scene-content and identity exclusions
+
+[cols="2,4,6",options="header"]
+|===
+|ID |Candidate |Required canonical result
+
+|SCENE-01 |Ordered building prisms |Exactly `N`, each with only identity,
+minimum corner, dimensions, and RGBA as its building facts.
+|SCENE-02 |City bounds |One exact axis-aligned bounds fact; not another
+presentable element.
+|SCENE-03 |Initial-view descriptor |One exact descriptor; not another
+presentable element.
+|SCENE-04 |No-interaction policy |One canonical policy; not another presentable
+element.
+|SCENE-05 |Repository URL or selected revision |Outside the city scene; it
+remains the #441 result identity.
+|SCENE-06 |Building label |Absent; label count is exactly `0`.
+|SCENE-07 |Tooltip |Absent.
+|SCENE-08 |Legend |Absent.
+|SCENE-09 |Ground plane |Absent.
+|SCENE-10 |Road |Absent.
+|SCENE-11 |District |Absent.
+|SCENE-12 |Hierarchy |Absent.
+|SCENE-13 |Decorative geometry |Absent.
+|SCENE-14 |Unit-level object |Absent.
+|SCENE-15 |Identity used as display text or markup |Absent; identity remains an
+inert key.
+|SCENE-16 |Identity used as a URL or resource locator |Absent; identity remains
+an inert key.
+|SCENE-17 |Identity used as a material or shader name |Absent; identity remains
+an inert key.
+|SCENE-18 |Mesh, triangle, draw-call, lighting, background, antialiasing,
+device-color-management, or camera-object fact |Not a canonical fact. This
+contract neither selects nor tests a renderer implementation object.
+|===
+
+The canonical scene contains no unlisted product element. SCENE-18 excludes
+implementation details from semantic equality without selecting whether or how
+a future accepted renderer realizes the canonical facts.
+
+[[interaction-exclusions]]
+== Closed initial-presentation and interaction table
+
+[cols="2,4,6",options="header"]
+|===
+|ID |Candidate |Required result
+
+|VIEW-01 |Orthographic three-quarter initial view |Present with the exact target,
+basis, and fit formulas.
+|VIEW-02 |Unclipped city bounds |Every bound remains visible; distance and
+clip-plane mechanism stay noncanonical.
+|VIEW-03 |Initial camera animation |Absent.
+|VIEW-04 |Orbit |Absent.
+|VIEW-05 |Pan |Absent.
+|VIEW-06 |Zoom |Absent.
+|VIEW-07 |Auto-rotation |Absent.
+|VIEW-08 |Focus |Absent.
+|VIEW-09 |Hover |Absent.
+|VIEW-10 |Click |Absent.
+|VIEW-11 |Selection |Absent.
+|VIEW-12 |Camera controls |Absent.
+|VIEW-13 |Passive resize to another positive aspect |Reapply only the fit formula;
+do not rebuild, reorder, animate, or persist the city.
+|===
+
+VIEW-13 is a passive presentation response, not exploration or a user-supplied
+configuration value.
+
+[[cc-review-table]]
+== Closed CC and PR disposition review
+
+[cols="2,4,6",options="header"]
+|===
+|ID |Review input |Only accepted result
+
+|CC-01 |`N` complete canonical module facts reach construction |Exactly `N`
+identity-matched buildings; no independent city cap or limit-exceeded outcome.
+|CC-02 |Repository-derived label count |Exactly `0`.
+|CC-03 |Individual label bytes |Not applicable because no label exists.
+|CC-04 |Aggregate label bytes |Exactly `0`.
+|CC-05 |Renderer-independent scene-element count |Exactly `N` building prisms;
+bounds and view descriptors are not elements; no independent cap.
+|CC-06 |X coordinate bound |Exact derived X bound; no independent maximum.
+|CC-07 |Y coordinate bound |Exact derived Y bound; no independent maximum.
+|CC-08 |Z coordinate bound |Exact derived Z bound; no independent maximum.
+|CC-09 |City-construction duration |No value, interval, threshold, or limit
+result here; #451 owns the decision.
+|PR-01 |Presentation duration |No value, interval, threshold, or limit result
+here; #451 owns the decision.
+|===
+
+A missing, additional, or repeated mapping is `M1-CITY-1`, not a CC limit. A
+private capacity cannot add a lower cap or another code.
+
+[[precision-review]]
+== Precision and semantic repeatability
+
+[cols="2,4,6",options="header"]
+|===
+|ID |Compared fact or evaluation |Required equality
+
+|PREC-01 |Identity and ordered sequence |Exact equality.
+|PREC-02 |Building dimensions and positions |Exact integer equality; no rounding
+or tolerance.
+|PREC-03 |One-unit gaps and city bounds |Exact integer equality; no rounding or
+tolerance.
+|PREC-04 |Derived bounds center |Exact half-integer equality.
+|PREC-05 |Palette bytes |Exact RGBA-byte equality.
+|PREC-06 |View-policy fields and interaction exclusions |Exact equality.
+|PREC-07 |Normalized direction/basis scalar evaluation |Component-wise
+`\|actual - expected\| <= 10^-9 * max(1, \|expected\|)` only.
+|PREC-08 |Projection scalar evaluation for a positive aspect |The same
+component-wise tolerance only.
+|PREC-09 |Repeated canonical scene for the same input and aspect |Exact scene
+equality plus only PREC-07/08 tolerance for camera evaluation.
+|PREC-10 |Pixel hash or screenshot |Not acceptance evidence and not a substitute
+for semantic equality.
+|===
+
+Time, locale, randomness, concurrency, carrier order, and device order are
+absent from every expected result.
+
+[[closed-failure-examples]]
+== Closed stage-failure examples
+
+[cols="2,5,3,2",options="header"]
+|===
+|ID |Condition |Only category |Only code
+
+|FAIL-CITY-01 |Invalid #443 input |`City construction failed` |`M1-CITY-1`
+|FAIL-CITY-02 |Duplicate building identity |`City construction failed` |`M1-CITY-1`
+|FAIL-CITY-03 |Incomplete canonical module facts |`City construction failed` |`M1-CITY-1`
+|FAIL-CITY-04 |Empty sequence at the city stage |`City construction failed` |`M1-CITY-1`
+|FAIL-CITY-05 |Malformed or unrepresentable fact |`City construction failed` |`M1-CITY-1`
+|FAIL-CITY-06 |Missing, additional, or repeated model mapping |`City construction failed` |`M1-CITY-1`
+|FAIL-CITY-07 |Complete exact model cannot be produced |`City construction failed` |`M1-CITY-1`
+|FAIL-CITY-08 |Arithmetic or model corruption |`City construction failed` |`M1-CITY-1`
+|FAIL-PRES-01 |A valid complete canonical model cannot instantiate every
+building |`Presentation failed` |`M1-PRES-1`
+|FAIL-PRES-02 |The complete required initial presentation cannot be established
+|`Presentation failed` |`M1-PRES-1`
+|===
+
+The construction/presentation boundary in FAIL-CITY-06 and FAIL-PRES-01 is
+observable: an invalid or incomplete canonical model is construction failure;
+failure to adapt an already valid complete model into all required presented
+buildings is presentation failure. The examples do not assign either stage to
+a component or port.
+
+Every row has all of these shared invariants:
+
+* no module path, raw fact, or implementation diagnostic is exposed;
+* no partial model, partial scene, skipped or clamped building, fallback
+  layout/palette/camera, prior city, stale city, or late result is visible;
+* after selection, only the current canonical repository URL and full lowercase
+  commit ID remain;
+* replacement makes the prior attempt ineligible before classifying a new
+  result, and cancellation prevents every tied or late result; and
+* success remains atomic under #441.
+
+[[capacity-example]]
+=== Private capacity is not a product limit
+
+[source,gherkin]
+----
+Scenario: A valid accepted input exceeds a private implementation capacity
+  Given a complete conforming #443 metric sequence is within every accepted upstream limit
+  When a private implementation capacity cannot process or present it exactly
+  Then the implementation is nonconforming
+  And it does not truncate, skip, clamp, or publish a partial result
+  And it does not report a CC limit or an undeclared category or code
+  And only the applicable accepted stage failure can be observed
+----
+
+This scenario creates no capacity value, threshold, boundary, or permission for
+a safeguard. CC-09 and PR-01 remain exclusively deferred to #451.
+
+[[acceptance-evidence-allocation]]
+== Evidence traceability
+
+[cols="2,4,6",options="header"]
+|===
+|Contract evidence |Owner |Required boundary
+
+|Geometry, palette, canonical order, square shelves, gaps, bounds, view
+descriptor, zero/palette/ragged/permutation examples, CC dispositions, and
+focused construction failure
+|https://github.com/FelixGeisler/code-city/issues/457[#457]
+|Exact pure-construction and `M1-CITY-1` evidence without changing the contract
+or selecting visualization technology.
+
+|Every prism/color/transform adaptation, initial fit, passive resize, inert
+identity, absence of extra scene/interaction items, semantic repeatability, and
+focused presentation failure
+|https://github.com/FelixGeisler/code-city/issues/458[#458]
+|Complete presentation and `M1-PRES-1` evidence without pixel hashes or added
+labels, controls, or geometry.
+
+|Integrated categories/codes, current-identity retention, replacement,
+cancellation, atomic success, and no stale, partial, or late publication
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Observable #441 state evidence across the accepted stages.
+
+|Visualization technology and CC-09/PR-01 feasibility and decisions
+|https://github.com/FelixGeisler/code-city/issues/451[#451]
+|Technology and duration decisions only; the accepted city contract and these
+inert examples cannot be altered.
+|===
+
+No additional product, architecture, technology, or evidence-mechanism decision
+is assigned by these examples.

@@ -29,8 +29,9 @@ Main flow::
 . Code City shows the canonical repository identity and selected commit
   identity as soon as both are known; loading continues without a partial city.
 . The later M1 stages admit source, derive the
-  xref:08-fixed-metric-semantics.adoc[fixed canonical metrics], construct the
-  city, and prepare its initial presentation.
+  xref:08-fixed-metric-semantics.adoc[fixed canonical metrics], and apply the
+  xref:10-fixed-city-layout-and-presentation.adoc[fixed city, layout, and
+  initial-presentation contract].
 . Only after every stage succeeds, one complete city appears atomically with
   the exact repository and commit identity it represents.
 
@@ -64,7 +65,8 @@ all city output disappear. A late outcome cannot change the cancelled state.
 Downstream failure:: Any source, analysis, city-construction, or presentation
 failure uses the common failure invariant: the attempt may explain the failure
 and identify a revision already selected, but it shows no stale or partial
-city. Detailed downstream causes belong to their owning M0 contracts.
+city. The fixed construction and presentation categories are defined in
+xref:10-fixed-city-layout-and-presentation.adoc#city-failure[].
 
 The exact stable states and transitions are normative in
 xref:04-functional-requirements.adoc#states[Observable states and transitions].

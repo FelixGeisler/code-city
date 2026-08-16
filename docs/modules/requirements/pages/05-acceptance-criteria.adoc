@@ -5,7 +5,9 @@ revision, and state contract. They define reviewable behavior but are not
 executable fixtures, test scaffolds, provider stubs, or a choice of test
 technology. Source-admission and limit scenarios are in
 xref:07-source-admission-and-limit-acceptance.adoc[]. Fixed metric matrices and
-examples are in xref:09-fixed-metric-acceptance.adoc[].
+examples are in xref:09-fixed-metric-acceptance.adoc[]. Fixed city, layout, and
+initial-presentation examples are in
+xref:11-fixed-city-layout-and-presentation-acceptance.adoc[].
 
 The input/revision/state contract is acceptable only when all scenarios below
 agree with xref:04-functional-requirements.adoc[] and all of these gates hold:
@@ -318,9 +320,12 @@ codes, and wording are in xref:06-source-admission-and-limits.adoc[] under
 https://github.com/FelixGeisler/code-city/issues/442[#442]. Fixed metric rules
 and their inert review examples are in xref:08-fixed-metric-semantics.adoc[] and
 xref:09-fixed-metric-acceptance.adoc[] under
-https://github.com/FelixGeisler/code-city/issues/443[#443]. City mapping remains
-with https://github.com/FelixGeisler/code-city/issues/444[#444]. This scenario
-fixes the common observable state invariant without redefining those contracts.
+https://github.com/FelixGeisler/code-city/issues/443[#443]. Fixed city and
+presentation rules and their inert review examples are in
+xref:10-fixed-city-layout-and-presentation.adoc[] and
+xref:11-fixed-city-layout-and-presentation-acceptance.adoc[] under
+https://github.com/FelixGeisler/code-city/issues/444[#444]. This scenario fixes
+the common observable state invariant without redefining those contracts.
 
 == Excluded controls and retention
 
