@@ -1,0 +1,470 @@
+= ADR 0003: M1 core strata, building blocks, and conceptual ports
+
+Status:: Accepted
+
+== Context
+
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] establishes one conceptual
+core and one collective edge/adapters side, permits source dependencies from
+edge/adapters to core, and forbids source dependencies from core to
+edge/adapters. It deliberately leaves the core's internal structure and the
+minimum building blocks and conceptual ports to
+https://github.com/FelixGeisler/code-city/issues/462[#462].
+
+xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
+places UI application and presentation work in the browser main context and
+processing application, provider, parser, and city work in at most one
+same-origin dedicated processing worker. Placement does not establish source
+layers or dependency directions.
+
+M1 needs a minimum assignment of orchestration, deterministic policy, provider
+and parser translation, presentation adaptation, state, failure, admission,
+cancellation, and cleanup responsibilities. Without that assignment, the
+implementation slices could create competing orchestration or admission paths,
+leak edge-specific values into core policy, or establish an accidental source
+architecture.
+
+This ADR refines ADR 0001's core into application and domain strata and fixes
+minimum logical responsibilities and conceptual port roles under ADR 0002's
+placement. It does not supersede either ADR, and both remain unchanged. ADR
+0001 remains authoritative for the outer core/edge source boundary, and ADR
+0002 remains authoritative for runtime and deployment placement.
+
+== Authority
+
+The human governance decision recorded in
+https://github.com/FelixGeisler/code-city/issues/444[#444] delegates a decision
+to the Requirements Engineer when one recommendation is clear,
+evidence-backed, deterministic, reversible through normal revision, and
+inside the accepted outcome, scope, and non-goals. An architecture choice
+under that delegation also requires a clear evidence-backed Software Architect
+recommendation.
+
+For issue-body SHA-256
+`de4c271b31a258599f9aa215e5337b44ee42391bf05e02df89761ec509998eea`,
+the independent Software Architect's architecture-decision clarification cycle
+1 clearly recommended one conceptual core with application and domain strata
+and capability-scoped edge-to-domain access over either an undifferentiated
+core or an adapters-only-to-application funnel. Acting on that recommendation
+and delegation, the Requirements Engineer accepted this exact decision in
+https://github.com/FelixGeisler/code-city/issues/462[#462], whose accepted
+issue-body SHA-256 is
+`6288e7033e17f458912a8a69fefdc493586d2e653e1040001a89712f8a552a2a`.
+
+Under the same delegated authority and the clear
+https://github.com/FelixGeisler/code-city/issues/462#issuecomment-5306434639[Software
+Architect issue-readiness cycle 1 recommendation], the Requirements Engineer
+clarified that the three-arrow whitelist below governs cross-stratum source
+dependencies only. General same-stratum source policy remains undecided, while
+the named worker-coordinator permission and bypass prohibitions remain
+binding. This prevents the decision from accidentally selecting a source
+layout.
+
+The choice is supported by
+https://github.com/FelixGeisler/code-city/issues/441[#441] through
+https://github.com/FelixGeisler/code-city/issues/446[#446] and
+https://github.com/FelixGeisler/code-city/issues/461[#461], stays inside #462
+and M1, is deterministic, and is reversible by reopening #462 and revising or
+superseding this ADR. It adds no threshold, technology, credential,
+persistence, cost, compatibility, privacy or security policy, or product
+contract. Its structural cost and bypass risk are understood and objectively
+constrainable; no material trade-off remains unresolved.
+
+This ADR is accepted through that recorded authority and is not pending a
+later generic human-acceptance gate. A semantic deviation requires
+requirements clarification before implementation or merge.
+
+== Decision
+
+=== Core strata and edge
+
+The conceptual core has two source-dependency strata:
+
+. *Application core:* current-attempt and worker-stage orchestration and
+  ownership of application driving and driven ports.
+. *Domain core:* canonical values and pure deterministic input, state,
+  identity, admission, metric, and city policies.
+
+Provider, UI/shell, UI-worker bridge, parser, and renderer mechanisms are
+*edge/adapters*. These are responsibility boundaries, not packages,
+components, execution contexts, or deployment nodes.
+
+The capability-scoped cross-stratum source graph is:
+
+[source,text]
+----
+edge/adapters ----------------> application core ----> domain core
+       +-----------------------------------------------> domain core
+----
+
+The cross-stratum source-dependency whitelist is exactly these three arrows:
+
+* `edge/adapters → application core`;
+* `edge/adapters → domain core`, only under the capability constraint below;
+  and
+* `application core → domain core`.
+
+This ADR does not decide the general same-stratum source graph or concrete
+source mapping. Within the application stratum,
+`worker-pipeline application coordination → named worker-stage application capabilities`
+is expressly permitted. The ownership and bypass prohibitions below remain
+mandatory.
+
+The following source dependencies are forbidden:
+
+* `domain core → application core`;
+* `domain core → edge/adapters`;
+* `application core → edge/adapters`;
+* UI application → worker-pipeline implementation or the reverse; and
+* a stage capability → a predecessor stage's implementation.
+
+Analysis consumes admitted-module contracts, not retrieval implementation.
+City construction consumes canonical metric contracts, not analyzer
+implementation.
+
+Direct `edge/adapters → domain core` access is permission only for implementing
+a core-owned port or adapting canonical domain values. Production actions still
+enter through application driving ports. An adapter must not create a second
+orchestrator, admission path, metric path, or city-construction path. Port
+contracts remain with their application or domain semantic owner; there is no
+separate contracts layer. This ADR does not revive ADR 0001's former blanket
+adapter/domain or framework/storage classifications.
+
+=== Meanings kept distinct
+
+* A *source-dependency arrow* means source on the left may import or otherwise
+  depend on source on the right.
+* A *runtime flow* may call an outward adapter through a core-owned driven port
+  and receive data inward without reversing the source dependency.
+* *Runtime messages* may move both ways between the UI and worker bridge
+  halves. They grant no source dependency and create no trust crossing.
+* *Placement* follows ADR 0002: UI application and presentation run in the
+  main context, while processing application, provider, parser, and city work
+  run in the worker. Placement does not define layering.
+* *Driving* and *driven* labels define conceptual port roles only. They do not
+  require an interface, package, or one-component-per-port design.
+
+=== Minimum logical blocks
+
+These are exclusive responsibility boundaries, not package or component
+counts.
+
+[cols="3,4,8",options="header"]
+|===
+|Block |Stratum and ADR 0002 placement |Exclusive responsibility
+
+|UI attempt coordinator
+|Application, UI main
+|Draft and validation-policy use; current attempt and observable state;
+identity retention; replacement and cancellation precedence; sole publication
+gate; session reset.
+
+|Worker pipeline coordinator
+|Application, worker
+|Resolution → admission → metrics → city sequence; stage termination;
+downstream suppression; feasible cancellation coordination; core-transient
+release.
+
+|Revision resolution
+|Application plus domain identity policy, worker
+|Canonical repository and one immutable revision; resolution classification;
+no source retrieval.
+
+|Retrieval/admission
+|Application plus domain admission policy, worker
+|Sole `M1-ADM`/RA classification and admitted-module creation and order; one
+complete set or failure.
+
+|Static metrics
+|Application plus domain metric policy, worker
+|Consume only admitted modules; complete canonical metric facts or
+`M1-MET-1`.
+
+|City construction
+|Pure domain, worker
+|Complete metric facts → one complete canonical scene or `M1-CITY-1`; no
+acquisition, analyzer, parser, bridge, or renderer dependency.
+
+|UI surface adapter
+|Edge, UI main
+|User actions and state/status display; no business-state ownership.
+
+|Presentation adapter
+|Edge, UI main
+|https://github.com/FelixGeisler/code-city/issues/458[#458] realization through
+https://github.com/FelixGeisler/code-city/issues/451[#451]-selected
+visualization technology: complete-scene renderer adaptation, inert
+identities, `M1-PRES-1` detection, and presentation-resource cleanup.
+
+|UI-worker bridge
+|Edge, both contexts
+|Correlation and transport of lifecycle commands and source-free outcomes; no
+validation, orchestration, classification, or admission.
+
+|GitHub resolution adapter
+|Edge, worker
+|https://github.com/FelixGeisler/code-city/issues/453[#453] realization of the
+https://github.com/FelixGeisler/code-city/issues/448[#448]-selected
+resolution-evidence mechanism only; no source retrieval.
+
+|GitHub retrieval adapter
+|Edge, worker
+|https://github.com/FelixGeisler/code-city/issues/454[#454] realization of
+https://github.com/FelixGeisler/code-city/issues/449[#449]-selected
+selected-revision records and bytes and owned physical network resources; no
+independent admission.
+
+|Parser adapter
+|Edge, worker
+|Parser-specific grammar and syntax translation; no metric policy, execution,
+import, or provider access.
+|===
+
+Parser-specific objects remain edge-side. Only core-owned semantic
+observations cross the static-syntax boundary.
+
+=== Conceptual port roles and bridge payloads
+
+[cols="4,4,5",options="header"]
+|===
+|Port role |Kind and owner |Collaborator
+
+|User attempt actions
+|Driving; UI attempt coordinator
+|UI surface adapter
+
+|Worker outcome intake
+|Driving; UI attempt coordinator
+|Main bridge half
+
+|Processing gateway
+|Driven; UI attempt coordinator
+|Main bridge half
+
+|Worker attempt control
+|Driving; worker pipeline coordinator
+|Worker bridge half
+
+|Worker outcome publication
+|Driven; worker pipeline coordinator
+|Worker bridge half
+
+|Resolve immutable revision
+|Driving; resolution capability
+|Worker pipeline coordinator
+
+|Resolution evidence
+|Driven; resolution capability
+|GitHub resolution adapter
+
+|Retrieve and admit
+|Driving; retrieval/admission capability
+|Worker pipeline coordinator
+
+|Selected-revision repository data
+|Driven; retrieval/admission capability
+|GitHub retrieval adapter
+
+|Analyze admitted modules
+|Driving; static-metrics capability
+|Worker pipeline coordinator
+
+|Static syntax
+|Driven; static-metrics capability
+|Parser adapter
+
+|Construct canonical city
+|Domain-owned driving contract; an ordinary pure call is sufficient
+|Worker pipeline coordinator
+
+|Present complete scene
+|Driven; UI attempt coordinator
+|Presentation adapter
+|===
+
+The bridge may carry only:
+
+* toward the worker: one normalized, syntactically accepted submission and
+  lifecycle control; and
+* toward the UI: selected identity, one terminal failure, or one complete
+  canonical scene.
+
+Raw or normalized repository source or content, admitted modules, parser
+objects, metric intermediates, and partial scenes must not cross. Building
+identities may cross only as inert model keys. Exact message and port schemas
+remain with #453 through #460.
+
+=== Sole state, failure, admission, cancellation, and cleanup ownership
+
+* *Visible state and publication:* the UI attempt coordinator only; the UI
+  surface only displays it.
+* *Input failure:* domain validation policy classifies it; the UI coordinator
+  commits `Failure` before worker dispatch.
+* *Resolution outcomes:* the revision-resolution capability.
+* *Admission and RA outcomes:* the retrieval/admission capability only; no
+  other block creates or readmits admitted modules.
+* *Metric failure:* the static-metrics capability.
+* *Construction failure:* the city constructor.
+* *Presentation failure:* the presentation adapter detects it and cleans its
+  resources; the UI coordinator alone commits visible `Failure`.
+* *Worker sequencing and suppression:* the worker pipeline coordinator only.
+* *Bridge behavior:* transport outcomes unchanged; never validate, classify,
+  admit, or reclassify them.
+
+On a worker-stage failure, the owning capability returns its terminal outcome,
+the pipeline suppresses later stages and releases core transients, and the UI
+applies the outcome only if that attempt remains publication-eligible.
+
+Cancellation and cleanup are partitioned exactly once:
+
+. The UI coordinator immediately revokes publication eligibility, wins ties,
+  and clears identity, city, and presentation state while preserving the draft
+  required by #441.
+. The worker pipeline coordinates feasible stopping, suppresses downstream
+  stages, and releases core transient references.
+. Each provider or parser adapter releases only the physical resources it
+  owns.
+. The bridge releases transport references.
+. The presentation adapter disposes incomplete or replaced presentation
+  resources.
+
+Late output is harmless because the UI publication gate remains authoritative.
+Reload discards all application-managed session state. This decision adds no
+cleanup-latency, secure-erasure, platform-cache, or garbage-collection promise.
+
+== Rationale
+
+The split makes mutable orchestration distinct from deterministic policy,
+preserves provider, parser, and renderer independence and pure city
+construction, gives #452 objective cross-stratum and named same-stratum
+conformance rules, and supports focused #453 through #458 slices without
+turning each slice into an architecture layer.
+
+== Downside
+
+The additional stratum and boundary translations add structural cost.
+Capability-scoped edge-to-domain access creates bypass risk, so production
+entry, sole admission, and publication ownership require behavioral evidence
+as well as source-graph evidence.
+
+== Rejected alternatives
+
+* *Undifferentiated core.* It uses fewer concepts but leaves the separation of
+  policy and orchestration convention-only and not objectively protectable.
+* *Adapters may depend only on application.* It creates a stronger funnel but
+  adds unsupported wrappers or duplicate translations for canonical
+  identities, syntax, and scenes.
+* *Blanket adapter-to-domain access.* It permits orchestration and invariant
+  bypass.
+* *Treat the three-arrow cross-stratum whitelist as a complete same-stratum
+  policy.* It creates unsupported source-layout constraints.
+* *Add a contracts layer, per-stage hexagons or packages, generic buses,
+  registries, or extension abstractions.* No accepted M1 need supports them.
+
+== Consequences and conformance
+
+[cols="2,8",options="header"]
+|===
+|Owner |Decision or realization implication
+
+|https://github.com/FelixGeisler/code-city/issues/447[#447]
+|The shell/build decision must support these strata, ADR 0002 placements, and
+bridge composition without placing framework source in core.
+
+|https://github.com/FelixGeisler/code-city/issues/448[#448]
+|Selects the mechanism for the resolution-evidence driven port. #453 realizes
+that port, and it does not retrieve source.
+
+|https://github.com/FelixGeisler/code-city/issues/449[#449]
+|Selects the mechanism for selected-revision repository data and the sole
+retrieval/admission boundary. #454 realizes those port roles.
+
+|https://github.com/FelixGeisler/code-city/issues/450[#450]
+|Selects parser technology that implements the static-syntax port without
+leaking parser types into core policy.
+
+|https://github.com/FelixGeisler/code-city/issues/451[#451]
+|Selects visualization technology for the presentation port. #458 realizes
+that port, while city construction remains pure domain.
+
+|https://github.com/FelixGeisler/code-city/issues/452[#452]
+|Maps these conceptual rules to source. Its automated evidence accepts
+`edge→application`, capability-authorized `edge→domain`, and
+`application→domain` cross-stratum dependencies plus
+`worker-pipeline coordinator→named worker-stage application capability`. It
+rejects out-of-capability `edge→domain`, `application→edge`, `domain→edge`,
+`domain→application`, UI↔worker implementation, and
+`stage capability→predecessor-stage implementation` dependencies without
+establishing a general same-stratum policy.
+
+|https://github.com/FelixGeisler/code-city/issues/453[#453]
+|Realizes the #448-selected resolution-evidence port, owns the exact
+accepted-submission and resolution/selected-identity handoffs, and proves
+pre-provider input rejection.
+
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Realizes the #449-selected repository-data and retrieval/admission port roles,
+owns the exact admitted-module handoff, and proves only retrieval/admission
+creates admitted modules.
+
+|https://github.com/FelixGeisler/code-city/issues/455[#455] and
+https://github.com/FelixGeisler/code-city/issues/456[#456]
+|Refine one static-metrics block, not separate architecture layers. Parser
+objects remain edge-side, and analysis consumes admitted modules rather than
+retrieval implementation.
+
+|https://github.com/FelixGeisler/code-city/issues/457[#457]
+|Owns the canonical-scene handoff and proves city construction from metric
+fixtures without acquisition, analyzer, parser, bridge, or renderer source.
+
+|https://github.com/FelixGeisler/code-city/issues/458[#458]
+|Realizes the #451-selected presentation port and proves source-free
+complete-scene adaptation, inert identities, presentation failure, and
+presentation-resource cleanup.
+
+|https://github.com/FelixGeisler/code-city/issues/459[#459]
+|Connects the two coordinators through the restricted bridge for the success
+path and proves latest-attempt atomic publication.
+
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Proves unchanged failure propagation, cancellation ties, late-result
+rejection, downstream suppression, and the complete cleanup partition.
+
+|https://github.com/FelixGeisler/code-city/issues/461[#461]
+|Remains the completed driver, context, and quality baseline. Quality Scenario
+8 is refined only to cover this ADR's cross-stratum whitelist, named
+same-stratum permission and prohibitions, and #452 evidence.
+
+|https://github.com/FelixGeisler/code-city/issues/462[#462]
+|Owns this accepted ADR, the minimum blocks, ports, and ownership, and their
+strategy and building-block documentation. It owns no concrete source map,
+general same-stratum dependency policy, or schema.
+
+|https://github.com/FelixGeisler/code-city/issues/463[#463]
+|Synthesizes these ports with only mechanisms accepted by #447 through #451
+and must add no port, owner, admission path, or orchestrator.
+|===
+
+If a mechanism selected by #447 through #451 cannot realize these boundaries
+under ADR 0002, its owning decision remains unaccepted. #463 or implementation
+must not silently alter this ADR.
+
+== Exclusions
+
+This ADR does not select or change:
+
+* product behavior or a requirements contract;
+* a package or source layout, concrete source map, general same-stratum policy
+  beyond the named permission and prohibitions, module name, executable
+  interface, signature, DTO, message or port schema, or separate contracts
+  layer;
+* shell, framework, build, packaging, Pages workflow or route,
+  endpoint/request/redirect/retry/retrieval, parser, analyzer, renderer,
+  transport/worker/cancellation, test, dependency, enforcement-tool, or
+  deployment technology;
+* a threshold, limit, failure category, credential, persistence or storage
+  port, cache, backend, additional runtime context, platform cleanup or erasure
+  promise, compatibility commitment, future port, plugin, registry, generic
+  bus, extension point, or per-stage hexagon; or
+* an outcome owned by #447 through #460 or #463, a v1 behavior, or a v1
+  implementation choice.

@@ -11,3 +11,8 @@
   records the clear Software Architect recommendation and the Requirements
   Engineer's acceptance under the human delegation recorded in
   https://github.com/FelixGeisler/code-city/issues/444[#444].
+* xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003: M1 core strata, building blocks, and conceptual ports]
+  is `Accepted`. https://github.com/FelixGeisler/code-city/issues/462[#462]
+  records the clear Software Architect recommendation and the Requirements
+  Engineer's acceptance under the human delegation recorded in
+  https://github.com/FelixGeisler/code-city/issues/444[#444].

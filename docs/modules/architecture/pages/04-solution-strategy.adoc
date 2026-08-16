@@ -1,1 +1,92 @@
 = 4. Solution Strategy
+
+The accepted structural strategy is defined by
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
+xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002],
+and
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003].
+The ADRs remain authoritative where this summary omits detail.
+
+== One core with two strata
+
+ADR 0003 refines ADR 0001's conceptual core without superseding its outer
+boundary:
+
+* the *application core* owns current-attempt and worker-stage orchestration
+  and the application driving and driven ports;
+* the *domain core* owns canonical values and pure deterministic input, state,
+  identity, admission, metric, and city policies; and
+* provider, UI/shell, UI-worker bridge, parser, and renderer mechanisms remain
+  *edge/adapters*.
+
+These are source and responsibility boundaries, not packages, components,
+execution contexts, or deployment nodes. ADR 0002 independently places UI
+application and presentation work in the browser main context and processing
+application, provider, parser, and city work in the worker.
+
+== Capability-scoped source direction
+
+The cross-stratum source graph is:
+
+[source,text]
+----
+edge/adapters ----------------> application core ----> domain core
+       +-----------------------------------------------> domain core
+----
+
+Its cross-stratum whitelist is exactly:
+
+* `edge/adapters → application core`;
+* `edge/adapters → domain core`, only to implement a core-owned port or adapt
+  canonical domain values; and
+* `application core → domain core`.
+
+Production actions still enter through application driving ports. Direct
+edge-to-domain access must not create a second orchestrator, admission path,
+metric path, or city-construction path. Port contracts remain with their
+application or domain semantic owner; there is no separate contracts layer.
+Analysis consumes admitted-module contracts rather than retrieval
+implementation, and city construction consumes canonical metric contracts
+rather than analyzer implementation.
+
+ADR 0003 does not decide a general same-stratum source graph or concrete source
+mapping. Within the application stratum,
+`worker-pipeline application coordination → named worker-stage application capabilities`
+is expressly permitted. The following source dependencies remain forbidden:
+
+* `domain core → application core`;
+* `domain core → edge/adapters`;
+* `application core → edge/adapters`;
+* UI application → worker-pipeline implementation or the reverse; and
+* a stage capability → a predecessor stage's implementation.
+
+A source-dependency arrow means that source on its left may import or otherwise
+depend on source on its right. Runtime calls through core-owned driven ports,
+bidirectional UI-worker messages, and ADR 0002 placement neither reverse nor
+grant a source dependency. UI-worker messages create no trust crossing.
+Driving and driven labels denote conceptual roles only; they require no
+interface, package, or one-component-per-port design.
+
+== Selected trade-off
+
+Separating mutable orchestration from pure deterministic policy makes the
+accepted boundary objectively protectable, preserves provider, parser, and
+renderer independence, and keeps city construction pure. Capability-scoped
+edge-to-domain access avoids unsupported wrappers and duplicate translations
+for canonical values while retaining application driving ports as the only
+production entry.
+
+The cost is an additional stratum, boundary translations, and bypass risk.
+That risk is constrained through sole orchestration, admission, metric,
+city-construction, and publication ownership and through source and behavioral
+evidence owned by https://github.com/FelixGeisler/code-city/issues/452[#452]
+through https://github.com/FelixGeisler/code-city/issues/460[#460]. An
+undifferentiated core would leave the policy/orchestration split
+convention-only; an adapters-only-to-application funnel would require
+unsupported wrappers; blanket adapter-to-domain access would permit invariant
+bypass.
+
+The minimum responsibilities and conceptual collaborations are documented in
+xref:05-building-block-view.adoc[Building Block View]. Concrete source mapping,
+general same-stratum policy, packages, interfaces, schemas, mechanisms, and
+technologies remain with their stated downstream owners.

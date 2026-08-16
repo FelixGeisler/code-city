@@ -153,22 +153,36 @@ https://github.com/FelixGeisler/code-city/issues/444[#444] atomic failures; evid
 and https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |8. Dependency conformance
-|A source-dependency edge governed by accepted ADR 0001 is added or changed.
-|Packaged M1 source graph; runtime calls and data flow are considered
-separately.
-|The graph conforms to that accepted ADR; runtime direction is not treated as
-source-dependency direction.
-|#452's automated evidence accepts a conforming graph and rejects one
-representative forbidden edge.
-|xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] is accepted through
-https://github.com/FelixGeisler/code-city/issues/445[#445]. Automated evidence
-belongs to https://github.com/FelixGeisler/code-city/issues/452[#452].
+|A source-dependency edge governed by accepted ADR 0001 or ADR 0003 is added
+or changed.
+|Mapped M1 source graph; runtime calls, messages, data flow, and ADR 0002
+placement are considered separately from source direction.
+|The cross-stratum graph contains only `edge→application`,
+capability-authorized `edge→domain`, and `application→domain`. The named
+worker-pipeline coordinator→worker-stage application-capability dependency is
+permitted. Out-of-capability edge-to-domain access and every named forbidden
+dependency are rejected. No general same-stratum rule is inferred.
+|#452's automated evidence accepts representative `edge→application`,
+capability-authorized `edge→domain`, and `application→domain` cross-stratum
+dependencies plus
+`worker-pipeline coordinator→named worker-stage application capability`. It
+rejects representative out-of-capability `edge→domain`, `application→edge`,
+`domain→edge`, `domain→application`, UI↔worker implementation, and
+`stage capability→predecessor-stage implementation` dependencies.
+|xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] and
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
+are the accepted source-conformance rules. Automated evidence belongs to
+https://github.com/FelixGeisler/code-city/issues/452[#452].
 |===
 
 Scenario 8 applies to xref:adr/0001-core-dependency-boundary.adoc[accepted ADR
-0001], and https://github.com/FelixGeisler/code-city/issues/452[#452] owns its
-automated evidence. RA-10 and RA-11, SP-01 through SP-04, CC-09, and PR-01
-remain deferred to their linked owners in
+0001] and
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[accepted
+ADR 0003]. https://github.com/FelixGeisler/code-city/issues/452[#452] owns the
+complete positive and negative source-conformance evidence. Runtime direction,
+messages, and placement are not source direction, and no general same-stratum
+rule is inferred. RA-10 and RA-11, SP-01 through SP-04, CC-09, and PR-01 remain
+deferred to their linked owners in
 xref:requirements:06-source-admission-and-limits.adoc#deferred-limits[Downstream
 limit decisions and dispositions]; this page gives them no scenario, value,
 unit, interval, precedence rule, or diagnostic.

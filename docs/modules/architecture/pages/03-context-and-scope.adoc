@@ -3,7 +3,10 @@
 This view preserves the accepted logical system context and realizes only the
 runtime, delivery, trust, transient-data, and cleanup placement accepted in
 xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002].
-Provider mechanisms, internal blocks and ports, handoff schemas, and the full
+The internal strata, minimum blocks, conceptual ports, bridge boundary, and
+ownership mapping are accepted in
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003].
+Provider mechanisms, exact message and port schemas, and the full
 accepted-mechanism runtime synthesis remain deferred to their owning issues.
 
 == Local terms
@@ -161,8 +164,8 @@ https://github.com/FelixGeisler/code-city/issues/447[#447].
 |UI main context to processing worker
 |Only a current normalized, syntactically accepted submission and lifecycle
 control. Invalid input is rejected before dispatch or provider interaction.
-|Exact messages, schemas, and ports remain deferred to their owning issues;
-this view selects no communication or cancellation primitive.
+|Exact message and port schemas remain deferred to their owning issues; this
+view selects no communication or cancellation primitive.
 
 |Processing worker to UI main context
 |The selected canonical repository/revision tuple while `Loading`, one terminal
@@ -272,16 +275,18 @@ garbage-collection internals.
 xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
 is authoritative for the placement above and its feasibility stop rule.
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains independently
-authoritative for source dependencies.
+authoritative for the outer source-dependency boundary.
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
+is authoritative for internal strata, minimum blocks, conceptual ports, the
+bridge boundary, and exclusive ownership.
 
 The following remain deferred: shell/build and Pages mechanism in
 https://github.com/FelixGeisler/code-city/issues/447[#447]; GitHub origins and
 resolution/retrieval mechanisms in #448 and #449; analyzer and renderer
-technology and deferred limits in #450 and #451; internal blocks, conceptual
-ports, and ownership mapping in
-https://github.com/FelixGeisler/code-city/issues/462[#462]; and the complete
-accepted-mechanism/port runtime synthesis in
-https://github.com/FelixGeisler/code-city/issues/463[#463]. This view selects no
-endpoint, API, redirect/request policy, shell, parser, analyzer, renderer,
-package, schema, port, worker lifecycle or cancellation primitive, Pages
+technology and deferred limits in #450 and #451; exact message and port schemas
+in #453 through #460; and the complete accepted-mechanism/port runtime
+synthesis in https://github.com/FelixGeisler/code-city/issues/463[#463]. This
+view selects no endpoint, API, redirect/request policy, shell, parser,
+analyzer, renderer, concrete package or source map, executable interface,
+message or port schema, worker lifecycle or cancellation primitive, Pages
 workflow, route, threshold, or fallback.
