@@ -3,7 +3,7 @@
 This view records only the execution-context ownership, generic handoffs,
 publication gate, and lifecycle cleanup accepted in
 xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002].
-It does not select a message schema, port, API, GitHub mechanism, worker
+It does not select a message or port schema, API, GitHub mechanism, worker
 lifecycle or cancellation primitive, parser, analyzer, renderer, or full
 accepted-mechanism flow. That synthesis remains with
 https://github.com/FelixGeisler/code-city/issues/463[#463].
@@ -144,7 +144,7 @@ mechanism remain with #447.
 |UI to worker
 |A current normalized, syntactically accepted submission and lifecycle control.
 Invalid input never crosses this handoff.
-|Exact message, schema, port, dispatch, and cancellation mechanisms remain
+|Exact message and port schemas, dispatch, and cancellation mechanisms remain
 deferred.
 
 |Worker to UI while `Loading`
@@ -246,8 +246,12 @@ be reopened. No proxy, relay, backend, serverless function, credential,
 persistent cache, opaque unbounded response, automatic-retry workaround,
 second retrieval path, or other fallback may be introduced silently.
 
-The exact shell, provider mechanisms, parser/analyzer, renderer, minimum blocks,
-conceptual ports, messages, schemas, package mapping, worker primitive,
-workflow, route, and full success/failure/replacement/cancellation flow remain
-with #447 through #451, #462, and #463. xref:adr/0001-core-dependency-boundary.adoc[ADR
-0001] remains authoritative for source dependencies.
+The minimum blocks, conceptual ports, bridge boundary, and exclusive ownership
+are accepted in
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003].
+The exact shell, provider mechanisms, parser/analyzer, renderer, message and
+port schemas, concrete source mapping, worker primitive, workflow, route, and
+full success/failure/replacement/cancellation flow remain with their stated
+owners in #447 through #460 and #463.
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains authoritative
+for the outer source-dependency boundary.

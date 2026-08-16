@@ -111,10 +111,10 @@ with direct anonymous worker-to-Public-GitHub communication and no backend,
 credential, or persistent product state. ADR 0002 also fixes topology-level
 enforcement and cleanup ownership without changing ADR 0001.
 
-Shell/build and Pages mechanism, provider origins and requests, analysis and
-visualization technology, internal blocks and ports, exact handoff schemas,
-worker lifecycle/cancellation and physical cleanup mechanisms, and deferred
-limits remain *deferred/not accepted here*. Their owners are
-https://github.com/FelixGeisler/code-city/issues/447[#447] through
-https://github.com/FelixGeisler/code-city/issues/451[#451] and
-https://github.com/FelixGeisler/code-city/issues/462[#462].
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
+is the accepted internal core-strata, minimum-block, conceptual-port, bridge,
+and exclusive-ownership constraint. Shell/build and Pages mechanism, provider
+origins and requests, analysis and visualization technology, concrete source
+mapping, exact message and port schemas, worker lifecycle/cancellation and
+physical cleanup mechanisms, and deferred limits remain *deferred/not accepted
+here* with their owners in #447 through #460 and #463.

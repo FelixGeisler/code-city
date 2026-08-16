@@ -162,14 +162,18 @@ browser UI/presentation main context, at most one same-origin dedicated processi
 direct anonymous worker-to-Public-GitHub communication, and the absence of a
 Code City backend, credential, and persistent product state.
 
+The internal core strata, minimum logical blocks, conceptual ports, bridge
+boundary, and ownership mapping owned by
+https://github.com/FelixGeisler/code-city/issues/462[#462] are accepted in
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003].
 The mechanism and technology choices owned by
 https://github.com/FelixGeisler/code-city/issues/447[#447] through
-https://github.com/FelixGeisler/code-city/issues/451[#451] and
-https://github.com/FelixGeisler/code-city/issues/462[#462] remain
-*deferred/not accepted here*. Neither this page nor ADR 0002 selects a shell,
-build or Pages workflow, application route, GitHub endpoint or request policy,
-parser, analyzer, renderer, internal block, port, schema, package, worker
-lifecycle or cancellation primitive, or deferred threshold.
+https://github.com/FelixGeisler/code-city/issues/451[#451] remain
+*deferred/not accepted here*. Neither this page nor ADR 0002 or ADR 0003
+selects a shell, build or Pages workflow, application route, GitHub endpoint or
+request policy, parser, analyzer, renderer, exact message or port schema,
+concrete package or source map, worker lifecycle or cancellation primitive, or
+deferred threshold.
 
 https://github.com/FelixGeisler/code-city/issues/463[#463] and
 https://github.com/FelixGeisler/code-city/issues/464[#464] are later synthesis

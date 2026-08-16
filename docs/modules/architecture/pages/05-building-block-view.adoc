@@ -1,1 +1,249 @@
 = 5. Building Block View
+
+This view documents only the minimum logical responsibilities and conceptual
+collaborations accepted in
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003].
+They fit the source strategy in xref:04-solution-strategy.adoc[Solution
+Strategy] and the placement in
+xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002].
+They are exclusive responsibility boundaries, not package or component counts,
+and do not prescribe interfaces, schemas, mechanisms, or technologies.
+
+== Minimum logical blocks
+
+[cols="3,4,8",options="header"]
+|===
+|Block |Stratum and placement |Exclusive responsibility
+
+|UI attempt coordinator
+|Application, UI main
+|Uses the domain validation policy; owns the draft, current attempt,
+observable state, identity retention, replacement and cancellation precedence,
+sole publication gate, and session reset.
+
+|Worker pipeline coordinator
+|Application, worker
+|Owns the resolution → admission → metrics → city sequence, stage termination,
+downstream suppression, feasible cancellation coordination, and release of
+core transients.
+
+|Revision resolution
+|Application plus domain identity policy, worker
+|Produces the canonical repository and one immutable revision and owns
+resolution classification. It performs no source retrieval.
+
+|Retrieval/admission
+|Application plus domain admission policy, worker
+|Is the sole owner of `M1-ADM`/RA classification and admitted-module creation
+and order. It produces one complete admitted set or a failure.
+
+|Static metrics
+|Application plus domain metric policy, worker
+|Consumes only admitted modules and produces complete canonical metric facts
+or `M1-MET-1`.
+
+|City construction
+|Pure domain, worker
+|Transforms complete metric facts into one complete canonical scene or
+`M1-CITY-1`. It has no acquisition, analyzer, parser, bridge, or renderer
+dependency.
+
+|UI surface adapter
+|Edge, UI main
+|Adapts user actions and displays state and status without owning business
+state.
+
+|Presentation adapter
+|Edge, UI main
+|Realizes the presentation port in
+https://github.com/FelixGeisler/code-city/issues/458[#458] using the technology
+selected by https://github.com/FelixGeisler/code-city/issues/451[#451]: adapts
+a complete scene to the renderer, treats identities as inert, detects
+`M1-PRES-1`, and cleans presentation resources.
+
+|UI-worker bridge
+|Edge, both contexts
+|Correlates and transports lifecycle commands and source-free outcomes. It
+performs no validation, orchestration, classification, or admission.
+
+|GitHub resolution adapter
+|Edge, worker
+|Realizes the resolution-evidence port in
+https://github.com/FelixGeisler/code-city/issues/453[#453] using the mechanism
+selected by https://github.com/FelixGeisler/code-city/issues/448[#448]. It
+retrieves no source.
+
+|GitHub retrieval adapter
+|Edge, worker
+|Realizes selected-revision records and bytes in
+https://github.com/FelixGeisler/code-city/issues/454[#454] using the mechanism
+selected by https://github.com/FelixGeisler/code-city/issues/449[#449] and owns
+its physical network resources. It performs no independent admission.
+
+|Parser adapter
+|Edge, worker
+|Translates parser-specific grammar and syntax into core-owned semantic
+observations. It owns no metric policy and performs no execution, import, or
+provider access.
+|===
+
+Resolution and retrieval are distinct. Retrieval/admission alone creates or
+readmits admitted modules. Analysis consumes admitted modules rather than
+retrieval implementation. Parser-specific objects remain edge-side. City
+construction is pure domain, and presentation receives only a complete,
+source-free canonical scene.
+
+== Conceptual port roles
+
+[cols="4,4,5",options="header"]
+|===
+|Port role |Kind and semantic owner |Collaborator
+
+|User attempt actions
+|Driving; UI attempt coordinator
+|UI surface adapter
+
+|Worker outcome intake
+|Driving; UI attempt coordinator
+|Main bridge half
+
+|Processing gateway
+|Driven; UI attempt coordinator
+|Main bridge half
+
+|Worker attempt control
+|Driving; worker pipeline coordinator
+|Worker bridge half
+
+|Worker outcome publication
+|Driven; worker pipeline coordinator
+|Worker bridge half
+
+|Resolve immutable revision
+|Driving; revision-resolution capability
+|Worker pipeline coordinator
+
+|Resolution evidence
+|Driven; revision-resolution capability
+|GitHub resolution adapter
+
+|Retrieve and admit
+|Driving; retrieval/admission capability
+|Worker pipeline coordinator
+
+|Selected-revision repository data
+|Driven; retrieval/admission capability
+|GitHub retrieval adapter
+
+|Analyze admitted modules
+|Driving; static-metrics capability
+|Worker pipeline coordinator
+
+|Static syntax
+|Driven; static-metrics capability
+|Parser adapter
+
+|Construct canonical city
+|Domain-owned driving contract; an ordinary pure call is sufficient
+|Worker pipeline coordinator
+
+|Present complete scene
+|Driven; UI attempt coordinator
+|Presentation adapter
+|===
+
+Driving and driven labels describe conceptual roles, not executable
+interfaces, package boundaries, or component counts. Contracts stay with their
+application or domain semantic owners; no contracts layer exists.
+
+== UI-worker bridge boundary
+
+The bridge may transport only:
+
+* toward the worker, one normalized, syntactically accepted submission and
+  lifecycle control; and
+* toward the UI, selected identity, one terminal failure, or one complete
+  canonical scene.
+
+Raw or normalized repository source or content, admitted modules, parser
+objects, metric intermediates, and partial scenes never cross the bridge.
+Building identities may cross only as inert model keys. Runtime messages may
+move in both directions but grant no source dependency and create no trust
+crossing. Exact message and port schemas remain with #453 through #460.
+
+== Exclusive outcome and lifecycle ownership
+
+[cols="4,5,7",options="header"]
+|===
+|Concern |Sole owner |Boundary
+
+|Visible state and publication
+|UI attempt coordinator
+|The UI surface displays state but does not own it. The coordinator is the sole
+publication-eligibility gate.
+
+|Input-failure classification
+|Domain validation policy
+|The policy returns the classification before worker dispatch. No edge block
+classifies or reclassifies it.
+
+|Visible input-failure transition
+|UI attempt coordinator
+|The coordinator alone commits `Failure` before worker dispatch.
+
+|Resolution outcome
+|Revision-resolution capability
+|The resolution adapter supplies evidence only.
+
+|Admission and RA outcome
+|Retrieval/admission capability
+|No other block creates or readmits admitted modules. The retrieval adapter
+supplies selected-revision records and bytes only.
+
+|Metric failure
+|Static-metrics capability
+|The parser adapter supplies semantic syntax observations only.
+
+|Construction failure
+|City constructor
+|It consumes complete canonical metric facts and has no edge dependency.
+
+|Presentation-failure detection and resource cleanup
+|Presentation adapter
+|The adapter reports the outcome and cleans only its presentation resources.
+
+|Visible presentation-failure transition
+|UI attempt coordinator
+|Only the coordinator commits visible `Failure`.
+
+|Worker sequencing and suppression
+|Worker pipeline coordinator
+|A stage capability returns its terminal outcome; the pipeline suppresses
+later stages and releases core transients.
+
+|Bridge transport
+|UI-worker bridge
+|It transports outcomes unchanged and never validates, classifies, admits, or
+reclassifies them.
+|===
+
+An outcome from the worker is applied only while its attempt remains
+publication-eligible.
+
+Cancellation and cleanup are partitioned exactly once:
+
+. The UI attempt coordinator immediately revokes publication eligibility,
+  wins ties, and clears identity, city, and presentation state while preserving
+  the draft required by #441.
+. The worker pipeline coordinator coordinates feasible stopping, suppresses
+  downstream stages, and releases core transient references.
+. Each provider or parser adapter releases only the physical resources it
+  owns.
+. The UI-worker bridge releases transport references.
+. The presentation adapter disposes incomplete or replaced presentation
+  resources.
+
+Late output is harmless because the UI publication gate remains authoritative.
+Reload discards all application-managed session state. No cleanup latency,
+secure erasure, platform-cache behavior, or garbage-collection behavior is
+promised.
