@@ -35,22 +35,26 @@ xref:04-functional-requirements.adoc#states[Observable states and transitions].
 |xref:06-source-admission-and-limits.adoc[] defines the closed module-admission
 matrix, approved RA-01 through RA-09 maxima, deterministic classification, and
 observable category/code pairs under
-https://github.com/FelixGeisler/code-city/issues/442[#442]. Later processing,
-construction, presentation, and duration limit choices remain explicitly
-deferred to their linked owners.
+https://github.com/FelixGeisler/code-city/issues/442[#442]. RA-10/RA-11,
+SP-01 through SP-04, and CC-09/PR-01 remain explicitly deferred to their linked
+owners; CC-01 through CC-08 have the fixed #444 dispositions.
 
 |Fixed metric semantics
 |Included; accepted contract
 |xref:08-fixed-metric-semantics.adoc[] defines lexical physical-line SLOC,
 executable units, per-unit and maximum complexity, canonical facts, and atomic
 metric failure under https://github.com/FelixGeisler/code-city/issues/443[#443].
-Analyzer technology, analysis responsibility, and city mapping remain with
-their linked downstream owners.
+Analyzer technology and analysis responsibility remain with their linked
+downstream owners; city mapping is fixed by the next contract.
 
 |Fixed city, layout, and presentation
-|Contract pending
-|https://github.com/FelixGeisler/code-city/issues/444[#444] owns mapping,
-layout, palette, framing, and permitted presentation interaction.
+|Included; accepted contract
+|xref:10-fixed-city-layout-and-presentation.adoc[] defines exact prism mapping,
+palette, scene exclusions, unsigned-UTF-8 square shelves and bounds,
+orthographic framing, no interaction, precision, CC-01 through CC-08
+dispositions, and atomic stage failures under
+https://github.com/FelixGeisler/code-city/issues/444[#444]. Visualization
+technology and CC-09/PR-01 remain with #451.
 
 |Authentication, private repositories, or credentials
 |Excluded

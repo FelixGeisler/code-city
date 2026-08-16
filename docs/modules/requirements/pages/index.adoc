@@ -13,11 +13,12 @@ immutable repository revision.
 The baseline begins with the input, revision-identity, and user-state contract
 from https://github.com/FelixGeisler/code-city/issues/441[#441], the accepted
 source-admission and RA-01 through RA-09 contract from
-https://github.com/FelixGeisler/code-city/issues/442[#442], and the accepted
-fixed metric contract from
-https://github.com/FelixGeisler/code-city/issues/443[#443]. Decisions for the
-analyzer/version, possible later processing limits, city construction,
-presentation, and duration limits remain with their owning issues and the #464
+https://github.com/FelixGeisler/code-city/issues/442[#442], the accepted fixed
+metric contract from https://github.com/FelixGeisler/code-city/issues/443[#443],
+and the accepted fixed city, layout, and initial-presentation contract from
+https://github.com/FelixGeisler/code-city/issues/444[#444]. Analyzer/version,
+possible later retrieval and processing limits, visualization technology, and
+CC-09/PR-01 duration decisions remain with their owning issues and the #464
 hard gate.
 
 == Reading order
@@ -43,6 +44,14 @@ hard gate.
   and atomic metric failure.
 . xref:09-fixed-metric-acceptance.adoc[Fixed Metric Acceptance] provides the
   closed inert matrices, exact examples, and evidence allocation for that
+  contract.
+. xref:10-fixed-city-layout-and-presentation.adoc[Fixed City Layout and
+  Presentation] defines exact geometry, palette, scene content, square-shelf
+  layout and bounds, orthographic view, precision, interaction exclusions,
+  limit dispositions, and stage failures.
+. xref:11-fixed-city-layout-and-presentation-acceptance.adoc[Fixed City Layout
+  and Presentation Acceptance] provides the closed inert fixtures, boundary
+  tables, exclusions, failure examples, and evidence allocation for that
   contract.
 
 The words *must*, *must not*, *required*, and *only* are normative on these

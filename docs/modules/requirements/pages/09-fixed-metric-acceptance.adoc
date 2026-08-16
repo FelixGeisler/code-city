@@ -588,7 +588,7 @@ field, value, or order.
 |FACT-06 |Finding or diagnostic list |It is not a successful canonical metric fact.
 |FACT-07 |Dependency or unresolved-import information |It is not a canonical metric fact.
 |FACT-08 |Higher-level analysis |It remains outside this contract.
-|FACT-09 |City, building, layout, or presentation data |It belongs to #444 and later accepted contracts, not the metric fact set.
+|FACT-09 |City, building, layout, or presentation data |It belongs to the accepted fixed city contract under #444, not the metric fact set.
 |FACT-10 |Traversal suffix, parser node name, locale key, or concurrency key |It cannot enter identity or order.
 |===
 
@@ -621,6 +621,7 @@ The analyzer and version remain owned by
 https://github.com/FelixGeisler/code-city/issues/450[#450], analysis
 responsibility and port boundaries by
 https://github.com/FelixGeisler/code-city/issues/462[#462], and city existence
-and mapping by https://github.com/FelixGeisler/code-city/issues/444[#444]. These
-inert examples assign none of those choices and require no additional product
-decision to document the accepted metric contract.
+and mapping by xref:10-fixed-city-layout-and-presentation.adoc[] under
+https://github.com/FelixGeisler/code-city/issues/444[#444]. These inert examples
+assign none of those choices and require no additional product decision to
+document the accepted metric contract.

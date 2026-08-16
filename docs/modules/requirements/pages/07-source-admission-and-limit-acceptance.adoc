@@ -16,8 +16,9 @@ The contract is acceptable only when all of these gates hold:
   precedence rather than provider response or discovery order;
 * replacement, cancellation, failure, late completion, identity retention, and
   atomic publication preserve the accepted #441 invariants;
-* no deferred limit receives a value, requirement, scenario, or evidence
-  assumption here; and
+* CC-01 through CC-08 use only their accepted #444 dispositions, while every
+  still-deferred RA-10/RA-11, SP-01 through SP-04, CC-09, and PR-01 choice
+  remains without a value or scenario here; and
 * `npm run docs:build` succeeds.
 
 == Admission classification
@@ -385,14 +386,31 @@ metric result, model, partial city, stale city, or late publication.
 |===
 
 [[deferred-evidence]]
-== Deferred decisions have no evidence assumptions here
+== Downstream dispositions and evidence boundaries
 
-RA-10/RA-11, SP-01 through SP-04, CC-01 through CC-09, and PR-01 have no
-approved values, boundary scenarios, precedence cases, diagnostics, or evidence
-mapping in this change. Their decision owners are
-https://github.com/FelixGeisler/code-city/issues/449[#449],
-https://github.com/FelixGeisler/code-city/issues/450[#450],
-https://github.com/FelixGeisler/code-city/issues/444[#444], and
-https://github.com/FelixGeisler/code-city/issues/451[#451], with the hard gate
-in https://github.com/FelixGeisler/code-city/issues/464[#464]. No downstream
-body is changed by this allocation.
+RA-10/RA-11 and SP-01 through SP-04 still have no approved values, boundary
+scenarios, precedence cases, diagnostics, or evidence mapping here. Their
+decision owners remain https://github.com/FelixGeisler/code-city/issues/449[#449]
+and https://github.com/FelixGeisler/code-city/issues/450[#450]. CC-09 and PR-01
+likewise have no value, interval, threshold, or limit result here; visualization
+feasibility and both duration decisions remain exclusively with
+https://github.com/FelixGeisler/code-city/issues/451[#451].
+
+CC-01 through CC-08 are no longer deferred. Their only accepted dispositions
+are the exact table in
+xref:06-source-admission-and-limits.adoc#deferred-limits[] and the authoritative
+city contract in xref:10-fixed-city-layout-and-presentation.adoc#city-limit-dispositions[]:
+exactly `N` buildings and `N` scene prisms, zero labels, no applicable label
+bytes, no independent city or coordinate caps, exact derived bounds, and no
+independent limit-exceeded outcome. Missing, additional, or repeated mappings
+remain `M1-CITY-1`; private capacity remains a conformance defect.
+
+https://github.com/FelixGeisler/code-city/issues/457[#457] owns focused CC,
+construction, and `M1-CITY-1` evidence;
+https://github.com/FelixGeisler/code-city/issues/458[#458] owns complete
+presentation and absence evidence; and
+https://github.com/FelixGeisler/code-city/issues/460[#460] retains integrated
+state evidence. The hard gate in
+https://github.com/FelixGeisler/code-city/issues/464[#464] verifies the recorded
+human delegation and its #444 exercises before M1 implementation handoff. No
+downstream issue body is changed by this documentation allocation.
