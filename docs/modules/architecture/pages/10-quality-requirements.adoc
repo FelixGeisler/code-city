@@ -3,7 +3,8 @@
 The matrix below is the closed M1 quality-scenario set. Numerical limits and
 detailed contracts are linked to their normative requirements rather than
 copied. No elapsed-time target, tool-specific test prescription, or screenshot
-equality is introduced.
+equality is introduced. ADR 0008's fixed WebGL facts are mechanism conformance,
+while canonical repeatability remains semantic.
 
 [cols="2,5,4,6,6,6",options="header"]
 |===
@@ -36,13 +37,16 @@ processed repeatedly while provider or carrier order, locale, time,
 concurrency, or device order varies.
 |Successful accepted M1 journey.
 |Admission result, canonical metric facts, and canonical scene facts are
-identical. Exact equality applies except only the camera-evaluation tolerance
-accepted in #444; screenshots are not evidence.
+identical. ADR 0008's source-free instance values, fixed resource/draw policy,
+and camera evaluation are deterministic. Exact canonical equality applies
+except only #444's camera-evaluation tolerance; uploaded pixels and screenshots
+are not acceptance evidence.
 |Controlled retrieval proves the selected commit projects its exact root tree,
 provider order cannot affect canonical candidate order, each raw URL uses the
 immutable commit and retained raw path, and each in-horizon expected Git blob
 identity agrees before decode. Permutation and repetition evidence compares the
-canonical admitted-module sequence, metric facts, scene facts, and semantic
+canonical admitted-module sequence, metric facts, scene facts, defensive
+presentation projection, exact fixed WebGL mechanism facts, and semantic
 presentation result.
 |https://github.com/FelixGeisler/code-city/issues/442[#442]
 xref:requirements:06-source-admission-and-limits.adoc#admission-composition[M1-ADM-5]
@@ -90,7 +94,9 @@ or malformed supported-family syntax.
 |Admission, static metric processing, and presentation of the current attempt.
 |Every value remains inert data: no execution, evaluation, import, or dynamic
 loading occurs. Malformed syntax produces `M1-MET-1`; repository-derived model
-identities remain inert and never become markup or resource locators.
+identities remain inert and never become normal-object keys, DOM/WebGL text,
+names, IDs, classes, attributes, labels, shader text/defines, resource
+locators, diagnostics, or logs.
 |Adversarial fixtures observe no sentinel side effect or active interpretation
 and verify the exact atomic malformed-source outcome.
 |https://github.com/FelixGeisler/code-city/issues/442[#442]
@@ -121,8 +127,10 @@ lower limit or partial admitted set. Valid city input follows #444's CC-01
 through CC-08 dispositions.
 |Controlled cap, truncation, projection, hostile-key, SHA-horizon, raw/hash
 workspace, RA-04+1, request/workspace serialization, cutoff, precedence, and
-permutation evidence covers the selected retrieval/admission path; city
-evidence covers the fixed CC dispositions and integrated failure state.
+permutation evidence covers the selected retrieval/admission path; full-
+envelope city fixtures renew ADR 0008's coordinate/half-integer/`float32`
+proof; renderer evidence covers exact instance capacity and integrated failure
+without a lower private cap.
 |https://github.com/FelixGeisler/code-city/issues/442[#442]
 xref:requirements:06-source-admission-and-limits.adoc#limit-rule[M1-LIM-0],
 xref:requirements:06-source-admission-and-limits.adoc#metadata-policy[M1-LIM-1],
@@ -184,8 +192,8 @@ evidence https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |8. Dependency conformance
 |A source-dependency edge, concrete mechanism dependency or value use, or
-core-owned contract governed by accepted ADR 0001, ADR 0003, ADR 0004, or ADR
-0007 is added or changed.
+core-owned contract governed by accepted ADR 0001, ADR 0003, ADR 0004, ADR
+0007, or ADR 0008 is added or changed.
 |Mapped M1 source graph and shell boundaries. TypeScript language use, runtime
 calls, messages, data flow, and ADR 0002 placement are considered separately
 from source direction and concrete mechanism dependence.
@@ -199,8 +207,11 @@ otherwise depend on no concrete DOM/Worker mechanism value, and expose no
 DOM/Worker mechanism type in a core-owned contract. The parser adapter alone
 may depend on ADR 0007's exact parser assets and API; no parser object/type or
 source-derived key crosses into core, and the main bridge's worker-generation
-gate remains transport-resource ownership rather than orchestration. No
-general same-stratum rule is inferred.
+gate remains transport-resource ownership rather than orchestration. Only the
+UI-main presentation edge adapter may declare or use ADR 0008 renderer types,
+shaders, WebGL/Canvas/ResizeObserver APIs, state, or handoff projection; #452's
+shell and #457's city source remain renderer-free/neutral. No general same-
+stratum rule is inferred.
 |#452's initial automated evidence accepts representative
 `edge→application`, capability-authorized `edge→domain`, and
 `application→domain` cross-stratum dependencies plus
@@ -214,14 +225,18 @@ concrete DOM/Worker mechanism value dependence or instantiation, and
 DOM/Worker mechanism types in core-owned contracts. It also verifies ADR
 0007's parser-adapter-only dependency, fixed asset locators, primitive static-
 syntax boundary, and sole main-bridge worker handle/generation gate without
-adding a parser dependency or implementation. #460 executes the complete check
-against its final head after all M1 dependency and build-input changes.
+adding a parser dependency or implementation. #452 also proves its walking-
+shell baseline contains no renderer declaration or dependency. #458 proves
+every renderer type/value/API is confined to the presentation edge and adds no
+renderer package. #460 executes the complete check against its final head
+after all M1 dependency and build-input changes.
 |xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
 xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004],
-and
 xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
-0007] are the accepted conformance rules. Initial automated evidence belongs to
+0007], and
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
+are the accepted conformance rules. Initial automated evidence belongs to
 https://github.com/FelixGeisler/code-city/issues/452[#452]; final-head execution
 belongs to https://github.com/FelixGeisler/code-city/issues/460[#460].
 
@@ -275,6 +290,35 @@ xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-conten
 0006], and
 xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
 0007]; focused evidence #455 and integrated final evidence #460.
+
+|11. Atomic and retained WebGL presentation
+|A complete canonical handoff is malformed or hostile; host/drawing-buffer size
+changes during staging or passive resize; observer setup, a WebGL operation, or
+draw fails; context is lost before or after publication; or cancellation/
+replacement races synchronous presentation work.
+|UI-main presentation edge with one current generation, detached candidate or
+current published canvas, and ADR 0008's complete accepted envelope.
+|Defensive own-field validation precedes every WebGL resource. Model breach
+propagates only `M1-CITY-1`; `M1-PRES-1` begins only after a valid model. One
+fixed resource set and draw are staged detached; listener, observer, final
+verified host reread/redraw, post-operation checks, and eligibility precede one
+no-yield publication. Resize reuses resources. Current loss/resize failure
+removes city/canvas, retains tuple/draft, and remains failed without retry,
+restoration, fallback, or edit-only clearing. Cleanup is exactly once.
+|#457 supplies complete full-envelope canonical scenes and renews coordinate/
+float bounds. #458 proves hostile/inherited/accessor/throwing handoffs never
+reach WebGL; exact shaders, buffers, context attributes, property/API whitelist,
+draw state/call, camera and capacity; initial/resize host/backing/drawing-buffer
+equality and mismatch; observer-before-publication and final detached reread/
+redraw; stale synchronous work; context loss; post-`Success`; and cleanup. #459
+proves packaged success; #460 renews hosted final-head and nonclassifying UI-
+commit evidence. Every implementation CI job is green on each exact head.
+|xref:requirements:10-fixed-city-layout-and-presentation.adoc#presentation-boundary[source-free
+presentation boundary],
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#post-success-presentation-failure[published
+presentation lifecycle], and
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008];
+evidence #457 through #460.
 |===
 
 xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
@@ -299,9 +343,11 @@ Scenario 8 applies to xref:adr/0001-core-dependency-boundary.adoc[accepted ADR
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[accepted
 ADR 0003],
 xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[accepted ADR
-0004], and
+0004],
 xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[accepted
-ADR 0007]. https://github.com/FelixGeisler/code-city/issues/452[#452] owns the
+ADR 0007], and
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[accepted ADR
+0008]. https://github.com/FelixGeisler/code-city/issues/452[#452] owns the
 initial complete positive and negative automated source-conformance check;
 https://github.com/FelixGeisler/code-city/issues/460[#460] owns its execution
 against the final head. Runtime direction, messages, data flow, ADR 0002
@@ -333,11 +379,21 @@ the complexity and combined rerun, and #460 final closure, asset, provenance,
 traffic/logging, lifecycle, and publication renewal. This documentation and its
 inert appendix are not executable parser evidence.
 
-RA-10 retrieval duration, RA-11 admission duration, and SP-01 through SP-04 are
-no longer deferred: each is explicitly unnecessary and has no value, unit,
-timer, clock, category, code, interval, cutoff, boundary, or precedence.
-Scenarios 6 and 10 have no elapsed-time target, and arbitrary provider or static
-time alone may leave an attempt `Loading` without creating an outcome. CC-09
-and PR-01 remain with #451 as linked from
-xref:requirements:06-source-admission-and-limits.adoc#deferred-limits[accepted
-limit dispositions].
+ADR 0008 is the accepted quality source for the source-free model boundary,
+fixed WebGL resources/shaders/context/API/state/camera, drawing-buffer equality,
+full-envelope float feasibility, observer-before-publication atomicity, passive
+resize, context loss, post-`Success` failure, cleanup, CC-09/PR-01, evidence
+renewal, and stop rules. #452 owns only renderer-free baseline evidence, #457
+renderer-neutral construction/bound renewal, #458 focused renderer evidence,
+#459 packaged success, and #460 final hosted renewal. The dated platform,
+package, repository, and OSV observations are documentary point-in-time facts,
+not runtime, compatibility, vulnerability-free, performance, legal, cleanup,
+or future-maintenance warranties.
+
+RA-10 retrieval duration, RA-11 admission duration, SP-01 through SP-04, CC-09,
+and PR-01 are no longer deferred: each is explicitly unnecessary and has no
+value, unit, timer, clock, category, code, interval, cutoff, boundary, or
+precedence; CC-09/PR-01 additionally have no deadline, threshold, or
+T-1/T/T+1 scenario. Scenarios 6, 10, and 11 have no elapsed-time target, and
+arbitrary provider, static, construction, or presentation time alone may leave
+an attempt `Loading` without creating an outcome.

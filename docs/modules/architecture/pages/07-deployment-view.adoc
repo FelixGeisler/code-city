@@ -18,10 +18,14 @@ xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-conten
 xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
 0007] accepts five statically addressed parser assets beneath `/code-city/`,
 worker-only parsing, and the worker-generation lifecycle without another node
-or provider path. None creates current product traffic, dependency, asset, or
-deployment node. This view adds no Pages source, action/workflow, application
-route, deployment mechanism, renderer, general port/schema, or additional
-worker primitive.
+or provider path.
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
+accepts browser-native WebGL2 in the existing UI main context with fixed
+repository-source shader literals and no renderer package, external renderer
+asset, rendering worker, fallback, or extra deployment node. None creates
+current product traffic, dependency, asset, or deployment node. This view adds
+no Pages source, action/workflow, application route, deployment mechanism,
+general port/schema, or additional worker primitive.
 
 == Production topology
 
@@ -81,8 +85,10 @@ credential. It is not a product-data trust boundary.
 |Browser UI/presentation main context
 |One main context on the user device, loaded from the accepted Pages target.
 |Owns input and current-session product state, state and attempt eligibility,
-presentation adaptation and cleanup, and the sole atomic publication gate. It
-makes no provider or repository request.
+ADR 0008 defensive source-free WebGL2 adaptation, detached canvas staging,
+fixed GPU resources, observer/resize/context-loss lifecycle and cleanup, and
+the sole atomic publication/visible-failure gate. It makes no provider or
+repository request.
 
 |Browser processing worker context
 |At most one dedicated context, same-origin with the UI.
@@ -118,18 +124,23 @@ path.
 |Trusted static UI and worker artifacts. The future ADR 0007 package includes
 only its exact build-generated same-origin runtime JavaScript URL, runtime
 WASM, and JavaScript/TypeScript/TSX grammar WASMs, all statically addressed
-beneath `/code-city/`.
+beneath `/code-city/`. ADR 0008's two shaders are fixed literals in trusted UI
+source, not separately loaded artifacts.
 |Repository payload, admitted source, metrics, city/scene data, attempt state,
-credential, server runtime, server-side product state, Node shim, browser
-polyfill, older runtime, unused grammar, query asset, native binding, or parser
-plugin.
+credential, server runtime, server-side product state, renderer npm package or
+external shader/texture/font/model/asset, rendering worker, compatibility
+layer, Node shim, browser polyfill, older parser runtime, unused grammar, query
+asset, native binding, or parser plug-in.
 
 |UI main context
 |Input draft; current state and status; selected identity where permitted; one
-complete city only in `Success`; renderer adaptation resources. State is
-current-session only and reload starts empty.
+complete city only in `Success`; one WebGL2 canvas/context/program/VAO and
+position/index/instance buffers; temporary fixed shaders; one observer and one
+loss listener. State is current-session only and reload starts empty.
 |Provider records, repository requests, raw or normalized source, admitted
-modules, parser/analyzer objects, and canonical metric intermediates.
+modules, parser/analyzer objects, canonical metric intermediates, per-building
+DOM/WebGL objects, external renderer resources, alternate contexts/renderers,
+or CPU renderer cache after successful upload.
 
 |Processing worker
 |Transient current-attempt provider records, paths, raw and normalized source,
@@ -176,9 +187,17 @@ worker*, and no user or service credential crosses either boundary.
   `ATTEMPT_DRAINED` are posted, and only then does the bridge terminate and
   clear the worker. Hard static termination may bypass deletion and relies on
   realm release, never for provider cleanup.
-* A presentation failure is owned by the UI, which cleans up incomplete
-  presentation resources. Reload discards all application-managed session
-  state.
+* A presentation model breach before WebGL propagates `M1-CITY-1`; only an
+  already-valid complete model can produce `M1-PRES-1`. Before initial
+  publication, the UI registers loss handling, stages and draws while detached,
+  attaches observation, performs the final verified host-size reread/redraw,
+  and then commits once. Current published context loss or required resize
+  failure synchronously removes city/canvas and enters persistent
+  `M1-PRES-1` while retaining tuple and draft.
+* Presentation cleanup disconnects observation, removes listener/canvas,
+  deletes every live shader/program/buffer/VAO once, and clears adapter data and
+  references. A lost context makes no driver-release claim. Reload discards all
+  application-managed session state.
 
 This placement promises no cleanup latency, secure erasure, physical browser
 or process teardown, or garbage-collection timing and does not redefine
@@ -219,16 +238,20 @@ source/action/workflow, application route, and deployment mechanism remain
 unselected. ADR 0005 owns the accepted resolution origin and mechanism; ADR
 0006 owns selected-revision retrieval/admission at the two named origins; ADR
 0007 owns exact static assets, fixed same-origin URLs, no-SP disposition, and
-phase-aware worker termination; #451 owns renderer technology and CC-09/PR-01;
-#462 owns blocks and conceptual ports; and #463 owns full accepted-mechanism and
-port synthesis. This view adds no renderer, concrete source map, general port
-or schema, workflow, route, fallback, or source-derived capability.
+phase-aware worker termination; ADR 0008 owns browser-native WebGL2 without a
+renderer supply chain or added node/asset and resolves CC-09/PR-01 as
+unnecessary; #462 owns blocks and conceptual ports; and #463 owns full
+accepted-mechanism and port synthesis. #452 remains renderer-free, #457 remains
+renderer-neutral, #458 owns all renderer realization, and #460 renews hosted
+presentation evidence. This view adds no concrete source map, general port or
+schema, workflow, route, fallback, or source-derived capability.
 
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains unchanged and
 authoritative for the outer source boundary;
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
 remains authoritative for the internal graph; ADR 0004 adds only its build/edge
 mechanism constraints; ADR 0005 governs resolution; ADR 0006 governs selected-
-revision retrieval/admission; and ADR 0007 governs static syntax and the
-worker-generation phase gate. Runtime placement grants no new source dependency,
-and ADRs 0006/0007 add no node or product-data path.
+revision retrieval/admission; ADR 0007 governs static syntax and the worker-
+generation phase gate; and ADR 0008 governs UI-edge presentation. Runtime
+placement grants no new source dependency, and ADRs 0006 through 0008 add no
+node or product-data path.

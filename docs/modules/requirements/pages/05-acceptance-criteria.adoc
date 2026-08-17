@@ -5,8 +5,8 @@ revision, and state contract. They define reviewable behavior but are not
 executable fixtures, test scaffolds, provider stubs, or a choice of test
 technology. Source-admission and limit scenarios are in
 xref:07-source-admission-and-limit-acceptance.adoc[]. Fixed metric matrices and
-examples are in xref:09-fixed-metric-acceptance.adoc[]. Fixed city, layout, and
-initial-presentation examples are in
+examples are in xref:09-fixed-metric-acceptance.adoc[]. Fixed city, layout,
+presentation-lifecycle, and post-`Success` failure examples are in
 xref:11-fixed-city-layout-and-presentation-acceptance.adoc[].
 
 The input/revision/state contract is acceptable only when all scenarios below
@@ -324,8 +324,46 @@ https://github.com/FelixGeisler/code-city/issues/443[#443]. Fixed city and
 presentation rules and their inert review examples are in
 xref:10-fixed-city-layout-and-presentation.adoc[] and
 xref:11-fixed-city-layout-and-presentation-acceptance.adoc[] under
-https://github.com/FelixGeisler/code-city/issues/444[#444]. This scenario fixes
+https://github.com/FelixGeisler/code-city/issues/444[#444]. These scenarios fix
 the common observable state invariant without redefining those contracts.
+
+== Post-success presentation failure
+
+[source,gherkin]
+----
+Scenario Outline: The current published presentation cannot remain Success after it fails
+  Given Success shows one complete city for the current canonical repository URL and full commit ID
+  And the input contains its current draft, which may be a post-submit edit
+  When <failure> occurs for the current published presentation
+  Then the state synchronously becomes Failure
+  And the category is "Presentation failed"
+  And the code is "M1-PRES-1"
+  And the complete city and canvas are removed
+  And the presentation is disposed
+  And the current canonical repository URL, full commit ID, and input draft remain
+  And no earlier city, replacement, retry, alternate renderer, or fallback appears
+  When the user edits the input without submitting
+  Then the same Failure remains and only the unsubmitted draft changes
+
+  Examples:
+    | failure                                  |
+    | its WebGL context is lost                |
+    | its required passive-resize render fails |
+----
+
+[source,gherkin]
+----
+Scenario: A stale presentation callback cannot change current visible state
+  Given an older candidate or presentation is no longer publication-eligible
+  When its queued WebGL context-loss or resize callback runs
+  Then it performs only local idempotent disposal
+  And the current input draft, state, status, identity, and city do not change
+----
+
+Only resubmit or reload leaves the post-`Success` `Failure`; editing alone does
+not. Detailed classification, drawing-buffer, resize, context-loss, and cleanup
+examples are in
+xref:11-fixed-city-layout-and-presentation-acceptance.adoc[].
 
 == Excluded controls and retention
 

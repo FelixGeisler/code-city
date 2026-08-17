@@ -15,9 +15,12 @@ xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-conten
 xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
 0007] accepts exact static-syntax assets and behavior, the provider/static phase
 barrier, two bridge-only lifecycle attestations, and ordinary versus hard-stop
-cleanup. None makes product traffic or parser behavior current. This view adds
-no general message or port schema, renderer, or complete accepted-mechanism
-flow; synthesis remains with
+cleanup.
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
+accepts exact UI-edge presentation staging, rendering, resize, context-loss,
+and cleanup behavior. None makes product traffic, parser behavior, or rendering
+current. This view adds no general message or port schema or complete accepted-
+mechanism flow; synthesis remains with
 https://github.com/FelixGeisler/code-city/issues/463[#463].
 
 == Runtime topology
@@ -83,10 +86,13 @@ count, package boundary, or source-dependency rule.
 worker dispatch or provider interaction; current-attempt identity and
 observable states; replacement and cancellation precedence; canonical URL
 updates that preserve post-submission edits; the sole publication-eligibility
-gate; presentation adaptation and failure; inert building identities;
-presentation-resource cleanup; atomic publication of the complete city and
-selected identity; rejection of stale, replaced, cancelled, partial, or late
-output; current-session retention and empty reload reset.
+gate; ADR 0008 source-free defensive handoff validation and browser-native
+WebGL2 presentation adaptation; inert building identities; detached staging,
+drawing-buffer verification, observer-before-publication, final host reread,
+passive resize, context-loss and post-`Success` failure handling; presentation-
+resource cleanup; atomic publication of complete city and selected identity;
+rejection of stale, replaced, cancelled, partial, or late output; current-
+session retention and empty reload reset.
 
 |Processing worker
 |Direct anonymous repository resolution; canonical identity validation;
@@ -138,12 +144,17 @@ compliant admitted set reaches sequential analysis
 renewal #460
 
 |Renderer-neutral city construction and CC-09
-|Worker city boundary
-|https://github.com/FelixGeisler/code-city/issues/451[#451]
+|Worker city boundary; CC-09 has no timer or duration outcome
+|#444 requirements, ADR 0008's no-duration decision, and renderer-neutral
+construction/float-bound evidence in
+https://github.com/FelixGeisler/code-city/issues/457[#457]
 
-|Presentation and PR-01
-|UI presentation boundary
-|https://github.com/FelixGeisler/code-city/issues/451[#451]
+|Browser-native WebGL2 presentation and PR-01
+|UI presentation edge; PR-01 has no timer or duration outcome
+|xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008];
+focused realization in https://github.com/FelixGeisler/code-city/issues/458[#458]
+and final hosted renewal in
+https://github.com/FelixGeisler/code-city/issues/460[#460]
 
 |xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
@@ -162,8 +173,12 @@ interval, cutoff, boundary, or precedence. A request may remain `Loading` until
 provider/browser failure, cancellation, replacement, or reload; elapsed time
 alone changes nothing. SP-01 through SP-04 are also explicitly unnecessary:
 they have no value, timer, category, code, boundary, precedence, or diagnostic,
-and `Static-processing limit exceeded` does not exist. CC-09 and PR-01 remain
-with #451 without a value, interval, threshold, or limit result.
+and `Static-processing limit exceeded` does not exist. CC-09 and PR-01 are
+explicitly unnecessary under ADR 0008: they have no value, unit, timer, clock,
+deadline, interval, cutoff, category, code, precedence,
+threshold, boundary, or T-1/T/T+1 scenario. Arbitrary elapsed construction or
+presentation time alone leaves the attempt `Loading`; M1 makes no completion,
+startup, frame-time, throughput, latency, or preemption promise.
 
 == Generic handoffs
 
@@ -199,9 +214,12 @@ available.
 worker may post exactly `PROVIDER_DRAINED_STATIC_ENTERED` and `ATTEMPT_DRAINED`,
 each containing only its discriminator and existing opaque bridge-generated
 attempt/generation correlation.
-|No partial-stage handoff or alternate result is accepted. The internal
-attestations carry no business, source, parser, timing, or count data and never
-enter worker-outcome intake, visible state, status, or classification.
+|No partial-stage handoff or alternate result is accepted. The presentation
+adapter validates the complete handoff before WebGL; a model breach propagates
+`M1-CITY-1` through the nonclassifying bridge, and `M1-PRES-1` starts only after
+validation. The internal attestations carry no business, source, parser,
+timing, or count data and never enter worker-outcome intake, visible state,
+status, or classification.
 
 |Worker and Public GitHub
 |Direct anonymous resolution and selected-revision retrieval.
@@ -239,11 +257,14 @@ mechanism/port synthesis:
   or terminates the attempt. No admitted set, metric facts, or partial scene is
   published to presentation.
 . A complete canonical scene crosses to the UI only after all worker stages
-  succeed. The UI owns renderer adaptation and presentation failure.
-. The UI's sole publication-eligibility gate admits only the current complete
-  result. It atomically publishes the complete city with the selected identity,
-  or publishes no city. Every stale, replaced, cancelled, partial, or late
-  result is rejected.
+  succeed. The presentation adapter defensively validates it before WebGL and
+  owns only ADR 0008 adaptation/failure/cleanup; the bridge does not classify.
+. The UI's sole publication-eligibility gate admits only the current fully
+  staged result. After observer setup, the mandatory final detached host reread
+  and any required redraw, and a final eligibility check, it synchronously
+  publishes canvas, complete city, and selected identity in one no-yield
+  commit, or publishes no city. Every stale, replaced, cancelled, partial, or
+  late result is rejected.
 
 == Selected-revision retrieval/admission sequence
 
@@ -344,6 +365,57 @@ never relies on hard termination. Observable no-overlap means at most one
 bridge-owned usable worker handle, parser set, provider slot, and raw/hash
 workspace, not physical teardown.
 
+== Presentation staging and continued-validity sequence
+
+ADR 0008 fixes the following UI-main order after the complete-scene handoff:
+
+. Validate every required own data field and bounded collection, complete
+  unique `1..4,000` building set, exact canonical geometry/palette/order/bounds/
+  view, prototype-safe identity handling, and current generation. A defect or
+  validation throw creates no WebGL and propagates `M1-CITY-1` unchanged.
+. Project source-freely into the one 28-byte-stride instance representation and
+  check generation eligibility before renderer staging.
+. Read positive integer host dimensions; create one detached matching canvas;
+  immediately register one `{ passive: true, once: true }`
+  `webglcontextlost` listener; request only ADR 0008's exact `webgl2` context;
+  read and verify drawing-buffer equality; then compile the two fixed shaders,
+  allocate/upload the one program/VAO/three buffers, restore fixed state, and
+  issue the one instanced draw while detached.
+. After synchronous operations, check throws, `getError`, context loss,
+  drawing-buffer equality, and generation eligibility.
+. Construct one `ResizeObserver` with an asynchronous generation-guarded
+  callback and successfully `observe(host)` while detached. Failure is
+  `M1-PRES-1`; disconnect and idempotently dispose. Publication cannot precede
+  this step.
+. Without yielding, reread host dimensions immediately before commit. If
+  changed, set both backing dimensions exactly, reread and verify both drawing-
+  buffer properties, recompute only aspect projection/viewport, restore state,
+  clear, and issue exactly one detached draw. Recheck operations and current
+  eligibility.
+. In one synchronous no-yield UI-coordinator commit, publish canvas, current
+  identity, and `Success`.
+
+No timer, animation frame, microtask yield, retry, debounce, or network
+operation enters the commit. Synchronous WebGL work need not be preemptible;
+post-operation eligibility prevents stale publication.
+
+The asynchronous observer cannot publish. For a changed positive integer host
+size it reuses canvas, context, program, VAO, and buffers; sets backing size
+exactly; reads and verifies host/backing/drawing-buffer equality; recomputes
+only aspect-dependent matrix/viewport; reapplies all fixed state; clears; and
+draws once. It does not rebuild/reupload buffers, reorder, animate, time,
+debounce, or retry. Unchanged dimensions do not draw; platform batching means
+only the latest reported size is promised.
+
+The once/passive loss listener never calls `preventDefault`; no restoration
+listener/path or loss extension exists. Candidate loss fails without
+publication. Current published loss, or non-positive/non-integer size,
+observer callback throw, drawing-buffer mismatch, WebGL error/loss, or failed
+required resize draw after `Success`, synchronously makes the UI coordinator
+commit `Presentation failed` / `M1-PRES-1`. It retains current tuple and draft,
+removes city/canvas, disposes, and remains failed until resubmit or reload.
+Stale callbacks dispose locally and cannot change visible state.
+
 == Replacement, cancellation, failure, and cleanup
 
 === Replacement or cancellation
@@ -370,18 +442,26 @@ workspace, not physical teardown.
 . The worker may return only the one terminal failure outcome, followed by
   `ATTEMPT_DRAINED`. The UI applies the outcome only for the current eligible
   attempt; no stale or partial city is published.
-. If adaptation of a complete canonical scene fails, the UI owns presentation
-  failure and cleanup of every incomplete presentation resource.
+. If adaptation of an already-valid complete canonical scene fails, the
+  presentation adapter reports `M1-PRES-1` and cleans every incomplete
+  resource; the UI coordinator alone commits visible failure. A model defect
+  remains `M1-CITY-1` before WebGL.
+. If the current presentation fails after `Success`, the same ownership removes
+  city/canvas, retains tuple and draft, and commits the persistent
+  post-`Success` failure without retry or fallback.
 
 After a successful complete-scene handoff, worker processing intermediates do
 not become retained product state and are released before `ATTEMPT_DRAINED`.
 Reload discards all application-managed session state and starts a fresh empty
 session.
 
-Cleanup has no accepted latency or secure-erasure promise. Cancellation and
-replacement revoke publication eligibility immediately but promise no
-computation, network-stop, browser-teardown, or physical-process timing. A
-stalled old provider settlement may delay replacement without creating an RA
+Presentation cleanup disconnects its observer, removes loss listener and
+canvas, deletes each live shader/program/buffer/VAO exactly once, and clears
+adapter-owned typed data and references. If context is already lost it claims
+no driver release. Cleanup has no accepted latency or secure-erasure promise.
+Cancellation and replacement revoke publication eligibility immediately but
+promise no computation, network-stop, browser-teardown, or physical-process timing. A stalled old provider settlement may delay
+replacement without creating an RA
 or SP timing failure. This view does not redefine provider, browser, operating-
 system, network, platform caching, or garbage-collection internals.
 
@@ -428,10 +508,21 @@ lifecycle. A selected version, asset, API, grammar, URL, capability, inventory,
 or lifecycle deviation stops implementation and reopens #450; no fallback may
 be introduced.
 
-Renderer mechanisms, general message and port schemas, concrete source mapping,
-Pages workflow and route, and the complete cross-mechanism synthesis remain
-with their stated owners in #451 through #460 and #463.
+ADR 0008 records #451's dated package/platform documentary evidence, exact
+fixed mechanism, float proof, lifecycle, ownership, renewal, and stop rules. #457
+renews renderer-neutral bounds; #458 implements every renderer declaration and
+focused check; #459 integrates the success path; #460 renews final hosted
+initial/resize drawing-buffer, context-loss, cleanup, and post-`Success`
+evidence. A required dependency, extension, fallback, dynamic shader, external
+resource, extra rendering context/canvas/program/VAO/draw policy, private
+capacity, retry,
+restoration, or weaker failure/cleanup rule stops implementation and reopens
+#451.
+
+General message and port schemas, concrete source mapping, Pages workflow and
+route, test technology, and complete cross-mechanism synthesis remain with
+their stated owners through #463.
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains authoritative
 for the outer source-dependency boundary, ADR 0005 for resolution, ADR 0006 for
-selected-revision retrieval/admission, and ADR 0007 for static syntax and
-phase-aware worker lifecycle.
+selected-revision retrieval/admission, ADR 0007 for static syntax and phase-
+aware worker lifecycle, and ADR 0008 for UI-edge presentation.

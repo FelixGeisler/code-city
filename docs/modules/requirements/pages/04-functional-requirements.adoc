@@ -6,7 +6,8 @@ RA-01 through RA-09 refinement is normative in
 xref:06-source-admission-and-limits.adoc[]. Fixed metric semantics and metric
 failure are normative in xref:08-fixed-metric-semantics.adoc[]. Fixed city,
 layout, initial-presentation, and stage-failure semantics are normative in
-xref:10-fixed-city-layout-and-presentation.adoc[].
+xref:10-fixed-city-layout-and-presentation.adoc[], including the current
+published presentation's context-loss and required-resize failure transitions.
 
 == Terms
 
@@ -31,8 +32,10 @@ resolution.
 Selected revision:: The one immutable commit chosen for the current attempt
 under <<revision-selection,M1-REV-1>>.
 
-Complete city:: A city for which every required M1 stage has succeeded. Output
-from an unfinished or failed stage is not a city that may be shown.
+Complete city:: A city for which every required M1 stage has succeeded and
+whose current published presentation remains valid. Output from an unfinished
+or failed stage, and a city whose current WebGL presentation has failed, is not
+a city that may be shown.
 
 [[canonical-url]]
 == Canonical URL input
@@ -210,7 +213,7 @@ alone does not replace it, while another submit does
 preserved post-submit edit
 |No loading, cancel, or failure status; submit may start a replacement
 |Canonical repository URL and full commit ID
-|Exactly one complete city for that identity
+|Exactly one complete city and current valid presentation for that identity
 
 |Failure
 |Current draft; the normalized submission or resolved canonical URL if
@@ -283,6 +286,30 @@ no city is visible. A failure remains until the user resubmits or reloads;
 editing only creates an unsubmitted draft and does not clear it. There is no
 automatic retry, branch fallback, revision fallback, or stale-city fallback.
 
+After `Success`, either failure of the current published WebGL context or
+failure of a required passive-resize presentation synchronously changes the
+current state as follows:
+
+[source,text]
+----
+Success
+  -- current published WebGL context loss -->
+Failure / Presentation failed / M1-PRES-1
+
+Success
+  -- required passive-resize presentation failure -->
+Failure / Presentation failed / M1-PRES-1
+----
+
+That transition retains the current selected canonical repository URL, full
+lowercase commit ID, and current input draft, including any post-submit edit.
+It removes the complete city and canvas and disposes the current presentation.
+It does not restore an earlier city, start a replacement, retry, select another
+renderer, or alter the draft. The failure remains until resubmit or reload;
+editing alone does not clear it. A stale queued loss or resize callback cannot
+change visible state and performs only local idempotent disposal. These are the
+only post-`Success` refinements; every other state invariant remains unchanged.
+
 === M1-STATE-4: Cancellation
 
 Cancel is available only in `Loading`. Invoking it immediately changes the
@@ -339,7 +366,9 @@ returns invalid identity evidence.
 invent an identity or retry automatically.
 
 |Downstream source, limit, processing, construction, or presentation failure
-|A later admitted-source, metric, city, or presentation stage fails.
+|A later admitted-source, metric, city, or presentation stage fails, or the
+current published presentation loses its WebGL context or fails a required
+passive resize after `Success`.
 |Use the exact visible category in
 xref:06-source-admission-and-limits.adoc#failure-categories[] for its failures,
 xref:08-fixed-metric-semantics.adoc#metric-failure[] for metric failures, or
@@ -364,12 +393,13 @@ reload.
 [[decision-boundary]]
 == Decision boundary
 
-The requirements above do not decide implementation or architecture ownership.
-The deferred choices and their authoritative downstream locations are:
+The requirements above do not redefine implementation or architecture
+ownership. Accepted architecture concerns and their authoritative downstream
+locations are:
 
 [cols="3,3,4",options="header"]
 |===
-|Deferred choice |Owning issue |Affected architecture views
+|Architecture concern |Owning issue |Affected architecture views
 
 |M1 drivers, logical context/trust boundaries, and measurable quality scenarios
 |https://github.com/FelixGeisler/code-city/issues/461[#461]
@@ -399,6 +429,17 @@ evidence, trust handling, and resolution cancellation/failure mechanism
 xref:architecture:06-runtime-view.adoc[Runtime View], and
 xref:architecture:09-architecture-decisions.adoc[Architecture Decisions]
 
+|Browser-native WebGL2 presentation technology, source-free defensive
+projection, fixed GPU representation, atomic publication, passive resize,
+context-loss behavior, and presentation cleanup
+|https://github.com/FelixGeisler/code-city/issues/451[#451]
+|xref:architecture:04-solution-strategy.adoc[Solution Strategy],
+xref:architecture:05-building-block-view.adoc[Building Block View],
+xref:architecture:06-runtime-view.adoc[Runtime View],
+xref:architecture:08-crosscutting-concepts.adoc[Cross-cutting Concepts], and
+xref:architecture:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR
+0008]
+
 |Synthesis of accepted success, failure, replacement, cancellation, cleanup,
 and deployment flow
 |https://github.com/FelixGeisler/code-city/issues/463[#463]
@@ -414,7 +455,9 @@ https://github.com/FelixGeisler/code-city/issues/443[#443]. Fixed city, layout,
 and initial-presentation semantics are defined in
 xref:10-fixed-city-layout-and-presentation.adoc[] under
 https://github.com/FelixGeisler/code-city/issues/444[#444]. Their mechanisms,
-enforcement, and evidence boundaries remain with the linked downstream issues;
-visualization technology and CC-09/PR-01 remain with #451. Nothing in this page
-assigns those rules, the state machine, cancellation, or cleanup to a provider,
-analyzer, renderer, process, node, component, or port.
+enforcement, and evidence boundaries remain with the linked downstream issues.
+ADR 0008 records #451's accepted WebGL2 mechanism and the explicitly-
+unnecessary CC-09/PR-01 disposition; it does not displace this page's visible-
+state authority. Nothing in this page assigns provider, analyzer, renderer,
+process, node, component, or port ownership beyond the accepted architecture
+links above.

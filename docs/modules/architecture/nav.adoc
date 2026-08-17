@@ -17,6 +17,7 @@
 ** xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006: Bounded selected-revision retrieval via GitHub tree and raw content]
 ** xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007: Static syntax with pinned Tree-sitter WebAssembly grammars]
 *** xref:adr/0007-static-syntax-evidence-appendix.adoc[ADR 0007 evidence appendix]
+** xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008: Browser-native WebGL2 instanced city presentation]
 * xref:10-quality-requirements.adoc[10. Quality Requirements]
 * xref:11-risks-and-technical-debt.adoc[11. Risks and Technical Debt]
 * xref:12-glossary.adoc[12. Glossary]

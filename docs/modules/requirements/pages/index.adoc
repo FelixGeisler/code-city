@@ -19,9 +19,12 @@ and the accepted fixed city, layout, and initial-presentation contract from
 https://github.com/FelixGeisler/code-city/issues/444[#444].
 https://github.com/FelixGeisler/code-city/issues/450[#450] fixes the exact
 Tree-sitter runtime and grammars, recovered-tree failure behavior, and the
-full-envelope disposition that SP-01 through SP-04 are unnecessary. Only
-visualization technology and the CC-09/PR-01 duration decisions remain with
-their owning issue and the #464 hard gate.
+full-envelope disposition that SP-01 through SP-04 are unnecessary.
+https://github.com/FelixGeisler/code-city/issues/451[#451] accepts
+browser-native WebGL2 presentation, the source-free construction/presentation
+boundary, fail-closed lifecycle behavior, and the disposition that CC-09 and
+PR-01 are unnecessary. The #464 hard gate verifies all accepted decisions and
+evidence ownership before M1 implementation.
 
 == Reading order
 
@@ -50,11 +53,12 @@ their owning issue and the #464 hard gate.
 . xref:10-fixed-city-layout-and-presentation.adoc[Fixed City Layout and
   Presentation] defines exact geometry, palette, scene content, square-shelf
   layout and bounds, orthographic view, precision, interaction exclusions,
-  limit dispositions, and stage failures.
+  limit dispositions, stage-failure ownership, and post-`Success` presentation
+  failure behavior.
 . xref:11-fixed-city-layout-and-presentation-acceptance.adoc[Fixed City Layout
   and Presentation Acceptance] provides the closed inert fixtures, boundary
-  tables, exclusions, failure examples, and evidence allocation for that
-  contract.
+  tables, source-free handoff and fixed-presentation checks, exclusions,
+  lifecycle-failure examples, and evidence allocation for that contract.
 
 The words *must*, *must not*, *required*, and *only* are normative on these
 pages. Examples clarify the normative rules but do not create executable test

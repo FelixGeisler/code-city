@@ -1,17 +1,22 @@
 = Fixed City Layout and Presentation
 
-This page is the one authoritative, renderer-neutral M1 contract that turns a
-complete successful canonical module-metric sequence into one deterministic
-city and fixed initial presentation. It applies only after
+This page is the authoritative M1 product contract that turns a complete
+successful canonical module-metric sequence into one deterministic city and
+keeps its fixed presentation valid. It applies only after
 xref:08-fixed-metric-semantics.adoc[] has produced the complete canonical facts
 for the admitted modules.
 
-The rules define product facts, exclusions, and failure behavior. They do not
-select a renderer, mesh, material, shader, scene-graph or camera object,
-component, port, topology, enforcement location, or executable evidence
-mechanism. Static syntax is already fixed independently by
-xref:architecture:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007]
-and is not redefined here.
+The renderer-neutral canonical city facts remain those accepted in #444.
+https://github.com/FelixGeisler/code-city/issues/451[#451] additionally fixes
+the source-free construction/presentation boundary, passive-resize and
+post-`Success` failure behavior, and explicitly-unnecessary CC-09/PR-01
+disposition on this page. The browser-native WebGL2 edge realization is
+accepted separately in
+xref:architecture:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR
+0008]; renderer implementation facts do not become canonical scene facts.
+Static syntax remains independently fixed by
+xref:architecture:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007].
 
 [[city-terms]]
 == Terms
@@ -30,6 +35,13 @@ Initial-view descriptor:: The renderer-neutral orthographic target, basis,
 projection extents, and fit rule under <<initial-view,Fixed initial view and
 interaction>>.
 
+Valid complete canonical model:: The one complete, internally consistent
+canonical scene authoritatively validated and constructed by the worker-side
+city constructor for the current eligible generation.
+
+Current published presentation:: The one canvas and fixed WebGL2 resources
+that currently realize a valid complete canonical model in `Success`.
+
 [[city-input]]
 == Input boundary
 
@@ -43,7 +55,54 @@ recalculate them.
 For `N >= 1`, one and only one building must correspond to each input identity.
 A duplicate identity or invalid #443 fact, or any missing, additional, or
 repeated model mapping, fails construction under <<city-failure,Atomic
-construction and presentation failure>>.
+construction and presentation failure>>. The worker-side city constructor is
+the authoritative owner of that validation and complete construction.
+
+[[presentation-boundary]]
+== Construction and source-free presentation boundary
+
+The UI presentation adapter consumes only one valid complete canonical model
+for the current eligible generation. It receives no repository source,
+admitted modules, parser or analyzer objects, metric intermediates, or partial
+scene. Before any WebGL resource is created, it defensively validates and
+projects the complete handoff field by field:
+
+* every required root, collection, building, vector, color, bounds, and view
+  field is an own data property with the expected primitive or bounded
+  collection value;
+* missing or inherited required values, accessor-backed expected fields,
+  sparse or wrong-count collections, wrong primitive types, non-finite values,
+  unsafe integers, duplicate identities, inconsistent geometry, bounds,
+  palette, order, view, or unrepresentable canonical values are construction-
+  contract breaches;
+* additional own fields outside the canonical contract are ignored without
+  evaluating their values or accessors merely for diagnostics, becoming
+  control state, or permitting an additional canonical mapping or collection
+  entry;
+* `N` equals the complete building count, identities are unique, and
+  `1 <= N <= 4,000`; integer geometry and palette bytes are exact; every
+  #444 layout, bounds, order, palette, target, basis, projection, and no-
+  interaction fact agrees, with only #444's camera-scalar tolerance;
+* arrays and `Map`, or an equivalent prototype-safe map, may carry collections;
+  a building identity never becomes a property key in a normal object; and
+* a throwing descriptor or validation operation is a construction-contract
+  breach, not a raw exception or presentation diagnostic.
+
+The adapter never repairs, reorders, clamps, truncates, reconstructs, or
+reclassifies malformed canonical data. A detected model defect or validation
+throw creates no WebGL resource, cleans local staging, and propagates only
+`City construction failed` / `M1-CITY-1`. The bridge transports the fixed
+outcome without classifying exceptions. The UI attempt coordinator alone
+commits current visible state.
+
+Only after the complete model passes that defensive validation can canvas,
+context, GPU-representation, allocation, shader/program, upload, draw, framing,
+passive-resize, or context-loss failure produce `Presentation failed` /
+`M1-PRES-1`. Building paths and identities, repository/source values, URLs,
+object keys, markup, and diagnostics never become DOM text, names, IDs,
+classes, attributes, WebGL labels, shader text or defines, resource locators,
+or log content. The separately displayed canonical repository URL and full
+commit ID remain outside the adapter.
 
 [[building-geometry]]
 == Coordinate system and building geometry
@@ -184,18 +243,27 @@ presentable elements. There is no independent cap.
 <<square-shelf-layout>> define and bound the scene.
 
 |CC-09 city-construction duration
-|Deferred exclusively to https://github.com/FelixGeisler/code-city/issues/451[#451].
-This contract sets no value, interval, threshold, or limit result.
+|Explicitly unnecessary for M1. It has no value, unit, timer, clock, deadline,
+interval, cutoff, category, stable code, precedence, threshold, boundary, or
+T-1/T/T+1 scenario.
 
 |PR-01 presentation duration
-|Deferred exclusively to https://github.com/FelixGeisler/code-city/issues/451[#451].
-This contract sets no value, interval, threshold, or limit result.
+|Explicitly unnecessary for M1. It has no value, unit, timer, clock, deadline,
+interval, cutoff, category, stable code, precedence, threshold, boundary, or
+T-1/T/T+1 scenario.
 |===
 
 CC-01 through CC-08 create no independent limit-exceeded outcome. Missing,
 additional, or repeated mappings and malformed or unrepresentable facts use
 `M1-CITY-1` under <<city-failure>>. A private implementation capacity cannot
 create an undeclared product limit.
+
+Arbitrary elapsed construction or presentation time alone creates no outcome;
+while work has produced neither a browser/platform failure nor a lifecycle
+result, the attempt remains `Loading`. M1 makes no completion, startup, frame-
+time, throughput, latency, or preemption promise. Complete-envelope bounds,
+fixed resources, `O(N)` projection/upload for `N <= 4,000`, one draw call, and
+the accepted float proof establish feasibility instead of a timer.
 
 [[initial-view]]
 == Fixed initial view and interaction
@@ -222,13 +290,18 @@ H = (11/10) * max(E_v, E_r/a)
 horizontal half-size = aH
 ----
 
-Physical camera distance and the clip-plane mechanism are noncanonical, but
-every city bound must remain unclipped. Initial publication has no camera
+Physical camera distance and the clip-plane mechanism are noncanonical
+renderer facts fixed for the selected realization by ADR 0008; every city
+bound must remain unclipped. Initial publication has no camera
 animation. Orbit, pan, zoom, auto-rotation, focus, hover, click, selection, and
 camera controls are all absent.
 
-A passive viewport resize only reapplies this fit formula for the new positive
-aspect. It does not rebuild, reorder, or persist the city.
+A passive viewport resize only reapplies this fit formula for the latest
+positive integer host size and verified positive aspect. It does not rebuild,
+reupload, reorder, animate, retry, debounce, or persist the city. Unchanged
+size causes no draw. A non-positive/non-integer changed size, drawing-buffer
+mismatch, context loss, WebGL error, callback throw, or required resize-draw
+failure uses `M1-PRES-1` and the published-presentation transition below.
 
 [[precision-repeatability]]
 == Precision and repeatability
@@ -246,11 +319,12 @@ projection formulas permits this component-wise tolerance:
 |actual - expected| <= 10^-9 * max(1, |expected|)
 ----
 
-Pixel hashes and screenshot equality are not renderer-independent evidence.
-For the same canonical input and positive viewport aspect, repeatability means
-exact canonical-scene equality and the same camera evaluation within only that
-tolerance. Time, locale, randomness, concurrency, carrier order, and device
-order cannot enter the result.
+Pixel hashes and screenshot equality are not acceptance evidence. For the same
+canonical input and positive viewport aspect, repeatability means exact
+canonical-scene equality and the same camera evaluation within only that
+tolerance. The uploaded `float32` matrix and pixels are renderer facts. Time,
+locale, randomness, concurrency, carrier order, and device order cannot enter
+the canonical result.
 
 [[city-failure]]
 == Atomic construction and presentation failure
@@ -261,14 +335,18 @@ order cannot enter the result.
 
 |`City construction failed`
 |`M1-CITY-1`
-|Invalid, duplicate, incomplete, empty-at-this-stage, or otherwise
-nonconforming #443 input; inability to produce the complete exact model; or
-arithmetic/model corruption.
+|Invalid, duplicate, incomplete, empty-at-this-stage, malformed, unsafe,
+unrepresentable, missing, additional, repeated, inconsistent, or otherwise
+nonconforming canonical input/model; inability to produce the complete exact
+model; defensive handoff validation failure or throw; or arithmetic/model
+corruption.
 
 |`Presentation failed`
 |`M1-PRES-1`
-|Failure to instantiate every canonical building or establish the required
-complete initial presentation.
+|Only after an already-valid complete model passes defensive validation:
+failure of the fixed GPU representation or allocation, canvas or context,
+returned attributes, shader/program, upload, draw, framing, passive resize,
+context retention, or another required presentation operation.
 |===
 
 Each failed stage produces only its one category and code. Neither result
@@ -284,6 +362,47 @@ including latest-attempt precedence and atomic publication, unchanged.
 If a valid accepted input exceeds a private implementation capacity, that is a
 conformance defect. It does not permit truncation or an undeclared limit or
 failure result.
+
+[[post-success-presentation-failure]]
+== Published presentation lifecycle
+
+Initial publication is atomic: defensive validation, fixed detached WebGL
+staging and draw, context-loss listener registration, successful construction
+and observation of one `ResizeObserver`, a final detached host-size reread and
+any required redraw, and a final current-generation eligibility check all
+precede one synchronous no-yield commit of canvas, identity, and `Success`.
+Observer setup after publication is prohibited. A failed or stale candidate
+never reaches the DOM.
+
+The current published presentation has exactly these additional transitions:
+
+[source,text]
+----
+Success
+  -- current published WebGL context loss -->
+Failure / Presentation failed / M1-PRES-1
+
+Success
+  -- required passive-resize presentation failure -->
+Failure / Presentation failed / M1-PRES-1
+----
+
+Either event synchronously removes the complete city and canvas, disposes the
+presentation, and retains the current canonical repository URL, full lowercase
+commit ID, and current input draft. It does not restore an earlier city, start
+a replacement, retry, select a fallback renderer, or alter a post-submit edit.
+The failure remains until resubmit or reload; editing alone does not clear it.
+A stale queued loss or resize callback performs only local idempotent disposal
+and cannot change visible state.
+
+Normal failure, replacement, cancellation, and reload disconnect the observer,
+remove the loss listener and canvas, delete each live shader, program, buffer,
+and VAO exactly once, and clear adapter-owned typed data and references. If the
+context is already lost, cleanup still removes application-owned DOM,
+listeners, observers, and references but makes no driver-release claim.
+Cleanup makes no secure-erasure, immediate computation/network-stop, driver-
+release-latency, garbage-collection, physical-browser, or operating-system-
+process teardown promise.
 
 [[city-decision-record]]
 == Decision authority and rationale
@@ -333,8 +452,8 @@ behavior.
 |Canonical square-shelf layout and no independent CC-01 through CC-08 caps
 |Preserves canonical order, prevents overlap, is more compact than one row, and
 needs no packing heuristic; upstream limits already bound input.
-|Rows can be ragged and non-optimal, and #451 must prove visualization
-feasibility.
+|Rows can be ragged and non-optimal; downstream full-envelope evidence must
+renew ADR 0008's accepted visualization-feasibility proof.
 |Size sorting, bin packing, hierarchy, and arbitrary lower city caps add
 unstable heuristics or unsupported thresholds.
 
@@ -359,6 +478,14 @@ ownership.
 city would publish misleading, partial, or stale output.
 |===
 
+The accepted https://github.com/FelixGeisler/code-city/issues/451[#451] records
+the Requirements Engineer's delegated selection of browser-native WebGL2,
+source-free fail-closed presentation, post-`Success` lifecycle refinement, and
+explicitly-unnecessary CC-09/PR-01 disposition on the clear Software Architect
+recommendation and incorporated Security Reviewer constraints. ADR 0008 is the
+authoritative technology decision and needs no later generic human-acceptance
+gate.
+
 [[city-evidence-allocation]]
 == Evidence ownership and visualization technology
 
@@ -374,19 +501,23 @@ bounds, view descriptor, zero/boundary fixture, CC dispositions, and focused
 `M1-CITY-1`.
 
 |https://github.com/FelixGeisler/code-city/issues/458[#458]
-|Complete prism/color/transform adaptation, initial fit and passive resize,
-absence of labels, controls, and extra geometry, inert identity handling,
-semantic repeatability, and focused `M1-PRES-1`.
+|Every renderer type and fixed constant; defensive source-free projection;
+exact shader, prism, buffer, API/state, camera, float and one-draw realization;
+initial/resize drawing-buffer equality; observer-before-publication and final
+detached reread/redraw; context loss; post-`Success` failure; exactly-once
+cleanup; no malformed model reaching WebGL; and focused `M1-PRES-1`.
 
 |https://github.com/FelixGeisler/code-city/issues/460[#460]
-|Integrated category/code, retained current identity, replacement/cancellation
-precedence, atomic success, and no stale, partial, or late publication.
+|Integrated and hosted category/code, nonclassifying propagation, retained
+current identity, replacement/cancellation precedence, drawing-buffer and
+context-loss renewal, post-`Success` failure, atomic success, cleanup, and no
+stale, partial, or late publication.
 
 |https://github.com/FelixGeisler/code-city/issues/451[#451]
-|Visualization technology and CC-09/PR-01 feasibility and decisions only. It
-may not alter this contract.
+|Accepted ADR 0008, visualization feasibility, CC-09/PR-01 disposition,
+evidence renewal, and stop rules. It does not implement the renderer.
 |===
 
-No architecture page or ADR is selected by this requirements contract.
-Visualization technology, any resulting architecture decision, and the two
-duration decisions remain exclusively with #451.
+ADR 0008 is the accepted architecture realization of this unchanged canonical
+city contract. No renderer package, fallback, additional feature, source
+layout, schema, or test technology is selected by this requirements page.

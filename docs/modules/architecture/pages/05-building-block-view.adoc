@@ -15,7 +15,9 @@ are constrained by
 xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
 0006]. The parser adapter and worker-generation lifecycle are constrained by
 xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
-0007]. The decisions are documented but not yet implemented.
+0007]. The presentation adapter and its lifecycle are constrained by
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008].
+The decisions are documented but not yet implemented.
 
 == Minimum logical blocks
 
@@ -63,11 +65,12 @@ state.
 
 |Presentation adapter
 |Edge, UI main
-|Realizes the presentation port in
-https://github.com/FelixGeisler/code-city/issues/458[#458] using the technology
-selected by https://github.com/FelixGeisler/code-city/issues/451[#451]: adapts
-a complete scene to the renderer, treats identities as inert, detects
-`M1-PRES-1`, and cleans presentation resources.
+|Realizes ADR 0008 in https://github.com/FelixGeisler/code-city/issues/458[#458]:
+defensively validates and source-freely projects one complete scene; alone owns
+all browser-native WebGL2 types, trusted shaders, canvas/context, drawing-
+buffer checks, program/VAO/buffers, API/state, camera matrix, one instanced
+draw, observer, resize/loss listeners, `M1-PRES-1` detection, and idempotent
+presentation cleanup. It treats identities as inert and owns no visible state.
 
 |UI-worker bridge
 |Edge, both contexts
@@ -187,7 +190,11 @@ The bridge may transport only:
 
 Raw or normalized repository source or content, admitted modules, parser
 objects, metric intermediates, and partial scenes never cross the bridge.
-Building identities may cross only as inert model keys. The two lifecycle
+Building identities may cross only as inert model keys. The presentation
+adapter performs complete own-data-property and bounded-value validation before
+creating WebGL. Any model breach remains `M1-CITY-1`; the bridge transports it
+without exception classification, and only an already-valid model can reach
+`M1-PRES-1`. The two lifecycle
 attestations carry no identity, provider, source, admitted-module, parser,
 metric, scene, diagnostic, timing, or count and never enter worker-outcome
 intake, visible state, status, or classification. Runtime messages grant no
@@ -236,7 +243,10 @@ bytes.
 
 |Presentation-failure detection and resource cleanup
 |Presentation adapter
-|The adapter reports the outcome and cleans only its presentation resources.
+|Only after valid-model validation, the adapter reports `M1-PRES-1`; it owns
+its detached candidate and current WebGL resources, observer/loss listener,
+post-`Success` loss/resize callbacks, and idempotent cleanup. It never commits
+visible state.
 
 |Visible presentation-failure transition
 |UI attempt coordinator
@@ -275,8 +285,10 @@ Cancellation and cleanup are partitioned exactly once:
 . The main bridge owns the sole worker handle, generation correlation,
   hard-stop gate, listener/transport release, exactly-once termination, and
   handle clearing.
-. The presentation adapter disposes incomplete or replaced presentation
-  resources.
+. The presentation adapter disconnects its observer, removes its loss listener
+  and canvas, deletes every live shader/program/buffer/VAO exactly once, and
+  clears its typed data and references for incomplete, failed, replaced,
+  cancelled, reloaded, context-lost, or resize-failed presentation.
 
 For resolution, ADR 0005 refines the adapter part of step 3: each status-`200`
 response has the inclusive 4 MiB stream bound, reader-lock release in
@@ -295,6 +307,19 @@ raw/hash/decoded temporary before another request. It releases reader locks in
 non-abortable phases, and cleans projected inventory and unpublished output.
 Replacement work is latest-only and cannot start until old operations,
 non-abortable work, locks, and application-owned cleanup settle.
+
+ADR 0008 refines presentation ownership without changing bridge ownership. The
+adapter validates before WebGL; stages one detached candidate; registers the
+once/passive loss listener; creates and draws the fixed resources; constructs
+and successfully attaches one generation-guarded observer; performs the final
+no-yield host-size reread and any required verified detached redraw; and only
+then returns a publishable candidate. The UI coordinator checks current
+eligibility and alone commits canvas, identity, and `Success` synchronously.
+The same adapter reuses resources for passive resize and reports current
+context loss or required resize failure; the UI coordinator alone removes the
+city and commits `Presentation failed` / `M1-PRES-1` while retaining tuple and
+draft. Stale callbacks dispose locally. #452 owns none of these renderer
+responsibilities; #457 remains renderer-neutral; #458 owns their realization.
 
 ADR 0007 adds a strict phase boundary. Before matching
 `PROVIDER_DRAINED_STATIC_ENTERED` receipt, the main bridge must not terminate:

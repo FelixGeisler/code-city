@@ -19,9 +19,13 @@ through GitHub tree and raw content.
 xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
 0007] accepts the exact worker-side Tree-sitter runtime/grammars, static-syntax
 projection, full-envelope no-SP disposition, and provider-drained/static-phase
-lifecycle. These are documented decisions, not implemented traffic or parser
-behavior. General message and port schemas and the full accepted-mechanism
-runtime synthesis remain with their owning issues.
+lifecycle.
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
+accepts the source-free browser-native WebGL2 presentation edge, fixed resource
+and draw mechanism, atomic staging, passive resize, context loss, cleanup, and
+no-duration disposition. These are documented decisions, not implemented
+traffic, parser behavior, or rendering. General message and port schemas and
+the full accepted-mechanism runtime synthesis remain with their owning issues.
 
 == Local terms
 
@@ -172,7 +176,10 @@ transitions].
 
 |UI main context to User
 |Stable state and status, the canonical repository/revision identity where
-permitted, one failure outcome, or the complete city only in `Success`.
+permitted, one failure outcome, or the complete current WebGL2 city only in
+`Success`. Current context loss or required resize failure removes that city
+and enters the accepted `M1-PRES-1` `Failure` while retaining the tuple and
+draft.
 |xref:requirements:04-functional-requirements.adoc#states[Observable states and
 transitions] and
 xref:requirements:10-fixed-city-layout-and-presentation.adoc#canonical-scene[Canonical
@@ -197,7 +204,10 @@ view selects no communication or cancellation primitive.
 failure outcome, or one complete canonical scene. A complete scene crosses
 without raw or normalized source, repository entry content, admitted modules,
 parser objects, or metric intermediates; building identities are inert model
-keys. Separately, the worker may post only ADR 0007's
+keys. The UI adapter defensively validates every required own data field before
+creating WebGL. A model breach propagates `M1-CITY-1` unchanged through the
+nonclassifying bridge; `M1-PRES-1` begins only after the complete model passes.
+Separately, the worker may post only ADR 0007's
 `PROVIDER_DRAINED_STATIC_ENTERED` and `ATTEMPT_DRAINED` internal attestations,
 each with only its discriminator and existing opaque attempt/generation
 correlation.
@@ -296,12 +306,17 @@ hosted renewal belongs to #460.
 
 |UI presentation boundary
 |One complete canonical scene may arrive without source or analysis objects.
-Building identities remain inert model keys. The UI adapts only the complete
-model and publishes the complete city and selected identity atomically when
-the attempt remains eligible.
-|UI presentation adaptation, failure, incomplete-resource cleanup, and rejection
-of stale, replaced, cancelled, partial, or late output belong to #458 through
-#460.
+Building identities remain inert keys and never become normal-object keys,
+DOM/WebGL names, shader text, locators, or logs. The UI defensively validates
+the complete model before WebGL, stages one detached canvas and ADR 0008's
+fixed program/VAO/buffers/draw, successfully observes the host, performs the
+final detached size verification/redraw, and only then atomically publishes
+city and identity. Passive resize reuses those resources. Current context loss
+or required resize failure removes presentation and enters `Failure`.
+|#457 owns renderer-neutral construction and renewed float bounds; #458 owns
+all renderer declarations, fixed source-free adaptation, drawing-buffer
+equality, staging, resize, loss, failure, and cleanup; #459 integrates success;
+#460 renews hosted and post-`Success` evidence.
 |===
 
 Replacement or cancellation immediately revokes the old attempt's publication
@@ -316,9 +331,17 @@ operations before termination is valid. Ordinary terminal paths delete cursor,
 tree, and parser, release core references, post the one business result and
 `ATTEMPT_DRAINED`, then terminate. Late outcomes remain rejected.
 
-This placement makes no cleanup-latency, secure-erasure, garbage-collection,
-physical browser teardown, or operating-system-process teardown promise.
-Provider work never relies on hard termination.
+Presentation cleanup additionally disconnects its observer, removes its loss
+listener and canvas, deletes each live shader, program, buffer, and VAO once,
+and clears adapter data/references. A context already lost adds no driver-
+release claim. A current published context loss or required resize failure
+synchronously commits `Presentation failed` / `M1-PRES-1`, retains the current
+tuple and draft, removes city/canvas, and remains until resubmit or reload; a
+stale callback only disposes locally.
+
+This placement makes no cleanup-latency, secure-erasure, driver-release,
+garbage-collection, physical browser teardown, or operating-system-process
+teardown promise. Provider work never relies on hard termination.
 
 == Decision boundary
 
@@ -360,10 +383,18 @@ SP-01 through SP-04, and static renewal/stop rules. #455 owns parser/SLOC/unit
 realization, #456 complexity and the combined rerun, and #460 integrated
 renewal; no parser package or asset exists yet.
 
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
+is authoritative for visualization selection, source-free defensive
+projection, fixed WebGL geometry/buffers/shaders/context/API/state/camera,
+drawing-buffer equality, float feasibility, observer-before-publication,
+resize, context loss, failure ownership, cleanup, CC-09/PR-01, renewal, and
+stop rules. #452 remains renderer-free; #457 renews renderer-neutral bounds;
+#458 owns all renderer implementation and focused evidence; #459 integrates;
+#460 renews final-hosted behavior. No renderer dependency or asset exists now.
+
 The following remain unselected: Pages source/action/workflow and deployment
-mechanism; renderer technology and CC-09/PR-01 in #451; concrete source mapping;
-general message and port schemas in #453 through #460; and the complete
-accepted-mechanism/port runtime synthesis in
-https://github.com/FelixGeisler/code-city/issues/463[#463]. This view adds no
-renderer, executable interface, general schema, Pages workflow, route,
+mechanism; concrete source mapping; general message and port schemas in #453
+through #460; test technology; and the complete accepted-mechanism/port runtime
+synthesis in https://github.com/FelixGeisler/code-city/issues/463[#463]. This
+view adds no executable interface, general schema, Pages workflow, route,
 threshold, fallback, or source-derived capability.
