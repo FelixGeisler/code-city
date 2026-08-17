@@ -11,7 +11,9 @@ The M0 authority mapping is exact:
   trust/context baseline and terminology;
 * https://github.com/FelixGeisler/code-city/issues/446[M0-07 — #446] owns the
   runtime/deployment topology recorded by
-  xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002];
+  xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
+  and the later human-directed branch/publication cutover recorded by
+  xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009];
 * https://github.com/FelixGeisler/code-city/issues/462[M0-08 — #462] owns the
   strata, blocks, exact conceptual ports, bridge boundary, and exclusive
   ownership recorded by
@@ -26,10 +28,12 @@ xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains authoritative for
 source dependencies. ADR 0004 accepts the framework-free TypeScript/Vite
 static-package contract; ADR 0005 accepts anonymous immutable-revision
 resolution; ADR 0006 accepts bounded selected-revision retrieval and sole
-admission; ADR 0007 accepts static syntax and phase-aware lifecycle; and ADR
-0008 accepts source-free WebGL2 presentation. All eight ADRs are `Accepted`.
-They are documented decisions, not current M1 source, dependencies, product
-traffic, parser behavior, rendering, package, or deployment behavior.
+admission; ADR 0007 accepts static syntax and phase-aware lifecycle; ADR 0008
+accepts source-free WebGL2 presentation; and ADR 0009 accepts the M1 main-line,
+sole-publisher, and app-over-docs cutover. All nine ADRs are `Accepted`. They
+are documented decisions, not current M1 source, dependencies, product traffic,
+parser behavior, rendering, package, executable workflow, branch
+administration, or deployment behavior.
 
 == Local terms
 
@@ -44,6 +48,13 @@ process boundary, security sandbox, or source-dependency arrow.
 production delivery target:: The public HTTPS GitHub Pages site
 `https://felixgeisler.github.io/code-city/`, whose exact origin is
 `https://felixgeisler.github.io`.
+
+active M1 line:: The same M1 history named `v2` before ADR 0009's
+administrative cutover and default `main` afterward.
+
+archived v1 line:: The prior v1 history named `main` before the cutover and
+locked `v1` afterward. It is comparison evidence, not an integration or
+publication line.
 
 processing data:: Inert provider and repository data and derived intermediates
 used only while producing the current attempt's outcome. It is neither a
@@ -126,15 +137,17 @@ https://github.com/FelixGeisler/code-city/issues/454[#454], and
 https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |GitHub Pages delivery node
-|Serves trusted static UI and worker artifacts at
-`https://felixgeisler.github.io/code-city/` only. It receives no repository
-payload, admitted source, metric facts, city or scene data, attempt state, or
-credential.
-|xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002];
-initial packaged-shell evidence belongs to
+|At final cutover, serves trusted static UI and worker artifacts at
+`https://felixgeisler.github.io/code-city/` only, published only from the new
+M1 `main`. It receives no repository payload, admitted source, metric facts,
+city or scene data, attempt state, or credential. Legacy documentation may
+remain frozen until #460 replaces it; it is not co-hosted with the application.
+|xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
+and xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009];
+initial non-deploying package/workflow evidence belongs to
 https://github.com/FelixGeisler/code-city/issues/452[#452], successful
 integration to https://github.com/FelixGeisler/code-city/issues/459[#459], and
-renewed final-head production evidence to
+guarded explicit publication plus renewed production-origin evidence to
 https://github.com/FelixGeisler/code-city/issues/460[#460].
 |===
 
@@ -205,10 +218,13 @@ scene and exclusions].
 |GitHub Pages to browser
 |Trusted static UI and worker artifacts only.
 |ADR 0004 accepts the conceptual `/code-city/` Vite package with one separate
-same-origin ES-module worker. #452 implements it initially, #459 integrates the
-successful path, and #460 renews final-head production evidence. No such
-package exists yet; Pages source, action/workflow, application route, and
-deployment mechanism remain unselected.
+same-origin ES-module worker. ADR 0009 accepts new `main` as the sole publisher
+and requires #460 to replace, not co-host, legacy documentation. #452 owns the
+exact first-party workflow and package but its merge cannot deploy; #459
+integrates the successful path; and #460 explicitly publishes and renews final-
+head production-origin evidence. No M1 package or workflow exists yet. Exact
+YAML, event/gate, action versions, artifact root, route realization, and
+emitted filenames remain deferred to #452.
 
 |UI main context to processing worker
 |Only a current normalized, syntactically accepted submission and lifecycle
@@ -289,11 +305,15 @@ or transmitted.
 |Placement |Contents and lifecycle |Ownership and evidence
 
 |GitHub Pages delivery node
-|Static UI and worker artifacts only; no repository payload, source, derived
-fact, city/scene data, attempt state, or credential.
-|Initial static-package inspection belongs to
-https://github.com/FelixGeisler/code-city/issues/452[#452]; renewed final-head
-inspection belongs to https://github.com/FelixGeisler/code-city/issues/460[#460].
+|At final cutover, the new-main M1 application contains static UI and worker
+artifacts only; no repository payload, source, derived fact, city/scene data,
+attempt state, credential, or documentation output. Until then, the existing
+legacy documentation may remain reachable but cannot be refreshed after the
+administrative gate.
+|Initial non-deploying package/workflow inspection belongs to
+https://github.com/FelixGeisler/code-city/issues/452[#452]; explicit deployment,
+legacy-absence proof, and renewed exact-origin inspection belong to
+https://github.com/FelixGeisler/code-city/issues/460[#460].
 
 |UI main context: current-session state
 |Input draft, stable state and status, selected repository/revision tuple where
@@ -401,10 +421,19 @@ stop rules. #452 remains renderer-free; #457 renews renderer-neutral bounds;
 #458 owns all renderer implementation and focused evidence; #459 integrates;
 #460 renews final-hosted behavior. No renderer dependency or asset exists now.
 
+xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009] is
+authoritative for the identity-preserving branch transition, active/default
+M1 line, locked v1 archive, sole new-main Pages publisher, archival
+documentation disposition, and #452-versus-#460 publication gate. This
+documentation change neither administers that target nor implements a workflow.
+#464 owns the separate administrative read-back packet, #452 the exact non-deploying
+workflow realization, and #460 the explicit final deployment and exact-origin
+proof.
+
 The exact accepted/not-implemented baseline, deferred list, stop rules, and
 unchanged #452–#460 ownership are recorded once in
 xref:07-deployment-view.adoc#accepted-current-deferred[Accepted, current, and
 still deferred]. The complete accepted mechanism/port flow is recorded once in
 xref:06-runtime-view.adoc[Runtime View]. This reference view adds no executable
-interface, schema, Pages workflow, route, threshold, fallback, worker policy,
-or source-derived capability.
+interface, schema, executable Pages workflow, route implementation, threshold,
+fallback, worker policy, or source-derived capability.

@@ -18,6 +18,7 @@
 ** xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007: Static syntax with pinned Tree-sitter WebAssembly grammars]
 *** xref:adr/0007-static-syntax-evidence-appendix.adoc[ADR 0007 evidence appendix]
 ** xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008: Browser-native WebGL2 instanced city presentation]
+** xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009: M1 main-line and GitHub Pages cutover]
 * xref:10-quality-requirements.adoc[10. Quality Requirements]
 * xref:11-risks-and-technical-debt.adoc[11. Risks and Technical Debt]
 * xref:12-glossary.adoc[12. Glossary]

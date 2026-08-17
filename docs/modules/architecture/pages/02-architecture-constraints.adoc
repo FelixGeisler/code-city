@@ -138,6 +138,18 @@ xref:requirements:01-product-scope.adoc#non-goals[Non-goals].
 |https://github.com/FelixGeisler/code-city/issues/459[#459] and
 https://github.com/FelixGeisler/code-city/issues/460[#460].
 
+|The active M1 line is `v2` until the accepted post-ADR administrative
+cutover, then default `main`; the former v1 `main` becomes locked archival
+`v1`. Only the resulting M1 `main` may publish Pages, and #460 replaces the
+legacy hosted documentation with the application rather than co-hosting it.
+|https://github.com/FelixGeisler/code-city/issues/446[#446] and
+xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009].
+|The separately sealed administration gate in
+https://github.com/FelixGeisler/code-city/issues/464[#464], exact non-deploying
+workflow realization in https://github.com/FelixGeisler/code-city/issues/452[#452],
+and guarded final deployment and production-origin proof in
+https://github.com/FelixGeisler/code-city/issues/460[#460].
+
 |M1 has no authentication or other input, configuration, exploration, history,
 persistence, export, compatibility promise, or speculative extension point.
 |xref:requirements:01-product-scope.adoc#non-goals[Non-goals] and
@@ -209,7 +221,19 @@ fixed trusted shaders; the UI coordinator alone publishes or commits visible
 failure. #452's walking shell remains renderer-free, #457 construction remains
 renderer-neutral, and #458 owns every renderer declaration and focused check.
 
-Pages source/action/workflow and deployment mechanism, concrete source mapping,
-general message and port schemas, and test technology stay with their owners.
-Static syntax, SP-01 through SP-04, selected-revision retrieval, RA-10/RA-11,
-visualization technology, and CC-09/PR-01 are no longer deferred.
+xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009] is the
+accepted branch and publication constraint. The current M1 `v2` history becomes
+the sole active/default `main`, current v1 `main` becomes locked archival `v1`,
+only new `main` may publish, and #460 replaces rather than co-hosts the legacy
+Pages documentation. This documentation records the accepted target; it
+neither performs administration nor creates executable configuration. #464
+owns the branch/protection/environment
+migration evidence; #452 owns exact non-deploying workflow realization; and
+#460 owns the explicit final publication and production-origin proof.
+
+Concrete source mapping, executable message and port schemas, exact #452
+workflow YAML, event and gate, action versions, artifact root, emitted
+filenames, and test technology stay with their owners. Branch identity, sole-
+publisher placement, documentation disposition, static syntax, SP-01 through
+SP-04, selected-revision retrieval, RA-10/RA-11, visualization technology, and
+CC-09/PR-01 are no longer deferred.

@@ -1,0 +1,338 @@
+= ADR 0009: M1 main-line and GitHub Pages cutover
+
+Status:: Accepted
+
+== Context
+
+xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
+accepts the browser-only runtime topology and the production target
+`https://felixgeisler.github.io/code-city/`, but deliberately did not select
+which branch could publish, what would happen to the hosted documentation, or
+how the active M1 line would replace the v1 line as the repository default.
+The M1 work and its current documentation are on `v2`, while the observed
+repository default and legacy Pages publisher are on the v1 `main` line. That
+leaves two apparent main lines and permits outdated documentation to occupy the
+accepted application target.
+
+This ADR resolves branch identity, publication authority, and the one-way
+cutover. It does not change ADR 0002's runtime topology or target, ADR 0004's
+build technology and `/code-city/` base, product behavior, source architecture,
+provider mechanisms, parser, renderer, limits, lifecycle, or failure policy.
+
+== Authority
+
+On 2026-08-17, after the conflict between the `main`-only legacy publisher and
+the M1 `v2` line was presented, the human owner directed:
+
+[quote]
+____
+you can rename current v1 main branch to v1. Make v2 the new main branch. We
+also only need v2 documentation. Everything is outdated and no longer actively
+needed. But lets keep the branch.
+____
+
+https://github.com/FelixGeisler/code-city/issues/446[#446] records that direct
+instruction, the compatible independent Software Architect recommendation, and
+the accepted decision under issue-body SHA-256
+`1a4c1159dbfb15f03e2419ebf52124b697e22966a67de91ba8fe60ac0a36233d`.
+The human instruction decides the compatibility and branch-governance choice;
+no delegated balancing of that choice is used.
+
+This ADR is therefore `Accepted` and is not pending generic future human
+acceptance. Repository administration and executable workflow implementation
+remain gated work described below. A semantic deviation requires requirements
+clarification before implementation or administration.
+
+== Observed pre-migration state
+
+The following observations were read on 2026-08-17. They are reconciliation
+inputs, not claims about the state after this ADR merges:
+
+* repository default branch and v1 tip: `main` at
+  `3ed8407809ea660657d6eeb49579ddb8412932fa`;
+* M1 branch and baseline: `v2` at
+  `f2f8db632b2ee1de31a12bdb9fc9aeed620b51a1`;
+* no `v1` branch and no open pull request;
+* the legacy Documentation workflow publishes `build/site` from qualifying
+  `main` pushes, and legacy Container and Release workflow registrations also
+  remain enabled;
+* Pages uses GitHub Actions, the `github-pages` environment admits only a
+  custom `main` branch policy, and the target currently serves legacy Antora
+  documentation; and
+* the M1 line contains only the CI workflow, whose push filter still names
+  `v2` until https://github.com/FelixGeisler/code-city/issues/452[#452]
+  implements the new shell and build baseline.
+
+A mismatch in an observation before the corresponding administrative step
+stops that step for reconciliation. It does not authorize force, deletion, or
+destructive repair.
+
+== Decision
+
+=== Branch identities and documentation authority
+
+After this ADR's conforming pull request is merged into the current M1 `v2`
+line, repository administration performs identity-preserving branch renames,
+never a history rewrite:
+
+. rename the then-current v1 `main` branch to `v1`;
+. rename the then-current M1 `v2` branch, including this ADR's merge, to
+  `main`;
+. make that new `main` the default and sole active integration line; and
+. leave no active `v2` branch name.
+
+The commit identities and histories do not change. New work, pull requests,
+and current documentation use the resulting `main`. A URL naming `main` then
+resolves the M1 line; immutable v1 evidence must name `v1`, `v1.0.0`, or an
+immutable v1 commit. Redirects from old `v2` URLs are convenience only and are
+not authoritative evidence.
+
+The resulting `v1` and immutable `v1.0.0` tag are comparison and historical
+evidence only. The `v1` branch is not a fallback, release line, integration
+base, current documentation source, or publication authority. Unlocking,
+deleting, publishing, or resuming development from it requires a new human
+decision.
+
+Requirements, architecture, operations, and project documentation on the
+active M1 line are the sole current Code City documentation. Documentation
+retained on `v1` is archival and may be outdated. It need not be migrated,
+repaired, republished, redirected, or bundled into M1. `npm run docs:build`
+remains conformance evidence for current repository documentation.
+
+=== One production publisher and one final artifact
+
+After migration, only the new `main` may publish the `github-pages`
+production environment. No tag, delivery branch, archived branch, fork, or
+other workflow may publish the production Pages environment or a v1 package or
+release. The environment policy independently denies `v1` deployment.
+
+The legacy-only Documentation, Container, and Release workflow registrations
+are disabled and read back as disabled; the current-main CI workflow remains
+enabled. The last deployed legacy documentation may remain reachable, but no
+legacy ref may replace or refresh it. The final M1 publication replaces that
+artifact with the application at the accepted root target. There is no
+co-hosted documentation route, composite documentation/application artifact,
+compatibility redirect, second Pages artifact, preview publisher, second
+origin, or fallback publisher.
+
+The sole publisher is a first-party GitHub Pages workflow with only the minimum
+repository-read, Pages-write, and OIDC permissions needed for publication. It
+adds no repository or provider credential, long-lived deployment secret,
+external hosting service, or second production path.
+
+=== Build configuration and production cutover ownership
+
+https://github.com/FelixGeisler/code-city/issues/452[#452] owns the reviewed
+repository implementation needed to build and package the application and to
+define the single first-party, new-`main` GitHub Pages workflow. Before
+Developer handoff, #452 must fix the exact source/package map, current-main CI
+trigger, base and dependency-boundary evidence mechanism, workflow event and
+gate, action versions, artifact root, permissions, and proof that tests,
+development dependencies, source, and documentation output do not enter the
+production artifact.
+
+Merging #452 must not deploy or replace the hosted documentation. Production
+publication is explicitly initiated only by
+https://github.com/FelixGeisler/code-city/issues/460[#460] after all preceding
+M1 slices and #460's exact-head reviews pass. Exact YAML, source filenames,
+emitted filenames, and equivalent local implementation syntax remain #452
+choices; this ADR does not select them.
+
+#460 owns the guarded final merge, explicit deployment, and production-origin
+evidence. It must:
+
+. merge the exact reviewed #460 change through the protected main-line pull-
+  request path;
+. require successful `verify` on the resulting guarded merge commit and prove
+  that commit's tree is the reviewed head tree with no unrelated change;
+. explicitly dispatch the accepted main-only publication path for that exact
+  commit;
+. record deployment and environment identity, deployed commit, and a complete
+  artifact manifest containing each relative URL, byte length, media type, and
+  SHA-256;
+. after GitHub reports that deployment successful, fetch the entry and every
+  emitted artifact from the exact production origin with a deployment-unique
+  cache-busting query and require byte-for-byte length and hash equality with
+  the manifest;
+. resolve every entry reference beneath `/code-city/` and prove known legacy
+  entry and assets are absent rather than stale or partially retained;
+. prove the local and fetched artifact exclude repository source, test tools,
+  documentation output, source maps, secrets, server artifacts, and stale v1
+  assets; and
+. prove `v1` and the retired legacy workflow cannot overwrite the accepted
+  deployment.
+
+A deployment API commit field or browser screenshot alone is insufficient.
+The deployment identity, complete local manifest, and bytes fetched from the
+production origin must agree.
+
+=== Protected administrative realization
+
+The branch migration is repository administration after #446's guarded merge,
+not a source or configuration change. It occurs only with no open pull request,
+and each operation is read back before the next one.
+
+The resulting new `main` protection:
+
+* requires strict, up-to-date status checks and binds `verify` to the GitHub
+  Actions app ID `15368`;
+* binds `delivery/architecture`, `delivery/testing`,
+  `delivery/requirements`, and `delivery/security` to Quality Assurance app ID
+  `4599126`;
+* requires the guarded pull-request path and conversation resolution;
+* applies to administrators with no bypass, rejects force pushes and deletion,
+  and requires zero separate GitHub approving reviews because the four exact-
+  head role checks are the accepted reviews; and
+* permits the accepted guarded merge-commit method, so required linear history
+  is false.
+
+A stale v1 context or an unbound check with the same name cannot satisfy that
+policy. The resulting `v1` protection has no obsolete required check or review
+gate, applies to administrators with no bypass, sets `lock_branch` true, and
+rejects force pushes and deletion. Its lock, not an obsolete check, preserves
+the archive. The `github-pages` environment has exactly one custom branch
+policy named `main`, resolving only to the new M1 line.
+
+The authorized failure-safe order is:
+
+. verify #446 closed through its guarded merge, that merge commit's `v2` push
+  `verify` run succeeded, zero open pull requests, exact remote tips, absent
+  `v1`, and a clean local state;
+. disable and read back the legacy Documentation, Container, and Release
+  workflow registrations while retaining CI, then require no such workflow run
+  in `requested`, `waiting`, `pending`, `queued`, or `in_progress` and no
+  legacy Pages deployment in `pending`, `queued`, or `in_progress`;
+. record every local ref and worktree, fetch without prune, and fast-forward
+  the clean checked-out local `v2` to the exact merge SHA;
+. install and read back the strict new-main protection on remote `v2`, and
+  verify enabled CI has a `pull_request` trigger capable of producing the app-
+  bound `verify` for protected-main pull requests;
+. rename protected remote old `main` to `v1`, then protected remote `v2` to
+  `main`, keeping the former default protected during the interval;
+. prove strict protection followed new `main`, replace and read back the Pages
+  policy as exactly one custom `main` policy if needed, and only then make new
+  `main` the default;
+. replace and read back `v1` protection with the archive policy and reconfirm
+  refs, tips, policies, workflow states, quiescence, and zero open pull
+  requests; and
+. reconcile local names and upstreams without prune: old local `main` becomes
+  `v1`, checked-out `v2` becomes `main`, explicit remote refs and exact SHAs are
+  verified, `origin/HEAD` becomes `origin/main`, and the stale `origin/v2`
+  tracking ref is removed only after the remote branch is proved absent.
+
+Every detached review worktree must retain its original HEAD. Local failure is
+reconciled from the recorded snapshot with only missing identity-preserving
+renames or restoration of saved names; no reset, prune, local-branch deletion,
+or detached-worktree movement is allowed.
+
+If a remote step fails, captured state determines no-op continuation or the
+exact inverse identity-preserving rename. After both renames, rollback is only
+remote `main` to `v2`, remote `v1` to `main`, and restoration of captured
+default, protections, and environment followed by read-back; legacy workflows
+stay disabled. Never delete or force a ref, create a synthetic commit, weaken a
+protection or publication gate, or work around a required check.
+
+=== Administrative evidence gate
+
+The repository administrator owns a separate post-#446, pre-#464 gate. The
+existing locally authenticated repository-owner administration channel is used
+because the Requirements, Developer, and QA Apps intentionally lack
+Administration permission; no token value enters a packet, log, issue, or
+repository file.
+
+An immutable #464 administration packet receives `administration.md` and
+redacted JSON read-backs or hashes for the refs, default, protections,
+environment, workflows, runs, deployments, open pull requests, before/after
+SHAs, worktrees, app-bound checks, quiescence, and local reconciliation. The
+final https://github.com/FelixGeisler/code-city/issues/464[#464] body records
+that sealed packet's SHA-256. The Requirements App then publishes the exact-
+body consolidated readiness attestation, which #464's pull request must link.
+No #464 candidate readiness or later M1 Developer handoff occurs until the
+administrative state and packet match this decision. #464 must empirically
+produce `verify` and all four role checks on protected `main`; failure reopens
+#446 rather than weakening protection.
+
+== Rationale
+
+One conventional active/default `main` removes permanent dual-main ambiguity
+and allows the default branch to own the dispatchable production workflow.
+Retaining v1 as a locked identity-preserving archive preserves comparison
+history without allowing outdated checks, workflows, documentation, or
+artifacts to govern M1. One main-only publisher prevents the archived
+Documentation workflow from overwriting the application. Reserving production
+publication for #460 avoids exposing an incomplete M1.
+
+== Downside
+
+Branch URLs, local clones, automation, protection, and habits must follow the
+rename. Legacy documentation may remain visible but frozen until #460. Current
+repository documentation will no longer be hosted at the Pages root after the
+application replaces it. The ordered administration and exact hosted evidence
+add work, and exact workflow and build details still need #452 review.
+
+== Rejected alternatives
+
+* *Keep M1 on `v2` and v1 as default `main`.* This preserves dual-main
+  ambiguity and complicates default-branch-only publication.
+* *Keep the v1 commit history active under `main` because it is already an
+  ancestor of `v2`.* Branch authority and repository protection are state, not
+  only commit ancestry, and this contradicts the human-selected identities.
+* *Host documentation and the application together.* This adds an unneeded
+  route, composite package, and overwrite policy.
+* *Use a subpath, second host, preview service, or second publisher.* This
+  contradicts the accepted production target or adds an unapproved topology.
+* *Deploy automatically when #452 merges.* This could publish an incomplete M1
+  before all slices and exact-head final reviews pass.
+
+== Consequences
+
+* Until administration completes, the M1 integration base remains `v2`; after
+  it completes, the sole active/default integration base is `main` and no
+  active `v2` exists.
+* The archived v1 line remains available as locked `v1` and immutable
+  `v1.0.0`, but it cannot integrate, release, or publish.
+* Current M1 repository documentation remains authoritative; #460 replaces,
+  rather than co-hosts, the legacy hosted documentation with the M1
+  application.
+* #452 owns non-deploying build, CI, and publication-workflow realization.
+  #460 alone owns the final explicit deployment and exact-origin proof. #464
+  owns evidence that the branch, protection, workflow, environment, and local
+  administrative gate completed before M1 implementation handoff.
+* ADR 0002 remains unchanged and authoritative for browser topology and the
+  Pages target. ADR 0004 remains unchanged and authoritative for the Vite
+  package and `/code-city/` base.
+
+== Stop and reopen rules
+
+Stop and reopen #446 before proceeding if implementation or administration
+would require or observe:
+
+* a different active/default branch, an additional production publisher,
+  automatic intermediate production deployment, co-hosted documentation,
+  another route, origin, environment, service, credential, preview path, or
+  fallback;
+* a release or merge from archived v1, changed commit identities, missing
+  branch/worktree evidence, a force push, deletion, synthetic commit,
+  destructive local repair, or weaker protection;
+* a Pages artifact or deployment whose reviewed tree, guarded merge commit,
+  complete manifest, deployment identity, or production-origin bytes cannot be
+  proved equal as required;
+* a legacy workflow or archived ref that can refresh or overwrite production;
+  or
+* a mismatch in observed state, workflow/deployment quiescence, app-bound
+  checks, refs, default branch, environment policy, or protection that cannot
+  be resolved by the authorized no-op or exact inverse rename.
+
+Reopen the owning ADR instead for changes to runtime topology, build
+technology, provider access, parser, renderer, limits, lifecycle, or failure
+policy. No silent workaround or weakened gate is permitted.
+
+== Exclusions
+
+This ADR does not add or select production source, configuration, workflow
+YAML, action version, dependency, manifest, emitted filename, source filename,
+test framework, browser harness, executable handoff schema, Worker/Fetch
+syntax, deployment artifact, route implementation, or product behavior. It
+does not rewrite, delete, merge, repair, republish, or resume development on
+v1, and it does not change `v1.0.0`, ADRs 0001 through 0008, or product
+requirements.
