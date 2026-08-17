@@ -1,27 +1,18 @@
 = 6. Runtime View
 
-This view records only the execution-context ownership, generic handoffs,
-publication gate, and lifecycle cleanup accepted in
-xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002].
-xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
-accepts the future `/code-city/` static package and separate same-origin
-ES-module worker used by this topology; it does not make that package current
-repository behavior. Vite development and preview servers are local tools, not
-runtime nodes.
-xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
-0005] accepts the exact anonymous revision-resolution REST boundary.
-xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
-0006] accepts the exact selected-revision retrieval/admission boundary.
-xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
-0007] accepts exact static-syntax assets and behavior, the provider/static phase
-barrier, two bridge-only lifecycle attestations, and ordinary versus hard-stop
-cleanup.
-xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
-accepts exact UI-edge presentation staging, rendering, resize, context-loss,
-and cleanup behavior. None makes product traffic, parser behavior, or rendering
-current. This view adds no general message or port schema or complete accepted-
-mechanism flow; synthesis remains with
-https://github.com/FelixGeisler/code-city/issues/463[#463].
+This view is the authoritative implementation-independent synthesis of the
+accepted M1 runtime flow. It links ADR 0002's execution placement and ADR
+0003's exact ports and ownership to ADR 0005 resolution, ADR 0006 retrieval and
+admission, ADR 0007 static syntax and phase-aware lifecycle, and ADR 0008
+presentation. ADR 0004 supplies only the accepted conceptual `/code-city/`
+static package and separate same-origin ES-module worker; Vite development and
+preview servers are local tools, not runtime nodes.
+
+The matrices were accepted through
+https://github.com/FelixGeisler/code-city/issues/463[#463]. They add no product
+behavior, implementation, general message or port schema, transport or
+cancellation primitive, worker-creation policy, dependency, traffic, parser
+operation, rendering, package, or deployment mechanism.
 
 == Runtime topology
 
@@ -79,7 +70,7 @@ count, package boundary, or source-dependency rule.
 
 [cols="3,8",options="header"]
 |===
-|Context |Accepted ownership
+|Context |Accepted responsibilities placed in the context
 
 |UI/presentation main context
 |Input draft, permitted normalization, canonical grammar validation before
@@ -109,13 +100,18 @@ settlement before static entry; ordinary cleanup or hard static realm release;
 and release of transient processing references.
 |===
 
+This placement table does not collapse ADR 0003's block or port ownership.
+Adapters, capabilities, coordinators, bridge halves, and presentation retain
+the exact owners identified in the matrices below.
+
 Repository data remains inert and is never executed, evaluated, imported, or
 dynamically loaded. ADR 0005 fixes at most two native Fetch GETs, strict
 case-only resolution evidence, immutable-SHA pinning, inclusive 4 MiB bodies,
 and application-controlled cleanup. ADR 0006 then fixes two capped REST GETs,
 no more than `5,000` sequential raw GETs, bounded own-field/prototype-safe
 projection, exact Git blob comparison, one `4,194,317`-byte raw/hash workspace,
-and complete cleanup before another request or replacement. Neither ADR makes
+and complete cleanup before another provider request for a replacement.
+Neither ADR makes
 a malicious-provider, atomic-provider-state, latency, or compatibility
 warranty. UI rejection of a late result remains authoritative. SP-01 through
 SP-04 are unnecessary: the complete RA-07/RA-08/RA-09 envelope reaches static
@@ -180,292 +176,612 @@ threshold, boundary, or T-1/T/T+1 scenario. Arbitrary elapsed construction or
 presentation time alone leaves the attempt `Loading`; M1 makes no completion,
 startup, frame-time, throughput, latency, or preemption promise.
 
-== Generic handoffs
+== End-to-end runtime synthesis
 
-[cols="4,7,5",options="header"]
+The following matrices link the accepted contracts and mechanisms without
+selecting an executable interface, message schema, transport primitive, worker-
+creation policy, or new behavior. Canonical internal artifacts are visible
+here to the documentation reader through their producer, consumer, and
+placement; admitted modules, metric facts, canonical scenes, and building
+identities are not additional user-visible product output. The matrices add no
+port, block, owner, admission path, classifier, or orchestrator. The city
+constructor remains authoritative for the canonical model; defensive
+presentation validation is not a second constructor or classifier. The UI
+attempt coordinator alone owns visible state and the publication gate.
+
+=== Complete successful flow
+
+[cols="1,3,4,9,3",options="header"]
 |===
-|Handoff |Only accepted content |Deferred detail
+|Order
+|Exact port or non-port handoff
+|Owner / collaborator
+|Accepted transition
+|Authoritative requirement / ADR
 
-|Pages to browser
-|Trusted static UI and worker artifacts.
-|ADR 0004 accepts the future Vite package, `/code-city/` base, and separate
-same-origin ES-module worker. #452 implements the initial package, #459
-integrates the success path, and #460 renews final-head evidence. The package
-does not exist yet; Pages source/action/workflow, application route, and
-deployment mechanism remain unselected.
+|1
+|`User attempt actions`
+|UI attempt coordinator / UI surface adapter
+|The UI surface adapter supplies submit to the UI attempt coordinator. The
+coordinator first revokes any prior result, installs the normalized submission,
+applies the accepted grammar policy, and continues here only for accepted
+syntax.
+|xref:requirements:04-functional-requirements.adoc[];
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
 
-|User to UI
-|Untrusted URL draft and submit, cancel, and reload actions.
-|The product contract is authoritative; this view adds no input or action.
+|2
+|`Processing gateway`
+|UI attempt coordinator / main bridge half
+|The UI attempt coordinator drives the main bridge half with only the current
+normalized, syntactically accepted submission. No exact message schema or
+transport primitive is selected.
+|xref:requirements:04-functional-requirements.adoc[]; ADR 0003
 
-|UI to worker
-|A current normalized, syntactically accepted submission and lifecycle control.
-Invalid input never crosses this handoff.
-|Exact message and port schemas, dispatch, and cancellation mechanisms remain
-deferred.
+|3
+|`Worker attempt control`
+|Worker pipeline coordinator / worker bridge half
+|The worker bridge half drives the worker pipeline coordinator for the current
+generation. The bridge owns correlation and transport resources but is not
+another orchestrator.
+|xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
 
-|Worker to UI while `Loading`
-|The selected canonical repository URL and immutable revision tuple, when
-available.
-|Exact identity handoff shape remains deferred.
+|4
+|`Resolve immutable revision`
+|Revision-resolution capability / worker pipeline coordinator
+|The worker pipeline invokes the revision-resolution capability before source
+retrieval.
+|ADR 0003;
+xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR 0005]
 
-|Worker to UI at a terminal processing result
-|One terminal failure outcome or one complete canonical scene. Separately, the
-worker may post exactly `PROVIDER_DRAINED_STATIC_ENTERED` and `ATTEMPT_DRAINED`,
-each containing only its discriminator and existing opaque bridge-generated
-attempt/generation correlation.
-|No partial-stage handoff or alternate result is accepted. The presentation
-adapter validates the complete handoff before WebGL; a model breach propagates
-`M1-CITY-1` through the nonclassifying bridge, and `M1-PRES-1` starts only after
-validation. The internal attestations carry no business, source, parser,
-timing, or count data and never enter worker-outcome intake, visible state,
-status, or classification.
+|5
+|`Resolution evidence`
+|Revision-resolution capability / GitHub resolution adapter
+|The GitHub resolution adapter performs ADR 0005's ordered metadata GET and
+selector-free one-item commit-list GET; validates required response-field
+shapes, including an own-string `default_branch`; discards `default_branch`
+locally so it never crosses the port; and emits only permitted primitive
+identity, status, and commit-SHA
+projections. The revision-resolution capability classifies that projected
+evidence, validates the exact public/case-only identity relation, and alone
+constructs the immutable tuple `(canonical repository URL, full lowercase
+40-hex commit ID)`.
+|xref:requirements:04-functional-requirements.adoc#immutable-revision[]; ADR
+0003; ADR 0005
 
-|Worker and Public GitHub
-|Direct anonymous resolution and selected-revision retrieval.
-|ADR 0005 fixes resolution at `https://api.github.com`. ADR 0006 consumes the
-resulting immutable tuple, requests its commit object and exact recursive root
-tree at `https://api.github.com`, then requests in-horizon candidate bytes
-sequentially from `https://raw.githubusercontent.com`. Exact options, URL and
-identity checks, caps, canonical order, global no-overlap, no retry/fallback,
-and current-attempt cleanup apply.
+|6
+|`Worker outcome publication` → `Worker outcome intake`
+|Worker pipeline and UI attempt coordinators / worker and main bridge halves
+|The selected tuple may cross while `Loading`. The UI coordinator applies it
+only to the current eligible attempt and preserves any post-submit draft edit.
+|xref:requirements:04-functional-requirements.adoc#states[]; ADRs 0002 and 0003
+
+|7
+|`Retrieve and admit`
+|Retrieval/admission capability / worker pipeline coordinator
+|The pipeline invokes the retrieval/admission capability with only the selected
+immutable tuple. It remains the sole admission and RA classifier and sole
+admitted-module creator.
+|xref:requirements:06-source-admission-and-limits.adoc[]; ADR 0003;
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006]
+
+|8
+|`Selected-revision repository data`
+|Retrieval/admission capability / GitHub retrieval adapter
+|The GitHub retrieval adapter performs only ADR 0006's selected-commit GET,
+exact recursive-root-tree GET, sequential canonical-order immutable raw GETs,
+bounded streaming, hash computation, and own-field primitive projection. The
+retrieval/admission capability validates projected identities and blob-hash
+evidence, applies the complete bounded inventory and every admission/RA horizon
+plus strict decode/normalization, owns all admission/RA classification, and
+alone creates one complete ordered admitted-module set. No branch, alternate
+path, retry, or partial set appears.
+|xref:requirements:06-source-admission-and-limits.adoc[]; ADRs 0003 and 0006
+
+|9
+|`PROVIDER_DRAINED_STATIC_ENTERED` — non-port
+|Worker pipeline and main bridge / provider adapters
+|After successful admission, all provider work settles; locks, gates, provider
+objects, and the raw/hash workspace are released; only the complete core-owned
+admitted set remains; provider restart becomes impossible; then the worker
+posts the bridge-only attestation.
+|xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007]
+
+|10
+|`Analyze admitted modules`
+|Static-metrics capability / worker pipeline coordinator
+|The pipeline invokes the static-metrics capability with the complete admitted
+set in canonical order.
+|xref:requirements:08-fixed-metric-semantics.adoc[]; ADR 0003
+
+|11
+|`Static syntax`
+|Static-metrics capability / parser adapter
+|Only after the static-entry post, the parser adapter may load the accepted
+same-origin runtime JavaScript, runtime WASM, and three grammar WASMs. It
+performs complete fact-free validation before primitive projection and emits
+only validated primitive syntax observations. The static-metrics capability
+owns `M1-MET-1` classification and alone creates the complete canonical metric
+facts.
+|xref:requirements:08-fixed-metric-semantics.adoc[]; ADRs 0003 and 0007
+
+|12
+|`Construct canonical city`
+|City constructor / worker pipeline coordinator
+|The pipeline makes the ordinary pure domain call from complete canonical
+metric facts to exactly one complete renderer-neutral canonical scene.
+|xref:requirements:10-fixed-city-layout-and-presentation.adoc[]; ADR 0003
+
+|13
+|`Worker outcome publication`
+|Worker pipeline coordinator / worker bridge half
+|On ordinary success, cursor/tree/parser cleanup and core-reference release
+precede publication. The worker posts one complete source-free scene, then
+posts `ATTEMPT_DRAINED`; no admitted set, parser object, metric intermediate,
+source, or partial scene crosses.
+|ADRs 0003 and 0007
+
+|14
+|`Worker outcome intake`
+|UI attempt coordinator / main bridge half
+|The main bridge transports the business payload without validation or
+classification. The UI coordinator applies it only if the generation remains
+current. Matching drain receipt permits exactly-once worker termination and
+handle clearing.
+|xref:requirements:04-functional-requirements.adoc#states[]; ADRs 0003 and 0007
+
+|15
+|`Present complete scene`
+|UI attempt coordinator / presentation adapter
+|The presentation adapter defensively validates every required own field and
+projects source-freely; creates the detached canvas and immediately registers
+the once/passive loss listener before context creation; creates the context,
+performs ADR 0008's fixed staging/draw, and checks the result; then constructs
+and attaches the observer; performs the final host-size reread and required
+detached redraw; rechecks eligibility; and only then allows one synchronous
+no-yield commit of canvas, identity, and `Success`.
+|xref:requirements:10-fixed-city-layout-and-presentation.adoc[];
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
 |===
 
-Raw or normalized source, repository entry content, admitted modules,
-parser/analyzer objects, and canonical metric intermediates never cross into
-presentation. A complete canonical scene may cross without those values;
-canonical building identities cross only as inert model keys.
+`PROVIDER_DRAINED_STATIC_ENTERED` and `ATTEMPT_DRAINED` are bridge-only
+lifecycle attestations, not conceptual ports or business outcomes. Each
+carries only its discriminator and existing opaque generation correlation.
+Neither enters `Worker outcome intake`, visible state, status, or
+classification.
 
-== Current-attempt and publication sequence
+=== Complete terminal-failure flow
 
-The following is a topology-level ownership sequence, not #463's later
-mechanism/port synthesis:
+The authoritative contracts are xref:requirements:04-functional-requirements.adoc[input and state outcomes],
+xref:requirements:06-source-admission-and-limits.adoc[admission outcomes],
+xref:requirements:08-fixed-metric-semantics.adoc[metric failure], and
+xref:requirements:10-fixed-city-layout-and-presentation.adoc[city and
+presentation failures]. This matrix links to those contracts; it does not
+redefine their conditions or thresholds.
 
-. On submit, the UI makes the new submission the only current attempt and
-  immediately revokes every prior attempt's publication eligibility before
-  validating the new value.
-. The UI performs the permitted normalization and canonical grammar validation.
-  Invalid input ends in the accepted failure state without worker dispatch or
-  provider interaction.
-. For accepted syntax, the UI enters `Loading` and hands only the current
-  normalized submission to the worker. The worker owns the direct anonymous
-  provider and processing stages.
-. The worker may hand back the selected canonical repository/revision tuple
-  while processing continues. The UI applies it only to the current eligible
-  attempt and never overwrites a draft edited after submission.
-. Each worker stage either supplies its complete input to the next worker stage
-  or terminates the attempt. No admitted set, metric facts, or partial scene is
-  published to presentation.
-. A complete canonical scene crosses to the UI only after all worker stages
-  succeed. The presentation adapter defensively validates it before WebGL and
-  owns only ADR 0008 adaptation/failure/cleanup; the bridge does not classify.
-. The UI's sole publication-eligibility gate admits only the current fully
-  staged result. After observer setup, the mandatory final detached host reread
-  and any required redraw, and a final eligibility check, it synchronously
-  publishes canvas, complete city, and selected identity in one no-yield
-  commit, or publishes no city. Every stale, replaced, cancelled, partial, or
-  late result is rejected.
+For compactness, _worker result route_ is documentation shorthand, not a new
+block or port: owning capability → worker pipeline suppression → `Worker
+outcome publication` → nonclassifying bridge → `Worker outcome intake` →
+current UI coordinator. Ordinary worker cleanup ends with the business
+payload, `ATTEMPT_DRAINED`, and bridge-owned termination and handle clearing.
 
-== Selected-revision retrieval/admission sequence
+[cols="3,3,4,3,4,4,4,2,4,2",options="header"]
+|===
+|Failure
+|Category / code
+|Sole classifier or authority
+|Stopped
+|Suppressed
+|Route
+|Cleanup
+|State
+|Tuple + draft
+|City
 
-Within step 5, ADR 0006 fixes this worker-side order:
+|Invalid/non-canonical input
+|`Invalid/non-canonical input` / no stable code
+|Domain validation policy; UI coordinator commits
+|Before dispatch/provider interaction
+|Every worker and downstream stage
+|`User attempt actions` only; no bridge dispatch
+|Dispose prior UI presentation; any replaced generation follows the lifecycle
+matrix
+|`Failure`
+|No tuple; normalized submitted draft, with later edits remaining drafts
+|None
 
-. Consume only ADR 0005's canonical owner/repository URL and selected full
-  lowercase commit. Never resolve another ref.
-. Use the single global request slot for the selected-commit REST GET; validate
-  the normalized selected identity and project its full root-tree identity.
-. Use that slot for the exact recursive-root-tree REST GET. Enforce the 4 MiB
-  and 8 MiB REST caps, complete-inventory rule, own-field primitive projection,
-  #442 entry/path/metadata horizons, and candidate-SHA projection. Provider
-  tree representations are gone before raw retrieval.
-. In canonical unsigned-UTF-8 candidate order, use the same slot for at most one
-  raw GET per candidate and at most `5,000` per journey. While the content
-  horizon remains open, validate the expected blob SHA, stream into the single
-  global workspace, apply RA-04/RA-05, compare exact Git blob identity, then
-  strictly decode and normalize once only after agreement.
-. Return one complete ordered admitted-module set or one accepted terminal
-  result. A failure cancels unread work where feasible, cleans application-owned
-  state, starts no later request or stage, and publishes no admitted set.
+|Anonymous repository unavailable
+|`Repository unavailable for anonymous access` / no stable code
+|Revision-resolution capability
+|Resolution
+|Later resolution request where applicable and every downstream stage
+|Worker result route
+|ADR 0005 adapter cleanup, pipeline release, ordinary drain
+|`Failure`
+|No tuple; normalized submitted or preserved edited draft
+|None
 
-Each REST/raw request, tree projection, hash, decode, and normalization phase
-uses ADR 0006's explicit eligibility checks and release order. Globally no
-replacement or other attempt starts retrieval/admission work until the old
-request, read/cancel operations, non-abortable JSON/digest/decode work, reader
-lock, workspace, inventory, and unpublished output have settled and been
-cleaned. Submissions waiting during settlement coalesce to the latest only.
+|No resolvable default tip
+|`Revision unavailable` / no stable code
+|Revision-resolution capability
+|Resolution
+|Retrieval and every later stage
+|Worker result route
+|ADR 0005 cleanup and ordinary drain
+|`Failure`
+|No tuple; normalized submitted or preserved edited draft
+|None
 
-== Provider-to-static phase sequence
+|Resolution/provider evidence fails
+|`Provider/resolution failure` / no stable code
+|Revision-resolution capability
+|Failed resolution operation
+|Every later request and stage
+|Worker result route
+|ADR 0005 cancellation/settlement and ordinary drain
+|`Failure`
+|No tuple; normalized submitted or preserved edited draft
+|None
 
-Every worker generation begins provider-capable. No dynamic parser-runtime
-import, grammar or runtime asset fetch/load, `Parser.init`, parse, or traversal
-may begin in that phase. After successful admission the worker retains only the
-core-owned complete admitted-module handoff; settles every ADR 0005/0006 fetch,
-read, abort, reader cancellation, rejection, JSON parse, Web Crypto, strict
-decode, and normalization; releases reader locks; clears every response,
-reader, chunk, provider object, inventory, hash view, digest, workspace, and
-provider transient; releases the global request and workspace gates; and makes
-provider restart impossible for that generation.
+|No eligible candidate
+|`No supported modules` / `ADM-06`
+|Retrieval/admission capability
+|Complete-set horizon
+|Metrics, city, presentation
+|Worker result route
+|ADR 0006 resource cleanup, unpublished-set release, ordinary drain
+|`Failure`
+|Selected tuple retained; untouched canonical draft or preserved edited draft
+|None
 
-The worker then posts `PROVIDER_DRAINED_STATIC_ENTERED`. Unless terminated, it
-does not wait for acknowledgement before its first static operation. The
-following orders are mandatory:
+|All eligible candidates skipped
+|`No supported modules` / `ADM-07`
+|Retrieval/admission capability
+|Complete-set horizon
+|Metrics, city, presentation
+|Worker result route
+|ADR 0006 cleanup and ordinary drain
+|`Failure`
+|Selected tuple retained; current draft preserved
+|None
 
-[source,text]
-----
-provider settlement/global-gate release < post PROVIDER_DRAINED_STATIC_ENTERED
-post PROVIDER_DRAINED_STATIC_ENTERED < every parser/runtime/asset operation, if any
-----
+|Completeness/path/identity failure
+|`Source admission failed` / `M1-ADM-1`
+|Retrieval/admission capability
+|Applicable REST, path, collision, or identity horizon
+|Later requests/stages
+|Worker result route
+|Cancel unread work where feasible; settle locks/gates/inventory/workspace;
+ordinary drain
+|`Failure`
+|Selected tuple retained; current draft preserved
+|None
 
-Matching receipt by the main bridge makes the generation hard-termination-
-safe. Receipt can race ahead of the worker's first static operation.
+|Required kind evidence failure
+|`Source admission failed` / `M1-ADM-3`
+|Retrieval/admission capability
+|Metadata horizon
+|Content and downstream stages
+|Worker result route
+|ADR 0006 cleanup and ordinary drain
+|`Failure`
+|Selected tuple retained; current draft preserved
+|None
 
-Before matching receipt, cancellation or replacement follows only this order:
+|Candidate SHA/raw/content failure
+|`Source admission failed` / `M1-ADM-4`
+|Retrieval/admission capability
+|Canonical content horizon
+|Later content and downstream stages
+|Worker result route
+|Reader/digest/decode/workspace cleanup and ordinary drain
+|`Failure`
+|Selected tuple retained; current draft preserved
+|None
 
-[source,text]
-----
-revoke < provider settlement < lock/global-gate release < ATTEMPT_DRAINED < terminate old < clear handle < create new < first new provider request
-----
+|Entry count above maximum
+|`Repository/admission limit exceeded` / `RA-01`
+|Retrieval/admission capability
+|Entry horizon
+|Field inspection and every later horizon
+|Worker result route
+|ADR 0006 bounded cleanup and ordinary drain
+|`Failure`
+|Selected tuple retained; current draft preserved
+|None
 
-The main bridge posts lifecycle stop and must not terminate early. The pipeline
-suppresses downstream work, provider adapters settle and release their exact
-resources in `finally`, the pipeline clears admitted modules and unpublished
-output, and then posts `ATTEMPT_DRAINED`. The bridge marks the generation
-closing, terminates exactly once, releases listeners/transport references,
-clears its sole handle, and only then creates the latest coalesced replacement.
-Pending settlement may delay replacement without limit or timing outcome.
+|Canonical path bytes above maximum
+|Same category / `RA-02`
+|Retrieval/admission capability
+|Path horizon
+|Metadata/content/downstream stages
+|Worker result route
+|ADR 0006 cleanup and ordinary drain
+|`Failure`
+|Selected tuple retained; current draft preserved
+|None
 
-After matching receipt, cancellation or replacement uses the static path even
-when a lifecycle-stop message is queued but unhandled:
+|Path depth above maximum
+|Same category / `RA-03`
+|Retrieval/admission capability
+|Path horizon
+|Metadata/content/downstream stages
+|Worker result route
+|ADR 0006 cleanup and ordinary drain
+|`Failure`
+|Selected tuple retained; current draft preserved
+|None
 
-[source,text]
-----
-provider settlement/global-gate release < post PROVIDER_DRAINED_STATIC_ENTERED < bridge receipt < hard terminate < clear handle < create replacement
-----
+|One content body above maximum
+|Same category / `RA-04`
+|Retrieval/admission capability
+|Content horizon
+|Unread suffix, later stages
+|Worker result route
+|Feasible reader cancellation, workspace release, ordinary drain
+|`Failure`
+|Selected tuple retained; current draft preserved
+|None
 
-The UI first revokes publication eligibility. The main bridge then terminates
-the sole worker without parser acknowledgement, clears its handle, and only
-then creates the latest replacement. Zero static operations before hard
-termination is valid; otherwise termination may occur during runtime loading,
-parsing, or traversal. No cooperative parser-stop, progress callback, immediate
-computation-stop, or browser teardown-latency claim exists.
+|Aggregate raw content above maximum
+|Same category / `RA-05`
+|Retrieval/admission capability
+|Content horizon
+|Later identities and stages
+|Worker result route
+|Feasible cancellation, accumulated-output/workspace release, ordinary drain
+|`Failure`
+|Selected tuple retained; current draft preserved
+|None
 
-On an ordinary terminal path, the worker deletes the applicable cursor, tree,
-and parser; clears source, endpoint, slice, projection, metric, admitted-module,
-and other core references; posts only one source-free terminal outcome or one
-complete canonical scene; then posts `ATTEMPT_DRAINED`. The bridge applies or
-rejects the business payload through the publication gate and, after matching
-drain receipt, terminates exactly once and clears its handle. Realm-held
-language modules are released by that termination.
+|Candidate count above maximum
+|Same category / `RA-06`
+|Retrieval/admission capability
+|Metadata horizon
+|Content and downstream stages
+|Worker result route
+|ADR 0006 cleanup and ordinary drain
+|`Failure`
+|Selected tuple retained; current draft preserved
+|None
 
-Hard static termination may prevent JavaScript `finally` and parser deletion.
-Evidence must not claim delete-spy observation on that path. Realm termination
-releases static resources without timing, secure-erasure, garbage-collection,
-physical-browser, or operating-system-process teardown claims. Provider work
-never relies on hard termination. Observable no-overlap means at most one
-bridge-owned usable worker handle, parser set, provider slot, and raw/hash
-workspace, not physical teardown.
+|Admitted module count above maximum
+|Same category / `RA-07`
+|Retrieval/admission capability
+|Complete-set horizon
+|Metrics, city, presentation
+|Worker result route
+|Unpublished-module release and ordinary drain
+|`Failure`
+|Selected tuple retained; current draft preserved
+|None
 
-== Presentation staging and continued-validity sequence
+|Normalized module bytes above maximum
+|Same category / `RA-08`
+|Retrieval/admission capability
+|Complete-set horizon
+|Metrics, city, presentation
+|Worker result route
+|Unpublished-module release and ordinary drain
+|`Failure`
+|Selected tuple retained; current draft preserved
+|None
 
-ADR 0008 fixes the following UI-main order after the complete-scene handoff:
+|Aggregate normalized bytes above maximum
+|Same category / `RA-09`
+|Retrieval/admission capability
+|Complete-set horizon
+|Metrics, city, presentation
+|Worker result route
+|Unpublished-module release and ordinary drain
+|`Failure`
+|Selected tuple retained; current draft preserved
+|None
 
-. Validate every required own data field and bounded collection, complete
-  unique `1..4,000` building set, exact canonical geometry/palette/order/bounds/
-  view, prototype-safe identity handling, and current generation. A defect or
-  validation throw creates no WebGL and propagates `M1-CITY-1` unchanged.
-. Project source-freely into the one 28-byte-stride instance representation and
-  check generation eligibility before renderer staging.
-. Read positive integer host dimensions; create one detached matching canvas;
-  immediately register one `{ passive: true, once: true }`
-  `webglcontextlost` listener; request only ADR 0008's exact `webgl2` context;
-  read and verify drawing-buffer equality; then compile the two fixed shaders,
-  allocate/upload the one program/VAO/three buffers, restore fixed state, and
-  issue the one instanced draw while detached.
-. After synchronous operations, check throws, `getError`, context loss,
-  drawing-buffer equality, and generation eligibility.
-. Construct one `ResizeObserver` with an asynchronous generation-guarded
-  callback and successfully `observe(host)` while detached. Failure is
-  `M1-PRES-1`; disconnect and idempotently dispose. Publication cannot precede
-  this step.
-. Without yielding, reread host dimensions immediately before commit. If
-  changed, set both backing dimensions exactly, reread and verify both drawing-
-  buffer properties, recompute only aspect projection/viewport, restore state,
-  clear, and issue exactly one detached draw. Recheck operations and current
-  eligibility.
-. In one synchronous no-yield UI-coordinator commit, publish canvas, current
-  identity, and `Success`.
+|Grammar or canonical-metric failure
+|`Metric processing failed` / `M1-MET-1`
+|Static-metrics capability; parser adapter supplies validated primitive syntax
+observations only
+|Metrics
+|City and presentation
+|Worker result route
+|Ordinary cursor/tree/parser deletion, static/core-reference release, drain
+|`Failure`
+|Selected tuple retained; current draft preserved
+|None
 
-No timer, animation frame, microtask yield, retry, debounce, or network
-operation enters the commit. Synchronous WebGL work need not be preemptible;
-post-operation eligibility prevents stale publication.
+|Constructor rejects or cannot complete the model
+|`City construction failed` / `M1-CITY-1`
+|City constructor
+|City construction
+|Scene handoff and presentation
+|Worker result route
+|Core transient release and ordinary drain
+|`Failure`
+|Selected tuple retained; current draft preserved
+|None
 
-The asynchronous observer cannot publish. For a changed positive integer host
-size it reuses canvas, context, program, VAO, and buffers; sets backing size
-exactly; reads and verifies host/backing/drawing-buffer equality; recomputes
-only aspect-dependent matrix/viewport; reapplies all fixed state; clears; and
-draws once. It does not rebuild/reupload buffers, reorder, animate, time,
-debounce, or retry. Unchanged dimensions do not draw; platform batching means
-only the latest reported size is promised.
+|Defensive handoff breach or validation throw
+|`City construction failed` / `M1-CITY-1`
+|City-construction contract; presentation adapter only detects and propagates,
+bridge does not classify
+|Before WebGL creation
+|Presentation and `Success`
+|Complete scene arrives through publication/intake; `Present complete scene`
+propagates the fixed outcome to the UI coordinator
+|Clean local staging; create no WebGL; worker follows ordinary drain
+|`Failure`
+|Selected tuple retained; current draft preserved
+|None
 
-The once/passive loss listener never calls `preventDefault`; no restoration
-listener/path or loss extension exists. Candidate loss fails without
-publication. Current published loss, or non-positive/non-integer size,
-observer callback throw, drawing-buffer mismatch, WebGL error/loss, or failed
-required resize draw after `Success`, synchronously makes the UI coordinator
-commit `Presentation failed` / `M1-PRES-1`. It retains current tuple and draft,
-removes city/canvas, disposes, and remains failed until resubmit or reload.
-Stale callbacks dispose locally and cannot change visible state.
+|Initial presentation operation fails after valid-model validation
+|`Presentation failed` / `M1-PRES-1`
+|Presentation adapter; UI coordinator commits
+|Detached initial presentation
+|Atomic publication and `Success`
+|`Present complete scene` result to UI coordinator; bridge does not reclassify
+|Disconnect observer, remove listener/canvas, delete live GPU resources once,
+clear references
+|`Failure`
+|Selected tuple retained; current draft preserved
+|None
 
-== Replacement, cancellation, failure, and cleanup
+|Current published WebGL context is lost
+|`Presentation failed` / `M1-PRES-1`
+|Presentation adapter detects; UI coordinator synchronously commits
+|Current published presentation
+|Restoration, retry, fallback, later stale callbacks
+|Loss callback directly to current UI coordinator; no worker route
+|Remove city/canvas, dispose exactly once; stale callbacks dispose locally
+|`Success` → `Failure`
+|Current tuple and draft retained
+|Removed
 
-=== Replacement or cancellation
+|Required passive resize fails after `Success`
+|`Presentation failed` / `M1-PRES-1`
+|Presentation adapter detects; UI coordinator synchronously commits
+|Required resize presentation
+|Further publication, retry, fallback, stale callbacks
+|Generation-guarded resize callback to current UI coordinator
+|Remove city/canvas and dispose exactly once
+|`Success` → `Failure`
+|Current tuple and draft retained
+|Removed
+|===
 
-. The UI immediately revokes the old attempt's publication eligibility and
-  clears identity, city, and presentation state as the accepted state contract
-  requires. Cancellation preserves the editable draft; replacement installs
-  the new submission before its validation result and coalesces to the latest.
-. The main bridge selects the pre-receipt or post-receipt path solely from its
-  matching `PROVIDER_DRAINED_STATIC_ENTERED` receipt gate. Its sole worker-
-  generation handle and hard-stop gate are transport-resource ownership, not a
-  second orchestrator.
-. The selected path follows the exact phase order above. Pre-receipt provider
-  operations settle cooperatively through `ATTEMPT_DRAINED`; post-receipt
-  static work is hard-terminated without acknowledgement. Handle clearing
-  always precedes replacement creation.
-. Any tied or late identity, failure, scene, or lifecycle message is ignored.
-  UI ineligibility remains authoritative even if underlying work completes.
+No row adds a diagnostic category, code, retry, timeout, fallback, partial
+output, stale-city retention, or classifier. RA-10/RA-11, SP-01 through SP-04,
+CC-09, and PR-01 remain explicitly unnecessary; elapsed time alone remains
+inert.
 
-=== Stage or presentation failure
+[[runtime-lifecycle-matrix]]
+=== Cancellation, replacement, and reload
 
-. A worker-stage failure suppresses all downstream work and enters the ordinary
-  terminal cleanup path above.
-. The worker may return only the one terminal failure outcome, followed by
-  `ATTEMPT_DRAINED`. The UI applies the outcome only for the current eligible
-  attempt; no stale or partial city is published.
-. If adaptation of an already-valid complete canonical scene fails, the
-  presentation adapter reports `M1-PRES-1` and cleans every incomplete
-  resource; the UI coordinator alone commits visible failure. A model defect
-  remains `M1-CITY-1` before WebGL.
-. If the current presentation fails after `Success`, the same ownership removes
-  city/canvas, retains tuple and draft, and commits the persistent
-  post-`Success` failure without retry or fallback.
+[cols="4,5,9,6,3",options="header"]
+|===
+|Case
+|Immediate UI ownership
+|Required processing / bridge order
+|Cleanup and late outcomes
+|Result
 
-After a successful complete-scene handoff, worker processing intermediates do
-not become retained product state and are released before `ATTEMPT_DRAINED`.
-Reload discards all application-managed session state and starts a fresh empty
-session.
+|Cancel a live generation before matching
+`PROVIDER_DRAINED_STATIC_ENTERED` receipt
+|Revoke eligibility immediately, clear tuple/city/presentation, preserve draft
+|Issue lifecycle stop; while no matching static-entry receipt arrives, retain
+`revoke < provider settlement < lock/global-gate release < ATTEMPT_DRAINED <
+terminate old < clear handle`. A matching receipt instead switches immediately
+to the hard path below. Before drain, the pipeline suppresses downstream and
+clears admitted modules, core transients, and unpublished output.
+|Provider work never relies on termination; every tied or late message is
+ignored.
+|`Cancelled`
 
-Presentation cleanup disconnects its observer, removes loss listener and
-canvas, deletes each live shader/program/buffer/VAO exactly once, and clears
-adapter-owned typed data and references. If context is already lost it claims
-no driver release. Cleanup has no accepted latency or secure-erasure promise.
-Cancellation and replacement revoke publication eligibility immediately but
-promise no computation, network-stop, browser-teardown, or physical-process timing. A stalled old provider settlement may delay
-replacement without creating an RA
-or SP timing failure. This view does not redefine provider, browser, operating-
-system, network, platform caching, or garbage-collection internals.
+|Replace a live generation before matching receipt
+|Old attempt becomes ineligible before new validation; install the new
+normalized submission; coalesce waiting submissions to latest only
+|For an accepted latest replacement, while no matching static-entry receipt
+arrives: `revoke < provider settlement < lock/global-gate release <
+ATTEMPT_DRAINED < terminate old < clear old usable handle < new usable handle <
+dispatch accepted replacement < first new provider request`. A matching
+receipt instead switches immediately to the hard path below. Before drain, the
+pipeline suppresses downstream and clears admitted modules, core transients,
+and unpublished output. Invalid latest input is not dispatched and starts no
+provider request; optional idle worker-context creation remains unselected.
+|No superseded pending submission starts; old outcomes remain ignored.
+|New input is `Failure` if invalid, otherwise `Loading`
 
-== Feasibility and remaining synthesis
+|Cancel after matching static-entry receipt
+|Revoke eligibility and clear visible old-attempt data
+|Existing order remains `provider settlement/global-gate release < post
+PROVIDER_DRAINED_STATIC_ENTERED < bridge receipt < hard terminate < clear
+handle`.
+|No parser acknowledgement or delete-spy claim; zero static operations is
+valid.
+|`Cancelled`
+
+|Replace after matching static-entry receipt
+|Revoke before any old publication; latest submission alone is current
+|For an accepted latest replacement: `provider settlement/global-gate release
+< post PROVIDER_DRAINED_STATIC_ENTERED < bridge receipt < hard terminate <
+clear old usable handle < new usable handle < dispatch accepted replacement <
+first new provider request`. For invalid latest input, old handling ends after
+handle clearing; nothing is dispatched and no provider request starts;
+optional idle worker-context creation remains unselected.
+|Termination may occur during asset loading, parsing, or traversal; late output
+is ignored.
+|New input is `Failure` if invalid, otherwise `Loading`
+
+|Cancel or replace during detached presentation staging
+|UI revokes candidate eligibility before publication
+|Post-operation and final eligibility checks reject the candidate; no partial
+commit.
+|Disconnect observer, remove listener/canvas, delete candidate resources once;
+stale callbacks dispose locally.
+|`Cancelled` or the new attempt's state
+
+|Cancel tied with a terminal success or failure while `Loading`
+|Cancellation wins
+|No tied business outcome may pass the publication gate.
+|Clear selected identity and city; ignore the tied and every later result.
+|`Cancelled`
+
+|Submit from `Initial`
+|Current draft becomes the normalized submission and sole attempt
+|No prior result exists; invalid input dispatches nothing, valid input enters
+the accepted gateway.
+|No stale state exists.
+|`Failure` or `Loading`
+
+|Submit from `Success`
+|Invalidate tuple/city/status immediately before validating replacement
+|Dispose the published presentation; any later worker use follows only the
+accepted handle/dispatch ordering.
+|Old city cannot be fallback; stale callbacks dispose locally.
+|`Failure` or `Loading`
+
+|Submit from `Failure`
+|Clear prior failure and tuple before validating replacement
+|No old failure may label the new attempt.
+|Any residual stale outcome is ignored.
+|`Failure` or `Loading`
+
+|Submit from `Cancelled`
+|Clear cancellation confirmation before validating replacement
+|The cancelled generation remains permanently ineligible.
+|Late cancelled output remains ignored.
+|`Failure` or `Loading`
+
+|Reload from any state
+|Discard all application-managed session state
+|Do not select a browser/process teardown mechanism or timing promise.
+|Dispose presentation-owned resources where application code runs; restore no
+draft, attempt, tuple, result, error, or history.
+|Empty `Initial`
+|===
+
+If no worker handle exists when cancellation or replacement occurs, the UI
+result still applies and no termination event is fabricated. Worker-context
+creation timing remains unselected: eager, lazy, and optional idle creation are
+neither required nor forbidden. Dispatch and provider start are syntax-gated
+instead: accepted normalized input may be dispatched only through a usable
+handle; invalid input dispatches nothing and starts no provider request. Any
+old usable handle is cleared before any new usable handle; for accepted
+replacement, the new usable handle precedes dispatch and the first new provider
+request.
+
+The receipt gate remains live while a pre-receipt stop or settlement path is
+pending. A matching `PROVIDER_DRAINED_STATIC_ENTERED` receipt attests provider
+settlement/global-gate release and immediately switches that generation to the
+post-receipt hard path. The bridge does not wait for `ATTEMPT_DRAINED`: it hard-
+terminates, clears the old usable handle, then conditionally dispatches only
+accepted latest input through a new usable handle before its first provider
+request; invalid latest input remains undispatched.
+
+The matrix creates no cancellation, settlement, worker-termination, cleanup,
+network-stop, computation-stop, garbage-collection, secure-erasure, or
+physical-process timing promise.
+
+== Mechanism feasibility and authority
 
 ADR 0005 records https://github.com/FelixGeisler/code-city/issues/448[#448]'s
 dated documentary/read-only feasibility for the exact
@@ -519,10 +835,14 @@ capacity, retry,
 restoration, or weaker failure/cleanup rule stops implementation and reopens
 #451.
 
-General message and port schemas, concrete source mapping, Pages workflow and
-route, test technology, and complete cross-mechanism synthesis remain with
-their stated owners through #463.
+The accepted cross-mechanism synthesis is complete in the matrices above.
+Concrete source/package mapping, executable message and port schemas, Pages
+source/action/workflow, application route and deployment mechanism, worker-
+creation timing, emitted filenames, general transport/cancellation primitives,
+and test technology remain deferred exactly as listed in
+xref:07-deployment-view.adoc#accepted-current-deferred[Deployment View].
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains authoritative
-for the outer source-dependency boundary, ADR 0005 for resolution, ADR 0006 for
-selected-revision retrieval/admission, ADR 0007 for static syntax and phase-
-aware worker lifecycle, and ADR 0008 for UI-edge presentation.
+for the outer source-dependency boundary, ADR 0003 for exact ports and
+ownership, ADR 0005 for resolution, ADR 0006 for selected-revision
+retrieval/admission, ADR 0007 for static syntax and phase-aware worker
+lifecycle, and ADR 0008 for UI-edge presentation.
