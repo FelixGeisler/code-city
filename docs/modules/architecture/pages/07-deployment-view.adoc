@@ -1,31 +1,18 @@
 = 7. Deployment View
 
-This view records the production nodes, origin, artifact placement, and
-runtime-data placement accepted in
-xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002].
-xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
-accepts the future framework-free TypeScript and Vite static-package contract:
-the exact `/code-city/` base and one separately emitted, non-inline,
-same-origin ES-module worker. That documented decision is accepted now, but no
-shell, dependency, configuration, production artifact, or deployment workflow
-exists yet.
-xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
-0005] accepts the exact `api.github.com` revision-resolution deployment
-exchange.
-xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
-0006] accepts worker-originated selected-commit/root-tree exchanges at
-`api.github.com` and immutable-commit content at `raw.githubusercontent.com`.
-xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
-0007] accepts five statically addressed parser assets beneath `/code-city/`,
-worker-only parsing, and the worker-generation lifecycle without another node
-or provider path.
-xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
-accepts browser-native WebGL2 in the existing UI main context with fixed
-repository-source shader literals and no renderer package, external renderer
-asset, rendering worker, fallback, or extra deployment node. None creates
-current product traffic, dependency, asset, or deployment node. This view adds
-no Pages source, action/workflow, application route, deployment mechanism,
-general port/schema, or additional worker primitive.
+This view is the authoritative implementation-independent deployment
+synthesis accepted through
+https://github.com/FelixGeisler/code-city/issues/463[#463]. It links ADR 0002's
+production target, browser-only contexts, direct-provider topology, and trust
+crossings to ADR 0004's conceptual `/code-city/` static package, ADRs 0005 and
+0006's exact GitHub origins, ADR 0007's five same-origin parser assets, and ADR
+0008's embedded trusted shader literals and browser-native presentation.
+
+These decisions create no current M1 shell, source, dependency, configuration,
+asset, package, traffic, renderer, route, workflow, or deployment mechanism.
+This view selects no source map, executable schema, emitted filename, worker-
+creation timing, transport/cancellation primitive, preload policy, or test
+technology.
 
 == Production topology
 
@@ -64,194 +51,338 @@ general port/schema, or additional worker primitive.
 The production delivery URL is exactly
 `https://felixgeisler.github.io/code-city/`, and requests originating from the
 application have the exact production origin `https://felixgeisler.github.io`.
-ADR 0004 fixes `/code-city/` as the future package's public base. Adopting this
-existing target and base does not adopt its current Pages source,
+ADR 0004 fixes `/code-city/` as the accepted conceptual package's public base.
+Adopting this existing target and base does not adopt its current Pages source,
 action/workflow, application route, or deployment mechanism.
 
-== Nodes and origins
+== Deployment and conceptual-open-path matrix
 
-[cols="3,5,7",options="header"]
+The matrix distinguishes placement, artifacts, product data, retention,
+ownership, trust, open-path participation, and implementation status. The UI
+main and worker contexts are execution/lifecycle contexts, never processes,
+packages, components, security sandboxes, trust boundaries, or source-
+dependency boundaries.
+
+[cols="3,4,5,5,4,6,4,4,5",options="header"]
 |===
-|Node or context |Accepted placement |Boundary
+|Placement
+|Exact target / origin
+|Conceptual artifact
+|Data
+|Retention
+|Owner / enforcer
+|Trust
+|Open-path participation
+|Accepted / current / deferred
 
-|GitHub Pages delivery node
-|The existing public HTTPS target at
-`https://felixgeisler.github.io/code-city/`, exact origin
-`https://felixgeisler.github.io`.
-|Serves trusted static UI and worker artifacts only. It receives no repository
-payload, admitted source, metric facts, city or scene data, attempt state, or
-credential. It is not a product-data trust boundary.
+|GitHub Pages target and base
+|Target `https://felixgeisler.github.io/code-city/`; origin
+`https://felixgeisler.github.io`; base `/code-city/`
+|Trusted static entry HTML, UI JavaScript, CSS, separate non-inline worker, and
+statically referenced assets; shader literals are embedded trusted UI source,
+not renderer assets
+|Static artifacts only; no repository payload, source, metric, scene, attempt
+state, or credential
+|No Code City product data is retained at this node
+|xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
+and xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004];
+package evidence https://github.com/FelixGeisler/code-city/issues/452[#452],
+final evidence https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Not a product-data trust crossing
+|First step of the conceptual open path
+|Target/base accepted; target exists; no M1 package exists; Pages
+source/action/workflow, route, and deployment mechanism remain deferred
 
-|Browser UI/presentation main context
-|One main context on the user device, loaded from the accepted Pages target.
-|Owns input and current-session product state, state and attempt eligibility,
-ADR 0008 defensive source-free WebGL2 adaptation, detached canvas staging,
-fixed GPU resources, observer/resize/context-loss lifecycle and cleanup, and
-the sole atomic publication/visible-failure gate. It makes no provider or
-repository request.
+|User device/browser
+|Loads the accepted target
+|Standards browser runtime only
+|Current-session state only
+|Reload restores nothing
+|UI coordinator and accepted adapters
+|`User → UI` is one exact trust crossing
+|The user opens the target
+|Topology accepted; no M1 runtime is made current by this issue
 
-|Browser processing worker context
-|At most one dedicated context, same-origin with the UI.
-|Owns direct anonymous provider interaction and all retrieval, admission,
-analysis, and renderer-neutral city processing. Its current-attempt repository
-and derived data is transient. It is not an operating-system-process guarantee,
-security sandbox, trust crossing, component count, package boundary, or
-source-dependency rule.
+|UI/presentation main context
+|Pages origin
+|HTML/UI JavaScript/CSS and fixed embedded WebGL shader literals; no renderer
+package or external renderer asset
+|Draft, state/status, selected tuple where permitted, one complete city only in
+`Success`, and presentation resources
+|Session-only
+|UI coordinator, UI surface adapter, and presentation adapter
+|Receives untrusted user input; bridge and Pages are not trust crossings
+|The trusted package opens into empty `Initial`
+|Placement/mechanism accepted but not implemented; concrete source/package map
+deferred
 
-|Public GitHub
-|External to the user device and the sole external information system.
-|Resolution and selected-revision retrieval are direct and anonymous from the
-processing worker. ADR 0005 fixes resolution at `api.github.com`. ADR 0006 fixes
-selected-commit and recursive-root-tree REST at `api.github.com` and sequential
-immutable-commit raw content at `raw.githubusercontent.com`, with redirect
-refusal, exact URL checks, bounded responses, no credential, and no alternate
-origin or path.
+|At most one dedicated processing worker context
+|Same origin as UI
+|One separate, non-inline ES-module worker
+|Transient resolution/retrieval data, admitted modules, parser objects,
+metrics, and city intermediates
+|Released by the accepted lifecycle
+|Main bridge: sole usable worker handle, generation correlation, hard-stop gate,
+and transport/listener release; worker pipeline: stage sequence/suppression,
+phase completion, and core-reference release; stage capabilities:
+classifications and canonical products; provider adapters: physical requests,
+streams, hash workspace, and ADR 0005/0006 settlement; parser adapter: ordinary-
+path parser handles; worker termination: hard static-realm release
+|`Public GitHub → worker` is the other exact trust crossing
+|Worker-creation timing is not selected; no worker processing is required to
+show fresh `Initial`
+|Placement and separate artifact accepted but not implemented; timing, emitted
+filename, and general transport/cancellation primitives deferred
+
+|GitHub REST origin
+|`https://api.github.com`
+|No Code City artifact; ADR 0005 resolution and ADR 0006 selected-commit/root-
+tree exchanges
+|Untrusted bounded JSON/evidence
+|Transient in worker only
+|GitHub resolution and retrieval adapters
+|Public-GitHub inbound trust crossing
+|No request on fresh open; only after valid submit
+|Exact mechanism accepted; no current product traffic
+
+|GitHub raw-content origin
+|`https://raw.githubusercontent.com`
+|No Code City artifact; immutable-commit raw-content exchange
+|Untrusted inert bytes/source
+|Transient in worker only
+|GitHub retrieval adapter and sole retrieval/admission capability
+|Same Public-GitHub inbound trust crossing
+|No fresh-open traffic
+|Exact mechanism accepted; no current product traffic
+
+|Same-origin parser assets
+|Beneath `/code-city/`
+|One runtime JavaScript asset, one runtime WASM, and exactly three grammar
+WASMs; no output filename is selected here
+|Trusted delivered static artifacts
+|Platform/browser caching is unspecified. Only loaded runtime/language state is
+worker-realm-lifetime state
+|Parser adapter and accepted package contract
+|Pages delivery is not a product-data trust crossing
+|Assets become eligible only after the provider-drained static barrier. The
+canonical suffix selects one closed already-packaged grammar family, never an
+asset URL, plugin, or new capability
+|Exact assets/mechanism accepted but absent; emitted filenames remain deferred
+
+|Same-origin UI-worker handoff
+|Inside the browser's Pages origin
+|Conceptual bridge transport, not another deployment artifact
+|Only accepted submission/lifecycle control toward worker; selected tuple, one
+terminal failure, or one complete source-free scene toward UI; two restricted
+lifecycle attestations toward main bridge
+|Creates no additional product-data retention
+|Main and worker bridge halves
+|Not a trust crossing or security sandbox
+|No handoff is required merely to show fresh `Initial`
+|Payload classes and ports accepted; executable schemas and general
+transport/cancel primitives deferred
+
+|Local build tools
+|No production runtime origin or node
+|Accepted `vite@8.2.1` and `typescript@7.0.2` build/check tools
+|No runtime product data
+|No runtime product-data retention
+|Initial realization https://github.com/FelixGeisler/code-city/issues/452[#452];
+final renewal https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Outside the runtime trust map
+|Outside the conceptual open path
+|Decision accepted; tools are not current M1 dependencies; concrete
+source/package realization remains with #452
 |===
 
-No additional Code City application runtime context or deployment node exists.
-In particular, M1 has no Code City backend, relay, proxy, serverless function,
-server runtime, database, queue, service credential, server-side product state,
-product persistence, application-managed persistent cache, or second retrieval
-path.
+UI current-attempt/publication ownership and presentation-resource ownership
+remain separate from every worker owner in the matrix. Source-dependency
+arrows, runtime calls, runtime messages, deployment placement, and logical
+trust crossings remain distinct.
 
-== Artifact and data placement
+The conceptual open path is exactly:
 
-[cols="3,7,6",options="header"]
+[source,text]
+----
+https://felixgeisler.github.io/code-city/
+  → trusted static package beneath /code-city/
+  → browser UI main context
+  → Initial with empty draft and no status, tuple, city, history, or restored state
+----
+
+This path does not select an emitted filename, application route
+implementation, Pages source, action/workflow, deployment mechanism, worker-
+creation timing, or preload policy. Parser runtime/grammar assets become
+eligible only after the accepted static barrier, never during provider-capable
+processing.
+
+== Security invariants
+
+* The only logical trust crossings are exactly:
+** `User → UI main context`;
+** `Public GitHub → processing worker`.
+* Same-origin bridge traffic and GitHub Pages artifact delivery are not logical
+  product-data trust crossings.
+* No user or service credential is requested, accepted, read, retained, or
+  transmitted.
+* Repository metadata, paths, bytes, and source remain untrusted and inert.
+  They are never executed, evaluated, imported, or dynamically loaded.
+  Repository data cannot construct, alter, or select an asset URL or introduce
+  a capability.
+* The canonical path's final suffix selects one grammar family only through
+  ADR 0007's closed mapping to already-packaged JavaScript, TypeScript, or TSX
+  grammars. It never selects an asset URL, plugin, or new capability.
+* The UI performs no GitHub/provider request. Pages receives no product data.
+* Cross-boundary content remains limited to validated primitive resolution
+  evidence; bounded selected-revision records/bytes, with retrieval/admission
+  alone creating the complete admitted set; fresh primitive static-syntax
+  observations; selected identity, one fixed terminal failure, or one complete
+  source-free canonical scene through the bridge; and the two discriminator-
+  plus-correlation lifecycle attestations.
+* Raw/normalized source, provider objects, admitted modules, parser objects,
+  metric intermediates, and partial scenes never reach presentation.
+* Building identities remain inert model keys and never become normal-object
+  keys, DOM/WebGL names or text, shader content, resource locators, or logs.
+* The worker remains only an execution/lifecycle context, not a security
+  boundary, sandbox, operating-system process, package, component, or trust
+  crossing.
+
+[[accepted-current-deferred]]
+== Accepted, current, and still deferred
+
+=== Accepted but not implemented by this issue
+
+* Requirements https://github.com/FelixGeisler/code-city/issues/441[#441]
+  through https://github.com/FelixGeisler/code-city/issues/444[#444] and their
+  observable state/failure contracts.
+* ADR 0001's core/edge source boundary.
+* ADR 0002's target, browser-only topology, context placement, direct provider
+  path, and trust crossings.
+* ADR 0003's strata, blocks, exact 13 conceptual ports, bridge restrictions,
+  and exclusive ownership.
+* ADR 0004's framework-free TypeScript/Vite package contract, `/code-city/`
+  base, and separate non-inline worker.
+* ADR 0005's anonymous two-call immutable-revision resolution.
+* ADR 0006's bounded commit/tree/raw retrieval, sole admission, resource, and
+  cancellation policy.
+* ADR 0007's exact static assets, primitive projection, provider/static
+  barrier, lifecycle attestations, and ordinary-versus-hard cleanup.
+* ADR 0008's source-free browser-native WebGL2 presentation, atomic staging,
+  resize, context loss, and cleanup.
+
+These are documented accepted decisions. #463 creates no M1 source,
+dependency, package, artifact, runtime request, parser operation, or rendering
+behavior.
+
+=== Still deferred — exact list
+
+* Concrete source and package map.
+* Executable message and port schemas.
+* Pages source, action, and workflow.
+* Application route and deployment mechanism.
+* Worker creation timing.
+* Emitted filenames.
+* General transport and cancellation primitives.
+* Test technology.
+
+No additional item may be silently selected or described as implemented.
+
+=== Unchanged M1 ownership
+
+[cols="2,8",options="header"]
 |===
-|Placement |Present |Prohibited or absent
+|Owner
+|Retained implementation / evidence responsibility
 
-|GitHub Pages
-|Trusted static UI and worker artifacts. The future ADR 0007 package includes
-only its exact build-generated same-origin runtime JavaScript URL, runtime
-WASM, and JavaScript/TypeScript/TSX grammar WASMs, all statically addressed
-beneath `/code-city/`. ADR 0008's two shaders are fixed literals in trusted UI
-source, not separately loaded artifacts.
-|Repository payload, admitted source, metrics, city/scene data, attempt state,
-credential, server runtime, server-side product state, renderer npm package or
-external shader/texture/font/model/asset, rendering worker, compatibility
-layer, Node shim, browser polyfill, older parser runtime, unused grammar, query
-asset, native binding, or parser plug-in.
+|https://github.com/FelixGeisler/code-city/issues/452[#452]
+|Concrete source/package map, walking package, accepted source-boundary
+enforcement, and initial artifact evidence
 
-|UI main context
-|Input draft; current state and status; selected identity where permitted; one
-complete city only in `Success`; one WebGL2 canvas/context/program/VAO and
-position/index/instance buffers; temporary fixed shaders; one observer and one
-loss listener. State is current-session only and reload starts empty.
-|Provider records, repository requests, raw or normalized source, admitted
-modules, parser/analyzer objects, canonical metric intermediates, per-building
-DOM/WebGL objects, external renderer resources, alternate contexts/renderers,
-or CPU renderer cache after successful upload.
+|https://github.com/FelixGeisler/code-city/issues/453[#453]
+|Input rejection, resolution-evidence port, exact resolution mechanism, and
+selected-identity handoffs
 
-|Processing worker
-|Transient current-attempt provider records, paths, raw and normalized source,
-admitted modules, counters, metrics, one parser/tree/cursor set, and renderer-
-neutral city-construction intermediates. Provider resources are gone before
-ADR 0007 static entry; fixed same-origin parser assets may then load.
-|Persisted product/history state, credential, presentation resources,
-provider/static overlap, source-derived asset URL or capability, and any
-execution, evaluation, import, or dynamic loading of repository data.
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|Selected-revision data port, retrieval/admission, admitted-module handoff, and
+RA/resource/cancellation evidence
 
-|Worker-to-UI handoff
-|The selected canonical repository/revision tuple while `Loading`, one terminal
-failure outcome, or one complete canonical scene. Canonical building identities
-may cross only as inert model keys.
-|Raw or normalized source, repository entry content, admitted modules,
-parser/analyzer objects, canonical metric intermediates, or a partial scene.
+|https://github.com/FelixGeisler/code-city/issues/455[#455]
+|Parser, validation, SLOC, units, static barrier, and ordinary cleanup
+
+|https://github.com/FelixGeisler/code-city/issues/456[#456]
+|Decision/complexity projection and complete metric rerun
+
+|https://github.com/FelixGeisler/code-city/issues/457[#457]
+|Pure canonical-city construction, scene handoff, bounds, and focused
+`M1-CITY-1`
+
+|https://github.com/FelixGeisler/code-city/issues/458[#458]
+|Complete WebGL2 presentation adapter, staging, resize, loss, cleanup, and
+focused `M1-PRES-1`
+
+|https://github.com/FelixGeisler/code-city/issues/459[#459]
+|Packaged successful URL-to-city integration
+
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Integrated failure/lifecycle behavior and final hosted/deployment renewal
 |===
 
-The UI is the sole publication-eligibility gate. It atomically publishes the
-complete city and selected identity only for the current eligible attempt and
-rejects every stale, replaced, cancelled, partial, or late worker result.
-Same-origin UI/worker communication is not a trust crossing. The only logical
-trust crossings remain *User → UI main context* and *Public GitHub → processing
-worker*, and no user or service credential crosses either boundary.
+== Stop rules
 
-== Cleanup placement
+Stop this documentation change rather than assume or broaden scope if:
 
-* Replacement or cancellation immediately revokes the old attempt's
-  publication eligibility in the UI and clears identity, city, and
-  presentation state according to the accepted state contract.
-* The worker applies ADR 0005's resolution cleanup and ADR 0006's retrieval
-  abort, feasible body cancellation, handled settlement, reader-lock release,
-  post-operation eligibility checks, and complete application-owned cleanup.
-  Across all attempts, at most one retrieval/admission request and one raw/hash
-  workspace exist; only the latest replacement can start after old work and
-  cleanup settle. Any late outcome is ignored by the UI.
-* Before matching `PROVIDER_DRAINED_STATIC_ENTERED` receipt, the bridge must
-  not terminate: provider settlement and global-gate release precede
-  `ATTEMPT_DRAINED`, termination, handle clearing, and replacement. After
-  matching receipt, it hard-terminates and clears the sole worker before
-  replacement; zero static operations is valid.
-* On an ordinary worker terminal path, the parser adapter deletes cursor, tree,
-  and parser, core references are released, one business payload and then
-  `ATTEMPT_DRAINED` are posted, and only then does the bridge terminate and
-  clear the worker. Hard static termination may bypass deletion and relies on
-  realm release, never for provider cleanup.
-* A presentation model breach before WebGL propagates `M1-CITY-1`; only an
-  already-valid complete model can produce `M1-PRES-1`. Before initial
-  publication, the UI registers loss handling, stages and draws while detached,
-  attaches observation, performs the final verified host-size reread/redraw,
-  and then commits once. Current published context loss or required resize
-  failure synchronously removes city/canvas and enters persistent
-  `M1-PRES-1` while retaining tuple and draft.
-* Presentation cleanup disconnects observation, removes listener/canvas,
-  deletes every live shader/program/buffer/VAO once, and clears adapter data and
-  references. A lost context makes no driver-release claim. Reload discards all
-  application-managed session state.
+* an accepted requirement and ADR contradict;
+* any stage, failure, cleanup action, or retained datum lacks one accepted
+  owner;
+* the flow cannot use all 13 exact ports without adding a port, block,
+  abstraction, admission path, classifier, or orchestrator;
+* accurate synthesis requires changing a requirement, ADR, navigation file, or
+  any path other than `docs/modules/architecture/pages/03-context-and-scope.adoc`,
+  `docs/modules/architecture/pages/06-runtime-view.adoc`, and
+  `docs/modules/architecture/pages/07-deployment-view.adoc`;
+* implementation detail would require selecting any deferred item above;
+* a required mechanism needs another origin, request, retry, fallback,
+  credential, runtime context, asset, renderer, parser, threshold, timing
+  outcome, or weaker security/lifecycle rule; or
+* an ADR renewal or stop condition is met.
 
-This placement promises no cleanup latency, secure erasure, physical browser
-or process teardown, or garbage-collection timing and does not redefine
-provider, browser, operating-system, network, or platform caching internals.
+The exact conflicting authorities return to their owning issue. No gap is
+repaired in #463, and a newly discovered consequential choice is a blocker,
+not an implementation decision.
 
-== Feasibility gate and deferred deployment detail
+== Feasibility and authority
 
-ADR 0005 records https://github.com/FelixGeisler/code-city/issues/448[#448]'s
-dated documentary/read-only feasibility for direct
-anonymous revision resolution from exact origin
-`https://felixgeisler.github.io` to `https://api.github.com`. It covers the two
-selected paths, redirect refusal, preflights, CORS and response visibility,
-anonymous request and rate policy, immutable identity evidence, bounded body
-handling, cancellation, and application-controlled release. The observations
-are point-in-time evidence only. #453 revalidates the pin and endpoint contract
-before implementation, and #460 renews hosted-origin evidence on the final
+xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
+0005] records https://github.com/FelixGeisler/code-city/issues/448[#448]'s dated
+read-only feasibility for direct anonymous revision resolution from exact
+origin `https://felixgeisler.github.io` to `https://api.github.com`. Its
+observations are point-in-time evidence only; #453 revalidates the mechanism
+before implementation and #460 renews hosted-origin evidence on the final
 head.
 
-ADR 0006 records #449's dated exact-origin REST/raw, immutable-byte, Web Crypto,
-and rejected-codeload feasibility. The observations are point-in-time evidence
-only. #454 revalidates the mechanism before implementation, and #460 renews
-hosted final-head REST/raw evidence. A deprecation or `410`, loss of REST/raw
-CORS, immutable-SHA exact-byte/hash agreement, pinned API/tree/schema
-compatibility, required worker Web Crypto, or bounded-resource feasibility
-stops implementation and reopens #449. Reopen
-https://github.com/FelixGeisler/code-city/issues/446[#446] when direct-browser
-topology feasibility is affected. No origin, endpoint, header, order, cap,
-proxy, relay, backend, credential, persistent cache, retry, wait, second path,
-or fallback may change silently.
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006] records https://github.com/FelixGeisler/code-city/issues/449[#449]'s dated
+REST/raw, immutable-byte, Web Crypto, and rejected-codeload feasibility. #454
+revalidates before implementation and #460 renews final hosted evidence. Any
+ADR 0005 or ADR 0006 stop condition returns to its owning issue and, when
+browser-only topology is affected, to
+https://github.com/FelixGeisler/code-city/issues/446[#446]. No origin,
+endpoint, header, order, cap, proxy, relay, backend, credential, persistent
+cache, retry, wait, second path, or fallback changes silently.
 
-ADR 0004 now owns the accepted shell/build and package constraints.
-https://github.com/FelixGeisler/code-city/issues/452[#452] later implements the
-initial exact dependencies, walking shell, package, and evidence;
-https://github.com/FelixGeisler/code-city/issues/459[#459] integrates the
-successful path; and https://github.com/FelixGeisler/code-city/issues/460[#460]
-renews canonical production evidence against the final head. Pages
-source/action/workflow, application route, and deployment mechanism remain
-unselected. ADR 0005 owns the accepted resolution origin and mechanism; ADR
-0006 owns selected-revision retrieval/admission at the two named origins; ADR
-0007 owns exact static assets, fixed same-origin URLs, no-SP disposition, and
-phase-aware worker termination; ADR 0008 owns browser-native WebGL2 without a
-renderer supply chain or added node/asset and resolves CC-09/PR-01 as
-unnecessary; #462 owns blocks and conceptual ports; and #463 owns full
-accepted-mechanism and port synthesis. #452 remains renderer-free, #457 remains
-renderer-neutral, #458 owns all renderer realization, and #460 renews hosted
-presentation evidence. This view adds no concrete source map, general port or
-schema, workflow, route, fallback, or source-derived capability.
-
-xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains unchanged and
-authoritative for the outer source boundary;
-xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
-remains authoritative for the internal graph; ADR 0004 adds only its build/edge
-mechanism constraints; ADR 0005 governs resolution; ADR 0006 governs selected-
-revision retrieval/admission; ADR 0007 governs static syntax and the worker-
-generation phase gate; and ADR 0008 governs UI-edge presentation. Runtime
-placement grants no new source dependency, and ADRs 0006 through 0008 add no
-node or product-data path.
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains authoritative for
+the outer source boundary;
+xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002] for
+topology and placement;
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003] for
+the internal graph, exact ports, and exclusive ownership;
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004] for
+the conceptual static package;
+ADRs 0005 and 0006 for the two GitHub exchanges;
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007]
+for exact static assets and phase-aware worker lifecycle; and
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
+for UI-edge presentation. This documented deployment view adds no source
+mapping, executable schema, filename, route, Pages workflow, worker timing,
+transport/cancellation primitive, test technology, dependency, artifact, or
+product behavior.
