@@ -397,3 +397,212 @@ precedence; CC-09/PR-01 additionally have no deadline, threshold, or
 T-1/T/T+1 scenario. Scenarios 6, 10, and 11 have no elapsed-time target, and
 arbitrary provider, static, construction, or presentation time alone may leave
 an attempt `Loading` without creating an outcome.
+
+[[issue-fitness-allocation]]
+== Issue fitness allocation
+
+The nine rows below allocate objective implementation fitness to one M1 issue
+each. They link rather than replace the eleven quality scenarios above and the
+xref:08-crosscutting-concepts.adoc#crosscutting-rule-inventory[cross-cutting
+rule inventory]. They select no framework, browser harness, test service,
+timing threshold, or screenshot equality. Each issue must close its stated
+readiness choices before Developer handoff.
+
+[cols="2,5,4,7,4,5",options="header"]
+|===
+|Fitness row / issue
+|Accepted sources, rules, and quality scenarios
+|Owned boundary
+|Objective focused evidence
+|Integration / final renewal
+|Stop / reopen condition
+
+|`FT-452`
+
+https://github.com/FelixGeisler/code-city/issues/452[#452]
+|xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004],
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007],
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008];
+`XR-01`, `XR-02`; scenario 8
+|Source/package graph, package/build output, current-main CI, and non-deploying
+Pages-workflow boundary
+|The issue-readiness packet fixes the concrete map, test/conformance mechanism,
+actions and versions, commands, permissions, and artifact root. Focused checks
+accept every permitted representative dependency and reject every prohibited
+one; prove dependency/action closure, public base, separate worker, production
+exclusions, byte-identical package output, and a workflow that cannot deploy on
+merge.
+|Every later closure-changing issue renews applicable evidence;
+https://github.com/FelixGeisler/code-city/issues/460[#460] reruns the final
+closure and artifact/deployment evidence.
+|Stop and return to
+https://github.com/FelixGeisler/code-city/issues/452[#452] readiness or the
+contradicted ADR issue if a source map, test/conformance mechanism,
+dependency/action, workflow gate, or artifact boundary is not fixed or cannot
+conform.
+
+|`FT-453`
+
+https://github.com/FelixGeisler/code-city/issues/453[#453]
+|xref:requirements:04-functional-requirements.adoc[Functional Requirements] and
+xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
+0005]; `XR-03` through `XR-05`, `XR-08`, `XR-09`; scenarios 1, 3, and 6
+|UI pre-dispatch/state boundary, resolution capability, and GitHub resolution
+adapter
+|Prove invalid input starts no dispatch/provider work; exact draft/state/tuple
+transitions and cancellation hold; the accepted anonymous resolution traffic,
+evidence projection, classifications, caps, origin, and cleanup produce only
+the immutable selected tuple or accepted outcome.
+|https://github.com/FelixGeisler/code-city/issues/459[#459] renews the packaged
+success path; https://github.com/FelixGeisler/code-city/issues/460[#460] renews
+all final hosted outcomes.
+|Stop and reopen https://github.com/FelixGeisler/code-city/issues/441[#441] or
+https://github.com/FelixGeisler/code-city/issues/448[#448] if input, state,
+resolution semantics, CORS, privacy, or cleanup cannot conform.
+
+|`FT-454`
+
+https://github.com/FelixGeisler/code-city/issues/454[#454]
+|xref:requirements:06-source-admission-and-limits.adoc[Source Admission and
+Repository Limits] and
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006]; `XR-05`, `XR-10`, `XR-11`; scenarios 2 through 7 as applicable
+|Selected-revision retrieval adapter and sole retrieval/admission capability
+|Prove the immutable selected-revision path, every RA horizon and precedence,
+bounded own-field projection, canonical order, expected identity, one complete
+deterministic admitted set, exact workspace/request overlap, cancellation,
+cleanup, and inert-byte treatment. No partial or alternate admission path may
+pass.
+|https://github.com/FelixGeisler/code-city/issues/459[#459] renews packaged
+success; https://github.com/FelixGeisler/code-city/issues/460[#460] renews all
+final retrieval/admission and lifecycle evidence.
+|Stop and reopen https://github.com/FelixGeisler/code-city/issues/442[#442] or
+https://github.com/FelixGeisler/code-city/issues/449[#449] on a contract,
+provider, capacity, integrity, or lifecycle mismatch; add no fallback.
+
+|`FT-455`
+
+https://github.com/FelixGeisler/code-city/issues/455[#455]
+|xref:requirements:08-fixed-metric-semantics.adoc[Fixed Metric Semantics] and
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007]; `XR-12`, `XR-13`, `XR-15` through `XR-18`; scenarios 2, 4, 9, and 10
+|Parser adapter, provider/static lifecycle boundary, bridge worker-generation
+resources, and static-metrics capability for SLOC/units
+|Prove exact pinned assets and provenance, complete recovery/JSX validation,
+two iterative passes, primitive/prototype-safe projection, UTF conversion,
+canonical SLOC/units, provider-settled static entry, both source-free
+attestations, ordinary cleanup and hard-stop races, no source execution, and
+the focused full accepted envelope.
+|https://github.com/FelixGeisler/code-city/issues/456[#456] reruns the combined
+facts/envelope; https://github.com/FelixGeisler/code-city/issues/460[#460]
+renews final assets, provenance, lifecycle, and absence evidence.
+|Stop and reopen https://github.com/FelixGeisler/code-city/issues/450[#450] on
+any package, asset, ABI, grammar, API, provenance, full-envelope, or lifecycle
+deviation; no parser fallback is allowed.
+
+|`FT-456`
+
+https://github.com/FelixGeisler/code-city/issues/456[#456]
+|xref:requirements:08-fixed-metric-semantics.adoc#canonical-facts[Canonical
+metric facts] and
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007]; `XR-12`, `XR-13`, `XR-16`, `XR-18`; scenarios 2 and 9
+|Static-metrics capability's complete complexity/fact projection over the
+unchanged parser boundary
+|Prove the exact complexity projection and one complete canonical fact set,
+then rerun the entire combined metric, grammar, lifecycle, and full-envelope
+matrix without adding parser surface or a lower capacity.
+|https://github.com/FelixGeisler/code-city/issues/460[#460] reruns final combined
+metric, asset, provenance, and lifecycle evidence.
+|Stop and return to https://github.com/FelixGeisler/code-city/issues/443[#443]
+or reopen https://github.com/FelixGeisler/code-city/issues/450[#450] if exact
+facts or the unchanged parser/full-envelope boundary cannot conform.
+
+|`FT-457`
+
+https://github.com/FelixGeisler/code-city/issues/457[#457]
+|xref:requirements:10-fixed-city-layout-and-presentation.adoc[Fixed City,
+Layout, and Presentation] and
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008];
+`XR-19`; scenarios 2, 5, and 11
+|Pure renderer-neutral city constructor
+|Prove one complete canonical city from complete facts, including exact linked
+layout, geometry, palette, bounds, identity/order, float/source-free handoff,
+and focused `M1-CITY-1`, with no renderer declaration or partial scene.
+|https://github.com/FelixGeisler/code-city/issues/459[#459] renews packaged
+success; https://github.com/FelixGeisler/code-city/issues/460[#460] renews final
+construction and handoff evidence.
+|Stop and return to https://github.com/FelixGeisler/code-city/issues/444[#444]
+or reopen https://github.com/FelixGeisler/code-city/issues/451[#451] if the
+canonical model or accepted float feasibility cannot conform.
+
+|`FT-458`
+
+https://github.com/FelixGeisler/code-city/issues/458[#458]
+|xref:requirements:10-fixed-city-layout-and-presentation.adoc#presentation-boundary[Presentation
+boundary] and
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008];
+`XR-20`, `XR-21`; scenarios 2, 4, 8, and 11
+|UI-main defensive presentation and WebGL resource/lifecycle boundary
+|Prove own-field source-free projection, inert identity and no active labels;
+the fixed resources, shaders, context, API/state, camera, draw, and capacity;
+atomic detached staging, final size verification, resize, loss, post-success
+failure, stale-race disposal, and exactly-once cleanup. A model breach reaches
+no WebGL and remains the construction outcome.
+|https://github.com/FelixGeisler/code-city/issues/459[#459] renews packaged
+success; https://github.com/FelixGeisler/code-city/issues/460[#460] renews all
+hosted and post-success behavior.
+|Stop and reopen https://github.com/FelixGeisler/code-city/issues/451[#451] on a
+renderer, API, resource, numeric, capacity, lifecycle, fallback, or cleanup
+deviation.
+
+|`FT-459`
+
+https://github.com/FelixGeisler/code-city/issues/459[#459]
+|xref:requirements:01-product-scope.adoc[Product Scope],
+xref:06-runtime-view.adoc[Runtime View], and
+xref:09-architecture-decisions.adoc[accepted ADRs 0002 through 0008]; applicable
+`XR-02` through `XR-21`; scenarios 1 through 4, 7, and 11
+|Packaged successful URL-to-city path across every accepted handoff
+|Prove the complete successful path with at most one usable worker, direct
+anonymous GitHub access, one immutable tuple and complete city published
+atomically, and no backend, credential, persistence, second path, source at the
+UI, or unowned handoff.
+|https://github.com/FelixGeisler/code-city/issues/460[#460] renews every
+applicable rule on the final head and hosted origin.
+|Stop and reopen the requirement or ADR issue owning any failed handoff,
+mechanism, ownership, package, or success invariant; do not bridge the gap with
+speculative infrastructure.
+
+|`FT-460`
+
+https://github.com/FelixGeisler/code-city/issues/460[#460]
+|xref:requirements:index.adoc[All accepted requirements] and
+xref:09-architecture-decisions.adoc[accepted ADRs 0001 through 0009]; `XR-01`
+through `XR-22`; scenarios 1 through 11
+|Integrated terminal behavior, final closure/provenance, protected-main merge,
+explicit publication, and production-origin equality
+|Prove every approved failure, cancel, replacement, reload, late-result, and
+post-success path; renew dependency, asset, provenance, conformance, privacy,
+cleanup, and full-envelope evidence; prove the guarded reviewed-tree-equivalent
+merge and successful push verification; explicitly dispatch only the accepted
+commit; record the complete artifact manifest; require exact-origin byte
+equality and base/reference correctness; and prove legacy absence, production
+exclusions, and archived overwrite denial.
+|This row is the final renewal for the complete accepted M1 baseline on one
+unchanged exact head and its resulting guarded merge/deployment evidence.
+|Stop publication and reopen https://github.com/FelixGeisler/code-city/issues/446[#446]
+or the owning requirement/ADR issue if any behavior, check, protection,
+provenance, manifest byte, deployment policy, exclusion, or overwrite denial is
+missing or differs. Never weaken or bypass a gate.
+|===
+
+No published M1 issue is implementation-ready solely because an earlier body
+says `READY FOR IMPLEMENTATION REVIEW`. Before each Developer handoff, its body
+must be revised against the exact final M0 `main` commit and pass Architect,
+Tester, Developer, and Security review on one immutable digest.
+https://github.com/FelixGeisler/code-city/issues/452[#452] is the next
+refinement owner after https://github.com/FelixGeisler/code-city/issues/464[#464]
+closes.

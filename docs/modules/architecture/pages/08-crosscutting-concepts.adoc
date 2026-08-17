@@ -153,3 +153,374 @@ garbage-collection, physical-browser, or process-teardown promise. CC-09 and
 PR-01 are unnecessary: elapsed construction or presentation time alone leaves
 the attempt `Loading` without a completion, startup, frame-time, throughput,
 latency, or preemption promise.
+
+[[crosscutting-rule-inventory]]
+== Rule ownership, enforcement, and evidence index
+
+The following closed inventory aggregates accepted rules by linking their
+normative owners. Each row names one and only one final semantic or resource
+owner and one enforcement boundary. A focused implementation issue or a later
+evidence-renewal issue is not an additional final owner. Composite concerns
+such as no execution, cancellation, cleanup, and atomicity are enforced by the
+conjunction of their atomic rows rather than by a duplicate global owner.
+
+[cols="3,3,4,3,3,4",options="header"]
+|===
+|ID, rule allocation, and authority
+|Sole final owner
+|Exact enforcement boundary
+|Focused implementation evidence
+|Integration / final renewal
+|Stop / reopen owner
+
+|`XR-01` Source direction and concrete-mechanism confinement
+
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
+and xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
+|The #452-owned build-time source/dependency conformance gate
+|The package graph boundary rejects disallowed source direction and concrete
+mechanism dependence in core.
+|https://github.com/FelixGeisler/code-city/issues/452[#452]
+|Every dependency or build-input issue renews applicable evidence;
+https://github.com/FelixGeisler/code-city/issues/460[#460] renews the final head.
+|Reopen https://github.com/FelixGeisler/code-city/issues/445[#445],
+https://github.com/FelixGeisler/code-city/issues/462[#462], or
+https://github.com/FelixGeisler/code-city/issues/447[#447] according to the
+contradicted decision.
+
+|`XR-02` Static package, public base, separate worker, production exclusions,
+and non-deploying workflow realization
+
+xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002],
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004],
+xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009], and
+xref:07-deployment-view.adoc[Deployment View]
+|The #452 package/build boundary
+|The package and build-output boundary enforces the accepted static entry,
+`/code-city/` base, separate worker, exclusions, and a workflow that cannot
+deploy on #452 merge.
+|https://github.com/FelixGeisler/code-city/issues/452[#452]
+|https://github.com/FelixGeisler/code-city/issues/459[#459] renews packaged
+success; https://github.com/FelixGeisler/code-city/issues/460[#460] renews the
+final artifact and deployment.
+|Reopen https://github.com/FelixGeisler/code-city/issues/447[#447] for package
+mechanism drift or https://github.com/FelixGeisler/code-city/issues/446[#446]
+for placement or publication drift.
+
+|`XR-03` Canonical input grammar and invalid-input failure before provider work
+
+xref:requirements:04-functional-requirements.adoc#canonical-url[Canonical URL
+input] and
+xref:requirements:04-functional-requirements.adoc#failure-outcomes[Failure
+outcomes]
+|Domain validation policy
+|The UI pre-dispatch boundary classifies invalid input before worker dispatch
+or provider action.
+|https://github.com/FelixGeisler/code-city/issues/453[#453]
+|https://github.com/FelixGeisler/code-city/issues/460[#460] renews all failure
+paths.
+|Reopen https://github.com/FelixGeisler/code-city/issues/441[#441].
+
+|`XR-04` Draft, selected tuple, visible state, and edit-preserving transitions
+
+xref:requirements:04-functional-requirements.adoc#states[Observable states and
+transitions] and xref:05-building-block-view.adoc[Building Block View]
+|UI attempt coordinator
+|The UI attempt-state boundary owns draft, tuple, visible state, and their
+accepted transitions.
+|https://github.com/FelixGeisler/code-city/issues/453[#453]
+|https://github.com/FelixGeisler/code-city/issues/459[#459] renews success;
+https://github.com/FelixGeisler/code-city/issues/460[#460] renews all terminal
+states.
+|Reopen https://github.com/FelixGeisler/code-city/issues/441[#441].
+
+|`XR-05` Replacement/cancellation precedence and immediate publication
+revocation
+
+xref:requirements:04-functional-requirements.adoc#states[Observable states] and
+xref:06-runtime-view.adoc#runtime-lifecycle-matrix[Lifecycle matrix]
+|UI attempt coordinator
+|Its publication-eligibility gate revokes the prior attempt before replacement
+validation or cancellation and wins tied outcomes.
+|https://github.com/FelixGeisler/code-city/issues/453[#453] and
+https://github.com/FelixGeisler/code-city/issues/454[#454] for their stages
+|https://github.com/FelixGeisler/code-city/issues/460[#460] renews integrated
+races.
+|Reopen https://github.com/FelixGeisler/code-city/issues/441[#441], or the ADR
+issue owning a contradicted lifecycle mechanism.
+
+|`XR-06` Atomic complete publication and rejection of stale, late, or partial
+results
+
+xref:requirements:04-functional-requirements.adoc#states[Observable states],
+xref:requirements:06-source-admission-and-limits.adoc#failure-invariants[admission
+failure invariants],
+xref:requirements:08-fixed-metric-semantics.adoc#metric-failure[metric failure],
+and xref:requirements:10-fixed-city-layout-and-presentation.adoc#city-failure[city
+failure]
+|UI attempt coordinator
+|Its publication-eligibility gate commits only one complete current result and
+rejects every stale, late, or partial result.
+|https://github.com/FelixGeisler/code-city/issues/459[#459]
+|https://github.com/FelixGeisler/code-city/issues/460[#460] renews failure,
+replacement, and final publication.
+|Reopen the requirement issue owning the contradicted atomicity rule:
+https://github.com/FelixGeisler/code-city/issues/441[#441],
+https://github.com/FelixGeisler/code-city/issues/442[#442],
+https://github.com/FelixGeisler/code-city/issues/443[#443], or
+https://github.com/FelixGeisler/code-city/issues/444[#444].
+
+|`XR-07` Current-session-only retention and reload reset
+
+xref:requirements:04-functional-requirements.adoc#states[Observable states] and
+xref:requirements:01-product-scope.adoc#non-goals[Non-goals]
+|UI attempt coordinator
+|The UI session boundary retains only the accepted current-attempt state and
+restores nothing on reload.
+|https://github.com/FelixGeisler/code-city/issues/459[#459] proves packaged
+absence of persistence.
+|https://github.com/FelixGeisler/code-city/issues/460[#460] renews reload and
+final evidence.
+|Reopen https://github.com/FelixGeisler/code-city/issues/441[#441].
+
+|`XR-08` Canonical repository, immutable revision, and resolution outcomes
+
+xref:requirements:04-functional-requirements.adoc#immutable-revision[Immutable
+revision selection and identity] and
+xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
+0005]
+|Revision-resolution capability
+|The accepted-submission-to-selected-tuple boundary constructs identity and
+classifies resolution outcomes from admitted evidence.
+|https://github.com/FelixGeisler/code-city/issues/453[#453]
+|https://github.com/FelixGeisler/code-city/issues/459[#459] renews success;
+https://github.com/FelixGeisler/code-city/issues/460[#460] renews the final
+hosted path.
+|Reopen https://github.com/FelixGeisler/code-city/issues/448[#448], or
+https://github.com/FelixGeisler/code-city/issues/441[#441] for a product-
+identity change.
+
+|`XR-09` Resolution requests, origin, anonymity, caps, primitive projection,
+and physical cleanup
+
+xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
+0005] and
+xref:requirements:04-functional-requirements.adoc#anonymous-access[Anonymous
+access]
+|GitHub resolution adapter
+|The provider-response ingress boundary admits only the accepted bounded
+primitive resolution evidence and owns its physical request resources.
+|https://github.com/FelixGeisler/code-city/issues/453[#453]
+|https://github.com/FelixGeisler/code-city/issues/460[#460] renews hosted CORS,
+origin, and privacy evidence.
+|Reopen https://github.com/FelixGeisler/code-city/issues/448[#448]; topology
+drift also reopens https://github.com/FelixGeisler/code-city/issues/446[#446].
+
+|`XR-10` Commit/tree/raw requests, origins, anonymity, caps, integrity
+workspace, and physical cleanup
+
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006] and xref:requirements:06-source-admission-and-limits.adoc[Source Admission
+and Repository Limits]
+|GitHub retrieval adapter
+|The selected-commit provider-ingress boundary admits bounded records and bytes
+and owns request, stream, integrity-workspace, and physical cleanup resources.
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Reopen https://github.com/FelixGeisler/code-city/issues/449[#449]; topology
+drift also reopens https://github.com/FelixGeisler/code-city/issues/446[#446].
+
+|`XR-11` Admission/RA classification, canonical ordering, and one complete
+deterministic admitted set
+
+xref:requirements:06-source-admission-and-limits.adoc#admission-composition[Admission
+composition] and
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006]
+|Retrieval/admission capability
+|The provider-primitives-and-bytes-to-admitted-modules boundary alone
+classifies admission/RA outcomes and creates one complete ordered set.
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|https://github.com/FelixGeisler/code-city/issues/459[#459] renews success;
+https://github.com/FelixGeisler/code-city/issues/460[#460] renews final evidence.
+|Reopen https://github.com/FelixGeisler/code-city/issues/442[#442] or
+https://github.com/FelixGeisler/code-city/issues/449[#449], according to the
+contradiction.
+
+|`XR-12` Stage ordering, downstream suppression, and release of core transient
+references
+
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
+xref:05-building-block-view.adoc[Building Block View], and
+xref:06-runtime-view.adoc[Runtime View]
+|Worker pipeline coordinator
+|The boundary between named application capabilities enforces sequence,
+suppression, and core-reference release without becoming a second classifier.
+|https://github.com/FelixGeisler/code-city/issues/455[#455],
+https://github.com/FelixGeisler/code-city/issues/456[#456], and
+https://github.com/FelixGeisler/code-city/issues/457[#457], as applicable
+|https://github.com/FelixGeisler/code-city/issues/460[#460] renews the integrated
+pipeline.
+|Reopen https://github.com/FelixGeisler/code-city/issues/462[#462] or the issue
+owning the contradicted stage decision.
+
+|`XR-13` Provider-settled/static-entry transition and lifecycle-attestation
+emission
+
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007] and xref:06-runtime-view.adoc#runtime-lifecycle-matrix[Lifecycle matrix]
+|Worker pipeline coordinator
+|The provider/static phase boundary permits static entry and emits the
+restricted attestation only after provider settlement and release.
+|https://github.com/FelixGeisler/code-city/issues/455[#455]
+|https://github.com/FelixGeisler/code-city/issues/456[#456] renews the combined
+run; https://github.com/FelixGeisler/code-city/issues/460[#460] renews
+integration.
+|Reopen https://github.com/FelixGeisler/code-city/issues/450[#450].
+
+|`XR-14` Restricted payload transport, correlation, and nonclassification
+
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
+and xref:05-building-block-view.adoc#_ui_worker_bridge_boundary[UI-worker bridge
+boundary]
+|UI-worker bridge
+|The bounded serialization/deserialization boundary transports only accepted
+payload classes and correlation without validating or classifying them.
+|Each owning handoff issue from
+https://github.com/FelixGeisler/code-city/issues/453[#453] through
+https://github.com/FelixGeisler/code-city/issues/459[#459]
+|https://github.com/FelixGeisler/code-city/issues/460[#460] renews malformed and
+late transport behavior.
+|Reopen https://github.com/FelixGeisler/code-city/issues/462[#462], or the issue
+whose readiness-owned semantic schema would change.
+
+|`XR-15` Worker generation, sole usable handle, receipt gates, hard termination,
+and transport-resource cleanup
+
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007] and xref:05-building-block-view.adoc[Building Block View]
+|Main bridge half
+|The UI worker-handle/generation boundary owns receipt gating, the sole usable
+handle, hard termination, and transport/listener release.
+|https://github.com/FelixGeisler/code-city/issues/455[#455]
+|https://github.com/FelixGeisler/code-city/issues/460[#460] renews integrated
+replacement and cancellation.
+|Reopen https://github.com/FelixGeisler/code-city/issues/450[#450], or
+https://github.com/FelixGeisler/code-city/issues/462[#462] if bridge ownership
+changes.
+
+|`XR-16` Pinned grammar-asset selection, syntax validation, primitive
+projection, and no source execution
+
+xref:requirements:08-fixed-metric-semantics.adoc#syntax-families[Pinned syntax
+families] and
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007]
+|Parser adapter
+|The normalized-module-to-primitive-observation boundary confines the pinned
+assets/API, validates syntax, and prevents source execution or parser-object
+escape.
+|https://github.com/FelixGeisler/code-city/issues/455[#455]
+|https://github.com/FelixGeisler/code-city/issues/456[#456] renews combined
+facts; https://github.com/FelixGeisler/code-city/issues/460[#460] renews assets
+and provenance.
+|Reopen https://github.com/FelixGeisler/code-city/issues/450[#450].
+
+|`XR-17` Ordinary cursor/tree/parser cleanup
+
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007] and xref:06-runtime-view.adoc#runtime-lifecycle-matrix[Lifecycle matrix]
+|Parser adapter
+|On ordinary terminal paths, parser handles are released before
+`ATTEMPT_DRAINED`; hard realm termination remains a separate bridge-owned path.
+|https://github.com/FelixGeisler/code-city/issues/455[#455]
+|https://github.com/FelixGeisler/code-city/issues/460[#460] renews integrated
+lifecycle evidence.
+|Reopen https://github.com/FelixGeisler/code-city/issues/450[#450].
+
+|`XR-18` Metric failure and one complete canonical SLOC/unit/complexity fact set
+
+xref:requirements:08-fixed-metric-semantics.adoc#canonical-facts[Canonical
+facts], xref:requirements:08-fixed-metric-semantics.adoc#metric-failure[Metric
+failure], and xref:05-building-block-view.adoc[Building Block View]
+|Static-metrics capability
+|The primitive-observation-to-canonical-facts boundary alone classifies metric
+failure and creates the complete canonical fact set.
+|https://github.com/FelixGeisler/code-city/issues/455[#455] for SLOC/units and
+https://github.com/FelixGeisler/code-city/issues/456[#456] for complexity and
+the full rerun
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Reopen https://github.com/FelixGeisler/code-city/issues/443[#443], or
+https://github.com/FelixGeisler/code-city/issues/450[#450] for a parser-
+technology contradiction.
+
+|`XR-19` Construction failure and one complete renderer-neutral canonical scene
+
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#canonical-scene[Canonical
+scene], xref:requirements:10-fixed-city-layout-and-presentation.adoc#city-failure[city
+failure], and xref:05-building-block-view.adoc[Building Block View]
+|City constructor
+|The canonical-facts-to-scene boundary alone constructs or rejects the complete
+renderer-neutral scene.
+|https://github.com/FelixGeisler/code-city/issues/457[#457]
+|https://github.com/FelixGeisler/code-city/issues/459[#459] renews success;
+https://github.com/FelixGeisler/code-city/issues/460[#460] renews final evidence.
+|Reopen https://github.com/FelixGeisler/code-city/issues/444[#444], or
+https://github.com/FelixGeisler/code-city/issues/462[#462] if construction
+ownership changes.
+
+|`XR-20` Source-free defensive model validation, prototype-safe inert identity,
+and no repository-derived active labels, text, locators, or logs
+
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#presentation-boundary[Presentation
+boundary] and
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
+|Presentation adapter
+|Before any WebGL resource creation, the adapter validates and source-freely
+projects the complete model and propagates a breach without reclassification.
+|https://github.com/FelixGeisler/code-city/issues/458[#458]
+|https://github.com/FelixGeisler/code-city/issues/460[#460] renews adversarial
+and final evidence.
+|Reopen https://github.com/FelixGeisler/code-city/issues/451[#451], or
+https://github.com/FelixGeisler/code-city/issues/444[#444] if the model contract
+changes.
+
+|`XR-21` WebGL realization, `M1-PRES-1`, detached staging, resize/loss,
+observer/listener, and presentation-resource cleanup
+
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#post-success-presentation-failure[Published
+presentation lifecycle] and
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
+|Presentation adapter
+|The valid-scene-to-canvas/resource boundary owns fixed realization, failure
+detection, detached/current resources, callbacks, and cleanup; visible state
+remains with the UI coordinator.
+|https://github.com/FelixGeisler/code-city/issues/458[#458]
+|https://github.com/FelixGeisler/code-city/issues/459[#459] renews success;
+https://github.com/FelixGeisler/code-city/issues/460[#460] renews post-success
+and final evidence.
+|Reopen https://github.com/FelixGeisler/code-city/issues/451[#451].
+
+|`XR-22` Protected-main-only final publication and replacement of frozen
+documentation by exact accepted application bytes
+
+xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009] and
+xref:07-deployment-view.adoc[Deployment View]
+|The #460 explicit-dispatch publication gate
+|The protected `main` and non-bypassable `github-pages` environment boundary
+admits only the guarded reviewed application artifact.
+|https://github.com/FelixGeisler/code-city/issues/464[#464] is the point-in-time
+administration prerequisite;
+https://github.com/FelixGeisler/code-city/issues/452[#452] owns non-deploying
+workflow realization.
+|https://github.com/FelixGeisler/code-city/issues/460[#460] owns final hosted
+proof.
+|Publication or administration drift reopens
+https://github.com/FelixGeisler/code-city/issues/446[#446].
+|===
+
+This inventory does not replace ADR 0003's 13 conceptual ports or their exact
+sole-owner allocations. It adds no same-stratum rule, worker sandbox, trust
+crossing, second classifier, fallback, retry, timer, hidden capacity, cleanup-
+latency promise, secure-erasure claim, or new port.

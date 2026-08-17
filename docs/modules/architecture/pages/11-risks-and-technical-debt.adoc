@@ -1,1 +1,248 @@
 = 11. Risks and Technical Debt
+
+This is the closed M1 risk register. It links each risk to already accepted
+requirements or decisions and allocates observation, response, evidence,
+renewal, and reopening; it does not introduce severity, likelihood, deadline,
+workaround, or future design.
+
+[cols="2,4,3,5,3,3,4",options="header"]
+|===
+|Risk and authority
+|Trigger / observation
+|Impact
+|Accepted response
+|Focused evidence owner
+|Final renewal owner
+|Stop / reopen owner
+
+|`RK-01` Boundary/conformance bypass
+
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
+and xref:03-context-and-scope.adoc[Context and Scope]
+|A source direction, port, capability owner, runtime placement, or trust
+crossing drifts, or a concrete edge mechanism enters core.
+|The accepted boundary or sole semantic owner can no longer be demonstrated.
+|Fail the conformance gate and stop. Do not infer a general same-stratum rule,
+add a bypass, or relabel a runtime or trust relation as a source dependency.
+|https://github.com/FelixGeisler/code-city/issues/452[#452]
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Reopen https://github.com/FelixGeisler/code-city/issues/445[#445] for ADR 0001,
+https://github.com/FelixGeisler/code-city/issues/462[#462] for ADR 0003, or the
+issue owning the contradicted ADR; topology drift also reopens
+https://github.com/FelixGeisler/code-city/issues/446[#446].
+
+|`RK-02` Dependency/action/build reproducibility and supply-chain drift
+
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
+|A package or action closure, integrity record, license/notice evidence,
+point-in-time vulnerability result, test tool, build input, or production
+exclusion changes.
+|Reproducibility, reviewability, or the accepted production closure is no
+longer evidenced.
+|Review every added dependency or action and renew its accepted closure. Stop
+on an unaccepted dependency, action, artifact inclusion, or evidence gap.
+|https://github.com/FelixGeisler/code-city/issues/452[#452] initially; every
+closure-changing issue, including
+https://github.com/FelixGeisler/code-city/issues/455[#455] for parser additions,
+renews its addition.
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Reopen https://github.com/FelixGeisler/code-city/issues/447[#447] or the issue
+owning the changed technology; no waiver or unreviewed production dependency is
+permitted.
+
+|`RK-03` Direct-browser GitHub API/CORS/version drift
+
+xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR 0005]
+and
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006]
+|An accepted endpoint, status/header/body visibility, redirect rule, origin,
+CORS behavior, or API semantic no longer holds.
+|The accepted direct anonymous browser topology cannot conform.
+|Stop; add no credential, proxy, relay, retry, fallback, alternate origin, or
+second retrieval path.
+|https://github.com/FelixGeisler/code-city/issues/453[#453] and
+https://github.com/FelixGeisler/code-city/issues/454[#454]
+|https://github.com/FelixGeisler/code-city/issues/460[#460] from the hosted
+origin
+|Reopen https://github.com/FelixGeisler/code-city/issues/448[#448] or
+https://github.com/FelixGeisler/code-city/issues/449[#449]; when browser-only
+topology is affected, reopen
+https://github.com/FelixGeisler/code-city/issues/446[#446].
+
+|`RK-04` Anonymous quota/provider availability
+
+xref:requirements:04-functional-requirements.adoc#anonymous-access[Anonymous
+access] and xref:06-runtime-view.adoc[Runtime View]
+|Anonymous provider rate or availability prevents an attempt from completing.
+|The journey may remain `Loading` or end only through an already accepted
+provider outcome.
+|Preserve the accepted provider-failure and `Loading` behavior. Add no
+credential, retry, cache, alternate provider, or availability promise.
+|https://github.com/FelixGeisler/code-city/issues/453[#453] and
+https://github.com/FelixGeisler/code-city/issues/454[#454]
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Return a changed outcome to
+https://github.com/FelixGeisler/code-city/issues/441[#441] and a changed
+provider mechanism to https://github.com/FelixGeisler/code-city/issues/448[#448]
+or https://github.com/FelixGeisler/code-city/issues/449[#449].
+
+|`RK-05` Sequential request delay and no elapsed-time outcome
+
+xref:requirements:06-source-admission-and-limits.adoc#deferred-limits[Duration
+dispositions] and xref:06-runtime-view.adoc[Runtime View]
+|Accepted sequential provider or static operations take arbitrary elapsed
+time.
+|An attempt can remain `Loading`; elapsed time alone supplies no outcome or
+failure code.
+|Retain cancellation and replacement semantics without inventing a timeout,
+clock, cutoff, retry, performance promise, or new category.
+|https://github.com/FelixGeisler/code-city/issues/453[#453] through
+https://github.com/FelixGeisler/code-city/issues/456[#456], as applicable
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Return any elapsed-time policy to the owning requirement and ADR issue before
+implementation.
+
+|`RK-06` Response/tree/raw/resource-envelope pressure
+
+xref:requirements:06-source-admission-and-limits.adoc[Source Admission and
+Repository Limits],
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006], and
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007]
+|An actual capped response, inventory, raw workspace, admitted module/byte
+envelope, or browser capacity reaches its accepted boundary.
+|A lower private cap, partial result, or wrong failure would violate the
+accepted envelope.
+|Enforce the linked inclusive limits and exact failures. Treat inability on
+valid in-envelope input as a conformance defect, not a new private limit.
+|https://github.com/FelixGeisler/code-city/issues/454[#454], with full-envelope
+renewal in https://github.com/FelixGeisler/code-city/issues/455[#455] and
+https://github.com/FelixGeisler/code-city/issues/456[#456]
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Reopen https://github.com/FelixGeisler/code-city/issues/442[#442] for a product
+limit or https://github.com/FelixGeisler/code-city/issues/449[#449] or
+https://github.com/FelixGeisler/code-city/issues/450[#450] for a mechanism
+change.
+
+|`RK-07` Hostile-data activation/prototype/path/evidence retention
+
+xref:requirements:06-source-admission-and-limits.adoc#untrusted-source[M1-ADM-0],
+xref:08-crosscutting-concepts.adoc[Cross-cutting Concepts], and
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#presentation-boundary[Presentation boundary]
+|Repository/provider values become executable, markup, normal-object keys,
+resource locators, active labels/text, logs, telemetry, or source-bearing CI
+artifacts.
+|Untrusted data gains an active capability or private source is retained as
+evidence.
+|Keep values inert, primitive/prototype-safe, and source-free; retain only the
+minimal non-source evidence required by the accepted owner. The worker is not
+a security sandbox.
+|https://github.com/FelixGeisler/code-city/issues/454[#454],
+https://github.com/FelixGeisler/code-city/issues/455[#455], and
+https://github.com/FelixGeisler/code-city/issues/458[#458]
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Stop and reopen the requirement or ADR issue owning the boundary that cannot
+remain inert or source-free.
+
+|`RK-08` Git SHA-1 integrity limitation
+
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006]
+|Raw Git object equality is presented as malicious-provider collision
+resistance.
+|The evidence overstates the accepted consistency check and creates an
+unsupported security warranty.
+|Retain exact byte/object consistency evidence and explicitly make no
+malicious-provider security or collision-resistance warranty.
+|https://github.com/FelixGeisler/code-city/issues/454[#454]
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|A stronger guarantee requires a new accepted decision; reopen
+https://github.com/FelixGeisler/code-city/issues/449[#449].
+
+|`RK-09` Lifecycle/cancellation/stale-publication races
+
+xref:06-runtime-view.adoc#runtime-lifecycle-matrix[Lifecycle matrix] and
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007]
+|Provider settlement, static-entry receipt, hard termination, a late payload,
+replacement, or cleanup ordering drifts.
+|Provider work can overlap, a stale/partial result can publish, or resource
+ownership becomes ambiguous.
+|Revoke publication first; follow the exact attestation, settlement, handle,
+and cleanup owners; reject late output. Promise no teardown or cleanup latency.
+|https://github.com/FelixGeisler/code-city/issues/454[#454] and
+https://github.com/FelixGeisler/code-city/issues/455[#455]
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Reopen https://github.com/FelixGeisler/code-city/issues/450[#450] for the phase
+mechanism or the requirement/ADR issue owning the contradicted lifecycle rule.
+
+|`RK-10` Parser runtime/grammar ABI and provenance drift
+
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007]
+|The package, selected WASM bytes, Vite asset closure, permitted API surface, or
+provenance changes.
+|Pinned syntax and supply-chain conformance are no longer established.
+|Stop on the exact pin, hash, inventory, ABI, API, asset, or provenance
+mismatch; add no parser or recovery fallback.
+|https://github.com/FelixGeisler/code-city/issues/455[#455]
+|https://github.com/FelixGeisler/code-city/issues/456[#456] for the combined
+rerun and https://github.com/FelixGeisler/code-city/issues/460[#460] finally
+|Reopen https://github.com/FelixGeisler/code-city/issues/450[#450].
+
+|`RK-11` Pinned grammar semantics and full-envelope capacity
+
+xref:requirements:08-fixed-metric-semantics.adoc[Fixed Metric Semantics] and
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007]
+|Known accepted/rejected syntax behavior changes, or valid full-envelope input
+fails because of stack, memory, or another private capacity.
+|Canonical metric behavior or the no-lower-limit commitment is violated.
+|Preserve pinned acceptance/rejection and classify valid in-envelope inability
+as a conformance defect. Add no recovery parser, fallback, retry, or private
+limit.
+|https://github.com/FelixGeisler/code-city/issues/455[#455] and
+https://github.com/FelixGeisler/code-city/issues/456[#456]
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Reopen https://github.com/FelixGeisler/code-city/issues/450[#450] for a
+technology or grammar change.
+
+|`RK-12` WebGL/numeric/lifecycle compatibility drift
+
+xref:requirements:10-fixed-city-layout-and-presentation.adoc[Fixed City,
+Layout, and Presentation] and
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
+|WebGL2, the fixed API/state/shaders, drawing-buffer equality, float proof,
+context loss, resize, or cleanup no longer conforms.
+|A canonical scene cannot be presented through the accepted fail-closed
+boundary.
+|Fail closed with the accepted owner and outcome; add no fallback renderer,
+extension, restoration, retry, lower private capacity, or cleanup warranty.
+|https://github.com/FelixGeisler/code-city/issues/457[#457] and
+https://github.com/FelixGeisler/code-city/issues/458[#458]
+|https://github.com/FelixGeisler/code-city/issues/460[#460] at the hosted target
+|Reopen https://github.com/FelixGeisler/code-city/issues/451[#451].
+
+|`RK-13` Branch/publisher/deployed-provenance drift
+
+xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009] and
+xref:07-deployment-view.adoc[Deployment View]
+|Default/protection/app bindings, environment bypass or branch policy, retired
+workflow state, reviewed tree, manifest, or production bytes diverge.
+|The guarded head or deployed application provenance cannot be trusted.
+|Stop publication and never weaken or bypass protection. Preserve the frozen
+legacy deployment until the exact accepted application bytes can replace it.
+|https://github.com/FelixGeisler/code-city/issues/464[#464] proves the
+point-in-time administration prerequisite;
+https://github.com/FelixGeisler/code-city/issues/452[#452] owns non-deploying
+workflow realization.
+|https://github.com/FelixGeisler/code-city/issues/460[#460]
+|Reopen https://github.com/FelixGeisler/code-city/issues/446[#446].
+|===
+
+== Technical-debt boundary
+
+No known technical-debt item authorizes a TODO, waiver, lower private capacity,
+stale evidence, or design to be selected later by a Developer. Unimplemented
+M1 work is owned backlog, not accepted debt. A discovered conformance gap
+blocks its owning issue and is returned to the linked requirement or ADR; it is
+not silently entered here as debt.

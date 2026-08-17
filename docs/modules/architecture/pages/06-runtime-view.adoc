@@ -70,20 +70,25 @@ count, package boundary, or source-dependency rule.
 
 == Publication placement and current state
 
-ADR 0009 accepts an identity-preserving transition from the active M1 `v2` line
-to default `main`, with the prior v1 `main` retained as locked `v1`. Only that
-new M1 `main` may publish Pages. The final application replaces the frozen
-legacy hosted documentation; it is not co-hosted with documentation and gains
-no second route, origin, publisher, or runtime context.
+ADR 0009's identity-preserving administration is complete. The protected and
+default M1 line is `main`, the prior v1 line is locked archival `v1`, and no
+`v2` branch remains. Strict checks are app-bound; the `github-pages`
+environment is non-bypassable and has exactly one custom `main` policy. Legacy
+Documentation, Container, and Release were disabled before migration and their
+registrations now read `deleted` because their files are absent from `main`;
+CI remains active. The sealed #464 administration artifact has SHA-256
+`bc8df73542bf11dc8d09898e09764d93f1a40ebcf195b8002d594b201d1b05bb`;
+only that digest and its summarized postconditions are public here.
 
-This documentation does not claim that transition, workflow, or deployment has
-occurred. #464 owns the separate administrative branch/protection/environment
-read-back gate. #452 owns exact non-deploying build, CI, and first-party Pages
-workflow realization. #460 alone explicitly dispatches the final reviewed
-main-line artifact and proves the guarded merge commit, complete manifest, and
-production-origin bytes. Exact YAML, event and gate, action versions, artifact
-root, source map, emitted filenames, and test mechanism remain deferred to
-#452.
+No M1 package, executable Pages workflow, product traffic, or application
+deployment exists yet. The final application replaces the frozen legacy hosted
+documentation; it is not co-hosted with documentation and gains no second
+route, origin, publisher, or runtime context. #452 owns exact non-deploying
+build, current-main CI, and first-party Pages workflow realization. #460 alone
+explicitly dispatches the final reviewed main-line artifact and proves the
+guarded merge commit, complete manifest, and production-origin bytes. Exact
+YAML, event and gate, action versions, artifact root, source map, emitted
+filenames, and test mechanism remain with #452 readiness.
 
 == Runtime responsibilities
 
@@ -855,10 +860,10 @@ restoration, or weaker failure/cleanup rule stops implementation and reopens
 #451.
 
 xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009] records
-the accepted branch/publication placement and the #464 administration,
-#452 non-deploying realization, and #460 explicit final-publication ownership.
-It changes no runtime responsibility, trust crossing, product-data path, or
-application context.
+the accepted branch/publication placement, the completed sealed #464
+administration prerequisite, #452 non-deploying realization, and #460 explicit
+final-publication ownership. It changes no runtime responsibility, trust
+crossing, product-data path, or application context.
 
 The accepted cross-mechanism synthesis is complete in the matrices above.
 Concrete source/package mapping, executable message and port schemas, exact

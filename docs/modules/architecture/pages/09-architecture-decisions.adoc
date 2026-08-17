@@ -78,3 +78,36 @@
   the separately evidenced administration gate, #452 owns non-deploying exact
   workflow realization, and #460 owns the guarded final deployment and exact-
   origin evidence.
+
+== Decision closure and implementation-readiness boundary
+
+The decision directory contains exactly nine decision files, ADR 0001 through
+ADR 0009. Each records `Status:: Accepted`; none records `Proposed` or
+`Superseded`. The
+xref:adr/0007-static-syntax-evidence-appendix.adoc[ADR 0007 evidence appendix]
+is inert evidence, not a tenth ADR, and has no decision status.
+
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] is the sole core
+source-dependency ADR and has no accepted successor.
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
+is an internal refinement of the core, not a successor. ADR 0009 governs
+repository identity and publication and likewise does not succeed ADR 0001.
+A contradiction returns to the issue owning the affected ADR; #464 does not
+repair, generically re-accept, or supersede a decision.
+
+The bullets above preserve each decision's issue and authority link.
+https://github.com/FelixGeisler/code-city/issues/444[#444] records the human
+delegation under which the Requirements Engineer accepted ADRs with a clear
+recommendation. https://github.com/FelixGeisler/code-city/issues/446[#446]
+records the direct human decision for ADR 0009's consequential branch and
+publication outcome; that outcome is not delegated authority.
+
+Final exact-head human approval for
+https://github.com/FelixGeisler/code-city/issues/464[#464] remains a merge gate.
+It accepts the resulting implementation-ready M0 baseline and does not
+re-accept or supersede any individual ADR. Accepted architecture still does
+not hand an M1 issue to a Developer: each issue must close the consequential
+semantics allocated in
+xref:07-deployment-view.adoc#accepted-current-deferred[Accepted, current, and
+still deferred] and pass same-digest readiness against the final M0 `main`
+revision. #452 is the next refinement owner after #464 closes.

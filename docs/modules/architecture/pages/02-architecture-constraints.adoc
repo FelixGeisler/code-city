@@ -138,13 +138,13 @@ xref:requirements:01-product-scope.adoc#non-goals[Non-goals].
 |https://github.com/FelixGeisler/code-city/issues/459[#459] and
 https://github.com/FelixGeisler/code-city/issues/460[#460].
 
-|The active M1 line is `v2` until the accepted post-ADR administrative
-cutover, then default `main`; the former v1 `main` becomes locked archival
-`v1`. Only the resulting M1 `main` may publish Pages, and #460 replaces the
-legacy hosted documentation with the application rather than co-hosting it.
+|The active and protected/default M1 line is `main`; the former v1 line is
+locked archival `v1`, and no `v2` branch remains. Only M1 `main` may publish
+Pages, and #460 replaces the frozen legacy hosted documentation with the
+application rather than co-hosting it.
 |https://github.com/FelixGeisler/code-city/issues/446[#446] and
 xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009].
-|The separately sealed administration gate in
+|The sealed point-in-time administration evidence in
 https://github.com/FelixGeisler/code-city/issues/464[#464], exact non-deploying
 workflow realization in https://github.com/FelixGeisler/code-city/issues/452[#452],
 and guarded final deployment and production-origin proof in
@@ -222,18 +222,26 @@ failure. #452's walking shell remains renderer-free, #457 construction remains
 renderer-neutral, and #458 owns every renderer declaration and focused check.
 
 xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009] is the
-accepted branch and publication constraint. The current M1 `v2` history becomes
-the sole active/default `main`, current v1 `main` becomes locked archival `v1`,
-only new `main` may publish, and #460 replaces rather than co-hosts the legacy
-Pages documentation. This documentation records the accepted target; it
-neither performs administration nor creates executable configuration. #464
-owns the branch/protection/environment
-migration evidence; #452 owns exact non-deploying workflow realization; and
-#460 owns the explicit final publication and production-origin proof.
+accepted branch and publication constraint. Its separate administration is
+complete: the sealed #464 artifact has SHA-256
+`bc8df73542bf11dc8d09898e09764d93f1a40ebcf195b8002d594b201d1b05bb` and
+records protected/default M1 `main`, locked archival `v1`, absent `v2`, strict
+app-bound checks, and a non-bypassable `github-pages` environment with exactly
+one custom `main` deployment policy. The legacy Documentation, Container, and
+Release registrations were disabled before migration and now read `deleted`
+because their files are absent from `main`; CI remains active. The last legacy
+documentation deployment stays frozen until #460. No M1 package, executable
+Pages workflow, product traffic, or application deployment exists yet. This
+page publishes only the digest and summarized postconditions, not raw private
+administration evidence. #452 owns exact non-deploying workflow realization,
+and #460 owns explicit
+final application publication and production-origin proof.
 
 Concrete source mapping, executable message and port schemas, exact #452
 workflow YAML, event and gate, action versions, artifact root, emitted
-filenames, and test technology stay with their owners. Branch identity, sole-
-publisher placement, documentation disposition, static syntax, SP-01 through
-SP-04, selected-revision retrieval, RA-10/RA-11, visualization technology, and
-CC-09/PR-01 are no longer deferred.
+filenames, and test technology stay with their readiness owners as indexed in
+xref:07-deployment-view.adoc#accepted-current-deferred[Accepted, current, and
+still deferred]. Branch identity, sole-publisher placement, documentation
+disposition, static syntax, SP-01 through SP-04, selected-revision retrieval,
+RA-10/RA-11, visualization technology, and CC-09/PR-01 are accepted or
+explicitly unnecessary rather than deferred.

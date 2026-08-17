@@ -1,1 +1,29 @@
 = Code City v2
+
+Code City v2 is at the accepted M0 baseline for the M1 product. The
+requirements and architecture are accepted, but the M1 application is not yet
+implemented: no M1 package, executable M1 build/Pages workflow, product
+traffic, or application deployment exists in this baseline.
+
+== Reading map
+
+* Start with xref:requirements:index.adoc[Requirements] for authoritative
+  product scope and observable behavior.
+* Use xref:architecture:index.adoc[Architecture] for the accepted realization
+  boundaries and the distinction between completed repository administration,
+  accepted-but-unimplemented M1 decisions, and issue-owned implementation
+  details.
+* Implementers enter through
+  xref:architecture:08-crosscutting-concepts.adoc[Cross-cutting Concepts],
+  xref:architecture:10-quality-requirements.adoc[Quality Requirements], and
+  xref:architecture:07-deployment-view.adoc#accepted-current-deferred[Accepted,
+  current, and still deferred].
+* Reviewers use
+  xref:architecture:09-architecture-decisions.adoc[Architecture Decisions],
+  xref:architecture:11-risks-and-technical-debt.adoc[Risks and Technical Debt],
+  and xref:architecture:12-glossary.adoc[Glossary] as link-oriented indexes
+  back to the authoritative contracts.
+
+The xref:comparison:index.adoc[Comparison] pages are non-authoritative
+placeholders outside this M0/M1 requirements and architecture baseline. They do
+not define a comparison method or report measurements.

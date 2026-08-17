@@ -1,1 +1,50 @@
 = Architecture
+
+This arc42 module records the accepted M0 architecture baseline for M1. The
+repository-administration prerequisite is complete, while the M1 package,
+executable M1 build/Pages workflow, product traffic, parser, renderer, and
+application deployment remain unimplemented. Accepted decisions are constraints on later
+issues, not claims that their mechanisms already exist.
+
+== Current baseline
+
+The sealed administration baseline records protected/default `main` at
+`b0b1a0a4e873b9415d266b67c7adeda913faf655`, the former v1 line as locked
+archival `v1` at `3ed8407809ea660657d6eeb49579ddb8412932fa`, and no `v2`
+branch. ADR 0009 administration is sealed under SHA-256
+`bc8df73542bf11dc8d09898e09764d93f1a40ebcf195b8002d594b201d1b05bb`.
+The summarized current state and the still-frozen legacy Pages deployment are
+indexed in xref:07-deployment-view.adoc[Deployment View]; no raw private
+administration evidence belongs in this documentation.
+
+xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] is the sole core
+source-dependency ADR and has no accepted successor.
+xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
+is an internal refinement, not a successor. All nine decision ADRs are
+`Accepted`; xref:09-architecture-decisions.adoc[Architecture Decisions] records
+the status and authority closure without duplicating their contents.
+
+== Reader entry points
+
+* Requirements readers begin with xref:requirements:index.adoc[the normative
+  requirements reading order], then use
+  xref:01-introduction-and-goals.adoc[Introduction and Goals] for architecture
+  drivers.
+* Implementers use xref:04-solution-strategy.adoc[Solution Strategy],
+  xref:05-building-block-view.adoc[Building Block View], and
+  xref:06-runtime-view.adoc[Runtime View], then follow the sole-owner and
+  evidence allocations in
+  xref:08-crosscutting-concepts.adoc[Cross-cutting Concepts].
+* Issue-readiness reviewers use
+  xref:10-quality-requirements.adoc[Quality Requirements] for the closed
+  scenario and issue-fitness allocations. Every M1 issue still requires its own
+  same-digest readiness review before Developer handoff.
+* Architecture reviewers use
+  xref:09-architecture-decisions.adoc[Architecture Decisions],
+  xref:11-risks-and-technical-debt.adoc[Risks and Technical Debt], and
+  xref:12-glossary.adoc[Glossary] as indexes to the governing requirements,
+  views, ADRs, evidence owners, and reopen owners.
+* Deployment and publication reviewers use
+  xref:07-deployment-view.adoc#accepted-current-deferred[Accepted, current, and
+  still deferred] to distinguish completed administration, accepted
+  publication policy, unimplemented M1 work, and issue-owned local detail.

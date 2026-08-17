@@ -23,8 +23,12 @@ full-envelope disposition that SP-01 through SP-04 are unnecessary.
 https://github.com/FelixGeisler/code-city/issues/451[#451] accepts
 browser-native WebGL2 presentation, the source-free construction/presentation
 boundary, fail-closed lifecycle behavior, and the disposition that CC-09 and
-PR-01 are unnecessary. The #464 hard gate verifies all accepted decisions and
-evidence ownership before M1 implementation.
+PR-01 are unnecessary. The final M0 synthesis in
+https://github.com/FelixGeisler/code-city/issues/464[#464] closes the
+cross-cutting ownership, risk, decision-status, and implementation-fitness
+indexes for this accepted but unimplemented baseline. Each M1 issue still
+requires readiness against the exact final M0 `main` revision before Developer
+handoff.
 
 == Reading order
 
@@ -33,7 +37,7 @@ evidence ownership before M1 implementation.
 . xref:02-stakeholders-and-use-cases.adoc[Stakeholders and Use Cases] describes
   the single user journey and its alternatives.
 . xref:03-feature-inventory.adoc[Feature Inventory] shows what is included,
-  excluded, or owned by a later M0 contract.
+  excluded, or allocated to an accepted downstream evidence owner.
 . xref:04-functional-requirements.adoc[Functional Requirements] contains the
   normative URL grammar, immutable-revision identity, and state machine.
 . xref:05-acceptance-criteria.adoc[Input and State Acceptance] provides
@@ -59,6 +63,13 @@ evidence ownership before M1 implementation.
   and Presentation Acceptance] provides the closed inert fixtures, boundary
   tables, source-free handoff and fixed-presentation checks, exclusions,
   lifecycle-failure examples, and evidence allocation for that contract.
+. After the normative requirements, use
+  xref:architecture:08-crosscutting-concepts.adoc[Cross-cutting Concepts] for
+  sole enforcement ownership,
+  xref:architecture:10-quality-requirements.adoc[Quality Requirements] for
+  issue-fitness evidence, and
+  xref:architecture:11-risks-and-technical-debt.adoc[Risks and Technical Debt]
+  for stop and reopen ownership.
 
 The words *must*, *must not*, *required*, and *only* are normative on these
 pages. Examples clarify the normative rules but do not create executable test

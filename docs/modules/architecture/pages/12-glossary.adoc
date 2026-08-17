@@ -1,1 +1,158 @@
 = 12. Glossary
+
+This glossary is a link-oriented index, not a second requirements or
+architecture contract. The linked owner defines each term; where a group spans
+several owners, the final column identifies the distinction without restating
+its values or creating a synonym.
+
+[cols="2,6,8",options="header"]
+|===
+|Group
+|Indexed terms
+|Normative owner and distinction
+
+|`GL-01`
+|draft; submission; canonical repository URL
+|xref:requirements:04-functional-requirements.adoc#canonical-url[Canonical URL
+input] owns URL and submission semantics;
+xref:requirements:04-functional-requirements.adoc#states[Observable states]
+owns draft retention.
+
+|`GL-02`
+|attempt; generation; current attempt; publication eligibility
+|xref:requirements:04-functional-requirements.adoc#states[Observable states]
+owns attempt behavior;
+xref:05-building-block-view.adoc#_exclusive_outcome_and_lifecycle_ownership[exclusive
+ownership] and xref:06-runtime-view.adoc#runtime-lifecycle-matrix[the lifecycle
+matrix] distinguish UI attempt ownership from bridge generation resources.
+
+|`GL-03`
+|canonical repository; selected identity tuple; immutable revision
+|xref:requirements:04-functional-requirements.adoc#immutable-revision[Immutable
+revision selection and identity] owns product identity;
+xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
+0005] owns its resolution mechanism.
+
+|`GL-04`
+|provider-capable; provider-drained/static-entered; static phase; lifecycle
+attestations
+|xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007] owns phase and attestation semantics;
+xref:06-runtime-view.adoc#runtime-lifecycle-matrix[the lifecycle matrix] links
+them to cancellation and replacement.
+
+|`GL-05`
+|canonical path; admitted module; canonical module identity; normalized content
+|xref:requirements:06-source-admission-and-limits.adoc[Source Admission and
+Repository Limits] owns path, admission, and normalized-content semantics;
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006] owns the selected-revision retrieval boundary.
+
+|`GL-06`
+|primitive static-syntax observation; source-free projection
+|xref:requirements:08-fixed-metric-semantics.adoc#metric-input[Metric input]
+and
+xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
+0007] own parser-to-metric projection;
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#presentation-boundary[the
+presentation boundary] owns scene-to-presentation projection.
+
+|`GL-07`
+|executable unit; SLOC; complexity; canonical metric fact
+|xref:requirements:08-fixed-metric-semantics.adoc[Fixed Metric Semantics] owns
+the metric terms and
+xref:requirements:08-fixed-metric-semantics.adoc#canonical-facts[canonical
+facts] owns their complete result.
+
+|`GL-08`
+|canonical city/scene; building; building identity; complete scene
+|xref:requirements:10-fixed-city-layout-and-presentation.adoc#canonical-scene[Canonical
+scene and exclusions] owns scene content and identity;
+xref:05-building-block-view.adoc[Building Block View] distinguishes constructor
+and presentation owners.
+
+|`GL-09`
+|complete; partial; atomic publication; stale result; late result
+|xref:requirements:04-functional-requirements.adoc#states[Observable states],
+xref:requirements:06-source-admission-and-limits.adoc#failure-invariants[admission
+failure invariants], and
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#city-failure[city
+failure] own the applicable atomicity rules;
+xref:06-runtime-view.adoc[Runtime View] links their publication gate.
+
+|`GL-10`
+|domain; application; edge/adapter; capability; conceptual port
+|xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
+owns strata, capabilities, and port roles;
+xref:05-building-block-view.adoc[Building Block View] indexes their exclusive
+responsibilities.
+
+|`GL-11`
+|source dependency; runtime placement; data flow; trust crossing
+|xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] owns the outer source
+dependency;
+xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
+and xref:03-context-and-scope.adoc[Context and Scope] keep runtime placement,
+data flow, and trust crossings distinct.
+
+|`GL-12`
+|UI attempt coordinator; worker pipeline coordinator; UI-worker bridge; main
+bridge
+|xref:05-building-block-view.adoc[Building Block View] owns the logical blocks,
+port roles, bridge halves, and exclusive outcome/resource responsibilities;
+xref:06-runtime-view.adoc[Runtime View] owns their ordered collaboration.
+
+|`GL-13`
+|untrusted; inert; active interpretation; no execution
+|xref:requirements:06-source-admission-and-limits.adoc#untrusted-source[M1-ADM-0]
+owns repository-data treatment;
+xref:08-crosscutting-concepts.adoc[Cross-cutting Concepts] links provider,
+parser, bridge, and presentation confinement.
+
+|`GL-14`
+|own data property; primitive/prototype-safe; source-free; defensive
+presentation validation
+|xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
+0006] owns provider projection;
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#presentation-boundary[the
+presentation boundary] and
+xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
+own defensive scene projection.
+
+|`GL-15`
+|product limit; accepted envelope; conformance defect; unnecessary limit; no
+elapsed-time outcome
+|xref:requirements:06-source-admission-and-limits.adoc#limit-rule[The product
+limit rule] and
+xref:requirements:06-source-admission-and-limits.adoc#deferred-limits[closed
+limit dispositions] own repository/static limits;
+xref:requirements:10-fixed-city-layout-and-presentation.adoc#city-limit-dispositions[city
+and presentation dispositions] owns its stages.
+
+|`GL-16`
+|cleanup; release; disposal; settlement; termination; excluded secure-erasure
+or physical-teardown claim
+|xref:05-building-block-view.adoc#_exclusive_outcome_and_lifecycle_ownership[Exclusive
+lifecycle ownership],
+xref:06-runtime-view.adoc#runtime-lifecycle-matrix[the lifecycle matrix], and
+xref:08-crosscutting-concepts.adoc#_atomic_presentation_lifecycle_and_disposal[presentation
+disposal] distinguish provider, core, parser, bridge, worker-realm, and
+presentation responsibilities.
+
+|`GL-17`
+|production artifact; production publisher; cutover; current documentation;
+archived v1
+|xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009] owns branch,
+publisher, archive, and documentation authority;
+xref:07-deployment-view.adoc[Deployment View] indexes completed administration
+and the unimplemented application cutover.
+
+|`GL-18`
+|focused evidence; integration evidence; renewal; stop condition; reopen owner
+|xref:10-quality-requirements.adoc[Quality Requirements] allocates focused and
+integrated evidence;
+xref:11-risks-and-technical-debt.adoc[Risks and Technical Debt] allocates stop
+and reopen ownership; xref:07-deployment-view.adoc#accepted-current-deferred[the
+readiness boundary] identifies choices that must close before Developer
+handoff.
+|===
