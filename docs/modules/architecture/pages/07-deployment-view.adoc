@@ -2,17 +2,19 @@
 
 This view is the authoritative implementation-independent deployment
 synthesis accepted through
-https://github.com/FelixGeisler/code-city/issues/463[#463]. It links ADR 0002's
+https://github.com/FelixGeisler/code-city/issues/463[#463] and extended by
+https://github.com/FelixGeisler/code-city/issues/446[#446]. It links ADR 0002's
 production target, browser-only contexts, direct-provider topology, and trust
 crossings to ADR 0004's conceptual `/code-city/` static package, ADRs 0005 and
-0006's exact GitHub origins, ADR 0007's five same-origin parser assets, and ADR
-0008's embedded trusted shader literals and browser-native presentation.
+0006's exact GitHub origins, ADR 0007's five same-origin parser assets, ADR
+0008's browser-native presentation, and ADR 0009's branch, publisher, and
+cutover placement.
 
-These decisions create no current M1 shell, source, dependency, configuration,
-asset, package, traffic, renderer, route, workflow, or deployment mechanism.
-This view selects no source map, executable schema, emitted filename, worker-
-creation timing, transport/cancellation primitive, preload policy, or test
-technology.
+These accepted decisions create no current M1 shell, source, dependency,
+configuration, asset, package, traffic, renderer, route, executable workflow,
+branch administration, or deployment. This view selects no source map,
+executable schema, emitted filename, worker-creation timing,
+transport/cancellation primitive, preload policy, or test technology.
 
 == Production topology
 
@@ -22,6 +24,8 @@ technology.
 | GitHub Pages delivery node                                    |
 | target URL:  https://felixgeisler.github.io/code-city/        |
 | exact origin: https://felixgeisler.github.io                  |
+| final publisher: resulting M1 main only                        |
+| final content: M1 application; legacy docs replaced            |
 | trusted static UI and worker artifacts only                   |
 +-------------------------------+-------------------------------+
                                 |
@@ -52,8 +56,105 @@ The production delivery URL is exactly
 `https://felixgeisler.github.io/code-city/`, and requests originating from the
 application have the exact production origin `https://felixgeisler.github.io`.
 ADR 0004 fixes `/code-city/` as the accepted conceptual package's public base.
-Adopting this existing target and base does not adopt its current Pages source,
-action/workflow, application route, or deployment mechanism.
+ADR 0009 now accepts the branch and publisher placement: only the resulting M1
+`main` may publish, and #460 replaces the legacy hosted documentation with the
+application. It does not select exact source/configuration names, workflow
+YAML, action versions, emitted filenames, route realization, or test tools.
+
+== Branch and publication migration
+
+=== Accepted current-to-target transition
+
+At this documentation change's observed baseline, v1 still occupies default
+`main`, M1 occupies `v2`, no `v1` branch exists, and the target serves Antora
+output from the legacy `main`-only Documentation workflow. The `github-pages`
+environment has one custom `main` policy, but its observed read-back reports
+`can_admins_bypass: true`. Those are dated pre-migration facts, not a lasting
+contract and not a claim that migration has already occurred.
+
+After this ADR's pull request merges into `v2`, the separately gated
+administration renames old v1 `main` to `v1`, renames M1 `v2` including that
+merge to `main`, makes the latter the default and active integration line, and
+leaves no active `v2`. Commit identities and histories are preserved. The
+resulting `v1` and immutable `v1.0.0` are archival comparison evidence only;
+new work and all current repository documentation use the new `main`.
+
+Only new `main` may publish `github-pages`. The old Documentation, Container,
+and Release workflow registrations are disabled before the rename and remain
+disabled; current CI remains enabled. The environment read-back reports
+`can_admins_bypass: false` and exactly one custom deployment branch policy
+named `main`, resolving only to the M1 line. Administrators cannot bypass that
+policy, so the environment independently denies `v1`. Existing hosted
+documentation may remain frozen until #460, but
+it cannot be refreshed and is not a fallback. #460 replaces it with the M1
+application; no documentation route, redirect, composite artifact, second
+publisher, origin, environment, or preview path is accepted.
+
+=== Protected administration and read-back
+
+The migration occurs only after #446's guarded merge is closed, that merge
+commit's `v2` push `verify` succeeds, remote tips match, `v1` is absent, no
+pull request is open, and local state is clean. Before any rename, the
+administrator snapshots refs and worktrees, disables and reads back legacy
+workflow registrations, proves all such runs and legacy deployments are
+terminal, fast-forwards local `v2` to the exact merge SHA without prune, and
+installs the strict new-main protection on remote `v2`.
+
+The new-main policy requires strict/up-to-date app-bound checks: `verify` from
+GitHub Actions app ID `15368` and `delivery/architecture`,
+`delivery/testing`, `delivery/requirements`, and `delivery/security` from
+Quality Assurance app ID `4599126`. It requires protected pull requests and
+conversation resolution, applies to administrators without bypass, rejects
+force pushes and deletion, uses zero separate GitHub approving reviews, and
+permits the accepted merge-commit method with required linear history false.
+The archive policy has no obsolete required check or review gate; it applies
+to administrators without bypass, sets `lock_branch` true, and rejects force
+push and deletion.
+
+The protected old `main` is renamed to `v1` before protected `v2` is renamed to
+`main`; the former default remains protected during the interval. Protection
+on new `main`, the `github-pages` environment read-back of
+`can_admins_bypass: false`, and its exact one-`main` deployment branch policy
+are proved before changing the default. Every remote operation is read back.
+Local names and upstreams are
+then reconciled without prune or reset, the stale `origin/v2` tracking ref is
+removed only after remote absence is proved, and all detached worktree HEADs
+must remain unchanged.
+
+A sealed #464 administration packet records redacted before/after refs and
+SHAs, default branch, protections and app bindings, environment policy,
+workflow registrations and quiescence, runs and deployments, open-pull-request
+state, worktrees, and local reconciliation. Its final environment evidence
+includes the API read-back `can_admins_bypass: false` and the complete policy
+read-back showing exactly one custom `main` deployment branch policy resolving
+only to the new M1 line. Its digest is published in #464
+before the Requirements readiness attestation. No #464 readiness or later M1
+Developer handoff occurs until all state and evidence match ADR 0009. Failure
+uses only a proved no-op continuation or exact inverse identity-preserving
+rename and captured-policy restoration; no force, delete, synthetic commit,
+prune, reset, weakened gate, or required-check workaround is allowed.
+
+=== Build and final cutover ownership
+
+https://github.com/FelixGeisler/code-city/issues/452[#452] owns the exact
+source/package map, current-main CI trigger, conformance mechanism, first-party
+Pages workflow event and gate, exact action versions, artifact root,
+permissions, and production-artifact exclusions. Its merge must not deploy or
+replace the hosted documentation.
+
+https://github.com/FelixGeisler/code-city/issues/460[#460] alone explicitly
+dispatches production after all prior slices and its exact-head reviews pass.
+It proves successful push verification for the guarded merge commit, equality
+of that commit's tree to the reviewed head tree without unrelated change, and
+the exact dispatched commit and deployment/environment identity. It records a
+complete manifest of relative URL, byte length, media type, and SHA-256, then
+fetches the entry and every artifact from the exact origin with a deployment-
+unique cache-busting query and requires byte-for-byte manifest equality. Every
+entry reference must remain beneath `/code-city/`; known legacy assets and all
+source, tests, documentation output, source maps, secrets, server artifacts,
+and stale v1 assets must be absent. The evidence must also prove the archived
+publisher cannot overwrite the deployment. A deployment API commit or
+screenshot alone is insufficient.
 
 == Deployment and conceptual-open-path matrix
 
@@ -84,14 +185,17 @@ not renderer assets
 |Static artifacts only; no repository payload, source, metric, scene, attempt
 state, or credential
 |No Code City product data is retained at this node
-|xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
-and xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004];
-package evidence https://github.com/FelixGeisler/code-city/issues/452[#452],
-final evidence https://github.com/FelixGeisler/code-city/issues/460[#460]
+|xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002],
+xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004],
+and xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009];
+non-deploying package/workflow evidence
+https://github.com/FelixGeisler/code-city/issues/452[#452], final explicit
+publication evidence https://github.com/FelixGeisler/code-city/issues/460[#460]
 |Not a product-data trust crossing
 |First step of the conceptual open path
-|Target/base accepted; target exists; no M1 package exists; Pages
-source/action/workflow, route, and deployment mechanism remain deferred
+|Target/base and sole new-main publisher accepted; target currently serves
+legacy docs; no M1 package/workflow exists; exact #452 workflow and route
+realization remain deferred, and #460 owns replacement
 
 |User device/browser
 |Loads the accepted target
@@ -210,11 +314,12 @@ https://felixgeisler.github.io/code-city/
   → Initial with empty draft and no status, tuple, city, history, or restored state
 ----
 
-This path does not select an emitted filename, application route
-implementation, Pages source, action/workflow, deployment mechanism, worker-
-creation timing, or preload policy. Parser runtime/grammar assets become
-eligible only after the accepted static barrier, never during provider-capable
-processing.
+This path accepts only new `main` as its eventual publisher and #460 as the
+explicit final deployment owner. It does not select an emitted filename,
+application-route implementation, exact #452 workflow YAML/event/gate/action
+version/artifact root, worker-creation timing, or preload policy. Parser
+runtime/grammar assets become eligible only after the accepted static barrier,
+never during provider-capable processing.
 
 == Security invariants
 
@@ -223,6 +328,14 @@ processing.
 ** `Public GitHub → processing worker`.
 * Same-origin bridge traffic and GitHub Pages artifact delivery are not logical
   product-data trust crossings.
+* Only the resulting M1 `main` may publish production through the single first-
+  party Pages path. The archived branch, tags, forks, delivery branches, and
+  retired workflows are independently denied by the environment policy, whose
+  required read-back is `can_admins_bypass: false` with exactly one custom
+  `main` deployment branch policy resolving only to the new M1 line.
+* The Pages deploy job has only the required repository-read, Pages-write, and
+  OIDC permissions. It introduces no long-lived deployment secret, repository
+  or provider credential, external host, preview publisher, or fallback.
 * No user or service credential is requested, accepted, read, retained, or
   transmitted.
 * Repository metadata, paths, bytes, and source remain untrusted and inert.
@@ -269,25 +382,35 @@ processing.
   barrier, lifecycle attestations, and ordinary-versus-hard cleanup.
 * ADR 0008's source-free browser-native WebGL2 presentation, atomic staging,
   resize, context loss, and cleanup.
+* ADR 0009's identity-preserving M1 `v2` to default `main` transition, locked
+  v1 archive, sole new-main first-party Pages publisher, current-main
+  documentation authority, legacy workflow retirement, and #460 app-over-docs
+  cutover.
 
-These are documented accepted decisions. #463 creates no M1 source,
-dependency, package, artifact, runtime request, parser operation, or rendering
-behavior.
+These are documented accepted decisions. This #446 documentation change
+creates no M1 source, dependency, package, artifact, runtime request, parser
+operation, rendering behavior, executable workflow, branch administration, or
+deployment. The observed legacy state remains current until the separate
+administrative gate and #460 cutover complete.
 
 === Still deferred — exact list
 
 * Concrete source and package map.
 * Executable message and port schemas.
-* Pages source, action, and workflow.
-* Application route and deployment mechanism.
+* Exact #452 CI and Pages workflow YAML, event and gate, action versions,
+  artifact root, permissions realization, and conformance mechanism.
+* Application-route implementation.
 * Worker creation timing.
-* Emitted filenames.
+* Source and emitted filenames.
 * General transport and cancellation primitives.
 * Test technology.
 
-No additional item may be silently selected or described as implemented.
+The active/default branch identities, archive role, sole publisher, no
+intermediate deployment, documentation disposition, and final explicit #460
+cutover are accepted and are not deferred. No additional item may be silently
+selected or described as implemented.
 
-=== Unchanged M1 ownership
+=== Retained M1 ownership and administration gate
 
 [cols="2,8",options="header"]
 |===
@@ -295,8 +418,10 @@ No additional item may be silently selected or described as implemented.
 |Retained implementation / evidence responsibility
 
 |https://github.com/FelixGeisler/code-city/issues/452[#452]
-|Concrete source/package map, walking package, accepted source-boundary
-enforcement, and initial artifact evidence
+|Concrete source/package map, walking package, accepted source-boundary and
+base conformance, current-main CI trigger, exact first-party Pages workflow and
+action versions, production artifact root/permissions/exclusions, and initial
+non-deploying package evidence. Its merge cannot publish production.
 
 |https://github.com/FelixGeisler/code-city/issues/453[#453]
 |Input rejection, resolution-evidence port, exact resolution mechanism, and
@@ -324,31 +449,56 @@ focused `M1-PRES-1`
 |Packaged successful URL-to-city integration
 
 |https://github.com/FelixGeisler/code-city/issues/460[#460]
-|Integrated failure/lifecycle behavior and final hosted/deployment renewal
+|Integrated failure/lifecycle behavior; guarded reviewed-tree-equivalent final
+merge; successful merge-commit verification; explicit main-only publication;
+complete artifact manifest; exact-origin byte equality; base/reference,
+legacy-absence, exclusion, and archived-overwrite proof
+
+|https://github.com/FelixGeisler/code-city/issues/464[#464]
+|The separately sealed post-#446 administration packet and readiness gate for
+exact refs and commit identities, protected/default new `main`, locked `v1`,
+enabled app-bound CI, disabled legacy workflows, only-main Pages policy with
+`can_admins_bypass: false`, quiescence, zero open pull requests, preserved
+worktrees, and ordered no-prune
+local reconciliation
 |===
 
 == Stop rules
 
-Stop this documentation change rather than assume or broaden scope if:
+Stop rather than assume, administer, configure, or deploy if:
 
-* an accepted requirement and ADR contradict;
-* any stage, failure, cleanup action, or retained datum lacks one accepted
-  owner;
-* the flow cannot use all 13 exact ports without adding a port, block,
-  abstraction, admission path, classifier, or orchestrator;
-* accurate synthesis requires changing a requirement, ADR, navigation file, or
-  any path other than `docs/modules/architecture/pages/03-context-and-scope.adoc`,
-  `docs/modules/architecture/pages/06-runtime-view.adoc`, and
-  `docs/modules/architecture/pages/07-deployment-view.adoc`;
-* implementation detail would require selecting any deferred item above;
-* a required mechanism needs another origin, request, retry, fallback,
-  credential, runtime context, asset, renderer, parser, threshold, timing
-  outcome, or weaker security/lifecycle rule; or
+* an accepted requirement or ADR contradicts this placement, or a stage,
+  failure, cleanup action, retained datum, or one of the 13 exact ports loses
+  its accepted owner;
+* the pre-step repository, ref, worktree, workflow, run, deployment,
+  protection, environment, default-branch, open-pull-request, or exact-SHA
+  read-back differs from the captured state;
+* the transition would change commit identity, use a force push, deletion,
+  synthetic commit, destructive local repair, prune, reset, or unprotected
+  active/default branch;
+* the target-stage `github-pages` environment read-back does not report
+  `can_admins_bypass: false`, or its deployment branch policies are not exactly
+  one custom `main` policy resolving only to the new M1 line;
+* M1 would use a branch other than resulting `main`, archived v1 would resume
+  development/release/publication, or another branch, tag, fork, workflow,
+  environment, publisher, origin, route, service, credential, preview, or
+  fallback could publish production;
+* #452's merge could deploy incomplete M1, or #460 could not prove guarded
+  reviewed-tree equivalence, merge-commit push verification, explicit exact-
+  commit dispatch, complete manifest, production-origin byte equality for
+  every artifact, legacy absence, exclusions, and archived overwrite denial;
+* implementation would silently select a deferred item above or require
+  another request, runtime context, parser, renderer, asset, threshold, timing
+  outcome, trust boundary, or weaker security, lifecycle, protection, or
+  provenance rule; or
 * an ADR renewal or stop condition is met.
 
-The exact conflicting authorities return to their owning issue. No gap is
-repaired in #463, and a newly discovered consequential choice is a blocker,
-not an implementation decision.
+A remote administrative failure permits only a captured-state no-op or exact
+inverse identity-preserving rename and policy restoration followed by read-
+back. Otherwise stop for human reconciliation. Branch/publication deviations
+reopen #446; runtime, build, provider, parser, renderer, limit, lifecycle, or
+failure deviations return to their owning requirement or ADR. A newly
+discovered consequential choice is a blocker, not an implementation decision.
 
 == Feasibility and authority
 
@@ -373,16 +523,19 @@ cache, retry, wait, second path, or fallback changes silently.
 xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains authoritative for
 the outer source boundary;
 xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002] for
-topology and placement;
+runtime topology and the Pages target;
 xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003] for
 the internal graph, exact ports, and exclusive ownership;
 xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004] for
 the conceptual static package;
 ADRs 0005 and 0006 for the two GitHub exchanges;
 xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007]
-for exact static assets and phase-aware worker lifecycle; and
+for exact static assets and phase-aware worker lifecycle;
 xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
-for UI-edge presentation. This documented deployment view adds no source
-mapping, executable schema, filename, route, Pages workflow, worker timing,
-transport/cancellation primitive, test technology, dependency, artifact, or
-product behavior.
+for UI-edge presentation; and
+xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009] for branch
+identity, archive/default authority, sole publication, administration, and the
+#452/#460 cutover split. This documented deployment view adds no source
+mapping, executable schema, filename, route implementation, workflow YAML,
+worker timing, transport/cancellation primitive, test technology, dependency,
+artifact, administration, deployment, or product behavior.

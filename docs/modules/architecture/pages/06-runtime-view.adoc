@@ -6,7 +6,9 @@ accepted M1 runtime flow. It links ADR 0002's execution placement and ADR
 admission, ADR 0007 static syntax and phase-aware lifecycle, and ADR 0008
 presentation. ADR 0004 supplies only the accepted conceptual `/code-city/`
 static package and separate same-origin ES-module worker; Vite development and
-preview servers are local tools, not runtime nodes.
+preview servers are local tools, not runtime nodes. ADR 0009 fixes the active
+M1 branch, sole new-main Pages publisher, and final app-over-docs placement
+without adding another runtime node or changing this flow.
 
 The matrices were accepted through
 https://github.com/FelixGeisler/code-city/issues/463[#463]. They add no product
@@ -65,6 +67,23 @@ service credential crosses any boundary.
 The UI/worker split is an execution and lifecycle boundary, not an
 operating-system-process guarantee, security sandbox, trust crossing, component
 count, package boundary, or source-dependency rule.
+
+== Publication placement and current state
+
+ADR 0009 accepts an identity-preserving transition from the active M1 `v2` line
+to default `main`, with the prior v1 `main` retained as locked `v1`. Only that
+new M1 `main` may publish Pages. The final application replaces the frozen
+legacy hosted documentation; it is not co-hosted with documentation and gains
+no second route, origin, publisher, or runtime context.
+
+This documentation does not claim that transition, workflow, or deployment has
+occurred. #464 owns the separate administrative branch/protection/environment
+read-back gate. #452 owns exact non-deploying build, CI, and first-party Pages
+workflow realization. #460 alone explicitly dispatches the final reviewed
+main-line artifact and proves the guarded merge commit, complete manifest, and
+production-origin bytes. Exact YAML, event and gate, action versions, artifact
+root, source map, emitted filenames, and test mechanism remain deferred to
+#452.
 
 == Runtime responsibilities
 
@@ -835,14 +854,22 @@ capacity, retry,
 restoration, or weaker failure/cleanup rule stops implementation and reopens
 #451.
 
+xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009] records
+the accepted branch/publication placement and the #464 administration,
+#452 non-deploying realization, and #460 explicit final-publication ownership.
+It changes no runtime responsibility, trust crossing, product-data path, or
+application context.
+
 The accepted cross-mechanism synthesis is complete in the matrices above.
-Concrete source/package mapping, executable message and port schemas, Pages
-source/action/workflow, application route and deployment mechanism, worker-
-creation timing, emitted filenames, general transport/cancellation primitives,
-and test technology remain deferred exactly as listed in
-xref:07-deployment-view.adoc#accepted-current-deferred[Deployment View].
-xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains authoritative
-for the outer source-dependency boundary, ADR 0003 for exact ports and
-ownership, ADR 0005 for resolution, ADR 0006 for selected-revision
+Concrete source/package mapping, executable message and port schemas, exact
+#452 workflow YAML/event/gate/action versions/artifact root, route realization,
+worker-creation timing, emitted filenames, general transport/cancellation
+primitives, and test technology remain deferred exactly as listed in
+xref:07-deployment-view.adoc#accepted-current-deferred[Deployment View]. Branch
+identity, sole-publisher placement, and app-over-docs disposition are accepted,
+not deferred. xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] remains
+authoritative for the outer source-dependency boundary, ADR 0003 for exact
+ports and ownership, ADR 0005 for resolution, ADR 0006 for selected-revision
 retrieval/admission, ADR 0007 for static syntax and phase-aware worker
-lifecycle, and ADR 0008 for UI-edge presentation.
+lifecycle, ADR 0008 for UI-edge presentation, and ADR 0009 for publication and
+cutover policy.

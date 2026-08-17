@@ -100,12 +100,20 @@ Update these commands when the v2 toolchain replaces the v1 toolchain.
 
 ## Git and pull requests
 
-The `v2` branch is the integration branch for the reimplementation.
+The active M1 integration branch is named `v2` before ADR 0009's accepted
+post-merge branch cutover and is the default `main` after that cutover. Before
+the rename, the existing v1 `main` is not an M1 base; afterward, the locked
+`v1` branch is archival and must not be used for development, release, pull-
+request integration, or Pages publication. No Developer handoff may occur
+between the ADR 0009 merge and completion of the separately evidenced branch
+administration gate.
 
-* Work on a short-lived branch created from an up-to-date `v2` branch.
+* Work on a short-lived branch created from an up-to-date active M1 integration
+  branch: `v2` before the cutover, `main` afterward.
 * Keep commits focused and use clear conventional commit messages.
 * Commit completed work, push the branch, and create or update a pull request
-  targeting `v2` automatically.
+  targeting the active M1 integration branch (`v2` before the cutover, `main`
+  afterward) automatically.
 * A pull request is not ready for review until all required checks have completed
   successfully. Monitor its checks, investigate failures, push fixes, and wait
   for the replacement checks before handing the pull request to the user.
@@ -113,5 +121,6 @@ The `v2` branch is the integration branch for the reimplementation.
   CI job is green and the Software Architect, Tester, and Requirements Engineer
   all return `PASS` for the same exact head. Never bypass repository protection
   or merge using a stale verdict.
-* Do not push directly to `v2` or rewrite shared history.
+* Do not push directly to the active M1 integration branch or rewrite shared
+  history.
 * Do not include unrelated, generated, local, or secret files in a commit.

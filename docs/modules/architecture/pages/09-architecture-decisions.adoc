@@ -65,3 +65,16 @@
   and stop rules. #452 remains renderer-free, #457 owns canonical construction
   and float-bound renewal, #458 owns all renderer realization, #459 integrates,
   #460 renews final hosted evidence, and #463/#464 own synthesis/readiness.
+* xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009: M1 main-line and GitHub Pages cutover]
+  is `Accepted`. https://github.com/FelixGeisler/code-city/issues/446[#446]
+  records the direct 2026-08-17 human branch and documentation decision and
+  accepts it under issue-body SHA-256
+  `1a4c1159dbfb15f03e2419ebf52124b697e22966a67de91ba8fe60ac0a36233d`.
+  ADR 0009 complements rather than supersedes ADR 0002: it fixes the
+  identity-preserving `v2`-to-`main` and v1-`main`-to-locked-`v1` transition,
+  sole new-main Pages authority, archival documentation disposition, and
+  app-over-docs cutover. It is a publication and repository-governance
+  decision, not a successor to ADR 0001's core-dependency boundary. #464 owns
+  the separately evidenced administration gate, #452 owns non-deploying exact
+  workflow realization, and #460 owns the guarded final deployment and exact-
+  origin evidence.
