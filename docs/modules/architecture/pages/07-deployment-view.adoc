@@ -67,9 +67,10 @@ YAML, action versions, emitted filenames, route realization, or test tools.
 
 At this documentation change's observed baseline, v1 still occupies default
 `main`, M1 occupies `v2`, no `v1` branch exists, and the target serves Antora
-output from the legacy `main`-only Documentation workflow. Those are dated
-pre-migration facts, not a lasting contract and not a claim that migration has
-already occurred.
+output from the legacy `main`-only Documentation workflow. The `github-pages`
+environment has one custom `main` policy, but its observed read-back reports
+`can_admins_bypass: true`. Those are dated pre-migration facts, not a lasting
+contract and not a claim that migration has already occurred.
 
 After this ADR's pull request merges into `v2`, the separately gated
 administration renames old v1 `main` to `v1`, renames M1 `v2` including that
@@ -80,9 +81,11 @@ new work and all current repository documentation use the new `main`.
 
 Only new `main` may publish `github-pages`. The old Documentation, Container,
 and Release workflow registrations are disabled before the rename and remain
-disabled; current CI remains enabled. The environment has exactly one custom
-branch policy named `main`, resolving only to the M1 line, and independently
-denies `v1`. Existing hosted documentation may remain frozen until #460, but
+disabled; current CI remains enabled. The environment read-back reports
+`can_admins_bypass: false` and exactly one custom deployment branch policy
+named `main`, resolving only to the M1 line. Administrators cannot bypass that
+policy, so the environment independently denies `v1`. Existing hosted
+documentation may remain frozen until #460, but
 it cannot be refreshed and is not a fallback. #460 replaces it with the M1
 application; no documentation route, redirect, composite artifact, second
 publisher, origin, environment, or preview path is accepted.
@@ -110,8 +113,10 @@ push and deletion.
 
 The protected old `main` is renamed to `v1` before protected `v2` is renamed to
 `main`; the former default remains protected during the interval. Protection
-on new `main` and the only-main Pages policy are proved before changing the
-default. Every remote operation is read back. Local names and upstreams are
+on new `main`, the `github-pages` environment read-back of
+`can_admins_bypass: false`, and its exact one-`main` deployment branch policy
+are proved before changing the default. Every remote operation is read back.
+Local names and upstreams are
 then reconciled without prune or reset, the stale `origin/v2` tracking ref is
 removed only after remote absence is proved, and all detached worktree HEADs
 must remain unchanged.
@@ -119,7 +124,10 @@ must remain unchanged.
 A sealed #464 administration packet records redacted before/after refs and
 SHAs, default branch, protections and app bindings, environment policy,
 workflow registrations and quiescence, runs and deployments, open-pull-request
-state, worktrees, and local reconciliation. Its digest is published in #464
+state, worktrees, and local reconciliation. Its final environment evidence
+includes the API read-back `can_admins_bypass: false` and the complete policy
+read-back showing exactly one custom `main` deployment branch policy resolving
+only to the new M1 line. Its digest is published in #464
 before the Requirements readiness attestation. No #464 readiness or later M1
 Developer handoff occurs until all state and evidence match ADR 0009. Failure
 uses only a proved no-op continuation or exact inverse identity-preserving
@@ -322,7 +330,9 @@ never during provider-capable processing.
   product-data trust crossings.
 * Only the resulting M1 `main` may publish production through the single first-
   party Pages path. The archived branch, tags, forks, delivery branches, and
-  retired workflows are independently denied by the environment policy.
+  retired workflows are independently denied by the environment policy, whose
+  required read-back is `can_admins_bypass: false` with exactly one custom
+  `main` deployment branch policy resolving only to the new M1 line.
 * The Pages deploy job has only the required repository-read, Pages-write, and
   OIDC permissions. It introduces no long-lived deployment secret, repository
   or provider credential, external host, preview publisher, or fallback.
@@ -447,8 +457,9 @@ legacy-absence, exclusion, and archived-overwrite proof
 |https://github.com/FelixGeisler/code-city/issues/464[#464]
 |The separately sealed post-#446 administration packet and readiness gate for
 exact refs and commit identities, protected/default new `main`, locked `v1`,
-enabled app-bound CI, disabled legacy workflows, only-main Pages policy,
-quiescence, zero open pull requests, preserved worktrees, and ordered no-prune
+enabled app-bound CI, disabled legacy workflows, only-main Pages policy with
+`can_admins_bypass: false`, quiescence, zero open pull requests, preserved
+worktrees, and ordered no-prune
 local reconciliation
 |===
 
@@ -465,6 +476,9 @@ Stop rather than assume, administer, configure, or deploy if:
 * the transition would change commit identity, use a force push, deletion,
   synthetic commit, destructive local repair, prune, reset, or unprotected
   active/default branch;
+* the target-stage `github-pages` environment read-back does not report
+  `can_admins_bypass: false`, or its deployment branch policies are not exactly
+  one custom `main` policy resolving only to the new M1 line;
 * M1 would use a branch other than resulting `main`, archived v1 would resume
   development/release/publication, or another branch, tag, fork, workflow,
   environment, publisher, origin, route, service, credential, preview, or

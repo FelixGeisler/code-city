@@ -56,8 +56,9 @@ inputs, not claims about the state after this ADR merges:
 * the legacy Documentation workflow publishes `build/site` from qualifying
   `main` pushes, and legacy Container and Release workflow registrations also
   remain enabled;
-* Pages uses GitHub Actions, the `github-pages` environment admits only a
-  custom `main` branch policy, and the target currently serves legacy Antora
+* Pages uses GitHub Actions; the `github-pages` environment admits only a
+  custom `main` branch policy, but its observed environment read-back reports
+  `can_admins_bypass: true`; the target currently serves legacy Antora
   documentation; and
 * the M1 line contains only the CI workflow, whose push filter still names
   `v2` until https://github.com/FelixGeisler/code-city/issues/452[#452]
@@ -102,9 +103,12 @@ remains conformance evidence for current repository documentation.
 === One production publisher and one final artifact
 
 After migration, only the new `main` may publish the `github-pages`
-production environment. No tag, delivery branch, archived branch, fork, or
-other workflow may publish the production Pages environment or a v1 package or
-release. The environment policy independently denies `v1` deployment.
+production environment. The environment must read back
+`can_admins_bypass: false` and exactly one custom deployment branch policy
+named `main` that resolves only to the new M1 line. No administrator, tag,
+delivery branch, archived branch, fork, or other workflow may bypass that
+policy to publish the production Pages environment or a v1 package or release.
+Together, these environment controls independently deny `v1` deployment.
 
 The legacy-only Documentation, Container, and Release workflow registrations
 are disabled and read back as disabled; the current-main CI workflow remains
@@ -190,8 +194,10 @@ A stale v1 context or an unbound check with the same name cannot satisfy that
 policy. The resulting `v1` protection has no obsolete required check or review
 gate, applies to administrators with no bypass, sets `lock_branch` true, and
 rejects force pushes and deletion. Its lock, not an obsolete check, preserves
-the archive. The `github-pages` environment has exactly one custom branch
-policy named `main`, resolving only to the new M1 line.
+the archive. The `github-pages` environment read-back reports
+`can_admins_bypass: false` and exactly one custom deployment branch policy
+named `main`, resolving only to the new M1 line. Both conditions are required;
+an administrator cannot bypass the branch policy.
 
 The authorized failure-safe order is:
 
@@ -209,9 +215,11 @@ The authorized failure-safe order is:
   bound `verify` for protected-main pull requests;
 . rename protected remote old `main` to `v1`, then protected remote `v2` to
   `main`, keeping the former default protected during the interval;
-. prove strict protection followed new `main`, replace and read back the Pages
-  policy as exactly one custom `main` policy if needed, and only then make new
-  `main` the default;
+. prove strict protection followed new `main`, set and read back the
+  `github-pages` environment as `can_admins_bypass: false`, replace and read
+  back its deployment branch policies as exactly one custom `main` policy if
+  needed, prove that policy resolves only to new M1 `main`, and only then make
+  new `main` the default;
 . replace and read back `v1` protection with the archive policy and reconfirm
   refs, tips, policies, workflow states, quiescence, and zero open pull
   requests; and
@@ -244,6 +252,9 @@ An immutable #464 administration packet receives `administration.md` and
 redacted JSON read-backs or hashes for the refs, default, protections,
 environment, workflows, runs, deployments, open pull requests, before/after
 SHAs, worktrees, app-bound checks, quiescence, and local reconciliation. The
+environment evidence includes its final API read-back with
+`can_admins_bypass: false` and the complete deployment-branch-policy read-back
+showing exactly one custom `main` policy resolving only to the new M1 line. The
 final https://github.com/FelixGeisler/code-city/issues/464[#464] body records
 that sealed packet's SHA-256. The Requirements App then publishes the exact-
 body consolidated readiness attestation, which #464's pull request must link.
@@ -319,9 +330,12 @@ would require or observe:
   proved equal as required;
 * a legacy workflow or archived ref that can refresh or overwrite production;
   or
-* a mismatch in observed state, workflow/deployment quiescence, app-bound
-  checks, refs, default branch, environment policy, or protection that cannot
-  be resolved by the authorized no-op or exact inverse rename.
+* a required target-stage `github-pages` environment read-back other than
+  `can_admins_bypass: false`, a deployment branch policy other than exactly
+  one custom `main` policy resolving only to the new M1 line, or another
+  mismatch in observed state, workflow/deployment quiescence, app-bound checks,
+  refs, default branch, environment policy, or protection that cannot be
+  resolved by the authorized no-op or exact inverse rename.
 
 Reopen the owning ADR instead for changes to runtime topology, build
 technology, provider access, parser, renderer, limits, lifecycle, or failure
