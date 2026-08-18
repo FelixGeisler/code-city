@@ -3,6 +3,7 @@ site:
   url: https://felixgeisler.github.io/code-city
   start_page: code-city::index.adoc
 content:
+  edit_url: false
   sources:
   - url: .
     branches: HEAD
@@ -11,6 +12,7 @@ ui:
   bundle:
     url: https://gitlab.com/antora/antora-ui-default/-/jobs/artifacts/HEAD/raw/build/ui-bundle.zip?job=bundle-stable
     snapshot: true
+  supplemental_files: ./docs/ui
 urls:
   html_extension_style: indexify
 output:

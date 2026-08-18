@@ -1,106 +1,28 @@
-= ADR 0001: Core/edge source-dependency boundary
+= ADR 0001: Core dependency boundary
 
 Status:: Accepted
 
 == Context
 
-The accepted M1 contracts support a stable boundary that lets deterministic
-policy remain independent of change-prone GitHub/repository I/O and renderer
-technology. The original proposal went further by defining application and
-domain layers, allowing specific dependencies between them, and classifying
-framework and storage concerns. Those choices are not needed for the minimum
-stable boundary and belong to later decisions.
+Product rules must remain independent from GitHub, browser, parser, renderer,
+and build tooling.
 
 == Decision
 
-There is one conceptual *core* and one collective *edge/adapters* side. These
-are responsibility boundaries, not packages, processes, deployment nodes, or
-a count of components.
+[source,text]
+----
+external mechanisms (edge) ─────► core
+core                       ──X──► edge
+----
 
-This ADR governs only source dependencies that cross that conceptual boundary:
+Edge code may depend on core policy and values. Core code must not import
+browser, network, Worker, Tree-sitter, WebGL, Vite, or another concrete edge
+mechanism.
 
-* `edge/adapters → core` is allowed: source at the edge may depend on core
-  source. This permission does not require every edge source to depend on core.
-* `core → edge/adapters` is forbidden.
-
-A source-dependency arrow means that source on the arrow's left may depend on
-source on its right. It does not depict or constrain runtime calls, control
-flow, or data flow.
-
-GitHub/repository I/O and renderer technology are edge concerns and remain
-outside the core. Renderer-neutral canonical policy is not renderer technology
-and may be assigned to the core by the later building-block decision.
-
-This ADR establishes no dependency rule inside the core or inside
-edge/adapters. It creates no application/domain split, no direct
-adapter-to-domain grant, and no framework or storage category, existence
-assumption, or placement rule.
-
-== Rationale
-
-This is the smallest stable boundary supported by the accepted M1 contracts.
-It keeps core source independent of GitHub/repository I/O and renderer
-technology while leaving topology and internal building-block and port choices
-to https://github.com/FelixGeisler/code-city/issues/446[#446] and
-https://github.com/FelixGeisler/code-city/issues/462[#462]. Narrowing ADR 0001
-in place removes accidental commitments from its proposed form without losing
-its identity and history.
-
-== Downside
-
-The rule is intentionally less prescriptive. Internal structure, ports,
-concrete source/package mapping, and enforcement remain to later accepted
-decisions, and adapters may need translation at the boundary.
+ADR 0003 refines the core into application and domain responsibilities. This
+ADR does not require a package, interface, class, or runtime boundary.
 
 == Consequences
 
-* Core source must not acquire a source dependency on GitHub/repository I/O,
-  renderer technology, or other source assigned to edge/adapters.
-* https://github.com/FelixGeisler/code-city/issues/446[#446] consumes this
-  conceptual boundary but still owns placement, target, process/system/trust
-  boundaries, runtime flow, cleanup ownership, and feasible enforcement
-  locations. It must not authorize a core-to-edge source dependency. This ADR
-  selects none of those choices.
-* https://github.com/FelixGeisler/code-city/issues/462[#462] owns internal core
-  and edge responsibilities, any application/domain split, all internal
-  dependency directions, conceptual ports and ownership, and whether a
-  narrower adapter-to-core rule is needed. It must keep GitHub/repository I/O
-  and renderer technology outside the core, may place renderer-neutral
-  canonical policy in the core, and must preserve the prohibition on
-  core-to-edge source dependencies. It must not treat this ADR as granting a
-  direct adapter-to-domain dependency.
-* After the accepted M0 mappings exist,
-  https://github.com/FelixGeisler/code-city/issues/452[#452] owns the concrete
-  source/package mapping and enforcement mechanism. Its evidence must accept
-  the governed edge-to-core direction and reject a representative core-to-edge
-  source dependency. It must not encode an internal core/edge,
-  application/domain, direct adapter-to-domain, framework, or storage rule
-  that this ADR does not establish. This ADR chooses no package layout, tool,
-  check implementation, or enforcement location.
-
-== Rejected alternatives
-
-* *Accept ADR 0001 unchanged.* Rejected because its application/domain split,
-  direct adapter-to-domain permission, and framework/storage classifications
-  would decide #462 or assume absent M1 concerns.
-* *Create a successor ADR.* Rejected because an in-place narrowing preserves
-  the same decision identity without duplicate history.
-* *Omit the boundary or allow core-to-edge source dependencies.* Rejected
-  because either would permit core policy to couple to the external mechanisms
-  this decision must isolate.
-
-== Authority
-
-The human delegation recorded in
-https://github.com/FelixGeisler/code-city/issues/444[#444] authorizes the
-Requirements Engineer to decide when one recommendation is clear,
-evidence-backed, deterministic, reversible through normal revision, and within
-accepted scope. For issue-body SHA-256
-`c8fcf2dcca1a4aea15135b442d73e3917726f66d7bb2ffd8ecac47fd1f2827f6`,
-https://github.com/FelixGeisler/code-city/issues/445[#445] records the clear
-Software Architect recommendation and the Requirements Engineer's delegated
-acceptance of this exact decision.
-
-This ADR is accepted through that recorded authority and is not pending a
-later generic human-acceptance gate. A semantic deviation requires
-requirements clarification before implementation or merge.
+Core behaviour can be tested without external systems. A new mechanism stays
+at the edge unless a later accepted decision changes this boundary.

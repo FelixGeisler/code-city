@@ -1,155 +1,33 @@
-= 8. Cross-cutting Concepts
+= 8. Crosscutting Concepts
 
-== Bounded untrusted selected-revision retrieval and admission
+This chapter is an index. Each concept is defined in one owning section.
 
-xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
-0006] consumes only ADR 0005's immutable canonical repository/full-commit
-tuple. Provider objects, metadata, paths, and bytes remain inert and untrusted:
-required JSON evidence must be own fields projected one primitive at a time;
-prototype-named additive fields are ignored; path-keyed state is prototype-free;
-and no provider locator, source, or repository-derived value is executed,
-logged, used as markup, or transferred to the UI.
+[cols="2,3",options="header"]
+|===
+|Concept |Owner
 
-Identity and transport spelling remain distinct. Segment-wise NFC canonical
-paths own collision, horizon, and unsigned-UTF-8 ordering semantics, while the
-validated raw path alone forms an independently percent-encoded
-immutable-commit raw URL. Required commit, root-tree, and in-horizon candidate blob IDs
-are normalized full 40-hex identities at their specified horizons. Raw bytes
-are decoded only after the exact Git blob SHA-1 agrees. That comparison detects
-inconsistent or transformed bytes; it is not collision resistance or a
-malicious-provider security warranty.
+|Trust crossings
+|xref:03-context-and-scope.adoc[Context and Scope]
 
-Every application reservoir is explicit and bounded: one capped REST
-transformation; at most `10,001` primitive projected inventory records; only
-RA-bounded unpublished modules; and, globally across attempts, one active
-retrieval/admission request plus one exact `4,194,317`-byte raw/hash workspace.
-RA-04+1 is counted without storage or digest, tree provider representations are
-gone before raw retrieval, and each raw/hash/decoded temporary is gone before
-the next request. Retrieval/admission is the sole creator of one complete
-ordered admitted-module set or one terminal result.
+|Dependency direction, data boundaries, and inert values
+|xref:05-building-block-view.adoc[Building Block View]
 
-Cancellation or replacement revokes publication eligibility immediately.
-Application-owned fetch, reader, response, provider-object, inventory,
-workspace, decoded, and unpublished-output references are settled and removed
-in ADR 0006's phase order before only the latest replacement may begin. The UI
-publication gate rejects every late outcome. This promises neither cleanup or
-replacement latency, secure erasure, garbage-collection timing, immediate
-network stop, worker isolation, nor an RA-10/RA-11 elapsed-time outcome.
+|Provider ingress and immutable retrieval
+|xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006]
 
-== Pinned static syntax and primitive projection
+|Deterministic source, metrics, and city rules
+|xref:requirements:source-and-metrics.adoc[Source and Metrics] and
+xref:requirements:city-and-failures.adoc[City and Failures]
 
-xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
-0007] confines exact `web-tree-sitter@0.26.12` and the three selected grammar
-WASMs from exact `@vscode/tree-sitter-wasm@0.3.1` to the worker-side parser
-adapter. The canonical suffix selects only JavaScript, TypeScript, or TSX;
-non-JSX JavaScript also rejects the closed visible-JSX node list. Complete
-iterative recovery validation is fact-free and precedes a separate iterative
-projection pass. A recovered tree is atomic `M1-MET-1`; grammar-valid failure
-inside the full accepted envelope is a conformance defect instead.
+|Current attempt, cancellation, resource lifetime, and atomic publication
+|xref:06-runtime-view.adoc[Runtime View]
 
-Only ADR 0007's cursor movement/getter subset is permitted. Queries, recursive
-JavaScript traversal, node convenience helpers, node text/stringification,
-old-tree reuse, callbacks, logging, and source-derived keys are prohibited.
-The adapter validates fields individually and emits only fresh primitive
-observations in arrays, `Map`, or equivalent prototype-safe structures. Core
-alone owns top level, unit ownership, arithmetic, canonical identities/order,
-and facts. Required UTF-16 endpoints are sorted, deduplicated, range- and
-surrogate-validated, then converted to UTF-8 offsets in one scalar scan without
-a whole-file lookup table.
+|Static syntax boundary
+|xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007]
 
-Runtime and grammar URLs are fixed Vite imports, same-origin, and beneath
-`/code-city/`; repository data cannot construct or select them. Parser loading
-adds no filesystem, configuration, module resolution, source import/execution,
-DOM, storage, telemetry, logging, provider request, general WASI host, thread,
-nested worker, plugin, or fallback capability. The inert
-xref:adr/0007-static-syntax-evidence-appendix.adoc[evidence appendix] records
-the complete 217-row WASM inventory without granting API permission.
+|Numeric representation and WebGL lifecycle
+|xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
 
-== Provider/static lifecycle separation
-
-Every generation is provider-capable until all ADR 0005/0006 operations,
-locks, gates, workspaces, provider objects, and references have settled and
-been released. Only then may the worker post
-`PROVIDER_DRAINED_STATIC_ENTERED`; every parser runtime, asset, or parser
-operation follows that post. Before matching bridge receipt, cancellation
-waits for cooperative provider settlement and `ATTEMPT_DRAINED` before
-termination and replacement. After matching receipt, the main bridge hard-
-terminates and clears its sole worker before replacement, including the valid
-race with zero static operations.
-
-Ordinary terminal paths explicitly delete parser handles, release static/core
-references, post one business payload and `ATTEMPT_DRAINED`, then terminate.
-Hard static termination may bypass `finally` and deletion and instead releases
-the realm without timing, delete-spy, secure-erasure, garbage-collection, or
-physical-teardown claims. Provider work never relies on hard termination.
-Observable no-overlap means at most one usable worker handle, parser set,
-provider slot, and raw/hash workspace. SP-01 through SP-04 are unnecessary; the
-full RA-07/RA-08/RA-09 envelope reaches analysis and elapsed static time alone
-creates no outcome.
-
-== Source-free fixed presentation
-
-xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
-confines browser-native WebGL2 and GLSL ES 3.00 to the UI-main presentation
-edge adapter. The worker constructor remains the authoritative owner of the
-complete renderer-neutral canonical scene. The adapter receives no source,
-admitted module, parser/analyzer object, metric intermediate, partial scene, or
-result identity.
-
-Before any WebGL resource, defensive projection requires own data properties,
-expected primitive and bounded collection values, complete unique `1..4,000`
-buildings, exact canonical geometry/palette/order/bounds/view, and prototype-
-safe identity handling. It ignores additive fields without evaluating them for
-diagnostics and never repairs, reorders, clamps, truncates, reconstructs, or
-reclassifies. A model breach or validation throw creates no WebGL and remains
-`M1-CITY-1`; the bridge transports it unchanged and the UI coordinator alone
-commits state. `M1-PRES-1` starts only after the valid complete model passes.
-Identity and source-derived values never become normal-object keys, DOM or
-WebGL names/text/attributes/labels, shader text/defines, locators, diagnostics,
-or logs.
-
-The fixed representation has one eight-corner/36-index prism, one interleaved
-28-byte-stride instance buffer, one program, one VAO, three buffers, two exact
-trusted shader literals during setup, and one instanced draw. One detached
-canvas requests only WebGL2 with fixed attributes. Effective DPR is one; host,
-backing, and read drawing-buffer dimensions must be exactly equal positive
-integers before draw/publication. Each draw restores the closed state, API,
-viewport, matrix, clear, and one-call sequence. No extension, renderer package,
-external asset, dynamic shader, diagnostic/log API, readback, texture,
-framebuffer, fallback, retry, restoration, or second rendering object set is
-permitted.
-
-The target-relative orthographic matrix uses ADR 0008's exact camera/clipping
-mechanism. The complete accepted envelope proves each uploaded integer or half-
-integer endpoint exactly representable in `float32`; this is not a lower
-product cap. Canonical scene and camera-tolerance acceptance remains semantic,
-not pixel or screenshot equality.
-
-== Atomic presentation lifecycle and disposal
-
-The candidate stays detached through loss-listener registration, context and
-fixed draw, post-operation eligibility, successful construction and attachment
-of one generation-guarded `ResizeObserver`, and the mandatory final no-yield
-host-size reread and any verified redraw. Only then may the UI coordinator
-synchronously commit canvas, identity, and `Success`. The observer cannot
-publish. Synchronous WebGL work need not be preemptible, but post-operation
-generation checks prevent stale publication; timers, animation frames,
-microtask yields, retries, debounces, and network work are absent.
-
-A changed valid host size reuses all GPU resources, rereads and verifies
-host/backing/drawing-buffer equality, recomputes only aspect projection and
-viewport, restores state, and draws once. Unchanged size does not draw. The
-once/passive loss listener does not prevent default, and no restoration path
-exists. Current context loss or required resize failure synchronously enters
-`Presentation failed` / `M1-PRES-1`, retains current tuple and draft, removes
-city/canvas, and remains until resubmit or reload. A stale callback only
-disposes locally.
-
-Failure, replacement, cancellation, reload, loss, and resize failure disconnect
-observation, remove loss listener/canvas, delete every live shader, program,
-buffer, and VAO once, and clear typed data/references. A context already lost
-adds no driver-release claim. Cleanup makes no latency, secure-erasure,
-garbage-collection, physical-browser, or process-teardown promise. CC-09 and
-PR-01 are unnecessary: elapsed construction or presentation time alone leaves
-the attempt `Loading` without a completion, startup, frame-time, throughput,
-latency, or preemption promise.
+|Production artifact and browser policy
+|xref:07-deployment-view.adoc[Deployment View]
+|===

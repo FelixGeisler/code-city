@@ -1,80 +1,43 @@
 = 9. Architecture Decisions
 
-== Accepted decisions
+An ADR is used only when a decision is important, durable, and difficult to
+infer from the architecture or source. Smaller choices stay with the relevant
+page, code, or test.
 
-* xref:adr/0001-core-dependency-boundary.adoc[ADR 0001: Core/edge source-dependency boundary]
-  is `Accepted`. https://github.com/FelixGeisler/code-city/issues/445[#445]
-  records the Requirements Engineer's acceptance under the human delegation
-  recorded in https://github.com/FelixGeisler/code-city/issues/444[#444].
-* xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002: Browser-only M1 runtime and GitHub Pages deployment topology]
-  is `Accepted`. https://github.com/FelixGeisler/code-city/issues/446[#446]
-  records the clear Software Architect recommendation and the Requirements
-  Engineer's acceptance under the human delegation recorded in
-  https://github.com/FelixGeisler/code-city/issues/444[#444].
-* xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003: M1 core strata, building blocks, and conceptual ports]
-  is `Accepted`. https://github.com/FelixGeisler/code-city/issues/462[#462]
-  records the clear Software Architect recommendation and the Requirements
-  Engineer's acceptance under the human delegation recorded in
-  https://github.com/FelixGeisler/code-city/issues/444[#444].
-* xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004: Framework-free TypeScript shell built with Vite]
-  is `Accepted`. https://github.com/FelixGeisler/code-city/issues/447[#447]
-  records the clear Software Architect recommendation and the Requirements
-  Engineer's acceptance under the human delegation recorded in #444. This is
-  the accepted documented decision; #452 owns initial implementation, #459
-  successful integration, and #460 renewed final-head production evidence.
-* xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR 0005: Anonymous GitHub default-branch-tip resolution via REST]
-  is `Accepted`. https://github.com/FelixGeisler/code-city/issues/448[#448]
-  records the clear Software Architect recommendation, calibrated cap evidence,
-  and Requirements Engineer acceptance under the human instruction and
-  delegation recorded in #444. The decision needs no later generic human
-  acceptance; #453 owns implementation, #459 packaged-path evidence, and #460
-  renewed final-head hosted evidence.
-* xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006: Bounded selected-revision retrieval via GitHub tree and raw content]
-  is `Accepted`. https://github.com/FelixGeisler/code-city/issues/449[#449]
-  records the clear Software Architect recommendation, incorporated Security
-  Reviewer controls, and Requirements Engineer acceptance under #444's human
-  delegation for accepted issue-body SHA-256
-  `94498dc88433cbada4fd71223374c66c8e6ae7ba69c83a11045f199989a987dd`.
-  The decision needs no later generic human-acceptance gate; #454 owns focused
-  mechanism evidence, #459 packaged-path evidence, #460 final hosted renewal,
-  and #463/#464 synthesis and readiness evidence.
-* xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007: Static syntax with pinned Tree-sitter WebAssembly grammars]
-  is `Accepted`. https://github.com/FelixGeisler/code-city/issues/450[#450]
-  records the clear Software Architect recommendation, incorporated Security
-  Reviewer constraints, and Requirements Engineer acceptance under #444's
-  human delegation for accepted issue-body SHA-256
-  `78a0d1949cb8d6a254556b21c982830e17ccf3ce83af5ec99bc26a1eae570f19`.
-  The decision needs no later generic human-acceptance gate. It narrowly amends
-  ADR 0003's bridge payload and parser cleanup while remaining compatible with
-  ADRs 0005/0006. #455 owns parser/SLOC/unit realization, #456 complexity and
-  the combined full-envelope rerun, #460 final renewal and integrated
-  lifecycle evidence, and #463/#464 synthesis and readiness evidence. The
-  xref:adr/0007-static-syntax-evidence-appendix.adoc[inert appendix] records the
-  canonical WASM inventory without granting parser API permission.
-* xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008: Browser-native WebGL2 instanced city presentation]
-  is `Accepted`. https://github.com/FelixGeisler/code-city/issues/451[#451]
-  records the clear Software Architect recommendation, incorporated Security
-  Reviewer constraints, and Requirements Engineer acceptance under #444's
-  human delegation for accepted issue-body SHA-256
-  `617c8eb9ff5671ca399eb3ed4f0656e76feb06c211fe880bdb399011826d3126`.
-  The decision needs no later generic human-acceptance gate. It keeps city
-  construction renderer-neutral, confines fixed raw WebGL2 to the UI-main
-  presentation edge, resolves CC-09/PR-01 as unnecessary, and fixes source-
-  free projection, failure ownership, resources, shaders, context, API/state,
-  camera/float proof, atomic staging, resize, context loss, cleanup, evidence,
-  and stop rules. #452 remains renderer-free, #457 owns canonical construction
-  and float-bound renewal, #458 owns all renderer realization, #459 integrates,
-  #460 renews final hosted evidence, and #463/#464 own synthesis/readiness.
-* xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009: M1 main-line and GitHub Pages cutover]
-  is `Accepted`. https://github.com/FelixGeisler/code-city/issues/446[#446]
-  records the direct 2026-08-17 human branch and documentation decision and
-  accepts it under issue-body SHA-256
-  `1a4c1159dbfb15f03e2419ebf52124b697e22966a67de91ba8fe60ac0a36233d`.
-  ADR 0009 complements rather than supersedes ADR 0002: it fixes the
-  identity-preserving `v2`-to-`main` and v1-`main`-to-locked-`v1` transition,
-  sole new-main Pages authority, archival documentation disposition, and
-  app-over-docs cutover. It is a publication and repository-governance
-  decision, not a successor to ADR 0001's core-dependency boundary. #464 owns
-  the separately evidenced administration gate, #452 owns non-deploying exact
-  workflow realization, and #460 owns the guarded final deployment and exact-
-  origin evidence.
+[cols="2,3,3",options="header"]
+|===
+|Record |Decision |Why it matters
+
+|xref:adr/0001-core-dependency-boundary.adoc[ADR 0001]
+|Core rules are independent from external mechanisms
+|Keeps product policy testable and replaceable
+
+|xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
+|Browser-only runtime on GitHub Pages
+|Avoids credentials, backend operation, and persistence
+
+|xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
+|Explicit core responsibilities and ports
+|Prevents accidental ownership and dependency drift
+
+|xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
+|Framework-free TypeScript shell built with Vite
+|Keeps the application surface small
+
+|xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR 0005] and
+xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006]
+|Direct anonymous GitHub resolution and retrieval
+|Provides one immutable input without a backend
+
+|xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007]
+|Pinned Tree-sitter WebAssembly grammars
+|Provides deterministic static syntax without executing source
+
+|xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
+|Browser-native WebGL2 presentation
+|Meets the fixed rendering contract without a renderer package
+
+|xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009]
+|M1 uses `main`; v1 is archival; only `main` publishes
+|Keeps one integration line and one production publisher
+|===

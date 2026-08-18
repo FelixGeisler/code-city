@@ -1,6 +1,0 @@
-.Comparison
-* xref:index.adoc[Overview]
-* xref:01-comparison-method.adoc[Comparison Method]
-* xref:02-version-1-baseline.adoc[Version 1 Baseline]
-* xref:03-version-2-measurements.adoc[Version 2 Measurements]
-* xref:04-results-and-conclusions.adoc[Results and Conclusions]

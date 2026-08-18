@@ -1,1 +1,43 @@
 = 11. Risks and Technical Debt
+
+[cols="2,4,3",options="header"]
+|===
+|Risk |Consequence |Response or stop trigger
+
+|GitHub retrieval scale and drift
+|Thousands of anonymous raw requests may be slow, throttled, or affected by
+CORS, API, and tree-contract changes
+|Run production-origin capacity and release smoke tests. Reopen ADR 0005 or
+0006 if the fixed path is no longer dependable; do not add a silent fallback
+
+|Full-envelope browser capacity
+|The full published source envelope plus JavaScript, parser, and WASM
+representations may exceed an assumed browser capacity
+|Prove dense, deep, maximum-file, aggregate, repeated-attempt, and cancellation
+fixtures. Failure reopens the envelope or processing lifecycle
+
+|Lifecycle races
+|Cancellation, replacement, worker failure, resize, or context loss could
+publish stale output or leak an owned resource
+|Exercise every asynchronous boundary and stop delivery on overlap, stale
+publication, or non-idempotent cleanup
+
+|Parser and grammar drift
+|A dependency or grammar change can alter accepted syntax and metric facts
+|Pin and verify runtime, grammar assets, ABI, provenance, and representative
+facts; renew before accepting a change
+
+|WebGL and numeric drift
+|A changed metric, layout, envelope, or representation can invalidate clipping
+or exact `float32` coordinates
+|Renew ADR 0008's depth and representation proof with full-envelope scenes
+
+|Production artifact drift
+|A rebuild, stale asset, mutable dependency, or permissive browser policy can
+make deployed bytes differ from reviewed bytes
+|Build once, deploy the verified artifact, check its manifest and browser
+policy, and compare production bytes
+|===
+
+No architecture-specific technical debt is currently accepted. Temporary work
+status belongs in the relevant GitHub issue, not in this chapter.

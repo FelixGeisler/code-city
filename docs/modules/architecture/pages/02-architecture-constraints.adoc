@@ -1,239 +1,27 @@
 = 2. Architecture Constraints
 
-The following set is closed for this baseline. Each constraint links to its
-normative requirement instead of copying detailed grammar, matrices, formulas,
-precedence tables, or numerical thresholds.
-
-[cols="5,6,4",options="header"]
+[cols="1,3",options="header"]
 |===
-|Accepted constraint |Normative source |Evidence owner
+|Constraint |Consequence
 
-|One canonical public-GitHub URL is the sole user input. Each syntactically
-accepted current attempt selects and identifies one immutable selected
-revision at the GitHub-designated default-branch tip.
-|https://github.com/FelixGeisler/code-city/issues/441[#441]:
-xref:requirements:04-functional-requirements.adoc#canonical-url[Canonical URL
-input] and
-xref:requirements:04-functional-requirements.adoc#immutable-revision[Immutable
-revision selection and identity].
-|https://github.com/FelixGeisler/code-city/issues/453[#453] and
-https://github.com/FelixGeisler/code-city/issues/459[#459].
+|Browser only
+|UI and presentation run in the main context; processing uses at most one worker.
 
-|Operation is anonymous. User and service credentials are prohibited, and
-anonymously unavailable conditions preserve the accepted privacy behavior.
-|https://github.com/FelixGeisler/code-city/issues/441[#441]:
-xref:requirements:04-functional-requirements.adoc#anonymous-access[Anonymous
-public access] and
-xref:requirements:04-functional-requirements.adoc#failure-outcomes[Required
-failure categories].
-|https://github.com/FelixGeisler/code-city/issues/453[#453] and
-https://github.com/FelixGeisler/code-city/issues/460[#460].
+|Public GitHub only
+|Repository access is direct and anonymous. There is no proxy or credential.
 
-|User values, GitHub values, repository metadata, paths, entry content, and
-source remain untrusted data. Repository data is never executed, evaluated,
-imported, or dynamically loaded.
-|https://github.com/FelixGeisler/code-city/issues/442[#442]:
-xref:requirements:06-source-admission-and-limits.adoc#untrusted-source[M1-ADM-0];
-https://github.com/FelixGeisler/code-city/issues/443[#443]:
-xref:requirements:08-fixed-metric-semantics.adoc#metric-input[Input boundary];
-and https://github.com/FelixGeisler/code-city/issues/444[#444]:
-xref:requirements:10-fixed-city-layout-and-presentation.adoc#canonical-scene[Canonical
-scene and exclusions].
-|https://github.com/FelixGeisler/code-city/issues/454[#454],
-https://github.com/FelixGeisler/code-city/issues/455[#455],
-https://github.com/FelixGeisler/code-city/issues/458[#458], and
-https://github.com/FelixGeisler/code-city/issues/460[#460].
+|Static hosting
+|GitHub Pages serves one application artifact below `/code-city/`.
 
-|The immutable selected revision is retrieved only through ADR 0006's bounded
-commit-object, recursive-root-tree, and sequential raw-content path. Retrieval
-and admission alone create one complete ordered admitted-module set; no second
-path, retry, wait, credential, backend, or fallback exists. Globally, at most
-one retrieval/admission request and one exact raw/hash workspace exist at a
-time.
-|xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR 0006]
-and
-xref:requirements:06-source-admission-and-limits.adoc#selected-revision-completeness[Selected-revision
-completeness boundaries].
-|https://github.com/FelixGeisler/code-city/issues/454[#454],
-https://github.com/FelixGeisler/code-city/issues/459[#459], and
-https://github.com/FelixGeisler/code-city/issues/460[#460].
+|Session only
+|Reload clears product state. There is no database or browser persistence.
 
-|The accepted admission and ordering rules and RA-01 through RA-09, canonical
-metric facts and metric failure, and city, scene, presentation, all CC/PR
-dispositions, and post-`Success` presentation-failure behavior are exact and
-non-configurable.
-|https://github.com/FelixGeisler/code-city/issues/442[#442]:
-xref:requirements:06-source-admission-and-limits.adoc#admission-composition[M1-ADM-5],
-xref:requirements:06-source-admission-and-limits.adoc#limit-rule[M1-LIM-0], and
-xref:requirements:06-source-admission-and-limits.adoc#outcome-precedence[M1-OUT-2];
-https://github.com/FelixGeisler/code-city/issues/443[#443]:
-xref:requirements:08-fixed-metric-semantics.adoc#canonical-facts[Canonical
-facts] and
-xref:requirements:08-fixed-metric-semantics.adoc#metric-failure[Atomic metric
-failure]; https://github.com/FelixGeisler/code-city/issues/444[#444]:
-xref:requirements:10-fixed-city-layout-and-presentation.adoc#canonical-scene[Canonical
-scene],
-xref:requirements:10-fixed-city-layout-and-presentation.adoc#city-limit-dispositions[CC
-dispositions], and
-xref:requirements:10-fixed-city-layout-and-presentation.adoc#city-failure[stage
-failure].
-|https://github.com/FelixGeisler/code-city/issues/454[#454] through
-https://github.com/FelixGeisler/code-city/issues/460[#460].
+|Independent core
+|Core rules depend on no browser, GitHub, Worker, parser, renderer, or build API.
 
-|Static syntax uses only ADR 0007's exact pinned runtime and three grammar
-assets, complete iterative validation before primitive projection, permitted
-cursor-only API, fixed same-origin `/code-city/` locators, and phase-aware
-worker lifecycle. SP-01 through SP-04 are unnecessary; no lower processing
-limit or static-duration outcome exists.
-|xref:requirements:08-fixed-metric-semantics.adoc#syntax-families[Closed
-pinned-grammar families],
-xref:requirements:06-source-admission-and-limits.adoc#deferred-limits[static-processing
-dispositions], and
-xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007].
-|https://github.com/FelixGeisler/code-city/issues/455[#455],
-https://github.com/FelixGeisler/code-city/issues/456[#456], and
-https://github.com/FelixGeisler/code-city/issues/460[#460].
+|Fixed result
+|Users cannot configure revision, metrics, layout, palette, or limits.
 
-|Presentation uses only ADR 0008's browser-native WebGL2 UI-edge adapter. The
-worker and canonical scene stay renderer-neutral; defensive handoff validation
-precedes all WebGL; resources, shaders, context, drawing-buffer equality,
-API/state, camera, draw, observer-before-publication, resize, context loss,
-post-`Success` failure, and cleanup are fixed. No renderer package, source-
-derived active value, extension, fallback, restoration, retry, or private lower
-capacity exists. CC-09 and PR-01 are unnecessary.
-|xref:requirements:10-fixed-city-layout-and-presentation.adoc#presentation-boundary[Construction
-and source-free presentation boundary],
-xref:requirements:10-fixed-city-layout-and-presentation.adoc#post-success-presentation-failure[Published
-presentation lifecycle], and
-xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008].
-|Renderer-neutral construction and float-bound renewal in
-https://github.com/FelixGeisler/code-city/issues/457[#457], focused renderer
-evidence in https://github.com/FelixGeisler/code-city/issues/458[#458],
-integration in https://github.com/FelixGeisler/code-city/issues/459[#459], and
-final hosted renewal in https://github.com/FelixGeisler/code-city/issues/460[#460].
-
-|Submission, replacement, cancellation, failure, success, identity retention,
-and complete-city publication obey the current-attempt invariant: no stale,
-partial, or late result may be published.
-|https://github.com/FelixGeisler/code-city/issues/441[#441]:
-xref:requirements:04-functional-requirements.adoc#states[M1-STATE-1 through
-M1-STATE-5]; https://github.com/FelixGeisler/code-city/issues/442[#442]:
-xref:requirements:06-source-admission-and-limits.adoc#failure-invariants[M1-OUT-3];
-https://github.com/FelixGeisler/code-city/issues/443[#443]:
-xref:requirements:08-fixed-metric-semantics.adoc#metric-failure[Atomic metric
-failure]; and https://github.com/FelixGeisler/code-city/issues/444[#444]:
-xref:requirements:10-fixed-city-layout-and-presentation.adoc#city-failure[Atomic
-construction and presentation failure].
-|https://github.com/FelixGeisler/code-city/issues/459[#459] and
-https://github.com/FelixGeisler/code-city/issues/460[#460].
-
-|Product state is current-session only and reload resets it. M1 creates no
-persisted product or history record; repository payloads and derived
-intermediates are not persisted product records.
-|https://github.com/FelixGeisler/code-city/issues/441[#441]:
-xref:requirements:04-functional-requirements.adoc#states[Observable states and
-transitions] and
-xref:requirements:04-functional-requirements.adoc#_m1_ex_1_excluded_controls_and_retained_data[M1-EX-1];
-xref:requirements:01-product-scope.adoc#non-goals[Non-goals].
-|https://github.com/FelixGeisler/code-city/issues/459[#459] and
-https://github.com/FelixGeisler/code-city/issues/460[#460].
-
-|The active M1 line is `v2` until the accepted post-ADR administrative
-cutover, then default `main`; the former v1 `main` becomes locked archival
-`v1`. Only the resulting M1 `main` may publish Pages, and #460 replaces the
-legacy hosted documentation with the application rather than co-hosting it.
-|https://github.com/FelixGeisler/code-city/issues/446[#446] and
-xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009].
-|The separately sealed administration gate in
-https://github.com/FelixGeisler/code-city/issues/464[#464], exact non-deploying
-workflow realization in https://github.com/FelixGeisler/code-city/issues/452[#452],
-and guarded final deployment and production-origin proof in
-https://github.com/FelixGeisler/code-city/issues/460[#460].
-
-|M1 has no authentication or other input, configuration, exploration, history,
-persistence, export, compatibility promise, or speculative extension point.
-|xref:requirements:01-product-scope.adoc#non-goals[Non-goals] and
-https://github.com/FelixGeisler/code-city/issues/441[#441]
-xref:requirements:04-functional-requirements.adoc#_m1_ex_1_excluded_controls_and_retained_data[M1-EX-1].
-|https://github.com/FelixGeisler/code-city/issues/459[#459] and
-https://github.com/FelixGeisler/code-city/issues/460[#460].
+|One publisher
+|Only protected `main` may publish the production application.
 |===
-
-xref:adr/0001-core-dependency-boundary.adoc[ADR 0001] is the accepted
-source-dependency constraint.
-xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002]
-is the accepted runtime and deployment constraint: the exact production target
-is `https://felixgeisler.github.io/code-city/` at origin
-`https://felixgeisler.github.io`; Code City runs in one browser
-UI/presentation main context and at most one same-origin dedicated processing worker,
-with direct anonymous worker-to-Public-GitHub communication and no backend,
-credential, or persistent product state. ADR 0002 also fixes topology-level
-enforcement and cleanup ownership without changing ADR 0001.
-
-xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003]
-is the accepted internal core-strata, minimum-block, conceptual-port, bridge,
-and exclusive-ownership constraint.
-
-xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004]
-is the accepted shell/build constraint: future framework-free TypeScript
-source is packaged by exact-pinned Vite as a `/code-city/` static entry with a
-separate, non-inline, same-origin ES-module worker, while Vite, UI-framework,
-and concrete DOM/Worker mechanisms remain outside application and domain
-core. This is an accepted documented decision, not current implementation.
-https://github.com/FelixGeisler/code-city/issues/452[#452] owns the initial
-package and evidence, https://github.com/FelixGeisler/code-city/issues/459[#459]
-owns successful integration, and
-https://github.com/FelixGeisler/code-city/issues/460[#460] owns renewed
-final-head production evidence.
-
-xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
-0005] is the accepted anonymous revision-resolution constraint. Native worker
-Fetch makes exactly the bounded sequential GitHub metadata and omitted-`sha`
-one-item commit-list requests, permits only case canonicalization, projects the
-full lowercase 40-hex identity, and applies the fixed privacy, status, quota,
-cancellation, and application-controlled cleanup policy. It retrieves no
-source. This is an accepted documented decision, not current implementation;
-https://github.com/FelixGeisler/code-city/issues/453[#453] owns its realization.
-
-xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
-0006] is the accepted immutable selected-revision retrieval and sole-admission
-constraint. Native worker Fetch obtains the selected commit object, its exact
-recursive root tree, and at most one sequential immutable-commit raw response
-per in-horizon candidate; bounded own-field projection, exact Git blob identity,
-and #442's canonical horizons govern one complete set or terminal result. Its
-global no-overlap, cleanup, replacement-coalescing, stop, and no-timing-promise
-rules are mandatory. #454 owns focused evidence, #459 packaged-path evidence,
-and #460 hosted renewal.
-
-xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
-0007] is the accepted static-syntax and phase-lifecycle constraint. Its
-provider-drained barrier precedes every runtime, grammar, parse, and traversal
-operation; pre-barrier cancellation waits for provider settlement and
-`ATTEMPT_DRAINED`, while matching barrier receipt permits immediate hard
-termination before zero or during active static operations. Ordinary terminal
-paths delete parser handles before `ATTEMPT_DRAINED`. At most one usable worker,
-parser set, provider slot, and raw/hash workspace overlap observably.
-
-xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
-is the accepted visualization and UI-presentation lifecycle constraint. The
-presentation adapter alone may use its exact browser-native WebGL2 surface and
-fixed trusted shaders; the UI coordinator alone publishes or commits visible
-failure. #452's walking shell remains renderer-free, #457 construction remains
-renderer-neutral, and #458 owns every renderer declaration and focused check.
-
-xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009] is the
-accepted branch and publication constraint. The current M1 `v2` history becomes
-the sole active/default `main`, current v1 `main` becomes locked archival `v1`,
-only new `main` may publish, and #460 replaces rather than co-hosts the legacy
-Pages documentation. This documentation records the accepted target; it
-neither performs administration nor creates executable configuration. #464
-owns the branch/protection/environment
-migration evidence; #452 owns exact non-deploying workflow realization; and
-#460 owns the explicit final publication and production-origin proof.
-
-Concrete source mapping, executable message and port schemas, exact #452
-workflow YAML, event and gate, action versions, artifact root, emitted
-filenames, and test technology stay with their owners. Branch identity, sole-
-publisher placement, documentation disposition, static syntax, SP-01 through
-SP-04, selected-revision retrieval, RA-10/RA-11, visualization technology, and
-CC-09/PR-01 are no longer deferred.

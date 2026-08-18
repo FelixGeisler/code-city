@@ -1,337 +1,92 @@
 = 5. Building Block View
 
-This view documents only the minimum logical responsibilities and conceptual
-collaborations accepted in
-xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003].
-They fit the source strategy in xref:04-solution-strategy.adoc[Solution
-Strategy] and the placement in
-xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002].
-They are exclusive responsibility boundaries, not package or component counts,
-and do not prescribe interfaces or schemas. The GitHub resolution adapter is
-constrained by
-xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
-0005], and the GitHub retrieval adapter and retrieval/admission collaboration
-are constrained by
-xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
-0006]. The parser adapter and worker-generation lifecycle are constrained by
-xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
-0007]. The presentation adapter and its lifecycle are constrained by
-xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008].
-The decisions are documented but not yet implemented.
+image::building-blocks.svg[Main-context and worker building blocks]
 
-== Minimum logical blocks
-
-[cols="3,4,8",options="header"]
+[cols="2,1,4",options="header"]
 |===
-|Block |Stratum and placement |Exclusive responsibility
+|Block |Location |Responsibility
 
-|UI attempt coordinator
-|Application, UI main
-|Uses the domain validation policy; owns the draft, current attempt,
-observable state, identity retention, replacement and cancellation precedence,
-sole publication gate, and session reset.
+|UI attempt coordinator |Main application |Validate the submitted URL shape;
+own the current attempt and all visible publication
 
-|Worker pipeline coordinator
-|Application, worker
-|Owns the resolution → admission → metrics → city sequence, stage termination,
-downstream suppression, feasible cancellation coordination, and release of
-core transients.
+|Worker bridge |Main and worker edge |Own the sole concrete worker handle;
+validate closed, generation-tagged commands, outcomes, and lifecycle messages;
+reject stale messages
 
-|Revision resolution
-|Application plus domain identity policy, worker
-|Produces the canonical repository and one immutable revision and owns
-resolution classification. It performs no source retrieval.
+|Worker pipeline coordinator |Worker application |Sequence capabilities and
+suppress downstream work after failure or cancellation
 
-|Retrieval/admission
-|Application plus domain admission policy, worker
-|Is the sole owner of `M1-ADM`/RA classification and admitted-module creation
-and order. It produces one complete admitted set or a failure.
+|Revision selection |Worker application |Ask the GitHub gateway for the
+immutable head commit of the repository's default branch
 
-|Static metrics
-|Application plus domain metric policy, worker
-|Consumes only admitted modules and produces complete canonical metric facts
-or `M1-MET-1`.
+|GitHub gateway |Worker edge |Construct and perform fixed-origin anonymous
+requests; return bounded primitive evidence
 
-|City construction
-|Pure domain, worker
-|Transforms complete metric facts into one complete canonical scene or
-`M1-CITY-1`. It has no acquisition, analyzer, parser, bridge, or renderer
-dependency.
+|Source retrieval |Worker application |Coordinate immutable tree and blob
+retrieval, verify identities, and return canonically ordered source evidence
 
-|UI surface adapter
-|Edge, UI main
-|Adapts user actions and displays state and status without owning business
-state.
+|Admission |Worker domain |Normalise paths and content, select modules, and own
+the published Code City envelope and its limit result
 
-|Presentation adapter
-|Edge, UI main
-|Realizes ADR 0008 in https://github.com/FelixGeisler/code-city/issues/458[#458]:
-defensively validates and source-freely projects one complete scene; alone owns
-all browser-native WebGL2 types, trusted shaders, canvas/context, drawing-
-buffer checks, program/VAO/buffers, API/state, camera matrix, one instanced
-draw, observer, resize/loss listeners, `M1-PRES-1` detection, and idempotent
-presentation cleanup. It treats identities as inert and owns no visible state.
+|Parser adapter |Worker edge |Validate one syntax tree and translate it into
+grammar-neutral observations
 
-|UI-worker bridge
-|Edge, both contexts
-|Correlates and transports lifecycle commands and source-free outcomes. It
-performs no validation, orchestration, classification, or admission.
+|Metrics |Worker domain |Consume normalised source and syntax observations;
+own SLOC, executable-unit, ownership, and complexity rules
 
-|GitHub resolution adapter
-|Edge, worker
-|Realizes the resolution-evidence port in
-https://github.com/FelixGeisler/code-city/issues/453[#453] using ADR 0005's
-exact bounded native-Fetch metadata and omitted-`sha` commit-list calls. It
-validates and projects only primitive evidence, owns its response-stream
-resources, and retrieves no source.
+|City builder |Worker domain |Create the complete renderer-neutral city
 
-|GitHub retrieval adapter
-|Edge, worker
-|Realizes ADR 0006's exact selected-commit and recursive-root-tree REST GETs,
-own-field bounded primitive projection, canonical immutable-commit raw GETs,
-stream caps, raw/hash workspace, Web Crypto Git-blob comparison, and physical
-request/reader/response/hash cleanup for
-https://github.com/FelixGeisler/code-city/issues/454[#454]. It supplies records
-and bytes only and performs no independent admission, classification, retry,
-or fallback.
-
-|Parser adapter
-|Edge, worker
-|Owns ADR 0007's exact pinned Tree-sitter runtime/grammar loading, complete
-fact-free iterative validation, second cursor-only iterative projection,
-UTF-16-to-UTF-8 endpoint conversion, and ordinary parser-handle deletion. It
-passes only fresh primitive observations, owns no metric policy, and performs
-no source execution/import, configuration discovery, or provider access.
+|Presentation |Main edge |Validate the presentation model and own one disposable
+WebGL session
 |===
 
-Resolution and retrieval are distinct. Retrieval/admission alone validates the
-selected-revision evidence, applies every admission horizon, and creates or
-readmits one complete ordered module set. The retrieval adapter cannot bypass
-that owner. Analysis consumes admitted modules rather than retrieval
-implementation. Parser-specific objects remain edge-side. City construction is
-pure domain, and presentation receives only a complete, source-free canonical
-scene.
+== Dependency rule
 
-== Conceptual port roles
+[source,text]
+----
+edge ───────► application ───────► domain
+  └──────────────────────────────► domain  (capability-local policy only)
+----
 
-[cols="4,4,5",options="header"]
+Reverse dependencies are forbidden. Driving adapters enter application ports;
+domain code imports no GitHub, browser, Worker, Tree-sitter, or WebGL API.
+Transport moves data but does not classify product failures. Only the UI
+attempt coordinator changes visible state.
+
+[[data-boundaries]]
+== Data boundaries
+
+[cols="2,2,4",options="header"]
 |===
-|Port role |Kind and semantic owner |Collaborator
+|Value |From → to |Content
 
-|User attempt actions
-|Driving; UI attempt coordinator
-|UI surface adapter
+|Repository reference |UI → revision selection |The two non-empty URL path
+segments as inert strings
 
-|Worker outcome intake
-|Driving; UI attempt coordinator
-|Main bridge half
+|Selected revision |Revision selection → retrieval |Repository reference and
+GitHub's full immutable commit ID
 
-|Processing gateway
-|Driven; UI attempt coordinator
-|Main bridge half
+|Source evidence |GitHub gateway → retrieval |Projected tree records or one
+bounded raw byte sequence; never a provider object or provider URL
 
-|Worker attempt control
-|Driving; worker pipeline coordinator
-|Worker bridge half
+|Admitted module |Admission → parser and metrics |Canonical path and normalised
+UTF-8 source
 
-|Worker outcome publication
-|Driven; worker pipeline coordinator
-|Worker bridge half
+|Syntax observations |Parser → metrics |Primitive spans and events for lexical
+exclusions, executable-unit boundaries and nesting, runtime/type-only regions,
+and decision occurrences
 
-|Resolve immutable revision
-|Driving; revision-resolution capability
-|Worker pipeline coordinator
+|Module facts |Metrics → city builder |Canonical path and the three integers
+`S`, `U`, and `M`
 
-|Resolution evidence
-|Driven; revision-resolution capability
-|GitHub resolution adapter
+|Presentation model |City builder → presentation |Dense, source-free geometry,
+colour, and bounds with finite values; no source, parser value, provider value,
+or resource locator
 
-|Retrieve and admit
-|Driving; retrieval/admission capability
-|Worker pipeline coordinator
-
-|Selected-revision repository data
-|Driven; retrieval/admission capability
-|GitHub retrieval adapter
-
-|Analyze admitted modules
-|Driving; static-metrics capability
-|Worker pipeline coordinator
-
-|Static syntax
-|Driven; static-metrics capability
-|Parser adapter
-
-|Construct canonical city
-|Domain-owned driving contract; an ordinary pure call is sufficient
-|Worker pipeline coordinator
-
-|Present complete scene
-|Driven; UI attempt coordinator
-|Presentation adapter
+|Attempt outcome |Worker → UI |One closed, generation-tagged success or failure
+payload
 |===
 
-Driving and driven labels describe conceptual roles, not executable
-interfaces, package boundaries, or component counts. Contracts stay with their
-application or domain semantic owners; no contracts layer exists.
-
-== UI-worker bridge boundary
-
-The bridge may transport only:
-
-* toward the worker, one normalized, syntactically accepted submission and
-  lifecycle control;
-* toward the UI, selected identity, one terminal failure, or one complete
-  canonical scene; and
-* internally toward the main bridge, exactly
-  `PROVIDER_DRAINED_STATIC_ENTERED` or `ATTEMPT_DRAINED`, carrying only its
-  discriminator and existing opaque bridge-generated attempt/generation
-  correlation.
-
-Raw or normalized repository source or content, admitted modules, parser
-objects, metric intermediates, and partial scenes never cross the bridge.
-Building identities may cross only as inert model keys. The presentation
-adapter performs complete own-data-property and bounded-value validation before
-creating WebGL. Any model breach remains `M1-CITY-1`; the bridge transports it
-without exception classification, and only an already-valid model can reach
-`M1-PRES-1`. The two lifecycle
-attestations carry no identity, provider, source, admitted-module, parser,
-metric, scene, diagnostic, timing, or count and never enter worker-outcome
-intake, visible state, status, or classification. Runtime messages grant no
-source dependency and create no trust crossing. General message and port
-schemas remain with #453 through #460.
-
-== Exclusive outcome and lifecycle ownership
-
-[cols="4,5,7",options="header"]
-|===
-|Concern |Sole owner |Boundary
-
-|Visible state and publication
-|UI attempt coordinator
-|The UI surface displays state but does not own it. The coordinator is the sole
-publication-eligibility gate.
-
-|Input-failure classification
-|Domain validation policy
-|The policy returns the classification before worker dispatch. No edge block
-classifies or reclassifies it.
-
-|Visible input-failure transition
-|UI attempt coordinator
-|The coordinator alone commits `Failure` before worker dispatch.
-
-|Resolution outcome
-|Revision-resolution capability
-|The resolution adapter supplies only ADR 0005's validated primitive evidence;
-it neither constructs the tuple nor reclassifies an outcome.
-
-|Admission and RA outcome
-|Retrieval/admission capability
-|No other block creates or readmits admitted modules. It returns one complete
-ordered set or one accepted terminal result. The retrieval adapter supplies
-only ADR 0006's bounded selected-revision records, expected identities, and
-bytes.
-
-|Metric failure
-|Static-metrics capability
-|The parser adapter supplies semantic syntax observations only.
-
-|Construction failure
-|City constructor
-|It consumes complete canonical metric facts and has no edge dependency.
-
-|Presentation-failure detection and resource cleanup
-|Presentation adapter
-|Only after valid-model validation, the adapter reports `M1-PRES-1`; it owns
-its detached candidate and current WebGL resources, observer/loss listener,
-post-`Success` loss/resize callbacks, and idempotent cleanup. It never commits
-visible state.
-
-|Visible presentation-failure transition
-|UI attempt coordinator
-|Only the coordinator commits visible `Failure`.
-
-|Worker sequencing and suppression
-|Worker pipeline coordinator
-|A stage capability returns its terminal outcome; the pipeline suppresses
-later stages and releases core transients.
-
-|Bridge transport and worker-generation resource gate
-|UI-worker bridge
-|It transports business outcomes unchanged, consumes ADR 0007's two internal
-lifecycle attestations, and owns the sole concrete worker handle, generation
-correlation, hard-stop gate, listeners, and transport references. This
-resource ownership is not a second orchestrator; the bridge never validates,
-classifies, admits, or reclassifies.
-|===
-
-An outcome from the worker is applied only while its attempt remains
-publication-eligible.
-
-Cancellation and cleanup are partitioned exactly once:
-
-. The UI attempt coordinator immediately revokes publication eligibility,
-  wins ties, and clears identity, city, and presentation state while preserving
-  the draft required by #441.
-. The worker pipeline coordinator suppresses downstream stages, completes the
-  current lifecycle phase, and releases core transient references.
-. Provider adapters settle and release only their ADR 0005/0006 physical
-  resources; provider work never relies on worker termination.
-. The parser adapter deletes cursor, tree, and parser on ordinary paths. Hard
-  static termination may prevent `finally` and deletion; worker-realm
-  termination then releases static resources without a timing or delete-spy
-  claim.
-. The main bridge owns the sole worker handle, generation correlation,
-  hard-stop gate, listener/transport release, exactly-once termination, and
-  handle clearing.
-. The presentation adapter disconnects its observer, removes its loss listener
-  and canvas, deletes every live shader/program/buffer/VAO exactly once, and
-  clears its typed data and references for incomplete, failed, replaced,
-  cancelled, reloaded, context-lost, or resize-failed presentation.
-
-For resolution, ADR 0005 refines the adapter part of step 3: each status-`200`
-response has the inclusive 4 MiB stream bound, reader-lock release in
-`finally`, and ordered removal of application-owned chunk, text, parsed-object,
-response, and reader reachability before request two or return. Cancellation
-or replacement aborts the attempt signal, requests feasible body cancellation,
-settles cleanup, and suppresses later work. Only a validated primitive
-projection may remain reachable.
-
-For retrieval, ADR 0006 further refines step 3. Across all attempts the adapter
-holds at most one retrieval/admission provider request and one exact
-`4,194,317`-byte raw/hash workspace. It removes each capped REST transformation
-before the next request, the provider tree before raw retrieval, and each
-raw/hash/decoded temporary before another request. It releases reader locks in
-`finally`, handles abort/cancel/read/digest settlement, checks eligibility after
-non-abortable phases, and cleans projected inventory and unpublished output.
-Replacement work is latest-only and cannot start until old operations,
-non-abortable work, locks, and application-owned cleanup settle.
-
-ADR 0008 refines presentation ownership without changing bridge ownership. The
-adapter validates before WebGL; stages one detached candidate; registers the
-once/passive loss listener; creates and draws the fixed resources; constructs
-and successfully attaches one generation-guarded observer; performs the final
-no-yield host-size reread and any required verified detached redraw; and only
-then returns a publishable candidate. The UI coordinator checks current
-eligibility and alone commits canvas, identity, and `Success` synchronously.
-The same adapter reuses resources for passive resize and reports current
-context loss or required resize failure; the UI coordinator alone removes the
-city and commits `Presentation failed` / `M1-PRES-1` while retaining tuple and
-draft. Stale callbacks dispose locally. #452 owns none of these renderer
-responsibilities; #457 remains renderer-neutral; #458 owns their realization.
-
-ADR 0007 adds a strict phase boundary. Before matching
-`PROVIDER_DRAINED_STATIC_ENTERED` receipt, the main bridge must not terminate:
-provider settlement and gate release precede `ATTEMPT_DRAINED`, termination,
-handle clearing, replacement creation, and its first provider request. After
-matching receipt, hard termination and handle clearing precede replacement;
-zero static operations is valid. Ordinary completion posts one business
-payload and `ATTEMPT_DRAINED` only after parser deletion and reference release,
-then the bridge terminates. At most one usable worker handle, parser set,
-provider slot, and raw/hash workspace overlaps observably.
-
-Late output is harmless because the UI publication gate remains authoritative.
-Reload discards all application-managed session state. No cleanup latency,
-secure erasure, physical teardown, platform-cache behavior, or garbage-
-collection behavior is promised.
+Concrete provider and parser objects remain at their edges. Repository-derived
+strings are never interpreted as markup, object keys, shader text, or resource
+locations.

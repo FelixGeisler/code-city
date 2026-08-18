@@ -1,1 +1,33 @@
-= Code City v2
+= Overview
+
+Code City turns one public GitHub repository into a deterministic 3D city of
+its supported JavaScript and TypeScript modules.
+
+image::overview-flow.svg[Flow from a repository URL to a complete Code City]
+
+[cols="1,3",options="header"]
+|===
+| |Code City
+
+|Input
+|One URL of an anonymously accessible public GitHub repository
+
+|Selection
+|The repository's default-branch tip, resolved to one immutable commit
+
+|Output
+|One complete city, or one failure with no stale or partial city
+
+|Building
+|One admitted source module
+
+|Dimensions
+|Height: source lines; footprint: executable units
+
+|Colour
+|Maximum executable-unit complexity
+|===
+
+* xref:requirements:index.adoc[Requirements] defines observable behaviour.
+* xref:architecture:01-introduction-and-goals.adoc[Architecture] explains the
+  main structure and decisions.

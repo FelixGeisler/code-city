@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 450" role="img" aria-labelledby="title desc">
+  <title id="title">Code City deployment</title>
+  <desc id="desc">GitHub Pages serves static assets to the browser. The browser main context uses one worker. The worker accesses public GitHub directly.</desc>
+  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#475569"/></marker></defs>
+  <style>.n{fill:#f8fafc;stroke:#334155;stroke-width:2}.b{fill:#e0f2fe;stroke:#0369a1;stroke-width:2}.t{font:17px system-ui,sans-serif;fill:#0f172a;text-anchor:middle}.s{font:14px system-ui,sans-serif;fill:#334155;text-anchor:middle}.a{stroke:#475569;stroke-width:2;marker-end:url(#arrow)}</style>
+  <rect class="n" x="30" y="165" width="190" height="110" rx="8"/><text class="t" x="125" y="205">GitHub Pages</text><text class="s" x="125" y="235">Static application</text>
+  <rect class="b" x="330" y="55" width="300" height="340" rx="12"/><text class="t" x="480" y="90">Browser</text>
+  <rect class="n" x="375" y="125" width="210" height="90" rx="8"/><text class="t" x="480" y="162">Main context</text><text class="s" x="480" y="188">UI + WebGL</text>
+  <rect class="n" x="375" y="270" width="210" height="90" rx="8"/><text class="t" x="480" y="307">Worker</text><text class="s" x="480" y="333">Processing pipeline</text>
+  <rect class="n" x="740" y="165" width="170" height="110" rx="8"/><text class="t" x="825" y="205">Public GitHub</text><text class="s" x="825" y="235">REST + source</text>
+  <line class="a" x1="220" y1="220" x2="320" y2="170"/><text class="s" x="270" y="175">assets</text>
+  <line class="a" x1="480" y1="215" x2="480" y2="260"/><line class="a" x1="500" y1="270" x2="500" y2="225"/>
+  <line class="a" x1="585" y1="315" x2="730" y2="245"/><line class="a" x1="740" y1="205" x2="595" y2="290"/>
+</svg>
