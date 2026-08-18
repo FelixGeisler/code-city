@@ -10,14 +10,23 @@
     "npm": ">=11 <12"
   },
   "scripts": {
+    "dev": "vite",
+    "typecheck": "tsc -p tsconfig.main.json && tsc -p tsconfig.worker.json",
+    "test": "node --test",
+    "build": "node tools/build-package.mjs",
+    "test:reproducibility": "node tools/check-reproducibility.mjs",
+    "start": "node tools/serve-package.mjs",
+    "test:package": "node tools/audit-package.mjs",
     "docs:build": "antora antora-playbook.yml",
-    "verify": "npm run docs:build"
+    "verify": "npm run typecheck && npm run test && npm run build && npm run test:reproducibility && npm run test:package && npm run docs:build"
   },
   "overrides": {
     "js-yaml": "4.3.1"
   },
   "devDependencies": {
     "@antora/cli": "3.1.15",
-    "@antora/site-generator": "3.1.15"
+    "@antora/site-generator": "3.1.15",
+    "typescript": "7.0.2",
+    "vite": "8.2.1"
   }
 }
