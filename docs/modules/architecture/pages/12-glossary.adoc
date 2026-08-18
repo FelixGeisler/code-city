@@ -1,1 +1,24 @@
 = 12. Glossary
+
+[cols="1,3",options="header"]
+|===
+|Term |Meaning
+
+|Attempt
+|Work started by one submitted repository URL.
+
+|Selected revision
+|The immutable commit at the head of GitHub's default branch when submitted.
+
+|Admitted module
+|One supported, valid source file included in the selected revision's complete source set.
+
+|Core
+|Product policy and application coordination independent from external mechanisms.
+
+|Edge
+|Code that translates browser, GitHub, Worker, parser, renderer, or build mechanisms.
+
+|Complete city
+|The renderer-neutral city and valid presentation produced by a successful current attempt.
+|===

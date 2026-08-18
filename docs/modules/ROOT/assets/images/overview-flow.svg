@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 170" role="img" aria-labelledby="title desc">
+  <title id="title">Code City processing flow</title>
+  <desc id="desc">A repository URL is validated, resolved, retrieved, measured, converted to a city, and shown. Any failed step produces no city.</desc>
+  <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#475569"/></marker></defs>
+  <style>.b{fill:#f8fafc;stroke:#334155;stroke-width:2}.t{font:16px system-ui,sans-serif;fill:#0f172a;text-anchor:middle}.a{stroke:#475569;stroke-width:2;marker-end:url(#arrow)}</style>
+  <g>
+    <rect class="b" x="10" y="30" width="150" height="60" rx="8"/><text class="t" x="85" y="66">Repository URL</text>
+    <line class="a" x1="160" y1="60" x2="200" y2="60"/>
+    <rect class="b" x="210" y="30" width="130" height="60" rx="8"/><text class="t" x="275" y="66">Validate</text>
+    <line class="a" x1="340" y1="60" x2="380" y2="60"/>
+    <rect class="b" x="390" y="30" width="130" height="60" rx="8"/><text class="t" x="455" y="66">Resolve</text>
+    <line class="a" x1="520" y1="60" x2="560" y2="60"/>
+    <rect class="b" x="570" y="30" width="130" height="60" rx="8"/><text class="t" x="635" y="66">Retrieve</text>
+    <line class="a" x1="700" y1="60" x2="740" y2="60"/>
+    <rect class="b" x="750" y="30" width="130" height="60" rx="8"/><text class="t" x="815" y="66">Measure</text>
+    <line class="a" x1="880" y1="60" x2="920" y2="60"/>
+    <rect class="b" x="930" y="30" width="110" height="60" rx="8"/><text class="t" x="985" y="66">Build</text>
+    <line class="a" x1="1040" y1="60" x2="1070" y2="60"/>
+    <rect class="b" x="1080" y="30" width="90" height="60" rx="8"/><text class="t" x="1125" y="66">Show</text>
+    <g stroke="#b91c1c" stroke-width="2">
+      <line x1="275" y1="90" x2="275" y2="125"/>
+      <line x1="455" y1="90" x2="455" y2="125"/>
+      <line x1="635" y1="90" x2="635" y2="125"/>
+      <line x1="815" y1="90" x2="815" y2="125"/>
+      <line x1="985" y1="90" x2="985" y2="125"/>
+      <line x1="1125" y1="90" x2="1125" y2="125"/>
+      <line x1="1125" y1="125" x2="275" y2="125"/>
+    </g>
+    <text class="t" x="700" y="152" fill="#991b1b">Any failure → no city</text>
+  </g>
+</svg>

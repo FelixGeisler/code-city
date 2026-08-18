@@ -1,0 +1,99 @@
+= City and Failures
+
+== Building mapping
+
+The scene contains exactly one axis-aligned prism for each admitted module.
+
+[cols="1,2",options="header"]
+|===
+|Property |Rule
+
+|Identity |Canonical module path
+|Height |`S + 1`
+|Width |`U + 1`
+|Depth |`U + 1`
+|Colour |Palette band selected by `M`
+|===
+
+[cols="1,1",options="header"]
+|===
+|Complexity `M` |RGBA colour
+
+|0 |`#440154FF`
+|1 |`#414487FF`
+|2–3 |`#2A788EFF`
+|4–7 |`#22A884FF`
+|8–15 |`#7AD151FF`
+|16+ |`#FDE725FF`
+|===
+
+== Layout
+
+Sort the `N` identities by unsigned UTF-8. Let `C` be the smallest positive
+integer with `C² ≥ N`. For zero-based index `i`:
+
+[source,text]
+----
+r = floor(i / C)          k = i mod C          b_i = U_i + 1
+x_i = sum(b_j + 1) for j = rC through i-1
+D_r = max(b_j) in row r
+z_i = sum(D_q + 1) for q = 0 through r-1
+minimum corner_i = (x_i, 0, z_i)
+----
+
+An empty sum is zero. Place at most `C` buildings per row. Bounds are exactly:
+
+[source,text]
+----
+minimum = (0, 0, 0)
+maximum = (max(x_i + b_i), max(S_i + 1), max(z_i + b_i))
+----
+
+== View
+
+Let `Lx`, `Ly`, and `Lz` be the bounds lengths, `T` their centre, and `a` the
+positive viewport aspect:
+
+[source,text]
+----
+direction D = (1, 1, 1) / sqrt(3)
+right R     = (1, 0, -1) / sqrt(2)
+up V        = (-1, 2, -1) / sqrt(6)
+E_r         = (Lx + Lz) / (2 * sqrt(2))
+E_v         = (Lx + 2*Ly + Lz) / (2 * sqrt(6))
+H           = 1.1 * max(E_v, E_r / a)
+horizontal half-size = aH
+----
+
+Resize reapplies this orthographic fit. Camera scalar evaluation permits only
+`10^-9 × max(1, |expected|)` component error. There is no animation, orbit,
+pan, zoom, hover, selection, label, road, district, or decoration.
+
+== Failures
+
+Show exactly one category and, where assigned, one stable code. Never show raw
+source, path, parser, provider, or renderer diagnostics.
+
+[cols="2,2",options="header"]
+|===
+|Category |Code
+
+|Invalid input |None
+|Repository unavailable for anonymous access |None
+|Revision unavailable |None
+|Provider/resolution failure |None
+|No supported modules |`ADM-06` or `ADM-07`
+|Source admission failed |`M1-ADM-1`, `M1-ADM-3`, or `M1-ADM-4`
+|Repository exceeds Code City limits |None
+|Metric processing failed |`M1-MET-1`
+|City construction failed |`M1-CITY-1`
+|Presentation failed |`M1-PRES-1`
+|===
+
+`M1-CITY-1` includes an invalid or incomplete canonical model, including
+failure during defensive model validation. `M1-PRES-1` begins only after a
+valid model reaches WebGL.
+
+Every failure removes the city. A post-selection failure retains the selected
+commit ID. There is no skipped building, partial scene, fallback, or stale
+result.

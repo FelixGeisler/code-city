@@ -1,65 +1,55 @@
-= Requirements
+= Product
 
-The requirements module is the authoritative source for Code City product scope
-and observable behavior. Architecture documentation explains how accepted
-requirements are realized; it does not redefine them.
+== Scope
 
-== M1 baseline
+[cols="1,3",options="header"]
+|===
+|Included |Rule
 
-M1 delivers one journey: a user submits one canonical public GitHub repository
-URL and receives a deterministic Code City for one automatically selected,
-immutable repository revision.
+|Repository
+|One anonymously accessible public GitHub repository
 
-The baseline begins with the input, revision-identity, and user-state contract
-from https://github.com/FelixGeisler/code-city/issues/441[#441], the accepted
-source-admission and RA-01 through RA-09 contract from
-https://github.com/FelixGeisler/code-city/issues/442[#442], the accepted fixed
-metric contract from https://github.com/FelixGeisler/code-city/issues/443[#443],
-and the accepted fixed city, layout, and initial-presentation contract from
-https://github.com/FelixGeisler/code-city/issues/444[#444].
-https://github.com/FelixGeisler/code-city/issues/450[#450] fixes the exact
-Tree-sitter runtime and grammars, recovered-tree failure behavior, and the
-full-envelope disposition that SP-01 through SP-04 are unnecessary.
-https://github.com/FelixGeisler/code-city/issues/451[#451] accepts
-browser-native WebGL2 presentation, the source-free construction/presentation
-boundary, fail-closed lifecycle behavior, and the disposition that CC-09 and
-PR-01 are unnecessary. The #464 hard gate verifies all accepted decisions and
-evidence ownership before M1 implementation.
+|Revision
+|The current head commit of the repository's default branch
 
-== Reading order
+|Files
+|`.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, and `.cts`
 
-. xref:01-product-scope.adoc[Product Scope] defines the M1 outcome and the
-  authoritative non-goals.
-. xref:02-stakeholders-and-use-cases.adoc[Stakeholders and Use Cases] describes
-  the single user journey and its alternatives.
-. xref:03-feature-inventory.adoc[Feature Inventory] shows what is included,
-  excluded, or owned by a later M0 contract.
-. xref:04-functional-requirements.adoc[Functional Requirements] contains the
-  normative URL grammar, immutable-revision identity, and state machine.
-. xref:05-acceptance-criteria.adoc[Input and State Acceptance] provides
-  documentary Given/When/Then examples for reviewing that contract.
-. xref:06-source-admission-and-limits.adoc[Source Admission and Repository Limits]
-  contains the closed admission matrix, approved RA-01 through RA-09 inventory,
-  bounded classification, and observable category/code rules.
-. xref:07-source-admission-and-limit-acceptance.adoc[Source Admission and Limit
-  Acceptance] provides documentary scenarios and downstream evidence mapping
-  for that contract.
-. xref:08-fixed-metric-semantics.adoc[Fixed Metric Semantics] defines lexical
-  physical-line SLOC, executable units, complexity, canonical metric facts,
-  the exact pinned-grammar boundary, and atomic metric failure.
-. xref:09-fixed-metric-acceptance.adoc[Fixed Metric Acceptance] provides the
-  closed inert matrices, exact examples, and evidence allocation for that
-  contract.
-. xref:10-fixed-city-layout-and-presentation.adoc[Fixed City Layout and
-  Presentation] defines exact geometry, palette, scene content, square-shelf
-  layout and bounds, orthographic view, precision, interaction exclusions,
-  limit dispositions, stage-failure ownership, and post-`Success` presentation
-  failure behavior.
-. xref:11-fixed-city-layout-and-presentation-acceptance.adoc[Fixed City Layout
-  and Presentation Acceptance] provides the closed inert fixtures, boundary
-  tables, source-free handoff and fixed-presentation checks, exclusions,
-  lifecycle-failure examples, and evidence allocation for that contract.
+|Result
+|One deterministic, fixed city for the selected commit
 
-The words *must*, *must not*, *required*, and *only* are normative on these
-pages. Examples clarify the normative rules but do not create executable test
-fixtures or select an implementation mechanism.
+|Storage
+|Current browser session only; reload clears all product state
+|===
+
+=== Input
+
+Accepted form: `https://github.com/<owner>/<repository>`
+
+* Ignore surrounding spaces, tabs, and line breaks.
+* Require HTTPS, the `github.com` host, and exactly two non-empty path segments.
+* Reject credentials, a port, query, fragment, trailing slash, encoded path, or
+  extra path segment.
+
+Invalid input starts no GitHub request.
+
+=== Selected revision
+
+On submit, resolve the current head commit of GitHub's default branch and
+process only that immutable commit. Show its full commit ID with the result.
+Movement of the branch after selection does not change the current attempt. A
+new submission resolves the head again.
+
+== What the user sees
+
+. Before submission, the page shows the repository URL input.
+. After submission, any previous result disappears. The page shows that Code
+  City is working and offers Cancel.
+. On success, the page shows the selected commit ID and one complete city.
+. On failure, the page shows a short explanation and no city. It also shows the
+  commit ID when one was selected.
+. After cancellation, the page shows a cancellation message and no city.
+
+Submitting another repository starts over. Results from an older or cancelled
+submission must never appear. Code City has no timeout, automatic retry, or
+fallback.

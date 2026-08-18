@@ -1,0 +1,117 @@
+= Source and Metrics
+
+Repository content is untrusted data. Code City never executes or imports it.
+
+== Admission
+
+[cols="1,3",options="header"]
+|===
+|Area |Rule
+
+|Path
+|Split a repository-relative `/` path into non-empty segments and normalise
+each segment to NFC. Preserve case. Reject absolute forms, backslashes,
+repeated or trailing separators, `.`/`..`, and control characters.
+
+|Identity
+|The canonical path. Exact or NFC collisions fail. Successful identities sort
+by unsigned UTF-8 bytes.
+
+|Suffix
+|Compare the final suffix ASCII case-insensitively with `.js`, `.jsx`, `.mjs`,
+`.cjs`, `.ts`, `.tsx`, `.mts`, or `.cts`.
+
+|Kind
+|Admit regular files. Skip directories, links, submodules and their descendants,
+and unsupported suffixes. Do not apply vendor or generated-path exclusions.
+
+|Content
+|Decode strict UTF-8, remove one leading BOM, reject NUL, convert CRLF and CR
+to LF, and perform no other transformation. Empty content is valid.
+|===
+
+== Supported processing envelope
+
+These are Code City limits, not copies of GitHub limits. All maxima are
+inclusive.
+
+[cols="2,1",options="header"]
+|===
+|Measured value |Maximum
+
+|Admitted modules |4,000
+|Normalised UTF-8 in one module |2 MiB
+|Normalised UTF-8 across all modules |40 MiB
+|===
+
+A repository outside this envelope fails as `Repository exceeds Code City
+limits`. It is never sampled, truncated, or partially processed.
+
+GitHub independently owns API, rate, response, and tree limits.
+Code City does not copy those values into its product contract. A truncated or
+otherwise incomplete provider result fails as incomplete source. Internal
+buffers and counters are implementation safeguards and must not reduce the
+published Code City envelope.
+
+== Syntax
+
+[cols="2,3",options="header"]
+|===
+|Suffix |Grammar
+
+|`.js`, `.mjs`, `.cjs`
+|JavaScript; reject visible JSX nodes
+
+|`.jsx`
+|JavaScript with JSX
+
+|`.ts`, `.mts`, `.cts`
+|TypeScript
+
+|`.tsx`
+|TSX
+|===
+
+Parser errors, missing nodes, or recovery fail the complete attempt. Type
+checking, name resolution, linting, and dependency analysis are not performed.
+
+== Metrics
+
+=== Source lines (`S`)
+
+Count a physical line once when it contains non-whitespace, non-comment source.
+Blank, line-comment-only, block-comment-only, JSDoc-only,
+triple-slash-directive-only, hashbang-only, and JSX-comment-only lines count
+zero. Comment-looking text in strings, templates, regular expressions, or JSX
+remains source. A final LF adds no line.
+
+=== Executable units (`U`)
+
+Count body-bearing functions, arrows, methods, constructors, getters, setters,
+and static blocks. Add exactly one `top-level` unit when value-level syntax
+exists outside callable parameter/body, concise-expression, and static-block-body
+regions. Comments, type-only syntax, ambient declarations, signatures, and
+`export {}` alone do not create that unit.
+
+=== Complexity (`M`)
+
+For each unit:
+
+[source,text]
+----
+complexity = 1
+           + owned if statements
+           + owned loops
+           + owned non-default case labels
+           + owned catch clauses
+           + owned runtime ternaries
+           + owned &&, ||, ??, &&=, ||=, and ??= occurrences
+----
+
+Nested units own their regions exclusively. Parameter defaults belong to their
+unit; declaration expressions outside a unit belong to `top-level`. `else`,
+`switch`, `default`, `try`, `finally`, optional chaining, comparisons, calls,
+and erased TypeScript syntax add zero themselves.
+
+`U` is the unit count. `M` is the maximum unit complexity, or `0` when no unit
+exists.

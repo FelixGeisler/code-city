@@ -1,278 +1,33 @@
 = 4. Solution Strategy
 
-The accepted structural strategy is defined by
-xref:adr/0001-core-dependency-boundary.adoc[ADR 0001],
-xref:adr/0002-browser-only-runtime-and-github-pages-deployment.adoc[ADR 0002],
-xref:adr/0003-m1-core-strata-building-blocks-and-conceptual-ports.adoc[ADR 0003],
-xref:adr/0004-framework-free-typescript-shell-built-with-vite.adoc[ADR 0004],
-xref:adr/0005-anonymous-github-default-branch-tip-resolution-via-rest.adoc[ADR
-0005], and
-xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-content.adoc[ADR
-0006],
-xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR
-0007], and
-xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008].
-The ADRs remain authoritative where this summary omits detail.
+[cols="1,3",options="header"]
+|===
+|Strategy |Approach
 
-== One core with two strata
+|Stable input
+|Resolve the repository's default branch once and process its immutable commit
 
-ADR 0003 refines ADR 0001's conceptual core without superseding its outer
-boundary:
+|Independent core
+|Keep validation, admission, metrics, city construction, and state policy free
+of browser and provider APIs
 
-* the *application core* owns current-attempt and worker-stage orchestration
-  and the application driving and driven ports;
-* the *domain core* owns canonical values and pure deterministic input, state,
-  identity, admission, metric, and city policies; and
-* provider, UI/shell, UI-worker bridge, parser, and renderer mechanisms remain
-  *edge/adapters*.
+|Bounded processing
+|Run retrieval and static analysis as one ordered worker pipeline with explicit
+limits
 
-These are source and responsibility boundaries, not packages, components,
-execution contexts, or deployment nodes. ADR 0002 independently places UI
-application and presentation work in the browser main context and processing
-application, provider, parser, and city work in the worker.
+|Direct provider access
+|Use anonymous GitHub REST and raw-content requests; no backend or credential
 
-== Capability-scoped source direction
+|Fixed syntax
+|Use pinned Tree-sitter WebAssembly grammars and fail on incomplete syntax
 
-The cross-stratum source graph is:
+|Fixed presentation
+|Build a renderer-neutral city, then present it with browser-native WebGL2
 
-[source,text]
-----
-edge/adapters ----------------> application core ----> domain core
-       +-----------------------------------------------> domain core
-----
+|Atomic publication
+|Only the current attempt may replace the visible state; failures publish no
+partial city
+|===
 
-Its cross-stratum whitelist is exactly:
-
-* `edge/adapters → application core`;
-* `edge/adapters → domain core`, only to implement a core-owned port or adapt
-  canonical domain values; and
-* `application core → domain core`.
-
-Production actions still enter through application driving ports. Direct
-edge-to-domain access must not create a second orchestrator, admission path,
-metric path, or city-construction path. Port contracts remain with their
-application or domain semantic owner; there is no separate contracts layer.
-Analysis consumes admitted-module contracts rather than retrieval
-implementation, and city construction consumes canonical metric contracts
-rather than analyzer implementation.
-
-ADR 0003 does not decide a general same-stratum source graph or concrete source
-mapping. Within the application stratum,
-`worker-pipeline application coordination → named worker-stage application capabilities`
-is expressly permitted. The following source dependencies remain forbidden:
-
-* `domain core → application core`;
-* `domain core → edge/adapters`;
-* `application core → edge/adapters`;
-* UI application → worker-pipeline implementation or the reverse; and
-* a stage capability → a predecessor stage's implementation.
-
-A source-dependency arrow means that source on its left may import or otherwise
-depend on source on its right. Runtime calls through core-owned driven ports,
-bidirectional UI-worker messages, and ADR 0002 placement neither reverse nor
-grant a source dependency. UI-worker messages create no trust crossing.
-Driving and driven labels denote conceptual roles only; they require no
-interface, package, or one-component-per-port design.
-
-== Accepted shell and package strategy
-
-ADR 0004 selects framework-free TypeScript with plain HTML, standards CSS, and
-browser ES modules. Exact `vite@8.2.1` packages the future application, and
-exact `typescript@7.0.2` performs a separate strict, no-emit,
-isolated-modules check. Future direct dependencies are exact-pinned and their
-committed closure and evidence are renewed after dependency, closure, or build
-input changes.
-
-The future static production entry uses the exact `/code-city/` public base and
-one statically addressed, separate, non-inline, same-origin ES-module worker.
-Vite, a UI framework, and concrete DOM/Worker mechanisms remain build or
-edge/adapter concerns; application and domain core may not import or depend on
-them, instantiate their concrete values, or expose their mechanism types in
-core-owned contracts. ADRs 0001 and 0003 still govern source direction, and
-ADR 0002 still governs runtime placement.
-
-This is an accepted documented strategy now, not implemented repository
-behavior. https://github.com/FelixGeisler/code-city/issues/452[#452] owns the
-initial dependencies, walking shell, package, enforcement, and evidence;
-https://github.com/FelixGeisler/code-city/issues/459[#459] owns successful-path
-integration; and https://github.com/FelixGeisler/code-city/issues/460[#460]
-renews canonical production evidence on the final head. ADR 0004 selects no
-Pages workflow or deployment mechanism, provider, parser, renderer, source
-layout, schema, lifecycle primitive, or threshold.
-
-== Accepted revision-resolution strategy
-
-ADR 0005 selects native worker Fetch for one bounded sequential metadata GET
-and one bounded omitted-`sha` one-item commit-list GET to `api.github.com`.
-The edge adapter rejects redirects and non-case-only aliases, validates only
-the admitted CORS, media, UTF-8, JSON, identity, and status evidence, discards
-`default_branch`, and projects primitive scalars. The core-owned
-revision-resolution capability alone classifies outcomes and constructs the
-canonical repository/full-lowercase-40-hex tuple. Request two is the sole
-default-tip selector; the returned SHA is immutable once pinned, without an
-atomic or concurrent-provider-state warranty.
-
-Both response bodies have the inclusive 4 MiB post-content-decoding cap and
-the application-controlled reader/chunk/text/parsed-object cleanup boundary in
-ADR 0005. The mechanism makes at most two application GETs, retrieves no
-source, has no credential, retry, fallback, backend, or dependency, and hands
-its immutable tuple only to ADR 0006 retrieval/admission. This is an accepted
-documented strategy, not current product traffic;
-https://github.com/FelixGeisler/code-city/issues/453[#453] owns implementation.
-
-== Accepted selected-revision retrieval/admission strategy
-
-ADR 0006 consumes that tuple without resolving another ref. Native worker Fetch
-requests the selected commit object and its validated root tree recursively at
-`api.github.com`, completes #442's bounded path and metadata horizons through
-own-field primitive projection, then requests candidate bytes one at a time in
-canonical unsigned-UTF-8 identity order from `raw.githubusercontent.com`.
-Retrieval/admission alone returns one complete admitted-module sequence or one
-accepted terminal result.
-
-The strategy fixes inclusive 4 MiB commit and 8 MiB tree transformations,
-complete inventory evidence, prototype-safe path lookup, four closed Git
-mode/type pairs, exact raw-segment encoding, and expected Git blob identity
-before strict source decoding. One exact `4,194,317`-byte raw/hash workspace
-reuses the RA-04 content buffer and Git-header prefix without a second whole
-preimage; RA-04+1 is counted but neither stored nor hashed. Globally, at most
-one retrieval/admission provider request and one workspace exist, and a
-replacement starts only after old work and application-owned cleanup settle.
-There is no SDK, credential, archive, retry, wait, fallback, or second path.
-RA-10 and RA-11 are explicitly unnecessary, so bounded resources do not imply
-an elapsed-time promise.
-
-Tree plus sequential raw content accepts a potentially high request count in
-exchange for a complete Git kind/submodule inventory, exact per-blob
-consistency, bounded unsupported-content exposure, and no archive parser. The
-cost is up to `5,000` sequential raw requests, undocumented raw capacity, and a
-provider-valid tree possibly exceeding the selected 8 MiB cap. The observed
-codeload path is not readable from the production origin and would add
-archive/decompression/reconciliation risk; throttling or compatibility drift
-is terminal rather than a fallback trigger. #454 owns controlled evidence,
-#459 packaged-path evidence, and #460 hosted renewal.
-
-== Accepted static-syntax and phase strategy
-
-ADR 0007 selects exact `web-tree-sitter@0.26.12` and three grammar WASMs from
-exact `@vscode/tree-sitter-wasm@0.3.1`. The final ASCII-insensitive suffix
-selects JavaScript, TypeScript, or TSX; non-JSX JavaScript additionally rejects
-the closed visible-JSX node list. A complete iterative, fact-free recovery
-validation pass must succeed before a second iterative projection pass creates
-only fresh primitive core observations. Parser nodes and source-derived keys
-stay edge-side; core alone owns top level, unit ownership, arithmetic,
-identities, order, and facts.
-
-The parser adapter uses only ADR 0007's cursor subset and fixed same-origin
-`/code-city/` Vite asset URLs. There is no query, recursive JavaScript walk,
-old-tree reuse, fallback parser, source execution, provider-selected locator,
-Node shim, logging, telemetry, or provider request. Required UTF-16 endpoints
-are converted to UTF-8 in one deterministic scalar scan without a whole-file
-lookup table.
-
-Every worker generation begins provider-capable. ADR 0005/0006 operations,
-locks, gates, workspaces, provider values, and references settle before the
-worker posts `PROVIDER_DRAINED_STATIC_ENTERED`; every static asset or parser
-operation follows that post. Pre-receipt cancellation uses cooperative provider
-settlement and `ATTEMPT_DRAINED` before termination. After matching receipt,
-the main bridge may hard-terminate the sole worker before zero or during active
-static operations, clear its handle, then create the latest replacement.
-Ordinary paths delete cursor/tree/parser and clear core references before the
-terminal payload and `ATTEMPT_DRAINED`. This observable sequencing allows at
-most one usable worker, parser set, provider slot, and raw/hash workspace
-without promising physical teardown.
-
-SP-01 through SP-04 are unnecessary. All `4,000` RA-07 modules, each RA-08
-maximum, and the RA-09 aggregate reach sequential analysis; elapsed static time
-alone creates no outcome. A grammar-valid full-envelope failure is a
-conformance defect and stop condition, not `M1-MET-1` or an undeclared limit.
-#455 realizes parser/SLOC/units, #456 adds decisions/complexity and reruns the
-combined matrix, and #460 renews the exact assets, supply-chain evidence, and
-integrated lifecycle.
-
-== Accepted browser-native WebGL2 presentation strategy
-
-ADR 0008 selects raw browser-native WebGL2 and fixed GLSL ES 3.00 only in the
-UI-main presentation edge adapter. Worker-side city construction stays pure,
-renderer-neutral domain policy. The bridge carries only one complete canonical
-scene; no source, admitted module, parser/analyzer value, metric intermediate,
-partial scene, or result identity enters the adapter.
-
-Before WebGL, the adapter validates every required own data field and bounded
-collection, exact `1..4,000` building count, identity/order, geometry, palette,
-bounds, view, and no-interaction fact. It ignores additive noncanonical own
-fields without evaluating them for diagnostics, uses only arrays and `Map` or
-equivalent prototype-safe maps, and never uses identity as a normal-object key
-or active DOM/WebGL value. A malformed, unsafe, throwing, incomplete, or
-inconsistent model creates no WebGL and propagates `M1-CITY-1`; the bridge does
-not classify it. `M1-PRES-1` begins only after a valid complete model passes.
-
-The GPU mechanism is closed: one eight-corner/36-index unit prism; one
-96-byte position buffer, one 36-byte index buffer, and one 28-byte-stride
-interleaved instance buffer (`112,000` bytes at `N=4,000`); one program, VAO,
-and instanced draw. The two shaders are exact trusted ASCII LF/final-LF
-literals. One detached canvas requests only `webgl2` with ADR 0008's ten exact
-options. Returned critical attributes must agree. Effective DPR is one; host,
-backing, and read drawing-buffer dimensions must be the same positive integers
-before every draw or publication. A mismatch fails closed without clamping.
-
-Every draw restores the complete fixed white-clear, depth/cull/mask/disabled-
-state, verified viewport, clear, program/VAO, matrix, and one-draw sequence.
-Only ADR 0008's closed property/method list is used; there is no extension,
-query, info log, readback, texture, framebuffer, dynamic shader, diagnostic,
-logging, or telemetry surface. The target-relative orthographic matrix uses
-ADR 0008's exact basis, `E_d`, camera, near/far, and fit equations. The full
-accepted envelope proves exact `float32` integer/half-integer representation;
-pixels remain non-acceptance facts.
-
-Initial presentation is staged entirely while detached. Its once/passive
-context-loss listener precedes context creation. The fixed draw and post-
-operation eligibility checks precede successful construction and
-`observe(host)` of one asynchronous generation-guarded `ResizeObserver`. A
-mandatory final no-yield host-size reread, any required verified detached
-redraw, and another eligibility check precede one synchronous commit of canvas,
-identity, and `Success`. Observer setup after publication, timers, animation
-frames, microtask yields, retries, debounces, and network work are prohibited.
-
-A changed positive integer size reuses canvas, context, program, VAO, and
-buffers, rereads drawing-buffer dimensions, recomputes only aspect-dependent
-projection/viewport, reapplies state, and draws once. Unchanged dimensions do
-not draw. Context restoration, alternate renderers, retry, and fallback do not
-exist. Current published context loss or required resize failure synchronously
-enters `Presentation failed` / `M1-PRES-1`, retains the current tuple and draft,
-removes city/canvas, disposes once, and remains until resubmit or reload. Stale
-callbacks only dispose locally.
-
-Normal failure, replacement, cancellation, reload, or post-`Success` failure
-disconnects observation, removes listener/canvas, deletes each live shader,
-program, buffer, and VAO once, and clears adapter data/references. A lost
-context adds no driver-release claim. CC-09 and PR-01 are unnecessary; elapsed
-construction/presentation time alone remains `Loading`, with no performance or
-preemption promise. #452 owns no renderer material, #457 owns renderer-neutral
-scenes and float-bound renewal, #458 owns every renderer declaration and
-focused check, #459 integrates, and #460 renews final hosted evidence.
-
-== Selected trade-off
-
-Separating mutable orchestration from pure deterministic policy makes the
-accepted boundary objectively protectable, preserves provider, parser, and
-renderer independence, and keeps city construction pure. Capability-scoped
-edge-to-domain access avoids unsupported wrappers and duplicate translations
-for canonical values while retaining application driving ports as the only
-production entry.
-
-The cost is an additional stratum, boundary translations, and bypass risk.
-That risk is constrained through sole orchestration, admission, metric,
-city-construction, and publication ownership and through source and behavioral
-evidence owned by https://github.com/FelixGeisler/code-city/issues/452[#452]
-through https://github.com/FelixGeisler/code-city/issues/460[#460]. An
-undifferentiated core would leave the policy/orchestration split
-convention-only; an adapters-only-to-application funnel would require
-unsupported wrappers; blanket adapter-to-domain access would permit invariant
-bypass.
-
-The minimum responsibilities and conceptual collaborations are documented in
-xref:05-building-block-view.adoc[Building Block View]. Concrete source mapping,
-general same-stratum policy, packages, interfaces, schemas, and every remaining
-mechanism or technology not accepted in ADRs 0004 through 0008 remain with
-their stated downstream owners.
+The architecture prefers explicit, single-purpose parts over extension points,
+fallbacks, plugins, or configurable pipelines.
