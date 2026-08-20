@@ -74,11 +74,12 @@ test("accepts same-layer, inward, and edge-to-outside imports in every supported
     "src/domain/dynamic.ts": "export {};\n",
   }, async (root) => {
     const result = await checkBoundaries(root);
-    const kinds = new Set(result.imports.map((entry) => entry.kind));
-    assert(kinds.has("ordinary import"));
-    assert(kinds.has("type-only import"));
-    assert(kinds.has("re-export"));
-    assert(kinds.has("string-literal dynamic import"));
+    const kindCounts = Map.groupBy(result.imports, (entry) => entry.kind);
+    assert.equal(result.imports.length, 15);
+    assert.equal(kindCounts.get("ordinary import")?.length, 6);
+    assert.equal(kindCounts.get("type-only import")?.length, 3);
+    assert.equal(kindCounts.get("re-export")?.length, 3);
+    assert.equal(kindCounts.get("string-literal dynamic import")?.length, 3);
     assert(result.imports.some((entry) => entry.sourceLayer === "edge" && entry.targetLayer === "outside-src"));
     assert(result.imports.some((entry) => entry.sourceLayer === "application" && entry.targetLayer === "domain"));
     assert(result.imports.some((entry) => entry.sourceLayer === "domain" && entry.targetLayer === "domain"));
@@ -389,6 +390,35 @@ test("fails closed for unknown queries, non-literal imports, and unresolved loca
   assert(error.violations.some((violation) => violation.kind === "non-literal dynamic import" && violation.reason === "dynamic, module, and import-type references must use a string literal"));
 });
 
+test("rejects direct Vite glob calls in every layer regardless of argument shape", async () => {
+  const reason = "Vite import.meta.glob is forbidden in source layers because Vite is not a core dependency";
+  const error = await rejectedFixture({
+    "src/edge/same-layer.ts": "const modules = import.meta.glob('./*.ts'); void modules;\n",
+    "src/application/array.ts": "const modules = import.meta.glob(['../edge/*.ts', '../domain/*.ts']); void modules;\n",
+    "src/domain/literal.ts": "const modules = import.meta.glob('../edge/*.ts'); void modules;\n",
+    "src/domain/options.ts": [
+      "const pattern = '../application/*.ts';",
+      "const modules = import.meta.glob<{ default: unknown }>(pattern, { eager: true, query: '?raw' });",
+      "void modules;",
+    ].join("\n"),
+  });
+
+  assert.deepEqual(
+    error.violations.map(({ source, kind, specifier, reason: violationReason }) => ({
+      source,
+      kind,
+      specifier,
+      reason: violationReason,
+    })),
+    [
+      { source: "src/application/array.ts", kind: "Vite import.meta.glob call", specifier: undefined, reason },
+      { source: "src/domain/literal.ts", kind: "Vite import.meta.glob call", specifier: undefined, reason },
+      { source: "src/domain/options.ts", kind: "Vite import.meta.glob call", specifier: undefined, reason },
+      { source: "src/edge/same-layer.ts", kind: "Vite import.meta.glob call", specifier: undefined, reason },
+    ],
+  );
+});
+
 test("accepts same-layer and inward triple-slash path references from compiler metadata", async () => {
   await withFixture({
     "src/edge/main.ts": [
@@ -464,14 +494,17 @@ test("fails closed on unsupported compiler reference, AMD, and no-default-lib di
   }
 });
 
-test("accepts the actual edge-only production source and retains worker import evidence", async () => {
+test("accepts the actual edge-only production source and retains one worker import evidence entry", async () => {
   const result = await checkBoundaries(projectRoot);
   assert.equal(result.filesChecked, 2);
-  assert(result.imports.some((entry) => (
-    entry.source === "src/edge/main.ts"
-      && entry.specifier === "./processing-worker.ts?worker&url"
-      && entry.resolved === "src/edge/processing-worker.ts"
-      && entry.sourceLayer === "edge"
-      && entry.targetLayer === "edge"
-  )));
+  assert.deepEqual(result.imports, [{
+    source: "src/edge/main.ts",
+    sourceLayer: "edge",
+    line: 1,
+    column: 1,
+    kind: "ordinary import",
+    specifier: "./processing-worker.ts?worker&url",
+    resolved: "src/edge/processing-worker.ts",
+    targetLayer: "edge",
+  }]);
 });

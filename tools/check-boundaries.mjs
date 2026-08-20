@@ -12,8 +12,11 @@ import {
   isExternalModuleReference,
   isImportDeclaration,
   isImportEqualsDeclaration,
+  isIdentifier,
   isImportTypeNode,
   isLiteralTypeNode,
+  isMetaProperty,
+  isPropertyAccessExpression,
   isStringLiteral,
 } from "typescript/unstable/ast";
 
@@ -147,6 +150,19 @@ function sourceOffsetPosition(sourceFile, offset) {
   return { line: position.line + 1, column: position.character + 1 };
 }
 
+function isDirectViteGlobCall(node) {
+  if (!isCallExpression(node) || !isPropertyAccessExpression(node.expression)) {
+    return false;
+  }
+  const importMeta = node.expression.expression;
+  return isIdentifier(node.expression.name)
+    && node.expression.name.text === "glob"
+    && isMetaProperty(importMeta)
+    && importMeta.keywordToken === SyntaxKind.ImportKeyword
+    && isIdentifier(importMeta.name)
+    && importMeta.name.text === "meta";
+}
+
 function collectReferences(sourceFile) {
   const references = [];
 
@@ -209,6 +225,14 @@ function collectReferences(sourceFile) {
       } else {
         references.push({ kind: "non-literal import type", node: undefined, specifier: undefined, ...position });
       }
+    } else if (isDirectViteGlobCall(node)) {
+      references.push({
+        kind: "Vite import.meta.glob call",
+        specifier: undefined,
+        unsupported: true,
+        unsupportedReason: "Vite import.meta.glob is forbidden in source layers because Vite is not a core dependency",
+        ...sourcePosition(sourceFile, node),
+      });
     } else if (isCallExpression(node) && node.expression.kind === SyntaxKind.ImportKeyword) {
       const position = sourcePosition(sourceFile, node);
       const argument = node.arguments.length === 1 ? node.arguments[0] : undefined;
