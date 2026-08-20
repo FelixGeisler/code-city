@@ -68,22 +68,33 @@ class ObservationRows {
   disable(row: number): void { this.codes[row] = ROW_DISABLED; }
   setOwned(row: number, starts: readonly number[], ends: readonly number[]): void { this.ownedOffsets[row] = this.ownedStarts.length; this.ownedCounts[row] = starts.length; this.ownedStarts.push(...starts); this.ownedEnds.push(...ends); }
   finish(source: string) {
-    const requiredEndpoints: number[] = [];
+    let requiredEndpointCapacity = 0;
+    for (let row = 0; row < this.size; row += 1) {
+      const code = this.codes[row]!;
+      if (code !== ROW_DISABLED) requiredEndpointCapacity += 2 + (code === ROW_UNIT ? this.ownedCounts[row]! * 2 : 0);
+    }
+    const requiredEndpoints = new Uint32Array(requiredEndpointCapacity);
+    let collectedEndpointCount = 0;
     for (let row = 0; row < this.size; row += 1) {
       const code = this.codes[row]!;
       if (code === ROW_DISABLED) continue;
-      requiredEndpoints.push(this.starts[row]!, this.ends[row]!);
+      requiredEndpoints[collectedEndpointCount++] = this.starts[row]!;
+      requiredEndpoints[collectedEndpointCount++] = this.ends[row]!;
       if (code !== ROW_UNIT) continue;
       const offset = this.ownedOffsets[row]!, count = this.ownedCounts[row]!;
-      for (let owned = 0; owned < count; owned += 1) requiredEndpoints.push(this.ownedStarts[offset + owned]!, this.ownedEnds[offset + owned]!);
+      for (let owned = 0; owned < count; owned += 1) {
+        requiredEndpoints[collectedEndpointCount++] = this.ownedStarts[offset + owned]!;
+        requiredEndpoints[collectedEndpointCount++] = this.ownedEnds[offset + owned]!;
+      }
     }
-    requiredEndpoints.sort((left, right) => left - right);
+    invariant(collectedEndpointCount === requiredEndpointCapacity, "Missing required parser endpoint");
+    requiredEndpoints.sort();
     let endpointCount = 0;
-    for (const endpoint of requiredEndpoints) {
-      invariant(Number.isSafeInteger(endpoint) && endpoint >= 0 && endpoint <= source.length, "Invalid parser endpoint");
+    for (let index = 0; index < requiredEndpoints.length; index += 1) {
+      const endpoint = requiredEndpoints[index]!;
+      invariant(endpoint <= source.length, "Invalid parser endpoint");
       if (endpointCount === 0 || requiredEndpoints[endpointCount - 1] !== endpoint) requiredEndpoints[endpointCount++] = endpoint;
     }
-    requiredEndpoints.length = endpointCount;
     const byteEndpoints = new Uint32Array(endpointCount);
     let endpointIndex = 0, utf16Offset = 0, utf8Offset = 0;
     for (const scalar of source) {
@@ -97,7 +108,9 @@ class ObservationRows {
     }
     if (requiredEndpoints[endpointIndex] === utf16Offset) byteEndpoints[endpointIndex++] = utf8Offset;
     invariant(endpointIndex === endpointCount, "Invalid parser endpoint");
+    const asciiOnly = utf8Offset === utf16Offset;
     const translate = (endpoint: number): number => {
+      if (asciiOnly) return endpoint;
       let low = 0, high = endpointCount;
       while (low < high) { const middle = (low + high) >>> 1; if (requiredEndpoints[middle]! < endpoint) low = middle + 1; else high = middle; }
       invariant(requiredEndpoints[low] === endpoint, "Missing parser endpoint translation");
