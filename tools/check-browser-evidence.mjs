@@ -24,11 +24,14 @@ function invariant(condition, message) {
 }
 
 function chromeCandidates() {
-  return [
-    process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, "Google", "Chrome", "Application", "chrome.exe"),
-    process.env["PROGRAMFILES(X86)"] && path.join(process.env["PROGRAMFILES(X86)"], "Google", "Chrome", "Application", "chrome.exe"),
-    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Google", "Chrome", "Application", "chrome.exe"),
-  ].filter(Boolean);
+  if (process.platform === "win32") {
+    return [
+      process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, "Google", "Chrome", "Application", "chrome.exe"),
+      process.env["PROGRAMFILES(X86)"] && path.join(process.env["PROGRAMFILES(X86)"], "Google", "Chrome", "Application", "chrome.exe"),
+      process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Google", "Chrome", "Application", "chrome.exe"),
+    ].filter(Boolean);
+  }
+  return ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/opt/google/chrome/chrome"];
 }
 
 async function findChrome() {
@@ -42,13 +45,23 @@ async function findChrome() {
 }
 
 async function executableVersion(executable) {
-  const escaped = executable.replaceAll("'", "''");
-  const version = await new Promise((resolve, reject) => execFile(
-    "powershell.exe",
-    ["-NoProfile", "-Command", `(Get-Item -LiteralPath '${escaped}').VersionInfo.ProductVersion`],
-    { encoding: "utf8" },
-    (error, stdout) => error ? reject(error) : resolve(stdout.trim()),
-  ));
+  let version;
+  if (process.platform === "win32") {
+    const escaped = executable.replaceAll("'", "''");
+    version = await new Promise((resolve, reject) => execFile(
+      "powershell.exe",
+      ["-NoProfile", "-Command", `(Get-Item -LiteralPath '${escaped}').VersionInfo.ProductVersion`],
+      { encoding: "utf8" },
+      (error, stdout) => error ? reject(error) : resolve(stdout.trim()),
+    ));
+  } else {
+    version = await new Promise((resolve, reject) => execFile(
+      executable,
+      ["--version"],
+      { encoding: "utf8" },
+      (error, stdout) => error ? reject(error) : resolve(stdout.trim().replace(/^Google Chrome\s+/u, "")),
+    ));
+  }
   invariant(/^\d+\.\d+\.\d+\.\d+$/u.test(version), "Installed Google Chrome version could not be recorded");
   return version;
 }
