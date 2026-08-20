@@ -1,4 +1,4 @@
-import { FAILURE_CATEGORIES, type FailureCategory } from "./resolution";
+import { FAILURE_CATEGORIES, FAILURE_CODES, type FailureCategory, type FailureCode } from "./resolution";
 import type { RepositoryReference } from "../domain/repository-reference";
 
 export type WorkerCommand =
@@ -6,7 +6,8 @@ export type WorkerCommand =
   | Readonly<{ type: "STOP"; generation: number }>;
 
 export type WorkerMessage =
-  | Readonly<{ type: "FAILURE"; generation: number; category: FailureCategory }>
+  | Readonly<{ type: "FAILURE"; generation: number; category: FailureCategory; code?: FailureCode }>
+  | Readonly<{ type: "PROVIDER_DRAINED_STATIC_ENTERED"; generation: number }>
   | Readonly<{ type: "ATTEMPT_DRAINED"; generation: number }>;
 
 type DataRecord = Record<string, unknown>;
@@ -72,13 +73,39 @@ export function parseWorkerCommand(value: unknown): WorkerCommand | undefined {
     : undefined;
 }
 
+function validFailureCode(category: FailureCategory, code: unknown): code is FailureCode {
+  if (typeof code !== "string" || !(FAILURE_CODES as readonly string[]).includes(code)) {
+    return false;
+  }
+  return category === "No supported modules"
+    ? code === "ADM-06" || code === "ADM-07"
+    : category === "Source admission failed" && code.startsWith("M1-ADM-");
+}
+
 export function parseWorkerMessage(value: unknown, expectedGeneration: number): WorkerMessage | undefined {
+  const codedFailure = ownDataRecord(value, ["type", "generation", "category", "code"]);
+  if (codedFailure?.type === "FAILURE"
+    && codedFailure.generation === expectedGeneration
+    && generation(codedFailure.generation)
+    && typeof codedFailure.category === "string"
+    && (FAILURE_CATEGORIES as readonly string[]).includes(codedFailure.category)
+    && validFailureCode(codedFailure.category as FailureCategory, codedFailure.code)) {
+    return {
+      type: "FAILURE",
+      generation: codedFailure.generation,
+      category: codedFailure.category as FailureCategory,
+      code: codedFailure.code,
+    };
+  }
+
   const failure = ownDataRecord(value, ["type", "generation", "category"]);
   if (failure?.type === "FAILURE"
     && failure.generation === expectedGeneration
     && generation(failure.generation)
     && typeof failure.category === "string"
-    && (FAILURE_CATEGORIES as readonly string[]).includes(failure.category)) {
+    && (FAILURE_CATEGORIES as readonly string[]).includes(failure.category)
+    && failure.category !== "No supported modules"
+    && failure.category !== "Source admission failed") {
     return {
       type: "FAILURE",
       generation: failure.generation,
@@ -86,10 +113,14 @@ export function parseWorkerMessage(value: unknown, expectedGeneration: number): 
     };
   }
 
-  const drained = ownDataRecord(value, ["type", "generation"]);
-  return drained?.type === "ATTEMPT_DRAINED"
-    && drained.generation === expectedGeneration
-    && generation(drained.generation)
-    ? { type: "ATTEMPT_DRAINED", generation: drained.generation }
+  const terminal = ownDataRecord(value, ["type", "generation"]);
+  if (terminal?.generation !== expectedGeneration || !generation(terminal.generation)) {
+    return undefined;
+  }
+  if (terminal.type === "PROVIDER_DRAINED_STATIC_ENTERED") {
+    return { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: terminal.generation };
+  }
+  return terminal.type === "ATTEMPT_DRAINED"
+    ? { type: "ATTEMPT_DRAINED", generation: terminal.generation }
     : undefined;
 }

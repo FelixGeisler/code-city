@@ -57,6 +57,8 @@ test("repository URL policy trims only surrounding ASCII whitespace and preserve
     "https://github.com/owner\\x/repo", "https://github.com/owner/repo\\x",
     "https://github.com/./repo", "https://github.com/../repo",
     "https://github.com/owner/.", "https://github.com/owner/..",
+    `https://github.com/ow${String.fromCharCode(0xd800)}ner/repo`,
+    `https://github.com/owner/re${String.fromCharCode(0xdc00)}po`,
     "\vhttps://github.com/owner/repo",
   ];
   for (const value of rejected) {
@@ -75,6 +77,15 @@ test("gateway independently encodes inert segments without allowing URL route no
   ]) {
     assert.match(githubRevisionUrl(reference), /^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+\/commits\?per_page=1&page=1$/);
   }
+});
+
+test("route encoding rejects rather than mutates lone surrogates before Fetch", async () => {
+  const invalid = { owner: `ow${String.fromCharCode(0xd800)}ner`, repository: "repo" };
+  assert.throws(() => githubRevisionUrl(invalid), /Unicode scalar/);
+  let calls = 0;
+  const gateway = createGithubRevisionGateway(async () => { calls += 1; return response(); });
+  await assert.rejects(gateway(invalid, new AbortController().signal), /Unicode scalar/);
+  assert.equal(calls, 0);
 });
 
 test("gateway makes the exact sole native-fetch request", async () => {
@@ -147,6 +158,7 @@ test("gateway projects only a valid first own primitive revision", async () => {
   const invalidBodies = [
     "{}", "[null]", "[{}]", `[{"SHA":"${SHA40}"}]`, `[{"sha":${JSON.stringify({ value: SHA40 })}}]`,
     `[{"__proto__":{"sha":"${SHA40}"}}]`, `[{"sha":"${"a".repeat(39)}"}]`,
+    `[{"sha":"${"a".repeat(41)}"}]`, `[{"sha":"${"a".repeat(63)}"}]`,
     `[{"sha":"${"a".repeat(65)}"}]`, `[{"sha":"${"A".repeat(40)}"}]`, "not json",
   ];
   for (const body of invalidBodies) {

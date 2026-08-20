@@ -87,6 +87,32 @@ test("mapped FAILURE is shown, then matching drain performs normal cleanup exact
   assert.equal(f.events.filter((event) => event === "view:Revision unavailable").length, 1);
 });
 
+test("validated static barrier keeps the worker internal and cancellation terminates it without STOP", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  const transport = f.transports[0];
+  transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+  assert.equal(transport.closeCalls, 0);
+  assert.deepEqual(transport.sent.map((message) => message.type), ["START"]);
+  f.cancel();
+  assert.equal(transport.closeCalls, 1);
+  assert.equal(transport.detachCalls, 1);
+  assert.deepEqual(transport.sent.map((message) => message.type), ["START"]);
+  assert.equal(f.events.at(-2), "worker:detach");
+  assert.equal(f.events.at(-1), "worker:close");
+});
+
+test("a duplicate or raced static barrier fails closed and terminates exactly once", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  const transport = f.transports[0];
+  const barrier = { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 };
+  transport.handlers.message(barrier);
+  transport.handlers.message(barrier);
+  assert.equal(transport.closeCalls, 1);
+  assert.equal(f.events.filter((event) => event === "view:Provider/resolution failure").length, 1);
+});
+
 test("queued current FAILURE cannot replace synchronously selected cancellation", () => {
   const f = fixture();
   f.controller.submit(VALID);

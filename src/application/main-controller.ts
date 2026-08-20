@@ -1,4 +1,5 @@
 import { parseWorkerMessage, readGeneration, type WorkerCommand } from "./protocol";
+import type { FailureCode } from "./resolution";
 import { parseRepositoryReference } from "../domain/repository-reference";
 
 export type WorkerTransport = Readonly<{
@@ -14,7 +15,7 @@ export type WorkerTransport = Readonly<{
 export type AttemptView = Readonly<{
   invalid(): void;
   working(cancel: () => void): void;
-  failure(category: string): void;
+  failure(category: string, code?: FailureCode): void;
   cancelled(): void;
 }>;
 
@@ -24,6 +25,7 @@ type ActiveBridge = {
   detach: () => void;
   failureShown: boolean;
   generation: number;
+  staticEntered: boolean;
   transport: WorkerTransport;
 };
 
@@ -52,12 +54,16 @@ export function createMainController(
     }
   }
 
-  function showFailure(bridge: ActiveBridge, category = "Provider/resolution failure"): void {
+  function showFailure(
+    bridge: ActiveBridge,
+    category = "Provider/resolution failure",
+    code?: FailureCode,
+  ): void {
     if (bridge.cancelled || bridge.failureShown) {
       return;
     }
     bridge.failureShown = true;
-    view.failure(category);
+    view.failure(category, code);
   }
 
   function drainImpossible(bridge: ActiveBridge): void {
@@ -76,6 +82,10 @@ export function createMainController(
     }
     bridge.cancelled = true;
     view.cancelled();
+    if (bridge.staticEntered) {
+      cleanup(bridge);
+      return;
+    }
     try {
       bridge.transport.send({ type: "STOP", generation: bridge.generation });
     } catch {
@@ -110,6 +120,7 @@ export function createMainController(
       detach: () => {},
       failureShown: false,
       generation,
+      staticEntered: false,
       transport,
     };
     active = bridge;
@@ -132,7 +143,18 @@ export function createMainController(
             return;
           }
           if (message.type === "FAILURE") {
-            showFailure(bridge, message.category);
+            showFailure(bridge, message.category, message.code);
+            return;
+          }
+          if (message.type === "PROVIDER_DRAINED_STATIC_ENTERED") {
+            if (bridge.cancelled || bridge.failureShown || bridge.staticEntered) {
+              if (!bridge.cancelled) {
+                showFailure(bridge);
+              }
+              cleanup(bridge);
+              return;
+            }
+            bridge.staticEntered = true;
             return;
           }
           if (!bridge.cancelled && !bridge.failureShown) {

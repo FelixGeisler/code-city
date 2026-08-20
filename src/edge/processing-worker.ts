@@ -1,10 +1,12 @@
 import { parseWorkerCommand } from "../application/protocol";
 import { createWorkerAttemptPipeline } from "../application/worker-attempt";
 import { createGithubRevisionGateway } from "./github-revision-gateway";
+import { createGithubSourceGateway } from "./github-source-gateway";
 
 const workerScope: DedicatedWorkerGlobalScope = self;
 const pipeline = createWorkerAttemptPipeline(
   createGithubRevisionGateway(fetch),
+  createGithubSourceGateway(fetch),
   (message) => workerScope.postMessage(message),
 );
 
