@@ -107,21 +107,51 @@ test("all table cases traverse the production adapter, domain, and application p
   }
 });
 
-test("initialization failures release all three admitted sources before one atomic M1-MET-1 result", async () => {
-  for (const injected of [
-    "runtime-import", "Parser.init/runtime-WASM", "JS grammar load", "TS grammar load", "TSX grammar load",
-  ]) {
+test("initialization failures in exact order release all three sources without creating parser resources", async () => {
+  const rows = [
+    ["runtime-import", 0],
+    ["Parser.init/runtime-WASM", 0],
+    ["JS grammar load", 1],
+    ["TS grammar load", 2],
+    ["TSX grammar load", 3],
+  ];
+  for (const [injected, failingLoad] of rows) {
     const order = [];
+    let grammarLoads = 0;
+    class FakeParser {
+      static async init() {
+        order.push("Parser.init/runtime-WASM");
+        if (injected === "Parser.init/runtime-WASM") throw new Error(injected);
+      }
+    }
+    const parser = createTreeSitterAdapter(assets, {
+      async importRuntime() {
+        order.push("runtime-import");
+        if (injected === "runtime-import") throw new Error(injected);
+        return {
+          Parser: FakeParser,
+          Language: {
+            async load() {
+              grammarLoads += 1;
+              order.push(["JS grammar load", "TS grammar load", "TSX grammar load"][grammarLoads - 1]);
+              if (grammarLoads === failingLoad) throw new Error(injected);
+              return {};
+            },
+          },
+        };
+      },
+      async loadBytes() { return new Uint8Array([0]); },
+      observeResource: (event) => order.push(event),
+    });
     const result = await processAdmittedBaseMetrics([
       { canonicalPath: "a.js", normalizedSource: "" },
       { canonicalPath: "b.ts", normalizedSource: "" },
       { canonicalPath: "c.tsx", normalizedSource: "" },
-    ], {
-      async initialize() { order.push(`failure:${injected}`); throw new Error(injected); },
-      async project() { order.push("parser-created"); throw new Error("must not parse"); },
-    }, (event) => order.push(event));
+    ], parser, (event) => order.push(event));
     assert.deepEqual(result, { kind: "failure", category: "Metric processing failed", code: "M1-MET-1" });
-    assert.deepEqual(order, [`failure:${injected}`, "source-released", "source-released", "source-released"]);
+    assert.deepEqual(order.slice(-3), ["source-released", "source-released", "source-released"], injected);
+    assert.equal(order.some((entry) => String(entry).includes("created")), false, injected);
+    assert.equal(grammarLoads, failingLoad, injected);
   }
 });
 

@@ -44,29 +44,150 @@ function digest(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-export async function generateCanonicalWasmInventory() {
-  const fixture = await readFile(path.join(projectRoot, "test", "fixtures", "wasm-inventory.tsv"));
-  invariant(fixture.byteLength === 10_103, "Canonical WASM inventory byte length changed");
-  invariant(digest(fixture) === "b4b6e4528e5147ef618593b2504f204de6a3aac2ce06d9cfe2a3661f435756bb", "Canonical WASM inventory digest changed");
-  const text = fixture.toString("utf8");
-  invariant(!text.startsWith("\uFEFF") && text.endsWith("\n") && !text.includes("\r"), "Canonical WASM inventory encoding changed");
-  invariant(text.split("\n").length - 1 === 217, "Canonical WASM inventory row count changed");
+const utf8 = new TextEncoder();
+const decoder = new TextDecoder("utf8", { fatal: true });
+const valueTypes = new Map([[0x7f, "i32"], [0x7e, "i64"], [0x7d, "f32"], [0x7c, "f64"], [0x70, "funcref"], [0x6f, "externref"]]);
+const externalKinds = ["function", "table", "memory", "global", "tag"];
 
-  const wasmAssets = SELECTED_ASSETS.filter((asset) => asset.relativePath.endsWith(".wasm"));
-  for (const asset of wasmAssets) {
-    const bytes = await readFile(path.join(projectRoot, ...asset.relativePath.split("/")));
-    const module = new WebAssembly.Module(bytes);
-    const imports = WebAssembly.Module.imports(module);
-    const exports = WebAssembly.Module.exports(module);
-    const sectionName = path.posix.basename(asset.relativePath);
-    const sectionStart = text.indexOf(`ASSET\t${sectionName}\n`);
-    invariant(sectionStart >= 0, `Inventory has no ${sectionName} section`);
-    const nextSection = text.indexOf("ASSET\t", sectionStart + 1);
-    const section = text.slice(sectionStart, nextSection < 0 ? text.length : nextSection);
-    for (const entry of imports) invariant(section.includes(`IMPORT\t${entry.module}\t${entry.name}\t${entry.kind}\t`), `Inventory import drift: ${sectionName}/${entry.module}/${entry.name}`);
-    for (const entry of exports) invariant(section.includes(`EXPORT\t${entry.name}\t${entry.kind}\t`), `Inventory export drift: ${sectionName}/${entry.name}`);
+function reader(bytes, start = 0, end = bytes.length) {
+  let offset = start;
+  return {
+    get offset() { return offset; },
+    get done() { return offset === end; },
+    byte() { invariant(offset < end, "Truncated WASM byte"); return bytes[offset++]; },
+    varuint() {
+      let value = 0;
+      let shift = 0;
+      for (;;) {
+        const byte = this.byte();
+        value += (byte & 0x7f) * 2 ** shift;
+        invariant(Number.isSafeInteger(value) && shift <= 49, "Unsupported WASM integer");
+        if ((byte & 0x80) === 0) return value;
+        shift += 7;
+      }
+    },
+    string() {
+      const length = this.varuint();
+      invariant(offset + length <= end, "Truncated WASM string");
+      const value = decoder.decode(bytes.subarray(offset, offset + length));
+      offset += length;
+      return value;
+    },
+    subreader(length) {
+      invariant(offset + length <= end, "Truncated WASM section");
+      const nested = reader(bytes, offset, offset + length);
+      offset += length;
+      return nested;
+    },
+  };
+}
+
+function limits(input) {
+  const flags = input.varuint();
+  invariant((flags & ~7) === 0, "Unsupported WASM limits flags");
+  const minimum = input.varuint();
+  const maximum = (flags & 1) ? input.varuint() : undefined;
+  return { minimum, maximum, shared: Boolean(flags & 2), memory64: Boolean(flags & 4) };
+}
+
+function limitDescriptor(value) {
+  return `min=${value.minimum};max=${value.maximum ?? "-"};shared=${value.shared};memory64=${value.memory64}`;
+}
+
+function parseCanonicalInventoryAsset(bytes) {
+  invariant(bytes.length >= 8 && Buffer.from(bytes.subarray(0, 8)).equals(Buffer.from([0, 97, 115, 109, 1, 0, 0, 0])), "Invalid WASM header");
+  const input = reader(bytes, 8);
+  const imports = [];
+  const exports = [];
+  const memories = [];
+  while (!input.done) {
+    const sectionId = input.byte();
+    const section = input.subreader(input.varuint());
+    if (sectionId === 2) {
+      const count = section.varuint();
+      for (let index = 0; index < count; index += 1) {
+        const module = section.string();
+        const name = section.string();
+        const kindCode = section.byte();
+        const kind = externalKinds[kindCode];
+        invariant(kind, "Unsupported WASM import kind");
+        let descriptor;
+        if (kind === "function") descriptor = `type[${section.varuint()}]`;
+        else if (kind === "table") {
+          const type = valueTypes.get(section.byte());
+          invariant(type, "Unsupported WASM table type");
+          descriptor = `${type};${limitDescriptor(limits(section))}`;
+        } else if (kind === "memory") {
+          const memoryLimits = limits(section);
+          descriptor = limitDescriptor(memoryLimits);
+          memories.push({ origin: "import", module, name, ...memoryLimits });
+        } else if (kind === "global") {
+          const type = valueTypes.get(section.byte());
+          const mutable = section.byte();
+          invariant(type && (mutable === 0 || mutable === 1), "Unsupported WASM global type");
+          descriptor = `${type};mutable=${Boolean(mutable)}`;
+        } else {
+          descriptor = `type[${section.varuint()}]`;
+          section.byte();
+        }
+        imports.push([module, name, kind, descriptor]);
+      }
+      invariant(section.done, "Trailing WASM import bytes");
+    } else if (sectionId === 5) {
+      const count = section.varuint();
+      for (let index = 0; index < count; index += 1) memories.push({ origin: "defined", module: "-", name: "-", ...limits(section) });
+      invariant(section.done, "Trailing WASM memory bytes");
+    } else if (sectionId === 7) {
+      const count = section.varuint();
+      for (let index = 0; index < count; index += 1) {
+        const name = section.string();
+        const kind = externalKinds[section.byte()];
+        invariant(kind, "Unsupported WASM export kind");
+        exports.push([name, kind, String(section.varuint())]);
+      }
+      invariant(section.done, "Trailing WASM export bytes");
+    }
   }
-  return fixture;
+  return { imports, exports, memories };
+}
+
+function unsignedTupleCompare(left, right) {
+  const leftBytes = utf8.encode(left.join("\0"));
+  const rightBytes = utf8.encode(right.join("\0"));
+  const length = Math.min(leftBytes.length, rightBytes.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = leftBytes[index] - rightBytes[index];
+    if (difference) return difference;
+  }
+  return leftBytes.length - rightBytes.length;
+}
+
+export async function generateCanonicalWasmInventory() {
+  const rows = [];
+  for (const asset of SELECTED_ASSETS.filter((candidate) => candidate.relativePath.endsWith(".wasm"))) {
+    const bytes = await readFile(path.join(projectRoot, ...asset.relativePath.split("/")));
+    const parsed = parseCanonicalInventoryAsset(bytes);
+    rows.push(`ASSET\t${path.posix.basename(asset.relativePath)}`);
+    rows.push("IMPORT\tmodule\tname\tkind\tdescriptor");
+    for (const fields of parsed.imports.sort(unsignedTupleCompare)) rows.push(`IMPORT\t${fields.join("\t")}`);
+    rows.push("EXPORT\tname\tkind\tindex");
+    for (const fields of parsed.exports.sort(unsignedTupleCompare)) rows.push(`EXPORT\t${fields.join("\t")}`);
+    rows.push("MEMORY\tindex\torigin\tmodule\tname\tmin-pages\tmax-pages\tshared\tmemory64\tmin-bytes\tmax-bytes");
+    for (const [index, memory] of parsed.memories.entries()) {
+      rows.push([
+        "MEMORY", index, memory.origin, memory.module, memory.name, memory.minimum, memory.maximum ?? "-",
+        memory.shared, memory.memory64, memory.minimum * 65_536,
+        memory.maximum === undefined ? "-" : memory.maximum * 65_536,
+      ].join("\t"));
+    }
+  }
+  const generated = Buffer.from(`${rows.join("\n")}\n`, "utf8");
+  invariant(generated.byteLength === 10_103, "Generated canonical WASM inventory byte length changed");
+  invariant(rows.length === 217, "Generated canonical WASM inventory row count changed");
+  invariant(digest(generated) === "b4b6e4528e5147ef618593b2504f204de6a3aac2ce06d9cfe2a3661f435756bb", "Generated canonical WASM inventory digest changed");
+  const fixture = await readFile(path.join(projectRoot, "test", "fixtures", "wasm-inventory.tsv"));
+  invariant(generated.equals(fixture), "Tracked canonical WASM inventory differs from generated evidence");
+  return generated;
 }
 
 export async function checkParserAssets() {
