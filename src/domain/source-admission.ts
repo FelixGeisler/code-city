@@ -173,7 +173,7 @@ export function prepareSourceInventory(entries: readonly ProjectedTreeEntry[]): 
 
 export type SourceAdmissionSession = Readonly<{
   add(candidate: SourceCandidate, decodedSource: string): AdmissionFailure | undefined;
-  complete(): readonly AdmittedModule[];
+  complete(): AdmittedModule[];
 }>;
 
 export function createSourceAdmissionSession(): SourceAdmissionSession {

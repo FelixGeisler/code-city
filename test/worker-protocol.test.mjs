@@ -48,10 +48,12 @@ test("command protocol is closed, own-data-only, and generation-tagged", () => {
 test("worker-to-main protocol rejects unknown, inherited, accessor, malformed, and wrong-generation values", () => {
   const failure = { type: "FAILURE", generation: 7, category: "Revision unavailable" };
   const codedFailure = { type: "FAILURE", generation: 7, category: "Source admission failed", code: "M1-ADM-4" };
+  const metricFailure = { type: "FAILURE", generation: 7, category: "Metric processing failed", code: "M1-MET-1" };
   const staticEntered = { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 7 };
   const drained = { type: "ATTEMPT_DRAINED", generation: 7 };
   assert.deepEqual(parseWorkerMessage(failure, 7), failure);
   assert.deepEqual(parseWorkerMessage(codedFailure, 7), codedFailure);
+  assert.deepEqual(parseWorkerMessage(metricFailure, 7), metricFailure);
   assert.deepEqual(parseWorkerMessage(staticEntered, 7), staticEntered);
   assert.deepEqual(parseWorkerMessage(drained, 7), drained);
   for (const invalid of [
@@ -59,6 +61,7 @@ test("worker-to-main protocol rejects unknown, inherited, accessor, malformed, a
     { ...failure, extra: true }, { type: "SUCCESS", generation: 7, revision: SHA },
     { type: "Source admission failed", generation: 7, category: "Source admission failed" },
     { type: "FAILURE", generation: 7, category: "No supported modules", code: "M1-ADM-1" },
+    { type: "FAILURE", generation: 7, category: "Metric processing failed", code: "M1-ADM-1" },
     { type: "ATTEMPT_DRAINED", generation: 7, extra: true },
     inherited(failure), accessor(failure, "category"), accessor(drained, "generation"),
     new Proxy(failure, { ownKeys() { throw new Error("trap"); } }),
@@ -108,6 +111,38 @@ test("STOP aborts current work, releases it, stops downstream publication, and d
   pipeline.stop(4);
   await tick();
   assert.equal(order.filter((entry) => entry === "ATTEMPT_DRAINED").length, 1);
+});
+
+test("metric initialization starts only after the source-free static barrier and an ordinary failure drains atomically", async () => {
+  const order = [];
+  const pipeline = createWorkerAttemptPipeline(async () => ({ kind: "revision", revision: SHA }), {
+    async loadInventory() {
+      return { kind: "inventory", entries: [
+        { path: "a.js", mode: "100644", type: "blob", sha: SHA },
+        { path: "b.ts", mode: "100644", type: "blob", sha: SHA },
+        { path: "c.tsx", mode: "100644", type: "blob", sha: SHA },
+      ] };
+    },
+    async readSource() { return { kind: "source", decodedSource: "" }; },
+  }, (message) => order.push(message), undefined, {
+    async initialize() { order.push("parser:initialize"); throw new Error("runtime-import"); },
+    async project() { order.push("parser:project"); throw new Error("must not parse"); },
+  });
+  pipeline.start(REPOSITORY, 8);
+  await tick();
+  await tick();
+  assert.deepEqual(order, [
+    { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 8 },
+    "parser:initialize",
+    { type: "FAILURE", generation: 8, category: "Metric processing failed", code: "M1-MET-1" },
+    { type: "ATTEMPT_DRAINED", generation: 8 },
+  ]);
+  assert.deepEqual(pipeline.ownership(), {
+    phase: "idle",
+    selectedRevisionRetained: false,
+    admittedModuleCount: 0,
+    providerResource: false,
+  });
 });
 
 test("complete admission crosses only the closed static barrier and retains no provider state", async () => {

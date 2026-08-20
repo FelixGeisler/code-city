@@ -46,7 +46,7 @@ export type RetrievalOwnership = Readonly<{
 }>;
 
 export type SourceRetrievalResult =
-  | Readonly<{ kind: "admitted"; selected: string; modules: readonly AdmittedModule[] }>
+  | Readonly<{ kind: "admitted"; selected: string; modules: AdmittedModule[] }>
   | SourceFailure
   | Readonly<{ kind: "cancelled" }>;
 
