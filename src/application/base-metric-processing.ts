@@ -14,7 +14,7 @@ export type SyntaxProjectionCapability = Readonly<{
   }>>;
 }>;
 
-export type MetricProcessingEvent = "source-released" | "analysis-retained";
+export type MetricProcessingEvent = "source-acquired" | "source-released" | "analysis-retained";
 
 export type BaseMetricProcessingResult =
   | Readonly<{ kind: "processed"; analyses: readonly BaseMetricAnalysis[] }>
@@ -40,6 +40,7 @@ export async function processAdmittedBaseMetrics(
     for (let index = 0; index < queue.length; index += 1) {
       const module = queue[index];
       if (!module) throw new Error("Missing admitted module");
+      observe("source-acquired");
       let stream: Awaited<ReturnType<SyntaxProjectionCapability["project"]>> | undefined;
       try {
         stream = await parser.project(selectGrammarFamily(module.canonicalPath), module.normalizedSource);
