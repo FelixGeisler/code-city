@@ -61,13 +61,37 @@ function assertProductionShape(manifest) {
   return workerAssets[0];
 }
 
-function assertClosedReference(reference, manifestPaths) {
+export function assertClosedReference(reference, manifestPaths) {
   invariant(!/^(?:https?:|\/\/|data:|blob:)/i.test(reference), `Remote or inline runtime reference is forbidden: ${reference}`);
+  invariant(!reference.includes("\\"), `Runtime reference contains a backslash separator: ${reference}`);
   invariant(reference.startsWith(PACKAGE_BASE_PATH), `Runtime reference is outside ${PACKAGE_BASE_PATH}: ${reference}`);
   const parsed = new URL(reference, "https://example.invalid");
   invariant(parsed.origin === "https://example.invalid", `Runtime reference is not same-origin: ${reference}`);
   invariant(!parsed.search && !parsed.hash, `Runtime reference must not contain a query or fragment: ${reference}`);
-  const relativePath = decodeURIComponent(parsed.pathname.slice(PACKAGE_BASE_PATH.length));
+  invariant(reference === parsed.pathname, `Runtime reference uses a noncanonical path alias: ${reference}`);
+  invariant(
+    parsed.pathname === PACKAGE_BASE_PATH || parsed.pathname.startsWith(PACKAGE_BASE_PATH),
+    `Runtime reference escapes ${PACKAGE_BASE_PATH}: ${reference}`,
+  );
+
+  const encodedPath = parsed.pathname.slice(PACKAGE_BASE_PATH.length);
+  let relativePath;
+  try {
+    relativePath = decodeURIComponent(encodedPath);
+  } catch {
+    throw new Error(`Runtime reference contains invalid URL encoding: ${reference}`);
+  }
+  invariant(!relativePath.includes("\\"), `Runtime reference contains a backslash separator: ${reference}`);
+  invariant(
+    relativePath === "" || (
+      !path.posix.isAbsolute(relativePath)
+      && path.posix.normalize(relativePath) === relativePath
+      && !relativePath.split("/").some((segment) => segment === "" || segment === "." || segment === "..")
+    ),
+    `Runtime reference has a noncanonical package path: ${reference}`,
+  );
+  const canonicalEncodedPath = relativePath.split("/").map(encodeURIComponent).join("/");
+  invariant(encodedPath === canonicalEncodedPath, `Runtime reference uses a noncanonical URL alias: ${reference}`);
   invariant(manifestPaths.has(relativePath || "index.html"), `Runtime reference is absent from the package: ${reference}`);
 }
 

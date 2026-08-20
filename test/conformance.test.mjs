@@ -6,6 +6,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { createServer as createViteServer } from "vite";
 import viteConfig from "../vite.config.mjs";
+import { assertClosedReference } from "../tools/audit-package.mjs";
 import { inspectDependencyClosure } from "../tools/check-dependencies.mjs";
 import {
   assertNoWorkerConstructionOrMessageContract,
@@ -103,6 +104,36 @@ test("the Vite shell is edge-only, static, policy-closed, and worker-inert", asy
   const workerSource = await readText("src/edge/processing-worker.ts");
   assertNoWorkerConstructionOrMessageContract(mainSource, "Main source");
   assertNoWorkerConstructionOrMessageContract(workerSource, "Worker source");
+});
+
+test("the package closure guard rejects path aliases and traversal before manifest lookup", () => {
+  const manifestPaths = new Set(["index.html", "assets/main.js", "assets/name with space.css"]);
+  for (const reference of [
+    "/code-city/",
+    "/code-city/index.html",
+    "/code-city/assets/main.js",
+    "/code-city/assets/name%20with%20space.css",
+  ]) {
+    assert.doesNotThrow(() => assertClosedReference(reference, manifestPaths));
+  }
+
+  for (const reference of [
+    "/code-city/../index.html",
+    "/code-city/%2e%2e/index.html",
+    "/code-city/assets%2fmain.js",
+    "/code-city/assets%5cmain.js",
+    "/code-city/assets\\main.js",
+    "/code-city/assets//main.js",
+    "/code-city/assets/./main.js",
+    "/code-city/%69ndex.html",
+    "/code-city/%",
+  ]) {
+    assert.throws(
+      () => assertClosedReference(reference, manifestPaths),
+      Error,
+      `Expected package closure rejection for ${reference}`,
+    );
+  }
 });
 
 test("the development command configuration starts at the public base and shuts down cleanly", async () => {

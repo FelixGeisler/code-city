@@ -4,11 +4,14 @@ import { existsSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { API } from "typescript/unstable/sync";
+import { createScanner } from "typescript/unstable/ast/scanner";
 import {
   SyntaxKind,
   isCallExpression,
   isExportDeclaration,
+  isExternalModuleReference,
   isImportDeclaration,
+  isImportEqualsDeclaration,
   isImportTypeNode,
   isLiteralTypeNode,
   isStringLiteral,
@@ -139,6 +142,11 @@ function sourcePosition(sourceFile, node) {
   return { line: position.line + 1, column: position.character + 1 };
 }
 
+function sourceOffsetPosition(sourceFile, offset) {
+  const position = sourceFile.getLineAndCharacterOfPosition(offset);
+  return { line: position.line + 1, column: position.character + 1 };
+}
+
 function collectReferences(sourceFile) {
   const references = [];
 
@@ -154,6 +162,25 @@ function collectReferences(sourceFile) {
         });
       } else {
         references.push({ kind: "ordinary import", node: undefined, specifier: undefined, ...position });
+      }
+    } else if (isImportEqualsDeclaration(node) && isExternalModuleReference(node.moduleReference)) {
+      const position = sourcePosition(sourceFile, node);
+      const argument = node.moduleReference.expression;
+      if (argument && isStringLiteral(argument)) {
+        references.push({
+          kind: node.isTypeOnly ? "type-only external-module import equals" : "external-module import equals",
+          node: argument,
+          resolution: "module-probe",
+          specifier: argument.text,
+          ...position,
+        });
+      } else {
+        references.push({
+          kind: node.isTypeOnly ? "non-literal type-only external-module import equals" : "non-literal external-module import equals",
+          node: undefined,
+          specifier: undefined,
+          ...position,
+        });
       }
     } else if (isExportDeclaration(node) && node.moduleSpecifier) {
       const position = sourcePosition(sourceFile, node);
@@ -206,6 +233,80 @@ function collectReferences(sourceFile) {
   return references;
 }
 
+function compilerPragmaName(comment) {
+  const body = comment.startsWith("///") ? comment.slice(3).trimStart() : "";
+  if (!body.startsWith("<")) {
+    return undefined;
+  }
+  let end = 1;
+  while (end < body.length && ![" ", "\t", "\r", "\n", "/", ">"].includes(body[end])) {
+    end += 1;
+  }
+  return body.slice(1, end).toLowerCase();
+}
+
+function collectUnsupportedCompilerPragmas(sourceFile) {
+  const references = [];
+  const scanner = createScanner(false, sourceFile.languageVariant, sourceFile.text);
+  const supportedReferences = [
+    ...sourceFile.referencedFiles,
+    ...sourceFile.typeReferenceDirectives,
+    ...sourceFile.libReferenceDirectives,
+  ];
+
+  for (let token = scanner.scan(); token !== SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+    if (token === SyntaxKind.SingleLineCommentTrivia) {
+      const start = scanner.getTokenStart();
+      const end = scanner.getTokenEnd();
+      const pragmaName = compilerPragmaName(scanner.getTokenText());
+      const representedInMetadata = supportedReferences.some((reference) => reference.pos >= start && reference.end <= end);
+      if ((pragmaName === "reference" && !representedInMetadata)
+        || pragmaName === "amd-dependency"
+        || pragmaName === "amd-module") {
+        references.push({
+          kind: `unsupported ${pragmaName} compiler directive`,
+          specifier: undefined,
+          unsupported: true,
+          ...sourceOffsetPosition(sourceFile, start),
+        });
+      }
+      continue;
+    }
+    if (token !== SyntaxKind.WhitespaceTrivia
+      && token !== SyntaxKind.NewLineTrivia
+      && token !== SyntaxKind.MultiLineCommentTrivia
+      && token !== SyntaxKind.ShebangTrivia) {
+      break;
+    }
+  }
+  return references;
+}
+
+function collectCompilerReferences(sourceFile) {
+  const references = sourceFile.referencedFiles.map((reference) => ({
+    kind: "triple-slash path reference",
+    resolution: "path-reference",
+    specifier: reference.fileName,
+    ...sourceOffsetPosition(sourceFile, reference.pos),
+  }));
+
+  for (const [kind, directives] of [
+    ["triple-slash types reference", sourceFile.typeReferenceDirectives],
+    ["triple-slash lib reference", sourceFile.libReferenceDirectives],
+  ]) {
+    for (const directive of directives) {
+      references.push({
+        kind,
+        specifier: directive.fileName,
+        unsupported: true,
+        ...sourceOffsetPosition(sourceFile, directive.pos),
+      });
+    }
+  }
+  references.push(...collectUnsupportedCompilerPragmas(sourceFile));
+  return references;
+}
+
 function inspectQuery(specifier) {
   const queryIndex = specifier.indexOf("?");
   if (queryIndex === -1) {
@@ -237,6 +338,12 @@ function resolveModulePath(checker, moduleSpecifierNode) {
     }
   }
   return undefined;
+}
+
+function resolvePathReference(program, sourceFile, specifier) {
+  const candidate = path.resolve(path.dirname(sourceFile.fileName), specifier);
+  const target = program.getSourceFile(candidate);
+  return target ? pathForClassification(target.fileName) : undefined;
 }
 
 function displayResolvedPath(rootDirectory, resolvedPath) {
@@ -288,7 +395,7 @@ export async function checkBoundaries(rootDirectory = process.cwd()) {
     }
   }
 
-  const workerQueries = [];
+  const resolutionQueries = [];
   withCompilerProject(root, sourceFiles, new Map(), (project) => {
     const parseDiagnostics = project.program.getSyntacticDiagnostics();
     if (parseDiagnostics.length > 0) {
@@ -305,7 +412,8 @@ export async function checkBoundaries(rootDirectory = process.cwd()) {
         throw new Error(`TypeScript did not parse ${sourceClassification.relativePath}`);
       }
 
-      for (const reference of collectReferences(sourceFile)) {
+      const references = [...collectCompilerReferences(sourceFile), ...collectReferences(sourceFile)];
+      for (const reference of references) {
         const common = {
           source: sourceClassification.relativePath,
           sourceLayer: sourceClassification.layer,
@@ -315,7 +423,11 @@ export async function checkBoundaries(rootDirectory = process.cwd()) {
           specifier: reference.specifier,
         };
 
-        if (!reference.node || reference.specifier === undefined) {
+        if (reference.unsupported) {
+          violations.push({ ...common, reason: "unsupported compiler reference directive is forbidden" });
+          continue;
+        }
+        if (reference.specifier === undefined || (!reference.node && !reference.resolution)) {
           violations.push({ ...common, reason: "dynamic, module, and import-type references must use a string literal" });
           continue;
         }
@@ -329,13 +441,24 @@ export async function checkBoundaries(rootDirectory = process.cwd()) {
           if (!isLocalSpecifier(query.resolvedSpecifier)) {
             violations.push({ ...common, reason: "?worker&url must target a local module" });
           } else {
-            workerQueries.push({ ...common, resolvedSpecifier: query.resolvedSpecifier });
+            resolutionQueries.push({
+              ...common,
+              queryKind: "worker-url",
+              resolvedSpecifier: query.resolvedSpecifier,
+            });
           }
           continue;
         }
+        if (reference.resolution === "module-probe") {
+          resolutionQueries.push({ ...common, queryKind: "module", resolvedSpecifier: reference.specifier });
+          continue;
+        }
 
-        const resolvedPath = resolveModulePath(project.checker, reference.node);
-        if (!resolvedPath && isLocalSpecifier(reference.specifier)) {
+        const resolvedPath = reference.resolution === "path-reference"
+          ? resolvePathReference(project.program, sourceFile, reference.specifier)
+          : resolveModulePath(project.checker, reference.node);
+        const localReference = reference.resolution === "path-reference" || isLocalSpecifier(reference.specifier);
+        if (!resolvedPath && localReference) {
           violations.push({ ...common, reason: "unresolved local target" });
           continue;
         }
@@ -357,16 +480,16 @@ export async function checkBoundaries(rootDirectory = process.cwd()) {
     }
   });
 
-  if (workerQueries.length > 0) {
+  if (resolutionQueries.length > 0) {
     const virtualFiles = new Map();
     const probeByPath = new Map();
     const allFiles = [...sourceFiles];
-    for (const [index, query] of workerQueries.entries()) {
+    for (const [index, query] of resolutionQueries.entries()) {
       let probePath;
       do {
         probePath = path.join(
           path.dirname(path.join(root, ...query.source.split("/"))),
-          `.code-city-worker-resolution-${process.pid}-${index}-${randomUUID()}.ts`,
+          `.code-city-module-resolution-${process.pid}-${index}-${randomUUID()}.ts`,
         );
       } while (existsSync(probePath));
       virtualFiles.set(probePath, `import ${JSON.stringify(query.resolvedSpecifier)};\n`);
@@ -380,14 +503,19 @@ export async function checkBoundaries(rootDirectory = process.cwd()) {
         const probe = project.program.getSourceFile(probePath);
         const importDeclaration = probe?.statements[0];
         if (!importDeclaration || !isImportDeclaration(importDeclaration) || !isStringLiteral(importDeclaration.moduleSpecifier)) {
-          throw new Error(`TypeScript did not parse worker resolution probe for ${query.source}`);
+          throw new Error(`TypeScript did not parse module resolution probe for ${query.source}`);
         }
         const resolvedPath = resolveModulePath(project.checker, importDeclaration.moduleSpecifier);
-        if (!resolvedPath) {
-          violations.push({ ...query, reason: "unresolved local target after stripping exact ?worker&url suffix" });
+        if (!resolvedPath && isLocalSpecifier(query.resolvedSpecifier)) {
+          const reason = query.queryKind === "worker-url"
+            ? "unresolved local target after stripping exact ?worker&url suffix"
+            : "unresolved local target";
+          violations.push({ ...query, reason });
           continue;
         }
-        const targetClassification = classifyPath(root, resolvedPath);
+        const targetClassification = resolvedPath
+          ? classifyPath(root, resolvedPath)
+          : { layer: "outside-src", relativePath: undefined };
         evidence.push({
           source: query.source,
           sourceLayer: query.sourceLayer,
@@ -395,7 +523,7 @@ export async function checkBoundaries(rootDirectory = process.cwd()) {
           column: query.column,
           kind: query.kind,
           specifier: query.specifier,
-          resolved: displayResolvedPath(root, resolvedPath),
+          resolved: resolvedPath ? displayResolvedPath(root, resolvedPath) : null,
           targetLayer: targetClassification.layer,
         });
         if (!ALLOWED_TARGETS[query.sourceLayer].has(targetClassification.layer)) {
@@ -406,7 +534,7 @@ export async function checkBoundaries(rootDirectory = process.cwd()) {
             column: query.column,
             kind: query.kind,
             specifier: query.specifier,
-            reason: `${query.sourceLayer} -> ${targetClassification.layer} is forbidden after stripping exact ?worker&url suffix`,
+            reason: `${query.sourceLayer} -> ${targetClassification.layer} is forbidden${query.queryKind === "worker-url" ? " after stripping exact ?worker&url suffix" : ""}`,
           });
         }
       }

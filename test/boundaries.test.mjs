@@ -113,6 +113,76 @@ test("accepts same-layer, inward, and exact-query import types without duplicati
   });
 });
 
+test("accepts external-module import-equals dependencies without duplicate evidence", async () => {
+  await withFixture({
+    "src/edge/main.ts": [
+      "import Same = require('./same.ts');",
+      "import type Domain = require('../domain/types.ts');",
+      "void Same;",
+      "void (null as Domain.Value | null);",
+    ].join("\n"),
+    "src/edge/same.ts": "const same = true; export = same;\n",
+    "src/domain/types.ts": "namespace Domain { export type Value = string; } export = Domain;\n",
+  }, async (root) => {
+    const result = await checkBoundaries(root);
+    const imports = result.imports.filter((entry) => entry.kind.includes("external-module import equals"));
+    assert.deepEqual(imports.map(({ kind, specifier, targetLayer }) => ({ kind, specifier, targetLayer })), [
+      {
+        kind: "external-module import equals",
+        specifier: "./same.ts",
+        targetLayer: "edge",
+      },
+      {
+        kind: "type-only external-module import equals",
+        specifier: "../domain/types.ts",
+        targetLayer: "domain",
+      },
+    ]);
+  });
+});
+
+test("rejects forbidden, missing, and unknown-query external-module import-equals dependencies", async () => {
+  const error = await rejectedFixture({
+    "src/edge/edge.ts": "const edge = true; export = edge;\n",
+    "src/domain/main.ts": [
+      "import Reverse = require('../edge/edge.ts');",
+      "import Missing = require('./missing.ts');",
+      "import Unknown = require('./same.ts?raw');",
+      "void Reverse; void Missing; void Unknown;",
+    ].join("\n"),
+    "src/domain/same.ts": "const same = true; export = same;\n",
+  });
+
+  assert(error.violations.some((violation) => (
+    violation.kind === "external-module import equals"
+      && violation.specifier === "../edge/edge.ts"
+      && violation.reason === "domain -> edge is forbidden"
+  )));
+  assert(error.violations.some((violation) => (
+    violation.kind === "external-module import equals"
+      && violation.specifier === "./missing.ts"
+      && violation.reason === "unresolved local target"
+  )));
+  assert(error.violations.some((violation) => (
+    violation.kind === "external-module import equals"
+      && violation.specifier === "./same.ts?raw"
+      && violation.reason === "unknown import query suffix is forbidden"
+  )));
+});
+
+test("rejects a parser-permitted non-literal external-module import-equals dependency", async () => {
+  const error = await rejectedFixture({
+    "src/edge/main.ts": "const target = './same.ts'; import Invalid = require(target); void Invalid;\n",
+    "src/edge/same.ts": "export {};\n",
+  });
+
+  assert(error.violations.some((violation) => (
+    violation.kind === "non-literal external-module import equals"
+      && violation.specifier === undefined
+      && violation.reason === "dynamic, module, and import-type references must use a string literal"
+  )));
+});
+
 test("rejects a reverse-layer import type", async () => {
   const error = await rejectedFixture({
     "src/edge/types.ts": "export type Edge = string;\n",
@@ -215,6 +285,81 @@ test("fails closed for unknown queries, non-literal imports, and unresolved loca
   assert(error.violations.some((violation) => violation.specifier === "./missing.ts" && violation.reason === "unresolved local target"));
   assert(error.violations.some((violation) => violation.kind === "non-literal import type" && violation.reason === "dynamic, module, and import-type references must use a string literal"));
   assert(error.violations.some((violation) => violation.kind === "non-literal dynamic import" && violation.reason === "dynamic, module, and import-type references must use a string literal"));
+});
+
+test("accepts same-layer and inward triple-slash path references from compiler metadata", async () => {
+  await withFixture({
+    "src/edge/main.ts": [
+      '/// <reference path="./same.ts" />',
+      '/// <reference path="../domain/types.ts" />',
+      "export {};",
+    ].join("\n"),
+    "src/edge/same.ts": "export {};\n",
+    "src/domain/types.ts": "export {};\n",
+  }, async (root) => {
+    const result = await checkBoundaries(root);
+    const references = result.imports.filter((entry) => entry.kind === "triple-slash path reference");
+    assert.deepEqual(references.map(({ specifier, targetLayer }) => ({ specifier, targetLayer })), [
+      { specifier: "./same.ts", targetLayer: "edge" },
+      { specifier: "../domain/types.ts", targetLayer: "domain" },
+    ]);
+  });
+});
+
+test("rejects forbidden and missing triple-slash path references", async () => {
+  const error = await rejectedFixture({
+    "src/edge/edge.ts": "export {};\n",
+    "src/domain/main.ts": [
+      '/// <reference path="../edge/edge.ts" />',
+      '/// <reference path="./missing.ts" />',
+      "export {};",
+    ].join("\n"),
+  });
+
+  assert(error.violations.some((violation) => (
+    violation.kind === "triple-slash path reference"
+      && violation.specifier === "../edge/edge.ts"
+      && violation.reason === "domain -> edge is forbidden"
+  )));
+  assert(error.violations.some((violation) => (
+    violation.kind === "triple-slash path reference"
+      && violation.specifier === "./missing.ts"
+      && violation.reason === "unresolved local target"
+  )));
+});
+
+test("fails closed on unsupported compiler reference, AMD, and no-default-lib directives", async () => {
+  const error = await rejectedFixture({
+    "src/edge/main.ts": [
+      '/// <reference types="vite/client" />',
+      '/// <reference lib="dom" />',
+      '/// <reference no-default-lib="true" />',
+      '/// <amd-dependency path="edge-browser-package" />',
+      '/// <amd-module name="edge-browser-module" />',
+      "export {};",
+    ].join("\n"),
+  });
+
+  assert(error.violations.some((violation) => (
+    violation.kind === "triple-slash types reference"
+      && violation.specifier === "vite/client"
+      && violation.reason === "unsupported compiler reference directive is forbidden"
+  )));
+  assert(error.violations.some((violation) => (
+    violation.kind === "triple-slash lib reference"
+      && violation.specifier === "dom"
+      && violation.reason === "unsupported compiler reference directive is forbidden"
+  )));
+  for (const kind of [
+    "unsupported reference compiler directive",
+    "unsupported amd-dependency compiler directive",
+    "unsupported amd-module compiler directive",
+  ]) {
+    assert(error.violations.some((violation) => (
+      violation.kind === kind
+        && violation.reason === "unsupported compiler reference directive is forbidden"
+    )));
+  }
 });
 
 test("accepts the actual edge-only production source and retains worker import evidence", async () => {
