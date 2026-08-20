@@ -1,0 +1,217 @@
+ASSET	web-tree-sitter.wasm
+IMPORT	module	name	kind	descriptor
+IMPORT	GOT.mem	__heap_base	global	i32;mutable=true
+IMPORT	GOT.mem	__stack_high	global	i32;mutable=true
+IMPORT	GOT.mem	__stack_low	global	i32;mutable=true
+IMPORT	env	__indirect_function_table	table	funcref;min=30;max=-;shared=false;memory64=false
+IMPORT	env	__memory_base	global	i32;mutable=false
+IMPORT	env	__stack_pointer	global	i32;mutable=true
+IMPORT	env	__table_base	global	i32;mutable=false
+IMPORT	env	_abort_js	function	type[9]
+IMPORT	env	emscripten_resize_heap	function	type[0]
+IMPORT	env	memory	memory	min=512;max=32768;shared=false;memory64=false
+IMPORT	env	tree_sitter_log_callback	function	type[5]
+IMPORT	env	tree_sitter_parse_callback	function	type[7]
+IMPORT	env	tree_sitter_progress_callback	function	type[1]
+IMPORT	env	tree_sitter_query_progress_callback	function	type[0]
+IMPORT	wasi_snapshot_preview1	fd_close	function	type[0]
+IMPORT	wasi_snapshot_preview1	fd_seek	function	type[22]
+IMPORT	wasi_snapshot_preview1	fd_write	function	type[6]
+EXPORT	name	kind	index
+EXPORT	__wasm_apply_data_relocs	function	285
+EXPORT	__wasm_call_ctors	function	286
+EXPORT	_emscripten_stack_alloc	function	163
+EXPORT	_emscripten_stack_restore	function	164
+EXPORT	calloc	function	42
+EXPORT	emscripten_stack_get_current	function	162
+EXPORT	free	function	50
+EXPORT	iswalnum	function	19
+EXPORT	iswalpha	function	102
+EXPORT	iswblank	function	159
+EXPORT	iswdigit	function	165
+EXPORT	iswlower	function	160
+EXPORT	iswspace	function	101
+EXPORT	iswupper	function	157
+EXPORT	iswxdigit	function	154
+EXPORT	malloc	function	34
+EXPORT	memchr	function	99
+EXPORT	memcmp	function	18
+EXPORT	memcpy	function	36
+EXPORT	memmove	function	156
+EXPORT	memset	function	51
+EXPORT	realloc	function	92
+EXPORT	setThrew	function	168
+EXPORT	strcmp	function	153
+EXPORT	strlen	function	100
+EXPORT	strncat	function	158
+EXPORT	strncmp	function	27
+EXPORT	strncpy	function	155
+EXPORT	towlower	function	167
+EXPORT	towupper	function	166
+EXPORT	ts_init	function	270
+EXPORT	ts_language_abi_version	function	278
+EXPORT	ts_language_field_count	function	269
+EXPORT	ts_language_field_name_for_id	function	217
+EXPORT	ts_language_metadata_wasm	function	259
+EXPORT	ts_language_name	function	276
+EXPORT	ts_language_next_state	function	43
+EXPORT	ts_language_state_count	function	283
+EXPORT	ts_language_subtypes_wasm	function	257
+EXPORT	ts_language_supertypes_wasm	function	258
+EXPORT	ts_language_symbol_count	function	284
+EXPORT	ts_language_symbol_for_name	function	30
+EXPORT	ts_language_symbol_name	function	248
+EXPORT	ts_language_symbol_type	function	69
+EXPORT	ts_language_type_is_named_wasm	function	261
+EXPORT	ts_language_type_is_visible_wasm	function	260
+EXPORT	ts_lookahead_iterator_current_symbol	function	169
+EXPORT	ts_lookahead_iterator_delete	function	184
+EXPORT	ts_lookahead_iterator_new	function	195
+EXPORT	ts_lookahead_iterator_next	function	173
+EXPORT	ts_lookahead_iterator_reset	function	174
+EXPORT	ts_lookahead_iterator_reset_state	function	175
+EXPORT	ts_node_child_by_field_id_wasm	function	212
+EXPORT	ts_node_child_count_wasm	function	216
+EXPORT	ts_node_child_wasm	function	214
+EXPORT	ts_node_child_with_descendant_wasm	function	204
+EXPORT	ts_node_children_by_field_id_wasm	function	221
+EXPORT	ts_node_children_wasm	function	193
+EXPORT	ts_node_descendant_count_wasm	function	207
+EXPORT	ts_node_descendant_for_index_wasm	function	203
+EXPORT	ts_node_descendant_for_position_wasm	function	201
+EXPORT	ts_node_descendants_of_type_wasm	function	191
+EXPORT	ts_node_end_index_wasm	function	196
+EXPORT	ts_node_end_point_wasm	function	198
+EXPORT	ts_node_field_name_for_child_wasm	function	223
+EXPORT	ts_node_field_name_for_named_child_wasm	function	222
+EXPORT	ts_node_first_child_for_byte_wasm	function	220
+EXPORT	ts_node_first_named_child_for_byte_wasm	function	219
+EXPORT	ts_node_grammar_symbol_wasm	function	218
+EXPORT	ts_node_has_changes_wasm	function	189
+EXPORT	ts_node_has_error_wasm	function	188
+EXPORT	ts_node_is_error_wasm	function	187
+EXPORT	ts_node_is_extra_wasm	function	185
+EXPORT	ts_node_is_missing_wasm	function	186
+EXPORT	ts_node_is_named_wasm	function	190
+EXPORT	ts_node_named_child_count_wasm	function	215
+EXPORT	ts_node_named_child_wasm	function	213
+EXPORT	ts_node_named_children_wasm	function	192
+EXPORT	ts_node_named_descendant_for_index_wasm	function	202
+EXPORT	ts_node_named_descendant_for_position_wasm	function	200
+EXPORT	ts_node_next_named_sibling_wasm	function	209
+EXPORT	ts_node_next_parse_state_wasm	function	182
+EXPORT	ts_node_next_sibling_wasm	function	211
+EXPORT	ts_node_parent_wasm	function	205
+EXPORT	ts_node_parse_state_wasm	function	183
+EXPORT	ts_node_prev_named_sibling_wasm	function	208
+EXPORT	ts_node_prev_sibling_wasm	function	210
+EXPORT	ts_node_start_index_wasm	function	197
+EXPORT	ts_node_start_point_wasm	function	199
+EXPORT	ts_node_symbol_wasm	function	224
+EXPORT	ts_node_to_string_wasm	function	194
+EXPORT	ts_parser_delete	function	143
+EXPORT	ts_parser_enable_logger_wasm	function	267
+EXPORT	ts_parser_included_ranges_wasm	function	262
+EXPORT	ts_parser_new_wasm	function	268
+EXPORT	ts_parser_parse_wasm	function	265
+EXPORT	ts_parser_reset	function	41
+EXPORT	ts_parser_set_included_ranges	function	57
+EXPORT	ts_parser_set_language	function	142
+EXPORT	ts_point_edit	function	144
+EXPORT	ts_query_capture_count	function	138
+EXPORT	ts_query_capture_name_for_id	function	136
+EXPORT	ts_query_capture_quantifier_for_id	function	135
+EXPORT	ts_query_captures_wasm	function	179
+EXPORT	ts_query_delete	function	75
+EXPORT	ts_query_disable_capture	function	127
+EXPORT	ts_query_disable_pattern	function	126
+EXPORT	ts_query_end_byte_for_pattern	function	131
+EXPORT	ts_query_is_pattern_guaranteed_at_step	function	128
+EXPORT	ts_query_is_pattern_non_local	function	129
+EXPORT	ts_query_is_pattern_rooted	function	130
+EXPORT	ts_query_matches_wasm	function	181
+EXPORT	ts_query_new	function	140
+EXPORT	ts_query_pattern_count	function	139
+EXPORT	ts_query_predicates_for_pattern	function	133
+EXPORT	ts_query_start_byte_for_pattern	function	132
+EXPORT	ts_query_string_count	function	137
+EXPORT	ts_query_string_value_for_id	function	134
+EXPORT	ts_range_edit	function	79
+EXPORT	ts_tree_copy	function	275
+EXPORT	ts_tree_cursor_copy_wasm	function	250
+EXPORT	ts_tree_cursor_current_depth_wasm	function	227
+EXPORT	ts_tree_cursor_current_descendant_index_wasm	function	226
+EXPORT	ts_tree_cursor_current_field_id_wasm	function	228
+EXPORT	ts_tree_cursor_current_node_id_wasm	function	233
+EXPORT	ts_tree_cursor_current_node_is_missing_wasm	function	234
+EXPORT	ts_tree_cursor_current_node_is_named_wasm	function	235
+EXPORT	ts_tree_cursor_current_node_state_id_wasm	function	236
+EXPORT	ts_tree_cursor_current_node_type_id_wasm	function	237
+EXPORT	ts_tree_cursor_current_node_wasm	function	225
+EXPORT	ts_tree_cursor_delete_wasm	function	249
+EXPORT	ts_tree_cursor_end_index_wasm	function	229
+EXPORT	ts_tree_cursor_end_position_wasm	function	231
+EXPORT	ts_tree_cursor_goto_descendant_wasm	function	239
+EXPORT	ts_tree_cursor_goto_first_child_for_index_wasm	function	243
+EXPORT	ts_tree_cursor_goto_first_child_for_position_wasm	function	242
+EXPORT	ts_tree_cursor_goto_first_child_wasm	function	245
+EXPORT	ts_tree_cursor_goto_last_child_wasm	function	244
+EXPORT	ts_tree_cursor_goto_next_sibling_wasm	function	241
+EXPORT	ts_tree_cursor_goto_parent_wasm	function	238
+EXPORT	ts_tree_cursor_goto_previous_sibling_wasm	function	240
+EXPORT	ts_tree_cursor_new_wasm	function	251
+EXPORT	ts_tree_cursor_reset_to_wasm	function	246
+EXPORT	ts_tree_cursor_reset_wasm	function	247
+EXPORT	ts_tree_cursor_start_index_wasm	function	230
+EXPORT	ts_tree_cursor_start_position_wasm	function	232
+EXPORT	ts_tree_delete	function	274
+EXPORT	ts_tree_edit_wasm	function	254
+EXPORT	ts_tree_get_changed_ranges_wasm	function	252
+EXPORT	ts_tree_included_ranges_wasm	function	253
+EXPORT	ts_tree_root_node_wasm	function	256
+EXPORT	ts_tree_root_node_with_offset_wasm	function	255
+MEMORY	index	origin	module	name	min-pages	max-pages	shared	memory64	min-bytes	max-bytes
+MEMORY	0	import	env	memory	512	32768	false	false	33554432	2147483648
+ASSET	tree-sitter-javascript.wasm
+IMPORT	module	name	kind	descriptor
+IMPORT	env	__indirect_function_table	table	funcref;min=7;max=-;shared=false;memory64=false
+IMPORT	env	__memory_base	global	i32;mutable=false
+IMPORT	env	__stack_pointer	global	i32;mutable=true
+IMPORT	env	__table_base	global	i32;mutable=false
+IMPORT	env	iswalpha	function	type[2]
+IMPORT	env	iswspace	function	type[2]
+IMPORT	env	memory	memory	min=6;max=-;shared=false;memory64=false
+EXPORT	name	kind	index
+EXPORT	__wasm_apply_data_relocs	function	3
+EXPORT	__wasm_call_ctors	function	2
+EXPORT	tree_sitter_javascript	function	10
+MEMORY	index	origin	module	name	min-pages	max-pages	shared	memory64	min-bytes	max-bytes
+MEMORY	0	import	env	memory	6	-	false	false	393216	-
+ASSET	tree-sitter-typescript.wasm
+IMPORT	module	name	kind	descriptor
+IMPORT	env	__indirect_function_table	table	funcref;min=7;max=-;shared=false;memory64=false
+IMPORT	env	__memory_base	global	i32;mutable=false
+IMPORT	env	__table_base	global	i32;mutable=false
+IMPORT	env	iswalpha	function	type[2]
+IMPORT	env	iswspace	function	type[2]
+IMPORT	env	memory	memory	min=22;max=-;shared=false;memory64=false
+EXPORT	name	kind	index
+EXPORT	__wasm_apply_data_relocs	function	3
+EXPORT	__wasm_call_ctors	function	2
+EXPORT	tree_sitter_typescript	function	9
+MEMORY	index	origin	module	name	min-pages	max-pages	shared	memory64	min-bytes	max-bytes
+MEMORY	0	import	env	memory	22	-	false	false	1441792	-
+ASSET	tree-sitter-tsx.wasm
+IMPORT	module	name	kind	descriptor
+IMPORT	env	__indirect_function_table	table	funcref;min=7;max=-;shared=false;memory64=false
+IMPORT	env	__memory_base	global	i32;mutable=false
+IMPORT	env	__table_base	global	i32;mutable=false
+IMPORT	env	iswalpha	function	type[2]
+IMPORT	env	iswspace	function	type[2]
+IMPORT	env	memory	memory	min=22;max=-;shared=false;memory64=false
+EXPORT	name	kind	index
+EXPORT	__wasm_apply_data_relocs	function	3
+EXPORT	__wasm_call_ctors	function	2
+EXPORT	tree_sitter_tsx	function	9
+MEMORY	index	origin	module	name	min-pages	max-pages	shared	memory64	min-bytes	max-bytes
+MEMORY	0	import	env	memory	22	-	false	false	1441792	-
