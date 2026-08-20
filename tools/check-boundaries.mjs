@@ -9,6 +9,8 @@ import {
   isCallExpression,
   isExportDeclaration,
   isImportDeclaration,
+  isImportTypeNode,
+  isLiteralTypeNode,
   isStringLiteral,
 } from "typescript/unstable/ast";
 
@@ -165,6 +167,21 @@ function collectReferences(sourceFile) {
       } else {
         references.push({ kind: "re-export", node: undefined, specifier: undefined, ...position });
       }
+    } else if (isImportTypeNode(node)) {
+      const position = sourcePosition(sourceFile, node);
+      const argument = isLiteralTypeNode(node.argument) && isStringLiteral(node.argument.literal)
+        ? node.argument.literal
+        : undefined;
+      if (argument) {
+        references.push({
+          kind: "string-literal import type",
+          node: argument,
+          specifier: argument.text,
+          ...position,
+        });
+      } else {
+        references.push({ kind: "non-literal import type", node: undefined, specifier: undefined, ...position });
+      }
     } else if (isCallExpression(node) && node.expression.kind === SyntaxKind.ImportKeyword) {
       const position = sourcePosition(sourceFile, node);
       const argument = node.arguments.length === 1 ? node.arguments[0] : undefined;
@@ -298,8 +315,8 @@ export async function checkBoundaries(rootDirectory = process.cwd()) {
           specifier: reference.specifier,
         };
 
-        if (reference.kind === "non-literal dynamic import" || !reference.node || reference.specifier === undefined) {
-          violations.push({ ...common, reason: "dynamic and module imports must use a string literal" });
+        if (!reference.node || reference.specifier === undefined) {
+          violations.push({ ...common, reason: "dynamic, module, and import-type references must use a string literal" });
           continue;
         }
 

@@ -85,6 +85,59 @@ test("accepts same-layer, inward, and edge-to-outside imports in every supported
   });
 });
 
+test("accepts same-layer, inward, and exact-query import types without duplicating dynamic evidence", async () => {
+  await withFixture({
+    "src/edge/main.ts": [
+      "type Same = import('./same.ts').Same;",
+      "type Inward = import('../domain/types.ts').Domain;",
+      "type WorkerModule = typeof import('./worker.ts?worker&url');",
+      "void import('../application/dynamic.ts');",
+      "void (null as Same | Inward | WorkerModule | null);",
+    ].join("\n"),
+    "src/edge/same.ts": "export type Same = string;\n",
+    "src/edge/worker.ts": "export {};\n",
+    "src/application/dynamic.ts": "export {};\n",
+    "src/domain/types.ts": "export type Domain = string;\n",
+  }, async (root) => {
+    const result = await checkBoundaries(root);
+    const importTypes = result.imports.filter((entry) => entry.kind === "string-literal import type");
+    assert.equal(importTypes.length, 3);
+    assert(importTypes.some((entry) => entry.specifier === "./same.ts" && entry.targetLayer === "edge"));
+    assert(importTypes.some((entry) => entry.specifier === "../domain/types.ts" && entry.targetLayer === "domain"));
+    assert(importTypes.some((entry) => (
+      entry.specifier === "./worker.ts?worker&url"
+        && entry.resolved === "src/edge/worker.ts"
+        && entry.targetLayer === "edge"
+    )));
+    assert.equal(result.imports.filter((entry) => entry.kind === "string-literal dynamic import").length, 1);
+  });
+});
+
+test("rejects a reverse-layer import type", async () => {
+  const error = await rejectedFixture({
+    "src/edge/types.ts": "export type Edge = string;\n",
+    "src/domain/main.ts": "type Edge = import('../edge/types.ts').Edge; void (null as Edge | null);\n",
+  });
+
+  assert(error.violations.some((violation) => (
+    violation.kind === "string-literal import type"
+      && violation.specifier === "../edge/types.ts"
+      && violation.reason === "domain -> edge is forbidden"
+  )));
+});
+
+test("rejects a missing import-type target", async () => {
+  const error = await rejectedFixture({
+    "src/edge/main.ts": "type Missing = import('./missing.ts').Missing; void (null as Missing | null);\n",
+  });
+
+  assert(error.violations.some((violation) => (
+    violation.kind === "string-literal import type"
+      && violation.specifier === "./missing.ts"
+      && violation.reason === "unresolved local target"
+  )));
+});
+
 test("rejects outward ordinary, type-only, re-export, dynamic, and outside imports", async () => {
   const error = await rejectedFixture({
     "outside.ts": "export {};\n",
@@ -146,19 +199,22 @@ test("rejects a missing exact ?worker&url target", async () => {
   )));
 });
 
-test("fails closed for unknown queries, non-literal dynamic imports, and unresolved local targets", async () => {
+test("fails closed for unknown queries, non-literal imports, and unresolved local targets", async () => {
   const error = await rejectedFixture({
     "src/edge/main.ts": [
-      "import './same.ts?raw';",
+      "type UnknownQuery = import('./same.ts?raw').Same;",
       "import './missing.ts';",
       "const target = './same.ts';",
+      "type NonLiteral = import(target).Same;",
       "void import(target);",
+      "void (null as UnknownQuery | NonLiteral | null);",
     ].join("\n"),
-    "src/edge/same.ts": "export {};\n",
+    "src/edge/same.ts": "export type Same = string;\n",
   });
-  assert(error.violations.some((violation) => violation.specifier === "./same.ts?raw" && violation.reason === "unknown import query suffix is forbidden"));
+  assert(error.violations.some((violation) => violation.kind === "string-literal import type" && violation.specifier === "./same.ts?raw" && violation.reason === "unknown import query suffix is forbidden"));
   assert(error.violations.some((violation) => violation.specifier === "./missing.ts" && violation.reason === "unresolved local target"));
-  assert(error.violations.some((violation) => violation.kind === "non-literal dynamic import" && violation.reason === "dynamic and module imports must use a string literal"));
+  assert(error.violations.some((violation) => violation.kind === "non-literal import type" && violation.reason === "dynamic, module, and import-type references must use a string literal"));
+  assert(error.violations.some((violation) => violation.kind === "non-literal dynamic import" && violation.reason === "dynamic, module, and import-type references must use a string literal"));
 });
 
 test("accepts the actual edge-only production source and retains worker import evidence", async () => {
