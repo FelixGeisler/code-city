@@ -11,10 +11,19 @@ const { createMainController } = await import("../src/application/main-controlle
 
 const VALID = "https://github.com/owner/repo";
 
-function fixture({ factoryThrows = false, listenThrows = false, sendThrows = false } = {}) {
+function fixture({
+  factoryThrows = false,
+  factoryThrowsAt = [],
+  listenThrows = false,
+  sendThrows = false,
+  sendThrowsWhen = () => false,
+} = {}) {
   const events = [];
   const transports = [];
   let cancelAction;
+  let createCalls = 0;
+  let liveWorkers = 0;
+  let maximumLiveWorkers = 0;
   const view = {
     invalid: () => events.push("view:Invalid input"),
     working(cancel) { cancelAction = cancel; events.push("view:working"); },
@@ -22,9 +31,13 @@ function fixture({ factoryThrows = false, listenThrows = false, sendThrows = fal
     cancelled: () => events.push("view:Cancelled"),
   };
   function createWorker() {
+    createCalls += 1;
     events.push("worker:create");
-    if (factoryThrows) throw new Error("startup");
+    if (factoryThrows || factoryThrowsAt.includes(createCalls)) throw new Error("startup");
+    liveWorkers += 1;
+    maximumLiveWorkers = Math.max(maximumLiveWorkers, liveWorkers);
     const transport = {
+      number: createCalls,
       handlers: undefined,
       closeCalls: 0,
       detachCalls: 0,
@@ -32,9 +45,13 @@ function fixture({ factoryThrows = false, listenThrows = false, sendThrows = fal
       send(command) {
         this.sent.push(command);
         events.push(`send:${command.type}`);
-        if (sendThrows) throw new Error("postMessage failed");
+        if (sendThrows || sendThrowsWhen(this, command)) throw new Error("postMessage failed");
       },
-      close() { this.closeCalls += 1; events.push("worker:close"); },
+      close() {
+        this.closeCalls += 1;
+        liveWorkers -= 1;
+        events.push("worker:close");
+      },
       listen(handlers) {
         events.push("worker:listen");
         if (listenThrows) throw new Error("listener startup");
@@ -46,7 +63,13 @@ function fixture({ factoryThrows = false, listenThrows = false, sendThrows = fal
     return transport;
   }
   const controller = createMainController(createWorker, view);
-  return { controller, events, transports, cancel: () => cancelAction() };
+  return {
+    controller,
+    events,
+    transports,
+    cancel: () => cancelAction(),
+    maximumLiveWorkers: () => maximumLiveWorkers,
+  };
 }
 
 test("invalid input creates neither worker nor request-capable processing", () => {
@@ -58,7 +81,7 @@ test("invalid input creates neither worker nor request-capable processing", () =
   assert.equal(f.transports.length, 0);
 });
 
-test("one worker receives accepted unusual segments unchanged and active submission is disabled", () => {
+test("one worker receives accepted unusual segments unchanged", () => {
   const f = fixture();
   const acceptedRawValue = "https://github.com/ow\fner/re po!";
   assert.equal(f.controller.submit(acceptedRawValue), true);
@@ -69,8 +92,6 @@ test("one worker receives accepted unusual segments unchanged and active submiss
     generation: 1,
     repository: { owner: "ow\fner", repository: "re po!" },
   }]);
-  assert.equal(f.controller.submit(VALID), false);
-  assert.equal(f.transports.length, 1);
 });
 
 test("mapped FAILURE is shown, then matching drain performs normal cleanup exactly once", () => {
@@ -85,6 +106,93 @@ test("mapped FAILURE is shown, then matching drain performs normal cleanup exact
   transport.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
   assert.equal(transport.closeCalls, 1);
   assert.equal(f.events.filter((event) => event === "view:Revision unavailable").length, 1);
+  assert.equal(f.controller.submit("https://github.com/owner/next"), true);
+  assert.equal(f.transports[1].sent[0].generation, 2);
+});
+
+test("invalid replacement reports Invalid input and leaves the active attempt unchanged", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  assert.equal(f.controller.submit("owner/repo"), false);
+  assert.equal(f.transports.length, 1);
+  assert.deepEqual(f.transports[0].sent.map((message) => message.type), ["START"]);
+  assert.equal(f.transports[0].closeCalls, 0);
+  assert.equal(f.events.at(-1), "view:Invalid input");
+});
+
+test("provider-active replacement sends STOP, suppresses old failure, and starts only after drain", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  const old = f.transports[0];
+
+  assert.equal(f.controller.submit("https://github.com/owner/replacement"), true);
+  assert.deepEqual(old.sent.map((message) => message.type), ["START", "STOP"]);
+  assert.equal(f.transports.length, 1);
+  assert.equal(old.closeCalls, 0);
+
+  old.handlers.message({ type: "FAILURE", generation: 1, category: "Revision unavailable" });
+  assert.equal(f.events.includes("view:Revision unavailable"), false);
+  old.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
+
+  assert.equal(old.detachCalls, 1);
+  assert.equal(old.closeCalls, 1);
+  assert.equal(f.transports.length, 2);
+  assert.deepEqual(f.events.slice(-6), [
+    "worker:detach",
+    "worker:close",
+    "worker:create",
+    "worker:listen",
+    "view:working",
+    "send:START",
+  ]);
+  assert.deepEqual(f.transports[1].sent[0], {
+    type: "START",
+    generation: 2,
+    repository: { owner: "owner", repository: "replacement" },
+  });
+  assert.equal(f.maximumLiveWorkers(), 1);
+});
+
+test("validated static-phase replacement closes immediately without STOP and starts the latest", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  const old = f.transports[0];
+  old.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+
+  assert.equal(f.controller.submit("https://github.com/owner/static-replacement"), true);
+  assert.deepEqual(old.sent.map((message) => message.type), ["START"]);
+  assert.equal(old.detachCalls, 1);
+  assert.equal(old.closeCalls, 1);
+  assert.equal(f.transports.length, 2);
+  assert.equal(f.transports[1].sent[0].generation, 2);
+  assert.equal(f.maximumLiveWorkers(), 1);
+});
+
+test("provider replacements coalesce to only the latest repository and send STOP once", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  const old = f.transports[0];
+  f.controller.submit("https://github.com/owner/discarded");
+  f.controller.submit("https://github.com/owner/latest");
+
+  assert.deepEqual(old.sent.map((message) => message.type), ["START", "STOP"]);
+  assert.equal(f.transports.length, 1);
+  old.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
+  assert.equal(f.transports.length, 2);
+  assert.deepEqual(f.transports[1].sent[0].repository, { owner: "owner", repository: "latest" });
+});
+
+test("a raced static barrier after provider STOP clears the old worker before replacement", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  const old = f.transports[0];
+  f.controller.submit("https://github.com/owner/latest");
+  old.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+
+  assert.deepEqual(old.sent.map((message) => message.type), ["START", "STOP"]);
+  assert.equal(old.closeCalls, 1);
+  assert.equal(f.transports.length, 2);
+  assert.equal(f.maximumLiveWorkers(), 1);
 });
 
 test("validated static barrier keeps the worker internal and cancellation terminates it without STOP", () => {
@@ -178,17 +286,116 @@ test("malformed current messages and un-cancelled crash/messageerror fail and cl
   }
 });
 
-test("startup construction and post failures expose only mapped failure", () => {
-  const construction = fixture({ factoryThrows: true });
+test("replacement crash or messageerror makes drain impossible and starts the pending attempt", () => {
+  for (const deliver of [(handlers) => handlers.crash(), (handlers) => handlers.messageError()]) {
+    const f = fixture();
+    f.controller.submit(VALID);
+    const old = f.transports[0];
+    f.controller.submit("https://github.com/owner/after-crash");
+    deliver(old.handlers);
+
+    assert.equal(old.detachCalls, 1);
+    assert.equal(old.closeCalls, 1);
+    assert.equal(f.transports.length, 2);
+    assert.equal(f.events.some((event) => event === "view:Provider/resolution failure"), false);
+    assert.equal(f.transports[1].sent[0].generation, 2);
+    assert.equal(f.maximumLiveWorkers(), 1);
+  }
+});
+
+test("a failed STOP send closes exactly once and starts the pending replacement", () => {
+  const f = fixture({
+    sendThrowsWhen: (transport, command) => transport.number === 1 && command.type === "STOP",
+  });
+  f.controller.submit(VALID);
+  const old = f.transports[0];
+  assert.equal(f.controller.submit("https://github.com/owner/after-stop-error"), true);
+
+  assert.equal(old.detachCalls, 1);
+  assert.equal(old.closeCalls, 1);
+  assert.equal(f.transports.length, 2);
+  assert.equal(f.transports[1].sent[0].generation, 2);
+  assert.equal(f.events.some((event) => event === "view:Provider/resolution failure"), false);
+  old.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
+  assert.equal(old.closeCalls, 1);
+});
+
+test("replacement factory failure does not consume a generation or retain the old worker", () => {
+  const f = fixture({ factoryThrowsAt: [2] });
+  f.controller.submit(VALID);
+  const old = f.transports[0];
+  old.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+  assert.equal(f.controller.submit("https://github.com/owner/factory-fails"), true);
+
+  assert.equal(old.detachCalls, 1);
+  assert.equal(old.closeCalls, 1);
+  assert.equal(f.transports.length, 1);
+  assert.equal(f.events.filter((event) => event === "view:Provider/resolution failure").length, 1);
+
+  assert.equal(f.controller.submit("https://github.com/owner/recovered"), true);
+  assert.equal(f.transports.length, 2);
+  assert.equal(f.transports[1].sent[0].generation, 2);
+  assert.equal(f.maximumLiveWorkers(), 1);
+});
+
+test("stale old callbacks and stale generations cannot affect the replacement", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  const old = f.transports[0];
+  f.controller.submit("https://github.com/owner/current");
+  old.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
+  const current = f.transports[1];
+
+  old.handlers.message({ type: "FAILURE", generation: 1, category: "Revision unavailable" });
+  old.handlers.crash();
+  current.handlers.message({ type: "FAILURE", generation: 1, category: "Revision unavailable" });
+  assert.equal(old.closeCalls, 1);
+  assert.equal(current.closeCalls, 0);
+  assert.equal(f.events.some((event) => event === "view:Revision unavailable"), false);
+});
+
+test("cancellation clears a pending replacement and keeps cancellation precedence", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  const old = f.transports[0];
+  f.controller.submit("https://github.com/owner/pending");
+  f.cancel();
+  old.handlers.message({ type: "FAILURE", generation: 1, category: "Revision unavailable" });
+  old.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
+
+  assert.deepEqual(old.sent.map((message) => message.type), ["START", "STOP"]);
+  assert.equal(old.detachCalls, 1);
+  assert.equal(old.closeCalls, 1);
+  assert.equal(f.transports.length, 1);
+  assert.equal(f.events.filter((event) => event === "view:Cancelled").length, 1);
+  assert.equal(f.events.some((event) => event === "view:Revision unavailable"), false);
+});
+
+test("a later submission can queue while cancellation drains, and cancel can clear it again", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  const old = f.transports[0];
+  f.cancel();
+  f.controller.submit("https://github.com/owner/new-pending");
+  f.cancel();
+  old.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
+  assert.equal(f.transports.length, 1);
+  assert.equal(f.events.filter((event) => event === "view:Cancelled").length, 1);
+});
+
+test("startup construction and post failures expose only mapped failure without consuming generations", () => {
+  const construction = fixture({ factoryThrowsAt: [1] });
   assert.equal(construction.controller.submit(VALID), false);
   assert.deepEqual(construction.events, ["worker:create", "view:Provider/resolution failure"]);
+  assert.equal(construction.controller.submit("https://github.com/owner/retry"), true);
+  assert.equal(construction.transports[0].sent[0].generation, 1);
 
   const listening = fixture({ listenThrows: true });
   assert.equal(listening.controller.submit(VALID), false);
   assert.equal(listening.transports[0].closeCalls, 1);
   assert.equal(listening.events.filter((event) => event === "view:Provider/resolution failure").length, 1);
 
-  const posting = fixture({ sendThrows: true });
+  const posting = fixture({ sendThrowsWhen: (_transport, command) => command.type === "START" });
   assert.equal(posting.controller.submit(VALID), false);
   assert.equal(posting.transports[0].closeCalls, 1);
   assert.equal(posting.transports[0].detachCalls, 1);
