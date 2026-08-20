@@ -89,31 +89,31 @@ comparison module.
 Use judgment and run checks proportional to the change and its risk. Do not run
 commands merely as a ritual.
 
-* For documentation changes, run `npm run docs:build`.
-* During implementation, run the smallest relevant checks while iterating.
-* Run `npm run verify` only when it is still the appropriate repository-wide
-  gate and the scope or risk justifies it.
+* During implementation, run the smallest relevant check: `npm run typecheck`,
+  `npm run test`, `npm run build`, `npm run test:reproducibility`,
+  `npm run test:package`, or `npm run docs:build`.
+* `npm run test:reproducibility` consumes the existing canonical package and
+  performs its second build only under `build/reproducibility/`.
+* `npm run test:package` audits the existing canonical package without
+  rebuilding or changing it.
+* Run `npm run verify` for the repository-wide gate. It executes type checking,
+  tests, the canonical build, reproducibility, packaged HTTP audit, and the
+  documentation build in that order.
+* For `npm run dev` and `npm run start`, verify both startup and clean shutdown
+  when server behavior changes.
 * Never claim that a check passed unless it was executed successfully.
 * Report checks run and relevant checks not run at the end of the task.
 
-Update these commands when the v2 toolchain replaces the v1 toolchain.
-
 ## Git and pull requests
 
-The active M1 integration branch is named `v2` before ADR 0009's accepted
-post-merge branch cutover and is the default `main` after that cutover. Before
-the rename, the existing v1 `main` is not an M1 base; afterward, the locked
-`v1` branch is archival and must not be used for development, release, pull-
-request integration, or Pages publication. No Developer handoff may occur
-between the ADR 0009 merge and completion of the separately evidenced branch
-administration gate.
+The protected default integration branch is `main`. The locked `v1` branch is
+archival and must not be used for development, release, pull-request
+integration, or Pages publication.
 
-* Work on a short-lived branch created from an up-to-date active M1 integration
-  branch: `v2` before the cutover, `main` afterward.
+* Work on a short-lived branch created from an up-to-date `main`.
 * Keep commits focused and use clear conventional commit messages.
 * Commit completed work, push the branch, and create or update a pull request
-  targeting the active M1 integration branch (`v2` before the cutover, `main`
-  afterward) automatically.
+  targeting `main` automatically.
 * A pull request is not ready for review until all required checks have completed
   successfully. Monitor its checks, investigate failures, push fixes, and wait
   for the replacement checks before handing the pull request to the user.
@@ -121,6 +121,5 @@ administration gate.
   CI job is green and the Software Architect, Tester, and Requirements Engineer
   all return `PASS` for the same exact head. Never bypass repository protection
   or merge using a stale verdict.
-* Do not push directly to the active M1 integration branch or rewrite shared
-  history.
+* Do not push directly to `main` or rewrite shared history.
 * Do not include unrelated, generated, local, or secret files in a commit.
