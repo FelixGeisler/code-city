@@ -9,6 +9,7 @@ registerHooks({
 });
 const { parseWorkerCommand, parseWorkerMessage } = await import("../src/application/protocol.ts");
 const { createWorkerAttemptPipeline } = await import("../src/application/worker-attempt.ts");
+const { createTreeSitterAdapter } = await import("../src/edge/tree-sitter-adapter.ts");
 
 const REPOSITORY = { owner: "owner", repository: "repo" };
 const SHA = "a".repeat(40);
@@ -113,36 +114,56 @@ test("STOP aborts current work, releases it, stops downstream publication, and d
   assert.equal(order.filter((entry) => entry === "ATTEMPT_DRAINED").length, 1);
 });
 
-test("metric initialization starts only after the source-free static barrier and an ordinary failure drains atomically", async () => {
-  const order = [];
-  const pipeline = createWorkerAttemptPipeline(async () => ({ kind: "revision", revision: SHA }), {
-    async loadInventory() {
-      return { kind: "inventory", entries: [
+test("all five initialization failures traverse selected-revision worker ownership and drain atomically", async () => {
+  const rows = [
+    ["runtime-import", 0], ["Parser.init/runtime-WASM", 0], ["JS grammar load", 1], ["TS grammar load", 2], ["TSX grammar load", 3],
+  ];
+  const initializationOrder = ["runtime-import", "Parser.init/runtime-WASM", "JS grammar load", "TS grammar load", "TSX grammar load"];
+  for (const [injected, failingLoad] of rows) {
+    const order = [];
+    const resourceEvents = [];
+    const ownershipAtPublication = [];
+    let grammarLoads = 0;
+    let projects = 0;
+    class FakeParser {
+      static async init() { order.push("Parser.init/runtime-WASM"); if (injected === "Parser.init/runtime-WASM") throw new Error(injected); }
+      setLanguage() {}
+      parse() { projects += 1; throw new Error("no module may start"); }
+      delete() {}
+    }
+    const parser = createTreeSitterAdapter({ runtimeJavaScript: "runtime.js", runtimeWasm: "runtime.wasm", grammarJavaScript: "javascript.wasm", grammarTypeScript: "typescript.wasm", grammarTsx: "tsx.wasm" }, {
+      async importRuntime() {
+        order.push("runtime-import");
+        if (injected === "runtime-import") throw new Error(injected);
+        return { Parser: FakeParser, Language: { async load() { grammarLoads += 1; const step = initializationOrder[grammarLoads + 1]; order.push(step); if (grammarLoads === failingLoad) throw new Error(injected); return {}; } } };
+      },
+      async loadBytes() { return new Uint8Array([0]); },
+      observeResource(event) { resourceEvents.push(event); },
+    });
+    let pipeline;
+    pipeline = createWorkerAttemptPipeline(async () => ({ kind: "revision", revision: SHA }), {
+      async loadInventory() { return { kind: "inventory", entries: [
         { path: "a.js", mode: "100644", type: "blob", sha: SHA },
         { path: "b.ts", mode: "100644", type: "blob", sha: SHA },
         { path: "c.tsx", mode: "100644", type: "blob", sha: SHA },
-      ] };
-    },
-    async readSource() { return { kind: "source", decodedSource: "" }; },
-  }, (message) => order.push(message), undefined, {
-    async initialize() { order.push("parser:initialize"); throw new Error("runtime-import"); },
-    async project() { order.push("parser:project"); throw new Error("must not parse"); },
-  });
-  pipeline.start(REPOSITORY, 8);
-  await tick();
-  await tick();
-  assert.deepEqual(order, [
-    { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 8 },
-    "parser:initialize",
-    { type: "FAILURE", generation: 8, category: "Metric processing failed", code: "M1-MET-1" },
-    { type: "ATTEMPT_DRAINED", generation: 8 },
-  ]);
-  assert.deepEqual(pipeline.ownership(), {
-    phase: "idle",
-    selectedRevisionRetained: false,
-    admittedModuleCount: 0,
-    providerResource: false,
-  });
+      ] }; },
+      async readSource(_repository, _revision, candidate) { order.push(`retrieved:${candidate.canonicalPath}`); return { kind: "source", decodedSource: "" }; },
+    }, (message) => { order.push(message.type); ownershipAtPublication.push([message.type, pipeline.ownership()]); }, undefined, parser, (event) => order.push(event));
+    pipeline.start(REPOSITORY, 8);
+    await tick(); await tick();
+    assert.deepEqual(order.slice(0, 4), ["retrieved:a.js", "retrieved:b.ts", "retrieved:c.tsx", "PROVIDER_DRAINED_STATIC_ENTERED"], injected);
+    assert.deepEqual(order.slice(4, 4 + initializationOrder.indexOf(injected) + 1), initializationOrder.slice(0, initializationOrder.indexOf(injected) + 1), injected);
+    assert.deepEqual(order.slice(-5), ["source-released", "source-released", "source-released", "FAILURE", "ATTEMPT_DRAINED"], injected);
+    assert.equal(order.filter((entry) => entry === "source-released").length, 3, injected);
+    assert.equal(order.includes("source-acquired"), false, injected);
+    assert.equal(projects, 0, injected);
+    assert.deepEqual(resourceEvents, [], injected);
+    assert.equal(grammarLoads, failingLoad, injected);
+    assert.deepEqual(ownershipAtPublication.map(([type, ownership]) => [type, ownership.selectedRevisionRetained, ownership.admittedModuleCount, ownership.baseAnalysisCount]), [
+      ["PROVIDER_DRAINED_STATIC_ENTERED", true, 3, 0], ["FAILURE", false, 0, 0], ["ATTEMPT_DRAINED", false, 0, 0],
+    ], injected);
+    assert.deepEqual(pipeline.ownership(), { phase: "idle", selectedRevisionRetained: false, admittedModuleCount: 0, baseAnalysisCount: 0, providerResource: false }, injected);
+  }
 });
 
 test("complete admission crosses only the closed static barrier and retains no provider state", async () => {
@@ -166,6 +187,7 @@ test("complete admission crosses only the closed static barrier and retains no p
     generation: 9,
     selectedRevisionRetained: true,
     admittedModuleCount: 1,
+    baseAnalysisCount: 0,
     providerResource: false,
   });
   assert.deepEqual(messages, [{ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 9 }]);

@@ -1,7 +1,7 @@
 import type { AdmittedModule } from "../domain/source-admission";
 import type { RepositoryReference } from "../domain/repository-reference";
 import type { BaseMetricAnalysis } from "../domain/base-metrics";
-import { processAdmittedBaseMetrics, type SyntaxProjectionCapability } from "./base-metric-processing";
+import { processAdmittedBaseMetrics, type MetricProcessingEvent, type SyntaxProjectionCapability } from "./base-metric-processing";
 import type { WorkerMessage } from "./protocol";
 import { resolveRevision, type RevisionGateway } from "./resolution";
 import {
@@ -28,6 +28,7 @@ export type AttemptOwnership = Readonly<{
   generation?: number;
   selectedRevisionRetained: boolean;
   admittedModuleCount: number;
+  baseAnalysisCount: number;
   providerResource: false;
 }>;
 
@@ -43,6 +44,7 @@ export function createWorkerAttemptPipeline(
   publish: (message: WorkerMessage) => void,
   observeRetrieval: (ownership: RetrievalOwnership) => void = () => {},
   syntaxParser?: SyntaxProjectionCapability,
+  observeMetricProcessing: (event: MetricProcessingEvent) => void = () => {},
 ): WorkerAttemptPipeline {
   let active: ActiveAttempt | undefined;
 
@@ -123,7 +125,7 @@ export function createWorkerAttemptPipeline(
 
       if (syntaxParser) {
         attempt.admittedModules = undefined;
-        const processing = await processAdmittedBaseMetrics(retrieval.modules, syntaxParser);
+        const processing = await processAdmittedBaseMetrics(retrieval.modules, syntaxParser, observeMetricProcessing);
         if (processing.kind === "failure") {
           attempt.selectedRevision = undefined;
           publish({
@@ -169,12 +171,14 @@ export function createWorkerAttemptPipeline(
           generation: active.generation,
           selectedRevisionRetained: active.selectedRevision !== undefined,
           admittedModuleCount: active.admittedModules?.length ?? 0,
+          baseAnalysisCount: active.baseAnalyses?.length ?? 0,
           providerResource: false,
         }
       : {
           phase: "idle",
           selectedRevisionRetained: false,
           admittedModuleCount: 0,
+          baseAnalysisCount: 0,
           providerResource: false,
         },
   };

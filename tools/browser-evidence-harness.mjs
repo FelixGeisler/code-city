@@ -24,11 +24,11 @@ const summary = async (analysis) => ({
 const expectedSummary = async ({S,U,tuples,unitForms=["top-level"],unitByteSpans=[null]}) => ({S,U,unitForms,unitByteSpans,observationKindCounts:(()=>{const c=emptyCounts();for(const tuple of tuples)c[tuple[0]]+=1;return c;})(),observationOrderDigest:await tupleDigest(tuples)});
 
 function resources() {
-  const live={parser:0,tree:0,cursor:0,observationStream:0};
-  const peak={parser:0,tree:0,cursor:0,source:1,observationStream:0};
+  const live={parser:0,tree:0,cursor:0,source:0,observationStream:0};
+  const peak={parser:0,tree:0,cursor:0,source:0,observationStream:0};
   const cleanup={parserDeletes:0,treeDeletes:0,cursorDeletes:0,sourceReleases:0,observationStreamReleases:0};
   const names={"parser-created":["parser",1],"parser-deleted":["parser",-1],"tree-created":["tree",1],"tree-deleted":["tree",-1],"cursor-created":["cursor",1],"cursor-deleted":["cursor",-1],"observation-stream-created":["observationStream",1],"observation-stream-released":["observationStream",-1]};
-  return {live,peak,cleanup,event(event){const x=names[event];if(!x)return;live[x[0]]+=x[1];peak[x[0]]=Math.max(peak[x[0]],live[x[0]]);if(event==="parser-deleted")cleanup.parserDeletes++;if(event==="tree-deleted")cleanup.treeDeletes++;if(event==="cursor-deleted")cleanup.cursorDeletes++;if(event==="observation-stream-released")cleanup.observationStreamReleases++;},application(event){if(event==="source-released")cleanup.sourceReleases++;}};
+  return {live,peak,cleanup,event(event){const x=names[event];if(!x)return;live[x[0]]+=x[1];if(live[x[0]]<0)throw new Error("resource release without acquisition: "+event);peak[x[0]]=Math.max(peak[x[0]],live[x[0]]);if(event==="parser-deleted")cleanup.parserDeletes++;if(event==="tree-deleted")cleanup.treeDeletes++;if(event==="cursor-deleted")cleanup.cursorDeletes++;if(event==="observation-stream-released")cleanup.observationStreamReleases++;},application(event){if(event==="source-acquired"){live.source++;peak.source=Math.max(peak.source,live.source);}if(event==="source-released"){live.source--;if(live.source<0)throw new Error("source release without acquisition");cleanup.sourceReleases++;}}};
 }
 function createParser(tracker) { return createTreeSitterAdapter({runtimeJavaScript:ASSETS[0].url,runtimeWasm:ASSETS[1].url,grammarJavaScript:ASSETS[2].url,grammarTypeScript:ASSETS[3].url,grammarTsx:ASSETS[4].url},{importRuntime:()=>globalThis.__codeCityRuntimePromise,observeResource:(event)=>tracker.event(event)}); }
 
@@ -63,7 +63,7 @@ for(const item of cases){
   const expectedDigest=await digest(JSON.stringify(expected));
   const observedDigest=await digest(JSON.stringify(observed));
   const cleanup={parserDeletes:tracker.cleanup.parserDeletes,treeDeletes:tracker.cleanup.treeDeletes,cursorDeletes:tracker.cleanup.cursorDeletes,sourceReleases:tracker.cleanup.sourceReleases,observationStreamReleases:tracker.cleanup.observationStreamReleases};
-  const pass=JSON.stringify(expected)===JSON.stringify(observed)&&expectedDigest===observedDigest&&JSON.stringify(cleanup)===JSON.stringify({parserDeletes:1,treeDeletes:1,cursorDeletes:2,sourceReleases:1,observationStreamReleases:1});
+  const pass=JSON.stringify(expected)===JSON.stringify(observed)&&expectedDigest===observedDigest&&JSON.stringify(cleanup)===JSON.stringify({parserDeletes:1,treeDeletes:1,cursorDeletes:2,sourceReleases:1,observationStreamReleases:1})&&Object.values(tracker.live).every((count)=>count===0)&&tracker.peak.source===1;
   outputCases.push({id:item.id,family:item.family,inputUtf8Bytes:encoder.encode(item.source).byteLength,expected,observed,expectedDigest,observedDigest,cleanup,pass});
   console.log("browser-evidence:done:"+item.id);
 }
@@ -86,11 +86,11 @@ for(let run=0;run<2;run++){
   if(result.kind!=="processed"||result.analyses.length!==4000)throw new Error("matrix failed");
   const facts=result.analyses.map((analysis)=>analysis.canonicalPath+"\\t"+analysis.S+"\\t"+analysis.U+"\\n").join("");
   const observed={totalS:result.analyses.reduce((n,a)=>n+a.S,0),totalU:result.analyses.reduce((n,a)=>n+a.U,0),totalUnits:result.analyses.reduce((n,a)=>n+a.units.length,0),totalDecisionObservations:result.analyses.reduce((n,a)=>n+a.observations.filter((o)=>o.kind==="decision").length,0),totalObservations:result.analyses.reduce((n,a)=>n+a.observations.length,0),factsDigest:await digest(facts)};
-  const peakLive={parser:tracker.peak.parser,tree:tracker.peak.tree,cursor:tracker.peak.cursor,source:1,observationStream:tracker.peak.observationStream};
+  const peakLive={parser:tracker.peak.parser,tree:tracker.peak.tree,cursor:tracker.peak.cursor,source:tracker.peak.source,observationStream:tracker.peak.observationStream};
   const cleanup={parserDeletes:tracker.cleanup.parserDeletes,treeDeletes:tracker.cleanup.treeDeletes,cursorDeletes:tracker.cleanup.cursorDeletes,sourceReleases:tracker.cleanup.sourceReleases,observationStreamReleases:tracker.cleanup.observationStreamReleases};
   const ordered={modules:4000,normalizedBytes:41943040,observed,peakLive,cleanup};
   const runDigest=await digest(JSON.stringify(ordered));
-  const pass=JSON.stringify(expectedMatrix)===JSON.stringify(observed)&&JSON.stringify(peakLive)===JSON.stringify({parser:1,tree:1,cursor:1,source:1,observationStream:1})&&JSON.stringify(cleanup)===JSON.stringify({parserDeletes:4000,treeDeletes:4000,cursorDeletes:8000,sourceReleases:4000,observationStreamReleases:4000});
+  const pass=JSON.stringify(expectedMatrix)===JSON.stringify(observed)&&JSON.stringify(peakLive)===JSON.stringify({parser:1,tree:1,cursor:1,source:1,observationStream:1})&&JSON.stringify(cleanup)===JSON.stringify({parserDeletes:4000,treeDeletes:4000,cursorDeletes:8000,sourceReleases:4000,observationStreamReleases:4000})&&Object.values(tracker.live).every((count)=>count===0);
   matrixRuns.push({modules:4000,normalizedBytes:41943040,expected:expectedMatrix,observed,peakLive,cleanup,runDigest,pass});
   console.log("browser-evidence:done:matrix:"+run);
 }
