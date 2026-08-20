@@ -11,7 +11,7 @@ import {
   verifyManifestAgainstDirectory,
 } from "./package-manifest.mjs";
 import {
-  assertNoWorkerConstructionOrMessageContract,
+  assertWorkerConstructionPolicy,
   collectRuntimeReferences,
   inspectEntryPolicy,
 } from "./package-policy.mjs";
@@ -110,15 +110,31 @@ export async function auditCanonicalPackage() {
     for (const record of manifest.files) {
       const content = await readFile(path.join(distDirectory, ...record.path.split("/")));
       packageFiles.set(record.path, content.toString("utf8"));
-      if (record.path.endsWith(".js")) {
-        assertNoWorkerConstructionOrMessageContract(content.toString("utf8"), `Packaged ${record.path}`);
-      }
     }
+    assertWorkerConstructionPolicy(
+      [...packageFiles]
+        .filter(([relativePath]) => relativePath.endsWith(".js"))
+        .map(([relativePath, content]) => [`Packaged ${relativePath}`, content]),
+    );
+
+    const remoteLiterals = [...packageFiles]
+      .filter(([relativePath]) => relativePath.endsWith(".js"))
+      .flatMap(([, content]) => [...content.matchAll(/["'`](https?:\/\/[^"'`\s]*)["'`]/gi)].map((match) => match[1]));
+    invariant(remoteLiterals.includes("https://github.com/"), "Repository input policy lost its fixed literal GitHub origin");
+    const fixedGatewayLiterals = remoteLiterals.filter((reference) => (
+      /^https:\/\/api\.github\.com\/repos\/\$\{[^{}]+\}\/\$\{[^{}]+\}\/commits\?per_page=1&page=1$/.test(reference)
+    ));
+    invariant(fixedGatewayLiterals.length === 1, "Production must contain exactly one fixed GitHub revision gateway URL");
+    invariant(remoteLiterals.length === 2, "Production contains an untracked remote URL literal");
 
     const entryHtml = packageFiles.get("index.html");
     inspectEntryPolicy(entryHtml);
     const references = collectRuntimeReferences(entryHtml, packageFiles);
     invariant(references.length > 0, "Production entry has no runtime references");
+    invariant(
+      references.includes(`${PACKAGE_BASE_PATH}${workerAsset.path}`),
+      "The sole Worker construction is not statically addressed to the packaged same-origin worker asset",
+    );
     for (const reference of references) {
       assertClosedReference(reference, manifestPaths);
     }

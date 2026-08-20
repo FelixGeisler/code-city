@@ -10,6 +10,30 @@ body {
   place-items: center;
 }
 
+main {
+  width: min(36rem, calc(100% - 2rem));
+}
+
 h1 {
-  margin: 0;
+  margin-block: 0 1.5rem;
+}
+
+form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+input,
+button {
+  box-sizing: border-box;
+  font: inherit;
+  padding: 0.65rem;
+}
+
+button {
+  justify-self: start;
+}
+
+[data-feedback]:empty {
+  display: none;
 }

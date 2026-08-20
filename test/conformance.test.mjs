@@ -9,7 +9,7 @@ import viteConfig from "../vite.config.mjs";
 import { assertClosedReference } from "../tools/audit-package.mjs";
 import { inspectDependencyClosure } from "../tools/check-dependencies.mjs";
 import {
-  assertNoWorkerConstructionOrMessageContract,
+  assertWorkerConstructionPolicy,
   inspectEntryPolicy,
 } from "../tools/package-policy.mjs";
 
@@ -80,7 +80,7 @@ test("exactly three strict no-emit TypeScript configs isolate main and worker li
   assert.deepEqual(worker.files.map((file) => file.replaceAll("\\", "/")), ["./src/edge/processing-worker.ts"]);
 });
 
-test("the Vite shell is edge-only, static, policy-closed, and worker-inert", async () => {
+test("the Vite application is strictly layered, policy-closed, and has one static module worker", async () => {
   assert.equal(viteConfig.base, "/code-city/");
   assert.equal(viteConfig.publicDir, false);
   assert.equal(viteConfig.build.sourcemap, false);
@@ -89,6 +89,12 @@ test("the Vite shell is edge-only, static, policy-closed, and worker-inert", asy
 
   const productionFiles = await listFiles(path.join(projectRoot, "src"));
   assert.deepEqual(productionFiles, [
+    "application/main-controller.ts",
+    "application/protocol.ts",
+    "application/resolution.ts",
+    "application/worker-attempt.ts",
+    "domain/repository-reference.ts",
+    "edge/github-revision-gateway.ts",
     "edge/main.ts",
     "edge/processing-worker.ts",
     "edge/shell.css",
@@ -97,13 +103,29 @@ test("the Vite shell is edge-only, static, policy-closed, and worker-inert", asy
   const indexHtml = await readText("index.html");
   inspectEntryPolicy(indexHtml);
   assert.match(indexHtml, /<h1>Code City<\/h1>/);
-  assert.doesNotMatch(indexHtml, /<(?:form|input|button|canvas)\b/i);
+  assert.equal((indexHtml.match(/<form\b/gi) ?? []).length, 1);
+  assert.equal((indexHtml.match(/<input\b/gi) ?? []).length, 1);
+  assert.equal((indexHtml.match(/<button\b/gi) ?? []).length, 1);
+  assert.doesNotMatch(indexHtml, /<(?:select|textarea|canvas)\b/i);
+
+  const formTag = indexHtml.match(/<form\b[^>]*>/i)?.[0];
+  const inputTag = indexHtml.match(/<input\b[^>]*>/i)?.[0];
+  assert(formTag);
+  assert(inputTag);
+  assert.match(formTag, /\snovalidate(?:\s|>)/i);
+  assert.match(indexHtml, /<label\s+for="repository">GitHub repository URL<\/label>/);
+  assert.match(inputTag, /\sid="repository"(?:\s|>)/i);
+  assert.match(inputTag, /\sname="repository"(?:\s|>)/i);
+  assert.match(inputTag, /\stype="text"(?:\s|>)/i);
+  assert.doesNotMatch(inputTag, /\stype="url"|\srequired(?:\s|>)/i);
 
   const mainSource = await readText("src/edge/main.ts");
-  assert.match(mainSource, /from "\.\/processing-worker\.ts\?worker&url"/);
   const workerSource = await readText("src/edge/processing-worker.ts");
-  assertNoWorkerConstructionOrMessageContract(mainSource, "Main source");
-  assertNoWorkerConstructionOrMessageContract(workerSource, "Worker source");
+  assert.match(mainSource, /from "\.\/processing-worker\.ts\?worker&url"/);
+  assert.match(mainSource, /new Worker\(processingWorkerUrl, \{ type: "module" \}\)/);
+  assert.match(mainSource, /form\.addEventListener\("submit", \(event\) => \{\s*event\.preventDefault\(\);\s*controller\.submit\(input\.value\);\s*\}\);/);
+  assertWorkerConstructionPolicy([["Main source", mainSource], ["Worker source", workerSource]]);
+  assert.doesNotMatch(`${mainSource}\n${workerSource}`, /SharedWorker|blob:|data:|createObjectURL/);
 });
 
 test("the package closure guard rejects path aliases and traversal before manifest lookup", () => {
@@ -185,7 +207,7 @@ test("commands and CI preserve the canonical package audit sequence without depl
   assert.doesNotMatch(ci, /\bv2\b|upload-artifact|deploy-pages|configure-pages|environment:|pages:\s*write|id-token:\s*write|contents:\s*write/i);
 });
 
-test("README and agent guidance describe current main, archival v1, and supported commands", async () => {
+test("README and agent guidance describe the current product and supported commands", async () => {
   const readme = await readText("README.md");
   for (const expected of [
     "npm ci --ignore-scripts",
@@ -196,7 +218,6 @@ test("README and agent guidance describe current main, archival v1, and supporte
     "http://127.0.0.1:4173/code-city/",
     "npm run verify",
     "`main`",
-    "`v1`",
   ]) {
     assert(readme.includes(expected), `README is missing ${expected}`);
   }
@@ -205,5 +226,5 @@ test("README and agent guidance describe current main, archival v1, and supporte
   for (const expected of ["npm run typecheck", "npm run test", "npm run build", "npm run test:reproducibility", "npm run test:package", "npm run docs:build", "npm run verify"]) {
     assert(agents.includes(expected), `AGENTS.md is missing ${expected}`);
   }
-  assert.doesNotMatch(agents, /active M1 integration branch is named `v2`|target(?:ing)? the active M1 integration branch \(`v2`|created from[^\n]*`v2`/i);
+  assert.doesNotMatch(`${readme}\n${agents}`, /\bv2\b|\b2\.x\b|reimplementation|template|\bv1\b|\barchiv(?:e|al)\b|\bformer\b/i);
 });
