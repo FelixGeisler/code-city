@@ -11,6 +11,14 @@
 <body>
   <main>
     <h1>Code City</h1>
+    <section data-surface>
+      <form>
+        <label for="repository">GitHub repository URL</label>
+        <input id="repository" name="repository" type="url" required autocomplete="off" spellcheck="false">
+        <button type="submit">Submit</button>
+        <p data-feedback role="alert" aria-live="polite"></p>
+      </form>
+    </section>
   </main>
   <script type="module" src="/src/edge/main.ts"></script>
 </body>

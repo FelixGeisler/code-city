@@ -1,16 +1,10 @@
-# Code City v2 agent instructions
+# Code City agent instructions
 
 ## Project context
 
-Code City v2 is a deliberate reimplementation of Code City 1.x. The goal is a
-useful product developed from explicit needs, deliberate decisions, clear
-architecture, and measurable evidence.
-
-Code City 1.0.0 is a baseline for comparison, not a specification to reproduce.
-Its production code may contain defects, unnecessary features, and accidental
-design. Inspect it when useful, but do not copy or port it by default. Reuse a
-contract, fixture, test, or implementation only after checking that it fits an
-accepted v2 need and meets the expected quality.
+Code City is developed from explicit needs, deliberate decisions, clear
+architecture, and measurable evidence. Implement only behavior supported by
+the current authoritative product and architecture sources.
 
 ## Sources of truth
 
@@ -31,7 +25,7 @@ create parallel architecture summaries or duplicate requirements in arc42.
 
 Be pragmatic. Not every change needs a requirement identifier or formal
 traceability. Changes must still fit the agreed product scope and must not add
-features merely because v1 contains them or because they might be useful later.
+features merely because they might be useful later.
 
 Make consequential assumptions visible. Ask for clarification when an
 assumption would materially change product behavior, scope, cost, security, or
@@ -106,9 +100,7 @@ commands merely as a ritual.
 
 ## Git and pull requests
 
-The protected default integration branch is `main`. The locked `v1` branch is
-archival and must not be used for development, release, pull-request
-integration, or Pages publication.
+The protected default integration branch is `main`.
 
 * Work on a short-lived branch created from an up-to-date `main`.
 * Keep commits focused and use clear conventional commit messages.

@@ -494,17 +494,21 @@ test("fails closed on unsupported compiler reference, AMD, and no-default-lib di
   }
 });
 
-test("accepts the actual edge-only production source and retains one worker import evidence entry", async () => {
+test("accepts the actual strict production strata and retains the static worker import", async () => {
   const result = await checkBoundaries(projectRoot);
-  assert.equal(result.filesChecked, 2);
-  assert.deepEqual(result.imports, [{
-    source: "src/edge/main.ts",
-    sourceLayer: "edge",
-    line: 1,
-    column: 1,
-    kind: "ordinary import",
-    specifier: "./processing-worker.ts?worker&url",
-    resolved: "src/edge/processing-worker.ts",
-    targetLayer: "edge",
-  }]);
+  assert.equal(result.filesChecked, 8);
+  assert(result.imports.some((entry) => (
+    entry.source === "src/edge/main.ts"
+      && entry.specifier === "./processing-worker.ts?worker&url"
+      && entry.resolved === "src/edge/processing-worker.ts"
+      && entry.targetLayer === "edge"
+  )));
+  for (const entry of result.imports) {
+    if (entry.sourceLayer === "application") {
+      assert(["application", "domain"].includes(entry.targetLayer));
+    }
+    if (entry.sourceLayer === "domain") {
+      assert.equal(entry.targetLayer, "domain");
+    }
+  }
 });

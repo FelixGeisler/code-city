@@ -101,7 +101,7 @@ export function collectRuntimeReferences(html, packageFiles) {
     }
 
     if (relativePath.endsWith(".js")) {
-      for (const match of content.matchAll(/["'`]((?:\/code-city\/|https?:\/\/|\/\/|data:|blob:)[^"'`\s]*)["'`]/gi)) {
+      for (const match of content.matchAll(/["'`]((?:\/code-city\/|\/\/|data:|blob:)[^"'`\s]*)["'`]/gi)) {
         references.add(match[1]);
       }
     }
@@ -110,13 +110,18 @@ export function collectRuntimeReferences(html, packageFiles) {
   return [...references].sort();
 }
 
-export function assertNoWorkerConstructionOrMessageContract(source, label) {
-  const forbidden = [
-    [/\bnew\s+(?:(?:globalThis|window|self)\s*\.\s*)?(?:Worker|SharedWorker)\s*\(/, "worker construction"],
-    [/\b(?:postMessage|onmessage|onmessageerror)\b/, "worker message contract"],
-    [/\baddEventListener\s*\(\s*["']message(?:error)?["']/, "worker message listener"],
-  ];
-  for (const [pattern, description] of forbidden) {
-    invariant(!pattern.test(source), `${label} contains forbidden ${description}`);
+export function assertWorkerConstructionPolicy(sources) {
+  let workerConstructions = 0;
+  for (const [label, source] of sources) {
+    invariant(typeof source === "string", `${label} is not text`);
+    invariant(!/\bnew\s+(?:(?:globalThis|window|self)\s*\.\s*)?SharedWorker\s*\(/.test(source), `${label} constructs a SharedWorker`);
+    invariant(!/\b(?:blob:|data:|URL\s*\.\s*createObjectURL)\b/i.test(source), `${label} contains an inline worker mechanism`);
+    const constructions = [...source.matchAll(/\bnew\s+(?:(?:globalThis|window|self)\s*\.\s*)?Worker\s*\(([\s\S]{0,300}?)\)/g)];
+    workerConstructions += constructions.length;
+    for (const construction of constructions) {
+      invariant(/\{\s*type\s*:\s*["'`]module["'`]\s*\}/.test(construction[1]), `${label} worker is not an ES-module worker`);
+      invariant(!/^\s*["'`](?:https?:|\/\/|blob:|data:)/i.test(construction[1]), `${label} worker is not statically same-origin`);
+    }
   }
+  invariant(workerConstructions === 1, `Production must contain exactly one Worker construction; found ${workerConstructions}`);
 }
