@@ -8,6 +8,7 @@ import { createServer as createViteServer } from "vite";
 import viteConfig from "../vite.config.mjs";
 import { assertClosedReference } from "../tools/audit-package.mjs";
 import { inspectDependencyClosure } from "../tools/check-dependencies.mjs";
+import { checkParserAssets } from "../tools/check-parser-assets.mjs";
 import {
   assertWorkerConstructionPolicy,
   inspectEntryPolicy,
@@ -52,6 +53,10 @@ test("the dependency manifest and complete lock closure match the accepted pins"
   assert(result.registryPackageCount > 0);
 });
 
+test("selected parser assets, licenses, ABI envelope, and canonical inventory match accepted evidence", async () => {
+  await checkParserAssets();
+});
+
 test("exactly three strict no-emit TypeScript configs isolate main and worker libraries", async () => {
   const rootEntries = await readdir(projectRoot);
   const configFiles = rootEntries.filter((name) => /^tsconfig(?:\.[^.]+)?\.json$/.test(name)).sort();
@@ -89,11 +94,13 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
 
   const productionFiles = await listFiles(path.join(projectRoot, "src"));
   assert.deepEqual(productionFiles, [
+    "application/base-metric-processing.ts",
     "application/main-controller.ts",
     "application/protocol.ts",
     "application/resolution.ts",
     "application/source-retrieval.ts",
     "application/worker-attempt.ts",
+    "domain/base-metrics.ts",
     "domain/repository-reference.ts",
     "domain/source-admission.ts",
     "edge/github-revision-gateway.ts",
@@ -101,6 +108,8 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
     "edge/main.ts",
     "edge/processing-worker.ts",
     "edge/shell.css",
+    "edge/tree-sitter-adapter.ts",
+    "edge/tree-sitter-assets.ts",
   ]);
 
   const indexHtml = await readText("index.html");

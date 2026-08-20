@@ -16,6 +16,7 @@ import {
   inspectEntryPolicy,
 } from "./package-policy.mjs";
 import { closePackageServer, createPackageServer, listen } from "./serve-package.mjs";
+import { checkPackagedBrowserEvidence } from "./check-browser-evidence.mjs";
 
 const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const distDirectory = path.join(projectRoot, "dist");
@@ -51,13 +52,25 @@ function assertProductionShape(manifest) {
   const html = manifest.files.filter((record) => record.path.endsWith(".html"));
   const css = manifest.files.filter((record) => record.path.endsWith(".css"));
   const javascript = manifest.files.filter((record) => record.path.endsWith(".js"));
+  const wasm = manifest.files.filter((record) => record.path.endsWith(".wasm"));
   invariant(html.length === 1 && html[0].path === "index.html", "Production package must contain only the index HTML document");
   invariant(css.length === 1, "Production package must contain exactly one stylesheet");
-  invariant(javascript.length === 2, "Production package must contain one main module and one worker module");
-  invariant(manifest.files.length === html.length + css.length + javascript.length, "Production package contains a non-runtime artifact");
+  invariant(javascript.length === 3, "Production package must contain main, worker, and external parser runtime JavaScript");
+  invariant(wasm.length === 4, "Production package must contain exactly one runtime and three grammar WASMs");
+  invariant(manifest.files.length === html.length + css.length + javascript.length + wasm.length, "Production package contains a non-runtime artifact");
 
   const workerAssets = javascript.filter((record) => /(?:^|\/)processing-worker-[A-Za-z0-9_-]+\.js$/.test(record.path));
   invariant(workerAssets.length === 1, "Production package must contain exactly one separate processing worker asset");
+  const expectedAssetDigests = new Set([
+    "0c868236a47296b4ff3c1570f20e0899e4a784ff6e5cd7bfc9c3a55225463e4a",
+    "ba5c7a539603f251f380e4d6ce26ee954ffca7bda8b2e13744dc4c87d6ce6041",
+    "5fb488d0cabb4775a594bab85682de5ad6ce83c0d6ac997a9f82dd084d571240",
+    "778025db5a8be0e70f8ccc3671e486dfeddd048c25d9e8a70c26de2e1bf6f97d",
+    "79e5da75ea62855a0cd67177685f0164eac87d5f630b3cbe1e0a099751ad30f8",
+  ]);
+  const selectedAssets = manifest.files.filter((record) => expectedAssetDigests.has(record.sha256));
+  invariant(selectedAssets.length === 5, "Packaged parser assets differ from the five accepted selected files");
+  invariant(new Set(selectedAssets.map((record) => record.sha256)).size === 5, "Packaged parser asset digest is duplicated");
   return workerAssets[0];
 }
 
@@ -215,6 +228,7 @@ export async function auditCanonicalPackage() {
     throw failure;
   }
   console.log("Audited the unchanged canonical package over confined local HTTP and shut it down cleanly.");
+  await checkPackagedBrowserEvidence();
 }
 
 const invokedPath = process.argv[1] && path.resolve(process.argv[1]);
