@@ -108,10 +108,22 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
   assert.equal((indexHtml.match(/<button\b/gi) ?? []).length, 1);
   assert.doesNotMatch(indexHtml, /<(?:select|textarea|canvas)\b/i);
 
+  const formTag = indexHtml.match(/<form\b[^>]*>/i)?.[0];
+  const inputTag = indexHtml.match(/<input\b[^>]*>/i)?.[0];
+  assert(formTag);
+  assert(inputTag);
+  assert.match(formTag, /\snovalidate(?:\s|>)/i);
+  assert.match(indexHtml, /<label\s+for="repository">GitHub repository URL<\/label>/);
+  assert.match(inputTag, /\sid="repository"(?:\s|>)/i);
+  assert.match(inputTag, /\sname="repository"(?:\s|>)/i);
+  assert.match(inputTag, /\stype="text"(?:\s|>)/i);
+  assert.doesNotMatch(inputTag, /\stype="url"|\srequired(?:\s|>)/i);
+
   const mainSource = await readText("src/edge/main.ts");
   const workerSource = await readText("src/edge/processing-worker.ts");
   assert.match(mainSource, /from "\.\/processing-worker\.ts\?worker&url"/);
   assert.match(mainSource, /new Worker\(processingWorkerUrl, \{ type: "module" \}\)/);
+  assert.match(mainSource, /form\.addEventListener\("submit", \(event\) => \{\s*event\.preventDefault\(\);\s*controller\.submit\(input\.value\);\s*\}\);/);
   assertWorkerConstructionPolicy([["Main source", mainSource], ["Worker source", workerSource]]);
   assert.doesNotMatch(`${mainSource}\n${workerSource}`, /SharedWorker|blob:|data:|createObjectURL/);
 });

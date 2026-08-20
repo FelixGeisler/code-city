@@ -1,6 +1,7 @@
 import type { GatewayResult, RevisionGateway } from "../application/resolution";
-import { isProviderRevision, type RepositoryReference } from "../domain/repository-reference";
+import type { RepositoryReference } from "../domain/repository-reference";
 
+const PROVIDER_REVISION = /^[0-9a-f]{40,64}$/;
 const MAX_EVIDENCE_BYTES = 1_048_576;
 const API_ORIGIN = "https://api.github.com";
 
@@ -79,7 +80,7 @@ function projectRevision(value: unknown): GatewayResult {
     return { kind: "invalid-evidence" };
   }
   const descriptor = Object.getOwnPropertyDescriptor(first, "sha");
-  if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "string" || !isProviderRevision(descriptor.value)) {
+  if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "string" || !PROVIDER_REVISION.test(descriptor.value)) {
     return { kind: "invalid-evidence" };
   }
   return { kind: "revision", revision: descriptor.value };

@@ -58,12 +58,17 @@ test("invalid input creates neither worker nor request-capable processing", () =
   assert.equal(f.transports.length, 0);
 });
 
-test("one worker is created only after valid Submit and active submission is disabled", () => {
+test("one worker receives accepted unusual segments unchanged and active submission is disabled", () => {
   const f = fixture();
-  assert.equal(f.controller.submit(` \t${VALID}\n`), true);
+  const acceptedRawValue = "https://github.com/ow\fner/re po!";
+  assert.equal(f.controller.submit(acceptedRawValue), true);
   assert.equal(f.transports.length, 1);
   assert.deepEqual(f.events.slice(0, 4), ["worker:create", "worker:listen", "view:working", "send:START"]);
-  assert.deepEqual(f.transports[0].sent, [{ type: "START", generation: 1, repository: { owner: "owner", repository: "repo" } }]);
+  assert.deepEqual(f.transports[0].sent, [{
+    type: "START",
+    generation: 1,
+    repository: { owner: "ow\fner", repository: "re po!" },
+  }]);
   assert.equal(f.controller.submit(VALID), false);
   assert.equal(f.transports.length, 1);
 });

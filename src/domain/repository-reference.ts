@@ -30,7 +30,3 @@ export function parseRepositoryReference(input: string): RepositoryReference | u
 
   return { owner, repository };
 }
-
-export function isProviderRevision(value: string): boolean {
-  return /^[0-9a-f]{40,64}$/.test(value);
-}
