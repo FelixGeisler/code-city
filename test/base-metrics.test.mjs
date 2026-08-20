@@ -42,6 +42,29 @@ function materializeAnalysis(analysis) {
   return { canonicalPath: analysis.canonicalPath, S: analysis.S, U: analysis.U, units: [...analysis.units], observations: [...analysis.observations] };
 }
 
+function endpointParser(startIndex, endIndex, events = []) {
+  const rootNode = {
+    hasError: false,
+    walk() {
+      return {
+        nodeType: "comment", nodeIsNamed: true, nodeIsMissing: false, currentFieldName: null, startIndex, endIndex,
+        gotoFirstChild: () => false, gotoNextSibling: () => false, gotoParent: () => false, delete() {},
+      };
+    },
+  };
+  class FakeParser {
+    static async init() {}
+    setLanguage() {}
+    parse() { return { rootNode, delete() {} }; }
+    delete() {}
+  }
+  return createTreeSitterAdapter({ runtimeJavaScript: "runtime.js", runtimeWasm: "runtime.wasm", grammarJavaScript: "javascript.wasm", grammarTypeScript: "typescript.wasm", grammarTsx: "tsx.wasm" }, {
+    importRuntime: async () => ({ Parser: FakeParser, Language: { load: async () => ({}) } }),
+    loadBytes: async () => new Uint8Array(),
+    observeResource: (event) => events.push(event),
+  });
+}
+
 const REQUIRED_CASE_IDS = [
   "node-js-function", "node-jsx-comment", "node-ts-type-only", "node-tsx-value",
   "suffix-js", "suffix-mjs", "suffix-cjs", "suffix-jsx", "suffix-ts", "suffix-mts", "suffix-cts", "suffix-tsx",
@@ -49,7 +72,7 @@ const REQUIRED_CASE_IDS = [
   "sloc-empty", "sloc-whitespace", "sloc-line-comment", "sloc-block-comment", "sloc-jsdoc", "sloc-triple-slash", "sloc-hashbang", "sloc-leading-comment", "sloc-trailing-comment", "sloc-embedded-comment", "sloc-string-comment-text", "sloc-template-comment-text", "sloc-regex-comment-text", "sloc-template-blank-lines", "sloc-jsx-text-comment-looking", "sloc-jsx-blank-lines", "sloc-jsx-comment-wrapper", "sloc-typescript-source",
   "unit-function-declaration", "unit-function-expression", "unit-generator-function", "unit-async-function", "unit-exported-function", "unit-arrow-concise-unparenthesized", "unit-arrow-block", "unit-async-arrow", "unit-object-method", "unit-class-method", "unit-constructor", "unit-getter", "unit-setter", "unit-static-block", "unit-modifiers", "unit-decorator-span", "unit-computed-name", "unit-field-arrow", "unit-field-function", "unit-nested-order",
   "bodyless-overload", "bodyless-declare-function", "bodyless-ambient-class", "bodyless-abstract-method", "bodyless-interface-method", "bodyless-implicit-constructor", "ambient-enum", "ambient-namespace", "ambient-nested-runtime-shapes",
-  "top-level-empty-statement", "top-level-function", "top-level-value", "top-level-type-only", "top-level-import-type", "top-level-export-type", "top-level-import-all-type-trivia", "top-level-export-all-type-trivia", "top-level-import-mixed", "top-level-export-mixed", "top-level-side-effect-import", "top-level-export-empty", "top-level-runtime-enum", "top-level-runtime-namespace", "top-level-ambient", "top-level-jsx", "top-level-type-and-value-mixed",
+  "top-level-empty-statement", "top-level-function", "top-level-value", "top-level-type-only", "top-level-import-type", "top-level-export-type", "top-level-import-all-type-trivia", "top-level-export-all-type-trivia", "top-level-import-mixed", "top-level-export-mixed", "top-level-side-effect-import", "top-level-export-empty", "top-level-export-empty-trivia", "top-level-export-local-value", "top-level-export-empty-reexport", "top-level-export-value-reexport", "top-level-runtime-enum", "top-level-runtime-namespace", "top-level-ambient", "top-level-jsx", "top-level-type-and-value-mixed",
   "decisions-all", "decisions-exclusions", "canonical-src-a", "ownership-parameter-and-nested", "ownership-field-and-computed", "identity-order-astral", "identity-order-same-start-nesting",
   "contextual-top-return", "contextual-top-break", "contextual-top-continue", "contextual-import-defer-rejected",
   "malformed-javascript", "malformed-jsx", "malformed-typescript", "malformed-tsx", "missing-recovery", "forbidden-jsx-js", "typescript-in-javascript", "nonfailure-type-diagnostic", "nonfailure-unresolved-import", "nonexecution-sentinel",
@@ -176,7 +199,16 @@ test("independent zero-unit, mixed-list, contextual, and arrow-owned-region deci
     assert.equal(expected.U, 1, id); assert.deepEqual(expected.units, [{ path: "t.ts", kind: "top-level" }], id);
     assert.equal(expected.observations[0].valueKind, "value-or-side-effect-import-export", id);
   }
-  assert.equal(byId.get("top-level-export-empty").expectedOutcome.U, 0);
+  for (const id of ["top-level-export-empty", "top-level-export-empty-trivia"]) {
+    const expected = byId.get(id).expectedOutcome;
+    assert.equal(expected.U, 0, id); assert.deepEqual(expected.units, [], id);
+    assert.equal(expected.observations[0].typeKind, "exact export{}", id);
+  }
+  for (const id of ["top-level-export-local-value", "top-level-export-empty-reexport", "top-level-export-value-reexport"]) {
+    const expected = byId.get(id).expectedOutcome;
+    assert.equal(expected.U, 1, id); assert.deepEqual(expected.units, [{ path: "t.ts", kind: "top-level" }], id);
+    assert.equal(expected.observations[0].valueKind, "value-or-side-effect-import-export", id);
+  }
   assert.deepEqual(byId.get("unit-arrow-concise-unparenthesized").expectedOutcome.units, [
     { path: "u.js", kind: "top-level" },
     { path: "u.js", kind: "arrow", startByte: 10, endByte: 16, ownedRegions: [{ startByte: 10, endByte: 11 }, { startByte: 15, endByte: 16 }] },
@@ -223,10 +255,44 @@ test("dense full-envelope actual-WASM processing retains compact facts with one 
   assert.deepEqual(cleanup, { parser: 4_000, tree: 4_000, cursor: 8_000, source: 4_000, stream: 4_000 });
 });
 
+test("UTF-16 endpoint conversion rejects split, range, and malformed scalar defects atomically", async () => {
+  const cases = [
+    { id: "split-start", source: "😀x", start: 1, end: 3 },
+    { id: "split-end", source: "😀x", start: 0, end: 1 },
+    { id: "past-end", source: "😀x", start: 0, end: 4 },
+    { id: "malformed-high-surrogate", source: "\ud800x", start: 0, end: 2 },
+    { id: "malformed-low-surrogate", source: "\udc00x", start: 0, end: 2 },
+  ];
+  for (const entry of cases) {
+    const resourceEvents = [], sourceEvents = [];
+    const result = await processAdmittedBaseMetrics([{ canonicalPath: "a.js", normalizedSource: entry.source }], endpointParser(entry.start, entry.end, resourceEvents), (event) => sourceEvents.push(event));
+    assert.deepEqual(result, { kind: "failure", category: "Metric processing failed", code: "M1-MET-1" }, entry.id);
+    assert.deepEqual(sourceEvents, ["source-acquired", "source-released"], entry.id);
+    assert.equal(resourceEvents.filter((event) => event === "observation-stream-created").length, 0, entry.id);
+    assert.equal(resourceEvents.filter((event) => event === "cursor-deleted").length, 2, entry.id);
+    assert.equal(resourceEvents.filter((event) => event === "tree-deleted").length, 1, entry.id);
+    assert.equal(resourceEvents.filter((event) => event === "parser-deleted").length, 1, entry.id);
+  }
+});
+
+test("UTF-16 endpoint conversion scans astral source without indexing unrelated scalars", async () => {
+  const parser = endpointParser(1, 3);
+  await parser.initialize();
+  const astral = await parser.project("javascript-no-jsx", "a😀b");
+  assert.deepEqual([...astral.observations], [{ kind: "lexical-exclusion", startByte: 1, endByte: 5 }]);
+  astral.release();
+
+  const unrelatedSource = `x${"😀".repeat(1_000_000)}`;
+  const unrelated = await endpointParser(0, 1).project("javascript-no-jsx", unrelatedSource);
+  assert.deepEqual([...unrelated.observations], [{ kind: "lexical-exclusion", startByte: 0, endByte: 1 }]);
+  assert(unrelated.observations.packedByteLength() < 64);
+  unrelated.release();
+});
+
 test("production parser source uses only the approved iterative cursor surface", async () => {
   const source = await readFile(path.join(projectRoot, "src", "edge", "tree-sitter-adapter.ts"), "utf8");
   for (const forbidden of [
-    ".children", ".namedChildren", ".child(", ".parent", ".text", ".toString(", "QueryCursor", "new Query", ".setLogger", "progressCallback", "oldTree",
+    ".children", ".namedChildren", ".child(", ".parent", ".text", ".toString(", "QueryCursor", "new Query", ".setLogger", "progressCallback", "oldTree", "astralEnds", "astralExtras",
   ]) assert(!source.includes(forbidden), `Forbidden parser API token ${forbidden}`);
   assert.equal((source.match(/\.parse\(normalizedSource\)/g) ?? []).length, 1);
   assert.doesNotMatch(source, /function\s+\w+\([^)]*\)\s*\{[^{}]*\b\1\s*\(/s);

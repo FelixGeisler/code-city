@@ -2991,6 +2991,115 @@
       }
     },
     {
+      "id": "top-level-export-empty-trivia",
+      "canonicalPath": "t.ts",
+      "source": "export { /* empty */ }; // trailing\n",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "exact export{}",
+            "startByte": 0,
+            "endByte": 23
+          },
+          {
+            "kind": "lexical-exclusion",
+            "startByte": 9,
+            "endByte": 20
+          },
+          {
+            "kind": "lexical-exclusion",
+            "startByte": 24,
+            "endByte": 35
+          }
+        ],
+        "digest": "b65a9773db5c005b3295936210e85ada723c4c97482165986bd5a00d318cddc8"
+      }
+    },
+    {
+      "id": "top-level-export-local-value",
+      "canonicalPath": "t.ts",
+      "source": "export { value };",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "t.ts",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "value-or-side-effect-import-export",
+            "startByte": 0,
+            "endByte": 17
+          }
+        ],
+        "digest": "e72ebdbd1b078f142dc6ea79f12a9d40210e7ce8405a8f2c4e759d95ae160e60"
+      }
+    },
+    {
+      "id": "top-level-export-empty-reexport",
+      "canonicalPath": "t.ts",
+      "source": "export {} from 'm';",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "t.ts",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "value-or-side-effect-import-export",
+            "startByte": 0,
+            "endByte": 19
+          }
+        ],
+        "digest": "2f9c17d1d58e45f5cabd3020516d5380af2889e5f186d383796dfd99cffaeb4b"
+      }
+    },
+    {
+      "id": "top-level-export-value-reexport",
+      "canonicalPath": "t.ts",
+      "source": "export { value } from 'm';",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "t.ts",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "value-or-side-effect-import-export",
+            "startByte": 0,
+            "endByte": 26
+          }
+        ],
+        "digest": "3cb898baec6701834b7ad4c5d463bfa27ba59d58aebb948a4d742fb75cace54b"
+      }
+    },
+    {
       "id": "top-level-runtime-enum",
       "canonicalPath": "t.ts",
       "source": "enum E { A }",

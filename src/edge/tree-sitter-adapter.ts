@@ -30,7 +30,7 @@ type Utf16Span = Readonly<{ start: number; end: number }>;
 
 type UnitFrame = { row: number; form: ExplicitUnitForm; start: number; end: number; firstNonDecoratorStart?: number; name?: Utf16Span; ownedStarts: number[]; ownedEnds: number[]; sawGet: boolean; sawSet: boolean };
 type OperatorFrame = { row: number; and: boolean; or: boolean; nullish: boolean; andAssign: boolean; orAssign: boolean; nullishAssign: boolean };
-type StatementFrame = { row: number; wholeType: boolean; clause: boolean; specifiers: number; typeSpecifiers: number; directTypeDeclaration: boolean; exportStatement: boolean };
+type StatementFrame = { row: number; wholeType: boolean; clause: boolean; source: boolean; specifiers: number; typeSpecifiers: number; directTypeDeclaration: boolean; exportStatement: boolean };
 type SpecifierFrame = { statementDepth: number; typeToken: boolean };
 type JsxFrame = { commentRows: number[]; hasNonCommentContent: boolean; start: number; end: number };
 type ProjectionFrame = { ambient: boolean; unit?: UnitFrame; operator?: OperatorFrame; statement?: StatementFrame; specifier?: SpecifierFrame; jsx?: JsxFrame };
@@ -68,10 +68,41 @@ class ObservationRows {
   disable(row: number): void { this.codes[row] = ROW_DISABLED; }
   setOwned(row: number, starts: readonly number[], ends: readonly number[]): void { this.ownedOffsets[row] = this.ownedStarts.length; this.ownedCounts[row] = starts.length; this.ownedStarts.push(...starts); this.ownedEnds.push(...ends); }
   finish(source: string) {
-    const astralEnds: number[] = [], astralExtras: number[] = [];
-    let utf16 = 0, extra = 0;
-    for (const scalar of source) { utf16 += scalar.length; if (scalar.length === 2) { extra += new TextEncoder().encode(scalar).byteLength - 2; astralEnds.push(utf16); astralExtras.push(extra); } }
-    const translate = (endpoint: number): number => { let low = 0, high = astralEnds.length; while (low < high) { const middle = (low + high) >>> 1; if (astralEnds[middle]! <= endpoint) low = middle + 1; else high = middle; } return endpoint + (low === 0 ? 0 : astralExtras[low - 1]!); };
+    const requiredEndpoints: number[] = [];
+    for (let row = 0; row < this.size; row += 1) {
+      const code = this.codes[row]!;
+      if (code === ROW_DISABLED) continue;
+      requiredEndpoints.push(this.starts[row]!, this.ends[row]!);
+      if (code !== ROW_UNIT) continue;
+      const offset = this.ownedOffsets[row]!, count = this.ownedCounts[row]!;
+      for (let owned = 0; owned < count; owned += 1) requiredEndpoints.push(this.ownedStarts[offset + owned]!, this.ownedEnds[offset + owned]!);
+    }
+    requiredEndpoints.sort((left, right) => left - right);
+    let endpointCount = 0;
+    for (const endpoint of requiredEndpoints) {
+      invariant(Number.isSafeInteger(endpoint) && endpoint >= 0 && endpoint <= source.length, "Invalid parser endpoint");
+      if (endpointCount === 0 || requiredEndpoints[endpointCount - 1] !== endpoint) requiredEndpoints[endpointCount++] = endpoint;
+    }
+    requiredEndpoints.length = endpointCount;
+    const byteEndpoints = new Uint32Array(endpointCount);
+    let endpointIndex = 0, utf16Offset = 0, utf8Offset = 0;
+    for (const scalar of source) {
+      if (requiredEndpoints[endpointIndex] === utf16Offset) byteEndpoints[endpointIndex++] = utf8Offset;
+      const codePoint = scalar.codePointAt(0)!;
+      invariant(!(scalar.length === 1 && codePoint >= 0xd800 && codePoint <= 0xdfff), "Malformed Unicode scalar");
+      const scalarEnd = utf16Offset + scalar.length;
+      invariant(requiredEndpoints[endpointIndex] === undefined || requiredEndpoints[endpointIndex]! >= scalarEnd, "Parser endpoint splits a surrogate pair");
+      utf8Offset += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+      utf16Offset = scalarEnd;
+    }
+    if (requiredEndpoints[endpointIndex] === utf16Offset) byteEndpoints[endpointIndex++] = utf8Offset;
+    invariant(endpointIndex === endpointCount, "Invalid parser endpoint");
+    const translate = (endpoint: number): number => {
+      let low = 0, high = endpointCount;
+      while (low < high) { const middle = (low + high) >>> 1; if (requiredEndpoints[middle]! < endpoint) low = middle + 1; else high = middle; }
+      invariant(requiredEndpoints[low] === endpoint, "Missing parser endpoint translation");
+      return byteEndpoints[low]!;
+    };
     const writer = createSyntaxObservationWriter();
     for (let row = 0; row < this.size; row += 1) {
       const code = this.codes[row]!; if (code === ROW_DISABLED) continue;
@@ -110,18 +141,18 @@ function projectTree(root: RootHandle, source: string, observe: (event: ParserRe
     const frame = frames[exitingDepth]; if (!frame) return;
     if (frame.operator) { const op = frame.operator; const kind: DecisionKind | undefined = op.andAssign ? "logical-and-assign" : op.orAssign ? "logical-or-assign" : op.nullishAssign ? "nullish-assign" : op.and ? "logical-and" : op.or ? "logical-or" : op.nullish ? "nullish" : undefined; if (kind) rows.patch(op.row, ROW_DECISION, payload(DECISION_KINDS, kind)); else rows.disable(op.row); }
     if (frame.specifier) { const statement = frames[frame.specifier.statementDepth]?.statement; invariant(statement, "Detached import/export specifier"); statement.specifiers += 1; if (frame.specifier.typeToken) statement.typeSpecifiers += 1; }
-    if (frame.statement) { const item = frame.statement; const typeKind: TypeOnlyKind | undefined = item.wholeType || item.directTypeDeclaration ? "import/export type" : item.clause && item.specifiers === 0 && item.exportStatement ? "exact export{}" : item.clause && item.specifiers > 0 && item.specifiers === item.typeSpecifiers ? "import/export lists all specifiers type-only" : undefined; if (typeKind) rows.patch(item.row, ROW_TYPE, payload(TYPE_ONLY_KINDS, typeKind)); else rows.patch(item.row, ROW_VALUE, payload(VALUE_ANCHOR_KINDS, "value-or-side-effect-import-export")); }
+    if (frame.statement) { const item = frame.statement; const typeKind: TypeOnlyKind | undefined = item.wholeType || item.directTypeDeclaration ? "import/export type" : item.clause && item.specifiers === 0 && item.exportStatement && !item.source ? "exact export{}" : item.clause && item.specifiers > 0 && item.specifiers === item.typeSpecifiers ? "import/export lists all specifiers type-only" : undefined; if (typeKind) rows.patch(item.row, ROW_TYPE, payload(TYPE_ONLY_KINDS, typeKind)); else rows.patch(item.row, ROW_VALUE, payload(VALUE_ANCHOR_KINDS, "value-or-side-effect-import-export")); }
     if (frame.jsx && frame.jsx.commentRows.length > 0 && !frame.jsx.hasNonCommentContent) { const [first, ...rest] = frame.jsx.commentRows; rows.patch(first!, ROW_LEXICAL, 0, frame.jsx.start, frame.jsx.end); for (const row of rest) rows.disable(row); }
     if (frame.unit) { const unit = frame.unit; let form = unit.form; if (form === "method") { if (unit.sawGet) form = "getter"; else if (unit.sawSet) form = "setter"; else if (unit.name && exactAscii(source, unit.name, "constructor")) form = "constructor"; } invariant(unit.ownedStarts.length > 0, "Explicit unit has no body-bearing owned region"); rows.patch(unit.row, ROW_UNIT, payload(EXPLICIT_UNIT_FORMS, form), unit.firstNonDecoratorStart ?? unit.start, unit.end); rows.setOwned(unit.row, unit.ownedStarts, unit.ownedEnds); }
     frames.length = exitingDepth;
   }
   try {
     for (;;) {
-      const nodeType = cursor.nodeType, start = cursor.startIndex, end = cursor.endIndex, field = cursor.currentFieldName; invariant(Number.isSafeInteger(start) && Number.isSafeInteger(end) && start >= 0 && end >= start, "Invalid parser endpoint");
+      const nodeType = cursor.nodeType, start = cursor.startIndex, end = cursor.endIndex, field = cursor.currentFieldName; invariant(Number.isSafeInteger(start) && Number.isSafeInteger(end) && start >= 0 && end >= start && end <= 0xffff_ffff, "Invalid parser endpoint");
       const parent = frames[depth.value - 1];
       if (parent?.unit) { if (nodeType !== "decorator" && parent.unit.firstNonDecoratorStart === undefined) parent.unit.firstNonDecoratorStart = start; if (field === "name") parent.unit.name = { start, end }; if (field === "parameters" || field === "parameter" || field === "body") { parent.unit.ownedStarts.push(start); parent.unit.ownedEnds.push(end); } if (nodeType === "get") parent.unit.sawGet = true; if (nodeType === "set") parent.unit.sawSet = true; }
       if (parent?.operator) { if (nodeType === "&&") parent.operator.and = true; else if (nodeType === "||") parent.operator.or = true; else if (nodeType === "??") parent.operator.nullish = true; else if (nodeType === "&&=") parent.operator.andAssign = true; else if (nodeType === "||=") parent.operator.orAssign = true; else if (nodeType === "??=") parent.operator.nullishAssign = true; }
-      if (parent?.statement) { if (nodeType === "type") parent.statement.wholeType = true; if (nodeType === "export_clause" || nodeType === "named_imports") parent.statement.clause = true; if (TYPE_DECLARATION_NODES.has(nodeType)) parent.statement.directTypeDeclaration = true; }
+      if (parent?.statement) { if (nodeType === "type") parent.statement.wholeType = true; if (nodeType === "export_clause" || nodeType === "named_imports") parent.statement.clause = true; if (field === "source" || nodeType === "from") parent.statement.source = true; if (TYPE_DECLARATION_NODES.has(nodeType)) parent.statement.directTypeDeclaration = true; }
       if (parent?.specifier && nodeType === "type") parent.specifier.typeToken = true;
       for (let owner = depth.value - 1; owner >= 0; owner -= 1) { const jsx = frames[owner]?.jsx; if (jsx) { if (!LEXICAL_EXCLUSIONS.has(nodeType) && nodeType !== "{" && nodeType !== "}") jsx.hasNonCommentContent = true; break; } }
       const ambient = (parent?.ambient ?? false) || nodeType === "ambient_declaration";
@@ -131,7 +162,7 @@ function projectTree(root: RootHandle, source: string, observe: (event: ParserRe
       let operator: OperatorFrame | undefined;
       if (!ambient && (nodeType === "binary_expression" || nodeType === "augmented_assignment_expression")) operator = { row: rows.append(ROW_DECISION, 0, start, end), and: false, or: false, nullish: false, andAssign: false, orAssign: false, nullishAssign: false };
       let statement: StatementFrame | undefined;
-      if (!ambient && (nodeType === "import_statement" || nodeType === "export_statement")) statement = { row: rows.append(ROW_TYPE, 0, start, end), wholeType: false, clause: false, specifiers: 0, typeSpecifiers: 0, directTypeDeclaration: false, exportStatement: nodeType === "export_statement" };
+      if (!ambient && (nodeType === "import_statement" || nodeType === "export_statement")) statement = { row: rows.append(ROW_TYPE, 0, start, end), wholeType: false, clause: false, source: false, specifiers: 0, typeSpecifiers: 0, directTypeDeclaration: false, exportStatement: nodeType === "export_statement" };
       let statementDepth = -1; for (let owner = depth.value - 1; owner >= 0; owner -= 1) if (frames[owner]?.statement) { statementDepth = owner; break; }
       if (statementDepth >= 0 && (nodeType === "export_clause" || nodeType === "named_imports")) frames[statementDepth]!.statement!.clause = true;
       const specifier = statementDepth >= 0 && (nodeType === "import_specifier" || nodeType === "export_specifier") ? { statementDepth, typeToken: false } : undefined;
