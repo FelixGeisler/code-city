@@ -1,19 +1,22 @@
 import type { GatewayResult, RevisionGateway } from "../application/resolution";
 import type { RepositoryReference } from "../domain/repository-reference";
 
-const PROVIDER_REVISION = /^[0-9a-f]{40,64}$/;
+const PROVIDER_REVISION = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const MAX_EVIDENCE_BYTES = 1_048_576;
 const API_ORIGIN = "https://api.github.com";
 
-function encodePathSegment(value: string): string {
-  return encodeURIComponent(value.toWellFormed()).replace(/[!'()*]/g, (character) => (
+export function encodeGithubPathSegment(value: string): string {
+  if (!value.isWellFormed()) {
+    throw new Error("GitHub route segment is not a Unicode scalar string");
+  }
+  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => (
     `%${character.codePointAt(0)?.toString(16).toUpperCase()}`
   ));
 }
 
 export function githubRevisionUrl(repository: RepositoryReference): string {
-  const owner = encodePathSegment(repository.owner);
-  const name = encodePathSegment(repository.repository);
+  const owner = encodeGithubPathSegment(repository.owner);
+  const name = encodeGithubPathSegment(repository.repository);
   const requestUrl = `${API_ORIGIN}/repos/${owner}/${name}/commits?per_page=1&page=1`;
   if (new URL(requestUrl).href !== requestUrl) {
     throw new Error("Request URL normalization changed the fixed route");

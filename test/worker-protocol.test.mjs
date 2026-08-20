@@ -47,12 +47,18 @@ test("command protocol is closed, own-data-only, and generation-tagged", () => {
 
 test("worker-to-main protocol rejects unknown, inherited, accessor, malformed, and wrong-generation values", () => {
   const failure = { type: "FAILURE", generation: 7, category: "Revision unavailable" };
+  const codedFailure = { type: "FAILURE", generation: 7, category: "Source admission failed", code: "M1-ADM-4" };
+  const staticEntered = { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 7 };
   const drained = { type: "ATTEMPT_DRAINED", generation: 7 };
   assert.deepEqual(parseWorkerMessage(failure, 7), failure);
+  assert.deepEqual(parseWorkerMessage(codedFailure, 7), codedFailure);
+  assert.deepEqual(parseWorkerMessage(staticEntered, 7), staticEntered);
   assert.deepEqual(parseWorkerMessage(drained, 7), drained);
   for (const invalid of [
     { ...failure, generation: 6 }, { ...failure, category: "raw provider detail" },
     { ...failure, extra: true }, { type: "SUCCESS", generation: 7, revision: SHA },
+    { type: "Source admission failed", generation: 7, category: "Source admission failed" },
+    { type: "FAILURE", generation: 7, category: "No supported modules", code: "M1-ADM-1" },
     { type: "ATTEMPT_DRAINED", generation: 7, extra: true },
     inherited(failure), accessor(failure, "category"), accessor(drained, "generation"),
     new Proxy(failure, { ownKeys() { throw new Error("trap"); } }),
@@ -67,6 +73,9 @@ test("provider resources settle before FAILURE, which precedes one drain", async
     await tick();
     order.push("request-reader-gateway-released");
     return { kind: "invalid-evidence" };
+  }, {
+    async loadInventory() { throw new Error("must not run"); },
+    async readSource() { throw new Error("must not run"); },
   }, (message) => order.push(message.type));
   pipeline.start(REPOSITORY, 1);
   await tick();
@@ -85,6 +94,9 @@ test("STOP aborts current work, releases it, stops downstream publication, and d
     await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
     order.push("released");
     throw new Error("aborted transport");
+  }, {
+    async loadInventory() { throw new Error("must not run"); },
+    async readSource() { throw new Error("must not run"); },
   }, (message) => order.push(message.type));
   pipeline.start(REPOSITORY, 4);
   pipeline.stop(3);
@@ -98,19 +110,32 @@ test("STOP aborts current work, releases it, stops downstream publication, and d
   assert.equal(order.filter((entry) => entry === "ATTEMPT_DRAINED").length, 1);
 });
 
-test("successful resolution stays inside the same worker pipeline until STOP", async () => {
+test("complete admission crosses only the closed static barrier and retains no provider state", async () => {
   const messages = [];
   let calls = 0;
   const pipeline = createWorkerAttemptPipeline(async () => {
     calls += 1;
     return { kind: "revision", revision: SHA };
+  }, {
+    async loadInventory() {
+      return { kind: "inventory", entries: [{ path: "src/a.ts", mode: "100644", type: "blob", sha: SHA }] };
+    },
+    async readSource() { return { kind: "source", decodedSource: "const value = 1;" }; },
   }, (message) => messages.push(message));
   pipeline.start(REPOSITORY, 9);
   await tick();
+  await tick();
   assert.equal(calls, 1);
-  assert.deepEqual(pipeline.selected(), { kind: "selected", repository: REPOSITORY, revision: SHA });
-  assert.deepEqual(messages, [], "no selected-revision or success message may cross the worker boundary");
+  assert.deepEqual(pipeline.ownership(), {
+    phase: "static",
+    generation: 9,
+    selectedRevisionRetained: true,
+    admittedModuleCount: 1,
+    providerResource: false,
+  });
+  assert.deepEqual(messages, [{ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 9 }]);
+  assert.doesNotMatch(JSON.stringify(messages), /source|revision|repository|providerResource/);
   pipeline.stop(9);
   await tick();
-  assert.deepEqual(messages, [{ type: "ATTEMPT_DRAINED", generation: 9 }]);
+  assert.equal(messages.length, 1, "static cancellation is realm termination owned by main");
 });

@@ -67,7 +67,8 @@ segments as inert strings
 GitHub's full immutable commit ID
 
 |Source evidence |GitHub gateway → retrieval |Projected tree records or one
-bounded raw byte sequence; never a provider object or provider URL
+bounded, identity-verified, strictly decoded source text value; no provider
+object, provider URL, or raw buffer crosses this boundary
 
 |Admitted module |Admission → parser and metrics |Canonical path and normalised
 UTF-8 source

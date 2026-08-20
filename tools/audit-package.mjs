@@ -121,11 +121,19 @@ export async function auditCanonicalPackage() {
       .filter(([relativePath]) => relativePath.endsWith(".js"))
       .flatMap(([, content]) => [...content.matchAll(/["'`](https?:\/\/[^"'`\s]*)["'`]/gi)].map((match) => match[1]));
     invariant(remoteLiterals.includes("https://github.com/"), "Repository input policy lost its fixed literal GitHub origin");
-    const fixedGatewayLiterals = remoteLiterals.filter((reference) => (
-      /^https:\/\/api\.github\.com\/repos\/\$\{[^{}]+\}\/\$\{[^{}]+\}\/commits\?per_page=1&page=1$/.test(reference)
-    ));
-    invariant(fixedGatewayLiterals.length === 1, "Production must contain exactly one fixed GitHub revision gateway URL");
-    invariant(remoteLiterals.length === 2, "Production contains an untracked remote URL literal");
+    const fixedGatewayPatterns = [
+      /^https:\/\/api\.github\.com\/repos\/\$\{[^{}]+\}\/\$\{[^{}]+\}\/commits\?per_page=1&page=1$/,
+      /^https:\/\/api\.github\.com\/repos\/\$\{[^{}]+\}\/\$\{[^{}]+\}\/git\/commits\/\$\{[^{}]+\}$/,
+      /^https:\/\/api\.github\.com\/repos\/\$\{[^{}]+\}\/\$\{[^{}]+\}\/git\/trees\/\$\{[^{}]+\}\?recursive=1$/,
+      /^https:\/\/raw\.githubusercontent\.com\/\$\{[^{}]+\}\/\$\{[^{}]+\}\/\$\{[^{}]+\}\/\$\{[^{}]+\}$/,
+    ];
+    for (const pattern of fixedGatewayPatterns) {
+      invariant(
+        remoteLiterals.filter((reference) => pattern.test(reference)).length === 1,
+        `Production must contain exactly one fixed gateway URL matching ${pattern}`,
+      );
+    }
+    invariant(remoteLiterals.length === 5, "Production contains an untracked remote URL literal");
 
     const entryHtml = packageFiles.get("index.html");
     inspectEntryPolicy(entryHtml);

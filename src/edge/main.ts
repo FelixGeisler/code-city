@@ -37,7 +37,7 @@ const view: AttemptView = {
     button.addEventListener("click", cancel, { once: true });
     surface.append(status, button);
   },
-  failure: terminal,
+  failure: (category, code) => terminal(code ? `${category} (${code})` : category),
   cancelled: () => terminal("Cancelled"),
 };
 

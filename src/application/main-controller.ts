@@ -1,4 +1,5 @@
 import { parseWorkerMessage, readGeneration, type WorkerCommand } from "./protocol";
+import type { FailureCode } from "./resolution";
 import { parseRepositoryReference } from "../domain/repository-reference";
 
 export type WorkerTransport = Readonly<{
@@ -14,16 +15,19 @@ export type WorkerTransport = Readonly<{
 export type AttemptView = Readonly<{
   invalid(): void;
   working(cancel: () => void): void;
-  failure(category: string): void;
+  failure(category: string, code?: FailureCode): void;
   cancelled(): void;
 }>;
 
 type ActiveBridge = {
-  cancelled: boolean;
+  cancellationSelected: boolean;
   closed: boolean;
   detach: () => void;
   failureShown: boolean;
   generation: number;
+  publicationRevoked: boolean;
+  staticEntered: boolean;
+  stopSent: boolean;
   transport: WorkerTransport;
 };
 
@@ -38,7 +42,16 @@ export function createMainController(
 ): MainController {
   let active: ActiveBridge | undefined;
   let generation = 0;
-  let started = false;
+  let pending: ReturnType<typeof parseRepositoryReference>;
+
+  function startPending(): void {
+    if (active || !pending) {
+      return;
+    }
+    const repository = pending;
+    pending = undefined;
+    start(repository);
+  }
 
   function cleanup(bridge: ActiveBridge): void {
     if (bridge.closed) {
@@ -49,33 +62,34 @@ export function createMainController(
     bridge.transport.close();
     if (active === bridge) {
       active = undefined;
+      startPending();
     }
   }
 
-  function showFailure(bridge: ActiveBridge, category = "Provider/resolution failure"): void {
-    if (bridge.cancelled || bridge.failureShown) {
+  function showFailure(
+    bridge: ActiveBridge,
+    category = "Provider/resolution failure",
+    code?: FailureCode,
+  ): void {
+    if (bridge.publicationRevoked || bridge.failureShown) {
       return;
     }
     bridge.failureShown = true;
-    view.failure(category);
+    view.failure(category, code);
   }
 
   function drainImpossible(bridge: ActiveBridge): void {
-    if (bridge.cancelled) {
-      cleanup(bridge);
-      return;
+    if (!bridge.publicationRevoked) {
+      showFailure(bridge);
     }
-    showFailure(bridge);
     cleanup(bridge);
   }
 
-  function cancel(): void {
-    const bridge = active;
-    if (!bridge || bridge.cancelled || bridge.closed) {
+  function stopProvider(bridge: ActiveBridge): void {
+    if (bridge.stopSent) {
       return;
     }
-    bridge.cancelled = true;
-    view.cancelled();
+    bridge.stopSent = true;
     try {
       bridge.transport.send({ type: "STOP", generation: bridge.generation });
     } catch {
@@ -83,33 +97,43 @@ export function createMainController(
     }
   }
 
-  function submit(value: string): boolean {
-    if (active || started) {
-      return false;
+  function cancel(): void {
+    pending = undefined;
+    const bridge = active;
+    if (!bridge || bridge.closed) {
+      return;
     }
-    const repository = parseRepositoryReference(value);
-    if (!repository) {
-      view.invalid();
-      return false;
+    bridge.publicationRevoked = true;
+    if (!bridge.cancellationSelected) {
+      bridge.cancellationSelected = true;
+      view.cancelled();
     }
+    if (bridge.staticEntered) {
+      cleanup(bridge);
+      return;
+    }
+    stopProvider(bridge);
+  }
 
-    generation += 1;
+  function start(repository: NonNullable<ReturnType<typeof parseRepositoryReference>>): boolean {
+    const nextGeneration = generation + 1;
     let transport: WorkerTransport;
     try {
       transport = createWorker();
     } catch {
-      started = true;
       view.failure("Provider/resolution failure");
       return false;
     }
 
-    started = true;
     const bridge: ActiveBridge = {
-      cancelled: false,
+      cancellationSelected: false,
       closed: false,
       detach: () => {},
       failureShown: false,
-      generation,
+      generation: nextGeneration,
+      publicationRevoked: false,
+      staticEntered: false,
+      stopSent: false,
       transport,
     };
     active = bridge;
@@ -125,17 +149,28 @@ export function createMainController(
           }
           const message = parseWorkerMessage(value, bridge.generation);
           if (!message) {
-            if (!bridge.cancelled) {
-              showFailure(bridge);
+            drainImpossible(bridge);
+            return;
+          }
+          if (message.type === "FAILURE") {
+            showFailure(bridge, message.category, message.code);
+            return;
+          }
+          if (message.type === "PROVIDER_DRAINED_STATIC_ENTERED") {
+            if (bridge.failureShown || bridge.staticEntered) {
+              if (!bridge.publicationRevoked) {
+                showFailure(bridge);
+              }
+              cleanup(bridge);
+              return;
+            }
+            bridge.staticEntered = true;
+            if (bridge.publicationRevoked) {
               cleanup(bridge);
             }
             return;
           }
-          if (message.type === "FAILURE") {
-            showFailure(bridge, message.category);
-            return;
-          }
-          if (!bridge.cancelled && !bridge.failureShown) {
+          if (!bridge.publicationRevoked && !bridge.failureShown) {
             showFailure(bridge);
           }
           cleanup(bridge);
@@ -151,10 +186,33 @@ export function createMainController(
 
     view.working(cancel);
     try {
-      transport.send({ type: "START", generation, repository });
+      transport.send({ type: "START", generation: nextGeneration, repository });
     } catch {
       drainImpossible(bridge);
       return false;
+    }
+    generation = nextGeneration;
+    return true;
+  }
+
+  function submit(value: string): boolean {
+    const repository = parseRepositoryReference(value);
+    if (!repository) {
+      view.invalid();
+      return false;
+    }
+
+    const bridge = active;
+    if (!bridge) {
+      return start(repository);
+    }
+
+    pending = repository;
+    bridge.publicationRevoked = true;
+    if (bridge.staticEntered) {
+      cleanup(bridge);
+    } else {
+      stopProvider(bridge);
     }
     return true;
   }

@@ -21,7 +21,8 @@ export function parseRepositoryReference(input: string): RepositoryReference | u
   const owner = path.slice(0, separator);
   const repository = path.slice(separator + 1);
   if ([owner, repository].some((segment) => (
-    segment === "."
+    !segment.isWellFormed()
+    || segment === "."
     || segment === ".."
     || /[%\\?#]/.test(segment)
   ))) {

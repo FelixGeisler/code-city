@@ -4,9 +4,15 @@ export const FAILURE_CATEGORIES = [
   "Repository unavailable for anonymous access",
   "Revision unavailable",
   "Provider/resolution failure",
+  "No supported modules",
+  "Source admission failed",
+  "Repository exceeds Code City limits",
 ] as const;
 
+export const FAILURE_CODES = ["ADM-06", "ADM-07", "M1-ADM-1", "M1-ADM-3", "M1-ADM-4"] as const;
+
 export type FailureCategory = typeof FAILURE_CATEGORIES[number];
+export type FailureCode = typeof FAILURE_CODES[number];
 
 export type GatewayResult =
   | Readonly<{ kind: "http"; status: number }>
