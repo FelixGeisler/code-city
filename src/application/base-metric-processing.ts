@@ -1,9 +1,14 @@
-import { deriveBaseMetricAnalysis, type BaseMetricAnalysis } from "../domain/base-metrics";
+import {
+  deriveBaseMetricAnalysis,
+  selectGrammarFamily,
+  type BaseMetricAnalysis,
+  type GrammarFamily,
+} from "../domain/base-metrics";
 import type { AdmittedModule } from "../domain/source-admission";
 
 export type SyntaxProjectionCapability = Readonly<{
   initialize(): Promise<void>;
-  project(canonicalPath: string, normalizedSource: string): Promise<Readonly<{
+  project(grammarFamily: GrammarFamily, normalizedSource: string): Promise<Readonly<{
     observations: Parameters<typeof deriveBaseMetricAnalysis>[2];
     release(): void;
   }>>;
@@ -37,7 +42,7 @@ export async function processAdmittedBaseMetrics(
       if (!module) throw new Error("Missing admitted module");
       let stream: Awaited<ReturnType<SyntaxProjectionCapability["project"]>> | undefined;
       try {
-        stream = await parser.project(module.canonicalPath, module.normalizedSource);
+        stream = await parser.project(selectGrammarFamily(module.canonicalPath), module.normalizedSource);
         const analysis = deriveBaseMetricAnalysis(module.canonicalPath, module.normalizedSource, stream.observations);
         analyses.push(analysis);
         observe("analysis-retained");

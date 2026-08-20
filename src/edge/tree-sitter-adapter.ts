@@ -2,13 +2,12 @@ import type {
   ByteSpan,
   DecisionKind,
   ExplicitUnitForm,
+  GrammarFamily,
   SyntaxObservation,
   SyntaxObservationStream,
   TypeOnlyKind,
   ValueAnchorKind,
 } from "../domain/base-metrics";
-
-export type GrammarFamily = "javascript-no-jsx" | "javascript-jsx" | "typescript" | "tsx";
 
 export type ParserAssetUrls = Readonly<{
   runtimeJavaScript: string;
@@ -32,7 +31,7 @@ export type ParserAdapterOptions = Readonly<{
 
 export type StaticSyntaxParser = Readonly<{
   initialize(): Promise<void>;
-  project(canonicalPath: string, normalizedSource: string): Promise<SyntaxObservationStream>;
+  project(grammarFamily: GrammarFamily, normalizedSource: string): Promise<SyntaxObservationStream>;
 }>;
 
 type CursorHandle = Readonly<{
@@ -127,16 +126,6 @@ function invariant(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
   }
-}
-
-function grammarFamilyFor(canonicalPath: string): GrammarFamily {
-  const finalSegment = canonicalPath.slice(canonicalPath.lastIndexOf("/") + 1)
-    .replace(/[A-Z]/g, (character) => String.fromCharCode(character.charCodeAt(0) + 32));
-  if (finalSegment.endsWith(".jsx")) return "javascript-jsx";
-  if (finalSegment.endsWith(".tsx")) return "tsx";
-  if (finalSegment.endsWith(".ts") || finalSegment.endsWith(".mts") || finalSegment.endsWith(".cts")) return "typescript";
-  if (finalSegment.endsWith(".js") || finalSegment.endsWith(".mjs") || finalSegment.endsWith(".cjs")) return "javascript-no-jsx";
-  throw new Error("Unsupported parser suffix");
 }
 
 function runtimeModule(value: unknown): RuntimeModule {
@@ -487,13 +476,12 @@ export function createTreeSitterAdapter(
       initialization ??= initializeAll();
       await initialization;
     },
-    async project(canonicalPath, normalizedSource) {
+    async project(grammarFamily, normalizedSource) {
       initialization ??= initializeAll();
       const initialized = await initialization;
-      const family = grammarFamilyFor(canonicalPath);
-      const language = family === "typescript"
+      const language = grammarFamily === "typescript"
         ? initialized.typescript
-        : family === "tsx"
+        : grammarFamily === "tsx"
           ? initialized.tsx
           : initialized.javascript;
       let parser: ParserHandle | undefined;
@@ -505,7 +493,7 @@ export function createTreeSitterAdapter(
         tree = parser.parse(normalizedSource) ?? undefined;
         invariant(tree, "Parser returned no tree");
         observe("tree-created");
-        validateTree(tree.rootNode, family === "javascript-no-jsx", observe);
+        validateTree(tree.rootNode, grammarFamily === "javascript-no-jsx", observe);
         const observations = projectTree(tree.rootNode, normalizedSource, observe);
         observe("observation-stream-created");
         let released = false;

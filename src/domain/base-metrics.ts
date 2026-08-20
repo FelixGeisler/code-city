@@ -1,3 +1,15 @@
+export type GrammarFamily = "javascript-no-jsx" | "javascript-jsx" | "typescript" | "tsx";
+
+export function selectGrammarFamily(canonicalPath: string): GrammarFamily {
+  const finalSegment = canonicalPath.slice(canonicalPath.lastIndexOf("/") + 1)
+    .replace(/[A-Z]/g, (character) => String.fromCharCode(character.charCodeAt(0) + 32));
+  if (finalSegment.endsWith(".jsx")) return "javascript-jsx";
+  if (finalSegment.endsWith(".tsx")) return "tsx";
+  if (finalSegment.endsWith(".ts") || finalSegment.endsWith(".mts") || finalSegment.endsWith(".cts")) return "typescript";
+  if (finalSegment.endsWith(".js") || finalSegment.endsWith(".mjs") || finalSegment.endsWith(".cjs")) return "javascript-no-jsx";
+  throw new Error("Unsupported parser suffix");
+}
+
 export const EXPLICIT_UNIT_FORMS = [
   "function", "arrow", "method", "constructor", "getter", "setter", "static-block",
 ] as const;
