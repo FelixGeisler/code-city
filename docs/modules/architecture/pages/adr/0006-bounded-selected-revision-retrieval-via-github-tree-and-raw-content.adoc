@@ -27,9 +27,10 @@ The GitHub gateway is the only component that performs provider requests.
   breach is provider failure, not another product maximum. The raw cap is
   derived so every source that can normalise to the published per-module
   maximum remains admissible.
-* Project only required own primitive fields from JSON. Provider objects never
-  become application control objects; untrusted keys use `Map` or another
-  prototype-free representation.
+* From tree JSON, project only path and kind plus the candidate blob identity
+  needed by retrieval. Ignore provider size and provider-returned URLs. Provider
+  objects never become application control objects; untrusted keys use `Map` or
+  another prototype-free representation.
 
 These transport caps are implementation safeguards, not additional repository
 limits. Their derivation and boundary tests belong with the gateway.
@@ -39,12 +40,14 @@ limits. Their derivation and boundary tests belong with the gateway.
 . Read the selected immutable commit and its root tree through GitHub REST.
 . Read the recursive tree and reject truncation, malformed evidence, or an
   identity inconsistent with the selected commit.
-. Project path, kind, size, and blob identity; release provider JSON; then apply
-  path and metadata admission in canonical order.
+. Project path and kind, plus blob identity only for candidates; release
+  provider JSON; then apply path and metadata admission in canonical order.
+  Provider size and provider-returned URLs are ignored.
 . Fetch candidate blobs sequentially from locally constructed immutable raw
   URLs.
-. Compare each expected Git blob identity before strict UTF-8 decoding and
-  content admission.
+. At the edge, stream each bounded raw body, verify its expected Git blob
+  identity, strictly decode UTF-8, and return source text to application content
+  admission.
 . Return one complete, canonically ordered admitted set or one failure.
 
 At most one provider request and one raw/hash workspace are active. There is no
