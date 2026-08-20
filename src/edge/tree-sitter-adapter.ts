@@ -74,43 +74,49 @@ class ObservationRows {
       if (code !== ROW_DISABLED) requiredEndpointCapacity += 2 + (code === ROW_UNIT ? this.ownedCounts[row]! * 2 : 0);
     }
     const requiredEndpoints = new Uint32Array(requiredEndpointCapacity);
-    let collectedEndpointCount = 0;
+    let collectedEndpointCount = 0, previousEndpoint = 0, endpointsSorted = true;
     for (let row = 0; row < this.size; row += 1) {
       const code = this.codes[row]!;
       if (code === ROW_DISABLED) continue;
-      requiredEndpoints[collectedEndpointCount++] = this.starts[row]!;
-      requiredEndpoints[collectedEndpointCount++] = this.ends[row]!;
+      const start = this.starts[row]!, end = this.ends[row]!;
+      endpointsSorted &&= collectedEndpointCount === 0 || start >= previousEndpoint;
+      requiredEndpoints[collectedEndpointCount++] = start; previousEndpoint = start;
+      endpointsSorted &&= end >= previousEndpoint;
+      requiredEndpoints[collectedEndpointCount++] = end; previousEndpoint = end;
       if (code !== ROW_UNIT) continue;
       const offset = this.ownedOffsets[row]!, count = this.ownedCounts[row]!;
       for (let owned = 0; owned < count; owned += 1) {
-        requiredEndpoints[collectedEndpointCount++] = this.ownedStarts[offset + owned]!;
-        requiredEndpoints[collectedEndpointCount++] = this.ownedEnds[offset + owned]!;
+        const ownedStart = this.ownedStarts[offset + owned]!, ownedEnd = this.ownedEnds[offset + owned]!;
+        endpointsSorted &&= ownedStart >= previousEndpoint;
+        requiredEndpoints[collectedEndpointCount++] = ownedStart; previousEndpoint = ownedStart;
+        endpointsSorted &&= ownedEnd >= previousEndpoint;
+        requiredEndpoints[collectedEndpointCount++] = ownedEnd; previousEndpoint = ownedEnd;
       }
     }
     invariant(collectedEndpointCount === requiredEndpointCapacity, "Missing required parser endpoint");
-    requiredEndpoints.sort();
+    if (!endpointsSorted) requiredEndpoints.sort();
     let endpointCount = 0;
     for (let index = 0; index < requiredEndpoints.length; index += 1) {
       const endpoint = requiredEndpoints[index]!;
       invariant(endpoint <= source.length, "Invalid parser endpoint");
       if (endpointCount === 0 || requiredEndpoints[endpointCount - 1] !== endpoint) requiredEndpoints[endpointCount++] = endpoint;
     }
-    const byteEndpoints = new Uint32Array(endpointCount);
+    let byteEndpoints: Uint32Array | undefined;
     let endpointIndex = 0, utf16Offset = 0, utf8Offset = 0;
     for (const scalar of source) {
-      if (requiredEndpoints[endpointIndex] === utf16Offset) byteEndpoints[endpointIndex++] = utf8Offset;
+      if (requiredEndpoints[endpointIndex] === utf16Offset) { if (byteEndpoints) byteEndpoints[endpointIndex] = utf8Offset; endpointIndex += 1; }
       const codePoint = scalar.codePointAt(0)!;
       invariant(!(scalar.length === 1 && codePoint >= 0xd800 && codePoint <= 0xdfff), "Malformed Unicode scalar");
+      if (codePoint > 0x7f && !byteEndpoints) { byteEndpoints = new Uint32Array(endpointCount); for (let prior = 0; prior < endpointIndex; prior += 1) byteEndpoints[prior] = requiredEndpoints[prior]!; }
       const scalarEnd = utf16Offset + scalar.length;
       invariant(requiredEndpoints[endpointIndex] === undefined || requiredEndpoints[endpointIndex]! >= scalarEnd, "Parser endpoint splits a surrogate pair");
       utf8Offset += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
       utf16Offset = scalarEnd;
     }
-    if (requiredEndpoints[endpointIndex] === utf16Offset) byteEndpoints[endpointIndex++] = utf8Offset;
+    if (requiredEndpoints[endpointIndex] === utf16Offset) { if (byteEndpoints) byteEndpoints[endpointIndex] = utf8Offset; endpointIndex += 1; }
     invariant(endpointIndex === endpointCount, "Invalid parser endpoint");
-    const asciiOnly = utf8Offset === utf16Offset;
     const translate = (endpoint: number): number => {
-      if (asciiOnly) return endpoint;
+      if (!byteEndpoints) return endpoint;
       let low = 0, high = endpointCount;
       while (low < high) { const middle = (low + high) >>> 1; if (requiredEndpoints[middle]! < endpoint) low = middle + 1; else high = middle; }
       invariant(requiredEndpoints[low] === endpoint, "Missing parser endpoint translation");
