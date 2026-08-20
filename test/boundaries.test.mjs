@@ -183,6 +183,108 @@ test("rejects a parser-permitted non-literal external-module import-equals depen
   )));
 });
 
+test("accepts same-layer and inward external-module augmentations without treating declare global as a dependency", async () => {
+  await withFixture({
+    "src/edge/main.ts": [
+      "export {};",
+      "declare module './same.ts' { export interface SameAugmentation {} }",
+      "declare module '../domain/types.ts' { export interface DomainAugmentation {} }",
+      "declare global { interface Window { codeCity: boolean } }",
+    ].join("\n"),
+    "src/edge/same.ts": "export {};\n",
+    "src/domain/types.ts": "export {};\n",
+  }, async (root) => {
+    const result = await checkBoundaries(root);
+    const augmentations = result.imports.filter((entry) => entry.kind === "external-module augmentation");
+    assert.deepEqual(
+      augmentations.map(({ line, column, specifier, resolved, targetLayer }) => ({
+        line,
+        column,
+        specifier,
+        resolved,
+        targetLayer,
+      })),
+      [
+        {
+          line: 2,
+          column: 16,
+          specifier: "./same.ts",
+          resolved: "src/edge/same.ts",
+          targetLayer: "edge",
+        },
+        {
+          line: 3,
+          column: 16,
+          specifier: "../domain/types.ts",
+          resolved: "src/domain/types.ts",
+          targetLayer: "domain",
+        },
+      ],
+    );
+  });
+});
+
+test("rejects a reverse-layer external-module augmentation", async () => {
+  const error = await rejectedFixture({
+    "src/edge/types.ts": "export {};\n",
+    "src/domain/main.ts": "export {}; declare module '../edge/types.ts' { export interface EdgeAugmentation {} }\n",
+  });
+
+  assert(error.violations.some((violation) => (
+    violation.kind === "external-module augmentation"
+      && violation.specifier === "../edge/types.ts"
+      && violation.reason === "domain -> edge is forbidden"
+  )));
+});
+
+test("rejects a missing local external-module augmentation target", async () => {
+  const error = await rejectedFixture({
+    "src/edge/main.ts": "export {}; declare module './missing.ts' { export interface MissingAugmentation {} }\n",
+  });
+
+  assert(error.violations.some((violation) => (
+    violation.kind === "external-module augmentation"
+      && violation.specifier === "./missing.ts"
+      && violation.reason === "unresolved local target"
+  )));
+});
+
+test("rejects an unknown-query external-module augmentation", async () => {
+  const error = await rejectedFixture({
+    "src/edge/main.ts": "export {}; declare module './same.ts?raw' { export interface QueryAugmentation {} }\n",
+    "src/edge/same.ts": "export {};\n",
+  });
+
+  assert(error.violations.some((violation) => (
+    violation.kind === "external-module augmentation"
+      && violation.specifier === "./same.ts?raw"
+      && violation.reason === "unknown import query suffix is forbidden"
+  )));
+});
+
+test("classifies external-package augmentations as outside-src", async () => {
+  await withFixture({
+    "src/edge/main.ts": "export {}; declare module 'edge-package' { export interface EdgePackageAugmentation {} }\n",
+  }, async (root) => {
+    const result = await checkBoundaries(root);
+    assert(result.imports.some((entry) => (
+      entry.kind === "external-module augmentation"
+        && entry.specifier === "edge-package"
+        && entry.resolved === null
+        && entry.targetLayer === "outside-src"
+    )));
+  });
+
+  const error = await rejectedFixture({
+    "src/application/main.ts": "export {}; declare module 'application-package' { export interface ApplicationPackageAugmentation {} }\n",
+  });
+  assert(error.violations.some((violation) => (
+    violation.kind === "external-module augmentation"
+      && violation.specifier === "application-package"
+      && violation.reason === "application -> outside-src is forbidden"
+  )));
+});
+
 test("rejects a reverse-layer import type", async () => {
   const error = await rejectedFixture({
     "src/edge/types.ts": "export type Edge = string;\n",

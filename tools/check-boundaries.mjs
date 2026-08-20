@@ -282,7 +282,11 @@ function collectUnsupportedCompilerPragmas(sourceFile) {
   return references;
 }
 
-function collectCompilerReferences(sourceFile) {
+function compilerNodeKey(node) {
+  return `${node.pos}:${node.end}`;
+}
+
+function collectCompilerReferences(sourceFile, astReferences) {
   const references = sourceFile.referencedFiles.map((reference) => ({
     kind: "triple-slash path reference",
     resolution: "path-reference",
@@ -304,6 +308,35 @@ function collectCompilerReferences(sourceFile) {
     }
   }
   references.push(...collectUnsupportedCompilerPragmas(sourceFile));
+
+  const astModuleReferences = new Set(
+    astReferences
+      .filter((reference) => reference.node && isStringLiteral(reference.node))
+      .map((reference) => compilerNodeKey(reference.node)),
+  );
+  for (const compilerImport of sourceFile.imports) {
+    if (isStringLiteral(compilerImport) && !astModuleReferences.has(compilerNodeKey(compilerImport))) {
+      references.push({
+        kind: "unsupported compiler module reference",
+        specifier: compilerImport.text,
+        unsupported: true,
+        unsupportedReason: "compiler-recorded module reference has no corresponding typed AST evidence",
+        ...sourcePosition(sourceFile, compilerImport),
+      });
+    }
+  }
+
+  for (const augmentation of sourceFile.moduleAugmentations) {
+    if (isStringLiteral(augmentation) && !astModuleReferences.has(compilerNodeKey(augmentation))) {
+      references.push({
+        kind: "external-module augmentation",
+        node: augmentation,
+        resolution: "module-probe",
+        specifier: augmentation.text,
+        ...sourcePosition(sourceFile, augmentation),
+      });
+    }
+  }
   return references;
 }
 
@@ -412,7 +445,8 @@ export async function checkBoundaries(rootDirectory = process.cwd()) {
         throw new Error(`TypeScript did not parse ${sourceClassification.relativePath}`);
       }
 
-      const references = [...collectCompilerReferences(sourceFile), ...collectReferences(sourceFile)];
+      const astReferences = collectReferences(sourceFile);
+      const references = [...collectCompilerReferences(sourceFile, astReferences), ...astReferences];
       for (const reference of references) {
         const common = {
           source: sourceClassification.relativePath,
@@ -424,7 +458,10 @@ export async function checkBoundaries(rootDirectory = process.cwd()) {
         };
 
         if (reference.unsupported) {
-          violations.push({ ...common, reason: "unsupported compiler reference directive is forbidden" });
+          violations.push({
+            ...common,
+            reason: reference.unsupportedReason ?? "unsupported compiler reference directive is forbidden",
+          });
           continue;
         }
         if (reference.specifier === undefined || (!reference.node && !reference.resolution)) {
