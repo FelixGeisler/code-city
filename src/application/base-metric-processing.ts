@@ -23,7 +23,7 @@ export type SyntaxProjectionCapability = Readonly<{
 export type MetricProcessingEvent = "source-acquired" | "source-released" | "fact-retained";
 
 export type BaseMetricProcessingResult =
-  | Readonly<{ kind: "processed"; facts: readonly ModuleComplexityFact[] }>
+  | Readonly<{ kind: "processed"; facts: readonly ModuleComplexityFact[]; release(): void }>
   | Readonly<{ kind: "failure"; category: "Metric processing failed"; code: "M1-MET-1" }>;
 
 export async function processAdmittedBaseMetrics(
@@ -63,7 +63,17 @@ export async function processAdmittedBaseMetrics(
     for (let index = 1; index < facts.length; index += 1) {
       if (facts[index - 1]!.canonicalPath === facts[index]!.canonicalPath) throw new Error("Duplicate canonical path");
     }
-    return { kind: "processed", facts };
+    let released = false;
+    return {
+      kind: "processed",
+      facts,
+      release() {
+        if (!released) {
+          released = true;
+          facts.length = 0;
+        }
+      },
+    };
   } catch {
     facts.length = 0;
     for (let index = 0; index < queue.length; index += 1) releaseSource(index);

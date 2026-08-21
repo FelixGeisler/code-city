@@ -1,7 +1,7 @@
 import type { AdmittedModule } from "../domain/source-admission";
 import type { RepositoryReference } from "../domain/repository-reference";
 import type { ModuleComplexityFact } from "../domain/complexity";
-import { buildCity, validatePresentationModel, type City } from "../domain/city-model";
+import { buildCity, validatePresentationModel, type City, type PresentationModel } from "../domain/city-model";
 import { processAdmittedBaseMetrics, type MetricProcessingEvent, type SyntaxProjectionCapability } from "./base-metric-processing";
 import type { WorkerMessage } from "./protocol";
 import { resolveRevision, type RevisionGateway } from "./resolution";
@@ -12,9 +12,7 @@ import {
 } from "./source-retrieval";
 
 type ActiveAttempt = {
-  admittedModules?: readonly AdmittedModule[];
-  city?: City;
-  finalFacts?: readonly ModuleComplexityFact[];
+  model?: PresentationModel;
   controller?: AbortController;
   drained: boolean;
   generation: number;
@@ -30,12 +28,14 @@ export type AttemptOwnership = Readonly<{
   generation?: number;
   selectedRevisionRetained: boolean;
   admittedModuleCount: number;
-  cityRetained: boolean;
+  presentationModelRetained: boolean;
   finalFactCount: number;
   providerResource: false;
 }>;
 
 export type CityConstructionCapability = (facts: readonly ModuleComplexityFact[]) => City;
+
+type SuccessfulPreparation = Readonly<{ revision: string; model: PresentationModel }>;
 
 export type WorkerAttemptPipeline = Readonly<{
   start(repository: RepositoryReference, generation: number): void;
@@ -54,6 +54,103 @@ export function createWorkerAttemptPipeline(
 ): WorkerAttemptPipeline {
   let active: ActiveAttempt | undefined;
 
+  function preparePresentationModel(facts: readonly ModuleComplexityFact[]): PresentationModel {
+    const city = constructCity(facts);
+    const model = validatePresentationModel(city.model);
+    const buffers = [model.origins.buffer, model.sizes.buffer, model.rgba.buffer, model.bounds.buffer];
+    if (new Set(buffers).size !== 4) {
+      throw new Error("Presentation buffers must be distinct");
+    }
+    return model;
+  }
+
+  async function prepareStaticSuccess(
+    attempt: ActiveAttempt,
+    revision: string,
+    admittedModules: AdmittedModule[],
+  ): Promise<SuccessfulPreparation | undefined> {
+    if (!syntaxParser) {
+      return undefined;
+    }
+    const processing = await processAdmittedBaseMetrics(admittedModules, syntaxParser, observeMetricProcessing);
+    if (processing.kind === "failure") {
+      attempt.selectedRevision = undefined;
+      publish({
+        type: "FAILURE",
+        generation: attempt.generation,
+        category: processing.category,
+        code: processing.code,
+      });
+      drain(attempt);
+      return undefined;
+    }
+    let model: PresentationModel;
+    try {
+      model = preparePresentationModel(processing.facts);
+    } catch {
+      processing.release();
+      publish({
+        type: "FAILURE",
+        generation: attempt.generation,
+        category: "City construction failed",
+        code: "M1-CITY-1",
+      });
+      drain(attempt);
+      return undefined;
+    }
+    processing.release();
+    return { revision, model };
+  }
+
+  async function prepareProviderSuccess(attempt: ActiveAttempt): Promise<SuccessfulPreparation | undefined> {
+    const repository = attempt.repository;
+    const controller = attempt.controller;
+    if (!repository || !controller) {
+      return undefined;
+    }
+    const resolution = await resolveRevision(repository, controller.signal, revisionGateway);
+    if (attempt.stopped || resolution.kind === "cancelled") {
+      drain(attempt);
+      return undefined;
+    }
+    if (resolution.kind === "failure") {
+      publish({ type: "FAILURE", generation: attempt.generation, category: resolution.category });
+      drain(attempt);
+      return undefined;
+    }
+
+    attempt.selectedRevision = resolution.revision;
+    const retrieval = await retrieveAdmittedSources(
+      repository,
+      resolution.revision,
+      controller.signal,
+      sourceGateway,
+      observeRetrieval,
+    );
+    if (attempt.stopped || retrieval.kind === "cancelled") {
+      drain(attempt);
+      return undefined;
+    }
+    if (retrieval.kind === "failure") {
+      publish({
+        type: "FAILURE",
+        generation: attempt.generation,
+        category: retrieval.category,
+        ...(retrieval.code === undefined ? {} : { code: retrieval.code }),
+      });
+      drain(attempt);
+      return undefined;
+    }
+
+    const revision = retrieval.selected;
+    attempt.phase = "static";
+    attempt.repository = undefined;
+    attempt.controller = undefined;
+    attempt.selectedRevision = revision;
+    publish({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: attempt.generation });
+    return prepareStaticSuccess(attempt, revision, retrieval.modules);
+  }
+
   function drain(attempt: ActiveAttempt): void {
     if (attempt.drained) {
       return;
@@ -62,12 +159,33 @@ export function createWorkerAttemptPipeline(
     attempt.controller = undefined;
     attempt.repository = undefined;
     attempt.selectedRevision = undefined;
-    attempt.admittedModules = undefined;
-    attempt.city = undefined;
-    attempt.finalFacts = undefined;
+    attempt.model = undefined;
     publish({ type: "ATTEMPT_DRAINED", generation: attempt.generation });
     if (active === attempt) {
       active = undefined;
+    }
+  }
+
+  async function runAttempt(attempt: ActiveAttempt): Promise<void> {
+    try {
+      let prepared = await prepareProviderSuccess(attempt);
+      if (!prepared) {
+        return;
+      }
+      attempt.selectedRevision = prepared.revision;
+      attempt.model = prepared.model;
+      publish({ type: "SUCCESS", generation: attempt.generation, revision: prepared.revision, model: prepared.model });
+      attempt.selectedRevision = undefined;
+      attempt.model = undefined;
+      prepared = undefined;
+      drain(attempt);
+    } catch {
+      if (attempt.stopped) {
+        drain(attempt);
+        return;
+      }
+      publish({ type: "FAILURE", generation: attempt.generation, category: "Provider/resolution failure" });
+      drain(attempt);
     }
   }
 
@@ -85,94 +203,7 @@ export function createWorkerAttemptPipeline(
       stopped: false,
     };
     active = attempt;
-    attempt.run = (async () => {
-      const controller = attempt.controller;
-      if (!controller) {
-        return;
-      }
-      const resolution = await resolveRevision(repository, controller.signal, revisionGateway);
-      if (attempt.stopped || resolution.kind === "cancelled") {
-        drain(attempt);
-        return;
-      }
-      if (resolution.kind === "failure") {
-        publish({ type: "FAILURE", generation, category: resolution.category });
-        drain(attempt);
-        return;
-      }
-
-      const retrieval = await retrieveAdmittedSources(
-        repository,
-        resolution.revision,
-        controller.signal,
-        sourceGateway,
-        observeRetrieval,
-      );
-      if (attempt.stopped || retrieval.kind === "cancelled") {
-        drain(attempt);
-        return;
-      }
-      if (retrieval.kind === "failure") {
-        publish({
-          type: "FAILURE",
-          generation,
-          category: retrieval.category,
-          ...(retrieval.code === undefined ? {} : { code: retrieval.code }),
-        });
-        drain(attempt);
-        return;
-      }
-
-      attempt.phase = "static";
-      attempt.repository = undefined;
-      attempt.controller = undefined;
-      attempt.selectedRevision = retrieval.selected;
-      attempt.admittedModules = retrieval.modules;
-      publish({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation });
-
-      if (syntaxParser) {
-        attempt.admittedModules = undefined;
-        const processing = await processAdmittedBaseMetrics(retrieval.modules, syntaxParser, observeMetricProcessing);
-        if (processing.kind === "failure") {
-          attempt.selectedRevision = undefined;
-          publish({
-            type: "FAILURE",
-            generation,
-            category: processing.category,
-            code: processing.code,
-          });
-          drain(attempt);
-          return;
-        }
-        attempt.finalFacts = processing.facts;
-        let candidate: City | undefined;
-        try {
-          candidate = constructCity(processing.facts);
-          validatePresentationModel(candidate.model);
-          attempt.city = candidate;
-          attempt.finalFacts = undefined;
-          candidate = undefined;
-        } catch {
-          candidate = undefined;
-          attempt.city = undefined;
-          attempt.finalFacts = undefined;
-          publish({
-            type: "FAILURE",
-            generation,
-            category: "City construction failed",
-            code: "M1-CITY-1",
-          });
-          drain(attempt);
-        }
-      }
-    })().catch(() => {
-      if (attempt.stopped) {
-        drain(attempt);
-        return;
-      }
-      publish({ type: "FAILURE", generation, category: "Provider/resolution failure" });
-      drain(attempt);
-    });
+    attempt.run = runAttempt(attempt);
   }
 
   function stop(generation: number): void {
@@ -196,16 +227,16 @@ export function createWorkerAttemptPipeline(
           phase: active.phase,
           generation: active.generation,
           selectedRevisionRetained: active.selectedRevision !== undefined,
-          admittedModuleCount: active.admittedModules?.length ?? 0,
-          cityRetained: active.city !== undefined,
-          finalFactCount: active.finalFacts?.length ?? 0,
+          admittedModuleCount: 0,
+          presentationModelRetained: active.model !== undefined,
+          finalFactCount: 0,
           providerResource: false,
         }
       : {
           phase: "idle",
           selectedRevisionRetained: false,
           admittedModuleCount: 0,
-          cityRetained: false,
+          presentationModelRetained: false,
           finalFactCount: 0,
           providerResource: false,
         },

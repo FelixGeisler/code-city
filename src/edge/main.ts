@@ -1,5 +1,6 @@
 import processingWorkerUrl from "./processing-worker.ts?worker&url";
 import { createMainController, type AttemptView, type WorkerTransport } from "../application/main-controller";
+import { createCityPresenter } from "./city-presenter";
 
 function requiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -9,36 +10,52 @@ function requiredElement<T extends Element>(selector: string): T {
   return element;
 }
 
-const surface = requiredElement<HTMLElement>("[data-surface]");
 const form = requiredElement<HTMLFormElement>("form");
 const input = requiredElement<HTMLInputElement>("input[name=repository]");
 const feedback = requiredElement<HTMLElement>("[data-feedback]");
+const status = requiredElement<HTMLElement>("[data-status]");
+const commit = requiredElement<HTMLOutputElement>("[data-commit]");
+const city = requiredElement<HTMLElement>("[data-city]");
 
-function terminal(message: string): void {
-  surface.replaceChildren();
-  const status = document.createElement("p");
-  status.setAttribute("role", "status");
-  status.textContent = message;
-  surface.append(status);
+function replaceStatus(message: string, cancel?: () => void): void {
+  const text = document.createElement("p");
+  text.setAttribute("role", "status");
+  text.textContent = message;
+  if (!cancel) {
+    status.replaceChildren(text);
+    return;
+  }
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Cancel";
+  button.addEventListener("click", cancel, { once: true });
+  status.replaceChildren(text, button);
 }
 
 const view: AttemptView = {
+  clear() {
+    feedback.textContent = "";
+    status.replaceChildren();
+    commit.textContent = "";
+  },
   invalid() {
     feedback.textContent = "Invalid input";
   },
   working(cancel) {
-    surface.replaceChildren();
-    const status = document.createElement("p");
-    status.setAttribute("role", "status");
-    status.textContent = "Resolving immutable revision…";
-    const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = "Cancel";
-    button.addEventListener("click", cancel, { once: true });
-    surface.append(status, button);
+    replaceStatus("Working", cancel);
   },
-  failure: (category, code) => terminal(code ? `${category} (${code})` : category),
-  cancelled: () => terminal("Cancelled"),
+  success(revision) {
+    status.replaceChildren();
+    commit.textContent = revision;
+  },
+  failure: (category, code) => {
+    commit.textContent = "";
+    replaceStatus(code ? `${category} (${code})` : category);
+  },
+  cancelled: () => {
+    commit.textContent = "";
+    replaceStatus("Cancelled");
+  },
 };
 
 function createWorkerTransport(): WorkerTransport {
@@ -65,7 +82,11 @@ function createWorkerTransport(): WorkerTransport {
   };
 }
 
-const controller = createMainController(createWorkerTransport, view);
+const controller = createMainController(createWorkerTransport, view, (hooks) => createCityPresenter({
+  host: city,
+  isEligible: hooks.isEligible,
+  failed: hooks.failed,
+}));
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   controller.submit(input.value);

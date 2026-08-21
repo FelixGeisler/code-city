@@ -1,4 +1,5 @@
 import { FAILURE_CATEGORIES, FAILURE_CODES, type FailureCategory, type FailureCode } from "./resolution";
+import { validatePresentationModel, type PresentationModel } from "../domain/city-model";
 import type { RepositoryReference } from "../domain/repository-reference";
 
 export type WorkerCommand =
@@ -8,6 +9,7 @@ export type WorkerCommand =
 export type WorkerMessage =
   | Readonly<{ type: "FAILURE"; generation: number; category: FailureCategory; code?: FailureCode }>
   | Readonly<{ type: "PROVIDER_DRAINED_STATIC_ENTERED"; generation: number }>
+  | Readonly<{ type: "SUCCESS"; generation: number; revision: string; model: PresentationModel }>
   | Readonly<{ type: "ATTEMPT_DRAINED"; generation: number }>;
 
 type DataRecord = Record<string, unknown>;
@@ -90,6 +92,29 @@ function validFailureCode(category: FailureCategory, code: unknown): code is Fai
 }
 
 export function parseWorkerMessage(value: unknown, expectedGeneration: number): WorkerMessage | undefined {
+  const success = ownDataRecord(value, ["type", "generation", "revision", "model"]);
+  if (success?.type === "SUCCESS"
+    && success.generation === expectedGeneration
+    && generation(success.generation)
+    && typeof success.revision === "string"
+    && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(success.revision)) {
+    try {
+      return {
+        type: "SUCCESS",
+        generation: success.generation,
+        revision: success.revision,
+        model: validatePresentationModel(success.model),
+      };
+    } catch {
+      return {
+        type: "FAILURE",
+        generation: success.generation,
+        category: "City construction failed",
+        code: "M1-CITY-1",
+      };
+    }
+  }
+
   const codedFailure = ownDataRecord(value, ["type", "generation", "category", "code"]);
   if (codedFailure?.type === "FAILURE"
     && codedFailure.generation === expectedGeneration

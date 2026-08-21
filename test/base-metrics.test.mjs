@@ -270,6 +270,7 @@ test("dense full-envelope actual-WASM processing retains compact facts with one 
     if (event === "source-released") { live.source -= 1; cleanup.source += 1; assert(live.source >= 0); }
   });
   assert.equal(result.kind, "processed");
+  assert(modules.every((module) => module === undefined), "the actual admitted-module container must have every slot released");
   assert.equal(normalizedBytes, 41_943_040);
   assert.equal(result.facts.length, 4_000);
   assert.equal(finalized.slice(0, 20).reduce((total, entry) => total + entry.observationCount, 0), 41_943_040);

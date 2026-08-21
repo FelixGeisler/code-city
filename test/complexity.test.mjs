@@ -149,7 +149,8 @@ test("production-WASM rows preserve base evidence and traverse the production fi
       createParser(),
       (event) => applicationEvents.push(event),
     );
-    assert.deepEqual(application, { kind: "processed", facts: [entry.expectedOutcome.fact] }, `${entry.id} application`);
+    assert.equal(application.kind, "processed", `${entry.id} application`);
+    assert.deepEqual(application.facts, [entry.expectedOutcome.fact], `${entry.id} application`);
     assert.deepEqual(Object.keys(application.facts[0]).sort(), ["M", "S", "U", "canonicalPath"]);
     assert.deepEqual(applicationEvents, ["source-acquired", "fact-retained", "source-released"]);
   }
@@ -178,7 +179,8 @@ test("small input permutations sort final facts by unsigned UTF-8 and duplicate 
       assert.deepEqual(result, entry.expectedOutcome, entry.id);
       assert.equal(events.filter((event) => event === "source-released").length, entry.modules.length, entry.id);
     } else {
-      assert.deepEqual(result, { kind: "processed", facts: entry.expectedFacts }, entry.id);
+      assert.equal(result.kind, "processed", entry.id);
+      assert.deepEqual(result.facts, entry.expectedFacts, entry.id);
     }
   }
 });
@@ -232,10 +234,9 @@ test("actual WASM handles 10,000 arrow units each owning one decision", { timeou
   assert(finalized.perUnitComplexities.subarray(1).every((complexity) => complexity === 2));
   stream.release();
 
-  assert.deepEqual(
-    await processAdmittedBaseMetrics([{ canonicalPath: "many-units.js", normalizedSource: source }], createParser()),
-    { kind: "processed", facts: [{ canonicalPath: "many-units.js", S: 1, U: 10_001, M: 2 }] },
-  );
+  const processing = await processAdmittedBaseMetrics([{ canonicalPath: "many-units.js", normalizedSource: source }], createParser());
+  assert.equal(processing.kind, "processed");
+  assert.deepEqual(processing.facts, [{ canonicalPath: "many-units.js", S: 1, U: 10_001, M: 2 }]);
 });
 
 function resourceTracker() {

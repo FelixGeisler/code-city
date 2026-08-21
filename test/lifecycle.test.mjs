@@ -8,8 +8,11 @@ registerHooks({
   },
 });
 const { createMainController } = await import("../src/application/main-controller.ts");
+const { buildCity } = await import("../src/domain/city-model.ts");
 
 const VALID = "https://github.com/owner/repo";
+const SHA = "a".repeat(40);
+const MODEL = buildCity([{ canonicalPath: "a.js", S: 1, U: 1, M: 0 }]).model;
 
 function fixture({
   factoryThrows = false,
@@ -17,6 +20,7 @@ function fixture({
   listenThrows = false,
   sendThrows = false,
   sendThrowsWhen = () => false,
+  presentResult = { kind: "committed" },
 } = {}) {
   const events = [];
   const transports = [];
@@ -24,9 +28,12 @@ function fixture({
   let createCalls = 0;
   let liveWorkers = 0;
   let maximumLiveWorkers = 0;
+  const presentation = { clears: 0, calls: [], hooks: undefined };
   const view = {
+    clear() {},
     invalid: () => events.push("view:Invalid input"),
     working(cancel) { cancelAction = cancel; events.push("view:working"); },
+    success: (revision) => events.push(`view:success:${revision}`),
     failure: (category) => events.push(`view:${category}`),
     cancelled: () => events.push("view:Cancelled"),
   };
@@ -62,10 +69,21 @@ function fixture({
     transports.push(transport);
     return transport;
   }
-  const controller = createMainController(createWorker, view);
+  const controller = createMainController(createWorker, view, (hooks) => {
+    presentation.hooks = hooks;
+    return {
+      clear() { presentation.clears += 1; },
+      present(generation, model) {
+        events.push("present");
+        presentation.calls.push({ generation, model, eligible: hooks.isEligible(generation) });
+        return presentResult;
+      },
+    };
+  });
   return {
     controller,
     events,
+    presentation,
     transports,
     cancel: () => cancelAction(),
     maximumLiveWorkers: () => maximumLiveWorkers,
@@ -108,6 +126,83 @@ test("mapped FAILURE is shown, then matching drain performs normal cleanup exact
   assert.equal(f.events.filter((event) => event === "view:Revision unavailable").length, 1);
   assert.equal(f.controller.submit("https://github.com/owner/next"), true);
   assert.equal(f.transports[1].sent[0].generation, 2);
+});
+
+test("success is accepted once after the barrier, presented before publication, and remains eligible after worker drain", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  const transport = f.transports[0];
+  transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+  transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, model: MODEL });
+  assert.deepEqual(f.presentation.calls, [{ generation: 1, model: MODEL, eligible: true }]);
+  assert.deepEqual(f.events.slice(-2), ["present", `view:success:${SHA}`]);
+  transport.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
+  assert.equal(transport.closeCalls, 1);
+  assert.equal(f.presentation.hooks.isEligible(1), true);
+
+  f.presentation.hooks.failed(1, "Presentation failed", "M1-PRES-1");
+  assert.equal(f.events.at(-1), "view:Presentation failed");
+  assert.equal(f.presentation.hooks.isEligible(1), false);
+});
+
+test("a new valid submission synchronously revokes a drained publication and can commit an identical second result", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  const first = f.transports[0];
+  first.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+  first.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, model: MODEL });
+  first.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
+  assert.equal(f.presentation.clears, 1);
+
+  assert.equal(f.controller.submit(VALID), true);
+  assert.equal(f.presentation.clears, 2);
+  assert.equal(f.presentation.hooks.isEligible(1), false);
+  const second = f.transports[1];
+  second.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 2 });
+  second.handlers.message({ type: "SUCCESS", generation: 2, revision: SHA, model: MODEL });
+  second.handlers.message({ type: "ATTEMPT_DRAINED", generation: 2 });
+  assert.deepEqual(f.presentation.calls.map(({ generation, eligible }) => ({ generation, eligible })), [
+    { generation: 1, eligible: true }, { generation: 2, eligible: true },
+  ]);
+  assert.equal(f.events.filter((event) => event === `view:success:${SHA}`).length, 2);
+  assert.equal(f.maximumLiveWorkers(), 1);
+});
+
+test("invalid success models map to CITY1 before presentation and a duplicate success fails closed", () => {
+  {
+    const f = fixture();
+    f.controller.submit(VALID);
+    const transport = f.transports[0];
+    transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+    transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, model: {} });
+    assert.deepEqual(f.presentation.calls, []);
+    assert.equal(f.events.at(-1), "view:City construction failed");
+    transport.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
+    assert.equal(transport.closeCalls, 1);
+  }
+  {
+    const f = fixture();
+    f.controller.submit(VALID);
+    const transport = f.transports[0];
+    transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+    const success = { type: "SUCCESS", generation: 1, revision: SHA, model: MODEL };
+    transport.handlers.message(success);
+    transport.handlers.message(success);
+    assert.equal(transport.closeCalls, 1);
+    assert.equal(f.presentation.clears, 2);
+  }
+});
+
+test("synchronous presenter failure is mapped by the controller without using the asynchronous hook", () => {
+  const f = fixture({ presentResult: { kind: "failure", category: "Presentation failed", code: "M1-PRES-1" } });
+  f.controller.submit(VALID);
+  const transport = f.transports[0];
+  transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+  transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, model: MODEL });
+  assert.equal(f.events.at(-1), "view:Presentation failed");
+  assert.equal(f.events.some((event) => event.startsWith("view:success:")), false);
+  transport.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
+  assert.equal(transport.closeCalls, 1);
 });
 
 test("invalid replacement reports Invalid input and leaves the active attempt unchanged", () => {

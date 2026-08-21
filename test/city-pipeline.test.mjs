@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import test from "node:test";
 
@@ -22,6 +23,7 @@ function fixture(constructCity) {
   const order = [];
   let pipeline;
   let releases = 0;
+  let factsSeen;
   const parser = {
     async initialize() { order.push("parser:initialize"); },
     async project() {
@@ -43,12 +45,13 @@ function fixture(constructCity) {
     (message) => {
       messages.push(message);
       order.push(`publish:${message.type}`);
-      publications.push({ message, ownership: pipeline.ownership() });
+      publications.push({ message, ownership: pipeline.ownership(), capturedFactCount: factsSeen?.length ?? 0 });
     },
     undefined,
     parser,
     (event) => order.push(`metric:${event}`),
     (facts) => {
+      factsSeen = facts;
       order.push("city:construct");
       return constructCity(facts);
     },
@@ -56,36 +59,47 @@ function fixture(constructCity) {
   return { pipeline, messages, publications, order, releases: () => releases };
 }
 
-test("the City capability runs exactly once after complete facts and success retains only revision plus City", async () => {
+test("success releases source identities and facts, publishes only revision plus model, then drains", async () => {
   let calls = 0;
-  let received;
+  let receivedFacts;
   const f = fixture((facts) => {
     calls += 1;
-    received = facts;
+    receivedFacts = facts;
+    assert.deepEqual(facts, [{ canonicalPath: "src/a.ts", S: 1, U: 0, M: 0 }]);
     return buildCity(facts);
   });
   f.pipeline.start(REPOSITORY, 31);
   await tick(); await tick();
 
   assert.equal(calls, 1);
-  assert.deepEqual(received, [{ canonicalPath: "src/a.ts", S: 1, U: 0, M: 0 }]);
+  assert.deepEqual(receivedFacts, [], "the actual processing-result fact container is released before publication");
   assert(f.order.indexOf("metric:fact-retained") < f.order.indexOf("city:construct"));
   assert.equal(f.releases(), 1);
-  assert.deepEqual(f.messages, [{ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 31 }]);
-  assert.doesNotMatch(JSON.stringify(f.messages), /MODEL|SUCCESS|CITY|UI|origin|rgba|bounds/i);
+  assert.deepEqual(f.messages.map(({ type }) => type), ["PROVIDER_DRAINED_STATIC_ENTERED", "SUCCESS", "ATTEMPT_DRAINED"]);
+  const success = f.messages[1];
+  assert.deepEqual(Object.keys(success), ["type", "generation", "revision", "model"]);
+  assert.equal(success.generation, 31);
+  assert.equal(success.revision, SHA);
+  assert.deepEqual(Object.keys(success.model), ["kind", "count", "origins", "sizes", "rgba", "bounds"]);
+  assert.doesNotMatch(JSON.stringify(success), /canonicalPath|normalizedSource|identities|facts/i);
+  assert.deepEqual(f.publications.map(({ message, ownership }) => [message.type, ownership.selectedRevisionRetained, ownership.admittedModuleCount, ownership.presentationModelRetained, ownership.finalFactCount]), [
+    ["PROVIDER_DRAINED_STATIC_ENTERED", true, 0, false, 0],
+    ["SUCCESS", true, 0, true, 0],
+    ["ATTEMPT_DRAINED", false, 0, false, 0],
+  ]);
+  assert.equal(f.publications.find(({ message }) => message.type === "SUCCESS").capturedFactCount, 0);
   assert.deepEqual(f.pipeline.ownership(), {
-    phase: "static",
-    generation: 31,
-    selectedRevisionRetained: true,
+    phase: "idle",
+    selectedRevisionRetained: false,
     admittedModuleCount: 0,
-    cityRetained: true,
+    presentationModelRetained: false,
     finalFactCount: 0,
     providerResource: false,
   });
   f.pipeline.stop(31);
   await tick();
-  assert.equal(calls, 1, "static STOP remains hard realm termination owned by main");
-  assert.equal(f.messages.length, 1);
+  assert.equal(calls, 1);
+  assert.equal(f.messages.filter(({ type }) => type === "SUCCESS").length, 1);
 });
 
 for (const [id, construct] of [
@@ -115,7 +129,7 @@ for (const [id, construct] of [
       generation: 32,
       selectedRevisionRetained: true,
       admittedModuleCount: 0,
-      cityRetained: false,
+      presentationModelRetained: false,
       finalFactCount: 0,
       providerResource: false,
     });
@@ -123,7 +137,7 @@ for (const [id, construct] of [
       phase: "idle",
       selectedRevisionRetained: false,
       admittedModuleCount: 0,
-      cityRetained: false,
+      presentationModelRetained: false,
       finalFactCount: 0,
       providerResource: false,
     });
@@ -132,3 +146,21 @@ for (const [id, construct] of [
     assert.equal(f.messages.filter(({ type }) => type === "ATTEMPT_DRAINED").length, 1);
   });
 }
+
+test("SUCCESS publication is outside provider/static/City lifetimes and preparation returns only revision plus model", async () => {
+  const source = await readFile(new URL("../src/application/worker-attempt.ts", import.meta.url), "utf8");
+  const activeStart = source.indexOf("type ActiveAttempt = {");
+  const activeEnd = source.indexOf("\n};", activeStart);
+  const staticStart = source.indexOf("async function prepareStaticSuccess");
+  const providerStart = source.indexOf("async function prepareProviderSuccess");
+  const helperEnd = source.indexOf("\n  function drain", providerStart);
+  const successPublish = source.indexOf('publish({ type: "SUCCESS"');
+
+  assert(activeStart >= 0 && activeEnd > activeStart && staticStart > activeEnd && providerStart > staticStart && helperEnd > providerStart);
+  assert(successPublish > helperEnd, "SUCCESS must be published only after both preparation helpers complete");
+  assert.doesNotMatch(source.slice(staticStart, helperEnd), /type:\s*"SUCCESS"/u);
+  assert.match(source.slice(staticStart, providerStart), /processing\.release\(\);\s*return \{ revision, model \};/u);
+  assert.match(source.slice(providerStart, helperEnd), /return prepareStaticSuccess\(attempt, revision, retrieval\.modules\);/u);
+  assert.doesNotMatch(source.slice(activeStart, activeEnd), /admitted|source|facts|city|identit/iu);
+  assert.match(source.slice(helperEnd), /let prepared = await prepareProviderSuccess[\s\S]*publish\(\{ type: "SUCCESS"[\s\S]*prepared = undefined;\s*drain\(attempt\);/u);
+});
