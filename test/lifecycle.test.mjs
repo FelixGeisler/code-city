@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
 import test from "node:test";
+import { createServer as createViteServer } from "vite";
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -25,18 +26,23 @@ function fixture({
   const events = [];
   const transports = [];
   let cancelAction;
+  let visibleState = "empty";
   let createCalls = 0;
   let liveWorkers = 0;
   let maximumLiveWorkers = 0;
   const failures = [];
   const presentation = { clears: 0, calls: [], disposes: 0, hooks: undefined };
   const view = {
-    clear() {},
-    invalid: () => events.push("view:Invalid input"),
-    working(cancel) { cancelAction = cancel; events.push("view:working"); },
-    success: (revision) => events.push(`view:success:${revision}`),
-    failure(category, code, revision) { failures.push({ category, code, revision }); events.push(`view:${category}`); },
-    cancelled: () => events.push("view:Cancelled"),
+    clear() { visibleState = "empty"; },
+    invalid() { visibleState = "invalid"; events.push("view:Invalid input"); },
+    working(cancel) { visibleState = "working-with-cancel"; cancelAction = cancel; events.push("view:working"); },
+    success(revision) { visibleState = "success"; events.push(`view:success:${revision}`); },
+    failure(category, code, revision) {
+      visibleState = "failure";
+      failures.push({ category, code, revision });
+      events.push(`view:${category}`);
+    },
+    cancelled() { visibleState = "cancelled"; events.push("view:Cancelled"); },
   };
   function createWorker() {
     createCalls += 1;
@@ -89,7 +95,13 @@ function fixture({
     presentation,
     transports,
     cancel: () => cancelAction(),
+    clickVisibleCancel() {
+      assert.equal(visibleState, "working-with-cancel");
+      assert.equal(typeof cancelAction, "function");
+      cancelAction();
+    },
     maximumLiveWorkers: () => maximumLiveWorkers,
+    visibleState: () => visibleState,
   };
 }
 
@@ -499,16 +511,21 @@ test("stale old callbacks and stale generations cannot affect the replacement", 
   assert.equal(f.events.some((event) => event === "view:Revision unavailable"), false);
 });
 
-test("cancellation clears a pending replacement and keeps cancellation precedence", () => {
+test("replacement remains visibly working while provider drain waits and its displayed Cancel clears pending work", () => {
   const f = fixture();
   f.controller.submit(VALID);
   const old = f.transports[0];
   f.controller.submit("https://github.com/owner/pending");
-  f.cancel();
+
+  assert.equal(f.visibleState(), "working-with-cancel");
+  assert.deepEqual(old.sent.map((message) => message.type), ["START", "STOP"]);
+  assert.equal(old.closeCalls, 0, "the replacement remains cancellable while provider drain is pending");
+  f.clickVisibleCancel();
+  assert.equal(f.visibleState(), "cancelled");
+
   old.handlers.message({ type: "FAILURE", generation: 1, category: "Revision unavailable" });
   old.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
 
-  assert.deepEqual(old.sent.map((message) => message.type), ["START", "STOP"]);
   assert.equal(old.detachCalls, 1);
   assert.equal(old.closeCalls, 1);
   assert.equal(f.transports.length, 1);
@@ -627,6 +644,69 @@ test("controller disposal is terminal, idempotent, clears pending work, and make
   assert.equal(f.failures.length, 0);
   assert.equal(f.controller.submit(VALID), false);
   assert.equal(f.transports.length, 1);
+});
+
+test("partial browser-worker listener setup rolls back attached listeners before terminating once", async () => {
+  const shellElement = {
+    addEventListener() {},
+    replaceChildren() {},
+    textContent: "",
+  };
+  const previousDocument = globalThis.document;
+  const previousWindow = globalThis.window;
+  globalThis.document = {
+    querySelector: () => shellElement,
+    createElement: () => ({ addEventListener() {}, setAttribute() {}, textContent: "", type: "" }),
+  };
+  globalThis.window = { addEventListener() {} };
+
+  const server = await createViteServer({
+    configFile: "vite.config.mjs",
+    server: { middlewareMode: true },
+    appType: "custom",
+    logLevel: "silent",
+  });
+  try {
+    const { createWorkerTransport } = await server.ssrLoadModule("/src/edge/main.ts");
+    const additions = [];
+    const removals = [];
+    const attached = new Map();
+    let terminations = 0;
+    const worker = {
+      addEventListener(type, listener) {
+        additions.push(type);
+        if (type === "messageerror") throw new Error("partial listener setup");
+        attached.set(type, listener);
+      },
+      removeEventListener(type, listener) {
+        assert.equal(attached.get(type), listener);
+        attached.delete(type);
+        removals.push(type);
+      },
+      postMessage() {},
+      terminate() { terminations += 1; },
+    };
+    const transport = createWorkerTransport(worker);
+    const controller = createMainController(
+      () => transport,
+      { clear() {}, invalid() {}, working() {}, success() {}, failure() {}, cancelled() {} },
+      () => ({ clear() {}, dispose() {}, present: () => ({ kind: "committed" }) }),
+    );
+
+    assert.equal(controller.submit(VALID), false);
+    assert.deepEqual(additions, ["message", "error", "messageerror"]);
+    assert.deepEqual(removals, ["message", "error"]);
+    assert.equal(attached.size, 0);
+    assert.equal(terminations, 1);
+    controller.dispose();
+    assert.equal(terminations, 1);
+  } finally {
+    await server.close();
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  }
 });
 
 test("startup construction and post failures expose only mapped failure without consuming generations", () => {

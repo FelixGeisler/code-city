@@ -357,6 +357,7 @@ export function createMainController(
     }
 
     pending = repository;
+    view.working(cancel);
     closeWithMeaning(bridge, "replacement");
     return true;
   }
