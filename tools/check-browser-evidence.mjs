@@ -134,7 +134,7 @@ function exactKeys(value, keys, label) {
 }
 
 function validateBrowserResult(result, expectedAssets) {
-  exactKeys(result, ["schemaVersion", "assetRequests", "cases", "matrixRuns", "complexityMatrixRuns", "browserExceptions", "unexpectedNetworkRequests", "overallPass"], "Browser result");
+  exactKeys(result, ["schemaVersion", "assetRequests", "cases", "matrixRuns", "complexityMatrixRuns", "presentation", "browserExceptions", "unexpectedNetworkRequests", "overallPass"], "Browser result");
   assert.equal(result.schemaVersion, 1);
   assert.deepEqual(result.assetRequests, expectedAssets.map(({ role, path: assetPath, sha256 }) => ({ role, path: assetPath, sha256 })));
   assert.deepEqual(result.cases.map(({ id, family }) => ({ id, family })), [
@@ -189,6 +189,23 @@ function validateBrowserResult(result, expectedAssets) {
   assert.equal(result.complexityMatrixRuns[0].densePackedByteLength, result.complexityMatrixRuns[1].densePackedByteLength);
   assert.equal(result.complexityMatrixRuns[0].runDigest, result.complexityMatrixRuns[1].runDigest);
   assert.equal(result.complexityMatrixRuns[0].observed.factsDigest, result.complexityMatrixRuns[1].observed.factsDigest);
+  exactKeys(result.presentation, ["webgl2Available", "actualContexts", "initialDraws", "repeatDraws", "resizeDraws", "lossDefaultPrevented", "lossDraws", "lossFailures", "lossCleanup", "compileFailureResult", "compileFailureDraws", "compileFailures", "compileCleanup", "pass"], "Presentation");
+  assert.deepEqual(result.presentation, {
+    webgl2Available: true,
+    actualContexts: 4,
+    initialDraws: 1,
+    repeatDraws: 1,
+    resizeDraws: 1,
+    lossDefaultPrevented: false,
+    lossDraws: 0,
+    lossFailures: [[3, "Presentation failed", "M1-PRES-1"]],
+    lossCleanup: { deleteShader: 2, deleteProgram: 1, deleteBuffer: 3, deleteVertexArray: 1 },
+    compileFailureResult: "failed",
+    compileFailureDraws: 0,
+    compileFailures: [[4, "Presentation failed", "M1-PRES-1"]],
+    compileCleanup: { deleteShader: 1, deleteProgram: 0, deleteBuffer: 0, deleteVertexArray: 0 },
+    pass: true,
+  });
   assert.deepEqual(result.browserExceptions, []);
   assert.deepEqual(result.unexpectedNetworkRequests, []);
   assert.equal(result.overallPass, true);
@@ -313,7 +330,7 @@ export async function checkPackagedBrowserEvidence() {
     });
     invariant(unexpected.length === 0, `Unexpected browser network request(s): ${unexpected.join(", ")}`);
     validateBrowserResult(result, selected);
-    console.log(`Packaged Chrome/CDP evidence passed with ${executable} (${version}); ${result.cases.length} stress cases, two comment matrices, and two complete complexity matrices.`);
+    console.log(`Packaged Chrome/CDP evidence passed with ${executable} (${version}); ${result.cases.length} stress cases, two comment matrices, two complete complexity matrices, and actual WebGL2 presenter success/loss/compile-failure evidence.`);
   } catch (error) {
     failure = error;
   } finally {

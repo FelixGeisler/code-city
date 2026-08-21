@@ -1,0 +1,8 @@
+{
+  "cubePositions": [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1],
+  "cubeIndices": [0, 3, 2, 0, 2, 1, 4, 5, 6, 4, 6, 7, 0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5, 0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2],
+  "vertexShader": "#version 300 es\nprecision highp float;\n\nlayout(location = 0) in vec3 a_unitPosition;\nlayout(location = 1) in vec3 a_targetRelativeMinimum;\nlayout(location = 2) in vec3 a_dimensions;\nlayout(location = 3) in vec4 a_color;\n\nuniform mat4 u_clipFromTarget;\n\nflat out vec4 v_color;\n\nvoid main() {\n  vec3 targetRelativePosition = a_targetRelativeMinimum + a_unitPosition * a_dimensions;\n  gl_Position = u_clipFromTarget * vec4(targetRelativePosition, 1.0);\n  v_color = a_color;\n}\n",
+  "fragmentShader": "#version 300 es\nprecision highp float;\n\nflat in vec4 v_color;\nlayout(location = 0) out vec4 o_color;\n\nvoid main() {\n  o_color = v_color;\n}\n",
+  "unitAspectTwoMatrix": [0.3936479091644287, -0.4545454680919647, -0.3333333432674408, 0, 0, 0.9090909361839294, -0.3333333432674408, 0, -0.3936479091644287, -0.4545454680919647, -0.3333333432674408, 0, 0, 0, 0, 1],
+  "unitTargetRelativeCorners": [[0, 0, 0.5000000149011612, 1], [0.3936479091644287, -0.4545454680919647, 0.1666666716337204, 1], [0, 0.9090909361839294, 0.1666666716337204, 1], [0.3936479091644287, 0.4545454680919647, -0.1666666716337204, 1], [-0.3936479091644287, -0.4545454680919647, 0.1666666716337204, 1], [0, -0.9090909361839294, -0.1666666716337204, 1], [-0.3936479091644287, 0.4545454680919647, -0.1666666716337204, 1], [0, 0, -0.5000000149011612, 1]]
+}
