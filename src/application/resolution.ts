@@ -8,9 +8,10 @@ export const FAILURE_CATEGORIES = [
   "Source admission failed",
   "Repository exceeds Code City limits",
   "Metric processing failed",
+  "City construction failed",
 ] as const;
 
-export const FAILURE_CODES = ["ADM-06", "ADM-07", "M1-ADM-1", "M1-ADM-3", "M1-ADM-4", "M1-MET-1"] as const;
+export const FAILURE_CODES = ["ADM-06", "ADM-07", "M1-ADM-1", "M1-ADM-3", "M1-ADM-4", "M1-MET-1", "M1-CITY-1"] as const;
 
 export type FailureCategory = typeof FAILURE_CATEGORIES[number];
 export type FailureCode = typeof FAILURE_CODES[number];
