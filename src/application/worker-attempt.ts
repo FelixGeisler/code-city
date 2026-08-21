@@ -1,5 +1,7 @@
 import type { AdmittedModule } from "../domain/source-admission";
 import type { RepositoryReference } from "../domain/repository-reference";
+import type { BaseMetricAnalysis } from "../domain/base-metrics";
+import { processAdmittedBaseMetrics, type MetricProcessingEvent, type SyntaxProjectionCapability } from "./base-metric-processing";
 import type { WorkerMessage } from "./protocol";
 import { resolveRevision, type RevisionGateway } from "./resolution";
 import {
@@ -10,6 +12,7 @@ import {
 
 type ActiveAttempt = {
   admittedModules?: readonly AdmittedModule[];
+  baseAnalyses?: readonly BaseMetricAnalysis[];
   controller?: AbortController;
   drained: boolean;
   generation: number;
@@ -25,6 +28,7 @@ export type AttemptOwnership = Readonly<{
   generation?: number;
   selectedRevisionRetained: boolean;
   admittedModuleCount: number;
+  baseAnalysisCount: number;
   providerResource: false;
 }>;
 
@@ -39,6 +43,8 @@ export function createWorkerAttemptPipeline(
   sourceGateway: ImmutableSourceGateway,
   publish: (message: WorkerMessage) => void,
   observeRetrieval: (ownership: RetrievalOwnership) => void = () => {},
+  syntaxParser?: SyntaxProjectionCapability,
+  observeMetricProcessing: (event: MetricProcessingEvent) => void = () => {},
 ): WorkerAttemptPipeline {
   let active: ActiveAttempt | undefined;
 
@@ -51,6 +57,7 @@ export function createWorkerAttemptPipeline(
     attempt.repository = undefined;
     attempt.selectedRevision = undefined;
     attempt.admittedModules = undefined;
+    attempt.baseAnalyses = undefined;
     publish({ type: "ATTEMPT_DRAINED", generation: attempt.generation });
     if (active === attempt) {
       active = undefined;
@@ -115,6 +122,23 @@ export function createWorkerAttemptPipeline(
       attempt.selectedRevision = retrieval.selected;
       attempt.admittedModules = retrieval.modules;
       publish({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation });
+
+      if (syntaxParser) {
+        attempt.admittedModules = undefined;
+        const processing = await processAdmittedBaseMetrics(retrieval.modules, syntaxParser, observeMetricProcessing);
+        if (processing.kind === "failure") {
+          attempt.selectedRevision = undefined;
+          publish({
+            type: "FAILURE",
+            generation,
+            category: processing.category,
+            code: processing.code,
+          });
+          drain(attempt);
+          return;
+        }
+        attempt.baseAnalyses = processing.analyses;
+      }
     })().catch(() => {
       if (attempt.stopped) {
         drain(attempt);
@@ -147,12 +171,14 @@ export function createWorkerAttemptPipeline(
           generation: active.generation,
           selectedRevisionRetained: active.selectedRevision !== undefined,
           admittedModuleCount: active.admittedModules?.length ?? 0,
+          baseAnalysisCount: active.baseAnalyses?.length ?? 0,
           providerResource: false,
         }
       : {
           phase: "idle",
           selectedRevisionRetained: false,
           admittedModuleCount: 0,
+          baseAnalysisCount: 0,
           providerResource: false,
         },
   };

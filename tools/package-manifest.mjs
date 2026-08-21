@@ -8,6 +8,7 @@ const MEDIA_TYPES = new Map([
   [".css", "text/css"],
   [".html", "text/html"],
   [".js", "text/javascript"],
+  [".wasm", "application/wasm"],
 ]);
 
 function invariant(condition, message) {

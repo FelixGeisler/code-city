@@ -1,0 +1,4566 @@
+{
+  "schemaVersion": 1,
+  "cases": [
+    {
+      "id": "node-js-function",
+      "canonicalPath": "a.js",
+      "source": "function f(){ return 1; }",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "a.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "a.js",
+            "kind": "function",
+            "startByte": 0,
+            "endByte": 25,
+            "ownedRegions": [
+              {
+                "startByte": 10,
+                "endByte": 12
+              },
+              {
+                "startByte": 12,
+                "endByte": 25
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "explicit-unit",
+            "form": "function",
+            "startByte": 0,
+            "endByte": 25,
+            "ownedRegions": [
+              {
+                "startByte": 10,
+                "endByte": 12
+              },
+              {
+                "startByte": 12,
+                "endByte": 25
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 0,
+            "endByte": 25
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 14,
+            "endByte": 23
+          }
+        ],
+        "digest": "5d8c076b118913b0239588576dea0c00fd49776260ca81d9a9c7531a3a09f94e"
+      }
+    },
+    {
+      "id": "node-jsx-comment",
+      "canonicalPath": "a.jsx",
+      "source": "const x = <A>{/* c */}</A>;",
+      "grammarFamily": "javascript-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "a.jsx",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 27
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "top-level JSX",
+            "startByte": 10,
+            "endByte": 26
+          },
+          {
+            "kind": "lexical-exclusion",
+            "startByte": 13,
+            "endByte": 22
+          }
+        ],
+        "digest": "0154c0a66257c80e5b92b6824f5b0e270e52348ce7a10fd0687f9b20074d153b"
+      }
+    },
+    {
+      "id": "node-ts-type-only",
+      "canonicalPath": "a.ts",
+      "source": "interface X { value: string }",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "interface/type alias",
+            "startByte": 0,
+            "endByte": 29
+          }
+        ],
+        "digest": "9b1b0804aae39be13bbd6f0c19fd14b95d76153f91cd463b1114b57c4a8544b9"
+      }
+    },
+    {
+      "id": "node-tsx-value",
+      "canonicalPath": "a.tsx",
+      "source": "const x = <A />;",
+      "grammarFamily": "tsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "a.tsx",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 16
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "top-level JSX",
+            "startByte": 10,
+            "endByte": 15
+          }
+        ],
+        "digest": "c9b6d384ada7cbfb8c715a069fa5ed7a446df24e6cf6acd50ef511e5b8c0983e"
+      }
+    },
+    {
+      "id": "suffix-js",
+      "canonicalPath": "a.js",
+      "source": ";",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "a.js",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 1
+          }
+        ],
+        "digest": "e46ba104c4f6eb2a5283d9de7b5223a6dfecbe82bebc1df104b4635503642923"
+      }
+    },
+    {
+      "id": "suffix-mjs",
+      "canonicalPath": "a.mjs",
+      "source": ";",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "a.mjs",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 1
+          }
+        ],
+        "digest": "b6751318a5716f3438992a5966f53392eeac469c92eca4897c140467f500f92f"
+      }
+    },
+    {
+      "id": "suffix-cjs",
+      "canonicalPath": "a.cjs",
+      "source": ";",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "a.cjs",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 1
+          }
+        ],
+        "digest": "6adf67820a4c2dc8a958a412c29a28b56ad1731039eed8636f7e5fef93459796"
+      }
+    },
+    {
+      "id": "suffix-jsx",
+      "canonicalPath": "a.jsx",
+      "source": "<A/>;",
+      "grammarFamily": "javascript-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "a.jsx",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 5
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "top-level JSX",
+            "startByte": 0,
+            "endByte": 4
+          }
+        ],
+        "digest": "c1dd6244252b1eaa5ffc1323ceb74b2110a11150a5aa8165e6afa19c5c7f9a91"
+      }
+    },
+    {
+      "id": "suffix-ts",
+      "canonicalPath": "a.ts",
+      "source": "type X=string;",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "interface/type alias",
+            "startByte": 0,
+            "endByte": 14
+          }
+        ],
+        "digest": "efafdffb783b7309244bf16782ecbf03892f96c077d78652c976a18c35015019"
+      }
+    },
+    {
+      "id": "suffix-mts",
+      "canonicalPath": "a.mts",
+      "source": "type X=string;",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "interface/type alias",
+            "startByte": 0,
+            "endByte": 14
+          }
+        ],
+        "digest": "efafdffb783b7309244bf16782ecbf03892f96c077d78652c976a18c35015019"
+      }
+    },
+    {
+      "id": "suffix-cts",
+      "canonicalPath": "a.cts",
+      "source": "type X=string;",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "interface/type alias",
+            "startByte": 0,
+            "endByte": 14
+          }
+        ],
+        "digest": "efafdffb783b7309244bf16782ecbf03892f96c077d78652c976a18c35015019"
+      }
+    },
+    {
+      "id": "suffix-tsx",
+      "canonicalPath": "a.tsx",
+      "source": "<A/>;",
+      "grammarFamily": "tsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "a.tsx",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 5
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "top-level JSX",
+            "startByte": 0,
+            "endByte": 4
+          }
+        ],
+        "digest": "7b1d81aa06b9e680aeea5845e980b5cf1160d1c856adf3ead717a12cb6c71e63"
+      }
+    },
+    {
+      "id": "suffix-case-js",
+      "canonicalPath": "A.JS",
+      "source": ";",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "A.JS",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 1
+          }
+        ],
+        "digest": "0fceadfb6a4c4778935dbde5502cae59eafbba7b92bc62ea4f058e51ca88f2d9"
+      }
+    },
+    {
+      "id": "suffix-case-mjs",
+      "canonicalPath": "A.MJS",
+      "source": ";",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "A.MJS",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 1
+          }
+        ],
+        "digest": "48d5f1716dbf13e1e2cb920ad666738d74504887cfe61d76621a8a83631ff690"
+      }
+    },
+    {
+      "id": "suffix-case-cjs",
+      "canonicalPath": "A.CJS",
+      "source": ";",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "A.CJS",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 1
+          }
+        ],
+        "digest": "40514374afd5b87030d8b46d74d00e40afc946ba0843290937b664824163b911"
+      }
+    },
+    {
+      "id": "suffix-case-jsx",
+      "canonicalPath": "A.JSX",
+      "source": "<A/>;",
+      "grammarFamily": "javascript-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "A.JSX",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 5
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "top-level JSX",
+            "startByte": 0,
+            "endByte": 4
+          }
+        ],
+        "digest": "2e0e627e50b11fa4e52728a466b64b46c388a5187682e9771421ce8275ad0fd2"
+      }
+    },
+    {
+      "id": "suffix-case-ts",
+      "canonicalPath": "A.TS",
+      "source": "type X=string;",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "interface/type alias",
+            "startByte": 0,
+            "endByte": 14
+          }
+        ],
+        "digest": "efafdffb783b7309244bf16782ecbf03892f96c077d78652c976a18c35015019"
+      }
+    },
+    {
+      "id": "suffix-case-mts",
+      "canonicalPath": "A.MTS",
+      "source": "type X=string;",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "interface/type alias",
+            "startByte": 0,
+            "endByte": 14
+          }
+        ],
+        "digest": "efafdffb783b7309244bf16782ecbf03892f96c077d78652c976a18c35015019"
+      }
+    },
+    {
+      "id": "suffix-case-cts",
+      "canonicalPath": "A.CTS",
+      "source": "type X=string;",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "interface/type alias",
+            "startByte": 0,
+            "endByte": 14
+          }
+        ],
+        "digest": "efafdffb783b7309244bf16782ecbf03892f96c077d78652c976a18c35015019"
+      }
+    },
+    {
+      "id": "suffix-case-tsx",
+      "canonicalPath": "A.TSX",
+      "source": "<A/>;",
+      "grammarFamily": "tsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "A.TSX",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 5
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "top-level JSX",
+            "startByte": 0,
+            "endByte": 4
+          }
+        ],
+        "digest": "9cfd9ea719da7714c1158299767bbba29fb371a1127afc9ed38d3a51b932a4a1"
+      }
+    },
+    {
+      "id": "sloc-empty",
+      "canonicalPath": "s.js",
+      "source": "",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 0,
+        "U": 0,
+        "units": [],
+        "observations": [],
+        "digest": "2e5a8991dedf1819de5fa48b5539194d8a8241a551d9e2d129a00c5c69b29585"
+      }
+    },
+    {
+      "id": "sloc-whitespace",
+      "canonicalPath": "s.js",
+      "source": " \t\n\n",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 0,
+        "U": 0,
+        "units": [],
+        "observations": [],
+        "digest": "2e5a8991dedf1819de5fa48b5539194d8a8241a551d9e2d129a00c5c69b29585"
+      }
+    },
+    {
+      "id": "sloc-line-comment",
+      "canonicalPath": "s.js",
+      "source": "// only\n",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 0,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "lexical-exclusion",
+            "startByte": 0,
+            "endByte": 7
+          }
+        ],
+        "digest": "c55256f53d48bf6634dfe5485978b6a099c8000060db29f998286b0871a2990d"
+      }
+    },
+    {
+      "id": "sloc-block-comment",
+      "canonicalPath": "s.js",
+      "source": "/* only\n * still */\n",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 0,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "lexical-exclusion",
+            "startByte": 0,
+            "endByte": 19
+          }
+        ],
+        "digest": "bd0170553385874f3132d0fb86c2eac834373652baf2a5aadd92a1a799ad32b4"
+      }
+    },
+    {
+      "id": "sloc-jsdoc",
+      "canonicalPath": "s.js",
+      "source": "/** docs */\n",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 0,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "lexical-exclusion",
+            "startByte": 0,
+            "endByte": 11
+          }
+        ],
+        "digest": "84a5cf18f7af43f4860c37eef471666aeb803141d0474bc5be2199eb61f1da09"
+      }
+    },
+    {
+      "id": "sloc-triple-slash",
+      "canonicalPath": "s.ts",
+      "source": "/// <reference path=\"./x.d.ts\" />\n",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 0,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "lexical-exclusion",
+            "startByte": 0,
+            "endByte": 33
+          }
+        ],
+        "digest": "0a0d75d592b0837c2ad52d29d1fd3046634e8c0cf5868f29cc093a06eb90f320"
+      }
+    },
+    {
+      "id": "sloc-hashbang",
+      "canonicalPath": "s.js",
+      "source": "#!/usr/bin/env node\n",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 0,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "lexical-exclusion",
+            "startByte": 0,
+            "endByte": 19
+          }
+        ],
+        "digest": "bd0170553385874f3132d0fb86c2eac834373652baf2a5aadd92a1a799ad32b4"
+      }
+    },
+    {
+      "id": "sloc-leading-comment",
+      "canonicalPath": "s.js",
+      "source": "/*c*/ const x=1;",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "s.js",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "lexical-exclusion",
+            "startByte": 0,
+            "endByte": 5
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 6,
+            "endByte": 16
+          }
+        ],
+        "digest": "1dc7f8a1d108202b85764cac0c248891fd8b30b3ddb380bd6d9b3e082716ec30"
+      }
+    },
+    {
+      "id": "sloc-trailing-comment",
+      "canonicalPath": "s.js",
+      "source": "const x=1; //c",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "s.js",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 10
+          },
+          {
+            "kind": "lexical-exclusion",
+            "startByte": 11,
+            "endByte": 14
+          }
+        ],
+        "digest": "3b83c135a707e465c892ca301651df46a56d814921bbcd7e5f95bbbfe5689f29"
+      }
+    },
+    {
+      "id": "sloc-embedded-comment",
+      "canonicalPath": "s.js",
+      "source": "const /*c*/ x=1;",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "s.js",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 16
+          },
+          {
+            "kind": "lexical-exclusion",
+            "startByte": 6,
+            "endByte": 11
+          }
+        ],
+        "digest": "0934062a2786d716ab1272ccb95ad2d3de1267b529f574168a2cd3476c0c6138"
+      }
+    },
+    {
+      "id": "sloc-string-comment-text",
+      "canonicalPath": "s.js",
+      "source": "const x='/* source */';",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "s.js",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 23
+          }
+        ],
+        "digest": "53051d79150bcbcf4777e06b99dd5a0f83a73de4bb6ab2c3976aec6aaf84e95f"
+      }
+    },
+    {
+      "id": "sloc-template-comment-text",
+      "canonicalPath": "s.js",
+      "source": "const x=`// source`;",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "s.js",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 20
+          }
+        ],
+        "digest": "c91a22354b6de0b6b899ec544d5245ca4c38be3048dcfa3eebd9ca4ea689e716"
+      }
+    },
+    {
+      "id": "sloc-regex-comment-text",
+      "canonicalPath": "s.js",
+      "source": "const x=/\\/\\*/;",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "s.js",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 15
+          }
+        ],
+        "digest": "39e09e5ab2003ada900284854b06feaf2cf895a700e576e5f352f485bb7cada4"
+      }
+    },
+    {
+      "id": "sloc-template-blank-lines",
+      "canonicalPath": "s.js",
+      "source": "const x=`\n\nvalue\n`;",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 3,
+        "U": 1,
+        "units": [
+          {
+            "path": "s.js",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 19
+          }
+        ],
+        "digest": "71433934f33668bf8b9184eabeadfa20b0b1cb68e181731ba8927441784c8c11"
+      }
+    },
+    {
+      "id": "sloc-jsx-text-comment-looking",
+      "canonicalPath": "s.jsx",
+      "source": "<A>/* source */</A>;",
+      "grammarFamily": "javascript-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "s.jsx",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 20
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "top-level JSX",
+            "startByte": 0,
+            "endByte": 19
+          }
+        ],
+        "digest": "045f99a76185bdbb06bfb0f9518f49eeb720f255fa05e1f93bacb9173d0986bb"
+      }
+    },
+    {
+      "id": "sloc-jsx-blank-lines",
+      "canonicalPath": "s.jsx",
+      "source": "<>\n\n text\n</>;",
+      "grammarFamily": "javascript-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 3,
+        "U": 1,
+        "units": [
+          {
+            "path": "s.jsx",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 14
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "top-level JSX",
+            "startByte": 0,
+            "endByte": 13
+          }
+        ],
+        "digest": "a645448dcf598e77f591bdfef9455fc967320a6374fad6940c6a7f1054c17e13"
+      }
+    },
+    {
+      "id": "sloc-jsx-comment-wrapper",
+      "canonicalPath": "s.jsx",
+      "source": "<A>\n {/* only */}\n</A>;",
+      "grammarFamily": "javascript-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 2,
+        "U": 1,
+        "units": [
+          {
+            "path": "s.jsx",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 23
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "top-level JSX",
+            "startByte": 0,
+            "endByte": 22
+          },
+          {
+            "kind": "lexical-exclusion",
+            "startByte": 5,
+            "endByte": 17
+          }
+        ],
+        "digest": "f08ef2e8516883a6bd27e81a76fc30ba6209fd0895ac59bf5614f2a411b9de1b"
+      }
+    },
+    {
+      "id": "sloc-typescript-source",
+      "canonicalPath": "s.ts",
+      "source": "interface T {\n x: string;\n}",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 3,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "interface/type alias",
+            "startByte": 0,
+            "endByte": 27
+          }
+        ],
+        "digest": "8c38cc7bfc77e70fe6c8a070e9bb09d083f1a3a7c144ed24ac9d4ce6b3376efa"
+      }
+    },
+    {
+      "id": "unit-function-declaration",
+      "canonicalPath": "u.js",
+      "source": "function f(){}",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "u.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.js",
+            "kind": "function",
+            "startByte": 0,
+            "endByte": 14,
+            "ownedRegions": [
+              {
+                "startByte": 10,
+                "endByte": 12
+              },
+              {
+                "startByte": 12,
+                "endByte": 14
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "explicit-unit",
+            "form": "function",
+            "startByte": 0,
+            "endByte": 14,
+            "ownedRegions": [
+              {
+                "startByte": 10,
+                "endByte": 12
+              },
+              {
+                "startByte": 12,
+                "endByte": 14
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 0,
+            "endByte": 14
+          }
+        ],
+        "digest": "0d59ab868d90d1ea22ab043d580c66854f804ed003dc3d0e8c4e59652e977f43"
+      }
+    },
+    {
+      "id": "unit-function-expression",
+      "canonicalPath": "u.js",
+      "source": "const f=function(){};",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "u.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.js",
+            "kind": "function",
+            "startByte": 8,
+            "endByte": 20,
+            "ownedRegions": [
+              {
+                "startByte": 16,
+                "endByte": 18
+              },
+              {
+                "startByte": 18,
+                "endByte": 20
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 21
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "function",
+            "startByte": 8,
+            "endByte": 20,
+            "ownedRegions": [
+              {
+                "startByte": 16,
+                "endByte": 18
+              },
+              {
+                "startByte": 18,
+                "endByte": 20
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 8,
+            "endByte": 20
+          }
+        ],
+        "digest": "b207ca47595806f0bd324c02e3dfbe53a22e9e435ea558f3e565888591026669"
+      }
+    },
+    {
+      "id": "unit-generator-function",
+      "canonicalPath": "u.js",
+      "source": "function* f(){}",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "u.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.js",
+            "kind": "function",
+            "startByte": 0,
+            "endByte": 15,
+            "ownedRegions": [
+              {
+                "startByte": 11,
+                "endByte": 13
+              },
+              {
+                "startByte": 13,
+                "endByte": 15
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "explicit-unit",
+            "form": "function",
+            "startByte": 0,
+            "endByte": 15,
+            "ownedRegions": [
+              {
+                "startByte": 11,
+                "endByte": 13
+              },
+              {
+                "startByte": 13,
+                "endByte": 15
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 0,
+            "endByte": 15
+          }
+        ],
+        "digest": "4e950b37ec22f9fa251de6845e3783d691b9689c95055c9ef9b063bf60853a59"
+      }
+    },
+    {
+      "id": "unit-async-function",
+      "canonicalPath": "u.js",
+      "source": "async function f(){}",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "u.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.js",
+            "kind": "function",
+            "startByte": 0,
+            "endByte": 20,
+            "ownedRegions": [
+              {
+                "startByte": 16,
+                "endByte": 18
+              },
+              {
+                "startByte": 18,
+                "endByte": 20
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "explicit-unit",
+            "form": "function",
+            "startByte": 0,
+            "endByte": 20,
+            "ownedRegions": [
+              {
+                "startByte": 16,
+                "endByte": 18
+              },
+              {
+                "startByte": 18,
+                "endByte": 20
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 0,
+            "endByte": 20
+          }
+        ],
+        "digest": "49d5cb32b7f398f60a4f7e62349404a6d8c8cf80b3042de3891e88049e1f7bf5"
+      }
+    },
+    {
+      "id": "unit-exported-function",
+      "canonicalPath": "u.js",
+      "source": "export default function f(){}",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "u.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.js",
+            "kind": "function",
+            "startByte": 15,
+            "endByte": 29,
+            "ownedRegions": [
+              {
+                "startByte": 25,
+                "endByte": 27
+              },
+              {
+                "startByte": 27,
+                "endByte": 29
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "value-or-side-effect-import-export",
+            "startByte": 0,
+            "endByte": 29
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "function",
+            "startByte": 15,
+            "endByte": 29,
+            "ownedRegions": [
+              {
+                "startByte": 25,
+                "endByte": 27
+              },
+              {
+                "startByte": 27,
+                "endByte": 29
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 15,
+            "endByte": 29
+          }
+        ],
+        "digest": "cf1451d71b2dbc9b23c03b86982fa05449c3272098375d5f3a9d214297db8bc0"
+      }
+    },
+    {
+      "id": "unit-arrow-concise-unparenthesized",
+      "canonicalPath": "u.js",
+      "source": "const f = x => x;",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "u.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.js",
+            "kind": "arrow",
+            "startByte": 10,
+            "endByte": 16,
+            "ownedRegions": [
+              {
+                "startByte": 10,
+                "endByte": 11
+              },
+              {
+                "startByte": 15,
+                "endByte": 16
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 17
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "arrow",
+            "startByte": 10,
+            "endByte": 16,
+            "ownedRegions": [
+              {
+                "startByte": 10,
+                "endByte": 11
+              },
+              {
+                "startByte": 15,
+                "endByte": 16
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 10,
+            "endByte": 16
+          }
+        ],
+        "digest": "27f95e27e588804cc547ccc678dc4de2bc5a03daac9bbcb1ecd7427030b3556a"
+      }
+    },
+    {
+      "id": "unit-arrow-block",
+      "canonicalPath": "u.js",
+      "source": "const f=(x)=>{};",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "u.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.js",
+            "kind": "arrow",
+            "startByte": 8,
+            "endByte": 15,
+            "ownedRegions": [
+              {
+                "startByte": 8,
+                "endByte": 11
+              },
+              {
+                "startByte": 13,
+                "endByte": 15
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 16
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "arrow",
+            "startByte": 8,
+            "endByte": 15,
+            "ownedRegions": [
+              {
+                "startByte": 8,
+                "endByte": 11
+              },
+              {
+                "startByte": 13,
+                "endByte": 15
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 8,
+            "endByte": 15
+          }
+        ],
+        "digest": "2734e14bd4a1d5fc93831f313e40f3ff9e72cf5ae19f9c6f65213477faa02402"
+      }
+    },
+    {
+      "id": "unit-async-arrow",
+      "canonicalPath": "u.js",
+      "source": "const f=async x=>x;",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "u.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.js",
+            "kind": "arrow",
+            "startByte": 8,
+            "endByte": 18,
+            "ownedRegions": [
+              {
+                "startByte": 14,
+                "endByte": 15
+              },
+              {
+                "startByte": 17,
+                "endByte": 18
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 19
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "arrow",
+            "startByte": 8,
+            "endByte": 18,
+            "ownedRegions": [
+              {
+                "startByte": 14,
+                "endByte": 15
+              },
+              {
+                "startByte": 17,
+                "endByte": 18
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 8,
+            "endByte": 18
+          }
+        ],
+        "digest": "1ea612848932a204157a93aaaf76c4274a223c23a3ed99e66765b435283c1c00"
+      }
+    },
+    {
+      "id": "unit-object-method",
+      "canonicalPath": "u.js",
+      "source": "const x={m(){}};",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "u.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.js",
+            "kind": "method",
+            "startByte": 9,
+            "endByte": 14,
+            "ownedRegions": [
+              {
+                "startByte": 10,
+                "endByte": 12
+              },
+              {
+                "startByte": 12,
+                "endByte": 14
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 16
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "method",
+            "startByte": 9,
+            "endByte": 14,
+            "ownedRegions": [
+              {
+                "startByte": 10,
+                "endByte": 12
+              },
+              {
+                "startByte": 12,
+                "endByte": 14
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 9,
+            "endByte": 14
+          }
+        ],
+        "digest": "c9834534a947e6c6e44240a09ceaa877cbadee4d80e2716ae758a3df4084c9d6"
+      }
+    },
+    {
+      "id": "unit-class-method",
+      "canonicalPath": "u.js",
+      "source": "class C { m(){} }",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "u.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.js",
+            "kind": "method",
+            "startByte": 10,
+            "endByte": 15,
+            "ownedRegions": [
+              {
+                "startByte": 11,
+                "endByte": 13
+              },
+              {
+                "startByte": 13,
+                "endByte": 15
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 17
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "method",
+            "startByte": 10,
+            "endByte": 15,
+            "ownedRegions": [
+              {
+                "startByte": 11,
+                "endByte": 13
+              },
+              {
+                "startByte": 13,
+                "endByte": 15
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 10,
+            "endByte": 15
+          }
+        ],
+        "digest": "9bda30e5ece4edd57a57813d7bd1175718025c8cd828ecdc34624c7776d864a7"
+      }
+    },
+    {
+      "id": "unit-constructor",
+      "canonicalPath": "u.js",
+      "source": "class C { constructor(){} }",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "u.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.js",
+            "kind": "constructor",
+            "startByte": 10,
+            "endByte": 25,
+            "ownedRegions": [
+              {
+                "startByte": 21,
+                "endByte": 23
+              },
+              {
+                "startByte": 23,
+                "endByte": 25
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 27
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "constructor",
+            "startByte": 10,
+            "endByte": 25,
+            "ownedRegions": [
+              {
+                "startByte": 21,
+                "endByte": 23
+              },
+              {
+                "startByte": 23,
+                "endByte": 25
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 10,
+            "endByte": 25
+          }
+        ],
+        "digest": "3037c21a6de2bfd705e8270149f68f1590ae0f578c621f3b79e7d4bde2316b14"
+      }
+    },
+    {
+      "id": "unit-getter",
+      "canonicalPath": "u.js",
+      "source": "class C { get x(){return 1} }",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "u.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.js",
+            "kind": "getter",
+            "startByte": 10,
+            "endByte": 27,
+            "ownedRegions": [
+              {
+                "startByte": 15,
+                "endByte": 17
+              },
+              {
+                "startByte": 17,
+                "endByte": 27
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 29
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "getter",
+            "startByte": 10,
+            "endByte": 27,
+            "ownedRegions": [
+              {
+                "startByte": 15,
+                "endByte": 17
+              },
+              {
+                "startByte": 17,
+                "endByte": 27
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 10,
+            "endByte": 27
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 18,
+            "endByte": 26
+          }
+        ],
+        "digest": "523ee255f918a5197159f0339e32c0deea1dcd0761b497ea6c82c5f84b3edb01"
+      }
+    },
+    {
+      "id": "unit-setter",
+      "canonicalPath": "u.js",
+      "source": "class C { set x(v){} }",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "u.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.js",
+            "kind": "setter",
+            "startByte": 10,
+            "endByte": 20,
+            "ownedRegions": [
+              {
+                "startByte": 15,
+                "endByte": 18
+              },
+              {
+                "startByte": 18,
+                "endByte": 20
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 22
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "setter",
+            "startByte": 10,
+            "endByte": 20,
+            "ownedRegions": [
+              {
+                "startByte": 15,
+                "endByte": 18
+              },
+              {
+                "startByte": 18,
+                "endByte": 20
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 10,
+            "endByte": 20
+          }
+        ],
+        "digest": "a0c6cf2f7838e66c6fed1b57b3b774b0e7fe5dd2edc69f27f71178beb3f7e847"
+      }
+    },
+    {
+      "id": "unit-static-block",
+      "canonicalPath": "u.js",
+      "source": "class C { static { ; } }",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "u.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.js",
+            "kind": "static-block",
+            "startByte": 10,
+            "endByte": 22,
+            "ownedRegions": [
+              {
+                "startByte": 17,
+                "endByte": 22
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 24
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "static-block",
+            "startByte": 10,
+            "endByte": 22,
+            "ownedRegions": [
+              {
+                "startByte": 17,
+                "endByte": 22
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 10,
+            "endByte": 22
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 19,
+            "endByte": 20
+          }
+        ],
+        "digest": "24efb826b01cab0398ba6ca9a0b62ad4ae49e54d164eacf2d938cf0cf77d6cf2"
+      }
+    },
+    {
+      "id": "unit-modifiers",
+      "canonicalPath": "u.ts",
+      "source": "export abstract class C { static #m(){} protected async *n(){} }",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 3,
+        "units": [
+          {
+            "path": "u.ts",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.ts",
+            "kind": "method",
+            "startByte": 26,
+            "endByte": 39,
+            "ownedRegions": [
+              {
+                "startByte": 35,
+                "endByte": 37
+              },
+              {
+                "startByte": 37,
+                "endByte": 39
+              }
+            ]
+          },
+          {
+            "path": "u.ts",
+            "kind": "method",
+            "startByte": 40,
+            "endByte": 62,
+            "ownedRegions": [
+              {
+                "startByte": 58,
+                "endByte": 60
+              },
+              {
+                "startByte": 60,
+                "endByte": 62
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "value-or-side-effect-import-export",
+            "startByte": 0,
+            "endByte": 64
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "method",
+            "startByte": 26,
+            "endByte": 39,
+            "ownedRegions": [
+              {
+                "startByte": 35,
+                "endByte": 37
+              },
+              {
+                "startByte": 37,
+                "endByte": 39
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 26,
+            "endByte": 39
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "method",
+            "startByte": 40,
+            "endByte": 62,
+            "ownedRegions": [
+              {
+                "startByte": 58,
+                "endByte": 60
+              },
+              {
+                "startByte": 60,
+                "endByte": 62
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 40,
+            "endByte": 62
+          }
+        ],
+        "digest": "b003ed88ec6939a077a95a665ce5ba5acdb40d85f11fe3acb00057813e5fb5c7"
+      }
+    },
+    {
+      "id": "unit-decorator-span",
+      "canonicalPath": "u.ts",
+      "source": "class C { @d m(){} }",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "u.ts",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.ts",
+            "kind": "method",
+            "startByte": 13,
+            "endByte": 18,
+            "ownedRegions": [
+              {
+                "startByte": 14,
+                "endByte": 16
+              },
+              {
+                "startByte": 16,
+                "endByte": 18
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 20
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "method",
+            "startByte": 13,
+            "endByte": 18,
+            "ownedRegions": [
+              {
+                "startByte": 14,
+                "endByte": 16
+              },
+              {
+                "startByte": 16,
+                "endByte": 18
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 13,
+            "endByte": 18
+          }
+        ],
+        "digest": "505c48d5946a9110e3f8ded46992d8d0fc25a28d44818443b347fe103657e435"
+      }
+    },
+    {
+      "id": "unit-computed-name",
+      "canonicalPath": "u.js",
+      "source": "class C { [x&&y](){} }",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "u.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.js",
+            "kind": "method",
+            "startByte": 10,
+            "endByte": 20,
+            "ownedRegions": [
+              {
+                "startByte": 16,
+                "endByte": 18
+              },
+              {
+                "startByte": 18,
+                "endByte": 20
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 22
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "method",
+            "startByte": 10,
+            "endByte": 20,
+            "ownedRegions": [
+              {
+                "startByte": 16,
+                "endByte": 18
+              },
+              {
+                "startByte": 18,
+                "endByte": 20
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 10,
+            "endByte": 20
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "logical-and",
+            "startByte": 11,
+            "endByte": 15
+          }
+        ],
+        "digest": "62161396b9e31463cb15caedefc60e418399eede03bfc02bc0b88117f4adaa39"
+      }
+    },
+    {
+      "id": "unit-field-arrow",
+      "canonicalPath": "u.js",
+      "source": "class C { x=()=>1; }",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "u.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.js",
+            "kind": "arrow",
+            "startByte": 12,
+            "endByte": 17,
+            "ownedRegions": [
+              {
+                "startByte": 12,
+                "endByte": 14
+              },
+              {
+                "startByte": 16,
+                "endByte": 17
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 20
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "arrow",
+            "startByte": 12,
+            "endByte": 17,
+            "ownedRegions": [
+              {
+                "startByte": 12,
+                "endByte": 14
+              },
+              {
+                "startByte": 16,
+                "endByte": 17
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 12,
+            "endByte": 17
+          }
+        ],
+        "digest": "2a22608d12f4b0c94d0fdbef08260df2e1119429ca97061c8741215213935772"
+      }
+    },
+    {
+      "id": "unit-field-function",
+      "canonicalPath": "u.js",
+      "source": "class C { x=function(){}; }",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "u.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.js",
+            "kind": "function",
+            "startByte": 12,
+            "endByte": 24,
+            "ownedRegions": [
+              {
+                "startByte": 20,
+                "endByte": 22
+              },
+              {
+                "startByte": 22,
+                "endByte": 24
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 27
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "function",
+            "startByte": 12,
+            "endByte": 24,
+            "ownedRegions": [
+              {
+                "startByte": 20,
+                "endByte": 22
+              },
+              {
+                "startByte": 22,
+                "endByte": 24
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 12,
+            "endByte": 24
+          }
+        ],
+        "digest": "210052fbb7be20cf823eff6df750ae6524b548cdc7a92ada4663ba3f60c53028"
+      }
+    },
+    {
+      "id": "unit-nested-order",
+      "canonicalPath": "u.js",
+      "source": "function outer(a=()=>0){ return function inner(){ return ()=>1; }; }",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 5,
+        "units": [
+          {
+            "path": "u.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "u.js",
+            "kind": "function",
+            "startByte": 0,
+            "endByte": 68,
+            "ownedRegions": [
+              {
+                "startByte": 14,
+                "endByte": 23
+              },
+              {
+                "startByte": 23,
+                "endByte": 68
+              }
+            ]
+          },
+          {
+            "path": "u.js",
+            "kind": "arrow",
+            "startByte": 17,
+            "endByte": 22,
+            "ownedRegions": [
+              {
+                "startByte": 17,
+                "endByte": 19
+              },
+              {
+                "startByte": 21,
+                "endByte": 22
+              }
+            ]
+          },
+          {
+            "path": "u.js",
+            "kind": "function",
+            "startByte": 32,
+            "endByte": 65,
+            "ownedRegions": [
+              {
+                "startByte": 46,
+                "endByte": 48
+              },
+              {
+                "startByte": 48,
+                "endByte": 65
+              }
+            ]
+          },
+          {
+            "path": "u.js",
+            "kind": "arrow",
+            "startByte": 57,
+            "endByte": 62,
+            "ownedRegions": [
+              {
+                "startByte": 57,
+                "endByte": 59
+              },
+              {
+                "startByte": 61,
+                "endByte": 62
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "explicit-unit",
+            "form": "function",
+            "startByte": 0,
+            "endByte": 68,
+            "ownedRegions": [
+              {
+                "startByte": 14,
+                "endByte": 23
+              },
+              {
+                "startByte": 23,
+                "endByte": 68
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 0,
+            "endByte": 68
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "arrow",
+            "startByte": 17,
+            "endByte": 22,
+            "ownedRegions": [
+              {
+                "startByte": 17,
+                "endByte": 19
+              },
+              {
+                "startByte": 21,
+                "endByte": 22
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 17,
+            "endByte": 22
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 25,
+            "endByte": 66
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "function",
+            "startByte": 32,
+            "endByte": 65,
+            "ownedRegions": [
+              {
+                "startByte": 46,
+                "endByte": 48
+              },
+              {
+                "startByte": 48,
+                "endByte": 65
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 32,
+            "endByte": 65
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 50,
+            "endByte": 63
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "arrow",
+            "startByte": 57,
+            "endByte": 62,
+            "ownedRegions": [
+              {
+                "startByte": 57,
+                "endByte": 59
+              },
+              {
+                "startByte": 61,
+                "endByte": 62
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 57,
+            "endByte": 62
+          }
+        ],
+        "digest": "2fb78c7ec09de4a74f035a422dd1320555947455f3f514caefe11850f04436f4"
+      }
+    },
+    {
+      "id": "bodyless-overload",
+      "canonicalPath": "z.ts",
+      "source": "function f(x:string):void; function f(x:number):void;",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "signature-only",
+            "startByte": 0,
+            "endByte": 26
+          },
+          {
+            "kind": "type-only",
+            "typeKind": "signature-only",
+            "startByte": 27,
+            "endByte": 53
+          }
+        ],
+        "digest": "81f66dadcafe87dc210b24abf6d055879d5b4d3c6000fd94b5c41ff42de1c625"
+      }
+    },
+    {
+      "id": "bodyless-declare-function",
+      "canonicalPath": "z.ts",
+      "source": "declare function f():void;",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "ambient/declare",
+            "startByte": 0,
+            "endByte": 26
+          }
+        ],
+        "digest": "483546efa6de43ae925baf619583d05c91c988bd19793c64cb2e1d12ea8e851e"
+      }
+    },
+    {
+      "id": "bodyless-ambient-class",
+      "canonicalPath": "z.ts",
+      "source": "declare class C { m():void; get x():number; }",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "ambient/declare",
+            "startByte": 0,
+            "endByte": 45
+          }
+        ],
+        "digest": "a904d93a0c692bc716406b3563689fda1d0209eb6fffee5774ed0ef7885af959"
+      }
+    },
+    {
+      "id": "bodyless-abstract-method",
+      "canonicalPath": "z.ts",
+      "source": "abstract class C { abstract m():void; }",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "signature-only",
+            "startByte": 19,
+            "endByte": 36
+          }
+        ],
+        "digest": "21e20c04d8fd23735b24bad21af93609ad9af2836a931f5e8543c6febb307c59"
+      }
+    },
+    {
+      "id": "bodyless-interface-method",
+      "canonicalPath": "z.ts",
+      "source": "interface C { m():void; ():void; new():C; }",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "interface/type alias",
+            "startByte": 0,
+            "endByte": 43
+          },
+          {
+            "kind": "type-only",
+            "typeKind": "signature-only",
+            "startByte": 14,
+            "endByte": 22
+          },
+          {
+            "kind": "type-only",
+            "typeKind": "signature-only",
+            "startByte": 24,
+            "endByte": 31
+          },
+          {
+            "kind": "type-only",
+            "typeKind": "signature-only",
+            "startByte": 33,
+            "endByte": 40
+          }
+        ],
+        "digest": "98dcb2026ab69aa4ad74a654696aad9c7ff5b44d172ef054e26b644d4c446173"
+      }
+    },
+    {
+      "id": "bodyless-implicit-constructor",
+      "canonicalPath": "z.ts",
+      "source": "class C {}",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "z.ts",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 10
+          }
+        ],
+        "digest": "fb2c9d954e02c849609fda52d8edc96a3dcd17a576557d8aa3a3001ec56382fa"
+      }
+    },
+    {
+      "id": "ambient-enum",
+      "canonicalPath": "z.ts",
+      "source": "declare enum E { A }",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "ambient/declare",
+            "startByte": 0,
+            "endByte": 20
+          }
+        ],
+        "digest": "013a4727df0a4f7afdba49d885eb91724ae6b1f4c189250d1fdcf211b7c4bec0"
+      }
+    },
+    {
+      "id": "ambient-namespace",
+      "canonicalPath": "z.ts",
+      "source": "declare namespace N { interface X {} }",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "ambient/declare",
+            "startByte": 0,
+            "endByte": 38
+          }
+        ],
+        "digest": "a34139527857cd09b1ad343b90eed98007e61881a7e82e2c20b9246b69161af0"
+      }
+    },
+    {
+      "id": "ambient-nested-runtime-shapes",
+      "canonicalPath": "z.ts",
+      "source": "declare namespace N { enum E { A } class C { m():void } const x:number; }",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "ambient/declare",
+            "startByte": 0,
+            "endByte": 73
+          }
+        ],
+        "digest": "81f63be339a55e4b0f8ab3afb956162fa9e04632f9f4114ef8834944dd7a4a41"
+      }
+    },
+    {
+      "id": "top-level-empty-statement",
+      "canonicalPath": "t.js",
+      "source": ";",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "t.js",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 1
+          }
+        ],
+        "digest": "d64500f64db5142f323c2286fbbc5b5c9d92abbc9b178e606d57c7e586ff582b"
+      }
+    },
+    {
+      "id": "top-level-function",
+      "canonicalPath": "t.js",
+      "source": "function f(){}",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "t.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "t.js",
+            "kind": "function",
+            "startByte": 0,
+            "endByte": 14,
+            "ownedRegions": [
+              {
+                "startByte": 10,
+                "endByte": 12
+              },
+              {
+                "startByte": 12,
+                "endByte": 14
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "explicit-unit",
+            "form": "function",
+            "startByte": 0,
+            "endByte": 14,
+            "ownedRegions": [
+              {
+                "startByte": 10,
+                "endByte": 12
+              },
+              {
+                "startByte": 12,
+                "endByte": 14
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 0,
+            "endByte": 14
+          }
+        ],
+        "digest": "9fc7697ba07e2509775d1b11bff71a05974b2590b72327e362dab8c3ae1f7ae5"
+      }
+    },
+    {
+      "id": "top-level-value",
+      "canonicalPath": "t.js",
+      "source": "const x=1;",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "t.js",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 10
+          }
+        ],
+        "digest": "e848f606f82cf75593bf7311926d183fc40b26c6c5eeabd33d12b149fa0ed11b"
+      }
+    },
+    {
+      "id": "top-level-type-only",
+      "canonicalPath": "t.ts",
+      "source": "interface X{} type Y=X;",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "interface/type alias",
+            "startByte": 0,
+            "endByte": 13
+          },
+          {
+            "kind": "type-only",
+            "typeKind": "interface/type alias",
+            "startByte": 14,
+            "endByte": 23
+          }
+        ],
+        "digest": "43e2ba72252d7f0cc5d5b55330fcdc6d079a62e3c0a7cbddb2583392310bac01"
+      }
+    },
+    {
+      "id": "top-level-import-type",
+      "canonicalPath": "t.ts",
+      "source": "import type {A} from 'm';",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "import/export type",
+            "startByte": 0,
+            "endByte": 25
+          }
+        ],
+        "digest": "4f8594b25787112e3a2719d556f8e28c6687aa227db931c6c48c2d63366a9748"
+      }
+    },
+    {
+      "id": "top-level-export-type",
+      "canonicalPath": "t.ts",
+      "source": "export type {A};",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "import/export type",
+            "startByte": 0,
+            "endByte": 16
+          }
+        ],
+        "digest": "2dfe5c197359c59f6fab337186fea516d4a63b5ae5c228ab1bf7d603778dc4cf"
+      }
+    },
+    {
+      "id": "top-level-import-all-type-trivia",
+      "canonicalPath": "t.ts",
+      "source": "import { type A, /*x*/ type B, } from 'm';",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "import/export lists all specifiers type-only",
+            "startByte": 0,
+            "endByte": 42
+          },
+          {
+            "kind": "lexical-exclusion",
+            "startByte": 17,
+            "endByte": 22
+          }
+        ],
+        "digest": "6d32f59563eb2277330c1fdc3d1d0f4b972ef7ff1efc9c96bc92c8346abc7fc4"
+      }
+    },
+    {
+      "id": "top-level-export-all-type-trivia",
+      "canonicalPath": "t.ts",
+      "source": "export { type A, /*x*/ type B, };",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "import/export lists all specifiers type-only",
+            "startByte": 0,
+            "endByte": 33
+          },
+          {
+            "kind": "lexical-exclusion",
+            "startByte": 17,
+            "endByte": 22
+          }
+        ],
+        "digest": "440932f1a25c4827d42513f8b141f2cd9d27cdc3e58fd3825c48a82dc246fa30"
+      }
+    },
+    {
+      "id": "top-level-import-mixed",
+      "canonicalPath": "t.ts",
+      "source": "import { type A, B } from 'm';",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "t.ts",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "value-or-side-effect-import-export",
+            "startByte": 0,
+            "endByte": 30
+          }
+        ],
+        "digest": "b06a4f8c4ca5f9fdea567a0dc4396b488ecb4818e82c48b8b7d311cdf7209459"
+      }
+    },
+    {
+      "id": "top-level-export-mixed",
+      "canonicalPath": "t.ts",
+      "source": "export { type A, B };",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "t.ts",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "value-or-side-effect-import-export",
+            "startByte": 0,
+            "endByte": 21
+          }
+        ],
+        "digest": "c6d3e20c04743bc934bc6caaaff952b2e04959c0351c85eeeb3c1dcaff20b5be"
+      }
+    },
+    {
+      "id": "top-level-side-effect-import",
+      "canonicalPath": "t.ts",
+      "source": "import 'm';",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "t.ts",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "value-or-side-effect-import-export",
+            "startByte": 0,
+            "endByte": 11
+          }
+        ],
+        "digest": "0250775d4c19bb93f7ed89af9876e101b2369c1429761beb040b3e26a804d3e1"
+      }
+    },
+    {
+      "id": "top-level-export-empty",
+      "canonicalPath": "t.ts",
+      "source": "export {};",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "exact export{}",
+            "startByte": 0,
+            "endByte": 10
+          }
+        ],
+        "digest": "5674ed800a2beb702a4de626b2c8d11fb183339019e363bc2e12e3f55cd573f9"
+      }
+    },
+    {
+      "id": "top-level-export-empty-trivia",
+      "canonicalPath": "t.ts",
+      "source": "export { /* empty */ }; // trailing\n",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "exact export{}",
+            "startByte": 0,
+            "endByte": 23
+          },
+          {
+            "kind": "lexical-exclusion",
+            "startByte": 9,
+            "endByte": 20
+          },
+          {
+            "kind": "lexical-exclusion",
+            "startByte": 24,
+            "endByte": 35
+          }
+        ],
+        "digest": "b65a9773db5c005b3295936210e85ada723c4c97482165986bd5a00d318cddc8"
+      }
+    },
+    {
+      "id": "top-level-export-local-value",
+      "canonicalPath": "t.ts",
+      "source": "export { value };",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "t.ts",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "value-or-side-effect-import-export",
+            "startByte": 0,
+            "endByte": 17
+          }
+        ],
+        "digest": "e72ebdbd1b078f142dc6ea79f12a9d40210e7ce8405a8f2c4e759d95ae160e60"
+      }
+    },
+    {
+      "id": "top-level-export-empty-reexport",
+      "canonicalPath": "t.ts",
+      "source": "export {} from 'm';",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "t.ts",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "value-or-side-effect-import-export",
+            "startByte": 0,
+            "endByte": 19
+          }
+        ],
+        "digest": "2f9c17d1d58e45f5cabd3020516d5380af2889e5f186d383796dfd99cffaeb4b"
+      }
+    },
+    {
+      "id": "top-level-export-value-reexport",
+      "canonicalPath": "t.ts",
+      "source": "export { value } from 'm';",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "t.ts",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "value-or-side-effect-import-export",
+            "startByte": 0,
+            "endByte": 26
+          }
+        ],
+        "digest": "3cb898baec6701834b7ad4c5d463bfa27ba59d58aebb948a4d742fb75cace54b"
+      }
+    },
+    {
+      "id": "top-level-runtime-enum",
+      "canonicalPath": "t.ts",
+      "source": "enum E { A }",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "t.ts",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "nonambient runtime TypeScript enum/namespace",
+            "startByte": 0,
+            "endByte": 12
+          }
+        ],
+        "digest": "31faeaacc22b00cb035a1102f8a487cf8d3e258cc5fd2b0e1327e29e17842788"
+      }
+    },
+    {
+      "id": "top-level-runtime-namespace",
+      "canonicalPath": "t.ts",
+      "source": "namespace N { export const x=1 }",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "t.ts",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 32
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "nonambient runtime TypeScript enum/namespace",
+            "startByte": 0,
+            "endByte": 32
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "value-or-side-effect-import-export",
+            "startByte": 14,
+            "endByte": 30
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 21,
+            "endByte": 30
+          }
+        ],
+        "digest": "6dc958e325f6a0feb31dae466e057e8f761afbf60ac501c2af27518a0f69cbcd"
+      }
+    },
+    {
+      "id": "top-level-ambient",
+      "canonicalPath": "t.ts",
+      "source": "declare const x:number;",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "ambient/declare",
+            "startByte": 0,
+            "endByte": 23
+          }
+        ],
+        "digest": "64e1cd2581b6dbbc276ccd96d32a50674f461e98c318e6007a50bd4638871f20"
+      }
+    },
+    {
+      "id": "top-level-jsx",
+      "canonicalPath": "t.tsx",
+      "source": "<A/>;",
+      "grammarFamily": "tsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "t.tsx",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 5
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "top-level JSX",
+            "startByte": 0,
+            "endByte": 4
+          }
+        ],
+        "digest": "f70051b898a574490ace61b5ceffc91f173c1ebf12593d254181ed7ec8344ba8"
+      }
+    },
+    {
+      "id": "top-level-type-and-value-mixed",
+      "canonicalPath": "t.ts",
+      "source": "interface X{} const x=1;",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "t.ts",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "interface/type alias",
+            "startByte": 0,
+            "endByte": 13
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 14,
+            "endByte": 24
+          }
+        ],
+        "digest": "bd7558ddca65b08efb3c73500d325c131ef85619a0fb1d31378fdf1b331c96b6"
+      }
+    },
+    {
+      "id": "decisions-all",
+      "canonicalPath": "d.ts",
+      "source": "function f(){if(a){}else if(b){} for(;;){} for(x in y){} for(x of y){} for await(x of y){} while(a){} do{}while(a); switch(x){case 1:break;default:break} try{}catch{} a?b:c; a&&b; a||b; a??b; a&&=b; a||=b; a??=b;}",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "d.ts",
+            "kind": "top-level"
+          },
+          {
+            "path": "d.ts",
+            "kind": "function",
+            "startByte": 0,
+            "endByte": 213,
+            "ownedRegions": [
+              {
+                "startByte": 10,
+                "endByte": 12
+              },
+              {
+                "startByte": 12,
+                "endByte": 213
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "explicit-unit",
+            "form": "function",
+            "startByte": 0,
+            "endByte": 213,
+            "ownedRegions": [
+              {
+                "startByte": 10,
+                "endByte": 12
+              },
+              {
+                "startByte": 12,
+                "endByte": 213
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 0,
+            "endByte": 213
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 13,
+            "endByte": 32
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "if",
+            "startByte": 13,
+            "endByte": 32
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 25,
+            "endByte": 32
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "if",
+            "startByte": 25,
+            "endByte": 32
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 33,
+            "endByte": 42
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "loop",
+            "startByte": 33,
+            "endByte": 42
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 37,
+            "endByte": 38
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 38,
+            "endByte": 39
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 43,
+            "endByte": 56
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "loop",
+            "startByte": 43,
+            "endByte": 56
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 57,
+            "endByte": 70
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "loop",
+            "startByte": 57,
+            "endByte": 70
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 71,
+            "endByte": 90
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "loop",
+            "startByte": 71,
+            "endByte": 90
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 91,
+            "endByte": 101
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "loop",
+            "startByte": 91,
+            "endByte": 101
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 102,
+            "endByte": 115
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "loop",
+            "startByte": 102,
+            "endByte": 115
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 116,
+            "endByte": 153
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "case",
+            "startByte": 126,
+            "endByte": 139
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 133,
+            "endByte": 139
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 147,
+            "endByte": 152
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 154,
+            "endByte": 166
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "catch",
+            "startByte": 159,
+            "endByte": 166
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 167,
+            "endByte": 173
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "ternary",
+            "startByte": 167,
+            "endByte": 172
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 174,
+            "endByte": 179
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "logical-and",
+            "startByte": 174,
+            "endByte": 178
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 180,
+            "endByte": 185
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "logical-or",
+            "startByte": 180,
+            "endByte": 184
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 186,
+            "endByte": 191
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "nullish",
+            "startByte": 186,
+            "endByte": 190
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 192,
+            "endByte": 198
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "logical-and-assign",
+            "startByte": 192,
+            "endByte": 197
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 199,
+            "endByte": 205
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "logical-or-assign",
+            "startByte": 199,
+            "endByte": 204
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 206,
+            "endByte": 212
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "nullish-assign",
+            "startByte": 206,
+            "endByte": 211
+          }
+        ],
+        "digest": "2a8e429a46b8dad6073a67da95975624809475dc070080e2a4e463eb2ab14374"
+      }
+    },
+    {
+      "id": "decisions-exclusions",
+      "canonicalPath": "d.ts",
+      "source": "function f(a=x){ if(a){}else{} switch(a){default:break} try{}finally{} obj?.x; !a; a===b; a&b; return; throw a; break; continue; g(); await g(); yield a; const x=a!; }",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 2,
+        "units": [
+          {
+            "path": "d.ts",
+            "kind": "top-level"
+          },
+          {
+            "path": "d.ts",
+            "kind": "function",
+            "startByte": 0,
+            "endByte": 167,
+            "ownedRegions": [
+              {
+                "startByte": 10,
+                "endByte": 15
+              },
+              {
+                "startByte": 15,
+                "endByte": 167
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "explicit-unit",
+            "form": "function",
+            "startByte": 0,
+            "endByte": 167,
+            "ownedRegions": [
+              {
+                "startByte": 10,
+                "endByte": 15
+              },
+              {
+                "startByte": 15,
+                "endByte": 167
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 0,
+            "endByte": 167
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 17,
+            "endByte": 30
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "if",
+            "startByte": 17,
+            "endByte": 30
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 31,
+            "endByte": 55
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 49,
+            "endByte": 54
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 56,
+            "endByte": 70
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 71,
+            "endByte": 78
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 79,
+            "endByte": 82
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 83,
+            "endByte": 89
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 90,
+            "endByte": 94
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 95,
+            "endByte": 102
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 103,
+            "endByte": 111
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 112,
+            "endByte": 118
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 119,
+            "endByte": 128
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 129,
+            "endByte": 133
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 134,
+            "endByte": 144
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 145,
+            "endByte": 153
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 154,
+            "endByte": 165
+          }
+        ],
+        "digest": "1922c3eabe447122c269f6d99af32565f48603fe763826afe5c05b349ec771eb"
+      }
+    },
+    {
+      "id": "canonical-src-a",
+      "canonicalPath": "src/a.js",
+      "source": "function f(a = x && y) {\n  if (a) return () => a ?? y;\n  return a;\n}",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 4,
+        "U": 3,
+        "units": [
+          {
+            "path": "src/a.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "src/a.js",
+            "kind": "function",
+            "startByte": 0,
+            "endByte": 68,
+            "ownedRegions": [
+              {
+                "startByte": 10,
+                "endByte": 22
+              },
+              {
+                "startByte": 23,
+                "endByte": 68
+              }
+            ]
+          },
+          {
+            "path": "src/a.js",
+            "kind": "arrow",
+            "startByte": 41,
+            "endByte": 53,
+            "ownedRegions": [
+              {
+                "startByte": 41,
+                "endByte": 43
+              },
+              {
+                "startByte": 47,
+                "endByte": 53
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "explicit-unit",
+            "form": "function",
+            "startByte": 0,
+            "endByte": 68,
+            "ownedRegions": [
+              {
+                "startByte": 10,
+                "endByte": 22
+              },
+              {
+                "startByte": 23,
+                "endByte": 68
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 0,
+            "endByte": 68
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "logical-and",
+            "startByte": 15,
+            "endByte": 21
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 27,
+            "endByte": 54
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "if",
+            "startByte": 27,
+            "endByte": 54
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 34,
+            "endByte": 54
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "arrow",
+            "startByte": 41,
+            "endByte": 53,
+            "ownedRegions": [
+              {
+                "startByte": 41,
+                "endByte": 43
+              },
+              {
+                "startByte": 47,
+                "endByte": 53
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 41,
+            "endByte": 53
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "nullish",
+            "startByte": 47,
+            "endByte": 53
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 57,
+            "endByte": 66
+          }
+        ],
+        "digest": "56f211139c27bc5154edc8752958f0da5a6b6d0b710cc0249ed18789a3ada5a4"
+      }
+    },
+    {
+      "id": "ownership-parameter-and-nested",
+      "canonicalPath": "d.js",
+      "source": "function f(a=x&&y){ if(a) return ()=>a??y; }",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 3,
+        "units": [
+          {
+            "path": "d.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "d.js",
+            "kind": "function",
+            "startByte": 0,
+            "endByte": 44,
+            "ownedRegions": [
+              {
+                "startByte": 10,
+                "endByte": 18
+              },
+              {
+                "startByte": 18,
+                "endByte": 44
+              }
+            ]
+          },
+          {
+            "path": "d.js",
+            "kind": "arrow",
+            "startByte": 33,
+            "endByte": 41,
+            "ownedRegions": [
+              {
+                "startByte": 33,
+                "endByte": 35
+              },
+              {
+                "startByte": 37,
+                "endByte": 41
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "explicit-unit",
+            "form": "function",
+            "startByte": 0,
+            "endByte": 44,
+            "ownedRegions": [
+              {
+                "startByte": 10,
+                "endByte": 18
+              },
+              {
+                "startByte": 18,
+                "endByte": 44
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 0,
+            "endByte": 44
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "logical-and",
+            "startByte": 13,
+            "endByte": 17
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 20,
+            "endByte": 42
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "if",
+            "startByte": 20,
+            "endByte": 42
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 26,
+            "endByte": 42
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "arrow",
+            "startByte": 33,
+            "endByte": 41,
+            "ownedRegions": [
+              {
+                "startByte": 33,
+                "endByte": 35
+              },
+              {
+                "startByte": 37,
+                "endByte": 41
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 33,
+            "endByte": 41
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "nullish",
+            "startByte": 37,
+            "endByte": 41
+          }
+        ],
+        "digest": "ad982c1bd028782b941ef380cbad855fbad820e8fb02c432c5e9805a9790a037"
+      }
+    },
+    {
+      "id": "ownership-field-and-computed",
+      "canonicalPath": "d.js",
+      "source": "class C extends (a?B:C) { [x&&y](){return ()=>z||q} field=p??q; }",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 3,
+        "units": [
+          {
+            "path": "d.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "d.js",
+            "kind": "method",
+            "startByte": 26,
+            "endByte": 51,
+            "ownedRegions": [
+              {
+                "startByte": 32,
+                "endByte": 34
+              },
+              {
+                "startByte": 34,
+                "endByte": 51
+              }
+            ]
+          },
+          {
+            "path": "d.js",
+            "kind": "arrow",
+            "startByte": 42,
+            "endByte": 50,
+            "ownedRegions": [
+              {
+                "startByte": 42,
+                "endByte": 44
+              },
+              {
+                "startByte": 46,
+                "endByte": 50
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 65
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "ternary",
+            "startByte": 17,
+            "endByte": 22
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "method",
+            "startByte": 26,
+            "endByte": 51,
+            "ownedRegions": [
+              {
+                "startByte": 32,
+                "endByte": 34
+              },
+              {
+                "startByte": 34,
+                "endByte": 51
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 26,
+            "endByte": 51
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "logical-and",
+            "startByte": 27,
+            "endByte": 31
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 35,
+            "endByte": 50
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "arrow",
+            "startByte": 42,
+            "endByte": 50,
+            "ownedRegions": [
+              {
+                "startByte": 42,
+                "endByte": 44
+              },
+              {
+                "startByte": 46,
+                "endByte": 50
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 42,
+            "endByte": 50
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "logical-or",
+            "startByte": 46,
+            "endByte": 50
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "nullish",
+            "startByte": 58,
+            "endByte": 62
+          }
+        ],
+        "digest": "714d92408d6b5703522b618093b54e5f964c6037c22c3a322dc31c2a4af876d7"
+      }
+    },
+    {
+      "id": "identity-order-astral",
+      "canonicalPath": "i.js",
+      "source": "const s='😀'; function f(a='🚀'){ return ()=>a; }",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 3,
+        "units": [
+          {
+            "path": "i.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "i.js",
+            "kind": "function",
+            "startByte": 16,
+            "endByte": 53,
+            "ownedRegions": [
+              {
+                "startByte": 26,
+                "endByte": 36
+              },
+              {
+                "startByte": 36,
+                "endByte": 53
+              }
+            ]
+          },
+          {
+            "path": "i.js",
+            "kind": "arrow",
+            "startByte": 45,
+            "endByte": 50,
+            "ownedRegions": [
+              {
+                "startByte": 45,
+                "endByte": 47
+              },
+              {
+                "startByte": 49,
+                "endByte": 50
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 15
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "function",
+            "startByte": 16,
+            "endByte": 53,
+            "ownedRegions": [
+              {
+                "startByte": 26,
+                "endByte": 36
+              },
+              {
+                "startByte": 36,
+                "endByte": 53
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 16,
+            "endByte": 53
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 38,
+            "endByte": 51
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "arrow",
+            "startByte": 45,
+            "endByte": 50,
+            "ownedRegions": [
+              {
+                "startByte": 45,
+                "endByte": 47
+              },
+              {
+                "startByte": 49,
+                "endByte": 50
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 45,
+            "endByte": 50
+          }
+        ],
+        "digest": "30f808639063c738af28b2f3c3523529b7418a0ba32365f57d49ffc4c6911489"
+      }
+    },
+    {
+      "id": "identity-order-same-start-nesting",
+      "canonicalPath": "i.js",
+      "source": "const f=(function(){return ()=>1});",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 3,
+        "units": [
+          {
+            "path": "i.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "i.js",
+            "kind": "function",
+            "startByte": 9,
+            "endByte": 33,
+            "ownedRegions": [
+              {
+                "startByte": 17,
+                "endByte": 19
+              },
+              {
+                "startByte": 19,
+                "endByte": 33
+              }
+            ]
+          },
+          {
+            "path": "i.js",
+            "kind": "arrow",
+            "startByte": 27,
+            "endByte": 32,
+            "ownedRegions": [
+              {
+                "startByte": 27,
+                "endByte": 29
+              },
+              {
+                "startByte": 31,
+                "endByte": 32
+              }
+            ]
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 35
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "function",
+            "startByte": 9,
+            "endByte": 33,
+            "ownedRegions": [
+              {
+                "startByte": 17,
+                "endByte": 19
+              },
+              {
+                "startByte": 19,
+                "endByte": 33
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 9,
+            "endByte": 33
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 20,
+            "endByte": 32
+          },
+          {
+            "kind": "explicit-unit",
+            "form": "arrow",
+            "startByte": 27,
+            "endByte": 32,
+            "ownedRegions": [
+              {
+                "startByte": 27,
+                "endByte": 29
+              },
+              {
+                "startByte": 31,
+                "endByte": 32
+              }
+            ]
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "explicit-unit-declaration/expression",
+            "startByte": 27,
+            "endByte": 32
+          }
+        ],
+        "digest": "22cde02fa79063ca9767c5de99fbabef1677d1463e779aa7524551814e403e18"
+      }
+    },
+    {
+      "id": "contextual-top-return",
+      "canonicalPath": "c.js",
+      "source": "return 1;",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "c.js",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 9
+          }
+        ],
+        "digest": "aee177950cc4db9050787224abf654eeda26adb2773ceed103cb7a3bb9c9ee80"
+      }
+    },
+    {
+      "id": "contextual-top-break",
+      "canonicalPath": "c.js",
+      "source": "break;",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "c.js",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 6
+          }
+        ],
+        "digest": "39831ddb99f6870d7020f51b82dc70c4d229b515ee4485fe41b2718901941308"
+      }
+    },
+    {
+      "id": "contextual-top-continue",
+      "canonicalPath": "c.js",
+      "source": "continue;",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "c.js",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 9
+          }
+        ],
+        "digest": "aee177950cc4db9050787224abf654eeda26adb2773ceed103cb7a3bb9c9ee80"
+      }
+    },
+    {
+      "id": "contextual-import-defer-rejected",
+      "canonicalPath": "c.ts",
+      "source": "import defer * as x from 'm';",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "failure",
+        "category": "Metric processing failed",
+        "code": "M1-MET-1"
+      }
+    },
+    {
+      "id": "malformed-javascript",
+      "canonicalPath": "bad.js",
+      "source": "function {",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "failure",
+        "category": "Metric processing failed",
+        "code": "M1-MET-1"
+      }
+    },
+    {
+      "id": "malformed-jsx",
+      "canonicalPath": "bad.jsx",
+      "source": "const x=<A>",
+      "grammarFamily": "javascript-jsx",
+      "expectedOutcome": {
+        "kind": "failure",
+        "category": "Metric processing failed",
+        "code": "M1-MET-1"
+      }
+    },
+    {
+      "id": "malformed-typescript",
+      "canonicalPath": "bad.ts",
+      "source": "interface {",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "failure",
+        "category": "Metric processing failed",
+        "code": "M1-MET-1"
+      }
+    },
+    {
+      "id": "malformed-tsx",
+      "canonicalPath": "bad.tsx",
+      "source": "const x=<A>",
+      "grammarFamily": "tsx",
+      "expectedOutcome": {
+        "kind": "failure",
+        "category": "Metric processing failed",
+        "code": "M1-MET-1"
+      }
+    },
+    {
+      "id": "missing-recovery",
+      "canonicalPath": "missing.ts",
+      "source": "const x =",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "failure",
+        "category": "Metric processing failed",
+        "code": "M1-MET-1"
+      }
+    },
+    {
+      "id": "forbidden-jsx-js",
+      "canonicalPath": "forbidden.js",
+      "source": "const x=<A/>;",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "failure",
+        "category": "Metric processing failed",
+        "code": "M1-MET-1"
+      }
+    },
+    {
+      "id": "typescript-in-javascript",
+      "canonicalPath": "bad.js",
+      "source": "interface X{}",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "failure",
+        "category": "Metric processing failed",
+        "code": "M1-MET-1"
+      }
+    },
+    {
+      "id": "nonfailure-type-diagnostic",
+      "canonicalPath": "ok.ts",
+      "source": "const x: Missing = value;",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "ok.ts",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 25
+          }
+        ],
+        "digest": "4044db9517e707719464a43d963cf394641daae89db323083773a52e4db185d2"
+      }
+    },
+    {
+      "id": "nonfailure-unresolved-import",
+      "canonicalPath": "ok.ts",
+      "source": "import x from 'not-resolved';",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "ok.ts",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "value-or-side-effect-import-export",
+            "startByte": 0,
+            "endByte": 29
+          }
+        ],
+        "digest": "26a7b7c40033f91b925efde23880e0ce53866a60b42c8be176e0cbf0220ecfdf"
+      }
+    },
+    {
+      "id": "nonexecution-sentinel",
+      "canonicalPath": "sentinel.js",
+      "source": "globalThis.__codeCitySentinel=(globalThis.__codeCitySentinel??0)+1; throw new Error('executed');",
+      "grammarFamily": "javascript-no-jsx",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 1,
+        "units": [
+          {
+            "path": "sentinel.js",
+            "kind": "top-level"
+          }
+        ],
+        "observations": [
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 0,
+            "endByte": 67
+          },
+          {
+            "kind": "decision",
+            "decisionKind": "nullish",
+            "startByte": 31,
+            "endByte": 63
+          },
+          {
+            "kind": "value-anchor",
+            "valueKind": "runtime-statement/declaration",
+            "startByte": 68,
+            "endByte": 96
+          }
+        ],
+        "digest": "9b1f678671203f4ae43621b6d1c3482b255bc6a6b480915b70c4ed3c926f4a1e"
+      }
+    }
+  ]
+}

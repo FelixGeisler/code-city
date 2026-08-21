@@ -1,4 +1,4 @@
-export const EXACT_CSP = "default-src 'none'; base-uri 'none'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; form-action 'none'; frame-src 'none'; object-src 'none'; script-src 'self'; style-src 'self'; worker-src 'self'";
+export const EXACT_CSP = "default-src 'none'; base-uri 'none'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; form-action 'none'; frame-src 'none'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; worker-src 'self'";
 export const EXACT_REFERRER_POLICY = "no-referrer";
 
 function invariant(condition, message) {

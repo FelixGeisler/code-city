@@ -24,7 +24,17 @@ export async function inspectDependencyClosure(rootDirectory) {
   invariant(packageManifest.packageManager === "npm@11.6.2", "Root package manager must remain npm 11.6.2");
   invariant(packageManifest.engines?.node === ">=24 <25", "Root Node engine changed");
   invariant(packageManifest.engines?.npm === ">=11 <12", "Root npm engine changed");
-  invariant(!Object.hasOwn(packageManifest, "dependencies"), "Root runtime dependencies are forbidden");
+  const expectedDependencies = {
+    "@vscode/tree-sitter-wasm": "0.3.1",
+    "web-tree-sitter": "0.26.12",
+  };
+  invariant(
+    JSON.stringify(packageManifest.dependencies) === JSON.stringify(expectedDependencies),
+    "Direct production dependencies do not match the accepted parser pins",
+  );
+  for (const [name, version] of Object.entries(packageManifest.dependencies)) {
+    invariant(isExactVersion(version), `Direct production dependency is not exact: ${name}@${version}`);
+  }
   invariant(packageManifest.overrides?.["js-yaml"] === "4.3.1", "The js-yaml override changed");
 
   const expectedDevDependencies = {
@@ -47,7 +57,10 @@ export async function inspectDependencyClosure(rootDirectory) {
   invariant(lockRoot.name === packageManifest.name, "Lock root name differs from package.json");
   invariant(lockRoot.version === packageManifest.version, "Lock root version differs from package.json");
   invariant(lockRoot.license === packageManifest.license, "Lock root license differs from package.json");
-  invariant(!Object.hasOwn(lockRoot, "dependencies"), "Lock root contains runtime dependencies");
+  invariant(
+    JSON.stringify(lockRoot.dependencies) === JSON.stringify(packageManifest.dependencies),
+    "Lock root production dependencies differ from package.json",
+  );
   invariant(
     JSON.stringify(lockRoot.devDependencies) === JSON.stringify(packageManifest.devDependencies),
     "Lock root development dependencies differ from package.json",
@@ -71,6 +84,27 @@ export async function inspectDependencyClosure(rootDirectory) {
     invariant(typeof record.license === "string" && record.license.trim().length > 0, `Lock entry has no declared license: ${location}`);
     registryPackageCount += 1;
   }
+
+  const parserRuntime = lock.packages["node_modules/web-tree-sitter"];
+  invariant(
+    parserRuntime?.version === "0.26.12"
+      && parserRuntime.license === "MIT"
+      && parserRuntime.integrity === "sha512-fvqTNZQBGUgUgfP0mHw+iHf9Yf6bRQrp0A3pSf2v/hSKxkT1beCoIWoLVmlPL7O6dmySfSb/t1aJoJvrgTRStw=="
+      && !parserRuntime.dependencies
+      && !parserRuntime.optionalDependencies
+      && !parserRuntime.peerDependencies,
+    "web-tree-sitter lock provenance differs from accepted #450 evidence",
+  );
+  const grammars = lock.packages["node_modules/@vscode/tree-sitter-wasm"];
+  invariant(
+    grammars?.version === "0.3.1"
+      && grammars.license === "MIT"
+      && grammars.integrity === "sha512-RJFoomET6FajjG511fmQxeBQfU6M24a0aFZPqpid+ttIxanWf1VGytBG0UmsGjt07qmIPJS8U31D+aecuCucsQ=="
+      && !grammars.dependencies
+      && !grammars.optionalDependencies
+      && !grammars.peerDependencies,
+    "@vscode/tree-sitter-wasm lock provenance differs from accepted #450 evidence",
+  );
 
   const vite = lock.packages["node_modules/vite"];
   invariant(vite?.version === "8.2.1" && vite.license === "MIT", "Vite lock record must be exactly 8.2.1/MIT");

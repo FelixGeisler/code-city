@@ -23,6 +23,13 @@ import {
 const SOURCE_EXTENSIONS = new Set([".cts", ".mts", ".ts", ".tsx"]);
 const LAYERS = new Set(["edge", "application", "domain"]);
 const WORKER_URL_SUFFIX = "?worker&url";
+const PARSER_ASSET_IMPORTS = new Set([
+  "web-tree-sitter?url",
+  "web-tree-sitter/web-tree-sitter.wasm?url",
+  "@vscode/tree-sitter-wasm/wasm/tree-sitter-javascript.wasm?url",
+  "@vscode/tree-sitter-wasm/wasm/tree-sitter-typescript.wasm?url",
+  "@vscode/tree-sitter-wasm/wasm/tree-sitter-tsx.wasm?url",
+]);
 
 const ALLOWED_TARGETS = {
   edge: new Set(["edge", "application", "domain", "outside-src"]),
@@ -244,7 +251,14 @@ function collectReferences(sourceFile) {
           ...position,
         });
       } else {
-        references.push({ kind: "non-literal dynamic import", node: undefined, specifier: undefined, ...position });
+        references.push({
+          kind: "non-literal dynamic import",
+          node: undefined,
+          specifier: undefined,
+          approvedParserRuntimeImport: toPosix(sourceFile.fileName).endsWith("/src/edge/tree-sitter-adapter.ts")
+            && node.getText(sourceFile) === "import(/* @vite-ignore */ url)",
+          ...position,
+        });
       }
     }
     node.forEachChild((child) => {
@@ -373,6 +387,9 @@ function inspectQuery(specifier) {
   if (suffixIndex > 0 && queryIndex === suffixIndex && specifier.endsWith(WORKER_URL_SUFFIX)) {
     return { type: "worker-url", resolvedSpecifier: specifier.slice(0, suffixIndex) };
   }
+  if (PARSER_ASSET_IMPORTS.has(specifier)) {
+    return { type: "parser-asset", resolvedSpecifier: specifier.slice(0, -4) };
+  }
   return { type: "unknown", resolvedSpecifier: undefined };
 }
 
@@ -489,13 +506,26 @@ export async function checkBoundaries(rootDirectory = process.cwd()) {
           continue;
         }
         if (reference.specifier === undefined || (!reference.node && !reference.resolution)) {
-          violations.push({ ...common, reason: "dynamic, module, and import-type references must use a string literal" });
+          if (reference.approvedParserRuntimeImport) {
+            evidence.push({ ...common, resolved: null, targetLayer: "outside-src" });
+          } else {
+            violations.push({ ...common, reason: "dynamic, module, and import-type references must use a string literal" });
+          }
           continue;
         }
 
         const query = inspectQuery(reference.specifier);
         if (query.type === "unknown") {
           violations.push({ ...common, reason: "unknown import query suffix is forbidden" });
+          continue;
+        }
+        if (query.type === "parser-asset") {
+          if (sourceClassification.relativePath !== "src/edge/tree-sitter-assets.ts"
+            || !PARSER_ASSET_IMPORTS.has(reference.specifier)) {
+            violations.push({ ...common, reason: "?url is restricted to the five accepted parser asset imports" });
+          } else {
+            evidence.push({ ...common, resolved: null, targetLayer: "outside-src" });
+          }
           continue;
         }
         if (query.type === "worker-url") {
