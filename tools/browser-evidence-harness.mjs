@@ -135,6 +135,8 @@ for(let run=0;run<2;run++){
 function presentationPlatform(state,compileFailure=false){
   return {createCanvas(){
     const canvas=document.createElement("canvas");
+    const addListener=canvas.addEventListener.bind(canvas);
+    Object.defineProperty(canvas,"addEventListener",{value(type,listener,options){if(type==="webglcontextlost")state.lossCallbacks.push(listener);return addListener(type,listener,options);}});
     const acquire=canvas.getContext.bind(canvas);
     Object.defineProperty(canvas,"getContext",{value(kind,attributes){
       const actual=acquire(kind,attributes);
@@ -142,7 +144,7 @@ function presentationPlatform(state,compileFailure=false){
       state.actualContexts++;
       return new Proxy(actual,{get(target,property){
         if(property==="drawElementsInstanced")return (...args)=>{state.draws++;return target.drawElementsInstanced(...args);};
-        if(property==="getShaderParameter")return (shader,pname)=>{const actualStatus=target.getShaderParameter(shader,pname);return compileFailure&&pname===target.COMPILE_STATUS?false:actualStatus;};
+        if(property==="getShaderParameter")return (shader,pname)=>{const actualStatus=target.getShaderParameter(shader,pname);return compileFailure&&pname===0x8b81?false:actualStatus;};
         if(["deleteShader","deleteProgram","deleteBuffer","deleteVertexArray"].includes(property))return (...args)=>{state.deletes[property]++;return target[property](...args);};
         const value=Reflect.get(target,property,target);
         return typeof value==="function"?value.bind(target):value;
@@ -160,10 +162,10 @@ function presentationHost(width,height){
   return {host,dimensions};
 }
 const presentationModel=buildCity([{canonicalPath:"browser.js",S:1,U:1,M:1}]).model;
-const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeatDraws:0,resizeDraws:0,lossDefaultPrevented:null,lossDraws:0,lossFailures:[],lossCleanup:null,compileFailureResult:null,compileFailureDraws:0,compileFailures:[],compileCleanup:null,pass:false};
+const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeatDraws:0,resizeDraws:0,lossDefaultPrevented:null,lossDraws:0,lossFailures:[],lossCleanup:null,lossTerminalState:null,compileFailureResult:null,compileFailureDraws:0,compileFailures:[],compileCleanup:null,compileFailureTerminalState:null,pass:false};
 {
   const holder=presentationHost(320,180);
-  const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
+  const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
   const failures=[];
   const presenter=createCityPresenter({host:holder.host,platform:presentationPlatform(state),isEligible:()=>true,failed:(...args)=>failures.push(args)});
   const first=presenter.present(1,presentationModel);
@@ -184,7 +186,7 @@ const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeat
 }
 {
   const holder=presentationHost(320,180);
-  const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
+  const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
   const failures=[];
   const presenter=createCityPresenter({host:holder.host,platform:presentationPlatform(state),isEligible:()=>true,failed:(...args)=>failures.push(args)});
   if(presenter.present(3,presentationModel)!=="committed")throw new Error("Actual WebGL2 context-loss setup failed");
@@ -196,26 +198,39 @@ const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeat
   presentation.lossDraws=state.draws-before;
   presentation.lossFailures=failures;
   presentation.lossCleanup=state.deletes;
+  const retainedLoss=state.lossCallbacks[0];
+  const terminalLossDraws=state.draws;
+  const terminalLossCleanup=JSON.stringify(state.deletes);
+  if(event.defaultPrevented||presentation.lossDraws!==0||state.lossCallbacks.length!==1||typeof retainedLoss!=="function"||failures.length!==1||JSON.stringify(failures[0])!==JSON.stringify([3,"Presentation failed","M1-PRES-1"])||terminalLossCleanup!==JSON.stringify({deleteShader:2,deleteProgram:1,deleteBuffer:3,deleteVertexArray:1})||holder.host.firstChild!==null)throw new Error("Actual WebGL2 context-loss evidence failed");
+  retainedLoss(new Event("webglcontextlost",{cancelable:true}));
   canvas.dispatchEvent(new Event("webglcontextlost",{cancelable:true}));
   state.observerCallbacks[0]();
-  if(event.defaultPrevented||presentation.lossDraws!==0||failures.length!==1||JSON.stringify(failures[0])!==JSON.stringify([3,"Presentation failed","M1-PRES-1"])||JSON.stringify(state.deletes)!==JSON.stringify({deleteShader:2,deleteProgram:1,deleteBuffer:3,deleteVertexArray:1})||holder.host.firstChild!==null)throw new Error("Actual WebGL2 context-loss evidence failed");
+  presentation.lossTerminalState={retainedCallbacks:state.lossCallbacks.length,failures:failures.length,drawsAfterTerminal:state.draws-terminalLossDraws,canvases:state.canvases.length,hostChildren:holder.host.childNodes.length,cleanupUnchanged:JSON.stringify(state.deletes)===terminalLossCleanup};
+  if(JSON.stringify(presentation.lossTerminalState)!==JSON.stringify({retainedCallbacks:1,failures:1,drawsAfterTerminal:0,canvases:1,hostChildren:0,cleanupUnchanged:true}))throw new Error("Actual WebGL2 repeated context-loss callback was not inert");
   presentation.actualContexts+=state.actualContexts;
   holder.host.remove();
 }
 {
   const holder=presentationHost(320,180);
-  const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
+  const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
   const failures=[];
   const presenter=createCityPresenter({host:holder.host,platform:presentationPlatform(state,true),isEligible:()=>true,failed:(...args)=>failures.push(args)});
   presentation.compileFailureResult=presenter.present(4,presentationModel);
   presentation.compileFailureDraws=state.draws;
   presentation.compileFailures=failures;
   presentation.compileCleanup=state.deletes;
-  if(presentation.compileFailureResult!=="failed"||state.draws!==0||failures.length!==1||JSON.stringify(failures[0])!==JSON.stringify([4,"Presentation failed","M1-PRES-1"])||JSON.stringify(state.deletes)!==JSON.stringify({deleteShader:1,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0})||holder.host.firstChild!==null)throw new Error("Actual WebGL2 compile-failure evidence failed");
+  const retainedCompileLoss=state.lossCallbacks[0];
+  if(presentation.compileFailureResult!=="failed"||state.draws!==0||state.lossCallbacks.length!==1||typeof retainedCompileLoss!=="function"||failures.length!==1||JSON.stringify(failures[0])!==JSON.stringify([4,"Presentation failed","M1-PRES-1"])||JSON.stringify(state.deletes)!==JSON.stringify({deleteShader:1,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0})||state.canvases.length!==1||holder.host.firstChild!==null)throw new Error("Actual WebGL2 compile-failure evidence failed");
+  const terminalCompileDraws=state.draws;
+  const terminalCompileCleanup=JSON.stringify(state.deletes);
+  retainedCompileLoss(new Event("webglcontextlost",{cancelable:true}));
+  state.canvases[0].dispatchEvent(new Event("webglcontextlost",{cancelable:true}));
+  presentation.compileFailureTerminalState={retainedCallbacks:state.lossCallbacks.length,failures:failures.length,drawsAfterTerminal:state.draws-terminalCompileDraws,canvases:state.canvases.length,hostChildren:holder.host.childNodes.length,cleanupUnchanged:JSON.stringify(state.deletes)===terminalCompileCleanup};
+  if(JSON.stringify(presentation.compileFailureTerminalState)!==JSON.stringify({retainedCallbacks:1,failures:1,drawsAfterTerminal:0,canvases:1,hostChildren:0,cleanupUnchanged:true}))throw new Error("Actual WebGL2 compile-failure retained callback was not inert");
   presentation.actualContexts+=state.actualContexts;
   holder.host.remove();
 }
-presentation.pass=presentation.webgl2Available&&presentation.actualContexts===4&&presentation.initialDraws===1&&presentation.repeatDraws===1&&presentation.resizeDraws===1&&presentation.lossDefaultPrevented===false&&presentation.lossDraws===0&&presentation.lossFailures.length===1&&presentation.lossCleanup.deleteProgram===1&&presentation.lossCleanup.deleteBuffer===3&&presentation.lossCleanup.deleteVertexArray===1&&presentation.compileFailureResult==="failed"&&presentation.compileFailureDraws===0&&presentation.compileFailures.length===1&&presentation.compileCleanup.deleteShader===1;
+presentation.pass=presentation.webgl2Available&&presentation.actualContexts===4&&presentation.initialDraws===1&&presentation.repeatDraws===1&&presentation.resizeDraws===1&&presentation.lossDefaultPrevented===false&&presentation.lossDraws===0&&presentation.lossFailures.length===1&&presentation.lossCleanup.deleteProgram===1&&presentation.lossCleanup.deleteBuffer===3&&presentation.lossCleanup.deleteVertexArray===1&&presentation.lossTerminalState.retainedCallbacks===1&&presentation.lossTerminalState.failures===1&&presentation.lossTerminalState.drawsAfterTerminal===0&&presentation.lossTerminalState.canvases===1&&presentation.lossTerminalState.hostChildren===0&&presentation.lossTerminalState.cleanupUnchanged&&presentation.compileFailureResult==="failed"&&presentation.compileFailureDraws===0&&presentation.compileFailures.length===1&&presentation.compileCleanup.deleteShader===1&&presentation.compileFailureTerminalState.retainedCallbacks===1&&presentation.compileFailureTerminalState.failures===1&&presentation.compileFailureTerminalState.drawsAfterTerminal===0&&presentation.compileFailureTerminalState.canvases===1&&presentation.compileFailureTerminalState.hostChildren===0&&presentation.compileFailureTerminalState.cleanupUnchanged;
 const assetRequests=ASSETS.map(({role,path,sha256})=>({role,path,sha256}));
 const result={schemaVersion:1,assetRequests,cases:outputCases,matrixRuns,complexityMatrixRuns,presentation,browserExceptions:[],unexpectedNetworkRequests:[],overallPass:outputCases.every((entry)=>entry.pass)&&matrixRuns.every((entry)=>entry.pass)&&matrixRuns[0].runDigest===matrixRuns[1].runDigest&&complexityMatrixRuns.every((entry)=>entry.pass)&&complexityMatrixRuns[0].runDigest===complexityMatrixRuns[1].runDigest&&presentation.pass};
 document.querySelector("#result").textContent=JSON.stringify(result);

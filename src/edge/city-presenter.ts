@@ -121,6 +121,35 @@ type Session<G> = {
 
 const INSTANCE_STRIDE = 28;
 
+// Trusted WebGL 2 values from the Khronos WebGL specification. Keeping these
+// local closes the context data-property surface to drawing-buffer dimensions.
+const NO_ERROR = 0;
+const TRIANGLES = 0x0004;
+const DEPTH_BUFFER_BIT = 0x0100;
+const LESS = 0x0201;
+const BACK = 0x0405;
+const CCW = 0x0901;
+const DITHER = 0x0bd0;
+const BLEND = 0x0be2;
+const CULL_FACE = 0x0b44;
+const DEPTH_TEST = 0x0b71;
+const STENCIL_TEST = 0x0b90;
+const SCISSOR_TEST = 0x0c11;
+const UNSIGNED_BYTE = 0x1401;
+const FLOAT = 0x1406;
+const COLOR_BUFFER_BIT = 0x4000;
+const POLYGON_OFFSET_FILL = 0x8037;
+const SAMPLE_ALPHA_TO_COVERAGE = 0x809e;
+const SAMPLE_COVERAGE = 0x80a0;
+const ARRAY_BUFFER = 0x8892;
+const ELEMENT_ARRAY_BUFFER = 0x8893;
+const STATIC_DRAW = 0x88e4;
+const FRAGMENT_SHADER = 0x8b30;
+const VERTEX_SHADER = 0x8b31;
+const COMPILE_STATUS = 0x8b81;
+const LINK_STATUS = 0x8b82;
+const RASTERIZER_DISCARD = 0x8c89;
+
 const browserPlatform: PresenterPlatform = Object.freeze({
   createCanvas: () => document.createElement("canvas"),
   createResizeObserver: (callback) => new ResizeObserver(callback),
@@ -138,7 +167,7 @@ function sameDimensions(left: Dimensions, right: Dimensions): boolean {
 }
 
 function requireNoError(gl: WebGL2RenderingContext): void {
-  if (gl.isContextLost() || gl.getError() !== gl.NO_ERROR) throw new Error("WebGL2 operation failed");
+  if (gl.isContextLost() || gl.getError() !== NO_ERROR) throw new Error("WebGL2 operation failed");
 }
 
 function compileShader(gl: WebGL2RenderingContext, type: number, source: string, own: (shader: WebGLShader) => void): WebGLShader {
@@ -148,7 +177,7 @@ function compileShader(gl: WebGL2RenderingContext, type: number, source: string,
   if (shader === null) throw new Error("WebGL2 shader allocation failed");
   gl.shaderSource(shader, source);
   gl.compileShader(shader);
-  const compiled = gl.getShaderParameter(shader, gl.COMPILE_STATUS);
+  const compiled = gl.getShaderParameter(shader, COMPILE_STATUS);
   requireNoError(gl);
   if (compiled !== true) throw new Error("WebGL2 shader compilation failed");
   return shader;
@@ -205,25 +234,25 @@ function draw(session: Session<unknown>, size: Dimensions): void {
     gl.clearDepth(1);
     gl.colorMask(true, true, true, true);
     gl.depthMask(true);
-    gl.enable(gl.DEPTH_TEST);
-    gl.depthFunc(gl.LESS);
-    gl.enable(gl.CULL_FACE);
-    gl.cullFace(gl.BACK);
-    gl.frontFace(gl.CCW);
-    gl.disable(gl.BLEND);
-    gl.disable(gl.DITHER);
-    gl.disable(gl.STENCIL_TEST);
-    gl.disable(gl.SCISSOR_TEST);
-    gl.disable(gl.POLYGON_OFFSET_FILL);
-    gl.disable(gl.RASTERIZER_DISCARD);
-    gl.disable(gl.SAMPLE_COVERAGE);
-    gl.disable(gl.SAMPLE_ALPHA_TO_COVERAGE);
+    gl.enable(DEPTH_TEST);
+    gl.depthFunc(LESS);
+    gl.enable(CULL_FACE);
+    gl.cullFace(BACK);
+    gl.frontFace(CCW);
+    gl.disable(BLEND);
+    gl.disable(DITHER);
+    gl.disable(STENCIL_TEST);
+    gl.disable(SCISSOR_TEST);
+    gl.disable(POLYGON_OFFSET_FILL);
+    gl.disable(RASTERIZER_DISCARD);
+    gl.disable(SAMPLE_COVERAGE);
+    gl.disable(SAMPLE_ALPHA_TO_COVERAGE);
     gl.viewport(0, 0, size.width, size.height);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.clear(COLOR_BUFFER_BIT | DEPTH_BUFFER_BIT);
     gl.useProgram(program);
     gl.bindVertexArray(vao);
     gl.uniformMatrix4fv(uniform, false, matrix);
-    gl.drawElementsInstanced(gl.TRIANGLES, 36, gl.UNSIGNED_BYTE, 0, model.count);
+    gl.drawElementsInstanced(TRIANGLES, 36, UNSIGNED_BYTE, 0, model.count);
     requireNoError(gl);
   } finally {
     matrix.fill(0);
@@ -247,13 +276,13 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
     || attributes.preserveDrawingBuffer !== false
     || attributes.stencil !== false) throw new Error("WebGL2 context attributes differ");
 
-  session.vertexShader = compileShader(gl, gl.VERTEX_SHADER, VERTEX_SHADER_SOURCE, (shader) => { session.vertexShader = shader; });
-  session.fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER_SOURCE, (shader) => { session.fragmentShader = shader; });
+  session.vertexShader = compileShader(gl, VERTEX_SHADER, VERTEX_SHADER_SOURCE, (shader) => { session.vertexShader = shader; });
+  session.fragmentShader = compileShader(gl, FRAGMENT_SHADER, FRAGMENT_SHADER_SOURCE, (shader) => { session.fragmentShader = shader; });
   session.program = requireResource(gl.createProgram(), gl, (program) => { session.program = program; });
   gl.attachShader(session.program, session.vertexShader);
   gl.attachShader(session.program, session.fragmentShader);
   gl.linkProgram(session.program);
-  const linked = gl.getProgramParameter(session.program, gl.LINK_STATUS);
+  const linked = gl.getProgramParameter(session.program, LINK_STATUS);
   requireNoError(gl);
   if (linked !== true) throw new Error("WebGL2 program link failed");
   session.uniform = gl.getUniformLocation(session.program, "u_clipFromTarget") ?? undefined;
@@ -274,28 +303,28 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
   session.instanceBuffer = requireResource(gl.createBuffer(), gl, (buffer) => { session.instanceBuffer = buffer; });
 
   gl.bindVertexArray(session.vao);
-  gl.bindBuffer(gl.ARRAY_BUFFER, session.positionBuffer);
-  gl.bufferData(gl.ARRAY_BUFFER, CUBE_POSITIONS, gl.STATIC_DRAW);
+  gl.bindBuffer(ARRAY_BUFFER, session.positionBuffer);
+  gl.bufferData(ARRAY_BUFFER, CUBE_POSITIONS, STATIC_DRAW);
   requireNoError(gl);
   gl.enableVertexAttribArray(0);
-  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.vertexAttribPointer(0, 3, FLOAT, false, 0, 0);
 
-  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, session.indexBuffer);
-  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, CUBE_INDICES, gl.STATIC_DRAW);
+  gl.bindBuffer(ELEMENT_ARRAY_BUFFER, session.indexBuffer);
+  gl.bufferData(ELEMENT_ARRAY_BUFFER, CUBE_INDICES, STATIC_DRAW);
   requireNoError(gl);
 
   session.staging = createInstanceStaging(session.model!, size.width, size.height);
-  gl.bindBuffer(gl.ARRAY_BUFFER, session.instanceBuffer);
-  gl.bufferData(gl.ARRAY_BUFFER, session.staging, gl.STATIC_DRAW);
+  gl.bindBuffer(ARRAY_BUFFER, session.instanceBuffer);
+  gl.bufferData(ARRAY_BUFFER, session.staging, STATIC_DRAW);
   requireNoError(gl);
   gl.enableVertexAttribArray(1);
-  gl.vertexAttribPointer(1, 3, gl.FLOAT, false, INSTANCE_STRIDE, 0);
+  gl.vertexAttribPointer(1, 3, FLOAT, false, INSTANCE_STRIDE, 0);
   gl.vertexAttribDivisor(1, 1);
   gl.enableVertexAttribArray(2);
-  gl.vertexAttribPointer(2, 3, gl.FLOAT, false, INSTANCE_STRIDE, 12);
+  gl.vertexAttribPointer(2, 3, FLOAT, false, INSTANCE_STRIDE, 12);
   gl.vertexAttribDivisor(2, 1);
   gl.enableVertexAttribArray(3);
-  gl.vertexAttribPointer(3, 4, gl.UNSIGNED_BYTE, true, INSTANCE_STRIDE, 24);
+  gl.vertexAttribPointer(3, 4, UNSIGNED_BYTE, true, INSTANCE_STRIDE, 24);
   gl.vertexAttribDivisor(3, 1);
   requireNoError(gl);
   draw(session as Session<unknown>, size);

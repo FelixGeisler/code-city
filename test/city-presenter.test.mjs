@@ -16,18 +16,46 @@ const literals = JSON.parse(await readFile(path.join(projectRoot, "test/fixtures
 const { buildCity, deriveView } = await import("../src/domain/city-model.ts");
 const { createCityPresenter } = await import("../src/edge/city-presenter.ts");
 
-const GL_CONSTANTS = {
-  NO_ERROR: 0, VERTEX_SHADER: 1, FRAGMENT_SHADER: 2, COMPILE_STATUS: 3, LINK_STATUS: 4,
-  ARRAY_BUFFER: 5, ELEMENT_ARRAY_BUFFER: 6, STATIC_DRAW: 7, FLOAT: 8, UNSIGNED_BYTE: 9,
-  DEPTH_TEST: 10, LESS: 11, CULL_FACE: 12, BACK: 13, CCW: 14, BLEND: 15, DITHER: 16,
-  STENCIL_TEST: 17, SCISSOR_TEST: 18, POLYGON_OFFSET_FILL: 19, RASTERIZER_DISCARD: 20,
-  SAMPLE_COVERAGE: 21, SAMPLE_ALPHA_TO_COVERAGE: 22, COLOR_BUFFER_BIT: 0x4000,
-  DEPTH_BUFFER_BIT: 0x0100, TRIANGLES: 23,
-};
+const GL = Object.freeze({
+  NO_ERROR: 0,
+  TRIANGLES: 0x0004,
+  DEPTH_BUFFER_BIT: 0x0100,
+  LESS: 0x0201,
+  BACK: 0x0405,
+  CCW: 0x0901,
+  DITHER: 0x0bd0,
+  BLEND: 0x0be2,
+  CULL_FACE: 0x0b44,
+  DEPTH_TEST: 0x0b71,
+  STENCIL_TEST: 0x0b90,
+  SCISSOR_TEST: 0x0c11,
+  UNSIGNED_BYTE: 0x1401,
+  FLOAT: 0x1406,
+  COLOR_BUFFER_BIT: 0x4000,
+  POLYGON_OFFSET_FILL: 0x8037,
+  SAMPLE_ALPHA_TO_COVERAGE: 0x809e,
+  SAMPLE_COVERAGE: 0x80a0,
+  ARRAY_BUFFER: 0x8892,
+  ELEMENT_ARRAY_BUFFER: 0x8893,
+  STATIC_DRAW: 0x88e4,
+  FRAGMENT_SHADER: 0x8b30,
+  VERTEX_SHADER: 0x8b31,
+  COMPILE_STATUS: 0x8b81,
+  LINK_STATUS: 0x8b82,
+  RASTERIZER_DISCARD: 0x8c89,
+});
+
+const CLOSED_GL_METHODS = new Set([
+  "attachShader", "bindBuffer", "bindVertexArray", "bufferData", "clear", "clearColor", "clearDepth", "colorMask",
+  "compileShader", "createBuffer", "createProgram", "createShader", "createVertexArray", "cullFace", "deleteBuffer",
+  "deleteProgram", "deleteShader", "deleteVertexArray", "depthFunc", "depthMask", "disable", "drawElementsInstanced",
+  "enable", "enableVertexAttribArray", "frontFace", "getContextAttributes", "getError", "getProgramParameter",
+  "getShaderParameter", "getUniformLocation", "isContextLost", "linkProgram", "shaderSource", "uniformMatrix4fv",
+  "useProgram", "vertexAttribDivisor", "vertexAttribPointer", "viewport",
+]);
 
 class FakeGl {
   constructor(canvas, options = {}) {
-    Object.assign(this, GL_CONSTANTS);
     this.canvas = canvas;
     this.options = options;
     this.calls = [];
@@ -44,7 +72,7 @@ class FakeGl {
   }
   resource(kind) { return this.call(`create${kind}`, [], this.options.nullResource === kind ? null : { kind, id: ++this.nextResource }); }
   getContextAttributes() { return this.call("getContextAttributes", [], Object.hasOwn(this.options, "attributes") ? this.options.attributes : { alpha: false, antialias: false, depth: true, premultipliedAlpha: false, preserveDrawingBuffer: false, stencil: false }); }
-  getError() { return this.call("getError", [], this.options.glError ? 0x0502 : this.NO_ERROR); }
+  getError() { return this.call("getError", [], this.options.glError ? 0x0502 : GL.NO_ERROR); }
   isContextLost() { return this.call("isContextLost", [], this.lost); }
   createShader(type) { return this.call("createShader", [type], this.options.nullResource === "Shader" ? null : { kind: "Shader", type, id: ++this.nextResource }); }
   shaderSource(...args) { this.call("shaderSource", args); }
@@ -64,7 +92,7 @@ class FakeGl {
   deleteVertexArray(...args) { this.call("deleteVertexArray", args); }
   createBuffer() { return this.resource("Buffer"); }
   bindBuffer(...args) { this.call("bindBuffer", args); }
-  bufferData(target, data, usage) { const copy = new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice(); this.uploads.push({ target, byteLength: data.byteLength, bytes: copy }); this.call("bufferData", [target, data.byteLength, usage]); }
+  bufferData(target, data, usage) { const copy = new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice(); this.uploads.push({ target, byteLength: data.byteLength, bytes: copy }); this.call("bufferData", [target, copy, usage]); }
   deleteBuffer(...args) { this.call("deleteBuffer", args); }
   enableVertexAttribArray(...args) { this.call("enableVertexAttribArray", args); }
   vertexAttribPointer(...args) { this.call("vertexAttribPointer", args); }
@@ -84,8 +112,32 @@ class FakeGl {
 }
 
 class FakeCanvas {
-  constructor(host, glOptions) { this.host = host; this.width = 0; this.height = 0; this.listeners = new Set(); this.removeCount = 0; this.gl = new FakeGl(this, glOptions); }
-  getContext(kind, attributes) { this.contextRequest = { kind, attributes }; return this.gl.options.noContext ? null : this.gl; }
+  constructor(host, glOptions) {
+    this.host = host;
+    this.width = 0;
+    this.height = 0;
+    this.listeners = new Set();
+    this.removeCount = 0;
+    this.contextDataReads = [];
+    this.forbiddenContextReads = [];
+    this.gl = new FakeGl(this, glOptions);
+    this.context = new Proxy(this.gl, {
+      get: (target, property) => {
+        if (property === "drawingBufferWidth" || property === "drawingBufferHeight") {
+          this.contextDataReads.push(property);
+          return Reflect.get(target, property, target);
+        }
+        if (typeof property === "string" && CLOSED_GL_METHODS.has(property)) {
+          const method = Reflect.get(target, property, target);
+          assert.equal(typeof method, "function", `allowed WebGL method ${property} is absent`);
+          return method.bind(target);
+        }
+        this.forbiddenContextReads.push(String(property));
+        throw new Error(`forbidden WebGL context property read: ${String(property)}`);
+      },
+    });
+  }
+  getContext(kind, attributes) { this.contextRequest = { kind, attributes }; return this.gl.options.noContext ? null : this.context; }
   addEventListener(type, listener, options) { assert.equal(type, "webglcontextlost"); this.listenerOptions = options; this.listeners.add(listener); }
   removeEventListener(type, listener) { assert.equal(type, "webglcontextlost"); this.listeners.delete(listener); }
   remove() { this.removeCount += 1; if (this.host.child === this) this.host.child = undefined; }
@@ -125,6 +177,117 @@ function failuresCollector(environment, eligibility = () => true) {
 }
 function names(gl) { return gl.calls.map((call) => call[0]); }
 
+function expectedInstanceBytes() {
+  const bytes = new Uint8Array(28);
+  const view = new DataView(bytes.buffer);
+  for (const [index, value] of [-0.5, -0.5, -0.5, 1, 1, 1].entries()) view.setFloat32(index * 4, value, true);
+  bytes.set([0x44, 0x01, 0x54, 0xff], 24);
+  return bytes;
+}
+
+function expectedDrawCalls({ width, height, matrix, count, program, vao, uniform }) {
+  return [
+    ["isContextLost"],
+    ["getError"],
+    ["clearColor", 1, 1, 1, 1],
+    ["clearDepth", 1],
+    ["colorMask", true, true, true, true],
+    ["depthMask", true],
+    ["enable", GL.DEPTH_TEST],
+    ["depthFunc", GL.LESS],
+    ["enable", GL.CULL_FACE],
+    ["cullFace", GL.BACK],
+    ["frontFace", GL.CCW],
+    ["disable", GL.BLEND],
+    ["disable", GL.DITHER],
+    ["disable", GL.STENCIL_TEST],
+    ["disable", GL.SCISSOR_TEST],
+    ["disable", GL.POLYGON_OFFSET_FILL],
+    ["disable", GL.RASTERIZER_DISCARD],
+    ["disable", GL.SAMPLE_COVERAGE],
+    ["disable", GL.SAMPLE_ALPHA_TO_COVERAGE],
+    ["viewport", 0, 0, width, height],
+    ["clear", GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT],
+    ["useProgram", program],
+    ["bindVertexArray", vao],
+    ["uniformMatrix4fv", uniform, false, new Float32Array(matrix)],
+    ["drawElementsInstanced", GL.TRIANGLES, 36, GL.UNSIGNED_BYTE, 0, count],
+    ["isContextLost"],
+    ["getError"],
+  ];
+}
+
+function expectedInitialCalls() {
+  const vertexShader = { kind: "Shader", type: GL.VERTEX_SHADER, id: 1 };
+  const fragmentShader = { kind: "Shader", type: GL.FRAGMENT_SHADER, id: 2 };
+  const program = { kind: "Program", id: 3 };
+  const uniform = { kind: "Uniform", id: 4 };
+  const vao = { kind: "VertexArray", id: 5 };
+  const positionBuffer = { kind: "Buffer", id: 6 };
+  const indexBuffer = { kind: "Buffer", id: 7 };
+  const instanceBuffer = { kind: "Buffer", id: 8 };
+  const positionBytes = new Uint8Array(new Float32Array(literals.cubePositions).buffer);
+  return [
+    ["getContextAttributes"],
+    ["isContextLost"], ["getError"],
+    ["createShader", GL.VERTEX_SHADER],
+    ["isContextLost"], ["getError"],
+    ["shaderSource", vertexShader, literals.vertexShader],
+    ["compileShader", vertexShader],
+    ["getShaderParameter", vertexShader, GL.COMPILE_STATUS],
+    ["isContextLost"], ["getError"],
+    ["createShader", GL.FRAGMENT_SHADER],
+    ["isContextLost"], ["getError"],
+    ["shaderSource", fragmentShader, literals.fragmentShader],
+    ["compileShader", fragmentShader],
+    ["getShaderParameter", fragmentShader, GL.COMPILE_STATUS],
+    ["isContextLost"], ["getError"],
+    ["createProgram"],
+    ["isContextLost"], ["getError"],
+    ["attachShader", program, vertexShader],
+    ["attachShader", program, fragmentShader],
+    ["linkProgram", program],
+    ["getProgramParameter", program, GL.LINK_STATUS],
+    ["isContextLost"], ["getError"],
+    ["getUniformLocation", program, "u_clipFromTarget"],
+    ["isContextLost"], ["getError"],
+    ["deleteShader", vertexShader],
+    ["deleteShader", fragmentShader],
+    ["isContextLost"], ["getError"],
+    ["createVertexArray"],
+    ["isContextLost"], ["getError"],
+    ["createBuffer"],
+    ["isContextLost"], ["getError"],
+    ["createBuffer"],
+    ["isContextLost"], ["getError"],
+    ["createBuffer"],
+    ["isContextLost"], ["getError"],
+    ["bindVertexArray", vao],
+    ["bindBuffer", GL.ARRAY_BUFFER, positionBuffer],
+    ["bufferData", GL.ARRAY_BUFFER, positionBytes, GL.STATIC_DRAW],
+    ["isContextLost"], ["getError"],
+    ["enableVertexAttribArray", 0],
+    ["vertexAttribPointer", 0, 3, GL.FLOAT, false, 0, 0],
+    ["bindBuffer", GL.ELEMENT_ARRAY_BUFFER, indexBuffer],
+    ["bufferData", GL.ELEMENT_ARRAY_BUFFER, new Uint8Array(literals.cubeIndices), GL.STATIC_DRAW],
+    ["isContextLost"], ["getError"],
+    ["bindBuffer", GL.ARRAY_BUFFER, instanceBuffer],
+    ["bufferData", GL.ARRAY_BUFFER, expectedInstanceBytes(), GL.STATIC_DRAW],
+    ["isContextLost"], ["getError"],
+    ["enableVertexAttribArray", 1],
+    ["vertexAttribPointer", 1, 3, GL.FLOAT, false, 28, 0],
+    ["vertexAttribDivisor", 1, 1],
+    ["enableVertexAttribArray", 2],
+    ["vertexAttribPointer", 2, 3, GL.FLOAT, false, 28, 12],
+    ["vertexAttribDivisor", 2, 1],
+    ["enableVertexAttribArray", 3],
+    ["vertexAttribPointer", 3, 4, GL.UNSIGNED_BYTE, true, 28, 24],
+    ["vertexAttribDivisor", 3, 1],
+    ["isContextLost"], ["getError"],
+    ...expectedDrawCalls({ width: 200, height: 100, matrix: literals.unitAspectTwoMatrix, count: 1, program, vao, uniform }),
+  ];
+}
+
 function transform(matrix, point) {
   return [
     matrix[0] * point[0] + matrix[4] * point[1] + matrix[8] * point[2],
@@ -134,7 +297,7 @@ function transform(matrix, point) {
   ];
 }
 
-test("cube, indices, shaders, context request, matrix handedness, transpose, and depth are literal", () => {
+test("cube, indices, shaders, context request, complete setup/draw calls, matrix handedness, transpose, and depth are literal", () => {
   const environment = fakeEnvironment();
   const { presenter } = failuresCollector(environment);
   assert.equal(presenter.present(1, oneBuilding()), "committed");
@@ -148,6 +311,9 @@ test("cube, indices, shaders, context request, matrix handedness, transpose, and
   assert(shaderSources.every((source) => source.charCodeAt(source.length - 1) === 10));
   assert.equal(canvas.contextRequest.kind, "webgl2");
   assert.deepEqual(canvas.contextRequest.attributes, { alpha: false, antialias: false, depth: true, desynchronized: false, failIfMajorPerformanceCaveat: false, powerPreference: "default", premultipliedAlpha: false, preserveDrawingBuffer: false, stencil: false, xrCompatible: false });
+  assert.deepEqual(canvas.gl.calls, expectedInitialCalls());
+  assert.deepEqual(canvas.contextDataReads, ["drawingBufferWidth", "drawingBufferHeight"]);
+  assert.deepEqual(canvas.forbiddenContextReads, []);
   assert.deepEqual([...canvas.gl.calls.find((call) => call[0] === "uniformMatrix4fv")[3]], literals.unitAspectTwoMatrix);
   const matrix = literals.unitAspectTwoMatrix;
   assert.deepEqual(transform(matrix, [0, 0, 0]).map((value) => value === 0 ? 0 : value), [0, 0, 0, 1]);
@@ -165,6 +331,22 @@ test("cube, indices, shaders, context request, matrix handedness, transpose, and
   for (const key of ["target", "D", "R", "V"]) for (let index = 0; index < 3; index += 1) assert(Math.abs(view[key][index] - expectedScalars[key][index]) <= 1e-9 * Math.max(1, Math.abs(expectedScalars[key][index])));
 });
 
+test("production WebGL access is closed to exact methods and two dynamic data properties", async () => {
+  const source = await readFile(path.join(projectRoot, "src/edge/city-presenter.ts"), "utf8");
+  assert.doesNotMatch(source, /\bgl\.[A-Z][A-Z0-9_]*\b/u);
+  const usedMethods = [...new Set([...source.matchAll(/\bgl\.([a-z]\w*)\s*\(/gu)].map((match) => match[1]))].sort();
+  assert.deepEqual(usedMethods, [...CLOSED_GL_METHODS].sort());
+
+  const environment = fakeEnvironment();
+  const { presenter } = failuresCollector(environment);
+  assert.equal(presenter.present(1, oneBuilding()), "committed");
+  const canvas = environment.canvases[0];
+  assert.deepEqual(canvas.contextDataReads, ["drawingBufferWidth", "drawingBufferHeight"]);
+  assert.deepEqual(canvas.forbiddenContextReads, []);
+  assert.throws(() => canvas.context.DEPTH_TEST, /forbidden WebGL context property read: DEPTH_TEST/u);
+  assert.deepEqual(canvas.forbiddenContextReads, ["DEPTH_TEST"]);
+});
+
 test("one instance uses exact target-relative float staging, state, and one instanced draw", () => {
   const environment = fakeEnvironment();
   const { presenter } = failuresCollector(environment);
@@ -176,11 +358,11 @@ test("one instance uses exact target-relative float staging, state, and one inst
   assert.deepEqual(Array.from({ length: 6 }, (_, index) => view.getFloat32(index * 4, true)), [-0.5, -0.5, -0.5, 1, 1, 1]);
   assert.deepEqual([...instance.slice(24)], [0x44, 0x01, 0x54, 0xff]);
   const pointers = gl.calls.filter((call) => call[0] === "vertexAttribPointer").map((call) => call.slice(1));
-  assert.deepEqual(pointers, [[0, 3, gl.FLOAT, false, 0, 0], [1, 3, gl.FLOAT, false, 28, 0], [2, 3, gl.FLOAT, false, 28, 12], [3, 4, gl.UNSIGNED_BYTE, true, 28, 24]]);
+  assert.deepEqual(pointers, [[0, 3, GL.FLOAT, false, 0, 0], [1, 3, GL.FLOAT, false, 28, 0], [2, 3, GL.FLOAT, false, 28, 12], [3, 4, GL.UNSIGNED_BYTE, true, 28, 24]]);
   assert.deepEqual(gl.calls.filter((call) => call[0] === "vertexAttribDivisor").map((call) => call.slice(1)), [[1, 1], [2, 1], [3, 1]]);
-  assert.deepEqual(gl.calls.filter((call) => call[0] === "drawElementsInstanced").map((call) => call.slice(1)), [[gl.TRIANGLES, 36, gl.UNSIGNED_BYTE, 0, 1]]);
-  assert.deepEqual(gl.calls.find((call) => call[0] === "clear").slice(1), [gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT]);
-  for (const disabled of [gl.BLEND, gl.DITHER, gl.STENCIL_TEST, gl.SCISSOR_TEST, gl.POLYGON_OFFSET_FILL, gl.RASTERIZER_DISCARD, gl.SAMPLE_COVERAGE, gl.SAMPLE_ALPHA_TO_COVERAGE]) assert(gl.calls.some((call) => call[0] === "disable" && call[1] === disabled));
+  assert.deepEqual(gl.calls.filter((call) => call[0] === "drawElementsInstanced").map((call) => call.slice(1)), [[GL.TRIANGLES, 36, GL.UNSIGNED_BYTE, 0, 1]]);
+  assert.deepEqual(gl.calls.find((call) => call[0] === "clear").slice(1), [GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT]);
+  for (const disabled of [GL.BLEND, GL.DITHER, GL.STENCIL_TEST, GL.SCISSOR_TEST, GL.POLYGON_OFFSET_FILL, GL.RASTERIZER_DISCARD, GL.SAMPLE_COVERAGE, GL.SAMPLE_ALPHA_TO_COVERAGE]) assert(gl.calls.some((call) => call[0] === "disable" && call[1] === disabled));
   assert.deepEqual(environment.canvases[0].listenerOptions, { passive: true, once: true });
   assert.equal(environment.observers[0].observed, true);
 });
@@ -227,7 +409,7 @@ test("the complete 4,000-building model uploads exactly 112,000 bytes and draws 
   assert.equal(presenter.present(4000, model), "committed");
   const gl = environment.canvases[0].gl;
   assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [96, 36, 112000]);
-  assert.deepEqual(gl.calls.filter((call) => call[0] === "drawElementsInstanced").at(-1).slice(1), [gl.TRIANGLES, 36, gl.UNSIGNED_BYTE, 0, 4000]);
+  assert.deepEqual(gl.calls.filter((call) => call[0] === "drawElementsInstanced").at(-1).slice(1), [GL.TRIANGLES, 36, GL.UNSIGNED_BYTE, 0, 4000]);
 });
 
 test("invalid model clears the prior session before one swallowed City failure and creates nothing new", () => {
@@ -242,7 +424,7 @@ test("invalid model clears the prior session before one swallowed City failure a
   assert.deepEqual(events, [[2, "City construction failed", "M1-CITY-1", undefined]]);
 });
 
-test("final dimension reread redraws detached before commit and a changed resize redraws without upload", () => {
+test("final dimension reread redraws the detached candidate before commit", () => {
   const environment = fakeEnvironment({ width: 100, height: 100 });
   let widthReads = 0;
   Object.defineProperty(environment.host, "clientWidth", { configurable: true, get() { widthReads += 1; return widthReads === 1 ? 100 : 200; } });
@@ -250,15 +432,43 @@ test("final dimension reread redraws detached before commit and a changed resize
   assert.equal(presenter.present(1, oneBuilding()), "committed");
   const canvas = environment.canvases[0];
   assert.equal(canvas.gl.uploads.length, 3);
-  assert.deepEqual(canvas.gl.calls.filter((call) => call[0] === "drawElementsInstanced").length, 2);
+  assert.equal(canvas.gl.calls.filter((call) => call[0] === "drawElementsInstanced").length, 2);
   assert.equal(canvas.width, 200);
+});
+
+test("changed resize repeats the exact draw state with a literal matrix and unchanged resize makes no calls", () => {
+  const environment = fakeEnvironment();
+  const { presenter } = failuresCollector(environment);
+  assert.equal(presenter.present(1, oneBuilding()), "committed");
+  const canvas = environment.canvases[0];
+  const gl = canvas.gl;
+  const program = gl.calls.find((call) => call[0] === "useProgram")[1];
+  const vao = gl.calls.find((call) => call[0] === "bindVertexArray" && call.length === 2)[1];
+  const uniform = gl.calls.find((call) => call[0] === "uniformMatrix4fv")[1];
+  const callCount = gl.calls.length;
+  const dataReadCount = canvas.contextDataReads.length;
+
   environment.host.width = 300;
-  Object.defineProperty(environment.host, "clientWidth", { get() { return this.width; } });
   environment.observers[0].callback();
-  assert.equal(canvas.gl.uploads.length, 3);
-  assert.equal(canvas.gl.calls.filter((call) => call[0] === "drawElementsInstanced").length, 3);
+  assert.equal(gl.uploads.length, 3);
+  assert.deepEqual(gl.calls.slice(callCount), expectedDrawCalls({
+    width: 300,
+    height: 100,
+    matrix: literals.unitAspectThreeMatrix,
+    count: 1,
+    program,
+    vao,
+    uniform,
+  }));
+  assert.deepEqual(canvas.contextDataReads.slice(dataReadCount), ["drawingBufferWidth", "drawingBufferHeight"]);
+  assert.deepEqual(canvas.forbiddenContextReads, []);
+
+  const unchangedCallCount = gl.calls.length;
+  const unchangedDataReadCount = canvas.contextDataReads.length;
   environment.observers[0].callback();
-  assert.equal(canvas.gl.calls.filter((call) => call[0] === "drawElementsInstanced").length, 3);
+  assert.equal(gl.calls.length, unchangedCallCount);
+  assert.equal(canvas.contextDataReads.length, unchangedDataReadCount);
+  assert.equal(gl.uploads.length, 3);
 });
 
 test("context loss and resize failures clean exactly once before one contained presentation callback", () => {

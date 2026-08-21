@@ -189,7 +189,7 @@ function validateBrowserResult(result, expectedAssets) {
   assert.equal(result.complexityMatrixRuns[0].densePackedByteLength, result.complexityMatrixRuns[1].densePackedByteLength);
   assert.equal(result.complexityMatrixRuns[0].runDigest, result.complexityMatrixRuns[1].runDigest);
   assert.equal(result.complexityMatrixRuns[0].observed.factsDigest, result.complexityMatrixRuns[1].observed.factsDigest);
-  exactKeys(result.presentation, ["webgl2Available", "actualContexts", "initialDraws", "repeatDraws", "resizeDraws", "lossDefaultPrevented", "lossDraws", "lossFailures", "lossCleanup", "compileFailureResult", "compileFailureDraws", "compileFailures", "compileCleanup", "pass"], "Presentation");
+  exactKeys(result.presentation, ["webgl2Available", "actualContexts", "initialDraws", "repeatDraws", "resizeDraws", "lossDefaultPrevented", "lossDraws", "lossFailures", "lossCleanup", "lossTerminalState", "compileFailureResult", "compileFailureDraws", "compileFailures", "compileCleanup", "compileFailureTerminalState", "pass"], "Presentation");
   assert.deepEqual(result.presentation, {
     webgl2Available: true,
     actualContexts: 4,
@@ -200,10 +200,12 @@ function validateBrowserResult(result, expectedAssets) {
     lossDraws: 0,
     lossFailures: [[3, "Presentation failed", "M1-PRES-1"]],
     lossCleanup: { deleteShader: 2, deleteProgram: 1, deleteBuffer: 3, deleteVertexArray: 1 },
+    lossTerminalState: { retainedCallbacks: 1, failures: 1, drawsAfterTerminal: 0, canvases: 1, hostChildren: 0, cleanupUnchanged: true },
     compileFailureResult: "failed",
     compileFailureDraws: 0,
     compileFailures: [[4, "Presentation failed", "M1-PRES-1"]],
     compileCleanup: { deleteShader: 1, deleteProgram: 0, deleteBuffer: 0, deleteVertexArray: 0 },
+    compileFailureTerminalState: { retainedCallbacks: 1, failures: 1, drawsAfterTerminal: 0, canvases: 1, hostChildren: 0, cleanupUnchanged: true },
     pass: true,
   });
   assert.deepEqual(result.browserExceptions, []);
