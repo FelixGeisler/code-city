@@ -47,39 +47,55 @@ test("command protocol is closed, own-data-only, and generation-tagged", () => {
   }
 });
 
-test("worker-to-main protocol rejects unknown, inherited, accessor, malformed, and wrong-generation values", () => {
-  const failure = { type: "FAILURE", generation: 7, category: "Revision unavailable" };
-  const codedFailure = { type: "FAILURE", generation: 7, category: "Source admission failed", code: "M1-ADM-4" };
-  const metricFailure = { type: "FAILURE", generation: 7, category: "Metric processing failed", code: "M1-MET-1" };
-  const cityFailure = { type: "FAILURE", generation: 7, category: "City construction failed", code: "M1-CITY-1" };
+test("worker-to-main protocol accepts every exact pre/post-selection row and closes every message shape", () => {
+  const revision64 = "b".repeat(64);
+  const selected = { type: "REVISION_SELECTED", generation: 7, revision: SHA };
+  const preFailures = [
+    { type: "FAILURE", generation: 7, category: "Repository unavailable for anonymous access" },
+    { type: "FAILURE", generation: 7, category: "Revision unavailable" },
+    { type: "FAILURE", generation: 7, category: "Provider/resolution failure" },
+  ];
+  const postFailures = [
+    { type: "FAILURE", generation: 7, revision: SHA, category: "Provider/resolution failure" },
+    { type: "FAILURE", generation: 7, revision: SHA, category: "Repository exceeds Code City limits" },
+    { type: "FAILURE", generation: 7, revision: SHA, category: "No supported modules", code: "ADM-06" },
+    { type: "FAILURE", generation: 7, revision: SHA, category: "No supported modules", code: "ADM-07" },
+    { type: "FAILURE", generation: 7, revision: SHA, category: "Source admission failed", code: "M1-ADM-1" },
+    { type: "FAILURE", generation: 7, revision: SHA, category: "Source admission failed", code: "M1-ADM-3" },
+    { type: "FAILURE", generation: 7, revision: SHA, category: "Source admission failed", code: "M1-ADM-4" },
+    { type: "FAILURE", generation: 7, revision: SHA, category: "Metric processing failed", code: "M1-MET-1" },
+    { type: "FAILURE", generation: 7, revision: SHA, category: "City construction failed", code: "M1-CITY-1" },
+  ];
   const staticEntered = { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 7 };
   const success = { type: "SUCCESS", generation: 7, revision: SHA, model: buildCity([{ canonicalPath: "a.js", S: 1, U: 1, M: 0 }]).model };
   const drained = { type: "ATTEMPT_DRAINED", generation: 7 };
-  assert.deepEqual(parseWorkerMessage(failure, 7), failure);
-  assert.deepEqual(parseWorkerMessage(codedFailure, 7), codedFailure);
-  assert.deepEqual(parseWorkerMessage(metricFailure, 7), metricFailure);
-  assert.deepEqual(parseWorkerMessage(cityFailure, 7), cityFailure);
-  assert.deepEqual(parseWorkerMessage(staticEntered, 7), staticEntered);
-  assert.deepEqual(parseWorkerMessage(success, 7), success);
-  assert.deepEqual(parseWorkerMessage(drained, 7), drained);
+  for (const valid of [selected, { ...selected, revision: revision64 }, ...preFailures, ...postFailures, staticEntered, success, drained]) {
+    assert.deepEqual(parseWorkerMessage(valid, 7), valid);
+  }
   assert.deepEqual(parseWorkerMessage({ ...success, model: {} }, 7), {
-    type: "FAILURE", generation: 7, category: "City construction failed", code: "M1-CITY-1",
+    type: "FAILURE", generation: 7, revision: SHA, category: "City construction failed", code: "M1-CITY-1",
   });
+
+  const failure = preFailures[1];
+  const cityFailure = postFailures.at(-1);
   for (const invalid of [
-    { ...failure, generation: 6 }, { ...failure, category: "raw provider detail" },
-    { ...failure, extra: true }, { type: "SUCCESS", generation: 7, revision: SHA },
-    { ...success, revision: SHA.toUpperCase() }, { ...success, revision: "a".repeat(39) },
-    { ...success, extra: true }, inherited(success), accessor(success, "model"),
-    { type: "Source admission failed", generation: 7, category: "Source admission failed" },
-    { type: "FAILURE", generation: 7, category: "No supported modules", code: "M1-ADM-1" },
-    { type: "FAILURE", generation: 7, category: "Metric processing failed", code: "M1-ADM-1" },
-    { type: "FAILURE", generation: 7, category: "City construction failed", code: "M1-MET-1" },
-    { type: "FAILURE", generation: 7, category: "City construction failed" },
-    { type: "FAILURE", generation: 7, category: "Unknown city failure", code: "M1-CITY-1" },
-    inherited(cityFailure), accessor(cityFailure, "code"),
-    { type: "ATTEMPT_DRAINED", generation: 7, extra: true },
-    inherited(failure), accessor(failure, "category"), accessor(drained, "generation"),
-    new Proxy(failure, { ownKeys() { throw new Error("trap"); } }),
+    { ...selected, generation: 6 }, { ...selected, revision: SHA.toUpperCase() }, { ...selected, revision: "a".repeat(39) },
+    { ...failure, generation: 6 }, { ...failure, category: "raw provider detail" }, { ...failure, extra: true },
+    { type: "SUCCESS", generation: 7, revision: SHA }, { ...success, revision: SHA.toUpperCase() },
+    { ...success, revision: "a".repeat(39) }, { ...success, extra: true }, inherited(success), accessor(success, "model"),
+    { type: "Source admission failed", generation: 7, revision: SHA, category: "Source admission failed", code: "M1-ADM-4" },
+    { type: "FAILURE", generation: 7, category: "No supported modules", code: "ADM-06" },
+    { type: "FAILURE", generation: 7, revision: SHA, category: "Repository unavailable for anonymous access" },
+    { type: "FAILURE", generation: 7, revision: SHA, category: "Revision unavailable" },
+    { type: "FAILURE", generation: 7, revision: SHA, category: "Provider/resolution failure", code: "M1-CITY-1" },
+    { type: "FAILURE", generation: 7, revision: SHA, category: "No supported modules", code: "M1-ADM-1" },
+    { type: "FAILURE", generation: 7, revision: SHA, category: "Metric processing failed", code: "M1-ADM-1" },
+    { type: "FAILURE", generation: 7, revision: SHA, category: "City construction failed", code: "M1-MET-1" },
+    { type: "FAILURE", generation: 7, revision: SHA, category: "City construction failed" },
+    { type: "FAILURE", generation: 7, revision: SHA, category: "Unknown city failure", code: "M1-CITY-1" },
+    inherited(cityFailure), accessor(cityFailure, "code"), inherited(selected), accessor(selected, "revision"),
+    { type: "ATTEMPT_DRAINED", generation: 7, extra: true }, inherited(failure), accessor(failure, "category"),
+    accessor(drained, "generation"), new Proxy(failure, { ownKeys() { throw new Error("trap"); } }),
   ]) {
     assert.equal(parseWorkerMessage(invalid, 7), undefined);
   }
@@ -165,8 +181,8 @@ test("all five initialization failures traverse selected-revision worker ownersh
     }, (message) => { order.push(message.type); ownershipAtPublication.push([message.type, pipeline.ownership()]); }, undefined, parser, (event) => order.push(event));
     pipeline.start(REPOSITORY, 8);
     await tick(); await tick();
-    assert.deepEqual(order.slice(0, 4), ["retrieved:a.js", "retrieved:b.ts", "retrieved:c.tsx", "PROVIDER_DRAINED_STATIC_ENTERED"], injected);
-    assert.deepEqual(order.slice(4, 4 + initializationOrder.indexOf(injected) + 1), initializationOrder.slice(0, initializationOrder.indexOf(injected) + 1), injected);
+    assert.deepEqual(order.slice(0, 5), ["REVISION_SELECTED", "retrieved:a.js", "retrieved:b.ts", "retrieved:c.tsx", "PROVIDER_DRAINED_STATIC_ENTERED"], injected);
+    assert.deepEqual(order.slice(5, 5 + initializationOrder.indexOf(injected) + 1), initializationOrder.slice(0, initializationOrder.indexOf(injected) + 1), injected);
     assert.deepEqual(order.slice(-5), ["source-released", "source-released", "source-released", "FAILURE", "ATTEMPT_DRAINED"], injected);
     assert.equal(order.filter((entry) => entry === "source-released").length, 3, injected);
     assert.equal(order.includes("source-acquired"), false, injected);
@@ -174,7 +190,8 @@ test("all five initialization failures traverse selected-revision worker ownersh
     assert.deepEqual(resourceEvents, [], injected);
     assert.equal(grammarLoads, failingLoad, injected);
     assert.deepEqual(ownershipAtPublication.map(([type, ownership]) => [type, ownership.selectedRevisionRetained, ownership.admittedModuleCount, ownership.finalFactCount]), [
-      ["PROVIDER_DRAINED_STATIC_ENTERED", true, 0, 0], ["FAILURE", false, 0, 0], ["ATTEMPT_DRAINED", false, 0, 0],
+      ["REVISION_SELECTED", true, 0, 0], ["PROVIDER_DRAINED_STATIC_ENTERED", true, 0, 0],
+      ["FAILURE", true, 0, 0], ["ATTEMPT_DRAINED", false, 0, 0],
     ], injected);
     assert.deepEqual(pipeline.ownership(), { phase: "idle", selectedRevisionRetained: false, admittedModuleCount: 0, presentationModelRetained: false, finalFactCount: 0, providerResource: false }, injected);
   }
@@ -205,9 +222,12 @@ test("complete admission crosses only the closed static barrier and retains no p
     finalFactCount: 0,
     providerResource: false,
   });
-  assert.deepEqual(messages, [{ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 9 }]);
-  assert.doesNotMatch(JSON.stringify(messages), /source|revision|repository|providerResource/);
+  assert.deepEqual(messages, [
+    { type: "REVISION_SELECTED", generation: 9, revision: SHA },
+    { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 9 },
+  ]);
+  assert.doesNotMatch(JSON.stringify(messages), /source|repository|providerResource/);
   pipeline.stop(9);
   await tick();
-  assert.equal(messages.length, 1, "static cancellation is realm termination owned by main");
+  assert.equal(messages.length, 2, "static cancellation is realm termination owned by main");
 });

@@ -6,7 +6,9 @@ image::runtime.svg[Successful repository-to-city runtime flow]
 
 . Revoke publication rights, dispose any previous presentation, and start one
 worker generation.
-. Resolve the default-branch head and retrieve one complete admitted source set.
+. Resolve the default-branch head, publish and retain its closed
+`REVISION_SELECTED` value without displaying it, and retrieve one complete
+admitted source set.
 . Release every GitHub request, reader, provider object, raw buffer, and hash
 workspace.
 . Parse and measure one module at a time, then build one complete city.
@@ -45,14 +47,21 @@ clear the worker
 A provider-phase terminal failure releases provider resources before sending
 its outcome and `ATTEMPT_DRAINED`. A replacement worker starts only after the
 previous handle is clear. Every message carries the bridge-generated
-generation. Stale messages are ignored;
-a malformed current-generation message, worker startup failure, crash, or
-`messageerror` fails that attempt. Listener and transport cleanup is exactly
-once.
+generation. A post-selection failure also carries the validated selected
+revision, which remains visible with that failure; a pre-selection failure
+shows no revision. Synchronous and asynchronous presentation failures retain
+the successful selected revision. Stale messages are ignored; a malformed
+current-generation message, worker startup failure, crash, or `messageerror`
+fails closed immediately. A displayed terminal failure is immutable while its
+matching drain performs normal cleanup. Listener and transport cleanup is
+exactly once.
 
 The UI coordinator applies the same generation gate to resize and context-loss
 callbacks. A disposed presentation session can neither remove nor fail a newer
-city.
+city. On `pagehide`, the controller revokes publication, clears pending work,
+terminally disposes presentation, detaches listeners, and terminates its worker
+without cancellation semantics. Repeated disposal and callbacks after disposal
+are inert, so a reload starts with empty product state.
 
 == Resource lifetime
 

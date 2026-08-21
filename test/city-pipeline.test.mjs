@@ -75,14 +75,15 @@ test("success releases source identities and facts, publishes only revision plus
   assert.deepEqual(receivedFacts, [], "the actual processing-result fact container is released before publication");
   assert(f.order.indexOf("metric:fact-retained") < f.order.indexOf("city:construct"));
   assert.equal(f.releases(), 1);
-  assert.deepEqual(f.messages.map(({ type }) => type), ["PROVIDER_DRAINED_STATIC_ENTERED", "SUCCESS", "ATTEMPT_DRAINED"]);
-  const success = f.messages[1];
+  assert.deepEqual(f.messages.map(({ type }) => type), ["REVISION_SELECTED", "PROVIDER_DRAINED_STATIC_ENTERED", "SUCCESS", "ATTEMPT_DRAINED"]);
+  const success = f.messages[2];
   assert.deepEqual(Object.keys(success), ["type", "generation", "revision", "model"]);
   assert.equal(success.generation, 31);
   assert.equal(success.revision, SHA);
   assert.deepEqual(Object.keys(success.model), ["kind", "count", "origins", "sizes", "rgba", "bounds"]);
   assert.doesNotMatch(JSON.stringify(success), /canonicalPath|normalizedSource|identities|facts/i);
   assert.deepEqual(f.publications.map(({ message, ownership }) => [message.type, ownership.selectedRevisionRetained, ownership.admittedModuleCount, ownership.presentationModelRetained, ownership.finalFactCount]), [
+    ["REVISION_SELECTED", true, 0, false, 0],
     ["PROVIDER_DRAINED_STATIC_ENTERED", true, 0, false, 0],
     ["SUCCESS", true, 0, true, 0],
     ["ATTEMPT_DRAINED", false, 0, false, 0],
@@ -118,8 +119,9 @@ for (const [id, construct] of [
 
     assert.equal(calls, 1);
     assert.deepEqual(f.messages, [
+      { type: "REVISION_SELECTED", generation: 32, revision: SHA },
       { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 32 },
-      { type: "FAILURE", generation: 32, category: "City construction failed", code: "M1-CITY-1" },
+      { type: "FAILURE", generation: 32, revision: SHA, category: "City construction failed", code: "M1-CITY-1" },
       { type: "ATTEMPT_DRAINED", generation: 32 },
     ]);
     assert.doesNotMatch(JSON.stringify(f.messages), /injected internal detail|canonicalPath|origins|rgba|bounds/);

@@ -48,8 +48,8 @@ const view: AttemptView = {
     status.replaceChildren();
     commit.textContent = revision;
   },
-  failure: (category, code) => {
-    commit.textContent = "";
+  failure: (category, code, revision) => {
+    commit.textContent = revision ?? "";
     replaceStatus(code ? `${category} (${code})` : category);
   },
   cancelled: () => {
@@ -91,3 +91,4 @@ form.addEventListener("submit", (event) => {
   event.preventDefault();
   controller.submit(input.value);
 });
+window.addEventListener("pagehide", () => controller.dispose(), { once: true });

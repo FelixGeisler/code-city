@@ -28,13 +28,14 @@ function fixture({
   let createCalls = 0;
   let liveWorkers = 0;
   let maximumLiveWorkers = 0;
-  const presentation = { clears: 0, calls: [], hooks: undefined };
+  const failures = [];
+  const presentation = { clears: 0, calls: [], disposes: 0, hooks: undefined };
   const view = {
     clear() {},
     invalid: () => events.push("view:Invalid input"),
     working(cancel) { cancelAction = cancel; events.push("view:working"); },
     success: (revision) => events.push(`view:success:${revision}`),
-    failure: (category) => events.push(`view:${category}`),
+    failure(category, code, revision) { failures.push({ category, code, revision }); events.push(`view:${category}`); },
     cancelled: () => events.push("view:Cancelled"),
   };
   function createWorker() {
@@ -73,6 +74,7 @@ function fixture({
     presentation.hooks = hooks;
     return {
       clear() { presentation.clears += 1; },
+      dispose() { presentation.disposes += 1; },
       present(generation, model) {
         events.push("present");
         presentation.calls.push({ generation, model, eligible: hooks.isEligible(generation) });
@@ -83,6 +85,7 @@ function fixture({
   return {
     controller,
     events,
+    failures,
     presentation,
     transports,
     cancel: () => cancelAction(),
@@ -132,6 +135,7 @@ test("success is accepted once after the barrier, presented before publication, 
   const f = fixture();
   f.controller.submit(VALID);
   const transport = f.transports[0];
+  transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
   transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
   transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, model: MODEL });
   assert.deepEqual(f.presentation.calls, [{ generation: 1, model: MODEL, eligible: true }]);
@@ -142,6 +146,7 @@ test("success is accepted once after the barrier, presented before publication, 
 
   f.presentation.hooks.failed(1, "Presentation failed", "M1-PRES-1");
   assert.equal(f.events.at(-1), "view:Presentation failed");
+  assert.deepEqual(f.failures.at(-1), { category: "Presentation failed", code: "M1-PRES-1", revision: SHA });
   assert.equal(f.presentation.hooks.isEligible(1), false);
 });
 
@@ -149,6 +154,7 @@ test("a new valid submission synchronously revokes a drained publication and can
   const f = fixture();
   f.controller.submit(VALID);
   const first = f.transports[0];
+  first.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
   first.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
   first.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, model: MODEL });
   first.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
@@ -158,6 +164,7 @@ test("a new valid submission synchronously revokes a drained publication and can
   assert.equal(f.presentation.clears, 2);
   assert.equal(f.presentation.hooks.isEligible(1), false);
   const second = f.transports[1];
+  second.handlers.message({ type: "REVISION_SELECTED", generation: 2, revision: SHA });
   second.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 2 });
   second.handlers.message({ type: "SUCCESS", generation: 2, revision: SHA, model: MODEL });
   second.handlers.message({ type: "ATTEMPT_DRAINED", generation: 2 });
@@ -173,6 +180,7 @@ test("invalid success models map to CITY1 before presentation and a duplicate su
     const f = fixture();
     f.controller.submit(VALID);
     const transport = f.transports[0];
+    transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
     transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
     transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, model: {} });
     assert.deepEqual(f.presentation.calls, []);
@@ -184,6 +192,7 @@ test("invalid success models map to CITY1 before presentation and a duplicate su
     const f = fixture();
     f.controller.submit(VALID);
     const transport = f.transports[0];
+    transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
     transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
     const success = { type: "SUCCESS", generation: 1, revision: SHA, model: MODEL };
     transport.handlers.message(success);
@@ -197,22 +206,28 @@ test("synchronous presenter failure is mapped by the controller without using th
   const f = fixture({ presentResult: { kind: "failure", category: "Presentation failed", code: "M1-PRES-1" } });
   f.controller.submit(VALID);
   const transport = f.transports[0];
+  transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
   transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
   transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, model: MODEL });
   assert.equal(f.events.at(-1), "view:Presentation failed");
+  assert.deepEqual(f.failures.at(-1), { category: "Presentation failed", code: "M1-PRES-1", revision: SHA });
   assert.equal(f.events.some((event) => event.startsWith("view:success:")), false);
   transport.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
   assert.equal(transport.closeCalls, 1);
 });
 
-test("invalid replacement reports Invalid input and leaves the active attempt unchanged", () => {
+test("invalid replacement revokes output, closes active work, and starts no replacement", () => {
   const f = fixture();
   f.controller.submit(VALID);
   assert.equal(f.controller.submit("owner/repo"), false);
   assert.equal(f.transports.length, 1);
-  assert.deepEqual(f.transports[0].sent.map((message) => message.type), ["START"]);
+  assert.deepEqual(f.transports[0].sent.map((message) => message.type), ["START", "STOP"]);
   assert.equal(f.transports[0].closeCalls, 0);
   assert.equal(f.events.at(-1), "view:Invalid input");
+  f.transports[0].handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
+  assert.equal(f.transports[0].closeCalls, 1);
+  assert.equal(f.transports.length, 1);
+  assert.equal(f.events.at(-1), "worker:close");
 });
 
 test("provider-active replacement sends STOP, suppresses old failure, and starts only after drain", () => {
@@ -252,6 +267,7 @@ test("validated static-phase replacement closes immediately without STOP and sta
   const f = fixture();
   f.controller.submit(VALID);
   const old = f.transports[0];
+  old.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
   old.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
 
   assert.equal(f.controller.submit("https://github.com/owner/static-replacement"), true);
@@ -282,6 +298,7 @@ test("a raced static barrier after provider STOP clears the old worker before re
   f.controller.submit(VALID);
   const old = f.transports[0];
   f.controller.submit("https://github.com/owner/latest");
+  old.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
   old.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
 
   assert.deepEqual(old.sent.map((message) => message.type), ["START", "STOP"]);
@@ -294,6 +311,7 @@ test("validated static barrier keeps the worker internal and cancellation termin
   const f = fixture();
   f.controller.submit(VALID);
   const transport = f.transports[0];
+  transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
   transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
   assert.equal(transport.closeCalls, 0);
   assert.deepEqual(transport.sent.map((message) => message.type), ["START"]);
@@ -309,11 +327,21 @@ test("a duplicate or raced static barrier fails closed and terminates exactly on
   const f = fixture();
   f.controller.submit(VALID);
   const transport = f.transports[0];
+  transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
   const barrier = { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 };
   transport.handlers.message(barrier);
   transport.handlers.message(barrier);
   assert.equal(transport.closeCalls, 1);
   assert.equal(f.events.filter((event) => event === "view:Provider/resolution failure").length, 1);
+});
+
+test("repeated cancellation is idempotent while provider cleanup drains", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  f.cancel();
+  f.cancel();
+  assert.deepEqual(f.transports[0].sent.map(({ type }) => type), ["START", "STOP"]);
+  assert.equal(f.events.filter((event) => event === "view:Cancelled").length, 1);
 });
 
 test("queued current FAILURE cannot replace synchronously selected cancellation", () => {
@@ -357,6 +385,7 @@ test("stale generations are ignored before and after cancellation", () => {
   f.controller.submit(VALID);
   const transport = f.transports[0];
   transport.handlers.message({ type: "FAILURE", generation: 999, category: "Revision unavailable" });
+  transport.handlers.message(Object.assign(Object.create({ hostile: true }), { type: "FAILURE", generation: 999, category: "Revision unavailable" }));
   assert.equal(transport.closeCalls, 0);
   f.cancel();
   transport.handlers.message({ type: "ATTEMPT_DRAINED", generation: 999 });
@@ -381,6 +410,16 @@ test("malformed current messages and un-cancelled crash/messageerror fail and cl
   }
 });
 
+test("crash after revision selection fails immediately and retains the selected revision", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  const transport = f.transports[0];
+  transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
+  transport.handlers.crash();
+  assert.deepEqual(f.failures, [{ category: "Provider/resolution failure", code: undefined, revision: SHA }]);
+  assert.equal(transport.closeCalls, 1);
+});
+
 test("replacement crash or messageerror makes drain impossible and starts the pending attempt", () => {
   for (const deliver of [(handlers) => handlers.crash(), (handlers) => handlers.messageError()]) {
     const f = fixture();
@@ -396,6 +435,16 @@ test("replacement crash or messageerror makes drain impossible and starts the pe
     assert.equal(f.transports[1].sent[0].generation, 2);
     assert.equal(f.maximumLiveWorkers(), 1);
   }
+});
+
+test("a failed cancellation STOP send cleans immediately without replacing cancellation", () => {
+  const f = fixture({ sendThrowsWhen: (_transport, command) => command.type === "STOP" });
+  f.controller.submit(VALID);
+  f.cancel();
+  assert.equal(f.transports[0].detachCalls, 1);
+  assert.equal(f.transports[0].closeCalls, 1);
+  assert.equal(f.events.filter((event) => event === "view:Cancelled").length, 1);
+  assert.equal(f.failures.length, 0);
 });
 
 test("a failed STOP send closes exactly once and starts the pending replacement", () => {
@@ -419,6 +468,7 @@ test("replacement factory failure does not consume a generation or retain the ol
   const f = fixture({ factoryThrowsAt: [2] });
   f.controller.submit(VALID);
   const old = f.transports[0];
+  old.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
   old.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
   assert.equal(f.controller.submit("https://github.com/owner/factory-fails"), true);
 
@@ -475,7 +525,108 @@ test("a later submission can queue while cancellation drains, and cancel can cle
   f.cancel();
   old.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
   assert.equal(f.transports.length, 1);
-  assert.equal(f.events.filter((event) => event === "view:Cancelled").length, 1);
+  assert.equal(f.events.filter((event) => event === "view:Cancelled").length, 2);
+});
+
+test("every post-selection failure row retains the selected full revision", () => {
+  const rows = [
+    ["Provider/resolution failure"],
+    ["Repository exceeds Code City limits"],
+    ["No supported modules", "ADM-06"],
+    ["No supported modules", "ADM-07"],
+    ["Source admission failed", "M1-ADM-1"],
+    ["Source admission failed", "M1-ADM-3"],
+    ["Source admission failed", "M1-ADM-4"],
+    ["Metric processing failed", "M1-MET-1"],
+    ["City construction failed", "M1-CITY-1"],
+  ];
+  for (const [category, code] of rows) {
+    const f = fixture();
+    f.controller.submit(VALID);
+    const transport = f.transports[0];
+    transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
+    transport.handlers.message({ type: "FAILURE", generation: 1, revision: SHA, category, ...(code ? { code } : {}) });
+    assert.deepEqual(f.failures, [{ category, code, revision: SHA }], category);
+    assert.equal(transport.closeCalls, 0, category);
+    transport.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
+    assert.equal(transport.closeCalls, 1, category);
+  }
+});
+
+test("pre-selection failures show no revision and exact selected revision mismatches fail closed with the retained selection", () => {
+  for (const category of ["Repository unavailable for anonymous access", "Revision unavailable", "Provider/resolution failure"]) {
+    const f = fixture();
+    f.controller.submit(VALID);
+    const transport = f.transports[0];
+    transport.handlers.message({ type: "FAILURE", generation: 1, category });
+    assert.deepEqual(f.failures, [{ category, code: undefined, revision: undefined }]);
+    transport.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
+  }
+
+  const f = fixture();
+  f.controller.submit(VALID);
+  const transport = f.transports[0];
+  transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
+  transport.handlers.message({ type: "FAILURE", generation: 1, revision: "b".repeat(40), category: "Provider/resolution failure" });
+  assert.deepEqual(f.failures, [{ category: "Provider/resolution failure", code: undefined, revision: SHA }]);
+  assert.equal(transport.closeCalls, 1);
+});
+
+test("out-of-order and early-drain messages fail immediately with revision only after validated selection", () => {
+  const cases = [
+    { messages: [{ type: "ATTEMPT_DRAINED", generation: 1 }], revision: undefined },
+    { messages: [{ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 }], revision: undefined },
+    { messages: [{ type: "SUCCESS", generation: 1, revision: SHA, model: MODEL }], revision: undefined },
+    { messages: [
+      { type: "REVISION_SELECTED", generation: 1, revision: SHA },
+      { type: "ATTEMPT_DRAINED", generation: 1 },
+    ], revision: SHA },
+    { messages: [
+      { type: "REVISION_SELECTED", generation: 1, revision: SHA },
+      { type: "REVISION_SELECTED", generation: 1, revision: SHA },
+    ], revision: SHA },
+  ];
+  for (const item of cases) {
+    const f = fixture();
+    f.controller.submit(VALID);
+    for (const message of item.messages) f.transports[0].handlers.message(message);
+    assert.deepEqual(f.failures, [{ category: "Provider/resolution failure", code: undefined, revision: item.revision }]);
+    assert.equal(f.transports[0].detachCalls, 1);
+    assert.equal(f.transports[0].closeCalls, 1);
+  }
+});
+
+test("a latched failure is immutable and any intervening current message forces cleanup", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  const transport = f.transports[0];
+  transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
+  transport.handlers.message({ type: "FAILURE", generation: 1, revision: SHA, category: "Source admission failed", code: "M1-ADM-4" });
+  transport.handlers.message({ type: "FAILURE", generation: 1, revision: SHA, category: "Provider/resolution failure" });
+  assert.deepEqual(f.failures, [{ category: "Source admission failed", code: "M1-ADM-4", revision: SHA }]);
+  assert.equal(transport.closeCalls, 1);
+  transport.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
+  assert.equal(transport.closeCalls, 1);
+});
+
+test("controller disposal is terminal, idempotent, clears pending work, and makes retained callbacks inert", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  const transport = f.transports[0];
+  f.controller.submit("https://github.com/owner/pending");
+  f.controller.dispose();
+  f.controller.dispose();
+  assert.equal(f.presentation.disposes, 1);
+  assert.equal(transport.detachCalls, 1);
+  assert.equal(transport.closeCalls, 1);
+  assert.equal(f.transports.length, 1);
+  assert.equal(f.events.includes("view:Cancelled"), false);
+  transport.handlers.crash();
+  transport.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
+  f.presentation.hooks.failed(1, "Presentation failed", "M1-PRES-1");
+  assert.equal(f.failures.length, 0);
+  assert.equal(f.controller.submit(VALID), false);
+  assert.equal(f.transports.length, 1);
 });
 
 test("startup construction and post failures expose only mapped failure without consuming generations", () => {

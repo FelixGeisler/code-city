@@ -145,6 +145,7 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
   assert.match(mainSource, /form\.addEventListener\("submit", \(event\) => \{\s*event\.preventDefault\(\);\s*controller\.submit\(input\.value\);\s*\}\);/);
   assert.match(mainSource, /replaceStatus\("Working", cancel\)/);
   assert.match(mainSource, /commit\.textContent = revision/);
+  assert.match(mainSource, /window\.addEventListener\("pagehide", \(\) => controller\.dispose\(\), \{ once: true \}\)/);
   assert.doesNotMatch(mainSource, /innerHTML|insertAdjacentHTML/);
   assertWorkerConstructionPolicy([["Main source", mainSource], ["Worker source", workerSource]]);
   assert.doesNotMatch(`${mainSource}\n${workerSource}`, /SharedWorker|blob:|data:|createObjectURL/);
