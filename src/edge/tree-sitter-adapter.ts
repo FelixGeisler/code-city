@@ -105,22 +105,22 @@ class ObservationRows {
     let byteEndpoints: Uint32Array | undefined;
     let endpointIndex = 0, utf16Offset = 0, utf8Offset = 0;
     for (const scalar of source) {
-      if (endpoints[endpointIndex] === utf16Offset) { if (byteEndpoints) byteEndpoints[endpointIndex] = utf8Offset; endpointIndex += 1; }
+      if (endpointIndex < endpointCount && endpoints[endpointIndex] === utf16Offset) { if (byteEndpoints) byteEndpoints[endpointIndex] = utf8Offset; endpointIndex += 1; }
       const codePoint = scalar.codePointAt(0)!;
       invariant(!(scalar.length === 1 && codePoint >= 0xd800 && codePoint <= 0xdfff), "Malformed Unicode scalar");
       if (codePoint > 0x7f && !byteEndpoints) { byteEndpoints = new Uint32Array(endpointCount); for (let prior = 0; prior < endpointIndex; prior += 1) byteEndpoints[prior] = endpoints[prior]!; }
       const scalarEnd = utf16Offset + scalar.length;
-      invariant(endpoints[endpointIndex] === undefined || endpoints[endpointIndex]! >= scalarEnd, "Parser endpoint splits a surrogate pair");
+      invariant(endpointIndex >= endpointCount || endpoints[endpointIndex]! >= scalarEnd, "Parser endpoint splits a surrogate pair");
       utf8Offset += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
       utf16Offset = scalarEnd;
     }
-    if (endpoints[endpointIndex] === utf16Offset) { if (byteEndpoints) byteEndpoints[endpointIndex] = utf8Offset; endpointIndex += 1; }
+    if (endpointIndex < endpointCount && endpoints[endpointIndex] === utf16Offset) { if (byteEndpoints) byteEndpoints[endpointIndex] = utf8Offset; endpointIndex += 1; }
     invariant(endpointIndex === endpointCount, "Invalid parser endpoint");
     const translate = (endpoint: number): number => {
       if (!byteEndpoints) return endpoint;
       let low = 0, high = endpointCount;
       while (low < high) { const middle = (low + high) >>> 1; if (endpoints[middle]! < endpoint) low = middle + 1; else high = middle; }
-      invariant(endpoints[low] === endpoint, "Missing parser endpoint translation");
+      invariant(low < endpointCount && endpoints[low] === endpoint, "Missing parser endpoint translation");
       return byteEndpoints[low]!;
     };
     const writer = createSyntaxObservationWriter();
