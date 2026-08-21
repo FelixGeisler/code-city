@@ -1,6 +1,6 @@
 import type { AdmittedModule } from "../domain/source-admission";
 import type { RepositoryReference } from "../domain/repository-reference";
-import type { BaseMetricAnalysis } from "../domain/base-metrics";
+import type { ModuleComplexityFact } from "../domain/complexity";
 import { processAdmittedBaseMetrics, type MetricProcessingEvent, type SyntaxProjectionCapability } from "./base-metric-processing";
 import type { WorkerMessage } from "./protocol";
 import { resolveRevision, type RevisionGateway } from "./resolution";
@@ -12,7 +12,7 @@ import {
 
 type ActiveAttempt = {
   admittedModules?: readonly AdmittedModule[];
-  baseAnalyses?: readonly BaseMetricAnalysis[];
+  finalFacts?: readonly ModuleComplexityFact[];
   controller?: AbortController;
   drained: boolean;
   generation: number;
@@ -28,7 +28,7 @@ export type AttemptOwnership = Readonly<{
   generation?: number;
   selectedRevisionRetained: boolean;
   admittedModuleCount: number;
-  baseAnalysisCount: number;
+  finalFactCount: number;
   providerResource: false;
 }>;
 
@@ -57,7 +57,7 @@ export function createWorkerAttemptPipeline(
     attempt.repository = undefined;
     attempt.selectedRevision = undefined;
     attempt.admittedModules = undefined;
-    attempt.baseAnalyses = undefined;
+    attempt.finalFacts = undefined;
     publish({ type: "ATTEMPT_DRAINED", generation: attempt.generation });
     if (active === attempt) {
       active = undefined;
@@ -137,7 +137,7 @@ export function createWorkerAttemptPipeline(
           drain(attempt);
           return;
         }
-        attempt.baseAnalyses = processing.analyses;
+        attempt.finalFacts = processing.facts;
       }
     })().catch(() => {
       if (attempt.stopped) {
@@ -171,14 +171,14 @@ export function createWorkerAttemptPipeline(
           generation: active.generation,
           selectedRevisionRetained: active.selectedRevision !== undefined,
           admittedModuleCount: active.admittedModules?.length ?? 0,
-          baseAnalysisCount: active.baseAnalyses?.length ?? 0,
+          finalFactCount: active.finalFacts?.length ?? 0,
           providerResource: false,
         }
       : {
           phase: "idle",
           selectedRevisionRetained: false,
           admittedModuleCount: 0,
-          baseAnalysisCount: 0,
+          finalFactCount: 0,
           providerResource: false,
         },
   };

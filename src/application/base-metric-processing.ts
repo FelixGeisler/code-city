@@ -1,10 +1,16 @@
 import {
   deriveBaseMetricAnalysis,
   selectGrammarFamily,
-  type BaseMetricAnalysis,
   type GrammarFamily,
 } from "../domain/base-metrics";
-import type { AdmittedModule } from "../domain/source-admission";
+import {
+  finalizeModuleComplexity,
+  type ModuleComplexityFact,
+} from "../domain/complexity";
+import {
+  compareUnsignedUtf8,
+  type AdmittedModule,
+} from "../domain/source-admission";
 
 export type SyntaxProjectionCapability = Readonly<{
   initialize(): Promise<void>;
@@ -14,10 +20,10 @@ export type SyntaxProjectionCapability = Readonly<{
   }>>;
 }>;
 
-export type MetricProcessingEvent = "source-acquired" | "source-released" | "analysis-retained";
+export type MetricProcessingEvent = "source-acquired" | "source-released" | "fact-retained";
 
 export type BaseMetricProcessingResult =
-  | Readonly<{ kind: "processed"; analyses: readonly BaseMetricAnalysis[] }>
+  | Readonly<{ kind: "processed"; facts: readonly ModuleComplexityFact[] }>
   | Readonly<{ kind: "failure"; category: "Metric processing failed"; code: "M1-MET-1" }>;
 
 export async function processAdmittedBaseMetrics(
@@ -26,7 +32,7 @@ export async function processAdmittedBaseMetrics(
   observe: (event: MetricProcessingEvent) => void = () => {},
 ): Promise<BaseMetricProcessingResult> {
   const queue: (AdmittedModule | undefined)[] = admittedModules;
-  const analyses: BaseMetricAnalysis[] = [];
+  const facts: ModuleComplexityFact[] = [];
 
   function releaseSource(index: number): void {
     if (queue[index]) {
@@ -45,16 +51,21 @@ export async function processAdmittedBaseMetrics(
       try {
         stream = await parser.project(selectGrammarFamily(module.canonicalPath), module.normalizedSource);
         const analysis = deriveBaseMetricAnalysis(module.canonicalPath, module.normalizedSource, stream.observations);
-        analyses.push(analysis);
-        observe("analysis-retained");
+        const { fact } = finalizeModuleComplexity(analysis);
+        facts.push(fact);
+        observe("fact-retained");
       } finally {
         stream?.release();
         releaseSource(index);
       }
     }
-    return { kind: "processed", analyses };
+    facts.sort((left, right) => compareUnsignedUtf8(left.canonicalPath, right.canonicalPath));
+    for (let index = 1; index < facts.length; index += 1) {
+      if (facts[index - 1]!.canonicalPath === facts[index]!.canonicalPath) throw new Error("Duplicate canonical path");
+    }
+    return { kind: "processed", facts };
   } catch {
-    analyses.length = 0;
+    facts.length = 0;
     for (let index = 0; index < queue.length; index += 1) releaseSource(index);
     return { kind: "failure", category: "Metric processing failed", code: "M1-MET-1" };
   }

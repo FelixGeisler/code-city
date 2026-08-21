@@ -159,10 +159,10 @@ test("all five initialization failures traverse selected-revision worker ownersh
     assert.equal(projects, 0, injected);
     assert.deepEqual(resourceEvents, [], injected);
     assert.equal(grammarLoads, failingLoad, injected);
-    assert.deepEqual(ownershipAtPublication.map(([type, ownership]) => [type, ownership.selectedRevisionRetained, ownership.admittedModuleCount, ownership.baseAnalysisCount]), [
+    assert.deepEqual(ownershipAtPublication.map(([type, ownership]) => [type, ownership.selectedRevisionRetained, ownership.admittedModuleCount, ownership.finalFactCount]), [
       ["PROVIDER_DRAINED_STATIC_ENTERED", true, 3, 0], ["FAILURE", false, 0, 0], ["ATTEMPT_DRAINED", false, 0, 0],
     ], injected);
-    assert.deepEqual(pipeline.ownership(), { phase: "idle", selectedRevisionRetained: false, admittedModuleCount: 0, baseAnalysisCount: 0, providerResource: false }, injected);
+    assert.deepEqual(pipeline.ownership(), { phase: "idle", selectedRevisionRetained: false, admittedModuleCount: 0, finalFactCount: 0, providerResource: false }, injected);
   }
 });
 
@@ -187,7 +187,7 @@ test("complete admission crosses only the closed static barrier and retains no p
     generation: 9,
     selectedRevisionRetained: true,
     admittedModuleCount: 1,
-    baseAnalysisCount: 0,
+    finalFactCount: 0,
     providerResource: false,
   });
   assert.deepEqual(messages, [{ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 9 }]);

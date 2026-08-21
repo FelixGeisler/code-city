@@ -16,6 +16,7 @@ const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)))
 const { createTreeSitterAdapter } = await import("../src/edge/tree-sitter-adapter.ts");
 const { processAdmittedBaseMetrics } = await import("../src/application/base-metric-processing.ts");
 const { createSyntaxObservationWriter, deriveBaseMetricAnalysis } = await import("../src/domain/base-metrics.ts");
+const { finalizeModuleComplexity } = await import("../src/domain/complexity.ts");
 const fixture = JSON.parse(await readFile(path.join(projectRoot, "test", "fixtures", "base-metric-cases.json"), "utf8"));
 
 const assetPath = (relativePath) => pathToFileURL(path.join(projectRoot, ...relativePath.split("/"))).href;
@@ -36,10 +37,6 @@ function exactKeys(value, keys) {
 function expectedAnalysis(entry) {
   const { S, U, units, observations } = entry.expectedOutcome;
   return { canonicalPath: entry.canonicalPath, S, U, units, observations };
-}
-
-function materializeAnalysis(analysis) {
-  return { canonicalPath: analysis.canonicalPath, S: analysis.S, U: analysis.U, units: [...analysis.units], observations: [...analysis.observations] };
 }
 
 function endpointParser(startIndex, endIndex, events = [], copies = 1) {
@@ -124,8 +121,10 @@ test("all table cases traverse the production adapter, domain, and application p
       assert.equal(events.slice(before).filter((event) => event === "observation-stream-created").length, 0, entry.id);
     } else {
       assert.equal(result.kind, "processed", entry.id);
-      assert.deepEqual(result.analyses.map(materializeAnalysis), [expectedAnalysis(entry)], entry.id);
-      assert.deepEqual(sourceEvents, ["source-acquired", "analysis-retained", "source-released"], entry.id);
+      const expectedBase = expectedAnalysis(entry);
+      const expectedFinal = finalizeModuleComplexity({ ...expectedBase, units: expectedBase.units, observations: expectedBase.observations });
+      assert.deepEqual(result.facts, [expectedFinal.fact], entry.id);
+      assert.deepEqual(sourceEvents, ["source-acquired", "fact-retained", "source-released"], entry.id);
       assert.deepEqual(Object.fromEntries([
         "parser-created", "parser-deleted", "tree-created", "tree-deleted",
         "cursor-created", "cursor-deleted", "observation-stream-created", "observation-stream-released",
@@ -139,7 +138,7 @@ test("all table cases traverse the production adapter, domain, and application p
         "observation-stream-created": 1,
         "observation-stream-released": 1,
       }, entry.id);
-      assert.equal(Object.hasOwn(result.analyses[0], "normalizedSource"), false, `Source retained for ${entry.id}`);
+      assert.deepEqual(Object.keys(result.facts[0]).sort(), ["M", "S", "U", "canonicalPath"], `Only final facts retained for ${entry.id}`);
       if (entry.id === "nonexecution-sentinel") {
         assert.equal(globalThis.__codeCitySentinel, undefined);
         assert.equal(events.slice(before).filter((event) => event === "parser-created").length, 1, "sentinel reparsed");
@@ -154,20 +153,7 @@ test("actual WASM accepts duplicate projected endpoints followed by trailing com
   const source = "function f() {}\n/* 😀 trailing */\n  ";
   const result = await processAdmittedBaseMetrics([{ canonicalPath: "duplicate.js", normalizedSource: source }], parser);
   assert.equal(result.kind, "processed");
-  assert.deepEqual(result.analyses.map(materializeAnalysis), [{
-    canonicalPath: "duplicate.js",
-    S: 1,
-    U: 2,
-    units: [
-      { path: "duplicate.js", kind: "top-level" },
-      { path: "duplicate.js", kind: "function", startByte: 0, endByte: 15, ownedRegions: [{ startByte: 10, endByte: 12 }, { startByte: 13, endByte: 15 }] },
-    ],
-    observations: [
-      { kind: "explicit-unit", form: "function", startByte: 0, endByte: 15, ownedRegions: [{ startByte: 10, endByte: 12 }, { startByte: 13, endByte: 15 }] },
-      { kind: "value-anchor", valueKind: "explicit-unit-declaration/expression", startByte: 0, endByte: 15 },
-      { kind: "lexical-exclusion", startByte: 16, endByte: 35 },
-    ],
-  }]);
+  assert.deepEqual(result.facts, [{ canonicalPath: "duplicate.js", S: 1, U: 2, M: 1 }]);
 });
 
 test("endpoint dedup bounds conversion to the compacted prefix", async () => {
@@ -270,17 +256,26 @@ test("dense full-envelope actual-WASM processing retains compact facts with one 
   const dense = ";".repeat(2_097_152);
   const modules = Array.from({ length: 4_000 }, (_, index) => ({ canonicalPath: `dense/${String(index).padStart(4, "0")}.${["js", "jsx", "ts", "tsx"][index % 4]}`, normalizedSource: index < 20 ? dense : "" }));
   const normalizedBytes = modules.reduce((total, module) => total + Buffer.byteLength(module.normalizedSource), 0);
-  const result = await processAdmittedBaseMetrics(modules, parser, (event) => {
+  const finalized = [];
+  const inspectingParser = {
+    initialize: () => parser.initialize(),
+    async project(family, source) {
+      const stream = await parser.project(family, source);
+      finalized.push({ observationCount: stream.observations.length, observationPackedByteLength: stream.observations.packedByteLength() });
+      return stream;
+    },
+  };
+  const result = await processAdmittedBaseMetrics(modules, inspectingParser, (event) => {
     if (event === "source-acquired") { live.source += 1; peak.source = Math.max(peak.source, live.source); }
     if (event === "source-released") { live.source -= 1; cleanup.source += 1; assert(live.source >= 0); }
   });
   assert.equal(result.kind, "processed");
   assert.equal(normalizedBytes, 41_943_040);
-  assert.equal(result.analyses.length, 4_000);
-  assert.equal(result.analyses.slice(0, 20).reduce((total, analysis) => total + analysis.observations.length, 0), 41_943_040);
-  assert(result.analyses.slice(0, 20).every((analysis) => analysis.S === 1 && analysis.U === 1 && analysis.units.at(0).kind === "top-level"));
-  assert(result.analyses.slice(0, 20).every((analysis) => analysis.observations.packedByteLength() <= 64 && analysis.units.packedByteLength() === 0));
-  assert(result.analyses.slice(20).every((analysis) => analysis.S === 0 && analysis.U === 0 && analysis.observations.length === 0));
+  assert.equal(result.facts.length, 4_000);
+  assert.equal(finalized.slice(0, 20).reduce((total, entry) => total + entry.observationCount, 0), 41_943_040);
+  assert(result.facts.slice(0, 20).every((fact) => fact.S === 1 && fact.U === 1 && fact.M === 1));
+  assert(finalized.slice(0, 20).every((entry) => entry.observationPackedByteLength <= 64));
+  assert(result.facts.slice(20).every((fact) => fact.S === 0 && fact.U === 0 && fact.M === 0));
   assert.deepEqual(peak, { parser: 1, tree: 1, cursor: 1, source: 1, stream: 1 });
   assert.deepEqual(live, { parser: 0, tree: 0, cursor: 0, source: 0, stream: 0 });
   assert.deepEqual(cleanup, { parser: 4_000, tree: 4_000, cursor: 8_000, source: 4_000, stream: 4_000 });
