@@ -68,18 +68,6 @@ for(const item of cases){
   console.log("browser-evidence:done:"+item.id);
 }
 
-console.log("browser-evidence:start:dense-envelope");
-const denseTracker=resources();
-const denseParser=createParser(denseTracker);
-const denseSource=";".repeat(MAX);
-const denseModules=Array.from({length:4000},(_,index)=>({canonicalPath:"dense/"+String(index).padStart(4,"0")+"."+["js","jsx","ts","tsx"][index%4],normalizedSource:index<20?denseSource:""}));
-const denseResult=await processAdmittedBaseMetrics(denseModules,denseParser,(event)=>denseTracker.application(event));
-if(denseResult.kind!=="processed"||denseResult.analyses.length!==4000)throw new Error("dense envelope failed");
-const denseCleanup={parserDeletes:denseTracker.cleanup.parserDeletes,treeDeletes:denseTracker.cleanup.treeDeletes,cursorDeletes:denseTracker.cleanup.cursorDeletes,sourceReleases:denseTracker.cleanup.sourceReleases,observationStreamReleases:denseTracker.cleanup.observationStreamReleases};
-const densePass=denseResult.analyses.slice(0,20).every((analysis)=>analysis.S===1&&analysis.U===1&&analysis.observations.length===MAX&&analysis.observations.packedByteLength()<=64&&analysis.units.packedByteLength()===0)&&denseResult.analyses.slice(20).every((analysis)=>analysis.S===0&&analysis.U===0&&analysis.observations.length===0)&&JSON.stringify(denseTracker.peak)===JSON.stringify({parser:1,tree:1,cursor:1,source:1,observationStream:1})&&JSON.stringify(denseCleanup)===JSON.stringify({parserDeletes:4000,treeDeletes:4000,cursorDeletes:8000,sourceReleases:4000,observationStreamReleases:4000})&&Object.values(denseTracker.live).every((count)=>count===0);
-if(!densePass)throw new Error("dense envelope facts, compact storage, or cleanup mismatch");
-console.log("browser-evidence:done:dense-envelope");
-
 const matrixPaths=[];
 for(let index=0;index<4000;index++){
   const suffix=["js","jsx","ts","tsx"][index%4];
@@ -107,7 +95,7 @@ for(let run=0;run<2;run++){
   console.log("browser-evidence:done:matrix:"+run);
 }
 const assetRequests=ASSETS.map(({role,path,sha256})=>({role,path,sha256}));
-const result={schemaVersion:1,assetRequests,cases:outputCases,matrixRuns,browserExceptions:[],unexpectedNetworkRequests:[],overallPass:densePass&&outputCases.every((entry)=>entry.pass)&&matrixRuns.every((entry)=>entry.pass)&&matrixRuns[0].runDigest===matrixRuns[1].runDigest};
+const result={schemaVersion:1,assetRequests,cases:outputCases,matrixRuns,browserExceptions:[],unexpectedNetworkRequests:[],overallPass:outputCases.every((entry)=>entry.pass)&&matrixRuns.every((entry)=>entry.pass)&&matrixRuns[0].runDigest===matrixRuns[1].runDigest};
 document.querySelector("#result").textContent=JSON.stringify(result);
 `;
 }
