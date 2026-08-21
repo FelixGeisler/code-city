@@ -62,6 +62,87 @@ function assertView(actual, expected, id) {
   }
 }
 
+function adversarialTypedArrays(source) {
+  const Expected = source.constructor;
+  const Wrong = source instanceof Float32Array ? Uint32Array : Int8Array;
+  const bytesPerElement = Expected.BYTES_PER_ELEMENT;
+  const noReads = [];
+  const guardedGetter = (id, value) => {
+    let reads = 0;
+    noReads.push(() => assert.equal(reads, 0, `${id}: invoked attacker getter/trap`));
+    return { get: () => { reads += 1; return value; } };
+  };
+  const guardedProxy = (id, target, transparentGet = false) => {
+    let traps = 0;
+    noReads.push(() => assert.equal(traps, 0, `${id}: invoked attacker proxy trap`));
+    return new Proxy(target, {
+      get(inner, key) {
+        traps += 1;
+        return transparentGet ? Reflect.get(inner, key, inner) : undefined;
+      },
+      getOwnPropertyDescriptor(inner, key) { traps += 1; return Reflect.getOwnPropertyDescriptor(inner, key); },
+      getPrototypeOf(inner) { traps += 1; return Reflect.getPrototypeOf(inner); },
+      ownKeys(inner) { traps += 1; return Reflect.ownKeys(inner); },
+    });
+  };
+
+  const prototypeFake = Object.create(Expected.prototype);
+  for (let index = 0; index < source.length; index += 1) {
+    Object.defineProperty(prototypeFake, String(index), { configurable: true, enumerable: true, value: source[index], writable: true });
+  }
+  Object.defineProperty(prototypeFake, "length", { configurable: true, ...guardedGetter("prototype fake length", source.length) });
+
+  const tagFake = Object.create(Expected.prototype);
+  Object.defineProperty(tagFake, Symbol.toStringTag, { configurable: true, ...guardedGetter("Symbol.toStringTag fake", Expected.name) });
+
+  const extra = new Expected(source);
+  Object.defineProperty(extra, "extra", { configurable: true, ...guardedGetter("typed array extra", true) });
+  const ownLength = new Expected(source);
+  Object.defineProperty(ownLength, "length", { configurable: true, ...guardedGetter("typed array own length", source.length) });
+  const ownTag = new Expected(source);
+  Object.defineProperty(ownTag, Symbol.toStringTag, { configurable: true, ...guardedGetter("typed array own tag", Expected.name) });
+  const bufferExtra = new Expected(source);
+  Object.defineProperty(bufferExtra.buffer, "extra", { configurable: true, ...guardedGetter("ArrayBuffer extra", true) });
+
+  const wrongBrand = new Wrong(source.length);
+  Object.setPrototypeOf(wrongBrand, Expected.prototype);
+  const wrongView = new DataView(new ArrayBuffer(source.byteLength));
+  Object.setPrototypeOf(wrongView, Expected.prototype);
+  class TypedArraySubclass extends Expected {}
+  class ArrayBufferSubclass extends ArrayBuffer {}
+
+  const detached = new Expected(source);
+  structuredClone(detached.buffer, { transfer: [detached.buffer] });
+  const revokedFake = Proxy.revocable(prototypeFake, {});
+  revokedFake.revoke();
+  const revokedTypedArray = Proxy.revocable(new Expected(source), {});
+  revokedTypedArray.revoke();
+
+  return {
+    attacks: [
+      ["prototype fake", prototypeFake],
+      ["Symbol.toStringTag fake", tagFake],
+      ["active ordinary proxy", guardedProxy("active ordinary proxy", prototypeFake)],
+      ["revoked ordinary proxy", revokedFake.proxy],
+      ["active typed-array proxy", guardedProxy("active typed-array proxy", new Expected(source), true)],
+      ["revoked typed-array proxy", revokedTypedArray.proxy],
+      ["wrong intrinsic brand", wrongBrand],
+      ["wrong ArrayBuffer view", wrongView],
+      ["typed-array subclass", new TypedArraySubclass(source)],
+      ["typed array extra", extra],
+      ["typed array own length", ownLength],
+      ["typed array own tag", ownTag],
+      ["ArrayBuffer extra", bufferExtra],
+      ["non-zero byte offset", new Expected(new ArrayBuffer(source.byteLength + bytesPerElement), bytesPerElement, source.length)],
+      ["oversized backing buffer", new Expected(new ArrayBuffer(source.byteLength + bytesPerElement), 0, source.length)],
+      ["ArrayBuffer subclass", new Expected(new ArrayBufferSubclass(source.byteLength))],
+      ["SharedArrayBuffer", new Expected(new SharedArrayBuffer(source.byteLength))],
+      ["detached ArrayBuffer", detached],
+    ],
+    assertNoReads() { for (const assertion of noReads) assertion(); },
+  };
+}
+
 const REQUIRED_MALFORMED_IDS = [
   "wrong-kind", "count-zero", "short-origins", "non-palette", "zero-width", "depth-mismatch",
   "origin-layout", "bounds-mismatch", "fractional-size", "float-limit", "equal-x", "bad-aspect",
@@ -218,6 +299,19 @@ test("defensive model validation rejects shape, classes, lengths, colours, exten
   assertCityFailure(() => validatePresentationModel(negativeZero), "negative zero");
 });
 
+test("every presentation array requires an exact intrinsic typed-array and ordinary owned buffer without active reads", () => {
+  const source = buildCity(fixture.cityCases.find(({ id }) => id === "n5-varying-depths").facts).model;
+  for (const field of ["origins", "sizes", "rgba", "bounds"]) {
+    const adversarial = adversarialTypedArrays(source[field]);
+    for (const [id, value] of adversarial.attacks) {
+      const model = cloneModel(source);
+      model[field] = value;
+      assertCityFailure(() => validatePresentationModel(model), `${field}: ${id}`);
+    }
+    adversarial.assertNoReads();
+  }
+});
+
 test("view derivation matches every literal double-precision component and exercises both fit branches", () => {
   for (const entry of fixture.viewCases) {
     const actual = deriveView(entry.bounds, entry.aspect);
@@ -250,6 +344,12 @@ test("view derivation rejects degenerate, non-finite, malformed bounds and non-p
   for (const aspect of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
     assertCityFailure(() => deriveView([0, 0, 0, 1, 1, 1], aspect));
   }
+});
+
+test("typed view bounds reject branded fakes, proxies, wrong views, subclasses, extras, and unsafe buffers without active reads", () => {
+  const adversarial = adversarialTypedArrays(new Float32Array([0, 0, 0, 1, 1, 1]));
+  for (const [id, value] of adversarial.attacks) assertCityFailure(() => deriveView(value, 1), id);
+  adversarial.assertNoReads();
 });
 
 test("the 4,000-fact full envelope has the literal bounds and renewed exact float proof", () => {

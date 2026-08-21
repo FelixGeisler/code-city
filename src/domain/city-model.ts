@@ -40,6 +40,16 @@ const MAX_FLOAT_INTEGER = 2 ** 24;
 const MAX_TARGET_RELATIVE = 2 ** 23;
 const FACT_KEYS = ["canonicalPath", "S", "U", "M"] as const;
 const MODEL_KEYS = ["kind", "count", "origins", "sizes", "rgba", "bounds"] as const;
+const ARRAY_BUFFER_IS_VIEW = ArrayBuffer.isView;
+const ARRAY_BUFFER_PROTOTYPE = ArrayBuffer.prototype;
+const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Float32Array.prototype) as object;
+type IntrinsicGetter = (this: unknown) => unknown;
+const TYPED_ARRAY_TAG = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, Symbol.toStringTag)!.get as IntrinsicGetter;
+const TYPED_ARRAY_BUFFER = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "buffer")!.get as IntrinsicGetter;
+const TYPED_ARRAY_BYTE_LENGTH = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "byteLength")!.get as IntrinsicGetter;
+const TYPED_ARRAY_BYTE_OFFSET = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "byteOffset")!.get as IntrinsicGetter;
+const TYPED_ARRAY_LENGTH = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "length")!.get as IntrinsicGetter;
+const ARRAY_BUFFER_BYTE_LENGTH = Object.getOwnPropertyDescriptor(ARRAY_BUFFER_PROTOTYPE, "byteLength")!.get as IntrinsicGetter;
 const PALETTE = [
   [0x44, 0x01, 0x54, 0xff],
   [0x41, 0x44, 0x87, 0xff],
@@ -152,13 +162,32 @@ function snapshotFacts(value: unknown): FactSnapshot[] {
 function exactTypedArray<T extends Float32Array | Uint8Array>(
   value: unknown,
   prototype: object,
+  brand: "Float32Array" | "Uint8Array",
   length: number,
+  bytesPerElement: number,
 ): value is T {
+  if (typeof value !== "object" || value === null || !ARRAY_BUFFER_IS_VIEW(value)) return false;
   try {
-    return typeof value === "object"
-      && value !== null
-      && Object.getPrototypeOf(value) === prototype
-      && (value as T).length === length;
+    const byteLength = checkedMultiply(length, bytesPerElement);
+    if (TYPED_ARRAY_TAG.call(value) !== brand
+      || TYPED_ARRAY_LENGTH.call(value) !== length
+      || TYPED_ARRAY_BYTE_OFFSET.call(value) !== 0
+      || TYPED_ARRAY_BYTE_LENGTH.call(value) !== byteLength
+      || Object.getPrototypeOf(value) !== prototype) return false;
+
+    const buffer = TYPED_ARRAY_BUFFER.call(value);
+    if (typeof buffer !== "object"
+      || buffer === null
+      || Object.getPrototypeOf(buffer) !== ARRAY_BUFFER_PROTOTYPE
+      || ARRAY_BUFFER_BYTE_LENGTH.call(buffer) !== byteLength
+      || Reflect.ownKeys(buffer).length !== 0) return false;
+
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== length) return false;
+    for (let index = 0; index < length; index += 1) {
+      if (keys[index] !== String(index)) return false;
+    }
+    return true;
   } catch {
     return false;
   }
@@ -256,10 +285,10 @@ export function validatePresentationModel(value: unknown): PresentationModel {
   const count = record.count;
   const vectorLength = checkedMultiply(count, 3);
   const colourLength = checkedMultiply(count, 4);
-  if (!exactTypedArray<Float32Array>(record.origins, Float32Array.prototype, vectorLength)
-    || !exactTypedArray<Float32Array>(record.sizes, Float32Array.prototype, vectorLength)
-    || !exactTypedArray<Uint8Array>(record.rgba, Uint8Array.prototype, colourLength)
-    || !exactTypedArray<Float32Array>(record.bounds, Float32Array.prototype, 6)) invalid();
+  if (!exactTypedArray<Float32Array>(record.origins, Float32Array.prototype, "Float32Array", vectorLength, 4)
+    || !exactTypedArray<Float32Array>(record.sizes, Float32Array.prototype, "Float32Array", vectorLength, 4)
+    || !exactTypedArray<Uint8Array>(record.rgba, Uint8Array.prototype, "Uint8Array", colourLength, 1)
+    || !exactTypedArray<Float32Array>(record.bounds, Float32Array.prototype, "Float32Array", 6, 4)) invalid();
 
   const model: PresentationModel = {
     kind: PRESENTATION_KIND,
@@ -361,8 +390,8 @@ function boundsSnapshot(value: unknown): readonly [number, number, number, numbe
         if (!descriptor || !("value" in descriptor) || !descriptor.enumerable || typeof descriptor.value !== "number") invalid();
         snapshot.push(descriptor.value);
       }
-    } else if (exactTypedArray<Float32Array>(value, Float32Array.prototype, 6)) {
-      snapshot.push(...value);
+    } else if (exactTypedArray<Float32Array>(value, Float32Array.prototype, "Float32Array", 6, 4)) {
+      for (let index = 0; index < 6; index += 1) snapshot.push(value[index]!);
     } else {
       invalid();
     }
