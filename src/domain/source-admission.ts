@@ -80,7 +80,12 @@ function validatePath(path: string): Readonly<{ rawPath: string; canonicalPath: 
   };
 }
 
-function compareUnsignedUtf8(left: string, right: string): number {
+export function isCanonicalSourcePath(path: string): boolean {
+  const validated = validatePath(path);
+  return validated?.canonicalPath === path && hasSupportedSuffix(path);
+}
+
+export function compareUnsignedUtf8(left: string, right: string): number {
   const leftBytes = textEncoder.encode(left);
   const rightBytes = textEncoder.encode(right);
   const length = Math.min(leftBytes.length, rightBytes.length);
