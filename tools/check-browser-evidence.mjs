@@ -215,7 +215,7 @@ const WORKER_OBSERVATION_SOURCE = `(() => {
   };
 })();`;
 
-async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, requestedUrls }) {
+async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, requestedUrls, browserExceptions, failedRequests }) {
   const fixture = SUCCESS_FIXTURE;
   const revisionUrl = "https://api.github.com/repos/code-city/evidence-fixture/commits?per_page=1&page=1";
   const commitUrl = `https://api.github.com/repos/code-city/evidence-fixture/git/commits/${fixture.selected}`;
@@ -341,7 +341,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await cdp.send("Fetch.enable", { patterns: urls.map((urlPattern) => ({ urlPattern, requestStage: "Request" })) }, sessionId);
     await cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
     await cdp.send("Page.navigate", { url: `${origin}/code-city/index.html` }, sessionId);
-    await waitFor("document.querySelector('form') && globalThis.__codeCitySuccessEvidence", "canonical package startup");
+    await waitFor("document.readyState==='complete'&&document.querySelector('form')&&globalThis.__codeCitySuccessEvidence", "canonical package startup");
 
     const submit = `document.querySelector('input[name=repository]').value=${JSON.stringify(fixture.repositoryUrl)};document.querySelector('form').requestSubmit();true`;
     await evaluate(submit);
@@ -360,6 +360,8 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     const surface = await evaluate("({forms:document.querySelectorAll('[data-form]').length,status:document.querySelectorAll('[data-status]').length,commits:document.querySelectorAll('[data-commit]').length,cities:document.querySelectorAll('[data-city]').length,inputs:document.querySelectorAll('input[name=repository]').length,submit:document.querySelector('form button[type=submit]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length})");
 
     invariant(failures.length === 0, `Production success instrumentation failed: ${failures.map(String).join("; ")}`);
+    invariant(browserExceptions.length === 0, `Production browser exceptions: ${browserExceptions.join("; ")}`);
+    invariant(failedRequests.length === 0, `Production failed requests: ${failedRequests.join("; ")}`);
     assert.deepEqual(gets.map(({ url }) => url), [...urls, ...urls]);
     assert.equal(maximumGetConcurrency, 1);
     invariant(options.length >= 3, "Native CORS preflights were not intercepted on the parent session");
@@ -596,7 +598,7 @@ export async function checkPackagedBrowserEvidence() {
     });
     invariant(unexpected.length === 0, `Unexpected browser network request(s): ${unexpected.join(", ")}`);
     validateBrowserResult(result, selected);
-    await checkProductionSuccessPath({ cdp, sessionId, origin, manifest, requestedUrls });
+    await checkProductionSuccessPath({ cdp, sessionId, origin, manifest, requestedUrls, browserExceptions, failedRequests });
     console.log(`Packaged Chrome/CDP evidence passed with ${executable} (${version}); ${result.cases.length} stress cases, two comment matrices, two complete complexity matrices, presenter failure evidence, and two canonical production success flows.`);
   } catch (error) {
     failure = error;
