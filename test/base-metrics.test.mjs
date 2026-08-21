@@ -42,13 +42,14 @@ function materializeAnalysis(analysis) {
   return { canonicalPath: analysis.canonicalPath, S: analysis.S, U: analysis.U, units: [...analysis.units], observations: [...analysis.observations] };
 }
 
-function endpointParser(startIndex, endIndex, events = []) {
+function endpointParser(startIndex, endIndex, events = [], copies = 1) {
   const rootNode = {
     hasError: false,
     walk() {
+      let index = 0;
       return {
-        nodeType: "comment", nodeIsNamed: true, nodeIsMissing: false, currentFieldName: null, startIndex, endIndex,
-        gotoFirstChild: () => false, gotoNextSibling: () => false, gotoParent: () => false, delete() {},
+        get nodeType() { return "comment"; }, get nodeIsNamed() { return true; }, get nodeIsMissing() { return false; }, get currentFieldName() { return null; }, get startIndex() { return startIndex; }, get endIndex() { return endIndex; },
+        gotoFirstChild: () => false, gotoNextSibling() { if (index + 1 >= copies) return false; index += 1; return true; }, gotoParent: () => false, delete() {},
       };
     },
   };
@@ -146,6 +147,36 @@ test("all table cases traverse the production adapter, domain, and application p
     }
   }
   assert.equal(globalThis.__codeCitySentinel, undefined);
+});
+
+test("actual WASM accepts duplicate projected endpoints followed by trailing comment and trivia", async () => {
+  const parser = createTreeSitterAdapter(assets, { loadBytes: bytesFromFileUrl });
+  const source = "function f() {}\n/* 😀 trailing */\n  ";
+  const result = await processAdmittedBaseMetrics([{ canonicalPath: "duplicate.js", normalizedSource: source }], parser);
+  assert.equal(result.kind, "processed");
+  assert.deepEqual(result.analyses.map(materializeAnalysis), [{
+    canonicalPath: "duplicate.js",
+    S: 1,
+    U: 2,
+    units: [
+      { path: "duplicate.js", kind: "top-level" },
+      { path: "duplicate.js", kind: "function", startByte: 0, endByte: 15, ownedRegions: [{ startByte: 10, endByte: 12 }, { startByte: 13, endByte: 15 }] },
+    ],
+    observations: [
+      { kind: "explicit-unit", form: "function", startByte: 0, endByte: 15, ownedRegions: [{ startByte: 10, endByte: 12 }, { startByte: 13, endByte: 15 }] },
+      { kind: "value-anchor", valueKind: "explicit-unit-declaration/expression", startByte: 0, endByte: 15 },
+      { kind: "lexical-exclusion", startByte: 16, endByte: 35 },
+    ],
+  }]);
+});
+
+test("endpoint dedup bounds conversion to the compacted prefix", async () => {
+  const stream = await endpointParser(0, 1, [], 2).project("javascript-no-jsx", "x ");
+  assert.deepEqual([...stream.observations], [
+    { kind: "lexical-exclusion", startByte: 0, endByte: 1 },
+    { kind: "lexical-exclusion", startByte: 0, endByte: 1 },
+  ]);
+  stream.release();
 });
 
 test("a later module failure discards complete earlier facts and releases every source and stream", async () => {
