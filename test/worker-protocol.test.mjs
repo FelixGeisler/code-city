@@ -50,11 +50,13 @@ test("worker-to-main protocol rejects unknown, inherited, accessor, malformed, a
   const failure = { type: "FAILURE", generation: 7, category: "Revision unavailable" };
   const codedFailure = { type: "FAILURE", generation: 7, category: "Source admission failed", code: "M1-ADM-4" };
   const metricFailure = { type: "FAILURE", generation: 7, category: "Metric processing failed", code: "M1-MET-1" };
+  const cityFailure = { type: "FAILURE", generation: 7, category: "City construction failed", code: "M1-CITY-1" };
   const staticEntered = { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 7 };
   const drained = { type: "ATTEMPT_DRAINED", generation: 7 };
   assert.deepEqual(parseWorkerMessage(failure, 7), failure);
   assert.deepEqual(parseWorkerMessage(codedFailure, 7), codedFailure);
   assert.deepEqual(parseWorkerMessage(metricFailure, 7), metricFailure);
+  assert.deepEqual(parseWorkerMessage(cityFailure, 7), cityFailure);
   assert.deepEqual(parseWorkerMessage(staticEntered, 7), staticEntered);
   assert.deepEqual(parseWorkerMessage(drained, 7), drained);
   for (const invalid of [
@@ -63,6 +65,10 @@ test("worker-to-main protocol rejects unknown, inherited, accessor, malformed, a
     { type: "Source admission failed", generation: 7, category: "Source admission failed" },
     { type: "FAILURE", generation: 7, category: "No supported modules", code: "M1-ADM-1" },
     { type: "FAILURE", generation: 7, category: "Metric processing failed", code: "M1-ADM-1" },
+    { type: "FAILURE", generation: 7, category: "City construction failed", code: "M1-MET-1" },
+    { type: "FAILURE", generation: 7, category: "City construction failed" },
+    { type: "FAILURE", generation: 7, category: "Unknown city failure", code: "M1-CITY-1" },
+    inherited(cityFailure), accessor(cityFailure, "code"),
     { type: "ATTEMPT_DRAINED", generation: 7, extra: true },
     inherited(failure), accessor(failure, "category"), accessor(drained, "generation"),
     new Proxy(failure, { ownKeys() { throw new Error("trap"); } }),
@@ -162,7 +168,7 @@ test("all five initialization failures traverse selected-revision worker ownersh
     assert.deepEqual(ownershipAtPublication.map(([type, ownership]) => [type, ownership.selectedRevisionRetained, ownership.admittedModuleCount, ownership.finalFactCount]), [
       ["PROVIDER_DRAINED_STATIC_ENTERED", true, 3, 0], ["FAILURE", false, 0, 0], ["ATTEMPT_DRAINED", false, 0, 0],
     ], injected);
-    assert.deepEqual(pipeline.ownership(), { phase: "idle", selectedRevisionRetained: false, admittedModuleCount: 0, finalFactCount: 0, providerResource: false }, injected);
+    assert.deepEqual(pipeline.ownership(), { phase: "idle", selectedRevisionRetained: false, admittedModuleCount: 0, cityRetained: false, finalFactCount: 0, providerResource: false }, injected);
   }
 });
 
@@ -187,6 +193,7 @@ test("complete admission crosses only the closed static barrier and retains no p
     generation: 9,
     selectedRevisionRetained: true,
     admittedModuleCount: 1,
+    cityRetained: false,
     finalFactCount: 0,
     providerResource: false,
   });

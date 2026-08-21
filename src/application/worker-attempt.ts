@@ -1,6 +1,7 @@
 import type { AdmittedModule } from "../domain/source-admission";
 import type { RepositoryReference } from "../domain/repository-reference";
 import type { ModuleComplexityFact } from "../domain/complexity";
+import { buildCity, validatePresentationModel, type City } from "../domain/city-model";
 import { processAdmittedBaseMetrics, type MetricProcessingEvent, type SyntaxProjectionCapability } from "./base-metric-processing";
 import type { WorkerMessage } from "./protocol";
 import { resolveRevision, type RevisionGateway } from "./resolution";
@@ -12,6 +13,7 @@ import {
 
 type ActiveAttempt = {
   admittedModules?: readonly AdmittedModule[];
+  city?: City;
   finalFacts?: readonly ModuleComplexityFact[];
   controller?: AbortController;
   drained: boolean;
@@ -28,9 +30,12 @@ export type AttemptOwnership = Readonly<{
   generation?: number;
   selectedRevisionRetained: boolean;
   admittedModuleCount: number;
+  cityRetained: boolean;
   finalFactCount: number;
   providerResource: false;
 }>;
+
+export type CityConstructionCapability = (facts: readonly ModuleComplexityFact[]) => City;
 
 export type WorkerAttemptPipeline = Readonly<{
   start(repository: RepositoryReference, generation: number): void;
@@ -45,6 +50,7 @@ export function createWorkerAttemptPipeline(
   observeRetrieval: (ownership: RetrievalOwnership) => void = () => {},
   syntaxParser?: SyntaxProjectionCapability,
   observeMetricProcessing: (event: MetricProcessingEvent) => void = () => {},
+  constructCity: CityConstructionCapability = buildCity,
 ): WorkerAttemptPipeline {
   let active: ActiveAttempt | undefined;
 
@@ -57,6 +63,7 @@ export function createWorkerAttemptPipeline(
     attempt.repository = undefined;
     attempt.selectedRevision = undefined;
     attempt.admittedModules = undefined;
+    attempt.city = undefined;
     attempt.finalFacts = undefined;
     publish({ type: "ATTEMPT_DRAINED", generation: attempt.generation });
     if (active === attempt) {
@@ -138,6 +145,25 @@ export function createWorkerAttemptPipeline(
           return;
         }
         attempt.finalFacts = processing.facts;
+        let candidate: City | undefined;
+        try {
+          candidate = constructCity(processing.facts);
+          validatePresentationModel(candidate.model);
+          attempt.city = candidate;
+          attempt.finalFacts = undefined;
+          candidate = undefined;
+        } catch {
+          candidate = undefined;
+          attempt.city = undefined;
+          attempt.finalFacts = undefined;
+          publish({
+            type: "FAILURE",
+            generation,
+            category: "City construction failed",
+            code: "M1-CITY-1",
+          });
+          drain(attempt);
+        }
       }
     })().catch(() => {
       if (attempt.stopped) {
@@ -171,6 +197,7 @@ export function createWorkerAttemptPipeline(
           generation: active.generation,
           selectedRevisionRetained: active.selectedRevision !== undefined,
           admittedModuleCount: active.admittedModules?.length ?? 0,
+          cityRetained: active.city !== undefined,
           finalFactCount: active.finalFacts?.length ?? 0,
           providerResource: false,
         }
@@ -178,6 +205,7 @@ export function createWorkerAttemptPipeline(
           phase: "idle",
           selectedRevisionRetained: false,
           admittedModuleCount: 0,
+          cityRetained: false,
           finalFactCount: 0,
           providerResource: false,
         },

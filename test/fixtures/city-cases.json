@@ -1,0 +1,194 @@
+{
+  "schemaVersion": 1,
+  "paletteBoundaries": [
+    { "M": 0, "rgba": [68, 1, 84, 255] },
+    { "M": 1, "rgba": [65, 68, 135, 255] },
+    { "M": 2, "rgba": [42, 120, 142, 255] },
+    { "M": 3, "rgba": [42, 120, 142, 255] },
+    { "M": 4, "rgba": [34, 168, 132, 255] },
+    { "M": 7, "rgba": [34, 168, 132, 255] },
+    { "M": 8, "rgba": [122, 209, 81, 255] },
+    { "M": 15, "rgba": [122, 209, 81, 255] },
+    { "M": 16, "rgba": [253, 231, 37, 255] },
+    { "M": 9007199254740991, "rgba": [253, 231, 37, 255] }
+  ],
+  "cityCases": [
+    {
+      "id": "n1-zero",
+      "facts": [{ "canonicalPath": "z.js", "S": 0, "U": 0, "M": 0 }],
+      "expected": {
+        "identities": ["z.js"],
+        "count": 1,
+        "origins": [0, 0, 0],
+        "sizes": [1, 1, 1],
+        "rgba": [68, 1, 84, 255],
+        "bounds": [0, 0, 0, 1, 1, 1]
+      }
+    },
+    {
+      "id": "n2-unsorted",
+      "facts": [
+        { "canonicalPath": "b.js", "S": 0, "U": 3, "M": 2 },
+        { "canonicalPath": "a.ts", "S": 2, "U": 1, "M": 1 }
+      ],
+      "expected": {
+        "identities": ["a.ts", "b.js"],
+        "count": 2,
+        "origins": [0, 0, 0, 3, 0, 0],
+        "sizes": [2, 3, 2, 4, 1, 4],
+        "rgba": [65, 68, 135, 255, 42, 120, 142, 255],
+        "bounds": [0, 0, 0, 7, 3, 4]
+      }
+    },
+    {
+      "id": "n4-varying-rows",
+      "facts": [
+        { "canonicalPath": "d.tsx", "S": 2, "U": 3, "M": 16 },
+        { "canonicalPath": "b.mjs", "S": 4, "U": 2, "M": 4 },
+        { "canonicalPath": "a.js", "S": 0, "U": 0, "M": 3 },
+        { "canonicalPath": "c.cts", "S": 1, "U": 1, "M": 8 }
+      ],
+      "expected": {
+        "identities": ["a.js", "b.mjs", "c.cts", "d.tsx"],
+        "count": 4,
+        "origins": [0, 0, 0, 2, 0, 0, 0, 0, 4, 3, 0, 4],
+        "sizes": [1, 1, 1, 3, 5, 3, 2, 2, 2, 4, 3, 4],
+        "rgba": [42, 120, 142, 255, 34, 168, 132, 255, 122, 209, 81, 255, 253, 231, 37, 255],
+        "bounds": [0, 0, 0, 7, 5, 8]
+      }
+    },
+    {
+      "id": "n5-varying-depths",
+      "facts": [
+        { "canonicalPath": "e.jsx", "S": 3, "U": 0, "M": 15 },
+        { "canonicalPath": "c.ts", "S": 1, "U": 2, "M": 2 },
+        { "canonicalPath": "a.js", "S": 0, "U": 1, "M": 0 },
+        { "canonicalPath": "d.mts", "S": 4, "U": 3, "M": 7 },
+        { "canonicalPath": "b.cjs", "S": 2, "U": 0, "M": 1 }
+      ],
+      "expected": {
+        "identities": ["a.js", "b.cjs", "c.ts", "d.mts", "e.jsx"],
+        "count": 5,
+        "origins": [0, 0, 0, 3, 0, 0, 5, 0, 0, 0, 0, 4, 5, 0, 4],
+        "sizes": [2, 1, 2, 1, 3, 1, 3, 2, 3, 4, 5, 4, 1, 4, 1],
+        "rgba": [68, 1, 84, 255, 65, 68, 135, 255, 42, 120, 142, 255, 34, 168, 132, 255, 122, 209, 81, 255],
+        "bounds": [0, 0, 0, 8, 5, 8]
+      }
+    }
+  ],
+  "permutations": {
+    "cityCase": "n5-varying-depths",
+    "orders": [
+      [0, 1, 2, 3, 4],
+      [4, 3, 2, 1, 0],
+      [2, 4, 0, 3, 1],
+      [1, 3, 0, 4, 2]
+    ]
+  },
+  "viewCases": [
+    {
+      "id": "landscape-vertical-branch",
+      "bounds": [0, 0, 0, 7, 5, 8],
+      "aspect": 2,
+      "expected": {
+        "target": [3.5, 2.5, 4],
+        "D": [0.5773502691896258, 0.5773502691896258, 0.5773502691896258],
+        "R": [0.7071067811865475, 0, -0.7071067811865475],
+        "V": [-0.4082482904638631, 0.8164965809277261, -0.4082482904638631],
+        "E_r": 5.303300858899106,
+        "E_v": 5.103103630798288,
+        "H": 5.613413993878117,
+        "verticalHalf": 5.613413993878117,
+        "horizontalHalf": 11.226827987756234,
+        "E_d": 5.773502691896258,
+        "camera": [13.500000000000002, 12.500000000000002, 14.000000000000002],
+        "near": 5.773502691896258,
+        "far": 28.86751345948129
+      }
+    },
+    {
+      "id": "portrait-horizontal-branch",
+      "bounds": [0, 0, 0, 7, 5, 8],
+      "aspect": 0.5,
+      "expected": {
+        "target": [3.5, 2.5, 4],
+        "D": [0.5773502691896258, 0.5773502691896258, 0.5773502691896258],
+        "R": [0.7071067811865475, 0, -0.7071067811865475],
+        "V": [-0.4082482904638631, 0.8164965809277261, -0.4082482904638631],
+        "E_r": 5.303300858899106,
+        "E_v": 5.103103630798288,
+        "H": 11.667261889578034,
+        "verticalHalf": 11.667261889578034,
+        "horizontalHalf": 5.833630944789017,
+        "E_d": 5.773502691896258,
+        "camera": [13.500000000000002, 12.500000000000002, 14.000000000000002],
+        "near": 5.773502691896258,
+        "far": 28.86751345948129
+      }
+    },
+    {
+      "id": "offset-double-precision",
+      "bounds": [1.25, -2.5, 3.75, 8.5, 4.125, 10.875],
+      "aspect": 1.3333333333333333,
+      "expected": {
+        "target": [4.875, 0.8125, 7.3125],
+        "D": [0.5773502691896258, 0.5773502691896258, 0.5773502691896258],
+        "R": [0.7071067811865475, 0, -0.7071067811865475],
+        "V": [-0.4082482904638631, 0.8164965809277261, -0.4082482904638631],
+        "E_r": 5.08232998977831,
+        "E_v": 5.638929512032108,
+        "H": 6.20282246323532,
+        "verticalHalf": 6.20282246323532,
+        "horizontalHalf": 8.270429950980425,
+        "E_d": 6.062177826491071,
+        "camera": [15.375000000000002, 11.312500000000002, 17.8125],
+        "near": 6.062177826491071,
+        "far": 30.310889132455358
+      }
+    },
+    {
+      "id": "full-envelope",
+      "bounds": [0, 0, 0, 13981147, 2097153, 699176],
+      "aspect": 1.7777777777777777,
+      "expected": {
+        "target": [6990573.5, 1048576.5, 349588],
+        "D": [0.5773502691896258, 0.5773502691896258, 0.5773502691896258],
+        "R": [0.7071067811865475, 0, -0.7071067811865475],
+        "V": [-0.4082482904638631, 0.8164965809277261, -0.4082482904638631],
+        "E_r": 5190277.97165442,
+        "E_v": 3852767.5111948266,
+        "H": 4238044.262314309,
+        "verticalHalf": 4238044.262314309,
+        "horizontalHalf": 7534300.910780994,
+        "E_d": 4843240.142461243,
+        "camera": [15379311.500000002, 9437314.500000002, 8738326.000000002],
+        "near": 4843240.142461243,
+        "far": 24216200.712306216
+      }
+    }
+  ],
+  "malformedCases": [
+    { "id": "wrong-kind", "target": "model", "mutation": "kind", "literal": "OTHER", "expected": "M1-CITY-1" },
+    { "id": "count-zero", "target": "model", "mutation": "count", "literal": 0, "expected": "M1-CITY-1" },
+    { "id": "short-origins", "target": "model", "mutation": "typed-length", "literal": 14, "expected": "M1-CITY-1" },
+    { "id": "non-palette", "target": "model", "mutation": "colour", "literal": [0, 1, 84, 255], "expected": "M1-CITY-1" },
+    { "id": "zero-width", "target": "model", "mutation": "positive-geometry", "literal": 0, "expected": "M1-CITY-1" },
+    { "id": "depth-mismatch", "target": "model", "mutation": "prism-shape", "literal": 3, "expected": "M1-CITY-1" },
+    { "id": "origin-layout", "target": "model", "mutation": "layout", "literal": 4, "expected": "M1-CITY-1" },
+    { "id": "bounds-mismatch", "target": "model", "mutation": "bounds", "literal": [0, 0, 0, 9, 5, 8], "expected": "M1-CITY-1" },
+    { "id": "fractional-size", "target": "model", "mutation": "float-exactness", "literal": 1.5, "expected": "M1-CITY-1" },
+    { "id": "float-limit", "target": "model", "mutation": "target-relative-limit", "literal": 16777216, "expected": "M1-CITY-1" },
+    { "id": "equal-x", "target": "view", "mutation": "degenerate-bounds", "literal": [0, 0, 0, 0, 1, 1], "expected": "M1-CITY-1" },
+    { "id": "bad-aspect", "target": "view", "mutation": "aspect", "literal": 0, "expected": "M1-CITY-1" }
+  ],
+  "fullEnvelope": {
+    "count": 4000,
+    "columns": 64,
+    "largeFactCount": 20,
+    "largeFact": { "S": 2097152, "U": 699051, "M": 0 },
+    "smallFact": { "S": 0, "U": 0, "M": 0 },
+    "expectedBounds": [0, 0, 0, 13981147, 2097153, 699176],
+    "coordinateLimitExclusive": 16777216,
+    "targetRelativeLimitExclusive": 8388608
+  }
+}

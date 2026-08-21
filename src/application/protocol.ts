@@ -83,7 +83,10 @@ function validFailureCode(category: FailureCategory, code: unknown): code is Fai
   if (category === "Source admission failed") {
     return code.startsWith("M1-ADM-");
   }
-  return category === "Metric processing failed" && code === "M1-MET-1";
+  if (category === "Metric processing failed") {
+    return code === "M1-MET-1";
+  }
+  return category === "City construction failed" && code === "M1-CITY-1";
 }
 
 export function parseWorkerMessage(value: unknown, expectedGeneration: number): WorkerMessage | undefined {
@@ -110,7 +113,8 @@ export function parseWorkerMessage(value: unknown, expectedGeneration: number): 
     && (FAILURE_CATEGORIES as readonly string[]).includes(failure.category)
     && failure.category !== "No supported modules"
     && failure.category !== "Source admission failed"
-    && failure.category !== "Metric processing failed") {
+    && failure.category !== "Metric processing failed"
+    && failure.category !== "City construction failed") {
     return {
       type: "FAILURE",
       generation: failure.generation,
