@@ -121,6 +121,10 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
   assert.equal((indexHtml.match(/<form\b/gi) ?? []).length, 1);
   assert.equal((indexHtml.match(/<input\b/gi) ?? []).length, 1);
   assert.equal((indexHtml.match(/<button\b/gi) ?? []).length, 1);
+  assert.equal((indexHtml.match(/\sdata-form(?:\s|>)/gi) ?? []).length, 1);
+  assert.equal((indexHtml.match(/\sdata-status(?:\s|>)/gi) ?? []).length, 1);
+  assert.equal((indexHtml.match(/\sdata-commit(?:\s|>)/gi) ?? []).length, 1);
+  assert.equal((indexHtml.match(/\sdata-city(?:\s|>)/gi) ?? []).length, 1);
   assert.doesNotMatch(indexHtml, /<(?:select|textarea|canvas)\b/i);
 
   const formTag = indexHtml.match(/<form\b[^>]*>/i)?.[0];
@@ -139,6 +143,9 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
   assert.match(mainSource, /from "\.\/processing-worker\.ts\?worker&url"/);
   assert.match(mainSource, /new Worker\(processingWorkerUrl, \{ type: "module" \}\)/);
   assert.match(mainSource, /form\.addEventListener\("submit", \(event\) => \{\s*event\.preventDefault\(\);\s*controller\.submit\(input\.value\);\s*\}\);/);
+  assert.match(mainSource, /replaceStatus\("Working", cancel\)/);
+  assert.match(mainSource, /commit\.textContent = revision/);
+  assert.doesNotMatch(mainSource, /innerHTML|insertAdjacentHTML/);
   assertWorkerConstructionPolicy([["Main source", mainSource], ["Worker source", workerSource]]);
   assert.doesNotMatch(`${mainSource}\n${workerSource}`, /SharedWorker|blob:|data:|createObjectURL/);
 });

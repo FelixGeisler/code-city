@@ -59,9 +59,17 @@ const WEBGL2_CONTEXT_ATTRIBUTES = Object.freeze({
   xrCompatible: false,
 }) satisfies WebGLContextAttributes;
 
-export type PresentationResult = "committed" | "stale" | "failed";
 export type PresentationFailureCategory = "City construction failed" | "Presentation failed";
 export type PresentationFailureCode = "M1-CITY-1" | "M1-PRES-1";
+export type PresentationResult =
+  | Readonly<{ kind: "committed" }>
+  | Readonly<{ kind: "stale" }>
+  | Readonly<{ kind: "failure"; category: PresentationFailureCategory; code: PresentationFailureCode }>;
+
+const COMMITTED: PresentationResult = Object.freeze({ kind: "committed" });
+const STALE: PresentationResult = Object.freeze({ kind: "stale" });
+const CITY_FAILURE: PresentationResult = Object.freeze({ kind: "failure", category: "City construction failed", code: "M1-CITY-1" });
+const PRESENTATION_FAILURE: PresentationResult = Object.freeze({ kind: "failure", category: "Presentation failed", code: "M1-PRES-1" });
 
 type LossListener = (event: Event) => void;
 
@@ -93,6 +101,7 @@ export type CityPresenterOptions<G> = Readonly<{
 
 export type CityPresenter<G> = Readonly<{
   present(generation: G, model: unknown): PresentationResult;
+  clear(): void;
   dispose(): void;
 }>;
 
@@ -445,18 +454,16 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
       } catch {
         const affected = current;
         if (affected && current === affected) removeSession(affected);
-        notify(undefined, generation, "City construction failed", "M1-CITY-1");
-        return "failed";
+        return CITY_FAILURE;
       }
       if (disposed) {
-        notify(undefined, generation, "Presentation failed", "M1-PRES-1");
-        return "failed";
+        return PRESENTATION_FAILURE;
       }
 
       const affected = current;
       let candidate: Session<G> | undefined;
       try {
-        if (!isEligible(generation)) return "stale";
+        if (!isEligible(generation)) return STALE;
         const initial = dimensions(host);
         const canvas = platform.createCanvas();
         candidate = {
@@ -478,19 +485,21 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         }
         if (!isEligible(generation)) {
           cleanup(candidate);
-          return "stale";
+          return STALE;
         }
         host.replaceChildren(canvas as unknown as Node);
         candidate.committed = true;
         current = candidate;
         if (affected && affected !== candidate) cleanup(affected);
-        return "committed";
+        return COMMITTED;
       } catch {
         if (candidate) cleanup(candidate);
         if (affected && current === affected) removeSession(affected);
-        notify(candidate, generation, "Presentation failed", "M1-PRES-1");
-        return "failed";
+        return PRESENTATION_FAILURE;
       }
+    },
+    clear(): void {
+      if (current) removeSession(current);
     },
     dispose(): void {
       if (disposed) return;

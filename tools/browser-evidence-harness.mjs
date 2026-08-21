@@ -169,7 +169,7 @@ const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeat
   const failures=[];
   const presenter=createCityPresenter({host:holder.host,platform:presentationPlatform(state),isEligible:()=>true,failed:(...args)=>failures.push(args)});
   const first=presenter.present(1,presentationModel);
-  if(first!=="committed")throw new Error("Installed Chrome WebGL2 is unavailable or rejected");
+  if(first.kind!=="committed")throw new Error("Installed Chrome WebGL2 is unavailable or rejected");
   presentation.webgl2Available=true;
   presentation.initialDraws=state.draws;
   const firstCanvas=state.canvases[0];
@@ -180,7 +180,7 @@ const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeat
   const beforeResize=state.draws;
   state.observerCallbacks.at(-1)();
   presentation.resizeDraws=state.draws-beforeResize;
-  if(repeat!=="committed"||presentation.initialDraws!==1||presentation.repeatDraws!==1||presentation.resizeDraws!==1||failures.length!==0||holder.host.firstChild!==state.canvases.at(-1)||state.canvases.at(-1).width!==400||state.canvases.at(-1).height!==240)throw new Error("Actual WebGL2 present/repeat/resize evidence failed");
+  if(repeat.kind!=="committed"||presentation.initialDraws!==1||presentation.repeatDraws!==1||presentation.resizeDraws!==1||failures.length!==0||holder.host.firstChild!==state.canvases.at(-1)||state.canvases.at(-1).width!==400||state.canvases.at(-1).height!==240)throw new Error("Actual WebGL2 present/repeat/resize evidence failed");
   presentation.actualContexts+=state.actualContexts;
   presenter.dispose();holder.host.remove();
 }
@@ -189,7 +189,7 @@ const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeat
   const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
   const failures=[];
   const presenter=createCityPresenter({host:holder.host,platform:presentationPlatform(state),isEligible:()=>true,failed:(...args)=>failures.push(args)});
-  if(presenter.present(3,presentationModel)!=="committed")throw new Error("Actual WebGL2 context-loss setup failed");
+  if(presenter.present(3,presentationModel).kind!=="committed")throw new Error("Actual WebGL2 context-loss setup failed");
   const canvas=state.canvases[0];
   const before=state.draws;
   const event=new Event("webglcontextlost",{cancelable:true});
@@ -220,17 +220,17 @@ const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeat
   presentation.compileFailures=failures;
   presentation.compileCleanup=state.deletes;
   const retainedCompileLoss=state.lossCallbacks[0];
-  if(presentation.compileFailureResult!=="failed"||state.draws!==0||state.lossCallbacks.length!==1||typeof retainedCompileLoss!=="function"||failures.length!==1||JSON.stringify(failures[0])!==JSON.stringify([4,"Presentation failed","M1-PRES-1"])||JSON.stringify(state.deletes)!==JSON.stringify({deleteShader:1,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0})||state.canvases.length!==1||holder.host.firstChild!==null)throw new Error("Actual WebGL2 compile-failure evidence failed");
+  if(JSON.stringify(presentation.compileFailureResult)!==JSON.stringify({kind:"failure",category:"Presentation failed",code:"M1-PRES-1"})||state.draws!==0||state.lossCallbacks.length!==1||typeof retainedCompileLoss!=="function"||failures.length!==0||JSON.stringify(state.deletes)!==JSON.stringify({deleteShader:1,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0})||state.canvases.length!==1||holder.host.firstChild!==null)throw new Error("Actual WebGL2 compile-failure evidence failed");
   const terminalCompileDraws=state.draws;
   const terminalCompileCleanup=JSON.stringify(state.deletes);
   retainedCompileLoss(new Event("webglcontextlost",{cancelable:true}));
   state.canvases[0].dispatchEvent(new Event("webglcontextlost",{cancelable:true}));
   presentation.compileFailureTerminalState={retainedCallbacks:state.lossCallbacks.length,failures:failures.length,drawsAfterTerminal:state.draws-terminalCompileDraws,canvases:state.canvases.length,hostChildren:holder.host.childNodes.length,cleanupUnchanged:JSON.stringify(state.deletes)===terminalCompileCleanup};
-  if(JSON.stringify(presentation.compileFailureTerminalState)!==JSON.stringify({retainedCallbacks:1,failures:1,drawsAfterTerminal:0,canvases:1,hostChildren:0,cleanupUnchanged:true}))throw new Error("Actual WebGL2 compile-failure retained callback was not inert");
+  if(JSON.stringify(presentation.compileFailureTerminalState)!==JSON.stringify({retainedCallbacks:1,failures:0,drawsAfterTerminal:0,canvases:1,hostChildren:0,cleanupUnchanged:true}))throw new Error("Actual WebGL2 compile-failure retained callback was not inert");
   presentation.actualContexts+=state.actualContexts;
   holder.host.remove();
 }
-presentation.pass=presentation.webgl2Available&&presentation.actualContexts===4&&presentation.initialDraws===1&&presentation.repeatDraws===1&&presentation.resizeDraws===1&&presentation.lossDefaultPrevented===false&&presentation.lossDraws===0&&presentation.lossFailures.length===1&&presentation.lossCleanup.deleteProgram===1&&presentation.lossCleanup.deleteBuffer===3&&presentation.lossCleanup.deleteVertexArray===1&&presentation.lossTerminalState.retainedCallbacks===1&&presentation.lossTerminalState.failures===1&&presentation.lossTerminalState.drawsAfterTerminal===0&&presentation.lossTerminalState.canvases===1&&presentation.lossTerminalState.hostChildren===0&&presentation.lossTerminalState.cleanupUnchanged&&presentation.compileFailureResult==="failed"&&presentation.compileFailureDraws===0&&presentation.compileFailures.length===1&&presentation.compileCleanup.deleteShader===1&&presentation.compileFailureTerminalState.retainedCallbacks===1&&presentation.compileFailureTerminalState.failures===1&&presentation.compileFailureTerminalState.drawsAfterTerminal===0&&presentation.compileFailureTerminalState.canvases===1&&presentation.compileFailureTerminalState.hostChildren===0&&presentation.compileFailureTerminalState.cleanupUnchanged;
+presentation.pass=presentation.webgl2Available&&presentation.actualContexts===4&&presentation.initialDraws===1&&presentation.repeatDraws===1&&presentation.resizeDraws===1&&presentation.lossDefaultPrevented===false&&presentation.lossDraws===0&&presentation.lossFailures.length===1&&presentation.lossCleanup.deleteProgram===1&&presentation.lossCleanup.deleteBuffer===3&&presentation.lossCleanup.deleteVertexArray===1&&presentation.lossTerminalState.retainedCallbacks===1&&presentation.lossTerminalState.failures===1&&presentation.lossTerminalState.drawsAfterTerminal===0&&presentation.lossTerminalState.canvases===1&&presentation.lossTerminalState.hostChildren===0&&presentation.lossTerminalState.cleanupUnchanged&&presentation.compileFailureResult.kind==="failure"&&presentation.compileFailureDraws===0&&presentation.compileFailures.length===0&&presentation.compileCleanup.deleteShader===1&&presentation.compileFailureTerminalState.retainedCallbacks===1&&presentation.compileFailureTerminalState.failures===0&&presentation.compileFailureTerminalState.drawsAfterTerminal===0&&presentation.compileFailureTerminalState.canvases===1&&presentation.compileFailureTerminalState.hostChildren===0&&presentation.compileFailureTerminalState.cleanupUnchanged;
 const assetRequests=ASSETS.map(({role,path,sha256})=>({role,path,sha256}));
 const result={schemaVersion:1,assetRequests,cases:outputCases,matrixRuns,complexityMatrixRuns,presentation,browserExceptions:[],unexpectedNetworkRequests:[],overallPass:outputCases.every((entry)=>entry.pass)&&matrixRuns.every((entry)=>entry.pass)&&matrixRuns[0].runDigest===matrixRuns[1].runDigest&&complexityMatrixRuns.every((entry)=>entry.pass)&&complexityMatrixRuns[0].runDigest===complexityMatrixRuns[1].runDigest&&presentation.pass};
 document.querySelector("#result").textContent=JSON.stringify(result);

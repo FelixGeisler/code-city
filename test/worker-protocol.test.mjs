@@ -10,6 +10,7 @@ registerHooks({
 const { parseWorkerCommand, parseWorkerMessage } = await import("../src/application/protocol.ts");
 const { createWorkerAttemptPipeline } = await import("../src/application/worker-attempt.ts");
 const { createTreeSitterAdapter } = await import("../src/edge/tree-sitter-adapter.ts");
+const { buildCity } = await import("../src/domain/city-model.ts");
 
 const REPOSITORY = { owner: "owner", repository: "repo" };
 const SHA = "a".repeat(40);
@@ -52,16 +53,23 @@ test("worker-to-main protocol rejects unknown, inherited, accessor, malformed, a
   const metricFailure = { type: "FAILURE", generation: 7, category: "Metric processing failed", code: "M1-MET-1" };
   const cityFailure = { type: "FAILURE", generation: 7, category: "City construction failed", code: "M1-CITY-1" };
   const staticEntered = { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 7 };
+  const success = { type: "SUCCESS", generation: 7, revision: SHA, model: buildCity([{ canonicalPath: "a.js", S: 1, U: 1, M: 0 }]).model };
   const drained = { type: "ATTEMPT_DRAINED", generation: 7 };
   assert.deepEqual(parseWorkerMessage(failure, 7), failure);
   assert.deepEqual(parseWorkerMessage(codedFailure, 7), codedFailure);
   assert.deepEqual(parseWorkerMessage(metricFailure, 7), metricFailure);
   assert.deepEqual(parseWorkerMessage(cityFailure, 7), cityFailure);
   assert.deepEqual(parseWorkerMessage(staticEntered, 7), staticEntered);
+  assert.deepEqual(parseWorkerMessage(success, 7), success);
   assert.deepEqual(parseWorkerMessage(drained, 7), drained);
+  assert.deepEqual(parseWorkerMessage({ ...success, model: {} }, 7), {
+    type: "FAILURE", generation: 7, category: "City construction failed", code: "M1-CITY-1",
+  });
   for (const invalid of [
     { ...failure, generation: 6 }, { ...failure, category: "raw provider detail" },
     { ...failure, extra: true }, { type: "SUCCESS", generation: 7, revision: SHA },
+    { ...success, revision: SHA.toUpperCase() }, { ...success, revision: "a".repeat(39) },
+    { ...success, extra: true }, inherited(success), accessor(success, "model"),
     { type: "Source admission failed", generation: 7, category: "Source admission failed" },
     { type: "FAILURE", generation: 7, category: "No supported modules", code: "M1-ADM-1" },
     { type: "FAILURE", generation: 7, category: "Metric processing failed", code: "M1-ADM-1" },
@@ -168,7 +176,7 @@ test("all five initialization failures traverse selected-revision worker ownersh
     assert.deepEqual(ownershipAtPublication.map(([type, ownership]) => [type, ownership.selectedRevisionRetained, ownership.admittedModuleCount, ownership.finalFactCount]), [
       ["PROVIDER_DRAINED_STATIC_ENTERED", true, 3, 0], ["FAILURE", false, 0, 0], ["ATTEMPT_DRAINED", false, 0, 0],
     ], injected);
-    assert.deepEqual(pipeline.ownership(), { phase: "idle", selectedRevisionRetained: false, admittedModuleCount: 0, cityRetained: false, finalFactCount: 0, providerResource: false }, injected);
+    assert.deepEqual(pipeline.ownership(), { phase: "idle", selectedRevisionRetained: false, admittedModuleCount: 0, presentationModelRetained: false, finalFactCount: 0, providerResource: false }, injected);
   }
 });
 
@@ -193,7 +201,7 @@ test("complete admission crosses only the closed static barrier and retains no p
     generation: 9,
     selectedRevisionRetained: true,
     admittedModuleCount: 1,
-    cityRetained: false,
+    presentationModelRetained: false,
     finalFactCount: 0,
     providerResource: false,
   });

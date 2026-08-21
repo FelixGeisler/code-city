@@ -56,7 +56,7 @@ function fixture(constructCity) {
   return { pipeline, messages, publications, order, releases: () => releases };
 }
 
-test("the City capability runs exactly once after complete facts and success retains only revision plus City", async () => {
+test("success releases source identities and facts, publishes only revision plus model, then drains", async () => {
   let calls = 0;
   let received;
   const f = fixture((facts) => {
@@ -71,21 +71,30 @@ test("the City capability runs exactly once after complete facts and success ret
   assert.deepEqual(received, [{ canonicalPath: "src/a.ts", S: 1, U: 0, M: 0 }]);
   assert(f.order.indexOf("metric:fact-retained") < f.order.indexOf("city:construct"));
   assert.equal(f.releases(), 1);
-  assert.deepEqual(f.messages, [{ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 31 }]);
-  assert.doesNotMatch(JSON.stringify(f.messages), /MODEL|SUCCESS|CITY|UI|origin|rgba|bounds/i);
+  assert.deepEqual(f.messages.map(({ type }) => type), ["PROVIDER_DRAINED_STATIC_ENTERED", "SUCCESS", "ATTEMPT_DRAINED"]);
+  const success = f.messages[1];
+  assert.deepEqual(Object.keys(success), ["type", "generation", "revision", "model"]);
+  assert.equal(success.generation, 31);
+  assert.equal(success.revision, SHA);
+  assert.deepEqual(Object.keys(success.model), ["kind", "count", "origins", "sizes", "rgba", "bounds"]);
+  assert.doesNotMatch(JSON.stringify(success), /canonicalPath|normalizedSource|identities|facts/i);
+  assert.deepEqual(f.publications.map(({ message, ownership }) => [message.type, ownership.selectedRevisionRetained, ownership.admittedModuleCount, ownership.presentationModelRetained, ownership.finalFactCount]), [
+    ["PROVIDER_DRAINED_STATIC_ENTERED", true, 1, false, 0],
+    ["SUCCESS", true, 0, true, 0],
+    ["ATTEMPT_DRAINED", false, 0, false, 0],
+  ]);
   assert.deepEqual(f.pipeline.ownership(), {
-    phase: "static",
-    generation: 31,
-    selectedRevisionRetained: true,
+    phase: "idle",
+    selectedRevisionRetained: false,
     admittedModuleCount: 0,
-    cityRetained: true,
+    presentationModelRetained: false,
     finalFactCount: 0,
     providerResource: false,
   });
   f.pipeline.stop(31);
   await tick();
-  assert.equal(calls, 1, "static STOP remains hard realm termination owned by main");
-  assert.equal(f.messages.length, 1);
+  assert.equal(calls, 1);
+  assert.equal(f.messages.filter(({ type }) => type === "SUCCESS").length, 1);
 });
 
 for (const [id, construct] of [
@@ -115,7 +124,7 @@ for (const [id, construct] of [
       generation: 32,
       selectedRevisionRetained: true,
       admittedModuleCount: 0,
-      cityRetained: false,
+      presentationModelRetained: false,
       finalFactCount: 0,
       providerResource: false,
     });
@@ -123,7 +132,7 @@ for (const [id, construct] of [
       phase: "idle",
       selectedRevisionRetained: false,
       admittedModuleCount: 0,
-      cityRetained: false,
+      presentationModelRetained: false,
       finalFactCount: 0,
       providerResource: false,
     });

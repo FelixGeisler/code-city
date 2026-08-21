@@ -12,12 +12,31 @@ export type WorkerTransport = Readonly<{
   }>): () => void;
 }>;
 
+export type VisibleFailureCode = FailureCode | "M1-PRES-1";
+
 export type AttemptView = Readonly<{
+  clear(): void;
   invalid(): void;
   working(cancel: () => void): void;
-  failure(category: string, code?: FailureCode): void;
+  success(revision: string): void;
+  failure(category: string, code?: VisibleFailureCode): void;
   cancelled(): void;
 }>;
+
+export type ControllerPresentationResult =
+  | Readonly<{ kind: "committed" }>
+  | Readonly<{ kind: "stale" }>
+  | Readonly<{ kind: "failure"; category: "City construction failed" | "Presentation failed"; code: "M1-CITY-1" | "M1-PRES-1" }>;
+
+export type ControllerPresenter<G> = Readonly<{
+  present(generation: G, model: unknown): ControllerPresentationResult;
+  clear(): void;
+}>;
+
+export type ControllerPresentationFactory<G> = (hooks: Readonly<{
+  isEligible(generation: G): boolean;
+  failed(generation: G, category: "City construction failed" | "Presentation failed", code: "M1-CITY-1" | "M1-PRES-1"): void;
+}>) => ControllerPresenter<G>;
 
 type ActiveBridge = {
   cancellationSelected: boolean;
@@ -28,6 +47,8 @@ type ActiveBridge = {
   publicationRevoked: boolean;
   staticEntered: boolean;
   stopSent: boolean;
+  successAccepted: boolean;
+  successCommitted: boolean;
   transport: WorkerTransport;
 };
 
@@ -39,10 +60,35 @@ export type MainController = Readonly<{
 export function createMainController(
   createWorker: () => WorkerTransport,
   view: AttemptView,
+  createPresentation: ControllerPresentationFactory<number>,
 ): MainController {
   let active: ActiveBridge | undefined;
   let generation = 0;
   let pending: ReturnType<typeof parseRepositoryReference>;
+  let publishedGeneration: number | undefined;
+
+  const presenter = createPresentation({
+    isEligible(candidate) {
+      return candidate === publishedGeneration;
+    },
+    failed(candidate, category, code) {
+      if (candidate !== publishedGeneration) {
+        return;
+      }
+      publishedGeneration = undefined;
+      const bridge = active?.generation === candidate ? active : undefined;
+      if (bridge) {
+        bridge.failureShown = true;
+      }
+      view.failure(category, code);
+    },
+  });
+
+  function revokePublication(): void {
+    publishedGeneration = undefined;
+    presenter.clear();
+    view.clear();
+  }
 
   function startPending(): void {
     if (active || !pending) {
@@ -69,12 +115,16 @@ export function createMainController(
   function showFailure(
     bridge: ActiveBridge,
     category = "Provider/resolution failure",
-    code?: FailureCode,
+    code?: VisibleFailureCode,
   ): void {
     if (bridge.publicationRevoked || bridge.failureShown) {
       return;
     }
     bridge.failureShown = true;
+    if (publishedGeneration === bridge.generation) {
+      publishedGeneration = undefined;
+      presenter.clear();
+    }
     view.failure(category, code);
   }
 
@@ -134,6 +184,8 @@ export function createMainController(
       publicationRevoked: false,
       staticEntered: false,
       stopSent: false,
+      successAccepted: false,
+      successCommitted: false,
       transport,
     };
     active = bridge;
@@ -153,15 +205,16 @@ export function createMainController(
             return;
           }
           if (message.type === "FAILURE") {
+            if (bridge.successAccepted) {
+              drainImpossible(bridge);
+              return;
+            }
             showFailure(bridge, message.category, message.code);
             return;
           }
           if (message.type === "PROVIDER_DRAINED_STATIC_ENTERED") {
-            if (bridge.failureShown || bridge.staticEntered) {
-              if (!bridge.publicationRevoked) {
-                showFailure(bridge);
-              }
-              cleanup(bridge);
+            if (bridge.failureShown || bridge.staticEntered || bridge.successAccepted) {
+              drainImpossible(bridge);
               return;
             }
             bridge.staticEntered = true;
@@ -170,7 +223,37 @@ export function createMainController(
             }
             return;
           }
-          if (!bridge.publicationRevoked && !bridge.failureShown) {
+          if (message.type === "SUCCESS") {
+            if (!bridge.staticEntered || bridge.failureShown || bridge.successAccepted || bridge.publicationRevoked) {
+              drainImpossible(bridge);
+              return;
+            }
+            bridge.successAccepted = true;
+            publishedGeneration = bridge.generation;
+            const result = presenter.present(bridge.generation, message.model);
+            if (result.kind === "stale") {
+              if (publishedGeneration === bridge.generation) {
+                publishedGeneration = undefined;
+              }
+              cleanup(bridge);
+              return;
+            }
+            if (result.kind === "failure") {
+              publishedGeneration = undefined;
+              showFailure(bridge, result.category, result.code);
+              return;
+            }
+            try {
+              view.success(message.revision);
+              bridge.successCommitted = true;
+            } catch {
+              drainImpossible(bridge);
+            }
+            return;
+          }
+          if (!bridge.publicationRevoked
+            && !bridge.failureShown
+            && !(bridge.successAccepted && bridge.successCommitted)) {
             showFailure(bridge);
           }
           cleanup(bridge);
@@ -202,6 +285,7 @@ export function createMainController(
       return false;
     }
 
+    revokePublication();
     const bridge = active;
     if (!bridge) {
       return start(repository);

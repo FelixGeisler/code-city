@@ -1,7 +1,7 @@
 import type { AdmittedModule } from "../domain/source-admission";
 import type { RepositoryReference } from "../domain/repository-reference";
 import type { ModuleComplexityFact } from "../domain/complexity";
-import { buildCity, validatePresentationModel, type City } from "../domain/city-model";
+import { buildCity, validatePresentationModel, type City, type PresentationModel } from "../domain/city-model";
 import { processAdmittedBaseMetrics, type MetricProcessingEvent, type SyntaxProjectionCapability } from "./base-metric-processing";
 import type { WorkerMessage } from "./protocol";
 import { resolveRevision, type RevisionGateway } from "./resolution";
@@ -13,8 +13,8 @@ import {
 
 type ActiveAttempt = {
   admittedModules?: readonly AdmittedModule[];
-  city?: City;
   finalFacts?: readonly ModuleComplexityFact[];
+  model?: PresentationModel;
   controller?: AbortController;
   drained: boolean;
   generation: number;
@@ -30,7 +30,7 @@ export type AttemptOwnership = Readonly<{
   generation?: number;
   selectedRevisionRetained: boolean;
   admittedModuleCount: number;
-  cityRetained: boolean;
+  presentationModelRetained: boolean;
   finalFactCount: number;
   providerResource: false;
 }>;
@@ -63,8 +63,8 @@ export function createWorkerAttemptPipeline(
     attempt.repository = undefined;
     attempt.selectedRevision = undefined;
     attempt.admittedModules = undefined;
-    attempt.city = undefined;
     attempt.finalFacts = undefined;
+    attempt.model = undefined;
     publish({ type: "ATTEMPT_DRAINED", generation: attempt.generation });
     if (active === attempt) {
       active = undefined;
@@ -148,13 +148,20 @@ export function createWorkerAttemptPipeline(
         let candidate: City | undefined;
         try {
           candidate = constructCity(processing.facts);
-          validatePresentationModel(candidate.model);
-          attempt.city = candidate;
+          const model = validatePresentationModel(candidate.model);
+          const buffers = [model.origins.buffer, model.sizes.buffer, model.rgba.buffer, model.bounds.buffer];
+          if (new Set(buffers).size !== 4) {
+            throw new Error("Presentation buffers must be distinct");
+          }
+          attempt.admittedModules = undefined;
           attempt.finalFacts = undefined;
+          attempt.model = model;
           candidate = undefined;
+          publish({ type: "SUCCESS", generation, revision: retrieval.selected, model });
+          drain(attempt);
         } catch {
           candidate = undefined;
-          attempt.city = undefined;
+          attempt.model = undefined;
           attempt.finalFacts = undefined;
           publish({
             type: "FAILURE",
@@ -197,7 +204,7 @@ export function createWorkerAttemptPipeline(
           generation: active.generation,
           selectedRevisionRetained: active.selectedRevision !== undefined,
           admittedModuleCount: active.admittedModules?.length ?? 0,
-          cityRetained: active.city !== undefined,
+          presentationModelRetained: active.model !== undefined,
           finalFactCount: active.finalFacts?.length ?? 0,
           providerResource: false,
         }
@@ -205,7 +212,7 @@ export function createWorkerAttemptPipeline(
           phase: "idle",
           selectedRevisionRetained: false,
           admittedModuleCount: 0,
-          cityRetained: false,
+          presentationModelRetained: false,
           finalFactCount: 0,
           providerResource: false,
         },
