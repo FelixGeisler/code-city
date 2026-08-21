@@ -3,7 +3,7 @@ import type { RepositoryReference } from "../domain/repository-reference";
 import type { ModuleComplexityFact } from "../domain/complexity";
 import { buildCity, validatePresentationModel, type City, type PresentationModel } from "../domain/city-model";
 import { processAdmittedBaseMetrics, type MetricProcessingEvent, type SyntaxProjectionCapability } from "./base-metric-processing";
-import type { WorkerMessage } from "./protocol";
+import { validRevision, type WorkerMessage } from "./protocol";
 import { resolveRevision, type RevisionGateway } from "./resolution";
 import {
   retrieveAdmittedSources,
@@ -74,10 +74,10 @@ export function createWorkerAttemptPipeline(
     }
     const processing = await processAdmittedBaseMetrics(admittedModules, syntaxParser, observeMetricProcessing);
     if (processing.kind === "failure") {
-      attempt.selectedRevision = undefined;
       publish({
         type: "FAILURE",
         generation: attempt.generation,
+        revision,
         category: processing.category,
         code: processing.code,
       });
@@ -92,6 +92,7 @@ export function createWorkerAttemptPipeline(
       publish({
         type: "FAILURE",
         generation: attempt.generation,
+        revision,
         category: "City construction failed",
         code: "M1-CITY-1",
       });
@@ -114,12 +115,22 @@ export function createWorkerAttemptPipeline(
       return undefined;
     }
     if (resolution.kind === "failure") {
-      publish({ type: "FAILURE", generation: attempt.generation, category: resolution.category });
+      const category = resolution.category === "Repository unavailable for anonymous access"
+        || resolution.category === "Revision unavailable"
+        ? resolution.category
+        : "Provider/resolution failure";
+      publish({ type: "FAILURE", generation: attempt.generation, category });
       drain(attempt);
       return undefined;
     }
 
+    if (!validRevision(resolution.revision)) {
+      publish({ type: "FAILURE", generation: attempt.generation, category: "Provider/resolution failure" });
+      drain(attempt);
+      return undefined;
+    }
     attempt.selectedRevision = resolution.revision;
+    publish({ type: "REVISION_SELECTED", generation: attempt.generation, revision: resolution.revision });
     const retrieval = await retrieveAdmittedSources(
       repository,
       resolution.revision,
@@ -132,12 +143,23 @@ export function createWorkerAttemptPipeline(
       return undefined;
     }
     if (retrieval.kind === "failure") {
-      publish({
-        type: "FAILURE",
-        generation: attempt.generation,
-        category: retrieval.category,
-        ...(retrieval.code === undefined ? {} : { code: retrieval.code }),
-      });
+      if (retrieval.code === undefined) {
+        const category = retrieval.category === "Repository exceeds Code City limits"
+          ? retrieval.category
+          : "Provider/resolution failure";
+        publish({ type: "FAILURE", generation: attempt.generation, revision: resolution.revision, category });
+      } else {
+        const category = retrieval.category === "No supported modules"
+          ? retrieval.category
+          : "Source admission failed";
+        publish({
+          type: "FAILURE",
+          generation: attempt.generation,
+          revision: resolution.revision,
+          category,
+          code: retrieval.code,
+        });
+      }
       drain(attempt);
       return undefined;
     }
@@ -158,8 +180,8 @@ export function createWorkerAttemptPipeline(
     attempt.drained = true;
     attempt.controller = undefined;
     attempt.repository = undefined;
-    attempt.selectedRevision = undefined;
     attempt.model = undefined;
+    attempt.selectedRevision = undefined;
     publish({ type: "ATTEMPT_DRAINED", generation: attempt.generation });
     if (active === attempt) {
       active = undefined;
@@ -175,7 +197,6 @@ export function createWorkerAttemptPipeline(
       attempt.selectedRevision = prepared.revision;
       attempt.model = prepared.model;
       publish({ type: "SUCCESS", generation: attempt.generation, revision: prepared.revision, model: prepared.model });
-      attempt.selectedRevision = undefined;
       attempt.model = undefined;
       prepared = undefined;
       drain(attempt);
@@ -184,7 +205,10 @@ export function createWorkerAttemptPipeline(
         drain(attempt);
         return;
       }
-      publish({ type: "FAILURE", generation: attempt.generation, category: "Provider/resolution failure" });
+      const revision = attempt.selectedRevision;
+      publish(revision === undefined
+        ? { type: "FAILURE", generation: attempt.generation, category: "Provider/resolution failure" }
+        : { type: "FAILURE", generation: attempt.generation, revision, category: "Provider/resolution failure" });
       drain(attempt);
     }
   }

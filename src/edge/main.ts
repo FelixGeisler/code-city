@@ -48,8 +48,8 @@ const view: AttemptView = {
     status.replaceChildren();
     commit.textContent = revision;
   },
-  failure: (category, code) => {
-    commit.textContent = "";
+  failure: (category, code, revision) => {
+    commit.textContent = revision ?? "";
     replaceStatus(code ? `${category} (${code})` : category);
   },
   cancelled: () => {
@@ -58,8 +58,9 @@ const view: AttemptView = {
   },
 };
 
-function createWorkerTransport(): WorkerTransport {
-  const worker = new Worker(processingWorkerUrl, { type: "module" });
+export function createWorkerTransport(
+  worker: Worker = new Worker(processingWorkerUrl, { type: "module" }),
+): WorkerTransport {
   return {
     send: (command) => worker.postMessage(command),
     close: () => worker.terminate(),
@@ -70,14 +71,31 @@ function createWorkerTransport(): WorkerTransport {
         handlers.crash();
       };
       const messageError = () => handlers.messageError();
-      worker.addEventListener("message", message);
-      worker.addEventListener("error", error);
-      worker.addEventListener("messageerror", messageError);
-      return () => {
-        worker.removeEventListener("message", message);
-        worker.removeEventListener("error", error);
-        worker.removeEventListener("messageerror", messageError);
+      const attached: Array<() => void> = [];
+      let detached = false;
+      const detach = () => {
+        if (detached) {
+          return;
+        }
+        detached = true;
+        for (const remove of attached) {
+          try {
+            remove();
+          } catch {}
+        }
       };
+      try {
+        worker.addEventListener("message", message);
+        attached.push(() => worker.removeEventListener("message", message));
+        worker.addEventListener("error", error);
+        attached.push(() => worker.removeEventListener("error", error));
+        worker.addEventListener("messageerror", messageError);
+        attached.push(() => worker.removeEventListener("messageerror", messageError));
+      } catch (error) {
+        detach();
+        throw error;
+      }
+      return detach;
     },
   };
 }
@@ -91,3 +109,4 @@ form.addEventListener("submit", (event) => {
   event.preventDefault();
   controller.submit(input.value);
 });
+window.addEventListener("pagehide", () => controller.dispose(), { once: true });

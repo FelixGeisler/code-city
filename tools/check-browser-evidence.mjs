@@ -169,14 +169,22 @@ function checkStrictSourceNormalization() {
 
 function pageObservationSource() {
   return `(() => {
-    const evidence = { messages: [], contexts: [] };
+    const evidence = { messages: [], contexts: [], workers: [], liveWorkers: 0, maximumLiveWorkers: 0 };
     Object.defineProperty(globalThis, "__codeCitySuccessEvidence", { value: evidence, configurable: true });
-    const observedWorkers = new WeakSet();
-    const add = Worker.prototype.addEventListener;
-    Worker.prototype.addEventListener = function(type, listener, options) {
-      if (type === "message" && !observedWorkers.has(this)) {
-        observedWorkers.add(this);
-        add.call(this, "message", (event) => {
+    const NativeWorker = Worker;
+    const nativeAdd = NativeWorker.prototype.addEventListener;
+    const nativeRemove = NativeWorker.prototype.removeEventListener;
+    const nativePost = NativeWorker.prototype.postMessage;
+    const nativeTerminate = NativeWorker.prototype.terminate;
+    class ObservedWorker extends NativeWorker {
+      constructor(...args) {
+        super(...args);
+        const record = { posts: [], listenerAdds: [], listenerRemoves: [], terminateCalls: 0, usable: true };
+        Object.defineProperty(this, "__codeCityWorkerRecord", { value: record });
+        evidence.workers.push(record);
+        evidence.liveWorkers += 1;
+        evidence.maximumLiveWorkers = Math.max(evidence.maximumLiveWorkers, evidence.liveWorkers);
+        nativeAdd.call(this, "message", (event) => {
           const message = event.data;
           if (!message || message.type !== "SUCCESS") return;
           const model = message.model;
@@ -189,8 +197,29 @@ function pageObservationSource() {
           });
         });
       }
-      return add.call(this, type, listener, options);
-    };
+      postMessage(command, transfer) {
+        this.__codeCityWorkerRecord.posts.push({ type: command?.type, generation: command?.generation });
+        return transfer === undefined ? nativePost.call(this, command) : nativePost.call(this, command, transfer);
+      }
+      addEventListener(type, listener, options) {
+        this.__codeCityWorkerRecord.listenerAdds.push(type);
+        return nativeAdd.call(this, type, listener, options);
+      }
+      removeEventListener(type, listener, options) {
+        this.__codeCityWorkerRecord.listenerRemoves.push(type);
+        return nativeRemove.call(this, type, listener, options);
+      }
+      terminate() {
+        const record = this.__codeCityWorkerRecord;
+        record.terminateCalls += 1;
+        if (record.usable) {
+          record.usable = false;
+          evidence.liveWorkers -= 1;
+        }
+        return nativeTerminate.call(this);
+      }
+    }
+    Object.defineProperty(globalThis, "Worker", { value: ObservedWorker, configurable: true, writable: true });
     const acquire = HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext = function(kind, attributes) {
       const actual = acquire.call(this, kind, attributes);
@@ -255,9 +284,13 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
   const workerNetwork = [];
   const generationSourceRecords = [];
   const childInstallations = [];
+  const detachedWorkerTargets = [];
   const failures = [];
+  const heldRequests = [];
   let activeGets = 0;
+  let holdRevisionRequest = false;
   let maximumGetConcurrency = 0;
+  let pageDisposalSelected = false;
   const networkStart = requestedUrls.length;
 
   const fulfill = async (requestId, responseCode, responseHeaders, body = "") => {
@@ -271,6 +304,10 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
   };
 
   const listener = (message) => {
+    if (message.method === "Target.detachedFromTarget") {
+      detachedWorkerTargets.push(message.params.targetId);
+      return;
+    }
     if (message.method === "Target.attachedToTarget" && message.sessionId === sessionId && message.params.targetInfo.type === "worker") {
       const childSession = message.params.sessionId;
       childInstallations.push((async () => {
@@ -288,7 +325,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       return;
     }
     if (message.sessionId !== sessionId && message.method === "Network.loadingFailed") {
-      failures.push(new Error(`Worker network request failed: ${message.params.errorText}`));
+      if (!pageDisposalSelected) failures.push(new Error(`Worker network request failed: ${message.params.errorText}`));
       return;
     }
     if (message.method === "Runtime.consoleAPICalled" && message.sessionId !== sessionId) {
@@ -320,6 +357,10 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
         return;
       }
       invariant(method === "GET", `Unrecognized GitHub method: ${method}`);
+      if (holdRevisionRequest && url === revisionUrl) {
+        heldRequests.push({ requestId, url });
+        return;
+      }
       activeGets += 1;
       maximumGetConcurrency = Math.max(maximumGetConcurrency, activeGets);
       try {
@@ -384,6 +425,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await waitFor(`document.querySelector('[data-commit]').textContent===${JSON.stringify(fixture.selected)}&&document.querySelectorAll('[data-city] canvas').length===1&&globalThis.__codeCitySuccessEvidence.messages.length===2&&globalThis.__codeCitySuccessEvidence.contexts.length===2`, "second successful city");
     await Promise.all(childInstallations);
     await waitFor("globalThis.__codeCitySuccessEvidence.contexts.every((entry)=>entry.draws.length===1)&&globalThis.__codeCitySuccessEvidence.messages.length===2", "presentation evidence");
+    await waitFor("globalThis.__codeCitySuccessEvidence.workers.length===2&&globalThis.__codeCitySuccessEvidence.workers.every((worker)=>worker.terminateCalls===1&&!worker.usable)&&globalThis.__codeCitySuccessEvidence.liveWorkers===0", "successful worker cleanup");
     const observed = await evaluate("globalThis.__codeCitySuccessEvidence");
     const surface = await evaluate("({forms:document.querySelectorAll('[data-form]').length,status:document.querySelectorAll('[data-status]').length,commits:document.querySelectorAll('[data-commit]').length,cities:document.querySelectorAll('[data-city]').length,inputs:document.querySelectorAll('input[name=repository]').length,submit:document.querySelector('form button[type=submit]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length})");
 
@@ -397,6 +439,16 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert.equal(workerTransfers.length, 2);
     for (const transfer of workerTransfers) assert.deepEqual(transfer, { count: 4, ordered: true, distinct: 4, whole: true, detached: [0, 0, 0, 0] });
     assert.equal(observed.messages.length, 2);
+    assert.equal(observed.maximumLiveWorkers, 1);
+    assert.equal(observed.liveWorkers, 0);
+    assert.equal(observed.workers.length, 2);
+    for (const [index, worker] of observed.workers.entries()) {
+      assert.deepEqual(worker.posts, [{ type: "START", generation: index + 1 }]);
+      assert.deepEqual(worker.listenerAdds, ["message", "error", "messageerror"]);
+      assert.deepEqual(worker.listenerRemoves, ["message", "error", "messageerror"]);
+      assert.equal(worker.terminateCalls, 1);
+      assert.equal(worker.usable, false);
+    }
     assert.deepEqual(generationSourceRecords, [
       { normalizedSourceSha256: computedNormalizedSourceSha256 },
       { normalizedSourceSha256: computedNormalizedSourceSha256 },
@@ -425,7 +477,67 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     for (const exchange of workerNetwork) invariant(manifestUrls.has(exchange.url) || urls.includes(exchange.url), `Unexpected worker production-flow request: ${exchange.method} ${exchange.url}`);
     for (const expectedUrl of urls) assert.equal(workerNetwork.filter(({ url, method }) => url === expectedUrl && method === "GET").length, 2, `Worker did not issue both parent-intercepted GETs for ${expectedUrl}`);
 
-    console.log(`Production success evidence passed: selected=${fixture.selected}; normalized-source-sha256=${computedNormalizedSourceSha256}; model-sha256=${fixture.modelBytesSha256}; presenter-sha256=${presentationDigests[0]}; GETs=${gets.map(({ url }) => url).join(" -> ")}; OPTIONS=${JSON.stringify(options)}.`);
+    const contextLoss = await evaluate(`(() => {
+      const canvas=document.querySelector('[data-city] canvas');
+      const event=new Event('webglcontextlost',{cancelable:true});
+      canvas.dispatchEvent(event);
+      return {defaultPrevented:event.defaultPrevented,status:document.querySelector('[data-status]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,deletes:globalThis.__codeCitySuccessEvidence.contexts[1].deletes};
+    })()`);
+    assert.deepEqual(contextLoss, {
+      defaultPrevented: false,
+      status: "Presentation failed (M1-PRES-1)",
+      commit: fixture.selected,
+      canvases: 0,
+      deletes: { shader: 2, program: 1, buffer: 3, vao: 1 },
+    });
+
+    holdRevisionRequest = true;
+    await evaluate(submit);
+    const heldDeadline = Date.now() + 120_000;
+    while (heldRequests.length !== 1 && Date.now() < heldDeadline) {
+      if (failures.length) throw failures[0];
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    invariant(heldRequests.length === 1, "Page-lifecycle fixture did not hold exactly one provider request");
+    const beforePagehide = await evaluate("({workers:globalThis.__codeCitySuccessEvidence.workers.length,live:globalThis.__codeCitySuccessEvidence.liveWorkers,messages:globalThis.__codeCitySuccessEvidence.messages.length,canvases:document.querySelectorAll('[data-city] canvas').length,commit:document.querySelector('[data-commit]').textContent})");
+    assert.deepEqual(beforePagehide, { workers: 3, live: 1, messages: 2, canvases: 0, commit: "" });
+
+    pageDisposalSelected = true;
+    const pagehide = await evaluate("window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:false}));({workers:globalThis.__codeCitySuccessEvidence.workers,live:globalThis.__codeCitySuccessEvidence.liveWorkers,status:document.querySelector('[data-status]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length})");
+    assert.equal(pagehide.live, 0);
+    assert.equal(pagehide.status, "");
+    assert.equal(pagehide.commit, "");
+    assert.equal(pagehide.canvases, 0);
+    assert.equal(pagehide.workers.length, 3);
+    assert.deepEqual(pagehide.workers[2], {
+      posts: [{ type: "START", generation: 3 }],
+      listenerAdds: ["message", "error", "messageerror"],
+      listenerRemoves: ["message", "error", "messageerror"],
+      terminateCalls: 1,
+      usable: false,
+    });
+
+    const detachDeadline = Date.now() + 30_000;
+    while (detachedWorkerTargets.length < 3 && Date.now() < detachDeadline) await new Promise((resolve) => setTimeout(resolve, 50));
+    invariant(detachedWorkerTargets.length >= 3, "Chrome did not expose worker-target detachment for all terminated package workers");
+    const quiescent = {
+      productMessages: (await evaluate("globalThis.__codeCitySuccessEvidence.messages.length")),
+      requests: requestedUrls.length,
+      workerRequests: workerNetwork.length,
+    };
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.equal(await evaluate("globalThis.__codeCitySuccessEvidence.messages.length"), quiescent.productMessages);
+    assert.equal(requestedUrls.length, quiescent.requests);
+    assert.equal(workerNetwork.length, quiescent.workerRequests);
+    try { await cdp.send("Fetch.failRequest", { requestId: heldRequests[0].requestId, errorReason: "Aborted" }, sessionId); } catch {}
+
+    holdRevisionRequest = false;
+    await cdp.send("Page.reload", { ignoreCache: true }, sessionId);
+    await waitFor("document.readyState==='complete'&&globalThis.__codeCitySuccessEvidence&&globalThis.__codeCitySuccessEvidence.workers.length===0", "empty package reload");
+    const reloaded = await evaluate("({workers:globalThis.__codeCitySuccessEvidence.workers.length,messages:globalThis.__codeCitySuccessEvidence.messages.length,status:document.querySelector('[data-status]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length})");
+    assert.deepEqual(reloaded, { workers: 0, messages: 0, status: "", commit: "", canvases: 0 });
+
+    console.log(`Production lifecycle evidence passed: selected=${fixture.selected}; normalized-source-sha256=${computedNormalizedSourceSha256}; model-sha256=${fixture.modelBytesSha256}; presenter-sha256=${presentationDigests[0]}; max-live-worker=1; pagehide-target-detach=${detachedWorkerTargets.length}; GETs=${gets.map(({ url }) => url).join(" -> ")}; OPTIONS=${JSON.stringify(options)}.`);
   } finally {
     cdp.listeners.delete(listener);
     try { await cdp.send("Fetch.disable", {}, sessionId); } catch {}
@@ -632,7 +744,7 @@ export async function checkPackagedBrowserEvidence() {
     invariant(unexpected.length === 0, `Unexpected browser network request(s): ${unexpected.join(", ")}`);
     validateBrowserResult(result, selected);
     await checkProductionSuccessPath({ cdp, sessionId, origin, manifest, requestedUrls, browserExceptions, failedRequests });
-    console.log(`Packaged Chrome/CDP evidence passed with ${executable} (${version}); ${result.cases.length} stress cases, two comment matrices, two complete complexity matrices, presenter failure evidence, and two canonical production success flows.`);
+    console.log(`Packaged Chrome/CDP evidence passed with ${executable} (${version}); ${result.cases.length} stress cases, two comment matrices, two complete complexity matrices, canonical success/context-loss evidence, and pagehide/reload lifecycle evidence.`);
   } catch (error) {
     failure = error;
   } finally {

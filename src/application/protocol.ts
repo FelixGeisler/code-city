@@ -1,4 +1,4 @@
-import { FAILURE_CATEGORIES, FAILURE_CODES, type FailureCategory, type FailureCode } from "./resolution";
+import { FAILURE_CATEGORIES, FAILURE_CODES, type FailureCode } from "./resolution";
 import { validatePresentationModel, type PresentationModel } from "../domain/city-model";
 import type { RepositoryReference } from "../domain/repository-reference";
 
@@ -6,8 +6,26 @@ export type WorkerCommand =
   | Readonly<{ type: "START"; generation: number; repository: RepositoryReference }>
   | Readonly<{ type: "STOP"; generation: number }>;
 
+type PreSelectionCategory =
+  | "Repository unavailable for anonymous access"
+  | "Revision unavailable"
+  | "Provider/resolution failure";
+
+type PostSelectionUncodedCategory =
+  | "Provider/resolution failure"
+  | "Repository exceeds Code City limits";
+
+type PostSelectionCodedCategory =
+  | "No supported modules"
+  | "Source admission failed"
+  | "Metric processing failed"
+  | "City construction failed";
+
 export type WorkerMessage =
-  | Readonly<{ type: "FAILURE"; generation: number; category: FailureCategory; code?: FailureCode }>
+  | Readonly<{ type: "REVISION_SELECTED"; generation: number; revision: string }>
+  | Readonly<{ type: "FAILURE"; generation: number; category: PreSelectionCategory }>
+  | Readonly<{ type: "FAILURE"; generation: number; revision: string; category: PostSelectionUncodedCategory }>
+  | Readonly<{ type: "FAILURE"; generation: number; revision: string; category: PostSelectionCodedCategory; code: FailureCode }>
   | Readonly<{ type: "PROVIDER_DRAINED_STATIC_ENTERED"; generation: number }>
   | Readonly<{ type: "SUCCESS"; generation: number; revision: string; model: PresentationModel }>
   | Readonly<{ type: "ATTEMPT_DRAINED"; generation: number }>;
@@ -36,8 +54,12 @@ function ownDataRecord(value: unknown, exactKeys: readonly string[]): DataRecord
   }
 }
 
-function generation(value: unknown): value is number {
+function validGeneration(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+export function validRevision(value: unknown): value is string {
+  return typeof value === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value);
 }
 
 function repositoryReference(value: unknown): RepositoryReference | undefined {
@@ -50,11 +72,11 @@ function repositoryReference(value: unknown): RepositoryReference | undefined {
 
 export function readGeneration(value: unknown): number | undefined {
   try {
-    if (typeof value !== "object" || value === null || Object.getPrototypeOf(value) !== Object.prototype) {
+    if (typeof value !== "object" || value === null) {
       return undefined;
     }
     const descriptor = Object.getOwnPropertyDescriptor(value, "generation");
-    return descriptor && "value" in descriptor && generation(descriptor.value)
+    return descriptor && "value" in descriptor && validGeneration(descriptor.value)
       ? descriptor.value
       : undefined;
   } catch {
@@ -64,18 +86,24 @@ export function readGeneration(value: unknown): number | undefined {
 
 export function parseWorkerCommand(value: unknown): WorkerCommand | undefined {
   const start = ownDataRecord(value, ["type", "generation", "repository"]);
-  if (start?.type === "START" && generation(start.generation)) {
+  if (start?.type === "START" && validGeneration(start.generation)) {
     const repository = repositoryReference(start.repository);
     return repository ? { type: "START", generation: start.generation, repository } : undefined;
   }
 
   const stop = ownDataRecord(value, ["type", "generation"]);
-  return stop?.type === "STOP" && generation(stop.generation)
+  return stop?.type === "STOP" && validGeneration(stop.generation)
     ? { type: "STOP", generation: stop.generation }
     : undefined;
 }
 
-function validFailureCode(category: FailureCategory, code: unknown): code is FailureCode {
+function validFailureCode(category: string, code: unknown): code is FailureCode {
+  if (category !== "No supported modules"
+    && category !== "Source admission failed"
+    && category !== "Metric processing failed"
+    && category !== "City construction failed") {
+    return false;
+  }
   if (typeof code !== "string" || !(FAILURE_CODES as readonly string[]).includes(code)) {
     return false;
   }
@@ -83,21 +111,30 @@ function validFailureCode(category: FailureCategory, code: unknown): code is Fai
     return code === "ADM-06" || code === "ADM-07";
   }
   if (category === "Source admission failed") {
-    return code.startsWith("M1-ADM-");
+    return code === "M1-ADM-1" || code === "M1-ADM-3" || code === "M1-ADM-4";
   }
   if (category === "Metric processing failed") {
     return code === "M1-MET-1";
   }
-  return category === "City construction failed" && code === "M1-CITY-1";
+  return code === "M1-CITY-1";
 }
 
-export function parseWorkerMessage(value: unknown, expectedGeneration: number): WorkerMessage | undefined {
+function expectedGeneration(record: DataRecord | undefined, expected: number): record is DataRecord & { generation: number } {
+  return record?.generation === expected && validGeneration(record.generation);
+}
+
+export function parseWorkerMessage(value: unknown, expected: number): WorkerMessage | undefined {
+  const selected = ownDataRecord(value, ["type", "generation", "revision"]);
+  if (selected?.type === "REVISION_SELECTED"
+    && expectedGeneration(selected, expected)
+    && validRevision(selected.revision)) {
+    return { type: "REVISION_SELECTED", generation: selected.generation, revision: selected.revision };
+  }
+
   const success = ownDataRecord(value, ["type", "generation", "revision", "model"]);
   if (success?.type === "SUCCESS"
-    && success.generation === expectedGeneration
-    && generation(success.generation)
-    && typeof success.revision === "string"
-    && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(success.revision)) {
+    && expectedGeneration(success, expected)
+    && validRevision(success.revision)) {
     try {
       return {
         type: "SUCCESS",
@@ -109,46 +146,58 @@ export function parseWorkerMessage(value: unknown, expectedGeneration: number): 
       return {
         type: "FAILURE",
         generation: success.generation,
+        revision: success.revision,
         category: "City construction failed",
         code: "M1-CITY-1",
       };
     }
   }
 
-  const codedFailure = ownDataRecord(value, ["type", "generation", "category", "code"]);
+  const codedFailure = ownDataRecord(value, ["type", "generation", "revision", "category", "code"]);
   if (codedFailure?.type === "FAILURE"
-    && codedFailure.generation === expectedGeneration
-    && generation(codedFailure.generation)
+    && expectedGeneration(codedFailure, expected)
+    && validRevision(codedFailure.revision)
     && typeof codedFailure.category === "string"
     && (FAILURE_CATEGORIES as readonly string[]).includes(codedFailure.category)
-    && validFailureCode(codedFailure.category as FailureCategory, codedFailure.code)) {
+    && validFailureCode(codedFailure.category, codedFailure.code)) {
     return {
       type: "FAILURE",
       generation: codedFailure.generation,
-      category: codedFailure.category as FailureCategory,
+      revision: codedFailure.revision,
+      category: codedFailure.category as PostSelectionCodedCategory,
       code: codedFailure.code,
     };
   }
 
-  const failure = ownDataRecord(value, ["type", "generation", "category"]);
-  if (failure?.type === "FAILURE"
-    && failure.generation === expectedGeneration
-    && generation(failure.generation)
-    && typeof failure.category === "string"
-    && (FAILURE_CATEGORIES as readonly string[]).includes(failure.category)
-    && failure.category !== "No supported modules"
-    && failure.category !== "Source admission failed"
-    && failure.category !== "Metric processing failed"
-    && failure.category !== "City construction failed") {
+  const postSelectionFailure = ownDataRecord(value, ["type", "generation", "revision", "category"]);
+  if (postSelectionFailure?.type === "FAILURE"
+    && expectedGeneration(postSelectionFailure, expected)
+    && validRevision(postSelectionFailure.revision)
+    && (postSelectionFailure.category === "Provider/resolution failure"
+      || postSelectionFailure.category === "Repository exceeds Code City limits")) {
     return {
       type: "FAILURE",
-      generation: failure.generation,
-      category: failure.category as FailureCategory,
+      generation: postSelectionFailure.generation,
+      revision: postSelectionFailure.revision,
+      category: postSelectionFailure.category,
+    };
+  }
+
+  const preSelectionFailure = ownDataRecord(value, ["type", "generation", "category"]);
+  if (preSelectionFailure?.type === "FAILURE"
+    && expectedGeneration(preSelectionFailure, expected)
+    && (preSelectionFailure.category === "Repository unavailable for anonymous access"
+      || preSelectionFailure.category === "Revision unavailable"
+      || preSelectionFailure.category === "Provider/resolution failure")) {
+    return {
+      type: "FAILURE",
+      generation: preSelectionFailure.generation,
+      category: preSelectionFailure.category,
     };
   }
 
   const terminal = ownDataRecord(value, ["type", "generation"]);
-  if (terminal?.generation !== expectedGeneration || !generation(terminal.generation)) {
+  if (!expectedGeneration(terminal, expected)) {
     return undefined;
   }
   if (terminal.type === "PROVIDER_DRAINED_STATIC_ENTERED") {

@@ -63,8 +63,11 @@ attempt coordinator changes visible state.
 |Repository reference |UI → revision selection |The two non-empty URL path
 segments as inert strings
 
-|Selected revision |Revision selection → retrieval |Repository reference and
-GitHub's full immutable commit ID
+|Selected revision |Revision selection → retrieval and UI coordinator |Repository
+reference and GitHub's full immutable commit ID. Before retrieval, the worker
+publishes the closed interim `REVISION_SELECTED` message containing only its
+generation and revision. The coordinator retains that value without displaying
+it while work continues.
 
 |Source evidence |GitHub gateway → retrieval |Projected tree records or one
 bounded, identity-verified, strictly decoded source text value; no provider
@@ -85,7 +88,8 @@ colour, and bounds with finite values; no source, parser value, provider value,
 or resource locator
 
 |Attempt outcome |Worker → UI |One closed, generation-tagged success or failure
-payload
+payload. Every post-selection outcome carries the selected full revision;
+pre-selection failures carry none.
 |===
 
 Concrete provider and parser objects remain at their edges. Repository-derived
