@@ -133,6 +133,7 @@ function adversarialTypedArrays(source) {
       ["typed array own length", ownLength],
       ["typed array own tag", ownTag],
       ["ArrayBuffer extra", bufferExtra],
+      ["wrong length and byte length", new Expected(source.length - 1)],
       ["non-zero byte offset", new Expected(new ArrayBuffer(source.byteLength + bytesPerElement), bytesPerElement, source.length)],
       ["oversized backing buffer", new Expected(new ArrayBuffer(source.byteLength + bytesPerElement), 0, source.length)],
       ["ArrayBuffer subclass", new Expected(new ArrayBufferSubclass(source.byteLength))],
