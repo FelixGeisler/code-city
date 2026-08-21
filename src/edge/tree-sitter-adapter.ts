@@ -104,12 +104,13 @@ class ObservationRows {
     const endpoints = requiredEndpoints.subarray(0, endpointCount);
     let byteEndpoints: Uint32Array | undefined;
     let endpointIndex = 0, utf16Offset = 0, utf8Offset = 0;
-    for (const scalar of source) {
+    while (utf16Offset < source.length) {
       if (endpointIndex < endpointCount && endpoints[endpointIndex] === utf16Offset) { if (byteEndpoints) byteEndpoints[endpointIndex] = utf8Offset; endpointIndex += 1; }
-      const codePoint = scalar.codePointAt(0)!;
-      invariant(!(scalar.length === 1 && codePoint >= 0xd800 && codePoint <= 0xdfff), "Malformed Unicode scalar");
+      const codePoint = source.codePointAt(utf16Offset)!;
+      const scalarLength = codePoint > 0xffff ? 2 : 1;
+      invariant(!(scalarLength === 1 && codePoint >= 0xd800 && codePoint <= 0xdfff), "Malformed Unicode scalar");
       if (codePoint > 0x7f && !byteEndpoints) { byteEndpoints = new Uint32Array(endpointCount); for (let prior = 0; prior < endpointIndex; prior += 1) byteEndpoints[prior] = endpoints[prior]!; }
-      const scalarEnd = utf16Offset + scalar.length;
+      const scalarEnd = utf16Offset + scalarLength;
       invariant(endpointIndex >= endpointCount || endpoints[endpointIndex]! >= scalarEnd, "Parser endpoint splits a surrogate pair");
       utf8Offset += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
       utf16Offset = scalarEnd;
