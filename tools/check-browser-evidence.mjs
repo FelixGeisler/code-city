@@ -134,7 +134,7 @@ function exactKeys(value, keys, label) {
 }
 
 function validateBrowserResult(result, expectedAssets) {
-  exactKeys(result, ["schemaVersion", "assetRequests", "cases", "matrixRuns", "browserExceptions", "unexpectedNetworkRequests", "overallPass"], "Browser result");
+  exactKeys(result, ["schemaVersion", "assetRequests", "cases", "matrixRuns", "complexityMatrixRuns", "browserExceptions", "unexpectedNetworkRequests", "overallPass"], "Browser result");
   assert.equal(result.schemaVersion, 1);
   assert.deepEqual(result.assetRequests, expectedAssets.map(({ role, path: assetPath, sha256 }) => ({ role, path: assetPath, sha256 })));
   assert.deepEqual(result.cases.map(({ id, family }) => ({ id, family })), [
@@ -167,6 +167,28 @@ function validateBrowserResult(result, expectedAssets) {
     assert.equal(entry.pass, true);
   }
   assert.equal(result.matrixRuns[0].runDigest, result.matrixRuns[1].runDigest);
+  assert.equal(result.complexityMatrixRuns.length, 2);
+  for (const [index, entry] of result.complexityMatrixRuns.entries()) {
+    exactKeys(entry, ["modules", "normalizedBytes", "expected", "observed", "densePackedByteLength", "peakLive", "cleanup", "retainedOnlyFinalFacts", "runDigest", "pass"], `Complexity matrix ${index}`);
+    assert.equal(entry.modules, 4_000);
+    assert.equal(entry.normalizedBytes, 41_943_040);
+    assert.deepEqual(entry.expected, {
+      totalS: 20,
+      totalU: 20,
+      totalM: 6_990_520,
+      totalDecisionObservations: 6_990_500,
+      factsDigest: "f2ec54ea39565022686f3d17d07360570b1ebf6d097ca4254f95700bd0a520d4",
+    });
+    assert.deepEqual(entry.observed, entry.expected);
+    assert(entry.densePackedByteLength > 0);
+    assert.deepEqual(entry.peakLive, { parser: 1, tree: 1, cursor: 1, source: 1, observationStream: 1 });
+    assert.deepEqual(entry.cleanup, { parserDeletes: 4_000, treeDeletes: 4_000, cursorDeletes: 8_000, sourceReleases: 4_000, observationStreamReleases: 4_000 });
+    assert.equal(entry.retainedOnlyFinalFacts, true);
+    assert.equal(entry.pass, true);
+  }
+  assert.equal(result.complexityMatrixRuns[0].densePackedByteLength, result.complexityMatrixRuns[1].densePackedByteLength);
+  assert.equal(result.complexityMatrixRuns[0].runDigest, result.complexityMatrixRuns[1].runDigest);
+  assert.equal(result.complexityMatrixRuns[0].observed.factsDigest, result.complexityMatrixRuns[1].observed.factsDigest);
   assert.deepEqual(result.browserExceptions, []);
   assert.deepEqual(result.unexpectedNetworkRequests, []);
   assert.equal(result.overallPass, true);
@@ -291,7 +313,7 @@ export async function checkPackagedBrowserEvidence() {
     });
     invariant(unexpected.length === 0, `Unexpected browser network request(s): ${unexpected.join(", ")}`);
     validateBrowserResult(result, selected);
-    console.log(`Packaged Chrome/CDP evidence passed with ${executable} (${version}); ${result.cases.length} stress cases and two complete matrix runs.`);
+    console.log(`Packaged Chrome/CDP evidence passed with ${executable} (${version}); ${result.cases.length} stress cases, two comment matrices, and two complete complexity matrices.`);
   } catch (error) {
     failure = error;
   } finally {

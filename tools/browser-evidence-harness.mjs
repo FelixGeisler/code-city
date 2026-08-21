@@ -2,6 +2,7 @@ export function createBrowserHarnessSource({ projectRootUrl, assets }) {
   return `
 import { createTreeSitterAdapter } from ${JSON.stringify(`${projectRootUrl}src/edge/tree-sitter-adapter.ts`)};
 import { processAdmittedBaseMetrics } from ${JSON.stringify(`${projectRootUrl}src/application/base-metric-processing.ts`)};
+import { deriveBaseMetricAnalysis } from ${JSON.stringify(`${projectRootUrl}src/domain/base-metrics.ts`)};
 
 const ASSETS = ${JSON.stringify(assets)};
 const COUNT_KEYS = ["lexicalExclusion","explicitUnit","valueAnchor","typeOnly","if","loop","case","catch","ternary","logicalAnd","logicalOr","nullish","logicalAndAssign","logicalOrAssign","nullishAssign"];
@@ -31,6 +32,8 @@ function resources() {
   return {live,peak,cleanup,event(event){const x=names[event];if(!x)return;live[x[0]]+=x[1];if(live[x[0]]<0)throw new Error("resource release without acquisition: "+event);peak[x[0]]=Math.max(peak[x[0]],live[x[0]]);if(event==="parser-deleted")cleanup.parserDeletes++;if(event==="tree-deleted")cleanup.treeDeletes++;if(event==="cursor-deleted")cleanup.cursorDeletes++;if(event==="observation-stream-released")cleanup.observationStreamReleases++;},application(event){if(event==="source-acquired"){live.source++;peak.source=Math.max(peak.source,live.source);}if(event==="source-released"){live.source--;if(live.source<0)throw new Error("source release without acquisition");cleanup.sourceReleases++;}}};
 }
 function createParser(tracker) { return createTreeSitterAdapter({runtimeJavaScript:ASSETS[0].url,runtimeWasm:ASSETS[1].url,grammarJavaScript:ASSETS[2].url,grammarTypeScript:ASSETS[3].url,grammarTsx:ASSETS[4].url},{importRuntime:()=>globalThis.__codeCityRuntimePromise,observeResource:(event)=>tracker.event(event)}); }
+function createInspectingParser(tracker,path,observed) { const parser=createParser(tracker); return {initialize:()=>parser.initialize(),async project(family,source){const stream=await parser.project(family,source);observed.push(await summary(deriveBaseMetricAnalysis(path,source,stream.observations)));return stream;}}; }
+function createRecordingParser(tracker,observed) { const parser=createParser(tracker); return {initialize:()=>parser.initialize(),async project(family,source){const stream=await parser.project(family,source);let decisions=0;for(const observation of stream.observations)if(observation.kind==="decision")decisions++;observed.push({observationCount:stream.observations.length,decisionObservationCount:decisions,observationPackedByteLength:stream.observations.packedByteLength()});return stream;}}; }
 
 const MAX=2097152;
 const core="(".repeat(100000)+"0"+")".repeat(100000);
@@ -55,15 +58,16 @@ const outputCases=[];
 for(const item of cases){
   console.log("browser-evidence:start:"+item.id);
   const tracker=resources();
-  const parser=createParser(tracker);
+  const inspected=[];
+  const parser=createInspectingParser(tracker,item.path,inspected);
   const result=await processAdmittedBaseMetrics([{canonicalPath:item.path,normalizedSource:item.source}],parser,(event)=>tracker.application(event));
-  if(result.kind!=="processed") throw new Error(item.id+" failed");
+  if(result.kind!=="processed"||result.facts.length!==1) throw new Error(item.id+" failed");
   const expected=await expectedSummary(item);
-  const observed=await summary(result.analyses[0]);
+  const observed=inspected[0];
   const expectedDigest=await digest(JSON.stringify(expected));
   const observedDigest=await digest(JSON.stringify(observed));
   const cleanup={parserDeletes:tracker.cleanup.parserDeletes,treeDeletes:tracker.cleanup.treeDeletes,cursorDeletes:tracker.cleanup.cursorDeletes,sourceReleases:tracker.cleanup.sourceReleases,observationStreamReleases:tracker.cleanup.observationStreamReleases};
-  const pass=JSON.stringify(expected)===JSON.stringify(observed)&&expectedDigest===observedDigest&&JSON.stringify(cleanup)===JSON.stringify({parserDeletes:1,treeDeletes:1,cursorDeletes:2,sourceReleases:1,observationStreamReleases:1})&&Object.values(tracker.live).every((count)=>count===0)&&tracker.peak.source===1;
+  const pass=JSON.stringify(expected)===JSON.stringify(observed)&&expectedDigest===observedDigest&&result.facts[0].S===item.S&&result.facts[0].U===item.U&&Object.keys(result.facts[0]).join(",")==="canonicalPath,S,U,M"&&JSON.stringify(cleanup)===JSON.stringify({parserDeletes:1,treeDeletes:1,cursorDeletes:2,sourceReleases:1,observationStreamReleases:1})&&Object.values(tracker.live).every((count)=>count===0)&&tracker.peak.source===1;
   outputCases.push({id:item.id,family:item.family,inputUtf8Bytes:encoder.encode(item.source).byteLength,expected,observed,expectedDigest,observedDigest,cleanup,pass});
   console.log("browser-evidence:done:"+item.id);
 }
@@ -80,12 +84,13 @@ const matrixRuns=[];
 for(let run=0;run<2;run++){
   console.log("browser-evidence:start:matrix:"+run);
   const tracker=resources();
-  const parser=createParser(tracker);
+  const finalized=[];
+  const parser=createRecordingParser(tracker,finalized);
   const matrixModules=matrixPaths.map((canonicalPath,index)=>({canonicalPath,normalizedSource:index<20?commentOnly:""}));
   const result=await processAdmittedBaseMetrics(matrixModules,parser,(event)=>tracker.application(event));
-  if(result.kind!=="processed"||result.analyses.length!==4000)throw new Error("matrix failed");
-  const facts=result.analyses.map((analysis)=>analysis.canonicalPath+"\\t"+analysis.S+"\\t"+analysis.U+"\\n").join("");
-  const observed={totalS:result.analyses.reduce((n,a)=>n+a.S,0),totalU:result.analyses.reduce((n,a)=>n+a.U,0),totalUnits:result.analyses.reduce((n,a)=>n+a.units.length,0),totalDecisionObservations:result.analyses.reduce((n,a)=>n+a.observations.filter((o)=>o.kind==="decision").length,0),totalObservations:result.analyses.reduce((n,a)=>n+a.observations.length,0),factsDigest:await digest(facts)};
+  if(result.kind!=="processed"||result.facts.length!==4000)throw new Error("matrix failed");
+  const facts=result.facts.map((fact)=>fact.canonicalPath+"\\t"+fact.S+"\\t"+fact.U+"\\n").join("");
+  const observed={totalS:result.facts.reduce((n,a)=>n+a.S,0),totalU:result.facts.reduce((n,a)=>n+a.U,0),totalUnits:result.facts.reduce((n,a)=>n+a.U,0),totalDecisionObservations:finalized.reduce((n,a)=>n+a.decisionObservationCount,0),totalObservations:finalized.reduce((n,a)=>n+a.observationCount,0),factsDigest:await digest(facts)};
   const peakLive={parser:tracker.peak.parser,tree:tracker.peak.tree,cursor:tracker.peak.cursor,source:tracker.peak.source,observationStream:tracker.peak.observationStream};
   const cleanup={parserDeletes:tracker.cleanup.parserDeletes,treeDeletes:tracker.cleanup.treeDeletes,cursorDeletes:tracker.cleanup.cursorDeletes,sourceReleases:tracker.cleanup.sourceReleases,observationStreamReleases:tracker.cleanup.observationStreamReleases};
   const ordered={modules:4000,normalizedBytes:41943040,observed,peakLive,cleanup};
@@ -94,8 +99,39 @@ for(let run=0;run<2;run++){
   matrixRuns.push({modules:4000,normalizedBytes:41943040,expected:expectedMatrix,observed,peakLive,cleanup,runDigest,pass});
   console.log("browser-evidence:done:matrix:"+run);
 }
+const complexityPaths=[];
+for(let index=0;index<4000;index++){
+  const suffix=["js","jsx","ts","tsx"][index%4];
+  complexityPaths.push("complexity/"+String(index).padStart(4,"0")+"."+suffix);
+}
+const dense="a&&a; ".repeat(349525)+";;";
+if(encoder.encode(dense).byteLength!==2097152)throw new Error("complexity dense source size changed");
+const complexityFactsText=complexityPaths.map((canonicalPath,index)=>canonicalPath+"\\t"+(index<20?1:0)+"\\t"+(index<20?1:0)+"\\t"+(index<20?349526:0)+"\\n").join("");
+const complexityFactsDigest=await digest(complexityFactsText);
+const expectedComplexity={totalS:20,totalU:20,totalM:6990520,totalDecisionObservations:6990500,factsDigest:complexityFactsDigest};
+const complexityMatrixRuns=[];
+for(let run=0;run<2;run++){
+  console.log("browser-evidence:start:complexity-matrix:"+run);
+  const tracker=resources();
+  const finalized=[];
+  const parser=createRecordingParser(tracker,finalized);
+  const modules=complexityPaths.map((canonicalPath,index)=>({canonicalPath,normalizedSource:index<20?dense:""}));
+  const processing=await processAdmittedBaseMetrics(modules,parser,(event)=>tracker.application(event));
+  if(processing.kind!=="processed"||processing.facts.length!==4000)throw new Error("complexity matrix failed");
+  const facts=processing.facts.map((fact)=>fact.canonicalPath+"\\t"+fact.S+"\\t"+fact.U+"\\t"+fact.M+"\\n").join("");
+  const observed={totalS:processing.facts.reduce((n,a)=>n+a.S,0),totalU:processing.facts.reduce((n,a)=>n+a.U,0),totalM:processing.facts.reduce((n,a)=>n+a.M,0),totalDecisionObservations:finalized.reduce((n,a)=>n+a.decisionObservationCount,0),factsDigest:await digest(facts)};
+  const densePackedByteLength=finalized[0].observationPackedByteLength;
+  const peakLive={parser:tracker.peak.parser,tree:tracker.peak.tree,cursor:tracker.peak.cursor,source:tracker.peak.source,observationStream:tracker.peak.observationStream};
+  const cleanup={parserDeletes:tracker.cleanup.parserDeletes,treeDeletes:tracker.cleanup.treeDeletes,cursorDeletes:tracker.cleanup.cursorDeletes,sourceReleases:tracker.cleanup.sourceReleases,observationStreamReleases:tracker.cleanup.observationStreamReleases};
+  const retainedOnlyFinalFacts=processing.facts.every((fact)=>Object.keys(fact).join(",")==="canonicalPath,S,U,M")&&finalized.length===4000;
+  const ordered={modules:4000,normalizedBytes:41943040,observed,densePackedByteLength,peakLive,cleanup,retainedOnlyFinalFacts};
+  const runDigest=await digest(JSON.stringify(ordered));
+  const pass=JSON.stringify(expectedComplexity)===JSON.stringify(observed)&&complexityFactsDigest==="f2ec54ea39565022686f3d17d07360570b1ebf6d097ca4254f95700bd0a520d4"&&densePackedByteLength>0&&finalized.slice(0,20).every((entry)=>entry.decisionObservationCount===349525&&entry.observationPackedByteLength===densePackedByteLength)&&finalized.slice(20).every((entry)=>entry.decisionObservationCount===0&&entry.observationPackedByteLength===0)&&JSON.stringify(peakLive)===JSON.stringify({parser:1,tree:1,cursor:1,source:1,observationStream:1})&&JSON.stringify(cleanup)===JSON.stringify({parserDeletes:4000,treeDeletes:4000,cursorDeletes:8000,sourceReleases:4000,observationStreamReleases:4000})&&Object.values(tracker.live).every((count)=>count===0)&&retainedOnlyFinalFacts;
+  complexityMatrixRuns.push({modules:4000,normalizedBytes:41943040,expected:expectedComplexity,observed,densePackedByteLength,peakLive,cleanup,retainedOnlyFinalFacts,runDigest,pass});
+  console.log("browser-evidence:done:complexity-matrix:"+run);
+}
 const assetRequests=ASSETS.map(({role,path,sha256})=>({role,path,sha256}));
-const result={schemaVersion:1,assetRequests,cases:outputCases,matrixRuns,browserExceptions:[],unexpectedNetworkRequests:[],overallPass:outputCases.every((entry)=>entry.pass)&&matrixRuns.every((entry)=>entry.pass)&&matrixRuns[0].runDigest===matrixRuns[1].runDigest};
+const result={schemaVersion:1,assetRequests,cases:outputCases,matrixRuns,complexityMatrixRuns,browserExceptions:[],unexpectedNetworkRequests:[],overallPass:outputCases.every((entry)=>entry.pass)&&matrixRuns.every((entry)=>entry.pass)&&matrixRuns[0].runDigest===matrixRuns[1].runDigest&&complexityMatrixRuns.every((entry)=>entry.pass)&&complexityMatrixRuns[0].runDigest===complexityMatrixRuns[1].runDigest};
 document.querySelector("#result").textContent=JSON.stringify(result);
 `;
 }
