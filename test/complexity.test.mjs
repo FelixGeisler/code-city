@@ -109,8 +109,13 @@ test("the mode-discriminated complexity fixture has one closed production and ma
   validateFixtureSchema();
   assert.deepEqual(fixture.cases.filter((entry) => entry.mode === "production-wasm").map((entry) => entry.id), [
     "decisions-all", "decisions-exclusions", "ownership-parameter-and-nested", "ownership-field-and-computed",
-    "top-level-type-only", "decorator-and-outer-ownership", "equal-maxima", "high-count",
+    "top-level-type-only", "conditional-type-excluded", "decorator-and-outer-ownership", "equal-maxima", "high-count",
   ]);
+  const conditional = fixture.cases.find((entry) => entry.id === "conditional-type-excluded");
+  assert.equal(conditional.source, "type X<T> = T extends string ? 1 : 2;");
+  assert.deepEqual({ S: conditional.expectedOutcome.S, U: conditional.expectedOutcome.U, M: conditional.expectedOutcome.M }, { S: 1, U: 0, M: 0 });
+  assert.deepEqual(conditional.expectedOutcome.units, []);
+  assert.equal(conditional.expectedOutcome.observations.some((observation) => observation.kind === "decision"), false);
   assert(fixture.cases.some((entry) => entry.id === "checked-overflow" && entry.value === Number.MAX_SAFE_INTEGER));
 });
 
@@ -176,6 +181,61 @@ test("small input permutations sort final facts by unsigned UTF-8 and duplicate 
       assert.deepEqual(result, { kind: "processed", facts: entry.expectedFacts }, entry.id);
     }
   }
+});
+
+test("source-ordered ownership sweep handles 10,000 structural units and decisions", { timeout: 60_000 }, () => {
+  const count = 10_000;
+  const units = [{ path: "structural.js", kind: "top-level" }];
+  const observations = [];
+  for (let index = 0; index < count; index += 1) {
+    const startByte = index * 10;
+    units.push({
+      path: "structural.js",
+      kind: "function",
+      startByte,
+      endByte: startByte + 8,
+      ownedRegions: [{ startByte, endByte: startByte + 8 }],
+    });
+    observations.push({ kind: "decision", decisionKind: "logical-and", startByte: startByte + 2, endByte: startByte + 6 });
+  }
+
+  const finalized = finalizeModuleComplexity({ canonicalPath: "structural.js", S: 1, U: count + 1, units, observations });
+  assert.deepEqual(finalized.fact, { canonicalPath: "structural.js", S: 1, U: 10_001, M: 2 });
+  assert.equal(finalized.perUnitComplexities.length, 10_001);
+  assert.equal(finalized.perUnitComplexities[0], 1);
+  assert(finalized.perUnitComplexities.subarray(1).every((complexity) => complexity === 2));
+});
+
+test("actual WASM handles 10,000 arrow units each owning one decision", { timeout: 2 * 60_000 }, async () => {
+  const count = 10_000;
+  const source = Array.from({ length: count }, (_, index) => `const a${index}=()=>x&&y;`).join("");
+  assert.equal(Buffer.byteLength(source), 208_890);
+  assert(Buffer.byteLength(source) < 2 * 1024 * 1024);
+
+  const parser = createParser();
+  await parser.initialize();
+  const stream = await parser.project("javascript-no-jsx", source);
+  const analysis = deriveBaseMetricAnalysis("many-units.js", source, stream.observations);
+  assert.deepEqual({ S: analysis.S, U: analysis.U }, { S: 1, U: 10_001 });
+  const units = [...analysis.units];
+  assert.deepEqual(units[0], { path: "many-units.js", kind: "top-level" });
+  for (let index = 1; index < units.length; index += 1) assert.equal(units[index].kind, "arrow");
+  let decisionCount = 0;
+  for (const observation of analysis.observations) if (observation.kind === "decision") decisionCount += 1;
+  assert.equal(decisionCount, 10_000);
+  assert(stream.observations.packedByteLength() < 2 * 1024 * 1024);
+
+  const finalized = finalizeModuleComplexity(analysis);
+  assert.deepEqual(finalized.fact, { canonicalPath: "many-units.js", S: 1, U: 10_001, M: 2 });
+  assert.equal(finalized.perUnitComplexities.length, 10_001);
+  assert.equal(finalized.perUnitComplexities[0], 1);
+  assert(finalized.perUnitComplexities.subarray(1).every((complexity) => complexity === 2));
+  stream.release();
+
+  assert.deepEqual(
+    await processAdmittedBaseMetrics([{ canonicalPath: "many-units.js", normalizedSource: source }], createParser()),
+    { kind: "processed", facts: [{ canonicalPath: "many-units.js", S: 1, U: 10_001, M: 2 }] },
+  );
 });
 
 function resourceTracker() {

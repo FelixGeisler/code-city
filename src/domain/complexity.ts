@@ -121,11 +121,44 @@ export function finalizeModuleComplexity(input: ComplexityInput): FinalizedModul
     stack.push(index);
   }
 
+  const regions: Array<Readonly<{
+    tableIndex: number;
+    unitDepth: number;
+    startByte: number;
+    endByte: number;
+  }>> = [];
+  for (let explicitIndex = 0; explicitIndex < explicit.length; explicitIndex += 1) {
+    const { tableIndex, unit } = explicit[explicitIndex]!;
+    for (const region of unit.ownedRegions) {
+      regions.push({ tableIndex, unitDepth: depths[explicitIndex]!, ...region });
+    }
+  }
+  regions.sort((left, right) => left.startByte - right.startByte
+    || right.endByte - left.endByte
+    || left.unitDepth - right.unitDepth
+    || left.tableIndex - right.tableIndex);
+
+  const regionStack: number[] = [];
+  const activeDepths = new Set<number>();
+  for (let regionIndex = 0; regionIndex < regions.length; regionIndex += 1) {
+    const region = regions[regionIndex]!;
+    while (regionStack.length > 0 && region.startByte >= regions[regionStack.at(-1)!]!.endByte) {
+      activeDepths.delete(regions[regionStack.pop()!]!.unitDepth);
+    }
+    if (regionStack.length > 0 && region.endByte > regions[regionStack.at(-1)!]!.endByte) malformed();
+    if (activeDepths.has(region.unitDepth)) malformed();
+    regionStack.push(regionIndex);
+    activeDepths.add(region.unitDepth);
+  }
+
   const complexities = new Float64Array(units.length);
   complexities.fill(1);
   let previousStart = -1;
   let previousEnd = -1;
   let previousKind = -1;
+  let nextRegion = 0;
+  const activeRegions: number[] = [];
+  const activeBestRegions: number[] = [];
   for (const observation of input.observations) {
     if (!observation || !(OBSERVATION_ORDER as readonly string[]).includes(observation.kind)) malformed();
     const order = OBSERVATION_ORDER.indexOf(observation.kind);
@@ -142,27 +175,32 @@ export function finalizeModuleComplexity(input: ComplexityInput): FinalizedModul
     if (observation.kind !== "decision") continue;
     if (!(DECISION_KINDS as readonly string[]).includes(observation.decisionKind)) malformed();
 
-    let owner = -1;
-    let ownerDepth = -1;
-    for (let explicitIndex = 0; explicitIndex < explicit.length; explicitIndex += 1) {
-      const { tableIndex, unit } = explicit[explicitIndex]!;
-      if (unit.startByte > observation.startByte) break;
-      if (observation.startByte >= unit.endByte) continue;
-      for (const region of unit.ownedRegions) {
-        if (observation.startByte < region.startByte || observation.startByte >= region.endByte) continue;
-        if (observation.endByte > region.endByte) malformed();
-        const depth = depths[explicitIndex]!;
-        if (depth === ownerDepth) malformed();
-        if (depth > ownerDepth) {
-          owner = tableIndex;
-          ownerDepth = depth;
-        }
+    while (nextRegion < regions.length && regions[nextRegion]!.startByte <= observation.startByte) {
+      const region = regions[nextRegion]!;
+      while (activeRegions.length > 0 && region.startByte >= regions[activeRegions.at(-1)!]!.endByte) {
+        activeRegions.pop();
+        activeBestRegions.pop();
       }
+      const priorBest = activeBestRegions.at(-1) ?? -1;
+      if (priorBest !== -1 && region.unitDepth === regions[priorBest]!.unitDepth) malformed();
+      const best = priorBest === -1 || region.unitDepth > regions[priorBest]!.unitDepth
+        ? nextRegion
+        : priorBest;
+      activeRegions.push(nextRegion);
+      activeBestRegions.push(best);
+      nextRegion += 1;
     }
-    if (owner === -1) {
-      if (topLevelIndex === -1) malformed();
-      owner = topLevelIndex;
+    while (activeRegions.length > 0 && observation.startByte >= regions[activeRegions.at(-1)!]!.endByte) {
+      activeRegions.pop();
+      activeBestRegions.pop();
     }
+
+    let owner = topLevelIndex;
+    if (activeRegions.length > 0) {
+      if (observation.endByte > regions[activeRegions.at(-1)!]!.endByte) malformed();
+      owner = regions[activeBestRegions.at(-1)!]!.tableIndex;
+    }
+    if (owner === -1) malformed();
     complexities[owner] = checkedComplexityIncrement(complexities[owner]!);
   }
 

@@ -792,6 +792,36 @@
       }
     },
     {
+      "id": "conditional-type-excluded",
+      "mode": "production-wasm",
+      "canonicalPath": "conditional.ts",
+      "source": "type X<T> = T extends string ? 1 : 2;",
+      "grammarFamily": "typescript",
+      "expectedOutcome": {
+        "kind": "processed",
+        "S": 1,
+        "U": 0,
+        "units": [],
+        "observations": [
+          {
+            "kind": "type-only",
+            "typeKind": "interface/type alias",
+            "startByte": 0,
+            "endByte": 37
+          }
+        ],
+        "baseDigest": "eea5236aef0f305c6f9dbc48ffb4a4848ff9945789874620a206264217d416f0",
+        "perUnitComplexities": [],
+        "M": 0,
+        "fact": {
+          "canonicalPath": "conditional.ts",
+          "S": 1,
+          "U": 0,
+          "M": 0
+        }
+      }
+    },
+    {
       "id": "decorator-and-outer-ownership",
       "mode": "production-wasm",
       "canonicalPath": "decorated.ts",
@@ -13206,6 +13236,52 @@
             "kind": "function",
             "startByte": 0,
             "endByte": 10,
+            "ownedRegions": [
+              {
+                "startByte": 0,
+                "endByte": 10
+              }
+            ]
+          },
+          {
+            "path": "bad.js",
+            "kind": "function",
+            "startByte": 5,
+            "endByte": 15,
+            "ownedRegions": [
+              {
+                "startByte": 5,
+                "endByte": 15
+              }
+            ]
+          }
+        ],
+        "observations": []
+      },
+      "expectedOutcome": {
+        "kind": "failure",
+        "category": "Metric processing failed",
+        "code": "M1-MET-1"
+      }
+    },
+    {
+      "id": "crossing-owned-regions",
+      "mode": "synthetic-domain",
+      "operation": "finalize",
+      "input": {
+        "canonicalPath": "bad.js",
+        "S": 1,
+        "U": 3,
+        "units": [
+          {
+            "path": "bad.js",
+            "kind": "top-level"
+          },
+          {
+            "path": "bad.js",
+            "kind": "function",
+            "startByte": 0,
+            "endByte": 20,
             "ownedRegions": [
               {
                 "startByte": 0,
