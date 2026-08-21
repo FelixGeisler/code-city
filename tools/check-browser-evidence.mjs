@@ -25,7 +25,7 @@ const SUCCESS_FIXTURE = Object.freeze({
   path: "src/answer.js",
   source: "const answer = 42;\n",
   blob: "5c947feee9cbb434b57ed2e576b643e99e35e782",
-  normalizedSourceSha256: "8691f74ea796569734dafffbbcb79088362b52c3cef154aa0d8f32696d2d4737",
+  expectedNormalizedSourceSha256: "8691f74ea796569734dafffbbcb79088362b52c3cef154aa0d8f32696d2d4737",
   modelBytesSha256: "90ea132d2534fd0f06f796ba584a5fd0b927914230119a0a641d9b5497133bd6",
 });
 const CSP = "default-src 'none'; base-uri 'none'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; form-action 'none'; frame-src 'none'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; worker-src 'self'";
@@ -150,6 +150,23 @@ function digestBytes(parts) {
   return hash.digest("hex");
 }
 
+function normalizedSourceDigest(rawBytes) {
+  invariant(rawBytes instanceof Uint8Array, "Raw source fixture is not exact bytes");
+  let decoded = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(rawBytes);
+  if (decoded.startsWith("\uFEFF")) decoded = decoded.slice(1);
+  invariant(!decoded.includes("\0"), "Raw source fixture contains NUL");
+  const normalized = decoded.replace(/\r\n?/gu, "\n");
+  return createHash("sha256").update(new TextEncoder().encode(normalized)).digest("hex");
+}
+
+function checkStrictSourceNormalization() {
+  const raw = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("first\r\nsecond\rthird\n", "utf8")]);
+  const expected = createHash("sha256").update(Buffer.from("first\nsecond\nthird\n", "utf8")).digest("hex");
+  assert.equal(normalizedSourceDigest(raw), expected);
+  assert.throws(() => normalizedSourceDigest(Uint8Array.from([0xc3, 0x28])), /encoded data|encoding/iu);
+  assert.throws(() => normalizedSourceDigest(Buffer.from("before\0after", "utf8")), /NUL/u);
+}
+
 function pageObservationSource() {
   return `(() => {
     const evidence = { messages: [], contexts: [] };
@@ -216,22 +233,27 @@ const WORKER_OBSERVATION_SOURCE = `(() => {
 })();`;
 
 async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, requestedUrls, browserExceptions, failedRequests }) {
+  checkStrictSourceNormalization();
   const fixture = SUCCESS_FIXTURE;
   const revisionUrl = "https://api.github.com/repos/code-city/evidence-fixture/commits?per_page=1&page=1";
   const commitUrl = `https://api.github.com/repos/code-city/evidence-fixture/git/commits/${fixture.selected}`;
   const treeUrl = `https://api.github.com/repos/code-city/evidence-fixture/git/trees/${fixture.root}?recursive=1`;
   const rawUrl = `https://raw.githubusercontent.com/code-city/evidence-fixture/${fixture.selected}/${fixture.path}`;
   const urls = [revisionUrl, commitUrl, treeUrl, rawUrl];
+  const rawSourceBytes = Buffer.from(fixture.source, "utf8");
+  const computedNormalizedSourceSha256 = normalizedSourceDigest(rawSourceBytes);
+  assert.equal(computedNormalizedSourceSha256, fixture.expectedNormalizedSourceSha256);
   const bodies = new Map([
     [revisionUrl, JSON.stringify([{ sha: fixture.selected }])],
     [commitUrl, JSON.stringify({ sha: fixture.selected, tree: { sha: fixture.root } })],
     [treeUrl, JSON.stringify({ sha: fixture.root, truncated: false, tree: [{ path: fixture.path, mode: "100644", type: "blob", sha: fixture.blob }] })],
-    [rawUrl, fixture.source],
+    [rawUrl, rawSourceBytes],
   ]);
   const gets = [];
   const options = [];
   const workerTransfers = [];
   const workerNetwork = [];
+  const generationSourceRecords = [];
   const childInstallations = [];
   const failures = [];
   let activeGets = 0;
@@ -239,11 +261,12 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
   const networkStart = requestedUrls.length;
 
   const fulfill = async (requestId, responseCode, responseHeaders, body = "") => {
+    const exactBytes = typeof body === "string" ? Buffer.from(body, "utf8") : Buffer.from(body);
     await cdp.send("Fetch.fulfillRequest", {
       requestId,
       responseCode,
       responseHeaders,
-      body: Buffer.from(body, "utf8").toString("base64"),
+      body: exactBytes.toString("base64"),
     }, sessionId);
   };
 
@@ -308,11 +331,16 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
           invariant(headers["x-github-api-version"] === "2026-03-10", "API version changed");
         }
         gets.push({ url, method });
+        const body = bodies.get(url);
+        const bodyBytes = typeof body === "string" ? Buffer.from(body, "utf8") : Buffer.from(body);
+        if (url === rawUrl) {
+          generationSourceRecords.push({ normalizedSourceSha256: normalizedSourceDigest(bodyBytes) });
+        }
         await fulfill(requestId, 200, [
           { name: "Access-Control-Allow-Origin", value: origin },
           { name: "Content-Type", value: url === rawUrl ? "text/plain; charset=utf-8" : "application/json; charset=utf-8" },
-          { name: "Content-Length", value: String(Buffer.byteLength(bodies.get(url), "utf8")) },
-        ], bodies.get(url));
+          { name: "Content-Length", value: String(bodyBytes.byteLength) },
+        ], bodyBytes);
       } finally {
         activeGets -= 1;
       }
@@ -369,6 +397,11 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert.equal(workerTransfers.length, 2);
     for (const transfer of workerTransfers) assert.deepEqual(transfer, { count: 4, ordered: true, distinct: 4, whole: true, detached: [0, 0, 0, 0] });
     assert.equal(observed.messages.length, 2);
+    assert.deepEqual(generationSourceRecords, [
+      { normalizedSourceSha256: computedNormalizedSourceSha256 },
+      { normalizedSourceSha256: computedNormalizedSourceSha256 },
+    ]);
+    assert(generationSourceRecords.every(({ normalizedSourceSha256 }) => normalizedSourceSha256 === fixture.expectedNormalizedSourceSha256));
     const modelDigests = observed.messages.map((message) => digestBytes(message.buffers));
     assert.deepEqual(modelDigests, [fixture.modelBytesSha256, fixture.modelBytesSha256]);
     for (const message of observed.messages) {
@@ -392,7 +425,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     for (const exchange of workerNetwork) invariant(manifestUrls.has(exchange.url) || urls.includes(exchange.url), `Unexpected worker production-flow request: ${exchange.method} ${exchange.url}`);
     for (const expectedUrl of urls) assert.equal(workerNetwork.filter(({ url, method }) => url === expectedUrl && method === "GET").length, 2, `Worker did not issue both parent-intercepted GETs for ${expectedUrl}`);
 
-    console.log(`Production success evidence passed: selected=${fixture.selected}; normalized-source-sha256=${fixture.normalizedSourceSha256}; model-sha256=${fixture.modelBytesSha256}; presenter-sha256=${presentationDigests[0]}; GETs=${gets.map(({ url }) => url).join(" -> ")}; OPTIONS=${JSON.stringify(options)}.`);
+    console.log(`Production success evidence passed: selected=${fixture.selected}; normalized-source-sha256=${computedNormalizedSourceSha256}; model-sha256=${fixture.modelBytesSha256}; presenter-sha256=${presentationDigests[0]}; GETs=${gets.map(({ url }) => url).join(" -> ")}; OPTIONS=${JSON.stringify(options)}.`);
   } finally {
     cdp.listeners.delete(listener);
     try { await cdp.send("Fetch.disable", {}, sessionId); } catch {}
