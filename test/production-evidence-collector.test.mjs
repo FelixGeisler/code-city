@@ -693,14 +693,14 @@ test("wire-header minimization derives credential absence only from raw ExtraInf
   }
 });
 
-test("every CDP route cap accepts the exact boundary and rejects boundary plus one before body retrieval", () => {
+test("every CDP route cap uses cumulative decoded bytes and ignores encoded transfer overhead", () => {
   for (const [stage, cap] of Object.entries(RESPONSE_CAPS)) {
     if (stage === "deployment") continue;
     assert.equal(responseCapForRoute({ stage }), cap);
     const entry = { cap };
-    recordCdpTransferSize(entry, { dataLength: cap, encodedDataLength: cap });
+    recordCdpTransferSize(entry, { dataLength: cap, encodedDataLength: cap + 1_024 });
+    assert.equal(entry.dataLength, cap);
     assert.throws(() => recordCdpTransferSize({ cap }, { dataLength: cap + 1 }), /before retrieval/u);
-    assert.throws(() => recordCdpTransferSize({ cap }, { encodedDataLength: cap + 1 }), /before retrieval/u);
   }
 });
 
@@ -802,7 +802,7 @@ function fakeChromeChild() {
   return child;
 }
 
-function fakeCdpHarness({ failMethod } = {}) {
+function fakeCdpHarness({ failMethod, evaluateImpl } = {}) {
   const listeners = new Set();
   const closeListeners = new Set();
   const bodies = new Map();
@@ -818,7 +818,14 @@ function fakeCdpHarness({ failMethod } = {}) {
       if (method === "Browser.getVersion") return { product: "Chrome/140.0.1.2", protocolVersion: "1.3" };
       if (method === "Target.createTarget") return { targetId: "page-target" };
       if (method === "Target.attachToTarget") return { sessionId: "page-session" };
-      if (method === "Runtime.evaluate") return { result: { value: true } };
+      if (method === "Runtime.evaluate") {
+        const value = evaluateImpl
+          ? await evaluateImpl(params.expression)
+          : params.expression.includes("capacity-final-state")
+            ? { terminal: "Repository exceeds Code City limits", revision: REACT, cityCount: 0, canvasCount: 0 }
+            : true;
+        return { result: { value } };
+      }
       if (method === "Network.getResponseBody") {
         bodyCalls += 1;
         const stored = bodies.get(params.requestId);
@@ -896,7 +903,7 @@ test("signal-terminal Chrome children never wait for or manufacture a second exi
 
 function emitBrowserGet(harness, { requestId, url, body, headers = {}, responseHeaders = {
   "Access-Control-Allow-Origin": "*", "Content-Type": "application/json",
-}, dataLength } = {}) {
+}, dataLength, encodedDataLength } = {}) {
   harness.bodies.set(requestId, body);
   harness.emit("Network.requestWillBeSent", { requestId, request: { url, method: "GET", headers: {} } });
   harness.emit("Network.requestWillBeSentExtraInfo", { requestId, headers, associatedCookies: [] });
@@ -904,8 +911,9 @@ function emitBrowserGet(harness, { requestId, url, body, headers = {}, responseH
     url, status: 200, headers: responseHeaders, fromDiskCache: false, fromServiceWorker: false,
   } });
   const length = dataLength ?? new TextEncoder().encode(body).byteLength;
-  harness.emit("Network.dataReceived", { requestId, dataLength: length, encodedDataLength: length });
-  harness.emit("Network.loadingFinished", { requestId, encodedDataLength: length });
+  const encodedLength = encodedDataLength ?? length;
+  harness.emit("Network.dataReceived", { requestId, dataLength: length, encodedDataLength: encodedLength });
+  harness.emit("Network.loadingFinished", { requestId, encodedDataLength: encodedLength });
 }
 
 function emitBrowserBytes(harness, { requestId, url, bytes }) {
@@ -1122,6 +1130,47 @@ test("complete safe CDP facts survive a later fatal event without retaining unsa
   await session.close().catch(() => {});
 });
 
+test("CDP session accepts an exact decoded cap with encoded overhead and rejects an oversized retrieved body", async () => {
+  const cap = RESPONSE_CAPS.revision;
+  {
+    const opened = await openFakeBrowser();
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    await Promise.resolve();
+    emitBrowserGet(opened.harness, {
+      requestId: "exact-decoded", url: revisionUrl("FelixGeisler/code-city"),
+      body: paddedJson([{ sha: EVENT }], cap), dataLength: cap, encodedDataLength: cap + 1_024,
+    });
+    for (let attempts = 0; opened.harness.bodyCalls < 1 && attempts < 20; attempts += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(opened.harness.bodyCalls, 1);
+    opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+    }) });
+    const state = await Promise.race([
+      pending.then(() => "settled", () => "rejected"),
+      new Promise((resolve) => setTimeout(() => resolve("pending"), 20)),
+    ]);
+    assert.equal(state, "pending");
+    opened.harness.emit("Runtime.exceptionThrown", {});
+    await assert.rejects(pending, /browser exception/u);
+    await opened.session.close().catch(() => {});
+  }
+
+  {
+    const opened = await openFakeBrowser();
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    await Promise.resolve();
+    emitBrowserGet(opened.harness, {
+      requestId: "retrieved-overflow", url: revisionUrl("FelixGeisler/code-city"),
+      body: paddedJson([{ sha: EVENT }], cap + 1), dataLength: cap, encodedDataLength: cap + 1_024,
+    });
+    await assert.rejects(pending, /response body exceeds cap$/u);
+    assert.equal(opened.harness.bodyCalls, 1);
+    await opened.session.close().catch(() => {});
+  }
+});
+
 test("CDP transfer overflow fails before getResponseBody and closes owned resources", async () => {
   const opened = await openFakeBrowser();
   const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
@@ -1286,6 +1335,109 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
   ));
   assert.deepEqual(workerCommands.map(({ method }) => method), ["Runtime.enable", "Network.enable", "Runtime.runIfWaitingForDebugger"]);
   await session.close();
+});
+
+test("a late publication after worker detachment becomes a schema-valid handled capacity failure", async () => {
+  let stored;
+  const requestCandidates = NATIVE_ENTRIES.map((entry, offset) => ({
+    index: offset + 1, path: entry.path, blobId: entry.sha, normalizedBytes: 1,
+    runningAggregate: offset + 1, hashMatched: true, contentValid: true,
+  }));
+  const harness = fakeCdpHarness({
+    evaluateImpl: async (expression) => expression.includes("capacity-final-state")
+      ? { terminal: "Repository exceeds Code City limits", revision: REACT, cityCount: 1, canvasCount: 1 }
+      : true,
+  });
+  const seams = collectorMatrixSeams({
+    packetSink(value) { if (value) stored = value; return stored; },
+  });
+  seams.qualifyRepository = async ({ now, requestItems, progress }) => {
+    appendSequence(requestItems, now, "facebook/react", REACT, REACT_ROOT,
+      NATIVE_ENTRIES.map(({ path: sourcePath }) => sourcePath), false);
+    return Object.assign(progress, {
+      repositoryUrl: "https://github.com/facebook/react", revision: REACT, rootTree: REACT_ROOT,
+      treeEntries: 5000, truncated: false, candidates: requestCandidates,
+    });
+  };
+  seams.createBrowserEvidenceSession = async (args) => {
+    const native = await createBrowserEvidenceSession({
+      ...args,
+      launchImpl: async () => ({ child: fakeChromeChild(), websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+      connectImpl: () => harness.cdp,
+    });
+    return {
+      cdpVersion: native.cdpVersion,
+      fatalSignal: native.fatalSignal,
+      async collectSmoke(emit, startedMs) {
+        appendSequence(args.requestItems, args.now, "FelixGeisler/code-city", EVENT, ROOT, ["src/a.ts"], true, {
+          revision: () => emit("revision-selected", 1),
+        });
+        const published = emit("city-published", 1);
+        return {
+          repositoryUrl: "https://github.com/FelixGeisler/code-city", revision: EVENT, rootTree: ROOT,
+          terminal: "success", canvasCount: 1, modelSha256: "1".repeat(64), startedMs,
+          endedMs: published.atMs, providerGetCount: 4,
+        };
+      },
+      clearTrace() {},
+      collectCapacity: native.collectCapacity.bind(native),
+      snapshot: native.snapshot.bind(native),
+      close: native.close.bind(native),
+    };
+  };
+
+  const pending = collectProductionEvidence({
+    origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"), output: path.resolve("late-capacity-publication"),
+  }, seams);
+  for (let attempts = 0; !harness.calls.some(({ method, params }) => method === "Runtime.evaluate"
+    && params.expression.includes("https://github.com/facebook/react")); attempts += 1) {
+    assert(attempts < 20);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  harness.emit("Target.attachedToTarget", {
+    sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" },
+  }, "");
+  emitBrowserGet(harness, {
+    requestId: "capacity-revision", url: revisionUrl("facebook/react"), body: JSON.stringify([{ sha: REACT }]),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "REVISION_SELECTED", generation: 2, revision: REACT,
+  }) });
+  emitBrowserGet(harness, {
+    requestId: "capacity-commit", url: commitUrl("facebook/react", REACT),
+    body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
+  });
+  emitBrowserGet(harness, {
+    requestId: "capacity-tree", url: treeUrl("facebook/react", REACT_ROOT),
+    body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
+  });
+  for (let index = 0; index < NATIVE_ENTRIES.length; index += 1) {
+    emitBrowserGet(harness, {
+      requestId: `capacity-raw-${index + 1}`,
+      url: rawUrl("facebook/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
+    });
+  }
+  for (let attempts = 0; harness.bodyCalls < 4004 && attempts < 100; attempts += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(harness.bodyCalls, 4004);
+  harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "FAILURE", generation: 2, revision: REACT, category: "Repository exceeds Code City limits",
+  }) });
+  harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "ATTEMPT_DRAINED", generation: 2,
+  }) });
+  harness.emit("Target.detachedFromTarget", { sessionId: "worker-session", targetId: "worker-target" }, "");
+
+  const result = await pending;
+  assert.deepEqual([result.status, result.reason], ["fail", "stale-publication"]);
+  const capacity = JSON.parse(new TextDecoder().decode(stored.files.get("capacity.json")));
+  const lifecycle = JSON.parse(new TextDecoder().decode(stored.files.get("lifecycle.json")));
+  assert.deepEqual([capacity.status, capacity.reason], ["fail", "stale-publication"]);
+  assert.equal(capacity.data.workerQuiescent, null);
+  assert.equal(lifecycle.data.noLaterPublication, null);
+  assert.deepEqual(lifecycle.data.events.slice(-2).map(({ event }) => event), ["request-quiescent", "collector-failed"]);
 });
 
 test("CDP admission rejects overlap, wrong order/path, and capacity candidate 4,002 before body retrieval", async () => {
@@ -2165,6 +2317,61 @@ test("collector awaits the #494 writer and reader APIs and owns no storage renam
   assert(!/\.validated(?:\.staged)?/u.test(source));
   assert.match(source, /await \(seams\.writeValidatedEvidencePacket \?\? writeValidatedEvidencePacket\)/u);
   assert.match(source, /await \(seams\.readValidatedEvidencePacket \?\? readValidatedEvidencePacket\)/u);
+});
+
+test("a mismatched smoke SUCCESS revision becomes a schema-valid handled smoke failure without a model digest", async () => {
+  let stored;
+  const harness = fakeCdpHarness();
+  const seams = collectorMatrixSeams({
+    packetSink(value) { if (value) stored = value; return stored; },
+  });
+  seams.createBrowserEvidenceSession = async (args) => createBrowserEvidenceSession({
+    ...args,
+    launchImpl: async () => ({ child: fakeChromeChild(), websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+    connectImpl: () => harness.cdp,
+  });
+  const pending = collectProductionEvidence({
+    origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"), output: path.resolve("smoke-revision-mismatch"),
+  }, seams);
+  for (let attempts = 0; !harness.calls.some(({ method, params }) => method === "Runtime.evaluate"
+    && params.expression.includes("requestSubmit")); attempts += 1) {
+    assert(attempts < 20);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  harness.emit("Target.attachedToTarget", {
+    sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" },
+  }, "");
+  emitBrowserGet(harness, {
+    requestId: "smoke-revision", url: revisionUrl("FelixGeisler/code-city"), body: JSON.stringify([{ sha: EVENT }]),
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+  }) });
+  emitBrowserGet(harness, {
+    requestId: "smoke-commit", url: commitUrl("FelixGeisler/code-city", EVENT),
+    body: JSON.stringify({ sha: EVENT, tree: { sha: ROOT } }),
+  });
+  emitBrowserGet(harness, {
+    requestId: "smoke-tree", url: treeUrl("FelixGeisler/code-city", ROOT),
+    body: JSON.stringify({ sha: ROOT, truncated: false, tree: [{
+      path: "src/a.ts", mode: "100644", type: "blob", sha: NATIVE_BLOB,
+    }] }),
+  });
+  emitBrowserGet(harness, {
+    requestId: "smoke-raw", url: rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts"), body: "x",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "SUCCESS", generation: 1, revision: "9".repeat(40), modelSha256: "1".repeat(64),
+  }) });
+
+  const result = await pending;
+  assert.deepEqual([result.status, result.reason], ["fail", "smoke-failure"]);
+  const smoke = JSON.parse(new TextDecoder().decode(stored.files.get("smoke.json")));
+  assert.deepEqual([smoke.status, smoke.reason], ["fail", "smoke-failure"]);
+  assert.equal(smoke.data.revision, EVENT);
+  assert.equal(smoke.data.modelSha256, null);
 });
 
 test("controlled smoke observes exact request identities and remains pending until target detachment", async () => {

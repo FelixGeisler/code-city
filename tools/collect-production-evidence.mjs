@@ -693,14 +693,10 @@ export function responseCapForRoute(route) {
   return cap;
 }
 
-export function recordCdpTransferSize(entry, { dataLength = 0, encodedDataLength = 0, final = false } = {}) {
-  invariant(Number.isFinite(dataLength) && dataLength >= 0 && Number.isFinite(encodedDataLength) && encodedDataLength >= 0
-    && typeof final === "boolean", "browser transfer size is invalid");
+export function recordCdpTransferSize(entry, { dataLength = 0 } = {}) {
+  invariant(Number.isFinite(dataLength) && dataLength >= 0, "browser transfer size is invalid");
   entry.dataLength = (entry.dataLength ?? 0) + dataLength;
-  entry.encodedDataLength = final
-    ? Math.max(entry.encodedDataLength ?? 0, encodedDataLength)
-    : (entry.encodedDataLength ?? 0) + encodedDataLength;
-  invariant(entry.dataLength <= entry.cap && entry.encodedDataLength <= entry.cap, "browser response body exceeds cap before retrieval");
+  invariant(entry.dataLength <= entry.cap, "browser response body exceeds cap before retrieval");
 }
 
 async function cdpBody(cdp, sessionId, requestId, cap) {
@@ -1055,7 +1051,7 @@ export async function createBrowserEvidenceSession({
         }
         const entry = {
           sessionId: message.sessionId, requestId: message.params.requestId, url, method, route,
-          cap: responseCapForRoute(route), startedMs: now(), dataLength: 0, encodedDataLength: 0,
+          cap: responseCapForRoute(route), startedMs: now(), dataLength: 0,
           requestHeaderFacts: earlyExtra.get(key), admitted: false,
         };
         network.set(key, entry);
@@ -1081,8 +1077,6 @@ export async function createBrowserEvidenceSession({
       if (message.method === "Network.loadingFinished") {
         const entry = network.get(key);
         if (!entry) return;
-        try { recordCdpTransferSize(entry, { encodedDataLength: message.params.encodedDataLength ?? 0, final: true }); }
-        catch (error) { setFatal(error); return; }
         entry.finished = true;
         entry.finishedMs = Math.max(entry.startedMs, now());
         if (!entry.response || !entry.requestHeaderFacts) {
@@ -1160,7 +1154,8 @@ export async function createBrowserEvidenceSession({
         await flush();
         invariant(trace.revision === eventSha, "smoke revision evidence differs");
         const terminal = await nextFact((fact) => ["SUCCESS", "FAILURE"].includes(fact.type) && fact.generation === 1);
-        invariant(terminal.type === "SUCCESS", "smoke terminal differs");
+        invariant(terminal.type === "SUCCESS" && terminal.revision === selected.revision
+          && terminal.revision === eventSha, "smoke terminal revision differs");
         await nextFact((fact) => fact.type === "ATTEMPT_DRAINED" && fact.generation === 1);
         await waitUntil(cdp, sessionId, `document.querySelector('[data-commit]')?.textContent===${JSON.stringify(eventSha)}&&document.querySelectorAll('[data-city] canvas').length===1`, fatal);
         await flush();
@@ -1209,14 +1204,25 @@ export async function createBrowserEvidenceSession({
           revisionDisplayed: true, cityPresent: false, priorCityRemoved: true, rawRequestCount: 4001, candidates: trace.rawFacts,
         });
         emit("limit-failure", 2, terminal.observedAtMs);
-        await nextFact((fact) => fact.type === "ATTEMPT_DRAINED" && fact.generation === 2);
-        await waitUntil(cdp, sessionId, `document.querySelector('[data-status]')?.textContent==='Repository exceeds Code City limits'&&document.querySelector('[data-commit]')?.textContent===${JSON.stringify(qualification.revision)}&&document.querySelectorAll('[data-city] canvas').length===0`, fatal);
+        const drained = await nextFact((fact) => fact.type === "ATTEMPT_DRAINED" && fact.generation === 2);
+        await waitUntil(cdp, sessionId, `document.querySelector('[data-status]')?.textContent==='Repository exceeds Code City limits'&&document.querySelector('[data-commit]')?.textContent===${JSON.stringify(qualification.revision)}&&document.querySelectorAll('[data-city]').length===0&&document.querySelectorAll('[data-city] canvas').length===0`, fatal);
         await flush();
         invariant(network.size === 0, "capacity requests are not quiescent");
         progress.noLaterRequest = true;
         emit("request-quiescent", 2);
         invariant(workerTargets.size > 0, "capacity worker target was not observed");
         await waitForWorkerDetachment();
+        const finalUi = await evaluate(cdp, sessionId, `(() => { /* capacity-final-state */ return { terminal: document.querySelector('[data-status]')?.textContent ?? null, revision: document.querySelector('[data-commit]')?.textContent ?? null, cityCount: document.querySelectorAll('[data-city]').length, canvasCount: document.querySelectorAll('[data-city] canvas').length }; })()`);
+        await flush();
+        invariant(finalUi && Object.keys(finalUi).sort().join(",") === "canvasCount,cityCount,revision,terminal"
+          && ownString(finalUi, "terminal") === "Repository exceeds Code City limits"
+          && ownString(finalUi, "revision") === qualification.revision
+          && ownData(finalUi, "cityCount") === 0 && ownData(finalUi, "canvasCount") === 0,
+        "stale publication after worker detachment");
+        invariant(facts.length === 3 && facts[0] === selected && facts[1] === terminal && facts[2] === drained,
+          "stale publication worker message after detachment");
+        invariant(network.size === 0 && trace.gets.length === 4004 && trace.rawFacts.length === 4001,
+          "capacity requests are not quiescent after worker detachment");
         progress.workerQuiescent = true;
         const workerQuiescent = emit("worker-quiescent", 2);
         progress.endedMs = workerQuiescent.atMs;
