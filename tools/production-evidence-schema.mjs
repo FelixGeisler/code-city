@@ -430,7 +430,7 @@ function validateExchangeSequence(items, repository, applicationCall, complete) 
   return gets;
 }
 
-function validateGetBindings(gets, data, candidateValues, repositoryUrl, allowUnexpectedRaw = false) {
+function validateGetBindings(gets, data, candidateValues, repositoryUrl, allowedExtraRaw = 0) {
   const routes = gets.map((item) => routeOf(item.requestedUrl, item.stage));
   if (routes.length > 0) requireValue(data.repositoryUrl === repositoryUrl);
   const commit = routes.find((route) => route.stage === "commit");
@@ -440,10 +440,23 @@ function validateGetBindings(gets, data, candidateValues, repositoryUrl, allowUn
   if (tree) requireValue(data.rootTree !== null && tree.identity === data.rootTree);
   if (raws.length > 0) requireValue(data.revision !== null && raws.every((route) => route.identity === data.revision));
   if (candidateValues !== null) {
-    if (!allowUnexpectedRaw) requireValue(raws.length <= candidateValues.length);
+    requireValue(raws.length <= candidateValues.length + allowedExtraRaw);
     const sharedLength = Math.min(raws.length, candidateValues.length);
     for (let index = 0; index < sharedLength; index += 1) requireValue(raws[index].path === candidateValues[index].path);
   }
+}
+
+function validateTerminalRawPrefix(items, gets, candidateValues, reason) {
+  if (reason !== "content-invalid" && reason !== "unexpected-request") return;
+  const raws = gets.filter((item) => item.stage === "raw");
+  const extraRaw = raws.length - candidateValues.length;
+  requireValue(extraRaw === 0 || extraRaw === 1);
+  if (reason === "content-invalid") {
+    const finalCandidateInvalid = candidateValues.length > 0 && candidateValues.at(-1).contentValid === false;
+    requireValue(candidateValues.slice(0, -1).every((candidate) => candidate.contentValid));
+    requireValue(finalCandidateInvalid ? extraRaw === 0 : extraRaw === 1);
+  }
+  if (extraRaw === 1 || reason === "content-invalid") requireValue(raws.at(-1) === items.at(-1));
 }
 
 function maximumOverlap(items) {
@@ -481,8 +494,14 @@ function validateRequests(envelope, payloads, overallPass, primaryReason) {
   if (qualificationPass) requireValue(qualificationGets.length === 4004 && qualificationGets.slice(3).length === 4001);
   if (capacityPass) requireValue(capacityGets.length === 4004 && capacityGets.slice(3).length === 4001);
   validateGetBindings(smokeGets, payloads.smoke.data, null, CODE_CITY_URL);
-  validateGetBindings(qualificationGets, payloads.qualification.data, payloads.qualification.data.candidates, REACT_URL, payloads.qualification.reason === "unexpected-request");
-  validateGetBindings(capacityGets, payloads.capacity.data, payloads.capacity.data.candidates, REACT_URL, payloads.capacity.reason === "unexpected-request");
+  const qualificationReason = payloads.qualification.reason;
+  const capacityReason = payloads.capacity.reason;
+  validateGetBindings(qualificationGets, payloads.qualification.data, payloads.qualification.data.candidates, REACT_URL,
+    qualificationReason === "content-invalid" || qualificationReason === "unexpected-request" ? 1 : 0);
+  validateGetBindings(capacityGets, payloads.capacity.data, payloads.capacity.data.candidates, REACT_URL,
+    capacityReason === "content-invalid" || capacityReason === "unexpected-request" ? 1 : 0);
+  validateTerminalRawPrefix(items, qualificationGets, payloads.qualification.data.candidates, qualificationReason);
+  validateTerminalRawPrefix(items, capacityGets, payloads.capacity.data.candidates, capacityReason);
   const passingGroups = [...(smokePass ? groups.smoke : []), ...(qualificationPass ? groups.qualification : []), ...(capacityPass ? groups.capacity : [])];
   requireValue(passingGroups.every((item) => (item.method === "GET" ? item.status === 200 : item.status >= 200 && item.status <= 299)
     && item.redirected === false && item.authorizationAbsent && item.cookieAbsent && item.refererAbsent));
@@ -659,10 +678,10 @@ function deriveStatus(payloads) {
 }
 
 function failureGroup(stage, requestInfo) {
-  if (stage === "smoke") return { items: requestInfo.groups.smoke, gets: requestInfo.smokeGets, completeCount: null };
-  if (stage === "qualification") return { items: requestInfo.groups.qualification, gets: requestInfo.qualificationGets, completeCount: 4004 };
-  if (stage === "capacity") return { items: requestInfo.groups.capacity, gets: requestInfo.capacityGets, completeCount: 4004 };
-  return { items: requestInfo.groups.other, gets: requestInfo.groups.other.filter((item) => item.method === "GET"), completeCount: 1 };
+  if (stage === "smoke") return { items: requestInfo.groups.smoke };
+  if (stage === "qualification") return { items: requestInfo.groups.qualification };
+  if (stage === "capacity") return { items: requestInfo.groups.capacity };
+  return { items: requestInfo.groups.other };
 }
 
 function validateFailureEvidence(payloads, failure, requestInfo, events) {
@@ -673,7 +692,6 @@ function validateFailureEvidence(payloads, failure, requestInfo, events) {
   const hasCredential = group.items.some((item) => !item.authorizationAbsent || !item.cookieAbsent || !item.refererAbsent);
   const hasOverlap = maximumOverlap(group.items.filter((item) => item.method === "GET")) > 1;
   const hasProviderFailure = group.items.some((item) => item.method === "GET" ? item.status !== 200 : item.status < 200 || item.status > 299);
-  const hasUnexpectedRequest = group.completeCount !== null && group.gets.length > group.completeCount;
   const candidatesValue = stage === "qualification" || stage === "capacity" ? data.candidates : [];
   const hasHashMismatch = candidatesValue.some((candidate) => candidate.hashMatched === false);
   const hasInvalidContent = candidatesValue.some((candidate) => candidate.contentValid === false);
@@ -682,18 +700,14 @@ function validateFailureEvidence(payloads, failure, requestInfo, events) {
   const hasStalePublication = stage === "smoke"
     ? data.revision !== null && artifact.eventSha !== null && data.revision !== artifact.eventSha
     : stage === "capacity" && data.revision !== null && data.revision !== qualification.revision;
-  const hasTreeIncomplete = stage === "qualification"
-    ? data.truncated === true
-    : stage === "capacity" && eventIndex(events, "inventory-complete", 2) !== undefined && data.candidates.length < 4001;
+  const hasTreeIncomplete = stage === "qualification" && data.truncated === true;
   const hasQuiescenceFailure = stage === "smoke"
     ? eventIndex(events, "city-published", 1) !== undefined
     : stage === "capacity" && (data.noLaterRequest === false || data.workerQuiescent === false);
   const hasCleanupFailure = stage === "smoke"
     ? eventIndex(events, "city-published", 1) !== undefined
     : stage === "capacity" && (data.cityPresent === true || data.priorCityRemoved === false);
-  const hasStageFailure = stage === "smoke"
-    ? data.canvasCount !== null && data.canvasCount !== 1
-    : stage === "qualification" && data.truncated === false && data.treeEntries !== null && data.candidates.length < 4001;
+  const hasStageFailure = stage === "smoke" && data.canvasCount !== null && data.canvasCount !== 1;
   const hasArtifactMismatch = stage === "artifact" && (data.policyMatched === false || data.files.some((file) => file.match === false)
     || (data.eventSha !== null && data.deployedSha !== null && data.eventSha !== data.deployedSha));
 
@@ -706,9 +720,9 @@ function validateFailureEvidence(payloads, failure, requestInfo, events) {
   if (hasHashMismatch) requireValue(reason === "hash-mismatch");
   if (hasInvalidContent) requireValue(reason === "content-invalid");
   if (hasTreeIncomplete) requireValue(reason === "tree-incomplete");
+  if (stage === "qualification" && data.truncated === false) requireValue(reason !== "tree-incomplete");
   if (hasArtifactMismatch) requireValue(reason === "artifact-mismatch");
   if (hasStalePublication) requireValue(reason === "stale-publication" || reason === "identity-mismatch");
-  if (stage !== "artifact" && hasUnexpectedRequest) requireValue(reason === "unexpected-request");
   if (hasStageFailure) requireValue(reason === (stage === "smoke" ? "smoke-failure" : "qualification-failure"));
   if (hasQuiescenceFailure) requireValue(reason === "quiescence-failure" || reason === "cleanup-failure");
   if (hasCleanupFailure) requireValue(reason === "cleanup-failure" || reason === "quiescence-failure");
