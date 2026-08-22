@@ -176,8 +176,11 @@ function validateEnvelope(envelope, kind) {
 
 function requireNotRunData(data) {
   for (const value of Object.values(data)) {
-    if (Array.isArray(value)) requireValue(value.length === 0);
-    else requireValue(value === null);
+    if (utilTypes.isProxy(value)) reject();
+    if (Array.isArray(value)) {
+      exactArray(value);
+      requireValue(value.length === 0);
+    } else requireValue(value === null);
   }
 }
 

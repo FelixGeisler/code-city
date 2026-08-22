@@ -966,6 +966,28 @@ test("every payload data field and every nested record field is independently en
   }
 });
 
+test("blocked qualification and capacity reject candidate proxies without invoking traps", () => {
+  const cases = [
+    ["qualification", () => failurePayload("smoke", "infrastructure-failure")],
+    ["capacity", () => failurePayload("qualification", "infrastructure-failure")],
+  ];
+  for (const [stage, make] of cases) {
+    const payloads = make();
+    assert.deepEqual(payloads[stage].data.candidates, []);
+    assert.doesNotThrow(() => createEvidencePacket(payloads, BINDING), `${stage} accepts an exact empty native array`);
+
+    let getCalls = 0;
+    let ownKeysCalls = 0;
+    payloads[stage].data.candidates = new Proxy([], {
+      get() { getCalls += 1; throw new Error("must not run get trap"); },
+      ownKeys() { ownKeysCalls += 1; throw new Error("must not run ownKeys trap"); },
+    });
+    expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `${stage} rejects a blocked candidate proxy`);
+    assert.equal(getCalls, 0, `${stage} proxy get trap was not invoked`);
+    assert.equal(ownKeysCalls, 0, `${stage} proxy ownKeys trap was not invoked`);
+  }
+});
+
 test("plain-data, exact key order, symbol, accessor, inheritance, proxy, and dense-array rules reject adversarial inputs", () => {
   const factories = [
     () => { const p = makePassingPayloads(); p.extra = true; return p; },
