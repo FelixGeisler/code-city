@@ -466,6 +466,52 @@ test("collector-commit mismatch emits a marked schema-valid artifact failure wit
   assert.deepEqual(lifecycle.data.events.map(({ event }) => event), ["collector-start", "collector-failed"]);
 });
 
+test("artifact failure packets preserve each publication, platform, Chrome, and deployment fact as soon as observed", async () => {
+  for (const stop of ["discovery", "version", "deployment", "setup"]) {
+    let stored;
+    const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+    if (stop === "discovery") seams.discoverInstalledChrome = async () => { throw new Error("controlled discovery failure"); };
+    if (stop === "version") seams.readInstalledChromeVersion = async () => { throw new Error("controlled version failure"); };
+    if (stop === "deployment") seams.verifyDeploymentBinding = async ({ progress }) => {
+      Object.assign(progress, { deploymentId: 7, deployedSha: EVENT });
+      throw new CollectorFailure("artifact", "artifact-mismatch");
+    };
+    if (stop === "setup") seams.createBrowserEvidenceSession = async (args) => {
+      const harness = fakeCdpHarness({ failMethod: "Page.enable" });
+      const child = fakeChromeChild();
+      return createBrowserEvidenceSession({
+        ...args,
+        launchImpl: async () => ({ child, websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+        connectImpl: () => harness.cdp,
+      });
+    };
+    const result = await collectProductionEvidence({
+      origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"), output: path.resolve(`artifact-progress-${stop}`),
+    }, seams);
+    assert.equal(result.status, "fail", stop);
+    const artifact = JSON.parse(new TextDecoder().decode(stored.files.get("artifact.json")));
+    const lifecycle = JSON.parse(new TextDecoder().decode(stored.files.get("lifecycle.json")));
+    assert.equal(artifact.data.eventSha, EVENT, stop);
+    assert.equal(artifact.data.runId, 1, stop);
+    assert.equal(artifact.data.runAttempt, 1, stop);
+    assert.match(artifact.data.manifestSha256, /^[0-9a-f]{64}$/u, stop);
+    assert.match(artifact.data.publicationRecordSha256, /^[0-9a-f]{64}$/u, stop);
+    assert.equal(artifact.data.nodeVersion, process.version, stop);
+    assert.notEqual(artifact.data.runnerOs, null, stop);
+    assert.notEqual(artifact.data.runnerArch, null, stop);
+    assert.equal(artifact.data.chromeExecutableCategory, stop === "discovery" ? null : "windows-program-files", stop);
+    assert.equal(artifact.data.chromeVersion, ["deployment", "setup"].includes(stop) ? "140.0.1.2" : null, stop);
+    assert.equal(artifact.data.deploymentId, ["deployment", "setup"].includes(stop) ? 7 : null, stop);
+    assert.equal(artifact.data.deployedSha, ["deployment", "setup"].includes(stop) ? EVENT : null, stop);
+    assert.equal(lifecycle.data.collectorCommit, EVENT, stop);
+    assert.equal(lifecycle.data.cdpVersion, stop === "setup" ? "1.3" : null, stop);
+    assert.equal(lifecycle.data.events.at(-1).event, "collector-failed", stop);
+    if (stop === "setup") assert.deepEqual(lifecycle.data.events.map(({ event }) => event), [
+      "collector-start", "artifact-verified", "collector-failed",
+    ]);
+  }
+});
+
 test("full seam-driven collector maps the exact pass lifecycle, dynamic smoke K, 4,001 boundary, schema, writer, and read-back", async () => {
   const manifest = {
     schemaVersion: 2,
@@ -549,6 +595,25 @@ test("tree projection defers blob identity through the 4,001-fetch horizon and n
   assert.equal(projected.length, 4002);
   for (let index = 0; index < 4001; index += 1) assert.equal(candidateBlobId(projected[index], 40), BLOB);
   assert.equal(inspected4002, false);
+});
+
+test("tree projection closes provider records, rejects proxies, and retains no provider entry or accessor", () => {
+  let unrelatedReads = 0;
+  const provider = {
+    path: "src/a.ts", mode: "100644", type: "blob", sha: BLOB,
+    get url() { unrelatedReads += 1; throw new Error("provider locator must not be read"); },
+  };
+  const [candidate] = projectSourceCandidates([provider], 40, Infinity);
+  assert.deepEqual(Object.keys(candidate), ["rawPath", "canonicalPath", "mode", "type", "blobId"]);
+  assert(Object.isFrozen(candidate));
+  assert.equal(unrelatedReads, 0);
+  provider.path = "changed.ts";
+  provider.sha = "9".repeat(40);
+  assert.deepEqual(candidate, {
+    rawPath: "src/a.ts", canonicalPath: "src/a.ts", mode: "100644", type: "blob", blobId: BLOB,
+  });
+  assert.throws(() => projectSourceCandidates([new Proxy(provider, {})], 40), /invalid tree entry/u);
+  assert(!Object.values(candidate).includes(provider));
 });
 
 test("RFC Link parsing rejects every next relation token form without substring false positives", () => {
@@ -836,6 +901,40 @@ test("fatal CDP, process, and connection events reject pending fact waiters with
   }
 });
 
+test("drain, worker detachment, malformed terminal, and duplicate terminal reject fact waiters deterministically", async () => {
+  for (const stimulus of ["drain", "detach", "malformed", "duplicate"]) {
+    const opened = await openFakeBrowser();
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    await Promise.resolve();
+    if (stimulus === "drain") {
+      opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "ATTEMPT_DRAINED", generation: 1,
+      }) });
+    } else if (stimulus === "detach") {
+      opened.harness.emit("Target.attachedToTarget", {
+        sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" },
+      }, "");
+      await new Promise((resolve) => setImmediate(resolve));
+      opened.harness.emit("Target.detachedFromTarget", { sessionId: "worker-session", targetId: "worker-target" }, "");
+    } else if (stimulus === "malformed") {
+      opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "SUCCESS", generation: 1, revision: EVENT,
+      }) });
+    } else {
+      const terminal = { type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64) };
+      opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify(terminal) });
+      opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify(terminal) });
+    }
+    await assert.rejects(Promise.race([
+      pending,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("terminal waiter hung")), 100)),
+    ]), (error) => error.message !== "terminal waiter hung", stimulus);
+    await opened.session.close().catch(() => {});
+    assert.equal(opened.harness.closeCount, 1, stimulus);
+    assert.equal(opened.child.kills, 1, stimulus);
+  }
+});
+
 test("CDP request ExtraInfo is mandatory, unique, late-closed, and authoritative for credential facts", async () => {
   {
     const requestItems = [];
@@ -1032,6 +1131,93 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
   await session.close();
 });
 
+test("CDP admission rejects overlap, wrong order/path, and capacity candidate 4,002 before body retrieval", async () => {
+  {
+    const opened = await openFakeBrowser();
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    await Promise.resolve();
+    opened.harness.emit("Network.requestWillBeSent", {
+      requestId: "active-revision", request: { url: revisionUrl("FelixGeisler/code-city"), method: "GET", headers: {} },
+    });
+    opened.harness.emit("Network.requestWillBeSent", {
+      requestId: "overlap-commit", request: { url: commitUrl("FelixGeisler/code-city", EVENT), method: "GET", headers: {} },
+    });
+    await assert.rejects(pending, /overlap at admission/u);
+    assert.equal(opened.harness.bodyCalls, 0);
+    await opened.session.close().catch(() => {});
+    assert.equal(opened.harness.closeCount, 1);
+    assert.equal(opened.child.kills, 1);
+  }
+
+  {
+    const opened = await openFakeBrowser();
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    await Promise.resolve();
+    emitBrowserGet(opened.harness, {
+      requestId: "ordered-revision", url: revisionUrl("FelixGeisler/code-city"), body: JSON.stringify([{ sha: EVENT }]),
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+    }) });
+    opened.harness.emit("Network.requestWillBeSent", {
+      requestId: "wrong-commit", request: { url: commitUrl("FelixGeisler/code-city", "9".repeat(40)), method: "GET", headers: {} },
+    });
+    await assert.rejects(pending, /sequence differs at admission/u);
+    assert.equal(opened.harness.bodyCalls, 1);
+    await opened.session.close().catch(() => {});
+    assert.equal(opened.harness.closeCount, 1);
+    assert.equal(opened.child.kills, 1);
+  }
+
+  {
+    const opened = await openFakeBrowser();
+    const qualificationCandidates = NATIVE_ENTRIES.map((entry, offset) => ({
+      index: offset + 1, path: entry.path, blobId: entry.sha, normalizedBytes: 1,
+      runningAggregate: offset + 1, hashMatched: true, contentValid: true,
+    }));
+    const pending = opened.session.collectCapacity({
+      revision: REACT, rootTree: REACT_ROOT, candidates: qualificationCandidates,
+    }, () => ({ atMs: 1 }), 0);
+    await Promise.resolve();
+    emitBrowserGet(opened.harness, {
+      requestId: "limit-revision", url: revisionUrl("facebook/react"), body: JSON.stringify([{ sha: REACT }]),
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "REVISION_SELECTED", generation: 2, revision: REACT,
+    }) });
+    emitBrowserGet(opened.harness, {
+      requestId: "limit-commit", url: commitUrl("facebook/react", REACT),
+      body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
+    });
+    emitBrowserGet(opened.harness, {
+      requestId: "limit-tree", url: treeUrl("facebook/react", REACT_ROOT),
+      body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
+    });
+    for (let index = 0; index < NATIVE_ENTRIES.length; index += 1) {
+      emitBrowserGet(opened.harness, {
+        requestId: `limit-raw-${index + 1}`,
+        url: rawUrl("facebook/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
+      });
+    }
+    for (let attempts = 0; opened.harness.bodyCalls < 4004 && attempts < 100; attempts += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(opened.harness.bodyCalls, 4004);
+    opened.harness.emit("Network.requestWillBeSent", {
+      requestId: "candidate-4002", request: {
+        url: rawUrl("facebook/react", REACT, "4002.ts"), method: "GET", headers: {},
+      },
+    });
+    await assert.rejects(pending, /limit ordering.*4,002/u);
+    assert.equal(opened.harness.bodyCalls, 4004);
+    await opened.session.close().catch(() => {});
+    assert.equal(opened.harness.closeCount, 1);
+    assert.equal(opened.child.kills, 1);
+  }
+});
+
 const HANDLED_REASONS = {
   artifact: ["artifact-mismatch", "production-unreachable", "infrastructure-failure"],
   smoke: ["smoke-failure", "provider-failure", "cors-failure", "request-sequence", "request-overlap", "unexpected-request", "credential-header", "stale-publication", "quiescence-failure", "cleanup-failure", "infrastructure-failure"],
@@ -1137,6 +1323,128 @@ async function collectHandledMatrix(stage, reason) {
   }, seams);
   return { result, stored };
 }
+
+test("native CDP overlap and candidate-4,002 admission stops produce schema-valid marked packets", async () => {
+  for (const kind of ["overlap", "candidate-4002"]) {
+    let stored;
+    let bodyCallsAtStop = null;
+    const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+    const nativeCandidates = NATIVE_ENTRIES.map((entry, offset) => ({
+      index: offset + 1, path: entry.path, blobId: entry.sha, normalizedBytes: 1,
+      runningAggregate: offset + 1, hashMatched: true, contentValid: true,
+    }));
+    if (kind === "candidate-4002") {
+      seams.qualifyRepository = async ({ now, requestItems, progress }) => {
+        appendSequence(requestItems, now, "facebook/react", REACT, REACT_ROOT,
+          NATIVE_ENTRIES.map(({ path: sourcePath }) => sourcePath), false);
+        return Object.assign(progress, {
+          repositoryUrl: "https://github.com/facebook/react", revision: REACT, rootTree: REACT_ROOT,
+          treeEntries: 4002, truncated: false, candidates: structuredClone(nativeCandidates),
+        });
+      };
+    }
+    seams.createBrowserEvidenceSession = async (args) => {
+      const harness = fakeCdpHarness();
+      const child = fakeChromeChild();
+      const native = await createBrowserEvidenceSession({
+        ...args,
+        launchImpl: async () => ({ child, websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+        connectImpl: () => harness.cdp,
+      });
+      const driveOverlap = async () => {
+        await Promise.resolve();
+        harness.emit("Network.requestWillBeSent", {
+          requestId: "packet-active", request: { url: revisionUrl("FelixGeisler/code-city"), method: "GET", headers: {} },
+        });
+        harness.emit("Network.requestWillBeSent", {
+          requestId: "packet-overlap", request: { url: commitUrl("FelixGeisler/code-city", EVENT), method: "GET", headers: {} },
+        });
+        bodyCallsAtStop = harness.bodyCalls;
+      };
+      const driveLimit = async () => {
+        await Promise.resolve();
+        emitBrowserGet(harness, {
+          requestId: "packet-limit-revision", url: revisionUrl("facebook/react"), body: JSON.stringify([{ sha: REACT }]),
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+        harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+          type: "REVISION_SELECTED", generation: 2, revision: REACT,
+        }) });
+        emitBrowserGet(harness, {
+          requestId: "packet-limit-commit", url: commitUrl("facebook/react", REACT),
+          body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
+        });
+        emitBrowserGet(harness, {
+          requestId: "packet-limit-tree", url: treeUrl("facebook/react", REACT_ROOT),
+          body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
+        });
+        for (let index = 0; index < NATIVE_ENTRIES.length; index += 1) {
+          emitBrowserGet(harness, {
+            requestId: `packet-limit-raw-${index + 1}`,
+            url: rawUrl("facebook/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
+          });
+        }
+        for (let attempts = 0; harness.bodyCalls < 4004 && attempts < 100; attempts += 1) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        harness.emit("Network.requestWillBeSent", {
+          requestId: "packet-candidate-4002", request: {
+            url: rawUrl("facebook/react", REACT, "4002.ts"), method: "GET", headers: {},
+          },
+        });
+        bodyCallsAtStop = harness.bodyCalls;
+      };
+      return Object.freeze({
+        cdpVersion: native.cdpVersion,
+        snapshot: native.snapshot,
+        async collectSmoke(emit, startedMs) {
+          if (kind === "overlap") {
+            const pending = native.collectSmoke(emit, startedMs);
+            void driveOverlap();
+            return pending;
+          }
+          directRequest(args.requestItems, args.now, "revision", revisionUrl("FelixGeisler/code-city"), true);
+          emit("revision-selected", 1);
+          for (const [stage, url] of [
+            ["commit", commitUrl("FelixGeisler/code-city", EVENT)],
+            ["tree", treeUrl("FelixGeisler/code-city", ROOT)],
+            ["raw", rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts")],
+          ]) directRequest(args.requestItems, args.now, stage, url, true);
+          const published = emit("city-published", 1);
+          return {
+            repositoryUrl: "https://github.com/FelixGeisler/code-city", revision: EVENT, rootTree: ROOT,
+            terminal: "success", canvasCount: 1, modelSha256: "1".repeat(64), startedMs,
+            endedMs: published.atMs, providerGetCount: 4,
+          };
+        },
+        clearTrace() {},
+        async collectCapacity(qualification, emit, startedMs) {
+          const pending = native.collectCapacity(qualification, emit, startedMs);
+          void driveLimit();
+          return pending;
+        },
+        close: native.close,
+      });
+    };
+    const result = await collectProductionEvidence({
+      origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"), output: path.resolve(`native-admission-${kind}`),
+    }, seams);
+    const expectedReason = kind === "overlap" ? "request-overlap" : "limit-order";
+    const expectedStage = kind === "overlap" ? "smoke" : "capacity";
+    assert.deepEqual([result.status, result.reason], ["fail", expectedReason], kind);
+    assert.equal(bodyCallsAtStop, kind === "overlap" ? 0 : 4004, kind);
+    const stage = JSON.parse(new TextDecoder().decode(stored.files.get(`${expectedStage}.json`)));
+    const requests = JSON.parse(new TextDecoder().decode(stored.files.get("requests.json")));
+    const lifecycle = JSON.parse(new TextDecoder().decode(stored.files.get("lifecycle.json")));
+    assert.deepEqual([stage.reason, requests.reason, lifecycle.reason], [expectedReason, expectedReason, expectedReason], kind);
+    if (kind === "candidate-4002") {
+      assert.equal(stage.data.rawRequestCount, 4001);
+      assert.equal(stage.data.candidates.length, 4001);
+      assert.equal(requests.data.items.filter((item) => item.applicationCall
+        && item.requestedUrl.includes("/facebook/react/") && item.stage === "raw").length, 4001);
+    }
+  }
+});
 
 test("native qualification classifiers flow through the exact qualification stop packet and lifecycle", async () => {
   const cases = [
@@ -1245,6 +1553,114 @@ test("native browser CORS and incomplete-tree triggers flow through their owning
     assert.deepEqual([requests.reason, lifecycle.reason], [reason, reason]);
     assert.equal(lifecycle.data.events.at(-1).event, "collector-failed");
   }
+});
+
+test("native smoke tree, zero-candidate, identity, hash, and content failures produce marked smoke-failure packets", async () => {
+  const cases = ["truncated", "invalid", "zero", "identity", "hash", "content"];
+  for (const kind of cases) {
+    let stored;
+    const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+    seams.createBrowserEvidenceSession = async (args) => {
+      const harness = fakeCdpHarness();
+      const child = fakeChromeChild();
+      const native = await createBrowserEvidenceSession({
+        ...args,
+        launchImpl: async () => ({ child, websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+        connectImpl: () => harness.cdp,
+      });
+      const drive = async () => {
+        await Promise.resolve();
+        emitBrowserGet(harness, {
+          requestId: `${kind}-revision`, url: revisionUrl("FelixGeisler/code-city"),
+          body: JSON.stringify([{ sha: EVENT }]),
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+        harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+          type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+        }) });
+        emitBrowserGet(harness, {
+          requestId: `${kind}-commit`, url: commitUrl("FelixGeisler/code-city", EVENT),
+          body: JSON.stringify({ sha: EVENT, tree: { sha: ROOT } }),
+        });
+        const rawBytes = kind === "content" ? Uint8Array.of(0) : new TextEncoder().encode("x");
+        const expectedBlob = kind === "hash" ? BLOB : computeGitBlobId(rawBytes, 40);
+        const treeBody = kind === "invalid" ? "{"
+          : JSON.stringify({
+            sha: kind === "identity" ? "9".repeat(40) : ROOT,
+            truncated: kind === "truncated",
+            tree: kind === "zero" ? [] : [{ path: "src/a.ts", mode: "100644", type: "blob", sha: expectedBlob }],
+          });
+        emitBrowserGet(harness, {
+          requestId: `${kind}-tree`, url: treeUrl("FelixGeisler/code-city", ROOT), body: treeBody,
+        });
+        if (["hash", "content"].includes(kind)) {
+          emitBrowserGet(harness, {
+            requestId: `${kind}-raw`, url: rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts"),
+            body: new TextDecoder().decode(rawBytes),
+          });
+        }
+      };
+      return Object.freeze({
+        cdpVersion: native.cdpVersion,
+        snapshot: native.snapshot,
+        clearTrace: native.clearTrace,
+        async collectSmoke(emit, startedMs) {
+          const pending = native.collectSmoke(emit, startedMs);
+          void drive();
+          return pending;
+        },
+        collectCapacity: native.collectCapacity,
+        close: native.close,
+      });
+    };
+    const result = await collectProductionEvidence({
+      origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"), output: path.resolve(`native-smoke-${kind}`),
+    }, seams);
+    assert.deepEqual([result.status, result.reason], ["fail", "smoke-failure"], kind);
+    const smoke = JSON.parse(new TextDecoder().decode(stored.files.get("smoke.json")));
+    const requests = JSON.parse(new TextDecoder().decode(stored.files.get("requests.json")));
+    const lifecycle = JSON.parse(new TextDecoder().decode(stored.files.get("lifecycle.json")));
+    assert.deepEqual([smoke.status, smoke.reason, requests.reason, lifecycle.reason], [
+      "fail", "smoke-failure", "smoke-failure", "smoke-failure",
+    ], kind);
+    assert.equal(lifecycle.data.events.at(-1).event, "collector-failed", kind);
+  }
+});
+
+test("pre-packet overlap derivation converts a completed overlap into a marked request-overlap packet", async () => {
+  let stored;
+  const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+  const createSession = seams.createBrowserEvidenceSession;
+  seams.createBrowserEvidenceSession = async (args) => {
+    const session = await createSession(args);
+    let progress;
+    return {
+      ...session,
+      async collectSmoke(emit, startedMs) {
+        directRequest(args.requestItems, args.now, "revision", revisionUrl("FelixGeisler/code-city"), true);
+        emit("revision-selected", 1);
+        directRequest(args.requestItems, args.now, "commit", commitUrl("FelixGeisler/code-city", EVENT), true);
+        directRequest(args.requestItems, args.now, "tree", treeUrl("FelixGeisler/code-city", ROOT), true);
+        const gets = args.requestItems.slice(-2);
+        gets[0].endedMs = gets[1].endedMs;
+        progress = {
+          repositoryUrl: "https://github.com/FelixGeisler/code-city", revision: EVENT, rootTree: ROOT,
+          terminal: null, canvasCount: null, modelSha256: null, startedMs, endedMs: null, providerGetCount: 3,
+        };
+        throw new Error("controlled post-exchange observation failure");
+      },
+      snapshot(kind) { return kind === "smoke" ? progress : session.snapshot?.(kind); },
+    };
+  };
+  const result = await collectProductionEvidence({
+    origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"), output: path.resolve("derived-overlap"),
+  }, seams);
+  assert.deepEqual([result.status, result.reason], ["fail", "request-overlap"]);
+  const smoke = JSON.parse(new TextDecoder().decode(stored.files.get("smoke.json")));
+  const lifecycle = JSON.parse(new TextDecoder().decode(stored.files.get("lifecycle.json")));
+  assert.deepEqual([smoke.reason, lifecycle.reason, lifecycle.data.events.at(-1).event], [
+    "request-overlap", "request-overlap", "collector-failed",
+  ]);
 });
 
 test("collector controlled matrix produces a schema-valid marked packet for every handled stage and reason class", async () => {

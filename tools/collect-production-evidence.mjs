@@ -307,19 +307,21 @@ function ancestorIn(value, set) {
   return false;
 }
 
-export function projectSourceCandidates(providerEntries, selectedWidth) {
+export function projectSourceCandidates(providerEntries, selectedWidth, identityLimit = 4001) {
   const entries = denseOwnArray(providerEntries);
-  invariant(entries, "tree entries are not complete");
+  invariant(entries && [40, 64].includes(selectedWidth)
+    && (identityLimit === Infinity || (Number.isSafeInteger(identityLimit) && identityLimit >= 0)), "tree entries are not complete");
   const raw = new Set();
   const canonical = new Set();
   const projected = [];
-  for (const providerEntry of entries) {
+  for (let providerIndex = 0; providerIndex < entries.length; providerIndex += 1) {
+    const providerEntry = entries[providerIndex];
     const identity = pathProjection(ownString(providerEntry, "path"));
     const mode = ownString(providerEntry, "mode");
     const type = ownString(providerEntry, "type");
     invariant(identity && mode && type && !raw.has(identity.rawPath) && !canonical.has(identity.canonicalPath), "invalid tree entry");
     raw.add(identity.rawPath); canonical.add(identity.canonicalPath);
-    projected.push({ ...identity, mode, type, providerEntry });
+    projected.push({ ...identity, mode, type, providerIndex });
   }
   const boundaries = new Set(projected.filter((entry) => (entry.mode === "120000" && entry.type === "blob")
     || (entry.mode === "160000" && entry.type === "commit")).map((entry) => entry.canonicalPath));
@@ -340,16 +342,28 @@ export function projectSourceCandidates(providerEntries, selectedWidth) {
   }
   candidates.sort((left, right) => utf8Compare(left.canonicalPath, right.canonicalPath));
   invariant(candidates.length > 0, "tree has no supported candidates");
-  return candidates;
+  return candidates.map((entry, index) => {
+    const blobId = index < identityLimit ? ownString(entries[entry.providerIndex], "sha") : null;
+    if (index < identityLimit) {
+      invariant(blobId && new RegExp(`^[0-9a-f]{${selectedWidth}}$`, "u").test(blobId), "candidate blob identity is invalid");
+    }
+    return Object.freeze({
+      rawPath: entry.rawPath,
+      canonicalPath: entry.canonicalPath,
+      mode: entry.mode,
+      type: entry.type,
+      blobId,
+    });
+  });
 }
 
 export function candidateBlobId(candidate, selectedWidth) {
-  const blobId = ownString(candidate.providerEntry, "sha");
+  const blobId = ownString(candidate, "blobId");
   invariant(blobId && new RegExp(`^[0-9a-f]{${selectedWidth}}$`, "u").test(blobId), "candidate blob identity is invalid");
   return blobId;
 }
 
-function projectTree(bytes, expectedRoot, selectedWidth, progress) {
+function projectTree(bytes, expectedRoot, selectedWidth, progress, identityLimit = 4001) {
   const value = strictJson(bytes);
   const entries = denseOwnArray(ownData(value, "tree"));
   if (progress) {
@@ -359,7 +373,9 @@ function projectTree(bytes, expectedRoot, selectedWidth, progress) {
   }
   invariant(ownString(value, "sha") === expectedRoot, "tree root identity mismatch");
   invariant(ownData(value, "truncated") === false && entries, "tree evidence is incomplete");
-  return { entries, candidates: projectSourceCandidates(entries, selectedWidth) };
+  const treeEntries = entries.length;
+  const candidates = projectSourceCandidates(entries, selectedWidth, identityLimit);
+  return { treeEntries, candidates };
 }
 
 export function computeGitBlobId(bytes, width) {
@@ -675,6 +691,7 @@ export async function createBrowserEvidenceSession({
   requestItems,
   launchImpl = launchInstalledChrome,
   connectImpl = connectCdp,
+  observeCdpVersion = () => {},
 }) {
   const launched = await launchImpl(discovery, profile);
   let cdp;
@@ -685,6 +702,7 @@ export async function createBrowserEvidenceSession({
     cdp = connectImpl(launched.websocketUrl);
     const version = await cdp.send("Browser.getVersion");
     invariant(version.product === `Chrome/${chromeVersion}` && typeof version.protocolVersion === "string", "Chrome/CDP version mismatch");
+    observeCdpVersion(version.protocolVersion);
     const bindingName = "__codeCityCollectorEvidence";
     const facts = [];
     const factWaiters = [];
@@ -702,13 +720,55 @@ export async function createBrowserEvidenceSession({
     let processing = Promise.resolve();
     let closePromise;
 
+    function projectFact(value) {
+      invariant(value && typeof value === "object" && !Array.isArray(value), "worker observation is malformed");
+      const type = ownString(value, "type");
+      const generation = ownData(value, "generation");
+      invariant(type && Number.isSafeInteger(generation) && generation > 0, "worker observation is malformed");
+      const keys = Object.keys(value).sort();
+      const exactKeys = (expected) => invariant(keys.length === expected.length
+        && keys.every((key, index) => key === [...expected].sort()[index]), "worker observation is malformed");
+      if (type === "REVISION_SELECTED") {
+        exactKeys(["type", "generation", "revision"]);
+        const revision = ownString(value, "revision");
+        invariant(revision && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(revision), "worker observation is malformed");
+        return { type, generation, revision };
+      }
+      if (type === "SUCCESS") {
+        exactKeys(["type", "generation", "revision", "modelSha256"]);
+        const revision = ownString(value, "revision");
+        const modelSha256 = ownString(value, "modelSha256");
+        invariant(revision && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(revision)
+          && modelSha256 && /^[0-9a-f]{64}$/u.test(modelSha256), "worker terminal is malformed");
+        return { type, generation, revision, modelSha256 };
+      }
+      if (type === "FAILURE") {
+        exactKeys(["type", "generation", "revision", "category", "code"]);
+        const revision = ownString(value, "revision");
+        const category = ownString(value, "category");
+        const code = ownString(value, "code");
+        invariant(revision && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(revision)
+          && category && category.length <= 256 && code && code.length <= 128, "worker terminal is malformed");
+        return { type, generation, revision, category, code };
+      }
+      if (type === "ATTEMPT_DRAINED") {
+        exactKeys(["type", "generation"]);
+        return { type, generation };
+      }
+      return null;
+    }
     function publishFact(fact) {
       fact.observedAtMs = now();
+      if (mode && fact.generation === mode.generation && fact.type === "ATTEMPT_DRAINED" && !mode.firstTerminal) {
+        setFatal(new Error("attempt drained before required terminal"));
+        return;
+      }
       if (mode && fact.generation === mode.generation && ["SUCCESS", "FAILURE"].includes(fact.type)) {
-        if (mode.firstTerminal) { setFatal(new Error("capacity terminal order differs")); return; }
+        if (mode.firstTerminal) { setFatal(new Error("duplicate browser terminal")); return; }
         mode.firstTerminal = fact;
         mode.requestsClosed = true;
         if (network.size !== 0) setFatal(new Error("terminal preceded request completion"));
+        else if (mode.pendingOptions !== null) setFatal(new Error("browser request sequence ended after preflight"));
       }
       facts.push(fact);
       for (const waiter of [...factWaiters]) {
@@ -727,6 +787,7 @@ export async function createBrowserEvidenceSession({
     function setFatal(error) {
       if (fatal.value) return;
       fatal.value = error instanceof Error ? error : new Error("browser observation failed");
+      if (mode) mode.requestsClosed = true;
       for (const waiter of factWaiters.splice(0)) waiter.reject(fatal.value);
       for (const waiter of detachWaiters.splice(0)) waiter.reject(fatal.value);
     }
@@ -742,13 +803,53 @@ export async function createBrowserEvidenceSession({
       if (fatal.value) throw fatal.value;
     }
     function enqueue(task) {
-      processing = processing.then(task).catch(setFatal);
+      processing = processing.then(async () => {
+        if (fatal.value) throw fatal.value;
+        await task();
+      }).catch(setFatal);
+    }
+    function validateRequestAdmission(entry) {
+      const current = mode;
+      invariant(current && !current.requestsClosed, "unexpected browser request");
+      const index = current.admittedGets;
+      if (current.generation === 2 && index >= 4004) throw new Error("capacity limit ordering admitted candidate 4,002");
+      const expectedStage = index === 0 ? "revision" : index === 1 ? "commit" : index === 2 ? "tree" : "raw";
+      invariant(entry.route.stage === expectedStage, "browser request sequence differs at admission");
+      let expectedUrl;
+      if (expectedStage === "revision") {
+        expectedUrl = revisionUrl(current.repository);
+      } else if (expectedStage === "commit") {
+        invariant(current.revision && entry.route.identity === current.revision, "browser request sequence differs at admission");
+        expectedUrl = commitUrl(current.repository, current.revision);
+      } else if (expectedStage === "tree") {
+        invariant(current.rootTree && entry.route.identity === current.rootTree, "browser request sequence differs at admission");
+        expectedUrl = treeUrl(current.repository, current.rootTree);
+      } else {
+        const rawIndex = index - 3;
+        const expected = current.projected?.[rawIndex];
+        if (!expected) throw new Error("unexpected browser request");
+        invariant(entry.route.identity === current.revision && entry.route.path === expected.rawPath,
+          "browser request sequence differs at admission");
+        expectedUrl = rawUrl(current.repository, current.revision, expected.rawPath);
+      }
+      invariant(entry.url === expectedUrl, "browser request sequence differs at admission");
+      if (entry.method === "OPTIONS") {
+        invariant(expectedStage !== "raw" && current.pendingOptions === null, "browser request sequence differs at admission");
+        current.pendingOptions = entry.url;
+      } else {
+        invariant(current.pendingOptions === null || current.pendingOptions === entry.url,
+          "browser request sequence differs at admission");
+        current.pendingOptions = null;
+        current.admittedGets += 1;
+      }
+      entry.admitted = true;
     }
     function finalizeNetworkEntry(key, entry) {
       if (!entry.finished || !entry.response || !entry.extraInfo) return;
       network.delete(key);
       completedRequestIds.add(key);
       enqueue(async () => {
+        invariant(entry.admitted, "browser request was not admitted");
         const responseHeaders = headersFromCdp(entry.response.headers);
         const requestHeaders = Object.fromEntries(Object.entries(entry.extraInfo.headers ?? {}).map(([name, value]) => [name, String(value)]));
         const headerFacts = safeHeaderFacts(requestHeaders, responseHeaders);
@@ -775,8 +876,9 @@ export async function createBrowserEvidenceSession({
           current.progress.rootTree = current.rootTree;
         } else if (entry.route.stage === "tree") {
           invariant(entry.route.identity === current.rootTree, "browser tree identity mismatch");
-          const tree = projectTree(bytes, current.rootTree, current.revision.length);
-          current.treeEntries = tree.entries.length;
+          const tree = projectTree(bytes, current.rootTree, current.revision.length, undefined,
+            current.generation === 1 ? Infinity : 4001);
+          current.treeEntries = tree.treeEntries;
           current.projected = tree.candidates;
           current.onInventory?.(entry.finishedMs);
         } else {
@@ -793,7 +895,7 @@ export async function createBrowserEvidenceSession({
             contentValid: normalizedBytes <= MAX_NORMALIZED_BYTES && nextAggregate <= MAX_AGGREGATE_BYTES,
           };
           current.rawFacts.push(fact);
-          current.progress.candidates = current.rawFacts;
+          if (current.generation === 2) current.progress.candidates = current.rawFacts;
           current.aggregate = nextAggregate;
           invariant(fact.hashMatched, "browser candidate blob mismatch");
           invariant(fact.contentValid, "browser candidate content invalid");
@@ -807,7 +909,12 @@ export async function createBrowserEvidenceSession({
 
     listener = (message) => {
       if (message.method === "Runtime.bindingCalled" && message.params?.name === bindingName) {
-        try { publishFact(JSON.parse(message.params.payload)); } catch { setFatal(new Error("worker observation is malformed")); }
+        try {
+          const fact = projectFact(JSON.parse(message.params.payload));
+          if (fact) publishFact(fact);
+        } catch (error) {
+          setFatal(error instanceof Error ? error : new Error("worker observation is malformed"));
+        }
         return;
       }
       if (message.method === "Target.attachedToTarget" && message.params?.targetInfo?.type === "worker") {
@@ -821,8 +928,14 @@ export async function createBrowserEvidenceSession({
         return;
       }
       if (message.method === "Target.detachedFromTarget") {
-        const targetId = message.params?.targetId ?? workerTargets.get(message.params?.sessionId);
-        if (targetId) detachedWorkers.add(targetId);
+        const childSession = message.params?.sessionId;
+        const targetId = message.params?.targetId ?? workerTargets.get(childSession);
+        if (targetId) {
+          detachedWorkers.add(targetId);
+          if (mode && workerTargets.has(childSession) && !mode.firstTerminal) {
+            setFatal(new Error("worker detached before required terminal"));
+          }
+        }
         notifyDetached();
         return;
       }
@@ -864,12 +977,18 @@ export async function createBrowserEvidenceSession({
         if (!route || !["GET", "OPTIONS"].includes(method) || (route.stage === "raw" && method === "OPTIONS")) {
           setFatal(new Error("unexpected browser request")); return;
         }
-        network.set(key, {
+        if (method === "GET" && [...network.values()].some((entry) => entry.method === "GET")) {
+          setFatal(new Error("browser application GET overlap at admission"));
+          return;
+        }
+        const entry = {
           sessionId: message.sessionId, requestId: message.params.requestId, url, method, route,
           cap: responseCapForRoute(route), startedMs: now(), dataLength: 0, encodedDataLength: 0,
-          extraInfo: earlyExtra.get(key),
-        });
+          extraInfo: earlyExtra.get(key), admitted: false,
+        };
+        network.set(key, entry);
         earlyExtra.delete(key);
+        enqueue(async () => validateRequestAdmission(entry));
         return;
       }
       if (message.method === "Network.responseReceived") {
@@ -917,7 +1036,8 @@ export async function createBrowserEvidenceSession({
       detachedWorkers.clear();
       mode = {
         repository, generation, progress, gets: [], rawFacts: progress.candidates ?? [], aggregate: 0,
-        revision: null, rootTree: null, projected: null, treeEntries: null, firstTerminal: null, requestsClosed: false,
+        revision: null, rootTree: null, projected: null, treeEntries: null, admittedGets: 0, pendingOptions: null,
+        firstTerminal: null, requestsClosed: false,
       };
       return mode;
     }
@@ -1108,6 +1228,20 @@ function maximumOverlap(items) {
   return maximum;
 }
 
+function stageGetOverlap(state, stage) {
+  const start = state.stageRequestStarts[stage];
+  if (!Number.isSafeInteger(start)) return 0;
+  const nextStart = ["smoke", "qualification", "capacity"]
+    .map((name) => state.stageRequestStarts[name])
+    .filter((value) => Number.isSafeInteger(value) && value > start)
+    .sort((left, right) => left - right)[0] ?? state.requestItems.length;
+  return maximumOverlap(state.requestItems.slice(start, nextStart).filter((item) => item.method === "GET"));
+}
+
+function enforceNoStageOverlap(state, stage) {
+  if (stageGetOverlap(state, stage) > 1) fail(stage, "request-overlap");
+}
+
 function runnerPlatform() {
   const osName = { win32: "Windows", linux: "Linux", darwin: "macOS" }[process.platform];
   const arch = { x64: "X64", arm64: "ARM64" }[process.arch];
@@ -1215,11 +1349,14 @@ function mapBrowserFailure(stage, error) {
   if (/unexpected browser request/iu.test(message)) return new CollectorFailure(stage, "unexpected-request");
   if (/sequence|cardinality|redirected|duplicate/iu.test(message)) return new CollectorFailure(stage, "request-sequence");
   if (/quiescent/iu.test(message)) return new CollectorFailure(stage, "quiescence-failure");
+  if (stage === "smoke" && /tree|blob|candidate|UTF-8|NUL|content|identity|revision|commit|supported|encoded data|JSON|Unexpected token|property name/iu.test(message)) {
+    return new CollectorFailure(stage, "smoke-failure");
+  }
   if (/tree evidence is incomplete/iu.test(message)) return new CollectorFailure(stage, "tree-incomplete");
   if (/blob|candidate mismatch/iu.test(message)) return new CollectorFailure(stage, "hash-mismatch");
   if (/UTF-8|NUL|content/iu.test(message)) return new CollectorFailure(stage, "content-invalid");
   if (/invalid (?:revision|commit) evidence|revision differs|inventory.*differs|root identity|identity mismatch/iu.test(message)) return new CollectorFailure(stage, "identity-mismatch");
-  if (/terminal/iu.test(message)) return new CollectorFailure(stage, stage === "smoke" ? "smoke-failure" : "limit-order");
+  if (/terminal|limit ordering|cardinality/iu.test(message)) return new CollectorFailure(stage, stage === "smoke" ? "smoke-failure" : "limit-order");
   if (/request failed|response|transfer size/iu.test(message)) return new CollectorFailure(stage, "provider-failure");
   return new CollectorFailure(stage, "infrastructure-failure");
 }
@@ -1294,6 +1431,8 @@ export async function collectProductionEvidence(options, seams = {}) {
     invariant(/^v24\.\d+\.\d+$/u.test(process.version), "Node 24 is required");
     state.nodeVersion = process.version;
     state.invocation = [...COLLECTOR_INVOCATION];
+    state.artifact.nodeVersion = state.nodeVersion;
+    Object.assign(state.artifact, runnerPlatform());
     let publication;
     try {
       publication = await (seams.readPublicationInput ?? readPublicationInput)(options.manifestPath);
@@ -1302,6 +1441,14 @@ export async function collectProductionEvidence(options, seams = {}) {
     }
     const { manifestBytes, manifest, publicationRecordBytes, publicationRecord } = publication;
     binding = Object.freeze({ issueBodySha256: PARENT_ISSUE_BODY_SHA256, eventSha: publicationRecord.eventSha });
+    Object.assign(state.artifact, {
+      eventSha: publicationRecord.eventSha,
+      runId: publicationRecord.runId,
+      runAttempt: publicationRecord.runAttempt,
+      manifestSha256: digest(manifestBytes),
+      publicationRecordSha256: digest(publicationRecordBytes),
+      policyMatched: true,
+    });
     try {
       state.collectorCommit = await (seams.deriveCollectorCommit ?? deriveCollectorCommit)();
     } catch {
@@ -1312,20 +1459,9 @@ export async function collectProductionEvidence(options, seams = {}) {
       fail("artifact", "artifact-mismatch");
     }
     const discovery = await (seams.discoverInstalledChrome ?? discoverInstalledChrome)();
+    state.artifact.chromeExecutableCategory = discovery.category;
     state.chromeVersion = await (seams.readInstalledChromeVersion ?? readInstalledChromeVersion)(discovery);
-    const platform = runnerPlatform();
-    Object.assign(state.artifact, {
-      eventSha: publicationRecord.eventSha,
-      runId: publicationRecord.runId,
-      runAttempt: publicationRecord.runAttempt,
-      manifestSha256: digest(manifestBytes),
-      publicationRecordSha256: digest(publicationRecordBytes),
-      nodeVersion: state.nodeVersion,
-      chromeVersion: state.chromeVersion,
-      chromeExecutableCategory: discovery.category,
-      ...platform,
-      policyMatched: true,
-    });
+    state.artifact.chromeVersion = state.chromeVersion;
     const deployment = await (seams.verifyDeploymentBinding ?? verifyDeploymentBinding)({
       eventSha: publicationRecord.eventSha, origin: options.origin,
       fetchImpl: seams.fetchImpl ?? fetch, now, requestItems: state.requestItems, progress: state.artifact,
@@ -1337,20 +1473,22 @@ export async function collectProductionEvidence(options, seams = {}) {
     });
     emit("artifact-verified", 0);
 
+    profile = await (seams.mkdtemp ?? mkdtemp)(path.join(os.tmpdir(), "code-city-evidence-chrome-"));
+    browser = await (seams.createBrowserEvidenceSession ?? createBrowserEvidenceSession)({
+      discovery, chromeVersion: state.chromeVersion, profile, origin: options.origin, manifest,
+      eventSha: publicationRecord.eventSha, now, requestItems: state.requestItems,
+      observeCdpVersion(value) { state.cdpVersion = value; },
+    });
+    state.cdpVersion = browser.cdpVersion;
     activeStage = "smoke";
     state.stageRequestStarts.smoke = state.requestItems.length;
     const smokeStart = emit("smoke-start", 1);
     state.smoke = {
       ...emptyData(SMOKE_KEYS), repositoryUrl: CODE_CITY_URL, startedMs: smokeStart.atMs, providerGetCount: 0,
     };
-    profile = await (seams.mkdtemp ?? mkdtemp)(path.join(os.tmpdir(), "code-city-evidence-chrome-"));
-    browser = await (seams.createBrowserEvidenceSession ?? createBrowserEvidenceSession)({
-      discovery, chromeVersion: state.chromeVersion, profile, origin: options.origin, manifest,
-      eventSha: publicationRecord.eventSha, now, requestItems: state.requestItems,
-    });
-    state.cdpVersion = browser.cdpVersion;
     try {
       state.smoke = await browser.collectSmoke(emit, smokeStart.atMs);
+      enforceNoStageOverlap(state, "smoke");
       browser.clearTrace();
     } catch (error) {
       throw mapBrowserFailure("smoke", error);
@@ -1366,6 +1504,7 @@ export async function collectProductionEvidence(options, seams = {}) {
     state.qualification = await (seams.qualifyRepository ?? qualifyRepository)({
       fetchImpl: seams.fetchImpl ?? fetch, now, requestItems: state.requestItems, progress: state.qualification,
     });
+    enforceNoStageOverlap(state, "qualification");
     emit("qualification-complete", 0);
 
     activeStage = "capacity";
@@ -1377,6 +1516,7 @@ export async function collectProductionEvidence(options, seams = {}) {
     };
     try {
       state.capacity = await browser.collectCapacity(state.qualification, emit, capacityStart.atMs);
+      enforceNoStageOverlap(state, "capacity");
     } catch (error) {
       throw mapBrowserFailure("capacity", error);
     }
@@ -1391,6 +1531,9 @@ export async function collectProductionEvidence(options, seams = {}) {
     emit("collector-complete", 0);
   } catch (error) {
     failure = error instanceof CollectorFailure ? error : new CollectorFailure(activeStage, "infrastructure-failure");
+    if (["smoke", "qualification", "capacity"].includes(activeStage) && stageGetOverlap(state, activeStage) > 1) {
+      failure = new CollectorFailure(activeStage, "request-overlap");
+    }
     if (browser) {
       state.smoke = browser.snapshot?.("smoke") ?? state.smoke;
       state.capacity = browser.snapshot?.("capacity") ?? state.capacity;
