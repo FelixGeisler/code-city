@@ -155,6 +155,22 @@ async function runNativeQualification(overrides = {}) {
   return { ...controlled, requestItems, progress };
 }
 
+function qualificationFetchForSources(sourceForIndex) {
+  const sources = Array.from({ length: 4001 }, (_, index) => sourceForIndex(index));
+  const entries = sources.map((source, index) => ({
+    path: `${String(index + 1).padStart(4, "0")}.ts`, mode: "100644", type: "blob",
+    sha: computeGitBlobId(source, 40),
+  }));
+  return nativeQualificationFetch({
+    tree: { body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: entries }) },
+    raw: ({ url }) => {
+      const match = /(\d{4})\.ts$/u.exec(url);
+      assert(match);
+      return { body: sources[Number(match[1]) - 1] };
+    },
+  });
+}
+
 function appendSequence(items, now, repository, revision, root, paths, applicationCall, emit = {}) {
   directRequest(items, now, "revision", revisionUrl(repository), applicationCall);
   emit.revision?.();
@@ -410,6 +426,43 @@ test("native qualification enforces each revision, commit, tree, and raw respons
     await assert.rejects(qualifyRepository({ fetchImpl: overflow.fetchImpl, now: () => 1, requestItems: [] }),
       (error) => error.reason === "provider-failure", `${stage} boundary + 1`);
   }
+});
+
+test("qualification preserves only schema-safe prefixes at 2 MiB and 40 MiB boundaries and classifies +1, UTF-8, NUL, and hash failures", async () => {
+  const twoMiB = new Uint8Array(2 * 1024 * 1024).fill(0x78);
+  const empty = new Uint8Array();
+
+  for (const [name, sourceForIndex, expectedAggregate] of [
+    ["per-module boundary", (index) => index === 0 ? twoMiB : empty, twoMiB.byteLength],
+    ["aggregate boundary", (index) => index < 20 ? twoMiB : empty, 40 * 1024 * 1024],
+  ]) {
+    const controlled = qualificationFetchForSources(sourceForIndex);
+    const progress = { repositoryUrl: "https://github.com/facebook/react", revision: null, rootTree: null, treeEntries: null, truncated: null, candidates: [] };
+    await qualifyRepository({ fetchImpl: controlled.fetchImpl, now: () => 1, requestItems: [], progress });
+    assert.equal(progress.candidates.length, 4001, name);
+    assert.equal(progress.candidates.at(-1).runningAggregate, expectedAggregate, name);
+  }
+
+  for (const [name, sourceForIndex, prefixLength] of [
+    ["per-module +1", (index) => index === 0 ? new Uint8Array(2 * 1024 * 1024 + 1).fill(0x78) : empty, 0],
+    ["aggregate +1", (index) => index < 20 ? twoMiB : index === 20 ? Uint8Array.of(0x78) : empty, 20],
+    ["invalid UTF-8", (index) => index === 0 ? Uint8Array.of(0xc3, 0x28) : empty, 0],
+    ["NUL", (index) => index === 0 ? Uint8Array.of(0) : empty, 0],
+  ]) {
+    const controlled = qualificationFetchForSources(sourceForIndex);
+    const progress = { repositoryUrl: "https://github.com/facebook/react", revision: null, rootTree: null, treeEntries: null, truncated: null, candidates: [] };
+    await assert.rejects(qualifyRepository({ fetchImpl: controlled.fetchImpl, now: () => 1, requestItems: [], progress }),
+      (error) => error.stage === "qualification" && error.reason === "content-invalid", name);
+    assert.equal(progress.candidates.length, prefixLength, name);
+    assert(progress.candidates.every((candidate) => candidate.contentValid), name);
+  }
+
+  const hashProgress = { repositoryUrl: "https://github.com/facebook/react", revision: null, rootTree: null, treeEntries: null, truncated: null, candidates: [] };
+  const hash = nativeQualificationFetch({ raw: { body: new TextEncoder().encode("different") } });
+  await assert.rejects(qualifyRepository({ fetchImpl: hash.fetchImpl, now: () => 1, requestItems: [], progress: hashProgress }),
+    (error) => error.stage === "qualification" && error.reason === "hash-mismatch");
+  assert.equal(hashProgress.candidates.length, 1);
+  assert.equal(hashProgress.candidates[0].hashMatched, false);
 });
 
 test("native deployment fetches enforce both response boundaries and boundary plus one", async () => {
@@ -768,7 +821,10 @@ function fakeCdpHarness({ failMethod } = {}) {
       if (method === "Runtime.evaluate") return { result: { value: true } };
       if (method === "Network.getResponseBody") {
         bodyCalls += 1;
-        return { body: bodies.get(params.requestId) ?? "", base64Encoded: false };
+        const stored = bodies.get(params.requestId);
+        return stored && typeof stored === "object" && typeof stored.body === "string"
+          ? stored
+          : { body: stored ?? "", base64Encoded: false };
       }
       return {};
     },
@@ -850,6 +906,18 @@ function emitBrowserGet(harness, { requestId, url, body, headers = {}, responseH
   const length = dataLength ?? new TextEncoder().encode(body).byteLength;
   harness.emit("Network.dataReceived", { requestId, dataLength: length, encodedDataLength: length });
   harness.emit("Network.loadingFinished", { requestId, encodedDataLength: length });
+}
+
+function emitBrowserBytes(harness, { requestId, url, bytes }) {
+  harness.bodies.set(requestId, { body: Buffer.from(bytes).toString("base64"), base64Encoded: true });
+  harness.emit("Network.requestWillBeSent", { requestId, request: { url, method: "GET", headers: {} } });
+  harness.emit("Network.requestWillBeSentExtraInfo", { requestId, headers: {}, associatedCookies: [] });
+  harness.emit("Network.responseReceived", { requestId, response: {
+    url, status: 200, headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "text/plain" },
+    fromDiskCache: false, fromServiceWorker: false,
+  } });
+  harness.emit("Network.dataReceived", { requestId, dataLength: bytes.byteLength, encodedDataLength: bytes.byteLength });
+  harness.emit("Network.loadingFinished", { requestId, encodedDataLength: bytes.byteLength });
 }
 
 test("every Chrome/CDP session setup failure rolls back socket, process, listeners, and ownership once", async () => {
@@ -951,8 +1019,7 @@ test("CDP request ExtraInfo is mandatory, unique, late-closed, and authoritative
     emitBrowserGet(harness, { requestId: "credential", url: revisionUrl("FelixGeisler/code-city"), body: `${JSON.stringify([{ sha: EVENT }])}\n`, headers: { Cookie: "private" } });
     harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({ type: "REVISION_SELECTED", generation: 1, revision: EVENT }) });
     await assert.rejects(pending, /credential header/u);
-    assert.equal(requestItems.length, 1);
-    assert.equal(requestItems[0].cookieAbsent, false);
+    assert.equal(requestItems.length, 0);
     assert(!JSON.stringify(requestItems).includes("private"));
     await session.close().catch(() => {});
   }
@@ -977,6 +1044,82 @@ test("CDP request ExtraInfo is mandatory, unique, late-closed, and authoritative
     await assert.rejects(Promise.race([pending, new Promise((_, reject) => setTimeout(() => reject(new Error("hung")), 100))]), (error) => error.message !== "hung");
     await opened.session.close().catch(() => {});
   }
+});
+
+test("CDP ExtraInfo classifies credential names before failure or incompletion and never reads or retains secret values", async () => {
+  for (const ending of ["loading-failed", "incomplete", "ignored-asset"]) {
+    const opened = await openFakeBrowser();
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    await Promise.resolve();
+    let secretReads = 0;
+    let cookieMetadataReads = 0;
+    const headers = {};
+    Object.defineProperty(headers, "Authorization", {
+      enumerable: true,
+      get() { secretReads += 1; return "Bearer never-retain"; },
+    });
+    const params = { requestId: ending, headers };
+    Object.defineProperty(params, "associatedCookies", {
+      enumerable: true,
+      get() { cookieMetadataReads += 1; return [{ cookie: { value: "never-retain" } }]; },
+    });
+    opened.harness.emit("Network.requestWillBeSent", {
+      requestId: ending,
+      request: { url: ending === "ignored-asset" ? `${PRODUCTION_ORIGIN}index.html`
+        : revisionUrl("FelixGeisler/code-city"), method: "GET", headers: {} },
+    });
+    opened.harness.emit("Network.requestWillBeSentExtraInfo", params);
+    if (ending === "loading-failed") opened.harness.emit("Network.loadingFailed", { requestId: ending });
+    await assert.rejects(pending, /credential header observed/u, ending);
+    assert.equal(secretReads, 0, ending);
+    assert.equal(cookieMetadataReads, 0, ending);
+    assert.equal(JSON.stringify(opened.session).includes("never-retain"), false, ending);
+    await opened.session.close().catch(() => {});
+  }
+});
+
+test("complete safe CDP facts survive a later fatal event without retaining unsafe request or response header values", async () => {
+  const requestItems = [];
+  const harness = fakeCdpHarness();
+  const child = fakeChromeChild();
+  const session = await createBrowserEvidenceSession({
+    discovery: { executable: "chrome", category: "linux-path" }, chromeVersion: "140.0.1.2", profile: path.resolve("profile"),
+    origin: PRODUCTION_ORIGIN, manifest: { files: [{ path: "index.html" }] }, eventSha: EVENT,
+    now: (() => { let value = 0; return () => ++value; })(), requestItems,
+    launchImpl: async () => ({ child, websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }), connectImpl: () => harness.cdp,
+  });
+  const pending = session.collectSmoke(() => ({ atMs: 1 }), 0);
+  await Promise.resolve();
+  let requestSecretReads = 0;
+  let responseSecretReads = 0;
+  const requestHeaders = { Accept: "application/json" };
+  Object.defineProperty(requestHeaders, "X-Private", {
+    enumerable: true,
+    get() { requestSecretReads += 1; return "request-never-retain"; },
+  });
+  const responseHeaders = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" };
+  Object.defineProperty(responseHeaders, "Set-Cookie", {
+    enumerable: true,
+    get() { responseSecretReads += 1; return "response-never-retain"; },
+  });
+  const requestId = "safe-before-fatal";
+  const url = revisionUrl("FelixGeisler/code-city");
+  harness.bodies.set(requestId, JSON.stringify([{ sha: EVENT }]));
+  harness.emit("Network.requestWillBeSent", { requestId, request: { url, method: "GET", headers: {} } });
+  harness.emit("Network.requestWillBeSentExtraInfo", { requestId, headers: requestHeaders, associatedCookies: [] });
+  harness.emit("Network.responseReceived", { requestId, response: {
+    url, status: 200, headers: responseHeaders, fromDiskCache: false, fromServiceWorker: false,
+  } });
+  harness.emit("Network.loadingFinished", { requestId, encodedDataLength: 1 });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.emit("Runtime.exceptionThrown", {});
+  await assert.rejects(pending, /browser exception/u);
+  assert.equal(requestItems.length, 1);
+  assert.equal(requestItems[0].authorizationAbsent, true);
+  assert.equal(requestSecretReads, 0);
+  assert.equal(responseSecretReads, 0);
+  assert(!JSON.stringify({ requestItems, session }).includes("never-retain"));
+  await session.close().catch(() => {});
 });
 
 test("CDP transfer overflow fails before getResponseBody and closes owned resources", async () => {
@@ -1056,6 +1199,20 @@ test("an earlier SUCCESS is the first capacity terminal and fails exact limit or
   await opened.session.close().catch(() => {});
 });
 
+test("capacity terminal rejects the non-protocol extra code key", async () => {
+  const opened = await openFakeBrowser();
+  const pending = opened.session.collectCapacity({
+    revision: REACT, rootTree: REACT_ROOT, candidates: candidates(),
+  }, () => ({ atMs: 1 }), 0);
+  await Promise.resolve();
+  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "FAILURE", generation: 2, revision: REACT,
+    category: "Repository exceeds Code City limits", code: "limit",
+  }) });
+  await assert.rejects(pending, /worker observation is malformed/u);
+  await opened.session.close().catch(() => {});
+});
+
 test("native CDP capacity observes the complete ordered 4,004 exchange sequence, first terminal, non-overlap, and request/worker quiescence", async () => {
   const requestItems = [];
   const harness = fakeCdpHarness();
@@ -1107,7 +1264,7 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
   }
   assert.equal(harness.bodyCalls, 4004);
   harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
-    type: "FAILURE", generation: 2, revision: REACT, category: "Repository exceeds Code City limits", code: "limit",
+    type: "FAILURE", generation: 2, revision: REACT, category: "Repository exceeds Code City limits",
   }) });
   harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({ type: "ATTEMPT_DRAINED", generation: 2 }) });
   harness.emit("Target.detachedFromTarget", { sessionId: "worker-session", targetId: "worker-target" }, "");
@@ -1324,6 +1481,87 @@ async function collectHandledMatrix(stage, reason) {
   return { result, stored };
 }
 
+test("fatal CDP, connection, and Chrome process races abort a blocked qualification reader before browser and workspace release", async () => {
+  for (const stimulus of ["cdp", "connection", "process"]) {
+    let stored;
+    const order = [];
+    const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+    delete seams.qualifyRepository;
+    seams.rm = async () => { order.push("workspace"); };
+    seams.createBrowserEvidenceSession = async (args) => {
+      const harness = fakeCdpHarness();
+      const child = fakeChromeChild();
+      const native = await createBrowserEvidenceSession({
+        ...args,
+        launchImpl: async () => ({ child, websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+        connectImpl: () => harness.cdp,
+      });
+      let triggered = false;
+      seams.fetchImpl = async (url) => ({
+        status: 200,
+        url,
+        redirected: false,
+        headers: new Headers({ "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" }),
+        body: {
+          getReader() {
+            return {
+              read() {
+                if (!triggered) {
+                  triggered = true;
+                  queueMicrotask(() => {
+                    if (stimulus === "cdp") harness.emit("Runtime.exceptionThrown", {});
+                    else if (stimulus === "connection") {
+                      for (const listener of [...harness.cdp.closeListeners]) listener(new Error("controlled connection fatal"));
+                    } else {
+                      child.exitCode = 1;
+                      child.emit("exit", 1);
+                    }
+                  });
+                }
+                return new Promise(() => {});
+              },
+              async cancel() { order.push("reader-cancel"); },
+              releaseLock() { order.push("reader-release"); },
+            };
+          },
+        },
+      });
+      return Object.freeze({
+        cdpVersion: native.cdpVersion,
+        fatalSignal: native.fatalSignal,
+        snapshot: native.snapshot,
+        async collectSmoke(emit, startedMs) {
+          directRequest(args.requestItems, args.now, "revision", revisionUrl("FelixGeisler/code-city"), true);
+          emit("revision-selected", 1);
+          for (const [stage, url] of [
+            ["commit", commitUrl("FelixGeisler/code-city", EVENT)],
+            ["tree", treeUrl("FelixGeisler/code-city", ROOT)],
+            ["raw", rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts")],
+          ]) directRequest(args.requestItems, args.now, stage, url, true);
+          const published = emit("city-published", 1);
+          return { repositoryUrl: "https://github.com/FelixGeisler/code-city", revision: EVENT, rootTree: ROOT,
+            terminal: "success", canvasCount: 1, modelSha256: "1".repeat(64), startedMs,
+            endedMs: published.atMs, providerGetCount: 4 };
+        },
+        clearTrace() {},
+        collectCapacity: native.collectCapacity,
+        async close() { await native.close(); order.push("browser-close"); },
+      });
+    };
+    const result = await collectProductionEvidence({
+      origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"), output: path.resolve(`qualification-fatal-${stimulus}`),
+    }, seams);
+    assert.deepEqual([result.status, result.reason], ["fail", "infrastructure-failure"], stimulus);
+    assert.deepEqual(order, ["reader-cancel", "reader-release", "browser-close", "workspace"], stimulus);
+    const qualification = JSON.parse(new TextDecoder().decode(stored.files.get("qualification.json")));
+    const requests = JSON.parse(new TextDecoder().decode(stored.files.get("requests.json")));
+    assert.deepEqual([qualification.status, qualification.reason], ["fail", "infrastructure-failure"], stimulus);
+    assert.equal(qualification.data.candidates.length, 0, stimulus);
+    assert.equal(requests.data.items.filter((item) => !item.applicationCall
+      && item.requestedUrl.includes("/facebook/react/")).length, 0, stimulus);
+  }
+});
+
 test("native CDP overlap and candidate-4,002 admission stops produce schema-valid marked packets", async () => {
   for (const kind of ["overlap", "candidate-4002"]) {
     let stored;
@@ -1451,6 +1689,8 @@ test("native qualification classifiers flow through the exact qualification stop
     ["cors-failure", { revision: { headers: { "Content-Type": "application/json" } } }],
     ["identity-mismatch", { commit: { body: JSON.stringify({ sha: EVENT, tree: { sha: REACT_ROOT } }) } }],
     ["tree-incomplete", { tree: { body: JSON.stringify({ sha: REACT_ROOT, truncated: true, tree: NATIVE_ENTRIES }) } }],
+    ["hash-mismatch", { raw: { body: new TextEncoder().encode("different") } }],
+    ["content-invalid", { raw: { body: Uint8Array.of(0) } }],
   ];
   for (const [reason, overrides] of cases) {
     let stored;
@@ -1470,6 +1710,129 @@ test("native qualification classifiers flow through the exact qualification stop
     assert.deepEqual([requests.status, requests.reason], ["fail", reason]);
     assert.deepEqual([lifecycle.status, lifecycle.reason], ["fail", reason]);
     assert.deepEqual(lifecycle.data.events.slice(-2).map(({ event }) => event), ["qualification-start", "collector-failed"]);
+  }
+});
+
+test("qualification bound crossings write schema-valid marked packets with the completed safe prefix", async () => {
+  const twoMiB = new Uint8Array(2 * 1024 * 1024).fill(0x78);
+  const empty = new Uint8Array();
+  for (const [name, sourceForIndex, prefixLength] of [
+    ["module", (index) => index === 0 ? new Uint8Array(twoMiB.byteLength + 1).fill(0x78) : empty, 0],
+    ["aggregate", (index) => index < 20 ? twoMiB : index === 20 ? Uint8Array.of(0x78) : empty, 20],
+  ]) {
+    let stored;
+    const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+    const controlled = qualificationFetchForSources(sourceForIndex);
+    seams.qualifyRepository = async ({ now, requestItems, progress, signal }) => qualifyRepository({
+      fetchImpl: controlled.fetchImpl, now, requestItems, progress, signal,
+    });
+    const result = await collectProductionEvidence({
+      origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"), output: path.resolve(`qualification-bound-${name}`),
+    }, seams);
+    assert.deepEqual([result.status, result.reason], ["fail", "content-invalid"], name);
+    const qualification = JSON.parse(new TextDecoder().decode(stored.files.get("qualification.json")));
+    const requests = JSON.parse(new TextDecoder().decode(stored.files.get("requests.json")));
+    assert.equal(qualification.data.candidates.length, prefixLength, name);
+    assert(qualification.data.candidates.every((candidate) => candidate.contentValid), name);
+    assert.equal(requests.data.items.filter((item) => item.stage === "raw" && !item.applicationCall).length,
+      prefixLength + 1, name);
+  }
+});
+
+test("browser capacity normalization and hash failures produce stage-aware schema-valid packets at safe prefixes", async () => {
+  const twoMiB = new Uint8Array(2 * 1024 * 1024).fill(0x78);
+  const empty = new Uint8Array();
+  for (const [kind, reason, prefixLength] of [
+    ["module", "content-invalid", 0],
+    ["aggregate", "content-invalid", 20],
+    ["utf8", "content-invalid", 0],
+    ["nul", "content-invalid", 0],
+    ["hash", "hash-mismatch", 1],
+  ]) {
+    const sourceForIndex = (index) => {
+      if (kind === "module") return index === 0 ? new Uint8Array(twoMiB.byteLength + 1).fill(0x78) : empty;
+      if (kind === "aggregate") return index < 20 ? twoMiB : index === 20 ? Uint8Array.of(0x78) : empty;
+      if (kind === "utf8") return index === 0 ? Uint8Array.of(0xc3, 0x28) : empty;
+      if (kind === "nul") return index === 0 ? Uint8Array.of(0) : empty;
+      return index === 0 ? NATIVE_SOURCE : empty;
+    };
+    const sources = Array.from({ length: 4001 }, (_, index) => sourceForIndex(index));
+    const entries = sources.map((source, index) => ({
+      path: `${String(index + 1).padStart(4, "0")}.ts`, mode: "100644", type: "blob",
+      sha: kind === "hash" && index === 0 ? BLOB : computeGitBlobId(source, 40),
+    }));
+    let stored;
+    const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+    seams.createBrowserEvidenceSession = async (args) => {
+      const harness = fakeCdpHarness();
+      const child = fakeChromeChild();
+      const native = await createBrowserEvidenceSession({
+        ...args,
+        launchImpl: async () => ({ child, websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+        connectImpl: () => harness.cdp,
+      });
+      const drive = async () => {
+        await Promise.resolve();
+        emitBrowserGet(harness, {
+          requestId: `${kind}-revision`, url: revisionUrl("facebook/react"), body: JSON.stringify([{ sha: REACT }]),
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+        harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+          type: "REVISION_SELECTED", generation: 2, revision: REACT,
+        }) });
+        emitBrowserGet(harness, {
+          requestId: `${kind}-commit`, url: commitUrl("facebook/react", REACT),
+          body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
+        });
+        emitBrowserGet(harness, {
+          requestId: `${kind}-tree`, url: treeUrl("facebook/react", REACT_ROOT),
+          body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: entries }),
+        });
+        const rawCount = kind === "aggregate" ? 21 : 1;
+        for (let index = 0; index < rawCount; index += 1) {
+          emitBrowserBytes(harness, {
+            requestId: `${kind}-raw-${index + 1}`,
+            url: rawUrl("facebook/react", REACT, entries[index].path), bytes: sources[index],
+          });
+        }
+      };
+      return Object.freeze({
+        cdpVersion: native.cdpVersion,
+        fatalSignal: native.fatalSignal,
+        snapshot: native.snapshot,
+        async collectSmoke(emit, startedMs) {
+          directRequest(args.requestItems, args.now, "revision", revisionUrl("FelixGeisler/code-city"), true);
+          emit("revision-selected", 1);
+          for (const [stage, url] of [
+            ["commit", commitUrl("FelixGeisler/code-city", EVENT)],
+            ["tree", treeUrl("FelixGeisler/code-city", ROOT)],
+            ["raw", rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts")],
+          ]) directRequest(args.requestItems, args.now, stage, url, true);
+          const published = emit("city-published", 1);
+          return { repositoryUrl: "https://github.com/FelixGeisler/code-city", revision: EVENT, rootTree: ROOT,
+            terminal: "success", canvasCount: 1, modelSha256: "1".repeat(64), startedMs,
+            endedMs: published.atMs, providerGetCount: 4 };
+        },
+        clearTrace() {},
+        async collectCapacity(qualification, emit, startedMs) {
+          const pending = native.collectCapacity(qualification, emit, startedMs);
+          void drive();
+          return pending;
+        },
+        close: native.close,
+      });
+    };
+    const result = await collectProductionEvidence({
+      origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"), output: path.resolve(`browser-bound-${kind}`),
+    }, seams);
+    assert.deepEqual([result.status, result.reason], ["fail", reason], kind);
+    const capacity = JSON.parse(new TextDecoder().decode(stored.files.get("capacity.json")));
+    const requests = JSON.parse(new TextDecoder().decode(stored.files.get("requests.json")));
+    assert.deepEqual([capacity.status, capacity.reason], ["fail", reason], kind);
+    assert.equal(capacity.data.candidates.length, prefixLength, kind);
+    assert.equal(requests.data.items.filter((item) => item.applicationCall
+      && item.requestedUrl.includes("/facebook/react/") && item.stage === "raw").length,
+    kind === "hash" ? 1 : prefixLength + 1, kind);
   }
 });
 
@@ -1555,8 +1918,8 @@ test("native browser CORS and incomplete-tree triggers flow through their owning
   }
 });
 
-test("native smoke tree, zero-candidate, identity, hash, and content failures produce marked smoke-failure packets", async () => {
-  const cases = ["truncated", "invalid", "zero", "identity", "hash", "content"];
+test("native smoke tree, zero-candidate, identity, hash, UTF-8, NUL, and content-bound failures produce marked smoke-failure packets", async () => {
+  const cases = ["truncated", "invalid", "zero", "identity", "hash", "utf8", "content", "module", "aggregate"];
   for (const kind of cases) {
     let stored;
     const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
@@ -1582,22 +1945,33 @@ test("native smoke tree, zero-candidate, identity, hash, and content failures pr
           requestId: `${kind}-commit`, url: commitUrl("FelixGeisler/code-city", EVENT),
           body: JSON.stringify({ sha: EVENT, tree: { sha: ROOT } }),
         });
-        const rawBytes = kind === "content" ? Uint8Array.of(0) : new TextEncoder().encode("x");
-        const expectedBlob = kind === "hash" ? BLOB : computeGitBlobId(rawBytes, 40);
+        const twoMiB = new Uint8Array(2 * 1024 * 1024).fill(0x78);
+        const rawSources = kind === "aggregate"
+          ? Array.from({ length: 21 }, (_, index) => index < 20 ? twoMiB : Uint8Array.of(0x78))
+          : [kind === "content" ? Uint8Array.of(0)
+            : kind === "utf8" ? Uint8Array.of(0xc3, 0x28)
+              : kind === "module" ? new Uint8Array(twoMiB.byteLength + 1).fill(0x78)
+                : NATIVE_SOURCE];
+        const rawEntries = rawSources.map((source, index) => ({
+          path: `src/${String(index + 1).padStart(2, "0")}.ts`, mode: "100644", type: "blob",
+          sha: kind === "hash" && index === 0 ? BLOB : computeGitBlobId(source, 40),
+        }));
         const treeBody = kind === "invalid" ? "{"
           : JSON.stringify({
             sha: kind === "identity" ? "9".repeat(40) : ROOT,
             truncated: kind === "truncated",
-            tree: kind === "zero" ? [] : [{ path: "src/a.ts", mode: "100644", type: "blob", sha: expectedBlob }],
+            tree: kind === "zero" ? [] : rawEntries,
           });
         emitBrowserGet(harness, {
           requestId: `${kind}-tree`, url: treeUrl("FelixGeisler/code-city", ROOT), body: treeBody,
         });
-        if (["hash", "content"].includes(kind)) {
-          emitBrowserGet(harness, {
-            requestId: `${kind}-raw`, url: rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts"),
-            body: new TextDecoder().decode(rawBytes),
-          });
+        if (["hash", "utf8", "content", "module", "aggregate"].includes(kind)) {
+          for (let index = 0; index < rawSources.length; index += 1) {
+            emitBrowserBytes(harness, {
+              requestId: `${kind}-raw-${index + 1}`,
+              url: rawUrl("FelixGeisler/code-city", EVENT, rawEntries[index].path), bytes: rawSources[index],
+            });
+          }
         }
       };
       return Object.freeze({

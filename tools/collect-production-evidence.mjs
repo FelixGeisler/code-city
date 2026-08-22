@@ -149,11 +149,18 @@ export function parseCollectorArguments(args) {
   });
 }
 
-export function safeHeaderFacts(requestHeaders, responseHeaders) {
+function requestHeaderProjection(requestHeaders) {
   const requestNames = Object.keys(requestHeaders).map((name) => name.toLowerCase());
+  return Object.freeze({
+    headerNames: [...new Set(requestNames.filter((name) => SAFE_HEADERS.has(name)))].sort(),
+    authorizationAbsent: !requestNames.includes("authorization"),
+    cookieAbsent: !requestNames.includes("cookie"),
+    refererAbsent: !requestNames.includes("referer"),
+  });
+}
+
+function responseHeaderProjection(responseHeaders) {
   const responseNames = [...responseHeaders.keys()].map((name) => name.toLowerCase());
-  const observed = new Set([...requestNames, ...responseNames]);
-  const headerNames = [...observed].filter((name) => SAFE_HEADERS.has(name)).sort();
   const cors = responseHeaders.get("access-control-allow-origin");
   const corsAllowOrigin = cors === "*" || cors === "https://felixgeisler.github.io" ? cors : null;
   const rateValues = ["x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset"].map((name) => responseHeaders.get(name));
@@ -164,14 +171,48 @@ export function safeHeaderFacts(requestHeaders, responseHeaders) {
       rateLimit = { limit: values[0], remaining: values[1], reset: values[2] };
     }
   }
-  return {
-    headerNames,
+  return Object.freeze({
+    headerNames: [...new Set(responseNames.filter((name) => SAFE_HEADERS.has(name)))].sort(),
     corsAllowOrigin,
-    rateLimit,
-    authorizationAbsent: !requestNames.includes("authorization"),
-    cookieAbsent: !requestNames.includes("cookie"),
-    refererAbsent: !requestNames.includes("referer"),
+    rateLimit: Object.freeze(rateLimit),
+  });
+}
+
+function mergeHeaderFacts(requestFacts, responseFacts) {
+  return {
+    headerNames: [...new Set([...requestFacts.headerNames, ...responseFacts.headerNames])].sort(),
+    corsAllowOrigin: responseFacts.corsAllowOrigin,
+    rateLimit: responseFacts.rateLimit,
+    authorizationAbsent: requestFacts.authorizationAbsent,
+    cookieAbsent: requestFacts.cookieAbsent,
+    refererAbsent: requestFacts.refererAbsent,
   };
+}
+
+export function safeHeaderFacts(requestHeaders, responseHeaders) {
+  return mergeHeaderFacts(requestHeaderProjection(requestHeaders), responseHeaderProjection(responseHeaders));
+}
+
+function cdpResponseProjection(response) {
+  invariant(response && typeof response === "object", "browser response is malformed");
+  const rawHeaders = response.headers;
+  invariant(rawHeaders && typeof rawHeaders === "object", "browser response headers are malformed");
+  const safeHeaders = new Headers();
+  for (const name of Object.keys(rawHeaders)) {
+    const normalized = name.toLowerCase();
+    if (!SAFE_HEADERS.has(normalized)) continue;
+    const descriptor = Object.getOwnPropertyDescriptor(rawHeaders, name);
+    invariant(descriptor && Object.hasOwn(descriptor, "value") && descriptor.enumerable,
+      "browser response headers are malformed");
+    safeHeaders.append(name, String(descriptor.value));
+  }
+  return Object.freeze({
+    url: ownString(response, "url"),
+    status: ownData(response, "status"),
+    fromDiskCache: ownData(response, "fromDiskCache") === true,
+    fromServiceWorker: ownData(response, "fromServiceWorker") === true,
+    headerFacts: responseHeaderProjection(safeHeaders),
+  });
 }
 
 async function releaseResponse(response) {
@@ -179,15 +220,20 @@ async function releaseResponse(response) {
   try { await response.body.cancel(); } catch {}
 }
 
-export async function readBoundedResponseBody(response, cap) {
+export async function readBoundedResponseBody(response, cap, { signal } = {}) {
   invariant(Number.isSafeInteger(cap) && cap >= 0, "invalid response cap");
   if (!response.body) throw new Error("response body is absent");
   const reader = response.body.getReader();
   const chunks = [];
   let total = 0;
+  let rejectAbort;
+  const aborted = new Promise((_, reject) => { rejectAbort = reject; });
+  const onAbort = () => rejectAbort(new Error("response body aborted by browser fatal"));
+  signal?.addEventListener("abort", onAbort, { once: true });
   try {
+    if (signal?.aborted) onAbort();
     for (;;) {
-      const next = await reader.read();
+      const next = await (signal ? Promise.race([reader.read(), aborted]) : reader.read());
       if (next.done) break;
       if (!(next.value instanceof Uint8Array) || next.value.byteLength > cap - total) {
         await reader.cancel();
@@ -200,6 +246,7 @@ export async function readBoundedResponseBody(response, cap) {
     try { await reader.cancel(); } catch {}
     throw error;
   } finally {
+    signal?.removeEventListener("abort", onAbort);
     reader.releaseLock();
   }
   const bytes = new Uint8Array(total);
@@ -224,6 +271,7 @@ async function fixedFetch(requestUrl, {
   requestItems,
   api = true,
   corsRequired = false,
+  signal,
 }) {
   const headers = api ? { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2026-03-10" } : {};
   const startedMs = now();
@@ -237,8 +285,10 @@ async function fixedFetch(requestUrl, {
       referrerPolicy: "no-referrer",
       cache: "no-store",
       redirect: "error",
+      signal,
     });
   } catch {
+    if (signal?.aborted) throw new Error("request aborted by browser fatal");
     throw new Error("request failed");
   }
   const facts = safeHeaderFacts(headers, response.headers);
@@ -264,8 +314,9 @@ async function fixedFetch(requestUrl, {
   }
   let bytes;
   try {
-    bytes = await readBoundedResponseBody(response, cap);
+    bytes = await readBoundedResponseBody(response, cap, { signal });
   } catch {
+    if (signal?.aborted) throw new Error("response body aborted by browser fatal");
     record();
     throw new Error("response body mismatch");
   }
@@ -481,22 +532,22 @@ export async function verifyProductionAssets({ manifest, origin, fetchImpl, now,
   }
 }
 
-export async function qualifyRepository({ fetchImpl, now, requestItems, progress = {
+export async function qualifyRepository({ fetchImpl, now, requestItems, signal, progress = {
   repositoryUrl: REACT_URL, revision: null, rootTree: null, treeEntries: null, truncated: null, candidates: [],
 } }) {
   try {
     const revisionResult = await fixedFetch(revisionUrl(REACT_REPOSITORY), {
-      cap: API_CAP, stage: "revision", fetchImpl, now, requestItems, corsRequired: true,
+      cap: API_CAP, stage: "revision", fetchImpl, now, requestItems, corsRequired: true, signal,
     });
     const revision = projectRevision(revisionResult.bytes);
     progress.revision = revision;
     const commitResult = await fixedFetch(commitUrl(REACT_REPOSITORY, revision), {
-      cap: COMMIT_CAP, stage: "commit", fetchImpl, now, requestItems, corsRequired: true,
+      cap: COMMIT_CAP, stage: "commit", fetchImpl, now, requestItems, corsRequired: true, signal,
     });
     const rootTree = projectCommit(commitResult.bytes, revision);
     progress.rootTree = rootTree;
     const treeResult = await fixedFetch(treeUrl(REACT_REPOSITORY, rootTree), {
-      cap: TREE_CAP, stage: "tree", fetchImpl, now, requestItems, corsRequired: true,
+      cap: TREE_CAP, stage: "tree", fetchImpl, now, requestItems, corsRequired: true, signal,
     });
     const tree = parseTreeResponse(treeResult.bytes, rootTree, revision.length, progress);
     invariant(tree.candidates.length >= 4001, "qualification has fewer than 4,001 candidates");
@@ -505,7 +556,7 @@ export async function qualifyRepository({ fetchImpl, now, requestItems, progress
       const expected = tree.candidates[offset];
       const expectedBlob = candidateBlobId(expected, revision.length);
       const result = await fixedFetch(rawUrl(REACT_REPOSITORY, revision, expected.rawPath), {
-        cap: RAW_CAP, stage: "raw", fetchImpl, now, requestItems, api: false, corsRequired: true,
+        cap: RAW_CAP, stage: "raw", fetchImpl, now, requestItems, api: false, corsRequired: true, signal,
       });
       const actualBlob = computeGitBlobId(result.bytes, revision.length);
       let normalizedBytes;
@@ -514,23 +565,26 @@ export async function qualifyRepository({ fetchImpl, now, requestItems, progress
       const nextAggregate = aggregate + normalizedBytes;
       const hashMatched = actualBlob === expectedBlob;
       const contentValid = normalizedBytes <= MAX_NORMALIZED_BYTES && nextAggregate <= MAX_AGGREGATE_BYTES;
-      progress.candidates.push({
-        index: offset + 1,
-        path: expected.canonicalPath,
-        blobId: expectedBlob,
-        normalizedBytes,
-        runningAggregate: nextAggregate,
-        hashMatched,
-        contentValid,
-      });
-      aggregate = nextAggregate;
-      invariant(hashMatched, "candidate blob hash differs");
+      if (contentValid) {
+        progress.candidates.push({
+          index: offset + 1,
+          path: expected.canonicalPath,
+          blobId: expectedBlob,
+          normalizedBytes,
+          runningAggregate: nextAggregate,
+          hashMatched,
+          contentValid: true,
+        });
+        aggregate = nextAggregate;
+      }
       invariant(contentValid, "candidate content exceeds qualification bounds");
+      invariant(hashMatched, "candidate blob hash differs");
     }
     return Object.freeze(progress);
   } catch (error) {
     if (error instanceof CollectorFailure) throw error;
     const message = String(error?.message);
+    if (/browser fatal|aborted/iu.test(message) || signal?.aborted) fail("qualification", "infrastructure-failure");
     if (/CORS/iu.test(message)) fail("qualification", "cors-failure");
     if (/blob hash/iu.test(message)) fail("qualification", "hash-mismatch");
     if (/UTF-8|NUL|content/iu.test(message)) fail("qualification", "content-invalid");
@@ -633,14 +687,6 @@ function browserRoute(url, repository) {
   return null;
 }
 
-function headersFromCdp(value) {
-  const headers = new Headers();
-  if (value && typeof value === "object") {
-    for (const [name, headerValue] of Object.entries(value)) headers.set(name, String(headerValue));
-  }
-  return headers;
-}
-
 export function responseCapForRoute(route) {
   const cap = RESPONSE_CAPS[route?.stage];
   invariant(Number.isSafeInteger(cap), "browser route cap is invalid");
@@ -708,6 +754,7 @@ export async function createBrowserEvidenceSession({
     const factWaiters = [];
     const detachWaiters = [];
     const fatal = { value: null };
+    const fatalController = new AbortController();
     const network = new Map();
     const earlyExtra = new Map();
     const ignoredRequestIds = new Set();
@@ -743,9 +790,14 @@ export async function createBrowserEvidenceSession({
         return { type, generation, revision, modelSha256 };
       }
       if (type === "FAILURE") {
-        exactKeys(["type", "generation", "revision", "category", "code"]);
         const revision = ownString(value, "revision");
         const category = ownString(value, "category");
+        if (category === "Repository exceeds Code City limits") {
+          exactKeys(["type", "generation", "revision", "category"]);
+          invariant(revision && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(revision), "worker terminal is malformed");
+          return { type, generation, revision, category };
+        }
+        exactKeys(["type", "generation", "revision", "category", "code"]);
         const code = ownString(value, "code");
         invariant(revision && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(revision)
           && category && category.length <= 256 && code && code.length <= 128, "worker terminal is malformed");
@@ -788,6 +840,13 @@ export async function createBrowserEvidenceSession({
       if (fatal.value) return;
       fatal.value = error instanceof Error ? error : new Error("browser observation failed");
       if (mode) mode.requestsClosed = true;
+      network.clear();
+      earlyExtra.clear();
+      ignoredRequestIds.clear();
+      completedRequestIds.clear();
+      workerTargets.clear();
+      detachedWorkers.clear();
+      fatalController.abort(fatal.value);
       for (const waiter of factWaiters.splice(0)) waiter.reject(fatal.value);
       for (const waiter of detachWaiters.splice(0)) waiter.reject(fatal.value);
     }
@@ -845,14 +904,12 @@ export async function createBrowserEvidenceSession({
       entry.admitted = true;
     }
     function finalizeNetworkEntry(key, entry) {
-      if (!entry.finished || !entry.response || !entry.extraInfo) return;
+      if (!entry.finished || !entry.response || !entry.requestHeaderFacts) return;
       network.delete(key);
       completedRequestIds.add(key);
       enqueue(async () => {
         invariant(entry.admitted, "browser request was not admitted");
-        const responseHeaders = headersFromCdp(entry.response.headers);
-        const requestHeaders = Object.fromEntries(Object.entries(entry.extraInfo.headers ?? {}).map(([name, value]) => [name, String(value)]));
-        const headerFacts = safeHeaderFacts(requestHeaders, responseHeaders);
+        const headerFacts = mergeHeaderFacts(entry.requestHeaderFacts, entry.response.headerFacts);
         appendRequest(requestItems, {
           stage: entry.route.stage, method: entry.method, requestedUrl: entry.url, finalUrl: entry.response.url,
           applicationCall: entry.method === "GET", status: entry.response.status, startedMs: entry.startedMs,
@@ -860,7 +917,6 @@ export async function createBrowserEvidenceSession({
         });
         invariant(entry.response.status === (entry.method === "OPTIONS" ? 204 : 200)
           && entry.response.url === entry.url && !entry.response.fromDiskCache && !entry.response.fromServiceWorker, "browser response mismatch");
-        invariant(headerFacts.authorizationAbsent && headerFacts.cookieAbsent && headerFacts.refererAbsent, "credential header observed");
         invariant(headerFacts.corsAllowOrigin !== null, "browser CORS evidence is absent");
         if (entry.method !== "GET") return;
         const bytes = await cdpBody(cdp, entry.sessionId, entry.requestId, entry.cap);
@@ -887,18 +943,22 @@ export async function createBrowserEvidenceSession({
           invariant(expected && entry.route.identity === current.revision && entry.route.path === expected.rawPath, "browser raw sequence mismatch");
           const expectedBlob = candidateBlobId(expected, current.revision.length);
           const blobId = computeGitBlobId(bytes, current.revision.length);
-          const normalizedBytes = normalizeSourceBytes(bytes);
+          let normalizedBytes;
+          try { normalizedBytes = normalizeSourceBytes(bytes); }
+          catch { throw new Error("browser candidate content invalid"); }
           const nextAggregate = current.aggregate + normalizedBytes;
           const fact = {
             index: index + 1, path: expected.canonicalPath, blobId: expectedBlob, normalizedBytes,
             runningAggregate: nextAggregate, hashMatched: blobId === expectedBlob,
             contentValid: normalizedBytes <= MAX_NORMALIZED_BYTES && nextAggregate <= MAX_AGGREGATE_BYTES,
           };
-          current.rawFacts.push(fact);
-          if (current.generation === 2) current.progress.candidates = current.rawFacts;
-          current.aggregate = nextAggregate;
-          invariant(fact.hashMatched, "browser candidate blob mismatch");
+          if (fact.contentValid) {
+            current.rawFacts.push(fact);
+            if (current.generation === 2) current.progress.candidates = current.rawFacts;
+            current.aggregate = nextAggregate;
+          }
           invariant(fact.contentValid, "browser candidate content invalid");
+          invariant(fact.hashMatched, "browser candidate blob mismatch");
         }
       });
     }
@@ -908,6 +968,7 @@ export async function createBrowserEvidenceSession({
     launched.child.on("exit", processExitListener);
 
     listener = (message) => {
+      if (fatal.value) return;
       if (message.method === "Runtime.bindingCalled" && message.params?.name === bindingName) {
         try {
           const fact = projectFact(JSON.parse(message.params.payload));
@@ -952,16 +1013,27 @@ export async function createBrowserEvidenceSession({
         return;
       }
       if (message.method === "Network.requestWillBeSentExtraInfo") {
-        if (ignoredRequestIds.has(key)) return;
         if (completedRequestIds.has(key)) { setFatal(new Error("late browser request headers")); return; }
+        let requestHeaderFacts;
+        try {
+          requestHeaderFacts = requestHeaderProjection(message.params?.headers ?? {});
+        } catch (error) {
+          setFatal(error);
+          return;
+        }
+        if (!requestHeaderFacts.authorizationAbsent || !requestHeaderFacts.cookieAbsent || !requestHeaderFacts.refererAbsent) {
+          setFatal(new Error("credential header observed"));
+          return;
+        }
+        if (ignoredRequestIds.has(key)) return;
         const entry = network.get(key);
         if (!entry) {
           if (earlyExtra.has(key)) setFatal(new Error("duplicate browser request headers"));
-          else earlyExtra.set(key, message.params);
+          else earlyExtra.set(key, requestHeaderFacts);
           return;
         }
-        if (entry.extraInfo) { setFatal(new Error("duplicate browser request headers")); return; }
-        entry.extraInfo = message.params;
+        if (entry.requestHeaderFacts) { setFatal(new Error("duplicate browser request headers")); return; }
+        entry.requestHeaderFacts = requestHeaderFacts;
         finalizeNetworkEntry(key, entry);
         return;
       }
@@ -984,7 +1056,7 @@ export async function createBrowserEvidenceSession({
         const entry = {
           sessionId: message.sessionId, requestId: message.params.requestId, url, method, route,
           cap: responseCapForRoute(route), startedMs: now(), dataLength: 0, encodedDataLength: 0,
-          extraInfo: earlyExtra.get(key), admitted: false,
+          requestHeaderFacts: earlyExtra.get(key), admitted: false,
         };
         network.set(key, entry);
         earlyExtra.delete(key);
@@ -993,7 +1065,10 @@ export async function createBrowserEvidenceSession({
       }
       if (message.method === "Network.responseReceived") {
         const entry = network.get(key);
-        if (entry) entry.response = message.params.response;
+        if (entry) {
+          try { entry.response = cdpResponseProjection(message.params.response); }
+          catch (error) { setFatal(error); }
+        }
         return;
       }
       if (message.method === "Network.dataReceived") {
@@ -1010,7 +1085,7 @@ export async function createBrowserEvidenceSession({
         catch (error) { setFatal(error); return; }
         entry.finished = true;
         entry.finishedMs = Math.max(entry.startedMs, now());
-        if (!entry.response || !entry.extraInfo) {
+        if (!entry.response || !entry.requestHeaderFacts) {
           setFatal(new Error("browser request headers or response are incomplete"));
           return;
         }
@@ -1047,7 +1122,7 @@ export async function createBrowserEvidenceSession({
     async function flush() {
       await evaluate(cdp, sessionId, "true");
       await processing;
-      if ([...network.values()].some((entry) => entry.finished && !entry.extraInfo) || earlyExtra.size > 0) {
+      if ([...network.values()].some((entry) => entry.finished && !entry.requestHeaderFacts) || earlyExtra.size > 0) {
         setFatal(new Error("browser request headers are incomplete"));
       }
       if (fatal.value) throw fatal.value;
@@ -1068,6 +1143,7 @@ export async function createBrowserEvidenceSession({
     return Object.freeze({
       chromeVersion,
       cdpVersion: version.protocolVersion,
+      fatalSignal: fatalController.signal,
       snapshot,
       async collectSmoke(emit, startedMs) {
         facts.length = 0;
@@ -1502,7 +1578,8 @@ export async function collectProductionEvidence(options, seams = {}) {
       ...emptyData(QUALIFICATION_KEYS, ["candidates"]), repositoryUrl: REACT_URL,
     };
     state.qualification = await (seams.qualifyRepository ?? qualifyRepository)({
-      fetchImpl: seams.fetchImpl ?? fetch, now, requestItems: state.requestItems, progress: state.qualification,
+      fetchImpl: seams.fetchImpl ?? fetch, now, requestItems: state.requestItems, signal: browser.fatalSignal,
+      progress: state.qualification,
     });
     enforceNoStageOverlap(state, "qualification");
     emit("qualification-complete", 0);
