@@ -311,7 +311,8 @@ function failurePayload(stage, reason) {
     if (reason === "tree-incomplete") failedData.repositoryUrl = "https://github.com/facebook/react";
     if (reason === "hash-mismatch" || reason === "content-invalid") {
       failedData.candidates = structuredClone(payloads.qualification.data.candidates);
-      failedData.candidates[0][reason === "hash-mismatch" ? "hashMatched" : "contentValid"] = false;
+      const failedCandidate = reason === "content-invalid" ? failedData.candidates.at(-1) : failedData.candidates[0];
+      failedCandidate[reason === "hash-mismatch" ? "hashMatched" : "contentValid"] = false;
     }
     if (["limit-order", "cleanup-failure", "quiescence-failure"].includes(reason)) failedData.candidates = structuredClone(payloads.qualification.data.candidates);
     if (reason === "cleanup-failure") failedData.cityPresent = true;
@@ -459,6 +460,74 @@ function failurePayload(stage, reason) {
     noPersistence: null,
     noLaterPublication: null,
   }));
+  return payloads;
+}
+
+function candidateFailurePayload(stage, reason, candidateCount, extraRaw = 0, invalidIndex = null) {
+  const payloads = failurePayload(stage, reason);
+  const stageApplicationCall = stage === "capacity";
+  const retained = candidates().slice(0, candidateCount);
+  if (invalidIndex !== null) retained[invalidIndex < 0 ? retained.length + invalidIndex : invalidIndex].contentValid = false;
+  const extraPaths = Array.from({ length: extraRaw }, (_, index) => `${9000 + index}.ts`);
+  const paths = [...retained.map(({ path }) => path), ...extraPaths];
+  payloads.requests.data.items = payloads.requests.data.items.filter((item) => !(
+    item.requestedUrl.includes(REACT_REPO) && item.applicationCall === stageApplicationCall
+  ));
+  const stageItems = stage === "capacity"
+    ? capacityRequestSequence(paths, payloads.requests.data.items.length + 1)
+    : requestSequence(REACT_REPO, REACT_EVENT, REACT_ROOT, paths, false, 6.1, 0.0002, payloads.requests.data.items.length + 1);
+  payloads.requests.data.items.push(...stageItems);
+  payloads.requests.data.items.forEach((item, index) => { item.sequence = index + 1; });
+
+  Object.assign(payloads[stage].data, {
+    repositoryUrl: "https://github.com/facebook/react",
+    revision: REACT_EVENT,
+    rootTree: REACT_ROOT,
+    candidates: retained,
+  });
+  if (stage === "qualification") {
+    Object.assign(payloads.qualification.data, { treeEntries: 5000, truncated: false });
+    payloads.lifecycle.data.events = failedEvents("qualification", 7);
+  }
+  if (stage === "capacity") {
+    const capacityGets = stageItems.filter((item) => item.method === "GET");
+    const overlap = maximumOverlap(capacityGets);
+    payloads.capacity.data.rawRequestCount = paths.length;
+    payloads.capacity.data.maxOverlap = overlap;
+    payloads.lifecycle.data.maxOverlap = overlap;
+  }
+  const finalEvent = payloads.lifecycle.data.events.at(-1);
+  finalEvent.atMs = Math.max(finalEvent.atMs, ...stageItems.map((item) => item.endedMs));
+  payloads.lifecycle.data.durations = durations(payloads.lifecycle.data.events);
+  return payloads;
+}
+
+function removeFinalStageRaw(payloads, stage) {
+  const applicationCall = stage === "capacity";
+  const items = payloads.requests.data.items;
+  const index = items.findLastIndex((item) => item.stage === "raw" && item.applicationCall === applicationCall && item.requestedUrl.includes(REACT_REPO));
+  assert.notEqual(index, -1);
+  items.splice(index, 1);
+  items.forEach((item, offset) => { item.sequence = offset + 1; });
+  if (stage === "capacity") payloads.capacity.data.rawRequestCount -= 1;
+}
+
+function appendEqualTimestampLaterAsset(payloads) {
+  const items = payloads.requests.data.items;
+  for (const item of items) setRequestTime(item, 0, 0);
+  const later = request(items.length + 1, "asset", "https://felixgeisler.github.io/code-city/package-manifest.json", false, 0);
+  setRequestTime(later, 0, 0);
+  later.headerNames = [];
+  later.corsAllowOrigin = null;
+  items.push(later);
+  for (const lifecycleEvent of payloads.lifecycle.data.events) lifecycleEvent.atMs = 0;
+  payloads.lifecycle.data.durations = durations(payloads.lifecycle.data.events);
+  payloads.smoke.data.startedMs = 0;
+  payloads.smoke.data.endedMs = 0;
+  if (event(payloads.lifecycle.data.events, "capacity-start", 2)) {
+    payloads.capacity.data.maxOverlap = 0;
+    payloads.lifecycle.data.maxOverlap = 0;
+  }
   return payloads;
 }
 
@@ -615,6 +684,114 @@ test("handled reason validation does not claim successor-owned raw runtime truth
   laterInfrastructureFailure.lifecycle.reason = "infrastructure-failure";
   laterInfrastructureFailure.requests.data.items.at(-1).status = 200;
   assert.doesNotThrow(() => createEvidencePacket(laterInfrastructureFailure, BINDING), "later infrastructure failure may retain prior completed facts");
+});
+
+test("qualification and capacity content-invalid stops retain exactly one bounded terminal representation", () => {
+  const accepted = [
+    [0, 1, null, "empty prefix plus terminal raw"],
+    [2, 1, null, "middle prefix plus terminal raw"],
+    [4001, 1, null, "4,001 prefix plus terminal raw"],
+    [2, 0, -1, "middle prefix with complete false candidate"],
+    [4001, 0, -1, "4,001 prefix with complete false candidate"],
+  ];
+  for (const stage of ["qualification", "capacity"]) {
+    for (const [candidateCount, extraRaw, invalidIndex, label] of accepted) {
+      const payloads = candidateFailurePayload(stage, "content-invalid", candidateCount, extraRaw, invalidIndex);
+      let packet;
+      assert.doesNotThrow(() => { packet = createEvidencePacket(payloads, BINDING); }, `${stage}: ${label}`);
+      assert.equal(validateEvidencePacket(packet.files, BINDING).packetDigest, packet.packetDigest, `${stage}: ${label} revalidation`);
+    }
+
+    const rejected = [
+      ["false candidate before the end", () => candidateFailurePayload(stage, "content-invalid", 3, 0, 0)],
+      ["unmatched raw after a retained false candidate", () => candidateFailurePayload(stage, "content-invalid", 2, 1, -1)],
+      ["no terminal unmatched raw when no false candidate was retained", () => candidateFailurePayload(stage, "content-invalid", 2, 0)],
+      ["two unmatched raws", () => candidateFailurePayload(stage, "content-invalid", 2, 2)],
+      ["later raw after the retained terminal exchange", () => candidateFailurePayload(stage, "content-invalid", 1, 2)],
+      ["missing raw for a retained complete candidate", () => {
+        const payloads = candidateFailurePayload(stage, "content-invalid", 2, 0, -1);
+        removeFinalStageRaw(payloads, stage);
+        return payloads;
+      }],
+      ["shared-prefix path mismatch", () => {
+        const payloads = candidateFailurePayload(stage, "content-invalid", 2, 1);
+        const raw = payloads.requests.data.items.find((item) => item.stage === "raw" && item.applicationCall === (stage === "capacity") && item.requestedUrl.includes(REACT_REPO));
+        raw.requestedUrl = rawUrl(REACT_REPO, REACT_EVENT, "0000.ts");
+        raw.finalUrl = raw.requestedUrl;
+        return payloads;
+      }],
+      ["shared-prefix raw order mismatch", () => {
+        const payloads = candidateFailurePayload(stage, "content-invalid", 2, 1);
+        const raws = payloads.requests.data.items.filter((item) => item.stage === "raw" && item.applicationCall === (stage === "capacity") && item.requestedUrl.includes(REACT_REPO));
+        [raws[0].requestedUrl, raws[1].requestedUrl] = [raws[1].requestedUrl, raws[0].requestedUrl];
+        [raws[0].finalUrl, raws[1].finalUrl] = [raws[1].finalUrl, raws[0].finalUrl];
+        return payloads;
+      }],
+    ];
+    for (const [label, make] of rejected) expectCode("invalid-payload", () => createEvidencePacket(make(), BINDING), `${stage}: ${label}`);
+  }
+});
+
+test("qualification and capacity unexpected-request stops allow only zero or one bounded offending raw", () => {
+  for (const stage of ["qualification", "capacity"]) {
+    for (const candidateCount of [0, 2, 4001]) {
+      for (const offendingCount of [0, 1]) {
+        const label = `${stage}: ${candidateCount} candidates and ${offendingCount} offending raw`;
+        assert.doesNotThrow(() => createEvidencePacket(
+          candidateFailurePayload(stage, "unexpected-request", candidateCount, offendingCount), BINDING
+        ), label);
+      }
+    }
+
+    for (const [label, make] of [
+      ["two offending raws and every later raw", () => candidateFailurePayload(stage, "unexpected-request", 2, 2)],
+      ["later cross-group request after zero offending raws with equal timestamps", () => appendEqualTimestampLaterAsset(
+        candidateFailurePayload(stage, "unexpected-request", 2, 0)
+      )],
+      ["later cross-group request after one offending raw with equal timestamps", () => appendEqualTimestampLaterAsset(
+        candidateFailurePayload(stage, "unexpected-request", 2, 1)
+      )],
+      ["false candidate under the wrong reason", () => candidateFailurePayload(stage, "unexpected-request", 2, 0, -1)],
+      ["shared-prefix path mismatch", () => {
+        const payloads = candidateFailurePayload(stage, "unexpected-request", 2, 1);
+        const raw = payloads.requests.data.items.find((item) => item.stage === "raw" && item.applicationCall === (stage === "capacity") && item.requestedUrl.includes(REACT_REPO));
+        raw.requestedUrl = rawUrl(REACT_REPO, REACT_EVENT, "0000.ts");
+        raw.finalUrl = raw.requestedUrl;
+        return payloads;
+      }],
+      ["shared-prefix raw order mismatch", () => {
+        const payloads = candidateFailurePayload(stage, "unexpected-request", 2, 1);
+        const raws = payloads.requests.data.items.filter((item) => item.stage === "raw" && item.applicationCall === (stage === "capacity") && item.requestedUrl.includes(REACT_REPO));
+        [raws[0].requestedUrl, raws[1].requestedUrl] = [raws[1].requestedUrl, raws[0].requestedUrl];
+        [raws[0].finalUrl, raws[1].finalUrl] = [raws[1].finalUrl, raws[0].finalUrl];
+        return payloads;
+      }],
+    ]) expectCode("invalid-payload", () => createEvidencePacket(make(), BINDING), `${stage}: ${label}`);
+  }
+});
+
+test("short candidate prefixes do not infer tree or qualification failure reasons", () => {
+  const qualification = candidateFailurePayload("qualification", "infrastructure-failure", 2);
+  assert.equal(qualification.qualification.data.truncated, false);
+  assert.doesNotThrow(() => createEvidencePacket(qualification, BINDING), "complete nontruncated qualification inventory keeps its caller-selected reason");
+
+  const capacity = candidateFailurePayload("capacity", "limit-order", 2);
+  assert(event(capacity.lifecycle.data.events, "inventory-complete", 2));
+  assert.doesNotThrow(() => createEvidencePacket(capacity, BINDING), "capacity inventory with a short prefix is not tree-incomplete");
+
+  const qualificationFailure = candidateFailurePayload("qualification", "qualification-failure", 2);
+  assert.doesNotThrow(() => createEvidencePacket(qualificationFailure, BINDING), "qualification-failure remains a closed caller assertion");
+
+  const explicitTruncation = candidateFailurePayload("qualification", "tree-incomplete", 2);
+  explicitTruncation.qualification.data.truncated = true;
+  assert.doesNotThrow(() => createEvidencePacket(explicitTruncation, BINDING), "truncated true supports tree-incomplete");
+
+  const wrongTruncationReason = candidateFailurePayload("qualification", "infrastructure-failure", 2);
+  wrongTruncationReason.qualification.data.truncated = true;
+  expectCode("invalid-payload", () => createEvidencePacket(wrongTruncationReason, BINDING), "truncated true requires tree-incomplete");
+
+  const contradictedTreeReason = candidateFailurePayload("qualification", "tree-incomplete", 2);
+  expectCode("invalid-payload", () => createEvidencePacket(contradictedTreeReason, BINDING), "truncated false contradicts tree-incomplete");
 });
 
 test("status precedence, auxiliary mapping, null rules, event prefixes, and persisted derivations are closed", () => {
