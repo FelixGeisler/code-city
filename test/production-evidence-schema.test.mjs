@@ -512,6 +512,25 @@ function removeFinalStageRaw(payloads, stage) {
   if (stage === "capacity") payloads.capacity.data.rawRequestCount -= 1;
 }
 
+function appendEqualTimestampLaterAsset(payloads) {
+  const items = payloads.requests.data.items;
+  for (const item of items) setRequestTime(item, 0, 0);
+  const later = request(items.length + 1, "asset", "https://felixgeisler.github.io/code-city/package-manifest.json", false, 0);
+  setRequestTime(later, 0, 0);
+  later.headerNames = [];
+  later.corsAllowOrigin = null;
+  items.push(later);
+  for (const lifecycleEvent of payloads.lifecycle.data.events) lifecycleEvent.atMs = 0;
+  payloads.lifecycle.data.durations = durations(payloads.lifecycle.data.events);
+  payloads.smoke.data.startedMs = 0;
+  payloads.smoke.data.endedMs = 0;
+  if (event(payloads.lifecycle.data.events, "capacity-start", 2)) {
+    payloads.capacity.data.maxOverlap = 0;
+    payloads.lifecycle.data.maxOverlap = 0;
+  }
+  return payloads;
+}
+
 function expectCode(code, callback, message) {
   assert.throws(callback, (error) => error instanceof EvidenceContractError && error.code === code && error.message === code, message);
 }
@@ -726,6 +745,12 @@ test("qualification and capacity unexpected-request stops allow only zero or one
 
     for (const [label, make] of [
       ["two offending raws and every later raw", () => candidateFailurePayload(stage, "unexpected-request", 2, 2)],
+      ["later cross-group request after zero offending raws with equal timestamps", () => appendEqualTimestampLaterAsset(
+        candidateFailurePayload(stage, "unexpected-request", 2, 0)
+      )],
+      ["later cross-group request after one offending raw with equal timestamps", () => appendEqualTimestampLaterAsset(
+        candidateFailurePayload(stage, "unexpected-request", 2, 1)
+      )],
       ["false candidate under the wrong reason", () => candidateFailurePayload(stage, "unexpected-request", 2, 0, -1)],
       ["shared-prefix path mismatch", () => {
         const payloads = candidateFailurePayload(stage, "unexpected-request", 2, 1);

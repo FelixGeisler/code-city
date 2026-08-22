@@ -456,7 +456,8 @@ function validateTerminalRawPrefix(items, gets, candidateValues, reason) {
     requireValue(candidateValues.slice(0, -1).every((candidate) => candidate.contentValid));
     requireValue(finalCandidateInvalid ? extraRaw === 0 : extraRaw === 1);
   }
-  if (extraRaw === 1 || reason === "content-invalid") requireValue(raws.at(-1) === items.at(-1));
+  const terminalRequest = extraRaw === 1 ? raws.at(-1) : gets.at(-1);
+  requireValue(terminalRequest === items.at(-1));
 }
 
 function maximumOverlap(items) {
