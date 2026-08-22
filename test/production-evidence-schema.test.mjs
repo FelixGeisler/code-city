@@ -224,15 +224,15 @@ const SMOKE_KEYS = ["repositoryUrl", "revision", "rootTree", "terminal", "canvas
 const QUALIFICATION_KEYS = ["repositoryUrl", "revision", "rootTree", "treeEntries", "truncated", "candidates"];
 const CAPACITY_KEYS = ["repositoryUrl", "revision", "rootTree", "terminal", "revisionDisplayed", "cityPresent", "priorCityRemoved", "rawRequestCount", "maxOverlap", "noLaterRequest", "workerQuiescent", "candidates", "startedMs", "endedMs"];
 
-function failedEvents(stage) {
-  const prefixLength = { artifact: 1, smoke: 2, qualification: 7, capacity: 9 }[stage];
+function failedEvents(stage, prefixLength = { artifact: 1, smoke: 2, qualification: 6, capacity: 8 }[stage]) {
   const events = passEvents().slice(0, prefixLength);
-  events.push({ sequence: events.length + 1, generation: 0, event: "collector-failed", atMs: events.at(-1).atMs + 0.5 });
+  events.push({ sequence: events.length + 1, generation: 0, event: "collector-failed", atMs: events.at(-1).atMs + 1 });
   return events;
 }
 
 function failurePayload(stage, reason) {
   const payloads = makePassingPayloads();
+  const canonicalCandidatePaths = payloads.qualification.data.candidates.map(({ path }) => path);
   const stageIndex = ["artifact", "smoke", "qualification", "capacity"].indexOf(stage);
   const primary = ["artifact", "smoke", "qualification", "capacity"];
   for (let index = stageIndex + 1; index < primary.length; index += 1) {
@@ -240,27 +240,91 @@ function failurePayload(stage, reason) {
     const keys = kind === "smoke" ? SMOKE_KEYS : kind === "qualification" ? QUALIFICATION_KEYS : CAPACITY_KEYS;
     payloads[kind] = envelope(kind, "not-run", "blocked", nullData(keys, ["candidates"]));
   }
+
+  let failedData;
   if (stage === "artifact") {
-    const data = artifactData();
-    data.policyMatched = false;
-    payloads.artifact = envelope("artifact", "fail", reason, data);
+    failedData = artifactData();
+    if (reason === "artifact-mismatch") failedData.policyMatched = false;
+    if (reason === "production-unreachable") { failedData.files = []; failedData.policyMatched = null; }
+    if (reason === "infrastructure-failure") {
+      failedData = artifactData();
+      for (const key of Object.keys(failedData)) if (key !== "issueBodySha256" && key !== "files") failedData[key] = null;
+      failedData.files = [];
+    }
   } else if (stage === "smoke") {
-    payloads.smoke = envelope("smoke", "fail", reason, nullData(SMOKE_KEYS));
+    failedData = nullData(SMOKE_KEYS);
+    if (reason === "smoke-failure") failedData.canvasCount = 0;
+    if (reason === "stale-publication") failedData.revision = "9".repeat(40);
   } else if (stage === "qualification") {
-    payloads.qualification = envelope("qualification", "fail", reason, nullData(QUALIFICATION_KEYS, ["candidates"]));
+    failedData = nullData(QUALIFICATION_KEYS, ["candidates"]);
+    if (reason === "qualification-failure") Object.assign(failedData, { repositoryUrl: "https://github.com/facebook/react", revision: REACT_EVENT, rootTree: REACT_ROOT, treeEntries: 100, truncated: false });
+    if (reason === "identity-mismatch") failedData.revision = REACT_EVENT;
+    if (reason === "tree-incomplete") failedData.truncated = true;
+    if (reason === "hash-mismatch" || reason === "content-invalid") {
+      failedData.candidates = candidates().slice(0, 1);
+      failedData.candidates[0][reason === "hash-mismatch" ? "hashMatched" : "contentValid"] = false;
+      failedData.revision = REACT_EVENT; failedData.rootTree = REACT_ROOT;
+    }
   } else {
-    payloads.capacity = envelope("capacity", "fail", reason, nullData(CAPACITY_KEYS, ["candidates"]));
+    failedData = nullData(CAPACITY_KEYS, ["candidates"]);
+    if (reason === "identity-mismatch" || reason === "stale-publication") failedData.revision = "9".repeat(40);
+    if (reason === "tree-incomplete") failedData.repositoryUrl = "https://github.com/facebook/react";
+    if (reason === "hash-mismatch" || reason === "content-invalid") {
+      failedData.candidates = structuredClone(payloads.qualification.data.candidates.slice(0, 1));
+      failedData.candidates[0][reason === "hash-mismatch" ? "hashMatched" : "contentValid"] = false;
+    }
+    if (["limit-order", "cleanup-failure", "quiescence-failure"].includes(reason)) failedData.candidates = structuredClone(payloads.qualification.data.candidates);
+    if (reason === "cleanup-failure") failedData.cityPresent = true;
+    if (reason === "quiescence-failure") failedData.workerQuiescent = false;
   }
-  const keep = stage === "artifact" || stage === "smoke" ? 0 : stage === "qualification" ? 4 : 4008;
-  payloads.requests = envelope("requests", "fail", reason, { items: payloads.requests.data.items.slice(0, keep) });
-  const events = failedEvents(stage);
+  payloads[stage] = envelope(stage, "fail", reason, failedData);
+
+  const priorCount = stage === "artifact" || stage === "smoke" ? 0 : stage === "qualification" ? 4 : 4008;
+  let items = payloads.requests.data.items.slice(0, priorCount);
+  let prefixLength = { artifact: 1, smoke: 2, qualification: 6, capacity: 8 }[stage];
+  const requestReasons = new Set(["provider-failure", "cors-failure", "request-sequence", "request-overlap", "unexpected-request", "credential-header"]);
+  if (requestReasons.has(reason)) {
+    if (stage === "capacity") payloads.capacity.data.candidates = structuredClone(payloads.qualification.data.candidates);
+    const repository = stage === "smoke" ? CODE_CITY_REPO : stage === "qualification" || stage === "capacity" ? REACT_REPO : null;
+    if (stage === "artifact") {
+      const asset = request(1, "asset", "https://felixgeisler.github.io/code-city/package-manifest.json", false, 0.1);
+      items.push(asset);
+    } else {
+      const revision = stage === "smoke" ? EVENT : REACT_EVENT;
+      const root = stage === "smoke" ? ROOT : REACT_ROOT;
+      const applicationCall = stage !== "qualification";
+      const allPaths = stage === "smoke" ? ["src/main.ts"] : canonicalCandidatePaths;
+      const pathCount = reason === "unexpected-request" ? allPaths.length : reason === "request-overlap" ? 0 : -2;
+      const selected = pathCount >= 0 ? allPaths.slice(0, pathCount) : [];
+      let group = requestSequence(repository, revision, root, selected, applicationCall, stage === "smoke" ? 2.1 : stage === "qualification" ? 6.1 : 10.1, stage === "qualification" ? 0.0002 : 0.001, priorCount + 1);
+      if (reason !== "unexpected-request") group = group.slice(0, reason === "request-overlap" ? 2 : 1);
+      if (reason === "unexpected-request") {
+        const extraPath = stage === "smoke" ? "src/z.ts" : "9999.ts";
+        group.push(request(priorCount + group.length + 1, "raw", rawUrl(repository, revision, extraPath), applicationCall, group.at(-1).endedMs + 0.0001));
+      }
+      items.push(...group);
+      prefixLength = stage === "smoke" ? 3 : stage === "qualification" ? 7 : 14;
+    }
+    const target = items.at(-1);
+    if (reason === "provider-failure") target.status = 500;
+    if (reason === "cors-failure") { target.corsAllowOrigin = null; target.headerNames = []; }
+    if (reason === "credential-header") target.authorizationAbsent = false;
+    if (reason === "request-overlap") {
+      const first = items.at(-2); target.startedMs = first.startedMs; target.endedMs = first.endedMs;
+    }
+  }
+  if (reason === "cleanup-failure" || reason === "quiescence-failure") prefixLength = stage === "smoke" ? 5 : 14;
+  if (reason === "tree-incomplete" || reason === "limit-order") prefixLength = stage === "capacity" ? 11 : prefixLength;
+  if (stage === "capacity" && prefixLength >= 13) payloads.capacity.data.noLaterRequest = true;
+  items.forEach((item, index) => { item.sequence = index + 1; });
+  payloads.requests = envelope("requests", "fail", reason, { items });
+
+  const events = failedEvents(stage, prefixLength);
+  const overlap = stage === "capacity" && requestReasons.has(reason) ? (reason === "request-overlap" ? 2 : 1) : 0;
   payloads.lifecycle = envelope("lifecycle", "fail", reason, lifecycleData(events, {
-    invocation: stage === "artifact" ? null : lifecycleData().invocation,
-    maxOverlap: stage === "capacity" ? 0 : null,
-    noRetry: null,
-    noFallback: null,
-    noPersistence: null,
-    noLaterPublication: null,
+    chromeVersion: events.some((item) => item.event === "smoke-start") ? "140.0.1.2" : null,
+    cdpVersion: events.some((item) => item.event === "smoke-start") ? "1.3" : null,
+    maxOverlap: overlap,
   }));
   return payloads;
 }
@@ -366,7 +430,8 @@ test("every allowed earliest-primary/failure-reason pairing creates and revalida
   for (const [stage, allowed] of Object.entries(reasons)) {
     for (const reason of allowed) {
       const payloads = failurePayload(stage, reason);
-      const packet = createEvidencePacket(payloads, BINDING);
+      let packet;
+      assert.doesNotThrow(() => { packet = createEvidencePacket(payloads, BINDING); }, `${stage}/${reason}`);
       const index = JSON.parse(new TextDecoder().decode(packet.files.get("index.json")));
       assert.equal(index.overallStatus, "fail", `${stage}/${reason}`);
       assert.equal(index.firstFailure, reason, `${stage}/${reason}`);
@@ -484,6 +549,134 @@ test("request route, order, uniqueness, OPTIONS, privacy, timing, overlap, and d
     () => { const p = makePassingPayloads(); p.requests.data.items.splice(3, 1); p.requests.data.items.forEach((item, index) => { item.sequence = index + 1; }); p.smoke.data.providerGetCount = 3; return p; },
   ];
   for (const make of makers) expectCode("invalid-payload", () => createEvidencePacket(make(), BINDING));
+});
+
+test("failure boundaries reject later-stage observations and require every known attempted lifecycle fact", () => {
+  const laterRequests = [
+    ["artifact", "smoke", request(1, "revision", revisionUrl(CODE_CITY_REPO), true, 0.1)],
+    ["smoke", "qualification", request(1, "revision", revisionUrl(REACT_REPO), false, 1.5)],
+    ["qualification", "capacity", request(1, "revision", revisionUrl(REACT_REPO), true, 6.5)],
+  ];
+  for (const [failedStage, blockedStage, later] of laterRequests) {
+    const payloads = failurePayload(failedStage, "infrastructure-failure");
+    payloads.requests.data.items.push(later);
+    payloads.requests.data.items.forEach((item, index) => { item.sequence = index + 1; });
+    expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `${failedStage} forbids ${blockedStage} requests`);
+  }
+
+  for (const key of ["collectorCommit", "invocation", "nodeVersion", "maxOverlap", "noRetry", "noFallback", "noPersistence", "noLaterPublication"]) {
+    const payloads = failurePayload("artifact", "infrastructure-failure");
+    payloads.lifecycle.data[key] = null;
+    expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `known lifecycle ${key}`);
+  }
+  const missingDigest = failurePayload("artifact", "infrastructure-failure");
+  missingDigest.artifact.data.issueBodySha256 = null;
+  expectCode("invalid-payload", () => createEvidencePacket(missingDigest, BINDING));
+
+  const reachedBrowser = failurePayload("smoke", "cleanup-failure");
+  reachedBrowser.lifecycle.data.chromeVersion = null;
+  expectCode("invalid-payload", () => createEvidencePacket(reachedBrowser, BINDING));
+  const reachedCdp = failurePayload("smoke", "cleanup-failure");
+  reachedCdp.lifecycle.data.cdpVersion = null;
+  expectCode("invalid-payload", () => createEvidencePacket(reachedCdp, BINDING));
+
+  const earlyArtifact = failurePayload("artifact", "infrastructure-failure");
+  assert.equal(earlyArtifact.artifact.data.eventSha, null);
+  const packet = createEvidencePacket(earlyArtifact, BINDING);
+  assert.equal(validateEvidencePacket(packet.files, BINDING).packetDigest, packet.packetDigest);
+  earlyArtifact.artifact.data.eventSha = "9".repeat(40);
+  expectCode("invalid-payload", () => createEvidencePacket(earlyArtifact, BINDING));
+});
+
+test("persisted requests bind CORS names, canonical smoke order, exact URLs, and post-capacity quiescence", () => {
+  for (const mutate of [
+    (record) => { record.headerNames = []; },
+    (record) => { record.corsAllowOrigin = null; },
+  ]) {
+    const payloads = makePassingPayloads();
+    mutate(payloads.requests.data.items[0]);
+    expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING));
+  }
+
+  const reordered = makePassingPayloads(["src/a.ts", "src/b.ts"]);
+  const firstRaw = reordered.requests.data.items[3];
+  const secondRaw = reordered.requests.data.items[4];
+  [firstRaw.requestedUrl, secondRaw.requestedUrl] = [secondRaw.requestedUrl, firstRaw.requestedUrl];
+  [firstRaw.finalUrl, secondRaw.finalUrl] = [secondRaw.finalUrl, firstRaw.finalUrl];
+  expectCode("invalid-payload", () => createEvidencePacket(reordered, BINDING));
+
+  const afterQuiescence = makePassingPayloads();
+  const late = request(afterQuiescence.requests.data.items.length + 1, "asset", "https://felixgeisler.github.io/code-city/package-manifest.json", false, 21.1);
+  late.endedMs = 21.2;
+  afterQuiescence.requests.data.items.push(late);
+  expectCode("invalid-payload", () => createEvidencePacket(afterQuiescence, BINDING));
+
+  const deployment = failurePayload("artifact", "artifact-mismatch");
+  deployment.requests.data.items = [
+    request(1, "deployment", `https://api.github.com/repos/FelixGeisler/code-city/deployments?sha=${EVENT}&environment=github-pages&per_page=100&page=1`, false, 0.1),
+    request(2, "deployment", "https://api.github.com/repos/FelixGeisler/code-city/deployments/456/statuses?per_page=100&page=1", false, 0.2),
+  ];
+  assert.doesNotThrow(() => createEvidencePacket(deployment, BINDING));
+  const badDeploymentUrls = [
+    `https://api.github.com/repos/FelixGeisler/code-city/deployments?sha=${EVENT}&environment=github-pages&per_page=100&page=1&token=SECRET`,
+    `https://user@example.com/repos/FelixGeisler/code-city/deployments?sha=${EVENT}&environment=github-pages&per_page=100&page=1`,
+    `https://api.github.com/repos/FelixGeisler/code-city/deployments?sha=${EVENT}&environment=github-pages&per_page=100&page=1#fragment`,
+    "https://api.github.com/repos/FelixGeisler/code-city/deployments/456/statuses?page=1&per_page=100",
+  ];
+  for (const url of badDeploymentUrls) {
+    const malformed = structuredClone(deployment);
+    malformed.requests.data.items[0].requestedUrl = url;
+    malformed.requests.data.items[0].finalUrl = url;
+    expectCode("invalid-payload", () => createEvidencePacket(malformed, BINDING));
+  }
+});
+
+test("plain data and native containers reject traps without invoking attacker callbacks or leaking forbidden codes", () => {
+  const packet = createEvidencePacket(makePassingPayloads(), BINDING);
+  let calls = 0;
+  const throwing = () => { calls += 1; throw new EvidenceContractError("io-failure"); };
+
+  const accessorPayload = makePassingPayloads();
+  Object.defineProperty(accessorPayload.artifact.data, "repository", { enumerable: true, get: throwing });
+  expectCode("invalid-payload", () => createEvidencePacket(accessorPayload, BINDING));
+  assert.equal(calls, 0);
+
+  const accessorBinding = { issueBodySha256: PARENT, eventSha: EVENT };
+  Object.defineProperty(accessorBinding, "eventSha", { enumerable: true, get: throwing });
+  expectCode("invalid-binding", () => createEvidencePacket(makePassingPayloads(), accessorBinding));
+  assert.equal(calls, 0);
+
+  const mapMutations = [
+    (map) => Object.defineProperty(map, "size", { get: throwing }),
+    (map) => Object.defineProperty(map, "has", { value: throwing }),
+    (map) => Object.defineProperty(map, "get", { value: throwing }),
+    (map) => Object.defineProperty(map, Symbol.iterator, { value: throwing }),
+  ];
+  for (const mutate of mapMutations) {
+    const map = new Map(packet.files); mutate(map);
+    expectCode("invalid-payload", () => validateEvidencePacket(map, BINDING));
+    assert.equal(calls, 0);
+  }
+
+  for (const property of ["buffer", "byteLength", "every"]) {
+    const map = new Map(packet.files);
+    const bytes = new Uint8Array(map.get("smoke.json"));
+    Object.defineProperty(bytes, property, property === "every" ? { value: throwing } : { get: throwing });
+    map.set("smoke.json", bytes);
+    expectCode("invalid-payload", () => validateEvidencePacket(map, BINDING));
+    assert.equal(calls, 0);
+  }
+
+  const revokedMap = Proxy.revocable(new Map(packet.files), {}); revokedMap.revoke();
+  expectCode("invalid-payload", () => validateEvidencePacket(revokedMap.proxy, BINDING));
+  const revokedBytes = Proxy.revocable(new Uint8Array(packet.files.get("smoke.json")), {}); revokedBytes.revoke();
+  const map = new Map(packet.files); map.set("smoke.json", revokedBytes.proxy);
+  expectCode("invalid-payload", () => validateEvidencePacket(map, BINDING));
+
+  const wrapperInput = { artifactId: "1", platformDigest: DIGEST, packetDigest: DIGEST, eventSha: EVENT, runId: 1, runAttempt: 1 };
+  Object.defineProperty(wrapperInput, "artifactId", { enumerable: true, get: throwing });
+  expectCode("invalid-payload", () => createExternalWrapper(wrapperInput));
+  assert.equal(calls, 0);
 });
 
 test("packet map, whole-view, canonical UTF-8/LF, byte cap, file set, index fields, lengths, digests, and binding are enforced", () => {

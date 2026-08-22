@@ -9,6 +9,17 @@ const REACT_URL = "https://github.com/facebook/react";
 const MEDIA_TYPE = "application/json";
 const ENCODER = new TextEncoder();
 const DECODER = new TextDecoder("utf-8", { fatal: true });
+const MAP_PROTOTYPE = Map.prototype;
+const MAP_SIZE = Object.getOwnPropertyDescriptor(MAP_PROTOTYPE, "size").get;
+const MAP_HAS = MAP_PROTOTYPE.has;
+const MAP_GET = MAP_PROTOTYPE.get;
+const MAP_ENTRIES = MAP_PROTOTYPE.entries;
+const ARRAY_BUFFER_BYTE_LENGTH = Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, "byteLength").get;
+const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Uint8Array.prototype);
+const TYPED_ARRAY_BUFFER = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "buffer").get;
+const TYPED_ARRAY_BYTE_LENGTH = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "byteLength").get;
+const TYPED_ARRAY_BYTE_OFFSET = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "byteOffset").get;
+const TYPED_ARRAY_LENGTH = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "length").get;
 
 const PAYLOAD_NAMES = ["artifact", "smoke", "qualification", "capacity", "requests", "lifecycle"];
 const FILE_ORDER = PAYLOAD_NAMES.map((name) => `${name}.json`);
@@ -60,7 +71,7 @@ function requireValue(value) { if (!value) reject(); }
 function isObject(value) { return typeof value === "object" && value !== null; }
 
 function exactObject(value, keys) {
-  requireValue(isObject(value) && !Array.isArray(value) && !utilTypes.isProxy(value));
+  requireValue(isObject(value) && !utilTypes.isProxy(value) && !Array.isArray(value));
   requireValue(Object.getPrototypeOf(value) === Object.prototype);
   const ownKeys = Reflect.ownKeys(value);
   requireValue(ownKeys.length === keys.length && ownKeys.every((key, index) => key === keys[index]));
@@ -72,7 +83,7 @@ function exactObject(value, keys) {
 }
 
 function exactArray(value, max = Number.MAX_SAFE_INTEGER) {
-  requireValue(Array.isArray(value) && !utilTypes.isProxy(value) && Object.getPrototypeOf(value) === Array.prototype && value.length <= max);
+  requireValue(!utilTypes.isProxy(value) && Array.isArray(value) && Object.getPrototypeOf(value) === Array.prototype && value.length <= max);
   const ownKeys = Reflect.ownKeys(value);
   requireValue(ownKeys.length === value.length + 1 && ownKeys[value.length] === "length");
   for (let index = 0; index < value.length; index += 1) {
@@ -84,12 +95,20 @@ function exactArray(value, max = Number.MAX_SAFE_INTEGER) {
 }
 
 function isWholeUint8Array(value) {
-  return value instanceof Uint8Array
-    && !utilTypes.isProxy(value)
-    && Object.getPrototypeOf(value) === Uint8Array.prototype
-    && value.buffer instanceof ArrayBuffer
-    && value.byteOffset === 0
-    && value.byteLength === value.buffer.byteLength;
+  if (!isObject(value) || utilTypes.isProxy(value) || !utilTypes.isUint8Array(value) || Object.getPrototypeOf(value) !== Uint8Array.prototype) return false;
+  const length = TYPED_ARRAY_LENGTH.call(value);
+  const ownKeys = Reflect.ownKeys(value);
+  if (ownKeys.length !== length) return false;
+  for (let index = 0; index < length; index += 1) {
+    if (ownKeys[index] !== String(index)) return false;
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) return false;
+  }
+  const buffer = TYPED_ARRAY_BUFFER.call(value);
+  return utilTypes.isArrayBuffer(buffer)
+    && Reflect.ownKeys(buffer).length === 0
+    && TYPED_ARRAY_BYTE_OFFSET.call(value) === 0
+    && TYPED_ARRAY_BYTE_LENGTH.call(value) === ARRAY_BUFFER_BYTE_LENGTH.call(buffer);
 }
 
 function oneOf(value, values) { requireValue(values.includes(value)); }
@@ -124,7 +143,13 @@ function compareUtf8(left, right) {
 
 function hash(bytes) { return createHash("sha256").update(bytes).digest("hex"); }
 function canonicalBytes(value) { return ENCODER.encode(`${JSON.stringify(value)}\n`); }
-function equalBytes(left, right) { return left.byteLength === right.byteLength && left.every((byte, index) => byte === right[index]); }
+function equalBytes(left, right) {
+  const leftLength = TYPED_ARRAY_BYTE_LENGTH.call(left);
+  const rightLength = TYPED_ARRAY_BYTE_LENGTH.call(right);
+  if (leftLength !== rightLength) return false;
+  for (let index = 0; index < leftLength; index += 1) if (left[index] !== right[index]) return false;
+  return true;
+}
 
 function validateBindingValue(value) {
   exactObject(value, BINDING_KEYS);
@@ -169,7 +194,7 @@ function validateArtifactFile(record) {
 function validateArtifact(envelope) {
   const data = envelope.data;
   if (envelope.status === "not-run") reject();
-  nullable(data.issueBodySha256, sha256); nullable(data.eventSha, gitId); fixedOrNull(data.repository, REPOSITORY);
+  sha256(data.issueBodySha256); nullable(data.eventSha, gitId); fixedOrNull(data.repository, REPOSITORY);
   nullable(data.runId, positiveCount); nullable(data.runAttempt, positiveCount); fixedOrNull(data.origin, ORIGIN);
   nullable(data.manifestSha256, sha256); nullable(data.publicationRecordSha256, sha256);
   nullable(data.deploymentId, positiveCount); nullable(data.deployedSha, gitId);
@@ -181,7 +206,7 @@ function validateArtifact(envelope) {
   nullableBoolean(data.policyMatched);
   exactArray(data.files, 32); data.files.forEach(validateArtifactFile);
   for (let index = 1; index < data.files.length; index += 1) requireValue(compareUtf8(data.files[index - 1].path, data.files[index].path) < 0);
-  if (data.issueBodySha256 !== null) requireValue(data.issueBodySha256 === PARENT_DIGEST);
+  requireValue(data.issueBodySha256 === PARENT_DIGEST);
   if (envelope.status === "pass") {
     for (const [key, value] of Object.entries(data)) if (key !== "files") requireValue(value !== null);
     requireValue(data.eventSha === data.deployedSha && data.files.length > 0 && data.policyMatched === true && data.files.every((file) => file.match === true));
@@ -271,6 +296,7 @@ function validateRequestRecord(record, index) {
     prior = name;
   }
   requireValue(record.corsAllowOrigin === null || CORS_VALUES.has(record.corsAllowOrigin));
+  requireValue(record.headerNames.includes("access-control-allow-origin") === (record.corsAllowOrigin !== null));
   validateRateLimit(record.rateLimit);
   const rateNames = ["x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset"];
   const namedRates = rateNames.filter((name) => record.headerNames.includes(name)).length;
@@ -312,8 +338,11 @@ function routeOf(url, stage) {
     return { repository: "asset", stage, path };
   }
   if (stage === "deployment") {
-    requireValue(/^https:\/\/api\.github\.com\/repos\/FelixGeisler\/code-city\/deployments(?:\?[A-Za-z0-9%&=._~-]+)?$/u.test(url));
-    return { repository: "deployment", stage };
+    const list = /^https:\/\/api\.github\.com\/repos\/FelixGeisler\/code-city\/deployments\?sha=([0-9a-f]{40}|[0-9a-f]{64})&environment=github-pages&per_page=100&page=1$/u.exec(url);
+    if (list) return { repository: "deployment", stage, kind: "list", identity: list[1] };
+    const statuses = /^https:\/\/api\.github\.com\/repos\/FelixGeisler\/code-city\/deployments\/([1-9][0-9]{0,15})\/statuses\?per_page=100&page=1$/u.exec(url);
+    if (statuses && Number.isSafeInteger(Number(statuses[1]))) return { repository: "deployment", stage, kind: "statuses", deploymentId: Number(statuses[1]) };
+    reject();
   }
   if (stage === "issue") {
     requireValue(url === "https://api.github.com/repos/FelixGeisler/code-city/issues/460");
@@ -369,6 +398,10 @@ function validateExchangeSequence(items, repository, applicationCall, complete) 
     getUrls.add(record.requestedUrl); gets.push(record); priorGet += 1;
     const expected = priorGet < 3 ? stages[priorGet] : "raw";
     requireValue(record.stage === expected);
+    if (record.stage === "raw" && gets.length > 4) {
+      const previous = routeOf(gets.at(-2).requestedUrl, "raw");
+      requireValue(compareUtf8(previous.path, route.path) < 0);
+    }
   }
   if (complete) requireValue(gets.length >= 4 && gets.slice(0, 3).every((item, index) => item.stage === stages[index]) && gets.slice(3).every((item) => item.stage === "raw"));
   return gets;
@@ -464,9 +497,10 @@ function validateLifecycle(envelope, overallPass, primaryReason, failedStage, re
   const data = envelope.data;
   requireValue(envelope.status === (overallPass ? "pass" : "fail") && envelope.reason === (overallPass ? "none" : primaryReason));
   requireValue(data.collectorVersion === 1);
-  nullable(data.collectorCommit, gitId);
-  if (data.invocation !== null) { exactArray(data.invocation, 8); requireValue(data.invocation.length === 8 && data.invocation.every((value, index) => value === INVOCATION[index])); }
-  nullablePattern(data.nodeVersion, /^v24\.\d+\.\d+$/); nullablePattern(data.chromeVersion, /^\d+\.\d+\.\d+\.\d+$/);
+  gitId(data.collectorCommit);
+  exactArray(data.invocation, 8); requireValue(data.invocation.length === 8 && data.invocation.every((value, index) => value === INVOCATION[index]));
+  nullablePattern(data.nodeVersion, /^v24\.\d+\.\d+$/); requireValue(data.nodeVersion !== null);
+  nullablePattern(data.chromeVersion, /^\d+\.\d+\.\d+\.\d+$/);
   if (data.cdpVersion !== null) ascii(data.cdpVersion, 32);
   exactArray(data.events, 20000);
   for (let index = 0; index < data.events.length; index += 1) {
@@ -484,19 +518,19 @@ function validateLifecycle(envelope, overallPass, primaryReason, failedStage, re
     const prefix = data.events.slice(0, -1);
     prefix.forEach((event, index) => requireValue(index < PASS_EVENTS.length - 1 && event.event === PASS_EVENTS[index][0] && event.generation === PASS_EVENTS[index][1]));
     const completed = prefix.length;
-    const ranges = { artifact: [1, 1], smoke: [2, 6], qualification: [6, 8], capacity: [8, 14] };
+    const ranges = { artifact: [1, 1], smoke: [2, 5], qualification: [6, 7], capacity: [8, 14] };
     requireValue(completed >= ranges[failedStage][0] && completed <= ranges[failedStage][1]);
   }
   validateDurations(data.durations);
   const derived = derivedDurations(data.events);
   for (const key of Object.keys(derived)) requireValue(data.durations[key] === derived[key]);
-  nullable(data.maxOverlap, count);
-  for (const key of ["noRetry", "noFallback", "noPersistence", "noLaterPublication"]) nullableBoolean(data[key]);
-  if (data.maxOverlap !== null) requireValue(data.maxOverlap === requestInfo.capacityOverlap);
+  count(data.maxOverlap); requireValue(data.maxOverlap === requestInfo.capacityOverlap);
+  for (const key of ["noRetry", "noFallback", "noPersistence", "noLaterPublication"]) requireValue(data[key] === true);
+  const browserStarted = eventIndex(data.events, "smoke-start", 1) !== undefined;
+  if (browserStarted) requireValue(data.chromeVersion !== null && data.cdpVersion !== null);
   if (overallPass) {
-    requireValue(data.collectorCommit !== null && data.invocation !== null && data.nodeVersion !== null && data.chromeVersion !== null && data.cdpVersion !== null);
+    requireValue(data.chromeVersion !== null && data.cdpVersion !== null);
     requireValue(Object.values(data.durations).every((value) => value !== null));
-    requireValue(data.maxOverlap === requestInfo.capacityOverlap && data.noRetry === true && data.noFallback === true && data.noPersistence === true && data.noLaterPublication === true);
   }
   const total = data.durations.total;
   if (total !== null) for (const item of requestInfo.groups.smoke.concat(requestInfo.groups.qualification, requestInfo.groups.capacity, requestInfo.groups.other)) requireValue(item.endedMs <= total);
@@ -514,6 +548,84 @@ function deriveStatus(payloads) {
   return failed ?? { stage: null, reason: "none", index: -1 };
 }
 
+function failureGroup(stage, requestInfo) {
+  if (stage === "smoke") return { items: requestInfo.groups.smoke, gets: requestInfo.smokeGets, completeCount: 4 };
+  if (stage === "qualification") return { items: requestInfo.groups.qualification, gets: requestInfo.qualificationGets, completeCount: 4004 };
+  if (stage === "capacity") return { items: requestInfo.groups.capacity, gets: requestInfo.capacityGets, completeCount: 4004 };
+  return { items: requestInfo.groups.other, gets: requestInfo.groups.other.filter((item) => item.method === "GET"), completeCount: 1 };
+}
+
+function validateFailureEvidence(payloads, failure, requestInfo, events) {
+  if (failure.stage === null) return;
+  const { stage, reason } = failure;
+  const data = payloads[stage].data;
+  const group = failureGroup(stage, requestInfo);
+  const hasCredential = group.items.some((item) => !item.authorizationAbsent || !item.cookieAbsent || !item.refererAbsent);
+  const hasOverlap = maximumOverlap(group.items.filter((item) => item.method === "GET")) > 1;
+  const hasProviderFailure = group.items.some((item) => item.method === "GET" ? item.status !== 200 : item.status < 200 || item.status > 299);
+  const hasCorsFailure = group.items.some((item) => item.method === "GET" && item.corsAllowOrigin === null);
+  const hasIncompleteSequence = group.gets.length > 0 && group.gets.length < group.completeCount;
+  const hasUnexpectedRequest = group.gets.length > group.completeCount;
+  const candidatesValue = stage === "qualification" || stage === "capacity" ? data.candidates : [];
+  const hasHashMismatch = candidatesValue.some((candidate) => candidate.hashMatched === false);
+  const hasInvalidContent = candidatesValue.some((candidate) => candidate.contentValid === false);
+  const artifact = payloads.artifact.data;
+  const qualification = payloads.qualification.data;
+  const hasIdentityMismatch = stage === "qualification"
+    ? (data.revision === null) !== (data.rootTree === null)
+    : stage === "capacity" && ((data.revision !== null && data.revision !== qualification.revision) || (data.rootTree !== null && data.rootTree !== qualification.rootTree));
+  const hasStalePublication = stage === "smoke"
+    ? data.revision !== null && artifact.eventSha !== null && data.revision !== artifact.eventSha
+    : stage === "capacity" && data.revision !== null && data.revision !== qualification.revision;
+  const hasTreeIncomplete = stage === "qualification"
+    ? data.truncated === true
+    : stage === "capacity" && eventIndex(events, "inventory-complete", 2) !== undefined && data.candidates.length < 4001;
+  const hasQuiescenceFailure = stage === "smoke"
+    ? eventIndex(events, "city-published", 1) !== undefined
+    : stage === "capacity" && (data.noLaterRequest === false || data.workerQuiescent === false);
+  const hasCleanupFailure = stage === "smoke"
+    ? eventIndex(events, "city-published", 1) !== undefined
+    : stage === "capacity" && (data.cityPresent === true || data.priorCityRemoved === false);
+  const hasLimitOrderFailure = stage === "capacity" && eventIndex(events, "inventory-complete", 2) !== undefined
+    && (eventIndex(events, "limit-failure", 2) === undefined || data.terminal === null);
+  const hasStageFailure = stage === "smoke"
+    ? data.canvasCount !== null && data.canvasCount !== 1
+    : stage === "qualification" && data.truncated === false && data.treeEntries !== null && data.candidates.length < 4001;
+  const hasArtifactMismatch = stage === "artifact" && (data.policyMatched === false || data.files.some((file) => file.match === false)
+    || (data.eventSha !== null && data.deployedSha !== null && data.eventSha !== data.deployedSha));
+  const hasProductionUnreachable = stage === "artifact" && data.origin === ORIGIN && data.files.length === 0;
+  const noStageFacts = group.items.length === 0 && (stage === "artifact" ? !hasArtifactMismatch && !hasProductionUnreachable : Object.values(data).every((value) => value === null || Array.isArray(value) && value.length === 0));
+
+  const supported = {
+    "artifact-mismatch": hasArtifactMismatch,
+    "production-unreachable": hasProductionUnreachable,
+    "smoke-failure": hasStageFailure,
+    "qualification-failure": hasStageFailure,
+    "identity-mismatch": hasIdentityMismatch,
+    "provider-failure": hasProviderFailure,
+    "cors-failure": hasCorsFailure,
+    "tree-incomplete": hasTreeIncomplete,
+    "hash-mismatch": hasHashMismatch,
+    "content-invalid": hasInvalidContent,
+    "limit-order": hasLimitOrderFailure,
+    "request-sequence": hasIncompleteSequence,
+    "request-overlap": hasOverlap,
+    "unexpected-request": hasUnexpectedRequest,
+    "credential-header": hasCredential,
+    "stale-publication": hasStalePublication,
+    "quiescence-failure": hasQuiescenceFailure,
+    "cleanup-failure": hasCleanupFailure,
+    "infrastructure-failure": noStageFacts,
+  };
+  requireValue(supported[reason] === true);
+  if (hasCredential) requireValue(reason === "credential-header");
+  if (hasOverlap) requireValue(reason === "request-overlap");
+  if (hasProviderFailure) requireValue(reason === "provider-failure");
+  if (hasHashMismatch) requireValue(reason === "hash-mismatch");
+  if (hasInvalidContent) requireValue(reason === "content-invalid");
+  if (hasTreeIncomplete) requireValue(reason === "tree-incomplete");
+}
+
 function validatePayloadSet(payloads, binding) {
   exactObject(payloads, PAYLOAD_NAMES);
   for (const kind of PAYLOAD_NAMES) validateEnvelope(payloads[kind], kind);
@@ -522,15 +634,19 @@ function validatePayloadSet(payloads, binding) {
   const requestInfo = validateRequests(payloads.requests, payloads, overallPass, failure.reason);
   validateLifecycle(payloads.lifecycle, overallPass, failure.reason, failure.stage, requestInfo);
   const artifact = payloads.artifact.data; const lifecycle = payloads.lifecycle.data;
-  requireValue(artifact.issueBodySha256 === binding.issueBodySha256 && artifact.eventSha === binding.eventSha);
+  requireValue(artifact.issueBodySha256 === binding.issueBodySha256);
+  if (artifact.eventSha !== null) requireValue(artifact.eventSha === binding.eventSha);
   if (payloads.artifact.status === "pass") requireValue(lifecycle.collectorCommit === artifact.eventSha && artifact.eventSha === artifact.deployedSha);
   if (payloads.smoke.status === "pass") requireValue(payloads.smoke.data.providerGetCount === requestInfo.smokeGets.length);
   if (payloads.qualification.status === "pass" && payloads.capacity.status !== "not-run") {
     const capacity = payloads.capacity.data; const qualification = payloads.qualification.data;
-    if (capacity.repositoryUrl !== null) requireValue(capacity.repositoryUrl === qualification.repositoryUrl);
-    if (capacity.revision !== null) requireValue(capacity.revision === qualification.revision);
-    if (capacity.rootTree !== null) requireValue(capacity.rootTree === qualification.rootTree);
-    requireValue(JSON.stringify(capacity.candidates) === JSON.stringify(qualification.candidates.slice(0, capacity.candidates.length)));
+    const reason = payloads.capacity.reason;
+    if (capacity.repositoryUrl !== null && capacity.repositoryUrl !== qualification.repositoryUrl) requireValue(reason === "identity-mismatch");
+    if (capacity.revision !== null && capacity.revision !== qualification.revision) requireValue(reason === "identity-mismatch" || reason === "stale-publication");
+    if (capacity.rootTree !== null && capacity.rootTree !== qualification.rootTree) requireValue(reason === "identity-mismatch");
+    if (reason !== "hash-mismatch" && reason !== "content-invalid") {
+      requireValue(JSON.stringify(capacity.candidates) === JSON.stringify(qualification.candidates.slice(0, capacity.candidates.length)));
+    }
   }
   if (payloads.qualification.status === "pass" && payloads.capacity.status === "pass") {
     requireValue(JSON.stringify(payloads.capacity.data.candidates) === JSON.stringify(payloads.qualification.data.candidates));
@@ -547,19 +663,40 @@ function validatePayloadSet(payloads, binding) {
   if (artifact.nodeVersion !== null && lifecycle.nodeVersion !== null) requireValue(artifact.nodeVersion === lifecycle.nodeVersion);
   if (artifact.chromeVersion !== null && lifecycle.chromeVersion !== null) requireValue(artifact.chromeVersion === lifecycle.chromeVersion);
   const events = payloads.lifecycle.data.events;
+  const finalEvent = events.at(-1);
+  const artifactVerified = eventIndex(events, "artifact-verified", 0);
   const smokeStart = eventIndex(events, "smoke-start", 1); const cityPublished = eventIndex(events, "city-published", 1);
-  if (payloads.smoke.status === "pass") requireValue(payloads.smoke.data.startedMs === smokeStart.atMs && payloads.smoke.data.endedMs === cityPublished.atMs);
+  if (payloads.smoke.status === "pass") {
+    requireValue(payloads.smoke.data.startedMs === smokeStart.atMs && payloads.smoke.data.endedMs === cityPublished.atMs);
+    requireValue(payloads.smoke.data.revision === artifact.eventSha);
+  }
   const capacityStart = eventIndex(events, "capacity-start", 2); const workerQuiescent = eventIndex(events, "worker-quiescent", 2);
   if (payloads.capacity.status === "pass") requireValue(payloads.capacity.data.startedMs === capacityStart.atMs && payloads.capacity.data.endedMs === workerQuiescent.atMs);
-  const windows = [
-    [payloads.smoke.status === "pass", requestInfo.groups.smoke, smokeStart, eventIndex(events, "trace-reset", 0)],
-    [payloads.qualification.status === "pass", requestInfo.groups.qualification, eventIndex(events, "qualification-start", 0), eventIndex(events, "qualification-complete", 0)],
-    [payloads.capacity.status === "pass", requestInfo.groups.capacity, capacityStart, eventIndex(events, "request-quiescent", 2)],
+  const stageWindows = [
+    ["artifact", requestInfo.groups.other, events[0], artifactVerified],
+    ["smoke", requestInfo.groups.smoke, smokeStart, eventIndex(events, "trace-reset", 0)],
+    ["qualification", requestInfo.groups.qualification, eventIndex(events, "qualification-start", 0), eventIndex(events, "qualification-complete", 0)],
+    ["capacity", requestInfo.groups.capacity, capacityStart, eventIndex(events, "request-quiescent", 2)],
   ];
-  for (const [applies, items, start, end] of windows) if (applies) {
-    requireValue(start && end);
+  for (const [stage, items, start, completedEnd] of stageWindows) {
+    const stageEnvelope = payloads[stage];
+    if (stageEnvelope.status === "not-run") { requireValue(items.length === 0); continue; }
+    if (!start) { requireValue(stageEnvelope.status === "fail" && items.length === 0); continue; }
+    const end = stageEnvelope.status === "pass" ? completedEnd : finalEvent;
+    requireValue(end);
     for (const item of items) requireValue(item.startedMs >= start.atMs && item.endedMs <= end.atMs);
   }
+  const requestQuiescent = eventIndex(events, "request-quiescent", 2);
+  if (requestQuiescent) {
+    requireValue(payloads.requests.data.items.every((item) => item.endedMs <= requestQuiescent.atMs));
+    requireValue(payloads.capacity.data.noLaterRequest === true);
+  }
+  for (const item of requestInfo.groups.other) {
+    const route = routeOf(item.requestedUrl, item.stage);
+    if (route.repository === "deployment" && route.kind === "list") requireValue(artifact.eventSha === null || route.identity === artifact.eventSha);
+    if (route.repository === "deployment" && route.kind === "statuses") requireValue(artifact.deploymentId === null || route.deploymentId === artifact.deploymentId);
+  }
+  validateFailureEvidence(payloads, failure, requestInfo, events);
   return { overallStatus: overallPass ? "pass" : "fail", firstFailure: failure.reason };
 }
 
@@ -604,20 +741,21 @@ function parseCanonical(bytes, cap) {
 }
 
 function validateFilesMap(files) {
-  requireValue(files instanceof Map && !utilTypes.isProxy(files) && Object.getPrototypeOf(files) === Map.prototype && files.size === MAP_ORDER.length);
-  for (const path of MAP_ORDER) requireValue(files.has(path));
-  for (const [path, bytes] of files) requireValue(MAP_ORDER.includes(path) && isWholeUint8Array(bytes));
+  requireValue(isObject(files) && !utilTypes.isProxy(files) && utilTypes.isMap(files) && Object.getPrototypeOf(files) === MAP_PROTOTYPE);
+  requireValue(Reflect.ownKeys(files).length === 0 && MAP_SIZE.call(files) === MAP_ORDER.length);
+  for (const path of MAP_ORDER) requireValue(MAP_HAS.call(files, path));
+  for (const [path, bytes] of MAP_ENTRIES.call(files)) requireValue(MAP_ORDER.includes(path) && isWholeUint8Array(bytes));
 }
 
 function validatePacketInternal(files, binding) {
   validateFilesMap(files);
   const parsed = {}; const copied = new Map();
   for (const name of PAYLOAD_NAMES) {
-    const path = `${name}.json`; const source = files.get(path); const value = parseCanonical(source, CAPS.get(path));
+    const path = `${name}.json`; const source = MAP_GET.call(files, path); const value = parseCanonical(source, CAPS.get(path));
     parsed[name] = value; copied.set(path, new Uint8Array(source));
   }
   const status = validatePayloadSet(parsed, binding);
-  const indexSource = files.get("index.json"); const index = parseCanonical(indexSource, CAPS.get("index.json"));
+  const indexSource = MAP_GET.call(files, "index.json"); const index = parseCanonical(indexSource, CAPS.get("index.json"));
   exactObject(index, ["schemaVersion", "issueBodySha256", "eventSha", "overallStatus", "firstFailure", "files"]);
   requireValue(index.schemaVersion === 1 && index.issueBodySha256 === PARENT_DIGEST && index.eventSha === binding.eventSha && index.overallStatus === status.overallStatus && index.firstFailure === status.firstFailure);
   exactArray(index.files, 6);
@@ -654,8 +792,8 @@ function validateWrapperObject(value) {
   requireValue(value.artifactUrl === `https://github.com/FelixGeisler/code-city/actions/runs/${value.runId}/artifacts/${value.artifactId}` && ENCODER.encode(value.artifactUrl).length <= 2048);
 }
 
-function publicFailure(error, fallback) {
-  if (error instanceof EvidenceContractError) throw error;
+function publicFailure(error, fallback, preservedCodes = []) {
+  if (error instanceof EvidenceContractError && preservedCodes.includes(error.code)) throw error;
   throw new EvidenceContractError(fallback);
 }
 
@@ -679,7 +817,7 @@ export function validateEvidencePacket(files, binding) {
   try { validateBindingValue(binding); }
   catch (error) { publicFailure(error, "invalid-binding"); }
   try { return validatePacketInternal(files, binding); }
-  catch (error) { publicFailure(error, "invalid-payload"); }
+  catch (error) { publicFailure(error, "invalid-payload", ["noncanonical-bytes"]); }
 }
 
 export function createExternalWrapper(input) {
@@ -695,11 +833,11 @@ export function validateExternalWrapper(bytes, binding) {
   catch (error) { publicFailure(error, "invalid-binding"); }
   let parsed;
   try { parsed = parseCanonical(bytes, 4096); }
-  catch (error) { publicFailure(error, "noncanonical-bytes"); }
+  catch (error) { publicFailure(error, "noncanonical-bytes", ["noncanonical-bytes"]); }
   try {
     exactObject(parsed, ["schemaVersion", "artifactId", "artifactUrl", "platformDigest", "packetDigest", "eventSha", "runId", "runAttempt", "retentionDays"]);
     for (const key of WRAPPER_BINDING_KEYS) if (parsed[key] !== binding[key]) throw new EvidenceContractError("invalid-binding");
     validateWrapperObject(parsed);
     return Object.freeze(parsed);
-  } catch (error) { publicFailure(error, "invalid-payload"); }
+  } catch (error) { publicFailure(error, "invalid-payload", ["invalid-binding"]); }
 }
