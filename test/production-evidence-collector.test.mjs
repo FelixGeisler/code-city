@@ -1430,6 +1430,17 @@ function collectorMatrixSeams({ failStage, reason, progressedQualification = fal
       },
       clearTrace() {},
       async collectCapacity(qualification, emit, startedMs) {
+        if (!progressedCapacity && failStage === "capacity" && ["content-invalid", "unexpected-request"].includes(reason)) {
+          appendSequence(requestItems, now, "facebook/react", REACT, REACT_ROOT, ["unexpected.ts"], true, {
+            revision: () => emit("revision-selected", 2), inventory: () => emit("inventory-complete", 2),
+          });
+          capacityProgress = {
+            repositoryUrl: "https://github.com/facebook/react", revision: REACT, rootTree: REACT_ROOT,
+            terminal: null, revisionDisplayed: null, cityPresent: null, priorCityRemoved: null,
+            rawRequestCount: 1, maxOverlap: 1, noLaterRequest: null, workerQuiescent: null,
+            candidates: [], startedMs, endedMs: null,
+          };
+        }
         if (!progressedCapacity) failAt("capacity");
         appendSequence(requestItems, now, "facebook/react", REACT, REACT_ROOT, shared.map((item) => item.path), true, {
           revision: () => emit("revision-selected", 2), inventory: () => emit("inventory-complete", 2),
@@ -1451,7 +1462,13 @@ function collectorMatrixSeams({ failStage, reason, progressedQualification = fal
     }),
     qualifyRepository: async ({ now, requestItems, progress }) => {
       if (failStage === "qualification") {
-        if (progressedQualification) {
+        if (["content-invalid", "unexpected-request"].includes(reason)) {
+          appendSequence(requestItems, now, "facebook/react", REACT, REACT_ROOT, ["unexpected.ts"], false);
+          Object.assign(progress, {
+            repositoryUrl: "https://github.com/facebook/react", revision: REACT, rootTree: REACT_ROOT,
+            treeEntries: 5000, truncated: false, candidates: [],
+          });
+        } else if (progressedQualification) {
           directRequest(requestItems, now, "revision", revisionUrl("facebook/react"), false);
           progress.revision = REACT;
         }
@@ -2040,7 +2057,14 @@ test("pre-packet overlap derivation converts a completed overlap into a marked r
 test("collector controlled matrix produces a schema-valid marked packet for every handled stage and reason class", async () => {
   for (const [stage, reasons] of Object.entries(HANDLED_REASONS)) {
     for (const reason of reasons) {
-      const { result, stored } = await collectHandledMatrix(stage, reason);
+      let collected;
+      try {
+        collected = await collectHandledMatrix(stage, reason);
+      } catch (error) {
+        error.message = `${stage}/${reason}: ${error.message}`;
+        throw error;
+      }
+      const { result, stored } = collected;
       assert.equal(result.status, "fail", `${stage}/${reason}`);
       assert.equal(result.reason, reason, `${stage}/${reason}`);
       const lifecycle = JSON.parse(new TextDecoder().decode(stored.files.get("lifecycle.json")));
