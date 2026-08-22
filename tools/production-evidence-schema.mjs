@@ -683,19 +683,44 @@ function validatePayloadSet(payloads, binding) {
   const events = payloads.lifecycle.data.events;
   const finalEvent = events.at(-1);
   const artifactVerified = eventIndex(events, "artifact-verified", 0);
-  const smokeStart = eventIndex(events, "smoke-start", 1); const cityPublished = eventIndex(events, "city-published", 1);
+  const smokeStart = eventIndex(events, "smoke-start", 1);
+  const smokeRevisionSelected = eventIndex(events, "revision-selected", 1);
+  const cityPublished = eventIndex(events, "city-published", 1);
+  const traceReset = eventIndex(events, "trace-reset", 0);
+  const smokeRevisionExchanges = requestInfo.groups.smoke.filter((item) => item.stage === "revision");
+  const smokeRetrievalExchanges = requestInfo.groups.smoke.filter((item) => ["commit", "tree", "raw"].includes(item.stage));
+  if (payloads.smoke.data.startedMs !== null) {
+    requireValue(smokeStart !== undefined && payloads.smoke.data.startedMs >= smokeStart.atMs);
+    if (traceReset) requireValue(payloads.smoke.data.startedMs <= traceReset.atMs);
+  }
+  if (smokeRevisionSelected) {
+    requireValue(smokeRevisionExchanges.every((item) => item.endedMs <= smokeRevisionSelected.atMs));
+    requireValue(smokeRetrievalExchanges.every((item) => item.startedMs >= smokeRevisionSelected.atMs));
+  } else requireValue(smokeRetrievalExchanges.length === 0);
+  if (cityPublished) {
+    requireValue(requestInfo.groups.smoke.every((item) => item.endedMs <= cityPublished.atMs));
+    if (payloads.smoke.data.endedMs !== null) requireValue(payloads.smoke.data.endedMs <= cityPublished.atMs);
+  }
   if (payloads.smoke.status === "pass") {
     requireValue(payloads.smoke.data.startedMs === smokeStart.atMs && payloads.smoke.data.endedMs === cityPublished.atMs);
     requireValue(payloads.smoke.data.revision === artifact.eventSha);
   }
-  const capacityStart = eventIndex(events, "capacity-start", 2); const workerQuiescent = eventIndex(events, "worker-quiescent", 2);
+  const capacityStart = eventIndex(events, "capacity-start", 2);
+  const capacityRevisionSelected = eventIndex(events, "revision-selected", 2);
+  const workerQuiescent = eventIndex(events, "worker-quiescent", 2);
   const inventoryComplete = eventIndex(events, "inventory-complete", 2);
   const limitFailure = eventIndex(events, "limit-failure", 2);
+  const capacityRevisionExchanges = requestInfo.groups.capacity.filter((item) => item.stage === "revision");
+  const capacityInventoryExchanges = requestInfo.groups.capacity.filter((item) => item.stage === "commit" || item.stage === "tree");
   if (payloads.capacity.status === "pass") requireValue(payloads.capacity.data.startedMs === capacityStart.atMs && payloads.capacity.data.endedMs === workerQuiescent.atMs);
+  if (capacityRevisionSelected) {
+    requireValue(capacityRevisionExchanges.every((item) => item.endedMs <= capacityRevisionSelected.atMs));
+    requireValue(capacityInventoryExchanges.every((item) => item.startedMs >= capacityRevisionSelected.atMs));
+  } else requireValue(capacityInventoryExchanges.length === 0 && capacityRawRequests.length === 0);
   if (capacityRawRequests.length > 0) requireValue(inventoryComplete !== undefined);
   if (inventoryComplete) {
-    requireValue(capacityTreeRequest !== undefined && capacityTreeRequest.endedMs <= inventoryComplete.atMs);
-    if (capacityRawRequests.length > 0) requireValue(inventoryComplete.atMs <= capacityRawRequests[0].startedMs);
+    requireValue(capacityTreeRequest !== undefined && capacityInventoryExchanges.every((item) => item.endedMs <= inventoryComplete.atMs));
+    if (capacityRawRequests.length > 0) requireValue(capacityRawRequests.every((item) => item.startedMs >= inventoryComplete.atMs));
   }
   if (limitFailure) {
     requireValue(capacityRawRequests.length === 4001);

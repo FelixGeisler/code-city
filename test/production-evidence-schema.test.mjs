@@ -86,6 +86,37 @@ function requestSequence(repository, revision, root, paths, applicationCall, sta
   return routes.map(([stage, url], index) => request(firstSequence + index, stage, url, applicationCall, start + index * step));
 }
 
+function setRequestTime(record, startedMs, endedMs = startedMs + 0.0001) {
+  record.startedMs = startedMs;
+  record.endedMs = endedMs;
+}
+
+function smokeRequestSequence(paths, firstSequence) {
+  const items = requestSequence(CODE_CITY_REPO, EVENT, ROOT, paths, true, 2.1, 0.1, firstSequence);
+  items.slice(1).forEach((item, index) => setRequestTime(item, 3 + index * 0.1));
+  return items;
+}
+
+function capacityRequestSequence(paths, firstSequence) {
+  const items = requestSequence(REACT_REPO, REACT_EVENT, REACT_ROOT, paths, true, 8.1, 0.1, firstSequence);
+  if (items[1]) setRequestTime(items[1], 9);
+  if (items[2]) setRequestTime(items[2], 9.1);
+  items.slice(3).forEach((item, index) => setRequestTime(item, 10.1 + index * 0.002));
+  return items;
+}
+
+function insertPreflight(items, get, startedMs = get.startedMs, endedMs = startedMs) {
+  const index = items.indexOf(get);
+  const preflight = structuredClone(get);
+  preflight.method = "OPTIONS";
+  preflight.applicationCall = false;
+  preflight.status = 204;
+  setRequestTime(preflight, startedMs, endedMs);
+  items.splice(index, 0, preflight);
+  items.forEach((item, sequence) => { item.sequence = sequence + 1; });
+  return preflight;
+}
+
 function maximumOverlap(items) {
   const points = items.flatMap((item) => item.startedMs === item.endedMs ? [] : [[item.startedMs, 1], [item.endedMs, -1]]);
   points.sort((left, right) => left[0] - right[0] || left[1] - right[1]);
@@ -100,7 +131,7 @@ function passEvents() {
     ["collector-start", 0, 0], ["artifact-verified", 0, 1], ["smoke-start", 1, 2],
     ["revision-selected", 1, 3], ["city-published", 1, 4], ["trace-reset", 0, 5],
     ["qualification-start", 0, 6], ["qualification-complete", 0, 7], ["capacity-start", 2, 8],
-    ["revision-selected", 2, 9], ["inventory-complete", 2, 10.105], ["limit-failure", 2, 20],
+    ["revision-selected", 2, 9], ["inventory-complete", 2, 10.1], ["limit-failure", 2, 20],
     ["request-quiescent", 2, 21], ["worker-quiescent", 2, 22], ["collector-complete", 0, 23],
   ];
   return names.map(([event, generation, atMs], index) => ({ sequence: index + 1, generation, event, atMs }));
@@ -180,9 +211,9 @@ function lifecycleData(events = passEvents(), overrides = {}) {
 
 function makePassingPayloads(smokePaths = ["src/main.ts"]) {
   const sharedCandidates = candidates();
-  const smoke = requestSequence(CODE_CITY_REPO, EVENT, ROOT, smokePaths, true, 2.1, 0.1, 1);
+  const smoke = smokeRequestSequence(smokePaths, 1);
   const qualification = requestSequence(REACT_REPO, REACT_EVENT, REACT_ROOT, sharedCandidates.map(({ path }) => path), false, 6.1, 0.0002, smoke.length + 1);
-  const capacity = requestSequence(REACT_REPO, REACT_EVENT, REACT_ROOT, sharedCandidates.map(({ path }) => path), true, 10.1, 0.002, smoke.length + qualification.length + 1);
+  const capacity = capacityRequestSequence(sharedCandidates.map(({ path }) => path), smoke.length + qualification.length + 1);
   return {
     artifact: envelope("artifact", "pass", "none", artifactData()),
     smoke: envelope("smoke", "pass", "none", {
@@ -305,14 +336,18 @@ function failurePayload(stage, reason) {
       const allPaths = stage === "smoke" ? ["src/main.ts"] : canonicalCandidatePaths;
       const pathCount = reason === "unexpected-request" ? allPaths.length : reason === "request-overlap" ? 0 : -2;
       const selected = pathCount >= 0 ? allPaths.slice(0, pathCount) : [];
-      let group = requestSequence(repository, revision, root, selected, applicationCall, stage === "smoke" ? 2.1 : stage === "qualification" ? 6.1 : 10.1, stage === "qualification" ? 0.0002 : stage === "capacity" ? 0.002 : 0.001, priorCount + 1);
-      if (reason !== "unexpected-request") group = group.slice(0, reason === "request-overlap" ? 2 : 1);
+      let group = stage === "smoke"
+        ? smokeRequestSequence(selected, priorCount + 1)
+        : stage === "capacity"
+          ? capacityRequestSequence(selected, priorCount + 1)
+          : requestSequence(repository, revision, root, selected, applicationCall, 6.1, 0.0002, priorCount + 1);
+      if (reason !== "unexpected-request") group = group.slice(0, reason === "request-overlap" ? (stage === "qualification" ? 2 : 3) : 1);
       if (reason === "unexpected-request") {
         const extraPath = stage === "smoke" ? "src/z.ts" : "9999.ts";
         group.push(request(priorCount + group.length + 1, "raw", rawUrl(repository, revision, extraPath), applicationCall, group.at(-1).endedMs + 0.0001));
       }
       items.push(...group);
-      prefixLength = stage === "smoke" ? 3 : stage === "qualification" ? 7 : 14;
+      prefixLength = stage === "smoke" ? (["request-overlap", "unexpected-request"].includes(reason) ? 4 : 3) : stage === "qualification" ? 7 : 14;
     }
     const target = items.at(-1);
     if (reason === "provider-failure") target.status = 500;
@@ -329,7 +364,7 @@ function failurePayload(stage, reason) {
     if (["cleanup-failure", "quiescence-failure"].includes(reason)) paths = canonicalCandidatePaths;
     if (paths !== null) {
       Object.assign(payloads.capacity.data, { repositoryUrl: "https://github.com/facebook/react", revision: REACT_EVENT, rootTree: REACT_ROOT });
-      items.push(...requestSequence(REACT_REPO, REACT_EVENT, REACT_ROOT, paths, true, 10.1, 0.002, priorCount + 1));
+      items.push(...capacityRequestSequence(paths, priorCount + 1));
     }
   }
   if (reason === "cleanup-failure" || reason === "quiescence-failure") prefixLength = stage === "smoke" ? 5 : 14;
@@ -696,7 +731,108 @@ test("request route, order, uniqueness, OPTIONS, privacy, timing, overlap, and d
   for (const make of makers) expectCode("invalid-payload", () => createEvidencePacket(make(), BINDING));
 });
 
-test("capacity lifecycle events share request-clock boundaries for tree, raw retrieval, and limit failure", () => {
+test("smoke exchanges share revision-selection, publication, and stage-clock boundaries", () => {
+  for (const [label, mutate] of [
+    ["stage start equality", (p, smoke) => setRequestTime(smoke[0], 2, 2.0001)],
+    ["revision completion equality", (p, smoke) => setRequestTime(smoke[0], 2.9, 3)],
+    ["retrieval start equality", (_p, smoke) => setRequestTime(smoke[1], 3, 3.0001)],
+    ["publication completion equality", (_p, smoke) => setRequestTime(smoke.at(-1), 3.9, 4)],
+  ]) {
+    const payloads = makePassingPayloads();
+    const smoke = payloads.requests.data.items.filter((item) => item.requestedUrl.includes(CODE_CITY_REPO));
+    mutate(payloads, smoke);
+    assert.doesNotThrow(() => createEvidencePacket(payloads, BINDING), label);
+  }
+
+  for (const [label, mutate] of [
+    ["stage starts before smoke-start", (_p, smoke) => setRequestTime(smoke[0], 1.9999, 2)],
+    ["revision completes after selection", (_p, smoke) => {
+      setRequestTime(smoke[0], 2.9, 3.0001);
+      setRequestTime(smoke[1], 3.0001, 3.0002);
+    }],
+    ["retrieval starts before selection", (_p, smoke) => setRequestTime(smoke[1], 2.9999, 3)],
+    ["required raw completes after city-published before trace-reset", (_p, smoke) => setRequestTime(smoke.at(-1), 4.5, 4.5001)],
+  ]) {
+    const payloads = makePassingPayloads();
+    const smoke = payloads.requests.data.items.filter((item) => item.requestedUrl.includes(CODE_CITY_REPO));
+    mutate(payloads, smoke);
+    expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), label);
+  }
+
+  for (const [label, endedMs, accepted] of [
+    ["smoke ended before publication", 3.9, true],
+    ["smoke ended at publication", 4, true],
+    ["smoke ended after publication", 4.0001, false],
+  ]) {
+    const payloads = failurePayload("smoke", "cleanup-failure");
+    payloads.smoke.data.startedMs = 2;
+    payloads.smoke.data.endedMs = endedMs;
+    if (accepted) assert.doesNotThrow(() => createEvidencePacket(payloads, BINDING), label);
+    else expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), label);
+  }
+});
+
+test("qualification direct exchanges stay inside their exact phase window", () => {
+  const boundary = makePassingPayloads();
+  const direct = boundary.requests.data.items.filter((item) => item.requestedUrl.includes(REACT_REPO) && !item.applicationCall);
+  setRequestTime(direct[0], 6, 6.0001);
+  setRequestTime(direct.at(-1), 6.9999, 7);
+  assert.doesNotThrow(() => createEvidencePacket(boundary, BINDING), "qualification start/end equality");
+
+  const before = makePassingPayloads();
+  const beforeDirect = before.requests.data.items.filter((item) => item.requestedUrl.includes(REACT_REPO) && !item.applicationCall);
+  setRequestTime(beforeDirect[0], 5.9999, 6);
+  expectCode("invalid-payload", () => createEvidencePacket(before, BINDING), "qualification starts before phase");
+
+  const after = makePassingPayloads();
+  const afterDirect = after.requests.data.items.filter((item) => item.requestedUrl.includes(REACT_REPO) && !item.applicationCall);
+  setRequestTime(afterDirect.at(-1), 7, 7.0001);
+  expectCode("invalid-payload", () => createEvidencePacket(after, BINDING), "qualification completes after phase");
+});
+
+test("paired OPTIONS exchanges obey the same owning-route clock boundaries", () => {
+  const accepted = makePassingPayloads();
+  const acceptedItems = accepted.requests.data.items;
+  const acceptedSmokeCommit = acceptedItems.find((item) => item.requestedUrl.includes(CODE_CITY_REPO) && item.stage === "commit");
+  insertPreflight(acceptedItems, acceptedSmokeCommit, 3, 3);
+  assert.doesNotThrow(() => createEvidencePacket(accepted, BINDING), "selection equality");
+
+  const smoke = makePassingPayloads();
+  const smokeItems = smoke.requests.data.items;
+  const smokeCommit = smokeItems.find((item) => item.requestedUrl.includes(CODE_CITY_REPO) && item.stage === "commit");
+  insertPreflight(smokeItems, smokeCommit, 2.9999, 3);
+  expectCode("invalid-payload", () => createEvidencePacket(smoke, BINDING), "smoke preflight before selection");
+
+  const qualification = makePassingPayloads();
+  const qualificationItems = qualification.requests.data.items;
+  const qualificationRevision = qualificationItems.find((item) => item.requestedUrl.includes(REACT_REPO) && !item.applicationCall && item.stage === "revision");
+  insertPreflight(qualificationItems, qualificationRevision, 5.9999, 6);
+  expectCode("invalid-payload", () => createEvidencePacket(qualification, BINDING), "qualification preflight before phase");
+
+  const capacity = makePassingPayloads();
+  const capacityItems = capacity.requests.data.items;
+  const capacityTree = capacityItems.find((item) => item.requestedUrl.includes(REACT_REPO) && item.applicationCall && item.stage === "tree");
+  insertPreflight(capacityItems, capacityTree, 9.1, 10.1001);
+  expectCode("invalid-payload", () => createEvidencePacket(capacity, BINDING), "capacity preflight completes after inventory");
+});
+
+test("capacity lifecycle events share request-clock boundaries for resolution, inventory, retrieval, and limit failure", () => {
+  const resolutionBoundary = makePassingPayloads();
+  const resolutionBoundaryGets = resolutionBoundary.requests.data.items.filter((item) => item.applicationCall && item.requestedUrl.includes(REACT_REPO));
+  setRequestTime(resolutionBoundaryGets[0], 8.9, 9);
+  assert.doesNotThrow(() => createEvidencePacket(resolutionBoundary, BINDING), "revision completion equality");
+
+  const lateResolution = makePassingPayloads();
+  const lateResolutionGets = lateResolution.requests.data.items.filter((item) => item.applicationCall && item.requestedUrl.includes(REACT_REPO));
+  setRequestTime(lateResolutionGets[0], 8.9, 9.0001);
+  setRequestTime(lateResolutionGets[1], 9.0001, 9.0002);
+  expectCode("invalid-payload", () => createEvidencePacket(lateResolution, BINDING), "revision completion after selection");
+
+  const earlyInventory = makePassingPayloads();
+  const earlyInventoryGets = earlyInventory.requests.data.items.filter((item) => item.applicationCall && item.requestedUrl.includes(REACT_REPO));
+  setRequestTime(earlyInventoryGets[1], 8.9999, 9);
+  expectCode("invalid-payload", () => createEvidencePacket(earlyInventory, BINDING), "inventory starts before selection");
+
   const payloads = makePassingPayloads();
   const capacityGets = payloads.requests.data.items.filter((item) => item.applicationCall && item.requestedUrl.includes("facebook/react"));
   const tree = capacityGets.find((item) => item.stage === "tree");
