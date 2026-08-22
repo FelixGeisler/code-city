@@ -91,7 +91,7 @@ function passEvents() {
     ["collector-start", 0, 0], ["artifact-verified", 0, 1], ["smoke-start", 1, 2],
     ["revision-selected", 1, 3], ["city-published", 1, 4], ["trace-reset", 0, 5],
     ["qualification-start", 0, 6], ["qualification-complete", 0, 7], ["capacity-start", 2, 8],
-    ["revision-selected", 2, 9], ["inventory-complete", 2, 10], ["limit-failure", 2, 20],
+    ["revision-selected", 2, 9], ["inventory-complete", 2, 10.105], ["limit-failure", 2, 20],
     ["request-quiescent", 2, 21], ["worker-quiescent", 2, 22], ["collector-complete", 0, 23],
   ];
   return names.map(([event, generation, atMs], index) => ({ sequence: index + 1, generation, event, atMs }));
@@ -270,7 +270,7 @@ function failurePayload(stage, reason) {
     if (reason === "identity-mismatch" || reason === "stale-publication") failedData.revision = "9".repeat(40);
     if (reason === "tree-incomplete") failedData.repositoryUrl = "https://github.com/facebook/react";
     if (reason === "hash-mismatch" || reason === "content-invalid") {
-      failedData.candidates = structuredClone(payloads.qualification.data.candidates.slice(0, 1));
+      failedData.candidates = structuredClone(payloads.qualification.data.candidates);
       failedData.candidates[0][reason === "hash-mismatch" ? "hashMatched" : "contentValid"] = false;
     }
     if (["limit-order", "cleanup-failure", "quiescence-failure"].includes(reason)) failedData.candidates = structuredClone(payloads.qualification.data.candidates);
@@ -296,7 +296,7 @@ function failurePayload(stage, reason) {
       const allPaths = stage === "smoke" ? ["src/main.ts"] : canonicalCandidatePaths;
       const pathCount = reason === "unexpected-request" ? allPaths.length : reason === "request-overlap" ? 0 : -2;
       const selected = pathCount >= 0 ? allPaths.slice(0, pathCount) : [];
-      let group = requestSequence(repository, revision, root, selected, applicationCall, stage === "smoke" ? 2.1 : stage === "qualification" ? 6.1 : 10.1, stage === "qualification" ? 0.0002 : 0.001, priorCount + 1);
+      let group = requestSequence(repository, revision, root, selected, applicationCall, stage === "smoke" ? 2.1 : stage === "qualification" ? 6.1 : 10.1, stage === "qualification" ? 0.0002 : stage === "capacity" ? 0.002 : 0.001, priorCount + 1);
       if (reason !== "unexpected-request") group = group.slice(0, reason === "request-overlap" ? 2 : 1);
       if (reason === "unexpected-request") {
         const extraPath = stage === "smoke" ? "src/z.ts" : "9999.ts";
@@ -313,14 +313,27 @@ function failurePayload(stage, reason) {
       const first = items.at(-2); target.startedMs = first.startedMs; target.endedMs = first.endedMs;
     }
   }
+  if (stage === "capacity" && !requestReasons.has(reason)) {
+    let paths = null;
+    if (["tree-incomplete", "limit-order"].includes(reason)) paths = [];
+    if (["hash-mismatch", "content-invalid"].includes(reason)) paths = payloads.capacity.data.candidates.map(({ path }) => path);
+    if (["cleanup-failure", "quiescence-failure"].includes(reason)) paths = canonicalCandidatePaths;
+    if (paths !== null) {
+      Object.assign(payloads.capacity.data, { repositoryUrl: "https://github.com/facebook/react", revision: REACT_EVENT, rootTree: REACT_ROOT });
+      items.push(...requestSequence(REACT_REPO, REACT_EVENT, REACT_ROOT, paths, true, 10.1, 0.002, priorCount + 1));
+    }
+  }
   if (reason === "cleanup-failure" || reason === "quiescence-failure") prefixLength = stage === "smoke" ? 5 : 14;
-  if (reason === "tree-incomplete" || reason === "limit-order") prefixLength = stage === "capacity" ? 11 : prefixLength;
+  if (stage === "capacity" && ["tree-incomplete", "limit-order", "hash-mismatch", "content-invalid", "unexpected-request"].includes(reason)) prefixLength = 11;
+  if (stage === "capacity" && requestReasons.has(reason) && reason !== "unexpected-request") prefixLength = 10;
   if (stage === "capacity" && prefixLength >= 13) payloads.capacity.data.noLaterRequest = true;
   items.forEach((item, index) => { item.sequence = index + 1; });
   payloads.requests = envelope("requests", "fail", reason, { items });
 
   const events = failedEvents(stage, prefixLength);
-  const overlap = stage === "capacity" && requestReasons.has(reason) ? (reason === "request-overlap" ? 2 : 1) : 0;
+  events.at(-1).atMs = items.reduce((latest, item) => Math.max(latest, item.endedMs), events.at(-1).atMs);
+  const capacityApplicationGets = items.filter((item) => item.applicationCall && item.requestedUrl.includes("facebook/react"));
+  const overlap = capacityApplicationGets.length === 0 ? 0 : reason === "request-overlap" ? 2 : 1;
   payloads.lifecycle = envelope("lifecycle", "fail", reason, lifecycleData(events, {
     chromeVersion: events.some((item) => item.event === "smoke-start") ? "140.0.1.2" : null,
     cdpVersion: events.some((item) => item.event === "smoke-start") ? "1.3" : null,
@@ -458,6 +471,33 @@ test("status precedence, auxiliary mapping, null rules, event prefixes, and pers
   for (const make of cases) expectCode("invalid-payload", () => createEvidencePacket(make(), BINDING));
 });
 
+test("version and expected media-type strings accept 256 UTF-8 bytes and reject byte 257", () => {
+  const exactNode = `v24.${"1".repeat(250)}.1`;
+  const exactChrome = `${"1".repeat(250)}.1.1.1`;
+  const exactMediaType = `${"a".repeat(254)}/b`;
+  for (const value of [exactNode, exactChrome, exactMediaType]) {
+    assert.equal(value.length, 256);
+    assert.equal(encoder.encode(value).byteLength, 256);
+  }
+
+  for (const [field, exact] of [["nodeVersion", exactNode], ["chromeVersion", exactChrome]]) {
+    const payloads = makePassingPayloads();
+    payloads.artifact.data[field] = exact;
+    payloads.lifecycle.data[field] = exact;
+    assert.doesNotThrow(() => createEvidencePacket(payloads, BINDING), `${field} boundary`);
+
+    payloads.artifact.data[field] = `${exact}1`;
+    payloads.lifecycle.data[field] = `${exact}1`;
+    expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `${field} boundary + 1`);
+  }
+
+  const media = makePassingPayloads();
+  Object.assign(media.artifact.data.files[0], { expectedMediaType: exactMediaType, observedMediaType: exactMediaType });
+  assert.doesNotThrow(() => createEvidencePacket(media, BINDING), "expectedMediaType boundary");
+  media.artifact.data.files[0].expectedMediaType = `${exactMediaType}a`;
+  expectCode("invalid-payload", () => createEvidencePacket(media, BINDING), "expectedMediaType boundary + 1");
+});
+
 test("every payload data field and every nested record field is independently enforced", () => {
   const payloads = makePassingPayloads();
   for (const kind of ["artifact", "smoke", "qualification", "capacity", "requests", "lifecycle"]) {
@@ -537,6 +577,44 @@ test("zero to three immediately paired browser preflights are accepted without c
   assert.equal(payloads.capacity.data.rawRequestCount, 4001);
 });
 
+test("direct asset, deployment, and issue exchanges are successful unique GETs with closed topology", () => {
+  const direct = [
+    request(1, "asset", "https://felixgeisler.github.io/code-city/package-manifest.json", false, 0.1),
+    request(2, "deployment", `https://api.github.com/repos/FelixGeisler/code-city/deployments?sha=${EVENT}&environment=github-pages&per_page=100&page=1`, false, 0.2),
+    request(3, "deployment", "https://api.github.com/repos/FelixGeisler/code-city/deployments/456/statuses?per_page=100&page=1", false, 0.3),
+    request(4, "issue", "https://api.github.com/repos/FelixGeisler/code-city/issues/460", false, 0.4),
+  ];
+  for (const item of direct) { item.headerNames = []; item.corsAllowOrigin = null; }
+  const makeDirectPacket = () => {
+    const payloads = makePassingPayloads();
+    payloads.requests.data.items.unshift(...structuredClone(direct));
+    payloads.requests.data.items.forEach((item, index) => { item.sequence = index + 1; });
+    return payloads;
+  };
+  assert.doesNotThrow(() => createEvidencePacket(makeDirectPacket(), BINDING));
+
+  for (const index of [0, 1, 3]) {
+    for (const mutate of [
+      (payloads, record) => { payloads.requests.data.items.splice(index + 1, 0, structuredClone(record)); },
+      (_payloads, record) => { record.method = "OPTIONS"; },
+      (_payloads, record) => { record.status = 500; },
+      (_payloads, record) => {
+        record.redirected = true;
+        record.finalUrl = record.stage === "asset"
+          ? "https://felixgeisler.github.io/code-city/index.html"
+          : record.stage === "deployment"
+            ? "https://api.github.com/repos/FelixGeisler/code-city/deployments/456/statuses?per_page=100&page=1"
+            : "https://api.github.com/repos/FelixGeisler/code-city/issues/460#redirect";
+      },
+    ]) {
+      const payloads = makeDirectPacket();
+      mutate(payloads, payloads.requests.data.items[index]);
+      payloads.requests.data.items.forEach((item, sequence) => { item.sequence = sequence + 1; });
+      expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `${direct[index].stage} direct topology`);
+    }
+  }
+});
+
 test("request route, order, uniqueness, OPTIONS, privacy, timing, overlap, and dynamic K rules reject single mutations", () => {
   const makers = [
     () => { const p = makePassingPayloads(); p.requests.data.items[0].requestedUrl = revisionUrl(REACT_REPO); p.requests.data.items[0].finalUrl = revisionUrl(REACT_REPO); return p; },
@@ -549,6 +627,40 @@ test("request route, order, uniqueness, OPTIONS, privacy, timing, overlap, and d
     () => { const p = makePassingPayloads(); p.requests.data.items.splice(3, 1); p.requests.data.items.forEach((item, index) => { item.sequence = index + 1; }); p.smoke.data.providerGetCount = 3; return p; },
   ];
   for (const make of makers) expectCode("invalid-payload", () => createEvidencePacket(make(), BINDING));
+});
+
+test("capacity lifecycle events share request-clock boundaries for tree, raw retrieval, and limit failure", () => {
+  const timeline = (inventoryAt, limitAt) => {
+    const payloads = makePassingPayloads();
+    const capacityGets = payloads.requests.data.items.filter((item) => item.applicationCall && item.requestedUrl.includes("facebook/react"));
+    const tree = capacityGets.find((item) => item.stage === "tree");
+    const raws = capacityGets.filter((item) => item.stage === "raw");
+    event(payloads.lifecycle.data.events, "inventory-complete", 2).atMs = inventoryAt(tree, raws);
+    event(payloads.lifecycle.data.events, "limit-failure", 2).atMs = limitAt(tree, raws);
+    payloads.lifecycle.data.durations = durations(payloads.lifecycle.data.events);
+    return { payloads, tree, raws };
+  };
+
+  for (const [label, inventoryAt] of [
+    ["tree completion equality", (tree) => tree.endedMs],
+    ["first raw start equality", (_tree, raws) => raws[0].startedMs],
+  ]) {
+    const { payloads } = timeline(inventoryAt, (_tree, raws) => raws.at(-1).endedMs);
+    assert.doesNotThrow(() => createEvidencePacket(payloads, BINDING), label);
+  }
+
+  for (const [label, inventoryAt] of [
+    ["before tree completion", (tree) => tree.endedMs - 0.00001],
+    ["after first raw start", (_tree, raws) => raws[0].startedMs + 0.00001],
+  ]) {
+    const { payloads } = timeline(inventoryAt, (_tree, raws) => raws.at(-1).endedMs);
+    expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), label);
+  }
+
+  const exactLimit = timeline((_tree, raws) => raws[0].startedMs, (_tree, raws) => raws.at(-1).endedMs);
+  assert.doesNotThrow(() => createEvidencePacket(exactLimit.payloads, BINDING), "last raw completion equality");
+  const earlyLimit = timeline((_tree, raws) => raws[0].startedMs, (_tree, raws) => raws.at(-1).endedMs - 0.00001);
+  expectCode("invalid-payload", () => createEvidencePacket(earlyLimit.payloads, BINDING), "limit before final raw completion");
 });
 
 test("failure boundaries reject later-stage observations and require every known attempted lifecycle fact", () => {
@@ -679,6 +791,16 @@ test("plain data and native containers reject traps without invoking attacker ca
   assert.equal(calls, 0);
 });
 
+test("intrinsic caps reject oversized arrays before descriptor traversal", () => {
+  const payloads = makePassingPayloads();
+  let calls = 0;
+  const oversized = new Array(8201);
+  Object.defineProperty(oversized, "0", { enumerable: true, get() { calls += 1; throw new Error("must not run"); } });
+  payloads.requests.data.items = oversized;
+  expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING));
+  assert.equal(calls, 0);
+});
+
 test("packet map, whole-view, canonical UTF-8/LF, byte cap, file set, index fields, lengths, digests, and binding are enforced", () => {
   const packet = createEvidencePacket(passing, BINDING);
   expectCode("invalid-binding", () => validateEvidencePacket(packet.files, { issueBodySha256: "0".repeat(64), eventSha: EVENT }));
@@ -775,6 +897,20 @@ test("external wrappers are canonical, fresh, closed, bound, frozen on validatio
   const backing = new Uint8Array(bytes.length + 1); backing.set(bytes, 1);
   expectCode("noncanonical-bytes", () => validateExternalWrapper(backing.subarray(1), binding));
   expectCode("noncanonical-bytes", () => validateExternalWrapper(new Uint8Array(4097), binding));
+  expectCode("noncanonical-bytes", () => validateExternalWrapper(new Proxy(new Uint8Array(bytes), {}), binding));
+
+  let ownKeyCalls = 0;
+  let oversizedError;
+  const originalOwnKeys = Reflect.ownKeys;
+  Reflect.ownKeys = (value) => {
+    if (value === binding) return originalOwnKeys(value);
+    ownKeyCalls += 1; throw new Error("must not enumerate oversized bytes");
+  };
+  try { validateExternalWrapper(new Uint8Array(4097), binding); } catch (error) { oversizedError = error; }
+  finally { Reflect.ownKeys = originalOwnKeys; }
+  assert(oversizedError instanceof EvidenceContractError);
+  assert.equal(oversizedError.code, "noncanonical-bytes");
+  assert.equal(ownKeyCalls, 0);
 
   const wrapperMutations = {
     schemaVersion: 2, artifactId: "9", artifactUrl: "https://example.com", platformDigest: "8".repeat(64), packetDigest: "8".repeat(64),
@@ -782,9 +918,17 @@ test("external wrappers are canonical, fresh, closed, bound, frozen on validatio
   };
   for (const [key, invalid] of Object.entries(wrapperMutations)) {
     const wrapper = structuredClone(parsed); wrapper[key] = invalid;
-    const expected = ["artifactId", "platformDigest", "packetDigest", "eventSha", "runId", "runAttempt"].includes(key) ? "invalid-binding" : "invalid-payload";
+    const expected = ["platformDigest", "packetDigest", "eventSha", "runAttempt"].includes(key) ? "invalid-binding" : "invalid-payload";
     expectCode(expected, () => validateExternalWrapper(canonical(wrapper), binding));
   }
+  for (const [key, malformed] of [["platformDigest", "x"], ["packetDigest", "x"], ["eventSha", "x"], ["runAttempt", 0]]) {
+    const wrapper = structuredClone(parsed); wrapper[key] = malformed;
+    expectCode("invalid-payload", () => validateExternalWrapper(canonical(wrapper), binding), `malformed persisted ${key}`);
+  }
+  const wellFormedMismatch = structuredClone(parsed);
+  wellFormedMismatch.artifactId = "9";
+  wellFormedMismatch.artifactUrl = `https://github.com/FelixGeisler/code-city/actions/runs/${binding.runId}/artifacts/9`;
+  expectCode("invalid-binding", () => validateExternalWrapper(canonical(wellFormedMismatch), binding));
 });
 
 test("schema validation is deterministic and offline and distinguishes persisted assertions from raw observation truth", () => {
