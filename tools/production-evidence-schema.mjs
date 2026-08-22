@@ -391,9 +391,10 @@ function validateDirectExchanges(items, requireSuccess) {
     const route = routeOf(record.requestedUrl, record.stage);
     requireValue(["asset", "deployment", "issue"].includes(route.repository));
     requireValue(record.method === "GET" && record.applicationCall === false && record.redirected === false && record.requestedUrl === record.finalUrl);
+    requireValue(record.authorizationAbsent && record.cookieAbsent && record.refererAbsent);
     requireValue(!urls.has(record.requestedUrl));
     urls.add(record.requestedUrl);
-    if (requireSuccess) requireValue(record.status === 200 && record.authorizationAbsent && record.cookieAbsent && record.refererAbsent);
+    if (requireSuccess) requireValue(record.status === 200);
   }
 }
 
@@ -517,9 +518,12 @@ function validateLifecycle(envelope, overallPass, primaryReason, failedStage, re
   const data = envelope.data;
   requireValue(envelope.status === (overallPass ? "pass" : "fail") && envelope.reason === (overallPass ? "none" : primaryReason));
   requireValue(data.collectorVersion === 1);
-  gitId(data.collectorCommit);
-  exactArray(data.invocation, 8); requireValue(data.invocation.length === 8 && data.invocation.every((value, index) => value === INVOCATION[index]));
-  nullablePattern(data.nodeVersion, /^v24\.\d+\.\d+$/); requireValue(data.nodeVersion !== null);
+  nullable(data.collectorCommit, gitId);
+  if (data.invocation !== null) {
+    exactArray(data.invocation, 8);
+    requireValue(data.invocation.length === 8 && data.invocation.every((value, index) => value === INVOCATION[index]));
+  }
+  nullablePattern(data.nodeVersion, /^v24\.\d+\.\d+$/);
   nullablePattern(data.chromeVersion, /^\d+\.\d+\.\d+\.\d+$/);
   if (data.cdpVersion !== null) ascii(data.cdpVersion, 32);
   exactArray(data.events, 20000);
@@ -544,12 +548,19 @@ function validateLifecycle(envelope, overallPass, primaryReason, failedStage, re
   validateDurations(data.durations);
   const derived = derivedDurations(data.events);
   for (const key of Object.keys(derived)) requireValue(data.durations[key] === derived[key]);
-  count(data.maxOverlap); requireValue(data.maxOverlap === requestInfo.capacityOverlap);
-  for (const key of ["noRetry", "noFallback", "noPersistence", "noLaterPublication"]) requireValue(data[key] === true);
+  const capacityStarted = eventIndex(data.events, "capacity-start", 2) !== undefined;
+  nullable(data.maxOverlap, count);
+  requireValue(capacityStarted ? data.maxOverlap === requestInfo.capacityOverlap : data.maxOverlap === null);
+  for (const key of ["noRetry", "noFallback", "noPersistence", "noLaterPublication"]) {
+    nullableBoolean(data[key]);
+    requireValue(data[key] === null || data[key] === true);
+  }
   const browserStarted = eventIndex(data.events, "smoke-start", 1) !== undefined;
   if (browserStarted) requireValue(data.chromeVersion !== null && data.cdpVersion !== null);
   if (overallPass) {
-    requireValue(data.chromeVersion !== null && data.cdpVersion !== null);
+    requireValue(data.collectorCommit !== null && data.invocation !== null && data.nodeVersion !== null);
+    requireValue(data.chromeVersion !== null && data.cdpVersion !== null && data.maxOverlap !== null);
+    requireValue([data.noRetry, data.noFallback, data.noPersistence, data.noLaterPublication].every((value) => value === true));
     requireValue(Object.values(data.durations).every((value) => value !== null));
   }
   const total = data.durations.total;
@@ -583,17 +594,12 @@ function validateFailureEvidence(payloads, failure, requestInfo, events) {
   const hasCredential = group.items.some((item) => !item.authorizationAbsent || !item.cookieAbsent || !item.refererAbsent);
   const hasOverlap = maximumOverlap(group.items.filter((item) => item.method === "GET")) > 1;
   const hasProviderFailure = group.items.some((item) => item.method === "GET" ? item.status !== 200 : item.status < 200 || item.status > 299);
-  const hasCorsFailure = group.items.some((item) => item.method === "GET" && item.corsAllowOrigin === null);
-  const hasIncompleteSequence = group.gets.length > 0 && group.gets.length < group.completeCount;
   const hasUnexpectedRequest = group.gets.length > group.completeCount;
   const candidatesValue = stage === "qualification" || stage === "capacity" ? data.candidates : [];
   const hasHashMismatch = candidatesValue.some((candidate) => candidate.hashMatched === false);
   const hasInvalidContent = candidatesValue.some((candidate) => candidate.contentValid === false);
   const artifact = payloads.artifact.data;
   const qualification = payloads.qualification.data;
-  const hasIdentityMismatch = stage === "qualification"
-    ? (data.revision === null) !== (data.rootTree === null)
-    : stage === "capacity" && ((data.revision !== null && data.revision !== qualification.revision) || (data.rootTree !== null && data.rootTree !== qualification.rootTree));
   const hasStalePublication = stage === "smoke"
     ? data.revision !== null && artifact.eventSha !== null && data.revision !== artifact.eventSha
     : stage === "capacity" && data.revision !== null && data.revision !== qualification.revision;
@@ -606,44 +612,27 @@ function validateFailureEvidence(payloads, failure, requestInfo, events) {
   const hasCleanupFailure = stage === "smoke"
     ? eventIndex(events, "city-published", 1) !== undefined
     : stage === "capacity" && (data.cityPresent === true || data.priorCityRemoved === false);
-  const hasLimitOrderFailure = stage === "capacity" && eventIndex(events, "inventory-complete", 2) !== undefined
-    && (eventIndex(events, "limit-failure", 2) === undefined || data.terminal === null);
   const hasStageFailure = stage === "smoke"
     ? data.canvasCount !== null && data.canvasCount !== 1
     : stage === "qualification" && data.truncated === false && data.treeEntries !== null && data.candidates.length < 4001;
   const hasArtifactMismatch = stage === "artifact" && (data.policyMatched === false || data.files.some((file) => file.match === false)
     || (data.eventSha !== null && data.deployedSha !== null && data.eventSha !== data.deployedSha));
-  const hasProductionUnreachable = stage === "artifact" && data.origin === ORIGIN && data.files.length === 0;
-  const noStageFacts = group.items.length === 0 && (stage === "artifact" ? !hasArtifactMismatch && !hasProductionUnreachable : Object.values(data).every((value) => value === null || Array.isArray(value) && value.length === 0));
 
-  const supported = {
-    "artifact-mismatch": hasArtifactMismatch,
-    "production-unreachable": hasProductionUnreachable,
-    "smoke-failure": hasStageFailure,
-    "qualification-failure": hasStageFailure,
-    "identity-mismatch": hasIdentityMismatch,
-    "provider-failure": hasProviderFailure,
-    "cors-failure": hasCorsFailure,
-    "tree-incomplete": hasTreeIncomplete,
-    "hash-mismatch": hasHashMismatch,
-    "content-invalid": hasInvalidContent,
-    "limit-order": hasLimitOrderFailure,
-    "request-sequence": hasIncompleteSequence,
-    "request-overlap": hasOverlap,
-    "unexpected-request": hasUnexpectedRequest,
-    "credential-header": hasCredential,
-    "stale-publication": hasStalePublication,
-    "quiescence-failure": hasQuiescenceFailure,
-    "cleanup-failure": hasCleanupFailure,
-    "infrastructure-failure": noStageFacts,
-  };
-  requireValue(supported[reason] === true);
+  // #495 owns the raw runtime-to-reason mapping. Persisted facts can disprove a
+  // caller-selected reason, but their absence cannot prove that a closed
+  // allow-listed failure did not occur before minimization.
   if (hasCredential) requireValue(reason === "credential-header");
   if (hasOverlap) requireValue(reason === "request-overlap");
-  if (hasProviderFailure) requireValue(reason === "provider-failure");
+  if (stage !== "artifact" && hasProviderFailure) requireValue(reason === "provider-failure");
   if (hasHashMismatch) requireValue(reason === "hash-mismatch");
   if (hasInvalidContent) requireValue(reason === "content-invalid");
   if (hasTreeIncomplete) requireValue(reason === "tree-incomplete");
+  if (hasArtifactMismatch) requireValue(reason === "artifact-mismatch");
+  if (hasStalePublication) requireValue(reason === "stale-publication" || reason === "identity-mismatch");
+  if (stage !== "artifact" && hasUnexpectedRequest) requireValue(reason === "unexpected-request");
+  if (hasStageFailure) requireValue(reason === (stage === "smoke" ? "smoke-failure" : "qualification-failure"));
+  if (hasQuiescenceFailure) requireValue(reason === "quiescence-failure" || reason === "cleanup-failure");
+  if (hasCleanupFailure) requireValue(reason === "cleanup-failure" || reason === "quiescence-failure");
 }
 
 function validatePayloadSet(payloads, binding) {
@@ -657,7 +646,10 @@ function validatePayloadSet(payloads, binding) {
   requireValue(artifact.issueBodySha256 === binding.issueBodySha256);
   if (artifact.eventSha !== null) requireValue(artifact.eventSha === binding.eventSha);
   if (payloads.artifact.status === "pass") requireValue(lifecycle.collectorCommit === artifact.eventSha && artifact.eventSha === artifact.deployedSha);
-  if (payloads.smoke.status === "pass") requireValue(payloads.smoke.data.providerGetCount === requestInfo.smokeGets.length);
+  const smokeStarted = eventIndex(payloads.lifecycle.data.events, "smoke-start", 1) !== undefined;
+  requireValue(smokeStarted
+    ? payloads.smoke.data.providerGetCount === requestInfo.smokeGets.length
+    : payloads.smoke.data.providerGetCount === null);
   if (payloads.qualification.status === "pass" && payloads.capacity.status !== "not-run") {
     const capacity = payloads.capacity.data; const qualification = payloads.qualification.data;
     const reason = payloads.capacity.reason;
@@ -671,9 +663,13 @@ function validatePayloadSet(payloads, binding) {
   if (payloads.qualification.status === "pass" && payloads.capacity.status === "pass") {
     requireValue(JSON.stringify(payloads.capacity.data.candidates) === JSON.stringify(payloads.qualification.data.candidates));
   }
-  if (payloads.capacity.status === "pass") {
-    requireValue(payloads.capacity.data.rawRequestCount === requestInfo.capacityGets.filter((item) => item.stage === "raw").length);
+  const capacityStarted = eventIndex(payloads.lifecycle.data.events, "capacity-start", 2) !== undefined;
+  const capacityRawCount = requestInfo.capacityGets.filter((item) => item.stage === "raw").length;
+  if (capacityStarted) {
+    requireValue(payloads.capacity.data.rawRequestCount === capacityRawCount);
     requireValue(payloads.capacity.data.maxOverlap === requestInfo.capacityOverlap);
+  } else if (payloads.capacity.status !== "not-run") {
+    requireValue(payloads.capacity.data.rawRequestCount === null && payloads.capacity.data.maxOverlap === null);
   }
   const capacityTreeRequest = requestInfo.capacityGets.find((item) => item.stage === "tree");
   const capacityRawRequests = requestInfo.capacityGets.filter((item) => item.stage === "raw");

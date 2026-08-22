@@ -86,6 +86,15 @@ function requestSequence(repository, revision, root, paths, applicationCall, sta
   return routes.map(([stage, url], index) => request(firstSequence + index, stage, url, applicationCall, start + index * step));
 }
 
+function maximumOverlap(items) {
+  const points = items.flatMap((item) => item.startedMs === item.endedMs ? [] : [[item.startedMs, 1], [item.endedMs, -1]]);
+  points.sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+  let active = 0;
+  let maximum = 0;
+  for (const [, delta] of points) { active += delta; maximum = Math.max(maximum, active); }
+  return maximum;
+}
+
 function passEvents() {
   const names = [
     ["collector-start", 0, 0], ["artifact-verified", 0, 1], ["smoke-start", 1, 2],
@@ -332,12 +341,27 @@ function failurePayload(stage, reason) {
 
   const events = failedEvents(stage, prefixLength);
   events.at(-1).atMs = items.reduce((latest, item) => Math.max(latest, item.endedMs), events.at(-1).atMs);
-  const capacityApplicationGets = items.filter((item) => item.applicationCall && item.requestedUrl.includes("facebook/react"));
-  const overlap = capacityApplicationGets.length === 0 ? 0 : reason === "request-overlap" ? 2 : 1;
+  const smokeStarted = events.some((item) => item.event === "smoke-start");
+  const capacityStarted = events.some((item) => item.event === "capacity-start");
+  const smokeApplicationGets = items.filter((item) => item.method === "GET" && item.applicationCall && item.requestedUrl.includes(CODE_CITY_REPO));
+  const capacityApplicationGets = items.filter((item) => item.method === "GET" && item.applicationCall && item.requestedUrl.includes(REACT_REPO));
+  const overlap = maximumOverlap(capacityApplicationGets);
+  if (stage === "smoke" && smokeStarted) payloads.smoke.data.providerGetCount = smokeApplicationGets.length;
+  if (stage === "capacity" && capacityStarted) {
+    payloads.capacity.data.rawRequestCount = capacityApplicationGets.filter((item) => item.stage === "raw").length;
+    payloads.capacity.data.maxOverlap = overlap;
+  }
   payloads.lifecycle = envelope("lifecycle", "fail", reason, lifecycleData(events, {
-    chromeVersion: events.some((item) => item.event === "smoke-start") ? "140.0.1.2" : null,
-    cdpVersion: events.some((item) => item.event === "smoke-start") ? "1.3" : null,
-    maxOverlap: overlap,
+    collectorCommit: stage === "artifact" ? null : EVENT,
+    invocation: null,
+    nodeVersion: null,
+    chromeVersion: smokeStarted ? "140.0.1.2" : null,
+    cdpVersion: smokeStarted ? "1.3" : null,
+    maxOverlap: capacityStarted ? overlap : null,
+    noRetry: null,
+    noFallback: null,
+    noPersistence: null,
+    noLaterPublication: null,
   }));
   return payloads;
 }
@@ -455,6 +479,19 @@ test("every allowed earliest-primary/failure-reason pairing creates and revalida
   }
 });
 
+test("handled reason validation does not claim successor-owned raw runtime truth", () => {
+  const parsingFailure = failurePayload("smoke", "provider-failure");
+  parsingFailure.requests.data.items.at(-1).status = 200;
+  assert.doesNotThrow(() => createEvidencePacket(parsingFailure, BINDING), "provider parsing failure may retain a 200 exchange");
+
+  const laterInfrastructureFailure = failurePayload("smoke", "provider-failure");
+  laterInfrastructureFailure.smoke.reason = "infrastructure-failure";
+  laterInfrastructureFailure.requests.reason = "infrastructure-failure";
+  laterInfrastructureFailure.lifecycle.reason = "infrastructure-failure";
+  laterInfrastructureFailure.requests.data.items.at(-1).status = 200;
+  assert.doesNotThrow(() => createEvidencePacket(laterInfrastructureFailure, BINDING), "later infrastructure failure may retain prior completed facts");
+});
+
 test("status precedence, auxiliary mapping, null rules, event prefixes, and persisted derivations are closed", () => {
   const cases = [
     () => { const p = failurePayload("smoke", "smoke-failure"); p.qualification.status = "pass"; p.qualification.reason = "none"; return p; },
@@ -469,6 +506,24 @@ test("status precedence, auxiliary mapping, null rules, event prefixes, and pers
     () => { const p = makePassingPayloads(); p.lifecycle.data.noRetry = false; return p; },
   ];
   for (const make of cases) expectCode("invalid-payload", () => createEvidencePacket(make(), BINDING));
+});
+
+test("handled failures bind every observed persisted request count and overlap assertion", () => {
+  const cases = [
+    ["smoke provider count", () => { const p = failurePayload("smoke", "cleanup-failure"); p.smoke.data.providerGetCount = 99; return p; }],
+    ["capacity raw count", () => { const p = failurePayload("capacity", "cleanup-failure"); p.capacity.data.rawRequestCount = 1; return p; }],
+    ["capacity overlap", () => { const p = failurePayload("capacity", "cleanup-failure"); p.capacity.data.maxOverlap = 99; return p; }],
+    ["lifecycle overlap", () => { const p = failurePayload("capacity", "cleanup-failure"); p.lifecycle.data.maxOverlap = 99; return p; }],
+    ["observed smoke count cannot become null", () => { const p = failurePayload("smoke", "cleanup-failure"); p.smoke.data.providerGetCount = null; return p; }],
+    ["observed capacity raw count cannot become null", () => { const p = failurePayload("capacity", "tree-incomplete"); p.capacity.data.rawRequestCount = null; return p; }],
+    ["observed capacity overlap cannot become null", () => { const p = failurePayload("capacity", "tree-incomplete"); p.capacity.data.maxOverlap = null; return p; }],
+    ["observed lifecycle overlap cannot become null", () => { const p = failurePayload("capacity", "tree-incomplete"); p.lifecycle.data.maxOverlap = null; return p; }],
+  ];
+  for (const [label, make] of cases) expectCode("invalid-payload", () => createEvidencePacket(make(), BINDING), label);
+
+  const early = failurePayload("artifact", "infrastructure-failure");
+  early.lifecycle.data.maxOverlap = 0;
+  expectCode("invalid-payload", () => createEvidencePacket(early, BINDING), "unobserved overlap cannot be invented");
 });
 
 test("version and expected media-type strings accept 256 UTF-8 bytes and reject byte 257", () => {
@@ -577,7 +632,7 @@ test("zero to three immediately paired browser preflights are accepted without c
   assert.equal(payloads.capacity.data.rawRequestCount, 4001);
 });
 
-test("direct asset, deployment, and issue exchanges are successful unique GETs with closed topology", () => {
+test("direct asset, deployment, and issue exchanges are stage-aware unique GETs with closed topology", () => {
   const direct = [
     request(1, "asset", "https://felixgeisler.github.io/code-city/package-manifest.json", false, 0.1),
     request(2, "deployment", `https://api.github.com/repos/FelixGeisler/code-city/deployments?sha=${EVENT}&environment=github-pages&per_page=100&page=1`, false, 0.2),
@@ -593,11 +648,23 @@ test("direct asset, deployment, and issue exchanges are successful unique GETs w
   };
   assert.doesNotThrow(() => createEvidencePacket(makeDirectPacket(), BINDING));
 
+  for (const [index, reason] of [[0, "artifact-mismatch"], [1, "production-unreachable"], [3, "infrastructure-failure"]]) {
+    const payloads = failurePayload("artifact", reason);
+    const failedExchange = structuredClone(direct[index]);
+    failedExchange.sequence = 1;
+    failedExchange.status = 503;
+    payloads.requests.data.items = [failedExchange];
+    assert.doesNotThrow(() => createEvidencePacket(payloads, BINDING), `${failedExchange.stage} non-200 ${reason}`);
+  }
+
+  const failedPassExchange = makeDirectPacket();
+  failedPassExchange.requests.data.items[0].status = 503;
+  expectCode("invalid-payload", () => createEvidencePacket(failedPassExchange, BINDING), "passed artifact requires direct 200");
+
   for (const index of [0, 1, 3]) {
     for (const mutate of [
       (payloads, record) => { payloads.requests.data.items.splice(index + 1, 0, structuredClone(record)); },
       (_payloads, record) => { record.method = "OPTIONS"; },
-      (_payloads, record) => { record.status = 500; },
       (_payloads, record) => {
         record.redirected = true;
         record.finalUrl = record.stage === "asset"
@@ -659,7 +726,7 @@ test("capacity lifecycle events share request-clock boundaries for tree, raw ret
   expectCode("invalid-payload", () => createEvidencePacket(timeline((_tree, values) => values[0].startedMs, (_tree, values) => values.at(-1).endedMs - 0.00001), BINDING), "limit before final raw completion");
 });
 
-test("failure boundaries reject later-stage observations and require every known attempted lifecycle fact", () => {
+test("failure boundaries reject later-stage observations and preserve prefix-aware lifecycle nullability", () => {
   const laterRequests = [
     ["artifact", "smoke", request(1, "revision", revisionUrl(CODE_CITY_REPO), true, 0.1)],
     ["smoke", "qualification", request(1, "revision", revisionUrl(REACT_REPO), false, 1.5)],
@@ -672,11 +739,40 @@ test("failure boundaries reject later-stage observations and require every known
     expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `${failedStage} forbids ${blockedStage} requests`);
   }
 
-  for (const key of ["collectorCommit", "invocation", "nodeVersion", "maxOverlap", "noRetry", "noFallback", "noPersistence", "noLaterPublication"]) {
-    const payloads = failurePayload("artifact", "infrastructure-failure");
-    payloads.lifecycle.data[key] = null;
-    expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `known lifecycle ${key}`);
+  const earlyArtifact = failurePayload("artifact", "infrastructure-failure");
+  for (const key of ["collectorCommit", "invocation", "nodeVersion", "chromeVersion", "cdpVersion", "maxOverlap", "noRetry", "noFallback", "noPersistence", "noLaterPublication"]) {
+    assert.equal(earlyArtifact.lifecycle.data[key], null, `early ${key}`);
   }
+  assert.doesNotThrow(() => createEvidencePacket(earlyArtifact, BINDING));
+
+  const beforeBrowser = failurePayload("smoke", "infrastructure-failure");
+  assert.equal(beforeBrowser.lifecycle.data.chromeVersion, null);
+  assert.equal(beforeBrowser.lifecycle.data.cdpVersion, null);
+  assert.equal(beforeBrowser.smoke.data.providerGetCount, null);
+  assert.doesNotThrow(() => createEvidencePacket(beforeBrowser, BINDING));
+
+  const afterBrowser = failurePayload("smoke", "cleanup-failure");
+  assert.equal(afterBrowser.smoke.data.providerGetCount, 0);
+  assert.equal(afterBrowser.lifecycle.data.chromeVersion, "140.0.1.2");
+  assert.equal(afterBrowser.lifecycle.data.cdpVersion, "1.3");
+  assert.doesNotThrow(() => createEvidencePacket(afterBrowser, BINDING));
+
+  const beforeCapacity = failurePayload("qualification", "infrastructure-failure");
+  assert.equal(beforeCapacity.lifecycle.data.maxOverlap, null);
+  assert.doesNotThrow(() => createEvidencePacket(beforeCapacity, BINDING));
+
+  const capacityNotStarted = failurePayload("capacity", "identity-mismatch");
+  assert.equal(capacityNotStarted.capacity.data.rawRequestCount, null);
+  assert.equal(capacityNotStarted.capacity.data.maxOverlap, null);
+  assert.equal(capacityNotStarted.lifecycle.data.maxOverlap, null);
+  assert.doesNotThrow(() => createEvidencePacket(capacityNotStarted, BINDING));
+
+  const capacityStarted = failurePayload("capacity", "tree-incomplete");
+  assert.equal(capacityStarted.capacity.data.rawRequestCount, 0);
+  assert.equal(capacityStarted.capacity.data.maxOverlap, 1);
+  assert.equal(capacityStarted.lifecycle.data.maxOverlap, 1);
+  assert.doesNotThrow(() => createEvidencePacket(capacityStarted, BINDING));
+
   const missingDigest = failurePayload("artifact", "infrastructure-failure");
   missingDigest.artifact.data.issueBodySha256 = null;
   expectCode("invalid-payload", () => createEvidencePacket(missingDigest, BINDING));
@@ -688,7 +784,6 @@ test("failure boundaries reject later-stage observations and require every known
   reachedCdp.lifecycle.data.cdpVersion = null;
   expectCode("invalid-payload", () => createEvidencePacket(reachedCdp, BINDING));
 
-  const earlyArtifact = failurePayload("artifact", "infrastructure-failure");
   assert.equal(earlyArtifact.artifact.data.eventSha, null);
   const packet = createEvidencePacket(earlyArtifact, BINDING);
   assert.equal(validateEvidencePacket(packet.files, BINDING).packetDigest, packet.packetDigest);
