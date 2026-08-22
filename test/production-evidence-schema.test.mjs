@@ -481,7 +481,7 @@ test("version and expected media-type strings accept 256 UTF-8 bytes and reject 
   }
 
   for (const [field, exact] of [["nodeVersion", exactNode], ["chromeVersion", exactChrome]]) {
-    const payloads = makePassingPayloads();
+    const payloads = failurePayload("artifact", "artifact-mismatch");
     payloads.artifact.data[field] = exact;
     payloads.lifecycle.data[field] = exact;
     assert.doesNotThrow(() => createEvidencePacket(payloads, BINDING), `${field} boundary`);
@@ -491,7 +491,7 @@ test("version and expected media-type strings accept 256 UTF-8 bytes and reject 
     expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `${field} boundary + 1`);
   }
 
-  const media = makePassingPayloads();
+  const media = failurePayload("artifact", "artifact-mismatch");
   Object.assign(media.artifact.data.files[0], { expectedMediaType: exactMediaType, observedMediaType: exactMediaType });
   assert.doesNotThrow(() => createEvidencePacket(media, BINDING), "expectedMediaType boundary");
   media.artifact.data.files[0].expectedMediaType = `${exactMediaType}a`;
@@ -586,7 +586,7 @@ test("direct asset, deployment, and issue exchanges are successful unique GETs w
   ];
   for (const item of direct) { item.headerNames = []; item.corsAllowOrigin = null; }
   const makeDirectPacket = () => {
-    const payloads = makePassingPayloads();
+    const payloads = failurePayload("smoke", "infrastructure-failure");
     payloads.requests.data.items.unshift(...structuredClone(direct));
     payloads.requests.data.items.forEach((item, index) => { item.sequence = index + 1; });
     return payloads;
@@ -630,37 +630,33 @@ test("request route, order, uniqueness, OPTIONS, privacy, timing, overlap, and d
 });
 
 test("capacity lifecycle events share request-clock boundaries for tree, raw retrieval, and limit failure", () => {
+  const payloads = makePassingPayloads();
+  const capacityGets = payloads.requests.data.items.filter((item) => item.applicationCall && item.requestedUrl.includes("facebook/react"));
+  const tree = capacityGets.find((item) => item.stage === "tree");
+  const raws = capacityGets.filter((item) => item.stage === "raw");
   const timeline = (inventoryAt, limitAt) => {
-    const payloads = makePassingPayloads();
-    const capacityGets = payloads.requests.data.items.filter((item) => item.applicationCall && item.requestedUrl.includes("facebook/react"));
-    const tree = capacityGets.find((item) => item.stage === "tree");
-    const raws = capacityGets.filter((item) => item.stage === "raw");
     event(payloads.lifecycle.data.events, "inventory-complete", 2).atMs = inventoryAt(tree, raws);
     event(payloads.lifecycle.data.events, "limit-failure", 2).atMs = limitAt(tree, raws);
     payloads.lifecycle.data.durations = durations(payloads.lifecycle.data.events);
-    return { payloads, tree, raws };
+    return payloads;
   };
 
   for (const [label, inventoryAt] of [
     ["tree completion equality", (tree) => tree.endedMs],
     ["first raw start equality", (_tree, raws) => raws[0].startedMs],
   ]) {
-    const { payloads } = timeline(inventoryAt, (_tree, raws) => raws.at(-1).endedMs);
-    assert.doesNotThrow(() => createEvidencePacket(payloads, BINDING), label);
+    assert.doesNotThrow(() => createEvidencePacket(timeline(inventoryAt, (_tree, values) => values.at(-1).endedMs), BINDING), label);
   }
 
   for (const [label, inventoryAt] of [
     ["before tree completion", (tree) => tree.endedMs - 0.00001],
     ["after first raw start", (_tree, raws) => raws[0].startedMs + 0.00001],
   ]) {
-    const { payloads } = timeline(inventoryAt, (_tree, raws) => raws.at(-1).endedMs);
-    expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), label);
+    expectCode("invalid-payload", () => createEvidencePacket(timeline(inventoryAt, (_tree, values) => values.at(-1).endedMs), BINDING), label);
   }
 
-  const exactLimit = timeline((_tree, raws) => raws[0].startedMs, (_tree, raws) => raws.at(-1).endedMs);
-  assert.doesNotThrow(() => createEvidencePacket(exactLimit.payloads, BINDING), "last raw completion equality");
-  const earlyLimit = timeline((_tree, raws) => raws[0].startedMs, (_tree, raws) => raws.at(-1).endedMs - 0.00001);
-  expectCode("invalid-payload", () => createEvidencePacket(earlyLimit.payloads, BINDING), "limit before final raw completion");
+  assert.doesNotThrow(() => createEvidencePacket(timeline((_tree, values) => values[0].startedMs, (_tree, values) => values.at(-1).endedMs), BINDING), "last raw completion equality");
+  expectCode("invalid-payload", () => createEvidencePacket(timeline((_tree, values) => values[0].startedMs, (_tree, values) => values.at(-1).endedMs - 0.00001), BINDING), "limit before final raw completion");
 });
 
 test("failure boundaries reject later-stage observations and require every known attempted lifecycle fact", () => {
