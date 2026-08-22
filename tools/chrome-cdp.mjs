@@ -83,11 +83,15 @@ export async function readInstalledChromeVersion(discovery, {
   return version;
 }
 
+function childIsTerminal(child) {
+  return !child || [child.exitCode, child.signalCode].some((value) => value !== null && value !== undefined);
+}
+
 async function terminateChild(child) {
-  if (!child || child.exitCode !== null) return;
+  if (childIsTerminal(child)) return;
   const exited = new Promise((resolve) => child.once("exit", resolve));
   child.kill();
-  if (child.exitCode === null) await exited;
+  if (!childIsTerminal(child)) await exited;
 }
 
 export async function launchInstalledChrome(discovery, profile, { spawnImpl = spawnProcess } = {}) {
