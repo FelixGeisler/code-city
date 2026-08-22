@@ -772,6 +772,33 @@ test("smoke exchanges share revision-selection, publication, and stage-clock bou
   }
 });
 
+test("handled smoke timestamps require an observed start and stay within the failure clock", () => {
+  const absent = failurePayload("smoke", "infrastructure-failure");
+  assert.equal(event(absent.lifecycle.data.events, "smoke-start", 1), undefined);
+  assert.equal(absent.smoke.data.startedMs, null);
+  assert.equal(absent.smoke.data.endedMs, null);
+  assert.doesNotThrow(() => createEvidencePacket(absent, BINDING), "both timestamps remain absent before smoke-start");
+  for (const key of ["startedMs", "endedMs"]) {
+    const invented = failurePayload("smoke", "infrastructure-failure");
+    invented.smoke.data[key] = 1;
+    expectCode("invalid-payload", () => createEvidencePacket(invented, BINDING), `${key} requires smoke-start`);
+  }
+
+  for (const [label, startedMs, endedMs, accepted] of [
+    ["before smoke-start", 1.9999, 2, false],
+    ["smoke-start equality", 2, 2, true],
+    ["mid-stage", 2.25, 2.75, true],
+    ["collector-failed equality", 2, 3, true],
+    ["after collector-failed", 2, 3.0001, false],
+  ]) {
+    const payloads = failurePayload("smoke", "provider-failure");
+    payloads.smoke.data.startedMs = startedMs;
+    payloads.smoke.data.endedMs = endedMs;
+    if (accepted) assert.doesNotThrow(() => createEvidencePacket(payloads, BINDING), label);
+    else expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), label);
+  }
+});
+
 test("qualification direct exchanges stay inside their exact phase window", () => {
   const boundary = makePassingPayloads();
   const direct = boundary.requests.data.items.filter((item) => item.requestedUrl.includes(REACT_REPO) && !item.applicationCall);
@@ -860,6 +887,46 @@ test("capacity lifecycle events share request-clock boundaries for resolution, i
 
   assert.doesNotThrow(() => createEvidencePacket(timeline((_tree, values) => values[0].startedMs, (_tree, values) => values.at(-1).endedMs), BINDING), "last raw completion equality");
   expectCode("invalid-payload", () => createEvidencePacket(timeline((_tree, values) => values[0].startedMs, (_tree, values) => values.at(-1).endedMs - 0.00001), BINDING), "limit before final raw completion");
+});
+
+test("handled capacity timestamps require observed lifecycle boundaries through stop", () => {
+  const absent = failurePayload("capacity", "identity-mismatch");
+  assert.equal(event(absent.lifecycle.data.events, "capacity-start", 2), undefined);
+  assert.equal(absent.capacity.data.startedMs, null);
+  assert.equal(absent.capacity.data.endedMs, null);
+  assert.doesNotThrow(() => createEvidencePacket(absent, BINDING), "both timestamps remain absent before capacity-start");
+  for (const key of ["startedMs", "endedMs"]) {
+    const invented = failurePayload("capacity", "identity-mismatch");
+    invented.capacity.data[key] = 8;
+    expectCode("invalid-payload", () => createEvidencePacket(invented, BINDING), `${key} requires capacity-start`);
+  }
+
+  for (const [label, startedMs, endedMs, accepted] of [
+    ["before capacity-start", 7.9999, 8, false],
+    ["ended before capacity-start", null, 7.9999, false],
+    ["capacity-start equality", 8, 8, true],
+    ["mid-stage", 8.5, 9.5, true],
+    ["collector-failed equality", 8.5, 10, true],
+    ["after collector-failed", 8.5, 10.0001, false],
+    ["start after observed revision selection", 9.0001, 9.5, false],
+  ]) {
+    const payloads = failurePayload("capacity", "provider-failure");
+    payloads.capacity.data.startedMs = startedMs;
+    payloads.capacity.data.endedMs = endedMs;
+    if (accepted) assert.doesNotThrow(() => createEvidencePacket(payloads, BINDING), label);
+    else expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), label);
+  }
+
+  for (const [label, endedMs, accepted] of [
+    ["worker-quiescent equality", 22, true],
+    ["after worker-quiescent before collector-failed", 22.0001, false],
+  ]) {
+    const payloads = failurePayload("capacity", "cleanup-failure");
+    payloads.capacity.data.startedMs = 8;
+    payloads.capacity.data.endedMs = endedMs;
+    if (accepted) assert.doesNotThrow(() => createEvidencePacket(payloads, BINDING), label);
+    else expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), label);
+  }
 });
 
 test("failure boundaries reject later-stage observations and preserve prefix-aware lifecycle nullability", () => {

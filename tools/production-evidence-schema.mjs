@@ -495,6 +495,14 @@ function validateDurations(value) {
 }
 
 function eventIndex(events, name, generation) { return events.find((event) => event.event === name && event.generation === generation); }
+function validateStageTimes(data, start, finalEvent, startedUpper = finalEvent, endedUpper = finalEvent) {
+  if (!start) {
+    requireValue(data.startedMs === null && data.endedMs === null);
+    return;
+  }
+  if (data.startedMs !== null) requireValue(data.startedMs >= start.atMs && data.startedMs <= startedUpper.atMs);
+  if (data.endedMs !== null) requireValue(data.endedMs >= start.atMs && data.endedMs <= endedUpper.atMs);
+}
 function difference(events, endName, endGeneration, startName, startGeneration) {
   const end = eventIndex(events, endName, endGeneration); const start = eventIndex(events, startName, startGeneration);
   return end && start ? end.atMs - start.atMs : null;
@@ -689,10 +697,7 @@ function validatePayloadSet(payloads, binding) {
   const traceReset = eventIndex(events, "trace-reset", 0);
   const smokeRevisionExchanges = requestInfo.groups.smoke.filter((item) => item.stage === "revision");
   const smokeRetrievalExchanges = requestInfo.groups.smoke.filter((item) => ["commit", "tree", "raw"].includes(item.stage));
-  if (payloads.smoke.data.startedMs !== null) {
-    requireValue(smokeStart !== undefined && payloads.smoke.data.startedMs >= smokeStart.atMs);
-    if (traceReset) requireValue(payloads.smoke.data.startedMs <= traceReset.atMs);
-  }
+  validateStageTimes(payloads.smoke.data, smokeStart, finalEvent, traceReset ?? finalEvent, cityPublished ?? finalEvent);
   if (smokeRevisionSelected) {
     requireValue(smokeRevisionExchanges.every((item) => item.endedMs <= smokeRevisionSelected.atMs));
     requireValue(smokeRetrievalExchanges.every((item) => item.startedMs >= smokeRevisionSelected.atMs));
@@ -712,6 +717,7 @@ function validatePayloadSet(payloads, binding) {
   const limitFailure = eventIndex(events, "limit-failure", 2);
   const capacityRevisionExchanges = requestInfo.groups.capacity.filter((item) => item.stage === "revision");
   const capacityInventoryExchanges = requestInfo.groups.capacity.filter((item) => item.stage === "commit" || item.stage === "tree");
+  validateStageTimes(payloads.capacity.data, capacityStart, finalEvent, capacityRevisionSelected ?? finalEvent, workerQuiescent ?? finalEvent);
   if (payloads.capacity.status === "pass") requireValue(payloads.capacity.data.startedMs === capacityStart.atMs && payloads.capacity.data.endedMs === workerQuiescent.atMs);
   if (capacityRevisionSelected) {
     requireValue(capacityRevisionExchanges.every((item) => item.endedMs <= capacityRevisionSelected.atMs));
