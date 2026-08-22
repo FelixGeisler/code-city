@@ -40,4 +40,8 @@ xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-conten
 |xref:adr/0009-m1-main-line-and-github-pages-cutover.adoc[ADR 0009]
 |M1 uses `main`; v1 is archival; only `main` publishes
 |Keeps one integration line and one production publisher
+
+|xref:adr/0010-canonical-artifact-manifest-and-publication-evidence-contract.adoc[ADR 0010]
+|Canonical artifact manifest and publication evidence
+|Binds one reviewed package to its protected-main publication run
 |===
