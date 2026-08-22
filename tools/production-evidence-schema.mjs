@@ -427,13 +427,19 @@ function validateExchangeSequence(items, repository, applicationCall, complete) 
   return gets;
 }
 
-function validateGetBindings(gets, data, candidateValues, complete) {
-  if (!complete) return;
+function validateGetBindings(gets, data, candidateValues, repositoryUrl, allowUnexpectedRaw = false) {
   const routes = gets.map((item) => routeOf(item.requestedUrl, item.stage));
-  requireValue(routes[1].identity === data.revision && routes[2].identity === data.rootTree);
-  for (let index = 3; index < routes.length; index += 1) {
-    requireValue(routes[index].identity === data.revision);
-    if (candidateValues) requireValue(routes[index].path === candidateValues[index - 3].path);
+  if (routes.length > 0) requireValue(data.repositoryUrl === repositoryUrl);
+  const commit = routes.find((route) => route.stage === "commit");
+  const tree = routes.find((route) => route.stage === "tree");
+  const raws = routes.filter((route) => route.stage === "raw");
+  if (commit) requireValue(data.revision !== null && commit.identity === data.revision);
+  if (tree) requireValue(data.rootTree !== null && tree.identity === data.rootTree);
+  if (raws.length > 0) requireValue(data.revision !== null && raws.every((route) => route.identity === data.revision));
+  if (candidateValues !== null) {
+    if (!allowUnexpectedRaw) requireValue(raws.length <= candidateValues.length);
+    const sharedLength = Math.min(raws.length, candidateValues.length);
+    for (let index = 0; index < sharedLength; index += 1) requireValue(raws[index].path === candidateValues[index].path);
   }
 }
 
@@ -471,9 +477,9 @@ function validateRequests(envelope, payloads, overallPass, primaryReason) {
   if (smokePass) requireValue(smokeGets.length >= 4);
   if (qualificationPass) requireValue(qualificationGets.length === 4004 && qualificationGets.slice(3).length === 4001);
   if (capacityPass) requireValue(capacityGets.length === 4004 && capacityGets.slice(3).length === 4001);
-  validateGetBindings(smokeGets, payloads.smoke.data, null, smokePass);
-  validateGetBindings(qualificationGets, payloads.qualification.data, payloads.qualification.data.candidates, qualificationPass);
-  validateGetBindings(capacityGets, payloads.capacity.data, payloads.capacity.data.candidates, capacityPass);
+  validateGetBindings(smokeGets, payloads.smoke.data, null, CODE_CITY_URL);
+  validateGetBindings(qualificationGets, payloads.qualification.data, payloads.qualification.data.candidates, REACT_URL, payloads.qualification.reason === "unexpected-request");
+  validateGetBindings(capacityGets, payloads.capacity.data, payloads.capacity.data.candidates, REACT_URL, payloads.capacity.reason === "unexpected-request");
   const passingGroups = [...(smokePass ? groups.smoke : []), ...(qualificationPass ? groups.qualification : []), ...(capacityPass ? groups.capacity : [])];
   requireValue(passingGroups.every((item) => (item.method === "GET" ? item.status === 200 : item.status >= 200 && item.status <= 299)
     && item.redirected === false && item.authorizationAbsent && item.cookieAbsent && item.refererAbsent));
@@ -515,7 +521,7 @@ function validateLifecycleImplications(payloads, requestInfo, events) {
       requireFacts(smoke, ["repositoryUrl", "revision", "rootTree", "terminal", "canvasCount", "modelSha256", "startedMs", "endedMs", "providerGetCount"]);
       requireValue(smoke.repositoryUrl === CODE_CITY_URL && smoke.terminal === "success" && smoke.canvasCount === 1
         && requestInfo.smokeGets.length >= 4 && smoke.providerGetCount === requestInfo.smokeGets.length);
-      validateGetBindings(requestInfo.smokeGets, smoke, null, true);
+      validateGetBindings(requestInfo.smokeGets, smoke, null, CODE_CITY_URL);
       requireSuccessfulExchanges(requestInfo.groups.smoke, true);
     }],
     ["trace-reset", 0, () => {
@@ -527,7 +533,7 @@ function validateLifecycleImplications(payloads, requestInfo, events) {
         && qualification.treeEntries >= 4001 && qualification.candidates.length === 4001
         && qualification.candidates.every((candidate) => candidate.hashMatched && candidate.contentValid)
         && requestInfo.qualificationGets.length === 4004);
-      validateGetBindings(requestInfo.qualificationGets, qualification, qualification.candidates, true);
+      validateGetBindings(requestInfo.qualificationGets, qualification, qualification.candidates, REACT_URL);
       requireSuccessfulExchanges(requestInfo.groups.qualification);
     }],
     ["revision-selected", 2, () => {
@@ -539,7 +545,7 @@ function validateLifecycleImplications(payloads, requestInfo, events) {
       requireFacts(capacity, ["repositoryUrl", "revision", "rootTree"]);
       requireValue(capacity.repositoryUrl === REACT_URL && requestInfo.capacityGets.length >= 3
         && requestInfo.capacityGets.slice(0, 3).every((item, index) => item.stage === ["revision", "commit", "tree"][index]));
-      validateGetBindings(requestInfo.capacityGets.slice(0, 3), capacity, null, true);
+      validateGetBindings(requestInfo.capacityGets.slice(0, 3), capacity, null, REACT_URL);
       requireSuccessfulExchanges(requestInfo.groups.capacity.filter((item) => ["revision", "commit", "tree"].includes(item.stage)), true);
     }],
     ["limit-failure", 2, () => {
@@ -549,11 +555,14 @@ function validateLifecycleImplications(payloads, requestInfo, events) {
         && capacity.rawRequestCount === 4001 && capacity.candidates.length === 4001
         && capacity.candidates.every((candidate) => candidate.hashMatched && candidate.contentValid)
         && requestInfo.capacityGets.length === 4004);
-      validateGetBindings(requestInfo.capacityGets, capacity, capacity.candidates, true);
+      validateGetBindings(requestInfo.capacityGets, capacity, capacity.candidates, REACT_URL);
       requireSuccessfulExchanges(requestInfo.groups.capacity, true);
     }],
     ["request-quiescent", 2, () => requireValue(capacity.noLaterRequest === true)],
-    ["worker-quiescent", 2, () => requireValue(capacity.workerQuiescent === true)],
+    ["worker-quiescent", 2, () => {
+      const observed = eventIndex(events, "worker-quiescent", 2);
+      requireValue(capacity.workerQuiescent === true && capacity.endedMs === observed.atMs);
+    }],
   ];
   for (const [name, generation, validate] of implications) if (eventIndex(events, name, generation)) validate();
 }

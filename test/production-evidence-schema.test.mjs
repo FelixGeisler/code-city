@@ -357,6 +357,10 @@ function failurePayload(stage, reason) {
       const first = items.at(-2); target.startedMs = first.startedMs; target.endedMs = first.endedMs;
     }
   }
+  if (stage === "qualification" && ["hash-mismatch", "content-invalid"].includes(reason)) {
+    items.push(...requestSequence(REACT_REPO, REACT_EVENT, REACT_ROOT, failedData.candidates.map(({ path }) => path), false, 6.1, 0.0002, priorCount + 1));
+    prefixLength = 7;
+  }
   if (stage === "capacity" && !requestReasons.has(reason)) {
     let paths = null;
     if (["tree-incomplete", "limit-order"].includes(reason)) paths = [];
@@ -365,6 +369,18 @@ function failurePayload(stage, reason) {
     if (paths !== null) {
       Object.assign(payloads.capacity.data, { repositoryUrl: "https://github.com/facebook/react", revision: REACT_EVENT, rootTree: REACT_ROOT });
       items.push(...capacityRequestSequence(paths, priorCount + 1));
+    }
+  }
+  if (stage !== "artifact") {
+    const repository = stage === "smoke" ? CODE_CITY_REPO : REACT_REPO;
+    const stageItems = items.filter((item) => item.method === "GET" && item.requestedUrl.includes(repository)
+      && item.applicationCall === (stage !== "qualification"));
+    if (stageItems.some((item) => item.stage === "commit" || item.stage === "raw")) payloads[stage].data.revision = stage === "smoke" ? EVENT : REACT_EVENT;
+    if (stageItems.some((item) => item.stage === "tree")) payloads[stage].data.rootTree = stage === "smoke" ? ROOT : REACT_ROOT;
+    if ((stage === "qualification" || stage === "capacity") && requestReasons.has(reason)) {
+      const rawCount = stageItems.filter((item) => item.stage === "raw").length;
+      const candidateSource = stage === "qualification" ? candidates() : payloads.qualification.data.candidates;
+      payloads[stage].data.candidates = structuredClone(candidateSource.slice(0, Math.min(rawCount, 4001)));
     }
   }
   if (reason === "cleanup-failure" || reason === "quiescence-failure") {
@@ -427,7 +443,10 @@ function failurePayload(stage, reason) {
     candidates: structuredClone(payloads.qualification.data.candidates),
     startedMs: 8,
   });
-  if (workerQuiescent) payloads.capacity.data.workerQuiescent = true;
+  if (workerQuiescent) {
+    payloads.capacity.data.workerQuiescent = true;
+    payloads.capacity.data.endedMs = event(events, "worker-quiescent", 2).atMs;
+  }
   payloads.lifecycle = envelope("lifecycle", "fail", reason, lifecycleData(events, {
     collectorCommit: stage === "artifact" ? null : EVENT,
     invocation: null,
@@ -690,12 +709,20 @@ test("all lifecycle policy flags require true on pass and accept null, false, or
 
 test("worker-quiescent events require the matching capacity fact while absence permits an unobserved or failed outcome", () => {
   const observed = failurePayload("capacity", "cleanup-failure");
-  assert(event(observed.lifecycle.data.events, "worker-quiescent", 2));
+  const observedEvent = event(observed.lifecycle.data.events, "worker-quiescent", 2);
+  assert(observedEvent);
   assert.equal(observed.capacity.data.workerQuiescent, true);
+  assert.equal(observed.capacity.data.endedMs, observedEvent.atMs);
   assert.doesNotThrow(() => createEvidencePacket(observed, BINDING));
   for (const value of [null, false]) {
-    observed.capacity.data.workerQuiescent = value;
-    expectCode("invalid-payload", () => createEvidencePacket(observed, BINDING), `event rejects workerQuiescent=${value}`);
+    const mismatch = failurePayload("capacity", "cleanup-failure");
+    mismatch.capacity.data.workerQuiescent = value;
+    expectCode("invalid-payload", () => createEvidencePacket(mismatch, BINDING), `event rejects workerQuiescent=${value}`);
+  }
+  for (const value of [null, observedEvent.atMs - 0.0001, observedEvent.atMs + 0.0001]) {
+    const mismatch = failurePayload("capacity", "cleanup-failure");
+    mismatch.capacity.data.endedMs = value;
+    expectCode("invalid-payload", () => createEvidencePacket(mismatch, BINDING), `event rejects endedMs=${value}`);
   }
 
   for (const value of [null, false]) {
@@ -725,7 +752,7 @@ test("every observation event accepts its valid partial predecessor and complete
   assert.equal(prefixes[0][1].smoke.data.revision, null, "revision may remain partial before selection");
   assert.equal(prefixes[4][1].qualification.data.revision, null, "qualification may remain partial before completion");
   assert.equal(prefixes[6][1].capacity.data.revision, null, "capacity may remain partial before selection");
-  assert.equal(prefixes[7][1].capacity.data.rootTree, null, "inventory may remain partial before completion");
+  assert.equal(prefixes[7][1].capacity.data.rootTree, REACT_ROOT, "completed tree URL retains the root before inventory-complete");
   assert.equal(prefixes[8][1].capacity.data.terminal, null, "limit facts may remain partial before limit-failure");
   assert.equal(prefixes[8][1].capacity.data.noLaterRequest, null, "quiescence may remain partial before request-quiescent");
 });
@@ -826,6 +853,47 @@ test("handled failures bind every observed persisted request count and overlap a
   const early = failurePayload("artifact", "infrastructure-failure");
   early.lifecycle.data.maxOverlap = 0;
   expectCode("invalid-payload", () => createEvidencePacket(early, BINDING), "unobserved overlap cannot be invented");
+});
+
+test("completed persisted repository, revision, tree, and candidate routes bind on handled prefixes", () => {
+  const mutateUrl = (record, url) => {
+    record.requestedUrl = url;
+    record.finalUrl = url;
+  };
+  const qualificationPrefix = () => failurePayload("qualification", "hash-mismatch");
+  const validQualification = qualificationPrefix();
+  assert.equal(validQualification.qualification.data.candidates.length, 1);
+  assert.doesNotThrow(() => createEvidencePacket(validQualification, BINDING), "one completed candidate prefix is valid");
+
+  const qualificationMutations = [
+    ["repository route", (payloads) => mutateUrl(payloads.requests.data.items.find((item) => !item.applicationCall && item.stage === "revision"), revisionUrl(CODE_CITY_REPO))],
+    ["commit revision", (payloads) => mutateUrl(payloads.requests.data.items.find((item) => !item.applicationCall && item.stage === "commit"), commitUrl(REACT_REPO, "1".repeat(40)))],
+    ["tree root", (payloads) => mutateUrl(payloads.requests.data.items.find((item) => !item.applicationCall && item.stage === "tree"), treeUrl(REACT_REPO, "2".repeat(40)))],
+    ["raw revision", (payloads) => mutateUrl(payloads.requests.data.items.find((item) => !item.applicationCall && item.stage === "raw"), rawUrl(REACT_REPO, "3".repeat(40), "0001.ts"))],
+    ["decoded candidate path", (payloads) => mutateUrl(payloads.requests.data.items.find((item) => !item.applicationCall && item.stage === "raw"), rawUrl(REACT_REPO, REACT_EVENT, "0000.ts"))],
+    ["missing revision fact", (payloads) => { payloads.qualification.data.revision = null; }],
+    ["missing root fact", (payloads) => { payloads.qualification.data.rootTree = null; }],
+    ["missing candidate fact", (payloads) => { payloads.qualification.data.candidates = []; }],
+  ];
+  for (const [label, mutate] of qualificationMutations) {
+    const payloads = qualificationPrefix();
+    mutate(payloads);
+    expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), label);
+  }
+
+  const capacity = failurePayload("capacity", "hash-mismatch");
+  const firstCapacityRaw = capacity.requests.data.items.find((item) => item.applicationCall && item.stage === "raw" && item.requestedUrl.includes(REACT_REPO));
+  mutateUrl(firstCapacityRaw, rawUrl(REACT_REPO, REACT_EVENT, "0000.ts"));
+  expectCode("invalid-payload", () => createEvidencePacket(capacity, BINDING), "capacity raw path must match the same-index candidate");
+
+  const beforeCapacityRaw = failurePayload("capacity", "limit-order");
+  assert.equal(beforeCapacityRaw.requests.data.items.filter((item) => item.applicationCall && item.stage === "raw" && item.requestedUrl.includes(REACT_REPO)).length, 0);
+  assert.doesNotThrow(() => createEvidencePacket(beforeCapacityRaw, BINDING), "unrequested capacity candidates do not invent raw observations");
+
+  const smoke = failurePayload("smoke", "cleanup-failure");
+  const smokeRaw = smoke.requests.data.items.find((item) => item.applicationCall && item.stage === "raw" && item.requestedUrl.includes(CODE_CITY_REPO));
+  mutateUrl(smokeRaw, rawUrl(CODE_CITY_REPO, EVENT, "src/other.ts"));
+  assert.doesNotThrow(() => createEvidencePacket(smoke, BINDING), "discarded smoke tree candidates are not inferred");
 });
 
 test("version and expected media-type strings accept 256 UTF-8 bytes and reject byte 257", () => {
