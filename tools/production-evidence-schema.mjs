@@ -201,8 +201,8 @@ function validateArtifactFile(record) {
 function validateArtifact(envelope) {
   const data = envelope.data;
   if (envelope.status === "not-run") reject();
-  sha256(data.issueBodySha256); nullable(data.eventSha, gitId); fixedOrNull(data.repository, REPOSITORY);
-  nullable(data.runId, positiveCount); nullable(data.runAttempt, positiveCount); fixedOrNull(data.origin, ORIGIN);
+  sha256(data.issueBodySha256); nullable(data.eventSha, gitId); requireValue(data.repository === REPOSITORY);
+  nullable(data.runId, positiveCount); nullable(data.runAttempt, positiveCount); requireValue(data.origin === ORIGIN);
   nullable(data.manifestSha256, sha256); nullable(data.publicationRecordSha256, sha256);
   nullable(data.deploymentId, positiveCount); nullable(data.deployedSha, gitId);
   nullablePattern(data.nodeVersion, /^v24\.\d+\.\d+$/);
@@ -559,10 +559,7 @@ function validateLifecycle(envelope, overallPass, primaryReason, failedStage, re
   const capacityStarted = eventIndex(data.events, "capacity-start", 2) !== undefined;
   nullable(data.maxOverlap, count);
   requireValue(capacityStarted ? data.maxOverlap === requestInfo.capacityOverlap : data.maxOverlap === null);
-  for (const key of ["noRetry", "noFallback", "noPersistence", "noLaterPublication"]) {
-    nullableBoolean(data[key]);
-    requireValue(data[key] === null || data[key] === true);
-  }
+  for (const key of ["noRetry", "noFallback", "noPersistence", "noLaterPublication"]) nullableBoolean(data[key]);
   const browserStarted = eventIndex(data.events, "smoke-start", 1) !== undefined;
   if (browserStarted) requireValue(data.chromeVersion !== null && data.cdpVersion !== null);
   if (overallPass) {

@@ -288,7 +288,7 @@ function failurePayload(stage, reason) {
     if (reason === "production-unreachable") { failedData.files = []; failedData.policyMatched = null; }
     if (reason === "infrastructure-failure") {
       failedData = artifactData();
-      for (const key of Object.keys(failedData)) if (key !== "issueBodySha256" && key !== "files") failedData[key] = null;
+      for (const key of Object.keys(failedData)) if (!["issueBodySha256", "repository", "origin", "files"].includes(key)) failedData[key] = null;
       failedData.files = [];
     }
   } else if (stage === "smoke") {
@@ -541,6 +541,50 @@ test("status precedence, auxiliary mapping, null rules, event prefixes, and pers
     () => { const p = makePassingPayloads(); p.lifecycle.data.noRetry = false; return p; },
   ];
   for (const make of cases) expectCode("invalid-payload", () => createEvidencePacket(make(), BINDING));
+});
+
+test("artifact fixed constants remain exact facts on pass and every handled failure", () => {
+  const cases = [
+    ["pass", makePassingPayloads()],
+    ["earliest handled failure", failurePayload("artifact", "infrastructure-failure")],
+    ["later handled failure", failurePayload("smoke", "infrastructure-failure")],
+  ];
+  for (const [label, payloads] of cases) {
+    for (const [field, exact, wrong] of [
+      ["repository", "FelixGeisler/code-city", "facebook/react"],
+      ["origin", "https://felixgeisler.github.io/code-city/", "https://felixgeisler.github.io/"],
+    ]) {
+      assert.equal(payloads.artifact.data[field], exact, `${label} ${field}`);
+      payloads.artifact.data[field] = null;
+      expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `${label} null ${field}`);
+      payloads.artifact.data[field] = wrong;
+      expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `${label} wrong ${field}`);
+      payloads.artifact.data[field] = exact;
+    }
+    assert.doesNotThrow(() => createEvidencePacket(payloads, BINDING), label);
+  }
+});
+
+test("all lifecycle policy flags require true on pass and accept null, false, or true on handled failure", () => {
+  const fields = ["noRetry", "noFallback", "noPersistence", "noLaterPublication"];
+  const pass = makePassingPayloads();
+  assert.doesNotThrow(() => createEvidencePacket(pass, BINDING), "pass accepts all four true flags");
+  for (const field of fields) {
+    for (const value of [null, false]) {
+      pass.lifecycle.data[field] = value;
+      expectCode("invalid-payload", () => createEvidencePacket(pass, BINDING), `pass rejects ${field}=${value}`);
+    }
+    pass.lifecycle.data[field] = true;
+  }
+
+  const handled = failurePayload("artifact", "infrastructure-failure");
+  for (const field of fields) {
+    for (const value of [null, false, true]) {
+      handled.lifecycle.data[field] = value;
+      assert.doesNotThrow(() => createEvidencePacket(handled, BINDING), `failure accepts ${field}=${value}`);
+    }
+    handled.lifecycle.data[field] = null;
+  }
 });
 
 test("handled failures bind every observed persisted request count and overlap assertion", () => {
