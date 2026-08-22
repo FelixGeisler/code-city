@@ -83,6 +83,13 @@ export async function readInstalledChromeVersion(discovery, {
   return version;
 }
 
+async function terminateChild(child) {
+  if (!child || child.exitCode !== null) return;
+  const exited = new Promise((resolve) => child.once("exit", resolve));
+  child.kill();
+  if (child.exitCode === null) await exited;
+}
+
 export async function launchInstalledChrome(discovery, profile, { spawnImpl = spawnProcess } = {}) {
   invariant(discovery && typeof discovery.executable === "string", "Chrome discovery is invalid");
   invariant(typeof profile === "string" && path.isAbsolute(profile), "Chrome profile must be an absolute path");
@@ -93,25 +100,38 @@ export async function launchInstalledChrome(discovery, profile, { spawnImpl = sp
     stdio: ["ignore", "ignore", "pipe"],
     windowsHide: true,
   });
-  invariant(child && child.stderr && typeof child.once === "function", "Chrome process could not be launched");
+  invariant(child && child.stderr && typeof child.once === "function" && typeof child.kill === "function", "Chrome process could not be launched");
   let stderr = "";
-  const websocketUrl = await new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (error, value) => {
-      if (settled) return;
-      settled = true;
-      if (error) reject(error); else resolve(value);
-    };
-    child.once("error", () => finish(new Error("Chrome process failed before CDP startup")));
-    child.once("exit", () => finish(new Error("Chrome exited before CDP startup")));
-    child.stderr.on("data", (chunk) => {
-      stderr = `${stderr}${String(chunk)}`.slice(-16_384);
-      const match = /DevTools listening on (ws:\/\/[^\s]+)/u.exec(stderr);
-      if (match) finish(undefined, match[1]);
+  let finishStartup = () => {};
+  const onError = () => finishStartup(new Error("Chrome process failed before CDP startup"));
+  const onExit = () => finishStartup(new Error("Chrome exited before CDP startup"));
+  const onData = (chunk) => {
+    stderr = `${stderr}${String(chunk)}`.slice(-16_384);
+    const match = /DevTools listening on (ws:\/\/[^\s]+)/u.exec(stderr);
+    if (match) finishStartup(undefined, match[1]);
+  };
+  try {
+    const websocketUrl = await new Promise((resolve, reject) => {
+      let settled = false;
+      finishStartup = (error, value) => {
+        if (settled) return;
+        settled = true;
+        if (error) reject(error); else resolve(value);
+      };
+      child.once("error", onError);
+      child.once("exit", onExit);
+      child.stderr.on("data", onData);
     });
-  });
-  invariant(/^ws:\/\/(?:127\.0\.0\.1|\[::1\]|localhost):\d+\/devtools\/browser\/[A-Za-z0-9-]+$/u.test(websocketUrl), "Chrome returned an invalid CDP endpoint");
-  return Object.freeze({ child, websocketUrl, arguments: Object.freeze([...args]) });
+    invariant(/^ws:\/\/(?:127\.0\.0\.1|\[::1\]|localhost):\d+\/devtools\/browser\/[A-Za-z0-9-]+$/u.test(websocketUrl), "Chrome returned an invalid CDP endpoint");
+    return Object.freeze({ child, websocketUrl, arguments: Object.freeze([...args]) });
+  } catch (error) {
+    await terminateChild(child);
+    throw error;
+  } finally {
+    child.off?.("error", onError);
+    child.off?.("exit", onExit);
+    child.stderr.off?.("data", onData);
+  }
 }
 
 export function connectCdp(websocketUrl, { WebSocketImpl = WebSocket } = {}) {
@@ -119,6 +139,7 @@ export function connectCdp(websocketUrl, { WebSocketImpl = WebSocket } = {}) {
   let nextId = 1;
   const pending = new Map();
   const listeners = new Set();
+  const closeListeners = new Set();
   let openedResolve;
   let openedReject;
   const opened = new Promise((resolve, reject) => {
@@ -129,8 +150,10 @@ export function connectCdp(websocketUrl, { WebSocketImpl = WebSocket } = {}) {
   socket.addEventListener("error", () => openedReject(new Error("CDP WebSocket failed to open")), { once: true });
   socket.addEventListener("close", () => {
     const error = new Error("CDP WebSocket closed");
+    openedReject(error);
     for (const waiter of pending.values()) waiter.reject(error);
     pending.clear();
+    for (const listener of [...closeListeners]) listener(error);
   });
   socket.addEventListener("message", (event) => {
     let message;
@@ -151,12 +174,17 @@ export function connectCdp(websocketUrl, { WebSocketImpl = WebSocket } = {}) {
   });
   return Object.freeze({
     listeners,
+    closeListeners,
     async send(method, params = {}, sessionId) {
       await opened;
       const id = nextId;
       nextId += 1;
       const response = new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
-      socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+      try { socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })); }
+      catch (error) {
+        pending.delete(id);
+        throw new Error("CDP command could not be sent", { cause: error });
+      }
       return response;
     },
     close() {

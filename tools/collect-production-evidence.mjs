@@ -32,10 +32,17 @@ const CODE_CITY_REPOSITORY = "FelixGeisler/code-city";
 const CODE_CITY_URL = "https://github.com/FelixGeisler/code-city";
 const REACT_REPOSITORY = "facebook/react";
 const REACT_URL = "https://github.com/facebook/react";
-const API_CAP = 1_048_576;
-const COMMIT_CAP = 4 * 1_048_576;
-const TREE_CAP = 8 * 1_048_576;
-const RAW_CAP = 4_194_307;
+export const RESPONSE_CAPS = Object.freeze({
+  revision: 1_048_576,
+  deployment: 1_048_576,
+  commit: 4 * 1_048_576,
+  tree: 8 * 1_048_576,
+  raw: 4_194_307,
+});
+const API_CAP = RESPONSE_CAPS.revision;
+const COMMIT_CAP = RESPONSE_CAPS.commit;
+const TREE_CAP = RESPONSE_CAPS.tree;
+const RAW_CAP = RESPONSE_CAPS.raw;
 const MAX_NORMALIZED_BYTES = 2 * 1_048_576;
 const MAX_AGGREGATE_BYTES = 40 * 1_048_576;
 const SAFE_HEADERS = new Set([
@@ -138,7 +145,7 @@ export function parseCollectorArguments(args) {
   });
 }
 
-function safeHeaderFacts(requestHeaders, responseHeaders) {
+export function safeHeaderFacts(requestHeaders, responseHeaders) {
   const requestNames = Object.keys(requestHeaders).map((name) => name.toLowerCase());
   const responseNames = [...responseHeaders.keys()].map((name) => name.toLowerCase());
   const observed = new Set([...requestNames, ...responseNames]);
@@ -231,30 +238,34 @@ async function fixedFetch(requestUrl, {
     throw new Error("request failed");
   }
   const facts = safeHeaderFacts(headers, response.headers);
-  const ended = () => Math.max(startedMs, now());
-  if (response.status !== 200 || response.redirected || response.url !== requestUrl) {
-    await releaseResponse(response);
+  let recorded = false;
+  const record = () => {
+    if (recorded) return;
+    recorded = true;
     appendRequest(requestItems, {
       stage, method: "GET", requestedUrl: requestUrl, finalUrl: response.url || requestUrl,
-      applicationCall, status: response.status, startedMs, endedMs: ended(), ...facts,
+      applicationCall, status: response.status, startedMs, endedMs: Math.max(startedMs, now()), ...facts,
       redirected: response.redirected || response.url !== requestUrl,
     });
+  };
+  if (response.status !== 200 || response.redirected || response.url !== requestUrl) {
+    await releaseResponse(response);
+    record();
     throw new Error("request response mismatch");
   }
   if (corsRequired && facts.corsAllowOrigin === null) {
     await releaseResponse(response);
+    record();
     throw new Error("CORS mismatch");
   }
   let bytes;
   try {
     bytes = await readBoundedResponseBody(response, cap);
   } catch {
+    record();
     throw new Error("response body mismatch");
   }
-  appendRequest(requestItems, {
-    stage, method: "GET", requestedUrl: requestUrl, finalUrl: response.url,
-    applicationCall, status: response.status, startedMs, endedMs: ended(), ...facts, redirected: false,
-  });
+  record();
   return { bytes, response, facts };
 }
 
@@ -304,7 +315,7 @@ export function projectSourceCandidates(providerEntries, selectedWidth) {
     const type = ownString(providerEntry, "type");
     invariant(identity && mode && type && !raw.has(identity.rawPath) && !canonical.has(identity.canonicalPath), "invalid tree entry");
     raw.add(identity.rawPath); canonical.add(identity.canonicalPath);
-    projected.push({ ...identity, mode, type, blobId: ownString(providerEntry, "sha") });
+    projected.push({ ...identity, mode, type, providerEntry });
   }
   const boundaries = new Set(projected.filter((entry) => (entry.mode === "120000" && entry.type === "blob")
     || (entry.mode === "160000" && entry.type === "commit")).map((entry) => entry.canonicalPath));
@@ -316,10 +327,7 @@ export function projectSourceCandidates(providerEntries, selectedWidth) {
     invariant(!ancestorIn(entry.canonicalPath, regular), "tree contradicts a regular file");
     const supported = SOURCE_SUFFIXES.some((suffix) => entry.canonicalPath.slice(entry.canonicalPath.lastIndexOf("/") + 1).toLowerCase().endsWith(suffix));
     if (["100644", "100755"].includes(entry.mode) && entry.type === "blob") {
-      if (supported) {
-        invariant(typeof entry.blobId === "string" && new RegExp(`^[0-9a-f]{${selectedWidth}}$`, "u").test(entry.blobId), "candidate blob identity is invalid");
-        candidates.push(entry);
-      }
+      if (supported) candidates.push(entry);
       continue;
     }
     if ((entry.mode === "040000" && entry.type === "tree") || (entry.mode === "120000" && entry.type === "blob")
@@ -331,9 +339,20 @@ export function projectSourceCandidates(providerEntries, selectedWidth) {
   return candidates;
 }
 
-function projectTree(bytes, expectedRoot, selectedWidth) {
+export function candidateBlobId(candidate, selectedWidth) {
+  const blobId = ownString(candidate.providerEntry, "sha");
+  invariant(blobId && new RegExp(`^[0-9a-f]{${selectedWidth}}$`, "u").test(blobId), "candidate blob identity is invalid");
+  return blobId;
+}
+
+function projectTree(bytes, expectedRoot, selectedWidth, progress) {
   const value = strictJson(bytes);
   const entries = denseOwnArray(ownData(value, "tree"));
+  if (progress) {
+    const truncated = ownData(value, "truncated");
+    progress.truncated = typeof truncated === "boolean" ? truncated : null;
+    progress.treeEntries = entries?.length ?? null;
+  }
   invariant(ownString(value, "sha") === expectedRoot && ownData(value, "truncated") === false && entries, "tree evidence is incomplete");
   return { entries, candidates: projectSourceCandidates(entries, selectedWidth) };
 }
@@ -354,21 +373,34 @@ export function normalizeSourceBytes(bytes) {
   return ENCODER.encode(source).byteLength;
 }
 
-function parseTreeResponse(bytes, root, width) {
-  return projectTree(bytes, root, width);
+function parseTreeResponse(bytes, root, width, progress) {
+  return projectTree(bytes, root, width, progress);
 }
 
-export async function verifyDeploymentBinding({ eventSha, origin, fetchImpl, now, requestItems }) {
+export function hasNextLinkRelation(value) {
+  if (typeof value !== "string" || value.trim() === "") return false;
+  for (const member of value.split(/,(?=\s*<)/u)) {
+    const segments = member.split(";");
+    if (!/^\s*<[^>]+>\s*$/u.test(segments.shift() ?? "")) continue;
+    for (const parameter of segments) {
+      const match = /^\s*rel\s*=\s*(?:"([^"]*)"|([^\s;,]+))\s*$/iu.exec(parameter);
+      if (match && (match[1] ?? match[2]).split(/\s+/u).some((token) => token.toLowerCase() === "next")) return true;
+    }
+  }
+  return false;
+}
+
+export async function verifyDeploymentBinding({ eventSha, origin, fetchImpl, now, requestItems, progress }) {
   let listBytes;
   try {
     const listResult = await fixedFetch(deploymentListUrl(eventSha), {
       cap: API_CAP, stage: "deployment", fetchImpl, now, requestItems,
     });
     listBytes = listResult.bytes;
-    invariant(!/(?:^|,)\s*<[^>]+>\s*;\s*rel="next"(?:\s*,|$)/iu.test(listResult.response.headers.get("link") ?? ""), "deployment list is paginated");
+    invariant(!hasNextLinkRelation(listResult.response.headers.get("link") ?? ""), "deployment list is paginated");
     const listResponse = strictJson(listBytes);
     const deployments = denseOwnArray(listResponse);
-    invariant(deployments && !/\brel="?next"?/iu.test(""), "deployment list is malformed");
+    invariant(deployments, "deployment list is malformed");
     const matches = [];
     for (const providerRecord of deployments) {
       const id = ownData(providerRecord, "id");
@@ -380,10 +412,11 @@ export async function verifyDeploymentBinding({ eventSha, origin, fetchImpl, now
     }
     invariant(matches.length === 1, "deployment match is ambiguous");
     const selected = matches[0];
+    if (progress) Object.assign(progress, { deploymentId: selected.id, deployedSha: selected.sha });
     const statusResult = await fixedFetch(deploymentStatusesUrl(selected.id), {
       cap: API_CAP, stage: "deployment", fetchImpl, now, requestItems,
     });
-    invariant(!/(?:^|,)\s*<[^>]+>\s*;\s*rel="next"(?:\s*,|$)/iu.test(statusResult.response.headers.get("link") ?? ""), "deployment statuses are paginated");
+    invariant(!hasNextLinkRelation(statusResult.response.headers.get("link") ?? ""), "deployment statuses are paginated");
     const statuses = denseOwnArray(strictJson(statusResult.bytes), { nonempty: true });
     invariant(statuses, "deployment statuses are malformed");
     const values = statuses.map((record) => ({ state: ownString(record, "state"), environmentUrl: ownString(record, "environment_url") }));
@@ -397,8 +430,7 @@ export async function verifyDeploymentBinding({ eventSha, origin, fetchImpl, now
   }
 }
 
-export async function verifyProductionAssets({ manifest, origin, fetchImpl, now, requestItems }) {
-  const files = [];
+export async function verifyProductionAssets({ manifest, origin, fetchImpl, now, requestItems, files = [] }) {
   try {
     for (const expected of manifest.files) {
       const requestUrl = `${origin}${encodePath(expected.path)}`;
@@ -428,56 +460,58 @@ export async function verifyProductionAssets({ manifest, origin, fetchImpl, now,
   }
 }
 
-export async function qualifyRepository({ fetchImpl, now, requestItems }) {
+export async function qualifyRepository({ fetchImpl, now, requestItems, progress = {
+  repositoryUrl: REACT_URL, revision: null, rootTree: null, treeEntries: null, truncated: null, candidates: [],
+} }) {
   try {
     const revisionResult = await fixedFetch(revisionUrl(REACT_REPOSITORY), {
-      cap: API_CAP, stage: "revision", fetchImpl, now, requestItems,
+      cap: API_CAP, stage: "revision", fetchImpl, now, requestItems, corsRequired: true,
     });
     const revision = projectRevision(revisionResult.bytes);
+    progress.revision = revision;
     const commitResult = await fixedFetch(commitUrl(REACT_REPOSITORY, revision), {
-      cap: COMMIT_CAP, stage: "commit", fetchImpl, now, requestItems,
+      cap: COMMIT_CAP, stage: "commit", fetchImpl, now, requestItems, corsRequired: true,
     });
     const rootTree = projectCommit(commitResult.bytes, revision);
+    progress.rootTree = rootTree;
     const treeResult = await fixedFetch(treeUrl(REACT_REPOSITORY, rootTree), {
-      cap: TREE_CAP, stage: "tree", fetchImpl, now, requestItems,
+      cap: TREE_CAP, stage: "tree", fetchImpl, now, requestItems, corsRequired: true,
     });
-    const tree = parseTreeResponse(treeResult.bytes, rootTree, revision.length);
+    const tree = parseTreeResponse(treeResult.bytes, rootTree, revision.length, progress);
     invariant(tree.candidates.length >= 4001, "qualification has fewer than 4,001 candidates");
     let aggregate = 0;
-    const candidates = [];
     for (let offset = 0; offset < 4001; offset += 1) {
       const expected = tree.candidates[offset];
+      const expectedBlob = candidateBlobId(expected, revision.length);
       const result = await fixedFetch(rawUrl(REACT_REPOSITORY, revision, expected.rawPath), {
-        cap: RAW_CAP, stage: "raw", fetchImpl, now, requestItems, api: false,
+        cap: RAW_CAP, stage: "raw", fetchImpl, now, requestItems, api: false, corsRequired: true,
       });
       const actualBlob = computeGitBlobId(result.bytes, revision.length);
-      invariant(actualBlob === expected.blobId, "candidate blob hash differs");
-      const normalizedBytes = normalizeSourceBytes(result.bytes);
-      aggregate += normalizedBytes;
-      invariant(normalizedBytes <= MAX_NORMALIZED_BYTES && aggregate <= MAX_AGGREGATE_BYTES, "candidate content exceeds qualification bounds");
-      candidates.push({
+      let normalizedBytes;
+      try { normalizedBytes = normalizeSourceBytes(result.bytes); }
+      catch { throw new Error("candidate content is invalid"); }
+      const nextAggregate = aggregate + normalizedBytes;
+      const hashMatched = actualBlob === expectedBlob;
+      const contentValid = normalizedBytes <= MAX_NORMALIZED_BYTES && nextAggregate <= MAX_AGGREGATE_BYTES;
+      progress.candidates.push({
         index: offset + 1,
         path: expected.canonicalPath,
-        blobId: expected.blobId,
+        blobId: expectedBlob,
         normalizedBytes,
-        runningAggregate: aggregate,
-        hashMatched: true,
-        contentValid: true,
+        runningAggregate: nextAggregate,
+        hashMatched,
+        contentValid,
       });
+      aggregate = nextAggregate;
+      invariant(hashMatched, "candidate blob hash differs");
+      invariant(contentValid, "candidate content exceeds qualification bounds");
     }
-    return Object.freeze({
-      repositoryUrl: REACT_URL,
-      revision,
-      rootTree,
-      treeEntries: tree.entries.length,
-      truncated: false,
-      candidates,
-    });
+    return Object.freeze(progress);
   } catch (error) {
     if (error instanceof CollectorFailure) throw error;
     const message = String(error?.message);
     if (/blob hash/iu.test(message)) fail("qualification", "hash-mismatch");
-    if (/UTF-8|NUL|content exceeds/iu.test(message)) fail("qualification", "content-invalid");
+    if (/UTF-8|NUL|content/iu.test(message)) fail("qualification", "content-invalid");
     if (/tree evidence is incomplete/iu.test(message)) fail("qualification", "tree-incomplete");
     if (/commit identity|revision evidence|identity/iu.test(message)) fail("qualification", "identity-mismatch");
     if (/request|response|fetch/iu.test(message)) fail("qualification", "provider-failure");
@@ -585,8 +619,25 @@ function headersFromCdp(value) {
   return headers;
 }
 
+export function responseCapForRoute(route) {
+  const cap = RESPONSE_CAPS[route?.stage];
+  invariant(Number.isSafeInteger(cap), "browser route cap is invalid");
+  return cap;
+}
+
+export function recordCdpTransferSize(entry, { dataLength = 0, encodedDataLength = 0, final = false } = {}) {
+  invariant(Number.isFinite(dataLength) && dataLength >= 0 && Number.isFinite(encodedDataLength) && encodedDataLength >= 0
+    && typeof final === "boolean", "browser transfer size is invalid");
+  entry.dataLength = (entry.dataLength ?? 0) + dataLength;
+  entry.encodedDataLength = final
+    ? Math.max(entry.encodedDataLength ?? 0, encodedDataLength)
+    : (entry.encodedDataLength ?? 0) + encodedDataLength;
+  invariant(entry.dataLength <= entry.cap && entry.encodedDataLength <= entry.cap, "browser response body exceeds cap before retrieval");
+}
+
 async function cdpBody(cdp, sessionId, requestId, cap) {
   const value = await cdp.send("Network.getResponseBody", { requestId }, sessionId);
+  invariant(value && typeof value.body === "string" && typeof value.base64Encoded === "boolean", "browser response body is malformed");
   const bytes = value.base64Encoded ? Uint8Array.from(Buffer.from(value.body, "base64")) : ENCODER.encode(value.body);
   invariant(bytes.byteLength <= cap, "browser response body exceeds cap");
   return bytes;
@@ -620,275 +671,385 @@ export async function createBrowserEvidenceSession({
   connectImpl = connectCdp,
 }) {
   const launched = await launchImpl(discovery, profile);
-  const cdp = connectImpl(launched.websocketUrl);
-  const version = await cdp.send("Browser.getVersion");
-  invariant(version.product === `Chrome/${chromeVersion}` && typeof version.protocolVersion === "string", "Chrome/CDP version mismatch");
-  const bindingName = "__codeCityCollectorEvidence";
-  const facts = [];
-  const factWaiters = [];
-  const fatal = { value: null };
-  const network = new Map();
-  const workerTargets = new Set();
-  const detachedWorkers = new Set();
-  const allowedAssets = new Set(manifest.files.map((file) => `${origin}${encodePath(file.path)}`));
-  allowedAssets.add(origin);
-  let mode = null;
-  let processing = Promise.resolve();
+  let cdp;
+  let listener;
+  let fatalListener;
+  let processExitListener;
+  try {
+    cdp = connectImpl(launched.websocketUrl);
+    const version = await cdp.send("Browser.getVersion");
+    invariant(version.product === `Chrome/${chromeVersion}` && typeof version.protocolVersion === "string", "Chrome/CDP version mismatch");
+    const bindingName = "__codeCityCollectorEvidence";
+    const facts = [];
+    const factWaiters = [];
+    const detachWaiters = [];
+    const fatal = { value: null };
+    const network = new Map();
+    const earlyExtra = new Map();
+    const ignoredRequestIds = new Set();
+    const completedRequestIds = new Set();
+    const workerTargets = new Map();
+    const detachedWorkers = new Set();
+    const allowedAssets = new Set(manifest.files.map((file) => `${origin}${encodePath(file.path)}`));
+    allowedAssets.add(origin);
+    let mode = null;
+    let processing = Promise.resolve();
+    let closePromise;
 
-  function publishFact(fact) {
-    facts.push(fact);
-    for (const waiter of [...factWaiters]) {
-      if (waiter.predicate(fact)) {
-        factWaiters.splice(factWaiters.indexOf(waiter), 1);
-        waiter.resolve(fact);
+    function publishFact(fact) {
+      fact.observedAtMs = now();
+      if (mode && fact.generation === mode.generation && ["SUCCESS", "FAILURE"].includes(fact.type)) {
+        if (mode.firstTerminal) { setFatal(new Error("capacity terminal order differs")); return; }
+        mode.firstTerminal = fact;
+        mode.requestsClosed = true;
+        if (network.size !== 0) setFatal(new Error("terminal preceded request completion"));
+      }
+      facts.push(fact);
+      for (const waiter of [...factWaiters]) {
+        if (waiter.predicate(fact)) {
+          factWaiters.splice(factWaiters.indexOf(waiter), 1);
+          waiter.resolve(fact);
+        }
       }
     }
-  }
-  function nextFact(predicate) {
-    const found = facts.find(predicate);
-    if (found) return Promise.resolve(found);
-    return new Promise((resolve) => factWaiters.push({ predicate, resolve }));
-  }
-  function setFatal(error) {
-    if (!fatal.value) fatal.value = error instanceof Error ? error : new Error("browser observation failed");
-  }
-  function enqueue(task) {
-    processing = processing.then(task).catch(setFatal);
-  }
-
-  const listener = (message) => {
-    if (message.method === "Runtime.bindingCalled" && message.params?.name === bindingName) {
-      try { publishFact(JSON.parse(message.params.payload)); } catch { setFatal(new Error("worker observation is malformed")); }
-      return;
+    function nextFact(predicate) {
+      if (fatal.value) return Promise.reject(fatal.value);
+      const found = facts.find(predicate);
+      if (found) return Promise.resolve(found);
+      return new Promise((resolve, reject) => factWaiters.push({ predicate, resolve, reject }));
     }
-    if (message.method === "Target.attachedToTarget" && message.params?.targetInfo?.type === "worker") {
-      const childSession = message.params.sessionId;
-      workerTargets.add(message.params.targetInfo.targetId);
-      enqueue(async () => {
-        await cdp.send("Runtime.enable", {}, childSession);
-        await cdp.send("Network.enable", {}, childSession);
-        await cdp.send("Runtime.addBinding", { name: bindingName }, childSession);
-        await cdp.send("Runtime.runIfWaitingForDebugger", {}, childSession);
-      });
-      return;
+    function setFatal(error) {
+      if (fatal.value) return;
+      fatal.value = error instanceof Error ? error : new Error("browser observation failed");
+      for (const waiter of factWaiters.splice(0)) waiter.reject(fatal.value);
+      for (const waiter of detachWaiters.splice(0)) waiter.reject(fatal.value);
     }
-    if (message.method === "Target.detachedFromTarget") {
-      if (message.params?.targetId) detachedWorkers.add(message.params.targetId);
-      return;
+    function allWorkersDetached() {
+      return workerTargets.size > 0 && [...workerTargets.values()].every((targetId) => detachedWorkers.has(targetId));
     }
-    if (message.method === "Runtime.exceptionThrown") {
-      setFatal(new Error("browser exception"));
-      return;
+    function notifyDetached() {
+      if (allWorkersDetached()) for (const waiter of detachWaiters.splice(0)) waiter.resolve();
     }
-    if (message.method === "Network.loadingFailed") {
-      const key = `${message.sessionId ?? ""}:${message.params.requestId}`;
-      if (network.has(key)) setFatal(new Error("browser request failed"));
-      return;
+    async function waitForWorkerDetachment() {
+      if (fatal.value) throw fatal.value;
+      if (!allWorkersDetached()) await new Promise((resolve, reject) => detachWaiters.push({ resolve, reject }));
+      if (fatal.value) throw fatal.value;
     }
-    if (message.method === "Network.requestWillBeSent") {
-      const url = message.params.request.url;
-      const method = message.params.request.method;
-      const key = `${message.sessionId ?? ""}:${message.params.requestId}`;
-      if (allowedAssets.has(url) || url === "about:blank") return;
-      if (!mode) { setFatal(new Error("unexpected browser request")); return; }
-      const route = browserRoute(url, mode.repository);
-      if (!route || !["GET", "OPTIONS"].includes(method) || (route.stage === "raw" && method === "OPTIONS")) {
-        setFatal(new Error("unexpected browser request")); return;
-      }
-      network.set(key, {
-        sessionId: message.sessionId,
-        requestId: message.params.requestId,
-        url,
-        method,
-        route,
-        requestHeaders: message.params.request.headers ?? {},
-        startedMs: now(),
-      });
-      return;
+    function enqueue(task) {
+      processing = processing.then(task).catch(setFatal);
     }
-    if (message.method === "Network.responseReceived") {
-      const key = `${message.sessionId ?? ""}:${message.params.requestId}`;
-      const entry = network.get(key);
-      if (entry) entry.response = message.params.response;
-      return;
-    }
-    if (message.method === "Network.loadingFinished") {
-      const key = `${message.sessionId ?? ""}:${message.params.requestId}`;
-      const entry = network.get(key);
-      if (!entry) return;
+    function finalizeNetworkEntry(key, entry) {
+      if (!entry.finished || !entry.response || !entry.extraInfo) return;
       network.delete(key);
+      completedRequestIds.add(key);
       enqueue(async () => {
-        invariant(entry.response, "browser response is absent");
         const responseHeaders = headersFromCdp(entry.response.headers);
-        const requestHeaders = Object.fromEntries(Object.entries(entry.requestHeaders).map(([name, value]) => [name, String(value)]));
+        const requestHeaders = Object.fromEntries(Object.entries(entry.extraInfo.headers ?? {}).map(([name, value]) => [name, String(value)]));
         const headerFacts = safeHeaderFacts(requestHeaders, responseHeaders);
+        appendRequest(requestItems, {
+          stage: entry.route.stage, method: entry.method, requestedUrl: entry.url, finalUrl: entry.response.url,
+          applicationCall: entry.method === "GET", status: entry.response.status, startedMs: entry.startedMs,
+          endedMs: entry.finishedMs, ...headerFacts, redirected: entry.response.url !== entry.url,
+        });
         invariant(entry.response.status === (entry.method === "OPTIONS" ? 204 : 200)
           && entry.response.url === entry.url && !entry.response.fromDiskCache && !entry.response.fromServiceWorker, "browser response mismatch");
         invariant(headerFacts.authorizationAbsent && headerFacts.cookieAbsent && headerFacts.refererAbsent, "credential header observed");
         invariant(headerFacts.corsAllowOrigin !== null, "browser CORS evidence is absent");
-        appendRequest(requestItems, {
-          stage: entry.route.stage,
-          method: entry.method,
-          requestedUrl: entry.url,
-          finalUrl: entry.response.url,
-          applicationCall: entry.method === "GET",
-          status: entry.response.status,
-          startedMs: entry.startedMs,
-          endedMs: Math.max(entry.startedMs, now()),
-          ...headerFacts,
-          redirected: false,
-        });
         if (entry.method !== "GET") return;
-        const cap = entry.route.stage === "revision" ? API_CAP : entry.route.stage === "commit" ? COMMIT_CAP : entry.route.stage === "tree" ? TREE_CAP : RAW_CAP;
-        const bytes = await cdpBody(cdp, entry.sessionId, entry.requestId, cap);
+        const bytes = await cdpBody(cdp, entry.sessionId, entry.requestId, entry.cap);
         const current = mode;
         invariant(current, "browser trace was cleared too early");
         current.gets.push({ ...entry.route, url: entry.url });
         if (entry.route.stage === "revision") {
           current.revision = projectRevision(bytes);
+          current.progress.revision = current.revision;
         } else if (entry.route.stage === "commit") {
           invariant(entry.route.identity === current.revision, "browser commit identity mismatch");
           current.rootTree = projectCommit(bytes, current.revision);
+          current.progress.rootTree = current.rootTree;
         } else if (entry.route.stage === "tree") {
           invariant(entry.route.identity === current.rootTree, "browser tree identity mismatch");
           const tree = projectTree(bytes, current.rootTree, current.revision.length);
           current.treeEntries = tree.entries.length;
           current.projected = tree.candidates;
-          current.onInventory?.();
+          current.onInventory?.(entry.finishedMs);
         } else {
           const index = current.rawFacts.length;
           const expected = current.projected?.[index];
           invariant(expected && entry.route.identity === current.revision && entry.route.path === expected.rawPath, "browser raw sequence mismatch");
+          const expectedBlob = candidateBlobId(expected, current.revision.length);
           const blobId = computeGitBlobId(bytes, current.revision.length);
           const normalizedBytes = normalizeSourceBytes(bytes);
-          current.aggregate += normalizedBytes;
-          invariant(blobId === expected.blobId && normalizedBytes <= MAX_NORMALIZED_BYTES && current.aggregate <= MAX_AGGREGATE_BYTES, "browser candidate mismatch");
-          current.rawFacts.push({
-            index: index + 1, path: expected.canonicalPath, blobId, normalizedBytes,
-            runningAggregate: current.aggregate, hashMatched: true, contentValid: true,
-          });
+          const nextAggregate = current.aggregate + normalizedBytes;
+          const fact = {
+            index: index + 1, path: expected.canonicalPath, blobId: expectedBlob, normalizedBytes,
+            runningAggregate: nextAggregate, hashMatched: blobId === expectedBlob,
+            contentValid: normalizedBytes <= MAX_NORMALIZED_BYTES && nextAggregate <= MAX_AGGREGATE_BYTES,
+          };
+          current.rawFacts.push(fact);
+          current.progress.candidates = current.rawFacts;
+          current.aggregate = nextAggregate;
+          invariant(fact.hashMatched, "browser candidate blob mismatch");
+          invariant(fact.contentValid, "browser candidate content invalid");
         }
       });
     }
-  };
-  cdp.listeners.add(listener);
-  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
-  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
-  await Promise.all([
-    cdp.send("Page.enable", {}, sessionId),
-    cdp.send("Runtime.enable", {}, sessionId),
-    cdp.send("Network.enable", {}, sessionId),
-    cdp.send("Runtime.addBinding", { name: bindingName }, sessionId),
-  ]);
-  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: createWorkerObserverSource(bindingName) }, sessionId);
-  await cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
-  await cdp.send("Page.navigate", { url: origin }, sessionId);
-  await waitUntil(cdp, sessionId, "document.readyState==='complete'&&!!document.querySelector('form')", fatal);
+    fatalListener = setFatal;
+    processExitListener = () => setFatal(new Error("Chrome process exited"));
+    cdp.closeListeners?.add(fatalListener);
+    launched.child.on("exit", processExitListener);
 
-  function startTrace(repository) {
-    mode = { repository, gets: [], rawFacts: [], aggregate: 0, revision: null, rootTree: null, projected: null, treeEntries: null };
-    return mode;
-  }
-  async function submit(repositoryUrl) {
-    await evaluate(cdp, sessionId, `(() => { const input=document.querySelector('input[name=repository]'); input.value=${JSON.stringify(repositoryUrl)}; document.querySelector('form').requestSubmit(); return true; })()`);
-  }
-  async function flush() {
-    await evaluate(cdp, sessionId, "true");
-    await processing;
-    if (fatal.value) throw fatal.value;
-  }
+    listener = (message) => {
+      if (message.method === "Runtime.bindingCalled" && message.params?.name === bindingName) {
+        try { publishFact(JSON.parse(message.params.payload)); } catch { setFatal(new Error("worker observation is malformed")); }
+        return;
+      }
+      if (message.method === "Target.attachedToTarget" && message.params?.targetInfo?.type === "worker") {
+        const childSession = message.params.sessionId;
+        workerTargets.set(childSession, message.params.targetInfo.targetId);
+        enqueue(async () => {
+          await cdp.send("Runtime.enable", {}, childSession);
+          await cdp.send("Network.enable", {}, childSession);
+          await cdp.send("Runtime.addBinding", { name: bindingName }, childSession);
+          await cdp.send("Runtime.runIfWaitingForDebugger", {}, childSession);
+        });
+        return;
+      }
+      if (message.method === "Target.detachedFromTarget") {
+        const targetId = message.params?.targetId ?? workerTargets.get(message.params?.sessionId);
+        if (targetId) detachedWorkers.add(targetId);
+        notifyDetached();
+        return;
+      }
+      if (message.method === "Runtime.exceptionThrown") {
+        setFatal(new Error("browser exception"));
+        return;
+      }
+      const key = `${message.sessionId ?? ""}:${message.params?.requestId ?? ""}`;
+      if (message.method === "Network.loadingFailed") {
+        if (network.has(key)) {
+          network.delete(key);
+          setFatal(new Error("browser request failed"));
+        }
+        return;
+      }
+      if (message.method === "Network.requestWillBeSentExtraInfo") {
+        if (ignoredRequestIds.has(key)) return;
+        if (completedRequestIds.has(key)) { setFatal(new Error("late browser request headers")); return; }
+        const entry = network.get(key);
+        if (!entry) {
+          if (earlyExtra.has(key)) setFatal(new Error("duplicate browser request headers"));
+          else earlyExtra.set(key, message.params);
+          return;
+        }
+        if (entry.extraInfo) { setFatal(new Error("duplicate browser request headers")); return; }
+        entry.extraInfo = message.params;
+        finalizeNetworkEntry(key, entry);
+        return;
+      }
+      if (message.method === "Network.requestWillBeSent") {
+        const url = message.params.request.url;
+        const method = message.params.request.method;
+        if (allowedAssets.has(url) || url === "about:blank") {
+          ignoredRequestIds.add(key); earlyExtra.delete(key); return;
+        }
+        if (!mode || mode.requestsClosed) { setFatal(new Error("unexpected browser request")); return; }
+        if (network.has(key) || completedRequestIds.has(key)) { setFatal(new Error("redirected or duplicate browser request")); return; }
+        const route = browserRoute(url, mode.repository);
+        if (!route || !["GET", "OPTIONS"].includes(method) || (route.stage === "raw" && method === "OPTIONS")) {
+          setFatal(new Error("unexpected browser request")); return;
+        }
+        network.set(key, {
+          sessionId: message.sessionId, requestId: message.params.requestId, url, method, route,
+          cap: responseCapForRoute(route), startedMs: now(), dataLength: 0, encodedDataLength: 0,
+          extraInfo: earlyExtra.get(key),
+        });
+        earlyExtra.delete(key);
+        return;
+      }
+      if (message.method === "Network.responseReceived") {
+        const entry = network.get(key);
+        if (entry) entry.response = message.params.response;
+        return;
+      }
+      if (message.method === "Network.dataReceived") {
+        const entry = network.get(key);
+        if (entry) {
+          try { recordCdpTransferSize(entry, message.params); } catch (error) { setFatal(error); }
+        }
+        return;
+      }
+      if (message.method === "Network.loadingFinished") {
+        const entry = network.get(key);
+        if (!entry) return;
+        try { recordCdpTransferSize(entry, { encodedDataLength: message.params.encodedDataLength ?? 0, final: true }); }
+        catch (error) { setFatal(error); return; }
+        entry.finished = true;
+        entry.finishedMs = Math.max(entry.startedMs, now());
+        if (!entry.response || !entry.extraInfo) {
+          setFatal(new Error("browser request headers or response are incomplete"));
+          return;
+        }
+        finalizeNetworkEntry(key, entry);
+      }
+    };
+    cdp.listeners.add(listener);
+    const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+    const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+    await Promise.all([
+      cdp.send("Page.enable", {}, sessionId),
+      cdp.send("Runtime.enable", {}, sessionId),
+      cdp.send("Network.enable", {}, sessionId),
+      cdp.send("Runtime.addBinding", { name: bindingName }, sessionId),
+    ]);
+    await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: createWorkerObserverSource(bindingName) }, sessionId);
+    await cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
+    await cdp.send("Page.navigate", { url: origin }, sessionId);
+    await waitUntil(cdp, sessionId, "document.readyState==='complete'&&!!document.querySelector('form')", fatal);
 
-  return Object.freeze({
-    chromeVersion,
-    cdpVersion: version.protocolVersion,
-    async collectSmoke(emit, startedMs) {
-      facts.length = 0;
-      const trace = startTrace(CODE_CITY_REPOSITORY);
-      await submit(CODE_CITY_URL);
-      const selected = await nextFact((fact) => fact.type === "REVISION_SELECTED" && fact.generation === 1);
-      invariant(selected.revision === eventSha, "smoke selected a stale revision");
-      emit("revision-selected", 1);
-      await flush();
-      invariant(trace.revision === eventSha, "smoke revision evidence differs");
-      const success = await nextFact((fact) => fact.type === "SUCCESS" && fact.generation === 1);
-      await nextFact((fact) => fact.type === "ATTEMPT_DRAINED" && fact.generation === 1);
-      await waitUntil(cdp, sessionId, `document.querySelector('[data-commit]')?.textContent===${JSON.stringify(eventSha)}&&document.querySelectorAll('[data-city] canvas').length===1`, fatal);
-      await flush();
-      invariant(trace.projected && trace.projected.length >= 1 && trace.rawFacts.length === trace.projected.length, "smoke tree/request cardinality mismatch");
-      const expectedStages = ["revision", "commit", "tree", ...trace.projected.map(() => "raw")];
-      invariant(trace.gets.length === expectedStages.length && trace.gets.every((item, index) => item.stage === expectedStages[index]), "smoke request sequence mismatch");
-      const cityPublished = emit("city-published", 1);
-      const result = {
-        repositoryUrl: CODE_CITY_URL,
-        revision: trace.revision,
-        rootTree: trace.rootTree,
-        terminal: "success",
-        canvasCount: 1,
-        modelSha256: success.modelSha256,
-        startedMs,
-        endedMs: cityPublished.atMs,
-        providerGetCount: trace.gets.length,
+    function startTrace(repository, generation, progress) {
+      workerTargets.clear();
+      detachedWorkers.clear();
+      mode = {
+        repository, generation, progress, gets: [], rawFacts: progress.candidates ?? [], aggregate: 0,
+        revision: null, rootTree: null, projected: null, treeEntries: null, firstTerminal: null, requestsClosed: false,
       };
-      mode = null;
-      return result;
-    },
-    clearTrace() {
-      invariant(mode === null && network.size === 0, "browser trace is not quiescent");
-    },
-    async collectCapacity(qualification, emit, startedMs) {
-      facts.length = 0;
-      const trace = startTrace(REACT_REPOSITORY);
-      trace.onInventory = () => emit("inventory-complete", 2);
-      await submit(REACT_URL);
-      const selected = await nextFact((fact) => fact.type === "REVISION_SELECTED" && fact.generation === 2);
-      invariant(selected.revision === qualification.revision, "capacity revision differs from qualification");
-      emit("revision-selected", 2);
-      await flush();
-      invariant(trace.revision === qualification.revision, "capacity revision evidence differs from qualification");
-      const terminal = await nextFact((fact) => fact.type === "FAILURE" && fact.generation === 2);
-      invariant(terminal.category === "Repository exceeds Code City limits" && terminal.revision === qualification.revision, "capacity terminal differs");
-      await nextFact((fact) => fact.type === "ATTEMPT_DRAINED" && fact.generation === 2);
-      await waitUntil(cdp, sessionId, `document.querySelector('[data-status]')?.textContent==='Repository exceeds Code City limits'&&document.querySelector('[data-commit]')?.textContent===${JSON.stringify(qualification.revision)}&&document.querySelectorAll('[data-city] canvas').length===0`, fatal);
-      await flush();
-      invariant(trace.rootTree === qualification.rootTree && trace.projected && trace.projected.length >= 4001 && trace.rawFacts.length === 4001, "capacity inventory/cardinality differs");
-      invariant(JSON.stringify(trace.rawFacts) === JSON.stringify(qualification.candidates), "capacity bytes differ from qualification");
-      invariant(trace.gets.length === 4004 && trace.gets.slice(0, 3).every((item, index) => item.stage === ["revision", "commit", "tree"][index])
-        && trace.gets.slice(3).every((item) => item.stage === "raw"), "capacity request sequence differs");
-      emit("limit-failure", 2);
-      await flush();
-      invariant(network.size === 0, "capacity requests are not quiescent");
-      emit("request-quiescent", 2);
-      await waitUntil(cdp, sessionId, "true", fatal);
-      invariant(workerTargets.size > 0 && [...workerTargets].every((id) => detachedWorkers.has(id)), "capacity worker is not quiescent");
-      const workerQuiescent = emit("worker-quiescent", 2);
-      const endedMs = workerQuiescent.atMs;
-      mode = null;
-      return {
-        repositoryUrl: REACT_URL,
-        revision: trace.revision,
-        rootTree: trace.rootTree,
-        terminal: "Repository exceeds Code City limits",
-        revisionDisplayed: true,
-        cityPresent: false,
-        priorCityRemoved: true,
-        rawRequestCount: 4001,
-        maxOverlap: 1,
-        noLaterRequest: true,
-        workerQuiescent: true,
-        candidates: trace.rawFacts,
-        startedMs,
-        endedMs,
-      };
-    },
-    async close() {
-      cdp.listeners.delete(listener);
-      let closeError;
-      try { await cdp.send("Browser.close"); } catch (error) { closeError = error; } finally { cdp.close(); }
-      if (launched.child.exitCode === null && closeError) launched.child.kill();
-      if (launched.child.exitCode === null) await new Promise((resolve) => launched.child.once("exit", resolve));
-      if (closeError) throw closeError;
-    },
-  });
+      return mode;
+    }
+    async function submit(repositoryUrl) {
+      await evaluate(cdp, sessionId, `(() => { const input=document.querySelector('input[name=repository]'); input.value=${JSON.stringify(repositoryUrl)}; document.querySelector('form').requestSubmit(); return true; })()`);
+    }
+    async function flush() {
+      await evaluate(cdp, sessionId, "true");
+      await processing;
+      if ([...network.values()].some((entry) => entry.finished && !entry.extraInfo) || earlyExtra.size > 0) {
+        setFatal(new Error("browser request headers are incomplete"));
+      }
+      if (fatal.value) throw fatal.value;
+    }
+    function snapshot(kind) {
+      if (kind === "smoke" && mode?.generation === 1) mode.progress.providerGetCount = mode.gets.length;
+      if (kind === "capacity" && mode?.generation === 2) {
+        mode.progress.rawRequestCount = mode.rawFacts.length;
+        mode.progress.candidates = mode.rawFacts;
+      }
+      return mode?.progress;
+    }
+
+    return Object.freeze({
+      chromeVersion,
+      cdpVersion: version.protocolVersion,
+      snapshot,
+      async collectSmoke(emit, startedMs) {
+        facts.length = 0;
+        const progress = {
+          repositoryUrl: CODE_CITY_URL, revision: null, rootTree: null, terminal: null, canvasCount: null,
+          modelSha256: null, startedMs, endedMs: null, providerGetCount: 0,
+        };
+        const trace = startTrace(CODE_CITY_REPOSITORY, 1, progress);
+        await submit(CODE_CITY_URL);
+        const selected = await nextFact((fact) => fact.type === "REVISION_SELECTED" && fact.generation === 1);
+        progress.revision = selected.revision;
+        invariant(selected.revision === eventSha, "smoke selected a stale revision");
+        emit("revision-selected", 1, selected.observedAtMs);
+        await flush();
+        invariant(trace.revision === eventSha, "smoke revision evidence differs");
+        const terminal = await nextFact((fact) => ["SUCCESS", "FAILURE"].includes(fact.type) && fact.generation === 1);
+        invariant(terminal.type === "SUCCESS", "smoke terminal differs");
+        await nextFact((fact) => fact.type === "ATTEMPT_DRAINED" && fact.generation === 1);
+        await waitUntil(cdp, sessionId, `document.querySelector('[data-commit]')?.textContent===${JSON.stringify(eventSha)}&&document.querySelectorAll('[data-city] canvas').length===1`, fatal);
+        await flush();
+        invariant(workerTargets.size > 0, "smoke worker target was not observed");
+        await waitForWorkerDetachment();
+        invariant(trace.projected && trace.projected.length >= 1 && trace.rawFacts.length === trace.projected.length, "smoke tree/request cardinality mismatch");
+        const expectedStages = ["revision", "commit", "tree", ...trace.projected.map(() => "raw")];
+        invariant(trace.gets.length === expectedStages.length && trace.gets.every((item, index) => item.stage === expectedStages[index]), "smoke request sequence mismatch");
+        const cityPublished = emit("city-published", 1);
+        Object.assign(progress, {
+          revision: trace.revision, rootTree: trace.rootTree, terminal: "success", canvasCount: 1,
+          modelSha256: terminal.modelSha256, endedMs: cityPublished.atMs, providerGetCount: trace.gets.length,
+        });
+        mode = null;
+        return progress;
+      },
+      clearTrace() {
+        invariant(mode === null && network.size === 0 && earlyExtra.size === 0, "browser trace is not quiescent");
+      },
+      async collectCapacity(qualification, emit, startedMs) {
+        facts.length = 0;
+        const progress = {
+          ...emptyData(CAPACITY_KEYS, ["candidates"]), repositoryUrl: REACT_URL, startedMs,
+          rawRequestCount: 0, candidates: [],
+        };
+        const trace = startTrace(REACT_REPOSITORY, 2, progress);
+        trace.onInventory = (atMs) => emit("inventory-complete", 2, atMs);
+        await submit(REACT_URL);
+        const selected = await nextFact((fact) => fact.type === "REVISION_SELECTED" && fact.generation === 2);
+        progress.revision = selected.revision;
+        invariant(selected.revision === qualification.revision, "capacity revision differs from qualification");
+        emit("revision-selected", 2, selected.observedAtMs);
+        await flush();
+        invariant(trace.revision === qualification.revision, "capacity revision evidence differs from qualification");
+        const terminal = await nextFact((fact) => ["SUCCESS", "FAILURE"].includes(fact.type) && fact.generation === 2);
+        invariant(terminal.type === "FAILURE" && terminal.category === "Repository exceeds Code City limits"
+          && terminal.revision === qualification.revision, "capacity terminal differs");
+        await flush();
+        invariant(network.size === 0, "terminal preceded request completion");
+        invariant(trace.rootTree === qualification.rootTree && trace.projected && trace.projected.length >= 4001 && trace.rawFacts.length === 4001, "capacity inventory/cardinality differs");
+        invariant(JSON.stringify(trace.rawFacts) === JSON.stringify(qualification.candidates), "capacity bytes differ from qualification");
+        invariant(trace.gets.length === 4004 && trace.gets.slice(0, 3).every((item, index) => item.stage === ["revision", "commit", "tree"][index])
+          && trace.gets.slice(3).every((item) => item.stage === "raw"), "capacity request sequence differs");
+        Object.assign(progress, {
+          revision: trace.revision, rootTree: trace.rootTree, terminal: "Repository exceeds Code City limits",
+          revisionDisplayed: true, cityPresent: false, priorCityRemoved: true, rawRequestCount: 4001, candidates: trace.rawFacts,
+        });
+        emit("limit-failure", 2, terminal.observedAtMs);
+        await nextFact((fact) => fact.type === "ATTEMPT_DRAINED" && fact.generation === 2);
+        await waitUntil(cdp, sessionId, `document.querySelector('[data-status]')?.textContent==='Repository exceeds Code City limits'&&document.querySelector('[data-commit]')?.textContent===${JSON.stringify(qualification.revision)}&&document.querySelectorAll('[data-city] canvas').length===0`, fatal);
+        await flush();
+        invariant(network.size === 0, "capacity requests are not quiescent");
+        progress.noLaterRequest = true;
+        emit("request-quiescent", 2);
+        invariant(workerTargets.size > 0, "capacity worker target was not observed");
+        await waitForWorkerDetachment();
+        progress.workerQuiescent = true;
+        const workerQuiescent = emit("worker-quiescent", 2);
+        progress.endedMs = workerQuiescent.atMs;
+        mode = null;
+        return progress;
+      },
+      async close() {
+        if (closePromise) return closePromise;
+        closePromise = (async () => {
+          cdp.listeners.delete(listener);
+          cdp.closeListeners?.delete(fatalListener);
+          launched.child.off("exit", processExitListener);
+          const closeCommand = cdp.send("Browser.close").catch(() => {});
+          cdp.close();
+          if (launched.child.exitCode === null) {
+            const exited = new Promise((resolve) => launched.child.once("exit", resolve));
+            launched.child.kill();
+            if (launched.child.exitCode === null) await exited;
+          }
+          await closeCommand;
+        })();
+        return closePromise;
+      },
+    });
+  } catch (error) {
+    if (listener) cdp?.listeners.delete(listener);
+    if (fatalListener) cdp?.closeListeners?.delete(fatalListener);
+    if (processExitListener) launched.child.off("exit", processExitListener);
+    const closeCommand = cdp?.send("Browser.close").catch(() => {});
+    try { cdp?.close(); } catch {}
+    if (launched.child.exitCode === null) {
+      const exited = new Promise((resolve) => launched.child.once("exit", resolve));
+      launched.child.kill();
+      if (launched.child.exitCode === null) await exited;
+    }
+    await closeCommand;
+    throw error;
+  }
 }
 
 function envelope(kind, status, reason, data) {
@@ -950,8 +1111,8 @@ export async function deriveCollectorCommit({ execFileImpl = execFile } = {}) {
   const head = await run(["rev-parse", "--verify", "HEAD^{commit}"]);
   await run(["cat-file", "-e", "HEAD:tools/collect-production-evidence.mjs"]);
   await run(["ls-files", "--error-unmatch", "tools/collect-production-evidence.mjs"]);
-  await execFileImpl("git", ["diff", "--quiet", "HEAD", "--", "tools/collect-production-evidence.mjs"], { cwd: PROJECT_ROOT, windowsHide: true });
-  invariant(/^[0-9a-f]{40}$/u.test(head), "collector checkout is ambiguous");
+  const status = await run(["status", "--porcelain=v1", "--untracked-files=all"]);
+  invariant(status === "" && /^[0-9a-f]{40}$/u.test(head), "collector checkout is ambiguous or dirty");
   return head;
 }
 
@@ -994,35 +1155,30 @@ function failurePayloads(state, failure) {
   const stages = ["artifact", "smoke", "qualification", "capacity"];
   const failedIndex = stages.indexOf(failure.stage);
   invariant(failedIndex >= 0, "invalid failed stage");
-  const minimumPrefix = { artifact: 1, smoke: 3, qualification: 6, capacity: 8 }[failure.stage];
-  const prefix = state.events.slice(0, minimumPrefix);
-  const failureAt = Math.max(prefix.at(-1)?.atMs ?? 0, state.now());
-  const events = [...prefix, { sequence: prefix.length + 1, generation: 0, event: "collector-failed", atMs: failureAt }];
+  const failureAt = Math.max(state.events.at(-1)?.atMs ?? 0, state.now());
+  const events = [...state.events, {
+    sequence: state.events.length + 1, generation: 0, event: "collector-failed", atMs: failureAt,
+  }];
   state.events = events;
-  state.requestItems.splice(state.stageRequestStarts[failure.stage] ?? 0);
-  state.requestItems.forEach((item, index) => { item.sequence = index + 1; });
 
-  const smokeFail = {
-    ...emptyData(SMOKE_KEYS),
-    repositoryUrl: failure.stage === "smoke" ? CODE_CITY_URL : null,
-    providerGetCount: failure.stage === "smoke" ? 0 : null,
-  };
-  const qualificationFail = {
-    ...emptyData(QUALIFICATION_KEYS, ["candidates"]),
-    repositoryUrl: failure.stage === "qualification" ? REACT_URL : null,
-  };
-  const capacityFail = {
-    ...emptyData(CAPACITY_KEYS, ["candidates"]),
-    repositoryUrl: failure.stage === "capacity" ? REACT_URL : null,
-    rawRequestCount: failure.stage === "capacity" ? 0 : null,
-    maxOverlap: failure.stage === "capacity" ? 0 : null,
-  };
-  const failedData = {
-    artifact: state.artifact,
-    smoke: smokeFail,
-    qualification: qualificationFail,
-    capacity: capacityFail,
-  };
+  const smokeFail = state.smoke ?? emptyData(SMOKE_KEYS);
+  if (eventAt(events, "smoke-start", 1)) {
+    smokeFail.repositoryUrl ??= CODE_CITY_URL;
+    smokeFail.providerGetCount = state.requestItems.filter((item) => item.applicationCall
+      && item.requestedUrl.includes("/FelixGeisler/code-city/") && item.method === "GET").length;
+  }
+  const qualificationFail = state.qualification ?? emptyData(QUALIFICATION_KEYS, ["candidates"]);
+  if (eventAt(events, "qualification-start", 0)) qualificationFail.repositoryUrl ??= REACT_URL;
+  const capacityFail = state.capacity ?? emptyData(CAPACITY_KEYS, ["candidates"]);
+  if (eventAt(events, "capacity-start", 2)) {
+    capacityFail.repositoryUrl ??= REACT_URL;
+    const capacityGets = state.requestItems.filter((item) => item.applicationCall && item.method === "GET"
+      && item.requestedUrl.includes("/facebook/react/"));
+    capacityFail.rawRequestCount = capacityGets.filter((item) => item.stage === "raw").length;
+    capacityFail.maxOverlap = maximumOverlap(capacityGets);
+    capacityFail.candidates ??= [];
+  }
+  const failedData = { artifact: state.artifact, smoke: smokeFail, qualification: qualificationFail, capacity: capacityFail };
   const payloads = {};
   for (let index = 0; index < stages.length; index += 1) {
     const stage = stages[index];
@@ -1037,29 +1193,28 @@ function failurePayloads(state, failure) {
   }
   payloads.requests = envelope("requests", "fail", failure.reason, { items: state.requestItems });
   payloads.lifecycle = envelope("lifecycle", "fail", failure.reason, makeLifecycleData(state, "fail", failure.reason, events));
-  if (failure.stage === "capacity") payloads.lifecycle.data.maxOverlap = 0;
   return payloads;
 }
 
 function mapBrowserFailure(stage, error) {
   if (error instanceof CollectorFailure) return error;
   const message = String(error?.message);
-  if (/credential/iu.test(message)) return new CollectorFailure(stage, "credential-header");
+  if (/credential|request headers/iu.test(message)) return new CollectorFailure(stage, "credential-header");
   if (/CORS/iu.test(message)) return new CollectorFailure(stage, "cors-failure");
   if (/stale/iu.test(message)) return new CollectorFailure(stage, "stale-publication");
   if (/overlap/iu.test(message)) return new CollectorFailure(stage, "request-overlap");
   if (/unexpected browser request/iu.test(message)) return new CollectorFailure(stage, "unexpected-request");
-  if (/sequence|cardinality/iu.test(message)) return new CollectorFailure(stage, "request-sequence");
+  if (/sequence|cardinality|redirected|duplicate/iu.test(message)) return new CollectorFailure(stage, "request-sequence");
   if (/quiescent/iu.test(message)) return new CollectorFailure(stage, "quiescence-failure");
   if (/blob|candidate mismatch/iu.test(message)) return new CollectorFailure(stage, "hash-mismatch");
   if (/UTF-8|NUL|content/iu.test(message)) return new CollectorFailure(stage, "content-invalid");
   if (/revision differs|inventory.*differs|identity/iu.test(message)) return new CollectorFailure(stage, "identity-mismatch");
   if (/terminal/iu.test(message)) return new CollectorFailure(stage, stage === "smoke" ? "smoke-failure" : "limit-order");
-  if (/request failed|response mismatch/iu.test(message)) return new CollectorFailure(stage, "provider-failure");
+  if (/request failed|response|transfer size/iu.test(message)) return new CollectorFailure(stage, "provider-failure");
   return new CollectorFailure(stage, "infrastructure-failure");
 }
 
-async function readPublicationInput(manifestPath) {
+export async function readPublicationInput(manifestPath) {
   const manifestBytes = wholeBytes(await readFile(manifestPath));
   const manifest = parsePackageManifest(manifestBytes);
   const recordPath = path.join(path.dirname(manifestPath), "publication-record.json");
@@ -1111,8 +1266,11 @@ export async function collectProductionEvidence(options, seams = {}) {
     qualification: null,
     capacity: null,
   };
-  const emit = (event, generation) => {
-    const value = { sequence: state.events.length + 1, generation, event, atMs: now() };
+  const emit = (event, generation, observedAtMs) => {
+    const prior = state.events.at(-1)?.atMs ?? 0;
+    const atMs = observedAtMs === undefined ? now() : observedAtMs;
+    invariant(atMs >= prior, "lifecycle event order differs");
+    const value = { sequence: state.events.length + 1, generation, event, atMs };
     state.events.push(value);
     return value;
   };
@@ -1160,17 +1318,21 @@ export async function collectProductionEvidence(options, seams = {}) {
     });
     const deployment = await (seams.verifyDeploymentBinding ?? verifyDeploymentBinding)({
       eventSha: publicationRecord.eventSha, origin: options.origin,
-      fetchImpl: seams.fetchImpl ?? fetch, now, requestItems: state.requestItems,
+      fetchImpl: seams.fetchImpl ?? fetch, now, requestItems: state.requestItems, progress: state.artifact,
     });
     Object.assign(state.artifact, deployment);
     state.artifact.files = await (seams.verifyProductionAssets ?? verifyProductionAssets)({
       manifest, origin: options.origin, fetchImpl: seams.fetchImpl ?? fetch, now, requestItems: state.requestItems,
+      files: state.artifact.files,
     });
     emit("artifact-verified", 0);
 
     activeStage = "smoke";
     state.stageRequestStarts.smoke = state.requestItems.length;
     const smokeStart = emit("smoke-start", 1);
+    state.smoke = {
+      ...emptyData(SMOKE_KEYS), repositoryUrl: CODE_CITY_URL, startedMs: smokeStart.atMs, providerGetCount: 0,
+    };
     profile = await (seams.mkdtemp ?? mkdtemp)(path.join(os.tmpdir(), "code-city-evidence-chrome-"));
     browser = await (seams.createBrowserEvidenceSession ?? createBrowserEvidenceSession)({
       discovery, chromeVersion: state.chromeVersion, profile, origin: options.origin, manifest,
@@ -1188,14 +1350,21 @@ export async function collectProductionEvidence(options, seams = {}) {
     activeStage = "qualification";
     state.stageRequestStarts.qualification = state.requestItems.length;
     emit("qualification-start", 0);
+    state.qualification = {
+      ...emptyData(QUALIFICATION_KEYS, ["candidates"]), repositoryUrl: REACT_URL,
+    };
     state.qualification = await (seams.qualifyRepository ?? qualifyRepository)({
-      fetchImpl: seams.fetchImpl ?? fetch, now, requestItems: state.requestItems,
+      fetchImpl: seams.fetchImpl ?? fetch, now, requestItems: state.requestItems, progress: state.qualification,
     });
     emit("qualification-complete", 0);
 
     activeStage = "capacity";
     state.stageRequestStarts.capacity = state.requestItems.length;
     const capacityStart = emit("capacity-start", 2);
+    state.capacity = {
+      ...emptyData(CAPACITY_KEYS, ["candidates"]), repositoryUrl: REACT_URL,
+      startedMs: capacityStart.atMs, rawRequestCount: 0,
+    };
     try {
       state.capacity = await browser.collectCapacity(state.qualification, emit, capacityStart.atMs);
     } catch (error) {
@@ -1210,10 +1379,11 @@ export async function collectProductionEvidence(options, seams = {}) {
       fail("capacity", "cleanup-failure");
     }
     emit("collector-complete", 0);
-    packet = createEvidencePacket(passingPayloads(state), binding);
   } catch (error) {
     failure = error instanceof CollectorFailure ? error : new CollectorFailure(activeStage, "infrastructure-failure");
     if (browser) {
+      state.smoke = browser.snapshot?.("smoke") ?? state.smoke;
+      state.capacity = browser.snapshot?.("capacity") ?? state.capacity;
       try { await browser.close(); } catch {}
       browser = null;
     }
@@ -1221,10 +1391,11 @@ export async function collectProductionEvidence(options, seams = {}) {
       try { await (seams.rm ?? rm)(profile, { recursive: true, force: true }); } catch {}
       profile = null;
     }
-    if (binding) packet = createEvidencePacket(failurePayloads(state, failure), binding);
-    else throw failure;
+    if (!binding) throw failure;
   }
 
+  const createPacket = seams.createEvidencePacket ?? createEvidencePacket;
+  packet = createPacket(failure ? failurePayloads(state, failure) : passingPayloads(state), binding);
   await (seams.writeValidatedEvidencePacket ?? writeValidatedEvidencePacket)(options.output, packet);
   const readback = await (seams.readValidatedEvidencePacket ?? readValidatedEvidencePacket)(options.output, packet.binding);
   invariant(readback.packetDigest === packet.packetDigest, "stored packet read-back differs");
