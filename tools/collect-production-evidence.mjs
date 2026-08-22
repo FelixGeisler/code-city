@@ -56,6 +56,10 @@ function invariant(condition, message = "collector invariant failed") {
   if (!condition) throw new Error(message);
 }
 
+function childIsTerminal(child) {
+  return [child.exitCode, child.signalCode].some((value) => value !== null && value !== undefined);
+}
+
 export class CollectorFailure extends Error {
   constructor(stage, reason) {
     super("production evidence collection failed");
@@ -353,7 +357,8 @@ function projectTree(bytes, expectedRoot, selectedWidth, progress) {
     progress.truncated = typeof truncated === "boolean" ? truncated : null;
     progress.treeEntries = entries?.length ?? null;
   }
-  invariant(ownString(value, "sha") === expectedRoot && ownData(value, "truncated") === false && entries, "tree evidence is incomplete");
+  invariant(ownString(value, "sha") === expectedRoot, "tree root identity mismatch");
+  invariant(ownData(value, "truncated") === false && entries, "tree evidence is incomplete");
   return { entries, candidates: projectSourceCandidates(entries, selectedWidth) };
 }
 
@@ -510,10 +515,11 @@ export async function qualifyRepository({ fetchImpl, now, requestItems, progress
   } catch (error) {
     if (error instanceof CollectorFailure) throw error;
     const message = String(error?.message);
+    if (/CORS/iu.test(message)) fail("qualification", "cors-failure");
     if (/blob hash/iu.test(message)) fail("qualification", "hash-mismatch");
     if (/UTF-8|NUL|content/iu.test(message)) fail("qualification", "content-invalid");
     if (/tree evidence is incomplete/iu.test(message)) fail("qualification", "tree-incomplete");
-    if (/commit identity|revision evidence|identity/iu.test(message)) fail("qualification", "identity-mismatch");
+    if (/invalid (?:revision|commit) evidence|root identity|identity mismatch/iu.test(message)) fail("qualification", "identity-mismatch");
     if (/request|response|fetch/iu.test(message)) fail("qualification", "provider-failure");
     fail("qualification", "qualification-failure");
   }
@@ -810,7 +816,6 @@ export async function createBrowserEvidenceSession({
         enqueue(async () => {
           await cdp.send("Runtime.enable", {}, childSession);
           await cdp.send("Network.enable", {}, childSession);
-          await cdp.send("Runtime.addBinding", { name: bindingName }, childSession);
           await cdp.send("Runtime.runIfWaitingForDebugger", {}, childSession);
         });
         return;
@@ -928,12 +933,16 @@ export async function createBrowserEvidenceSession({
       if (fatal.value) throw fatal.value;
     }
     function snapshot(kind) {
-      if (kind === "smoke" && mode?.generation === 1) mode.progress.providerGetCount = mode.gets.length;
+      if (kind === "smoke" && mode?.generation === 1) {
+        mode.progress.providerGetCount = mode.gets.length;
+        return mode.progress;
+      }
       if (kind === "capacity" && mode?.generation === 2) {
         mode.progress.rawRequestCount = mode.rawFacts.length;
         mode.progress.candidates = mode.rawFacts;
+        return mode.progress;
       }
-      return mode?.progress;
+      return undefined;
     }
 
     return Object.freeze({
@@ -1026,10 +1035,10 @@ export async function createBrowserEvidenceSession({
           launched.child.off("exit", processExitListener);
           const closeCommand = cdp.send("Browser.close").catch(() => {});
           cdp.close();
-          if (launched.child.exitCode === null) {
+          if (!childIsTerminal(launched.child)) {
             const exited = new Promise((resolve) => launched.child.once("exit", resolve));
             launched.child.kill();
-            if (launched.child.exitCode === null) await exited;
+            if (!childIsTerminal(launched.child)) await exited;
           }
           await closeCommand;
         })();
@@ -1042,10 +1051,10 @@ export async function createBrowserEvidenceSession({
     if (processExitListener) launched.child.off("exit", processExitListener);
     const closeCommand = cdp?.send("Browser.close").catch(() => {});
     try { cdp?.close(); } catch {}
-    if (launched.child.exitCode === null) {
+    if (!childIsTerminal(launched.child)) {
       const exited = new Promise((resolve) => launched.child.once("exit", resolve));
       launched.child.kill();
-      if (launched.child.exitCode === null) await exited;
+      if (!childIsTerminal(launched.child)) await exited;
     }
     await closeCommand;
     throw error;
@@ -1206,9 +1215,10 @@ function mapBrowserFailure(stage, error) {
   if (/unexpected browser request/iu.test(message)) return new CollectorFailure(stage, "unexpected-request");
   if (/sequence|cardinality|redirected|duplicate/iu.test(message)) return new CollectorFailure(stage, "request-sequence");
   if (/quiescent/iu.test(message)) return new CollectorFailure(stage, "quiescence-failure");
+  if (/tree evidence is incomplete/iu.test(message)) return new CollectorFailure(stage, "tree-incomplete");
   if (/blob|candidate mismatch/iu.test(message)) return new CollectorFailure(stage, "hash-mismatch");
   if (/UTF-8|NUL|content/iu.test(message)) return new CollectorFailure(stage, "content-invalid");
-  if (/revision differs|inventory.*differs|identity/iu.test(message)) return new CollectorFailure(stage, "identity-mismatch");
+  if (/invalid (?:revision|commit) evidence|revision differs|inventory.*differs|root identity|identity mismatch/iu.test(message)) return new CollectorFailure(stage, "identity-mismatch");
   if (/terminal/iu.test(message)) return new CollectorFailure(stage, stage === "smoke" ? "smoke-failure" : "limit-order");
   if (/request failed|response|transfer size/iu.test(message)) return new CollectorFailure(stage, "provider-failure");
   return new CollectorFailure(stage, "infrastructure-failure");

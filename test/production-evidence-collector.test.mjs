@@ -24,6 +24,7 @@ import {
   normalizeSourceBytes,
   parseCollectorArguments,
   projectSourceCandidates,
+  qualifyRepository,
   readBoundedResponseBody,
   recordCdpTransferSize,
   responseCapForRoute,
@@ -97,6 +98,61 @@ function candidates() {
       contentValid: true,
     };
   });
+}
+
+const NATIVE_SOURCE = new TextEncoder().encode("x");
+const NATIVE_BLOB = computeGitBlobId(NATIVE_SOURCE, 40);
+const NATIVE_ENTRIES = Array.from({ length: 4001 }, (_, offset) => ({
+  path: `${String(offset + 1).padStart(4, "0")}.ts`, mode: "100644", type: "blob", sha: NATIVE_BLOB,
+}));
+
+function paddedJson(value, byteLength) {
+  const json = JSON.stringify(value);
+  assert(json.length <= byteLength);
+  return `${json}${" ".repeat(byteLength - json.length)}`;
+}
+
+function nativeQualificationFetch(overrides = {}) {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    let stage;
+    let body;
+    if (url === revisionUrl("facebook/react")) {
+      stage = "revision";
+      body = JSON.stringify([{ sha: REACT }]);
+    } else if (url === commitUrl("facebook/react", REACT)) {
+      stage = "commit";
+      body = JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } });
+    } else if (url === treeUrl("facebook/react", REACT_ROOT)) {
+      stage = "tree";
+      body = JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES });
+    } else if (url.startsWith(`https://raw.githubusercontent.com/facebook/react/${REACT}/`)) {
+      stage = "raw";
+      body = NATIVE_SOURCE;
+    } else {
+      throw new Error(`unexpected controlled URL: ${url}`);
+    }
+    const replacement = typeof overrides[stage] === "function"
+      ? overrides[stage]({ url, call: calls.filter((item) => item.url === url).length, body })
+      : overrides[stage];
+    const selected = replacement ?? {};
+    return response(selected.body ?? body, {
+      url: selected.url ?? url,
+      status: selected.status ?? 200,
+      redirected: selected.redirected ?? false,
+      headers: selected.headers ?? { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" },
+    });
+  };
+  return { calls, fetchImpl };
+}
+
+async function runNativeQualification(overrides = {}) {
+  const controlled = nativeQualificationFetch(overrides);
+  let tick = 0;
+  const requestItems = [];
+  const progress = await qualifyRepository({ fetchImpl: controlled.fetchImpl, now: () => ++tick, requestItems });
+  return { ...controlled, requestItems, progress };
 }
 
 function appendSequence(items, now, repository, revision, root, paths, applicationCall, emit = {}) {
@@ -183,7 +239,7 @@ test("Git blob and strict normalization facts are exact and bounded-view model d
   assert.equal(computeModelSha256(model), expected);
 });
 
-test("injected Worker observer preserves application listener identity, order, this, removal, cardinality, and exceptions", () => {
+test("page-side Worker observer preserves application constructor and listener transparency, order, this, removal, cardinality, and exceptions", () => {
   const emitted = [];
   class FakeWorker {
     constructor() { this.listeners = []; this.exceptions = []; }
@@ -202,6 +258,11 @@ test("injected Worker observer preserves application listener identity, order, t
   };
   vm.runInNewContext(createWorkerObserverSource(), context);
   const worker = new context.Worker("worker.js");
+  assert(worker instanceof FakeWorker);
+  assert.equal(Object.getPrototypeOf(context.Worker), FakeWorker);
+  assert.equal(context.Worker.prototype, FakeWorker.prototype);
+  assert.equal(worker.addEventListener, FakeWorker.prototype.addEventListener);
+  assert.equal(worker.removeEventListener, FakeWorker.prototype.removeEventListener);
   const order = [];
   const model = { count: 1, origins: Uint8Array.of(1), sizes: Uint8Array.of(2), rgba: Uint8Array.of(3), bounds: Uint8Array.of(4) };
   const message = { type: "SUCCESS", generation: 1, revision: EVENT, model };
@@ -289,6 +350,94 @@ test("deployment proof accepts one active exact match and rejects duplicate, pag
       eventSha: EVENT, origin: PRODUCTION_ORIGIN, fetchImpl: makeFetch(list, statuses, headers),
       now: () => ++time, requestItems: [],
     }), (error) => error.stage === "artifact" && error.reason === "artifact-mismatch");
+  }
+});
+
+test("native qualification completes the exact 4,004-request pass and classifies real identity, CORS, tree, hash, and content failures", async () => {
+  const passed = await runNativeQualification();
+  assert.equal(passed.calls.length, 4004);
+  assert.deepEqual(passed.calls.slice(0, 3).map(({ url }) => url), [
+    revisionUrl("facebook/react"), commitUrl("facebook/react", REACT), treeUrl("facebook/react", REACT_ROOT),
+  ]);
+  assert(passed.calls.slice(3).every(({ url }, index) => url === rawUrl("facebook/react", REACT, NATIVE_ENTRIES[index].path)));
+  assert.equal(passed.progress.candidates.length, 4001);
+  assert.equal(passed.requestItems.length, 4004);
+  assert(passed.calls.every(({ init }) => init.credentials === "omit" && init.redirect === "error" && init.referrer === ""));
+
+  const cases = [
+    ["identity-mismatch", { revision: { body: JSON.stringify([{ sha: "invalid" }]) } }],
+    ["identity-mismatch", { commit: { body: JSON.stringify({ sha: EVENT, tree: { sha: REACT_ROOT } }) } }],
+    ["identity-mismatch", { commit: { body: JSON.stringify({ sha: REACT }) } }],
+    ["identity-mismatch", { tree: { body: JSON.stringify({ sha: ROOT, truncated: false, tree: NATIVE_ENTRIES }) } }],
+    ["cors-failure", { revision: { headers: { "Content-Type": "application/json" } } }],
+    ["tree-incomplete", { tree: { body: JSON.stringify({ sha: REACT_ROOT, truncated: true, tree: NATIVE_ENTRIES }) } }],
+    ["hash-mismatch", { raw: { body: new TextEncoder().encode("different") } }],
+    ["content-invalid", { raw: { body: Uint8Array.of(0) } }],
+  ];
+  for (const [reason, overrides] of cases) {
+    const controlled = nativeQualificationFetch(overrides);
+    await assert.rejects(qualifyRepository({ fetchImpl: controlled.fetchImpl, now: () => 1, requestItems: [] }),
+      (error) => error.stage === "qualification" && error.reason === reason, reason);
+  }
+});
+
+test("native qualification enforces each revision, commit, tree, and raw response boundary and boundary plus one", async () => {
+  const routeCases = [
+    ["revision", RESPONSE_CAPS.revision, [{ sha: REACT }], { commit: { body: JSON.stringify({ sha: EVENT, tree: { sha: REACT_ROOT } }) } }, "identity-mismatch"],
+    ["commit", RESPONSE_CAPS.commit, { sha: REACT, tree: { sha: REACT_ROOT } }, { tree: { body: JSON.stringify({ sha: REACT_ROOT, truncated: true, tree: [] }) } }, "tree-incomplete"],
+    ["tree", RESPONSE_CAPS.tree, { sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }, {}, null],
+    ["raw", RESPONSE_CAPS.raw, null, {}, "content-invalid"],
+  ];
+  for (const [stage, cap, value, later, boundaryReason] of routeCases) {
+    const boundaryBody = stage === "raw" ? new Uint8Array(cap).fill(0x78) : paddedJson(value, cap);
+    const boundaryOverrides = { ...later, [stage]: { body: boundaryBody } };
+    if (stage === "raw") {
+      const entries = NATIVE_ENTRIES.map((entry, index) => (
+        index === 0 ? { ...entry, sha: computeGitBlobId(boundaryBody, 40) } : entry
+      ));
+      boundaryOverrides.tree = { body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: entries }) };
+    }
+    const boundary = nativeQualificationFetch(boundaryOverrides);
+    if (boundaryReason) {
+      await assert.rejects(qualifyRepository({ fetchImpl: boundary.fetchImpl, now: () => 1, requestItems: [] }),
+        (error) => error.reason === boundaryReason, `${stage} boundary`);
+    } else {
+      const progress = await qualifyRepository({ fetchImpl: boundary.fetchImpl, now: () => 1, requestItems: [] });
+      assert.equal(progress.candidates.length, 4001, `${stage} boundary`);
+    }
+
+    const overflow = nativeQualificationFetch({ [stage]: { body: new Uint8Array(cap + 1) } });
+    await assert.rejects(qualifyRepository({ fetchImpl: overflow.fetchImpl, now: () => 1, requestItems: [] }),
+      (error) => error.reason === "provider-failure", `${stage} boundary + 1`);
+  }
+});
+
+test("native deployment fetches enforce both response boundaries and boundary plus one", async () => {
+  const listUrl = `https://api.github.com/repos/FelixGeisler/code-city/deployments?sha=${EVENT}&environment=github-pages&per_page=100&page=1`;
+  const statusUrl = "https://api.github.com/repos/FelixGeisler/code-city/deployments/7/statuses?per_page=100&page=1";
+  const list = [{ id: 7, sha: EVENT, environment: "github-pages", task: "deploy" }];
+  const statuses = [{ state: "success", environment_url: PRODUCTION_ORIGIN }];
+  for (const selectedStage of ["list", "status"]) {
+    const fetchImpl = async (url) => response(
+      selectedStage === "list" && url === listUrl ? paddedJson(list, RESPONSE_CAPS.deployment)
+        : selectedStage === "status" && url === statusUrl ? paddedJson(statuses, RESPONSE_CAPS.deployment)
+          : JSON.stringify(url === listUrl ? list : statuses),
+      { url },
+    );
+    assert.deepEqual(await verifyDeploymentBinding({
+      eventSha: EVENT, origin: PRODUCTION_ORIGIN, fetchImpl, now: () => 1, requestItems: [],
+    }), { deploymentId: 7, deployedSha: EVENT });
+
+    await assert.rejects(verifyDeploymentBinding({
+      eventSha: EVENT, origin: PRODUCTION_ORIGIN,
+      fetchImpl: async (url) => response(
+        (selectedStage === "list" && url === listUrl) || (selectedStage === "status" && url === statusUrl)
+          ? new Uint8Array(RESPONSE_CAPS.deployment + 1)
+          : JSON.stringify(url === listUrl ? list : statuses),
+        { url },
+      ),
+      now: () => 1, requestItems: [],
+    }), (error) => error.stage === "artifact" && error.reason === "artifact-mismatch", `${selectedStage} boundary + 1`);
   }
 });
 
@@ -478,6 +627,38 @@ test("production asset verification binds exact content, MIME, length, hash, URL
   ]) await assert.rejects(attempt(), (error) => error.stage === "artifact");
 });
 
+test("native asset fetch accepts its route cap boundary and rejects boundary plus one before retaining content", async () => {
+  const expected = { path: "index.html", mediaType: "text/html", byteLength: 3, sha256: "f".repeat(64) };
+  const cap = expected.byteLength + 1;
+  const outcomes = [];
+  for (const size of [cap, cap + 1]) {
+    let canceled = false;
+    let emitted = false;
+    const body = {
+      getReader() {
+        return {
+          async read() {
+            if (emitted) return { done: true, value: undefined };
+            emitted = true;
+            return { done: false, value: new Uint8Array(size) };
+          },
+          async cancel() { canceled = true; },
+          releaseLock() {},
+        };
+      },
+    };
+    await assert.rejects(verifyProductionAssets({
+      manifest: { files: [expected] }, origin: PRODUCTION_ORIGIN,
+      fetchImpl: async (url) => ({
+        body, status: 200, url, redirected: false, headers: new Headers({ "Content-Type": "text/html" }),
+      }),
+      now: () => 1, requestItems: [],
+    }), (error) => error.stage === "artifact" && error.reason === "artifact-mismatch");
+    outcomes.push(canceled);
+  }
+  assert.deepEqual(outcomes, [false, true]);
+});
+
 test("invalid Chrome startup endpoint terminates the process and removes startup listeners exactly once", async () => {
   const child = new EventEmitter();
   child.stderr = new EventEmitter();
@@ -496,6 +677,7 @@ test("invalid Chrome startup endpoint terminates the process and removes startup
 function fakeChromeChild() {
   const child = new EventEmitter();
   child.exitCode = null;
+  child.signalCode = null;
   child.stderr = new EventEmitter();
   child.kills = 0;
   child.kill = () => { child.kills += 1; child.exitCode = 0; child.emit("exit", 0); };
@@ -550,13 +732,55 @@ async function openFakeBrowser(harness = fakeCdpHarness()) {
   return { child, session, harness };
 }
 
-function emitBrowserGet(harness, { requestId, url, body, headers = {}, dataLength } = {}) {
+test("signal-terminal Chrome children never wait for or manufacture a second exit during startup, setup, or final close", async () => {
+  {
+    const child = fakeChromeChild();
+    child.signalCode = "SIGTERM";
+    child.kill = () => { throw new Error("terminal startup child was killed twice"); };
+    const pending = launchInstalledChrome({ executable: "chrome", category: "linux-path" }, path.resolve("profile"), { spawnImpl: () => child });
+    queueMicrotask(() => child.stderr.emit("data", "DevTools listening on ws://evil.invalid/devtools/browser/id\n"));
+    await assert.rejects(Promise.race([
+      pending,
+      new Promise((_, reject) => setTimeout(() => reject(new Error("startup cleanup hung")), 100)),
+    ]), (error) => error.message === "Chrome returned an invalid CDP endpoint");
+  }
+
+  {
+    const harness = fakeCdpHarness({ failMethod: "Page.enable" });
+    const child = fakeChromeChild();
+    child.signalCode = "SIGKILL";
+    child.kill = () => { throw new Error("terminal setup child was killed twice"); };
+    await assert.rejects(Promise.race([
+      createBrowserEvidenceSession({
+        discovery: { executable: "chrome", category: "linux-path" }, chromeVersion: "140.0.1.2",
+        profile: path.resolve("profile"), origin: PRODUCTION_ORIGIN, manifest: { files: [{ path: "index.html" }] },
+        eventSha: EVENT, now: () => 1, requestItems: [],
+        launchImpl: async () => ({ child, websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }), connectImpl: () => harness.cdp,
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("setup cleanup hung")), 100)),
+    ]), (error) => /controlled Page\.enable failure/u.test(error.message));
+  }
+
+  {
+    const opened = await openFakeBrowser();
+    opened.child.signalCode = "SIGABRT";
+    const kills = opened.child.kills;
+    await Promise.race([
+      opened.session.close(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("final cleanup hung")), 100)),
+    ]);
+    assert.equal(opened.child.kills, kills);
+  }
+});
+
+function emitBrowserGet(harness, { requestId, url, body, headers = {}, responseHeaders = {
+  "Access-Control-Allow-Origin": "*", "Content-Type": "application/json",
+}, dataLength } = {}) {
   harness.bodies.set(requestId, body);
   harness.emit("Network.requestWillBeSent", { requestId, request: { url, method: "GET", headers: {} } });
   harness.emit("Network.requestWillBeSentExtraInfo", { requestId, headers, associatedCookies: [] });
   harness.emit("Network.responseReceived", { requestId, response: {
-    url, status: 200, headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" },
-    fromDiskCache: false, fromServiceWorker: false,
+    url, status: 200, headers: responseHeaders, fromDiskCache: false, fromServiceWorker: false,
   } });
   const length = dataLength ?? new TextEncoder().encode(body).byteLength;
   harness.emit("Network.dataReceived", { requestId, dataLength: length, encodedDataLength: length });
@@ -672,6 +896,53 @@ test("CDP transfer overflow fails before getResponseBody and closes owned resour
   assert.equal(opened.child.kills, 1);
 });
 
+test("each native CDP revision, commit, tree, and raw route rejects boundary plus one before body retrieval", async () => {
+  const source = new TextEncoder().encode("x");
+  const blob = computeGitBlobId(source, 40);
+  for (const [overflowStage, expectedBodyCalls] of [["revision", 0], ["commit", 1], ["tree", 2], ["raw", 3]]) {
+    const opened = await openFakeBrowser();
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    await Promise.resolve();
+    const complete = async (stage, requestId, url, body) => {
+      emitBrowserGet(opened.harness, { requestId, url, body });
+      await new Promise((resolve) => setImmediate(resolve));
+      if (stage === "revision") {
+        opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+          type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+        }) });
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    };
+    const overflow = (requestId, url, cap) => {
+      opened.harness.emit("Network.requestWillBeSent", { requestId, request: { url, method: "GET", headers: {} } });
+      opened.harness.emit("Network.requestWillBeSentExtraInfo", { requestId, headers: {}, associatedCookies: [] });
+      opened.harness.emit("Network.responseReceived", { requestId, response: {
+        url, status: 200, headers: { "Access-Control-Allow-Origin": "*" }, fromDiskCache: false, fromServiceWorker: false,
+      } });
+      opened.harness.emit("Network.dataReceived", { requestId, dataLength: cap + 1, encodedDataLength: 1 });
+    };
+
+    if (overflowStage === "revision") overflow("overflow-revision", revisionUrl("FelixGeisler/code-city"), RESPONSE_CAPS.revision);
+    else {
+      await complete("revision", "ok-revision", revisionUrl("FelixGeisler/code-city"), JSON.stringify([{ sha: EVENT }]));
+      if (overflowStage === "commit") overflow("overflow-commit", commitUrl("FelixGeisler/code-city", EVENT), RESPONSE_CAPS.commit);
+      else {
+        await complete("commit", "ok-commit", commitUrl("FelixGeisler/code-city", EVENT), JSON.stringify({ sha: EVENT, tree: { sha: ROOT } }));
+        if (overflowStage === "tree") overflow("overflow-tree", treeUrl("FelixGeisler/code-city", ROOT), RESPONSE_CAPS.tree);
+        else {
+          await complete("tree", "ok-tree", treeUrl("FelixGeisler/code-city", ROOT), JSON.stringify({
+            sha: ROOT, truncated: false, tree: [{ path: "src/a.ts", mode: "100644", type: "blob", sha: blob }],
+          }));
+          overflow("overflow-raw", rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts"), RESPONSE_CAPS.raw);
+        }
+      }
+    }
+    await assert.rejects(pending, /exceeds cap before retrieval/u, overflowStage);
+    assert.equal(opened.harness.bodyCalls, expectedBodyCalls, overflowStage);
+    await opened.session.close().catch(() => {});
+  }
+});
+
 test("an earlier SUCCESS is the first capacity terminal and fails exact limit ordering deterministically", async () => {
   const opened = await openFakeBrowser();
   const qualification = { revision: REACT, rootTree: REACT_ROOT, candidates: candidates() };
@@ -684,6 +955,81 @@ test("an earlier SUCCESS is the first capacity terminal and fails exact limit or
   opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({ type: "SUCCESS", generation: 2, revision: REACT, modelSha256: "f".repeat(64) }) });
   await assert.rejects(pending, /capacity terminal differs/u);
   await opened.session.close().catch(() => {});
+});
+
+test("native CDP capacity observes the complete ordered 4,004 exchange sequence, first terminal, non-overlap, and request/worker quiescence", async () => {
+  const requestItems = [];
+  const harness = fakeCdpHarness();
+  const child = fakeChromeChild();
+  let tick = 0;
+  const session = await createBrowserEvidenceSession({
+    discovery: { executable: "chrome", category: "linux-path" }, chromeVersion: "140.0.1.2", profile: path.resolve("profile"),
+    origin: PRODUCTION_ORIGIN, manifest: { files: [{ path: "index.html" }] }, eventSha: EVENT,
+    now: () => ++tick, requestItems,
+    launchImpl: async () => ({ child, websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }), connectImpl: () => harness.cdp,
+  });
+  const qualificationCandidates = NATIVE_ENTRIES.map((entry, offset) => ({
+    index: offset + 1, path: entry.path, blobId: entry.sha, normalizedBytes: 1,
+    runningAggregate: offset + 1, hashMatched: true, contentValid: true,
+  }));
+  const qualification = { revision: REACT, rootTree: REACT_ROOT, candidates: qualificationCandidates };
+  const events = [];
+  const pending = session.collectCapacity(qualification, (event, generation, atMs) => {
+    const value = { event, generation, atMs: atMs ?? ++tick };
+    events.push(value);
+    return value;
+  }, 0);
+  await Promise.resolve();
+  harness.emit("Target.attachedToTarget", { sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" } }, "");
+
+  emitBrowserGet(harness, {
+    requestId: "capacity-revision", url: revisionUrl("facebook/react"), body: JSON.stringify([{ sha: REACT }]),
+    dataLength: RESPONSE_CAPS.revision,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({ type: "REVISION_SELECTED", generation: 2, revision: REACT }) });
+  emitBrowserGet(harness, {
+    requestId: "capacity-commit", url: commitUrl("facebook/react", REACT),
+    body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }), dataLength: RESPONSE_CAPS.commit,
+  });
+  emitBrowserGet(harness, {
+    requestId: "capacity-tree", url: treeUrl("facebook/react", REACT_ROOT),
+    body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }), dataLength: RESPONSE_CAPS.tree,
+  });
+  for (let index = 0; index < NATIVE_ENTRIES.length; index += 1) {
+    emitBrowserGet(harness, {
+      requestId: `capacity-raw-${index + 1}`,
+      url: rawUrl("facebook/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
+      headers: {}, dataLength: RESPONSE_CAPS.raw,
+    });
+  }
+  for (let attempts = 0; harness.bodyCalls < 4004 && attempts < 100; attempts += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(harness.bodyCalls, 4004);
+  harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "FAILURE", generation: 2, revision: REACT, category: "Repository exceeds Code City limits", code: "limit",
+  }) });
+  harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({ type: "ATTEMPT_DRAINED", generation: 2 }) });
+  harness.emit("Target.detachedFromTarget", { sessionId: "worker-session", targetId: "worker-target" }, "");
+
+  const capacity = await pending;
+  assert.equal(capacity.rawRequestCount, 4001);
+  assert.equal(capacity.candidates.length, 4001);
+  assert.equal(capacity.noLaterRequest, true);
+  assert.equal(capacity.workerQuiescent, true);
+  assert.equal(requestItems.length, 4004);
+  assert.deepEqual(requestItems.slice(0, 3).map(({ stage }) => stage), ["revision", "commit", "tree"]);
+  assert(requestItems.slice(3).every(({ stage }) => stage === "raw"));
+  assert(requestItems.every((item, index) => index === 0 || requestItems[index - 1].endedMs <= item.startedMs));
+  assert.deepEqual(events.map(({ event }) => event), [
+    "revision-selected", "inventory-complete", "limit-failure", "request-quiescent", "worker-quiescent",
+  ]);
+  const workerCommands = harness.calls.filter(({ sessionId, method }) => (
+    sessionId === "worker-session" && method !== "Network.getResponseBody"
+  ));
+  assert.deepEqual(workerCommands.map(({ method }) => method), ["Runtime.enable", "Network.enable", "Runtime.runIfWaitingForDebugger"]);
+  await session.close();
 });
 
 const HANDLED_REASONS = {
@@ -791,6 +1137,115 @@ async function collectHandledMatrix(stage, reason) {
   }, seams);
   return { result, stored };
 }
+
+test("native qualification classifiers flow through the exact qualification stop packet and lifecycle", async () => {
+  const cases = [
+    ["cors-failure", { revision: { headers: { "Content-Type": "application/json" } } }],
+    ["identity-mismatch", { commit: { body: JSON.stringify({ sha: EVENT, tree: { sha: REACT_ROOT } }) } }],
+    ["tree-incomplete", { tree: { body: JSON.stringify({ sha: REACT_ROOT, truncated: true, tree: NATIVE_ENTRIES }) } }],
+  ];
+  for (const [reason, overrides] of cases) {
+    let stored;
+    const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+    const controlled = nativeQualificationFetch(overrides);
+    seams.qualifyRepository = async ({ now, requestItems, progress }) => qualifyRepository({
+      fetchImpl: controlled.fetchImpl, now, requestItems, progress,
+    });
+    const result = await collectProductionEvidence({
+      origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"), output: path.resolve(`native-${reason}`),
+    }, seams);
+    assert.deepEqual([result.status, result.reason], ["fail", reason]);
+    const qualification = JSON.parse(new TextDecoder().decode(stored.files.get("qualification.json")));
+    const requests = JSON.parse(new TextDecoder().decode(stored.files.get("requests.json")));
+    const lifecycle = JSON.parse(new TextDecoder().decode(stored.files.get("lifecycle.json")));
+    assert.deepEqual([qualification.status, qualification.reason], ["fail", reason]);
+    assert.deepEqual([requests.status, requests.reason], ["fail", reason]);
+    assert.deepEqual([lifecycle.status, lifecycle.reason], ["fail", reason]);
+    assert.deepEqual(lifecycle.data.events.slice(-2).map(({ event }) => event), ["qualification-start", "collector-failed"]);
+  }
+});
+
+test("native browser CORS and incomplete-tree triggers flow through their owning stop packets and lifecycles", async () => {
+  for (const kind of ["cors", "tree"]) {
+    let stored;
+    const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+    seams.createBrowserEvidenceSession = async (args) => {
+      const harness = fakeCdpHarness();
+      const child = fakeChromeChild();
+      const native = await createBrowserEvidenceSession({
+        ...args,
+        launchImpl: async () => ({ child, websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+        connectImpl: () => harness.cdp,
+      });
+      const driveCors = async () => {
+        await Promise.resolve();
+        emitBrowserGet(harness, {
+          requestId: "cors-revision", url: revisionUrl("FelixGeisler/code-city"),
+          body: JSON.stringify([{ sha: EVENT }]), headers: {}, responseHeaders: { "Content-Type": "application/json" },
+        });
+      };
+      const driveTree = async () => {
+        await Promise.resolve();
+        emitBrowserGet(harness, {
+          requestId: "tree-revision", url: revisionUrl("facebook/react"), body: JSON.stringify([{ sha: REACT }]),
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+        harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+          type: "REVISION_SELECTED", generation: 2, revision: REACT,
+        }) });
+        emitBrowserGet(harness, {
+          requestId: "tree-commit", url: commitUrl("facebook/react", REACT),
+          body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
+        });
+        emitBrowserGet(harness, {
+          requestId: "tree-incomplete", url: treeUrl("facebook/react", REACT_ROOT),
+          body: JSON.stringify({ sha: REACT_ROOT, truncated: true, tree: NATIVE_ENTRIES }),
+        });
+      };
+      return Object.freeze({
+        cdpVersion: native.cdpVersion,
+        snapshot: native.snapshot,
+        clearTrace: native.clearTrace,
+        async collectSmoke(emit, startedMs) {
+          if (kind === "cors") {
+            const pending = native.collectSmoke(emit, startedMs);
+            void driveCors();
+            return pending;
+          }
+          directRequest(args.requestItems, args.now, "revision", revisionUrl("FelixGeisler/code-city"), true);
+          emit("revision-selected", 1);
+          for (const [stage, url] of [
+            ["commit", commitUrl("FelixGeisler/code-city", EVENT)],
+            ["tree", treeUrl("FelixGeisler/code-city", ROOT)],
+            ["raw", rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts")],
+          ]) directRequest(args.requestItems, args.now, stage, url, true);
+          const published = emit("city-published", 1);
+          return { repositoryUrl: "https://github.com/FelixGeisler/code-city", revision: EVENT, rootTree: ROOT,
+            terminal: "success", canvasCount: 1, modelSha256: "1".repeat(64), startedMs,
+            endedMs: published.atMs, providerGetCount: 4 };
+        },
+        async collectCapacity(qualification, emit, startedMs) {
+          const pending = native.collectCapacity(qualification, emit, startedMs);
+          void driveTree();
+          return pending;
+        },
+        close: native.close,
+      });
+    };
+    const result = await collectProductionEvidence({
+      origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"), output: path.resolve(`native-browser-${kind}`),
+    }, seams);
+    const stage = kind === "cors" ? "smoke" : "capacity";
+    const reason = kind === "cors" ? "cors-failure" : "tree-incomplete";
+    assert.deepEqual([result.status, result.reason], ["fail", reason]);
+    const stagePacket = JSON.parse(new TextDecoder().decode(stored.files.get(`${stage}.json`)));
+    const requests = JSON.parse(new TextDecoder().decode(stored.files.get("requests.json")));
+    const lifecycle = JSON.parse(new TextDecoder().decode(stored.files.get("lifecycle.json")));
+    assert.deepEqual([stagePacket.status, stagePacket.reason], ["fail", reason]);
+    assert.deepEqual([requests.reason, lifecycle.reason], [reason, reason]);
+    assert.equal(lifecycle.data.events.at(-1).event, "collector-failed");
+  }
+});
 
 test("collector controlled matrix produces a schema-valid marked packet for every handled stage and reason class", async () => {
   for (const [stage, reasons] of Object.entries(HANDLED_REASONS)) {
@@ -908,6 +1363,13 @@ test("controlled smoke observes exact request identities and remains pending unt
   }, 0);
   await Promise.resolve();
   opened.harness.emit("Target.attachedToTarget", { sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" } }, "");
+  await new Promise((resolve) => setImmediate(resolve));
+  const workerCommands = opened.harness.calls.filter(({ sessionId }) => sessionId === "worker-session");
+  assert.deepEqual(workerCommands.map(({ method }) => method), [
+    "Runtime.enable", "Network.enable", "Runtime.runIfWaitingForDebugger",
+  ]);
+  assert(!workerCommands.some(({ method }) => ["Runtime.addBinding", "Runtime.evaluate", "Page.addScriptToEvaluateOnNewDocument"].includes(method)));
+  assert.equal(opened.harness.calls.filter(({ method, sessionId }) => method === "Runtime.addBinding" && sessionId === "page-session").length, 1);
 
   emitBrowserGet(opened.harness, {
     requestId: "smoke-revision", url: revisionUrl("FelixGeisler/code-city"),
