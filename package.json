@@ -13,6 +13,7 @@
     "dev": "vite",
     "typecheck": "tsc -p tsconfig.main.json && tsc -p tsconfig.worker.json",
     "test": "node --test",
+    "test:manifest": "node --test test/package-manifest.test.mjs test/publication-record.test.mjs",
     "build": "node tools/build-package.mjs",
     "test:reproducibility": "node tools/check-reproducibility.mjs",
     "start": "node tools/serve-package.mjs",

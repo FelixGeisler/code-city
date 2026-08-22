@@ -1,0 +1,79 @@
+= ADR 0010: Canonical artifact manifest and publication evidence contract
+
+Status:: Accepted
+
+== Context
+
+Code City must deploy the exact reviewed package without rebuilding it. The
+build, deployment, evidence collector, and acceptance tooling need one durable
+contract for identifying those bytes and the publication run that produced
+them. Leaving that contract only in scripts or delivery issues would let its
+producers and consumers drift independently.
+
+== Decision
+
+=== Artifact manifest
+
+The external package manifest is canonical JSON schema version `2` with the
+ordered keys `schemaVersion`, `basePath`, `policy`, and `files`.
+
+* `basePath` is `/code-city/`.
+* `policy` records the exact content-security policy, referrer policy, and
+  allowed connection origins applied by the entry document.
+* `files` lists every production runtime file once, in lexical relative-path
+  order, with its media-type essence, byte length, and lowercase SHA-256.
+* The manifest remains outside the deployed package and covers every deployed
+  byte.
+
+=== Publication record
+
+The canonical publication record is JSON schema version `1` with the ordered
+keys `schemaVersion`, `repository`, `eventName`, `eventSha`, `runId`,
+`runAttempt`, and `manifestSha256`.
+
+Its identity tuple is exactly:
+
+[source,text]
+----
+repository = FelixGeisler/code-city
+eventName = push
+eventSha = protected-main commit built by this run
+runId, runAttempt = the producing GitHub Actions run
+manifestSha256 = SHA-256 of the exact canonical manifest bytes
+----
+
+The build creates the manifest and record in one protected-main run. Deployment
+consumes that run's verified package artifact without rebuilding it. A record
+from another repository, event, commit, run, attempt, or manifest is invalid.
+
+=== Canonical representation and executable schema
+
+Canonical JSON bytes are UTF-8 without BOM, `JSON.stringify` key order as
+specified by the schema, no discretionary whitespace, and one final LF.
+Semantically equivalent noncanonical bytes are invalid.
+
+`tools/package-manifest.mjs`, `tools/publication-record.mjs`, and
+`tools/production-evidence-schema.mjs` are the executable contract owners.
+Tests hold the detailed evidence-payload schema, caps, status precedence, and
+privacy rules; reader documentation does not duplicate that large schema. The
+sealed evidence index binds its exact payload bytes to the accepted issue-body
+digest and publication `eventSha`.
+
+The manifest, publication record, and evidence packet are release evidence,
+not browser-runtime inputs, product state, credentials, telemetry, or retained
+repository content. They contain no source bodies or raw diagnostics.
+
+=== Versioning
+
+Producers and consumers migrate together. An incompatible field, identity,
+canonicalization, policy, digest, or ownership change requires architecture
+review and an explicit schema-version change. There is no permissive fallback,
+schema guessing, partial acceptance, or compatibility adapter.
+
+== Consequences
+
+Publication and acceptance can prove that production serves one reviewed
+artifact from one protected-main run. Canonical-byte and same-run checks add
+release tooling and test work, but prevent evidence from being substituted or
+silently reinterpreted. ADR 0009 continues to own the protected-main and Pages
+cutover; this ADR owns only artifact and publication evidence semantics.

@@ -11,6 +11,7 @@ import {
   assertPackageStateUnchanged,
   capturePackageState,
   readPackageManifest,
+  serializePackageManifest,
   verifyManifestAgainstDirectory,
   writePackageManifest,
 } from "./package-manifest.mjs";
@@ -35,8 +36,10 @@ export async function checkReproducibility() {
   try {
     await buildVitePackage(reproducedDist);
     const reproducedManifest = await writePackageManifest(reproducedDist, reproducedManifestPath);
+    const canonicalManifestBytes = serializePackageManifest(canonicalManifest);
+    const reproducedManifestBytes = serializePackageManifest(reproducedManifest);
     invariant(
-      JSON.stringify(reproducedManifest) === JSON.stringify(canonicalManifest),
+      Buffer.from(reproducedManifestBytes).equals(Buffer.from(canonicalManifestBytes)),
       "Reproduced manifest differs from the canonical manifest",
     );
 
