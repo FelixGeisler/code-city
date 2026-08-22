@@ -134,9 +134,29 @@ test("manifest object validation rejects every shape, policy, file, and runtime-
     const record = value.files[0];
     value.files[0] = { mediaType: record.mediaType, path: record.path, byteLength: record.byteLength, sha256: record.sha256 };
   });
-  for (const unsafePath of ["", "/app.js", "a\\b.js", "a//b.js", "a/./b.js", "a/../b.js", ".", "..", "a/", "a\u0000b.js", "a\u007fb.js"]) {
+  const encodedDots = ["%2e", "%2E"];
+  const encodedSeparators = ["%2f", "%2F", "%5c", "%5C"];
+  const encodedAliases = [
+    ...encodedDots.flatMap((left) => encodedDots.map((right) => `${left}${right}/app.js`)),
+    ...encodedDots.flatMap((dot) => [`assets/${dot}/app.js`, `${dot}./app.js`, `.${dot}/app.js`]),
+    ...encodedSeparators.map((separator) => `assets${separator}app.js`),
+    "%252e%252e/app.js",
+    "%61pp.js",
+    "app%2ejs",
+    "app%2Ejs",
+    "assets/%7eapp.js",
+    "assets/%7Eapp.js",
+  ];
+  for (const unsafePath of [
+    "", "/app.js", "a\\b.js", "a//b.js", "a/./b.js", "a/../b.js", ".", "..", "a/",
+    "a b.js", "a#b.js", "a?b.js", "a:b.js", "å.js", "a\u0000b.js", "a\u007fb.js",
+    ...encodedAliases,
+  ]) {
     add(`unsafe path ${JSON.stringify(unsafePath)}`, (value) => { value.files[0].path = unsafePath; });
   }
+  const urlSafePath = canonicalManifest();
+  urlSafePath.files[0].path = "Assets/~app_test-1.0.js";
+  assert.equal(validatePackageManifest(urlSafePath), urlSafePath);
   add("path type", (value) => { value.files[0].path = null; });
   add("unsupported extension", (value) => { value.files[0].path = "asset.json"; });
   add("uppercase extension", (value) => { value.files[0].path = "asset.JS"; });
@@ -289,6 +309,11 @@ test("directory generation rejects empty, unsupported, symlink, non-file, and no
     await writeFile(path.join(unsupported, "data.json"), "{}", "utf8");
     await assert.rejects(() => createPackageManifest(unsupported), /Unsupported production artifact type/u);
 
+    const encodedAlias = path.join(root, "encoded-alias");
+    await mkdir(path.join(encodedAlias, "%2e%2e"), { recursive: true });
+    await writeFile(path.join(encodedAlias, "%2e%2e", "app.js"), "", "utf8");
+    await assert.rejects(() => createPackageManifest(encodedAlias), /canonical URL-safe form/u);
+
     const rootFile = path.join(root, "file.js");
     await writeFile(rootFile, "", "utf8");
     await assert.rejects(() => createPackageManifest(rootFile), /real directory/u);
@@ -300,6 +325,11 @@ test("directory generation rejects empty, unsupported, symlink, non-file, and no
       const linkedRoot = path.join(root, "linked-root");
       await symlink(symlinkTarget, linkedRoot, process.platform === "win32" ? "junction" : "dir");
       await assert.rejects(() => createPackageManifest(linkedRoot), /real directory/u);
+      if (process.platform !== "win32") {
+        for (const lexicalAlias of [`${linkedRoot}${path.sep}`, `${linkedRoot}${path.sep}.`]) {
+          await assert.rejects(() => createPackageManifest(lexicalAlias), /real directory/u);
+        }
+      }
 
       const linkedEntryPackage = path.join(root, "linked-entry-package");
       await mkdir(linkedEntryPackage);

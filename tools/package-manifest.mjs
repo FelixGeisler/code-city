@@ -100,6 +100,7 @@ function validatePackagePath(relativePath, label) {
   invariant(!/\p{Cc}/u.test(relativePath), `Package path contains a control character: ${relativePath}`);
   const segments = relativePath.split("/");
   invariant(!segments.some((segment) => segment === "" || segment === "." || segment === ".."), `Non-canonical package path: ${relativePath}`);
+  invariant(segments.every((segment) => /^[A-Za-z0-9._~-]+$/u.test(segment)), `Package path segment is not in canonical URL-safe form: ${relativePath}`);
   invariant(path.posix.normalize(relativePath) === relativePath, `Non-canonical package path: ${relativePath}`);
 }
 
@@ -126,14 +127,15 @@ async function listFiles(directory, prefix = "") {
 }
 
 export async function createPackageManifest(directory) {
-  const rootMetadata = await lstat(directory);
+  const rootDirectory = path.resolve(directory);
+  const rootMetadata = await lstat(rootDirectory);
   invariant(rootMetadata.isDirectory() && !rootMetadata.isSymbolicLink(), "Production package root must be a real directory");
 
-  const paths = await listFiles(directory);
+  const paths = await listFiles(rootDirectory);
   paths.sort(lexicalCompare);
   const files = [];
   for (const relativePath of paths) {
-    const content = await readFile(path.join(directory, ...relativePath.split("/")));
+    const content = await readFile(path.join(rootDirectory, ...relativePath.split("/")));
     files.push({
       path: relativePath,
       mediaType: mediaTypeFor(relativePath),
