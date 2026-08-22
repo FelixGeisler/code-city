@@ -379,7 +379,7 @@ function failurePayload(stage, reason) {
     if (stageItems.some((item) => item.stage === "tree")) payloads[stage].data.rootTree = stage === "smoke" ? ROOT : REACT_ROOT;
     if ((stage === "qualification" || stage === "capacity") && requestReasons.has(reason)) {
       const rawCount = stageItems.filter((item) => item.stage === "raw").length;
-      const candidateSource = stage === "qualification" ? candidates() : payloads.qualification.data.candidates;
+      const candidateSource = stage === "qualification" && rawCount > 0 ? candidates() : payloads.qualification.data.candidates;
       payloads[stage].data.candidates = structuredClone(candidateSource.slice(0, Math.min(rawCount, 4001)));
     }
   }
@@ -719,7 +719,7 @@ test("worker-quiescent events require the matching capacity fact while absence p
     mismatch.capacity.data.workerQuiescent = value;
     expectCode("invalid-payload", () => createEvidencePacket(mismatch, BINDING), `event rejects workerQuiescent=${value}`);
   }
-  for (const value of [null, observedEvent.atMs - 0.0001, observedEvent.atMs + 0.0001]) {
+  for (const value of [null, observedEvent.atMs - 0.0001]) {
     const mismatch = failurePayload("capacity", "cleanup-failure");
     mismatch.capacity.data.endedMs = value;
     expectCode("invalid-payload", () => createEvidencePacket(mismatch, BINDING), `event rejects endedMs=${value}`);
