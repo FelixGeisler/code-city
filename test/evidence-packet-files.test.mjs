@@ -160,6 +160,15 @@ test("readers reject every unmarked, staged, partial, extra, missing, non-file, 
     }
     await assert.rejects(storage.readValidatedEvidencePacket(output, binding), expectedError("filesystem-safety"), name);
   }
+
+  const outputTarget = path.join(root, "output-symlink-target");
+  const outputLink = path.join(root, "output-symlink");
+  await fs.mkdir(outputTarget);
+  await fs.writeFile(path.join(outputTarget, "keep"), "unchanged");
+  await fs.symlink(outputTarget, outputLink, process.platform === "win32" ? "junction" : "dir");
+  await assert.rejects(storage.readValidatedEvidencePacket(outputLink, binding), expectedError("filesystem-safety"));
+  assert.deepEqual(await fs.readdir(outputTarget), ["keep"]);
+  assert.equal(await fs.readFile(path.join(outputTarget, "keep"), "utf8"), "unchanged");
 }));
 
 test("marker canonicality, 65/66-byte boundary, and digest equality are exact", async () => temporary(async (root) => {
@@ -178,13 +187,30 @@ test("marker canonicality, 65/66-byte boundary, and digest equality are exact", 
   }
 }));
 
-test("each packet file enforces its exact cap plus one before schema parsing", async () => temporary(async (root) => {
+test("each packet file accepts canonical bytes at its exact cap and rejects cap plus one before schema parsing", async () => temporary(async (root) => {
   const packet = makeEvidencePacket();
   for (const name of FILES) {
-    const output = path.join(root, name.replace(".json", ""));
-    await writeLooseDirectory(output, packet, ".validated", `${packet.packetDigest}\n`);
-    await fs.writeFile(path.join(output, name), new Uint8Array(CAPS.get(name) + 1));
-    await assert.rejects(storage.readValidatedEvidencePacket(output, binding), expectedError("noncanonical-bytes"), name);
+    const cap = CAPS.get(name);
+    const exactBytes = new TextEncoder().encode(`${JSON.stringify("x".repeat(cap - 3))}\n`);
+    assert.equal(exactBytes.byteLength, cap, `${name} exact fixture`);
+
+    const exactOutput = path.join(root, `${name.replace(".json", "")}-exact`);
+    await writeLooseDirectory(exactOutput, packet, ".validated", `${packet.packetDigest}\n`);
+    await fs.writeFile(path.join(exactOutput, name), exactBytes);
+    await assert.rejects(
+      storage.readValidatedEvidencePacket(exactOutput, binding),
+      expectedError("invalid-payload"),
+      `${name} exact cap reaches semantic validation`,
+    );
+
+    const oversizedOutput = path.join(root, `${name.replace(".json", "")}-oversized`);
+    await writeLooseDirectory(oversizedOutput, packet, ".validated", `${packet.packetDigest}\n`);
+    await fs.writeFile(path.join(oversizedOutput, name), new Uint8Array(cap + 1));
+    await assert.rejects(
+      storage.readValidatedEvidencePacket(oversizedOutput, binding),
+      expectedError("noncanonical-bytes"),
+      `${name} cap plus one`,
+    );
   }
 }));
 

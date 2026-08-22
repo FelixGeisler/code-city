@@ -205,19 +205,34 @@ await temp(async (root) => {
 for (const phase of ["close", "rename"]) {
   await temp(async (root) => {
     const output = path.join(root, "packet");
-    const packet = makeEvidencePacket();
+    const source = makeEvidencePacket();
+    const packet = {
+      binding: { ...source.binding },
+      files: new Map([...source.files].map(([name, bytes]) => [name, new Uint8Array(bytes)])),
+      packetDigest: source.packetDigest,
+    };
+    const acceptedBinding = Object.freeze({ ...packet.binding });
+    const acceptedDigest = packet.packetDigest;
     const hold = gate();
     if (phase === "close") state.holdClose = hold;
     else state.holdRename = hold;
     const writing = storage.writeValidatedEvidencePacket(output, packet);
     await hold.arrived;
     await assertPending(writing);
-    await assert.rejects(storage.readValidatedEvidencePacket(output, binding), expectCode("filesystem-safety"));
+    await assert.rejects(storage.readValidatedEvidencePacket(output, acceptedBinding), expectCode("filesystem-safety"));
     assert.equal(await realFs.stat(path.join(output, ".validated.staged")).then(() => true), true);
     await assert.rejects(realFs.lstat(path.join(output, ".validated")), { code: "ENOENT" });
+
+    packet.binding.eventSha = "b".repeat(40);
+    packet.files.get("artifact.json").fill(0);
+    packet.files.clear();
+    packet.packetDigest = "0".repeat(64);
+
     hold.release();
-    await writing;
-    assert.equal((await storage.readValidatedEvidencePacket(output, binding)).packetDigest, packet.packetDigest);
+    const result = await writing;
+    assert.deepEqual(result, { packetDigest: acceptedDigest });
+    assert.equal(await realFs.readFile(path.join(output, ".validated"), "utf8"), `${acceptedDigest}\n`);
+    assert.equal((await storage.readValidatedEvidencePacket(output, acceptedBinding)).packetDigest, acceptedDigest);
   });
 }
 

@@ -216,7 +216,12 @@ export async function writeValidatedEvidencePacket(output, packet) {
   try {
     exactPacket(packet);
     const validated = validateEvidencePacket(packet.files, packet.binding);
-    if (!sameBinding(validated.binding, packet.binding) || validated.packetDigest !== packet.packetDigest) {
+    const ownedBinding = Object.freeze({
+      issueBodySha256: validated.binding.issueBodySha256,
+      eventSha: validated.binding.eventSha,
+    });
+    const ownedPacketDigest = validated.packetDigest;
+    if (!sameBinding(ownedBinding, packet.binding) || ownedPacketDigest !== packet.packetDigest) {
       throw failure("invalid-payload");
     }
 
@@ -259,12 +264,12 @@ export async function writeValidatedEvidencePacket(output, packet) {
     }
 
     const rereadFiles = await verifyCreatedEntries(output);
-    const reread = validateEvidencePacket(rereadFiles, packet.binding);
-    if (!sameBinding(reread.binding, packet.binding) || reread.packetDigest !== packet.packetDigest) {
+    const reread = validateEvidencePacket(rereadFiles, ownedBinding);
+    if (!sameBinding(reread.binding, ownedBinding) || reread.packetDigest !== ownedPacketDigest) {
       throw failure("invalid-payload");
     }
 
-    const markerBytes = ENCODER.encode(`${packet.packetDigest}\n`);
+    const markerBytes = ENCODER.encode(`${ownedPacketDigest}\n`);
     const stagedTarget = path.join(output, STAGED_MARKER);
     let markerHandle;
     try {
@@ -298,7 +303,7 @@ export async function writeValidatedEvidencePacket(output, packet) {
       throw failure("io-failure");
     }
     committed = true;
-    return Object.freeze({ packetDigest: packet.packetDigest });
+    return Object.freeze({ packetDigest: ownedPacketDigest });
   } catch (error) {
     const initiating = normalized(error);
     if (reserved && !committed) {
