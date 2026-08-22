@@ -948,10 +948,10 @@ function runnerPlatform() {
 export async function deriveCollectorCommit({ execFileImpl = execFile } = {}) {
   const run = async (args) => (await execFileImpl("git", args, { cwd: PROJECT_ROOT, encoding: "utf8", windowsHide: true })).stdout.trim();
   const head = await run(["rev-parse", "--verify", "HEAD^{commit}"]);
-  const containing = await run(["log", "-1", "--format=%H", "--", "tools/collect-production-evidence.mjs"]);
+  await run(["cat-file", "-e", "HEAD:tools/collect-production-evidence.mjs"]);
   await run(["ls-files", "--error-unmatch", "tools/collect-production-evidence.mjs"]);
   await execFileImpl("git", ["diff", "--quiet", "HEAD", "--", "tools/collect-production-evidence.mjs"], { cwd: PROJECT_ROOT, windowsHide: true });
-  invariant(/^[0-9a-f]{40}$/u.test(head) && containing === head, "collector checkout is ambiguous");
+  invariant(/^[0-9a-f]{40}$/u.test(head), "collector checkout is ambiguous");
   return head;
 }
 
