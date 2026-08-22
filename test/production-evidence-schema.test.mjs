@@ -369,9 +369,11 @@ function failurePayload(stage, reason) {
   }
   if (reason === "cleanup-failure" || reason === "quiescence-failure") {
     prefixLength = stage === "smoke" ? 5 : reason === "quiescence-failure" ? 13 : 14;
+    if (stage === "smoke") items = smokeRequestSequence(["src/main.ts"], 1);
   }
   if (stage === "capacity" && ["tree-incomplete", "limit-order", "hash-mismatch", "content-invalid", "unexpected-request"].includes(reason)) prefixLength = 11;
-  if (stage === "capacity" && requestReasons.has(reason) && reason !== "unexpected-request") prefixLength = 10;
+  if (stage === "capacity" && reason === "request-overlap") prefixLength = 10;
+  if (stage === "capacity" && requestReasons.has(reason) && reason !== "request-overlap" && reason !== "unexpected-request") prefixLength = 9;
   if (stage === "capacity" && prefixLength >= 13) payloads.capacity.data.noLaterRequest = true;
   items.forEach((item, index) => { item.sequence = index + 1; });
   payloads.requests = envelope("requests", "fail", reason, { items });
@@ -381,6 +383,11 @@ function failurePayload(stage, reason) {
   const smokeStarted = events.some((item) => item.event === "smoke-start");
   const qualificationStarted = events.some((item) => item.event === "qualification-start");
   const capacityStarted = events.some((item) => item.event === "capacity-start");
+  const smokeRevisionSelected = events.some((item) => item.event === "revision-selected" && item.generation === 1);
+  const cityPublished = events.some((item) => item.event === "city-published" && item.generation === 1);
+  const capacityRevisionSelected = events.some((item) => item.event === "revision-selected" && item.generation === 2);
+  const inventoryComplete = events.some((item) => item.event === "inventory-complete" && item.generation === 2);
+  const limitFailure = events.some((item) => item.event === "limit-failure" && item.generation === 2);
   const workerQuiescent = events.some((item) => item.event === "worker-quiescent");
   const smokeApplicationGets = items.filter((item) => item.method === "GET" && item.applicationCall && item.requestedUrl.includes(CODE_CITY_REPO));
   const capacityApplicationGets = items.filter((item) => item.method === "GET" && item.applicationCall && item.requestedUrl.includes(REACT_REPO));
@@ -389,10 +396,37 @@ function failurePayload(stage, reason) {
   if (qualificationStarted) payloads.qualification.data.repositoryUrl = "https://github.com/facebook/react";
   if (capacityStarted) payloads.capacity.data.repositoryUrl = "https://github.com/facebook/react";
   if (stage === "smoke" && smokeStarted) payloads.smoke.data.providerGetCount = smokeApplicationGets.length;
+  if (stage === "smoke" && smokeRevisionSelected) payloads.smoke.data.revision = EVENT;
+  if (stage === "smoke" && cityPublished) Object.assign(payloads.smoke.data, {
+    repositoryUrl: "https://github.com/FelixGeisler/code-city",
+    revision: EVENT,
+    rootTree: ROOT,
+    terminal: "success",
+    canvasCount: 1,
+    modelSha256: "3".repeat(64),
+    startedMs: 2,
+    endedMs: 4,
+    providerGetCount: smokeApplicationGets.length,
+  });
   if (stage === "capacity" && capacityStarted) {
     payloads.capacity.data.rawRequestCount = capacityApplicationGets.filter((item) => item.stage === "raw").length;
     payloads.capacity.data.maxOverlap = overlap;
   }
+  if (stage === "capacity" && capacityRevisionSelected) payloads.capacity.data.revision = REACT_EVENT;
+  if (stage === "capacity" && inventoryComplete) payloads.capacity.data.rootTree = REACT_ROOT;
+  if (stage === "capacity" && limitFailure) Object.assign(payloads.capacity.data, {
+    repositoryUrl: "https://github.com/facebook/react",
+    revision: REACT_EVENT,
+    rootTree: REACT_ROOT,
+    terminal: "Repository exceeds Code City limits",
+    revisionDisplayed: true,
+    cityPresent: false,
+    priorCityRemoved: true,
+    rawRequestCount: 4001,
+    maxOverlap: overlap,
+    candidates: structuredClone(payloads.qualification.data.candidates),
+    startedMs: 8,
+  });
   if (workerQuiescent) payloads.capacity.data.workerQuiescent = true;
   payloads.lifecycle = envelope("lifecycle", "fail", reason, lifecycleData(events, {
     collectorCommit: stage === "artifact" ? null : EVENT,
@@ -669,6 +703,110 @@ test("worker-quiescent events require the matching capacity fact while absence p
     assert.equal(event(absent.lifecycle.data.events, "worker-quiescent", 2), undefined);
     absent.capacity.data.workerQuiescent = value;
     assert.doesNotThrow(() => createEvidencePacket(absent, BINDING), `absent event accepts workerQuiescent=${value}`);
+  }
+});
+
+test("every observation event accepts its valid partial predecessor and complete prefix", () => {
+  const prefixes = [
+    ["before smoke revision selection", failurePayload("smoke", "provider-failure")],
+    ["smoke revision selected", failurePayload("smoke", "request-overlap")],
+    ["smoke city published", failurePayload("smoke", "cleanup-failure")],
+    ["smoke trace reset", failurePayload("qualification", "infrastructure-failure")],
+    ["before qualification completion", failurePayload("qualification", "provider-failure")],
+    ["qualification complete", failurePayload("capacity", "identity-mismatch")],
+    ["before capacity revision selection", failurePayload("capacity", "provider-failure")],
+    ["capacity revision selected", failurePayload("capacity", "request-overlap")],
+    ["capacity inventory complete", failurePayload("capacity", "limit-order")],
+    ["capacity limit and request quiescent", failurePayload("capacity", "quiescence-failure")],
+    ["capacity worker quiescent", failurePayload("capacity", "cleanup-failure")],
+  ];
+  for (const [label, payloads] of prefixes) assert.doesNotThrow(() => createEvidencePacket(payloads, BINDING), label);
+
+  assert.equal(prefixes[0][1].smoke.data.revision, null, "revision may remain partial before selection");
+  assert.equal(prefixes[4][1].qualification.data.revision, null, "qualification may remain partial before completion");
+  assert.equal(prefixes[6][1].capacity.data.revision, null, "capacity may remain partial before selection");
+  assert.equal(prefixes[7][1].capacity.data.rootTree, null, "inventory may remain partial before completion");
+  assert.equal(prefixes[8][1].capacity.data.terminal, null, "limit facts may remain partial before limit-failure");
+  assert.equal(prefixes[8][1].capacity.data.noLaterRequest, null, "quiescence may remain partial before request-quiescent");
+});
+
+test("lifecycle observation events reject every missing implied fact and completed exchange", () => {
+  const rejectField = (payloads, data, key, value = null) => {
+    const prior = data[key];
+    data[key] = value;
+    expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `${key}=${value}`);
+    data[key] = prior;
+  };
+  const rejectRemovedGet = (payloads, predicate, label) => {
+    const items = payloads.requests.data.items;
+    const index = items.findIndex((item) => item.method === "GET" && predicate(item));
+    assert.notEqual(index, -1, label);
+    const [removed] = items.splice(index, 1);
+    items.forEach((item, offset) => { item.sequence = offset + 1; });
+    expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), label);
+    items.splice(index, 0, removed);
+    items.forEach((item, offset) => { item.sequence = offset + 1; });
+  };
+
+  const smokeSelected = failurePayload("smoke", "request-overlap");
+  rejectField(smokeSelected, smokeSelected.smoke.data, "revision");
+  rejectRemovedGet(smokeSelected, (item) => item.applicationCall && item.requestedUrl.includes(CODE_CITY_REPO) && item.stage === "revision", "smoke selection requires its revision GET");
+  assert.doesNotThrow(() => createEvidencePacket(smokeSelected, BINDING));
+
+  const smokePublished = failurePayload("smoke", "cleanup-failure");
+  for (const key of SMOKE_KEYS) rejectField(smokePublished, smokePublished.smoke.data, key);
+  for (const stage of ["revision", "commit", "tree", "raw"]) {
+    rejectRemovedGet(smokePublished, (item) => item.applicationCall && item.requestedUrl.includes(CODE_CITY_REPO) && item.stage === stage, `published smoke requires ${stage}`);
+  }
+  assert.doesNotThrow(() => createEvidencePacket(smokePublished, BINDING));
+
+  const qualificationComplete = failurePayload("capacity", "identity-mismatch");
+  for (const key of ["repositoryUrl", "revision", "rootTree", "treeEntries", "truncated"]) rejectField(qualificationComplete, qualificationComplete.qualification.data, key);
+  const qualificationCandidate = qualificationComplete.qualification.data.candidates.pop();
+  expectCode("invalid-payload", () => createEvidencePacket(qualificationComplete, BINDING), "qualification completion requires 4001 candidates");
+  qualificationComplete.qualification.data.candidates.push(qualificationCandidate);
+  rejectField(qualificationComplete, qualificationComplete.qualification.data, "truncated", true);
+  for (const stage of ["revision", "commit", "tree", "raw"]) {
+    rejectRemovedGet(qualificationComplete, (item) => !item.applicationCall && item.requestedUrl.includes(REACT_REPO) && item.stage === stage, `qualification completion requires ${stage}`);
+  }
+  assert.doesNotThrow(() => createEvidencePacket(qualificationComplete, BINDING));
+
+  const capacitySelected = failurePayload("capacity", "request-overlap");
+  rejectField(capacitySelected, capacitySelected.capacity.data, "revision");
+  rejectRemovedGet(capacitySelected, (item) => item.applicationCall && item.requestedUrl.includes(REACT_REPO) && item.stage === "revision", "capacity selection requires its revision GET");
+  assert.doesNotThrow(() => createEvidencePacket(capacitySelected, BINDING));
+
+  const inventoryComplete = failurePayload("capacity", "limit-order");
+  for (const key of ["repositoryUrl", "revision", "rootTree"]) rejectField(inventoryComplete, inventoryComplete.capacity.data, key);
+  for (const stage of ["revision", "commit", "tree"]) {
+    rejectRemovedGet(inventoryComplete, (item) => item.applicationCall && item.requestedUrl.includes(REACT_REPO) && item.stage === stage, `inventory completion requires ${stage}`);
+  }
+  assert.doesNotThrow(() => createEvidencePacket(inventoryComplete, BINDING));
+
+  const limitFailure = failurePayload("capacity", "quiescence-failure");
+  for (const key of ["repositoryUrl", "revision", "rootTree", "terminal", "revisionDisplayed", "cityPresent", "priorCityRemoved", "rawRequestCount", "maxOverlap", "startedMs"]) {
+    rejectField(limitFailure, limitFailure.capacity.data, key);
+  }
+  for (const [key, wrong] of [["terminal", "success"], ["revisionDisplayed", false], ["cityPresent", true], ["priorCityRemoved", false]]) {
+    rejectField(limitFailure, limitFailure.capacity.data, key, wrong);
+  }
+  const limitCandidate = limitFailure.capacity.data.candidates.pop();
+  expectCode("invalid-payload", () => createEvidencePacket(limitFailure, BINDING), "limit failure requires 4001 candidates");
+  limitFailure.capacity.data.candidates.push(limitCandidate);
+  rejectRemovedGet(limitFailure, (item) => item.applicationCall && item.requestedUrl.includes(REACT_REPO) && item.stage === "raw", "limit failure requires every raw GET");
+  for (const value of [null, false]) rejectField(limitFailure, limitFailure.capacity.data, "noLaterRequest", value);
+  assert.doesNotThrow(() => createEvidencePacket(limitFailure, BINDING));
+});
+
+test("handled stage end timestamps require an observed ordered start", () => {
+  for (const [stage, make, endedMs] of [
+    ["smoke", () => failurePayload("smoke", "provider-failure"), 2.5],
+    ["capacity", () => failurePayload("capacity", "provider-failure"), 8.5],
+  ]) {
+    const payloads = make();
+    payloads[stage].data.startedMs = null;
+    payloads[stage].data.endedMs = endedMs;
+    expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `${stage} end requires start`);
   }
 });
 
@@ -1047,10 +1185,9 @@ test("handled capacity timestamps require observed lifecycle boundaries through 
     ["before capacity-start", 7.9999, 8, false],
     ["ended before capacity-start", null, 7.9999, false],
     ["capacity-start equality", 8, 8, true],
-    ["mid-stage", 8.5, 9.5, true],
-    ["collector-failed equality", 8.5, 10, true],
-    ["after collector-failed", 8.5, 10.0001, false],
-    ["start after observed revision selection", 9.0001, 9.5, false],
+    ["mid-stage", 8.5, 8.75, true],
+    ["collector-failed equality", 8.5, 9, true],
+    ["after collector-failed", 8.5, 9.0001, false],
   ]) {
     const payloads = failurePayload("capacity", "provider-failure");
     payloads.capacity.data.startedMs = startedMs;
@@ -1098,7 +1235,7 @@ test("failure boundaries reject later-stage observations and preserve prefix-awa
   assert.doesNotThrow(() => createEvidencePacket(browserStarted, BINDING));
 
   const afterBrowser = failurePayload("smoke", "cleanup-failure");
-  assert.equal(afterBrowser.smoke.data.providerGetCount, 0);
+  assert.equal(afterBrowser.smoke.data.providerGetCount, 4);
   assert.equal(afterBrowser.lifecycle.data.chromeVersion, "140.0.1.2");
   assert.equal(afterBrowser.lifecycle.data.cdpVersion, "1.3");
   assert.doesNotThrow(() => createEvidencePacket(afterBrowser, BINDING));

@@ -226,7 +226,7 @@ function validateSmoke(envelope) {
   fixedOrNull(data.repositoryUrl, CODE_CITY_URL); nullable(data.revision, gitId); nullable(data.rootTree, gitId);
   fixedOrNull(data.terminal, "success"); nullable(data.canvasCount, count); nullable(data.modelSha256, sha256);
   nullable(data.startedMs, milliseconds); nullable(data.endedMs, milliseconds); nullable(data.providerGetCount, count);
-  if (data.startedMs !== null && data.endedMs !== null) requireValue(data.endedMs >= data.startedMs);
+  if (data.endedMs !== null) requireValue(data.startedMs !== null && data.endedMs >= data.startedMs);
   if (envelope.status === "pass") {
     requireValue(Object.values(data).every((value) => value !== null));
     requireValue(data.terminal === "success" && data.canvasCount === 1 && data.providerGetCount >= 4);
@@ -271,7 +271,7 @@ function validateCapacity(envelope) {
   for (const key of ["revisionDisplayed", "cityPresent", "priorCityRemoved", "noLaterRequest", "workerQuiescent"]) nullableBoolean(data[key]);
   nullable(data.rawRequestCount, count); nullable(data.maxOverlap, count); validateCandidates(data.candidates);
   nullable(data.startedMs, milliseconds); nullable(data.endedMs, milliseconds);
-  if (data.startedMs !== null && data.endedMs !== null) requireValue(data.endedMs >= data.startedMs);
+  if (data.endedMs !== null) requireValue(data.startedMs !== null && data.endedMs >= data.startedMs);
   if (data.revision !== null && data.rootTree !== null) requireValue(data.revision.length === data.rootTree.length);
   if (data.revision !== null) for (const candidate of data.candidates) requireValue(candidate.blobId.length === data.revision.length);
   if (envelope.status === "pass") {
@@ -495,6 +495,68 @@ function validateDurations(value) {
 }
 
 function eventIndex(events, name, generation) { return events.find((event) => event.event === name && event.generation === generation); }
+function requireFacts(data, keys) { requireValue(keys.every((key) => data[key] !== null)); }
+function requireSuccessfulExchanges(items, corsRequired = false) {
+  requireValue(items.every((item) => (item.method === "GET" ? item.status === 200 : item.status >= 200 && item.status <= 299)
+    && item.redirected === false && item.authorizationAbsent && item.cookieAbsent && item.refererAbsent
+    && (!corsRequired || item.corsAllowOrigin !== null)));
+}
+function validateLifecycleImplications(payloads, requestInfo, events) {
+  const smoke = payloads.smoke.data;
+  const qualification = payloads.qualification.data;
+  const capacity = payloads.capacity.data;
+  const implications = [
+    ["revision-selected", 1, () => {
+      requireFacts(smoke, ["revision"]);
+      requireValue(requestInfo.smokeGets.length >= 1 && requestInfo.smokeGets[0].stage === "revision");
+      requireSuccessfulExchanges(requestInfo.groups.smoke.filter((item) => item.stage === "revision"), true);
+    }],
+    ["city-published", 1, () => {
+      requireFacts(smoke, ["repositoryUrl", "revision", "rootTree", "terminal", "canvasCount", "modelSha256", "startedMs", "endedMs", "providerGetCount"]);
+      requireValue(smoke.repositoryUrl === CODE_CITY_URL && smoke.terminal === "success" && smoke.canvasCount === 1
+        && requestInfo.smokeGets.length >= 4 && smoke.providerGetCount === requestInfo.smokeGets.length);
+      validateGetBindings(requestInfo.smokeGets, smoke, null, true);
+      requireSuccessfulExchanges(requestInfo.groups.smoke, true);
+    }],
+    ["trace-reset", 0, () => {
+      requireValue(eventIndex(events, "city-published", 1) !== undefined);
+    }],
+    ["qualification-complete", 0, () => {
+      requireFacts(qualification, ["repositoryUrl", "revision", "rootTree", "treeEntries", "truncated"]);
+      requireValue(qualification.repositoryUrl === REACT_URL && qualification.truncated === false
+        && qualification.treeEntries >= 4001 && qualification.candidates.length === 4001
+        && qualification.candidates.every((candidate) => candidate.hashMatched && candidate.contentValid)
+        && requestInfo.qualificationGets.length === 4004);
+      validateGetBindings(requestInfo.qualificationGets, qualification, qualification.candidates, true);
+      requireSuccessfulExchanges(requestInfo.groups.qualification);
+    }],
+    ["revision-selected", 2, () => {
+      requireFacts(capacity, ["revision"]);
+      requireValue(requestInfo.capacityGets.length >= 1 && requestInfo.capacityGets[0].stage === "revision");
+      requireSuccessfulExchanges(requestInfo.groups.capacity.filter((item) => item.stage === "revision"), true);
+    }],
+    ["inventory-complete", 2, () => {
+      requireFacts(capacity, ["repositoryUrl", "revision", "rootTree"]);
+      requireValue(capacity.repositoryUrl === REACT_URL && requestInfo.capacityGets.length >= 3
+        && requestInfo.capacityGets.slice(0, 3).every((item, index) => item.stage === ["revision", "commit", "tree"][index]));
+      validateGetBindings(requestInfo.capacityGets.slice(0, 3), capacity, null, true);
+      requireSuccessfulExchanges(requestInfo.groups.capacity.filter((item) => ["revision", "commit", "tree"].includes(item.stage)), true);
+    }],
+    ["limit-failure", 2, () => {
+      requireFacts(capacity, ["repositoryUrl", "revision", "rootTree", "terminal", "revisionDisplayed", "cityPresent", "priorCityRemoved", "rawRequestCount", "maxOverlap", "startedMs"]);
+      requireValue(capacity.repositoryUrl === REACT_URL && capacity.terminal === "Repository exceeds Code City limits"
+        && capacity.revisionDisplayed === true && capacity.cityPresent === false && capacity.priorCityRemoved === true
+        && capacity.rawRequestCount === 4001 && capacity.candidates.length === 4001
+        && capacity.candidates.every((candidate) => candidate.hashMatched && candidate.contentValid)
+        && requestInfo.capacityGets.length === 4004);
+      validateGetBindings(requestInfo.capacityGets, capacity, capacity.candidates, true);
+      requireSuccessfulExchanges(requestInfo.groups.capacity, true);
+    }],
+    ["request-quiescent", 2, () => requireValue(capacity.noLaterRequest === true)],
+    ["worker-quiescent", 2, () => requireValue(capacity.workerQuiescent === true)],
+  ];
+  for (const [name, generation, validate] of implications) if (eventIndex(events, name, generation)) validate();
+}
 function validateStageTimes(data, start, finalEvent, startedUpper = finalEvent, endedUpper = finalEvent) {
   if (!start) {
     requireValue(data.startedMs === null && data.endedMs === null);
@@ -686,6 +748,7 @@ function validatePayloadSet(payloads, binding) {
   if (artifact.nodeVersion !== null && lifecycle.nodeVersion !== null) requireValue(artifact.nodeVersion === lifecycle.nodeVersion);
   if (artifact.chromeVersion !== null && lifecycle.chromeVersion !== null) requireValue(artifact.chromeVersion === lifecycle.chromeVersion);
   const events = payloads.lifecycle.data.events;
+  validateLifecycleImplications(payloads, requestInfo, events);
   const finalEvent = events.at(-1);
   const artifactVerified = eventIndex(events, "artifact-verified", 0);
   const smokeStart = eventIndex(events, "smoke-start", 1);
