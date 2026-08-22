@@ -1,0 +1,1252 @@
+import { execFile as execFileCallback } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify, types as utilTypes } from "node:util";
+
+import {
+  connectCdp,
+  discoverInstalledChrome,
+  launchInstalledChrome,
+  readInstalledChromeVersion,
+} from "./chrome-cdp.mjs";
+import { readValidatedEvidencePacket, writeValidatedEvidencePacket } from "./evidence-packet-files.mjs";
+import { parsePackageManifest } from "./package-manifest.mjs";
+import { createEvidencePacket } from "./production-evidence-schema.mjs";
+import { validatePublicationRecord } from "./publication-record.mjs";
+
+const execFile = promisify(execFileCallback);
+const ENCODER = new TextEncoder();
+const JSON_DECODER = new TextDecoder("utf-8", { fatal: true });
+const SOURCE_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+export const PRODUCTION_ORIGIN = "https://felixgeisler.github.io/code-city/";
+export const PARENT_ISSUE_BODY_SHA256 = "f06369b3eef5e62631ee8f61ddfd7679b00a3d2139dd83a2f6472820e62864e6";
+export const COLLECTOR_INVOCATION = Object.freeze([
+  "node", "tools/collect-production-evidence.mjs", "--origin", "$ORIGIN",
+  "--manifest", "$MANIFEST", "--output", "$OUTPUT",
+]);
+const CODE_CITY_REPOSITORY = "FelixGeisler/code-city";
+const CODE_CITY_URL = "https://github.com/FelixGeisler/code-city";
+const REACT_REPOSITORY = "facebook/react";
+const REACT_URL = "https://github.com/facebook/react";
+const API_CAP = 1_048_576;
+const COMMIT_CAP = 4 * 1_048_576;
+const TREE_CAP = 8 * 1_048_576;
+const RAW_CAP = 4_194_307;
+const MAX_NORMALIZED_BYTES = 2 * 1_048_576;
+const MAX_AGGREGATE_BYTES = 40 * 1_048_576;
+const SAFE_HEADERS = new Set([
+  "accept", "access-control-allow-origin", "cache-control", "content-type", "origin", "pragma",
+  "x-github-api-version", "x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset",
+]);
+const SOURCE_SUFFIXES = [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"];
+const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+function invariant(condition, message = "collector invariant failed") {
+  if (!condition) throw new Error(message);
+}
+
+export class CollectorFailure extends Error {
+  constructor(stage, reason) {
+    super("production evidence collection failed");
+    this.name = "CollectorFailure";
+    this.stage = stage;
+    this.reason = reason;
+  }
+}
+
+function fail(stage, reason) {
+  throw new CollectorFailure(stage, reason);
+}
+
+function digest(bytes, algorithm = "sha256") {
+  return createHash(algorithm).update(bytes).digest("hex");
+}
+
+function wholeBytes(value) {
+  return new Uint8Array(value);
+}
+
+function ownData(value, key) {
+  if (value === null || typeof value !== "object" || utilTypes.isProxy(value)) return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor && Object.hasOwn(descriptor, "value") && descriptor.enumerable ? descriptor.value : undefined;
+}
+
+function ownString(value, key) {
+  const result = ownData(value, key);
+  return typeof result === "string" ? result : undefined;
+}
+
+function denseOwnArray(value, { nonempty = false } = {}) {
+  if (!Array.isArray(value) || utilTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype
+      || (nonempty && value.length === 0)) return undefined;
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== value.length + 1 || keys.at(-1) !== "length") return undefined;
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (keys[index] !== String(index) || !descriptor || !Object.hasOwn(descriptor, "value") || !descriptor.enumerable) return undefined;
+  }
+  return value;
+}
+
+function strictJson(bytes) {
+  return JSON.parse(JSON_DECODER.decode(bytes));
+}
+
+function encodePath(value) {
+  return value.split("/").map((segment) => encodeURIComponent(segment).replace(/[!'()*]/gu, (character) => (
+    `%${character.codePointAt(0).toString(16).toUpperCase()}`
+  ))).join("/");
+}
+
+function revisionUrl(repository) {
+  return `https://api.github.com/repos/${repository}/commits?per_page=1&page=1`;
+}
+function commitUrl(repository, revision) {
+  return `https://api.github.com/repos/${repository}/git/commits/${revision}`;
+}
+function treeUrl(repository, root) {
+  return `https://api.github.com/repos/${repository}/git/trees/${root}?recursive=1`;
+}
+function rawUrl(repository, revision, rawPath) {
+  return `https://raw.githubusercontent.com/${repository}/${revision}/${encodePath(rawPath)}`;
+}
+function deploymentListUrl(eventSha) {
+  return `https://api.github.com/repos/FelixGeisler/code-city/deployments?sha=${eventSha}&environment=github-pages&per_page=100&page=1`;
+}
+function deploymentStatusesUrl(id) {
+  return `https://api.github.com/repos/FelixGeisler/code-city/deployments/${id}/statuses?per_page=100&page=1`;
+}
+
+export function parseCollectorArguments(args) {
+  invariant(Array.isArray(args), "collector arguments must be an array");
+  if (args.length !== 6
+      || args[0] !== "--origin" || args[2] !== "--manifest" || args[4] !== "--output"
+      || args[1] !== PRODUCTION_ORIGIN
+      || typeof args[3] !== "string" || args[3].length === 0 || args[3].startsWith("-")
+      || typeof args[5] !== "string" || args[5].length === 0 || args[5].startsWith("-")) {
+    throw new Error("invalid collector invocation");
+  }
+  return Object.freeze({
+    origin: args[1],
+    manifestPath: path.resolve(args[3]),
+    output: path.resolve(args[5]),
+  });
+}
+
+function safeHeaderFacts(requestHeaders, responseHeaders) {
+  const requestNames = Object.keys(requestHeaders).map((name) => name.toLowerCase());
+  const responseNames = [...responseHeaders.keys()].map((name) => name.toLowerCase());
+  const observed = new Set([...requestNames, ...responseNames]);
+  const headerNames = [...observed].filter((name) => SAFE_HEADERS.has(name)).sort();
+  const cors = responseHeaders.get("access-control-allow-origin");
+  const corsAllowOrigin = cors === "*" || cors === "https://felixgeisler.github.io" ? cors : null;
+  const rateValues = ["x-ratelimit-limit", "x-ratelimit-remaining", "x-ratelimit-reset"].map((name) => responseHeaders.get(name));
+  let rateLimit = { limit: null, remaining: null, reset: null };
+  if (rateValues.every((value) => value !== null)) {
+    const values = rateValues.map((value) => Number(value));
+    if (values.every((value) => Number.isSafeInteger(value) && value >= 0) && values[1] <= values[0]) {
+      rateLimit = { limit: values[0], remaining: values[1], reset: values[2] };
+    }
+  }
+  return {
+    headerNames,
+    corsAllowOrigin,
+    rateLimit,
+    authorizationAbsent: !requestNames.includes("authorization"),
+    cookieAbsent: !requestNames.includes("cookie"),
+    refererAbsent: !requestNames.includes("referer"),
+  };
+}
+
+async function releaseResponse(response) {
+  if (!response.body) return;
+  try { await response.body.cancel(); } catch {}
+}
+
+export async function readBoundedResponseBody(response, cap) {
+  invariant(Number.isSafeInteger(cap) && cap >= 0, "invalid response cap");
+  if (!response.body) throw new Error("response body is absent");
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      if (!(next.value instanceof Uint8Array) || next.value.byteLength > cap - total) {
+        await reader.cancel();
+        throw new Error("response body exceeds cap");
+      }
+      chunks.push(next.value);
+      total += next.value.byteLength;
+    }
+  } catch (error) {
+    try { await reader.cancel(); } catch {}
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+function appendRequest(items, value) {
+  items.push({ sequence: items.length + 1, ...value });
+}
+
+async function fixedFetch(requestUrl, {
+  cap,
+  stage,
+  applicationCall = false,
+  fetchImpl,
+  now,
+  requestItems,
+  api = true,
+  corsRequired = false,
+}) {
+  const headers = api ? { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2026-03-10" } : {};
+  const startedMs = now();
+  let response;
+  try {
+    response = await fetchImpl(requestUrl, {
+      method: "GET",
+      headers,
+      credentials: "omit",
+      referrer: "",
+      referrerPolicy: "no-referrer",
+      cache: "no-store",
+      redirect: "error",
+    });
+  } catch {
+    throw new Error("request failed");
+  }
+  const facts = safeHeaderFacts(headers, response.headers);
+  const ended = () => Math.max(startedMs, now());
+  if (response.status !== 200 || response.redirected || response.url !== requestUrl) {
+    await releaseResponse(response);
+    appendRequest(requestItems, {
+      stage, method: "GET", requestedUrl: requestUrl, finalUrl: response.url || requestUrl,
+      applicationCall, status: response.status, startedMs, endedMs: ended(), ...facts,
+      redirected: response.redirected || response.url !== requestUrl,
+    });
+    throw new Error("request response mismatch");
+  }
+  if (corsRequired && facts.corsAllowOrigin === null) {
+    await releaseResponse(response);
+    throw new Error("CORS mismatch");
+  }
+  let bytes;
+  try {
+    bytes = await readBoundedResponseBody(response, cap);
+  } catch {
+    throw new Error("response body mismatch");
+  }
+  appendRequest(requestItems, {
+    stage, method: "GET", requestedUrl: requestUrl, finalUrl: response.url,
+    applicationCall, status: response.status, startedMs, endedMs: ended(), ...facts, redirected: false,
+  });
+  return { bytes, response, facts };
+}
+
+function projectRevision(bytes) {
+  const array = denseOwnArray(strictJson(bytes), { nonempty: true });
+  const revision = array && ownString(array[0], "sha");
+  invariant(revision && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(revision), "invalid revision evidence");
+  return revision;
+}
+
+function projectCommit(bytes, revision) {
+  const value = strictJson(bytes);
+  const root = ownString(ownData(value, "tree"), "sha");
+  invariant(ownString(value, "sha") === revision && root && new RegExp(`^[0-9a-f]{${revision.length}}$`, "u").test(root), "invalid commit evidence");
+  return root;
+}
+
+function pathProjection(rawPath) {
+  if (typeof rawPath !== "string" || !rawPath.isWellFormed() || rawPath.length === 0 || rawPath.startsWith("/")
+      || /^[A-Za-z]:/u.test(rawPath) || rawPath.includes("\\") || rawPath.endsWith("/") || rawPath.includes("//")
+      || /\p{Cc}/u.test(rawPath)) return undefined;
+  const segments = rawPath.split("/");
+  if (segments.some((segment) => segment === "." || segment === "..")) return undefined;
+  return { rawPath, canonicalPath: segments.map((segment) => segment.normalize("NFC")).join("/") };
+}
+
+function utf8Compare(left, right) {
+  return Buffer.compare(ENCODER.encode(left), ENCODER.encode(right));
+}
+
+function ancestorIn(value, set) {
+  for (let slash = value.lastIndexOf("/"); slash >= 0; slash = value.lastIndexOf("/", slash - 1)) {
+    if (set.has(value.slice(0, slash))) return true;
+  }
+  return false;
+}
+
+export function projectSourceCandidates(providerEntries, selectedWidth) {
+  const entries = denseOwnArray(providerEntries);
+  invariant(entries, "tree entries are not complete");
+  const raw = new Set();
+  const canonical = new Set();
+  const projected = [];
+  for (const providerEntry of entries) {
+    const identity = pathProjection(ownString(providerEntry, "path"));
+    const mode = ownString(providerEntry, "mode");
+    const type = ownString(providerEntry, "type");
+    invariant(identity && mode && type && !raw.has(identity.rawPath) && !canonical.has(identity.canonicalPath), "invalid tree entry");
+    raw.add(identity.rawPath); canonical.add(identity.canonicalPath);
+    projected.push({ ...identity, mode, type, blobId: ownString(providerEntry, "sha") });
+  }
+  const boundaries = new Set(projected.filter((entry) => (entry.mode === "120000" && entry.type === "blob")
+    || (entry.mode === "160000" && entry.type === "commit")).map((entry) => entry.canonicalPath));
+  const regular = new Set(projected.filter((entry) => ["100644", "100755"].includes(entry.mode) && entry.type === "blob")
+    .map((entry) => entry.canonicalPath));
+  const candidates = [];
+  for (const entry of projected) {
+    if (ancestorIn(entry.canonicalPath, boundaries)) continue;
+    invariant(!ancestorIn(entry.canonicalPath, regular), "tree contradicts a regular file");
+    const supported = SOURCE_SUFFIXES.some((suffix) => entry.canonicalPath.slice(entry.canonicalPath.lastIndexOf("/") + 1).toLowerCase().endsWith(suffix));
+    if (["100644", "100755"].includes(entry.mode) && entry.type === "blob") {
+      if (supported) {
+        invariant(typeof entry.blobId === "string" && new RegExp(`^[0-9a-f]{${selectedWidth}}$`, "u").test(entry.blobId), "candidate blob identity is invalid");
+        candidates.push(entry);
+      }
+      continue;
+    }
+    if ((entry.mode === "040000" && entry.type === "tree") || (entry.mode === "120000" && entry.type === "blob")
+        || (entry.mode === "160000" && entry.type === "commit")) continue;
+    invariant(false, "tree entry kind is invalid");
+  }
+  candidates.sort((left, right) => utf8Compare(left.canonicalPath, right.canonicalPath));
+  invariant(candidates.length > 0, "tree has no supported candidates");
+  return candidates;
+}
+
+function projectTree(bytes, expectedRoot, selectedWidth) {
+  const value = strictJson(bytes);
+  const entries = denseOwnArray(ownData(value, "tree"));
+  invariant(ownString(value, "sha") === expectedRoot && ownData(value, "truncated") === false && entries, "tree evidence is incomplete");
+  return { entries, candidates: projectSourceCandidates(entries, selectedWidth) };
+}
+
+export function computeGitBlobId(bytes, width) {
+  invariant(width === 40 || width === 64, "invalid Git identity width");
+  const prefix = ENCODER.encode(`blob ${bytes.byteLength}\0`);
+  const hash = createHash(width === 40 ? "sha1" : "sha256");
+  hash.update(prefix); hash.update(bytes);
+  return hash.digest("hex");
+}
+
+export function normalizeSourceBytes(bytes) {
+  let source = SOURCE_DECODER.decode(bytes);
+  if (source.startsWith("\uFEFF")) source = source.slice(1);
+  invariant(!source.includes("\0"), "source contains NUL");
+  source = source.replace(/\r\n?/gu, "\n");
+  return ENCODER.encode(source).byteLength;
+}
+
+function parseTreeResponse(bytes, root, width) {
+  return projectTree(bytes, root, width);
+}
+
+export async function verifyDeploymentBinding({ eventSha, origin, fetchImpl, now, requestItems }) {
+  let listBytes;
+  try {
+    const listResult = await fixedFetch(deploymentListUrl(eventSha), {
+      cap: API_CAP, stage: "deployment", fetchImpl, now, requestItems,
+    });
+    listBytes = listResult.bytes;
+    invariant(!/(?:^|,)\s*<[^>]+>\s*;\s*rel="next"(?:\s*,|$)/iu.test(listResult.response.headers.get("link") ?? ""), "deployment list is paginated");
+    const listResponse = strictJson(listBytes);
+    const deployments = denseOwnArray(listResponse);
+    invariant(deployments && !/\brel="?next"?/iu.test(""), "deployment list is malformed");
+    const matches = [];
+    for (const providerRecord of deployments) {
+      const id = ownData(providerRecord, "id");
+      const sha = ownString(providerRecord, "sha");
+      const environment = ownString(providerRecord, "environment");
+      const task = ownString(providerRecord, "task");
+      invariant(Number.isSafeInteger(id) && id > 0 && sha && environment && task, "deployment record is malformed");
+      if (sha === eventSha && environment === "github-pages" && task === "deploy") matches.push({ id, sha });
+    }
+    invariant(matches.length === 1, "deployment match is ambiguous");
+    const selected = matches[0];
+    const statusResult = await fixedFetch(deploymentStatusesUrl(selected.id), {
+      cap: API_CAP, stage: "deployment", fetchImpl, now, requestItems,
+    });
+    invariant(!/(?:^|,)\s*<[^>]+>\s*;\s*rel="next"(?:\s*,|$)/iu.test(statusResult.response.headers.get("link") ?? ""), "deployment statuses are paginated");
+    const statuses = denseOwnArray(strictJson(statusResult.bytes), { nonempty: true });
+    invariant(statuses, "deployment statuses are malformed");
+    const values = statuses.map((record) => ({ state: ownString(record, "state"), environmentUrl: ownString(record, "environment_url") }));
+    invariant(values.every((value) => value.state && value.environmentUrl), "deployment status is malformed");
+    invariant(values[0].state === "success" && values[0].environmentUrl === origin
+      && values.slice(1).every((value) => value.state !== "inactive"), "deployment is not active at the production origin");
+    return Object.freeze({ deploymentId: selected.id, deployedSha: selected.sha });
+  } catch (error) {
+    if (error instanceof CollectorFailure) throw error;
+    fail("artifact", "artifact-mismatch");
+  }
+}
+
+export async function verifyProductionAssets({ manifest, origin, fetchImpl, now, requestItems }) {
+  const files = [];
+  try {
+    for (const expected of manifest.files) {
+      const requestUrl = `${origin}${encodePath(expected.path)}`;
+      const result = await fixedFetch(requestUrl, {
+        cap: expected.byteLength + 1, stage: "asset", fetchImpl, now, requestItems, api: false,
+      });
+      const observedMediaType = result.response.headers.get("content-type") ?? "application/octet-stream";
+      const observedSha256 = digest(result.bytes);
+      const match = result.bytes.byteLength === expected.byteLength && observedSha256 === expected.sha256
+        && observedMediaType.split(";", 1)[0].trim().toLowerCase() === expected.mediaType;
+      files.push({
+        path: expected.path,
+        expectedMediaType: expected.mediaType,
+        observedMediaType,
+        expectedBytes: expected.byteLength,
+        observedBytes: result.bytes.byteLength,
+        expectedSha256: expected.sha256,
+        observedSha256,
+        match,
+      });
+      invariant(match, "production asset mismatch");
+    }
+    return files;
+  } catch (error) {
+    if (error instanceof CollectorFailure) throw error;
+    fail("artifact", /request failed/iu.test(String(error?.message)) ? "production-unreachable" : "artifact-mismatch");
+  }
+}
+
+export async function qualifyRepository({ fetchImpl, now, requestItems }) {
+  try {
+    const revisionResult = await fixedFetch(revisionUrl(REACT_REPOSITORY), {
+      cap: API_CAP, stage: "revision", fetchImpl, now, requestItems,
+    });
+    const revision = projectRevision(revisionResult.bytes);
+    const commitResult = await fixedFetch(commitUrl(REACT_REPOSITORY, revision), {
+      cap: COMMIT_CAP, stage: "commit", fetchImpl, now, requestItems,
+    });
+    const rootTree = projectCommit(commitResult.bytes, revision);
+    const treeResult = await fixedFetch(treeUrl(REACT_REPOSITORY, rootTree), {
+      cap: TREE_CAP, stage: "tree", fetchImpl, now, requestItems,
+    });
+    const tree = parseTreeResponse(treeResult.bytes, rootTree, revision.length);
+    invariant(tree.candidates.length >= 4001, "qualification has fewer than 4,001 candidates");
+    let aggregate = 0;
+    const candidates = [];
+    for (let offset = 0; offset < 4001; offset += 1) {
+      const expected = tree.candidates[offset];
+      const result = await fixedFetch(rawUrl(REACT_REPOSITORY, revision, expected.rawPath), {
+        cap: RAW_CAP, stage: "raw", fetchImpl, now, requestItems, api: false,
+      });
+      const actualBlob = computeGitBlobId(result.bytes, revision.length);
+      invariant(actualBlob === expected.blobId, "candidate blob hash differs");
+      const normalizedBytes = normalizeSourceBytes(result.bytes);
+      aggregate += normalizedBytes;
+      invariant(normalizedBytes <= MAX_NORMALIZED_BYTES && aggregate <= MAX_AGGREGATE_BYTES, "candidate content exceeds qualification bounds");
+      candidates.push({
+        index: offset + 1,
+        path: expected.canonicalPath,
+        blobId: expected.blobId,
+        normalizedBytes,
+        runningAggregate: aggregate,
+        hashMatched: true,
+        contentValid: true,
+      });
+    }
+    return Object.freeze({
+      repositoryUrl: REACT_URL,
+      revision,
+      rootTree,
+      treeEntries: tree.entries.length,
+      truncated: false,
+      candidates,
+    });
+  } catch (error) {
+    if (error instanceof CollectorFailure) throw error;
+    const message = String(error?.message);
+    if (/blob hash/iu.test(message)) fail("qualification", "hash-mismatch");
+    if (/UTF-8|NUL|content exceeds/iu.test(message)) fail("qualification", "content-invalid");
+    if (/tree evidence is incomplete/iu.test(message)) fail("qualification", "tree-incomplete");
+    if (/commit identity|revision evidence|identity/iu.test(message)) fail("qualification", "identity-mismatch");
+    if (/request|response|fetch/iu.test(message)) fail("qualification", "provider-failure");
+    fail("qualification", "qualification-failure");
+  }
+}
+
+export function computeModelSha256(model) {
+  invariant(model && Number.isSafeInteger(model.count) && model.count >= 0 && model.count <= 0xffff_ffff, "model count is invalid");
+  const count = new Uint8Array(4);
+  new DataView(count.buffer).setUint32(0, model.count, true);
+  const hash = createHash("sha256");
+  hash.update(count);
+  for (const key of ["origins", "sizes", "rgba", "bounds"]) {
+    const view = model[key];
+    invariant(ArrayBuffer.isView(view), "model view is invalid");
+    hash.update(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+  }
+  return hash.digest("hex");
+}
+
+export function createWorkerObserverSource(bindingName = "__codeCityCollectorEvidence") {
+  invariant(/^__[A-Za-z0-9]+$/u.test(bindingName), "invalid CDP binding name");
+  return `(() => {
+    "use strict";
+    const emit = globalThis[${JSON.stringify(bindingName)}];
+    const NativeWorker = globalThis.Worker;
+    const nativeAdd = NativeWorker.prototype.addEventListener;
+    const K = [
+      0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+      0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+      0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+      0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+      0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+      0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+      0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+      0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+    ];
+    const rotr = (x, n) => (x >>> n) | (x << (32 - n));
+    function modelDigest(model) {
+      if (!model || !Number.isSafeInteger(model.count) || model.count < 0 || model.count > 0xffffffff) throw 0;
+      const h = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+      const block = new Uint8Array(64); const words = new Uint32Array(64); let used = 0; let length = 0;
+      function compress() {
+        for (let i=0;i<16;i++) words[i]=((block[i*4]<<24)|(block[i*4+1]<<16)|(block[i*4+2]<<8)|block[i*4+3])>>>0;
+        for (let i=16;i<64;i++) { const a=words[i-15],b=words[i-2]; const s0=rotr(a,7)^rotr(a,18)^(a>>>3); const s1=rotr(b,17)^rotr(b,19)^(b>>>10); words[i]=(words[i-16]+s0+words[i-7]+s1)>>>0; }
+        let [a,b,c,d,e,f,g,z]=h;
+        for (let i=0;i<64;i++) { const s1=rotr(e,6)^rotr(e,11)^rotr(e,25); const ch=(e&f)^(~e&g); const t1=(z+s1+ch+K[i]+words[i])>>>0; const s0=rotr(a,2)^rotr(a,13)^rotr(a,22); const maj=(a&b)^(a&c)^(b&c); const t2=(s0+maj)>>>0; z=g;g=f;f=e;e=(d+t1)>>>0;d=c;c=b;b=a;a=(t1+t2)>>>0; }
+        h[0]=(h[0]+a)>>>0;h[1]=(h[1]+b)>>>0;h[2]=(h[2]+c)>>>0;h[3]=(h[3]+d)>>>0;h[4]=(h[4]+e)>>>0;h[5]=(h[5]+f)>>>0;h[6]=(h[6]+g)>>>0;h[7]=(h[7]+z)>>>0;
+      }
+      function byte(value) { block[used++]=value; length++; if(used===64){compress();used=0;} }
+      const count=model.count>>>0; byte(count&255);byte((count>>>8)&255);byte((count>>>16)&255);byte((count>>>24)&255);
+      for (const key of ["origins","sizes","rgba","bounds"]) { const view=model[key]; if(!ArrayBuffer.isView(view))throw 0; const bytes=new Uint8Array(view.buffer,view.byteOffset,view.byteLength); for(let i=0;i<bytes.byteLength;i++)byte(bytes[i]); }
+      const bitLength=length*8; byte(0x80); while(used!==56)byte(0); const high=Math.floor(bitLength/0x100000000); const low=bitLength>>>0;
+      for(let shift=24;shift>=0;shift-=8)byte((high>>>shift)&255); for(let shift=24;shift>=0;shift-=8)byte((low>>>shift)&255);
+      return h.map((word)=>word.toString(16).padStart(8,"0")).join("");
+    }
+    function observe(event) {
+      try {
+        const message=event.data;
+        if(!message || typeof message!=="object" || typeof message.type!=="string")return;
+        const fact={type:message.type,generation:message.generation};
+        if(typeof message.revision==="string")fact.revision=message.revision;
+        if(typeof message.category==="string")fact.category=message.category;
+        if(typeof message.code==="string")fact.code=message.code;
+        if(message.type==="SUCCESS")fact.modelSha256=modelDigest(message.model);
+        emit(JSON.stringify(fact));
+      } catch {}
+    }
+    function ObservedWorker(...args) {
+      if(!new.target)throw new TypeError("Worker constructor requires new");
+      const worker=Reflect.construct(NativeWorker,args,NativeWorker);
+      nativeAdd.call(worker,"message",observe);
+      return worker;
+    }
+    Object.setPrototypeOf(ObservedWorker,NativeWorker);
+    Object.defineProperty(ObservedWorker,"prototype",{value:NativeWorker.prototype,writable:false});
+    Object.defineProperty(globalThis,"Worker",{value:ObservedWorker,writable:true,configurable:true});
+  })();`;
+}
+
+function browserRoute(url, repository) {
+  if (url === revisionUrl(repository)) return { stage: "revision" };
+  let match = new RegExp(`^https://api\\.github\\.com/repos/${repository.replace("/", "\\/")}/git/commits/([0-9a-f]{40}|[0-9a-f]{64})$`, "u").exec(url);
+  if (match) return { stage: "commit", identity: match[1] };
+  match = new RegExp(`^https://api\\.github\\.com/repos/${repository.replace("/", "\\/")}/git/trees/([0-9a-f]{40}|[0-9a-f]{64})\\?recursive=1$`, "u").exec(url);
+  if (match) return { stage: "tree", identity: match[1] };
+  const prefix = `https://raw.githubusercontent.com/${repository}/`;
+  if (url.startsWith(prefix)) {
+    const raw = /^([0-9a-f]{40}|[0-9a-f]{64})\/(.+)$/u.exec(url.slice(prefix.length));
+    if (!raw) return null;
+    let decoded;
+    try { decoded = decodeURIComponent(raw[2]); } catch { return null; }
+    if (raw[2] !== encodePath(decoded)) return null;
+    return { stage: "raw", identity: raw[1], path: decoded };
+  }
+  return null;
+}
+
+function headersFromCdp(value) {
+  const headers = new Headers();
+  if (value && typeof value === "object") {
+    for (const [name, headerValue] of Object.entries(value)) headers.set(name, String(headerValue));
+  }
+  return headers;
+}
+
+async function cdpBody(cdp, sessionId, requestId, cap) {
+  const value = await cdp.send("Network.getResponseBody", { requestId }, sessionId);
+  const bytes = value.base64Encoded ? Uint8Array.from(Buffer.from(value.body, "base64")) : ENCODER.encode(value.body);
+  invariant(bytes.byteLength <= cap, "browser response body exceeds cap");
+  return bytes;
+}
+
+async function evaluate(cdp, sessionId, expression) {
+  const result = await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId);
+  invariant(!result.exceptionDetails, "browser evaluation failed");
+  return result.result.value;
+}
+
+async function waitUntil(cdp, sessionId, predicate, fatal) {
+  for (;;) {
+    if (fatal.value) throw fatal.value;
+    const value = await evaluate(cdp, sessionId, predicate);
+    if (value) return value;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+export async function createBrowserEvidenceSession({
+  discovery,
+  chromeVersion,
+  profile,
+  origin,
+  manifest,
+  eventSha,
+  now,
+  requestItems,
+  launchImpl = launchInstalledChrome,
+  connectImpl = connectCdp,
+}) {
+  const launched = await launchImpl(discovery, profile);
+  const cdp = connectImpl(launched.websocketUrl);
+  const version = await cdp.send("Browser.getVersion");
+  invariant(version.product === `Chrome/${chromeVersion}` && typeof version.protocolVersion === "string", "Chrome/CDP version mismatch");
+  const bindingName = "__codeCityCollectorEvidence";
+  const facts = [];
+  const factWaiters = [];
+  const fatal = { value: null };
+  const network = new Map();
+  const workerTargets = new Set();
+  const detachedWorkers = new Set();
+  const allowedAssets = new Set(manifest.files.map((file) => `${origin}${encodePath(file.path)}`));
+  allowedAssets.add(origin);
+  let mode = null;
+  let processing = Promise.resolve();
+
+  function publishFact(fact) {
+    facts.push(fact);
+    for (const waiter of [...factWaiters]) {
+      if (waiter.predicate(fact)) {
+        factWaiters.splice(factWaiters.indexOf(waiter), 1);
+        waiter.resolve(fact);
+      }
+    }
+  }
+  function nextFact(predicate) {
+    const found = facts.find(predicate);
+    if (found) return Promise.resolve(found);
+    return new Promise((resolve) => factWaiters.push({ predicate, resolve }));
+  }
+  function setFatal(error) {
+    if (!fatal.value) fatal.value = error instanceof Error ? error : new Error("browser observation failed");
+  }
+  function enqueue(task) {
+    processing = processing.then(task).catch(setFatal);
+  }
+
+  const listener = (message) => {
+    if (message.method === "Runtime.bindingCalled" && message.params?.name === bindingName) {
+      try { publishFact(JSON.parse(message.params.payload)); } catch { setFatal(new Error("worker observation is malformed")); }
+      return;
+    }
+    if (message.method === "Target.attachedToTarget" && message.params?.targetInfo?.type === "worker") {
+      const childSession = message.params.sessionId;
+      workerTargets.add(message.params.targetInfo.targetId);
+      enqueue(async () => {
+        await cdp.send("Runtime.enable", {}, childSession);
+        await cdp.send("Network.enable", {}, childSession);
+        await cdp.send("Runtime.addBinding", { name: bindingName }, childSession);
+        await cdp.send("Runtime.runIfWaitingForDebugger", {}, childSession);
+      });
+      return;
+    }
+    if (message.method === "Target.detachedFromTarget") {
+      if (message.params?.targetId) detachedWorkers.add(message.params.targetId);
+      return;
+    }
+    if (message.method === "Runtime.exceptionThrown") {
+      setFatal(new Error("browser exception"));
+      return;
+    }
+    if (message.method === "Network.loadingFailed") {
+      const key = `${message.sessionId ?? ""}:${message.params.requestId}`;
+      if (network.has(key)) setFatal(new Error("browser request failed"));
+      return;
+    }
+    if (message.method === "Network.requestWillBeSent") {
+      const url = message.params.request.url;
+      const method = message.params.request.method;
+      const key = `${message.sessionId ?? ""}:${message.params.requestId}`;
+      if (allowedAssets.has(url) || url === "about:blank") return;
+      if (!mode) { setFatal(new Error("unexpected browser request")); return; }
+      const route = browserRoute(url, mode.repository);
+      if (!route || !["GET", "OPTIONS"].includes(method) || (route.stage === "raw" && method === "OPTIONS")) {
+        setFatal(new Error("unexpected browser request")); return;
+      }
+      network.set(key, {
+        sessionId: message.sessionId,
+        requestId: message.params.requestId,
+        url,
+        method,
+        route,
+        requestHeaders: message.params.request.headers ?? {},
+        startedMs: now(),
+      });
+      return;
+    }
+    if (message.method === "Network.responseReceived") {
+      const key = `${message.sessionId ?? ""}:${message.params.requestId}`;
+      const entry = network.get(key);
+      if (entry) entry.response = message.params.response;
+      return;
+    }
+    if (message.method === "Network.loadingFinished") {
+      const key = `${message.sessionId ?? ""}:${message.params.requestId}`;
+      const entry = network.get(key);
+      if (!entry) return;
+      network.delete(key);
+      enqueue(async () => {
+        invariant(entry.response, "browser response is absent");
+        const responseHeaders = headersFromCdp(entry.response.headers);
+        const requestHeaders = Object.fromEntries(Object.entries(entry.requestHeaders).map(([name, value]) => [name, String(value)]));
+        const headerFacts = safeHeaderFacts(requestHeaders, responseHeaders);
+        invariant(entry.response.status === (entry.method === "OPTIONS" ? 204 : 200)
+          && entry.response.url === entry.url && !entry.response.fromDiskCache && !entry.response.fromServiceWorker, "browser response mismatch");
+        invariant(headerFacts.authorizationAbsent && headerFacts.cookieAbsent && headerFacts.refererAbsent, "credential header observed");
+        invariant(headerFacts.corsAllowOrigin !== null, "browser CORS evidence is absent");
+        appendRequest(requestItems, {
+          stage: entry.route.stage,
+          method: entry.method,
+          requestedUrl: entry.url,
+          finalUrl: entry.response.url,
+          applicationCall: entry.method === "GET",
+          status: entry.response.status,
+          startedMs: entry.startedMs,
+          endedMs: Math.max(entry.startedMs, now()),
+          ...headerFacts,
+          redirected: false,
+        });
+        if (entry.method !== "GET") return;
+        const cap = entry.route.stage === "revision" ? API_CAP : entry.route.stage === "commit" ? COMMIT_CAP : entry.route.stage === "tree" ? TREE_CAP : RAW_CAP;
+        const bytes = await cdpBody(cdp, entry.sessionId, entry.requestId, cap);
+        const current = mode;
+        invariant(current, "browser trace was cleared too early");
+        current.gets.push({ ...entry.route, url: entry.url });
+        if (entry.route.stage === "revision") {
+          current.revision = projectRevision(bytes);
+        } else if (entry.route.stage === "commit") {
+          invariant(entry.route.identity === current.revision, "browser commit identity mismatch");
+          current.rootTree = projectCommit(bytes, current.revision);
+        } else if (entry.route.stage === "tree") {
+          invariant(entry.route.identity === current.rootTree, "browser tree identity mismatch");
+          const tree = projectTree(bytes, current.rootTree, current.revision.length);
+          current.treeEntries = tree.entries.length;
+          current.projected = tree.candidates;
+          current.onInventory?.();
+        } else {
+          const index = current.rawFacts.length;
+          const expected = current.projected?.[index];
+          invariant(expected && entry.route.identity === current.revision && entry.route.path === expected.rawPath, "browser raw sequence mismatch");
+          const blobId = computeGitBlobId(bytes, current.revision.length);
+          const normalizedBytes = normalizeSourceBytes(bytes);
+          current.aggregate += normalizedBytes;
+          invariant(blobId === expected.blobId && normalizedBytes <= MAX_NORMALIZED_BYTES && current.aggregate <= MAX_AGGREGATE_BYTES, "browser candidate mismatch");
+          current.rawFacts.push({
+            index: index + 1, path: expected.canonicalPath, blobId, normalizedBytes,
+            runningAggregate: current.aggregate, hashMatched: true, contentValid: true,
+          });
+        }
+      });
+    }
+  };
+  cdp.listeners.add(listener);
+  const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+  await Promise.all([
+    cdp.send("Page.enable", {}, sessionId),
+    cdp.send("Runtime.enable", {}, sessionId),
+    cdp.send("Network.enable", {}, sessionId),
+    cdp.send("Runtime.addBinding", { name: bindingName }, sessionId),
+  ]);
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: createWorkerObserverSource(bindingName) }, sessionId);
+  await cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true }, sessionId);
+  await cdp.send("Page.navigate", { url: origin }, sessionId);
+  await waitUntil(cdp, sessionId, "document.readyState==='complete'&&!!document.querySelector('form')", fatal);
+
+  function startTrace(repository) {
+    mode = { repository, gets: [], rawFacts: [], aggregate: 0, revision: null, rootTree: null, projected: null, treeEntries: null };
+    return mode;
+  }
+  async function submit(repositoryUrl) {
+    await evaluate(cdp, sessionId, `(() => { const input=document.querySelector('input[name=repository]'); input.value=${JSON.stringify(repositoryUrl)}; document.querySelector('form').requestSubmit(); return true; })()`);
+  }
+  async function flush() {
+    await evaluate(cdp, sessionId, "true");
+    await processing;
+    if (fatal.value) throw fatal.value;
+  }
+
+  return Object.freeze({
+    chromeVersion,
+    cdpVersion: version.protocolVersion,
+    async collectSmoke(emit, startedMs) {
+      facts.length = 0;
+      const trace = startTrace(CODE_CITY_REPOSITORY);
+      await submit(CODE_CITY_URL);
+      const selected = await nextFact((fact) => fact.type === "REVISION_SELECTED" && fact.generation === 1);
+      invariant(selected.revision === eventSha, "smoke selected a stale revision");
+      emit("revision-selected", 1);
+      await flush();
+      invariant(trace.revision === eventSha, "smoke revision evidence differs");
+      const success = await nextFact((fact) => fact.type === "SUCCESS" && fact.generation === 1);
+      await nextFact((fact) => fact.type === "ATTEMPT_DRAINED" && fact.generation === 1);
+      await waitUntil(cdp, sessionId, `document.querySelector('[data-commit]')?.textContent===${JSON.stringify(eventSha)}&&document.querySelectorAll('[data-city] canvas').length===1`, fatal);
+      await flush();
+      invariant(trace.projected && trace.projected.length >= 1 && trace.rawFacts.length === trace.projected.length, "smoke tree/request cardinality mismatch");
+      const expectedStages = ["revision", "commit", "tree", ...trace.projected.map(() => "raw")];
+      invariant(trace.gets.length === expectedStages.length && trace.gets.every((item, index) => item.stage === expectedStages[index]), "smoke request sequence mismatch");
+      const cityPublished = emit("city-published", 1);
+      const result = {
+        repositoryUrl: CODE_CITY_URL,
+        revision: trace.revision,
+        rootTree: trace.rootTree,
+        terminal: "success",
+        canvasCount: 1,
+        modelSha256: success.modelSha256,
+        startedMs,
+        endedMs: cityPublished.atMs,
+        providerGetCount: trace.gets.length,
+      };
+      mode = null;
+      return result;
+    },
+    clearTrace() {
+      invariant(mode === null && network.size === 0, "browser trace is not quiescent");
+    },
+    async collectCapacity(qualification, emit, startedMs) {
+      facts.length = 0;
+      const trace = startTrace(REACT_REPOSITORY);
+      trace.onInventory = () => emit("inventory-complete", 2);
+      await submit(REACT_URL);
+      const selected = await nextFact((fact) => fact.type === "REVISION_SELECTED" && fact.generation === 2);
+      invariant(selected.revision === qualification.revision, "capacity revision differs from qualification");
+      emit("revision-selected", 2);
+      await flush();
+      invariant(trace.revision === qualification.revision, "capacity revision evidence differs from qualification");
+      const terminal = await nextFact((fact) => fact.type === "FAILURE" && fact.generation === 2);
+      invariant(terminal.category === "Repository exceeds Code City limits" && terminal.revision === qualification.revision, "capacity terminal differs");
+      await nextFact((fact) => fact.type === "ATTEMPT_DRAINED" && fact.generation === 2);
+      await waitUntil(cdp, sessionId, `document.querySelector('[data-status]')?.textContent==='Repository exceeds Code City limits'&&document.querySelector('[data-commit]')?.textContent===${JSON.stringify(qualification.revision)}&&document.querySelectorAll('[data-city] canvas').length===0`, fatal);
+      await flush();
+      invariant(trace.rootTree === qualification.rootTree && trace.projected && trace.projected.length >= 4001 && trace.rawFacts.length === 4001, "capacity inventory/cardinality differs");
+      invariant(JSON.stringify(trace.rawFacts) === JSON.stringify(qualification.candidates), "capacity bytes differ from qualification");
+      invariant(trace.gets.length === 4004 && trace.gets.slice(0, 3).every((item, index) => item.stage === ["revision", "commit", "tree"][index])
+        && trace.gets.slice(3).every((item) => item.stage === "raw"), "capacity request sequence differs");
+      emit("limit-failure", 2);
+      await flush();
+      invariant(network.size === 0, "capacity requests are not quiescent");
+      emit("request-quiescent", 2);
+      await waitUntil(cdp, sessionId, "true", fatal);
+      invariant(workerTargets.size > 0 && [...workerTargets].every((id) => detachedWorkers.has(id)), "capacity worker is not quiescent");
+      const workerQuiescent = emit("worker-quiescent", 2);
+      const endedMs = workerQuiescent.atMs;
+      mode = null;
+      return {
+        repositoryUrl: REACT_URL,
+        revision: trace.revision,
+        rootTree: trace.rootTree,
+        terminal: "Repository exceeds Code City limits",
+        revisionDisplayed: true,
+        cityPresent: false,
+        priorCityRemoved: true,
+        rawRequestCount: 4001,
+        maxOverlap: 1,
+        noLaterRequest: true,
+        workerQuiescent: true,
+        candidates: trace.rawFacts,
+        startedMs,
+        endedMs,
+      };
+    },
+    async close() {
+      cdp.listeners.delete(listener);
+      let closeError;
+      try { await cdp.send("Browser.close"); } catch (error) { closeError = error; } finally { cdp.close(); }
+      if (launched.child.exitCode === null && closeError) launched.child.kill();
+      if (launched.child.exitCode === null) await new Promise((resolve) => launched.child.once("exit", resolve));
+      if (closeError) throw closeError;
+    },
+  });
+}
+
+function envelope(kind, status, reason, data) {
+  return { schemaVersion: 1, kind, status, reason, data };
+}
+
+function emptyData(keys, arrays = []) {
+  return Object.fromEntries(keys.map((key) => [key, arrays.includes(key) ? [] : null]));
+}
+
+const SMOKE_KEYS = ["repositoryUrl", "revision", "rootTree", "terminal", "canvasCount", "modelSha256", "startedMs", "endedMs", "providerGetCount"];
+const QUALIFICATION_KEYS = ["repositoryUrl", "revision", "rootTree", "treeEntries", "truncated", "candidates"];
+const CAPACITY_KEYS = ["repositoryUrl", "revision", "rootTree", "terminal", "revisionDisplayed", "cityPresent", "priorCityRemoved", "rawRequestCount", "maxOverlap", "noLaterRequest", "workerQuiescent", "candidates", "startedMs", "endedMs"];
+
+function eventAt(events, name, generation) {
+  return events.find((event) => event.event === name && event.generation === generation);
+}
+function durationBetween(events, endName, endGeneration, startName, startGeneration) {
+  const end = eventAt(events, endName, endGeneration);
+  const start = eventAt(events, startName, startGeneration);
+  return end && start ? end.atMs - start.atMs : null;
+}
+function deriveDurations(events) {
+  return {
+    artifact: durationBetween(events, "artifact-verified", 0, "collector-start", 0),
+    smoke: durationBetween(events, "trace-reset", 0, "smoke-start", 1),
+    qualification: durationBetween(events, "qualification-complete", 0, "qualification-start", 0),
+    resolution: durationBetween(events, "revision-selected", 2, "capacity-start", 2),
+    inventory: durationBetween(events, "inventory-complete", 2, "revision-selected", 2),
+    retrieval: durationBetween(events, "limit-failure", 2, "inventory-complete", 2),
+    terminal: durationBetween(events, "worker-quiescent", 2, "limit-failure", 2),
+    capacity: durationBetween(events, "worker-quiescent", 2, "capacity-start", 2),
+    total: events.at(-1)?.atMs ?? null,
+  };
+}
+
+function maximumOverlap(items) {
+  const points = [];
+  for (const item of items) {
+    if (item.startedMs === item.endedMs) continue;
+    points.push([item.startedMs, 1], [item.endedMs, -1]);
+  }
+  points.sort((left, right) => left[0] - right[0] || left[1] - right[1]);
+  let active = 0;
+  let maximum = 0;
+  for (const [, change] of points) { active += change; maximum = Math.max(maximum, active); }
+  return maximum;
+}
+
+function runnerPlatform() {
+  const osName = { win32: "Windows", linux: "Linux", darwin: "macOS" }[process.platform];
+  const arch = { x64: "X64", arm64: "ARM64" }[process.arch];
+  invariant(osName && arch, "runner platform is unsupported");
+  return { runnerOs: osName, runnerArch: arch };
+}
+
+export async function deriveCollectorCommit({ execFileImpl = execFile } = {}) {
+  const run = async (args) => (await execFileImpl("git", args, { cwd: PROJECT_ROOT, encoding: "utf8", windowsHide: true })).stdout.trim();
+  const head = await run(["rev-parse", "--verify", "HEAD^{commit}"]);
+  const containing = await run(["log", "-1", "--format=%H", "--", "tools/collect-production-evidence.mjs"]);
+  await run(["ls-files", "--error-unmatch", "tools/collect-production-evidence.mjs"]);
+  await execFileImpl("git", ["diff", "--quiet", "HEAD", "--", "tools/collect-production-evidence.mjs"], { cwd: PROJECT_ROOT, windowsHide: true });
+  invariant(/^[0-9a-f]{40}$/u.test(head) && containing === head, "collector checkout is ambiguous");
+  return head;
+}
+
+function makeLifecycleData(state, status, reason, events = state.events) {
+  const capacityStarted = eventAt(events, "capacity-start", 2) !== undefined;
+  const capacityItems = state.requestItems.filter((item) => item.applicationCall && item.requestedUrl.includes("/facebook/react/"));
+  return {
+    collectorVersion: 1,
+    collectorCommit: state.collectorCommit,
+    invocation: state.invocation,
+    nodeVersion: state.nodeVersion,
+    chromeVersion: state.chromeVersion,
+    cdpVersion: state.cdpVersion,
+    events,
+    durations: deriveDurations(events),
+    maxOverlap: capacityStarted ? maximumOverlap(capacityItems.filter((item) => item.method === "GET")) : null,
+    noRetry: status === "pass" ? true : null,
+    noFallback: status === "pass" ? true : null,
+    noPersistence: status === "pass" ? true : null,
+    noLaterPublication: status === "pass" ? true : null,
+  };
+}
+
+function passingPayloads(state) {
+  const capacityGets = state.requestItems.filter((item) => item.applicationCall && item.method === "GET"
+    && item.requestedUrl.includes("/facebook/react/"));
+  const overlap = maximumOverlap(capacityGets);
+  state.capacity.maxOverlap = overlap;
+  return {
+    artifact: envelope("artifact", "pass", "none", state.artifact),
+    smoke: envelope("smoke", "pass", "none", state.smoke),
+    qualification: envelope("qualification", "pass", "none", state.qualification),
+    capacity: envelope("capacity", "pass", "none", state.capacity),
+    requests: envelope("requests", "pass", "none", { items: state.requestItems }),
+    lifecycle: envelope("lifecycle", "pass", "none", makeLifecycleData(state, "pass", "none")),
+  };
+}
+
+function failurePayloads(state, failure) {
+  const stages = ["artifact", "smoke", "qualification", "capacity"];
+  const failedIndex = stages.indexOf(failure.stage);
+  invariant(failedIndex >= 0, "invalid failed stage");
+  const minimumPrefix = { artifact: 1, smoke: 3, qualification: 6, capacity: 8 }[failure.stage];
+  const prefix = state.events.slice(0, minimumPrefix);
+  const failureAt = Math.max(prefix.at(-1)?.atMs ?? 0, state.now());
+  const events = [...prefix, { sequence: prefix.length + 1, generation: 0, event: "collector-failed", atMs: failureAt }];
+  state.events = events;
+  state.requestItems.splice(state.stageRequestStarts[failure.stage] ?? 0);
+  state.requestItems.forEach((item, index) => { item.sequence = index + 1; });
+
+  const smokeFail = {
+    ...emptyData(SMOKE_KEYS),
+    repositoryUrl: failure.stage === "smoke" ? CODE_CITY_URL : null,
+    providerGetCount: failure.stage === "smoke" ? 0 : null,
+  };
+  const qualificationFail = {
+    ...emptyData(QUALIFICATION_KEYS, ["candidates"]),
+    repositoryUrl: failure.stage === "qualification" ? REACT_URL : null,
+  };
+  const capacityFail = {
+    ...emptyData(CAPACITY_KEYS, ["candidates"]),
+    repositoryUrl: failure.stage === "capacity" ? REACT_URL : null,
+    rawRequestCount: failure.stage === "capacity" ? 0 : null,
+    maxOverlap: failure.stage === "capacity" ? 0 : null,
+  };
+  const failedData = {
+    artifact: state.artifact,
+    smoke: smokeFail,
+    qualification: qualificationFail,
+    capacity: capacityFail,
+  };
+  const payloads = {};
+  for (let index = 0; index < stages.length; index += 1) {
+    const stage = stages[index];
+    if (index < failedIndex) payloads[stage] = envelope(stage, "pass", "none", state[stage]);
+    else if (index === failedIndex) payloads[stage] = envelope(stage, "fail", failure.reason, failedData[stage]);
+    else {
+      const data = stage === "smoke" ? emptyData(SMOKE_KEYS)
+        : stage === "qualification" ? emptyData(QUALIFICATION_KEYS, ["candidates"])
+          : emptyData(CAPACITY_KEYS, ["candidates"]);
+      payloads[stage] = envelope(stage, "not-run", "blocked", data);
+    }
+  }
+  payloads.requests = envelope("requests", "fail", failure.reason, { items: state.requestItems });
+  payloads.lifecycle = envelope("lifecycle", "fail", failure.reason, makeLifecycleData(state, "fail", failure.reason, events));
+  if (failure.stage === "capacity") payloads.lifecycle.data.maxOverlap = 0;
+  return payloads;
+}
+
+function mapBrowserFailure(stage, error) {
+  if (error instanceof CollectorFailure) return error;
+  const message = String(error?.message);
+  if (/credential/iu.test(message)) return new CollectorFailure(stage, "credential-header");
+  if (/CORS/iu.test(message)) return new CollectorFailure(stage, "cors-failure");
+  if (/stale/iu.test(message)) return new CollectorFailure(stage, "stale-publication");
+  if (/overlap/iu.test(message)) return new CollectorFailure(stage, "request-overlap");
+  if (/unexpected browser request/iu.test(message)) return new CollectorFailure(stage, "unexpected-request");
+  if (/sequence|cardinality/iu.test(message)) return new CollectorFailure(stage, "request-sequence");
+  if (/quiescent/iu.test(message)) return new CollectorFailure(stage, "quiescence-failure");
+  if (/blob|candidate mismatch/iu.test(message)) return new CollectorFailure(stage, "hash-mismatch");
+  if (/UTF-8|NUL|content/iu.test(message)) return new CollectorFailure(stage, "content-invalid");
+  if (/revision differs|inventory.*differs|identity/iu.test(message)) return new CollectorFailure(stage, "identity-mismatch");
+  if (/terminal/iu.test(message)) return new CollectorFailure(stage, stage === "smoke" ? "smoke-failure" : "limit-order");
+  if (/request failed|response mismatch/iu.test(message)) return new CollectorFailure(stage, "provider-failure");
+  return new CollectorFailure(stage, "infrastructure-failure");
+}
+
+async function readPublicationInput(manifestPath) {
+  const manifestBytes = wholeBytes(await readFile(manifestPath));
+  const manifest = parsePackageManifest(manifestBytes);
+  const recordPath = path.join(path.dirname(manifestPath), "publication-record.json");
+  const publicationRecordBytes = wholeBytes(await readFile(recordPath));
+  const publicationRecord = validatePublicationRecord(publicationRecordBytes, manifestBytes);
+  return { manifestBytes, manifest, publicationRecordBytes, publicationRecord };
+}
+
+export async function collectProductionEvidence(options, seams = {}) {
+  invariant(options?.origin === PRODUCTION_ORIGIN && path.isAbsolute(options.manifestPath) && path.isAbsolute(options.output), "collector options are invalid");
+  const clock = seams.clock ?? (() => performance.now());
+  const epoch = clock();
+  let priorNow = 0;
+  const now = () => {
+    const observed = Math.max(0, clock() - epoch);
+    priorNow = Math.max(priorNow, observed);
+    return priorNow;
+  };
+  const state = {
+    now,
+    events: [{ sequence: 1, generation: 0, event: "collector-start", atMs: 0 }],
+    requestItems: [],
+    stageRequestStarts: { artifact: 0 },
+    collectorCommit: null,
+    invocation: null,
+    nodeVersion: null,
+    chromeVersion: null,
+    cdpVersion: null,
+    artifact: {
+      issueBodySha256: PARENT_ISSUE_BODY_SHA256,
+      eventSha: null,
+      repository: CODE_CITY_REPOSITORY,
+      runId: null,
+      runAttempt: null,
+      origin: PRODUCTION_ORIGIN,
+      manifestSha256: null,
+      publicationRecordSha256: null,
+      deploymentId: null,
+      deployedSha: null,
+      nodeVersion: null,
+      chromeVersion: null,
+      chromeExecutableCategory: null,
+      runnerOs: null,
+      runnerArch: null,
+      policyMatched: null,
+      files: [],
+    },
+    smoke: null,
+    qualification: null,
+    capacity: null,
+  };
+  const emit = (event, generation) => {
+    const value = { sequence: state.events.length + 1, generation, event, atMs: now() };
+    state.events.push(value);
+    return value;
+  };
+  let binding;
+  let browser;
+  let profile;
+  let packet;
+  let failure;
+  let activeStage = "artifact";
+  try {
+    invariant(/^v24\.\d+\.\d+$/u.test(process.version), "Node 24 is required");
+    state.nodeVersion = process.version;
+    state.invocation = [...COLLECTOR_INVOCATION];
+    let publication;
+    try {
+      publication = await (seams.readPublicationInput ?? readPublicationInput)(options.manifestPath);
+    } catch {
+      fail("artifact", "artifact-mismatch");
+    }
+    const { manifestBytes, manifest, publicationRecordBytes, publicationRecord } = publication;
+    binding = Object.freeze({ issueBodySha256: PARENT_ISSUE_BODY_SHA256, eventSha: publicationRecord.eventSha });
+    try {
+      state.collectorCommit = await (seams.deriveCollectorCommit ?? deriveCollectorCommit)();
+    } catch {
+      fail("artifact", "artifact-mismatch");
+    }
+    if (state.collectorCommit !== publicationRecord.eventSha) {
+      state.collectorCommit = null;
+      fail("artifact", "artifact-mismatch");
+    }
+    const discovery = await (seams.discoverInstalledChrome ?? discoverInstalledChrome)();
+    state.chromeVersion = await (seams.readInstalledChromeVersion ?? readInstalledChromeVersion)(discovery);
+    const platform = runnerPlatform();
+    Object.assign(state.artifact, {
+      eventSha: publicationRecord.eventSha,
+      runId: publicationRecord.runId,
+      runAttempt: publicationRecord.runAttempt,
+      manifestSha256: digest(manifestBytes),
+      publicationRecordSha256: digest(publicationRecordBytes),
+      nodeVersion: state.nodeVersion,
+      chromeVersion: state.chromeVersion,
+      chromeExecutableCategory: discovery.category,
+      ...platform,
+      policyMatched: true,
+    });
+    const deployment = await (seams.verifyDeploymentBinding ?? verifyDeploymentBinding)({
+      eventSha: publicationRecord.eventSha, origin: options.origin,
+      fetchImpl: seams.fetchImpl ?? fetch, now, requestItems: state.requestItems,
+    });
+    Object.assign(state.artifact, deployment);
+    state.artifact.files = await (seams.verifyProductionAssets ?? verifyProductionAssets)({
+      manifest, origin: options.origin, fetchImpl: seams.fetchImpl ?? fetch, now, requestItems: state.requestItems,
+    });
+    emit("artifact-verified", 0);
+
+    activeStage = "smoke";
+    state.stageRequestStarts.smoke = state.requestItems.length;
+    const smokeStart = emit("smoke-start", 1);
+    profile = await (seams.mkdtemp ?? mkdtemp)(path.join(os.tmpdir(), "code-city-evidence-chrome-"));
+    browser = await (seams.createBrowserEvidenceSession ?? createBrowserEvidenceSession)({
+      discovery, chromeVersion: state.chromeVersion, profile, origin: options.origin, manifest,
+      eventSha: publicationRecord.eventSha, now, requestItems: state.requestItems,
+    });
+    state.cdpVersion = browser.cdpVersion;
+    try {
+      state.smoke = await browser.collectSmoke(emit, smokeStart.atMs);
+      browser.clearTrace();
+    } catch (error) {
+      throw mapBrowserFailure("smoke", error);
+    }
+    emit("trace-reset", 0);
+
+    activeStage = "qualification";
+    state.stageRequestStarts.qualification = state.requestItems.length;
+    emit("qualification-start", 0);
+    state.qualification = await (seams.qualifyRepository ?? qualifyRepository)({
+      fetchImpl: seams.fetchImpl ?? fetch, now, requestItems: state.requestItems,
+    });
+    emit("qualification-complete", 0);
+
+    activeStage = "capacity";
+    state.stageRequestStarts.capacity = state.requestItems.length;
+    const capacityStart = emit("capacity-start", 2);
+    try {
+      state.capacity = await browser.collectCapacity(state.qualification, emit, capacityStart.atMs);
+    } catch (error) {
+      throw mapBrowserFailure("capacity", error);
+    }
+    try {
+      await browser.close();
+      browser = null;
+      await (seams.rm ?? rm)(profile, { recursive: true, force: true });
+      profile = null;
+    } catch {
+      fail("capacity", "cleanup-failure");
+    }
+    emit("collector-complete", 0);
+    packet = createEvidencePacket(passingPayloads(state), binding);
+  } catch (error) {
+    failure = error instanceof CollectorFailure ? error : new CollectorFailure(activeStage, "infrastructure-failure");
+    if (browser) {
+      try { await browser.close(); } catch {}
+      browser = null;
+    }
+    if (profile) {
+      try { await (seams.rm ?? rm)(profile, { recursive: true, force: true }); } catch {}
+      profile = null;
+    }
+    if (binding) packet = createEvidencePacket(failurePayloads(state, failure), binding);
+    else throw failure;
+  }
+
+  await (seams.writeValidatedEvidencePacket ?? writeValidatedEvidencePacket)(options.output, packet);
+  const readback = await (seams.readValidatedEvidencePacket ?? readValidatedEvidencePacket)(options.output, packet.binding);
+  invariant(readback.packetDigest === packet.packetDigest, "stored packet read-back differs");
+  return Object.freeze({ packetDigest: packet.packetDigest, status: failure ? "fail" : "pass", reason: failure?.reason ?? "none" });
+}
+
+export async function runCollectorCli(args = process.argv.slice(2), seams = {}) {
+  let options;
+  try {
+    options = parseCollectorArguments(args);
+    const result = await collectProductionEvidence(options, seams);
+    if (result.status !== "pass") {
+      process.stderr.write("Production evidence collection failed safely.\n");
+      return 1;
+    }
+    process.stdout.write(`${result.packetDigest}\n`);
+    return 0;
+  } catch {
+    process.stderr.write("Production evidence collection failed safely.\n");
+    return 1;
+  }
+}
+
+const invokedPath = process.argv[1] && path.resolve(process.argv[1]);
+if (invokedPath === fileURLToPath(import.meta.url)) process.exitCode = await runCollectorCli();
