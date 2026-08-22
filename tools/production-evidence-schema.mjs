@@ -550,7 +550,7 @@ function validateLifecycle(envelope, overallPass, primaryReason, failedStage, re
     const prefix = data.events.slice(0, -1);
     prefix.forEach((event, index) => requireValue(index < PASS_EVENTS.length - 1 && event.event === PASS_EVENTS[index][0] && event.generation === PASS_EVENTS[index][1]));
     const completed = prefix.length;
-    const ranges = { artifact: [1, 1], smoke: [2, 5], qualification: [6, 7], capacity: [8, 14] };
+    const ranges = { artifact: [1, 2], smoke: [3, 5], qualification: [6, 7], capacity: [8, 14] };
     requireValue(completed >= ranges[failedStage][0] && completed <= ranges[failedStage][1]);
   }
   validateDurations(data.durations);
@@ -585,7 +585,7 @@ function deriveStatus(payloads) {
 }
 
 function failureGroup(stage, requestInfo) {
-  if (stage === "smoke") return { items: requestInfo.groups.smoke, gets: requestInfo.smokeGets, completeCount: 4 };
+  if (stage === "smoke") return { items: requestInfo.groups.smoke, gets: requestInfo.smokeGets, completeCount: null };
   if (stage === "qualification") return { items: requestInfo.groups.qualification, gets: requestInfo.qualificationGets, completeCount: 4004 };
   if (stage === "capacity") return { items: requestInfo.groups.capacity, gets: requestInfo.capacityGets, completeCount: 4004 };
   return { items: requestInfo.groups.other, gets: requestInfo.groups.other.filter((item) => item.method === "GET"), completeCount: 1 };
@@ -599,7 +599,7 @@ function validateFailureEvidence(payloads, failure, requestInfo, events) {
   const hasCredential = group.items.some((item) => !item.authorizationAbsent || !item.cookieAbsent || !item.refererAbsent);
   const hasOverlap = maximumOverlap(group.items.filter((item) => item.method === "GET")) > 1;
   const hasProviderFailure = group.items.some((item) => item.method === "GET" ? item.status !== 200 : item.status < 200 || item.status > 299);
-  const hasUnexpectedRequest = group.gets.length > group.completeCount;
+  const hasUnexpectedRequest = group.completeCount !== null && group.gets.length > group.completeCount;
   const candidatesValue = stage === "qualification" || stage === "capacity" ? data.candidates : [];
   const hasHashMismatch = candidatesValue.some((candidate) => candidate.hashMatched === false);
   const hasInvalidContent = candidatesValue.some((candidate) => candidate.contentValid === false);
@@ -692,9 +692,12 @@ function validatePayloadSet(payloads, binding) {
   const smokeRevisionSelected = eventIndex(events, "revision-selected", 1);
   const cityPublished = eventIndex(events, "city-published", 1);
   const traceReset = eventIndex(events, "trace-reset", 0);
+  const qualificationStart = eventIndex(events, "qualification-start", 0);
   const smokeRevisionExchanges = requestInfo.groups.smoke.filter((item) => item.stage === "revision");
   const smokeRetrievalExchanges = requestInfo.groups.smoke.filter((item) => ["commit", "tree", "raw"].includes(item.stage));
   validateStageTimes(payloads.smoke.data, smokeStart, finalEvent, traceReset ?? finalEvent, cityPublished ?? finalEvent);
+  if (smokeStart) requireValue(payloads.smoke.data.repositoryUrl === CODE_CITY_URL);
+  if (qualificationStart) requireValue(payloads.qualification.data.repositoryUrl === REACT_URL);
   if (smokeRevisionSelected) {
     requireValue(smokeRevisionExchanges.every((item) => item.endedMs <= smokeRevisionSelected.atMs));
     requireValue(smokeRetrievalExchanges.every((item) => item.startedMs >= smokeRevisionSelected.atMs));
@@ -715,6 +718,8 @@ function validatePayloadSet(payloads, binding) {
   const capacityRevisionExchanges = requestInfo.groups.capacity.filter((item) => item.stage === "revision");
   const capacityInventoryExchanges = requestInfo.groups.capacity.filter((item) => item.stage === "commit" || item.stage === "tree");
   validateStageTimes(payloads.capacity.data, capacityStart, finalEvent, capacityRevisionSelected ?? finalEvent, workerQuiescent ?? finalEvent);
+  if (capacityStart) requireValue(payloads.capacity.data.repositoryUrl === REACT_URL);
+  if (workerQuiescent) requireValue(payloads.capacity.data.workerQuiescent === true);
   if (payloads.capacity.status === "pass") requireValue(payloads.capacity.data.startedMs === capacityStart.atMs && payloads.capacity.data.endedMs === workerQuiescent.atMs);
   if (capacityRevisionSelected) {
     requireValue(capacityRevisionExchanges.every((item) => item.endedMs <= capacityRevisionSelected.atMs));
@@ -732,7 +737,7 @@ function validatePayloadSet(payloads, binding) {
   const stageWindows = [
     ["artifact", requestInfo.groups.other, events[0], artifactVerified],
     ["smoke", requestInfo.groups.smoke, smokeStart, eventIndex(events, "trace-reset", 0)],
-    ["qualification", requestInfo.groups.qualification, eventIndex(events, "qualification-start", 0), eventIndex(events, "qualification-complete", 0)],
+    ["qualification", requestInfo.groups.qualification, qualificationStart, eventIndex(events, "qualification-complete", 0)],
     ["capacity", requestInfo.groups.capacity, capacityStart, eventIndex(events, "request-quiescent", 2)],
   ];
   for (const [stage, items, start, completedEnd] of stageWindows) {

@@ -264,7 +264,7 @@ const SMOKE_KEYS = ["repositoryUrl", "revision", "rootTree", "terminal", "canvas
 const QUALIFICATION_KEYS = ["repositoryUrl", "revision", "rootTree", "treeEntries", "truncated", "candidates"];
 const CAPACITY_KEYS = ["repositoryUrl", "revision", "rootTree", "terminal", "revisionDisplayed", "cityPresent", "priorCityRemoved", "rawRequestCount", "maxOverlap", "noLaterRequest", "workerQuiescent", "candidates", "startedMs", "endedMs"];
 
-function failedEvents(stage, prefixLength = { artifact: 1, smoke: 2, qualification: 6, capacity: 8 }[stage]) {
+function failedEvents(stage, prefixLength = { artifact: 1, smoke: 3, qualification: 6, capacity: 8 }[stage]) {
   const events = passEvents().slice(0, prefixLength);
   events.push({ sequence: events.length + 1, generation: 0, event: "collector-failed", atMs: events.at(-1).atMs + 1 });
   return events;
@@ -321,7 +321,7 @@ function failurePayload(stage, reason) {
 
   const priorCount = stage === "artifact" || stage === "smoke" ? 0 : stage === "qualification" ? 4 : 4008;
   let items = payloads.requests.data.items.slice(0, priorCount);
-  let prefixLength = { artifact: 1, smoke: 2, qualification: 6, capacity: 8 }[stage];
+  let prefixLength = { artifact: 1, smoke: 3, qualification: 6, capacity: 8 }[stage];
   const requestReasons = new Set(["provider-failure", "cors-failure", "request-sequence", "request-overlap", "unexpected-request", "credential-header"]);
   if (requestReasons.has(reason)) {
     if (stage === "capacity") payloads.capacity.data.candidates = structuredClone(payloads.qualification.data.candidates);
@@ -367,7 +367,9 @@ function failurePayload(stage, reason) {
       items.push(...capacityRequestSequence(paths, priorCount + 1));
     }
   }
-  if (reason === "cleanup-failure" || reason === "quiescence-failure") prefixLength = stage === "smoke" ? 5 : 14;
+  if (reason === "cleanup-failure" || reason === "quiescence-failure") {
+    prefixLength = stage === "smoke" ? 5 : reason === "quiescence-failure" ? 13 : 14;
+  }
   if (stage === "capacity" && ["tree-incomplete", "limit-order", "hash-mismatch", "content-invalid", "unexpected-request"].includes(reason)) prefixLength = 11;
   if (stage === "capacity" && requestReasons.has(reason) && reason !== "unexpected-request") prefixLength = 10;
   if (stage === "capacity" && prefixLength >= 13) payloads.capacity.data.noLaterRequest = true;
@@ -377,15 +379,21 @@ function failurePayload(stage, reason) {
   const events = failedEvents(stage, prefixLength);
   events.at(-1).atMs = items.reduce((latest, item) => Math.max(latest, item.endedMs), events.at(-1).atMs);
   const smokeStarted = events.some((item) => item.event === "smoke-start");
+  const qualificationStarted = events.some((item) => item.event === "qualification-start");
   const capacityStarted = events.some((item) => item.event === "capacity-start");
+  const workerQuiescent = events.some((item) => item.event === "worker-quiescent");
   const smokeApplicationGets = items.filter((item) => item.method === "GET" && item.applicationCall && item.requestedUrl.includes(CODE_CITY_REPO));
   const capacityApplicationGets = items.filter((item) => item.method === "GET" && item.applicationCall && item.requestedUrl.includes(REACT_REPO));
   const overlap = maximumOverlap(capacityApplicationGets);
+  if (smokeStarted) payloads.smoke.data.repositoryUrl = "https://github.com/FelixGeisler/code-city";
+  if (qualificationStarted) payloads.qualification.data.repositoryUrl = "https://github.com/facebook/react";
+  if (capacityStarted) payloads.capacity.data.repositoryUrl = "https://github.com/facebook/react";
   if (stage === "smoke" && smokeStarted) payloads.smoke.data.providerGetCount = smokeApplicationGets.length;
   if (stage === "capacity" && capacityStarted) {
     payloads.capacity.data.rawRequestCount = capacityApplicationGets.filter((item) => item.stage === "raw").length;
     payloads.capacity.data.maxOverlap = overlap;
   }
+  if (workerQuiescent) payloads.capacity.data.workerQuiescent = true;
   payloads.lifecycle = envelope("lifecycle", "fail", reason, lifecycleData(events, {
     collectorCommit: stage === "artifact" ? null : EVENT,
     invocation: null,
@@ -470,6 +478,35 @@ test("dynamic smoke K is derived only from persisted ordered distinct raw GETs",
   assert.equal(validateEvidencePacket(packet.files, BINDING).packetDigest, packet.packetDigest);
   payloads.smoke.data.providerGetCount = 5;
   expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING));
+});
+
+test("handled smoke failures preserve dynamic K greater than one without weakening persisted derivations", () => {
+  const makeDynamicFailure = () => {
+    const payloads = failurePayload("smoke", "cleanup-failure");
+    payloads.requests.data.items = smokeRequestSequence(["src/a.ts", "src/b.ts"], 1);
+    payloads.smoke.data.providerGetCount = 5;
+    return payloads;
+  };
+
+  const accepted = makeDynamicFailure();
+  const packet = createEvidencePacket(accepted, BINDING);
+  assert.equal(validateEvidencePacket(packet.files, BINDING).packetDigest, packet.packetDigest);
+
+  const wrongCount = makeDynamicFailure();
+  wrongCount.smoke.data.providerGetCount = 4;
+  expectCode("invalid-payload", () => createEvidencePacket(wrongCount, BINDING), "dynamic failure count remains derived");
+
+  const duplicate = makeDynamicFailure();
+  const duplicateRaws = duplicate.requests.data.items.filter((item) => item.stage === "raw");
+  duplicateRaws[1].requestedUrl = duplicateRaws[0].requestedUrl;
+  duplicateRaws[1].finalUrl = duplicateRaws[0].finalUrl;
+  expectCode("invalid-payload", () => createEvidencePacket(duplicate, BINDING), "dynamic failure raw paths remain distinct");
+
+  const outOfOrder = makeDynamicFailure();
+  const orderedRaws = outOfOrder.requests.data.items.filter((item) => item.stage === "raw");
+  [orderedRaws[0].requestedUrl, orderedRaws[1].requestedUrl] = [orderedRaws[1].requestedUrl, orderedRaws[0].requestedUrl];
+  [orderedRaws[0].finalUrl, orderedRaws[1].finalUrl] = [orderedRaws[1].finalUrl, orderedRaws[0].finalUrl];
+  expectCode("invalid-payload", () => createEvidencePacket(outOfOrder, BINDING), "dynamic failure raw paths remain canonical");
 });
 
 test("inputs are copied, the native map remains honestly mutable, and every mutation requires fresh validation", () => {
@@ -565,6 +602,36 @@ test("artifact fixed constants remain exact facts on pass and every handled fail
   }
 });
 
+test("attempted stages retain their exact repository URL from the lifecycle start boundary", () => {
+  const attempted = [
+    ["smoke", "https://github.com/FelixGeisler/code-city", () => failurePayload("smoke", "provider-failure")],
+    ["qualification", "https://github.com/facebook/react", () => failurePayload("qualification", "provider-failure")],
+    ["capacity", "https://github.com/facebook/react", () => failurePayload("capacity", "provider-failure")],
+  ];
+  for (const [stage, exact, make] of attempted) {
+    const payloads = make();
+    assert.equal(payloads[stage].data.repositoryUrl, exact, `${stage} start retains its URL`);
+    payloads[stage].data.repositoryUrl = null;
+    expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `${stage} start rejects null URL`);
+    payloads[stage].data.repositoryUrl = stage === "smoke" ? "https://github.com/facebook/react" : "https://github.com/FelixGeisler/code-city";
+    expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `${stage} start rejects wrong URL`);
+  }
+
+  for (const payloads of [
+    failurePayload("artifact", "infrastructure-failure"),
+    failurePayload("smoke", "infrastructure-failure"),
+    failurePayload("qualification", "infrastructure-failure"),
+  ]) {
+    for (const stage of ["smoke", "qualification", "capacity"]) {
+      if (payloads[stage].status !== "not-run") continue;
+      assert.equal(payloads[stage].data.repositoryUrl, null, `${stage} remains null before it is reached`);
+      payloads[stage].data.repositoryUrl = stage === "smoke" ? "https://github.com/FelixGeisler/code-city" : "https://github.com/facebook/react";
+      expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `${stage} not-run rejects an invented URL`);
+      payloads[stage].data.repositoryUrl = null;
+    }
+  }
+});
+
 test("all lifecycle policy flags require true on pass and accept null, false, or true on handled failure", () => {
   const fields = ["noRetry", "noFallback", "noPersistence", "noLaterPublication"];
   const pass = makePassingPayloads();
@@ -584,6 +651,24 @@ test("all lifecycle policy flags require true on pass and accept null, false, or
       assert.doesNotThrow(() => createEvidencePacket(handled, BINDING), `failure accepts ${field}=${value}`);
     }
     handled.lifecycle.data[field] = null;
+  }
+});
+
+test("worker-quiescent events require the matching capacity fact while absence permits an unobserved or failed outcome", () => {
+  const observed = failurePayload("capacity", "cleanup-failure");
+  assert(event(observed.lifecycle.data.events, "worker-quiescent", 2));
+  assert.equal(observed.capacity.data.workerQuiescent, true);
+  assert.doesNotThrow(() => createEvidencePacket(observed, BINDING));
+  for (const value of [null, false]) {
+    observed.capacity.data.workerQuiescent = value;
+    expectCode("invalid-payload", () => createEvidencePacket(observed, BINDING), `event rejects workerQuiescent=${value}`);
+  }
+
+  for (const value of [null, false]) {
+    const absent = failurePayload("capacity", "quiescence-failure");
+    assert.equal(event(absent.lifecycle.data.events, "worker-quiescent", 2), undefined);
+    absent.capacity.data.workerQuiescent = value;
+    assert.doesNotThrow(() => createEvidencePacket(absent, BINDING), `absent event accepts workerQuiescent=${value}`);
   }
 });
 
@@ -816,18 +901,31 @@ test("smoke exchanges share revision-selection, publication, and stage-clock bou
   }
 });
 
-test("handled smoke timestamps require an observed start and stay within the failure clock", () => {
-  const absent = failurePayload("smoke", "infrastructure-failure");
-  assert.equal(event(absent.lifecycle.data.events, "smoke-start", 1), undefined);
-  assert.equal(absent.smoke.data.startedMs, null);
-  assert.equal(absent.smoke.data.endedMs, null);
-  assert.doesNotThrow(() => createEvidencePacket(absent, BINDING), "both timestamps remain absent before smoke-start");
-  for (const key of ["startedMs", "endedMs"]) {
-    const invented = failurePayload("smoke", "infrastructure-failure");
-    invented.smoke.data[key] = 1;
-    expectCode("invalid-payload", () => createEvidencePacket(invented, BINDING), `${key} requires smoke-start`);
-  }
+test("artifact owns failures through artifact-verified and smoke ownership starts at smoke-start", () => {
+  const artifact = failurePayload("artifact", "infrastructure-failure");
+  const artifactEvents = failedEvents("artifact", 2);
+  artifact.lifecycle.data.events = artifactEvents;
+  artifact.lifecycle.data.durations = durations(artifactEvents);
+  assert.equal(event(artifactEvents, "artifact-verified", 0)?.event, "artifact-verified");
+  assert.equal(event(artifactEvents, "smoke-start", 1), undefined);
+  assert.doesNotThrow(() => createEvidencePacket(artifact, BINDING), "artifact owns the post-verification pre-smoke boundary");
 
+  const misowned = failurePayload("smoke", "infrastructure-failure");
+  const preSmokeEvents = failedEvents("smoke", 2);
+  misowned.lifecycle.data.events = preSmokeEvents;
+  misowned.lifecycle.data.durations = durations(preSmokeEvents);
+  misowned.lifecycle.data.chromeVersion = null;
+  misowned.lifecycle.data.cdpVersion = null;
+  misowned.smoke.data.repositoryUrl = null;
+  misowned.smoke.data.providerGetCount = null;
+  expectCode("invalid-payload", () => createEvidencePacket(misowned, BINDING), "smoke cannot own a failure before smoke-start");
+
+  const smoke = failurePayload("smoke", "infrastructure-failure");
+  assert(event(smoke.lifecycle.data.events, "smoke-start", 1));
+  assert.doesNotThrow(() => createEvidencePacket(smoke, BINDING), "smoke owns the start boundary");
+});
+
+test("handled smoke timestamps stay within the observed failure clock", () => {
   for (const [label, startedMs, endedMs, accepted] of [
     ["before smoke-start", 1.9999, 2, false],
     ["smoke-start equality", 2, 2, true],
@@ -992,11 +1090,12 @@ test("failure boundaries reject later-stage observations and preserve prefix-awa
   }
   assert.doesNotThrow(() => createEvidencePacket(earlyArtifact, BINDING));
 
-  const beforeBrowser = failurePayload("smoke", "infrastructure-failure");
-  assert.equal(beforeBrowser.lifecycle.data.chromeVersion, null);
-  assert.equal(beforeBrowser.lifecycle.data.cdpVersion, null);
-  assert.equal(beforeBrowser.smoke.data.providerGetCount, null);
-  assert.doesNotThrow(() => createEvidencePacket(beforeBrowser, BINDING));
+  const browserStarted = failurePayload("smoke", "infrastructure-failure");
+  assert.equal(browserStarted.lifecycle.data.chromeVersion, "140.0.1.2");
+  assert.equal(browserStarted.lifecycle.data.cdpVersion, "1.3");
+  assert.equal(browserStarted.smoke.data.repositoryUrl, "https://github.com/FelixGeisler/code-city");
+  assert.equal(browserStarted.smoke.data.providerGetCount, 0);
+  assert.doesNotThrow(() => createEvidencePacket(browserStarted, BINDING));
 
   const afterBrowser = failurePayload("smoke", "cleanup-failure");
   assert.equal(afterBrowser.smoke.data.providerGetCount, 0);
