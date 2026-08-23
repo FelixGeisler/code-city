@@ -1392,6 +1392,69 @@ test("drain, worker detachment, malformed terminal, and duplicate terminal rejec
   }
 });
 
+test("matching-stage wrong identities and stale phase exchanges cannot pair, persist, or advance routes", async () => {
+  const wrongCommit = "9".repeat(40);
+  const wrongTree = "8".repeat(40);
+  const scenarios = [
+    {
+      name: "wrong-commit-identity", stage: "commit",
+      invalidUrl: commitUrl("FelixGeisler/code-city", wrongCommit),
+      nextUrl: treeUrl("FelixGeisler/code-city", ROOT),
+    },
+    {
+      name: "wrong-tree-identity", stage: "tree",
+      invalidUrl: treeUrl("FelixGeisler/code-city", wrongTree),
+      nextUrl: rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts"),
+    },
+    {
+      name: "stale-smoke-phase-during-capacity-generation", stage: "capacity",
+      invalidUrl: revisionUrl("FelixGeisler/code-city"),
+      nextUrl: commitUrl("facebook/react", REACT),
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    for (const order of ["options-first", "get-first"]) {
+      const opened = await openFakeBrowser();
+      const pending = scenario.stage === "capacity"
+        ? opened.session.collectCapacity({ revision: REACT, rootTree: REACT_ROOT, candidates: candidates() }, () => ({ atMs: 1 }), 0)
+        : opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+      await Promise.resolve();
+      const priorBodyCalls = scenario.stage === "capacity" ? 0 : await prepareBrowserStage(opened, scenario.stage);
+      const priorRecords = structuredClone(opened.requestItems);
+      const ids = {
+        GET: `${scenario.name}-${order}-get`, OPTIONS: `${scenario.name}-${order}-options`,
+      };
+      for (const method of order === "options-first" ? ["OPTIONS", "GET"] : ["GET", "OPTIONS"]) {
+        beginBrowserRequest(opened.harness, { requestId: ids[method], url: scenario.invalidUrl, method });
+      }
+
+      await assert.rejects(Promise.race([
+        pending,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("scenario hung")), 100)),
+      ]), (error) => error.message !== "scenario hung", `${scenario.name}/${order}`);
+
+      const expected = scenario.stage === "capacity"
+        ? browserStageRequest("revision")
+        : browserStageRequest(scenario.stage);
+      const currentUrl = scenario.stage === "capacity" ? revisionUrl("facebook/react") : expected.url;
+      beginBrowserRequest(opened.harness, { requestId: `${scenario.name}-current-get`, url: currentUrl, method: "GET" });
+      finishBrowserRequest(opened.harness, {
+        requestId: `${scenario.name}-current-get`, url: currentUrl, method: "GET",
+        body: scenario.stage === "capacity" ? JSON.stringify([{ sha: REACT }]) : expected.body,
+      });
+      beginBrowserRequest(opened.harness, { requestId: `${scenario.name}-next-get`, url: scenario.nextUrl, method: "GET" });
+      await new Promise((resolve) => setImmediate(resolve));
+
+      assert.deepEqual(opened.requestItems, priorRecords, `${scenario.name}/${order}: persisted`);
+      assert.equal(opened.harness.bodyCalls, priorBodyCalls, `${scenario.name}/${order}: advanced`);
+      assert(!JSON.stringify(opened.requestItems).includes(ids.GET), `${scenario.name}/${order}: GET paired`);
+      assert(!JSON.stringify(opened.requestItems).includes(ids.OPTIONS), `${scenario.name}/${order}: OPTIONS paired`);
+      await opened.session.close().catch(() => {});
+    }
+  }
+});
+
 test("preflight admission rejects every mismatched, duplicate, late, failed, incomplete, retried, or post-closure exchange", async () => {
   const revision = revisionUrl("FelixGeisler/code-city");
   const cases = [
