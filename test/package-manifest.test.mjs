@@ -28,7 +28,7 @@ function digest(bytes) {
 
 function canonicalManifest() {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     basePath: "/code-city/",
     policy: {
       contentSecurityPolicy: CSP,
@@ -36,7 +36,7 @@ function canonicalManifest() {
       connectOrigins: [...ORIGINS],
     },
     files: [
-      { path: "assets/app.js", mediaType: "text/javascript", byteLength: 3, sha256: "0".repeat(64) },
+      { path: "assets/app.js", mediaType: "application/javascript", byteLength: 3, sha256: "0".repeat(64) },
       { path: "index.html", mediaType: "text/html", byteLength: 0, sha256: "f".repeat(64) },
     ],
   };
@@ -62,7 +62,7 @@ function expectInvalidBytes(value, pattern = /./u) {
   assert.deepEqual(Uint8Array.from(value), before);
 }
 
-test("schema-v2 object and canonical-byte APIs preserve exact order, identity, and copies", () => {
+test("schema-v3 object and canonical-byte APIs preserve exact order, identity, and copies", () => {
   const manifest = canonicalManifest();
   assert.equal(PACKAGE_BASE_PATH, "/code-city/");
   assert.equal(validatePackageManifest(manifest), manifest);
@@ -81,6 +81,7 @@ test("schema-v2 object and canonical-byte APIs preserve exact order, identity, a
   assert.equal(first.byteOffset, 0);
   assert.equal(first.byteLength, first.buffer.byteLength);
   assert.deepEqual(first, expected);
+  assert.equal(digest(expected), "7ca903ebf9fc54270da10399ef7658716e0c6f3fbcdd1964746623eb80a8c5c9");
   assert.deepEqual(second, expected);
   assert.notEqual(first, second);
   first[0] = 0;
@@ -101,14 +102,15 @@ test("manifest object validation rejects every shape, policy, file, and runtime-
   };
 
   add("schema v1", (value) => { value.schemaVersion = 1; });
-  add("schema type", (value) => { value.schemaVersion = "2"; });
+  add("schema v2", (value) => { value.schemaVersion = 2; });
+  add("schema type", (value) => { value.schemaVersion = "3"; });
   add("base path", (value) => { value.basePath = "/"; });
   add("base path type", (value) => { value.basePath = null; });
   add("policy type", (value) => { value.policy = null; });
   add("files type", (value) => { value.files = {}; });
   add("missing top field", (value) => { delete value.policy; });
   add("extra top field", (value) => { value.extra = true; });
-  cases.push(["reordered top fields", { basePath: "/code-city/", schemaVersion: 2, policy: canonicalManifest().policy, files: canonicalManifest().files }]);
+  cases.push(["reordered top fields", { basePath: "/code-city/", schemaVersion: 3, policy: canonicalManifest().policy, files: canonicalManifest().files }]);
 
   add("CSP", (value) => { value.policy.contentSecurityPolicy += ";"; });
   add("CSP type", (value) => { value.policy.contentSecurityPolicy = null; });
@@ -160,7 +162,7 @@ test("manifest object validation rejects every shape, policy, file, and runtime-
   add("path type", (value) => { value.files[0].path = null; });
   add("unsupported extension", (value) => { value.files[0].path = "asset.json"; });
   add("uppercase extension", (value) => { value.files[0].path = "asset.JS"; });
-  add("wrong media type", (value) => { value.files[0].mediaType = "application/javascript"; });
+  add("legacy JavaScript media type", (value) => { value.files[0].mediaType = "text/javascript"; });
   add("media type type", (value) => { value.files[0].mediaType = null; });
   for (const badLength of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, "3", null]) {
     add(`length ${String(badLength)}`, (value) => { value.files[0].byteLength = badLength; });
@@ -194,7 +196,7 @@ test("manifest object validation rejects every shape, policy, file, and runtime-
   assert.throws(() => validatePackageManifest(inheritedPolicy), /plain object/u);
 
   const accessor = canonicalManifest();
-  Object.defineProperty(accessor, "schemaVersion", { enumerable: true, get: () => 2 });
+  Object.defineProperty(accessor, "schemaVersion", { enumerable: true, get: () => 3 });
   assert.throws(() => validatePackageManifest(accessor), /data property/u);
   const fileAccessor = canonicalManifest();
   Object.defineProperty(fileAccessor.files[0], "path", { enumerable: true, get: () => "assets/app.js" });
@@ -243,10 +245,10 @@ test("manifest parser rejects non-whole views and every noncanonical byte repres
     bytes(`${text}\n`),
     bytes(`${JSON.stringify(manifest, null, 2)}\n`),
     bytes(text.replace("/code-city/", "\\/code-city\\/")),
-    bytes(text.replace('{"schemaVersion":2,"basePath":"/code-city/"', '{"basePath":"/code-city/","schemaVersion":2')),
-    bytes(text.replace('{"schemaVersion":2', '{"schemaVersion":2,"schemaVersion":2')),
+    bytes(text.replace('{"schemaVersion":3,"basePath":"/code-city/"', '{"basePath":"/code-city/","schemaVersion":3')),
+    bytes(text.replace('{"schemaVersion":3', '{"schemaVersion":3,"schemaVersion":3')),
     bytes(`${text}false`),
-    bytes(`${JSON.stringify({ ...manifest, schemaVersion: 1 })}\n`),
+    bytes(`${JSON.stringify({ ...manifest, schemaVersion: 2 })}\n`),
   ];
   for (const representation of representations) {
     expectInvalidBytes(representation);
@@ -266,7 +268,7 @@ test("temporary packages generate recursively in lexical order and preserve cano
 
     const manifest = await createPackageManifest(packageDirectory);
     assert.deepEqual(manifest.files.map((record) => record.path), ["a.js", "a/style.css", "index.html", "worker.wasm"]);
-    assert.deepEqual(manifest.files.map((record) => record.mediaType), ["text/javascript", "text/css", "text/html", "application/wasm"]);
+    assert.deepEqual(manifest.files.map((record) => record.mediaType), ["application/javascript", "text/css", "text/html", "application/wasm"]);
     for (const record of manifest.files) {
       const content = await readFile(path.join(packageDirectory, ...record.path.split("/")));
       assert.equal(record.byteLength, content.byteLength);

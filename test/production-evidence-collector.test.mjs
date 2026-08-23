@@ -646,7 +646,7 @@ test("native deployment fetches enforce both response boundaries and boundary pl
 
 test("collector-commit mismatch emits a marked schema-valid artifact failure without starting Chrome", async () => {
   const manifest = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     basePath: "/code-city/",
     policy: { contentSecurityPolicy: CSP, referrerPolicy: "no-referrer", connectOrigins: ["'self'", "https://api.github.com", "https://raw.githubusercontent.com"] },
     files: [{ path: "index.html", mediaType: "text/html", byteLength: 1, sha256: "f".repeat(64) }],
@@ -762,7 +762,7 @@ test("invalid deployment status stops collector orchestration with a validated a
 
 test("full seam-driven collector maps the exact pass lifecycle, dynamic smoke K, 4,001 boundary, schema, writer, and read-back", async () => {
   const manifest = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     basePath: "/code-city/",
     policy: { contentSecurityPolicy: CSP, referrerPolicy: "no-referrer", connectOrigins: ["'self'", "https://api.github.com", "https://raw.githubusercontent.com"] },
     files: [{ path: "index.html", mediaType: "text/html", byteLength: 1, sha256: "f".repeat(64) }],
@@ -917,7 +917,7 @@ test("collector commit binding rejects dirtiness anywhere in the checked-out dep
 
 test("production asset verification binds exact content, MIME, length, hash, URL, and streamed cap", async () => {
   const bytes = new TextEncoder().encode("asset");
-  const expected = { path: "assets/app.js", mediaType: "text/javascript", byteLength: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") };
+  const expected = { path: "assets/app.js", mediaType: "application/javascript", byteLength: bytes.byteLength, sha256: createHash("sha256").update(bytes).digest("hex") };
   const url = `${PRODUCTION_ORIGIN}assets/app.js`;
   const run = (body, options = {}) => verifyProductionAssets({
     manifest: { files: [expected] }, origin: PRODUCTION_ORIGIN,
@@ -925,7 +925,7 @@ test("production asset verification binds exact content, MIME, length, hash, URL
       assert.equal(requested, url);
       assert.equal(init.redirect, "error");
       assert.equal(init.credentials, "omit");
-      return response(body, { url: options.url ?? url, status: options.status ?? 200, redirected: options.redirected, headers: { "Content-Type": options.type ?? "text/javascript" } });
+      return response(body, { url: options.url ?? url, status: options.status ?? 200, redirected: options.redirected, headers: { "Content-Type": options.type ?? "application/javascript" } });
     },
     now: (() => { let tick = 0; return () => ++tick; })(), requestItems: [],
   });
@@ -933,7 +933,7 @@ test("production asset verification binds exact content, MIME, length, hash, URL
   assert.equal(files[0].match, true);
   for (const attempt of [
     () => run(new TextEncoder().encode("other")),
-    () => run(bytes, { type: "application/javascript" }),
+    () => run(bytes, { type: "text/javascript" }),
     () => run(bytes, { status: 500 }),
     () => run(bytes, { url: `${url}?redirected=1`, redirected: true }),
     () => run(new Uint8Array(expected.byteLength + 2)),
@@ -1756,7 +1756,7 @@ const HANDLED_REASONS = {
 
 function matrixManifest() {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     basePath: "/code-city/",
     policy: { contentSecurityPolicy: CSP, referrerPolicy: "no-referrer", connectOrigins: ["'self'", "https://api.github.com", "https://raw.githubusercontent.com"] },
     files: [{ path: "index.html", mediaType: "text/html", byteLength: 1, sha256: "f".repeat(64) }],
