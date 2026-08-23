@@ -616,6 +616,11 @@ export function createWorkerObserverSource(bindingName = "__codeCityCollectorEvi
     const emit = globalThis[${JSON.stringify(bindingName)}];
     const NativeWorker = globalThis.Worker;
     const nativeAdd = NativeWorker.prototype.addEventListener;
+    const nativeObjectPrototype = Object.prototype;
+    const getPrototypeOf = Object.getPrototypeOf;
+    const getOwnPropertyDescriptors = Object.getOwnPropertyDescriptors;
+    const ownKeys = Reflect.ownKeys;
+    const malformedObservation = '{"malformed":true}';
     const K = [
       0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
       0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
@@ -645,17 +650,47 @@ export function createWorkerObserverSource(bindingName = "__codeCityCollectorEvi
       for(let shift=24;shift>=0;shift-=8)byte((high>>>shift)&255); for(let shift=24;shift>=0;shift-=8)byte((low>>>shift)&255);
       return h.map((word)=>word.toString(16).padStart(8,"0")).join("");
     }
+    function messageRecord(message) {
+      if(!message || typeof message!=="object" || getPrototypeOf(message)!==nativeObjectPrototype)throw 0;
+      const descriptors=getOwnPropertyDescriptors(message);
+      const keys=ownKeys(descriptors);
+      if(keys.some((key)=>typeof key!=="string"))throw 0;
+      for(const key of keys){const descriptor=descriptors[key];if(!("value" in descriptor)||!descriptor.enumerable)throw 0;}
+      const type=descriptors.type?.value;
+      let expected;
+      if(type==="REVISION_SELECTED")expected=["type","generation","revision"];
+      else if(type==="SUCCESS")expected=["type","generation","revision","model"];
+      else if(type==="FAILURE") {
+        if(keys.length===3)expected=["type","generation","category"];
+        else if(keys.length===4)expected=["type","generation","revision","category"];
+        else if(keys.length===5)expected=["type","generation","revision","category","code"];
+        else throw 0;
+      } else if(type==="PROVIDER_DRAINED_STATIC_ENTERED"||type==="ATTEMPT_DRAINED")expected=["type","generation"];
+      else throw 0;
+      if(keys.length!==expected.length||expected.some((key)=>!descriptors[key]))throw 0;
+      const record={};for(const key of expected)record[key]=descriptors[key].value;
+      if(!Number.isSafeInteger(record.generation)||record.generation<=0)throw 0;
+      if((type==="REVISION_SELECTED"||type==="SUCCESS")&&typeof record.revision!=="string")throw 0;
+      if(type==="FAILURE") {
+        if(typeof record.category!=="string")throw 0;
+        if(expected.includes("revision")&&typeof record.revision!=="string")throw 0;
+        if(expected.includes("code")&&typeof record.code!=="string")throw 0;
+      }
+      return record;
+    }
+    function observation(message) {
+      const record=messageRecord(message);
+      const fact={type:record.type,generation:record.generation};
+      if(typeof record.revision==="string")fact.revision=record.revision;
+      if(typeof record.category==="string")fact.category=record.category;
+      if(typeof record.code==="string")fact.code=record.code;
+      if(record.type==="SUCCESS")fact.modelSha256=modelDigest(record.model);
+      return JSON.stringify(fact);
+    }
     function observe(event) {
-      try {
-        const message=event.data;
-        if(!message || typeof message!=="object" || typeof message.type!=="string")return;
-        const fact={type:message.type,generation:message.generation};
-        if(typeof message.revision==="string")fact.revision=message.revision;
-        if(typeof message.category==="string")fact.category=message.category;
-        if(typeof message.code==="string")fact.code=message.code;
-        if(message.type==="SUCCESS")fact.modelSha256=modelDigest(message.model);
-        emit(JSON.stringify(fact));
-      } catch {}
+      let payload=malformedObservation;
+      try { payload=observation(event.data); } catch {}
+      try { emit(payload); } catch {}
     }
     function ObservedWorker(...args) {
       if(!new.target)throw new TypeError("Worker constructor requires new");

@@ -302,6 +302,81 @@ test("page-side Worker observer preserves application constructor and listener t
   assert.equal(observed.modelSha256, computeModelSha256(model));
 });
 
+test("page-side Worker observer closes original selection, success, and capacity shapes before projection", () => {
+  const emitted = [];
+  class FakeWorker {
+    constructor() { this.listeners = []; }
+    addEventListener(type, listener) { this.listeners.push({ type, listener }); }
+    dispatch(event) {
+      for (const item of [...this.listeners]) if (item.type === "message") item.listener.call(this, event);
+    }
+  }
+  const context = {
+    Worker: FakeWorker,
+    __codeCityCollectorEvidence: (value) => emitted.push(value),
+    ArrayBuffer, Uint8Array, Uint32Array, Number, Object, Reflect, Set, TypeError, JSON,
+  };
+  vm.runInNewContext(createWorkerObserverSource(), context);
+  const worker = new context.Worker("worker.js");
+  const delivered = [];
+  worker.addEventListener("message", (event) => delivered.push(event));
+
+  const model = { count: 1, origins: Uint8Array.of(1), sizes: Uint8Array.of(2), rgba: Uint8Array.of(3), bounds: Uint8Array.of(4) };
+  const variants = [
+    { name: "selection", message: { type: "REVISION_SELECTED", generation: 1, revision: EVENT }, missing: "revision", accessor: "revision" },
+    { name: "success", message: { type: "SUCCESS", generation: 1, revision: EVENT, model }, missing: "model", accessor: "model" },
+    {
+      name: "capacity", missing: "category", accessor: "category",
+      message: { type: "FAILURE", generation: 2, revision: REACT, category: "Repository exceeds Code City limits" },
+    },
+  ];
+  const dispatched = [];
+  const dispatch = (message) => {
+    const event = { data: message };
+    dispatched.push(event);
+    worker.dispatch(event);
+  };
+
+  for (const { message } of variants) dispatch(message);
+  assert.deepEqual(JSON.parse(emitted[0]), variants[0].message);
+  assert.deepEqual(JSON.parse(emitted[1]), {
+    type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: computeModelSha256(model),
+  });
+  assert.deepEqual(JSON.parse(emitted[2]), variants[2].message);
+
+  let accessorReads = 0;
+  for (const { name, message, missing, accessor: accessorKey } of variants) {
+    dispatch({ ...message, arbitraryDiagnostic: { name, secret: "must-not-be-observed" } });
+
+    const symbolMessage = { ...message };
+    symbolMessage[Symbol(`private-${name}`)] = "must-not-be-observed";
+    dispatch(symbolMessage);
+
+    const accessorMessage = { ...message };
+    Object.defineProperty(accessorMessage, accessorKey, {
+      enumerable: true,
+      get() { accessorReads += 1; return message[accessorKey]; },
+    });
+    dispatch(accessorMessage);
+
+    dispatch(Object.assign(Object.create({ inheritedDiagnostic: "must-not-be-observed" }), message));
+
+    const missingMessage = { ...message };
+    delete missingMessage[missing];
+    dispatch(missingMessage);
+
+    dispatch({ ...message, generation: "wrong-shape" });
+  }
+  dispatch(null);
+  dispatch([]);
+
+  assert.equal(accessorReads, 0);
+  assert.equal(emitted.length, dispatched.length);
+  assert(emitted.slice(3).every((payload) => payload === '{"malformed":true}'));
+  assert.deepEqual(delivered, dispatched);
+  assert(delivered.every((event, index) => event.data === dispatched[index].data));
+});
+
 test("Chrome discovery excludes LOCALAPPDATA and launch uses exactly the approved flags", async () => {
   const checked = [];
   const discovery = await discoverInstalledChrome({
@@ -1270,7 +1345,7 @@ test("an earlier SUCCESS is the first capacity terminal and fails exact limit or
   await opened.session.close().catch(() => {});
 });
 
-test("capacity terminal rejects the non-protocol extra code key", async () => {
+test("capacity terminal rejects arbitrary non-protocol observation keys", async () => {
   const opened = await openFakeBrowser();
   const pending = opened.session.collectCapacity({
     revision: REACT, rootTree: REACT_ROOT, candidates: candidates(),
@@ -1278,7 +1353,7 @@ test("capacity terminal rejects the non-protocol extra code key", async () => {
   await Promise.resolve();
   opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
     type: "FAILURE", generation: 2, revision: REACT,
-    category: "Repository exceeds Code City limits", code: "limit",
+    category: "Repository exceeds Code City limits", arbitraryDiagnostic: "must-not-be-retained",
   }) });
   await assert.rejects(pending, /worker observation is malformed/u);
   await opened.session.close().catch(() => {});
