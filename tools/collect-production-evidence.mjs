@@ -826,6 +826,7 @@ export async function createBrowserEvidenceSession({
     allowedAssets.add(origin);
     let mode = null;
     let processing = Promise.resolve();
+    let networkEventOrder = 0;
     let closePromise;
 
     function projectFact(value) {
@@ -881,7 +882,7 @@ export async function createBrowserEvidenceSession({
         mode.firstTerminal = fact;
         mode.requestsClosed = true;
         if (network.size !== 0) setFatal(new Error("terminal preceded request completion"));
-        else if (mode.pendingOptions !== null) setFatal(new Error("browser request sequence ended after preflight"));
+        else if (mode.activeExchange !== null) setFatal(new Error("browser request sequence ended before logical exchange completion"));
       }
       facts.push(fact);
       for (const waiter of [...factWaiters]) {
@@ -928,99 +929,139 @@ export async function createBrowserEvidenceSession({
         await task();
       }).catch(setFatal);
     }
+    function expectedExchange(current, index) {
+      if (current.generation === 2 && index >= 4004) throw new Error("capacity limit ordering admitted candidate 4,002");
+      const stage = index === 0 ? "revision" : index === 1 ? "commit" : index === 2 ? "tree" : "raw";
+      let url;
+      let identity;
+      let path;
+      if (stage === "revision") {
+        url = revisionUrl(current.repository);
+      } else if (stage === "commit") {
+        invariant(current.revision, "browser request sequence differs at admission");
+        identity = current.revision;
+        url = commitUrl(current.repository, identity);
+      } else if (stage === "tree") {
+        invariant(current.rootTree, "browser request sequence differs at admission");
+        identity = current.rootTree;
+        url = treeUrl(current.repository, identity);
+      } else {
+        const expected = current.projected?.[index - 3];
+        if (!expected) throw new Error("unexpected browser request");
+        identity = current.revision;
+        path = expected.rawPath;
+        url = rawUrl(current.repository, identity, path);
+      }
+      return { generation: current.generation, index, stage, identity, path, url, options: null, get: null, completed: false };
+    }
+    function entryMatchesExchange(entry, exchange) {
+      return entry.generation === exchange.generation
+        && entry.route.stage === exchange.stage
+        && entry.route.identity === exchange.identity
+        && entry.route.path === exchange.path
+        && entry.url === exchange.url;
+    }
     function validateRequestAdmission(entry) {
       const current = mode;
-      invariant(current && !current.requestsClosed, "unexpected browser request");
-      const index = current.admittedGets;
-      if (current.generation === 2 && index >= 4004) throw new Error("capacity limit ordering admitted candidate 4,002");
-      const expectedStage = index === 0 ? "revision" : index === 1 ? "commit" : index === 2 ? "tree" : "raw";
-      invariant(entry.route.stage === expectedStage, "browser request sequence differs at admission");
-      let expectedUrl;
-      if (expectedStage === "revision") {
-        expectedUrl = revisionUrl(current.repository);
-      } else if (expectedStage === "commit") {
-        invariant(current.revision && entry.route.identity === current.revision, "browser request sequence differs at admission");
-        expectedUrl = commitUrl(current.repository, current.revision);
-      } else if (expectedStage === "tree") {
-        invariant(current.rootTree && entry.route.identity === current.rootTree, "browser request sequence differs at admission");
-        expectedUrl = treeUrl(current.repository, current.rootTree);
-      } else {
-        const rawIndex = index - 3;
-        const expected = current.projected?.[rawIndex];
-        if (!expected) throw new Error("unexpected browser request");
-        invariant(entry.route.identity === current.revision && entry.route.path === expected.rawPath,
-          "browser request sequence differs at admission");
-        expectedUrl = rawUrl(current.repository, current.revision, expected.rawPath);
+      invariant(current && !current.requestsClosed && entry.generation === current.generation, "unexpected browser request");
+      let exchange = current.activeExchange;
+      if (exchange === null) {
+        exchange = expectedExchange(current, current.admittedGets);
+        current.activeExchange = exchange;
       }
-      invariant(entry.url === expectedUrl, "browser request sequence differs at admission");
+      invariant(!exchange.completed && entryMatchesExchange(entry, exchange), "browser request sequence differs at admission");
       if (entry.method === "OPTIONS") {
-        invariant(expectedStage !== "raw" && current.pendingOptions === null, "browser request sequence differs at admission");
-        current.pendingOptions = entry.url;
+        invariant(exchange.stage !== "raw" && exchange.options === null
+          && (!exchange.get?.finishedOrder || entry.requestOrder < exchange.get.finishedOrder),
+        "browser request sequence differs at admission");
+        exchange.options = entry;
       } else {
-        invariant(current.pendingOptions === null || current.pendingOptions === entry.url,
-          "browser request sequence differs at admission");
-        current.pendingOptions = null;
+        invariant(exchange.get === null, "browser request sequence differs at admission");
+        exchange.get = entry;
         current.admittedGets += 1;
       }
+      entry.exchange = exchange;
       entry.admitted = true;
+    }
+    function requestRecord(entry, startedMs = entry.startedMs) {
+      const headerFacts = mergeHeaderFacts(entry.requestHeaderFacts, entry.response.headerFacts);
+      invariant(entry.response.status === (entry.method === "OPTIONS" ? 204 : 200)
+        && entry.response.url === entry.url && !entry.response.fromDiskCache && !entry.response.fromServiceWorker, "browser response mismatch");
+      invariant(headerFacts.corsAllowOrigin !== null, "browser CORS evidence is absent");
+      return {
+        stage: entry.route.stage, method: entry.method, requestedUrl: entry.url, finalUrl: entry.response.url,
+        applicationCall: entry.method === "GET", status: entry.response.status, startedMs,
+        endedMs: entry.finishedMs, ...headerFacts, redirected: entry.response.url !== entry.url,
+      };
+    }
+    async function completeLogicalExchange(exchange) {
+      const current = mode;
+      invariant(current && current.generation === exchange.generation && current.activeExchange === exchange
+        && !exchange.completed && exchange.get?.networkValidated, "browser logical exchange differs");
+      const get = exchange.get;
+      if (exchange.options) {
+        invariant(exchange.options.networkValidated && exchange.options.finishedOrder < get.finishedOrder,
+          "browser preflight completed after its GET");
+        const logicalGetStart = Math.max(get.startedMs, exchange.options.finishedMs);
+        invariant(exchange.options.finishedMs <= logicalGetStart && logicalGetStart <= get.finishedMs,
+          "browser preflight timing differs");
+        appendRequest(requestItems, requestRecord(exchange.options));
+        appendRequest(requestItems, requestRecord(get, logicalGetStart));
+      } else {
+        appendRequest(requestItems, requestRecord(get));
+      }
+      exchange.completed = true;
+      current.activeExchange = null;
+      const bytes = await cdpBody(cdp, get.sessionId, get.requestId, get.cap);
+      invariant(mode === current, "browser trace was cleared too early");
+      current.gets.push({ ...get.route, url: get.url });
+      if (get.route.stage === "revision") {
+        current.revision = projectRevision(bytes);
+        current.progress.revision = current.revision;
+      } else if (get.route.stage === "commit") {
+        invariant(get.route.identity === current.revision, "browser commit identity mismatch");
+        current.rootTree = projectCommit(bytes, current.revision);
+        current.progress.rootTree = current.rootTree;
+      } else if (get.route.stage === "tree") {
+        invariant(get.route.identity === current.rootTree, "browser tree identity mismatch");
+        const tree = projectTree(bytes, current.rootTree, current.revision.length, undefined,
+          current.generation === 1 ? Infinity : 4001);
+        current.treeEntries = tree.treeEntries;
+        current.projected = tree.candidates;
+        current.onInventory?.(get.finishedMs);
+      } else {
+        const index = current.rawFacts.length;
+        const expected = current.projected?.[index];
+        invariant(expected && get.route.identity === current.revision && get.route.path === expected.rawPath, "browser raw sequence mismatch");
+        const expectedBlob = candidateBlobId(expected, current.revision.length);
+        const blobId = computeGitBlobId(bytes, current.revision.length);
+        let normalizedBytes;
+        try { normalizedBytes = normalizeSourceBytes(bytes); }
+        catch { throw new Error("browser candidate content invalid"); }
+        const nextAggregate = current.aggregate + normalizedBytes;
+        const fact = {
+          index: index + 1, path: expected.canonicalPath, blobId: expectedBlob, normalizedBytes,
+          runningAggregate: nextAggregate, hashMatched: blobId === expectedBlob,
+          contentValid: normalizedBytes <= MAX_NORMALIZED_BYTES && nextAggregate <= MAX_AGGREGATE_BYTES,
+        };
+        if (fact.contentValid) {
+          current.rawFacts.push(fact);
+          if (current.generation === 2) current.progress.candidates = current.rawFacts;
+          current.aggregate = nextAggregate;
+        }
+        invariant(fact.contentValid, "browser candidate content invalid");
+        invariant(fact.hashMatched, "browser candidate blob mismatch");
+      }
     }
     function finalizeNetworkEntry(key, entry) {
       if (!entry.finished || !entry.response || !entry.requestHeaderFacts) return;
       network.delete(key);
       completedRequestIds.add(key);
       enqueue(async () => {
-        invariant(entry.admitted, "browser request was not admitted");
-        const headerFacts = mergeHeaderFacts(entry.requestHeaderFacts, entry.response.headerFacts);
-        appendRequest(requestItems, {
-          stage: entry.route.stage, method: entry.method, requestedUrl: entry.url, finalUrl: entry.response.url,
-          applicationCall: entry.method === "GET", status: entry.response.status, startedMs: entry.startedMs,
-          endedMs: entry.finishedMs, ...headerFacts, redirected: entry.response.url !== entry.url,
-        });
-        invariant(entry.response.status === (entry.method === "OPTIONS" ? 204 : 200)
-          && entry.response.url === entry.url && !entry.response.fromDiskCache && !entry.response.fromServiceWorker, "browser response mismatch");
-        invariant(headerFacts.corsAllowOrigin !== null, "browser CORS evidence is absent");
-        if (entry.method !== "GET") return;
-        const bytes = await cdpBody(cdp, entry.sessionId, entry.requestId, entry.cap);
-        const current = mode;
-        invariant(current, "browser trace was cleared too early");
-        current.gets.push({ ...entry.route, url: entry.url });
-        if (entry.route.stage === "revision") {
-          current.revision = projectRevision(bytes);
-          current.progress.revision = current.revision;
-        } else if (entry.route.stage === "commit") {
-          invariant(entry.route.identity === current.revision, "browser commit identity mismatch");
-          current.rootTree = projectCommit(bytes, current.revision);
-          current.progress.rootTree = current.rootTree;
-        } else if (entry.route.stage === "tree") {
-          invariant(entry.route.identity === current.rootTree, "browser tree identity mismatch");
-          const tree = projectTree(bytes, current.rootTree, current.revision.length, undefined,
-            current.generation === 1 ? Infinity : 4001);
-          current.treeEntries = tree.treeEntries;
-          current.projected = tree.candidates;
-          current.onInventory?.(entry.finishedMs);
-        } else {
-          const index = current.rawFacts.length;
-          const expected = current.projected?.[index];
-          invariant(expected && entry.route.identity === current.revision && entry.route.path === expected.rawPath, "browser raw sequence mismatch");
-          const expectedBlob = candidateBlobId(expected, current.revision.length);
-          const blobId = computeGitBlobId(bytes, current.revision.length);
-          let normalizedBytes;
-          try { normalizedBytes = normalizeSourceBytes(bytes); }
-          catch { throw new Error("browser candidate content invalid"); }
-          const nextAggregate = current.aggregate + normalizedBytes;
-          const fact = {
-            index: index + 1, path: expected.canonicalPath, blobId: expectedBlob, normalizedBytes,
-            runningAggregate: nextAggregate, hashMatched: blobId === expectedBlob,
-            contentValid: normalizedBytes <= MAX_NORMALIZED_BYTES && nextAggregate <= MAX_AGGREGATE_BYTES,
-          };
-          if (fact.contentValid) {
-            current.rawFacts.push(fact);
-            if (current.generation === 2) current.progress.candidates = current.rawFacts;
-            current.aggregate = nextAggregate;
-          }
-          invariant(fact.contentValid, "browser candidate content invalid");
-          invariant(fact.hashMatched, "browser candidate blob mismatch");
-        }
+        invariant(entry.admitted && entry.exchange, "browser request was not admitted");
+        requestRecord(entry);
+        entry.networkValidated = true;
+        if (entry.method === "GET") await completeLogicalExchange(entry.exchange);
       });
     }
     fatalListener = setFatal;
@@ -1116,6 +1157,7 @@ export async function createBrowserEvidenceSession({
         }
         const entry = {
           sessionId: message.sessionId, requestId: message.params.requestId, url, method, route,
+          generation: mode.generation, requestOrder: ++networkEventOrder,
           cap: responseCapForRoute(route), startedMs: now(), dataLength: 0,
           requestHeaderFacts: earlyExtra.get(key), admitted: false,
         };
@@ -1143,7 +1185,12 @@ export async function createBrowserEvidenceSession({
         const entry = network.get(key);
         if (!entry) return;
         entry.finished = true;
+        entry.finishedOrder = ++networkEventOrder;
         entry.finishedMs = Math.max(entry.startedMs, now());
+        if (entry.method === "GET" && entry.exchange?.options && !entry.exchange.options.finished) {
+          setFatal(new Error("browser preflight completed after its GET"));
+          return;
+        }
         if (!entry.response || !entry.requestHeaderFacts) {
           setFatal(new Error("browser request headers or response are incomplete"));
           return;
@@ -1170,7 +1217,7 @@ export async function createBrowserEvidenceSession({
       detachedWorkers.clear();
       mode = {
         repository, generation, progress, gets: [], rawFacts: progress.candidates ?? [], aggregate: 0,
-        revision: null, rootTree: null, projected: null, treeEntries: null, admittedGets: 0, pendingOptions: null,
+        revision: null, rootTree: null, projected: null, treeEntries: null, admittedGets: 0, activeExchange: null,
         firstTerminal: null, requestsClosed: false,
       };
       return mode;
