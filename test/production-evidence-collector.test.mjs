@@ -1345,16 +1345,15 @@ test("an earlier SUCCESS is the first capacity terminal and fails exact limit or
   await opened.session.close().catch(() => {});
 });
 
-test("capacity terminal rejects arbitrary non-protocol observation keys", async () => {
+test("the fixed minimal malformed page observation causes deterministic capacity stage failure", async () => {
   const opened = await openFakeBrowser();
   const pending = opened.session.collectCapacity({
     revision: REACT, rootTree: REACT_ROOT, candidates: candidates(),
   }, () => ({ atMs: 1 }), 0);
   await Promise.resolve();
-  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
-    type: "FAILURE", generation: 2, revision: REACT,
-    category: "Repository exceeds Code City limits", arbitraryDiagnostic: "must-not-be-retained",
-  }) });
+  opened.harness.emit("Runtime.bindingCalled", {
+    name: "__codeCityCollectorEvidence", payload: '{"malformed":true}',
+  });
   await assert.rejects(pending, /worker observation is malformed/u);
   await opened.session.close().catch(() => {});
 });
