@@ -31,7 +31,19 @@ export type FinalizedModuleComplexity = Readonly<{
 }>;
 
 const MAX_PACKED_BYTE_OFFSET = 0xffff_ffff;
-const OBSERVATION_ORDER = ["lexical-exclusion", "explicit-unit", "value-anchor", "type-only", "decision"] as const;
+const DECISION_KIND_SET: ReadonlySet<string> = new Set(DECISION_KINDS);
+const EXPLICIT_UNIT_FORM_SET: ReadonlySet<string> = new Set(EXPLICIT_UNIT_FORMS);
+
+function observationOrder(kind: unknown): number {
+  switch (kind) {
+    case "lexical-exclusion": return 0;
+    case "explicit-unit": return 1;
+    case "value-anchor": return 2;
+    case "type-only": return 3;
+    case "decision": return 4;
+    default: return -1;
+  }
+}
 
 function malformed(): never {
   throw new Error("M1-MET-1");
@@ -88,7 +100,7 @@ export function finalizeModuleComplexity(input: ComplexityInput): FinalizedModul
       topLevelIndex = tableIndex;
       continue;
     }
-    if (!(EXPLICIT_UNIT_FORMS as readonly string[]).includes(unit.kind)
+    if (!EXPLICIT_UNIT_FORM_SET.has(unit.kind)
       || !validSpan(unit)
       || !Array.isArray(unit.ownedRegions)) {
       malformed();
@@ -156,52 +168,79 @@ export function finalizeModuleComplexity(input: ComplexityInput): FinalizedModul
   let previousStart = -1;
   let previousEnd = -1;
   let previousKind = -1;
-  let nextRegion = 0;
-  const activeRegions: number[] = [];
-  const activeBestRegions: number[] = [];
-  for (const observation of input.observations) {
-    if (!observation || !(OBSERVATION_ORDER as readonly string[]).includes(observation.kind)) malformed();
-    const order = OBSERVATION_ORDER.indexOf(observation.kind);
-    if (!validSpan(observation)
-      || observation.startByte < previousStart
-      || (observation.startByte === previousStart
-        && (observation.endByte > previousEnd
-          || (observation.endByte === previousEnd && order < previousKind)))) {
-      malformed();
-    }
-    previousStart = observation.startByte;
-    previousEnd = observation.endByte;
-    previousKind = order;
-    if (observation.kind !== "decision") continue;
-    if (!(DECISION_KINDS as readonly string[]).includes(observation.decisionKind)) malformed();
 
-    while (nextRegion < regions.length && regions[nextRegion]!.startByte <= observation.startByte) {
-      const region = regions[nextRegion]!;
-      while (activeRegions.length > 0 && region.startByte >= regions[activeRegions.at(-1)!]!.endByte) {
+  if (regions.length === 0) {
+    for (const observation of input.observations) {
+      if (!observation) malformed();
+      const order = observationOrder(observation.kind);
+      if (order === -1
+        || !validSpan(observation)
+        || observation.startByte < previousStart
+        || (observation.startByte === previousStart
+          && (observation.endByte > previousEnd
+            || (observation.endByte === previousEnd && order < previousKind)))) {
+        malformed();
+      }
+      previousStart = observation.startByte;
+      previousEnd = observation.endByte;
+      previousKind = order;
+      if (observation.kind !== "decision") continue;
+      if (!DECISION_KIND_SET.has(observation.decisionKind) || topLevelIndex === -1) malformed();
+      const complexity = complexities[topLevelIndex]!;
+      if (complexity >= Number.MAX_SAFE_INTEGER) malformed();
+      complexities[topLevelIndex] = complexity + 1;
+    }
+  } else {
+    let nextRegion = 0;
+    const activeRegions: number[] = [];
+    const activeBestRegions: number[] = [];
+    for (const observation of input.observations) {
+      if (!observation) malformed();
+      const order = observationOrder(observation.kind);
+      if (order === -1
+        || !validSpan(observation)
+        || observation.startByte < previousStart
+        || (observation.startByte === previousStart
+          && (observation.endByte > previousEnd
+            || (observation.endByte === previousEnd && order < previousKind)))) {
+        malformed();
+      }
+      previousStart = observation.startByte;
+      previousEnd = observation.endByte;
+      previousKind = order;
+      if (observation.kind !== "decision") continue;
+      if (!DECISION_KIND_SET.has(observation.decisionKind)) malformed();
+
+      while (nextRegion < regions.length && regions[nextRegion]!.startByte <= observation.startByte) {
+        const region = regions[nextRegion]!;
+        while (activeRegions.length > 0 && region.startByte >= regions[activeRegions.at(-1)!]!.endByte) {
+          activeRegions.pop();
+          activeBestRegions.pop();
+        }
+        const priorBest = activeBestRegions.at(-1) ?? -1;
+        if (priorBest !== -1 && region.unitDepth === regions[priorBest]!.unitDepth) malformed();
+        const best = priorBest === -1 || region.unitDepth > regions[priorBest]!.unitDepth
+          ? nextRegion
+          : priorBest;
+        activeRegions.push(nextRegion);
+        activeBestRegions.push(best);
+        nextRegion += 1;
+      }
+      while (activeRegions.length > 0 && observation.startByte >= regions[activeRegions.at(-1)!]!.endByte) {
         activeRegions.pop();
         activeBestRegions.pop();
       }
-      const priorBest = activeBestRegions.at(-1) ?? -1;
-      if (priorBest !== -1 && region.unitDepth === regions[priorBest]!.unitDepth) malformed();
-      const best = priorBest === -1 || region.unitDepth > regions[priorBest]!.unitDepth
-        ? nextRegion
-        : priorBest;
-      activeRegions.push(nextRegion);
-      activeBestRegions.push(best);
-      nextRegion += 1;
-    }
-    while (activeRegions.length > 0 && observation.startByte >= regions[activeRegions.at(-1)!]!.endByte) {
-      activeRegions.pop();
-      activeBestRegions.pop();
-    }
 
-    let owner = topLevelIndex;
-    if (activeRegions.length > 0) {
-      if (observation.endByte > regions[activeRegions.at(-1)!]!.endByte) malformed();
-      owner = regions[activeBestRegions.at(-1)!]!.tableIndex;
+      let owner = topLevelIndex;
+      if (activeRegions.length > 0) {
+        if (observation.endByte > regions[activeRegions.at(-1)!]!.endByte) malformed();
+        owner = regions[activeBestRegions.at(-1)!]!.tableIndex;
+      }
+      if (owner === -1) malformed();
+      const complexity = complexities[owner]!;
+      if (complexity >= Number.MAX_SAFE_INTEGER) malformed();
+      complexities[owner] = complexity + 1;
     }
-    if (owner === -1) malformed();
-    complexities[owner] = checkedComplexityIncrement(complexities[owner]!);
   }
 
   let M = 0;

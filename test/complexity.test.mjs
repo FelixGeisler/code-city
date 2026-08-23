@@ -15,7 +15,10 @@ registerHooks({
 const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const { createTreeSitterAdapter } = await import("../src/edge/tree-sitter-adapter.ts");
 const { processAdmittedBaseMetrics } = await import("../src/application/base-metric-processing.ts");
-const { deriveBaseMetricAnalysis } = await import("../src/domain/base-metrics.ts");
+const {
+  DECISION_KINDS,
+  deriveBaseMetricAnalysis,
+} = await import("../src/domain/base-metrics.ts");
 const { checkedComplexityIncrement, finalizeModuleComplexity } = await import("../src/domain/complexity.ts");
 const fixture = JSON.parse(await readFile(path.join(projectRoot, "test", "fixtures", "complexity-cases.json"), "utf8"));
 
@@ -33,6 +36,15 @@ const failure = { kind: "failure", category: "Metric processing failed", code: "
 function exactKeys(value, keys) {
   assert(value && typeof value === "object" && !Array.isArray(value));
   assert.deepEqual(Object.keys(value).sort(), [...keys].sort());
+}
+
+function assertPerUnitBytes(actual, expected, message) {
+  const expectedArray = Float64Array.from(expected);
+  assert.deepEqual(
+    Buffer.from(actual.buffer, actual.byteOffset, actual.byteLength),
+    Buffer.from(expectedArray.buffer, expectedArray.byteOffset, expectedArray.byteLength),
+    message,
+  );
 }
 
 function materializeBase(analysis) {
@@ -138,6 +150,7 @@ test("production-WASM rows preserve base evidence and traverse the production fi
     exactKeys(finalized.fact, ["canonicalPath", "S", "U", "M"]);
     assert(finalized.perUnitComplexities instanceof Float64Array, entry.id);
     assert.deepEqual([...finalized.perUnitComplexities], entry.expectedOutcome.perUnitComplexities, entry.id);
+    assertPerUnitBytes(finalized.perUnitComplexities, entry.expectedOutcome.perUnitComplexities, `${entry.id} packed per-unit complexities`);
     assert.deepEqual(finalized.fact, entry.expectedOutcome.fact, entry.id);
     assert.equal(finalized.fact.M, entry.expectedOutcome.M, entry.id);
     assert.equal(createHash("sha256").update(JSON.stringify(materializeBase(analysis))).digest("hex"), before, `${entry.id} mutated base facts`);
@@ -168,6 +181,107 @@ test("synthetic rows isolate malformed ownership and exact checked overflow thro
     assert.throws(() => checkedComplexityIncrement(invalid), /M1-MET-1/);
   }
   assert.equal(checkedComplexityIncrement(Number.MAX_SAFE_INTEGER - 1), Number.MAX_SAFE_INTEGER);
+});
+
+test("the region-free finalizer exhaustively preserves closed observation and decision-kind results", () => {
+  const observations = [
+    { kind: "lexical-exclusion", startByte: 0, endByte: 1 },
+    { kind: "explicit-unit", form: "function", startByte: 2, endByte: 3, ownedRegions: [] },
+    { kind: "value-anchor", valueKind: "runtime-statement/declaration", startByte: 4, endByte: 5 },
+    { kind: "type-only", typeKind: "interface/type alias", startByte: 6, endByte: 7 },
+    ...DECISION_KINDS.map((decisionKind, index) => ({
+      kind: "decision", decisionKind, startByte: 8 + index * 2, endByte: 9 + index * 2,
+    })),
+  ];
+  assert.deepEqual([...new Set(observations.map((observation) => observation.kind))], [
+    "lexical-exclusion", "explicit-unit", "value-anchor", "type-only", "decision",
+  ]);
+  assert.deepEqual(observations.slice(4).map((observation) => observation.decisionKind), DECISION_KINDS);
+
+  const finalized = finalizeModuleComplexity({
+    canonicalPath: "closed-sets.js",
+    S: 4,
+    U: 2,
+    units: [
+      { path: "closed-sets.js", kind: "top-level" },
+      { path: "closed-sets.js", kind: "function", startByte: 100, endByte: 120, ownedRegions: [] },
+    ],
+    observations,
+  });
+  assert.deepEqual(finalized.fact, { canonicalPath: "closed-sets.js", S: 4, U: 2, M: 12 });
+  assertPerUnitBytes(finalized.perUnitComplexities, [12, 1], "closed observation and decision kinds");
+});
+
+test("top-level-only and region-free paths consume and reject malformed late observations", () => {
+  const validPrefixLength = 2_000;
+  const cases = [
+    {
+      id: "top-level unknown observation kind",
+      units: [{ path: "late.js", kind: "top-level" }],
+      late: { kind: "unknown", startByte: validPrefixLength * 2, endByte: validPrefixLength * 2 + 1 },
+    },
+    {
+      id: "top-level unknown decision kind",
+      units: [{ path: "late.js", kind: "top-level" }],
+      late: { kind: "decision", decisionKind: "unknown", startByte: validPrefixLength * 2, endByte: validPrefixLength * 2 + 1 },
+    },
+    {
+      id: "region-free invalid late span",
+      units: [
+        { path: "late.js", kind: "top-level" },
+        { path: "late.js", kind: "arrow", startByte: 10_000, endByte: 10_010, ownedRegions: [] },
+      ],
+      late: { kind: "decision", decisionKind: "logical-and", startByte: validPrefixLength * 2, endByte: validPrefixLength * 2 },
+    },
+    {
+      id: "region-free late ordering regression",
+      units: [
+        { path: "late.js", kind: "top-level" },
+        { path: "late.js", kind: "function", startByte: 10_000, endByte: 10_010, ownedRegions: [] },
+      ],
+      late: { kind: "decision", decisionKind: "logical-and", startByte: 0, endByte: 1 },
+    },
+  ];
+
+  for (const entry of cases) {
+    let consumed = 0;
+    const observations = {
+      *[Symbol.iterator]() {
+        for (let index = 0; index < validPrefixLength; index += 1) {
+          consumed += 1;
+          yield { kind: "decision", decisionKind: "logical-and", startByte: index * 2, endByte: index * 2 + 1 };
+        }
+        consumed += 1;
+        yield entry.late;
+      },
+    };
+    assert.throws(() => finalizeModuleComplexity({
+      canonicalPath: "late.js", S: 1, U: entry.units.length, units: entry.units, observations,
+    }), /M1-MET-1/, entry.id);
+    assert.equal(consumed, validPrefixLength + 1, entry.id);
+  }
+});
+
+test("nested owned regions preserve exact owners and reject a crossing decision", () => {
+  const units = [
+    { path: "nested.js", kind: "top-level" },
+    { path: "nested.js", kind: "function", startByte: 0, endByte: 100, ownedRegions: [{ startByte: 10, endByte: 90 }] },
+    { path: "nested.js", kind: "arrow", startByte: 20, endByte: 70, ownedRegions: [{ startByte: 30, endByte: 60 }] },
+  ];
+  const observations = [5, 15, 35, 75, 95].map((startByte) => ({
+    kind: "decision", decisionKind: "logical-and", startByte, endByte: startByte + 1,
+  }));
+  const finalized = finalizeModuleComplexity({ canonicalPath: "nested.js", S: 1, U: 3, units, observations });
+  assert.deepEqual(finalized.fact, { canonicalPath: "nested.js", S: 1, U: 3, M: 3 });
+  assertPerUnitBytes(finalized.perUnitComplexities, [3, 3, 2], "nested ownership");
+
+  assert.throws(() => finalizeModuleComplexity({
+    canonicalPath: "nested.js",
+    S: 1,
+    U: 3,
+    units,
+    observations: [{ kind: "decision", decisionKind: "logical-and", startByte: 59, endByte: 61 }],
+  }), /M1-MET-1/);
 });
 
 test("small input permutations sort final facts by unsigned UTF-8 and duplicate paths fail atomically", async () => {
