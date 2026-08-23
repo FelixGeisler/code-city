@@ -84,18 +84,62 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
-        state="$(gh api repos/FelixGeisler/code-city/issues/460 --jq .state)" || exit 1
-        case "$state" in
-          open) echo "run-evidence=true" >> "$GITHUB_OUTPUT" ;;
-          closed) echo "run-evidence=false" >> "$GITHUB_OUTPUT" ;;
-          *) exit 1 ;;
-        esac
+        node --input-type=module <<'NODE'
+        import { appendFile } from "node:fs/promises";
+        const issueUrl = "https://api.github.com/repos/FelixGeisler/code-city/issues/460";
+        const maximumBytes = 1024 * 1024;
+        if (!process.env.GH_TOKEN) throw new Error("eligibility authentication is unavailable");
+        const response = await fetch(issueUrl, {
+          headers: {
+            accept: "application/vnd.github+json",
+            authorization: `Bearer ${process.env.GH_TOKEN}`,
+            "x-github-api-version": "2022-11-28",
+          },
+          redirect: "error",
+        });
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("eligibility response body is unavailable");
+        const chunks = [];
+        let byteLength = 0;
+        let complete = false;
+        try {
+          if (response.url !== issueUrl) throw new Error("eligibility response URL mismatch");
+          if (response.status !== 200) throw new Error("eligibility response status mismatch");
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+              complete = true;
+              break;
+            }
+            if (!(value instanceof Uint8Array)) throw new Error("eligibility response chunk mismatch");
+            const retained = value.subarray(0, maximumBytes + 1 - byteLength);
+            chunks.push(retained);
+            byteLength += retained.byteLength;
+            if (byteLength > maximumBytes) throw new Error("eligibility response exceeds 1 MiB");
+          }
+        } finally {
+          if (!complete) await reader.cancel().catch(() => {});
+          reader.releaseLock();
+        }
+        const bytes = new Uint8Array(byteLength);
+        let offset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        const payload = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+        if (payload === null || typeof payload !== "object" || Array.isArray(payload)
+            || !Object.hasOwn(payload, "state")
+            || (payload.state !== "open" && payload.state !== "closed")) {
+          throw new Error("eligibility issue state mismatch");
+        }
+        await appendFile(process.env.GITHUB_OUTPUT, `run-evidence=${payload.state === "open"}\n`);
+        NODE
 
   production-evidence:
     needs: [verify, deploy, eligibility]
     if: needs.eligibility.outputs.run-evidence == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 180
     permissions:
       contents: read
     steps:
