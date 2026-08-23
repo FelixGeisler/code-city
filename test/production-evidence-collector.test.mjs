@@ -2837,6 +2837,142 @@ test("full collector orchestration emits a schema-valid packet when lifecycle fa
   assert.deepEqual(lifecycle.data.events.slice(-2).map(({ event }) => event), ["worker-quiescent", "collector-complete"]);
 });
 
+test("full capacity orchestration flushes delayed tree inventory before a pending limit terminal", async () => {
+  let stored;
+  const treeBodyGate = deferredValue();
+  const fences = controlledWorkerFences();
+  const harness = fakeCdpHarness({
+    workerFenceImpl: fences.impl,
+    async bodyImpl({ params, value }) {
+      if (params.requestId === "causal-capacity-tree") await treeBodyGate.promise;
+      return value;
+    },
+  });
+  const qualificationCandidates = NATIVE_ENTRIES.map((entry, offset) => ({
+    index: offset + 1, path: entry.path, blobId: entry.sha, normalizedBytes: 1,
+    runningAggregate: offset + 1, hashMatched: true, contentValid: true,
+  }));
+  const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+  const fallbackBrowserFactory = seams.createBrowserEvidenceSession;
+  seams.qualifyRepository = async ({ now, requestItems, progress }) => {
+    appendSequence(requestItems, now, "facebook/react", REACT, REACT_ROOT,
+      NATIVE_ENTRIES.map(({ path: sourcePath }) => sourcePath), false);
+    return Object.assign(progress, {
+      repositoryUrl: "https://github.com/facebook/react", revision: REACT, rootTree: REACT_ROOT,
+      treeEntries: NATIVE_ENTRIES.length, truncated: false, candidates: qualificationCandidates,
+    });
+  };
+  seams.createBrowserEvidenceSession = async (args) => {
+    const native = await createBrowserEvidenceSession({
+      ...args,
+      launchImpl: async () => ({ child: fakeChromeChild(), websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+      connectImpl: () => harness.cdp,
+    });
+    const fallback = await fallbackBrowserFactory(args);
+    const driveCapacity = async () => {
+      await Promise.resolve();
+      harness.emit("Target.attachedToTarget", {
+        sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" },
+      }, "");
+      await new Promise((resolve) => setImmediate(resolve));
+      emitBrowserGet(harness, {
+        requestId: "causal-capacity-revision", url: revisionUrl("facebook/react"),
+        body: JSON.stringify([{ sha: REACT }]),
+      });
+      await waitForBodyCalls(harness, 1);
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "REVISION_SELECTED", generation: 2, revision: REACT,
+      }) });
+      await fences.waitForCount(1);
+      fences.release(0);
+      await new Promise((resolve) => setImmediate(resolve));
+      emitBrowserGet(harness, {
+        requestId: "causal-capacity-commit", url: commitUrl("facebook/react", REACT),
+        body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
+      });
+      await waitForBodyCalls(harness, 2);
+      emitBrowserGet(harness, {
+        requestId: "causal-capacity-tree", url: treeUrl("facebook/react", REACT_ROOT),
+        body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
+      });
+      await waitForBodyCalls(harness, 3);
+      for (let index = 0; index < NATIVE_ENTRIES.length; index += 1) {
+        emitBrowserGet(harness, {
+          requestId: `causal-capacity-raw-${index + 1}`,
+          url: rawUrl("facebook/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
+        });
+      }
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "FAILURE", generation: 2, revision: REACT, category: "Repository exceeds Code City limits",
+      }) });
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "ATTEMPT_DRAINED", generation: 2,
+      }) });
+      harness.emit("Target.detachedFromTarget", {
+        sessionId: "worker-session", targetId: "worker-target",
+      }, "");
+      await fences.waitForCount(2);
+      fences.release(1);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(stored, undefined, "terminal did not overtake delayed tree body processing");
+      treeBodyGate.resolve();
+    };
+    return Object.freeze({
+      cdpVersion: native.cdpVersion,
+      fatalSignal: native.fatalSignal,
+      snapshot: native.snapshot,
+      collectSmoke: fallback.collectSmoke,
+      clearTrace: native.clearTrace,
+      async collectCapacity(qualification, emit, startedMs) {
+        const pending = native.collectCapacity(qualification, emit, startedMs);
+        void driveCapacity();
+        return pending;
+      },
+      close: native.close,
+    });
+  };
+
+  const collection = collectProductionEvidence({
+    origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
+    output: path.resolve("causal-capacity-pass"),
+  }, seams);
+  let hangTimer;
+  let result;
+  try {
+    result = await Promise.race([
+      collection,
+      new Promise((_, reject) => {
+        hangTimer = setTimeout(() => reject(new Error("causal capacity orchestration hung")), 5000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(hangTimer);
+  }
+  assert.deepEqual([result.status, result.reason], ["pass", "none"]);
+  const validated = validateEvidencePacket(stored.files, stored.binding);
+  const lifecycle = JSON.parse(new TextDecoder().decode(validated.files.get("lifecycle.json")));
+  const requests = JSON.parse(new TextDecoder().decode(validated.files.get("requests.json")));
+  const capacityEvents = lifecycle.data.events.filter(({ generation }) => generation === 2);
+  assert.deepEqual(capacityEvents.map(({ event }) => event), [
+    "capacity-start", "revision-selected", "inventory-complete", "limit-failure",
+    "request-quiescent", "worker-quiescent",
+  ]);
+  for (const event of ["revision-selected", "inventory-complete", "limit-failure"]) {
+    assert.equal(capacityEvents.filter((item) => item.event === event).length, 1, event);
+  }
+  const revision = capacityEvents.find(({ event }) => event === "revision-selected");
+  const inventory = capacityEvents.find(({ event }) => event === "inventory-complete");
+  const limit = capacityEvents.find(({ event }) => event === "limit-failure");
+  const applicationRequests = requests.data.items.filter(({ applicationCall, requestedUrl }) => (
+    applicationCall && requestedUrl.includes("/facebook/react/")
+  ));
+  const tree = applicationRequests.find(({ stage }) => stage === "tree");
+  assert.equal(inventory.atMs, Math.max(tree.endedMs, revision.atMs));
+  assert(limit.atMs >= inventory.atMs);
+  assert(limit.atMs >= Math.max(...applicationRequests.map(({ endedMs }) => endedMs)));
+  assert.equal(lifecycle.status, "pass");
+});
+
 async function collectHandledMatrix(stage, reason) {
   let stored;
   const seams = collectorMatrixSeams({ failStage: stage, reason, packetSink(value) { if (value) stored = value; return stored; } });

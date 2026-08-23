@@ -877,7 +877,8 @@ export async function createBrowserEvidenceSession({
     function publishFact(fact, ...causalTimes) {
       const current = mode && fact.generation === mode.generation ? mode : null;
       fact.observedAtMs = Math.max(
-        factReceiptTimes.get(fact) ?? now(), current?.lastPublishedFactAtMs ?? 0, ...causalTimes,
+        factReceiptTimes.get(fact) ?? now(), current?.lastPublishedFactAtMs ?? 0,
+        current?.lastPublishedLifecycleAtMs ?? 0, ...causalTimes,
       );
       if (current) current.lastPublishedFactAtMs = fact.observedAtMs;
       facts.push(fact);
@@ -938,6 +939,36 @@ export async function createBrowserEvidenceSession({
         if (fatal.value) throw fatal.value;
         await task();
       }).catch(setFatal);
+    }
+    function flushCausalMilestones(current) {
+      if (!current.causalMilestonesOpen) return;
+      while (current.causalMilestones.length > 0) {
+        const milestone = current.causalMilestones[0];
+        const observedAtMs = Math.max(
+          milestone.causalAtMs, current.lastPublishedFactAtMs, current.lastPublishedLifecycleAtMs,
+        );
+        const published = milestone.publish(observedAtMs);
+        invariant(published && Number.isSafeInteger(published.atMs), "causal lifecycle milestone differs");
+        current.lastPublishedLifecycleAtMs = Math.max(observedAtMs, published.atMs);
+        current.publishedCausalMilestones.add(milestone.key);
+        current.causalMilestones.shift();
+      }
+    }
+    function recordCausalMilestone(current, key, causalAtMs, publish) {
+      invariant(mode === current && Number.isSafeInteger(causalAtMs)
+        && !current.publishedCausalMilestones.has(key)
+        && !current.causalMilestones.some((milestone) => milestone.key === key),
+      "causal lifecycle milestone differs");
+      current.causalMilestones.push({ key, causalAtMs, publish });
+      flushCausalMilestones(current);
+    }
+    function openCausalMilestones(current, priorLifecycle) {
+      invariant(mode === current && current.selectedFact && !current.causalMilestonesOpen
+        && priorLifecycle && Number.isSafeInteger(priorLifecycle.atMs),
+      "causal lifecycle milestone differs");
+      current.lastPublishedLifecycleAtMs = priorLifecycle.atMs;
+      current.causalMilestonesOpen = true;
+      flushCausalMilestones(current);
     }
     function currentWorkerSessions() {
       return [...workerTargets.entries()]
@@ -1011,6 +1042,7 @@ export async function createBrowserEvidenceSession({
           invariant(mode === current && current.pendingTerminal === pending, "browser terminal barrier differs");
           current.requestsClosed = true;
           await awaitProcessingBarrier(pending.processingBarrier);
+          flushCausalMilestones(current);
           invariant(network.size === 0 && earlyExtra.size === 0,
             "terminal preceded request completion");
           invariant(current.activeExchange === null,
@@ -1344,6 +1376,8 @@ export async function createBrowserEvidenceSession({
         pendingSelection: null, selectedFact: null, pendingTerminal: null, firstTerminal: null,
         pendingDrain: null, firstDrain: null, requestsClosed: false,
         stageEndMs: {}, latestRequestEndMs: 0, lastPublishedFactAtMs: 0,
+        causalMilestones: [], publishedCausalMilestones: new Set(),
+        causalMilestonesOpen: false, lastPublishedLifecycleAtMs: 0,
       };
       return mode;
     }
@@ -1353,6 +1387,7 @@ export async function createBrowserEvidenceSession({
     async function flush() {
       await evaluate(cdp, sessionId, "true");
       await awaitProcessingBarrier();
+      if (mode) flushCausalMilestones(mode);
       if ([...network.values()].some((entry) => entry.finished && (!entry.requestHeaderFacts || !entry.response)) || earlyExtra.size > 0) {
         setFatal(new Error("browser request headers or response are incomplete"));
       }
@@ -1387,7 +1422,7 @@ export async function createBrowserEvidenceSession({
         const selected = await nextFact((fact) => fact.type === "REVISION_SELECTED" && fact.generation === 1);
         progress.revision = selected.revision;
         invariant(selected.revision === eventSha, "smoke selected a stale revision");
-        emit("revision-selected", 1, selected.observedAtMs);
+        openCausalMilestones(trace, emit("revision-selected", 1, selected.observedAtMs));
         await flush();
         invariant(trace.revision === eventSha, "smoke revision evidence differs");
         const terminal = await nextFact((fact) => ["SUCCESS", "FAILURE"].includes(fact.type) && fact.generation === 1);
@@ -1419,15 +1454,15 @@ export async function createBrowserEvidenceSession({
           rawRequestCount: 0, candidates: [],
         };
         const trace = startTrace(REACT_REPOSITORY, 2, progress);
-        trace.onInventory = (atMs) => enqueueLifecycle(() => {
-          invariant(trace.selectedFact, "inventory preceded revision selection");
-          emit("inventory-complete", 2, Math.max(atMs, trace.lastPublishedFactAtMs));
-        });
+        trace.onInventory = (atMs) => recordCausalMilestone(
+          trace, "inventory-complete", atMs,
+          (observedAtMs) => emit("inventory-complete", 2, observedAtMs),
+        );
         await submit(REACT_URL);
         const selected = await nextFact((fact) => fact.type === "REVISION_SELECTED" && fact.generation === 2);
         progress.revision = selected.revision;
         invariant(selected.revision === qualification.revision, "capacity revision differs from qualification");
-        emit("revision-selected", 2, selected.observedAtMs);
+        openCausalMilestones(trace, emit("revision-selected", 2, selected.observedAtMs));
         await flush();
         invariant(trace.revision === qualification.revision, "capacity revision evidence differs from qualification");
         const terminal = await nextFact((fact) => ["SUCCESS", "FAILURE"].includes(fact.type) && fact.generation === 2);
