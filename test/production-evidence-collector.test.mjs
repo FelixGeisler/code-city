@@ -406,43 +406,116 @@ test("Chrome discovery excludes LOCALAPPDATA and launch uses exactly the approve
   assert(!observed.args.some((argument) => argument.includes("proxy") || argument.includes("swiftshader") || argument === "about:blank"));
 });
 
-test("deployment proof accepts one active exact match and rejects duplicate, pagination, inactive, origin, redirect, cap, and shape mismatches", async () => {
+test("deployment proof accepts deployment 6045120688's latest-first status history and ignores later provider URLs", async () => {
+  const deploymentId = 6045120688;
   const listUrl = `https://api.github.com/repos/FelixGeisler/code-city/deployments?sha=${EVENT}&environment=github-pages&per_page=100&page=1`;
-  const statusUrl = "https://api.github.com/repos/FelixGeisler/code-city/deployments/7/statuses?per_page=100&page=1";
+  const statusUrl = `https://api.github.com/repos/FelixGeisler/code-city/deployments/${deploymentId}/statuses?per_page=100&page=1`;
   const calls = [];
-  const makeFetch = (list, statuses, listHeaders = {}) => async (url) => {
+  const requestItems = [];
+  let time = 0;
+  const list = [{ id: deploymentId, sha: EVENT, environment: "github-pages", task: "deploy", environment_url: "https://evil.invalid/list" }];
+  const observedStatuses = [
+    { state: "success", environment_url: PRODUCTION_ORIGIN },
+    { state: "in_progress", environment_url: "" },
+    { state: "queued", environment_url: "" },
+    { state: "waiting", environment_url: "" },
+  ];
+  const fetchImpl = async (url) => {
     calls.push(url);
-    if (url === listUrl) return response(`${JSON.stringify(list)}\n`, { url, headers: listHeaders });
-    if (url === statusUrl) return response(`${JSON.stringify(statuses)}\n`, { url });
+    if (url === listUrl) return response(`${JSON.stringify(list)}\n`, { url });
+    if (url === statusUrl) return response(`${JSON.stringify(observedStatuses)}\n`, { url });
     throw new Error("provider URL was followed");
   };
-  const requestItems = []; let time = 0;
-  const result = await verifyDeploymentBinding({
-    eventSha: EVENT, origin: PRODUCTION_ORIGIN,
-    fetchImpl: makeFetch([{ id: 7, sha: EVENT, environment: "github-pages", task: "deploy", environment_url: "https://evil.invalid/" }], [
-      { state: "success", environment_url: PRODUCTION_ORIGIN },
-      { state: "queued", environment_url: PRODUCTION_ORIGIN },
-    ]),
-    now: () => ++time, requestItems,
-  });
-  assert.deepEqual(result, { deploymentId: 7, deployedSha: EVENT });
-  assert.deepEqual(calls, [listUrl, statusUrl]);
-  assert.equal(requestItems.length, 2);
 
-  const failures = [
-    [[], [{ state: "success", environment_url: PRODUCTION_ORIGIN }], {}],
-    [[{ id: 7, sha: EVENT, environment: "github-pages", task: "deploy" }, { id: 8, sha: EVENT, environment: "github-pages", task: "deploy" }], [], {}],
-    [[{ id: 7, sha: EVENT, environment: "github-pages", task: "deploy" }], [{ state: "failure", environment_url: PRODUCTION_ORIGIN }], {}],
-    [[{ id: 7, sha: EVENT, environment: "github-pages", task: "deploy" }], [{ state: "success", environment_url: "https://evil.invalid/" }], {}],
-    [[{ id: 7, sha: EVENT, environment: "github-pages", task: "deploy" }], [{ state: "success", environment_url: PRODUCTION_ORIGIN }, { state: "inactive", environment_url: PRODUCTION_ORIGIN }], {}],
-    [[{ id: 7, sha: EVENT, environment: "github-pages", task: "deploy" }], [{ state: "success", environment_url: PRODUCTION_ORIGIN }], { Link: `<${listUrl}&page=2>; rel="next"` }],
-    [[{ id: "7", sha: EVENT, environment: "github-pages", task: "deploy" }], [], {}],
+  assert.deepEqual(await verifyDeploymentBinding({
+    eventSha: EVENT, origin: PRODUCTION_ORIGIN, fetchImpl, now: () => ++time, requestItems,
+  }), { deploymentId, deployedSha: EVENT });
+  assert.deepEqual(calls, [listUrl, statusUrl]);
+  assert.deepEqual(requestItems.map(({ requestedUrl }) => requestedUrl), [listUrl, statusUrl]);
+
+  const laterProviderUrl = "https://evil.invalid/later-status";
+  const ignoredCalls = [];
+  assert.deepEqual(await verifyDeploymentBinding({
+    eventSha: EVENT,
+    origin: PRODUCTION_ORIGIN,
+    fetchImpl: async (url) => {
+      ignoredCalls.push(url);
+      if (url === listUrl) return response(JSON.stringify(list), { url });
+      if (url === statusUrl) return response(JSON.stringify([
+        observedStatuses[0], { state: "queued", environment_url: laterProviderUrl },
+      ]), { url });
+      throw new Error("provider URL was followed");
+    },
+    now: () => ++time,
+    requestItems: [],
+  }), { deploymentId, deployedSha: EVENT });
+  assert.deepEqual(ignoredCalls, [listUrl, statusUrl]);
+});
+
+test("deployment status validation rejects the complete malformed latest-first matrix as artifact-mismatch", async () => {
+  const deploymentId = 6045120688;
+  const listUrl = `https://api.github.com/repos/FelixGeisler/code-city/deployments?sha=${EVENT}&environment=github-pages&per_page=100&page=1`;
+  const statusUrl = `https://api.github.com/repos/FelixGeisler/code-city/deployments/${deploymentId}/statuses?per_page=100&page=1`;
+  const list = [{ id: deploymentId, sha: EVENT, environment: "github-pages", task: "deploy" }];
+  const first = { state: "success", environment_url: PRODUCTION_ORIGIN };
+  const invalidStatuses = [
+    ["invalid JSON", "{"],
+    ["null array", null],
+    ["object instead of array", {}],
+    ["empty array", []],
+    ["malformed first record", [null]],
+    ["missing first state", [{ environment_url: PRODUCTION_ORIGIN }]],
+    ["non-string first state", [{ state: 1, environment_url: PRODUCTION_ORIGIN }]],
+    ["empty first state", [{ state: "", environment_url: PRODUCTION_ORIGIN }]],
+    ["missing first URL", [{ state: "success" }]],
+    ["non-string first URL", [{ state: "success", environment_url: null }]],
+    ["wrong first state", [{ state: "queued", environment_url: PRODUCTION_ORIGIN }]],
+    ["wrong first URL", [{ state: "success", environment_url: "https://evil.invalid/" }]],
+    ["empty first URL", [{ state: "success", environment_url: "" }]],
+    ["malformed later record", [first, null]],
+    ["missing later state", [first, { environment_url: "" }]],
+    ["non-string later state", [first, { state: false, environment_url: "" }]],
+    ["empty later state", [first, { state: "", environment_url: "" }]],
+    ["missing later URL", [first, { state: "queued" }]],
+    ["non-string later URL", [first, { state: "queued", environment_url: 0 }]],
+    ["later inactive with empty URL", [first, { state: "inactive", environment_url: "" }]],
+    ["later inactive with nonempty URL", [first, { state: "inactive", environment_url: PRODUCTION_ORIGIN }]],
   ];
-  for (const [list, statuses, headers] of failures) {
+
+  for (const [name, statuses] of invalidStatuses) {
+    const statusBody = name === "invalid JSON" ? statuses : JSON.stringify(statuses);
     await assert.rejects(verifyDeploymentBinding({
-      eventSha: EVENT, origin: PRODUCTION_ORIGIN, fetchImpl: makeFetch(list, statuses, headers),
-      now: () => ++time, requestItems: [],
-    }), (error) => error.stage === "artifact" && error.reason === "artifact-mismatch");
+      eventSha: EVENT,
+      origin: PRODUCTION_ORIGIN,
+      fetchImpl: async (url) => {
+        if (url === listUrl) return response(JSON.stringify(list), { url });
+        if (url === statusUrl) return response(statusBody, { url });
+        throw new Error("unexpected URL");
+      },
+      now: () => 1,
+      requestItems: [],
+    }), (error) => error.stage === "artifact" && error.reason === "artifact-mismatch", name);
+  }
+
+  const envelopeFailures = [
+    ["no selected deployment", [], {}, {}],
+    ["duplicate selected deployment", [list[0], { ...list[0], id: deploymentId + 1 }], {}, {}],
+    ["malformed deployment record", [{ ...list[0], id: String(deploymentId) }], {}, {}],
+    ["paginated deployment list", list, { Link: `<${listUrl}&page=2>; rel="next"` }, {}],
+    ["paginated status history", list, {}, { Link: `<${statusUrl}&page=2>; rel="next"` }],
+  ];
+  for (const [name, deployments, listHeaders, statusHeaders] of envelopeFailures) {
+    await assert.rejects(verifyDeploymentBinding({
+      eventSha: EVENT,
+      origin: PRODUCTION_ORIGIN,
+      fetchImpl: async (url) => {
+        if (url === listUrl) return response(JSON.stringify(deployments), { url, headers: listHeaders });
+        if (url === statusUrl) return response(JSON.stringify([first]), { url, headers: statusHeaders });
+        throw new Error("unexpected URL");
+      },
+      now: () => 1,
+      requestItems: [],
+    }), (error) => error.stage === "artifact" && error.reason === "artifact-mismatch", name);
   }
 });
 
@@ -640,6 +713,51 @@ test("artifact failure packets preserve each publication, platform, Chrome, and 
       "collector-start", "artifact-verified", "collector-failed",
     ]);
   }
+});
+
+test("invalid deployment status stops collector orchestration with a validated artifact-mismatch packet", async () => {
+  const deploymentId = 6045120688;
+  const listUrl = `https://api.github.com/repos/FelixGeisler/code-city/deployments?sha=${EVENT}&environment=github-pages&per_page=100&page=1`;
+  const statusUrl = `https://api.github.com/repos/FelixGeisler/code-city/deployments/${deploymentId}/statuses?per_page=100&page=1`;
+  let stored;
+  let assetsStarted = false;
+  let browserStarted = false;
+  const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+  delete seams.verifyDeploymentBinding;
+  seams.fetchImpl = async (url) => {
+    if (url === listUrl) return response(JSON.stringify([
+      { id: deploymentId, sha: EVENT, environment: "github-pages", task: "deploy" },
+    ]), { url });
+    if (url === statusUrl) return response(JSON.stringify([
+      { state: "success", environment_url: PRODUCTION_ORIGIN },
+      { state: "waiting" },
+    ]), { url });
+    throw new Error("asset or provider URL was unexpectedly requested");
+  };
+  seams.verifyProductionAssets = async () => { assetsStarted = true; throw new Error("assets must not start"); };
+  seams.createBrowserEvidenceSession = async () => { browserStarted = true; throw new Error("browser must not start"); };
+
+  const result = await collectProductionEvidence({
+    origin: PRODUCTION_ORIGIN,
+    manifestPath: path.resolve("matrix-manifest.json"),
+    output: path.resolve("invalid-deployment-status"),
+  }, seams);
+
+  assert.equal(result.status, "fail");
+  assert.equal(result.reason, "artifact-mismatch");
+  assert.equal(assetsStarted, false);
+  assert.equal(browserStarted, false);
+  const artifact = JSON.parse(new TextDecoder().decode(stored.files.get("artifact.json")));
+  const lifecycle = JSON.parse(new TextDecoder().decode(stored.files.get("lifecycle.json")));
+  const requests = JSON.parse(new TextDecoder().decode(stored.files.get("requests.json")));
+  assert.equal(artifact.status, "fail");
+  assert.equal(artifact.reason, "artifact-mismatch");
+  assert.equal(artifact.data.deploymentId, deploymentId);
+  assert.equal(artifact.data.deployedSha, EVENT);
+  assert.deepEqual(artifact.data.files, []);
+  assert.deepEqual(lifecycle.data.events.map(({ event }) => event), ["collector-start", "collector-failed"]);
+  assert.deepEqual(requests.data.items.map(({ requestedUrl }) => requestedUrl), [listUrl, statusUrl]);
+  assert(requests.data.items.every(({ stage, applicationCall }) => stage === "deployment" && applicationCall === false));
 });
 
 test("full seam-driven collector maps the exact pass lifecycle, dynamic smoke K, 4,001 boundary, schema, writer, and read-back", async () => {
