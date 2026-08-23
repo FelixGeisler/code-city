@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { readValidatedEvidencePacket } from "./evidence-packet-files.mjs";
 import { createExternalWrapper, validateExternalWrapper } from "./production-evidence-schema.mjs";
 
+const PROJECT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const PARENT_ISSUE_BODY_SHA256 = "f06369b3eef5e62631ee8f61ddfd7679b00a3d2139dd83a2f6472820e62864e6";
 const PACKET_FILES = Object.freeze([
   "artifact.json",
@@ -256,16 +257,29 @@ export async function finalizeProductionEvidence(options, seams = {}) {
   const createWrapper = seams.createExternalWrapper ?? createExternalWrapper;
   const validateWrapper = seams.validateExternalWrapper ?? validateExternalWrapper;
   const suffix = seams.temporarySuffix ?? `${process.pid}.${randomBytes(16).toString("hex")}`;
+  const validationTemporaryRoot = path.resolve(seams.validationTemporaryRoot ?? os.tmpdir());
   invariant(options && typeof options === "object");
   requireResolvedAbsolutePath(options.packet);
+  requireResolvedAbsolutePath(options.metadata);
   requireResolvedAbsolutePath(options.output);
-  invariant(!isSameOrLexicallyBelow(options.packet, options.output));
+  requireResolvedAbsolutePath(PROJECT_ROOT);
+  requireResolvedAbsolutePath(validationTemporaryRoot);
 
+  for (const externalPath of [options.packet, options.metadata, options.output]) {
+    invariant(!isSameOrLexicallyBelow(PROJECT_ROOT, externalPath));
+  }
+  invariant(!isSameOrLexicallyBelow(options.packet, options.output));
+  invariant(!isSameOrLexicallyBelow(PROJECT_ROOT, validationTemporaryRoot));
+  invariant(!isSameOrLexicallyBelow(options.packet, validationTemporaryRoot));
+
+  await requireSafeAbsolutePath(PROJECT_ROOT, true, io);
   await requireSafeAbsolutePath(options.packet, true, io);
+  await requireSafeAbsolutePath(options.metadata, false, io);
   await requireSafeAbsolutePath(options.output, false, io);
+  await requireSafeAbsolutePath(validationTemporaryRoot, true, io);
   await requireAbsent(options.output, io);
   const metadata = await readMetadata(options.metadata, io);
-  const validationDirectory = await io.mkdtemp(path.join(os.tmpdir(), "code-city-evidence-finalize-"));
+  const validationDirectory = await io.mkdtemp(path.join(validationTemporaryRoot, "code-city-evidence-finalize-"));
   let packet;
   let validationFailure;
   try {

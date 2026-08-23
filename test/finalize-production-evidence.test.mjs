@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 
 import {
   finalizeProductionEvidence,
@@ -18,6 +19,8 @@ import { binding, makeEvidencePacket } from "./fixtures/evidence-packet-fixture.
 const execute = promisify(execFile);
 const FILES = ["artifact.json", "smoke.json", "qualification.json", "capacity.json", "requests.json", "lifecycle.json", "index.json"];
 const EVENT = binding.eventSha;
+const PROJECT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const SCRATCH_PREFIX = "code-city-evidence-finalize-";
 
 async function temporary(callback) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "code-city-finalizer-test-"));
@@ -60,6 +63,37 @@ async function snapshot(directory) {
   const result = new Map();
   for (const name of (await fs.readdir(directory)).sort()) result.set(name, await fs.readFile(path.join(directory, name)));
   return result;
+}
+
+async function snapshotTree(directory, current = directory, result = new Map()) {
+  for (const entry of (await fs.readdir(current, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name))) {
+    const target = path.join(current, entry.name);
+    const relative = path.relative(directory, target);
+    if (entry.isDirectory()) {
+      result.set(relative, "directory");
+      await snapshotTree(directory, target, result);
+    } else if (entry.isSymbolicLink()) {
+      result.set(relative, `symlink:${await fs.readlink(target)}`);
+    } else {
+      result.set(relative, new Uint8Array(await fs.readFile(target)));
+    }
+  }
+  return result;
+}
+
+function mutationTrackingIo(mutations) {
+  return {
+    ...fs,
+    async mkdtemp(...args) { mutations.push("mkdtemp"); return fs.mkdtemp(...args); },
+    async writeFile(...args) { mutations.push("writeFile"); return fs.writeFile(...args); },
+    async open(target, flags, ...args) {
+      if (typeof flags === "string" && /[awx+]/u.test(flags)) mutations.push(`open:${flags}`);
+      return fs.open(target, flags, ...args);
+    },
+    async link(...args) { mutations.push("link"); return fs.link(...args); },
+    async unlink(...args) { mutations.push("unlink"); return fs.unlink(...args); },
+    async rm(...args) { mutations.push("rm"); return fs.rm(...args); },
+  };
 }
 
 function alternatePacket() {
@@ -131,6 +165,101 @@ test("finalization copies an exact marker-free packet, uses the validated reader
   assert.deepEqual(Object.keys(wrapper), ["schemaVersion", "artifactId", "artifactUrl", "platformDigest", "packetDigest", "eventSha", "runId", "runAttempt", "retentionDays"]);
   assert.equal(new TextDecoder().decode(bytes), `${JSON.stringify(wrapper)}\n`);
   await assert.rejects(fs.lstat(path.join(root, ".wrapper.json.success.tmp")), { code: "ENOENT" });
+}));
+
+test("fixed module custody rejects repository output, packet, and metadata paths before mutation", async () => temporary(async (root) => {
+  const fixture = await arrange(root);
+  const packetBefore = await snapshotTree(fixture.packetDirectory);
+  const repositoryNamesBefore = (await fs.readdir(PROJECT_ROOT)).sort();
+  const repositoryBytesBefore = await fs.readFile(path.join(PROJECT_ROOT, "package.json"));
+  const fixtureTreeBefore = await snapshotTree(path.join(PROJECT_ROOT, "test", "fixtures"));
+  const nestedRepositoryOutput = path.join(PROJECT_ROOT, "test", "fixtures", "publication-custody", "wrapper.json");
+
+  const cases = [
+    ["repository output", { ...options(fixture), output: PROJECT_ROOT }],
+    ["nested repository output", { ...options(fixture), output: nestedRepositoryOutput }],
+    ["repository packet", { ...options(fixture), packet: PROJECT_ROOT }],
+    ["repository metadata", { ...options(fixture), metadata: path.join(PROJECT_ROOT, "package.json") }],
+  ];
+  for (const [name, unsafe] of cases) {
+    const mutations = [];
+    await assert.rejects(finalizeProductionEvidence(unsafe, {
+      fs: mutationTrackingIo(mutations),
+      temporarySuffix: "repository-custody",
+    }), undefined, name);
+    assert.deepEqual(mutations, [], `${name} reached a mutating operation`);
+    assert.deepEqual(await snapshotTree(fixture.packetDirectory), packetBefore, name);
+  }
+
+  assert.deepEqual((await fs.readdir(PROJECT_ROOT)).sort(), repositoryNamesBefore);
+  assert.deepEqual(await fs.readFile(path.join(PROJECT_ROOT, "package.json")), repositoryBytesBefore);
+  assert.deepEqual(await snapshotTree(path.join(PROJECT_ROOT, "test", "fixtures")), fixtureTreeBefore);
+  await assert.rejects(fs.lstat(nestedRepositoryOutput), { code: "ENOENT" });
+}));
+
+test("validation scratch accepts only a real external root and rejects repository, packet, non-directory, and symlink roots before creation", async () => temporary(async (root) => {
+  const fixture = await arrange(root);
+  const repositoryNamesBefore = (await fs.readdir(PROJECT_ROOT)).sort();
+  const testsBefore = await snapshotTree(path.join(PROJECT_ROOT, "test"));
+  const packetBefore = await snapshotTree(fixture.packetDirectory);
+  const packetAlias = path.join(root, "packet-temp-alias");
+  const repositoryAlias = path.join(root, "repository-temp-alias");
+  await fs.symlink(fixture.packetDirectory, packetAlias, process.platform === "win32" ? "junction" : "dir");
+  await fs.symlink(PROJECT_ROOT, repositoryAlias, process.platform === "win32" ? "junction" : "dir");
+
+  const unsafeRoots = [
+    ["repository root", PROJECT_ROOT],
+    ["repository child", path.join(PROJECT_ROOT, "test")],
+    ["packet root", fixture.packetDirectory],
+    ["packet child", path.join(fixture.packetDirectory, "nested-temp")],
+    ["non-directory", fixture.metadataPath],
+    ["repository symlink alias", repositoryAlias],
+    ["packet symlink alias", packetAlias],
+  ];
+  for (const [name, validationTemporaryRoot] of unsafeRoots) {
+    const mutations = [];
+    await assert.rejects(finalizeProductionEvidence(options(fixture), {
+      fs: mutationTrackingIo(mutations),
+      temporarySuffix: "unsafe-temp-root",
+      validationTemporaryRoot,
+    }), undefined, name);
+    assert.deepEqual(mutations, [], `${name} reached a mutating operation`);
+    assert.deepEqual(await snapshotTree(fixture.packetDirectory), packetBefore, name);
+    await assert.rejects(fs.lstat(fixture.output), { code: "ENOENT" });
+  }
+
+  await assert.rejects(
+    execute(process.execPath, [
+      "tools/finalize-production-evidence.mjs",
+      "--packet", fixture.packetDirectory,
+      "--metadata", fixture.metadataPath,
+      "--output", fixture.output,
+    ], {
+      cwd: PROJECT_ROOT,
+      env: { ...process.env, TMPDIR: PROJECT_ROOT, TMP: PROJECT_ROOT, TEMP: PROJECT_ROOT },
+    }),
+    (error) => error.code === 1 && error.stdout === "" && error.stderr === "Production evidence finalization failed safely.\n",
+  );
+
+  assert.deepEqual((await fs.readdir(PROJECT_ROOT)).sort(), repositoryNamesBefore);
+  assert.deepEqual(await snapshotTree(path.join(PROJECT_ROOT, "test")), testsBefore);
+  assert.deepEqual(await snapshotTree(fixture.packetDirectory), packetBefore);
+  for (const directory of [PROJECT_ROOT, path.join(PROJECT_ROOT, "test"), fixture.packetDirectory]) {
+    assert.deepEqual((await fs.readdir(directory)).filter((name) => name.startsWith(SCRATCH_PREFIX)), []);
+  }
+
+  const productionRoot = path.join(root, "packets", "FelixGeisler--code-city", "issue-496", EVENT, "production");
+  const validationTemporaryRoot = path.join(root, "external-validation-temp");
+  await fs.mkdir(productionRoot, { recursive: true });
+  await fs.mkdir(validationTemporaryRoot);
+  const validFixture = await arrange(productionRoot);
+  await finalizeProductionEvidence(options(validFixture), {
+    temporarySuffix: "external-custody",
+    validationTemporaryRoot,
+  });
+  assert((await fs.lstat(validFixture.output)).isFile());
+  assert.deepEqual(await fs.readdir(validationTemporaryRoot), []);
+  assert.deepEqual((await fs.readdir(validFixture.packetDirectory)).sort(), FILES.slice().sort());
 }));
 
 test("packet-contained outputs and symlink aliases fail before mutation and preserve the exact seven packet files", async () => temporary(async (root) => {
