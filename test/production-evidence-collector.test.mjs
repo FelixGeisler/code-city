@@ -1452,6 +1452,32 @@ test("an unfenced captured session may finish only the active route while termin
   await opened.session.close().catch(() => {});
 });
 
+test("a wrong-route request after valid selection rejects specifically while the terminal cutoff is pending", async () => {
+  const opened = await openTerminalCutoffScenario();
+  beginBrowserRequest(opened.harness, {
+    requestId: "pending-wrong-route", url: revisionUrl("FelixGeisler/code-city"),
+    method: "GET", sessionId: "worker-b",
+  });
+  await assert.rejects(opened.pending, /browser request sequence differs at admission/u);
+  assert.equal(opened.fences.pending.length, 4);
+  assert.deepEqual(opened.requestItems.map(({ stage }) => stage), ["revision"]);
+  await opened.session.close().catch(() => {});
+});
+
+test("a request first observed after all terminal fences rejects at the global cutoff", async () => {
+  const opened = await openTerminalCutoffScenario({ activeComponent: null });
+  opened.fences.release(2);
+  opened.fences.release(3);
+  await new Promise((resolve) => setImmediate(resolve));
+  beginBrowserRequest(opened.harness, {
+    requestId: "post-global-cutoff", url: opened.commit, method: "GET", sessionId: "worker-b",
+  });
+  await assert.rejects(opened.pending, /unexpected browser request/u);
+  assert.equal(opened.fences.pending.length, 4);
+  assert.deepEqual(opened.requestItems.map(({ stage }) => stage), ["revision"]);
+  await opened.session.close().catch(() => {});
+});
+
 test("terminal cutoffs reject duplicate terminals plus fenced, unknown, new, duplicate-GET, wrong-identity, and no-next-route requests", async () => {
   for (const scenario of ["duplicate-terminal", "fenced", "unknown", "new", "duplicate-get", "wrong-identity", "no-next-route"]) {
     const opened = await openTerminalCutoffScenario({
@@ -2621,6 +2647,103 @@ function collectorMatrixSeams({ failStage, reason, progressedQualification = fal
     },
   };
 }
+
+async function collectNativeSmokeBarrierFailurePacket(kind) {
+  let stored;
+  const diagnostic = `private-${kind}-diagnostic-should-not-persist`;
+  const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+  const fallbackBrowserFactory = seams.createBrowserEvidenceSession;
+  seams.createBrowserEvidenceSession = async (args) => {
+    const fences = kind === "processing-barrier" ? controlledWorkerFences() : null;
+    const harness = fakeCdpHarness({
+      workerFenceImpl: kind === "worker-command"
+        ? async () => { throw new Error(diagnostic); }
+        : fences.impl,
+      bodyImpl: kind === "processing-barrier"
+        ? async () => { throw new Error(diagnostic); }
+        : undefined,
+    });
+    const native = await createBrowserEvidenceSession({
+      ...args,
+      launchImpl: async () => ({ child: fakeChromeChild(), websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+      connectImpl: () => harness.cdp,
+    });
+    const fallback = await fallbackBrowserFactory(args);
+    const driveSmoke = async () => {
+      await Promise.resolve();
+      harness.emit("Target.attachedToTarget", {
+        sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" },
+      }, "");
+      await new Promise((resolve) => setImmediate(resolve));
+      const revision = revisionUrl("FelixGeisler/code-city");
+      if (kind === "worker-command") {
+        emitBrowserGet(harness, {
+          requestId: "failed-fence-revision", url: revision, body: JSON.stringify([{ sha: EVENT }]),
+        });
+        await waitForBodyCalls(harness, 1);
+        harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+          type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+        }) });
+      } else {
+        beginBrowserRequest(harness, {
+          requestId: "failed-processing-revision", url: revision, method: "GET",
+        });
+        harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+          type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+        }) });
+        await fences.waitForCount(1);
+        finishBrowserRequest(harness, {
+          requestId: "failed-processing-revision", url: revision, method: "GET",
+          body: JSON.stringify([{ sha: EVENT }]),
+        });
+        await waitForBodyCalls(harness, 1);
+        fences.release(0);
+      }
+    };
+    return Object.freeze({
+      cdpVersion: native.cdpVersion,
+      fatalSignal: native.fatalSignal,
+      snapshot: native.snapshot,
+      async collectSmoke(emit, startedMs) {
+        const pending = native.collectSmoke(emit, startedMs);
+        void driveSmoke();
+        return pending;
+      },
+      clearTrace: native.clearTrace,
+      collectCapacity: fallback.collectCapacity,
+      close: native.close,
+    });
+  };
+
+  const result = await collectProductionEvidence({
+    origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
+    output: path.resolve(`handled-${kind}`),
+  }, seams);
+  return { diagnostic, result, stored };
+}
+
+function assertSchemaValidSmokeBarrierFailure({ diagnostic, result, stored }) {
+  assert.deepEqual([result.status, result.reason], ["fail", "infrastructure-failure"]);
+  const index = JSON.parse(new TextDecoder().decode(stored.files.get("index.json")));
+  const smoke = JSON.parse(new TextDecoder().decode(stored.files.get("smoke.json")));
+  const lifecycle = JSON.parse(new TextDecoder().decode(stored.files.get("lifecycle.json")));
+  assert.deepEqual([index.overallStatus, index.firstFailure], ["fail", "infrastructure-failure"]);
+  assert.deepEqual([smoke.status, smoke.reason], ["fail", "infrastructure-failure"]);
+  assert.deepEqual(lifecycle.data.events.map(({ event }) => event), [
+    "collector-start", "artifact-verified", "smoke-start", "collector-failed",
+  ]);
+  for (const bytes of stored.files.values()) {
+    assert(!new TextDecoder().decode(bytes).includes(diagnostic));
+  }
+}
+
+test("full collector orchestration marks a worker-session fence command failure without raw diagnostics", async () => {
+  assertSchemaValidSmokeBarrierFailure(await collectNativeSmokeBarrierFailurePacket("worker-command"));
+});
+
+test("full collector orchestration marks a processing-barrier failure without raw diagnostics", async () => {
+  assertSchemaValidSmokeBarrierFailure(await collectNativeSmokeBarrierFailurePacket("processing-barrier"));
+});
 
 test("full collector orchestration emits a schema-valid packet when lifecycle facts precede cross-session completion", async () => {
   let stored;
