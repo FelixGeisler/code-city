@@ -204,7 +204,7 @@ test("the development command configuration starts at the public base and shuts 
   assert.equal(server.httpServer?.listening, false);
 });
 
-test("commands and CI preserve the canonical package audit sequence without deployment", async () => {
+test("commands preserve the canonical package audit sequence and CI separates review from publication", async () => {
   const packageManifest = await readJson("package.json");
   assert.deepEqual(packageManifest.scripts, {
     dev: "vite",
@@ -221,15 +221,19 @@ test("commands and CI preserve the canonical package audit sequence without depl
   });
 
   const ci = await readText(".github/workflows/ci.yml");
+  const publish = await readText(".github/workflows/publish.yml");
   assert.match(ci, /pull_request:/);
-  assert.match(ci, /push:\s*\n\s*branches: \[main\]/);
-  assert.match(ci, /permissions:\s*\n\s*contents: read/);
-  const install = ci.indexOf("npm ci --ignore-scripts");
-  const closure = ci.indexOf("npm ls --all");
-  const audit = ci.indexOf("npm audit --audit-level=high");
-  const verify = ci.indexOf("npm run verify");
-  assert(install >= 0 && install < closure && closure < audit && audit < verify);
-  assert.doesNotMatch(ci, /\bv2\b|upload-artifact|deploy-pages|configure-pages|environment:|pages:\s*write|id-token:\s*write|contents:\s*write/i);
+  assert.doesNotMatch(ci, /push:/);
+  assert.match(publish, /push:\s*\n\s*branches: \[main\]/);
+  assert.doesNotMatch(publish, /pull_request:/);
+  for (const workflow of [ci, publish]) {
+    const install = workflow.indexOf("npm ci --ignore-scripts");
+    const closure = workflow.indexOf("npm ls --all");
+    const audit = workflow.indexOf("npm audit --audit-level=high");
+    const verify = workflow.indexOf("npm run verify");
+    assert(install >= 0 && install < closure && closure < audit && audit < verify);
+  }
+  assert.doesNotMatch(ci, /upload-artifact|deploy-pages|configure-pages|environment:|pages:\s*write|id-token:\s*write|contents:\s*write/i);
 });
 
 test("README and agent guidance describe the current product and supported commands", async () => {

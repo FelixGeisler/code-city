@@ -35,8 +35,26 @@ or exact `float32` coordinates
 |Production artifact drift
 |A rebuild, stale asset, mutable dependency, or permissive browser policy can
 make deployed bytes differ from reviewed bytes
-|Build once, deploy the verified artifact, check its manifest and browser
-policy, and compare production bytes
+|Build once in the protected-main publication run, deploy that verified artifact,
+and stop when production bytes, media types, policy, or deployment identity differ
+
+|Anonymous production-provider limits
+|The same-run qualification and 4,001-request capacity journey can be throttled,
+blocked by CORS, or invalidated by provider tree and content drift
+|Preserve a schema-valid handled-failure packet, fail publication evidence, and
+require explicit disposition; never retry, authenticate, or substitute a provider
+
+|Evidence privacy or integrity failure
+|A malformed, unsealed, substituted, or over-disclosed packet could create false
+release confidence or persist sensitive diagnostics
+|Upload only the seven allow-listed validated files. Delete output and upload
+nothing after privacy, schema, path-safety, or binding failure
+
+|Evidence retention and external wrapper custody
+|The Actions artifact expires after 90 days and the external wrapper is not stored
+with the sealed packet
+|Authenticate and download the exact artifact promptly, finalize it offline with
+no-clobber publication, record its digest, and keep acceptance explicit
 |===
 
 No architecture-specific technical debt is currently accepted. Temporary work

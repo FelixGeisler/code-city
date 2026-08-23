@@ -6,6 +6,10 @@ image::deployment.svg[GitHub Pages and browser deployment]
 |===
 |Node |Content
 
+|GitHub Actions publication run
+|Protected-main verification, immutable artifacts, Pages deployment, eligibility,
+and production evidence
+
 |GitHub Pages
 |One reviewed static application artifact
 
@@ -16,20 +20,65 @@ image::deployment.svg[GitHub Pages and browser deployment]
 |GitHub access, admission, parsing, metrics, and city construction
 
 |Public GitHub
-|Default-branch head identity, immutable tree, and source content
+|Default-branch head identity, immutable tree, source content, deployment identity,
+and the open production-acceptance gate
 |===
 
-== Artifact path
+== Publication path
 
-Build the application once for one reviewed protected-`main` commit. Verification
-and deployment consume the same immutable artifact; deployment does not rebuild
-it. A manifest covers every production HTML, CSS, JavaScript, worker, WASM, and
-other runtime asset with its path, length, media type, and SHA-256 digest.
-Production contains no source map, test, documentation, or stale legacy asset.
+Pull requests have one `verify` check and cannot publish. A push to protected `main`
+runs the separate publication workflow. Its `verify` job checks out the event commit
+without persisted credentials, installs the pinned closure, audits it, and runs the
+complete verification command. The canonical package produced by that command is
+the run's only publication build.
 
-Only protected `main` may publish the production Pages environment. The final
-application replaces legacy documentation; documentation is not co-hosted with
-the product.
+After verification, the job creates a canonical publication record bound to the
+repository, push event, event commit, run, run attempt, and package-manifest digest.
+It uploads `dist/` as the Pages artifact and uploads the manifest and publication
+record as the fixed internal evidence artifact. Deployment consumes the Pages
+artifact without checkout, configuration, or rebuild and targets the protected
+`github-pages` environment.
+
+The eligibility job reads issue 460. An open issue continues to production evidence;
+a closed issue ends publication without evidence; an unavailable or unexpected state
+fails the run. No workflow dispatch or alternate publication trigger exists.
+
+== Production evidence
+
+The evidence job downloads only the fixed internal artifact from its own run and
+checks the push, main ref, event commit, checkout, manifest, publication record,
+repository, run, and attempt bindings before collection. The collector process has
+a minimal environment without a GitHub token. It independently checks the active
+Pages deployment, compares production bytes and policy with the manifest, runs the
+ordinary hosted product in a fresh Chrome profile, and records the accepted smoke,
+qualification, capacity, request, and lifecycle facts.
+
+Only a validated marker permits upload. The marker itself is excluded; the seven
+canonical JSON files are retained for 90 days in the single artifact named from the
+event commit and run attempt. Handled product or provider failure remains a failed
+job after preserving its validated packet. Privacy, schema, or unsafe-storage failure
+deletes the output and creates no evidence artifact. The job summary records the
+Actions artifact ID and URL, platform digest, packet digest, event commit, run,
+attempt, and retention binding for authenticated finalization.
+
+== Local finalization
+
+A coordinator authenticates the Actions artifact and job log, downloads the packet
+to a marker-free `sealed/` directory outside the repository, and writes only the
+eight authenticated fields to sibling `artifact-metadata.json`. Finalization is
+then local and offline:
+
+----
+node tools/finalize-production-evidence.mjs --packet <sealed-dir> --metadata <metadata-json> --output <production-dir>/wrapper.json
+----
+
+The finalizer copies only the seven regular packet files to an invocation-owned
+validation directory, adds the expected digest marker there, and uses the packet
+reader and schema validator to recompute all bindings. It creates and validates the
+canonical external wrapper, writes and fsyncs an exclusively created same-parent
+temporary file, rereads it, and commits it with a hard link. It never renames or
+replaces an output. A raced or pre-existing output therefore remains unchanged.
+The downloaded packet is never modified.
 
 == Browser policy
 
