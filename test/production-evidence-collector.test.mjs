@@ -1156,6 +1156,31 @@ function finishBrowserRequest(harness, {
   harness.emit("Network.loadingFinished", { requestId, encodedDataLength: length }, sessionId);
 }
 
+function emitBrowserCompletionPart(harness, {
+  requestId, url, method, part, body = "", status = method === "OPTIONS" ? 204 : 200,
+  responseHeaders = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" },
+  sessionId = "worker-session",
+}) {
+  if (method === "GET") harness.bodies.set(requestId, body);
+  if (part === "extra") {
+    harness.emit("Network.requestWillBeSentExtraInfo", { requestId, headers: {}, associatedCookies: [] }, sessionId);
+  } else if (part === "response") {
+    harness.emit("Network.responseReceived", { requestId, response: {
+      url, status, headers: responseHeaders, fromDiskCache: false, fromServiceWorker: false,
+    } }, sessionId);
+  } else {
+    const length = method === "GET" ? new TextEncoder().encode(body).byteLength : 0;
+    if (length > 0) harness.emit("Network.dataReceived", { requestId, dataLength: length, encodedDataLength: length }, sessionId);
+    harness.emit("Network.loadingFinished", { requestId, encodedDataLength: length }, sessionId);
+  }
+}
+
+const COMPLETION_PART_PERMUTATIONS = [
+  ["finished", "extra", "response"], ["finished", "response", "extra"],
+  ["extra", "finished", "response"], ["extra", "response", "finished"],
+  ["response", "finished", "extra"], ["response", "extra", "finished"],
+];
+
 async function waitForBodyCalls(harness, expected) {
   for (let attempts = 0; harness.bodyCalls < expected && attempts < 30; attempts += 1) {
     await new Promise((resolve) => setImmediate(resolve));
@@ -1246,6 +1271,81 @@ test("revision, commit, and tree correlate zero or one preflight in either CDP r
       await assert.rejects(pending, /browser exception/u);
       await opened.session.close().catch(() => {});
     }
+  }
+});
+
+test("GET and OPTIONS validation accepts every finished, ExtraInfo, and response arrival permutation exactly once", async () => {
+  const url = revisionUrl("FelixGeisler/code-city");
+  const body = JSON.stringify([{ sha: EVENT }]);
+  for (const optionsOrder of COMPLETION_PART_PERMUTATIONS) {
+    for (const getOrder of COMPLETION_PART_PERMUTATIONS) {
+      const harness = fakeCdpHarness();
+      const permuted = await openFakeBrowser(harness);
+      const permutedPending = permuted.session.collectSmoke(() => ({ atMs: 1 }), 0);
+      await Promise.resolve();
+      harness.emit("Network.requestWillBeSent", {
+        requestId: "permuted-get", request: { url, method: "GET", headers: {} },
+      }, "worker-session");
+      harness.emit("Network.requestWillBeSent", {
+        requestId: "permuted-options", request: { url, method: "OPTIONS", headers: {} },
+      }, "worker-session");
+      for (const part of optionsOrder) emitBrowserCompletionPart(harness, {
+        requestId: "permuted-options", url, method: "OPTIONS", part,
+      });
+      for (const part of getOrder) emitBrowserCompletionPart(harness, {
+        requestId: "permuted-get", url, method: "GET", part, body,
+      });
+      await waitForBodyCalls(harness, 1);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(harness.bodyCalls, 1, `${optionsOrder}/${getOrder}: GET body read once`);
+      assert.deepEqual(permuted.requestItems.map(({ method }) => method), ["OPTIONS", "GET"], `${optionsOrder}/${getOrder}`);
+      harness.emit("Runtime.exceptionThrown", {});
+      await assert.rejects(permutedPending, /browser exception/u);
+      await permuted.session.close().catch(() => {});
+    }
+  }
+});
+
+test("the second network validation completes a paired exchange without double completion", async () => {
+  const url = revisionUrl("FelixGeisler/code-city");
+  const body = JSON.stringify([{ sha: EVENT }]);
+  const scenarios = [
+    { name: "OPTIONS response second", second: "OPTIONS", delayed: "response" },
+    { name: "OPTIONS ExtraInfo second", second: "OPTIONS", delayed: "extra" },
+    { name: "GET response second", second: "GET", delayed: "response" },
+    { name: "GET ExtraInfo second", second: "GET", delayed: "extra" },
+    { name: "GET finished second", second: "GET", delayed: "finished" },
+  ];
+  for (const scenario of scenarios) {
+    const opened = await openFakeBrowser();
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    await Promise.resolve();
+    for (const method of ["GET", "OPTIONS"]) opened.harness.emit("Network.requestWillBeSent", {
+      requestId: `second-${method}`, request: { url, method, headers: {} },
+    }, "worker-session");
+    const emit = (method, part) => emitBrowserCompletionPart(opened.harness, {
+      requestId: `second-${method}`, url, method, part, body: method === "GET" ? body : "",
+    });
+    if (scenario.second === "OPTIONS") {
+      for (const part of ["finished", "extra", "response"].filter((part) => part !== scenario.delayed)) emit("OPTIONS", part);
+      for (const part of ["extra", "response", "finished"]) emit("GET", part);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(opened.harness.bodyCalls, 0, scenario.name);
+      emit("OPTIONS", scenario.delayed);
+    } else {
+      for (const part of ["extra", "response", "finished"]) emit("OPTIONS", part);
+      for (const part of ["finished", "extra", "response"].filter((part) => part !== scenario.delayed)) emit("GET", part);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(opened.harness.bodyCalls, 0, scenario.name);
+      emit("GET", scenario.delayed);
+    }
+    await waitForBodyCalls(opened.harness, 1);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(opened.harness.bodyCalls, 1, scenario.name);
+    assert.deepEqual(opened.requestItems.map(({ method }) => method), ["OPTIONS", "GET"], scenario.name);
+    opened.harness.emit("Runtime.exceptionThrown", {});
+    await assert.rejects(pending, /browser exception/u);
+    await opened.session.close().catch(() => {});
   }
 });
 
@@ -1516,10 +1616,16 @@ test("preflight admission rejects every mismatched, duplicate, late, failed, inc
       harness.emit("Network.requestWillBeSent", { requestId: "split", request: { url: revision, method: "OPTIONS", headers: {} } }, "worker-a");
       harness.emit("Network.requestWillBeSentExtraInfo", { requestId: "split", headers: {}, associatedCookies: [] }, "worker-b");
       finishBrowserRequest(harness, { requestId: "split", url: revision, method: "OPTIONS", sessionId: "worker-a" });
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
+      }) });
     }],
     ["missing-options-extra", async ({ harness }) => {
       harness.emit("Network.requestWillBeSent", { requestId: "missing", request: { url: revision, method: "OPTIONS", headers: {} } });
       finishBrowserRequest(harness, { requestId: "missing", url: revision, method: "OPTIONS" });
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
+      }) });
     }],
     ["duplicate-options-extra", async ({ harness }) => {
       beginBrowserRequest(harness, { requestId: "duplicate", url: revision, method: "OPTIONS" });
@@ -2220,10 +2326,14 @@ test("full collector orchestration completes a schema-valid packet when GET requ
       const revision = revisionUrl("FelixGeisler/code-city");
       beginBrowserRequest(harness, { requestId: "orchestration-get", url: revision, method: "GET" });
       beginBrowserRequest(harness, { requestId: "orchestration-options", url: revision, method: "OPTIONS" });
-      finishBrowserRequest(harness, { requestId: "orchestration-options", url: revision, method: "OPTIONS" });
+      harness.emit("Network.loadingFinished", { requestId: "orchestration-options", encodedDataLength: 0 }, "worker-session");
       finishBrowserRequest(harness, {
         requestId: "orchestration-get", url: revision, method: "GET", body: JSON.stringify([{ sha: EVENT }]),
       });
+      harness.emit("Network.responseReceived", { requestId: "orchestration-options", response: {
+        url: revision, status: 204, headers: { "Access-Control-Allow-Origin": "*" },
+        fromDiskCache: false, fromServiceWorker: false,
+      } }, "worker-session");
       await waitForBodyCalls(harness, 1);
       harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
         type: "REVISION_SELECTED", generation: 1, revision: EVENT,
