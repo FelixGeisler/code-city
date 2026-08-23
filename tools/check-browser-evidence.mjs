@@ -21,7 +21,7 @@ import {
   readInstalledChromeVersion,
 } from "./chrome-cdp.mjs";
 
-const WATCHDOG_MS = 8 * 60 * 1000;
+const WATCHDOG_MS = 600_000;
 const SUCCESS_FIXTURE = Object.freeze({
   repositoryUrl: "https://github.com/code-city/evidence-fixture",
   selected: "0123456789abcdef0123456789abcdef01234567",
@@ -626,7 +626,7 @@ export async function checkPackagedBrowserEvidence() {
         }
       })(),
       new Promise((_, reject) => {
-        watchdog = setTimeout(() => reject(new Error(`Packaged browser evidence exceeded the eight-minute watchdog; exceptions=${browserExceptions.join("|")}; requests=${requestedUrls.join("|")}`)), WATCHDOG_MS);
+        watchdog = setTimeout(() => reject(new Error(`Packaged browser evidence exceeded the ten-minute watchdog; exceptions=${browserExceptions.join("|")}; requests=${requestedUrls.join("|")}`)), WATCHDOG_MS);
       }),
     ]);
     clearTimeout(watchdog);

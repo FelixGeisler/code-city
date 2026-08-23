@@ -236,6 +236,26 @@ test("commands preserve the canonical package audit sequence and CI separates re
   assert.doesNotMatch(ci, /upload-artifact|deploy-pages|configure-pages|environment:|pages:\s*write|id-token:\s*write|contents:\s*write/i);
 });
 
+test("the packaged-Chrome watchdog is the exact ten-minute whole-harness bound", async () => {
+  const browserEvidence = await readText("tools/check-browser-evidence.mjs");
+  assert.match(browserEvidence, /^const WATCHDOG_MS = 600_000;$/m);
+  assert.equal((browserEvidence.match(/Promise\.race\(/g) ?? []).length, 1);
+
+  const navigation = browserEvidence.indexOf("await cdp.send(\"Page.navigate\"");
+  const raceStart = browserEvidence.indexOf("const result = await Promise.race([");
+  const raceEnd = browserEvidence.indexOf("clearTimeout(watchdog);", raceStart);
+  const validation = browserEvidence.indexOf("validateBrowserResult(result, selected);", raceEnd);
+  assert(navigation >= 0 && navigation < raceStart, "the watchdog race must start after the complete harness is launched");
+  assert(raceStart >= 0 && raceEnd > raceStart, "the complete harness result and watchdog must remain in one race");
+  assert(validation > raceEnd, "the raced whole-harness result must still be validated");
+
+  const race = browserEvidence.slice(raceStart, raceEnd);
+  assert.match(race, /document\.querySelector\('#result'\)\?\.textContent \|\| ''/);
+  assert.match(race, /if \(text\) return JSON\.parse\(text\);/);
+  assert.match(race, /Packaged browser evidence exceeded the ten-minute watchdog/);
+  assert.match(race, /watchdog = setTimeout\([\s\S]*, WATCHDOG_MS\);/);
+});
+
 test("README and agent guidance describe the current product and supported commands", async () => {
   const readme = await readText("README.md");
   for (const expected of [
