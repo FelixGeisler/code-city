@@ -14,7 +14,7 @@ producers and consumers drift independently.
 
 === Artifact manifest
 
-The external package manifest is canonical JSON schema version `2` with the
+The external package manifest is canonical JSON schema version `3` with the
 ordered keys `schemaVersion`, `basePath`, `policy`, and `files`.
 
 * `basePath` is `/code-city/`.
@@ -22,6 +22,8 @@ ordered keys `schemaVersion`, `basePath`, `policy`, and `files`.
   allowed connection origins applied by the entry document.
 * `files` lists every production runtime file once, in lexical relative-path
   order, with its media-type essence, byte length, and lowercase SHA-256.
+  The exact media types are `.js` -> `application/javascript`, `.css` ->
+  `text/css`, `.html` -> `text/html`, and `.wasm` -> `application/wasm`.
 * The manifest remains outside the deployed package and covers every deployed
   byte.
 
@@ -65,10 +67,19 @@ repository content. They contain no source bodies or raw diagnostics.
 
 === Versioning
 
-Producers and consumers migrate together. An incompatible field, identity,
+Manifest schema version `2` used `text/javascript` as its sole `.js` media
+type. Protected-main publish run `32630017930` was an unaccepted production
+candidate: every deployed file matched its manifest byte length and SHA-256,
+but exact MIME verification failed because GitHub Pages served the
+`application/javascript` essence. Version `3` therefore changes only the `.js`
+media type while retaining the manifest shape, policy, canonicalization, file
+bytes, lengths, digests, and all other media types.
+
+Producers and consumers migrate together. Schema version `2` and
+`text/javascript` for `.js` are rejected. An incompatible field, identity,
 canonicalization, policy, digest, or ownership change requires architecture
-review and an explicit schema-version change. There is no permissive fallback,
-schema guessing, partial acceptance, or compatibility adapter.
+review and an explicit schema-version change. There is no alias, permissive
+fallback, schema guessing, partial acceptance, or compatibility adapter.
 
 == Consequences
 

@@ -17,7 +17,7 @@ const FILE_KEYS = Object.freeze(["path", "mediaType", "byteLength", "sha256"]);
 const MEDIA_TYPES = new Map([
   [".css", "text/css"],
   [".html", "text/html"],
-  [".js", "text/javascript"],
+  [".js", "application/javascript"],
   [".wasm", "application/wasm"],
 ]);
 const encoder = new TextEncoder();
@@ -145,7 +145,7 @@ export async function createPackageManifest(directory) {
   }
 
   return validatePackageManifest({
-    schemaVersion: 2,
+    schemaVersion: 3,
     basePath: PACKAGE_BASE_PATH,
     policy: {
       contentSecurityPolicy: EXACT_CSP,
@@ -158,7 +158,7 @@ export async function createPackageManifest(directory) {
 
 export function validatePackageManifest(manifest) {
   assertExactDataObject(manifest, MANIFEST_KEYS, "Package manifest");
-  invariant(manifest.schemaVersion === 2, "Unsupported package manifest schema");
+  invariant(manifest.schemaVersion === 3, "Unsupported package manifest schema");
   invariant(manifest.basePath === PACKAGE_BASE_PATH, `Package manifest base must be ${PACKAGE_BASE_PATH}`);
 
   assertExactDataObject(manifest.policy, POLICY_KEYS, "Package manifest policy");

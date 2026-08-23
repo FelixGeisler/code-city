@@ -9,7 +9,7 @@ const encoder = new TextEncoder();
 
 function manifestObject({ fileDigest = "0".repeat(64) } = {}) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     basePath: "/code-city/",
     policy: {
       contentSecurityPolicy: CSP,
@@ -61,7 +61,7 @@ test("publication module exposes only canonical create and byte-validation APIs"
   assert.deepEqual(Object.keys(module), ["createPublicationRecord", "validatePublicationRecord"]);
 });
 
-test("creation derives ordered schema and manifest identity deterministically without aliasing or mutation", () => {
+test("creation derives ordered schema-v1 publication and schema-v3 manifest identity deterministically", () => {
   const manifestBytes = serializePackageManifest(manifestObject());
   const input = canonicalInput();
   const inputBefore = structuredClone(input);
@@ -78,6 +78,8 @@ test("creation derives ordered schema and manifest identity deterministically wi
     manifestSha256: digest(manifestBytes),
   };
 
+  assert.equal(expectedRecord.manifestSha256, "da9f31dcae5fd6acda68233b4d9b34672f6562d499bcea77951fea0eb2f3d400");
+  assert.equal(digest(first), "01d23eb38ee8214e7cde20ab52a15a8398e20856d9bc4abcf62142bc6aebfeed");
   assert(first instanceof Uint8Array);
   assert.equal(Buffer.isBuffer(first), false);
   assert.equal(first.byteOffset, 0);

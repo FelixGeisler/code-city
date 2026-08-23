@@ -66,7 +66,7 @@ function jobSteps(document, job) {
 
 function controlledManifestBytes(fileSha256 = "0".repeat(64)) {
   return serializePackageManifest({
-    schemaVersion: 2,
+    schemaVersion: 3,
     basePath: "/code-city/",
     policy: {
       contentSecurityPolicy: EXACT_CSP,
