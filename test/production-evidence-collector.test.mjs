@@ -1398,12 +1398,12 @@ test("cross-session fences causally order selection, terminal, drain, and detach
     harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
       type: "ATTEMPT_DRAINED", generation: 1,
     }) });
-    harness.emit("Target.detachedFromTarget", { sessionId: "worker-a", targetId: "target-a" }, "");
-    harness.emit("Target.detachedFromTarget", { sessionId: "worker-b", targetId: "target-b" }, "");
     await fences.waitForCount(4);
     if (delayedPart !== "body") emitBrowserCompletionPart(harness, {
       requestId: rawId, url: raw, method: "GET", part: delayedPart, body: "x", sessionId: "worker-b",
     });
+    harness.emit("Target.detachedFromTarget", { sessionId: "worker-a", targetId: "target-a" }, "");
+    harness.emit("Target.detachedFromTarget", { sessionId: "worker-b", targetId: "target-b" }, "");
     fences.release(2);
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(emitted.map(({ event }) => event), ["revision-selected"],
@@ -1469,13 +1469,11 @@ async function openTerminalCutoffScenario({ activeComponent = "options" } = {}) 
   return { ...opened, pending, fences, commit };
 }
 
-test("an unfenced captured session may finish only the active route while terminal, drain, and detach are pending", async () => {
+test("an unfenced captured session may finish only the active route while terminal and drain are pending", async () => {
   const opened = await openTerminalCutoffScenario();
   opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
     type: "ATTEMPT_DRAINED", generation: 1,
   }) });
-  opened.harness.emit("Target.detachedFromTarget", { sessionId: "worker-a", targetId: "target-a" }, "");
-  opened.harness.emit("Target.detachedFromTarget", { sessionId: "worker-b", targetId: "target-b" }, "");
   opened.fences.release(2);
   beginBrowserRequest(opened.harness, {
     requestId: "cutoff-delayed-get", url: opened.commit, method: "GET", sessionId: "worker-b",
@@ -1485,6 +1483,8 @@ test("an unfenced captured session may finish only the active route while termin
     body: JSON.stringify({ sha: EVENT, tree: { sha: ROOT } }), sessionId: "worker-b",
   });
   await waitForBodyCalls(opened.harness, 2);
+  opened.harness.emit("Target.detachedFromTarget", { sessionId: "worker-a", targetId: "target-a" }, "");
+  opened.harness.emit("Target.detachedFromTarget", { sessionId: "worker-b", targetId: "target-b" }, "");
   opened.fences.release(3);
   await assert.rejects(opened.pending, /tree\/request cardinality mismatch/u);
   assert.deepEqual(opened.requestItems.slice(-2).map(({ method, stage }) => [method, stage]), [
@@ -2029,33 +2029,86 @@ test("preflight admission rejects every mismatched, duplicate, late, failed, inc
   }
 });
 
-test("every provider Network event from an unknown session rejects before request, body, or header state", async () => {
-  const methods = [
-    ["Network.requestWillBeSent", (read) => {
-      const request = { method: "GET", headers: {} };
-      Object.defineProperty(request, "url", { enumerable: true, get() { read(); return revisionUrl("FelixGeisler/code-city"); } });
-      return { requestId: "unknown", request };
-    }],
-    ["Network.requestWillBeSentExtraInfo", (read) => {
-      const headers = {};
-      Object.defineProperty(headers, "Authorization", { enumerable: true, get() { read(); return "Bearer private"; } });
-      return { requestId: "unknown", headers, associatedCookies: [] };
-    }],
-    ["Network.responseReceived", () => ({ requestId: "unknown", response: {} })],
-    ["Network.dataReceived", () => ({ requestId: "unknown", dataLength: 1, encodedDataLength: 1 })],
-    ["Network.loadingFinished", () => ({ requestId: "unknown", encodedDataLength: 1 })],
-    ["Network.loadingFailed", () => ({ requestId: "unknown" })],
-  ];
-  for (const [method, params] of methods) {
+const PROVIDER_NETWORK_EVENTS = [
+  "Network.requestWillBeSent",
+  "Network.requestWillBeSentExtraInfo",
+  "Network.responseReceived",
+  "Network.dataReceived",
+  "Network.loadingFinished",
+  "Network.loadingFailed",
+];
+
+function privateNetworkParams(method, onRead, requestId) {
+  const values = method === "Network.requestWillBeSent"
+    ? { requestId, request: { url: revisionUrl("FelixGeisler/code-city"), method: "GET", headers: {} } }
+    : method === "Network.requestWillBeSentExtraInfo"
+      ? { requestId, headers: { Authorization: "Bearer private" }, associatedCookies: [] }
+      : method === "Network.responseReceived"
+        ? { requestId, response: { url: "private-response" } }
+        : method === "Network.dataReceived"
+          ? { requestId, dataLength: 1, encodedDataLength: 1 }
+          : method === "Network.loadingFinished"
+            ? { requestId, encodedDataLength: 1 }
+            : { requestId, errorText: "private-failure" };
+  return new Proxy(values, {
+    get(target, property, receiver) {
+      onRead(property);
+      return Reflect.get(target, property, receiver);
+    },
+  });
+}
+
+test("every provider Network event from an unknown session rejects before reading params or creating state", async () => {
+  for (const method of PROVIDER_NETWORK_EVENTS) {
     const opened = await openFakeBrowser();
     const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
     await Promise.resolve();
-    let privateReads = 0;
-    opened.harness.emit(method, params(() => { privateReads += 1; }), "unknown-session");
+    const privateReads = [];
+    opened.harness.emit(method, privateNetworkParams(method, (property) => privateReads.push(property), "unknown"), "unknown-session");
     await assert.rejects(pending, /unexpected browser network session/u, method);
-    assert.equal(privateReads, 0, method);
+    assert.deepEqual(privateReads, [], method);
     assert.equal(opened.harness.bodyCalls, 0, method);
     assert.deepEqual(opened.requestItems, [], method);
+    await opened.session.close().catch(() => {});
+  }
+});
+
+test("every provider Network event from a detached worker rejects before reading params or changing active evidence", async () => {
+  for (const method of PROVIDER_NETWORK_EVENTS) {
+    const opened = await openFakeBrowser();
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    await new Promise((resolve) => setImmediate(resolve));
+    opened.harness.emit("Target.attachedToTarget", {
+      sessionId: "current-worker", targetInfo: { type: "worker", targetId: "current-target" },
+    }, "page-session");
+    await new Promise((resolve) => setImmediate(resolve));
+    opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+    }) });
+    opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
+    }) });
+    opened.harness.emit("Target.detachedFromTarget", {
+      sessionId: "worker-session", targetId: "worker-target",
+    }, "page-session");
+
+    const activeSetupBefore = opened.harness.calls.filter(({ method: sentMethod, sessionId }) => (
+      sentMethod === "Network.enable" && sessionId === "current-worker"
+    )).length;
+    const privateReads = [];
+    opened.harness.emit(method, privateNetworkParams(method, (property) => privateReads.push(property), "detached"), "worker-session");
+    await assert.rejects(pending, /unexpected browser network session/u, method);
+
+    assert.deepEqual(privateReads, [], method);
+    assert.equal(opened.harness.bodyCalls, 0, method);
+    assert.deepEqual(opened.requestItems, [], method);
+    assert.equal(activeSetupBefore, 1, method);
+    assert.equal(opened.harness.calls.filter(({ method: sentMethod, sessionId }) => (
+      sentMethod === "Network.enable" && sessionId === "current-worker"
+    )).length, activeSetupBefore, method);
+    assert.equal(opened.harness.activity.filter(({ method: eventMethod, sessionId }) => (
+      eventMethod === "Target.detachedFromTarget" && sessionId === "current-worker"
+    )).length, 0, method);
     await opened.session.close().catch(() => {});
   }
 });
@@ -2839,6 +2892,73 @@ test("full collector orchestration marks a processing-barrier failure without ra
   assertSchemaValidSmokeBarrierFailure(await collectNativeSmokeBarrierFailurePacket("processing-barrier"));
 });
 
+test("post-detachment Network rejection produces a schema-valid handled packet without private state", async () => {
+  let stored;
+  const privateReads = [];
+  const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+  const fallbackBrowserFactory = seams.createBrowserEvidenceSession;
+  seams.createBrowserEvidenceSession = async (args) => {
+    const harness = fakeCdpHarness();
+    const native = await createBrowserEvidenceSession({
+      ...args,
+      launchImpl: async () => ({ child: fakeChromeChild(), websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+      connectImpl: () => harness.cdp,
+    });
+    const fallback = await fallbackBrowserFactory(args);
+    const driveSmoke = async () => {
+      await new Promise((resolve) => setImmediate(resolve));
+      harness.emit("Target.attachedToTarget", {
+        sessionId: "current-worker", targetInfo: { type: "worker", targetId: "current-target" },
+      }, "page-session");
+      await new Promise((resolve) => setImmediate(resolve));
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+      }) });
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
+      }) });
+      harness.emit("Target.detachedFromTarget", {
+        sessionId: "worker-session", targetId: "worker-target",
+      }, "page-session");
+      harness.emit("Network.requestWillBeSentExtraInfo", privateNetworkParams(
+        "Network.requestWillBeSentExtraInfo", (property) => privateReads.push(property), "private-detached-id",
+      ), "worker-session");
+    };
+    return Object.freeze({
+      cdpVersion: native.cdpVersion,
+      fatalSignal: native.fatalSignal,
+      snapshot: native.snapshot,
+      async collectSmoke(emit, startedMs) {
+        const pending = native.collectSmoke(emit, startedMs);
+        void driveSmoke();
+        return pending;
+      },
+      clearTrace: native.clearTrace,
+      collectCapacity: fallback.collectCapacity,
+      close: native.close,
+    });
+  };
+
+  const result = await collectProductionEvidence({
+    origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
+    output: path.resolve("detached-network-failure"),
+  }, seams);
+  assert.deepEqual([result.status, result.reason], ["fail", "unexpected-request"]);
+  assert.deepEqual(privateReads, []);
+  const validated = validateEvidencePacket(stored.files, stored.binding);
+  const index = JSON.parse(new TextDecoder().decode(validated.files.get("index.json")));
+  const smoke = JSON.parse(new TextDecoder().decode(validated.files.get("smoke.json")));
+  const requests = JSON.parse(new TextDecoder().decode(validated.files.get("requests.json")));
+  assert.deepEqual([index.overallStatus, index.firstFailure], ["fail", "unexpected-request"]);
+  assert.deepEqual([smoke.status, smoke.reason, smoke.data.providerGetCount], ["fail", "unexpected-request", 0]);
+  assert.deepEqual(requests.data.items, []);
+  for (const bytes of validated.files.values()) {
+    const text = new TextDecoder().decode(bytes);
+    assert(!text.includes("private-detached-id"));
+    assert(!text.includes("Bearer private"));
+  }
+});
+
 test("full collector orchestration ignores a page mirror and emits one worker-owned request sequence", async () => {
   let stored;
   let mirroredPageHeaderReads = 0;
@@ -2901,13 +3021,13 @@ test("full collector orchestration ignores a page mirror and emits one worker-ow
       harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
         type: "ATTEMPT_DRAINED", generation: 1,
       }) });
-      harness.emit("Target.detachedFromTarget", {
-        sessionId: "worker-session", targetId: "worker-target",
-      }, "");
       finishBrowserRequest(harness, {
         requestId: "orchestration-raw", url: raw, method: "GET", body: "x",
       });
       await waitForBodyCalls(harness, 4);
+      harness.emit("Target.detachedFromTarget", {
+        sessionId: "worker-session", targetId: "worker-target",
+      }, "");
     };
     return Object.freeze({
       cdpVersion: native.cdpVersion,

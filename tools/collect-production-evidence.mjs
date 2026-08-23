@@ -1254,7 +1254,8 @@ export async function createBrowserEvidenceSession({
       }
       if (message.method.startsWith("Network.")) {
         if (message.sessionId === pageSessionId) return;
-        if (!workerTargets.has(message.sessionId)) {
+        const targetId = workerTargets.get(message.sessionId);
+        if (!targetId || detachedWorkers.has(targetId)) {
           setFatal(new Error("unexpected browser network session"));
           return;
         }
