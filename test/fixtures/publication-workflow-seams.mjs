@@ -36,6 +36,7 @@ process.on("exit", () => writeFileSync(process.env.TEST_OBSERVER, JSON.stringify
 globalThis.fetch = async (url, options) => {
   observer.fetched = true;
   observer.url = url;
+  observer.options = options;
   observer.redirect = options?.redirect;
   observer.accept = options?.headers?.accept;
   observer.authorization = options?.headers?.authorization;
@@ -65,9 +66,11 @@ globalThis.fetch = async (url, options) => {
     async cancel() { observer.cancelled = true; },
     releaseLock() { observer.released = true; },
   };
+  observer.responseUrl = scenario.kind === "url-error" ? url + "/redirected" : url;
+  observer.responseStatus = scenario.kind === "status-error" ? 404 : 200;
   return {
-    url: scenario.kind === "url-error" ? url + "/redirected" : url,
-    status: scenario.kind === "status-error" ? 404 : 200,
+    url: observer.responseUrl,
+    status: observer.responseStatus,
     body: { getReader: () => reader },
   };
 };`;

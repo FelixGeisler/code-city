@@ -133,6 +133,48 @@ test("finalization copies an exact marker-free packet, uses the validated reader
   await assert.rejects(fs.lstat(path.join(root, ".wrapper.json.success.tmp")), { code: "ENOENT" });
 }));
 
+test("packet-contained outputs and symlink aliases fail before mutation and preserve the exact seven packet files", async () => temporary(async (root) => {
+  const fixture = await arrange(root);
+  const before = await snapshot(fixture.packetDirectory);
+  const beforeRootNames = (await fs.readdir(root)).sort();
+  assert.deepEqual([...before.keys()], FILES.slice().sort());
+
+  for (const [name, output] of [
+    ["packet directory", fixture.packetDirectory],
+    ["packet wrapper", path.join(fixture.packetDirectory, "wrapper.json")],
+    ["nested packet wrapper", path.join(fixture.packetDirectory, "nested", "wrapper.json")],
+  ]) {
+    const mutations = [];
+    const io = { ...fs };
+    for (const operation of ["mkdtemp", "writeFile", "open", "link", "unlink", "rm"]) {
+      io[operation] = async (...args) => {
+        mutations.push(operation);
+        return fs[operation](...args);
+      };
+    }
+    await assert.rejects(finalizeProductionEvidence({ ...options(fixture), output }, { fs: io, temporarySuffix: name.replaceAll(" ", "-") }));
+    assert.deepEqual(mutations, [], `${name} was rejected only after mutation started`);
+    assert.deepEqual(await snapshot(fixture.packetDirectory), before, name);
+    assert.deepEqual((await fs.readdir(fixture.packetDirectory)).sort(), FILES.slice().sort(), name);
+    assert.deepEqual((await fs.readdir(root)).sort(), beforeRootNames, name);
+  }
+
+  const alias = path.join(root, "sealed-alias");
+  await fs.symlink(fixture.packetDirectory, alias, process.platform === "win32" ? "junction" : "dir");
+  const aliasRootNames = (await fs.readdir(root)).sort();
+  for (const unsafe of [
+    { ...options(fixture), output: path.join(alias, "wrapper.json") },
+    { ...options(fixture), packet: alias },
+  ]) {
+    await assert.rejects(finalizeProductionEvidence(unsafe, { temporarySuffix: "alias" }));
+    assert.deepEqual(await snapshot(fixture.packetDirectory), before);
+    assert.deepEqual((await fs.readdir(fixture.packetDirectory)).sort(), FILES.slice().sort());
+    assert.deepEqual((await fs.readdir(root)).sort(), aliasRootNames);
+  }
+  await assert.rejects(fs.lstat(path.join(fixture.packetDirectory, "wrapper.json")), { code: "ENOENT" });
+  await assert.rejects(fs.lstat(path.join(fixture.packetDirectory, "nested")), { code: "ENOENT" });
+}));
+
 test("missing, extra, changed, symlinked, and substituted valid packet files never publish", async () => temporary(async (root) => {
   const variants = ["missing", "extra", "changed", "symlink"];
   for (const variant of variants) {

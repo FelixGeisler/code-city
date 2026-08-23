@@ -95,6 +95,10 @@ jobs:
             authorization: `Bearer ${process.env.GH_TOKEN}`,
             "x-github-api-version": "2022-11-28",
           },
+          credentials: "omit",
+          referrer: "",
+          referrerPolicy: "no-referrer",
+          cache: "no-store",
           redirect: "error",
         });
         const reader = response.body?.getReader();

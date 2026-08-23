@@ -71,6 +71,16 @@ function positiveSafeInteger(value) {
   return Number.isSafeInteger(value) && value > 0;
 }
 
+function requireResolvedAbsolutePath(target) {
+  invariant(typeof target === "string" && target.length > 0 && !target.includes("\0"));
+  invariant(path.isAbsolute(target) && path.resolve(target) === target);
+}
+
+function isSameOrLexicallyBelow(parent, candidate) {
+  const relative = path.relative(parent, candidate);
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
 export function validateArtifactMetadata(value) {
   exactKeys(value, METADATA_KEYS);
   invariant(typeof value.artifactId === "string" && /^[1-9][0-9]{0,19}$/u.test(value.artifactId));
@@ -247,7 +257,11 @@ export async function finalizeProductionEvidence(options, seams = {}) {
   const validateWrapper = seams.validateExternalWrapper ?? validateExternalWrapper;
   const suffix = seams.temporarySuffix ?? `${process.pid}.${randomBytes(16).toString("hex")}`;
   invariant(options && typeof options === "object");
+  requireResolvedAbsolutePath(options.packet);
+  requireResolvedAbsolutePath(options.output);
+  invariant(!isSameOrLexicallyBelow(options.packet, options.output));
 
+  await requireSafeAbsolutePath(options.packet, true, io);
   await requireSafeAbsolutePath(options.output, false, io);
   await requireAbsent(options.output, io);
   const metadata = await readMetadata(options.metadata, io);

@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, readdir, stat } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import yaml from "js-yaml";
+import { serializePackageManifest } from "../tools/package-manifest.mjs";
+import { EXACT_CSP, EXACT_REFERRER_POLICY } from "../tools/package-policy.mjs";
+import { createPublicationRecord } from "../tools/publication-record.mjs";
 import {
   evaluateCondition,
   inlineModule,
@@ -58,6 +62,43 @@ async function parsedWorkflows() {
 
 function jobSteps(document, job) {
   return document.jobs[job].steps;
+}
+
+function controlledManifestBytes(fileSha256 = "0".repeat(64)) {
+  return serializePackageManifest({
+    schemaVersion: 2,
+    basePath: "/code-city/",
+    policy: {
+      contentSecurityPolicy: EXACT_CSP,
+      referrerPolicy: EXACT_REFERRER_POLICY,
+      connectOrigins: ["'self'", "https://api.github.com", "https://raw.githubusercontent.com"],
+    },
+    files: [{ path: "index.html", mediaType: "text/html", byteLength: 0, sha256: fileSha256 }],
+  });
+}
+
+async function prepareBindingFixture(directory) {
+  const tools = path.join(directory, "tools");
+  const publication = path.join(directory, "build", "publication");
+  await mkdir(tools, { recursive: true });
+  await mkdir(publication, { recursive: true });
+  await Promise.all(["package-manifest.mjs", "package-policy.mjs", "publication-record.mjs"].map(
+    (name) => copyFile(path.join("tools", name), path.join(tools, name)),
+  ));
+  execFileSync("git", ["init", "--quiet", directory]);
+  execFileSync("git", ["-C", directory, "config", "user.name", "Code City test"]);
+  execFileSync("git", ["-C", directory, "config", "user.email", "test@code-city.invalid"]);
+  execFileSync("git", ["-C", directory, "add", "tools"]);
+  execFileSync("git", ["-C", directory, "commit", "--quiet", "-m", "binding fixture"]);
+  const head = execFileSync("git", ["-C", directory, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const manifestBytes = controlledManifestBytes();
+  const input = { repository: "FelixGeisler/code-city", eventName: "push", eventSha: head, runId: 123456, runAttempt: 2 };
+  const recordBytes = createPublicationRecord(input, manifestBytes);
+  const manifestPath = path.join(publication, "package-manifest.json");
+  const recordPath = path.join(publication, "publication-record.json");
+  await writeFile(manifestPath, manifestBytes);
+  await writeFile(recordPath, recordBytes);
+  return { head, input, manifestBytes, manifestPath, recordPath };
 }
 
 test("every workflow is parsed and CI has the exact pull-request-only topology", async () => {
@@ -169,6 +210,19 @@ test("parsed publish workflow has exact triggers, jobs, permissions, steps, pins
     with: { name: "code-city-publication-evidence", path: "build/publication" },
   });
   assert.deepEqual({ id: evidence.steps[4].id, continued: evidence.steps[4]["continue-on-error"] }, { id: "collector", continued: true });
+  assert.equal(evidence.steps.indexOf(evidence.steps[3]) < evidence.steps.indexOf(evidence.steps[4]), true, "publication binding precedes collection");
+  assert.equal(evidence.steps[4].run, `env -i HOME="$HOME" PATH="$PATH" RUNNER_OS="$RUNNER_OS" RUNNER_ARCH="$RUNNER_ARCH" \\
+  node tools/collect-production-evidence.mjs \\
+  --origin https://felixgeisler.github.io/code-city/ \\
+  --manifest build/publication/package-manifest.json \\
+  --output build/production-evidence
+`);
+  assert.doesNotMatch(evidence.steps[4].run, /token|secret|github[._-]?token|gh_token/iu);
+  const bindingSource = inlineModule(evidence.steps[3]);
+  assert.doesNotMatch(bindingSource, /api\.github\.com|collectorCommit|deriveCollectorCommit|deployments?\?/u);
+  const collectorSource = await readFile("tools/collect-production-evidence.mjs", "utf8");
+  assert.match(collectorSource, /deriveCollectorCommit/u);
+  assert.match(collectorSource, /repos\/FelixGeisler\/code-city\/deployments\?/u);
   assert.deepEqual({ id: evidence.steps[5].id, if: evidence.steps[5].if }, { id: "packet", if: "always()" });
   assert.equal(evidence.steps[6].uses, ACTIONS.artifactUpload);
   assert.deepEqual({ id: evidence.steps[6].id, if: evidence.steps[6].if }, {
@@ -220,12 +274,81 @@ test("eligibility executes fixed authenticated bounded retrieval for open, close
       assert.equal(result.code, fixture.code, result.stderr);
       assert.equal(result.output, fixture.output);
       assert.equal(result.observer.url, "https://api.github.com/repos/FelixGeisler/code-city/issues/460");
-      assert.equal(result.observer.redirect, "error");
-      assert.equal(result.observer.authorization, "Bearer controlled-token");
-      assert.equal(result.observer.accept, "application/vnd.github+json");
-      assert.equal(result.observer.apiVersion, "2022-11-28");
+      assert.deepEqual(result.observer.options, {
+        headers: {
+          accept: "application/vnd.github+json",
+          authorization: "Bearer controlled-token",
+          "x-github-api-version": "2022-11-28",
+        },
+        credentials: "omit",
+        referrer: "",
+        referrerPolicy: "no-referrer",
+        cache: "no-store",
+        redirect: "error",
+      });
+      assert.equal(result.observer.responseUrl, fixture.scenario.kind === "query-error"
+        ? undefined
+        : fixture.scenario.kind === "url-error"
+          ? "https://api.github.com/repos/FelixGeisler/code-city/issues/460/redirected"
+          : "https://api.github.com/repos/FelixGeisler/code-city/issues/460");
+      assert.equal(result.observer.responseStatus, fixture.scenario.kind === "query-error"
+        ? undefined
+        : fixture.scenario.kind === "status-error" ? 404 : 200);
       assert.equal(result.observer.cancelled, fixture.cancelled);
       assert.equal(result.observer.released, fixture.released ?? true);
+    });
+  }
+});
+
+test("pre-collector binding executes every current-run identity check before collection", async (t) => {
+  const { document } = (await parsedWorkflows())["publish.yml"];
+  const steps = jobSteps(document, "production-evidence");
+  const bindingStep = steps.find((step) => step.name === "Verify workflow-owned publication bindings");
+  const collectorStep = steps.find((step) => step.id === "collector");
+  assert(steps.indexOf(bindingStep) < steps.indexOf(collectorStep));
+  const source = inlineModule(bindingStep);
+
+  async function executeFixture(name, mutate) {
+    const directory = await mkdtemp(path.join(os.tmpdir(), `code-city-binding-${name}-`));
+    const fixture = await prepareBindingFixture(directory);
+    const env = {
+      GITHUB_EVENT_NAME: "push",
+      GITHUB_REF: "refs/heads/main",
+      GITHUB_SHA: fixture.head,
+      GITHUB_REPOSITORY: fixture.input.repository,
+      GITHUB_RUN_ID: String(fixture.input.runId),
+      GITHUB_RUN_ATTEMPT: String(fixture.input.runAttempt),
+    };
+    try {
+      await mutate?.(fixture, env);
+      return await runModule(source, { cwd: directory, env });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+
+  const valid = await executeFixture("valid");
+  assert.equal(valid.code, 0, valid.stderr);
+
+  const mismatches = [
+    { name: "event", mutate: async (_fixture, env) => { env.GITHUB_EVENT_NAME = "pull_request"; } },
+    { name: "ref", mutate: async (_fixture, env) => { env.GITHUB_REF = "refs/heads/release"; } },
+    { name: "SHA", mutate: async (_fixture, env) => { env.GITHUB_SHA = "not-a-sha"; } },
+    { name: "HEAD", mutate: async (fixture, env) => { env.GITHUB_SHA = fixture.head === "f".repeat(40) ? "e".repeat(40) : "f".repeat(40); } },
+    { name: "record", mutate: async (fixture) => {
+      const otherSha = fixture.head === "d".repeat(40) ? "c".repeat(40) : "d".repeat(40);
+      await writeFile(fixture.recordPath, createPublicationRecord({ ...fixture.input, eventSha: otherSha }, fixture.manifestBytes));
+    } },
+    { name: "manifest", mutate: async (fixture) => { await writeFile(fixture.manifestPath, controlledManifestBytes("1".repeat(64))); } },
+    { name: "repo", mutate: async (_fixture, env) => { env.GITHUB_REPOSITORY = "FelixGeisler/other"; } },
+    { name: "run", mutate: async (_fixture, env) => { env.GITHUB_RUN_ID = "123457"; } },
+    { name: "attempt", mutate: async (_fixture, env) => { env.GITHUB_RUN_ATTEMPT = "3"; } },
+  ];
+  for (const mismatch of mismatches) {
+    await t.test(mismatch.name, async () => {
+      const result = await executeFixture(mismatch.name.toLowerCase(), mismatch.mutate);
+      assert.notEqual(result.code, 0, `${mismatch.name} mismatch unexpectedly reached collection`);
+      assert.match(result.stderr, /publication binding mismatch|Package manifest|Publication record/u);
     });
   }
 });
