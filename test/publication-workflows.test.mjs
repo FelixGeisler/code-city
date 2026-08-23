@@ -7,8 +7,8 @@ const VERIFY_COMMANDS = ["npm ci --ignore-scripts", "npm ls --all", "npm audit -
 
 async function workflows() {
   return {
-    ci: await readFile(".github/workflows/ci.yml", "utf8"),
-    publish: await readFile(".github/workflows/publish.yml", "utf8"),
+    ci: (await readFile(".github/workflows/ci.yml", "utf8")).replaceAll("\r\n", "\n"),
+    publish: (await readFile(".github/workflows/publish.yml", "utf8")).replaceAll("\r\n", "\n"),
   };
 }
 
