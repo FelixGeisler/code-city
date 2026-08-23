@@ -722,6 +722,36 @@ async function waitUntil(cdp, sessionId, predicate, fatal) {
   }
 }
 
+function capacityUiExpression(marker) {
+  return `(() => { /* ${marker} */ const hosts = [...document.querySelectorAll('[data-city]')]; return { terminal: document.querySelector('[data-status]')?.textContent ?? null, revision: document.querySelector('[data-commit]')?.textContent ?? null, hostCount: hosts.length, presentedChildCount: hosts.reduce((count, host) => count + host.childElementCount, 0), canvasCount: document.querySelectorAll('[data-city] canvas').length }; })()`;
+}
+
+export function capacityUiHasPresentation(value) {
+  const presentedChildCount = ownData(value, "presentedChildCount");
+  const canvasCount = ownData(value, "canvasCount");
+  if (!Number.isSafeInteger(presentedChildCount) || presentedChildCount < 0
+      || !Number.isSafeInteger(canvasCount) || canvasCount < 0) return null;
+  return presentedChildCount > 0 || canvasCount > 0;
+}
+
+export function capacityUiIsClear(value, revision) {
+  return value !== null && typeof value === "object"
+    && Object.keys(value).sort().join(",") === "canvasCount,hostCount,presentedChildCount,revision,terminal"
+    && ownString(value, "terminal") === "Repository exceeds Code City limits"
+    && ownString(value, "revision") === revision
+    && ownData(value, "hostCount") === 1
+    && capacityUiHasPresentation(value) === false;
+}
+
+async function waitForClearCapacityUi(cdp, sessionId, revision, fatal) {
+  for (;;) {
+    if (fatal.value) throw fatal.value;
+    const value = await evaluate(cdp, sessionId, capacityUiExpression("capacity-pre-detachment-state"));
+    if (capacityUiIsClear(value, revision)) return value;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 export async function createBrowserEvidenceSession({
   discovery,
   chromeVersion,
@@ -1201,23 +1231,26 @@ export async function createBrowserEvidenceSession({
           && trace.gets.slice(3).every((item) => item.stage === "raw"), "capacity request sequence differs");
         Object.assign(progress, {
           revision: trace.revision, rootTree: trace.rootTree, terminal: "Repository exceeds Code City limits",
-          revisionDisplayed: true, cityPresent: false, priorCityRemoved: true, rawRequestCount: 4001, candidates: trace.rawFacts,
+          rawRequestCount: 4001, candidates: trace.rawFacts,
         });
         emit("limit-failure", 2, terminal.observedAtMs);
         const drained = await nextFact((fact) => fact.type === "ATTEMPT_DRAINED" && fact.generation === 2);
-        await waitUntil(cdp, sessionId, `document.querySelector('[data-status]')?.textContent==='Repository exceeds Code City limits'&&document.querySelector('[data-commit]')?.textContent===${JSON.stringify(qualification.revision)}&&document.querySelectorAll('[data-city]').length===0&&document.querySelectorAll('[data-city] canvas').length===0`, fatal);
+        const capacityUi = await waitForClearCapacityUi(cdp, sessionId, qualification.revision, fatal);
+        Object.assign(progress, {
+          revisionDisplayed: ownString(capacityUi, "revision") === qualification.revision,
+          cityPresent: capacityUiHasPresentation(capacityUi),
+          priorCityRemoved: capacityUiHasPresentation(capacityUi) === false,
+        });
         await flush();
         invariant(network.size === 0, "capacity requests are not quiescent");
         progress.noLaterRequest = true;
         emit("request-quiescent", 2);
         invariant(workerTargets.size > 0, "capacity worker target was not observed");
         await waitForWorkerDetachment();
-        const finalUi = await evaluate(cdp, sessionId, `(() => { /* capacity-final-state */ return { terminal: document.querySelector('[data-status]')?.textContent ?? null, revision: document.querySelector('[data-commit]')?.textContent ?? null, cityCount: document.querySelectorAll('[data-city]').length, canvasCount: document.querySelectorAll('[data-city] canvas').length }; })()`);
+        const finalUi = await evaluate(cdp, sessionId, capacityUiExpression("capacity-final-state"));
         await flush();
-        invariant(finalUi && Object.keys(finalUi).sort().join(",") === "canvasCount,cityCount,revision,terminal"
-          && ownString(finalUi, "terminal") === "Repository exceeds Code City limits"
-          && ownString(finalUi, "revision") === qualification.revision
-          && ownData(finalUi, "cityCount") === 0 && ownData(finalUi, "canvasCount") === 0,
+        invariant(capacityUiIsClear(finalUi, qualification.revision)
+          && capacityUiHasPresentation(finalUi) === progress.cityPresent,
         "stale publication after worker detachment");
         invariant(facts.length === 3 && facts[0] === selected && facts[1] === terminal && facts[2] === drained,
           "stale publication worker message after detachment");

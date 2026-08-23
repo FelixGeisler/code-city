@@ -14,6 +14,8 @@ import {
   RESPONSE_CAPS,
   CollectorFailure,
   candidateBlobId,
+  capacityUiHasPresentation,
+  capacityUiIsClear,
   collectProductionEvidence,
   computeGitBlobId,
   computeModelSha256,
@@ -821,8 +823,8 @@ function fakeCdpHarness({ failMethod, evaluateImpl } = {}) {
       if (method === "Runtime.evaluate") {
         const value = evaluateImpl
           ? await evaluateImpl(params.expression)
-          : params.expression.includes("capacity-final-state")
-            ? { terminal: "Repository exceeds Code City limits", revision: REACT, cityCount: 0, canvasCount: 0 }
+          : params.expression.includes("capacity-pre-detachment-state") || params.expression.includes("capacity-final-state")
+            ? { terminal: "Repository exceeds Code City limits", revision: REACT, hostCount: 1, presentedChildCount: 0, canvasCount: 0 }
             : true;
         return { result: { value } };
       }
@@ -859,6 +861,26 @@ async function openFakeBrowser(harness = fakeCdpHarness()) {
   });
   return { child, session, harness };
 }
+
+test("capacity observation accepts the production index's permanent empty city host and rejects a canvas", async () => {
+  const indexHtml = await readFile(new URL("../index.html", import.meta.url), "utf8");
+  const cityHosts = indexHtml.match(/<section\b[^>]*\bdata-city(?:\s|=|>)[^>]*>\s*<\/section>/giu) ?? [];
+  assert.equal(cityHosts.length, 1);
+  assert.equal((indexHtml.match(/\sdata-city(?:\s|=|>)/giu) ?? []).length, 1);
+  assert.doesNotMatch(cityHosts[0], /<canvas\b/iu);
+
+  const emptyHost = {
+    terminal: "Repository exceeds Code City limits", revision: REACT,
+    hostCount: 1, presentedChildCount: 0, canvasCount: 0,
+  };
+  assert.equal(capacityUiHasPresentation(emptyHost), false);
+  assert.equal(capacityUiIsClear(emptyHost, REACT), true);
+  assert.equal(capacityUiIsClear({ ...emptyHost, hostCount: 0 }, REACT), false);
+
+  const canvas = { ...emptyHost, presentedChildCount: 1, canvasCount: 1 };
+  assert.equal(capacityUiHasPresentation(canvas), true);
+  assert.equal(capacityUiIsClear(canvas, REACT), false);
+});
 
 test("signal-terminal Chrome children never wait for or manufacture a second exit during startup, setup, or final close", async () => {
   {
@@ -1344,9 +1366,15 @@ test("a late publication after worker detachment becomes a schema-valid handled 
     runningAggregate: offset + 1, hashMatched: true, contentValid: true,
   }));
   const harness = fakeCdpHarness({
-    evaluateImpl: async (expression) => expression.includes("capacity-final-state")
-      ? { terminal: "Repository exceeds Code City limits", revision: REACT, cityCount: 1, canvasCount: 1 }
-      : true,
+    evaluateImpl: async (expression) => {
+      if (expression.includes("capacity-pre-detachment-state")) {
+        return { terminal: "Repository exceeds Code City limits", revision: REACT, hostCount: 1, presentedChildCount: 0, canvasCount: 0 };
+      }
+      if (expression.includes("capacity-final-state")) {
+        return { terminal: "Repository exceeds Code City limits", revision: REACT, hostCount: 1, presentedChildCount: 1, canvasCount: 1 };
+      }
+      return true;
+    },
   });
   const seams = collectorMatrixSeams({
     packetSink(value) { if (value) stored = value; return stored; },
