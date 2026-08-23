@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawn } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createViteServer } from "vite";
 import {
@@ -16,6 +14,12 @@ import {
 import { canonicalDistDirectory, canonicalManifestPath, projectRoot } from "./build-package.mjs";
 import { createBrowserHarnessSource } from "./browser-evidence-harness.mjs";
 import { SELECTED_ASSETS } from "./check-parser-assets.mjs";
+import {
+  connectCdp,
+  discoverInstalledChrome,
+  launchInstalledChrome,
+  readInstalledChromeVersion,
+} from "./chrome-cdp.mjs";
 
 const WATCHDOG_MS = 8 * 60 * 1000;
 const SUCCESS_FIXTURE = Object.freeze({
@@ -32,111 +36,6 @@ const CSP = "default-src 'none'; base-uri 'none'; connect-src 'self' https://api
 
 function invariant(condition, message) {
   if (!condition) throw new Error(message);
-}
-
-function chromeCandidates() {
-  if (process.platform === "win32") {
-    return [
-      process.env.PROGRAMFILES && path.join(process.env.PROGRAMFILES, "Google", "Chrome", "Application", "chrome.exe"),
-      process.env["PROGRAMFILES(X86)"] && path.join(process.env["PROGRAMFILES(X86)"], "Google", "Chrome", "Application", "chrome.exe"),
-      process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "Google", "Chrome", "Application", "chrome.exe"),
-    ].filter(Boolean);
-  }
-  return ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/opt/google/chrome/chrome"];
-}
-
-async function findChrome() {
-  for (const candidate of chromeCandidates()) {
-    try {
-      const metadata = await import("node:fs/promises").then(({ stat }) => stat(candidate));
-      if (metadata.isFile()) return candidate;
-    } catch {}
-  }
-  throw new Error("Installed Google Chrome was not found; substitution and download are forbidden");
-}
-
-async function executableVersion(executable) {
-  let version;
-  if (process.platform === "win32") {
-    const escaped = executable.replaceAll("'", "''");
-    version = await new Promise((resolve, reject) => execFile(
-      "powershell.exe",
-      ["-NoProfile", "-Command", `(Get-Item -LiteralPath '${escaped}').VersionInfo.ProductVersion`],
-      { encoding: "utf8" },
-      (error, stdout) => error ? reject(error) : resolve(stdout.trim()),
-    ));
-  } else {
-    version = await new Promise((resolve, reject) => execFile(
-      executable,
-      ["--version"],
-      { encoding: "utf8" },
-      (error, stdout) => error ? reject(error) : resolve(stdout.trim().replace(/^Google Chrome\s+/u, "")),
-    ));
-  }
-  invariant(/^\d+\.\d+\.\d+\.\d+$/u.test(version), "Installed Google Chrome version could not be recorded");
-  return version;
-}
-
-async function launchChrome(executable, profile) {
-  const child = spawn(executable, [
-    "--headless=new",
-    "--remote-debugging-port=0",
-    `--user-data-dir=${profile}`,
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-background-networking",
-    "--disable-component-update",
-    "--disable-default-apps",
-    "about:blank",
-  ], { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
-  let stderr = "";
-  const websocketUrl = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Chrome DevTools endpoint did not appear: ${stderr}`)), 30_000);
-    const finish = (error, value) => { clearTimeout(timer); error ? reject(error) : resolve(value); };
-    child.once("error", (error) => finish(error));
-    child.once("exit", (code) => finish(new Error(`Chrome exited before CDP startup (${code}): ${stderr}`)));
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-      const match = /DevTools listening on (ws:\/\/[^\s]+)/u.exec(stderr);
-      if (match) finish(undefined, match[1]);
-    });
-  });
-  return { child, websocketUrl };
-}
-
-function connectCdp(url) {
-  const socket = new WebSocket(url);
-  let nextId = 1;
-  const pending = new Map();
-  const listeners = new Set();
-  const opened = new Promise((resolve, reject) => {
-    socket.addEventListener("open", resolve, { once: true });
-    socket.addEventListener("error", () => reject(new Error("CDP WebSocket failed to open")), { once: true });
-  });
-  socket.addEventListener("message", (event) => {
-    const message = JSON.parse(String(event.data));
-    if (message.id) {
-      const waiter = pending.get(message.id);
-      if (!waiter) return;
-      pending.delete(message.id);
-      if (message.error) waiter.reject(new Error(`CDP ${waiter.method} failed: ${message.error.message}`));
-      else waiter.resolve(message.result);
-      return;
-    }
-    for (const listener of listeners) listener(message);
-  });
-  return {
-    socket,
-    listeners,
-    async send(method, params = {}, sessionId) {
-      await opened;
-      const id = nextId++;
-      const response = new Promise((resolve, reject) => pending.set(id, { method, resolve, reject }));
-      socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
-      return await response;
-    },
-    close() { if (socket.readyState < WebSocket.CLOSING) socket.close(); },
-  };
 }
 
 function exactKeys(value, keys, label) {
@@ -629,8 +528,9 @@ export async function checkPackagedBrowserEvidence() {
   const manifest = await readPackageManifest(canonicalManifestPath);
   const harnessDirectory = path.join(projectRoot, "build", "browser-evidence");
   const profile = await mkdtemp(path.join(os.tmpdir(), "code-city-chrome-"));
-  const executable = await findChrome();
-  const version = await executableVersion(executable);
+  const discovery = await discoverInstalledChrome();
+  const executable = discovery.executable;
+  const version = await readInstalledChromeVersion(discovery);
   let vite;
   let httpServer;
   let chrome;
@@ -688,7 +588,7 @@ export async function checkPackagedBrowserEvidence() {
     invariant(typeof address === "object" && address, "Vite browser evidence server has no address");
     const origin = `http://127.0.0.1:${address.port}`;
 
-    chrome = await launchChrome(executable, profile);
+    chrome = await launchInstalledChrome(discovery, profile);
     cdp = connectCdp(chrome.websocketUrl);
     const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
     const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
