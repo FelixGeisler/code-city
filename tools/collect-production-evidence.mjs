@@ -492,7 +492,7 @@ export async function verifyDeploymentBinding({ eventSha, origin, fetchImpl, now
     const statuses = denseOwnArray(strictJson(statusResult.bytes), { nonempty: true });
     invariant(statuses, "deployment statuses are malformed");
     const values = statuses.map((record) => ({ state: ownString(record, "state"), environmentUrl: ownString(record, "environment_url") }));
-    invariant(values.every((value) => value.state && value.environmentUrl), "deployment status is malformed");
+    invariant(values.every((value) => value.state?.length > 0 && value.environmentUrl !== undefined), "deployment status is malformed");
     invariant(values[0].state === "success" && values[0].environmentUrl === origin
       && values.slice(1).every((value) => value.state !== "inactive"), "deployment is not active at the production origin");
     return Object.freeze({ deploymentId: selected.id, deployedSha: selected.sha });
