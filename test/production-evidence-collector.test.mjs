@@ -997,7 +997,7 @@ function fakeChromeChild() {
   return child;
 }
 
-function fakeCdpHarness({ failMethod, evaluateImpl } = {}) {
+function fakeCdpHarness({ failMethod, evaluateImpl, workerFenceImpl, bodyImpl } = {}) {
   const listeners = new Set();
   const closeListeners = new Set();
   const bodies = new Map();
@@ -1014,19 +1014,22 @@ function fakeCdpHarness({ failMethod, evaluateImpl } = {}) {
       if (method === "Target.createTarget") return { targetId: "page-target" };
       if (method === "Target.attachToTarget") return { sessionId: "page-session" };
       if (method === "Runtime.evaluate") {
-        const value = evaluateImpl
-          ? await evaluateImpl(params.expression)
-          : params.expression.includes("capacity-pre-detachment-state") || params.expression.includes("capacity-final-state")
-            ? { terminal: "Repository exceeds Code City limits", revision: REACT, hostCount: 1, presentedChildCount: 0, canvasCount: 0 }
-            : true;
+        const value = workerFenceImpl && sessionId !== undefined && params.expression === "true" && params.throwOnSideEffect
+          ? await workerFenceImpl({ sessionId, params, callIndex: calls.length - 1 })
+          : evaluateImpl
+            ? await evaluateImpl(params.expression)
+            : params.expression.includes("capacity-pre-detachment-state") || params.expression.includes("capacity-final-state")
+              ? { terminal: "Repository exceeds Code City limits", revision: REACT, hostCount: 1, presentedChildCount: 0, canvasCount: 0 }
+              : true;
         return { result: { value } };
       }
       if (method === "Network.getResponseBody") {
         bodyCalls += 1;
         const stored = bodies.get(params.requestId);
-        return stored && typeof stored === "object" && typeof stored.body === "string"
+        const value = stored && typeof stored === "object" && typeof stored.body === "string"
           ? stored
           : { body: stored ?? "", base64Encoded: false };
+        return bodyImpl ? await bodyImpl({ params, sessionId, value }) : value;
       }
       return {};
     },
@@ -1188,6 +1191,31 @@ async function waitForBodyCalls(harness, expected) {
   assert.equal(harness.bodyCalls, expected);
 }
 
+function deferredValue() {
+  let resolve;
+  const promise = new Promise((release) => { resolve = release; });
+  return { promise, resolve };
+}
+
+function controlledWorkerFences() {
+  const pending = [];
+  return {
+    pending,
+    impl({ sessionId }) {
+      const gate = deferredValue();
+      pending.push({ sessionId, gate });
+      return gate.promise.then(() => true);
+    },
+    async waitForCount(count) {
+      for (let attempts = 0; pending.length < count && attempts < 30; attempts += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      assert.equal(pending.length, count);
+    },
+    release(index) { pending[index].gate.resolve(); },
+  };
+}
+
 function emitBrowserBytes(harness, { requestId, url, bytes }) {
   harness.bodies.set(requestId, { body: Buffer.from(bytes).toString("base64"), base64Encoded: true });
   harness.emit("Network.requestWillBeSent", { requestId, request: { url, method: "GET", headers: {} } });
@@ -1234,6 +1262,313 @@ function browserStageRequest(stage) {
     body: JSON.stringify({ sha: ROOT, truncated: false, tree: [{ path: "src/a.ts", mode: "100644", type: "blob", sha: NATIVE_BLOB }] }),
   };
 }
+
+test("cross-session fences causally order selection, terminal, drain, and detachment across every delayed completion part", async () => {
+  for (const delayedPart of ["response", "extra", "finished", "body"]) {
+    const fences = controlledWorkerFences();
+    const bodyGates = new Map();
+    const harness = fakeCdpHarness({
+      workerFenceImpl: fences.impl,
+      async bodyImpl({ params, value }) {
+        const gate = bodyGates.get(params.requestId);
+        if (gate) await gate.promise;
+        return value;
+      },
+    });
+    const opened = await openFakeBrowser(harness);
+    const emitted = [];
+    const pending = opened.session.collectSmoke((event, generation, atMs) => {
+      const value = { event, generation, atMs: atMs ?? emitted.length + 1 };
+      emitted.push(value);
+      return value;
+    }, 0);
+    await Promise.resolve();
+    for (const suffix of ["a", "b"]) harness.emit("Target.attachedToTarget", {
+      sessionId: `worker-${suffix}`, targetInfo: { type: "worker", targetId: `target-${suffix}` },
+    }, "");
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const revisionId = `causal-revision-${delayedPart}`;
+    const revision = revisionUrl("FelixGeisler/code-city");
+    harness.bodies.set(revisionId, JSON.stringify([{ sha: EVENT }]));
+    harness.emit("Network.requestWillBeSent", {
+      requestId: revisionId, request: { url: revision, method: "GET", headers: {} },
+    }, "worker-a");
+    if (delayedPart === "body") bodyGates.set(revisionId, deferredValue());
+    for (const part of ["extra", "response", "finished"].filter((part) => part !== delayedPart)) {
+      emitBrowserCompletionPart(harness, {
+        requestId: revisionId, url: revision, method: "GET", part,
+        body: JSON.stringify([{ sha: EVENT }]), sessionId: "worker-a",
+      });
+    }
+    if (delayedPart === "body") await waitForBodyCalls(harness, 1);
+    harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+    }) });
+    await fences.waitForCount(2);
+    if (delayedPart !== "body") emitBrowserCompletionPart(harness, {
+      requestId: revisionId, url: revision, method: "GET", part: delayedPart,
+      body: JSON.stringify([{ sha: EVENT }]), sessionId: "worker-a",
+    });
+    fences.release(0);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(emitted, [], `${delayedPart}: selection waited for every session`);
+    fences.release(1);
+    if (delayedPart === "body") {
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(emitted, [], `${delayedPart}: selection waited for body processing`);
+      bodyGates.get(revisionId).resolve();
+    }
+    for (let attempts = 0; emitted.length === 0 && attempts < 30; attempts += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.deepEqual(emitted.map(({ event }) => event), ["revision-selected"], delayedPart);
+    assert(emitted[0].atMs >= opened.requestItems.at(-1).endedMs, delayedPart);
+
+    emitBrowserGet(harness, {
+      requestId: `causal-commit-${delayedPart}`, url: commitUrl("FelixGeisler/code-city", EVENT),
+      body: JSON.stringify({ sha: EVENT, tree: { sha: ROOT } }),
+    });
+    await waitForBodyCalls(harness, 2);
+    emitBrowserGet(harness, {
+      requestId: `causal-tree-${delayedPart}`, url: treeUrl("FelixGeisler/code-city", ROOT),
+      body: JSON.stringify({ sha: ROOT, truncated: false, tree: [
+        { path: "src/a.ts", mode: "100644", type: "blob", sha: NATIVE_BLOB },
+      ] }),
+    });
+    await waitForBodyCalls(harness, 3);
+
+    const rawId = `causal-raw-${delayedPart}`;
+    const raw = rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts");
+    harness.bodies.set(rawId, "x");
+    harness.emit("Network.requestWillBeSent", {
+      requestId: rawId, request: { url: raw, method: "GET", headers: {} },
+    }, "worker-b");
+    if (delayedPart === "body") bodyGates.set(rawId, deferredValue());
+    for (const part of ["extra", "response", "finished"].filter((part) => part !== delayedPart)) {
+      emitBrowserCompletionPart(harness, {
+        requestId: rawId, url: raw, method: "GET", part, body: "x", sessionId: "worker-b",
+      });
+    }
+    if (delayedPart === "body") await waitForBodyCalls(harness, 4);
+    harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
+    }) });
+    harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "ATTEMPT_DRAINED", generation: 1,
+    }) });
+    harness.emit("Target.detachedFromTarget", { sessionId: "worker-a", targetId: "target-a" }, "");
+    harness.emit("Target.detachedFromTarget", { sessionId: "worker-b", targetId: "target-b" }, "");
+    await fences.waitForCount(4);
+    if (delayedPart !== "body") emitBrowserCompletionPart(harness, {
+      requestId: rawId, url: raw, method: "GET", part: delayedPart, body: "x", sessionId: "worker-b",
+    });
+    fences.release(2);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(emitted.map(({ event }) => event), ["revision-selected"],
+      `${delayedPart}: terminal waited for every session`);
+    fences.release(3);
+    if (delayedPart === "body") {
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.deepEqual(emitted.map(({ event }) => event), ["revision-selected"],
+        `${delayedPart}: terminal waited for body processing`);
+      bodyGates.get(rawId).resolve();
+    }
+
+    const smoke = await pending;
+    assert.deepEqual(emitted.map(({ event }) => event), ["revision-selected", "city-published"], delayedPart);
+    assert(emitted[1].atMs >= emitted[0].atMs && emitted[1].atMs >= opened.requestItems.at(-1).endedMs, delayedPart);
+    assert.equal(smoke.providerGetCount, 4, delayedPart);
+    assert.deepEqual(opened.requestItems.map(({ stage }) => stage), ["revision", "commit", "tree", "raw"], delayedPart);
+    assert.equal(new Set(opened.requestItems.map(({ requestedUrl }) => requestedUrl)).size, 4, delayedPart);
+    await opened.session.close();
+  }
+});
+
+async function openTerminalCutoffScenario({ activeComponent = "options" } = {}) {
+  const fences = controlledWorkerFences();
+  const opened = await openFakeBrowser(fakeCdpHarness({ workerFenceImpl: fences.impl }));
+  const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+  await Promise.resolve();
+  for (const suffix of ["a", "b"]) opened.harness.emit("Target.attachedToTarget", {
+    sessionId: `worker-${suffix}`, targetInfo: { type: "worker", targetId: `target-${suffix}` },
+  }, "");
+  await new Promise((resolve) => setImmediate(resolve));
+  emitBrowserGet(opened.harness, {
+    requestId: "cutoff-revision", url: revisionUrl("FelixGeisler/code-city"),
+    body: JSON.stringify([{ sha: EVENT }]),
+  });
+  await waitForBodyCalls(opened.harness, 1);
+  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+  }) });
+  await fences.waitForCount(2);
+  fences.release(0);
+  fences.release(1);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const commit = commitUrl("FelixGeisler/code-city", EVENT);
+  if (activeComponent === "options") {
+    beginBrowserRequest(opened.harness, {
+      requestId: "cutoff-options", url: commit, method: "OPTIONS", sessionId: "worker-b",
+    });
+    finishBrowserRequest(opened.harness, {
+      requestId: "cutoff-options", url: commit, method: "OPTIONS", sessionId: "worker-b",
+    });
+  } else if (activeComponent === "get") {
+    beginBrowserRequest(opened.harness, {
+      requestId: "cutoff-get", url: commit, method: "GET", sessionId: "worker-b",
+    });
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
+  }) });
+  await fences.waitForCount(4);
+  return { ...opened, pending, fences, commit };
+}
+
+test("an unfenced captured session may finish only the active route while terminal, drain, and detach are pending", async () => {
+  const opened = await openTerminalCutoffScenario();
+  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "ATTEMPT_DRAINED", generation: 1,
+  }) });
+  opened.harness.emit("Target.detachedFromTarget", { sessionId: "worker-a", targetId: "target-a" }, "");
+  opened.harness.emit("Target.detachedFromTarget", { sessionId: "worker-b", targetId: "target-b" }, "");
+  opened.fences.release(2);
+  beginBrowserRequest(opened.harness, {
+    requestId: "cutoff-delayed-get", url: opened.commit, method: "GET", sessionId: "worker-b",
+  });
+  finishBrowserRequest(opened.harness, {
+    requestId: "cutoff-delayed-get", url: opened.commit, method: "GET",
+    body: JSON.stringify({ sha: EVENT, tree: { sha: ROOT } }), sessionId: "worker-b",
+  });
+  await waitForBodyCalls(opened.harness, 2);
+  opened.fences.release(3);
+  await assert.rejects(opened.pending, /tree\/request cardinality mismatch/u);
+  assert.deepEqual(opened.requestItems.slice(-2).map(({ method, stage }) => [method, stage]), [
+    ["OPTIONS", "commit"], ["GET", "commit"],
+  ]);
+  await opened.session.close().catch(() => {});
+});
+
+test("a wrong-route request after valid selection rejects specifically while the terminal cutoff is pending", async () => {
+  const opened = await openTerminalCutoffScenario();
+  beginBrowserRequest(opened.harness, {
+    requestId: "pending-wrong-route", url: revisionUrl("FelixGeisler/code-city"),
+    method: "GET", sessionId: "worker-b",
+  });
+  await assert.rejects(opened.pending, /browser request sequence differs at admission/u);
+  assert.equal(opened.fences.pending.length, 4);
+  assert.deepEqual(opened.requestItems.map(({ stage }) => stage), ["revision"]);
+  await opened.session.close().catch(() => {});
+});
+
+test("a request first observed after all terminal fences rejects at the global cutoff", async () => {
+  const opened = await openTerminalCutoffScenario({ activeComponent: null });
+  opened.fences.release(2);
+  opened.fences.release(3);
+  await new Promise((resolve) => setImmediate(resolve));
+  beginBrowserRequest(opened.harness, {
+    requestId: "post-global-cutoff", url: opened.commit, method: "GET", sessionId: "worker-b",
+  });
+  await assert.rejects(opened.pending, /unexpected browser request/u);
+  assert.equal(opened.fences.pending.length, 4);
+  assert.deepEqual(opened.requestItems.map(({ stage }) => stage), ["revision"]);
+  await opened.session.close().catch(() => {});
+});
+
+test("terminal cutoffs reject duplicate terminals plus fenced, unknown, new, duplicate-GET, wrong-identity, and no-next-route requests", async () => {
+  for (const scenario of ["duplicate-terminal", "fenced", "unknown", "new", "duplicate-get", "wrong-identity", "no-next-route"]) {
+    const opened = await openTerminalCutoffScenario({
+      activeComponent: scenario === "no-next-route" ? null : scenario === "duplicate-get" ? "get" : "options",
+    });
+    if (scenario === "duplicate-terminal") {
+      opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
+      }) });
+    } else if (scenario === "fenced") {
+      opened.fences.release(2);
+      await new Promise((resolve) => setImmediate(resolve));
+      beginBrowserRequest(opened.harness, {
+        requestId: scenario, url: opened.commit, method: "GET", sessionId: "worker-a",
+      });
+    } else if (scenario === "unknown") {
+      beginBrowserRequest(opened.harness, {
+        requestId: scenario, url: opened.commit, method: "GET", sessionId: "worker-unknown",
+      });
+    } else if (scenario === "new") {
+      opened.harness.emit("Target.attachedToTarget", {
+        sessionId: "worker-new", targetInfo: { type: "worker", targetId: "target-new" },
+      }, "");
+      beginBrowserRequest(opened.harness, {
+        requestId: scenario, url: opened.commit, method: "GET", sessionId: "worker-new",
+      });
+    } else if (scenario === "duplicate-get") {
+      beginBrowserRequest(opened.harness, {
+        requestId: scenario, url: opened.commit, method: "GET", sessionId: "worker-b",
+      });
+    } else if (scenario === "wrong-identity") {
+      beginBrowserRequest(opened.harness, {
+        requestId: scenario, url: commitUrl("FelixGeisler/code-city", "9".repeat(40)),
+        method: "GET", sessionId: "worker-b",
+      });
+    } else {
+      beginBrowserRequest(opened.harness, {
+        requestId: scenario, url: opened.commit, method: "GET", sessionId: "worker-b",
+      });
+    }
+    await assert.rejects(opened.pending, scenario === "duplicate-terminal" ? /duplicate browser terminal/u
+      : scenario === "duplicate-get" ? /overlap/u
+        : scenario === "wrong-identity" ? /sequence differs/u
+        : scenario === "no-next-route" ? /terminal cutoff/u : /unexpected browser request/u, scenario);
+    await opened.session.close().catch(() => {});
+  }
+});
+
+test("selection and terminal fence failures publish no barriered lifecycle fact", async () => {
+  for (const stage of ["selection", "terminal"]) {
+    let fenceCount = 0;
+    const harness = fakeCdpHarness({
+      workerFenceImpl: async () => {
+        fenceCount += 1;
+        if (stage === "selection" || fenceCount > 1) throw new Error(`controlled ${stage} fence failure`);
+        return true;
+      },
+    });
+    const opened = await openFakeBrowser(harness);
+    const emitted = [];
+    const pending = opened.session.collectSmoke((event, generation, atMs) => {
+      const value = { event, generation, atMs: atMs ?? emitted.length + 1 };
+      emitted.push(value);
+      return value;
+    }, 0);
+    await Promise.resolve();
+    harness.emit("Target.attachedToTarget", {
+      sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" },
+    }, "");
+    await new Promise((resolve) => setImmediate(resolve));
+    emitBrowserGet(harness, {
+      requestId: `${stage}-fence-revision`, url: revisionUrl("FelixGeisler/code-city"),
+      body: JSON.stringify([{ sha: EVENT }]),
+    });
+    await waitForBodyCalls(harness, 1);
+    harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+    }) });
+    if (stage === "terminal") {
+      for (let attempts = 0; emitted.length === 0 && attempts < 30; attempts += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
+      }) });
+    }
+    await assert.rejects(pending, new RegExp(`controlled ${stage} fence failure`, "u"));
+    assert.deepEqual(emitted.map(({ event }) => event), stage === "selection" ? [] : ["revision-selected"]);
+    await opened.session.close().catch(() => {});
+  }
+});
 
 test("revision, commit, and tree correlate zero or one preflight in either CDP request-event order", async () => {
   for (const stage of ["revision", "commit", "tree"]) {
@@ -1992,7 +2327,14 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
   const workerCommands = harness.calls.filter(({ sessionId, method }) => (
     sessionId === "worker-session" && method !== "Network.getResponseBody"
   ));
-  assert.deepEqual(workerCommands.map(({ method }) => method), ["Runtime.enable", "Network.enable", "Runtime.runIfWaitingForDebugger"]);
+  assert.deepEqual(workerCommands.map(({ method }) => method), [
+    "Runtime.enable", "Network.enable", "Runtime.runIfWaitingForDebugger", "Runtime.evaluate", "Runtime.evaluate",
+  ]);
+  for (const command of workerCommands.filter(({ method }) => method === "Runtime.evaluate")) {
+    assert.deepEqual(command.params, {
+      expression: "true", returnByValue: true, throwOnSideEffect: true, silent: true,
+    });
+  }
   await session.close();
 });
 
@@ -2306,7 +2648,104 @@ function collectorMatrixSeams({ failStage, reason, progressedQualification = fal
   };
 }
 
-test("full collector orchestration completes a schema-valid packet when GET request events precede matching preflights", async () => {
+async function collectNativeSmokeBarrierFailurePacket(kind) {
+  let stored;
+  const diagnostic = `private-${kind}-diagnostic-should-not-persist`;
+  const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+  const fallbackBrowserFactory = seams.createBrowserEvidenceSession;
+  seams.createBrowserEvidenceSession = async (args) => {
+    const fences = kind === "processing-barrier" ? controlledWorkerFences() : null;
+    const harness = fakeCdpHarness({
+      workerFenceImpl: kind === "worker-command"
+        ? async () => { throw new Error(diagnostic); }
+        : fences.impl,
+      bodyImpl: kind === "processing-barrier"
+        ? async () => { throw new Error(diagnostic); }
+        : undefined,
+    });
+    const native = await createBrowserEvidenceSession({
+      ...args,
+      launchImpl: async () => ({ child: fakeChromeChild(), websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+      connectImpl: () => harness.cdp,
+    });
+    const fallback = await fallbackBrowserFactory(args);
+    const driveSmoke = async () => {
+      await Promise.resolve();
+      harness.emit("Target.attachedToTarget", {
+        sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" },
+      }, "");
+      await new Promise((resolve) => setImmediate(resolve));
+      const revision = revisionUrl("FelixGeisler/code-city");
+      if (kind === "worker-command") {
+        emitBrowserGet(harness, {
+          requestId: "failed-fence-revision", url: revision, body: JSON.stringify([{ sha: EVENT }]),
+        });
+        await waitForBodyCalls(harness, 1);
+        harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+          type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+        }) });
+      } else {
+        beginBrowserRequest(harness, {
+          requestId: "failed-processing-revision", url: revision, method: "GET",
+        });
+        harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+          type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+        }) });
+        await fences.waitForCount(1);
+        finishBrowserRequest(harness, {
+          requestId: "failed-processing-revision", url: revision, method: "GET",
+          body: JSON.stringify([{ sha: EVENT }]),
+        });
+        await waitForBodyCalls(harness, 1);
+        fences.release(0);
+      }
+    };
+    return Object.freeze({
+      cdpVersion: native.cdpVersion,
+      fatalSignal: native.fatalSignal,
+      snapshot: native.snapshot,
+      async collectSmoke(emit, startedMs) {
+        const pending = native.collectSmoke(emit, startedMs);
+        void driveSmoke();
+        return pending;
+      },
+      clearTrace: native.clearTrace,
+      collectCapacity: fallback.collectCapacity,
+      close: native.close,
+    });
+  };
+
+  const result = await collectProductionEvidence({
+    origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
+    output: path.resolve(`handled-${kind}`),
+  }, seams);
+  return { diagnostic, result, stored };
+}
+
+function assertSchemaValidSmokeBarrierFailure({ diagnostic, result, stored }) {
+  assert.deepEqual([result.status, result.reason], ["fail", "infrastructure-failure"]);
+  const index = JSON.parse(new TextDecoder().decode(stored.files.get("index.json")));
+  const smoke = JSON.parse(new TextDecoder().decode(stored.files.get("smoke.json")));
+  const lifecycle = JSON.parse(new TextDecoder().decode(stored.files.get("lifecycle.json")));
+  assert.deepEqual([index.overallStatus, index.firstFailure], ["fail", "infrastructure-failure"]);
+  assert.deepEqual([smoke.status, smoke.reason], ["fail", "infrastructure-failure"]);
+  assert.deepEqual(lifecycle.data.events.map(({ event }) => event), [
+    "collector-start", "artifact-verified", "smoke-start", "collector-failed",
+  ]);
+  for (const bytes of stored.files.values()) {
+    assert(!new TextDecoder().decode(bytes).includes(diagnostic));
+  }
+}
+
+test("full collector orchestration marks a worker-session fence command failure without raw diagnostics", async () => {
+  assertSchemaValidSmokeBarrierFailure(await collectNativeSmokeBarrierFailurePacket("worker-command"));
+});
+
+test("full collector orchestration marks a processing-barrier failure without raw diagnostics", async () => {
+  assertSchemaValidSmokeBarrierFailure(await collectNativeSmokeBarrierFailurePacket("processing-barrier"));
+});
+
+test("full collector orchestration emits a schema-valid packet when lifecycle facts precede cross-session completion", async () => {
   let stored;
   const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
   const fallbackBrowserFactory = seams.createBrowserEvidenceSession;
@@ -2326,6 +2765,9 @@ test("full collector orchestration completes a schema-valid packet when GET requ
       const revision = revisionUrl("FelixGeisler/code-city");
       beginBrowserRequest(harness, { requestId: "orchestration-get", url: revision, method: "GET" });
       beginBrowserRequest(harness, { requestId: "orchestration-options", url: revision, method: "OPTIONS" });
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+      }) });
       harness.emit("Network.loadingFinished", { requestId: "orchestration-options", encodedDataLength: 0 }, "worker-session");
       finishBrowserRequest(harness, {
         requestId: "orchestration-get", url: revision, method: "GET", body: JSON.stringify([{ sha: EVENT }]),
@@ -2335,9 +2777,6 @@ test("full collector orchestration completes a schema-valid packet when GET requ
         fromDiskCache: false, fromServiceWorker: false,
       } }, "worker-session");
       await waitForBodyCalls(harness, 1);
-      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
-        type: "REVISION_SELECTED", generation: 1, revision: EVENT,
-      }) });
       emitBrowserGet(harness, {
         requestId: "orchestration-commit", url: commitUrl("FelixGeisler/code-city", EVENT),
         body: JSON.stringify({ sha: EVENT, tree: { sha: ROOT } }),
@@ -2350,11 +2789,8 @@ test("full collector orchestration completes a schema-valid packet when GET requ
         ] }),
       });
       await waitForBodyCalls(harness, 3);
-      emitBrowserGet(harness, {
-        requestId: "orchestration-raw", url: rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts"), body: "x",
-      });
-      await waitForBodyCalls(harness, 4);
-      await new Promise((resolve) => setImmediate(resolve));
+      const raw = rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts");
+      beginBrowserRequest(harness, { requestId: "orchestration-raw", url: raw, method: "GET" });
       harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
         type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
       }) });
@@ -2364,6 +2800,10 @@ test("full collector orchestration completes a schema-valid packet when GET requ
       harness.emit("Target.detachedFromTarget", {
         sessionId: "worker-session", targetId: "worker-target",
       }, "");
+      finishBrowserRequest(harness, {
+        requestId: "orchestration-raw", url: raw, method: "GET", body: "x",
+      });
+      await waitForBodyCalls(harness, 4);
     };
     return Object.freeze({
       cdpVersion: native.cdpVersion,
@@ -2395,6 +2835,142 @@ test("full collector orchestration completes a schema-valid packet when GET requ
   assert(smoke.every((item, index) => index === 0 || smoke[index - 1].endedMs <= item.startedMs));
   assert.equal(lifecycle.status, "pass");
   assert.deepEqual(lifecycle.data.events.slice(-2).map(({ event }) => event), ["worker-quiescent", "collector-complete"]);
+});
+
+test("full capacity orchestration flushes delayed tree inventory before a pending limit terminal", async () => {
+  let stored;
+  const treeBodyGate = deferredValue();
+  const fences = controlledWorkerFences();
+  const harness = fakeCdpHarness({
+    workerFenceImpl: fences.impl,
+    async bodyImpl({ params, value }) {
+      if (params.requestId === "causal-capacity-tree") await treeBodyGate.promise;
+      return value;
+    },
+  });
+  const qualificationCandidates = NATIVE_ENTRIES.map((entry, offset) => ({
+    index: offset + 1, path: entry.path, blobId: entry.sha, normalizedBytes: 1,
+    runningAggregate: offset + 1, hashMatched: true, contentValid: true,
+  }));
+  const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+  const fallbackBrowserFactory = seams.createBrowserEvidenceSession;
+  seams.qualifyRepository = async ({ now, requestItems, progress }) => {
+    appendSequence(requestItems, now, "facebook/react", REACT, REACT_ROOT,
+      NATIVE_ENTRIES.map(({ path: sourcePath }) => sourcePath), false);
+    return Object.assign(progress, {
+      repositoryUrl: "https://github.com/facebook/react", revision: REACT, rootTree: REACT_ROOT,
+      treeEntries: NATIVE_ENTRIES.length, truncated: false, candidates: qualificationCandidates,
+    });
+  };
+  seams.createBrowserEvidenceSession = async (args) => {
+    const native = await createBrowserEvidenceSession({
+      ...args,
+      launchImpl: async () => ({ child: fakeChromeChild(), websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+      connectImpl: () => harness.cdp,
+    });
+    const fallback = await fallbackBrowserFactory(args);
+    const driveCapacity = async () => {
+      await Promise.resolve();
+      harness.emit("Target.attachedToTarget", {
+        sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" },
+      }, "");
+      await new Promise((resolve) => setImmediate(resolve));
+      emitBrowserGet(harness, {
+        requestId: "causal-capacity-revision", url: revisionUrl("facebook/react"),
+        body: JSON.stringify([{ sha: REACT }]),
+      });
+      await waitForBodyCalls(harness, 1);
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "REVISION_SELECTED", generation: 2, revision: REACT,
+      }) });
+      await fences.waitForCount(1);
+      fences.release(0);
+      await new Promise((resolve) => setImmediate(resolve));
+      emitBrowserGet(harness, {
+        requestId: "causal-capacity-commit", url: commitUrl("facebook/react", REACT),
+        body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
+      });
+      await waitForBodyCalls(harness, 2);
+      emitBrowserGet(harness, {
+        requestId: "causal-capacity-tree", url: treeUrl("facebook/react", REACT_ROOT),
+        body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
+      });
+      await waitForBodyCalls(harness, 3);
+      for (let index = 0; index < NATIVE_ENTRIES.length; index += 1) {
+        emitBrowserGet(harness, {
+          requestId: `causal-capacity-raw-${index + 1}`,
+          url: rawUrl("facebook/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
+        });
+      }
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "FAILURE", generation: 2, revision: REACT, category: "Repository exceeds Code City limits",
+      }) });
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "ATTEMPT_DRAINED", generation: 2,
+      }) });
+      harness.emit("Target.detachedFromTarget", {
+        sessionId: "worker-session", targetId: "worker-target",
+      }, "");
+      await fences.waitForCount(2);
+      fences.release(1);
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(stored, undefined, "terminal did not overtake delayed tree body processing");
+      treeBodyGate.resolve();
+    };
+    return Object.freeze({
+      cdpVersion: native.cdpVersion,
+      fatalSignal: native.fatalSignal,
+      snapshot: native.snapshot,
+      collectSmoke: fallback.collectSmoke,
+      clearTrace: native.clearTrace,
+      async collectCapacity(qualification, emit, startedMs) {
+        const pending = native.collectCapacity(qualification, emit, startedMs);
+        void driveCapacity();
+        return pending;
+      },
+      close: native.close,
+    });
+  };
+
+  const collection = collectProductionEvidence({
+    origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
+    output: path.resolve("causal-capacity-pass"),
+  }, seams);
+  let hangTimer;
+  let result;
+  try {
+    result = await Promise.race([
+      collection,
+      new Promise((_, reject) => {
+        hangTimer = setTimeout(() => reject(new Error("causal capacity orchestration hung")), 5000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(hangTimer);
+  }
+  assert.deepEqual([result.status, result.reason], ["pass", "none"]);
+  const validated = validateEvidencePacket(stored.files, stored.binding);
+  const lifecycle = JSON.parse(new TextDecoder().decode(validated.files.get("lifecycle.json")));
+  const requests = JSON.parse(new TextDecoder().decode(validated.files.get("requests.json")));
+  const capacityEvents = lifecycle.data.events.filter(({ generation }) => generation === 2);
+  assert.deepEqual(capacityEvents.map(({ event }) => event), [
+    "capacity-start", "revision-selected", "inventory-complete", "limit-failure",
+    "request-quiescent", "worker-quiescent",
+  ]);
+  for (const event of ["revision-selected", "inventory-complete", "limit-failure"]) {
+    assert.equal(capacityEvents.filter((item) => item.event === event).length, 1, event);
+  }
+  const revision = capacityEvents.find(({ event }) => event === "revision-selected");
+  const inventory = capacityEvents.find(({ event }) => event === "inventory-complete");
+  const limit = capacityEvents.find(({ event }) => event === "limit-failure");
+  const applicationRequests = requests.data.items.filter(({ applicationCall, requestedUrl }) => (
+    applicationCall && requestedUrl.includes("/facebook/react/")
+  ));
+  const tree = applicationRequests.find(({ stage }) => stage === "tree");
+  assert.equal(inventory.atMs, Math.max(tree.endedMs, revision.atMs));
+  assert(limit.atMs >= inventory.atMs);
+  assert(limit.atMs >= Math.max(...applicationRequests.map(({ endedMs }) => endedMs)));
+  assert.equal(lifecycle.status, "pass");
 });
 
 async function collectHandledMatrix(stage, reason) {

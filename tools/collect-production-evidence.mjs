@@ -813,6 +813,7 @@ export async function createBrowserEvidenceSession({
     const bindingName = "__codeCityCollectorEvidence";
     const facts = [];
     const factWaiters = [];
+    const factReceiptTimes = new WeakMap();
     const detachWaiters = [];
     const fatal = { value: null };
     const fatalController = new AbortController();
@@ -821,11 +822,13 @@ export async function createBrowserEvidenceSession({
     const ignoredRequestIds = new Set();
     const completedRequestIds = new Set();
     const workerTargets = new Map();
+    const workerReady = new Map();
     const detachedWorkers = new Set();
     const allowedAssets = new Set(manifest.files.map((file) => `${origin}${encodePath(file.path)}`));
     allowedAssets.add(origin);
     let mode = null;
     let processing = Promise.resolve();
+    let lifecycleProcessing = Promise.resolve();
     let networkEventOrder = 0;
     let closePromise;
 
@@ -871,19 +874,13 @@ export async function createBrowserEvidenceSession({
       }
       return null;
     }
-    function publishFact(fact) {
-      fact.observedAtMs = now();
-      if (mode && fact.generation === mode.generation && fact.type === "ATTEMPT_DRAINED" && !mode.firstTerminal) {
-        setFatal(new Error("attempt drained before required terminal"));
-        return;
-      }
-      if (mode && fact.generation === mode.generation && ["SUCCESS", "FAILURE"].includes(fact.type)) {
-        if (mode.firstTerminal) { setFatal(new Error("duplicate browser terminal")); return; }
-        mode.firstTerminal = fact;
-        mode.requestsClosed = true;
-        if (network.size !== 0) setFatal(new Error("terminal preceded request completion"));
-        else if (mode.activeExchange !== null) setFatal(new Error("browser request sequence ended before logical exchange completion"));
-      }
+    function publishFact(fact, ...causalTimes) {
+      const current = mode && fact.generation === mode.generation ? mode : null;
+      fact.observedAtMs = Math.max(
+        factReceiptTimes.get(fact) ?? now(), current?.lastPublishedFactAtMs ?? 0,
+        current?.lastPublishedLifecycleAtMs ?? 0, ...causalTimes,
+      );
+      if (current) current.lastPublishedFactAtMs = fact.observedAtMs;
       facts.push(fact);
       for (const waiter of [...factWaiters]) {
         if (waiter.predicate(fact)) {
@@ -907,6 +904,7 @@ export async function createBrowserEvidenceSession({
       ignoredRequestIds.clear();
       completedRequestIds.clear();
       workerTargets.clear();
+      workerReady.clear();
       detachedWorkers.clear();
       fatalController.abort(fatal.value);
       for (const waiter of factWaiters.splice(0)) waiter.reject(fatal.value);
@@ -924,10 +922,152 @@ export async function createBrowserEvidenceSession({
       if (fatal.value) throw fatal.value;
     }
     function enqueue(task) {
-      processing = processing.then(async () => {
+      const completion = processing.then(async () => {
+        if (fatal.value) throw fatal.value;
+        await task();
+      });
+      processing = completion.catch(setFatal);
+      void completion.catch(() => {});
+      return completion;
+    }
+    async function awaitProcessingBarrier(barrier = processing) {
+      await barrier;
+      if (fatal.value) throw fatal.value;
+    }
+    function enqueueLifecycle(task) {
+      lifecycleProcessing = lifecycleProcessing.then(async () => {
         if (fatal.value) throw fatal.value;
         await task();
       }).catch(setFatal);
+    }
+    function flushCausalMilestones(current) {
+      if (!current.causalMilestonesOpen) return;
+      while (current.causalMilestones.length > 0) {
+        const milestone = current.causalMilestones[0];
+        const observedAtMs = Math.max(
+          milestone.causalAtMs, current.lastPublishedFactAtMs, current.lastPublishedLifecycleAtMs,
+        );
+        const published = milestone.publish(observedAtMs);
+        invariant(published && Number.isSafeInteger(published.atMs), "causal lifecycle milestone differs");
+        current.lastPublishedLifecycleAtMs = Math.max(observedAtMs, published.atMs);
+        current.publishedCausalMilestones.add(milestone.key);
+        current.causalMilestones.shift();
+      }
+    }
+    function recordCausalMilestone(current, key, causalAtMs, publish) {
+      invariant(mode === current && Number.isSafeInteger(causalAtMs)
+        && !current.publishedCausalMilestones.has(key)
+        && !current.causalMilestones.some((milestone) => milestone.key === key),
+      "causal lifecycle milestone differs");
+      current.causalMilestones.push({ key, causalAtMs, publish });
+      flushCausalMilestones(current);
+    }
+    function openCausalMilestones(current, priorLifecycle) {
+      invariant(mode === current && current.selectedFact && !current.causalMilestonesOpen
+        && priorLifecycle && Number.isSafeInteger(priorLifecycle.atMs),
+      "causal lifecycle milestone differs");
+      current.lastPublishedLifecycleAtMs = priorLifecycle.atMs;
+      current.causalMilestonesOpen = true;
+      flushCausalMilestones(current);
+    }
+    function currentWorkerSessions() {
+      return [...workerTargets.entries()]
+        .filter(([, targetId]) => !detachedWorkers.has(targetId))
+        .map(([childSession]) => childSession);
+    }
+    function startWorkerFences(sessions, onResponse) {
+      const barrier = Promise.all(sessions.map(async (childSession) => {
+        const ready = workerReady.get(childSession);
+        invariant(ready, "worker session fence differs");
+        await ready;
+        const response = await cdp.send("Runtime.evaluate", {
+          expression: "true", returnByValue: true, throwOnSideEffect: true, silent: true,
+        }, childSession);
+        invariant(response?.result?.value === true && !response.exceptionDetails, "worker session fence failed");
+        onResponse?.(childSession);
+      }));
+      void barrier.catch(setFatal);
+      return barrier;
+    }
+    function handleProjectedFact(fact) {
+      factReceiptTimes.set(fact, now());
+      const current = mode && fact.generation === mode.generation ? mode : null;
+      if (!current) { publishFact(fact); return; }
+      if (fact.type === "REVISION_SELECTED") {
+        if (current.pendingSelection || current.selectedFact) {
+          setFatal(new Error("duplicate revision selection"));
+          return;
+        }
+        const sessions = currentWorkerSessions();
+        const pending = { fact, barrier: null, processingBarrier: null };
+        current.pendingSelection = pending;
+        pending.barrier = startWorkerFences(sessions);
+        pending.processingBarrier = sessions.length === 0 ? processing : pending.barrier.then(() => processing);
+        void pending.processingBarrier.catch(setFatal);
+        enqueueLifecycle(async () => {
+          await pending.barrier;
+          await awaitProcessingBarrier(pending.processingBarrier);
+          invariant(mode === current && current.pendingSelection === pending
+            && current.revision === fact.revision && Number.isSafeInteger(current.stageEndMs.revision),
+          "revision selection preceded matching request completion");
+          publishFact(fact, current.stageEndMs.revision);
+          current.selectedFact = fact;
+          current.pendingSelection = null;
+        });
+        return;
+      }
+      if (["SUCCESS", "FAILURE"].includes(fact.type)) {
+        if (current.pendingTerminal || current.firstTerminal) {
+          setFatal(new Error("duplicate browser terminal"));
+          return;
+        }
+        if (!current.pendingSelection && !current.selectedFact) {
+          setFatal(new Error("browser terminal preceded revision selection"));
+          return;
+        }
+        const sessions = currentWorkerSessions();
+        const pending = {
+          fact, cutoffs: new Map(sessions.map((childSession) => [childSession, false])),
+          barrier: null, processingBarrier: null,
+        };
+        current.pendingTerminal = pending;
+        pending.barrier = startWorkerFences(sessions, (childSession) => pending.cutoffs.set(childSession, true));
+        pending.processingBarrier = sessions.length === 0 ? processing : pending.barrier.then(() => {
+          if (mode === current && current.pendingTerminal === pending) current.requestsClosed = true;
+          return processing;
+        });
+        void pending.processingBarrier.catch(setFatal);
+        enqueueLifecycle(async () => {
+          await pending.barrier;
+          invariant(mode === current && current.pendingTerminal === pending, "browser terminal barrier differs");
+          current.requestsClosed = true;
+          await awaitProcessingBarrier(pending.processingBarrier);
+          flushCausalMilestones(current);
+          invariant(network.size === 0 && earlyExtra.size === 0,
+            "terminal preceded request completion");
+          invariant(current.activeExchange === null,
+            "browser request sequence ended before logical exchange completion");
+          publishFact(fact, current.latestRequestEndMs);
+          current.firstTerminal = fact;
+        });
+        return;
+      }
+      if (fact.type === "ATTEMPT_DRAINED") {
+        if ((!current.pendingTerminal && !current.firstTerminal) || current.pendingDrain || current.firstDrain) {
+          setFatal(new Error(current.pendingDrain || current.firstDrain
+            ? "duplicate attempt drain" : "attempt drained before required terminal"));
+          return;
+        }
+        current.pendingDrain = fact;
+        enqueueLifecycle(async () => {
+          invariant(mode === current && current.firstTerminal, "attempt drained before required terminal");
+          publishFact(fact);
+          current.firstDrain = fact;
+          current.pendingDrain = null;
+        });
+        return;
+      }
+      publishFact(fact);
     }
     function expectedExchange(current, index) {
       if (current.generation === 2 && index >= 4004) throw new Error("capacity limit ordering admitted candidate 4,002");
@@ -963,9 +1103,12 @@ export async function createBrowserEvidenceSession({
     }
     function validateRequestAdmission(entry) {
       const current = mode;
-      invariant(current && !current.requestsClosed && entry.generation === current.generation, "unexpected browser request");
+      invariant(current && entry.generation === current.generation, "unexpected browser request");
       let exchange = current.activeExchange;
-      if (exchange === null) {
+      if (entry.terminalPendingAtObservation) {
+        invariant(current.pendingTerminal === entry.terminalPendingAtObservation && exchange !== null,
+          "browser request sequence differs at terminal cutoff");
+      } else if (exchange === null) {
         exchange = expectedExchange(current, current.admittedGets);
         current.activeExchange = exchange;
       }
@@ -1053,6 +1196,8 @@ export async function createBrowserEvidenceSession({
         invariant(fact.contentValid, "browser candidate content invalid");
         invariant(fact.hashMatched, "browser candidate blob mismatch");
       }
+      current.stageEndMs[exchange.stage] = Math.max(current.stageEndMs[exchange.stage] ?? 0, get.finishedMs);
+      current.latestRequestEndMs = Math.max(current.latestRequestEndMs, get.finishedMs);
     }
     function finalizeNetworkEntry(key, entry) {
       if (!entry.finished || !entry.response || !entry.requestHeaderFacts) return;
@@ -1078,7 +1223,7 @@ export async function createBrowserEvidenceSession({
       if (message.method === "Runtime.bindingCalled" && message.params?.name === bindingName) {
         try {
           const fact = projectFact(JSON.parse(message.params.payload));
-          if (fact) publishFact(fact);
+          if (fact) handleProjectedFact(fact);
         } catch (error) {
           setFatal(error instanceof Error ? error : new Error("worker observation is malformed"));
         }
@@ -1087,11 +1232,11 @@ export async function createBrowserEvidenceSession({
       if (message.method === "Target.attachedToTarget" && message.params?.targetInfo?.type === "worker") {
         const childSession = message.params.sessionId;
         workerTargets.set(childSession, message.params.targetInfo.targetId);
-        enqueue(async () => {
+        workerReady.set(childSession, enqueue(async () => {
           await cdp.send("Runtime.enable", {}, childSession);
           await cdp.send("Network.enable", {}, childSession);
           await cdp.send("Runtime.runIfWaitingForDebugger", {}, childSession);
-        });
+        }));
         return;
       }
       if (message.method === "Target.detachedFromTarget") {
@@ -1099,7 +1244,7 @@ export async function createBrowserEvidenceSession({
         const targetId = message.params?.targetId ?? workerTargets.get(childSession);
         if (targetId) {
           detachedWorkers.add(targetId);
-          if (mode && workerTargets.has(childSession) && !mode.firstTerminal) {
+          if (mode && workerTargets.has(childSession) && !mode.pendingTerminal && !mode.firstTerminal) {
             setFatal(new Error("worker detached before required terminal"));
           }
         }
@@ -1150,6 +1295,12 @@ export async function createBrowserEvidenceSession({
           ignoredRequestIds.add(key); earlyExtra.delete(key); return;
         }
         if (!mode || mode.requestsClosed) { setFatal(new Error("unexpected browser request")); return; }
+        const pendingTerminal = mode.pendingTerminal;
+        if (pendingTerminal && (!pendingTerminal.cutoffs.has(message.sessionId)
+          || pendingTerminal.cutoffs.get(message.sessionId))) {
+          setFatal(new Error("unexpected browser request"));
+          return;
+        }
         if (network.has(key) || completedRequestIds.has(key)) { setFatal(new Error("redirected or duplicate browser request")); return; }
         const route = browserRoute(url, mode.repository);
         if (!route || !["GET", "OPTIONS"].includes(method) || (route.stage === "raw" && method === "OPTIONS")) {
@@ -1164,6 +1315,7 @@ export async function createBrowserEvidenceSession({
           generation: mode.generation, requestOrder: ++networkEventOrder,
           cap: responseCapForRoute(route), startedMs: now(), dataLength: 0,
           requestHeaderFacts: earlyExtra.get(key), admitted: false,
+          terminalPendingAtObservation: pendingTerminal ?? null,
         };
         network.set(key, entry);
         earlyExtra.delete(key);
@@ -1216,11 +1368,16 @@ export async function createBrowserEvidenceSession({
 
     function startTrace(repository, generation, progress) {
       workerTargets.clear();
+      workerReady.clear();
       detachedWorkers.clear();
       mode = {
         repository, generation, progress, gets: [], rawFacts: progress.candidates ?? [], aggregate: 0,
         revision: null, rootTree: null, projected: null, treeEntries: null, admittedGets: 0, activeExchange: null,
-        firstTerminal: null, requestsClosed: false,
+        pendingSelection: null, selectedFact: null, pendingTerminal: null, firstTerminal: null,
+        pendingDrain: null, firstDrain: null, requestsClosed: false,
+        stageEndMs: {}, latestRequestEndMs: 0, lastPublishedFactAtMs: 0,
+        causalMilestones: [], publishedCausalMilestones: new Set(),
+        causalMilestonesOpen: false, lastPublishedLifecycleAtMs: 0,
       };
       return mode;
     }
@@ -1229,7 +1386,8 @@ export async function createBrowserEvidenceSession({
     }
     async function flush() {
       await evaluate(cdp, sessionId, "true");
-      await processing;
+      await awaitProcessingBarrier();
+      if (mode) flushCausalMilestones(mode);
       if ([...network.values()].some((entry) => entry.finished && (!entry.requestHeaderFacts || !entry.response)) || earlyExtra.size > 0) {
         setFatal(new Error("browser request headers or response are incomplete"));
       }
@@ -1264,7 +1422,7 @@ export async function createBrowserEvidenceSession({
         const selected = await nextFact((fact) => fact.type === "REVISION_SELECTED" && fact.generation === 1);
         progress.revision = selected.revision;
         invariant(selected.revision === eventSha, "smoke selected a stale revision");
-        emit("revision-selected", 1, selected.observedAtMs);
+        openCausalMilestones(trace, emit("revision-selected", 1, selected.observedAtMs));
         await flush();
         invariant(trace.revision === eventSha, "smoke revision evidence differs");
         const terminal = await nextFact((fact) => ["SUCCESS", "FAILURE"].includes(fact.type) && fact.generation === 1);
@@ -1278,7 +1436,7 @@ export async function createBrowserEvidenceSession({
         invariant(trace.projected && trace.projected.length >= 1 && trace.rawFacts.length === trace.projected.length, "smoke tree/request cardinality mismatch");
         const expectedStages = ["revision", "commit", "tree", ...trace.projected.map(() => "raw")];
         invariant(trace.gets.length === expectedStages.length && trace.gets.every((item, index) => item.stage === expectedStages[index]), "smoke request sequence mismatch");
-        const cityPublished = emit("city-published", 1);
+        const cityPublished = emit("city-published", 1, terminal.observedAtMs);
         Object.assign(progress, {
           revision: trace.revision, rootTree: trace.rootTree, terminal: "success", canvasCount: 1,
           modelSha256: terminal.modelSha256, endedMs: cityPublished.atMs, providerGetCount: trace.gets.length,
@@ -1296,12 +1454,15 @@ export async function createBrowserEvidenceSession({
           rawRequestCount: 0, candidates: [],
         };
         const trace = startTrace(REACT_REPOSITORY, 2, progress);
-        trace.onInventory = (atMs) => emit("inventory-complete", 2, atMs);
+        trace.onInventory = (atMs) => recordCausalMilestone(
+          trace, "inventory-complete", atMs,
+          (observedAtMs) => emit("inventory-complete", 2, observedAtMs),
+        );
         await submit(REACT_URL);
         const selected = await nextFact((fact) => fact.type === "REVISION_SELECTED" && fact.generation === 2);
         progress.revision = selected.revision;
         invariant(selected.revision === qualification.revision, "capacity revision differs from qualification");
-        emit("revision-selected", 2, selected.observedAtMs);
+        openCausalMilestones(trace, emit("revision-selected", 2, selected.observedAtMs));
         await flush();
         invariant(trace.revision === qualification.revision, "capacity revision evidence differs from qualification");
         const terminal = await nextFact((fact) => ["SUCCESS", "FAILURE"].includes(fact.type) && fact.generation === 2);
