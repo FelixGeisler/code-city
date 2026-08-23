@@ -824,6 +824,7 @@ export async function createBrowserEvidenceSession({
     const workerTargets = new Map();
     const workerReady = new Map();
     const detachedWorkers = new Set();
+    let pageSessionId;
     const allowedAssets = new Set(manifest.files.map((file) => `${origin}${encodePath(file.path)}`));
     allowedAssets.add(origin);
     let mode = null;
@@ -1251,6 +1252,13 @@ export async function createBrowserEvidenceSession({
         notifyDetached();
         return;
       }
+      if (message.method.startsWith("Network.")) {
+        if (message.sessionId === pageSessionId) return;
+        if (!workerTargets.has(message.sessionId)) {
+          setFatal(new Error("unexpected browser network session"));
+          return;
+        }
+      }
       if (message.method === "Runtime.exceptionThrown") {
         setFatal(new Error("browser exception"));
         return;
@@ -1354,11 +1362,11 @@ export async function createBrowserEvidenceSession({
     };
     cdp.listeners.add(listener);
     const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
-    const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
+    ({ sessionId: pageSessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true }));
+    const sessionId = pageSessionId;
     await Promise.all([
       cdp.send("Page.enable", {}, sessionId),
       cdp.send("Runtime.enable", {}, sessionId),
-      cdp.send("Network.enable", {}, sessionId),
       cdp.send("Runtime.addBinding", { name: bindingName }, sessionId),
     ]);
     await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: createWorkerObserverSource(bindingName) }, sessionId);
@@ -1706,7 +1714,7 @@ function mapBrowserFailure(stage, error) {
   if (/CORS/iu.test(message)) return new CollectorFailure(stage, "cors-failure");
   if (/stale/iu.test(message)) return new CollectorFailure(stage, "stale-publication");
   if (/overlap/iu.test(message)) return new CollectorFailure(stage, "request-overlap");
-  if (/unexpected browser request/iu.test(message)) return new CollectorFailure(stage, "unexpected-request");
+  if (/unexpected browser (?:request|network session)/iu.test(message)) return new CollectorFailure(stage, "unexpected-request");
   if (/sequence|cardinality|redirected|duplicate/iu.test(message)) return new CollectorFailure(stage, "request-sequence");
   if (/quiescent/iu.test(message)) return new CollectorFailure(stage, "quiescence-failure");
   if (stage === "smoke" && /tree|blob|candidate|UTF-8|NUL|content|identity|revision|commit|supported|encoded data|JSON|Unexpected token|property name/iu.test(message)) {

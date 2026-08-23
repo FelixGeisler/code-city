@@ -997,11 +997,13 @@ function fakeChromeChild() {
   return child;
 }
 
-function fakeCdpHarness({ failMethod, evaluateImpl, workerFenceImpl, bodyImpl } = {}) {
+function fakeCdpHarness({ failMethod, evaluateImpl, workerFenceImpl, bodyImpl, autoWorker = true } = {}) {
   const listeners = new Set();
   const closeListeners = new Set();
   const bodies = new Map();
   const calls = [];
+  const activity = [];
+  const workerSessions = new Set();
   let closeCount = 0;
   let bodyCalls = 0;
   const cdp = {
@@ -1009,11 +1011,25 @@ function fakeCdpHarness({ failMethod, evaluateImpl, workerFenceImpl, bodyImpl } 
     closeListeners,
     async send(method, params = {}, sessionId) {
       calls.push({ method, params, sessionId });
+      activity.push({ type: "send", method, sessionId });
       if (method === failMethod) throw new Error(`controlled ${method} failure`);
       if (method === "Browser.getVersion") return { product: "Chrome/140.0.1.2", protocolVersion: "1.3" };
       if (method === "Target.createTarget") return { targetId: "page-target" };
       if (method === "Target.attachToTarget") return { sessionId: "page-session" };
       if (method === "Runtime.evaluate") {
+        if (params.expression.includes("requestSubmit")) {
+          workerSessions.clear();
+          if (autoWorker) {
+            workerSessions.add("worker-session");
+            activity.push({ type: "event", method: "Target.attachedToTarget", sessionId: "worker-session" });
+            for (const listener of [...listeners]) listener({
+              method: "Target.attachedToTarget",
+              params: { sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" } },
+              sessionId: "page-session",
+            });
+            await new Promise((resolve) => setImmediate(resolve));
+          }
+        }
         const value = workerFenceImpl && sessionId !== undefined && params.expression === "true" && params.throwOnSideEffect
           ? await workerFenceImpl({ sessionId, params, callIndex: calls.length - 1 })
           : evaluateImpl
@@ -1036,10 +1052,18 @@ function fakeCdpHarness({ failMethod, evaluateImpl, workerFenceImpl, bodyImpl } 
     close() { closeCount += 1; },
   };
   return {
-    cdp, calls, bodies,
+    cdp, calls, activity, bodies,
     get closeCount() { return closeCount; },
     get bodyCalls() { return bodyCalls; },
     emit(method, params = {}, sessionId = "worker-session") {
+      if (method === "Target.attachedToTarget" && params?.targetInfo?.type === "worker") {
+        if (workerSessions.has(params.sessionId)) return;
+        workerSessions.add(params.sessionId);
+      }
+      activity.push({
+        type: "event", method,
+        sessionId: method === "Target.attachedToTarget" ? params.sessionId : sessionId,
+      });
       for (const listener of [...listeners]) listener({ method, params, sessionId });
     },
   };
@@ -1124,17 +1148,34 @@ test("signal-terminal Chrome children never wait for or manufacture a second exi
 
 function emitBrowserGet(harness, { requestId, url, body, headers = {}, responseHeaders = {
   "Access-Control-Allow-Origin": "*", "Content-Type": "application/json",
-}, dataLength, encodedDataLength } = {}) {
+}, dataLength, encodedDataLength, sessionId = "worker-session" } = {}) {
   harness.bodies.set(requestId, body);
-  harness.emit("Network.requestWillBeSent", { requestId, request: { url, method: "GET", headers: {} } });
-  harness.emit("Network.requestWillBeSentExtraInfo", { requestId, headers, associatedCookies: [] });
+  harness.emit("Network.requestWillBeSent", { requestId, request: { url, method: "GET", headers: {} } }, sessionId);
+  harness.emit("Network.requestWillBeSentExtraInfo", { requestId, headers, associatedCookies: [] }, sessionId);
   harness.emit("Network.responseReceived", { requestId, response: {
     url, status: 200, headers: responseHeaders, fromDiskCache: false, fromServiceWorker: false,
-  } });
+  } }, sessionId);
   const length = dataLength ?? new TextEncoder().encode(body).byteLength;
   const encodedLength = encodedDataLength ?? length;
-  harness.emit("Network.dataReceived", { requestId, dataLength: length, encodedDataLength: encodedLength });
-  harness.emit("Network.loadingFinished", { requestId, encodedDataLength: encodedLength });
+  harness.emit("Network.dataReceived", { requestId, dataLength: length, encodedDataLength: encodedLength }, sessionId);
+  harness.emit("Network.loadingFinished", { requestId, encodedDataLength: encodedLength }, sessionId);
+}
+
+function emitPageNetworkMirror(harness, {
+  requestId, url, method = "GET", headers = {}, body = "",
+  responseHeaders = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" },
+}) {
+  harness.emit("Network.requestWillBeSent", { requestId, request: { url, method, headers: {} } }, "page-session");
+  harness.emit("Network.requestWillBeSentExtraInfo", { requestId, headers, associatedCookies: [] }, "page-session");
+  harness.emit("Network.responseReceived", { requestId, response: {
+    url, status: method === "OPTIONS" ? 204 : 200, headers: responseHeaders,
+    fromDiskCache: false, fromServiceWorker: false,
+  } }, "page-session");
+  const length = method === "GET" ? new TextEncoder().encode(body).byteLength : 0;
+  if (length > 0) harness.emit("Network.dataReceived", {
+    requestId, dataLength: length, encodedDataLength: length,
+  }, "page-session");
+  harness.emit("Network.loadingFinished", { requestId, encodedDataLength: length }, "page-session");
 }
 
 function beginBrowserRequest(harness, {
@@ -1216,16 +1257,16 @@ function controlledWorkerFences() {
   };
 }
 
-function emitBrowserBytes(harness, { requestId, url, bytes }) {
+function emitBrowserBytes(harness, { requestId, url, bytes, sessionId = "worker-session" }) {
   harness.bodies.set(requestId, { body: Buffer.from(bytes).toString("base64"), base64Encoded: true });
-  harness.emit("Network.requestWillBeSent", { requestId, request: { url, method: "GET", headers: {} } });
-  harness.emit("Network.requestWillBeSentExtraInfo", { requestId, headers: {}, associatedCookies: [] });
+  harness.emit("Network.requestWillBeSent", { requestId, request: { url, method: "GET", headers: {} } }, sessionId);
+  harness.emit("Network.requestWillBeSentExtraInfo", { requestId, headers: {}, associatedCookies: [] }, sessionId);
   harness.emit("Network.responseReceived", { requestId, response: {
     url, status: 200, headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "text/plain" },
     fromDiskCache: false, fromServiceWorker: false,
-  } });
-  harness.emit("Network.dataReceived", { requestId, dataLength: bytes.byteLength, encodedDataLength: bytes.byteLength });
-  harness.emit("Network.loadingFinished", { requestId, encodedDataLength: bytes.byteLength });
+  } }, sessionId);
+  harness.emit("Network.dataReceived", { requestId, dataLength: bytes.byteLength, encodedDataLength: bytes.byteLength }, sessionId);
+  harness.emit("Network.loadingFinished", { requestId, encodedDataLength: bytes.byteLength }, sessionId);
 }
 
 async function prepareBrowserStage(opened, stage) {
@@ -1268,7 +1309,7 @@ test("cross-session fences causally order selection, terminal, drain, and detach
     const fences = controlledWorkerFences();
     const bodyGates = new Map();
     const harness = fakeCdpHarness({
-      workerFenceImpl: fences.impl,
+      workerFenceImpl: fences.impl, autoWorker: false,
       async bodyImpl({ params, value }) {
         const gate = bodyGates.get(params.requestId);
         if (gate) await gate.promise;
@@ -1327,14 +1368,14 @@ test("cross-session fences causally order selection, terminal, drain, and detach
 
     emitBrowserGet(harness, {
       requestId: `causal-commit-${delayedPart}`, url: commitUrl("FelixGeisler/code-city", EVENT),
-      body: JSON.stringify({ sha: EVENT, tree: { sha: ROOT } }),
+      body: JSON.stringify({ sha: EVENT, tree: { sha: ROOT } }), sessionId: "worker-a",
     });
     await waitForBodyCalls(harness, 2);
     emitBrowserGet(harness, {
       requestId: `causal-tree-${delayedPart}`, url: treeUrl("FelixGeisler/code-city", ROOT),
       body: JSON.stringify({ sha: ROOT, truncated: false, tree: [
         { path: "src/a.ts", mode: "100644", type: "blob", sha: NATIVE_BLOB },
-      ] }),
+      ] }), sessionId: "worker-a",
     });
     await waitForBodyCalls(harness, 3);
 
@@ -1387,7 +1428,7 @@ test("cross-session fences causally order selection, terminal, drain, and detach
 
 async function openTerminalCutoffScenario({ activeComponent = "options" } = {}) {
   const fences = controlledWorkerFences();
-  const opened = await openFakeBrowser(fakeCdpHarness({ workerFenceImpl: fences.impl }));
+  const opened = await openFakeBrowser(fakeCdpHarness({ workerFenceImpl: fences.impl, autoWorker: false }));
   const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
   await Promise.resolve();
   for (const suffix of ["a", "b"]) opened.harness.emit("Target.attachedToTarget", {
@@ -1396,7 +1437,7 @@ async function openTerminalCutoffScenario({ activeComponent = "options" } = {}) 
   await new Promise((resolve) => setImmediate(resolve));
   emitBrowserGet(opened.harness, {
     requestId: "cutoff-revision", url: revisionUrl("FelixGeisler/code-city"),
-    body: JSON.stringify([{ sha: EVENT }]),
+    body: JSON.stringify([{ sha: EVENT }]), sessionId: "worker-a",
   });
   await waitForBodyCalls(opened.harness, 1);
   opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
@@ -1521,7 +1562,8 @@ test("terminal cutoffs reject duplicate terminals plus fenced, unknown, new, dup
     await assert.rejects(opened.pending, scenario === "duplicate-terminal" ? /duplicate browser terminal/u
       : scenario === "duplicate-get" ? /overlap/u
         : scenario === "wrong-identity" ? /sequence differs/u
-        : scenario === "no-next-route" ? /terminal cutoff/u : /unexpected browser request/u, scenario);
+        : scenario === "no-next-route" ? /terminal cutoff/u
+          : scenario === "unknown" ? /unexpected browser network session/u : /unexpected browser request/u, scenario);
     await opened.session.close().catch(() => {});
   }
 });
@@ -1747,7 +1789,7 @@ test("preflight timing projection preserves observed GET starts, retimes reverse
 test("every Chrome/CDP session setup failure rolls back socket, process, listeners, and ownership once", async () => {
   const methods = [
     "Browser.getVersion", "Target.createTarget", "Target.attachToTarget", "Page.enable", "Runtime.enable",
-    "Network.enable", "Runtime.addBinding", "Page.addScriptToEvaluateOnNewDocument", "Target.setAutoAttach", "Page.navigate", "Runtime.evaluate",
+    "Runtime.addBinding", "Page.addScriptToEvaluateOnNewDocument", "Target.setAutoAttach", "Page.navigate", "Runtime.evaluate",
   ];
   for (const failMethod of methods) {
     const harness = fakeCdpHarness({ failMethod });
@@ -1985,6 +2027,58 @@ test("preflight admission rejects every mismatched, duplicate, late, failed, inc
     assert(!JSON.stringify(opened.requestItems).includes("options-"), name);
     await opened.session.close().catch(() => {});
   }
+});
+
+test("every provider Network event from an unknown session rejects before request, body, or header state", async () => {
+  const methods = [
+    ["Network.requestWillBeSent", (read) => {
+      const request = { method: "GET", headers: {} };
+      Object.defineProperty(request, "url", { enumerable: true, get() { read(); return revisionUrl("FelixGeisler/code-city"); } });
+      return { requestId: "unknown", request };
+    }],
+    ["Network.requestWillBeSentExtraInfo", (read) => {
+      const headers = {};
+      Object.defineProperty(headers, "Authorization", { enumerable: true, get() { read(); return "Bearer private"; } });
+      return { requestId: "unknown", headers, associatedCookies: [] };
+    }],
+    ["Network.responseReceived", () => ({ requestId: "unknown", response: {} })],
+    ["Network.dataReceived", () => ({ requestId: "unknown", dataLength: 1, encodedDataLength: 1 })],
+    ["Network.loadingFinished", () => ({ requestId: "unknown", encodedDataLength: 1 })],
+    ["Network.loadingFailed", () => ({ requestId: "unknown" })],
+  ];
+  for (const [method, params] of methods) {
+    const opened = await openFakeBrowser();
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    await Promise.resolve();
+    let privateReads = 0;
+    opened.harness.emit(method, params(() => { privateReads += 1; }), "unknown-session");
+    await assert.rejects(pending, /unexpected browser network session/u, method);
+    assert.equal(privateReads, 0, method);
+    assert.equal(opened.harness.bodyCalls, 0, method);
+    assert.deepEqual(opened.requestItems, [], method);
+    await opened.session.close().catch(() => {});
+  }
+});
+
+test("session-qualified worker identities preserve genuine overlap even with the same request ID and URL", async () => {
+  const opened = await openFakeBrowser();
+  const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+  await Promise.resolve();
+  opened.harness.emit("Target.attachedToTarget", {
+    sessionId: "worker-second", targetInfo: { type: "worker", targetId: "worker-target-second" },
+  }, "page-session");
+  await new Promise((resolve) => setImmediate(resolve));
+  const url = revisionUrl("FelixGeisler/code-city");
+  opened.harness.emit("Network.requestWillBeSent", {
+    requestId: "shared-request-id", request: { url, method: "GET", headers: {} },
+  }, "worker-session");
+  opened.harness.emit("Network.requestWillBeSent", {
+    requestId: "shared-request-id", request: { url, method: "GET", headers: {} },
+  }, "worker-second");
+  await assert.rejects(pending, /overlap at admission/u);
+  assert.equal(opened.harness.bodyCalls, 0);
+  assert.deepEqual(opened.requestItems, []);
+  await opened.session.close().catch(() => {});
 });
 
 test("early request ExtraInfo remains correlated independently for GET and OPTIONS without retaining IDs", async () => {
@@ -2745,8 +2839,9 @@ test("full collector orchestration marks a processing-barrier failure without ra
   assertSchemaValidSmokeBarrierFailure(await collectNativeSmokeBarrierFailurePacket("processing-barrier"));
 });
 
-test("full collector orchestration emits a schema-valid packet when lifecycle facts precede cross-session completion", async () => {
+test("full collector orchestration ignores a page mirror and emits one worker-owned request sequence", async () => {
   let stored;
+  let mirroredPageHeaderReads = 0;
   const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
   const fallbackBrowserFactory = seams.createBrowserEvidenceSession;
   seams.createBrowserEvidenceSession = async (args) => {
@@ -2763,6 +2858,15 @@ test("full collector orchestration emits a schema-valid packet when lifecycle fa
         sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" },
       }, "");
       const revision = revisionUrl("FelixGeisler/code-city");
+      const pageHeaders = {};
+      Object.defineProperty(pageHeaders, "Cookie", {
+        enumerable: true,
+        get() { mirroredPageHeaderReads += 1; return "page-mirror-private"; },
+      });
+      emitPageNetworkMirror(harness, {
+        requestId: "orchestration-get", url: revision,
+        body: JSON.stringify([{ sha: EVENT }]), headers: pageHeaders,
+      });
       beginBrowserRequest(harness, { requestId: "orchestration-get", url: revision, method: "GET" });
       beginBrowserRequest(harness, { requestId: "orchestration-options", url: revision, method: "OPTIONS" });
       harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
@@ -2832,6 +2936,9 @@ test("full collector orchestration emits a schema-valid packet when lifecycle fa
   ]);
   assert.deepEqual(smoke.filter(({ method }) => method === "GET").map(({ stage }) => stage), ["revision", "commit", "tree", "raw"]);
   assert.equal(smoke.filter(({ method }) => method === "OPTIONS").length, 1);
+  assert.equal(mirroredPageHeaderReads, 0);
+  assert.equal(smoke.filter(({ method, stage }) => method === "GET" && stage === "revision").length, 1);
+  assert(!JSON.stringify(smoke).includes("page-mirror"));
   assert(smoke.every((item, index) => index === 0 || smoke[index - 1].endedMs <= item.startedMs));
   assert.equal(lifecycle.status, "pass");
   assert.deepEqual(lifecycle.data.events.slice(-2).map(({ event }) => event), ["worker-quiescent", "collector-complete"]);
@@ -3281,6 +3388,7 @@ test("browser capacity normalization and hash failures produce stage-aware schem
         harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
           type: "REVISION_SELECTED", generation: 2, revision: REACT,
         }) });
+        await new Promise((resolve) => setImmediate(resolve));
         emitBrowserGet(harness, {
           requestId: `${kind}-commit`, url: commitUrl("facebook/react", REACT),
           body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
@@ -3365,6 +3473,7 @@ test("native browser CORS and incomplete-tree triggers flow through their owning
         harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
           type: "REVISION_SELECTED", generation: 2, revision: REACT,
         }) });
+        await new Promise((resolve) => setImmediate(resolve));
         emitBrowserGet(harness, {
           requestId: "tree-commit", url: commitUrl("facebook/react", REACT),
           body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
@@ -3442,6 +3551,7 @@ test("native smoke tree, zero-candidate, identity, hash, UTF-8, NUL, and content
         harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
           type: "REVISION_SELECTED", generation: 1, revision: EVENT,
         }) });
+        await new Promise((resolve) => setImmediate(resolve));
         emitBrowserGet(harness, {
           requestId: `${kind}-commit`, url: commitUrl("FelixGeisler/code-city", EVENT),
           body: JSON.stringify({ sha: EVENT, tree: { sha: ROOT } }),
@@ -3706,7 +3816,7 @@ test("a mismatched smoke SUCCESS revision becomes a schema-valid handled smoke f
   assert.equal(smoke.data.modelSha256, null);
 });
 
-test("controlled smoke observes exact request identities and remains pending until target detachment", async () => {
+test("controlled smoke gives Network ownership only to the worker and remains pending until target detachment", async () => {
   const opened = await openFakeBrowser();
   const emitted = [];
   const pending = opened.session.collectSmoke((event, generation, atMs) => {
@@ -3722,10 +3832,41 @@ test("controlled smoke observes exact request identities and remains pending unt
     "Runtime.enable", "Network.enable", "Runtime.runIfWaitingForDebugger",
   ]);
   assert(!workerCommands.some(({ method }) => ["Runtime.addBinding", "Runtime.evaluate", "Page.addScriptToEvaluateOnNewDocument"].includes(method)));
-  assert.equal(opened.harness.calls.filter(({ method, sessionId }) => method === "Runtime.addBinding" && sessionId === "page-session").length, 1);
+  const workerSetup = workerCommands.map(({ method }) => method);
+  assert(workerSetup.indexOf("Runtime.enable") < workerSetup.indexOf("Network.enable"));
+  assert(workerSetup.indexOf("Network.enable") < workerSetup.indexOf("Runtime.runIfWaitingForDebugger"));
+  const workerActivity = opened.harness.activity.filter(({ sessionId }) => sessionId === "worker-session");
+  assert.deepEqual(workerActivity.slice(0, 4).map(({ type, method }) => [type, method]), [
+    ["event", "Target.attachedToTarget"],
+    ["send", "Runtime.enable"],
+    ["send", "Network.enable"],
+    ["send", "Runtime.runIfWaitingForDebugger"],
+  ]);
+  const pageSetup = opened.harness.calls.filter(({ sessionId }) => sessionId === "page-session")
+    .map(({ method }) => method);
+  assert(pageSetup.includes("Page.enable"));
+  assert(pageSetup.includes("Runtime.enable"));
+  assert(pageSetup.includes("Runtime.addBinding"));
+  assert(!pageSetup.includes("Network.enable"));
+  assert.equal(pageSetup.filter((method) => method === "Runtime.addBinding").length, 1);
+
+  const revision = revisionUrl("FelixGeisler/code-city");
+  let pageHeaderReads = 0;
+  const pageHeaders = {};
+  Object.defineProperty(pageHeaders, "Authorization", {
+    enumerable: true,
+    get() { pageHeaderReads += 1; return "Bearer page-mirror-must-not-be-read"; },
+  });
+  emitPageNetworkMirror(opened.harness, {
+    requestId: "smoke-revision", url: revision,
+    body: `${JSON.stringify([{ sha: EVENT }])}\n`, headers: pageHeaders,
+  });
+  assert.equal(pageHeaderReads, 0);
+  assert.equal(opened.harness.bodyCalls, 0);
+  assert.deepEqual(opened.requestItems, []);
 
   emitBrowserGet(opened.harness, {
-    requestId: "smoke-revision", url: revisionUrl("FelixGeisler/code-city"),
+    requestId: "smoke-revision", url: revision,
     body: `${JSON.stringify([{ sha: EVENT }])}\n`,
   });
   await new Promise((resolve) => setImmediate(resolve));
@@ -3757,6 +3898,12 @@ test("controlled smoke observes exact request identities and remains pending unt
   const smoke = await pending;
   assert.equal(smoke.providerGetCount, 4);
   assert.equal(smoke.revision, EVENT);
+  assert.equal(opened.harness.bodyCalls, 4);
+  assert(opened.harness.calls.filter(({ method }) => method === "Network.getResponseBody")
+    .every(({ sessionId }) => sessionId === "worker-session"));
+  assert.deepEqual(opened.requestItems.map(({ stage }) => stage), ["revision", "commit", "tree", "raw"]);
+  assert.equal(pageHeaderReads, 0);
+  assert(!JSON.stringify(opened.requestItems).includes("page-mirror"));
   assert.deepEqual(emitted.map((item) => item.event), ["revision-selected", "city-published"]);
   await opened.session.close();
   assert.equal(opened.child.kills, 1);
