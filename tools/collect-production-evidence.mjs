@@ -997,10 +997,11 @@ export async function createBrowserEvidenceSession({
     async function completeLogicalExchange(exchange) {
       const current = mode;
       invariant(current && current.generation === exchange.generation && current.activeExchange === exchange
-        && !exchange.completed && exchange.get?.networkValidated, "browser logical exchange differs");
+        && !exchange.completed && exchange.get?.networkValidated
+        && (!exchange.options || exchange.options.networkValidated), "browser logical exchange differs");
       const get = exchange.get;
       if (exchange.options) {
-        invariant(exchange.options.networkValidated && exchange.options.finishedOrder < get.finishedOrder,
+        invariant(exchange.options.finishedOrder < get.finishedOrder,
           "browser preflight completed after its GET");
         const logicalGetStart = Math.max(get.startedMs, exchange.options.finishedMs);
         invariant(exchange.options.finishedMs <= logicalGetStart && logicalGetStart <= get.finishedMs,
@@ -1061,7 +1062,10 @@ export async function createBrowserEvidenceSession({
         invariant(entry.admitted && entry.exchange, "browser request was not admitted");
         requestRecord(entry);
         entry.networkValidated = true;
-        if (entry.method === "GET") await completeLogicalExchange(entry.exchange);
+        const exchange = entry.exchange;
+        if (exchange.get?.networkValidated && (!exchange.options || exchange.options.networkValidated)) {
+          await completeLogicalExchange(exchange);
+        }
       });
     }
     fatalListener = setFatal;
@@ -1169,8 +1173,10 @@ export async function createBrowserEvidenceSession({
       if (message.method === "Network.responseReceived") {
         const entry = network.get(key);
         if (entry) {
-          try { entry.response = cdpResponseProjection(message.params.response); }
-          catch (error) { setFatal(error); }
+          try {
+            entry.response = cdpResponseProjection(message.params.response);
+            finalizeNetworkEntry(key, entry);
+          } catch (error) { setFatal(error); }
         }
         return;
       }
@@ -1189,10 +1195,6 @@ export async function createBrowserEvidenceSession({
         entry.finishedMs = Math.max(entry.startedMs, now());
         if (entry.method === "GET" && entry.exchange?.options && !entry.exchange.options.finished) {
           setFatal(new Error("browser preflight completed after its GET"));
-          return;
-        }
-        if (!entry.response || !entry.requestHeaderFacts) {
-          setFatal(new Error("browser request headers or response are incomplete"));
           return;
         }
         finalizeNetworkEntry(key, entry);
@@ -1228,8 +1230,8 @@ export async function createBrowserEvidenceSession({
     async function flush() {
       await evaluate(cdp, sessionId, "true");
       await processing;
-      if ([...network.values()].some((entry) => entry.finished && !entry.requestHeaderFacts) || earlyExtra.size > 0) {
-        setFatal(new Error("browser request headers are incomplete"));
+      if ([...network.values()].some((entry) => entry.finished && (!entry.requestHeaderFacts || !entry.response)) || earlyExtra.size > 0) {
+        setFatal(new Error("browser request headers or response are incomplete"));
       }
       if (fatal.value) throw fatal.value;
     }
