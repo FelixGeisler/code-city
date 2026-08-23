@@ -1,0 +1,228 @@
+name: Publish
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version: 24
+        cache: npm
+    - run: npm ci --ignore-scripts
+    - run: npm ls --all
+    - run: npm audit --audit-level=high
+    - run: npm run verify
+    - name: Create and validate the publication record
+      run: |
+        node --input-type=module <<'NODE'
+        import { readFile, writeFile } from "node:fs/promises";
+        import { createPublicationRecord, validatePublicationRecord } from "./tools/publication-record.mjs";
+        const manifest = Uint8Array.from(await readFile("build/evidence/package-manifest.json"));
+        const record = createPublicationRecord({
+          repository: process.env.GITHUB_REPOSITORY,
+          eventName: process.env.GITHUB_EVENT_NAME,
+          eventSha: process.env.GITHUB_SHA,
+          runId: Number(process.env.GITHUB_RUN_ID),
+          runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+        }, manifest);
+        validatePublicationRecord(record, manifest);
+        await writeFile("build/evidence/publication-record.json", record, { flag: "wx" });
+        NODE
+    - name: Upload the Pages artifact
+      uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b
+      with:
+        path: dist
+    - name: Upload internal publication evidence
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: code-city-publication-evidence
+        path: |
+          build/evidence/package-manifest.json
+          build/evidence/publication-record.json
+        if-no-files-found: error
+        retention-days: 90
+
+  deploy:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+    - name: Deploy the reviewed Pages artifact
+      id: deployment
+      uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
+
+  eligibility:
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: read
+    outputs:
+      run-evidence: ${{ steps.issue.outputs.run-evidence }}
+    steps:
+    - name: Read the production-acceptance parent state
+      id: issue
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        state="$(gh api repos/FelixGeisler/code-city/issues/460 --jq .state)" || exit 1
+        case "$state" in
+          open) echo "run-evidence=true" >> "$GITHUB_OUTPUT" ;;
+          closed) echo "run-evidence=false" >> "$GITHUB_OUTPUT" ;;
+          *) exit 1 ;;
+        esac
+
+  production-evidence:
+    needs: [verify, deploy, eligibility]
+    if: needs.eligibility.outputs.run-evidence == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      with:
+        node-version: 24
+        cache: npm
+    - name: Download current-run publication evidence
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      with:
+        name: code-city-publication-evidence
+        path: build/publication
+    - name: Verify workflow-owned publication bindings
+      run: |
+        node --input-type=module <<'NODE'
+        import { createHash } from "node:crypto";
+        import { lstat, readFile, readdir } from "node:fs/promises";
+        import { execFileSync } from "node:child_process";
+        import { parsePackageManifest } from "./tools/package-manifest.mjs";
+        import { validatePublicationRecord } from "./tools/publication-record.mjs";
+        const expectedNames = ["package-manifest.json", "publication-record.json"];
+        if (process.env.GITHUB_EVENT_NAME !== "push" || process.env.GITHUB_REF !== "refs/heads/main") throw new Error("publication binding mismatch");
+        if (!/^[0-9a-f]{40}$/u.test(process.env.GITHUB_SHA ?? "")) throw new Error("publication binding mismatch");
+        const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+        if (head !== process.env.GITHUB_SHA) throw new Error("publication binding mismatch");
+        const names = (await readdir("build/publication")).sort();
+        if (JSON.stringify(names) !== JSON.stringify(expectedNames)) throw new Error("publication binding mismatch");
+        for (const name of names) if (!(await lstat(`build/publication/${name}`)).isFile()) throw new Error("publication binding mismatch");
+        const manifest = Uint8Array.from(await readFile("build/publication/package-manifest.json"));
+        parsePackageManifest(manifest);
+        const recordBytes = Uint8Array.from(await readFile("build/publication/publication-record.json"));
+        const record = validatePublicationRecord(recordBytes, manifest);
+        const manifestSha256 = createHash("sha256").update(manifest).digest("hex");
+        if (record.repository !== process.env.GITHUB_REPOSITORY
+            || record.eventName !== process.env.GITHUB_EVENT_NAME
+            || record.eventSha !== process.env.GITHUB_SHA
+            || record.runId !== Number(process.env.GITHUB_RUN_ID)
+            || record.runAttempt !== Number(process.env.GITHUB_RUN_ATTEMPT)
+            || record.manifestSha256 !== manifestSha256) throw new Error("publication binding mismatch");
+        NODE
+    - name: Collect tokenless production evidence
+      id: collector
+      continue-on-error: true
+      run: |
+        env -i HOME="$HOME" PATH="$PATH" RUNNER_OS="$RUNNER_OS" RUNNER_ARCH="$RUNNER_ARCH" \
+          node tools/collect-production-evidence.mjs \
+          --origin https://felixgeisler.github.io/code-city/ \
+          --manifest build/publication/package-manifest.json \
+          --output build/production-evidence
+    - name: Seal the upload gate
+      id: packet
+      if: always()
+      run: |
+        node --input-type=module <<'NODE'
+        import { rm, readFile, readdir } from "node:fs/promises";
+        const output = "build/production-evidence";
+        const expected = [".validated", "artifact.json", "capacity.json", "index.json", "lifecycle.json", "qualification.json", "requests.json", "smoke.json"];
+        let ready = false;
+        let digest = "";
+        try {
+          const names = (await readdir(output)).sort();
+          if (JSON.stringify(names) !== JSON.stringify(expected)) throw new Error();
+          const marker = await readFile(`${output}/.validated`, "utf8");
+          if (!/^[0-9a-f]{64}\n$/u.test(marker)) throw new Error();
+          digest = marker.trim();
+          ready = true;
+        } catch {
+          await rm(output, { recursive: true, force: true });
+        }
+        if (!ready) {
+          await import("node:fs/promises").then(({ appendFile }) => appendFile(process.env.GITHUB_STEP_SUMMARY, "Production evidence was not retained because validation did not complete safely.\n"));
+          process.exit(1);
+        }
+        await import("node:fs/promises").then(({ appendFile }) => appendFile(process.env.GITHUB_OUTPUT, `ready=true\npacket-digest=${digest}\n`));
+        NODE
+    - name: Upload the sealed production packet
+      id: evidence-upload
+      if: always() && steps.packet.outputs.ready == 'true'
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: production-evidence-${{ github.sha }}-${{ github.run_attempt }}
+        path: |
+          build/production-evidence/artifact.json
+          build/production-evidence/smoke.json
+          build/production-evidence/qualification.json
+          build/production-evidence/capacity.json
+          build/production-evidence/requests.json
+          build/production-evidence/lifecycle.json
+          build/production-evidence/index.json
+        if-no-files-found: error
+        retention-days: 90
+    - name: Record authenticated finalization metadata
+      if: always() && steps.evidence-upload.outcome == 'success'
+      env:
+        ARTIFACT_ID: ${{ steps.evidence-upload.outputs.artifact-id }}
+        ARTIFACT_URL: ${{ steps.evidence-upload.outputs.artifact-url }}
+        PLATFORM_DIGEST: ${{ steps.evidence-upload.outputs.artifact-digest }}
+        PACKET_DIGEST: ${{ steps.packet.outputs.packet-digest }}
+      run: |
+        node --input-type=module <<'NODE'
+        import { appendFile } from "node:fs/promises";
+        const source = {
+          schemaVersion: 1,
+          artifactId: process.env.ARTIFACT_ID,
+          artifactUrl: process.env.ARTIFACT_URL,
+          platformDigest: process.env.PLATFORM_DIGEST,
+          packetDigest: process.env.PACKET_DIGEST,
+          eventSha: process.env.GITHUB_SHA,
+          runId: Number(process.env.GITHUB_RUN_ID),
+          runAttempt: Number(process.env.GITHUB_RUN_ATTEMPT),
+          retentionDays: 90,
+        };
+        if (!/^[1-9][0-9]*$/u.test(source.artifactId)
+            || source.artifactUrl !== `https://github.com/FelixGeisler/code-city/actions/runs/${source.runId}/artifacts/${source.artifactId}`
+            || !/^[0-9a-f]{64}$/u.test(source.platformDigest)
+            || !/^[0-9a-f]{64}$/u.test(source.packetDigest)
+            || !/^[0-9a-f]{40}$/u.test(source.eventSha)
+            || !Number.isSafeInteger(source.runId) || source.runId <= 0
+            || !Number.isSafeInteger(source.runAttempt) || source.runAttempt <= 0) throw new Error("finalization source binding mismatch");
+        const canonical = `${JSON.stringify(source)}\n`;
+        process.stdout.write(canonical);
+        await appendFile(process.env.GITHUB_STEP_SUMMARY, `Authenticated finalization source values:\n\n\`\`\`json\n${canonical}\`\`\`\n`);
+        NODE
+    - name: Preserve handled-failure status
+      if: always() && steps.evidence-upload.outcome == 'success' && steps.collector.outcome != 'success'
+      run: exit 1
