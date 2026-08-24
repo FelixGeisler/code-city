@@ -1493,6 +1493,7 @@ export async function createBrowserEvidenceSession({
         stage: get.route.stage, bodyBacklog: 1, bodyReferenceCleared: false,
       }));
       let bytes;
+      let completedQualificationCandidateCount = null;
       const semanticRecord = Object.freeze({ ...get.route });
       try {
         bytes = await cdpBody(cdp, get.sessionId, get.requestId, get.cap);
@@ -1543,11 +1544,7 @@ export async function createBrowserEvidenceSession({
           current.rawFacts.push(fact);
           if (current.generation === 2) current.progress.candidates = current.rawFacts;
           current.aggregate = nextAggregate;
-          if (current.generation === 2) {
-            const count = current.rawFacts.length;
-            if (count % 250 === 0 || count === 4001) emitQualificationProgress(count);
-            if (count === 4001) current.onQualificationComplete?.(semanticGetEnd);
-          }
+          if (current.generation === 2) completedQualificationCandidateCount = current.rawFacts.length;
         }
       } finally {
         bytes?.fill(0);
@@ -1557,6 +1554,11 @@ export async function createBrowserEvidenceSession({
           kind: "provider-body-cleared", generation: current.generation,
           stage: get.route.stage, bodyBacklog: 0, bodyReferenceCleared: true,
         }));
+      }
+      if (completedQualificationCandidateCount !== null) {
+        const count = completedQualificationCandidateCount;
+        if (count % 250 === 0 || count === 4001) emitQualificationProgress(count);
+        if (count === 4001) current.onQualificationComplete?.(semanticGetEnd);
       }
       current.stageEndMs[exchange.stage] = Math.max(current.stageEndMs[exchange.stage] ?? 0, semanticGetEnd);
       current.latestRequestEndMs = Math.max(current.latestRequestEndMs, semanticGetEnd);
@@ -2041,10 +2043,8 @@ export async function createBrowserEvidenceSession({
       },
       async collectCapacity(qualification, emit, startedMs) {
         facts.length = 0;
-        const expectedIdentities = QUALIFICATION_IDENTITIES.get(qualification)
-          ?? Object.freeze(qualification.candidates.map((candidate) => Object.freeze({
-            rawPath: candidate.path, canonicalPath: candidate.path, blobId: candidate.blobId,
-          })));
+        const expectedIdentities = QUALIFICATION_IDENTITIES.get(qualification);
+        invariant(expectedIdentities !== undefined, "qualification identity custody differs");
         invariant(expectedIdentities.length === 4001, "qualification identity cardinality differs");
         qualification.candidates.splice(0);
         const progress = {

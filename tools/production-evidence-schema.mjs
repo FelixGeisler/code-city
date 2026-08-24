@@ -35,11 +35,20 @@ const CAPS = new Map([
   ["lifecycle.json", 1024 * 1024],
   ["index.json", 16 * 1024],
 ]);
+const NATIVE_QUALIFICATION_REASONS = Object.freeze([
+  "qualification-failure", "identity-mismatch", "provider-failure", "cors-failure", "tree-incomplete",
+  "request-sequence", "request-overlap", "unexpected-request", "credential-header", "infrastructure-failure",
+]);
+const SHARED_BROWSER_REASONS = Object.freeze([
+  "identity-mismatch", "provider-failure", "cors-failure", "tree-incomplete", "hash-mismatch", "content-invalid",
+  "limit-order", "request-sequence", "request-overlap", "unexpected-request", "credential-header", "stale-publication",
+  "quiescence-failure", "cleanup-failure", "infrastructure-failure",
+]);
 const FAIL_REASONS = Object.freeze({
   artifact: ["artifact-mismatch", "production-unreachable", "infrastructure-failure"],
   smoke: ["smoke-failure", "provider-failure", "cors-failure", "request-sequence", "request-overlap", "unexpected-request", "credential-header", "stale-publication", "quiescence-failure", "cleanup-failure", "infrastructure-failure"],
-  qualification: ["qualification-failure", "identity-mismatch", "provider-failure", "cors-failure", "tree-incomplete", "hash-mismatch", "content-invalid", "limit-order", "request-sequence", "request-overlap", "unexpected-request", "credential-header", "stale-publication", "quiescence-failure", "cleanup-failure", "infrastructure-failure"],
-  capacity: ["identity-mismatch", "provider-failure", "cors-failure", "tree-incomplete", "hash-mismatch", "content-invalid", "limit-order", "request-sequence", "request-overlap", "unexpected-request", "credential-header", "stale-publication", "quiescence-failure", "cleanup-failure", "infrastructure-failure"],
+  qualification: [...NATIVE_QUALIFICATION_REASONS, ...SHARED_BROWSER_REASONS.filter((reason) => !NATIVE_QUALIFICATION_REASONS.includes(reason))],
+  capacity: [...SHARED_BROWSER_REASONS],
 });
 const ERROR_CODES = new Set(["invalid-payload", "invalid-binding", "noncanonical-bytes", "filesystem-safety", "io-failure"]);
 const ENVELOPE_KEYS = ["schemaVersion", "kind", "status", "reason", "data"];
@@ -493,6 +502,7 @@ function validateRequests(envelope, payloads, overallPass, primaryReason) {
   const smokeGets = validateExchangeSequence(groups.smoke, REPOSITORY, true);
   const qualificationGets = validateExchangeSequence(groups.qualification, "react/react", false,
     qualificationPass || capacityStarted ? 3 : null);
+  requireValue(qualificationGets.every((item) => item.stage !== "raw"));
   const capacityGets = validateExchangeSequence(groups.capacity, "react/react", true,
     capacityPass ? 4004 : null);
   validateDirectExchanges(groups.other, payloads.artifact.status === "pass");
@@ -686,8 +696,12 @@ function deriveStatus(payloads) {
   }
   requireValue(smoke.status === "pass");
   if (qualification.status === "fail") {
-    if (capacity.status === "not-run") return { stage: "qualification", reason: qualification.reason, shared: false };
-    requireValue(capacity.status === "fail" && capacity.reason === qualification.reason);
+    if (capacity.status === "not-run") {
+      requireValue(NATIVE_QUALIFICATION_REASONS.includes(qualification.reason));
+      return { stage: "qualification", reason: qualification.reason, shared: false };
+    }
+    requireValue(capacity.status === "fail" && capacity.reason === qualification.reason
+      && SHARED_BROWSER_REASONS.includes(qualification.reason));
     return { stage: "capacity", reason: capacity.reason, shared: true };
   }
   requireValue(qualification.status === "pass");
@@ -751,6 +765,9 @@ function validatePayloadSet(payloads, binding) {
   exactObject(payloads, PAYLOAD_NAMES);
   for (const kind of PAYLOAD_NAMES) validateEnvelope(payloads[kind], kind);
   validateArtifact(payloads.artifact); validateSmoke(payloads.smoke); validateQualification(payloads.qualification); validateCapacity(payloads.capacity);
+  // Lifecycle events influence request-frontier validation, so enforce their
+  // native dense-array cap before any event lookup can traverse attacker input.
+  exactArray(payloads.lifecycle.data.events, 20000);
   const failure = deriveStatus(payloads); const overallPass = failure.stage === null;
   const requestInfo = validateRequests(payloads.requests, payloads, overallPass, failure.reason);
   validateLifecycle(payloads.lifecycle, overallPass, failure.reason, failure.stage, requestInfo);

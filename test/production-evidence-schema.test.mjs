@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import * as schema from "../tools/production-evidence-schema.mjs";
 import {
   EvidenceContractError,
   createEvidencePacket,
@@ -357,4 +358,440 @@ test("packet map, canonical UTF-8 plus LF, exact file set, index digest, and who
   const source = packet.files.get("artifact.json"); const padded = new Uint8Array(source.byteLength + 1); padded.set(source, 1);
   const partial = new Map(packet.files); partial.set("artifact.json", padded.subarray(1));
   expectInvalid(() => validateEvidencePacket(partial, BINDING));
+});
+
+// Baseline v2 suite migration map: the tests below retain the exhaustive API/error,
+// payload/nested-field, adversarial container/accessor/proxy, seven-cap, lifecycle,
+// status, request-topology, canonical packet/index, and wrapper assertions. Native
+// raw-qualification success/failure representations are the only structurally
+// obsolete cases; v3 replaces them with unconditional native-raw rejection and
+// shared-browser frontier matrices.
+
+function packetIndex(packet) {
+  return JSON.parse(new TextDecoder().decode(packet.files.get("index.json")));
+}
+
+function setReason(payloads, reason) {
+  payloads.qualification.reason = reason;
+  payloads.capacity.reason = reason;
+  payloads.requests.reason = reason;
+  payloads.lifecycle.reason = reason;
+}
+
+function mutateSharedReason(reason) {
+  const payloads = sharedBrowserFailure();
+  setReason(payloads, reason);
+  if (!["hash-mismatch", "content-invalid", "unexpected-request"].includes(reason)) {
+    payloads.requests.data.items.pop();
+    payloads.capacity.data.rawRequestCount = 1;
+  }
+  return payloads;
+}
+
+function directArtifactRequest(sequence = 1) {
+  const value = request(sequence, "asset", "https://felixgeisler.github.io/code-city/package-manifest.json", false, 0.1);
+  value.headerNames = [];
+  value.corsAllowOrigin = null;
+  return value;
+}
+
+test("the module retains the closed five-export API and privacy-safe error surface", () => {
+  assert.deepEqual(Object.keys(schema).sort(), [
+    "EvidenceContractError", "createEvidencePacket", "createExternalWrapper", "validateEvidencePacket", "validateExternalWrapper",
+  ].sort());
+  for (const code of ["invalid-payload", "invalid-binding", "noncanonical-bytes", "filesystem-safety", "io-failure"]) {
+    const error = new EvidenceContractError(code);
+    assert.deepEqual(Object.keys(error), ["name", "code"]);
+    assert.equal(error.message, code);
+    assert.equal(Object.hasOwn(error, "cause"), false);
+  }
+  assert.throws(() => new EvidenceContractError("secret"), TypeError);
+});
+
+test("packet creation copies inputs and validation returns fresh sealed packet metadata", () => {
+  const payloads = passingPayloads();
+  const packet = createEvidencePacket(payloads, BINDING);
+  payloads.smoke.data.terminal = "changed";
+  assert.equal(JSON.parse(new TextDecoder().decode(packet.files.get("smoke.json"))).data.terminal, "success");
+  const validated = validateEvidencePacket(packet.files, BINDING);
+  assert(Object.isFrozen(packet) && Object.isFrozen(packet.binding));
+  assert(Object.isFrozen(validated) && Object.isFrozen(validated.binding));
+  assert.notEqual(validated.files, packet.files);
+  assert.equal(validated.packetDigest, packet.packetDigest);
+});
+
+test("all six envelopes require exact ordered fields and plain data", () => {
+  for (const kind of ["artifact", "smoke", "qualification", "capacity", "requests", "lifecycle"]) {
+    const extra = passingPayloads(); extra[kind].extra = true;
+    expectInvalid(() => createEvidencePacket(extra, BINDING));
+    const reordered = passingPayloads();
+    reordered[kind] = { kind, schemaVersion: 3, status: reordered[kind].status, reason: reordered[kind].reason, data: reordered[kind].data };
+    expectInvalid(() => createEvidencePacket(reordered, BINDING));
+  }
+});
+
+test("the payload set rejects missing, extra, symbol, accessor, inherited, and proxy members", () => {
+  const factories = [
+    () => { const p = passingPayloads(); delete p.smoke; return p; },
+    () => { const p = passingPayloads(); p.extra = true; return p; },
+    () => { const p = passingPayloads(); p[Symbol("hidden")] = true; return p; },
+    () => { const p = passingPayloads(); Object.setPrototypeOf(p, { inherited: true }); return p; },
+    () => { const p = passingPayloads(); Object.defineProperty(p, "smoke", { enumerable: true, get() { throw new Error("must not run"); } }); return p; },
+    () => new Proxy(passingPayloads(), {}),
+  ];
+  for (const make of factories) expectInvalid(() => createEvidencePacket(make(), BINDING));
+});
+
+test("every payload data field remains independently required", () => {
+  for (const kind of ["artifact", "smoke", "qualification", "capacity", "requests", "lifecycle"]) {
+    const baseline = passingPayloads();
+    for (const key of Object.keys(baseline[kind].data)) {
+      const payloads = passingPayloads();
+      const original = payloads[kind].data[key];
+      payloads[kind].data[key] = Array.isArray(original) ? [] : null;
+      expectInvalid(() => createEvidencePacket(payloads, BINDING), undefined, `${kind}.${key}`);
+    }
+  }
+});
+
+test("artifact record fields reject independent malformed mutations", () => {
+  const mutations = { path: "../secret", expectedMediaType: "Text/HTML", observedMediaType: "\n", expectedBytes: -1, observedBytes: -1,
+    expectedSha256: "A".repeat(64), observedSha256: "A".repeat(64), match: null };
+  for (const [key, value] of Object.entries(mutations)) {
+    const payloads = passingPayloads(); payloads.artifact.data.files[0][key] = value;
+    expectInvalid(() => createEvidencePacket(payloads, BINDING));
+  }
+});
+
+test("candidate record fields reject independent malformed mutations", () => {
+  const mutations = { index: 0, path: "/a.ts", blobId: "A".repeat(40), normalizedBytes: -1,
+    runningAggregate: 2, hashMatched: false, contentValid: false };
+  for (const [key, value] of Object.entries(mutations)) {
+    const payloads = passingPayloads();
+    payloads.qualification.data.candidates[0][key] = value;
+    payloads.capacity.data.candidates[0][key] = value;
+    expectInvalid(() => createEvidencePacket(payloads, BINDING));
+  }
+});
+
+test("request record fields reject independent malformed mutations", () => {
+  const mutations = { sequence: 0, stage: "other", method: "POST", requestedUrl: "file:///secret", finalUrl: "file:///secret",
+    applicationCall: null, status: 99, startedMs: -1, endedMs: -1, headerNames: ["authorization"], corsAllowOrigin: "https://other",
+    rateLimit: null, authorizationAbsent: null, cookieAbsent: null, refererAbsent: null, redirected: true };
+  for (const [key, value] of Object.entries(mutations)) {
+    const payloads = passingPayloads(); payloads.requests.data.items[0][key] = value;
+    expectInvalid(() => createEvidencePacket(payloads, BINDING));
+  }
+});
+
+test("lifecycle event and duration fields reject independent malformed mutations", () => {
+  for (const [key, value] of Object.entries({ sequence: 0, generation: -1, event: "other", atMs: -1 })) {
+    const payloads = passingPayloads(); payloads.lifecycle.data.events[0][key] = value;
+    expectInvalid(() => createEvidencePacket(payloads, BINDING));
+  }
+  for (const key of Object.keys(passingPayloads().lifecycle.data.durations)) {
+    const payloads = passingPayloads(); payloads.lifecycle.data.durations[key] = null;
+    expectInvalid(() => createEvidencePacket(payloads, BINDING));
+  }
+});
+
+test("candidate arrays reject sparse, inherited, accessor, and proxy shapes", () => {
+  const factories = [
+    (value) => { delete value[3]; return value; },
+    (value) => { Object.setPrototypeOf(value, null); return value; },
+    (value) => { Object.defineProperty(value, "0", { enumerable: true, get() { throw new Error("must not run"); } }); return value; },
+    (value) => new Proxy(value, {}),
+  ];
+  for (const make of factories) {
+    const payloads = passingPayloads(); payloads.capacity.data.candidates = make(payloads.capacity.data.candidates);
+    expectInvalid(() => createEvidencePacket(payloads, BINDING));
+  }
+});
+
+test("blocked candidate proxies reject without invoking traps", () => {
+  for (const [stage, make] of [["capacity", nativeQualificationFailure], ["qualification", () => {
+    const p = nativeQualificationFailure(); p.smoke.status = "fail"; p.smoke.reason = "infrastructure-failure";
+    p.qualification = envelope("qualification", "not-run", "blocked", empty(QUALIFICATION_KEYS, ["candidates"]));
+    p.requests.reason = "infrastructure-failure"; p.lifecycle.reason = "infrastructure-failure";
+    p.requests.data.items = p.requests.data.items.slice(0, 4); p.lifecycle = lifecycle(failedEvents(3, 3), "fail", "infrastructure-failure", null);
+    return p;
+  }]]) {
+    const payloads = make(); let calls = 0;
+    payloads[stage].data.candidates = new Proxy([], { get() { calls += 1; throw new Error("trap"); }, ownKeys() { calls += 1; throw new Error("trap"); } });
+    expectInvalid(() => createEvidencePacket(payloads, BINDING));
+    assert.equal(calls, 0);
+  }
+});
+
+test("payload accessors and proxies never leak attacker-selected contract errors", () => {
+  let calls = 0;
+  const payloads = passingPayloads();
+  Object.defineProperty(payloads.artifact.data, "repository", { enumerable: true, get() { calls += 1; throw new EvidenceContractError("io-failure"); } });
+  expectInvalid(() => createEvidencePacket(payloads, BINDING));
+  assert.equal(calls, 0);
+});
+
+test("packet maps reject overridden methods and proxies without invoking traps", () => {
+  const packet = createEvidencePacket(passingPayloads(), BINDING); let calls = 0;
+  for (const mutate of [
+    (map) => Object.defineProperty(map, "size", { get() { calls += 1; throw new Error("trap"); } }),
+    (map) => Object.defineProperty(map, "get", { value() { calls += 1; throw new Error("trap"); } }),
+    (map) => Object.defineProperty(map, Symbol.iterator, { value() { calls += 1; throw new Error("trap"); } }),
+  ]) {
+    const map = new Map(packet.files); mutate(map); expectInvalid(() => validateEvidencePacket(map, BINDING)); assert.equal(calls, 0);
+  }
+  expectInvalid(() => validateEvidencePacket(new Proxy(packet.files, {}), BINDING));
+});
+
+test("byte views reject overridden accessors and partial backing buffers", () => {
+  const packet = createEvidencePacket(passingPayloads(), BINDING);
+  for (const property of ["buffer", "byteLength", "length"]) {
+    const files = new Map(packet.files); const bytes = new Uint8Array(files.get("smoke.json"));
+    Object.defineProperty(bytes, property, { get() { throw new Error("trap"); } }); files.set("smoke.json", bytes);
+    expectInvalid(() => validateEvidencePacket(files, BINDING));
+  }
+  const source = packet.files.get("smoke.json"); const backing = new Uint8Array(source.length + 2); backing.set(source, 1);
+  const files = new Map(packet.files); files.set("smoke.json", backing.subarray(1, -1));
+  expectInvalid(() => validateEvidencePacket(files, BINDING));
+});
+
+test("intrinsic request and lifecycle caps reject oversized arrays before traversal", () => {
+  for (const [kind, field, size] of [["requests", "items", 8201], ["lifecycle", "events", 20001]]) {
+    const payloads = passingPayloads(); let calls = 0; const oversized = new Array(size);
+    Object.defineProperty(oversized, "0", { enumerable: true, get() { calls += 1; throw new Error("trap"); } });
+    payloads[kind].data[field] = oversized;
+    expectInvalid(() => createEvidencePacket(payloads, BINDING));
+    assert.equal(calls, 0);
+  }
+});
+
+test("all seven byte caps reach semantics at the boundary and reject boundary plus one", () => {
+  const caps = { "artifact.json": 64 * 1024, "smoke.json": 64 * 1024, "qualification.json": 4 * 1024 * 1024,
+    "capacity.json": 4 * 1024 * 1024, "requests.json": 8 * 1024 * 1024, "lifecycle.json": 1024 * 1024, "index.json": 16 * 1024 };
+  const packet = createEvidencePacket(passingPayloads(), BINDING);
+  for (const [path, cap] of Object.entries(caps)) {
+    const exact = canonical("x".repeat(cap - 3)); assert.equal(exact.byteLength, cap);
+    const exactFiles = new Map(packet.files); exactFiles.set(path, exact); expectInvalid(() => validateEvidencePacket(exactFiles, BINDING));
+    const over = new Map(packet.files); over.set(path, canonical("x".repeat(cap - 2)));
+    expectInvalid(() => validateEvidencePacket(over, BINDING), "noncanonical-bytes");
+  }
+});
+
+test("packet maps require the canonical seven-file order-independent set", () => {
+  const packet = createEvidencePacket(passingPayloads(), BINDING);
+  assert.equal(validateEvidencePacket(new Map([...packet.files].reverse()), BINDING).packetDigest, packet.packetDigest);
+  for (const path of packet.files.keys()) {
+    const files = new Map(packet.files); files.delete(path); expectInvalid(() => validateEvidencePacket(files, BINDING));
+  }
+});
+
+test("canonical packet bytes reject duplicate LF, invalid UTF-8, and leading whitespace", () => {
+  const packet = createEvidencePacket(passingPayloads(), BINDING);
+  for (const replacement of [new Uint8Array([...packet.files.get("smoke.json"), 0x0a]), Uint8Array.of(0xff), encoder.encode(" {}\n")]) {
+    const files = new Map(packet.files); files.set("smoke.json", replacement);
+    expectInvalid(() => validateEvidencePacket(files, BINDING), "noncanonical-bytes");
+  }
+});
+
+test("every canonical index field is bound to packet facts", () => {
+  const packet = createEvidencePacket(passingPayloads(), BINDING); const original = packetIndex(packet);
+  const mutations = { schemaVersion: 2, issueBodySha256: "0".repeat(64), eventSha: "b".repeat(40), overallStatus: "fail", firstFailure: "provider-failure", files: [] };
+  for (const [key, value] of Object.entries(mutations)) {
+    const index = structuredClone(original); index[key] = value; const files = new Map(packet.files); files.set("index.json", canonical(index));
+    expectInvalid(() => validateEvidencePacket(files, BINDING));
+  }
+});
+
+test("every index file record field is bound to path, media type, length, and digest", () => {
+  const packet = createEvidencePacket(passingPayloads(), BINDING); const original = packetIndex(packet);
+  for (const key of ["path", "mediaType", "byteLength", "sha256"]) {
+    const index = structuredClone(original); index.files[0][key] = key === "byteLength" ? 0 : "invalid";
+    const files = new Map(packet.files); files.set("index.json", canonical(index));
+    expectInvalid(() => validateEvidencePacket(files, BINDING));
+  }
+});
+
+test("external wrappers remain canonical v1, closed, frozen, and bound", () => {
+  const binding = { artifactId: "123", platformDigest: "4".repeat(64), packetDigest: "5".repeat(64), eventSha: EVENT, runId: 7, runAttempt: 2 };
+  const bytes = createExternalWrapper(binding); const parsed = validateExternalWrapper(bytes, binding);
+  assert(Object.isFrozen(parsed)); assert.equal(parsed.schemaVersion, 1); assert.equal(parsed.retentionDays, 90);
+  assert.equal(parsed.artifactUrl, "https://github.com/FelixGeisler/code-city/actions/runs/7/artifacts/123");
+});
+
+test("external wrapper binding fields reject malformed and mismatched values", () => {
+  const binding = { artifactId: "123", platformDigest: "4".repeat(64), packetDigest: "5".repeat(64), eventSha: EVENT, runId: 7, runAttempt: 2 };
+  const bytes = createExternalWrapper(binding);
+  for (const [key, value] of Object.entries({ artifactId: "0", platformDigest: "A".repeat(64), packetDigest: "x", eventSha: "x", runId: 0, runAttempt: 0 })) {
+    expectInvalid(() => createExternalWrapper({ ...binding, [key]: value }));
+  }
+  assert.throws(() => validateExternalWrapper(bytes, { ...binding, packetDigest: "6".repeat(64) }),
+    (error) => error instanceof EvidenceContractError && error.code === "invalid-binding");
+});
+
+test("external wrapper bytes reject partial views, proxies, excess size, and noncanonical LF", () => {
+  const binding = { artifactId: "123", platformDigest: "4".repeat(64), packetDigest: "5".repeat(64), eventSha: EVENT, runId: 7, runAttempt: 2 };
+  const bytes = createExternalWrapper(binding); const backing = new Uint8Array(bytes.length + 1); backing.set(bytes, 1);
+  for (const value of [backing.subarray(1), new Proxy(new Uint8Array(bytes), {}), new Uint8Array(4097), new Uint8Array([...bytes, 0x0a])]) {
+    expectInvalid(() => validateExternalWrapper(value, binding), "noncanonical-bytes");
+  }
+});
+
+test("the schema unconditionally rejects native qualification raw GETs for every status frontier", () => {
+  for (const make of [nativeQualificationFailure, sharedBrowserFailure, postQualificationFailure, passingPayloads]) {
+    const payloads = make(); const items = payloads.requests.data.items;
+    const firstNative = items.findIndex((item) => !item.applicationCall && item.requestedUrl.includes("/react/react/"));
+    const raw = request(0, "raw", rawUrl("react/react", REACT, "0001.ts"), false, items[firstNative]?.startedMs ?? 6.5);
+    items.splice(firstNative < 0 ? items.length : firstNative + 1, 0, raw); items.forEach((item, index) => { item.sequence = index + 1; });
+    expectInvalid(() => createEvidencePacket(payloads, BINDING));
+  }
+});
+
+test("native-before-browser accepts only exact native qualification reasons", () => {
+  const accepted = ["qualification-failure", "identity-mismatch", "provider-failure", "cors-failure", "tree-incomplete",
+    "request-sequence", "request-overlap", "unexpected-request", "credential-header", "infrastructure-failure"];
+  for (const reason of accepted) {
+    const payloads = nativeQualificationFailure();
+    payloads.qualification.reason = reason; payloads.requests.reason = reason; payloads.lifecycle.reason = reason;
+    if (reason !== "provider-failure") payloads.requests.data.items.at(-1).status = 200;
+    assert.doesNotThrow(() => createEvidencePacket(payloads, BINDING), reason);
+  }
+});
+
+test("native-before-browser rejects capacity-only reasons at the frontier", () => {
+  for (const reason of ["hash-mismatch", "content-invalid", "limit-order", "stale-publication", "quiescence-failure", "cleanup-failure"]) {
+    const payloads = nativeQualificationFailure();
+    payloads.qualification.reason = reason; payloads.requests.reason = reason; payloads.lifecycle.reason = reason;
+    payloads.requests.data.items.at(-1).status = 200;
+    expectInvalid(() => createEvidencePacket(payloads, BINDING));
+  }
+});
+
+test("shared capacity-start failures accept the exact shared reason set with dual failure", () => {
+  const reasons = ["identity-mismatch", "provider-failure", "cors-failure", "tree-incomplete", "hash-mismatch", "content-invalid",
+    "limit-order", "request-sequence", "request-overlap", "unexpected-request", "credential-header", "stale-publication",
+    "quiescence-failure", "cleanup-failure", "infrastructure-failure"];
+  for (const reason of reasons) assert.doesNotThrow(() => createEvidencePacket(mutateSharedReason(reason), BINDING), reason);
+});
+
+test("shared capacity-start failures reject native-only, mismatched, and unequal-prefix states", () => {
+  const nativeOnly = mutateSharedReason("qualification-failure");
+  expectInvalid(() => createEvidencePacket(nativeOnly, BINDING));
+  const mismatch = sharedBrowserFailure(); mismatch.capacity.reason = "provider-failure";
+  expectInvalid(() => createEvidencePacket(mismatch, BINDING));
+  const unequal = sharedBrowserFailure(); unequal.capacity.data.candidates = [];
+  expectInvalid(() => createEvidencePacket(unequal, BINDING));
+});
+
+test("post-qualification failures preserve qualification pass and capacity ownership", () => {
+  for (const reason of ["limit-order", "stale-publication", "quiescence-failure", "cleanup-failure", "infrastructure-failure"]) {
+    const payloads = postQualificationFailure(); payloads.capacity.reason = reason; payloads.requests.reason = reason; payloads.lifecycle.reason = reason;
+    assert.doesNotThrow(() => createEvidencePacket(payloads, BINDING), reason);
+  }
+});
+
+test("status topology rejects skipped, premature, and regressed nested phase states", () => {
+  const cases = [
+    () => { const p = nativeQualificationFailure(); p.capacity.status = "pass"; p.capacity.reason = "none"; return p; },
+    () => { const p = sharedBrowserFailure(); p.qualification.status = "pass"; p.qualification.reason = "none"; return p; },
+    () => { const p = postQualificationFailure(); p.capacity.status = "not-run"; p.capacity.reason = "blocked"; return p; },
+    () => { const p = passingPayloads(); p.qualification.status = "fail"; p.qualification.reason = "provider-failure"; return p; },
+  ];
+  for (const make of cases) expectInvalid(() => createEvidencePacket(make(), BINDING));
+});
+
+test("lifecycle prefixes reject missing, reordered, duplicate, and post-terminal events", () => {
+  const factories = [
+    () => { const p = passingPayloads(); p.lifecycle.data.events.splice(5, 1); return p; },
+    () => { const p = passingPayloads(); [p.lifecycle.data.events[8], p.lifecycle.data.events[9]] = [p.lifecycle.data.events[9], p.lifecycle.data.events[8]]; return p; },
+    () => { const p = passingPayloads(); p.lifecycle.data.events.push(structuredClone(p.lifecycle.data.events.at(-1))); return p; },
+    () => { const p = nativeQualificationFailure(); p.lifecycle.data.events.splice(-1, 0, { sequence: 8, generation: 2, event: "capacity-start", atMs: 6.5 }); return p; },
+  ];
+  for (const make of factories) expectInvalid(() => createEvidencePacket(make(), BINDING));
+});
+
+test("native request topology is exactly three ordered metadata GETs and no retry", () => {
+  const valid = passingPayloads();
+  assert.deepEqual(valid.requests.data.items.filter((item) => !item.applicationCall && item.requestedUrl.includes("/react/react/"))
+    .map(({ stage }) => stage), ["revision", "commit", "tree"]);
+  for (const mutate of [
+    (items) => { items.splice(items.findIndex((item) => !item.applicationCall && item.stage === "commit"), 1); },
+    (items) => { const item = structuredClone(items.find((value) => !value.applicationCall && value.stage === "revision")); items.push(item); },
+  ]) {
+    const payloads = passingPayloads(); mutate(payloads.requests.data.items); payloads.requests.data.items.forEach((item, index) => { item.sequence = index + 1; });
+    expectInvalid(() => createEvidencePacket(payloads, BINDING));
+  }
+});
+
+test("browser request topology is exactly 4,004 ordered application GETs", () => {
+  const payloads = passingPayloads(); const browser = payloads.requests.data.items.filter((item) => item.applicationCall && item.requestedUrl.includes("/react/react/"));
+  assert.equal(browser.length, 4004); assert.deepEqual(browser.slice(0, 3).map(({ stage }) => stage), ["revision", "commit", "tree"]);
+  const removed = passingPayloads(); removed.requests.data.items.splice(removed.requests.data.items.findLastIndex((item) => item.applicationCall && item.stage === "raw"), 1);
+  removed.requests.data.items.forEach((item, index) => { item.sequence = index + 1; }); removed.capacity.data.rawRequestCount = 4000;
+  expectInvalid(() => createEvidencePacket(removed, BINDING));
+});
+
+test("request uniqueness and retry closure reject repeated routes", () => {
+  const payloads = passingPayloads(); const duplicate = structuredClone(payloads.requests.data.items.at(-1));
+  duplicate.sequence += 1; duplicate.startedMs += 1; duplicate.endedMs += 1; payloads.requests.data.items.push(duplicate);
+  expectInvalid(() => createEvidencePacket(payloads, BINDING));
+});
+
+test("request privacy rejects credentials, unsafe headers, bodies, and URL secrets", () => {
+  const factories = [
+    () => { const p = passingPayloads(); p.requests.data.items[0].authorizationAbsent = false; return p; },
+    () => { const p = passingPayloads(); p.requests.data.items[0].headerNames = ["authorization"]; return p; },
+    () => { const p = passingPayloads(); p.requests.data.items[0].body = "secret"; return p; },
+    () => { const p = passingPayloads(); p.requests.data.items[0].requestedUrl += "&token=secret"; p.requests.data.items[0].finalUrl = p.requests.data.items[0].requestedUrl; return p; },
+  ];
+  for (const make of factories) expectInvalid(() => createEvidencePacket(make(), BINDING));
+});
+
+test("browser CORS and preflight topology remain closed", () => {
+  const cors = passingPayloads(); cors.requests.data.items.find((item) => item.applicationCall).corsAllowOrigin = null;
+  expectInvalid(() => createEvidencePacket(cors, BINDING));
+  const preflight = passingPayloads(); const items = preflight.requests.data.items;
+  const getIndex = items.findIndex((item) => item.applicationCall && item.stage === "revision");
+  const options = structuredClone(items[getIndex]); options.method = "OPTIONS"; options.applicationCall = false; options.status = 204; options.endedMs = options.startedMs;
+  items.splice(getIndex, 0, options); items.forEach((item, index) => { item.sequence = index + 1; });
+  assert.doesNotThrow(() => createEvidencePacket(preflight, BINDING));
+  const unpaired = passingPayloads(); unpaired.requests.data.items[0].method = "OPTIONS"; unpaired.requests.data.items[0].applicationCall = false;
+  expectInvalid(() => createEvidencePacket(unpaired, BINDING));
+});
+
+test("request timing rejects reversed intervals, global clock regression, and overlap", () => {
+  const factories = [
+    () => { const p = passingPayloads(); p.requests.data.items[0].endedMs = p.requests.data.items[0].startedMs - 1; return p; },
+    () => { const p = passingPayloads(); p.requests.data.items[1].startedMs = 0; return p; },
+    () => { const p = passingPayloads(); const values = p.requests.data.items.filter((item) => item.applicationCall && item.requestedUrl.includes("/react/react/")); values[1].startedMs = values[0].startedMs; values[1].endedMs = values[0].endedMs; return p; },
+  ];
+  for (const make of factories) expectInvalid(() => createEvidencePacket(make(), BINDING));
+});
+
+test("candidate ordering, per-file cap, aggregate cap, hash, and content facts remain closed", () => {
+  const factories = [
+    () => { const p = passingPayloads(); p.qualification.data.candidates[0].normalizedBytes = 2 * 1024 * 1024 + 1; p.capacity.data.candidates[0].normalizedBytes = 2 * 1024 * 1024 + 1; return p; },
+    () => { const p = passingPayloads(); p.qualification.data.candidates.at(-1).runningAggregate = 40 * 1024 * 1024 + 1; p.capacity.data.candidates.at(-1).runningAggregate = 40 * 1024 * 1024 + 1; return p; },
+    () => { const p = passingPayloads(); p.qualification.data.candidates[0].hashMatched = false; p.capacity.data.candidates[0].hashMatched = false; return p; },
+    () => { const p = passingPayloads(); [p.qualification.data.candidates[0], p.qualification.data.candidates[1]] = [p.qualification.data.candidates[1], p.qualification.data.candidates[0]]; return p; },
+  ];
+  for (const make of factories) expectInvalid(() => createEvidencePacket(make(), BINDING));
+});
+
+test("direct asset topology remains unique, GET-only, redirect-free, and stage-aware", () => {
+  const accepted = passingPayloads(); accepted.requests.data.items.unshift(directArtifactRequest());
+  accepted.requests.data.items.forEach((item, index) => { item.sequence = index + 1; });
+  assert.doesNotThrow(() => createEvidencePacket(accepted, BINDING));
+  for (const mutate of [
+    (item) => { item.method = "OPTIONS"; },
+    (item) => { item.redirected = true; item.finalUrl = "https://felixgeisler.github.io/code-city/index.html"; },
+  ]) {
+    const payloads = passingPayloads(); const item = directArtifactRequest(); mutate(item); payloads.requests.data.items.unshift(item);
+    payloads.requests.data.items.forEach((value, index) => { value.sequence = index + 1; }); expectInvalid(() => createEvidencePacket(payloads, BINDING));
+  }
+});
+
+test("schema validation stays deterministic and offline across fresh v3 fixtures", () => {
+  const a = createEvidencePacket(passingPayloads(), BINDING); const b = createEvidencePacket(passingPayloads(), BINDING);
+  assert.equal(a.packetDigest, b.packetDigest);
+  for (const path of a.files.keys()) assert.deepEqual(a.files.get(path), b.files.get(path));
 });

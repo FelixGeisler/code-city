@@ -712,6 +712,22 @@ test("native qualification fixes the first 4,001 ordered path/blob identities wi
   assert.equal(JSON.stringify(result).includes("body"), false);
 });
 
+test("capacity requires the exact native-qualification WeakMap identity and rejects copied or fabricated public candidates", async () => {
+  for (const qualification of [
+    structuredClone((await runNativeQualification()).progress),
+    { revision: REACT, rootTree: REACT_ROOT, treeEntries: NATIVE_ENTRIES.length, truncated: false, candidates: candidates() },
+  ]) {
+    const opened = await openFakeBrowser();
+    await assert.rejects(opened.session.collectCapacity(qualification, () => ({ atMs: 1 }), 0),
+      /qualification identity custody differs/u);
+    assert.equal(opened.requestItems.length, 0);
+    assert.equal(opened.harness.bodyCalls, 0);
+    assert.equal(JSON.stringify(qualification).includes("rawPath"), false);
+    assert.equal(JSON.stringify(qualification).includes("body"), false);
+    await opened.session.close().catch(() => {});
+  }
+});
+
 test("native deployment fetches enforce both response boundaries and boundary plus one", async () => {
   const listUrl = `https://api.github.com/repos/FelixGeisler/code-city/deployments?sha=${EVENT}&environment=github-pages&per_page=100&page=1`;
   const statusUrl = "https://api.github.com/repos/FelixGeisler/code-city/deployments/7/statuses?per_page=100&page=1";
@@ -3510,8 +3526,9 @@ test("matching-stage wrong identities and stale phase exchanges cannot pair, per
   for (const scenario of scenarios) {
     for (const order of ["options-first", "get-first"]) {
       const opened = await openFakeBrowser();
+      const qualification = scenario.stage === "capacity" ? (await runNativeQualification()).progress : null;
       const pending = scenario.stage === "capacity"
-        ? opened.session.collectCapacity({ revision: REACT, rootTree: REACT_ROOT, candidates: candidates() }, () => ({ atMs: 1 }), 0)
+        ? opened.session.collectCapacity(qualification, () => ({ atMs: 1 }), 0)
         : opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
       await Promise.resolve();
       const priorBodyCalls = scenario.stage === "capacity" ? 0 : await prepareBrowserStage(opened, scenario.stage);
@@ -4134,7 +4151,7 @@ test("each native CDP revision, commit, tree, and raw route rejects boundary plu
 
 test("an earlier SUCCESS is the first capacity terminal and fails exact limit ordering deterministically", async () => {
   const opened = await openFakeBrowser();
-  const qualification = { revision: REACT, rootTree: REACT_ROOT, candidates: candidates() };
+  const qualification = (await runNativeQualification()).progress;
   const pending = opened.session.collectCapacity(qualification, () => ({ atMs: 1 }), 0);
   await Promise.resolve();
   emitBrowserGet(opened.harness, { requestId: "revision", url: revisionUrl("react/react"), body: `${JSON.stringify([{ sha: REACT }])}\n` });
@@ -4148,9 +4165,8 @@ test("an earlier SUCCESS is the first capacity terminal and fails exact limit or
 
 test("the fixed minimal malformed page observation causes deterministic capacity stage failure", async () => {
   const opened = await openFakeBrowser();
-  const pending = opened.session.collectCapacity({
-    revision: REACT, rootTree: REACT_ROOT, candidates: candidates(),
-  }, () => ({ atMs: 1 }), 0);
+  const qualification = (await runNativeQualification()).progress;
+  const pending = opened.session.collectCapacity(qualification, () => ({ atMs: 1 }), 0);
   await Promise.resolve();
   opened.harness.emit("Runtime.bindingCalled", {
     name: "__codeCityCollectorEvidence", payload: '{"malformed":true}',
@@ -4164,7 +4180,9 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
   const harness = fakeCdpHarness();
   const child = fakeChromeChild();
   const bodyStates = [];
+  const callbackBodyStates = [];
   const progressCounts = [];
+  let currentBodyState = null;
   let tick = 871.615432;
   const now = () => (tick += 0.25);
   const session = await createBrowserEvidenceSession({
@@ -4172,16 +4190,22 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
     origin: PRODUCTION_ORIGIN, manifest: { files: [{ path: "index.html" }] }, eventSha: EVENT,
     now, requestItems,
     launchImpl: async () => ({ child, websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }), connectImpl: () => harness.cdp,
-    observeBodyState(state) { bodyStates.push(structuredClone(state)); },
-    emitQualificationProgress(count) { progressCounts.push(count); },
+    observeBodyState(state) {
+      currentBodyState = structuredClone(state);
+      bodyStates.push(currentBodyState);
+    },
+    emitQualificationProgress(count) {
+      callbackBodyStates.push({ callback: `progress-${count}`, state: structuredClone(currentBodyState) });
+      progressCounts.push(count);
+    },
   });
-  const qualificationCandidates = NATIVE_ENTRIES.map((entry, offset) => ({
-    index: offset + 1, path: entry.path, blobId: entry.sha, normalizedBytes: 1,
-    runningAggregate: offset + 1, hashMatched: true, contentValid: true,
-  }));
-  const qualification = { revision: REACT, rootTree: REACT_ROOT, candidates: qualificationCandidates };
+  const qualification = (await runNativeQualification()).progress;
+  assert.deepEqual(qualification.candidates, [], "native qualification exposes no candidate identities");
   const events = [];
   const pending = session.collectCapacity(qualification, (event, generation, atMs) => {
+    if (event === "qualification-complete") {
+      callbackBodyStates.push({ callback: event, state: structuredClone(currentBodyState) });
+    }
     const value = { event, generation, atMs: atMs ?? now() };
     events.push(value);
     return value;
@@ -4220,6 +4244,10 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
   assert(bodyStates.every((state, index) => state.bodyBacklog === (index % 2 === 0 ? 1 : 0)
     && state.bodyReferenceCleared === (index % 2 === 1)));
   assert.deepEqual(progressCounts, [...Array.from({ length: 16 }, (_, index) => (index + 1) * 250), 4001]);
+  assert.equal(callbackBodyStates.length, progressCounts.length + 1);
+  assert(callbackBodyStates.every(({ state }) => state.kind === "provider-body-cleared"
+    && state.stage === "raw" && state.bodyBacklog === 0 && state.bodyReferenceCleared === true
+    && Object.hasOwn(state, "body") === false));
   harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
     type: "FAILURE", generation: 2, revision: REACT, category: "Repository exceeds Code City limits",
   }) });
@@ -4262,10 +4290,6 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
 
 test("a late publication after worker detachment becomes a schema-valid handled capacity failure", async () => {
   let stored;
-  const requestCandidates = NATIVE_ENTRIES.map((entry, offset) => ({
-    index: offset + 1, path: entry.path, blobId: entry.sha, normalizedBytes: 1,
-    runningAggregate: offset + 1, hashMatched: true, contentValid: true,
-  }));
   const harness = fakeCdpHarness({
     evaluateImpl: async (expression) => {
       if (expression.includes("capacity-pre-detachment-state")) {
@@ -4280,13 +4304,10 @@ test("a late publication after worker detachment becomes a schema-valid handled 
   const seams = collectorMatrixSeams({
     packetSink(value) { if (value) stored = value; return stored; },
   });
-  seams.qualifyRepository = async ({ now, requestItems, progress }) => {
-    appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, [], false);
-    return Object.assign(progress, {
-      repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
-      treeEntries: 5000, truncated: false, candidates: requestCandidates,
-    });
-  };
+  const controlledQualification = nativeQualificationFetch();
+  seams.qualifyRepository = ({ now, requestItems, progress, signal }) => qualifyRepository({
+    fetchImpl: controlledQualification.fetchImpl, now, requestItems, progress, signal,
+  });
   seams.createBrowserEvidenceSession = async (args) => {
     const native = await createBrowserEvidenceSession({
       ...args,
@@ -4409,13 +4430,8 @@ test("CDP admission rejects overlap, wrong order/path, and capacity candidate 4,
 
   {
     const opened = await openFakeBrowser();
-    const qualificationCandidates = NATIVE_ENTRIES.map((entry, offset) => ({
-      index: offset + 1, path: entry.path, blobId: entry.sha, normalizedBytes: 1,
-      runningAggregate: offset + 1, hashMatched: true, contentValid: true,
-    }));
-    const pending = opened.session.collectCapacity({
-      revision: REACT, rootTree: REACT_ROOT, candidates: qualificationCandidates,
-    }, () => ({ atMs: 1 }), 0);
+    const qualification = (await runNativeQualification()).progress;
+    const pending = opened.session.collectCapacity(qualification, () => ({ atMs: 1 }), 0);
     await Promise.resolve();
     emitBrowserGet(opened.harness, {
       requestId: "limit-revision", url: revisionUrl("react/react"), body: JSON.stringify([{ sha: REACT }]),
@@ -4458,7 +4474,7 @@ test("CDP admission rejects overlap, wrong order/path, and capacity candidate 4,
 const HANDLED_REASONS = {
   artifact: ["artifact-mismatch", "production-unreachable", "infrastructure-failure"],
   smoke: ["smoke-failure", "provider-failure", "cors-failure", "request-sequence", "request-overlap", "unexpected-request", "credential-header", "stale-publication", "quiescence-failure", "cleanup-failure", "infrastructure-failure"],
-  qualification: ["qualification-failure", "identity-mismatch", "provider-failure", "cors-failure", "tree-incomplete", "hash-mismatch", "content-invalid", "request-sequence", "request-overlap", "unexpected-request", "credential-header", "infrastructure-failure"],
+  qualification: ["qualification-failure", "identity-mismatch", "provider-failure", "cors-failure", "tree-incomplete", "request-sequence", "request-overlap", "unexpected-request", "credential-header", "infrastructure-failure"],
   capacity: ["identity-mismatch", "provider-failure", "cors-failure", "tree-incomplete", "hash-mismatch", "content-invalid", "limit-order", "request-sequence", "request-overlap", "unexpected-request", "credential-header", "stale-publication", "quiescence-failure", "cleanup-failure", "infrastructure-failure"],
 };
 
@@ -5048,19 +5064,12 @@ test("full capacity orchestration flushes delayed tree inventory before a pendin
       return value;
     },
   });
-  const qualificationCandidates = NATIVE_ENTRIES.map((entry, offset) => ({
-    index: offset + 1, path: entry.path, blobId: entry.sha, normalizedBytes: 1,
-    runningAggregate: offset + 1, hashMatched: true, contentValid: true,
-  }));
   const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
   const fallbackBrowserFactory = seams.createBrowserEvidenceSession;
-  seams.qualifyRepository = async ({ now, requestItems, progress }) => {
-    appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, [], false);
-    return Object.assign(progress, {
-      repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
-      treeEntries: NATIVE_ENTRIES.length, truncated: false, candidates: qualificationCandidates,
-    });
-  };
+  const controlledQualification = nativeQualificationFetch();
+  seams.qualifyRepository = ({ now, requestItems, progress, signal }) => qualifyRepository({
+    fetchImpl: controlledQualification.fetchImpl, now, requestItems, progress, signal,
+  });
   seams.createBrowserEvidenceSession = async (args) => {
     const native = await createBrowserEvidenceSession({
       ...args,
@@ -5263,18 +5272,11 @@ test("native CDP overlap and candidate-4,002 admission stops produce schema-vali
     let stored;
     let bodyCallsAtStop = null;
     const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
-    const nativeCandidates = NATIVE_ENTRIES.map((entry, offset) => ({
-      index: offset + 1, path: entry.path, blobId: entry.sha, normalizedBytes: 1,
-      runningAggregate: offset + 1, hashMatched: true, contentValid: true,
-    }));
     if (kind === "candidate-4002") {
-      seams.qualifyRepository = async ({ now, requestItems, progress }) => {
-        appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, [], false);
-        return Object.assign(progress, {
-          repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
-          treeEntries: 4002, truncated: false, candidates: structuredClone(nativeCandidates),
-        });
-      };
+      const controlledQualification = nativeQualificationFetch();
+      seams.qualifyRepository = ({ now, requestItems, progress, signal }) => qualifyRepository({
+        fetchImpl: controlledQualification.fetchImpl, now, requestItems, progress, signal,
+      });
     }
     seams.createBrowserEvidenceSession = async (args) => {
       const harness = fakeCdpHarness();
@@ -5432,17 +5434,12 @@ test("browser capacity normalization and hash failures produce stage-aware schem
     }));
     let stored;
     const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
-    seams.qualifyRepository = async ({ now, requestItems, progress }) => {
-      appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, [], false);
-      return Object.assign(progress, {
-        repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
-        treeEntries: entries.length, truncated: false,
-        candidates: entries.map((entry, index) => ({
-          index: index + 1, path: entry.path, blobId: entry.sha, normalizedBytes: 0,
-          runningAggregate: 0, hashMatched: true, contentValid: true,
-        })),
-      });
-    };
+    const controlledQualification = nativeQualificationFetch({
+      tree: { body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: entries }) },
+    });
+    seams.qualifyRepository = ({ now, requestItems, progress, signal }) => qualifyRepository({
+      fetchImpl: controlledQualification.fetchImpl, now, requestItems, progress, signal,
+    });
     seams.createBrowserEvidenceSession = async (args) => {
       const harness = fakeCdpHarness();
       const child = fakeChromeChild();
@@ -5521,6 +5518,12 @@ test("native browser CORS and incomplete-tree triggers flow through their owning
   for (const kind of ["cors", "tree"]) {
     let stored;
     const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+    if (kind === "tree") {
+      const controlledQualification = nativeQualificationFetch();
+      seams.qualifyRepository = ({ now, requestItems, progress, signal }) => qualifyRepository({
+        fetchImpl: controlledQualification.fetchImpl, now, requestItems, progress, signal,
+      });
+    }
     seams.createBrowserEvidenceSession = async (args) => {
       const harness = fakeCdpHarness();
       const child = fakeChromeChild();
