@@ -799,6 +799,8 @@ export async function createBrowserEvidenceSession({
   launchImpl = launchInstalledChrome,
   connectImpl = connectCdp,
   observeCdpVersion = () => {},
+  beforeProviderProjection = async () => {},
+  validateSafeTransientState = () => {},
 }) {
   const launched = await launchImpl(discovery, profile);
   let cdp;
@@ -818,9 +820,7 @@ export async function createBrowserEvidenceSession({
     const fatal = { value: null };
     const fatalController = new AbortController();
     const network = new Map();
-    const earlyExtra = new Map();
-    const ignoredRequestIds = new Set();
-    const completedRequestIds = new Set();
+    const correlations = new Map();
     const workerTargets = new Map();
     const workerReady = new Map();
     const detachedWorkers = new Set();
@@ -831,6 +831,7 @@ export async function createBrowserEvidenceSession({
     let processing = Promise.resolve();
     let lifecycleProcessing = Promise.resolve();
     let networkEventOrder = 0;
+    let traceStarted = false;
     let closePromise;
 
     function projectFact(value) {
@@ -901,9 +902,7 @@ export async function createBrowserEvidenceSession({
       fatal.value = error instanceof Error ? error : new Error("browser observation failed");
       if (mode) mode.requestsClosed = true;
       network.clear();
-      earlyExtra.clear();
-      ignoredRequestIds.clear();
-      completedRequestIds.clear();
+      correlations.clear();
       workerTargets.clear();
       workerReady.clear();
       detachedWorkers.clear();
@@ -931,8 +930,13 @@ export async function createBrowserEvidenceSession({
       void completion.catch(() => {});
       return completion;
     }
-    async function awaitProcessingBarrier(barrier = processing) {
-      await barrier;
+    async function awaitProcessingBarrier(barrier) {
+      if (barrier) await barrier;
+      for (;;) {
+        const observed = processing;
+        await observed;
+        if (observed === processing) break;
+      }
       if (fatal.value) throw fatal.value;
     }
     function enqueueLifecycle(task) {
@@ -1007,7 +1011,7 @@ export async function createBrowserEvidenceSession({
         void pending.processingBarrier.catch(setFatal);
         enqueueLifecycle(async () => {
           await pending.barrier;
-          await awaitProcessingBarrier(pending.processingBarrier);
+          await awaitProcessingBarrier();
           invariant(mode === current && current.pendingSelection === pending
             && current.revision === fact.revision && Number.isSafeInteger(current.stageEndMs.revision),
           "revision selection preceded matching request completion");
@@ -1042,11 +1046,11 @@ export async function createBrowserEvidenceSession({
           await pending.barrier;
           invariant(mode === current && current.pendingTerminal === pending, "browser terminal barrier differs");
           current.requestsClosed = true;
-          await awaitProcessingBarrier(pending.processingBarrier);
+          await awaitProcessingBarrier();
           flushCausalMilestones(current);
-          invariant(network.size === 0 && earlyExtra.size === 0,
+          invariant(network.size === 0 && [...correlations.values()].every(correlationComplete),
             "terminal preceded request completion");
-          invariant(current.activeExchange === null,
+          invariant(current.wireGet === null && current.openExchange === null,
             "browser request sequence ended before logical exchange completion");
           publishFact(fact, current.latestRequestEndMs);
           current.firstTerminal = fact;
@@ -1070,62 +1074,47 @@ export async function createBrowserEvidenceSession({
       }
       publishFact(fact);
     }
-    function expectedExchange(current, index) {
+    function expectedStage(current, index) {
       if (current.generation === 2 && index >= 4004) throw new Error("capacity limit ordering admitted candidate 4,002");
-      const stage = index === 0 ? "revision" : index === 1 ? "commit" : index === 2 ? "tree" : "raw";
-      let url;
-      let identity;
-      let path;
-      if (stage === "revision") {
-        url = revisionUrl(current.repository);
-      } else if (stage === "commit") {
-        invariant(current.revision, "browser request sequence differs at admission");
-        identity = current.revision;
-        url = commitUrl(current.repository, identity);
-      } else if (stage === "tree") {
-        invariant(current.rootTree, "browser request sequence differs at admission");
-        identity = current.rootTree;
-        url = treeUrl(current.repository, identity);
-      } else {
-        const expected = current.projected?.[index - 3];
-        if (!expected) throw new Error("unexpected browser request");
-        identity = current.revision;
-        path = expected.rawPath;
-        url = rawUrl(current.repository, identity, path);
+      return index === 0 ? "revision" : index === 1 ? "commit" : index === 2 ? "tree" : "raw";
+    }
+    function expectedExchange(current, entry) {
+      const index = current.admittedGets;
+      const stage = expectedStage(current, index);
+      invariant(entry.route.stage === stage, "browser request sequence differs at admission");
+      const exchange = {
+        generation: current.generation, index, stage, options: null, get: null,
+        sealed: false, scheduled: false, completed: false,
+      };
+      current.exchanges.push(exchange);
+      return exchange;
+    }
+    function expectedRoute(current, exchange) {
+      const { stage, index } = exchange;
+      if (stage === "revision") return { url: revisionUrl(current.repository) };
+      if (stage === "commit") {
+        invariant(current.revision, "browser request sequence differs before prior projection");
+        return { url: commitUrl(current.repository, current.revision), identity: current.revision };
       }
-      return { generation: current.generation, index, stage, identity, path, url, options: null, get: null, completed: false };
+      if (stage === "tree") {
+        invariant(current.rootTree, "browser request sequence differs before prior projection");
+        return { url: treeUrl(current.repository, current.rootTree), identity: current.rootTree };
+      }
+      const expected = current.projected?.[index - 3];
+      invariant(expected && current.revision, "browser request sequence differs before prior projection");
+      return {
+        url: rawUrl(current.repository, current.revision, expected.rawPath),
+        identity: current.revision,
+        path: expected.rawPath,
+      };
     }
     function entryMatchesExchange(entry, exchange) {
-      return entry.generation === exchange.generation
-        && entry.route.stage === exchange.stage
-        && entry.route.identity === exchange.identity
-        && entry.route.path === exchange.path
-        && entry.url === exchange.url;
+      return entry.generation === exchange.generation && entry.route.stage === exchange.stage;
     }
-    function validateRequestAdmission(entry) {
-      const current = mode;
-      invariant(current && entry.generation === current.generation, "unexpected browser request");
-      let exchange = current.activeExchange;
-      if (entry.terminalPendingAtObservation) {
-        invariant(current.pendingTerminal === entry.terminalPendingAtObservation && exchange !== null,
-          "browser request sequence differs at terminal cutoff");
-      } else if (exchange === null) {
-        exchange = expectedExchange(current, current.admittedGets);
-        current.activeExchange = exchange;
-      }
-      invariant(!exchange.completed && entryMatchesExchange(entry, exchange), "browser request sequence differs at admission");
-      if (entry.method === "OPTIONS") {
-        invariant(exchange.stage !== "raw" && exchange.options === null
-          && (!exchange.get?.finishedOrder || entry.requestOrder < exchange.get.finishedOrder),
-        "browser request sequence differs at admission");
-        exchange.options = entry;
-      } else {
-        invariant(exchange.get === null, "browser request sequence differs at admission");
-        exchange.get = entry;
-        current.admittedGets += 1;
-      }
-      entry.exchange = exchange;
-      entry.admitted = true;
+    function validateProjectedRoute(current, exchange, entry) {
+      const expected = expectedRoute(current, exchange);
+      invariant(entry.url === expected.url && entry.route.identity === expected.identity
+        && entry.route.path === expected.path, "browser request sequence differs at admission");
     }
     function requestRecord(entry, startedMs = entry.startedMs) {
       const headerFacts = mergeHeaderFacts(entry.requestHeaderFacts, entry.response.headerFacts);
@@ -1138,14 +1127,164 @@ export async function createBrowserEvidenceSession({
         endedMs: entry.finishedMs, ...headerFacts, redirected: entry.response.url !== entry.url,
       };
     }
+    function providerEntryReady(entry) {
+      return Boolean(entry.finished && entry.response && entry.requestHeaderFacts);
+    }
+    function correlationComplete(correlation) {
+      if (correlation.kind === "completed") return true;
+      if (correlation.kind === "provider") return correlation.entry.semanticComplete === true;
+      if (correlation.kind === "asset") return Boolean(correlation.request && correlation.response && correlation.finished);
+      return false;
+    }
+    function completedCorrelation(generation) {
+      return Object.freeze({ kind: "completed", generation });
+    }
+    function maybeCompleteAssetCorrelation(requestId, correlation) {
+      if (!correlationComplete(correlation)) return correlation;
+      const completed = completedCorrelation(correlation.generation);
+      correlations.set(requestId, completed);
+      validateSafeTransientState(Object.freeze({
+        kind: "asset-completed", generation: correlation.generation, correlation: completed,
+      }));
+      return completed;
+    }
+    function noteWorkerOwner(correlation, sessionId) {
+      if (sessionId === pageSessionId) return;
+      if (correlation.workerSession && correlation.workerSession !== sessionId) {
+        throw new Error("ambiguous browser request correlation");
+      }
+      correlation.workerSession = sessionId;
+    }
+    function assertCurrentCorrelation(correlation) {
+      const generation = mode?.generation ?? 0;
+      invariant(correlation.generation === generation, "stale browser request correlation");
+    }
+    function correlationId(message) {
+      const requestId = ownString(message.params, "requestId");
+      invariant(requestId, "browser request correlation is malformed");
+      return requestId;
+    }
+    function classifyAsset(requestId, url, sessionId) {
+      invariant(allowedAssets.has(url), "unexpected browser asset");
+      let correlation = correlations.get(requestId);
+      if (!correlation) {
+        correlation = { kind: "asset", generation: mode?.generation ?? 0, url, workerSession: null };
+        correlations.set(requestId, correlation);
+      } else if (correlation.kind === "unknown-extra") {
+        assertCurrentCorrelation(correlation);
+        const extraOwner = correlation.owner;
+        correlation = {
+          kind: "asset", generation: correlation.generation, url, workerSession: null,
+          requestExtra: { owner: extraOwner },
+        };
+        correlations.set(requestId, correlation);
+        noteWorkerOwner(correlation, extraOwner);
+      } else {
+        assertCurrentCorrelation(correlation);
+        invariant(correlation.kind === "asset" && correlation.url === url,
+          "ambiguous browser request correlation");
+      }
+      noteWorkerOwner(correlation, sessionId);
+      return correlation;
+    }
+    function assertProviderExtraOwner(correlation, sessionId) {
+      const entry = correlation.entry;
+      invariant(sessionId === pageSessionId || sessionId === entry.sessionId,
+        "unexpected browser request headers owner");
+      noteWorkerOwner(correlation, sessionId);
+    }
+    function projectRequestExtra(params) {
+      const requestHeaderFacts = requestHeaderProjection(ownData(params, "headers") ?? {});
+      invariant(requestHeaderFacts.authorizationAbsent && requestHeaderFacts.cookieAbsent
+        && requestHeaderFacts.refererAbsent, "credential header observed");
+      return requestHeaderFacts;
+    }
+    function attachProviderExtra(correlation, owner, params) {
+      invariant(!correlation.entry.requestHeaderFacts, "duplicate browser request headers");
+      assertProviderExtraOwner(correlation, owner);
+      correlation.entry.requestHeaderFacts = projectRequestExtra(params);
+      maybeScheduleExchange(correlation.entry.exchange);
+    }
+    function admitProviderRequest(message, sessionRole) {
+      const requestId = correlationId(message);
+      const request = ownData(message.params, "request");
+      const url = ownString(request, "url");
+      const method = ownString(request, "method");
+      invariant(url && method, "browser request is malformed");
+      if (allowedAssets.has(url)) {
+        invariant(method === "GET", "unexpected browser asset request");
+        const correlation = classifyAsset(requestId, url, message.sessionId);
+        invariant(!correlation.request, "duplicate browser asset request");
+        correlation.request = { owner: message.sessionId };
+        return maybeCompleteAssetCorrelation(requestId, correlation);
+      }
+      invariant(mode && !mode.requestsClosed, "unexpected browser request");
+      invariant((sessionRole === "page" && method === "OPTIONS")
+        || (sessionRole === "worker" && method === "GET"), "unexpected browser request role");
+      const pendingTerminal = mode.pendingTerminal;
+      if (pendingTerminal && !mode.openExchange && !mode.wireGet) {
+        throw new Error("browser request sequence differs at terminal cutoff");
+      }
+      if (pendingTerminal && sessionRole === "worker" && (!pendingTerminal.cutoffs.has(message.sessionId)
+        || pendingTerminal.cutoffs.get(message.sessionId))) throw new Error("unexpected browser request");
+      const priorCorrelation = correlations.get(requestId);
+      invariant(!priorCorrelation || priorCorrelation.kind === "unknown-extra",
+        "redirected, reused, or duplicate browser request");
+      if (priorCorrelation) assertCurrentCorrelation(priorCorrelation);
+      const route = browserRoute(url, mode.repository);
+      invariant(route && ["GET", "OPTIONS"].includes(method) && !(route.stage === "raw" && method === "OPTIONS"),
+        "unexpected browser request");
+
+      let exchange;
+      if (method === "GET") {
+        invariant(mode.wireGet === null, "browser application GET overlap at admission");
+        exchange = mode.openExchange ?? expectedExchange(mode, { route });
+        invariant(exchange.get === null && entryMatchesExchange({ generation: mode.generation, route }, exchange),
+          "browser request sequence differs at admission");
+        if (exchange.options) invariant(exchange.options.url === url, "browser request sequence differs at admission");
+      } else {
+        exchange = mode.wireGet?.exchange ?? mode.openExchange ?? expectedExchange(mode, { route });
+        invariant(exchange.options === null && !exchange.sealed
+          && entryMatchesExchange({ generation: mode.generation, route }, exchange),
+        "browser request sequence differs at admission");
+        if (exchange.get) invariant(exchange.get.url === url, "browser request sequence differs at admission");
+      }
+      const routeCanBeValidated = route.stage === "revision"
+        || (route.stage === "commit" && mode.revision)
+        || (route.stage === "tree" && mode.rootTree)
+        || (route.stage === "raw" && mode.revision && mode.projected?.[exchange.index - 3]);
+      if (routeCanBeValidated) validateProjectedRoute(mode, exchange, { url, route });
+      const entry = {
+        sessionId: message.sessionId, requestId, url, method, route,
+        generation: mode.generation,
+        cap: responseCapForRoute(route), startedMs: now(), dataLength: 0, dataEvents: 0,
+        requestHeaderFacts: null, exchange,
+      };
+      const correlation = { kind: "provider", generation: mode.generation, entry, workerSession: null };
+      correlations.set(requestId, correlation);
+      noteWorkerOwner(correlation, message.sessionId);
+      if (priorCorrelation) attachProviderExtra(correlation, priorCorrelation.owner, priorCorrelation.params);
+      network.set(requestId, entry);
+      if (method === "GET") {
+        exchange.get = entry;
+        mode.admittedGets += 1;
+        mode.wireGet = entry;
+      } else {
+        exchange.options = entry;
+      }
+      mode.openExchange = exchange;
+      return correlation;
+    }
     async function completeLogicalExchange(exchange) {
       const current = mode;
-      invariant(current && current.generation === exchange.generation && current.activeExchange === exchange
-        && !exchange.completed && exchange.get?.networkValidated
-        && (!exchange.options || exchange.options.networkValidated), "browser logical exchange differs");
+      invariant(current && current.generation === exchange.generation && exchange.sealed
+        && !exchange.completed && providerEntryReady(exchange.get)
+        && (!exchange.options || providerEntryReady(exchange.options)), "browser logical exchange differs");
+      validateProjectedRoute(current, exchange, exchange.get);
       const get = exchange.get;
       if (exchange.options) {
-        invariant(exchange.options.finishedOrder < get.finishedOrder,
+        validateProjectedRoute(current, exchange, exchange.options);
+        invariant(exchange.options.url === get.url && exchange.options.finishedOrder < get.finishedOrder,
           "browser preflight completed after its GET");
         const logicalGetStart = Math.max(get.startedMs, exchange.options.finishedMs);
         invariant(exchange.options.finishedMs <= logicalGetStart && logicalGetStart <= get.finishedMs,
@@ -1155,11 +1294,11 @@ export async function createBrowserEvidenceSession({
       } else {
         appendRequest(requestItems, requestRecord(get));
       }
-      exchange.completed = true;
-      current.activeExchange = null;
       const bytes = await cdpBody(cdp, get.sessionId, get.requestId, get.cap);
+      await beforeProviderProjection({ stage: get.route.stage });
       invariant(mode === current, "browser trace was cleared too early");
-      current.gets.push({ ...get.route, url: get.url });
+      const semanticRecord = Object.freeze({ ...get.route, url: get.url });
+      current.gets.push(semanticRecord);
       if (get.route.stage === "revision") {
         current.revision = projectRevision(bytes);
         current.progress.revision = current.revision;
@@ -1199,20 +1338,58 @@ export async function createBrowserEvidenceSession({
       }
       current.stageEndMs[exchange.stage] = Math.max(current.stageEndMs[exchange.stage] ?? 0, get.finishedMs);
       current.latestRequestEndMs = Math.max(current.latestRequestEndMs, get.finishedMs);
+      const completedEntries = [exchange.options, exchange.get].filter(Boolean);
+      exchange.completed = true;
+      for (const entry of completedEntries) {
+        entry.semanticComplete = true;
+        network.delete(entry.requestId);
+        correlations.set(entry.requestId, completedCorrelation(entry.generation));
+      }
+      exchange.options = null;
+      exchange.get = null;
+      Object.freeze(exchange);
+      validateSafeTransientState(Object.freeze({
+        kind: "provider-completed",
+        generation: current.generation,
+        correlations: Object.freeze(completedEntries.map((entry) => correlations.get(entry.requestId))),
+        exchange,
+        semanticRecordKeys: Object.freeze(Object.keys(semanticRecord).sort()),
+      }));
     }
-    function finalizeNetworkEntry(key, entry) {
-      if (!entry.finished || !entry.response || !entry.requestHeaderFacts) return;
-      network.delete(key);
-      completedRequestIds.add(key);
-      enqueue(async () => {
-        invariant(entry.admitted && entry.exchange, "browser request was not admitted");
-        requestRecord(entry);
-        entry.networkValidated = true;
-        const exchange = entry.exchange;
-        if (exchange.get?.networkValidated && (!exchange.options || exchange.options.networkValidated)) {
-          await completeLogicalExchange(exchange);
-        }
-      });
+    function maybeScheduleExchange() {
+      const current = mode;
+      if (!current) return;
+      for (;;) {
+        const exchange = current.exchanges[current.nextSemanticIndex];
+        if (!exchange || !exchange.sealed || exchange.scheduled || !providerEntryReady(exchange.get)
+            || (exchange.options && !providerEntryReady(exchange.options))) return;
+        exchange.scheduled = true;
+        current.nextSemanticIndex += 1;
+        enqueue(async () => completeLogicalExchange(exchange));
+      }
+    }
+    function assetResponse(message, requestId) {
+      const response = ownData(message.params, "response");
+      const url = ownString(response, "url");
+      invariant(url && allowedAssets.has(url), "unexpected browser request");
+      const correlation = classifyAsset(requestId, url, message.sessionId);
+      invariant(!correlation.response, "duplicate browser asset response");
+      correlation.response = { owner: message.sessionId };
+      maybeCompleteAssetCorrelation(requestId, correlation);
+    }
+    function assertNetworkCutoff(sessionRole, sessionId) {
+      const current = mode;
+      if (!current) {
+        invariant(!traceStarted && sessionRole === "page", "unexpected browser network event");
+        return;
+      }
+      invariant(!current.requestsClosed && !current.firstTerminal
+        && !current.pendingDrain && !current.firstDrain, "unexpected browser network event");
+      const pendingTerminal = current.pendingTerminal;
+      if (!pendingTerminal) return;
+      if (sessionRole === "page") throw new Error("unexpected browser network event");
+      invariant(pendingTerminal.cutoffs.has(sessionId) && !pendingTerminal.cutoffs.get(sessionId),
+        "unexpected browser network event");
     }
     fatalListener = setFatal;
     processExitListener = () => setFatal(new Error("Chrome process exited"));
@@ -1253,112 +1430,145 @@ export async function createBrowserEvidenceSession({
         return;
       }
       if (message.method.startsWith("Network.")) {
-        if (message.sessionId === pageSessionId) return;
-        const targetId = workerTargets.get(message.sessionId);
-        if (!targetId || detachedWorkers.has(targetId)) {
-          setFatal(new Error("unexpected browser network session"));
-          return;
+        let sessionRole;
+        if (message.sessionId === pageSessionId) {
+          sessionRole = "page";
+        } else {
+          const targetId = workerTargets.get(message.sessionId);
+          if (!targetId || detachedWorkers.has(targetId)) {
+            setFatal(new Error("unexpected browser network session"));
+            return;
+          }
+          sessionRole = "worker";
         }
-      }
-      if (message.method === "Runtime.exceptionThrown") {
-        setFatal(new Error("browser exception"));
-        return;
-      }
-      const key = `${message.sessionId ?? ""}:${message.params?.requestId ?? ""}`;
-      if (message.method === "Network.loadingFailed") {
-        if (network.has(key)) {
-          network.delete(key);
-          setFatal(new Error("browser request failed"));
-        }
-        return;
-      }
-      if (message.method === "Network.requestWillBeSentExtraInfo") {
-        if (completedRequestIds.has(key)) { setFatal(new Error("late browser request headers")); return; }
-        let requestHeaderFacts;
         try {
-          requestHeaderFacts = requestHeaderProjection(message.params?.headers ?? {});
+          assertNetworkCutoff(sessionRole, message.sessionId);
         } catch (error) {
           setFatal(error);
           return;
         }
-        if (!requestHeaderFacts.authorizationAbsent || !requestHeaderFacts.cookieAbsent || !requestHeaderFacts.refererAbsent) {
-          setFatal(new Error("credential header observed"));
+        if (message.method === "Network.responseReceivedExtraInfo") {
+          if (sessionRole === "page") return;
+          setFatal(new Error("unexpected browser network event"));
           return;
         }
-        if (ignoredRequestIds.has(key)) return;
-        const entry = network.get(key);
-        if (!entry) {
-          if (earlyExtra.has(key)) setFatal(new Error("duplicate browser request headers"));
-          else earlyExtra.set(key, requestHeaderFacts);
+        if (message.method === "Network.policyUpdated") {
+          if (sessionRole === "page") return;
+          setFatal(new Error("unexpected browser network event"));
           return;
         }
-        if (entry.requestHeaderFacts) { setFatal(new Error("duplicate browser request headers")); return; }
-        entry.requestHeaderFacts = requestHeaderFacts;
-        finalizeNetworkEntry(key, entry);
+        try {
+          if (message.method === "Network.loadingFailed") {
+            throw new Error("browser request failed");
+          }
+          if (message.method === "Network.requestWillBeSentExtraInfo") {
+            const requestId = correlationId(message);
+            const correlation = correlations.get(requestId);
+            if (!correlation) {
+              const pending = {
+                kind: "unknown-extra", generation: mode?.generation ?? 0,
+                owner: message.sessionId, params: message.params, workerSession: null,
+              };
+              noteWorkerOwner(pending, message.sessionId);
+              correlations.set(requestId, pending);
+              return;
+            }
+            assertCurrentCorrelation(correlation);
+            if (correlation.kind === "asset") {
+              invariant(!correlation.requestExtra, "duplicate browser asset request headers");
+              noteWorkerOwner(correlation, message.sessionId);
+              correlation.requestExtra = { owner: message.sessionId };
+              maybeCompleteAssetCorrelation(requestId, correlation);
+              return;
+            }
+            invariant(correlation.kind === "provider", "duplicate browser request headers");
+            attachProviderExtra(correlation, message.sessionId, message.params);
+            return;
+          }
+          if (message.method === "Network.requestWillBeSent") {
+            admitProviderRequest(message, sessionRole);
+            return;
+          }
+          if (message.method === "Network.responseReceived") {
+            const requestId = correlationId(message);
+            const correlation = correlations.get(requestId);
+            if (!correlation || correlation.kind === "asset") {
+              assetResponse(message, requestId);
+              return;
+            }
+            invariant(correlation.kind === "provider", "unmatched browser request fragment");
+            assertCurrentCorrelation(correlation);
+            const entry = correlation.entry;
+            invariant((entry.method === "GET" && sessionRole === "worker" && message.sessionId === entry.sessionId)
+              || (entry.method === "OPTIONS" && sessionRole === "page" && message.sessionId === entry.sessionId),
+            "unexpected browser response owner");
+            invariant(!entry.response, "duplicate browser response");
+            entry.response = cdpResponseProjection(ownData(message.params, "response"));
+            maybeScheduleExchange(entry.exchange);
+            return;
+          }
+          if (message.method === "Network.dataReceived") {
+            const requestId = correlationId(message);
+            const correlation = correlations.get(requestId);
+            invariant(correlation, "unmatched browser request fragment");
+            assertCurrentCorrelation(correlation);
+            noteWorkerOwner(correlation, message.sessionId);
+            if (correlation.kind === "asset") {
+              invariant(correlation.response && !correlation.finished, "browser asset data order differs");
+              correlation.dataEvents = (correlation.dataEvents ?? 0) + 1;
+              return;
+            }
+            invariant(correlation.kind === "provider", "unmatched browser request fragment");
+            const entry = correlation.entry;
+            invariant(message.sessionId === entry.sessionId && entry.response && !entry.finished,
+              "browser response data order differs");
+            recordCdpTransferSize(entry, message.params);
+            entry.dataEvents += 1;
+            return;
+          }
+          if (message.method === "Network.loadingFinished") {
+            const requestId = correlationId(message);
+            const correlation = correlations.get(requestId);
+            invariant(correlation, "unmatched browser request fragment");
+            assertCurrentCorrelation(correlation);
+            noteWorkerOwner(correlation, message.sessionId);
+            if (correlation.kind === "asset") {
+              invariant(!correlation.finished && ((correlation.dataEvents ?? 0) === 0 || correlation.response),
+                "browser asset finish order differs");
+              correlation.finished = true;
+              correlation.finishOwner = message.sessionId;
+              maybeCompleteAssetCorrelation(requestId, correlation);
+              return;
+            }
+            invariant(correlation.kind === "provider", "unmatched browser request fragment");
+            const entry = correlation.entry;
+            invariant(message.sessionId === entry.sessionId && !entry.finished,
+              "unexpected browser finish owner");
+            if (entry.dataEvents > 0) invariant(entry.response, "browser response finish order differs");
+            entry.finished = true;
+            entry.finishedOrder = ++networkEventOrder;
+            entry.finishedMs = Math.max(entry.startedMs, now());
+            if (entry.method === "GET") {
+              const current = mode;
+              invariant(current && current.generation === entry.generation && current.wireGet === entry,
+                "browser wire request differs");
+              invariant(!entry.exchange.options || entry.exchange.options.finished,
+                "browser preflight completed after its GET");
+              current.wireGet = null;
+              current.openExchange = null;
+              entry.exchange.sealed = true;
+            }
+            maybeScheduleExchange(entry.exchange);
+            return;
+          }
+          throw new Error("unexpected browser network event");
+        } catch (error) {
+          setFatal(error);
+        }
         return;
       }
-      if (message.method === "Network.requestWillBeSent") {
-        const url = message.params.request.url;
-        const method = message.params.request.method;
-        if (allowedAssets.has(url) || url === "about:blank") {
-          ignoredRequestIds.add(key); earlyExtra.delete(key); return;
-        }
-        if (!mode || mode.requestsClosed) { setFatal(new Error("unexpected browser request")); return; }
-        const pendingTerminal = mode.pendingTerminal;
-        if (pendingTerminal && (!pendingTerminal.cutoffs.has(message.sessionId)
-          || pendingTerminal.cutoffs.get(message.sessionId))) {
-          setFatal(new Error("unexpected browser request"));
-          return;
-        }
-        if (network.has(key) || completedRequestIds.has(key)) { setFatal(new Error("redirected or duplicate browser request")); return; }
-        const route = browserRoute(url, mode.repository);
-        if (!route || !["GET", "OPTIONS"].includes(method) || (route.stage === "raw" && method === "OPTIONS")) {
-          setFatal(new Error("unexpected browser request")); return;
-        }
-        if (method === "GET" && [...network.values()].some((entry) => entry.method === "GET")) {
-          setFatal(new Error("browser application GET overlap at admission"));
-          return;
-        }
-        const entry = {
-          sessionId: message.sessionId, requestId: message.params.requestId, url, method, route,
-          generation: mode.generation, requestOrder: ++networkEventOrder,
-          cap: responseCapForRoute(route), startedMs: now(), dataLength: 0,
-          requestHeaderFacts: earlyExtra.get(key), admitted: false,
-          terminalPendingAtObservation: pendingTerminal ?? null,
-        };
-        network.set(key, entry);
-        earlyExtra.delete(key);
-        enqueue(async () => validateRequestAdmission(entry));
-        return;
-      }
-      if (message.method === "Network.responseReceived") {
-        const entry = network.get(key);
-        if (entry) {
-          try {
-            entry.response = cdpResponseProjection(message.params.response);
-            finalizeNetworkEntry(key, entry);
-          } catch (error) { setFatal(error); }
-        }
-        return;
-      }
-      if (message.method === "Network.dataReceived") {
-        const entry = network.get(key);
-        if (entry) {
-          try { recordCdpTransferSize(entry, message.params); } catch (error) { setFatal(error); }
-        }
-        return;
-      }
-      if (message.method === "Network.loadingFinished") {
-        const entry = network.get(key);
-        if (!entry) return;
-        entry.finished = true;
-        entry.finishedOrder = ++networkEventOrder;
-        entry.finishedMs = Math.max(entry.startedMs, now());
-        if (entry.method === "GET" && entry.exchange?.options && !entry.exchange.options.finished) {
-          setFatal(new Error("browser preflight completed after its GET"));
-          return;
-        }
-        finalizeNetworkEntry(key, entry);
+      if (message.method === "Runtime.exceptionThrown") {
+        setFatal(new Error("browser exception"));
       }
     };
     cdp.listeners.add(listener);
@@ -1368,6 +1578,7 @@ export async function createBrowserEvidenceSession({
     await Promise.all([
       cdp.send("Page.enable", {}, sessionId),
       cdp.send("Runtime.enable", {}, sessionId),
+      cdp.send("Network.enable", {}, sessionId),
       cdp.send("Runtime.addBinding", { name: bindingName }, sessionId),
     ]);
     await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: createWorkerObserverSource(bindingName) }, sessionId);
@@ -1376,12 +1587,17 @@ export async function createBrowserEvidenceSession({
     await waitUntil(cdp, sessionId, "document.readyState==='complete'&&!!document.querySelector('form')", fatal);
 
     function startTrace(repository, generation, progress) {
+      invariant(network.size === 0 && [...correlations.values()].every(correlationComplete),
+        "browser asset correlation was not quiescent before generation");
+      correlations.clear();
       workerTargets.clear();
       workerReady.clear();
       detachedWorkers.clear();
+      traceStarted = true;
       mode = {
         repository, generation, progress, gets: [], rawFacts: progress.candidates ?? [], aggregate: 0,
-        revision: null, rootTree: null, projected: null, treeEntries: null, admittedGets: 0, activeExchange: null,
+        revision: null, rootTree: null, projected: null, treeEntries: null, admittedGets: 0,
+        wireGet: null, openExchange: null, exchanges: [], nextSemanticIndex: 0,
         pendingSelection: null, selectedFact: null, pendingTerminal: null, firstTerminal: null,
         pendingDrain: null, firstDrain: null, requestsClosed: false,
         stageEndMs: {}, latestRequestEndMs: 0, lastPublishedFactAtMs: 0,
@@ -1393,14 +1609,24 @@ export async function createBrowserEvidenceSession({
     async function submit(repositoryUrl) {
       await evaluate(cdp, sessionId, `(() => { const input=document.querySelector('input[name=repository]'); input.value=${JSON.stringify(repositoryUrl)}; document.querySelector('form').requestSubmit(); return true; })()`);
     }
-    async function flush() {
+    async function flush(requireQuiescence = false) {
       await evaluate(cdp, sessionId, "true");
       await awaitProcessingBarrier();
       if (mode) flushCausalMilestones(mode);
-      if ([...network.values()].some((entry) => entry.finished && (!entry.requestHeaderFacts || !entry.response)) || earlyExtra.size > 0) {
-        setFatal(new Error("browser request headers or response are incomplete"));
+      if (requireQuiescence && (network.size > 0
+          || [...correlations.values()].some((correlation) => !correlationComplete(correlation)))) {
+        setFatal(new Error("browser request headers, response, or asset correlation are incomplete"));
       }
       if (fatal.value) throw fatal.value;
+    }
+    function clearTransientCorrelation() {
+      invariant(network.size === 0 && [...correlations.values()].every(correlationComplete),
+        "browser request correlation is not quiescent");
+      const generation = mode?.generation ?? 0;
+      correlations.clear();
+      validateSafeTransientState(Object.freeze({
+        kind: "correlations-cleared", generation, correlationCount: correlations.size,
+      }));
     }
     function snapshot(kind) {
       if (kind === "smoke" && mode?.generation === 1) {
@@ -1439,7 +1665,7 @@ export async function createBrowserEvidenceSession({
           && terminal.revision === eventSha, "smoke terminal revision differs");
         await nextFact((fact) => fact.type === "ATTEMPT_DRAINED" && fact.generation === 1);
         await waitUntil(cdp, sessionId, `document.querySelector('[data-commit]')?.textContent===${JSON.stringify(eventSha)}&&document.querySelectorAll('[data-city] canvas').length===1`, fatal);
-        await flush();
+        await flush(true);
         invariant(workerTargets.size > 0, "smoke worker target was not observed");
         await waitForWorkerDetachment();
         invariant(trace.projected && trace.projected.length >= 1 && trace.rawFacts.length === trace.projected.length, "smoke tree/request cardinality mismatch");
@@ -1450,11 +1676,12 @@ export async function createBrowserEvidenceSession({
           revision: trace.revision, rootTree: trace.rootTree, terminal: "success", canvasCount: 1,
           modelSha256: terminal.modelSha256, endedMs: cityPublished.atMs, providerGetCount: trace.gets.length,
         });
+        clearTransientCorrelation();
         mode = null;
         return progress;
       },
       clearTrace() {
-        invariant(mode === null && network.size === 0 && earlyExtra.size === 0, "browser trace is not quiescent");
+        invariant(mode === null && network.size === 0 && correlations.size === 0, "browser trace is not quiescent");
       },
       async collectCapacity(qualification, emit, startedMs) {
         facts.length = 0;
@@ -1477,7 +1704,7 @@ export async function createBrowserEvidenceSession({
         const terminal = await nextFact((fact) => ["SUCCESS", "FAILURE"].includes(fact.type) && fact.generation === 2);
         invariant(terminal.type === "FAILURE" && terminal.category === "Repository exceeds Code City limits"
           && terminal.revision === qualification.revision, "capacity terminal differs");
-        await flush();
+        await flush(true);
         invariant(network.size === 0, "terminal preceded request completion");
         invariant(trace.rootTree === qualification.rootTree && trace.projected && trace.projected.length >= 4001 && trace.rawFacts.length === 4001, "capacity inventory/cardinality differs");
         invariant(JSON.stringify(trace.rawFacts) === JSON.stringify(qualification.candidates), "capacity bytes differ from qualification");
@@ -1495,14 +1722,14 @@ export async function createBrowserEvidenceSession({
           cityPresent: capacityUiHasPresentation(capacityUi),
           priorCityRemoved: capacityUiHasPresentation(capacityUi) === false,
         });
-        await flush();
+        await flush(true);
         invariant(network.size === 0, "capacity requests are not quiescent");
         progress.noLaterRequest = true;
         emit("request-quiescent", 2);
         invariant(workerTargets.size > 0, "capacity worker target was not observed");
         await waitForWorkerDetachment();
         const finalUi = await evaluate(cdp, sessionId, capacityUiExpression("capacity-final-state"));
-        await flush();
+        await flush(true);
         invariant(capacityUiIsClear(finalUi, qualification.revision)
           && capacityUiHasPresentation(finalUi) === progress.cityPresent,
         "stale publication after worker detachment");
@@ -1513,6 +1740,7 @@ export async function createBrowserEvidenceSession({
         progress.workerQuiescent = true;
         const workerQuiescent = emit("worker-quiescent", 2);
         progress.endedMs = workerQuiescent.atMs;
+        clearTransientCorrelation();
         mode = null;
         return progress;
       },
@@ -1715,7 +1943,9 @@ function mapBrowserFailure(stage, error) {
   if (/CORS/iu.test(message)) return new CollectorFailure(stage, "cors-failure");
   if (/stale/iu.test(message)) return new CollectorFailure(stage, "stale-publication");
   if (/overlap/iu.test(message)) return new CollectorFailure(stage, "request-overlap");
-  if (/unexpected browser (?:request|network session)/iu.test(message)) return new CollectorFailure(stage, "unexpected-request");
+  if (/unexpected browser (?:request|network (?:event|session))/iu.test(message)) {
+    return new CollectorFailure(stage, "unexpected-request");
+  }
   if (/sequence|cardinality|redirected|duplicate/iu.test(message)) return new CollectorFailure(stage, "request-sequence");
   if (/quiescent/iu.test(message)) return new CollectorFailure(stage, "quiescence-failure");
   if (stage === "smoke" && /tree|blob|candidate|UTF-8|NUL|content|identity|revision|commit|supported|encoded data|JSON|Unexpected token|property name/iu.test(message)) {
