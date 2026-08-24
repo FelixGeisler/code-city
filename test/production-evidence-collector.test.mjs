@@ -1667,7 +1667,19 @@ async function finishControlledSmoke(opened, idPrefix = "asset-pass") {
 
 test("exact manifest assets admit page, worker, parser, and split worker-bootstrap ownership without projection", async () => {
   const manifest = { files: SPLIT_ASSET_PATHS.map((assetPath) => ({ path: assetPath })) };
-  const opened = await openFakeBrowser(fakeCdpHarness(), { manifest });
+  const safeStates = [];
+  const opened = await openFakeBrowser(fakeCdpHarness(), {
+    manifest,
+    browserOptions: {
+      validateSafeTransientState(state) { safeStates.push(structuredClone(state)); },
+    },
+  });
+  emitControlledAsset(opened.harness, {
+    requestId: "initial-page-entry", url: PRODUCTION_ORIGIN, requestOwner: "page-session",
+  });
+  assert.deepEqual(safeStates, [{
+    kind: "asset-completed", generation: 0, correlation: { kind: "completed", generation: 0 },
+  }]);
   const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
   await Promise.resolve();
   let privateReads = 0;
@@ -1707,8 +1719,91 @@ test("exact manifest assets admit page, worker, parser, and split worker-bootstr
   assert.equal(privateReads, 0);
   assert.equal(opened.harness.bodyCalls, 4);
   assert.deepEqual(opened.requestItems.map(({ stage }) => stage), ["revision", "commit", "tree", "raw"]);
-  assert(!JSON.stringify({ smoke, requestItems: opened.requestItems, session: opened.session }).includes("asset-"));
+  const assetStates = safeStates.filter(({ kind }) => kind === "asset-completed");
+  assert.equal(assetStates.length, 7);
+  assert(assetStates.every((state, index) => JSON.stringify(state) === JSON.stringify({
+    kind: "asset-completed", generation: index === 0 ? 0 : 1,
+    correlation: { kind: "completed", generation: index === 0 ? 0 : 1 },
+  })));
+  assert.deepEqual(safeStates.at(-1), { kind: "correlations-cleared", generation: 1, correlationCount: 0 });
+  const retained = JSON.stringify({ smoke, requestItems: opened.requestItems, session: opened.session, safeStates });
+  for (const requestId of [
+    "initial-page-entry", "asset-entry", "asset-main", "asset-style", "asset-worker-bootstrap",
+    "asset-parser-js", "asset-parser-wasm",
+  ]) assert(!retained.includes(requestId));
   await opened.session.close();
+});
+
+test("provider completion retains only exact safe tombstones and exchange slots until correlation clear", async () => {
+  const safeStates = [];
+  const opened = await openFakeBrowser(fakeCdpHarness(), {
+    browserOptions: {
+      validateSafeTransientState(state) { safeStates.push(structuredClone(state)); },
+    },
+  });
+  const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+  await Promise.resolve();
+  await finishControlledSmoke(opened, "sensitive-correlation");
+  const smoke = await pending;
+  assert.equal(smoke.providerGetCount, 4);
+
+  const completed = safeStates.filter(({ kind }) => kind === "provider-completed");
+  assert.equal(completed.length, 4);
+  assert.deepEqual(completed[0], {
+    kind: "provider-completed",
+    generation: 1,
+    correlations: [{ kind: "completed", generation: 1 }],
+    exchange: {
+      generation: 1, index: 0, stage: "revision", options: null, get: null,
+      sealed: true, scheduled: true, completed: true,
+    },
+    semanticRecordKeys: ["stage", "url"],
+  });
+  assert(completed.every(({ correlations, exchange, semanticRecordKeys }, index) => (
+    correlations.length === 1
+    && JSON.stringify(correlations[0]) === JSON.stringify({ kind: "completed", generation: 1 })
+    && exchange.index === index && exchange.options === null && exchange.get === null
+    && !Object.keys(exchange).some((key) => /requestId|sessionId|url|header|route/u.test(key))
+    && !semanticRecordKeys.some((key) => /requestId|sessionId|header/u.test(key))
+  )));
+  assert.deepEqual(safeStates.at(-1), {
+    kind: "correlations-cleared", generation: 1, correlationCount: 0,
+  });
+  const serialized = JSON.stringify(safeStates);
+  assert(!serialized.includes("sensitive-correlation"));
+  assert(!/requestId|sessionId|headerNames|authorization|cookie|referer/iu.test(serialized));
+  await opened.session.close();
+});
+
+test("a completed provider tombstone rejects a late duplicate without exposing its transient value", async () => {
+  const firstCompletion = deferredValue();
+  const safeStates = [];
+  const opened = await openFakeBrowser(fakeCdpHarness(), {
+    browserOptions: {
+      validateSafeTransientState(state) {
+        safeStates.push(structuredClone(state));
+        if (state.kind === "provider-completed" && state.exchange.index === 0) firstCompletion.resolve();
+      },
+    },
+  });
+  const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+  await Promise.resolve();
+  const requestId = "late-private-duplicate";
+  const url = revisionUrl("FelixGeisler/code-city");
+  emitBrowserGet(opened.harness, {
+    requestId, url, body: JSON.stringify([{ sha: EVENT }]),
+  });
+  await firstCompletion.promise;
+  opened.harness.emit("Network.responseReceived", { requestId, response: {
+    url, status: 200, headers: { "Access-Control-Allow-Origin": "*" },
+    fromDiskCache: false, fromServiceWorker: false,
+  } }, "worker-session");
+  await assert.rejects(pending, /unmatched|duplicate/u);
+  assert.equal(opened.harness.bodyCalls, 1);
+  assert.equal(opened.requestItems.length, 1);
+  assert.deepEqual(safeStates[0].correlations, [{ kind: "completed", generation: 1 }]);
+  assert(!JSON.stringify({ requestItems: opened.requestItems, safeStates }).includes(requestId));
+  await opened.session.close().catch(() => {});
 });
 
 test("asset and role correlation rejects malformed, ambiguous, reused, unmatched, and noncanonical patterns", async () => {
@@ -1868,13 +1963,13 @@ test("cross-session fences causally order selection, terminal, drain, and detach
     harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
       type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
     }) });
-    harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
-      type: "ATTEMPT_DRAINED", generation: 1,
-    }) });
     await fences.waitForCount(4);
     if (delayedPart !== "body") emitBrowserCompletionPart(harness, {
       requestId: rawId, url: raw, method: "GET", part: delayedPart, body: "x", sessionId: "worker-b",
     });
+    harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "ATTEMPT_DRAINED", generation: 1,
+    }) });
     harness.emit("Target.detachedFromTarget", { sessionId: "worker-a", targetId: "target-a" }, "");
     harness.emit("Target.detachedFromTarget", { sessionId: "worker-b", targetId: "target-b" }, "");
     fences.release(2);
@@ -1942,27 +2037,16 @@ async function openTerminalCutoffScenario({ activeComponent = "options" } = {}) 
   return { ...opened, pending, fences, commit };
 }
 
-test("an unfenced captured session may finish only the active route while terminal and drain are pending", async () => {
+test("attempt drain rejects a new route even while its worker terminal fence is still open", async () => {
   const opened = await openTerminalCutoffScenario();
   opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
     type: "ATTEMPT_DRAINED", generation: 1,
   }) });
-  opened.fences.release(2);
   beginBrowserRequest(opened.harness, {
     requestId: "cutoff-delayed-get", url: opened.commit, method: "GET", sessionId: "worker-b",
   });
-  finishBrowserRequest(opened.harness, {
-    requestId: "cutoff-delayed-get", url: opened.commit, method: "GET",
-    body: JSON.stringify({ sha: EVENT, tree: { sha: ROOT } }), sessionId: "worker-b",
-  });
-  await waitForBodyCalls(opened.harness, 2);
-  opened.harness.emit("Target.detachedFromTarget", { sessionId: "worker-a", targetId: "target-a" }, "");
-  opened.harness.emit("Target.detachedFromTarget", { sessionId: "worker-b", targetId: "target-b" }, "");
-  opened.fences.release(3);
-  await assert.rejects(opened.pending, /tree\/request cardinality mismatch/u);
-  assert.deepEqual(opened.requestItems.slice(-2).map(({ method, stage }) => [method, stage]), [
-    ["OPTIONS", "commit"], ["GET", "commit"],
-  ]);
+  await assert.rejects(opened.pending, /unexpected browser network event/u);
+  assert.deepEqual(opened.requestItems.map(({ stage }) => stage), ["revision"]);
   await opened.session.close().catch(() => {});
 });
 
@@ -1986,7 +2070,7 @@ test("a request first observed after all terminal fences rejects at the global c
   beginBrowserRequest(opened.harness, {
     requestId: "post-global-cutoff", url: opened.commit, method: "GET", sessionId: "worker-b",
   });
-  await assert.rejects(opened.pending, /unexpected browser request/u);
+  await assert.rejects(opened.pending, /unexpected browser network event/u);
   assert.equal(opened.fences.pending.length, 4);
   assert.deepEqual(opened.requestItems.map(({ stage }) => stage), ["revision"]);
   await opened.session.close().catch(() => {});
@@ -2036,7 +2120,9 @@ test("terminal cutoffs reject duplicate terminals plus fenced, unknown, new, dup
       : scenario === "duplicate-get" ? /overlap/u
         : scenario === "wrong-identity" ? /sequence differs/u
         : scenario === "no-next-route" ? /terminal cutoff/u
-          : scenario === "unknown" ? /unexpected browser network session/u : /unexpected browser request/u, scenario);
+          : scenario === "unknown" ? /unexpected browser network session/u
+            : scenario === "fenced" || scenario === "new" ? /unexpected browser network event/u
+              : /unexpected browser request/u, scenario);
     await opened.session.close().catch(() => {});
   }
 });
@@ -2532,6 +2618,134 @@ function privateNetworkParams(method, onRead, requestId) {
     },
   });
 }
+
+function privateAssetParams(method, onRead, requestId) {
+  const url = `${PRODUCTION_ORIGIN}assets/parser.js`;
+  const values = method === "Network.requestWillBeSent"
+    ? { requestId, request: { url, method: "GET", headers: {} } }
+    : method === "Network.requestWillBeSentExtraInfo"
+      ? { requestId, headers: { Cookie: "private-asset" }, associatedCookies: [] }
+      : method === "Network.responseReceived"
+        ? { requestId, response: { url, status: 200, headers: { "X-Private": "private-asset" } } }
+        : method === "Network.dataReceived"
+          ? { requestId, dataLength: 1, encodedDataLength: 1 }
+          : method === "Network.loadingFinished"
+            ? { requestId, encodedDataLength: 1 }
+            : { requestId, errorText: "private-asset" };
+  return new Proxy(values, {
+    get(target, property, receiver) {
+      onRead(property);
+      return Reflect.get(target, property, receiver);
+    },
+  });
+}
+
+test("every asset Network method rejects post-page-fence, post-worker-fence, and post-drain before params access", async () => {
+  for (const cutoff of ["page", "worker", "drain"]) for (const method of PROVIDER_NETWORK_EVENTS) {
+    const opened = await openTerminalCutoffScenario({ activeComponent: null });
+    let sessionId;
+    if (cutoff === "page") {
+      sessionId = "page-session";
+    } else if (cutoff === "worker") {
+      opened.fences.release(2);
+      await new Promise((resolve) => setImmediate(resolve));
+      sessionId = "worker-a";
+    } else {
+      opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "ATTEMPT_DRAINED", generation: 1,
+      }) });
+      sessionId = "worker-b";
+    }
+    const reads = [];
+    opened.harness.emit(method, privateAssetParams(
+      method, (property) => reads.push(property), `${cutoff}-${method}-private`,
+    ), sessionId);
+    await assert.rejects(opened.pending, /unexpected browser network event/u, `${cutoff}/${method}`);
+    assert.deepEqual(reads, [], `${cutoff}/${method}`);
+    assert.equal(opened.harness.bodyCalls, 1, `${cutoff}/${method}`);
+    assert.deepEqual(opened.requestItems.map(({ stage }) => stage), ["revision"], `${cutoff}/${method}`);
+    await opened.session.close().catch(() => {});
+  }
+});
+
+test("every asset Network method rejects after trace clear before params access", async () => {
+  for (const method of PROVIDER_NETWORK_EVENTS) {
+    const opened = await openFakeBrowser();
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    await Promise.resolve();
+    await finishControlledSmoke(opened, `after-trace-${method}`);
+    await pending;
+    const reads = [];
+    opened.harness.emit(method, privateAssetParams(
+      method, (property) => reads.push(property), `after-trace-${method}-private`,
+    ), "page-session");
+    assert.equal(opened.session.fatalSignal.aborted, true, method);
+    assert.match(opened.session.fatalSignal.reason.message, /unexpected browser network event/u, method);
+    assert.deepEqual(reads, [], method);
+    assert.equal(opened.harness.bodyCalls, 4, method);
+    assert.deepEqual(opened.requestItems.map(({ stage }) => stage), ["revision", "commit", "tree", "raw"]);
+    await opened.session.close().catch(() => {});
+  }
+});
+
+test("a causally prior worker asset may complete only before that worker terminal fence", async () => {
+  const manifest = { files: SPLIT_ASSET_PATHS.map((assetPath) => ({ path: assetPath })) };
+  const assetCompleted = deferredValue();
+  const fences = controlledWorkerFences();
+  const opened = await openFakeBrowser(fakeCdpHarness({ workerFenceImpl: fences.impl, autoWorker: false }), {
+    manifest,
+    browserOptions: {
+      validateSafeTransientState(state) {
+        if (state.kind === "asset-completed" && state.generation === 1) assetCompleted.resolve(state);
+      },
+    },
+  });
+  const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+  await Promise.resolve();
+  for (const suffix of ["a", "b"]) opened.harness.emit("Target.attachedToTarget", {
+    sessionId: `worker-${suffix}`, targetInfo: { type: "worker", targetId: `target-${suffix}` },
+  }, "page-session");
+  await new Promise((resolve) => setImmediate(resolve));
+  emitBrowserGet(opened.harness, {
+    requestId: "asset-fence-revision", url: revisionUrl("FelixGeisler/code-city"),
+    body: JSON.stringify([{ sha: EVENT }]), sessionId: "worker-a",
+  });
+  await waitForBodyCalls(opened.harness, 1);
+  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+  }) });
+  await fences.waitForCount(2);
+  fences.release(0);
+  fences.release(1);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const requestId = "causally-prior-private-asset";
+  const url = `${PRODUCTION_ORIGIN}assets/parser.js`;
+  opened.harness.emit("Network.requestWillBeSent", {
+    requestId, request: { url, method: "GET", headers: {} },
+  }, "worker-b");
+  opened.harness.emit("Network.requestWillBeSentExtraInfo", {
+    requestId, headers: {}, associatedCookies: [],
+  }, "worker-b");
+  opened.harness.emit("Network.responseReceived", { requestId, response: {
+    url, status: 200, headers: {}, fromDiskCache: false, fromServiceWorker: false,
+  } }, "worker-b");
+  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
+  }) });
+  await fences.waitForCount(4);
+  opened.harness.emit("Network.dataReceived", {
+    requestId, dataLength: 1, encodedDataLength: 1,
+  }, "worker-b");
+  opened.harness.emit("Network.loadingFinished", { requestId, encodedDataLength: 1 }, "worker-b");
+  assert.deepEqual(await assetCompleted.promise, {
+    kind: "asset-completed", generation: 1, correlation: { kind: "completed", generation: 1 },
+  });
+  opened.harness.emit("Runtime.exceptionThrown", {});
+  await assert.rejects(pending, /browser exception/u);
+  assert(!JSON.stringify(opened.requestItems).includes(requestId));
+  await opened.session.close().catch(() => {});
+});
 
 test("every provider Network event from an unknown session rejects before reading params or creating state", async () => {
   for (const method of PROVIDER_NETWORK_EVENTS) {
@@ -3440,6 +3654,73 @@ test("post-detachment Network rejection produces a schema-valid handled packet w
   }
 });
 
+test("a complete post-terminal asset lifecycle becomes a schema-valid failure without payload access", async () => {
+  let stored;
+  const privateReads = [];
+  const privateIds = PROVIDER_NETWORK_EVENTS.map((method) => `post-terminal-${method}-private`);
+  const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+  const fallbackBrowserFactory = seams.createBrowserEvidenceSession;
+  seams.createBrowserEvidenceSession = async (args) => {
+    const harness = fakeCdpHarness();
+    const native = await createBrowserEvidenceSession({
+      ...args,
+      launchImpl: async () => ({ child: fakeChromeChild(), websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+      connectImpl: () => harness.cdp,
+    });
+    const fallback = await fallbackBrowserFactory(args);
+    const driveSmoke = async () => {
+      await Promise.resolve();
+      emitBrowserGet(harness, {
+        requestId: "safe-revision-before-asset-cutoff", url: revisionUrl("FelixGeisler/code-city"),
+        body: JSON.stringify([{ sha: EVENT }]),
+      });
+      await waitForBodyCalls(harness, 1);
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+      }) });
+      await new Promise((resolve) => setImmediate(resolve));
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
+      }) });
+      for (const [index, method] of PROVIDER_NETWORK_EVENTS.entries()) {
+        harness.emit(method, privateAssetParams(
+          method, (property) => privateReads.push(property), privateIds[index],
+        ), "page-session");
+      }
+    };
+    return Object.freeze({
+      cdpVersion: native.cdpVersion,
+      fatalSignal: native.fatalSignal,
+      snapshot: native.snapshot,
+      async collectSmoke(emit, startedMs) {
+        const pending = native.collectSmoke(emit, startedMs);
+        void driveSmoke();
+        return pending;
+      },
+      clearTrace: native.clearTrace,
+      collectCapacity: fallback.collectCapacity,
+      close: native.close,
+    });
+  };
+
+  const result = await collectProductionEvidence({
+    origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
+    output: path.resolve("post-terminal-asset-failure"),
+  }, seams);
+  assert.deepEqual([result.status, result.reason], ["fail", "unexpected-request"]);
+  assert.deepEqual(privateReads, []);
+  const validated = validateEvidencePacket(stored.files, stored.binding);
+  const index = JSON.parse(new TextDecoder().decode(validated.files.get("index.json")));
+  const smoke = JSON.parse(new TextDecoder().decode(validated.files.get("smoke.json")));
+  assert.deepEqual([index.overallStatus, index.firstFailure], ["fail", "unexpected-request"]);
+  assert.deepEqual([smoke.status, smoke.reason], ["fail", "unexpected-request"]);
+  for (const bytes of validated.files.values()) {
+    const text = new TextDecoder().decode(bytes);
+    assert(!privateIds.some((requestId) => text.includes(requestId)));
+    assert(!text.includes("private-asset"));
+  }
+});
+
 test("full collector orchestration correlates page preflight and GET ExtraInfo with worker GET lifecycle", async () => {
   let stored;
   let mirroredPageHeaderReads = 0;
@@ -3503,13 +3784,13 @@ test("full collector orchestration correlates page preflight and GET ExtraInfo w
       harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
         type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
       }) });
-      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
-        type: "ATTEMPT_DRAINED", generation: 1,
-      }) });
       finishBrowserRequest(harness, {
         requestId: "orchestration-raw", url: raw, method: "GET", body: "x",
       });
       await waitForBodyCalls(harness, 4);
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "ATTEMPT_DRAINED", generation: 1,
+      }) });
       harness.emit("Target.detachedFromTarget", {
         sessionId: "worker-session", targetId: "worker-target",
       }, "");

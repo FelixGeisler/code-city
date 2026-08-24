@@ -800,6 +800,7 @@ export async function createBrowserEvidenceSession({
   connectImpl = connectCdp,
   observeCdpVersion = () => {},
   beforeProviderProjection = async () => {},
+  validateSafeTransientState = () => {},
 }) {
   const launched = await launchImpl(discovery, profile);
   let cdp;
@@ -830,6 +831,7 @@ export async function createBrowserEvidenceSession({
     let processing = Promise.resolve();
     let lifecycleProcessing = Promise.resolve();
     let networkEventOrder = 0;
+    let traceStarted = false;
     let closePromise;
 
     function projectFact(value) {
@@ -1129,9 +1131,22 @@ export async function createBrowserEvidenceSession({
       return Boolean(entry.finished && entry.response && entry.requestHeaderFacts);
     }
     function correlationComplete(correlation) {
+      if (correlation.kind === "completed") return true;
       if (correlation.kind === "provider") return correlation.entry.semanticComplete === true;
       if (correlation.kind === "asset") return Boolean(correlation.request && correlation.response && correlation.finished);
       return false;
+    }
+    function completedCorrelation(generation) {
+      return Object.freeze({ kind: "completed", generation });
+    }
+    function maybeCompleteAssetCorrelation(requestId, correlation) {
+      if (!correlationComplete(correlation)) return correlation;
+      const completed = completedCorrelation(correlation.generation);
+      correlations.set(requestId, completed);
+      validateSafeTransientState(Object.freeze({
+        kind: "asset-completed", generation: correlation.generation, correlation: completed,
+      }));
+      return completed;
     }
     function noteWorkerOwner(correlation, sessionId) {
       if (sessionId === pageSessionId) return;
@@ -1201,7 +1216,7 @@ export async function createBrowserEvidenceSession({
         const correlation = classifyAsset(requestId, url, message.sessionId);
         invariant(!correlation.request, "duplicate browser asset request");
         correlation.request = { owner: message.sessionId };
-        return correlation;
+        return maybeCompleteAssetCorrelation(requestId, correlation);
       }
       invariant(mode && !mode.requestsClosed, "unexpected browser request");
       invariant((sessionRole === "page" && method === "OPTIONS")
@@ -1282,7 +1297,8 @@ export async function createBrowserEvidenceSession({
       const bytes = await cdpBody(cdp, get.sessionId, get.requestId, get.cap);
       await beforeProviderProjection({ stage: get.route.stage });
       invariant(mode === current, "browser trace was cleared too early");
-      current.gets.push({ ...get.route, url: get.url });
+      const semanticRecord = Object.freeze({ ...get.route, url: get.url });
+      current.gets.push(semanticRecord);
       if (get.route.stage === "revision") {
         current.revision = projectRevision(bytes);
         current.progress.revision = current.revision;
@@ -1322,11 +1338,23 @@ export async function createBrowserEvidenceSession({
       }
       current.stageEndMs[exchange.stage] = Math.max(current.stageEndMs[exchange.stage] ?? 0, get.finishedMs);
       current.latestRequestEndMs = Math.max(current.latestRequestEndMs, get.finishedMs);
+      const completedEntries = [exchange.options, exchange.get].filter(Boolean);
       exchange.completed = true;
-      for (const entry of [exchange.options, exchange.get].filter(Boolean)) {
+      for (const entry of completedEntries) {
         entry.semanticComplete = true;
         network.delete(entry.requestId);
+        correlations.set(entry.requestId, completedCorrelation(entry.generation));
       }
+      exchange.options = null;
+      exchange.get = null;
+      Object.freeze(exchange);
+      validateSafeTransientState(Object.freeze({
+        kind: "provider-completed",
+        generation: current.generation,
+        correlations: Object.freeze(completedEntries.map((entry) => correlations.get(entry.requestId))),
+        exchange,
+        semanticRecordKeys: Object.freeze(Object.keys(semanticRecord).sort()),
+      }));
     }
     function maybeScheduleExchange() {
       const current = mode;
@@ -1347,6 +1375,21 @@ export async function createBrowserEvidenceSession({
       const correlation = classifyAsset(requestId, url, message.sessionId);
       invariant(!correlation.response, "duplicate browser asset response");
       correlation.response = { owner: message.sessionId };
+      maybeCompleteAssetCorrelation(requestId, correlation);
+    }
+    function assertNetworkCutoff(sessionRole, sessionId) {
+      const current = mode;
+      if (!current) {
+        invariant(!traceStarted && sessionRole === "page", "unexpected browser network event");
+        return;
+      }
+      invariant(!current.requestsClosed && !current.firstTerminal
+        && !current.pendingDrain && !current.firstDrain, "unexpected browser network event");
+      const pendingTerminal = current.pendingTerminal;
+      if (!pendingTerminal) return;
+      if (sessionRole === "page") throw new Error("unexpected browser network event");
+      invariant(pendingTerminal.cutoffs.has(sessionId) && !pendingTerminal.cutoffs.get(sessionId),
+        "unexpected browser network event");
     }
     fatalListener = setFatal;
     processExitListener = () => setFatal(new Error("Chrome process exited"));
@@ -1398,6 +1441,12 @@ export async function createBrowserEvidenceSession({
           }
           sessionRole = "worker";
         }
+        try {
+          assertNetworkCutoff(sessionRole, message.sessionId);
+        } catch (error) {
+          setFatal(error);
+          return;
+        }
         if (message.method === "Network.responseReceivedExtraInfo") {
           if (sessionRole === "page") return;
           setFatal(new Error("unexpected browser network event"));
@@ -1429,6 +1478,7 @@ export async function createBrowserEvidenceSession({
               invariant(!correlation.requestExtra, "duplicate browser asset request headers");
               noteWorkerOwner(correlation, message.sessionId);
               correlation.requestExtra = { owner: message.sessionId };
+              maybeCompleteAssetCorrelation(requestId, correlation);
               return;
             }
             invariant(correlation.kind === "provider", "duplicate browser request headers");
@@ -1487,6 +1537,7 @@ export async function createBrowserEvidenceSession({
                 "browser asset finish order differs");
               correlation.finished = true;
               correlation.finishOwner = message.sessionId;
+              maybeCompleteAssetCorrelation(requestId, correlation);
               return;
             }
             invariant(correlation.kind === "provider", "unmatched browser request fragment");
@@ -1542,6 +1593,7 @@ export async function createBrowserEvidenceSession({
       workerTargets.clear();
       workerReady.clear();
       detachedWorkers.clear();
+      traceStarted = true;
       mode = {
         repository, generation, progress, gets: [], rawFacts: progress.candidates ?? [], aggregate: 0,
         revision: null, rootTree: null, projected: null, treeEntries: null, admittedGets: 0,
@@ -1570,7 +1622,11 @@ export async function createBrowserEvidenceSession({
     function clearTransientCorrelation() {
       invariant(network.size === 0 && [...correlations.values()].every(correlationComplete),
         "browser request correlation is not quiescent");
+      const generation = mode?.generation ?? 0;
       correlations.clear();
+      validateSafeTransientState(Object.freeze({
+        kind: "correlations-cleared", generation, correlationCount: correlations.size,
+      }));
     }
     function snapshot(kind) {
       if (kind === "smoke" && mode?.generation === 1) {
@@ -1887,7 +1943,9 @@ function mapBrowserFailure(stage, error) {
   if (/CORS/iu.test(message)) return new CollectorFailure(stage, "cors-failure");
   if (/stale/iu.test(message)) return new CollectorFailure(stage, "stale-publication");
   if (/overlap/iu.test(message)) return new CollectorFailure(stage, "request-overlap");
-  if (/unexpected browser (?:request|network session)/iu.test(message)) return new CollectorFailure(stage, "unexpected-request");
+  if (/unexpected browser (?:request|network (?:event|session))/iu.test(message)) {
+    return new CollectorFailure(stage, "unexpected-request");
+  }
   if (/sequence|cardinality|redirected|duplicate/iu.test(message)) return new CollectorFailure(stage, "request-sequence");
   if (/quiescent/iu.test(message)) return new CollectorFailure(stage, "quiescence-failure");
   if (stage === "smoke" && /tree|blob|candidate|UTF-8|NUL|content|identity|revision|commit|supported|encoded data|JSON|Unexpected token|property name/iu.test(message)) {
