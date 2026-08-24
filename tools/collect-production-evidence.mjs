@@ -650,6 +650,25 @@ export function createWorkerObserverSource(bindingName = "__codeCityCollectorEvi
       for(let shift=24;shift>=0;shift-=8)byte((high>>>shift)&255); for(let shift=24;shift>=0;shift-=8)byte((low>>>shift)&255);
       return h.map((word)=>word.toString(16).padStart(8,"0")).join("");
     }
+    const preSelectionFailureCategories = new Set([
+      "Repository unavailable for anonymous access", "Revision unavailable", "Provider/resolution failure",
+    ]);
+    const postSelectionFailureCategories = new Set([
+      "Provider/resolution failure", "Repository exceeds Code City limits",
+    ]);
+    const codedFailureCombinations = new Map([
+      ["No supported modules", new Set(["ADM-06", "ADM-07"])],
+      ["Source admission failed", new Set(["M1-ADM-1", "M1-ADM-3", "M1-ADM-4"])],
+      ["Metric processing failed", new Set(["M1-MET-1"])],
+      ["City construction failed", new Set(["M1-CITY-1"])],
+    ]);
+    const validRevision = (value) => typeof value==="string"&&/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value);
+    function validFailureShape(record, expected) {
+      if(expected.length===3)return preSelectionFailureCategories.has(record.category);
+      if(!validRevision(record.revision))return false;
+      if(expected.length===4)return postSelectionFailureCategories.has(record.category);
+      return codedFailureCombinations.get(record.category)?.has(record.code)===true;
+    }
     function messageRecord(message) {
       if(!message || typeof message!=="object" || getPrototypeOf(message)!==nativeObjectPrototype)throw 0;
       const descriptors=getOwnPropertyDescriptors(message);
@@ -670,12 +689,8 @@ export function createWorkerObserverSource(bindingName = "__codeCityCollectorEvi
       if(keys.length!==expected.length||expected.some((key)=>!descriptors[key]))throw 0;
       const record={};for(const key of expected)record[key]=descriptors[key].value;
       if(!Number.isSafeInteger(record.generation)||record.generation<=0)throw 0;
-      if((type==="REVISION_SELECTED"||type==="SUCCESS")&&typeof record.revision!=="string")throw 0;
-      if(type==="FAILURE") {
-        if(typeof record.category!=="string")throw 0;
-        if(expected.includes("revision")&&typeof record.revision!=="string")throw 0;
-        if(expected.includes("code")&&typeof record.code!=="string")throw 0;
-      }
+      if((type==="REVISION_SELECTED"||type==="SUCCESS")&&!validRevision(record.revision))throw 0;
+      if(type==="FAILURE"&&(typeof record.category!=="string"||!validFailureShape(record,expected)))throw 0;
       return record;
     }
     function observation(message) {
@@ -829,11 +844,22 @@ export async function createBrowserEvidenceSession({
     allowedAssets.add(origin);
     let mode = null;
     let processing = Promise.resolve();
-    let lifecycleProcessing = Promise.resolve();
     let networkEventOrder = 0;
     let traceStarted = false;
     let closePromise;
 
+    const preSelectionFailureCategories = new Set([
+      "Repository unavailable for anonymous access", "Revision unavailable", "Provider/resolution failure",
+    ]);
+    const postSelectionFailureCategories = new Set([
+      "Provider/resolution failure", "Repository exceeds Code City limits",
+    ]);
+    const codedFailureCombinations = new Map([
+      ["No supported modules", new Set(["ADM-06", "ADM-07"])],
+      ["Source admission failed", new Set(["M1-ADM-1", "M1-ADM-3", "M1-ADM-4"])],
+      ["Metric processing failed", new Set(["M1-MET-1"])],
+      ["City construction failed", new Set(["M1-CITY-1"])],
+    ]);
     function projectFact(value) {
       invariant(value && typeof value === "object" && !Array.isArray(value), "worker observation is malformed");
       const type = ownString(value, "type");
@@ -857,20 +883,26 @@ export async function createBrowserEvidenceSession({
         return { type, generation, revision, modelSha256 };
       }
       if (type === "FAILURE") {
-        const revision = ownString(value, "revision");
         const category = ownString(value, "category");
-        if (category === "Repository exceeds Code City limits") {
+        if (keys.length === 3) {
+          exactKeys(["type", "generation", "category"]);
+          invariant(category && preSelectionFailureCategories.has(category), "worker terminal is malformed");
+          return { type, generation, category };
+        }
+        const revision = ownString(value, "revision");
+        invariant(revision && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(revision), "worker terminal is malformed");
+        if (keys.length === 4) {
           exactKeys(["type", "generation", "revision", "category"]);
-          invariant(revision && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(revision), "worker terminal is malformed");
+          invariant(category && postSelectionFailureCategories.has(category), "worker terminal is malformed");
           return { type, generation, revision, category };
         }
         exactKeys(["type", "generation", "revision", "category", "code"]);
         const code = ownString(value, "code");
-        invariant(revision && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(revision)
-          && category && category.length <= 256 && code && code.length <= 128, "worker terminal is malformed");
+        invariant(category && code && codedFailureCombinations.get(category)?.has(code) === true,
+          "worker terminal is malformed");
         return { type, generation, revision, category, code };
       }
-      if (type === "ATTEMPT_DRAINED") {
+      if (type === "PROVIDER_DRAINED_STATIC_ENTERED" || type === "ATTEMPT_DRAINED") {
         exactKeys(["type", "generation"]);
         return { type, generation };
       }
@@ -897,10 +929,43 @@ export async function createBrowserEvidenceSession({
       if (found) return Promise.resolve(found);
       return new Promise((resolve, reject) => factWaiters.push({ predicate, resolve, reject }));
     }
+    function settleDeferred(deferred, kind, value) {
+      if (!deferred || deferred.settled) return false;
+      deferred.settled = true;
+      deferred[kind](value);
+      return true;
+    }
+    function deferredResult() {
+      const result = { settled: false };
+      result.promise = new Promise((resolve, reject) => Object.assign(result, { resolve, reject }));
+      void result.promise.catch(() => {});
+      return result;
+    }
+    function revisionReadinessResult() {
+      return Object.assign(deferredResult(), { state: "pending", value: null });
+    }
+    function settleRevisionReadiness(current, readiness) {
+      invariant(mode === current && current.revisionReadiness.state === "pending"
+        && !current.revisionReadiness.settled,
+      "revision readiness settlement conflicts");
+      const state = readiness.type === "selected-revision" ? "selected"
+        : readiness.type === "selection-unavailable" ? "unavailable" : null;
+      invariant(state, "revision readiness settlement conflicts");
+      current.revisionReadiness.state = state;
+      current.revisionReadiness.value = readiness;
+      invariant(settleDeferred(current.revisionReadiness, "resolve", readiness),
+        "revision readiness settlement conflicts");
+    }
     function setFatal(error) {
       if (fatal.value) return;
       fatal.value = error instanceof Error ? error : new Error("browser observation failed");
-      if (mode) mode.requestsClosed = true;
+      if (mode) {
+        mode.providerAdmissionClosed = true;
+        settleDeferred(mode.revisionReadiness, "reject", fatal.value);
+        settleDeferred(mode.selectionResult, "reject", fatal.value);
+        settleDeferred(mode.terminalResult, "reject", fatal.value);
+      }
+      for (const entry of network.values()) entry.bodyPromise = null;
       network.clear();
       correlations.clear();
       workerTargets.clear();
@@ -939,12 +1004,6 @@ export async function createBrowserEvidenceSession({
       }
       if (fatal.value) throw fatal.value;
     }
-    function enqueueLifecycle(task) {
-      lifecycleProcessing = lifecycleProcessing.then(async () => {
-        if (fatal.value) throw fatal.value;
-        await task();
-      }).catch(setFatal);
-    }
     function flushCausalMilestones(current) {
       if (!current.causalMilestonesOpen) return;
       while (current.causalMilestones.length > 0) {
@@ -975,104 +1034,189 @@ export async function createBrowserEvidenceSession({
       current.causalMilestonesOpen = true;
       flushCausalMilestones(current);
     }
-    function currentWorkerSessions() {
-      return [...workerTargets.entries()]
-        .filter(([, targetId]) => !detachedWorkers.has(targetId))
-        .map(([childSession]) => childSession);
+    function providerFrontierComplete(current) {
+      const expected = current.expectedProviderGets;
+      return Number.isSafeInteger(expected)
+        && current.admittedGets === expected
+        && current.exchanges.length === expected
+        && current.exchanges.every((exchange) => exchange.completed)
+        && network.size === 0
+        && current.wireGet === null
+        && current.openExchange === null;
     }
-    function startWorkerFences(sessions, onResponse) {
-      const barrier = Promise.all(sessions.map(async (childSession) => {
-        const ready = workerReady.get(childSession);
-        invariant(ready, "worker session fence differs");
-        await ready;
-        const response = await cdp.send("Runtime.evaluate", {
-          expression: "true", returnByValue: true, throwOnSideEffect: true, silent: true,
-        }, childSession);
-        invariant(response?.result?.value === true && !response.exceptionDetails, "worker session fence failed");
-        onResponse?.(childSession);
-      }));
-      void barrier.catch(setFatal);
-      return barrier;
+    function maybePublishTerminal(current) {
+      if (fatal.value || mode !== current || current.firstTerminal || !current.pendingTerminal
+          || !current.providerClosure || !providerFrontierComplete(current)) return;
+      const fact = current.pendingTerminal;
+      if (Object.hasOwn(fact, "revision")) {
+        if (!current.selectedFact) return;
+        invariant(fact.revision === current.selectedFact.revision,
+          "browser terminal revision differs from selected revision");
+      } else {
+        invariant(fact.type === "FAILURE" && current.revisionReadiness.state === "unavailable",
+          "pre-selection terminal differs");
+      }
+      flushCausalMilestones(current);
+      publishFact(fact, current.latestRequestEndMs);
+      current.firstTerminal = fact;
+      current.pendingTerminal = null;
+      settleDeferred(current.terminalResult, "resolve", fact);
+      if (current.pendingDrain) {
+        publishFact(current.pendingDrain);
+        current.firstDrain = current.pendingDrain;
+        current.pendingDrain = null;
+      }
+    }
+    function fixSuccessProviderFrontier(current) {
+      if (!current.projected) return;
+      invariant(current.projected.length >= 1, "smoke tree/request cardinality mismatch");
+      const expected = 3 + current.projected.length;
+      if (current.derivedProviderGets !== null) {
+        invariant(current.derivedProviderGets === expected, "browser provider frontier changed");
+      } else {
+        current.derivedProviderGets = expected;
+      }
+      if (current.providerClosure?.kind === "provider-drained") {
+        invariant(current.admittedGets === expected, "browser provider frontier cardinality differs");
+        current.expectedProviderGets = expected;
+      }
+      maybePublishTerminal(current);
+    }
+    function closeProviderAdmission(current, kind, expected) {
+      invariant(!current.providerClosure, "duplicate provider closure");
+      current.providerClosure = { kind };
+      current.providerAdmissionClosed = true;
+      if (kind === "provider-drained") {
+        if (current.derivedProviderGets !== null) {
+          invariant(current.admittedGets === current.derivedProviderGets,
+            "browser provider frontier cardinality differs");
+          current.expectedProviderGets = current.derivedProviderGets;
+        }
+      } else {
+        invariant(Number.isSafeInteger(expected) && expected >= 0,
+          "browser provider frontier is invalid");
+        current.expectedProviderGets = expected;
+        invariant(current.admittedGets === expected, "browser provider frontier cardinality differs");
+      }
+      maybePublishTerminal(current);
+    }
+    function isProviderDrainedFailure(fact) {
+      return fact.type === "FAILURE" && (
+        (fact.category === "Metric processing failed" && fact.code === "M1-MET-1")
+        || (fact.category === "City construction failed" && fact.code === "M1-CITY-1")
+        || (fact.category === "Provider/resolution failure" && !Object.hasOwn(fact, "code"))
+      );
+    }
+    function requiresProviderDrainedClosure(fact) {
+      return fact.type === "FAILURE" && (
+        (fact.category === "Metric processing failed" && fact.code === "M1-MET-1")
+        || (fact.category === "City construction failed" && fact.code === "M1-CITY-1")
+      );
+    }
+    function validateProviderDrainedTerminal(current, fact) {
+      invariant(current.providerClosure?.kind === "provider-drained" && current.providerAdmissionClosed,
+        "static terminal preceded provider closure");
+      invariant(fact.type === "SUCCESS" || isProviderDrainedFailure(fact),
+        "terminal contradicts provider-drained phase");
+      invariant((current.derivedProviderGets === null && current.expectedProviderGets === null)
+        || (Number.isSafeInteger(current.derivedProviderGets)
+          && current.expectedProviderGets === current.derivedProviderGets
+          && current.admittedGets === current.expectedProviderGets),
+      "browser provider frontier changed");
+    }
+    function resolveRevisionReadiness(current, semanticFact) {
+      invariant(mode === current && semanticFact.generation === current.generation
+        && semanticFact.revision === current.revision && Number.isSafeInteger(current.stageEndMs.revision),
+      "revision semantic readiness differs");
+      settleRevisionReadiness(current, semanticFact);
     }
     function handleProjectedFact(fact) {
       factReceiptTimes.set(fact, now());
       const current = mode && fact.generation === mode.generation ? mode : null;
-      if (!current) { publishFact(fact); return; }
-      if (fact.type === "REVISION_SELECTED") {
-        if (current.pendingSelection || current.selectedFact) {
-          setFatal(new Error("duplicate revision selection"));
-          return;
-        }
-        const sessions = currentWorkerSessions();
-        const pending = { fact, barrier: null, processingBarrier: null };
-        current.pendingSelection = pending;
-        pending.barrier = startWorkerFences(sessions);
-        pending.processingBarrier = sessions.length === 0 ? processing : pending.barrier.then(() => processing);
-        void pending.processingBarrier.catch(setFatal);
-        enqueueLifecycle(async () => {
-          await pending.barrier;
-          await awaitProcessingBarrier();
-          invariant(mode === current && current.pendingSelection === pending
-            && current.revision === fact.revision && Number.isSafeInteger(current.stageEndMs.revision),
-          "revision selection preceded matching request completion");
-          publishFact(fact, current.stageEndMs.revision);
-          current.selectedFact = fact;
-          current.pendingSelection = null;
-        });
+      if (!current) {
+        setFatal(new Error("stale worker observation"));
         return;
       }
-      if (["SUCCESS", "FAILURE"].includes(fact.type)) {
-        if (current.pendingTerminal || current.firstTerminal) {
-          setFatal(new Error("duplicate browser terminal"));
+      try {
+        if (fact.type === "REVISION_SELECTED") {
+          invariant(!current.pendingSelection && !current.selectedFact
+            && current.revisionReadiness.state !== "unavailable",
+          "duplicate or conflicting revision selection");
+          current.pendingSelection = fact;
+          void current.revisionReadiness.promise.then((readiness) => {
+            if (fatal.value || mode !== current) return;
+            invariant(readiness.type === "selected-revision" && readiness.revision === fact.revision,
+              "revision selection preceded matching request completion");
+            publishFact(fact, readiness.observedAtMs);
+            current.selectedFact = fact;
+            current.pendingSelection = null;
+            settleDeferred(current.selectionResult, "resolve", fact);
+            maybePublishTerminal(current);
+          }).catch(setFatal);
           return;
         }
-        if (!current.pendingSelection && !current.selectedFact) {
-          setFatal(new Error("browser terminal preceded revision selection"));
+        if (fact.type === "PROVIDER_DRAINED_STATIC_ENTERED") {
+          invariant(current.revisionReadiness.state === "selected"
+            || current.pendingSelection || current.selectedFact,
+          "provider-drained preceded revision selection");
+          closeProviderAdmission(current, "provider-drained");
           return;
         }
-        const sessions = currentWorkerSessions();
-        const pending = {
-          fact, cutoffs: new Map(sessions.map((childSession) => [childSession, false])),
-          barrier: null, processingBarrier: null,
-        };
-        current.pendingTerminal = pending;
-        pending.barrier = startWorkerFences(sessions, (childSession) => pending.cutoffs.set(childSession, true));
-        pending.processingBarrier = sessions.length === 0 ? processing : pending.barrier.then(() => {
-          if (mode === current && current.pendingTerminal === pending) current.requestsClosed = true;
-          return processing;
-        });
-        void pending.processingBarrier.catch(setFatal);
-        enqueueLifecycle(async () => {
-          await pending.barrier;
-          invariant(mode === current && current.pendingTerminal === pending, "browser terminal barrier differs");
-          current.requestsClosed = true;
-          await awaitProcessingBarrier();
-          flushCausalMilestones(current);
-          invariant(network.size === 0 && [...correlations.values()].every(correlationComplete),
-            "terminal preceded request completion");
-          invariant(current.wireGet === null && current.openExchange === null,
-            "browser request sequence ended before logical exchange completion");
-          publishFact(fact, current.latestRequestEndMs);
-          current.firstTerminal = fact;
-        });
-        return;
+        if (["SUCCESS", "FAILURE"].includes(fact.type)) {
+          invariant(!current.pendingTerminal && !current.firstTerminal,
+            "duplicate browser terminal");
+          if (current.generation === 2) {
+            invariant(fact.type === "FAILURE"
+              && fact.category === "Repository exceeds Code City limits",
+            "capacity terminal differs");
+          }
+          const hasRevision = Object.hasOwn(fact, "revision");
+          if (!hasRevision) {
+            invariant(fact.type === "FAILURE"
+              && current.revisionReadiness.state === "pending"
+              && current.revision === null && !Number.isSafeInteger(current.stageEndMs.revision)
+              && !current.pendingSelection && !current.selectedFact && !current.providerClosure,
+            "pre-selection terminal conflicts with revision readiness");
+            const unavailable = Object.freeze({
+              type: "selection-unavailable", generation: current.generation, category: fact.category,
+            });
+            settleRevisionReadiness(current, unavailable);
+            invariant(settleDeferred(current.selectionResult, "resolve", unavailable),
+              "revision selection settlement conflicts");
+          } else {
+            const selected = current.selectedFact ?? current.pendingSelection;
+            invariant(selected && selected.revision === fact.revision,
+              "browser terminal revision differs from selected revision");
+          }
+          current.pendingTerminal = fact;
+          if (current.providerClosure) {
+            validateProviderDrainedTerminal(current, fact);
+          } else if (fact.type === "FAILURE") {
+            invariant(!requiresProviderDrainedClosure(fact), "static terminal preceded provider closure");
+            const expected = fact.category === "Repository exceeds Code City limits" ? 4004 : current.admittedGets;
+            closeProviderAdmission(current, fact.category === "Repository exceeds Code City limits"
+              ? "limit-failure" : "failure", expected);
+          }
+          maybePublishTerminal(current);
+          return;
+        }
+        if (fact.type === "ATTEMPT_DRAINED") {
+          invariant((current.pendingTerminal || current.firstTerminal)
+            && !current.pendingDrain && !current.firstDrain,
+          current.pendingDrain || current.firstDrain
+            ? "duplicate attempt drain" : "attempt drained before required terminal");
+          if (current.firstTerminal) {
+            publishFact(fact);
+            current.firstDrain = fact;
+          } else {
+            current.pendingDrain = fact;
+          }
+          return;
+        }
+        throw new Error("worker observation is malformed");
+      } catch (error) {
+        setFatal(error);
       }
-      if (fact.type === "ATTEMPT_DRAINED") {
-        if ((!current.pendingTerminal && !current.firstTerminal) || current.pendingDrain || current.firstDrain) {
-          setFatal(new Error(current.pendingDrain || current.firstDrain
-            ? "duplicate attempt drain" : "attempt drained before required terminal"));
-          return;
-        }
-        current.pendingDrain = fact;
-        enqueueLifecycle(async () => {
-          invariant(mode === current && current.firstTerminal, "attempt drained before required terminal");
-          publishFact(fact);
-          current.firstDrain = fact;
-          current.pendingDrain = null;
-        });
-        return;
-      }
-      publishFact(fact);
     }
     function expectedStage(current, index) {
       if (current.generation === 2 && index >= 4004) throw new Error("capacity limit ordering admitted candidate 4,002");
@@ -1116,7 +1260,7 @@ export async function createBrowserEvidenceSession({
       invariant(entry.url === expected.url && entry.route.identity === expected.identity
         && entry.route.path === expected.path, "browser request sequence differs at admission");
     }
-    function requestRecord(entry, startedMs = entry.startedMs) {
+    function requestRecord(entry, startedMs = entry.startedMs, endedMs = entry.finishedMs) {
       const headerFacts = mergeHeaderFacts(entry.requestHeaderFacts, entry.response.headerFacts);
       invariant(entry.response.status === (entry.method === "OPTIONS" ? 204 : 200)
         && entry.response.url === entry.url && !entry.response.fromDiskCache && !entry.response.fromServiceWorker, "browser response mismatch");
@@ -1124,11 +1268,17 @@ export async function createBrowserEvidenceSession({
       return {
         stage: entry.route.stage, method: entry.method, requestedUrl: entry.url, finalUrl: entry.response.url,
         applicationCall: entry.method === "GET", status: entry.response.status, startedMs,
-        endedMs: entry.finishedMs, ...headerFacts, redirected: entry.response.url !== entry.url,
+        endedMs, ...headerFacts, redirected: entry.response.url !== entry.url,
       };
     }
     function providerEntryReady(entry) {
-      return Boolean(entry.finished && entry.response && entry.requestHeaderFacts);
+      return Boolean(entry.finished && entry.response && entry.requestHeaderFacts
+        && (entry.method !== "GET" || entry.bodyPromise));
+    }
+    function maybeCaptureProviderBody(entry) {
+      if (entry.method !== "GET" || entry.bodyPromise || !entry.response || !entry.finished) return;
+      entry.bodyPromise = cdpBody(cdp, entry.sessionId, entry.requestId, entry.cap);
+      void entry.bodyPromise.catch(setFatal);
     }
     function correlationComplete(correlation) {
       if (correlation.kind === "completed") return true;
@@ -1136,12 +1286,12 @@ export async function createBrowserEvidenceSession({
       if (correlation.kind === "asset") return Boolean(correlation.request && correlation.response && correlation.finished);
       return false;
     }
-    function completedCorrelation(generation) {
-      return Object.freeze({ kind: "completed", generation });
+    function completedCorrelation(generation, asset = false, lateExtraSeen = false) {
+      return Object.freeze({ kind: "completed", generation, asset, lateExtraSeen });
     }
     function maybeCompleteAssetCorrelation(requestId, correlation) {
       if (!correlationComplete(correlation)) return correlation;
-      const completed = completedCorrelation(correlation.generation);
+      const completed = completedCorrelation(correlation.generation, true);
       correlations.set(requestId, completed);
       validateSafeTransientState(Object.freeze({
         kind: "asset-completed", generation: correlation.generation, correlation: completed,
@@ -1218,15 +1368,9 @@ export async function createBrowserEvidenceSession({
         correlation.request = { owner: message.sessionId };
         return maybeCompleteAssetCorrelation(requestId, correlation);
       }
-      invariant(mode && !mode.requestsClosed, "unexpected browser request");
+      invariant(mode && !mode.providerAdmissionClosed, "unexpected browser request");
       invariant((sessionRole === "page" && method === "OPTIONS")
         || (sessionRole === "worker" && method === "GET"), "unexpected browser request role");
-      const pendingTerminal = mode.pendingTerminal;
-      if (pendingTerminal && !mode.openExchange && !mode.wireGet) {
-        throw new Error("browser request sequence differs at terminal cutoff");
-      }
-      if (pendingTerminal && sessionRole === "worker" && (!pendingTerminal.cutoffs.has(message.sessionId)
-        || pendingTerminal.cutoffs.get(message.sessionId))) throw new Error("unexpected browser request");
       const priorCorrelation = correlations.get(requestId);
       invariant(!priorCorrelation || priorCorrelation.kind === "unknown-extra",
         "redirected, reused, or duplicate browser request");
@@ -1236,9 +1380,16 @@ export async function createBrowserEvidenceSession({
         "unexpected browser request");
 
       let exchange;
+      let priorWireGet = null;
+      const cdpStarted = ownData(message.params, "timestamp");
       if (method === "GET") {
-        invariant(mode.wireGet === null, "browser application GET overlap at admission");
-        exchange = mode.openExchange ?? expectedExchange(mode, { route });
+        if (mode.wireGet !== null) {
+          invariant(Number.isFinite(cdpStarted) && Number.isFinite(mode.wireGet.cdpStarted),
+            "browser application GET overlap at admission");
+          priorWireGet = mode.wireGet;
+        }
+        exchange = mode.openExchange?.get === null
+          ? mode.openExchange : expectedExchange(mode, { route });
         invariant(exchange.get === null && entryMatchesExchange({ generation: mode.generation, route }, exchange),
           "browser request sequence differs at admission");
         if (exchange.options) invariant(exchange.options.url === url, "browser request sequence differs at admission");
@@ -1258,6 +1409,8 @@ export async function createBrowserEvidenceSession({
         sessionId: message.sessionId, requestId, url, method, route,
         generation: mode.generation,
         cap: responseCapForRoute(route), startedMs: now(), dataLength: 0, dataEvents: 0,
+        cdpStarted: Number.isFinite(cdpStarted) ? cdpStarted : null,
+        cdpFinished: null, priorWireGet,
         requestHeaderFacts: null, exchange,
       };
       const correlation = { kind: "provider", generation: mode.generation, entry, workerSession: null };
@@ -1282,22 +1435,31 @@ export async function createBrowserEvidenceSession({
         && (!exchange.options || providerEntryReady(exchange.options)), "browser logical exchange differs");
       validateProjectedRoute(current, exchange, exchange.get);
       const get = exchange.get;
+      let semanticGetEnd;
       if (exchange.options) {
         validateProjectedRoute(current, exchange, exchange.options);
         invariant(exchange.options.url === get.url && exchange.options.finishedOrder < get.finishedOrder,
           "browser preflight completed after its GET");
-        const logicalGetStart = Math.max(get.startedMs, exchange.options.finishedMs);
-        invariant(exchange.options.finishedMs <= logicalGetStart && logicalGetStart <= get.finishedMs,
+        invariant(exchange.options.finishedMs <= get.finishedMs,
           "browser preflight timing differs");
-        appendRequest(requestItems, requestRecord(exchange.options));
-        appendRequest(requestItems, requestRecord(get, logicalGetStart));
+        const logicalOptionsStart = Math.max(exchange.options.startedMs, current.latestRequestEndMs);
+        const logicalOptionsEnd = Math.max(exchange.options.finishedMs, logicalOptionsStart);
+        const logicalGetStart = Math.max(get.startedMs, logicalOptionsEnd);
+        semanticGetEnd = Math.max(get.finishedMs, logicalGetStart);
+        appendRequest(requestItems, requestRecord(exchange.options, logicalOptionsStart, logicalOptionsEnd));
+        appendRequest(requestItems, requestRecord(get, logicalGetStart, semanticGetEnd));
       } else {
-        appendRequest(requestItems, requestRecord(get));
+        const logicalGetStart = Math.max(get.startedMs, current.latestRequestEndMs);
+        semanticGetEnd = Math.max(get.finishedMs, logicalGetStart);
+        appendRequest(requestItems, requestRecord(get, logicalGetStart, semanticGetEnd));
       }
-      const bytes = await cdpBody(cdp, get.sessionId, get.requestId, get.cap);
+      const bodyPromise = get.bodyPromise;
+      invariant(bodyPromise, "browser response body was not captured");
+      const bytes = await bodyPromise;
+      get.bodyPromise = null;
       await beforeProviderProjection({ stage: get.route.stage });
       invariant(mode === current, "browser trace was cleared too early");
-      const semanticRecord = Object.freeze({ ...get.route, url: get.url });
+      const semanticRecord = Object.freeze({ ...get.route });
       current.gets.push(semanticRecord);
       if (get.route.stage === "revision") {
         current.revision = projectRevision(bytes);
@@ -1312,7 +1474,7 @@ export async function createBrowserEvidenceSession({
           current.generation === 1 ? Infinity : 4001);
         current.treeEntries = tree.treeEntries;
         current.projected = tree.candidates;
-        current.onInventory?.(get.finishedMs);
+        current.onInventory?.(semanticGetEnd);
       } else {
         const index = current.rawFacts.length;
         const expected = current.projected?.[index];
@@ -1336,8 +1498,8 @@ export async function createBrowserEvidenceSession({
         invariant(fact.contentValid, "browser candidate content invalid");
         invariant(fact.hashMatched, "browser candidate blob mismatch");
       }
-      current.stageEndMs[exchange.stage] = Math.max(current.stageEndMs[exchange.stage] ?? 0, get.finishedMs);
-      current.latestRequestEndMs = Math.max(current.latestRequestEndMs, get.finishedMs);
+      current.stageEndMs[exchange.stage] = Math.max(current.stageEndMs[exchange.stage] ?? 0, semanticGetEnd);
+      current.latestRequestEndMs = Math.max(current.latestRequestEndMs, semanticGetEnd);
       const completedEntries = [exchange.options, exchange.get].filter(Boolean);
       exchange.completed = true;
       for (const entry of completedEntries) {
@@ -1355,6 +1517,14 @@ export async function createBrowserEvidenceSession({
         exchange,
         semanticRecordKeys: Object.freeze(Object.keys(semanticRecord).sort()),
       }));
+      if (semanticRecord.stage === "revision") {
+        resolveRevisionReadiness(current, Object.freeze({
+          type: "selected-revision", generation: current.generation,
+          revision: current.revision, observedAtMs: current.stageEndMs.revision,
+        }));
+      }
+      if (semanticRecord.stage === "tree") fixSuccessProviderFrontier(current);
+      maybePublishTerminal(current);
     }
     function maybeScheduleExchange() {
       const current = mode;
@@ -1377,19 +1547,19 @@ export async function createBrowserEvidenceSession({
       correlation.response = { owner: message.sessionId };
       maybeCompleteAssetCorrelation(requestId, correlation);
     }
-    function assertNetworkCutoff(sessionRole, sessionId) {
-      const current = mode;
-      if (!current) {
-        invariant(!traceStarted && sessionRole === "page", "unexpected browser network event");
-        return;
-      }
-      invariant(!current.requestsClosed && !current.firstTerminal
-        && !current.pendingDrain && !current.firstDrain, "unexpected browser network event");
-      const pendingTerminal = current.pendingTerminal;
-      if (!pendingTerminal) return;
-      if (sessionRole === "page") throw new Error("unexpected browser network event");
-      invariant(pendingTerminal.cutoffs.has(sessionId) && !pendingTerminal.cutoffs.get(sessionId),
-        "unexpected browser network event");
+    function assertNetworkLifecycle(sessionRole) {
+      if (!mode) invariant(!traceStarted && sessionRole === "page", "unexpected browser network event");
+    }
+    function closedRequestIsExactAsset(message) {
+      const params = message.params;
+      const requestDescriptor = params && Object.getOwnPropertyDescriptor(params, "request");
+      if (!requestDescriptor || !("value" in requestDescriptor)) return false;
+      const request = requestDescriptor.value;
+      const urlDescriptor = request && Object.getOwnPropertyDescriptor(request, "url");
+      const methodDescriptor = request && Object.getOwnPropertyDescriptor(request, "method");
+      return Boolean(urlDescriptor && "value" in urlDescriptor
+        && methodDescriptor && "value" in methodDescriptor
+        && methodDescriptor.value === "GET" && allowedAssets.has(urlDescriptor.value));
     }
     fatalListener = setFatal;
     processExitListener = () => setFatal(new Error("Chrome process exited"));
@@ -1400,6 +1570,7 @@ export async function createBrowserEvidenceSession({
       if (fatal.value) return;
       if (message.method === "Runtime.bindingCalled" && message.params?.name === bindingName) {
         try {
+          invariant(!mode?.workerDetachedReceipt, "worker observation followed detachment");
           const fact = projectFact(JSON.parse(message.params.payload));
           if (fact) handleProjectedFact(fact);
         } catch (error) {
@@ -1421,9 +1592,18 @@ export async function createBrowserEvidenceSession({
         const childSession = message.params?.sessionId;
         const targetId = message.params?.targetId ?? workerTargets.get(childSession);
         if (targetId) {
+          if (detachedWorkers.has(targetId)) {
+            setFatal(new Error("duplicate worker detachment"));
+            return;
+          }
           detachedWorkers.add(targetId);
-          if (mode && workerTargets.has(childSession) && !mode.pendingTerminal && !mode.firstTerminal) {
-            setFatal(new Error("worker detached before required terminal"));
+          if (mode && workerTargets.has(childSession)) {
+            if (!mode.pendingTerminal && !mode.firstTerminal) {
+              setFatal(new Error("worker detached before required terminal"));
+              return;
+            }
+            mode.workerDetachedReceipt = true;
+            maybePublishTerminal(mode);
           }
         }
         notifyDetached();
@@ -1442,7 +1622,11 @@ export async function createBrowserEvidenceSession({
           sessionRole = "worker";
         }
         try {
-          assertNetworkCutoff(sessionRole, message.sessionId);
+          assertNetworkLifecycle(sessionRole);
+          if (message.method === "Network.requestWillBeSent" && mode?.providerAdmissionClosed
+              && !closedRequestIsExactAsset(message)) {
+            throw new Error("unexpected browser request");
+          }
         } catch (error) {
           setFatal(error);
           return;
@@ -1465,6 +1649,7 @@ export async function createBrowserEvidenceSession({
             const requestId = correlationId(message);
             const correlation = correlations.get(requestId);
             if (!correlation) {
+              invariant(!mode?.providerAdmissionClosed, "unexpected browser request headers");
               const pending = {
                 kind: "unknown-extra", generation: mode?.generation ?? 0,
                 owner: message.sessionId, params: message.params, workerSession: null,
@@ -1479,6 +1664,16 @@ export async function createBrowserEvidenceSession({
               noteWorkerOwner(correlation, message.sessionId);
               correlation.requestExtra = { owner: message.sessionId };
               maybeCompleteAssetCorrelation(requestId, correlation);
+              return;
+            }
+            if (correlation.kind === "completed" && correlation.asset) {
+              invariant(sessionRole === "page" && !correlation.lateExtraSeen,
+                "duplicate browser asset request headers");
+              const completed = completedCorrelation(correlation.generation, true, true);
+              correlations.set(requestId, completed);
+              validateSafeTransientState(Object.freeze({
+                kind: "asset-late-extra", generation: correlation.generation, correlation: completed,
+              }));
               return;
             }
             invariant(correlation.kind === "provider", "duplicate browser request headers");
@@ -1504,6 +1699,7 @@ export async function createBrowserEvidenceSession({
             "unexpected browser response owner");
             invariant(!entry.response, "duplicate browser response");
             entry.response = cdpResponseProjection(ownData(message.params, "response"));
+            maybeCaptureProviderBody(entry);
             maybeScheduleExchange(entry.exchange);
             return;
           }
@@ -1548,16 +1744,33 @@ export async function createBrowserEvidenceSession({
             entry.finished = true;
             entry.finishedOrder = ++networkEventOrder;
             entry.finishedMs = Math.max(entry.startedMs, now());
+            const cdpFinished = ownData(message.params, "timestamp");
+            entry.cdpFinished = Number.isFinite(cdpFinished) ? cdpFinished : null;
             if (entry.method === "GET") {
               const current = mode;
-              invariant(current && current.generation === entry.generation && current.wireGet === entry,
+              invariant(current && current.generation === entry.generation,
                 "browser wire request differs");
               invariant(!entry.exchange.options || entry.exchange.options.finished,
                 "browser preflight completed after its GET");
-              current.wireGet = null;
-              current.openExchange = null;
+              if (entry.priorWireGet?.finished) {
+                invariant(Number.isFinite(entry.priorWireGet.cdpFinished)
+                  && entry.priorWireGet.cdpFinished <= entry.cdpStarted,
+                "browser application GET overlap at completion");
+                entry.priorWireGet = null;
+              }
+              for (const later of current.exchanges.map((exchange) => exchange.get).filter(Boolean)) {
+                if (later.priorWireGet === entry && later.finished) {
+                  invariant(Number.isFinite(entry.cdpFinished)
+                    && entry.cdpFinished <= later.cdpStarted,
+                  "browser application GET overlap at completion");
+                  later.priorWireGet = null;
+                }
+              }
+              if (current.wireGet === entry) current.wireGet = null;
+              if (current.openExchange === entry.exchange) current.openExchange = null;
               entry.exchange.sealed = true;
             }
+            maybeCaptureProviderBody(entry);
             maybeScheduleExchange(entry.exchange);
             return;
           }
@@ -1598,8 +1811,11 @@ export async function createBrowserEvidenceSession({
         repository, generation, progress, gets: [], rawFacts: progress.candidates ?? [], aggregate: 0,
         revision: null, rootTree: null, projected: null, treeEntries: null, admittedGets: 0,
         wireGet: null, openExchange: null, exchanges: [], nextSemanticIndex: 0,
-        pendingSelection: null, selectedFact: null, pendingTerminal: null, firstTerminal: null,
-        pendingDrain: null, firstDrain: null, requestsClosed: false,
+        pendingSelection: null, selectedFact: null,
+        revisionReadiness: revisionReadinessResult(), selectionResult: deferredResult(), terminalResult: deferredResult(),
+        pendingTerminal: null, firstTerminal: null, pendingDrain: null, firstDrain: null,
+        providerClosure: null, providerAdmissionClosed: false,
+        derivedProviderGets: null, expectedProviderGets: null, workerDetachedReceipt: false,
         stageEndMs: {}, latestRequestEndMs: 0, lastPublishedFactAtMs: 0,
         causalMilestones: [], publishedCausalMilestones: new Set(),
         causalMilestonesOpen: false, lastPublishedLifecycleAtMs: 0,
@@ -1610,7 +1826,6 @@ export async function createBrowserEvidenceSession({
       await evaluate(cdp, sessionId, `(() => { const input=document.querySelector('input[name=repository]'); input.value=${JSON.stringify(repositoryUrl)}; document.querySelector('form').requestSubmit(); return true; })()`);
     }
     async function flush(requireQuiescence = false) {
-      await evaluate(cdp, sessionId, "true");
       await awaitProcessingBarrier();
       if (mode) flushCausalMilestones(mode);
       if (requireQuiescence && (network.size > 0
@@ -1654,13 +1869,31 @@ export async function createBrowserEvidenceSession({
         };
         const trace = startTrace(CODE_CITY_REPOSITORY, 1, progress);
         await submit(CODE_CITY_URL);
-        const selected = await nextFact((fact) => fact.type === "REVISION_SELECTED" && fact.generation === 1);
+        const firstResult = await Promise.race([
+          trace.selectionResult.promise,
+          trace.terminalResult.promise,
+        ]);
+        const selection = ["SUCCESS", "FAILURE"].includes(firstResult.type)
+          ? await trace.selectionResult.promise : firstResult;
+        if (selection.type === "selection-unavailable") {
+          const terminal = ["SUCCESS", "FAILURE"].includes(firstResult.type)
+            ? firstResult : await trace.terminalResult.promise;
+          invariant(terminal.type === "FAILURE" && !Object.hasOwn(terminal, "revision")
+            && terminal.category === selection.category, "smoke pre-selection terminal differs");
+          await nextFact((fact) => fact.type === "ATTEMPT_DRAINED" && fact.generation === 1);
+          await waitForWorkerDetachment();
+          await flush(true);
+          clearTransientCorrelation();
+          mode = null;
+          throw new Error(`smoke pre-selection failure: ${terminal.category}`);
+        }
+        const selected = selection;
         progress.revision = selected.revision;
         invariant(selected.revision === eventSha, "smoke selected a stale revision");
         openCausalMilestones(trace, emit("revision-selected", 1, selected.observedAtMs));
         await flush();
         invariant(trace.revision === eventSha, "smoke revision evidence differs");
-        const terminal = await nextFact((fact) => ["SUCCESS", "FAILURE"].includes(fact.type) && fact.generation === 1);
+        const terminal = await trace.terminalResult.promise;
         invariant(terminal.type === "SUCCESS" && terminal.revision === selected.revision
           && terminal.revision === eventSha, "smoke terminal revision differs");
         await nextFact((fact) => fact.type === "ATTEMPT_DRAINED" && fact.generation === 1);
