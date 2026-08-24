@@ -1290,6 +1290,25 @@ export async function createBrowserEvidenceSession({
       if (correlation.kind === "asset") return Boolean(correlation.request && correlation.response && correlation.finished);
       return false;
     }
+    function provisionalMarkerCount(generation) {
+      return [...correlations.values()].filter((correlation) => (
+        correlation.kind === "provisional-asset-extra" && correlation.generation === generation
+      )).length;
+    }
+    function admitProvisionalAssetExtra(requestId, ownerRole, ownerSession) {
+      invariant(mode?.providerAdmissionClosed && ["page", "worker"].includes(ownerRole)
+        && typeof ownerSession === "string" && ownerSession,
+      "unexpected browser request owner");
+      invariant(provisionalMarkerCount(mode.generation) < allowedAssets.size,
+        "browser request correlation cardinality differs");
+      const marker = {
+        kind: "provisional-asset-extra", generation: mode.generation, ownerRole, ownerSession,
+      };
+      correlations.set(requestId, marker);
+      validateSafeTransientState(Object.freeze({
+        kind: "asset-extra-provisional", generation: mode.generation, marker: Object.freeze({ ...marker }),
+      }));
+    }
     function completedCorrelation(generation, asset = false, lateExtraSeen = false) {
       return Object.freeze({ kind: "completed", generation, asset, lateExtraSeen });
     }
@@ -1305,7 +1324,7 @@ export async function createBrowserEvidenceSession({
     function noteWorkerOwner(correlation, sessionId) {
       if (sessionId === pageSessionId) return;
       if (correlation.workerSession && correlation.workerSession !== sessionId) {
-        throw new Error("ambiguous browser request correlation");
+        throw new Error("unexpected browser request owner");
       }
       correlation.workerSession = sessionId;
     }
@@ -1318,8 +1337,8 @@ export async function createBrowserEvidenceSession({
       invariant(requestId, "browser request correlation is malformed");
       return requestId;
     }
-    function classifyAsset(requestId, url, sessionId) {
-      invariant(allowedAssets.has(url), "unexpected browser asset");
+    function classifyAsset(requestId, url, sessionId, sessionRole) {
+      invariant(allowedAssets.has(url), "unexpected browser request");
       let correlation = correlations.get(requestId);
       if (!correlation) {
         correlation = { kind: "asset", generation: mode?.generation ?? 0, url, workerSession: null };
@@ -1333,10 +1352,20 @@ export async function createBrowserEvidenceSession({
         };
         correlations.set(requestId, correlation);
         noteWorkerOwner(correlation, extraOwner);
+      } else if (correlation.kind === "provisional-asset-extra") {
+        assertCurrentCorrelation(correlation);
+        invariant(correlation.ownerRole === sessionRole && correlation.ownerSession === sessionId,
+          "unexpected browser request owner");
+        correlation = {
+          kind: "asset", generation: correlation.generation, url, workerSession: null,
+          requestExtra: true,
+        };
+        correlations.set(requestId, correlation);
+        noteWorkerOwner(correlation, sessionId);
       } else {
         assertCurrentCorrelation(correlation);
         invariant(correlation.kind === "asset" && correlation.url === url,
-          "ambiguous browser request correlation");
+          "duplicate browser request correlation");
       }
       noteWorkerOwner(correlation, sessionId);
       return correlation;
@@ -1367,7 +1396,7 @@ export async function createBrowserEvidenceSession({
       invariant(url && method, "browser request is malformed");
       if (allowedAssets.has(url)) {
         invariant(method === "GET", "unexpected browser asset request");
-        const correlation = classifyAsset(requestId, url, message.sessionId);
+        const correlation = classifyAsset(requestId, url, message.sessionId, sessionRole);
         invariant(!correlation.request, "duplicate browser asset request");
         correlation.request = { owner: message.sessionId };
         return maybeCompleteAssetCorrelation(requestId, correlation);
@@ -1542,11 +1571,11 @@ export async function createBrowserEvidenceSession({
         enqueue(async () => completeLogicalExchange(exchange));
       }
     }
-    function assetResponse(message, requestId) {
+    function assetResponse(message, requestId, sessionRole) {
       const response = ownData(message.params, "response");
       const url = ownString(response, "url");
       invariant(url && allowedAssets.has(url), "unexpected browser request");
-      const correlation = classifyAsset(requestId, url, message.sessionId);
+      const correlation = classifyAsset(requestId, url, message.sessionId, sessionRole);
       invariant(!correlation.response, "duplicate browser asset response");
       correlation.response = { owner: message.sessionId };
       maybeCompleteAssetCorrelation(requestId, correlation);
@@ -1653,7 +1682,10 @@ export async function createBrowserEvidenceSession({
             const requestId = correlationId(message);
             const correlation = correlations.get(requestId);
             if (!correlation) {
-              invariant(!mode?.providerAdmissionClosed, "unexpected browser request headers");
+              if (mode?.providerAdmissionClosed) {
+                admitProvisionalAssetExtra(requestId, sessionRole, message.sessionId);
+                return;
+              }
               const pending = {
                 kind: "unknown-extra", generation: mode?.generation ?? 0,
                 owner: message.sessionId, params: message.params, workerSession: null,
@@ -1663,6 +1695,8 @@ export async function createBrowserEvidenceSession({
               return;
             }
             assertCurrentCorrelation(correlation);
+            invariant(correlation.kind !== "provisional-asset-extra",
+              "duplicate browser request correlation");
             if (correlation.kind === "asset") {
               invariant(!correlation.requestExtra, "duplicate browser asset request headers");
               noteWorkerOwner(correlation, message.sessionId);
@@ -1691,8 +1725,8 @@ export async function createBrowserEvidenceSession({
           if (message.method === "Network.responseReceived") {
             const requestId = correlationId(message);
             const correlation = correlations.get(requestId);
-            if (!correlation || correlation.kind === "asset") {
-              assetResponse(message, requestId);
+            if (!correlation || ["asset", "provisional-asset-extra"].includes(correlation.kind)) {
+              assetResponse(message, requestId, sessionRole);
               return;
             }
             invariant(correlation.kind === "provider", "unmatched browser request fragment");
@@ -2176,14 +2210,16 @@ function failurePayloads(state, failure) {
 function mapBrowserFailure(stage, error) {
   if (error instanceof CollectorFailure) return error;
   const message = String(error?.message);
-  if (/credential|request headers/iu.test(message)) return new CollectorFailure(stage, "credential-header");
+  if (message === "credential header observed") return new CollectorFailure(stage, "credential-header");
   if (/CORS/iu.test(message)) return new CollectorFailure(stage, "cors-failure");
   if (/stale/iu.test(message)) return new CollectorFailure(stage, "stale-publication");
   if (/overlap/iu.test(message)) return new CollectorFailure(stage, "request-overlap");
-  if (/unexpected browser (?:request|network (?:event|session))/iu.test(message)) {
+  if (/unexpected browser (?:request|asset|network (?:event|session))/iu.test(message)) {
     return new CollectorFailure(stage, "unexpected-request");
   }
-  if (/sequence|cardinality|redirected|duplicate/iu.test(message)) return new CollectorFailure(stage, "request-sequence");
+  if (/sequence|cardinality|redirected|duplicate|unmatched|correlation (?:is malformed|are incomplete)/iu.test(message)) {
+    return new CollectorFailure(stage, "request-sequence");
+  }
   if (/quiescent/iu.test(message)) return new CollectorFailure(stage, "quiescence-failure");
   if (stage === "smoke" && /tree|blob|candidate|UTF-8|NUL|content|identity|revision|commit|supported|encoded data|JSON|Unexpected token|property name/iu.test(message)) {
     return new CollectorFailure(stage, "smoke-failure");

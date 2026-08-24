@@ -1796,6 +1796,32 @@ async function finishControlledSmoke(opened, idPrefix = "asset-pass") {
   }, "page-session");
 }
 
+async function reachControlledProviderClosure(opened, idPrefix) {
+  for (const stage of ["revision", "commit", "tree", "raw"]) {
+    emitCanonicalGeneratedStage(opened.harness, stage, "worker-session", `${idPrefix}-${stage}`);
+  }
+  await waitForBodyCalls(opened.harness, 4);
+  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+  }) });
+  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1,
+  }) });
+  await new Promise((resolve) => setImmediate(resolve));
+}
+
+function finishClosedControlledSmoke(opened) {
+  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
+  }) });
+  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "ATTEMPT_DRAINED", generation: 1,
+  }) });
+  opened.harness.emit("Target.detachedFromTarget", {
+    sessionId: "worker-session", targetId: "worker-target",
+  }, "page-session");
+}
+
 test("exact manifest assets admit page, worker, parser, and split worker-bootstrap ownership without projection", async () => {
   const manifest = { files: SPLIT_ASSET_PATHS.map((assetPath) => ({ path: assetPath })) };
   const safeStates = [];
@@ -1866,6 +1892,201 @@ test("exact manifest assets admit page, worker, parser, and split worker-bootstr
     "asset-parser-js", "asset-parser-wasm",
   ]) assert(!retained.includes(requestId));
   await opened.session.close();
+});
+
+test("post-closure parser assets accept every controlled ExtraInfo/request/response order without header projection", async () => {
+  const manifest = { files: SPLIT_ASSET_PATHS.map((assetPath) => ({ path: assetPath })) };
+  const orders = [
+    ["extra", "request", "response", "finished"],
+    ["extra", "response", "request", "finished"],
+    ["response", "request", "extra", "finished"],
+    ["request", "extra", "response", "finished"],
+    ["request", "response", "finished", "late-extra"],
+  ];
+  let executions = 0;
+  for (const assetPath of ["assets/parser.js", "assets/parser.wasm"]) for (const order of orders) {
+    const safeStates = [];
+    const opened = await openFakeBrowser(fakeCdpHarness(), {
+      manifest,
+      browserOptions: {
+        validateSafeTransientState(state) { safeStates.push(structuredClone(state)); },
+      },
+    });
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    await Promise.resolve();
+    await reachControlledProviderClosure(opened, `post-closure-${executions}`);
+    const requestId = `post-closure-${executions}`;
+    const url = `${PRODUCTION_ORIGIN}${assetPath}`;
+    for (const token of order) {
+      if (token === "extra" || token === "late-extra") {
+        const owner = token === "late-extra" ? "page-session" : "worker-session";
+        opened.harness.emit("Network.requestWillBeSentExtraInfo", {
+          requestId, headers: new Proxy({}, { get() { throw new Error("asset header read"); } }),
+          associatedCookies: new Proxy([], { get() { throw new Error("asset cookie read"); } }),
+        }, owner);
+      } else if (token === "request") {
+        opened.harness.emit("Network.requestWillBeSent", {
+          requestId, request: { url, method: "GET", headers: new Proxy({}, {
+            get() { throw new Error("asset request header read"); },
+          }) },
+        }, "worker-session");
+      } else if (token === "response") {
+        opened.harness.emit("Network.responseReceived", { requestId, response: {
+          url, status: 200, headers: new Proxy({}, { get() { throw new Error("asset response header read"); } }),
+          fromDiskCache: false, fromServiceWorker: false,
+        } }, "worker-session");
+      } else {
+        opened.harness.emit("Network.loadingFinished", { requestId, encodedDataLength: 1 }, "worker-session");
+      }
+    }
+    finishClosedControlledSmoke(opened);
+    const smoke = await pending;
+    assert.equal(smoke.providerGetCount, 4);
+    assert.equal(opened.requestItems.length, 4);
+    assert.equal(opened.harness.bodyCalls, 4);
+    if (order[0] === "extra") {
+      assert(safeStates.some((state) => state.kind === "asset-extra-provisional"
+        && JSON.stringify(state.marker) === JSON.stringify({
+          kind: "provisional-asset-extra", generation: 1,
+          ownerRole: "worker", ownerSession: "worker-session",
+        })));
+    }
+    if (order.includes("late-extra")) assert(safeStates.some(({ kind }) => kind === "asset-late-extra"));
+    assert.deepEqual(safeStates.at(-1), { kind: "correlations-cleared", generation: 1, correlationCount: 0 });
+    assert(!JSON.stringify({ smoke, requestItems: opened.requestItems, session: opened.session }).includes(requestId));
+    await opened.session.close();
+    executions += 1;
+  }
+  assert.equal(executions, 10);
+});
+
+test("post-closure provisional markers are exact, bounded, header-opaque, and cleared on success or failure", async () => {
+  const manifest = { files: [{ path: "assets/parser.js" }] };
+  {
+    const safeStates = [];
+    const opened = await openFakeBrowser(fakeCdpHarness(), {
+      manifest,
+      browserOptions: {
+        validateSafeTransientState(state) { safeStates.push(structuredClone(state)); },
+      },
+    });
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    await Promise.resolve();
+    await reachControlledProviderClosure(opened, "opaque-marker");
+    let ignoredReads = 0;
+    const params = { requestId: "opaque-marker" };
+    for (const property of ["headers", "associatedCookies", "privateValue", "sessionId"]) {
+      Object.defineProperty(params, property, {
+        enumerable: true,
+        get() { ignoredReads += 1; throw new Error(`read ${property}`); },
+      });
+    }
+    opened.harness.emit("Network.requestWillBeSentExtraInfo", params, "worker-session");
+    assert.equal(ignoredReads, 0);
+    assert.deepEqual(safeStates.at(-1), {
+      kind: "asset-extra-provisional", generation: 1,
+      marker: {
+        kind: "provisional-asset-extra", generation: 1,
+        ownerRole: "worker", ownerSession: "worker-session",
+      },
+    });
+    const url = `${PRODUCTION_ORIGIN}assets/parser.js`;
+    opened.harness.emit("Network.requestWillBeSent", {
+      requestId: "opaque-marker", request: { url, method: "GET", headers: {} },
+    }, "worker-session");
+    opened.harness.emit("Network.responseReceived", { requestId: "opaque-marker", response: {
+      url, status: 200, headers: {}, fromDiskCache: false, fromServiceWorker: false,
+    } }, "worker-session");
+    opened.harness.emit("Network.loadingFinished", {
+      requestId: "opaque-marker", encodedDataLength: 1,
+    }, "worker-session");
+    finishClosedControlledSmoke(opened);
+    const smoke = await pending;
+    assert.equal(smoke.providerGetCount, 4);
+    assert.equal(ignoredReads, 0);
+    assert.deepEqual(safeStates.at(-1), {
+      kind: "correlations-cleared", generation: 1, correlationCount: 0,
+    });
+    assert(!JSON.stringify({ smoke, requestItems: opened.requestItems, session: opened.session })
+      .includes("opaque-marker"));
+    await opened.session.close();
+  }
+
+  {
+    const opened = await openFakeBrowser(fakeCdpHarness(), { manifest });
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    await Promise.resolve();
+    await reachControlledProviderClosure(opened, "marker-bound");
+    for (const requestId of ["marker-1", "marker-2"]) {
+      opened.harness.emit("Network.requestWillBeSentExtraInfo", { requestId }, "worker-session");
+    }
+    opened.harness.emit("Network.requestWillBeSentExtraInfo", { requestId: "marker-excess" }, "worker-session");
+    await assert.rejects(pending, /correlation cardinality/u);
+    await opened.session.close().catch(() => {});
+  }
+});
+
+test("post-closure provisional markers reject malformed, duplicate, unmatched, disallowed, and cross-worker traffic", async () => {
+  const manifest = { files: SPLIT_ASSET_PATHS.map((assetPath) => ({ path: assetPath })) };
+  const cases = [
+    ["malformed", /correlation is malformed/u, async ({ harness }) => {
+      harness.emit("Network.requestWillBeSentExtraInfo", { requestId: "" }, "worker-session");
+    }],
+    ["duplicate", /duplicate browser request correlation/u, async ({ harness }) => {
+      harness.emit("Network.requestWillBeSentExtraInfo", { requestId: "duplicate-marker" }, "worker-session");
+      harness.emit("Network.requestWillBeSentExtraInfo", { requestId: "duplicate-marker", headers: {} }, "worker-session");
+    }],
+    ["nonasset", /unexpected browser request/u, async ({ harness }) => {
+      harness.emit("Network.requestWillBeSentExtraInfo", { requestId: "nonasset-marker" }, "worker-session");
+      harness.emit("Network.requestWillBeSent", {
+        requestId: "nonasset-marker", request: { url: `${PRODUCTION_ORIGIN}not-allowed.js`, method: "GET" },
+      }, "worker-session");
+    }],
+    ["provider", /unexpected browser request/u, async ({ harness }) => {
+      harness.emit("Network.requestWillBeSentExtraInfo", { requestId: "provider-marker" }, "worker-session");
+      harness.emit("Network.requestWillBeSent", {
+        requestId: "provider-marker", request: { url: revisionUrl("FelixGeisler/code-city"), method: "GET" },
+      }, "worker-session");
+    }],
+    ["non-get", /unexpected browser request/u, async ({ harness }) => {
+      harness.emit("Network.requestWillBeSentExtraInfo", { requestId: "method-marker" }, "worker-session");
+      harness.emit("Network.requestWillBeSent", {
+        requestId: "method-marker", request: { url: `${PRODUCTION_ORIGIN}assets/parser.js`, method: "POST" },
+      }, "worker-session");
+    }],
+    ["worker-a-extra-worker-b-request", /unexpected browser request owner/u, async ({ harness }) => {
+      harness.emit("Network.requestWillBeSentExtraInfo", { requestId: "owner-ab" }, "worker-session");
+      harness.emit("Network.requestWillBeSent", {
+        requestId: "owner-ab", request: { url: `${PRODUCTION_ORIGIN}assets/parser.js`, method: "GET" },
+      }, "worker-second");
+    }],
+    ["worker-b-extra-worker-a-request", /unexpected browser request owner/u, async ({ harness }) => {
+      harness.emit("Network.requestWillBeSentExtraInfo", { requestId: "owner-ba" }, "worker-second");
+      harness.emit("Network.requestWillBeSent", {
+        requestId: "owner-ba", request: { url: `${PRODUCTION_ORIGIN}assets/parser.js`, method: "GET" },
+      }, "worker-session");
+    }],
+    ["unmatched", /correlation are incomplete/u, async (opened) => {
+      opened.harness.emit("Network.requestWillBeSentExtraInfo", { requestId: "unmatched-marker" }, "worker-session");
+      finishClosedControlledSmoke(opened);
+    }],
+  ];
+  for (const [name, pattern, drive] of cases) {
+    const opened = await openFakeBrowser(fakeCdpHarness(), { manifest });
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    await Promise.resolve();
+    opened.harness.emit("Target.attachedToTarget", {
+      sessionId: "worker-second", targetInfo: { type: "worker", targetId: "worker-second-target" },
+    }, "page-session");
+    await new Promise((resolve) => setImmediate(resolve));
+    await reachControlledProviderClosure(opened, `negative-${name}`);
+    await drive(opened);
+    await assert.rejects(Promise.race([
+      pending, new Promise((_, reject) => setTimeout(() => reject(new Error("case hung")), 100)),
+    ]), (error) => pattern.test(error.message), name);
+    assert.equal(opened.requestItems.length, 4, name);
+    await opened.session.close().catch(() => {});
+  }
 });
 
 test("provider completion retains only exact safe tombstones and exchange slots until correlation clear", async () => {
@@ -4059,6 +4280,41 @@ function collectorMatrixSeams({ failStage, reason, progressedQualification = fal
   };
 }
 
+test("browser failure mapping reserves credential-header for literal credential presence", async () => {
+  const cases = [
+    ["credential header observed", "credential-header"],
+    ["unexpected browser request headers owner", "unexpected-request"],
+    ["browser request correlation is malformed", "request-sequence"],
+    ["browser request headers, response, or asset correlation are incomplete", "request-sequence"],
+    ["duplicate browser request correlation", "request-sequence"],
+    ["browser request correlation cardinality differs", "request-sequence"],
+    ["stale browser request correlation", "stale-publication"],
+  ];
+  for (const [message, reason] of cases) {
+    let stored;
+    const seams = collectorMatrixSeams({
+      packetSink(value) { if (value) stored = value; return stored; },
+    });
+    const createFallback = seams.createBrowserEvidenceSession;
+    seams.createBrowserEvidenceSession = async (args) => {
+      const fallback = await createFallback(args);
+      return {
+        ...fallback,
+        async collectSmoke() { throw new Error(message); },
+      };
+    };
+    const result = await collectProductionEvidence({
+      origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
+      output: path.resolve(`taxonomy-${reason}-${message.length}`),
+    }, seams);
+    assert.deepEqual([result.status, result.reason], ["fail", reason], message);
+    const validated = validateEvidencePacket(stored.files, stored.binding);
+    const smoke = JSON.parse(new TextDecoder().decode(validated.files.get("smoke.json")));
+    assert.deepEqual([smoke.status, smoke.reason], ["fail", reason], message);
+    for (const bytes of validated.files.values()) assert(!new TextDecoder().decode(bytes).includes(message));
+  }
+});
+
 test("fractional clocks produce exact complete passing and handled-failure packets", async () => {
   async function collectPacket({ failStage, reason, output }) {
     let stored;
@@ -5368,6 +5624,15 @@ test("installed Chrome 151 split-session gate", {
     const secondStart = new Promise((resolve) => { releaseSecondStart = resolve; });
     let bodyRetrievalCount = 0;
     let firstBodyReleasedAfterSecondStarted = false;
+    let controlledAssetId;
+    let controlledAssetUrl;
+    let controlledAssetExtraBeforeRequestResponse = false;
+    const controlledParserPath = publication.manifest.files.find((file) => (
+      /assets\/web-tree-sitter-[^/]+\.js$/u.test(file.path)
+    ))?.path;
+    assert(controlledParserPath);
+    const controlledParserUrl = `${PRODUCTION_ORIGIN}${controlledParserPath}`;
+    let controlledFetchPromise = Promise.resolve();
     let session;
     let wrappedCdp;
     let tick = 0;
@@ -5378,7 +5643,14 @@ test("installed Chrome 151 split-session gate", {
         now: () => ++tick, requestItems,
         connectImpl(websocketUrl) {
           const native = connectCdp(websocketUrl);
-          native.listeners.add((message) => {
+          const collectorListeners = new Set();
+          const deliveredExtraIds = new Set();
+          const heldAssetMessages = [];
+          const heldTerminalMessages = [];
+          let controlledFetchPending = false;
+          let controlledFetchStarted = false;
+          let route;
+          const dispatch = (message) => {
             const requestId = message.params?.requestId;
             const url = message.params?.request?.url ?? message.params?.response?.url;
             let workerFact;
@@ -5390,6 +5662,7 @@ test("installed Chrome 151 split-session gate", {
               order: observations.length + 1, method: message.method, sessionId: message.sessionId,
               requestId, url, requestMethod: message.params?.request?.method, workerFact,
             });
+            if (message.method === "Network.requestWillBeSentExtraInfo") deliveredExtraIds.add(requestId);
             if (message.method === "Network.requestWillBeSent"
                 && message.params?.request?.method === "GET" && providerUrl(url)) {
               if (!firstProviderId) firstProviderId = requestId;
@@ -5400,9 +5673,68 @@ test("installed Chrome 151 split-session gate", {
               }
             }
             if (message.method === "Network.loadingFinished" && requestId === firstProviderId) firstFinished = true;
-          });
+            for (const item of [...collectorListeners]) item(message);
+            if (gated && workerFact === "PROVIDER_DRAINED_STATIC_ENTERED" && !controlledFetchStarted) {
+              controlledFetchStarted = true;
+              controlledFetchPending = true;
+              controlledFetchPromise = native.send("Runtime.evaluate", {
+                expression: `fetch(${JSON.stringify(controlledParserUrl)}, { cache: "no-store" }).then((response) => response.arrayBuffer().then(() => response.ok))`,
+                returnByValue: true, awaitPromise: true,
+              }, pageSessionId).then((result) => {
+                assert.equal(result.result?.value, true);
+              }).finally(() => {
+                controlledFetchPending = false;
+                for (const held of heldTerminalMessages.splice(0)) route(held);
+              });
+            }
+          };
+          route = (message) => {
+            if (!gated) {
+              dispatch(message);
+              return;
+            }
+            const requestId = message.params?.requestId;
+            const url = message.params?.request?.url ?? message.params?.response?.url;
+            let heldWorkerFact;
+            if (message.method === "Runtime.bindingCalled"
+                && message.params?.name === "__codeCityCollectorEvidence") {
+              try { heldWorkerFact = JSON.parse(message.params.payload)?.type; } catch {}
+            }
+            if (controlledFetchPending && (message.method === "Target.detachedFromTarget"
+                || ["SUCCESS", "FAILURE", "ATTEMPT_DRAINED"].includes(heldWorkerFact))) {
+              heldTerminalMessages.push(message);
+              return;
+            }
+            if (!controlledAssetId && url === controlledParserUrl && message.sessionId === pageSessionId) {
+              controlledAssetId = requestId;
+              controlledAssetUrl = url;
+              if (deliveredExtraIds.has(requestId)) {
+                controlledAssetExtraBeforeRequestResponse = true;
+                dispatch(message);
+              } else {
+                heldAssetMessages.push(message);
+              }
+              return;
+            }
+            if (controlledAssetId && requestId === controlledAssetId
+                && message.method === "Network.requestWillBeSentExtraInfo") {
+              dispatch(message);
+              controlledAssetExtraBeforeRequestResponse = heldAssetMessages.some((item) => [
+                "Network.requestWillBeSent", "Network.responseReceived",
+              ].includes(item.method));
+              for (const held of heldAssetMessages.splice(0)) dispatch(held);
+              return;
+            }
+            if (controlledAssetId && requestId === controlledAssetId
+                && !deliveredExtraIds.has(requestId)) {
+              heldAssetMessages.push(message);
+              return;
+            }
+            dispatch(message);
+          };
+          native.listeners.add(route);
           wrappedCdp = Object.freeze({
-            listeners: native.listeners,
+            listeners: collectorListeners,
             closeListeners: native.closeListeners,
             async send(method, params = {}, sessionId) {
               const valuePromise = native.send(method, params, sessionId);
@@ -5430,6 +5762,7 @@ test("installed Chrome 151 split-session gate", {
       const smoke = await session.collectSmoke((_event, _generation, observedAtMs) => ({
         atMs: observedAtMs ?? ++tick,
       }), 0);
+      await controlledFetchPromise;
       assert(wrappedCdp && pageSessionId);
       await wrappedCdp.send("Runtime.evaluate", {
         expression: "true", returnByValue: true, awaitPromise: true,
@@ -5494,8 +5827,13 @@ test("installed Chrome 151 split-session gate", {
           .map(({ stage }) => stage).slice(0, 3).join(",") === "revision,commit,tree";
       const noPersistedTransientData = !JSON.stringify({ smoke, requestItems, session }).includes(firstProviderId)
         && requestItems.every((item) => !Object.keys(item).some((key) => /requestId|sessionId|headers/u.test(key)));
+      const strictProviderCredentialAbsence = requestItems.length > 0 && requestItems.every((item) => (
+        item.authorizationAbsent === true && item.cookieAbsent === true && item.refererAbsent === true
+      ));
       const evidence = {
         schemaVersion: 1,
+        os: process.platform,
+        label,
         chromeMajor,
         eventSha: publication.publicationRecord.eventSha,
         manifestSha256: publication.publicationRecord.manifestSha256,
@@ -5508,6 +5846,9 @@ test("installed Chrome 151 split-session gate", {
         bodyRetrievalCount,
         firstGetFinishedBeforeSecondStarted: finishBeforeSecond && secondStarted,
         firstBodyReleasedAfterSecondStarted,
+        controlledAssetUrl,
+        controlledAssetExtraBeforeRequestResponse,
+        strictProviderCredentialAbsence,
         strictRecordOrder,
         noPersistedTransientData,
         pass: true,
@@ -5516,18 +5857,22 @@ test("installed Chrome 151 split-session gate", {
       assert.equal(evidence.eventSha, publication.publicationRecord.eventSha);
       assert.equal(evidence.manifestSha256, publication.publicationRecord.manifestSha256);
       assert.equal(evidence.pageOptionsCount, 3);
-      assert(providerGetCount >= 4);
+      assert.equal(providerGetCount, 64);
       assert.equal(bodyRetrievalCount, providerGetCount);
       assert.equal(pageGetExtraInfo.length, providerGetCount);
       assert(ignoredResponseExtraInfoCount >= pageOptionsCount + pageGetExtraInfo.length);
       assert.equal(evidence.ignoredPolicyCount, 1);
       assert(evidence.ignoredAssetCount > 0);
-      for (const key of ["strictRecordOrder", "noPersistedTransientData", "pass"]) {
+      for (const key of ["strictProviderCredentialAbsence", "strictRecordOrder", "noPersistedTransientData", "pass"]) {
         assert.equal(evidence[key], true, `${label}:${key}`);
       }
-      if (gated) for (const key of ["firstGetFinishedBeforeSecondStarted", "firstBodyReleasedAfterSecondStarted"]) {
+      if (gated) for (const key of [
+        "firstGetFinishedBeforeSecondStarted", "firstBodyReleasedAfterSecondStarted",
+        "controlledAssetExtraBeforeRequestResponse",
+      ]) {
         assert.equal(evidence[key], true, `${label}:${key}`);
       }
+      if (gated) assert.equal(evidence.controlledAssetUrl, controlledParserUrl);
       return evidence;
     } catch (error) {
       throw new Error(`${label} session failed: ${error.message}`, { cause: error });
@@ -5541,9 +5886,10 @@ test("installed Chrome 151 split-session gate", {
     }
   }
 
-  await runSession({ gated: false, label: "natural" });
-  const gated = await runSession({ gated: true, label: "gated" });
-  const bytes = new TextEncoder().encode(`${JSON.stringify(gated)}\n`);
+  const natural = await runSession({ gated: false, label: "natural" });
+  const gated = await runSession({ gated: true, label: "body-and-asset-reordered" });
+  const evidence = { schemaVersion: 1, os: process.platform, natural, gated, pass: true };
+  const bytes = new TextEncoder().encode(`${JSON.stringify(evidence)}\n`);
   await writeFile(evidenceOutput, bytes, { flag: "w" });
   assert.deepEqual(new Uint8Array(await readFile(evidenceOutput)), bytes);
 });
