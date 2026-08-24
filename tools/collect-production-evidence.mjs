@@ -23,7 +23,7 @@ const JSON_DECODER = new TextDecoder("utf-8", { fatal: true });
 const SOURCE_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 export const PRODUCTION_ORIGIN = "https://felixgeisler.github.io/code-city/";
-export const PARENT_ISSUE_BODY_SHA256 = "06f08ca0144ffe9d5e162f3eb74c898b8b3a9e789832eae8c406f0fef55d0184";
+export const PARENT_ISSUE_BODY_SHA256 = "62e24a6d2ba751a44a515a8402911a1de0fc811db62a80337bdc9a0518b1f300";
 export const COLLECTOR_INVOCATION = Object.freeze([
   "node", "tools/collect-production-evidence.mjs", "--origin", "$ORIGIN",
   "--manifest", "$MANIFEST", "--output", "$OUTPUT",
@@ -51,6 +51,7 @@ const SAFE_HEADERS = new Set([
 ]);
 const SOURCE_SUFFIXES = [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"];
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const QUALIFICATION_IDENTITIES = new WeakMap();
 
 function invariant(condition, message = "collector invariant failed") {
   if (!condition) throw new Error(message);
@@ -555,35 +556,12 @@ export async function qualifyRepository({ fetchImpl, now, requestItems, signal, 
     });
     const tree = parseTreeResponse(treeResult.bytes, rootTree, revision.length, progress);
     invariant(tree.candidates.length >= 4001, "qualification has fewer than 4,001 candidates");
-    let aggregate = 0;
-    for (let offset = 0; offset < 4001; offset += 1) {
-      const expected = tree.candidates[offset];
-      const expectedBlob = candidateBlobId(expected, revision.length);
-      const result = await fixedFetch(rawUrl(REACT_REPOSITORY, revision, expected.rawPath), {
-        cap: RAW_CAP, stage: "raw", fetchImpl, now, requestItems, api: false, corsRequired: true, signal,
-      });
-      const actualBlob = computeGitBlobId(result.bytes, revision.length);
-      let normalizedBytes;
-      try { normalizedBytes = normalizeSourceBytes(result.bytes); }
-      catch { throw new Error("candidate content is invalid"); }
-      const nextAggregate = aggregate + normalizedBytes;
-      const hashMatched = actualBlob === expectedBlob;
-      const contentValid = normalizedBytes <= MAX_NORMALIZED_BYTES && nextAggregate <= MAX_AGGREGATE_BYTES;
-      if (contentValid) {
-        progress.candidates.push({
-          index: offset + 1,
-          path: expected.canonicalPath,
-          blobId: expectedBlob,
-          normalizedBytes,
-          runningAggregate: nextAggregate,
-          hashMatched,
-          contentValid: true,
-        });
-        aggregate = nextAggregate;
-      }
-      invariant(contentValid, "candidate content exceeds qualification bounds");
-      invariant(hashMatched, "candidate blob hash differs");
-    }
+    const identities = Object.freeze(tree.candidates.slice(0, 4001).map((candidate) => Object.freeze({
+      rawPath: candidate.rawPath,
+      canonicalPath: candidate.canonicalPath,
+      blobId: candidateBlobId(candidate, revision.length),
+    })));
+    QUALIFICATION_IDENTITIES.set(progress, identities);
     return Object.freeze(progress);
   } catch (error) {
     if (error instanceof CollectorFailure) throw error;
@@ -820,6 +798,8 @@ export async function createBrowserEvidenceSession({
   observeCdpVersion = () => {},
   beforeProviderProjection = async () => {},
   validateSafeTransientState = () => {},
+  observeBodyState = () => {},
+  emitQualificationProgress = () => {},
 }) {
   const launched = await launchImpl(discovery, profile);
   let cdp;
@@ -852,6 +832,7 @@ export async function createBrowserEvidenceSession({
     let processing = Promise.resolve();
     let networkEventOrder = 0;
     let traceStarted = false;
+    let bodyBacklog = 0;
     let closePromise;
 
     const preSelectionFailureCategories = new Set([
@@ -1276,13 +1257,7 @@ export async function createBrowserEvidenceSession({
       };
     }
     function providerEntryReady(entry) {
-      return Boolean(entry.finished && entry.response && entry.requestHeaderFacts
-        && (entry.method !== "GET" || entry.bodyPromise));
-    }
-    function maybeCaptureProviderBody(entry) {
-      if (entry.method !== "GET" || entry.bodyPromise || !entry.response || !entry.finished) return;
-      entry.bodyPromise = cdpBody(cdp, entry.sessionId, entry.requestId, entry.cap);
-      void entry.bodyPromise.catch(setFatal);
+      return Boolean(entry.finished && entry.response && entry.requestHeaderFacts);
     }
     function correlationComplete(correlation) {
       if (correlation.kind === "completed") return true;
@@ -1511,50 +1486,77 @@ export async function createBrowserEvidenceSession({
         semanticGetEnd = Math.max(get.finishedMs, logicalGetStart);
         appendRequest(requestItems, requestRecord(get, logicalGetStart, semanticGetEnd));
       }
-      const bodyPromise = get.bodyPromise;
-      invariant(bodyPromise, "browser response body was not captured");
-      const bytes = await bodyPromise;
-      get.bodyPromise = null;
-      await beforeProviderProjection({ stage: get.route.stage });
-      invariant(mode === current, "browser trace was cleared too early");
+      invariant(bodyBacklog === 0, "browser response body backlog exceeded");
+      bodyBacklog = 1;
+      observeBodyState(Object.freeze({
+        kind: "provider-body-projecting", generation: current.generation,
+        stage: get.route.stage, bodyBacklog: 1, bodyReferenceCleared: false,
+      }));
+      let bytes;
       const semanticRecord = Object.freeze({ ...get.route });
-      current.gets.push(semanticRecord);
-      if (get.route.stage === "revision") {
-        current.revision = projectRevision(bytes);
-        current.progress.revision = current.revision;
-      } else if (get.route.stage === "commit") {
-        invariant(get.route.identity === current.revision, "browser commit identity mismatch");
-        current.rootTree = projectCommit(bytes, current.revision);
-        current.progress.rootTree = current.rootTree;
-      } else if (get.route.stage === "tree") {
-        invariant(get.route.identity === current.rootTree, "browser tree identity mismatch");
-        const tree = projectTree(bytes, current.rootTree, current.revision.length, undefined,
-          current.generation === 1 ? Infinity : 4001);
-        current.treeEntries = tree.treeEntries;
-        current.projected = tree.candidates;
-        current.onInventory?.(semanticGetEnd);
-      } else {
-        const index = current.rawFacts.length;
-        const expected = current.projected?.[index];
-        invariant(expected && get.route.identity === current.revision && get.route.path === expected.rawPath, "browser raw sequence mismatch");
-        const expectedBlob = candidateBlobId(expected, current.revision.length);
-        const blobId = computeGitBlobId(bytes, current.revision.length);
-        let normalizedBytes;
-        try { normalizedBytes = normalizeSourceBytes(bytes); }
-        catch { throw new Error("browser candidate content invalid"); }
-        const nextAggregate = current.aggregate + normalizedBytes;
-        const fact = {
-          index: index + 1, path: expected.canonicalPath, blobId: expectedBlob, normalizedBytes,
-          runningAggregate: nextAggregate, hashMatched: blobId === expectedBlob,
-          contentValid: normalizedBytes <= MAX_NORMALIZED_BYTES && nextAggregate <= MAX_AGGREGATE_BYTES,
-        };
-        if (fact.contentValid) {
+      try {
+        bytes = await cdpBody(cdp, get.sessionId, get.requestId, get.cap);
+        await beforeProviderProjection({ stage: get.route.stage });
+        invariant(mode === current, "browser trace was cleared too early");
+        current.gets.push(semanticRecord);
+        if (get.route.stage === "revision") {
+          current.revision = projectRevision(bytes);
+          current.progress.revision = current.revision;
+        } else if (get.route.stage === "commit") {
+          invariant(get.route.identity === current.revision, "browser commit identity mismatch");
+          current.rootTree = projectCommit(bytes, current.revision);
+          current.progress.rootTree = current.rootTree;
+        } else if (get.route.stage === "tree") {
+          invariant(get.route.identity === current.rootTree, "browser tree identity mismatch");
+          const tree = projectTree(bytes, current.rootTree, current.revision.length, undefined,
+            current.generation === 1 ? Infinity : 4001);
+          current.treeEntries = tree.treeEntries;
+          current.projected = tree.candidates;
+          if (current.generation === 2) {
+            invariant(current.expectedIdentities?.length === 4001
+              && current.projected.length >= 4001
+              && current.expectedIdentities.every((expected, index) => {
+                const observed = current.projected[index];
+                return observed.rawPath === expected.rawPath
+                  && observed.canonicalPath === expected.canonicalPath
+                  && candidateBlobId(observed, current.revision.length) === expected.blobId;
+              }), "capacity inventory differs from qualification");
+          }
+          current.onInventory?.(semanticGetEnd);
+        } else {
+          const index = current.rawFacts.length;
+          const expected = current.projected?.[index];
+          invariant(expected && get.route.identity === current.revision && get.route.path === expected.rawPath, "browser raw sequence mismatch");
+          const expectedBlob = candidateBlobId(expected, current.revision.length);
+          const blobId = computeGitBlobId(bytes, current.revision.length);
+          let normalizedBytes;
+          try { normalizedBytes = normalizeSourceBytes(bytes); }
+          catch { throw new Error("browser candidate content invalid"); }
+          const nextAggregate = current.aggregate + normalizedBytes;
+          const fact = {
+            index: index + 1, path: expected.canonicalPath, blobId: expectedBlob, normalizedBytes,
+            runningAggregate: nextAggregate, hashMatched: blobId === expectedBlob,
+            contentValid: normalizedBytes <= MAX_NORMALIZED_BYTES && nextAggregate <= MAX_AGGREGATE_BYTES,
+          };
+          invariant(fact.contentValid, "browser candidate content invalid");
+          invariant(fact.hashMatched, "browser candidate blob mismatch");
           current.rawFacts.push(fact);
           if (current.generation === 2) current.progress.candidates = current.rawFacts;
           current.aggregate = nextAggregate;
+          if (current.generation === 2) {
+            const count = current.rawFacts.length;
+            if (count % 250 === 0 || count === 4001) emitQualificationProgress(count);
+            if (count === 4001) current.onQualificationComplete?.(semanticGetEnd);
+          }
         }
-        invariant(fact.contentValid, "browser candidate content invalid");
-        invariant(fact.hashMatched, "browser candidate blob mismatch");
+      } finally {
+        bytes?.fill(0);
+        bytes = null;
+        bodyBacklog = 0;
+        observeBodyState(Object.freeze({
+          kind: "provider-body-cleared", generation: current.generation,
+          stage: get.route.stage, bodyBacklog: 0, bodyReferenceCleared: true,
+        }));
       }
       current.stageEndMs[exchange.stage] = Math.max(current.stageEndMs[exchange.stage] ?? 0, semanticGetEnd);
       current.latestRequestEndMs = Math.max(current.latestRequestEndMs, semanticGetEnd);
@@ -1762,7 +1764,6 @@ export async function createBrowserEvidenceSession({
             "unexpected browser response owner");
             invariant(!entry.response, "duplicate browser response");
             entry.response = cdpResponseProjection(ownData(message.params, "response"));
-            maybeCaptureProviderBody(entry);
             maybeScheduleExchange(entry.exchange);
             return;
           }
@@ -1833,7 +1834,6 @@ export async function createBrowserEvidenceSession({
               if (current.openExchange === entry.exchange) current.openExchange = null;
               entry.exchange.sealed = true;
             }
-            maybeCaptureProviderBody(entry);
             maybeScheduleExchange(entry.exchange);
             return;
           }
@@ -1933,7 +1933,7 @@ export async function createBrowserEvidenceSession({
       } catch (error) {
         observerError = error;
       } finally {
-        for (const entry of network.values()) entry.bodyPromise = null;
+        bodyBacklog = 0;
         network.clear();
         correlations.clear();
         workerTargets.clear();
@@ -2041,14 +2041,26 @@ export async function createBrowserEvidenceSession({
       },
       async collectCapacity(qualification, emit, startedMs) {
         facts.length = 0;
+        const expectedIdentities = QUALIFICATION_IDENTITIES.get(qualification)
+          ?? Object.freeze(qualification.candidates.map((candidate) => Object.freeze({
+            rawPath: candidate.path, canonicalPath: candidate.path, blobId: candidate.blobId,
+          })));
+        invariant(expectedIdentities.length === 4001, "qualification identity cardinality differs");
+        qualification.candidates.splice(0);
         const progress = {
           ...emptyData(CAPACITY_KEYS, ["candidates"]), repositoryUrl: REACT_URL, startedMs,
-          rawRequestCount: 0, candidates: [],
+          rawRequestCount: 0, candidates: qualification.candidates,
         };
         const trace = startTrace(REACT_REPOSITORY, 2, progress);
+        trace.rawFacts = qualification.candidates;
+        trace.expectedIdentities = expectedIdentities;
         trace.onInventory = (atMs) => recordCausalMilestone(
           trace, "inventory-complete", atMs,
           (observedAtMs) => emit("inventory-complete", 2, observedAtMs),
+        );
+        trace.onQualificationComplete = (atMs) => recordCausalMilestone(
+          trace, "qualification-complete", atMs,
+          (observedAtMs) => emit("qualification-complete", 0, observedAtMs),
         );
         await submit(REACT_URL);
         const selected = await nextFact((fact) => fact.type === "REVISION_SELECTED" && fact.generation === 2);
@@ -2141,7 +2153,7 @@ export async function createBrowserEvidenceSession({
 }
 
 function envelope(kind, status, reason, data) {
-  return { schemaVersion: 2, kind, status, reason, data };
+  return { schemaVersion: 3, kind, status, reason, data };
 }
 
 function emptyData(keys, arrays = []) {
@@ -2222,7 +2234,7 @@ function makeLifecycleData(state, status, reason, events = state.events) {
   const capacityStarted = eventAt(events, "capacity-start", 2) !== undefined;
   const capacityItems = state.requestItems.filter((item) => item.applicationCall && item.requestedUrl.includes("/react/react/"));
   return {
-    collectorVersion: 2,
+    collectorVersion: 3,
     collectorCommit: state.collectorCommit,
     invocation: state.invocation,
     nodeVersion: state.nodeVersion,
@@ -2269,28 +2281,44 @@ function failurePayloads(state, failure) {
     smokeFail.providerGetCount = state.requestItems.filter((item) => item.applicationCall
       && item.requestedUrl.includes("/FelixGeisler/code-city/") && item.method === "GET").length;
   }
-  const qualificationFail = state.qualification ?? emptyData(QUALIFICATION_KEYS, ["candidates"]);
+  const qualificationFail = state.qualification
+    ? { ...state.qualification, candidates: [...(state.qualification.candidates ?? [])] }
+    : emptyData(QUALIFICATION_KEYS, ["candidates"]);
   if (eventAt(events, "qualification-start", 0)) qualificationFail.repositoryUrl ??= REACT_URL;
-  const capacityFail = state.capacity ?? emptyData(CAPACITY_KEYS, ["candidates"]);
-  if (eventAt(events, "capacity-start", 2)) {
+  const capacityFail = state.capacity
+    ? { ...state.capacity, candidates: [...(state.capacity.candidates ?? [])] }
+    : emptyData(CAPACITY_KEYS, ["candidates"]);
+  const capacityStarted = eventAt(events, "capacity-start", 2) !== undefined;
+  const qualificationComplete = eventAt(events, "qualification-complete", 0) !== undefined;
+  if (capacityStarted) {
     capacityFail.repositoryUrl ??= REACT_URL;
     const capacityGets = state.requestItems.filter((item) => item.applicationCall && item.method === "GET"
       && item.requestedUrl.includes("/react/react/"));
     capacityFail.rawRequestCount = capacityGets.filter((item) => item.stage === "raw").length;
     capacityFail.maxOverlap = maximumOverlap(capacityGets);
-    capacityFail.candidates ??= [];
+    const safePrefix = [...capacityFail.candidates];
+    capacityFail.candidates = safePrefix;
+    qualificationFail.candidates = [...safePrefix];
   }
   const failedData = { artifact: state.artifact, smoke: smokeFail, qualification: qualificationFail, capacity: capacityFail };
   const payloads = {};
-  for (let index = 0; index < stages.length; index += 1) {
-    const stage = stages[index];
-    if (index < failedIndex) payloads[stage] = envelope(stage, "pass", "none", state[stage]);
-    else if (index === failedIndex) payloads[stage] = envelope(stage, "fail", failure.reason, failedData[stage]);
-    else {
-      const data = stage === "smoke" ? emptyData(SMOKE_KEYS)
-        : stage === "qualification" ? emptyData(QUALIFICATION_KEYS, ["candidates"])
-          : emptyData(CAPACITY_KEYS, ["candidates"]);
-      payloads[stage] = envelope(stage, "not-run", "blocked", data);
+  if (failure.stage === "capacity") {
+    payloads.artifact = envelope("artifact", "pass", "none", state.artifact);
+    payloads.smoke = envelope("smoke", "pass", "none", state.smoke);
+    payloads.qualification = envelope("qualification", qualificationComplete ? "pass" : "fail",
+      qualificationComplete ? "none" : failure.reason, qualificationFail);
+    payloads.capacity = envelope("capacity", "fail", failure.reason, capacityFail);
+  } else {
+    for (let index = 0; index < stages.length; index += 1) {
+      const stage = stages[index];
+      if (index < failedIndex) payloads[stage] = envelope(stage, "pass", "none", state[stage]);
+      else if (index === failedIndex) payloads[stage] = envelope(stage, "fail", failure.reason, failedData[stage]);
+      else {
+        const data = stage === "smoke" ? emptyData(SMOKE_KEYS)
+          : stage === "qualification" ? emptyData(QUALIFICATION_KEYS, ["candidates"])
+            : emptyData(CAPACITY_KEYS, ["candidates"]);
+        payloads[stage] = envelope(stage, "not-run", "blocked", data);
+      }
     }
   }
   payloads.requests = envelope("requests", "fail", failure.reason, { items: state.requestItems });
@@ -2441,6 +2469,11 @@ export async function collectProductionEvidence(options, seams = {}) {
       discovery, chromeVersion: state.chromeVersion, profile, origin: options.origin, manifest,
       eventSha: publicationRecord.eventSha, now, requestItems: state.requestItems,
       observeCdpVersion(value) { state.cdpVersion = value; },
+      emitQualificationProgress: seams.emitQualificationProgress ?? ((count) => {
+        (seams.writeStderr ?? process.stderr.write.bind(process.stderr))(
+          `Production evidence qualification: ${count}/4001 candidates validated.\n`,
+        );
+      }),
     });
     state.cdpVersion = browser.cdpVersion;
     activeStage = "smoke";
@@ -2469,7 +2502,6 @@ export async function collectProductionEvidence(options, seams = {}) {
       progress: state.qualification,
     });
     enforceNoStageOverlap(state, "qualification");
-    emit("qualification-complete", 0);
 
     activeStage = "capacity";
     state.stageRequestStarts.capacity = state.requestItems.length;
@@ -2520,18 +2552,20 @@ export async function collectProductionEvidence(options, seams = {}) {
 }
 
 export async function runCollectorCli(args = process.argv.slice(2), seams = {}) {
+  const writeStdout = seams.writeStdout ?? process.stdout.write.bind(process.stdout);
+  const writeStderr = seams.writeStderr ?? process.stderr.write.bind(process.stderr);
   let options;
   try {
     options = parseCollectorArguments(args);
     const result = await collectProductionEvidence(options, seams);
     if (result.status !== "pass") {
-      process.stderr.write("Production evidence collection failed safely.\n");
+      writeStderr("Production evidence collection failed safely.\n");
       return 1;
     }
-    process.stdout.write(`${result.packetDigest}\n`);
+    writeStdout(`${result.packetDigest}\n`);
     return 0;
   } catch {
-    process.stderr.write("Production evidence collection failed safely.\n");
+    writeStderr("Production evidence collection failed safely.\n");
     return 1;
   }
 }

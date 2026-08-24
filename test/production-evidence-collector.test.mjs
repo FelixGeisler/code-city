@@ -30,6 +30,7 @@ import {
   readBoundedResponseBody,
   readPublicationInput,
   recordCdpTransferSize,
+  runCollectorCli,
   responseCapForRoute,
   safeHeaderFacts,
   validObservedMs,
@@ -655,15 +656,16 @@ test("deployment status validation rejects the complete malformed latest-first m
   }
 });
 
-test("native qualification completes the exact 4,004-request pass and classifies real identity, CORS, tree, hash, and content failures", async () => {
+test("native qualification makes exactly three sequential metadata GETs and no raw-body GET", async () => {
   const passed = await runNativeQualification();
-  assert.equal(passed.calls.length, 4004);
-  assert.deepEqual(passed.calls.slice(0, 3).map(({ url }) => url), [
+  assert.equal(passed.calls.length, 3);
+  assert.deepEqual(passed.calls.map(({ url }) => url), [
     revisionUrl("react/react"), commitUrl("react/react", REACT), treeUrl("react/react", REACT_ROOT),
   ]);
-  assert(passed.calls.slice(3).every(({ url }, index) => url === rawUrl("react/react", REACT, NATIVE_ENTRIES[index].path)));
-  assert.equal(passed.progress.candidates.length, 4001);
-  assert.equal(passed.requestItems.length, 4004);
+  assert.deepEqual(passed.calls.map(({ url }) => new URL(url).hostname), ["api.github.com", "api.github.com", "api.github.com"]);
+  assert.equal(passed.progress.candidates.length, 0);
+  assert.equal(passed.progress.treeEntries, NATIVE_ENTRIES.length);
+  assert.equal(passed.requestItems.length, 3);
   assert(passed.calls.every(({ init }) => init.credentials === "omit" && init.redirect === "error" && init.referrer === ""));
 
   const cases = [
@@ -673,40 +675,25 @@ test("native qualification completes the exact 4,004-request pass and classifies
     ["identity-mismatch", { tree: { body: JSON.stringify({ sha: ROOT, truncated: false, tree: NATIVE_ENTRIES }) } }],
     ["cors-failure", { revision: { headers: { "Content-Type": "application/json" } } }],
     ["tree-incomplete", { tree: { body: JSON.stringify({ sha: REACT_ROOT, truncated: true, tree: NATIVE_ENTRIES }) } }],
-    ["hash-mismatch", { raw: { body: new TextEncoder().encode("different") } }],
-    ["content-invalid", { raw: { body: Uint8Array.of(0) } }],
   ];
   for (const [reason, overrides] of cases) {
     const controlled = nativeQualificationFetch(overrides);
     await assert.rejects(qualifyRepository({ fetchImpl: controlled.fetchImpl, now: () => 1, requestItems: [] }),
       (error) => error.stage === "qualification" && error.reason === reason, reason);
+    assert(controlled.calls.every(({ url }) => !url.startsWith("https://raw.githubusercontent.com/")), reason);
   }
 });
 
-test("native qualification enforces each revision, commit, tree, and raw response boundary and boundary plus one", async () => {
+test("native qualification enforces each metadata response boundary and rejects boundary plus one", async () => {
   const routeCases = [
-    ["revision", RESPONSE_CAPS.revision, [{ sha: REACT }], { commit: { body: JSON.stringify({ sha: EVENT, tree: { sha: REACT_ROOT } }) } }, "identity-mismatch"],
-    ["commit", RESPONSE_CAPS.commit, { sha: REACT, tree: { sha: REACT_ROOT } }, { tree: { body: JSON.stringify({ sha: REACT_ROOT, truncated: true, tree: [] }) } }, "tree-incomplete"],
-    ["tree", RESPONSE_CAPS.tree, { sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }, {}, null],
-    ["raw", RESPONSE_CAPS.raw, null, {}, "content-invalid"],
+    ["revision", RESPONSE_CAPS.revision, [{ sha: REACT }]],
+    ["commit", RESPONSE_CAPS.commit, { sha: REACT, tree: { sha: REACT_ROOT } }],
+    ["tree", RESPONSE_CAPS.tree, { sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }],
   ];
-  for (const [stage, cap, value, later, boundaryReason] of routeCases) {
-    const boundaryBody = stage === "raw" ? new Uint8Array(cap).fill(0x78) : paddedJson(value, cap);
-    const boundaryOverrides = { ...later, [stage]: { body: boundaryBody } };
-    if (stage === "raw") {
-      const entries = NATIVE_ENTRIES.map((entry, index) => (
-        index === 0 ? { ...entry, sha: computeGitBlobId(boundaryBody, 40) } : entry
-      ));
-      boundaryOverrides.tree = { body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: entries }) };
-    }
-    const boundary = nativeQualificationFetch(boundaryOverrides);
-    if (boundaryReason) {
-      await assert.rejects(qualifyRepository({ fetchImpl: boundary.fetchImpl, now: () => 1, requestItems: [] }),
-        (error) => error.reason === boundaryReason, `${stage} boundary`);
-    } else {
-      const progress = await qualifyRepository({ fetchImpl: boundary.fetchImpl, now: () => 1, requestItems: [] });
-      assert.equal(progress.candidates.length, 4001, `${stage} boundary`);
-    }
+  for (const [stage, cap, value] of routeCases) {
+    const boundary = nativeQualificationFetch({ [stage]: { body: paddedJson(value, cap) } });
+    const progress = await qualifyRepository({ fetchImpl: boundary.fetchImpl, now: () => 1, requestItems: [] });
+    assert.equal(progress.candidates.length, 0, `${stage} boundary`);
 
     const overflow = nativeQualificationFetch({ [stage]: { body: new Uint8Array(cap + 1) } });
     await assert.rejects(qualifyRepository({ fetchImpl: overflow.fetchImpl, now: () => 1, requestItems: [] }),
@@ -714,41 +701,15 @@ test("native qualification enforces each revision, commit, tree, and raw respons
   }
 });
 
-test("qualification preserves only schema-safe prefixes at 2 MiB and 40 MiB boundaries and classifies +1, UTF-8, NUL, and hash failures", async () => {
-  const twoMiB = new Uint8Array(2 * 1024 * 1024).fill(0x78);
-  const empty = new Uint8Array();
-
-  for (const [name, sourceForIndex, expectedAggregate] of [
-    ["per-module boundary", (index) => index === 0 ? twoMiB : empty, twoMiB.byteLength],
-    ["aggregate boundary", (index) => index < 20 ? twoMiB : empty, 40 * 1024 * 1024],
-  ]) {
-    const controlled = qualificationFetchForSources(sourceForIndex);
-    const progress = { repositoryUrl: "https://github.com/react/react", revision: null, rootTree: null, treeEntries: null, truncated: null, candidates: [] };
-    await qualifyRepository({ fetchImpl: controlled.fetchImpl, now: () => 1, requestItems: [], progress });
-    assert.equal(progress.candidates.length, 4001, name);
-    assert.equal(progress.candidates.at(-1).runningAggregate, expectedAggregate, name);
-  }
-
-  for (const [name, sourceForIndex, prefixLength] of [
-    ["per-module +1", (index) => index === 0 ? new Uint8Array(2 * 1024 * 1024 + 1).fill(0x78) : empty, 0],
-    ["aggregate +1", (index) => index < 20 ? twoMiB : index === 20 ? Uint8Array.of(0x78) : empty, 20],
-    ["invalid UTF-8", (index) => index === 0 ? Uint8Array.of(0xc3, 0x28) : empty, 0],
-    ["NUL", (index) => index === 0 ? Uint8Array.of(0) : empty, 0],
-  ]) {
-    const controlled = qualificationFetchForSources(sourceForIndex);
-    const progress = { repositoryUrl: "https://github.com/react/react", revision: null, rootTree: null, treeEntries: null, truncated: null, candidates: [] };
-    await assert.rejects(qualifyRepository({ fetchImpl: controlled.fetchImpl, now: () => 1, requestItems: [], progress }),
-      (error) => error.stage === "qualification" && error.reason === "content-invalid", name);
-    assert.equal(progress.candidates.length, prefixLength, name);
-    assert(progress.candidates.every((candidate) => candidate.contentValid), name);
-  }
-
-  const hashProgress = { repositoryUrl: "https://github.com/react/react", revision: null, rootTree: null, treeEntries: null, truncated: null, candidates: [] };
-  const hash = nativeQualificationFetch({ raw: { body: new TextEncoder().encode("different") } });
-  await assert.rejects(qualifyRepository({ fetchImpl: hash.fetchImpl, now: () => 1, requestItems: [], progress: hashProgress }),
-    (error) => error.stage === "qualification" && error.reason === "hash-mismatch");
-  assert.equal(hashProgress.candidates.length, 1);
-  assert.equal(hashProgress.candidates[0].hashMatched, false);
+test("native qualification fixes the first 4,001 ordered path/blob identities without retaining bodies", async () => {
+  const progress = { repositoryUrl: "https://github.com/react/react", revision: null, rootTree: null, treeEntries: null, truncated: null, candidates: [] };
+  const controlled = nativeQualificationFetch({ raw: { body: Uint8Array.of(0) } });
+  const result = await qualifyRepository({ fetchImpl: controlled.fetchImpl, now: () => 1, requestItems: [], progress });
+  assert.equal(result, progress);
+  assert.deepEqual(result.candidates, []);
+  assert.equal(controlled.calls.length, 3);
+  assert.equal(JSON.stringify(result).includes("rawPath"), false);
+  assert.equal(JSON.stringify(result).includes("body"), false);
 });
 
 test("native deployment fetches enforce both response boundaries and boundary plus one", async () => {
@@ -945,28 +906,29 @@ test("full seam-driven collector maps the exact pass lifecycle, dynamic smoke K,
         appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, shared.map(({ path: sourcePath }) => sourcePath), true, {
           revision: () => emit("revision-selected", 2), inventory: () => emit("inventory-complete", 2),
         });
+        emit("qualification-complete", 0);
         emit("limit-failure", 2); emit("request-quiescent", 2); const worker = emit("worker-quiescent", 2);
         return { repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT, terminal: "Repository exceeds Code City limits", revisionDisplayed: true, cityPresent: false, priorCityRemoved: true, rawRequestCount: 4001, maxOverlap: 1, noLaterRequest: true, workerQuiescent: true, candidates: structuredClone(qualification.candidates), startedMs, endedMs: worker.atMs };
       },
       async close() {},
     }),
     qualifyRepository: async ({ now, requestItems }) => {
-      appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, shared.map(({ path: sourcePath }) => sourcePath), false);
+      appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, [], false);
       return { repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT, treeEntries: 5000, truncated: false, candidates: shared };
     },
     writeValidatedEvidencePacket: async (_output, packet) => { stored = validateEvidencePacket(packet.files, packet.binding); },
     readValidatedEvidencePacket: async () => stored,
   });
   assert.deepEqual(result, { packetDigest: stored.packetDigest, status: "pass", reason: "none" });
-  assert.equal(PARENT_ISSUE_BODY_SHA256, "06f08ca0144ffe9d5e162f3eb74c898b8b3a9e789832eae8c406f0fef55d0184");
+  assert.equal(PARENT_ISSUE_BODY_SHA256, "62e24a6d2ba751a44a515a8402911a1de0fc811db62a80337bdc9a0518b1f300");
   assert.deepEqual(stored.binding, { issueBodySha256: PARENT_ISSUE_BODY_SHA256, eventSha: EVENT });
   const decoder = new TextDecoder();
   const persisted = Object.fromEntries([...stored.files]
     .map(([name, bytes]) => [name, JSON.parse(decoder.decode(bytes))]));
   for (const name of ["artifact", "smoke", "qualification", "capacity", "requests", "lifecycle"]) {
-    assert.equal(persisted[`${name}.json`].schemaVersion, 2, name);
+    assert.equal(persisted[`${name}.json`].schemaVersion, 3, name);
   }
-  assert.equal(persisted["index.json"].schemaVersion, 2);
+  assert.equal(persisted["index.json"].schemaVersion, 3);
   assert.equal(persisted["index.json"].issueBodySha256, PARENT_ISSUE_BODY_SHA256);
   assert.equal(persisted["artifact.json"].data.issueBodySha256, PARENT_ISSUE_BODY_SHA256);
   assert.equal(persisted["qualification.json"].data.repositoryUrl, "https://github.com/react/react");
@@ -975,19 +937,18 @@ test("full seam-driven collector maps the exact pass lifecycle, dynamic smoke K,
     && item.method === "GET" && item.requestedUrl.includes("/react/react/"));
   const capacityGets = persisted["requests.json"].data.items.filter((item) => item.applicationCall
     && item.method === "GET" && item.requestedUrl.includes("/react/react/"));
-  assert.equal(qualificationGets.length, 4004);
+  assert.equal(qualificationGets.length, 3);
   assert.equal(capacityGets.length, 4004);
-  assert.deepEqual(qualificationGets.slice(3).map((item) => item.requestedUrl),
-    shared.map((item) => rawUrl("react/react", REACT, item.path)));
+  assert.deepEqual(qualificationGets.map((item) => item.stage), ["revision", "commit", "tree"]);
   assert.deepEqual(capacityGets.slice(3).map((item) => item.requestedUrl),
     shared.map((item) => rawUrl("react/react", REACT, item.path)));
   assert(persisted["requests.json"].data.items.every((item) => !item.requestedUrl.includes("/10270250/")));
   const lifecycle = persisted["lifecycle.json"];
-  assert.equal(lifecycle.data.collectorVersion, 2);
+  assert.equal(lifecycle.data.collectorVersion, 3);
   assert.equal(lifecycle.data.maxOverlap, 1);
   assert.deepEqual(lifecycle.data.events.map(({ event, generation }) => [event, generation]), [
     ["collector-start", 0], ["artifact-verified", 0], ["smoke-start", 1], ["revision-selected", 1], ["city-published", 1], ["trace-reset", 0],
-    ["qualification-start", 0], ["qualification-complete", 0], ["capacity-start", 2], ["revision-selected", 2], ["inventory-complete", 2],
+    ["qualification-start", 0], ["capacity-start", 2], ["revision-selected", 2], ["inventory-complete", 2], ["qualification-complete", 0],
     ["limit-failure", 2], ["request-quiescent", 2], ["worker-quiescent", 2], ["collector-complete", 0],
   ]);
   const smoke = persisted["smoke.json"];
@@ -3120,15 +3081,10 @@ test("provider-drained state rejects duplicate markers and contradictory static 
   }
 });
 
-test("captured provider bodies allow a late page fragment to complete after worker detachment", async () => {
+test("bounded provider bodies wait for complete safe metadata and allow a late page fragment", async () => {
   let detached = false;
   const safeStates = [];
-  const harness = fakeCdpHarness({
-    async bodyImpl({ value }) {
-      if (detached) throw new Error("detached worker body command");
-      return value;
-    },
-  });
+  const harness = fakeCdpHarness();
   const opened = await openFakeBrowser(harness, {
     browserOptions: {
       validateSafeTransientState(state) { safeStates.push(structuredClone(state)); },
@@ -3167,10 +3123,7 @@ test("captured provider bodies allow a late page fragment to complete after work
       requestId, encodedDataLength: new TextEncoder().encode(fixture.body).byteLength,
     }, "worker-session");
   }
-  await waitForBodyCalls(harness, 4);
-  assert.equal(harness.calls.filter(({ method }) => method === "Network.getResponseBody").length, 4);
-  assert(harness.calls.filter(({ method }) => method === "Network.getResponseBody")
-    .every(({ sessionId }) => sessionId === "worker-session"));
+  assert.equal(harness.calls.filter(({ method }) => method === "Network.getResponseBody").length, 0);
 
   for (const fact of [
     { type: "REVISION_SELECTED", generation: 1, revision: EVENT },
@@ -3180,16 +3133,17 @@ test("captured provider bodies allow a late page fragment to complete after work
   ]) harness.emit("Runtime.bindingCalled", {
     name: "__codeCityCollectorEvidence", payload: JSON.stringify(fact),
   });
+  harness.emit("Network.requestWillBeSentExtraInfo", {
+    requestId: "detached-late-extra-0", headers: {}, associatedCookies: [],
+  }, "page-session");
+  await waitForBodyCalls(harness, 4);
+  assert(harness.calls.filter(({ method }) => method === "Network.getResponseBody")
+    .every(({ sessionId }) => sessionId === "worker-session"));
   detached = true;
   harness.emit("Target.detachedFromTarget", {
     sessionId: "worker-session", targetId: "worker-target",
   }, "page-session");
   const detachIndex = harness.activity.length - 1;
-  assert.deepEqual(emitted, []);
-
-  harness.emit("Network.requestWillBeSentExtraInfo", {
-    requestId: "detached-late-extra-0", headers: {}, associatedCookies: [],
-  }, "page-session");
   const smoke = await pending;
   assert.equal(smoke.providerGetCount, 4);
   assert.deepEqual(emitted.map(({ event }) => event), ["revision-selected", "city-published"]);
@@ -3340,13 +3294,13 @@ test("the second network validation completes a paired exchange without double c
       for (const part of ["finished", "extra", "response"].filter((part) => part !== scenario.delayed)) emit("OPTIONS", part);
       for (const part of ["extra", "response", "finished"]) emit("GET", part);
       await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(opened.harness.bodyCalls, 1, scenario.name);
+      assert.equal(opened.harness.bodyCalls, 0, scenario.name);
       emit("OPTIONS", scenario.delayed);
     } else {
       for (const part of ["extra", "response", "finished"]) emit("OPTIONS", part);
       for (const part of ["finished", "extra", "response"].filter((part) => part !== scenario.delayed)) emit("GET", part);
       await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(opened.harness.bodyCalls, scenario.delayed === "extra" ? 1 : 0, scenario.name);
+      assert.equal(opened.harness.bodyCalls, 0, scenario.name);
       emit("GET", scenario.delayed);
     }
     await waitForBodyCalls(opened.harness, 1);
@@ -3984,7 +3938,7 @@ test("CDP request ExtraInfo is mandatory, unique, late-admissible, and authorita
     } else {
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(opened.session.fatalSignal.aborted, false, kind);
-      assert.equal(opened.harness.bodyCalls, 1, kind);
+      assert.equal(opened.harness.bodyCalls, kind === "late" ? 1 : 0, kind);
       opened.harness.emit("Runtime.exceptionThrown", {});
       await assert.rejects(pending, /browser exception/u);
     }
@@ -4209,6 +4163,8 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
   const requestItems = [];
   const harness = fakeCdpHarness();
   const child = fakeChromeChild();
+  const bodyStates = [];
+  const progressCounts = [];
   let tick = 871.615432;
   const now = () => (tick += 0.25);
   const session = await createBrowserEvidenceSession({
@@ -4216,6 +4172,8 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
     origin: PRODUCTION_ORIGIN, manifest: { files: [{ path: "index.html" }] }, eventSha: EVENT,
     now, requestItems,
     launchImpl: async () => ({ child, websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }), connectImpl: () => harness.cdp,
+    observeBodyState(state) { bodyStates.push(structuredClone(state)); },
+    emitQualificationProgress(count) { progressCounts.push(count); },
   });
   const qualificationCandidates = NATIVE_ENTRIES.map((entry, offset) => ({
     index: offset + 1, path: entry.path, blobId: entry.sha, normalizedBytes: 1,
@@ -4257,6 +4215,11 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
     await new Promise((resolve) => setImmediate(resolve));
   }
   assert.equal(harness.bodyCalls, 4004);
+  assert.equal(Math.max(...bodyStates.map(({ bodyBacklog }) => bodyBacklog)), 1);
+  assert.equal(bodyStates.length, 8008);
+  assert(bodyStates.every((state, index) => state.bodyBacklog === (index % 2 === 0 ? 1 : 0)
+    && state.bodyReferenceCleared === (index % 2 === 1)));
+  assert.deepEqual(progressCounts, [...Array.from({ length: 16 }, (_, index) => (index + 1) * 250), 4001]);
   harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
     type: "FAILURE", generation: 2, revision: REACT, category: "Repository exceeds Code City limits",
   }) });
@@ -4275,13 +4238,14 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
   assert(requestItems.slice(3).every(({ stage }) => stage === "raw"));
   assert(requestItems.every((item, index) => index === 0 || requestItems[index - 1].endedMs <= item.startedMs));
   assert.deepEqual(events.map(({ event }) => event), [
-    "revision-selected", "inventory-complete", "limit-failure", "request-quiescent", "worker-quiescent",
+    "revision-selected", "inventory-complete", "qualification-complete", "limit-failure", "request-quiescent", "worker-quiescent",
   ]);
   assert.equal(events[0].atMs, selectionObservedAtMs);
   assert(events[0].atMs >= requestItems[0].endedMs);
   assert.equal(events[1].atMs, requestItems[2].endedMs);
-  assert.equal(events[2].atMs, terminalObservedAtMs);
-  assert(events[3].atMs > drainObservedAtMs);
+  assert.equal(events[2].atMs, requestItems.at(-1).endedMs);
+  assert.equal(events[3].atMs, terminalObservedAtMs);
+  assert(events[4].atMs > drainObservedAtMs);
   assert(events.every(({ atMs }, index) => validObservedMs(atMs)
     && !Number.isInteger(atMs) && (index === 0 || events[index - 1].atMs <= atMs)));
   assert(requestItems.every(({ startedMs, endedMs }) => validObservedMs(startedMs)
@@ -4317,8 +4281,7 @@ test("a late publication after worker detachment becomes a schema-valid handled 
     packetSink(value) { if (value) stored = value; return stored; },
   });
   seams.qualifyRepository = async ({ now, requestItems, progress }) => {
-    appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT,
-      NATIVE_ENTRIES.map(({ path: sourcePath }) => sourcePath), false);
+    appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, [], false);
     return Object.assign(progress, {
       repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
       treeEntries: 5000, truncated: false, candidates: requestCandidates,
@@ -4562,6 +4525,7 @@ function collectorMatrixSeams({ failStage, reason, progressedQualification = fal
         appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, shared.map((item) => item.path), true, {
           revision: () => emit("revision-selected", 2), inventory: () => emit("inventory-complete", 2),
         });
+        emit("qualification-complete", 0);
         const limit = emit("limit-failure", 2);
         capacityProgress = {
           repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
@@ -4579,19 +4543,13 @@ function collectorMatrixSeams({ failStage, reason, progressedQualification = fal
     }),
     qualifyRepository: async ({ now, requestItems, progress }) => {
       if (failStage === "qualification") {
-        if (["content-invalid", "unexpected-request"].includes(reason)) {
-          appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, ["unexpected.ts"], false);
-          Object.assign(progress, {
-            repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
-            treeEntries: 5000, truncated: false, candidates: [],
-          });
-        } else if (progressedQualification) {
+        if (progressedQualification) {
           directRequest(requestItems, now, "revision", revisionUrl("react/react"), false);
           progress.revision = REACT;
         }
         failAt("qualification");
       }
-      appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, shared.map((item) => item.path), false);
+      appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, [], false);
       return Object.assign(progress, { repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT, treeEntries: 5000, truncated: false, candidates: shared });
     },
     writeValidatedEvidencePacket: async (_output, packet) => {
@@ -4605,6 +4563,36 @@ function collectorMatrixSeams({ failStage, reason, progressedQualification = fal
     },
   };
 }
+
+test("successful CLI output is sparse privacy-safe progress on stderr and digest-only stdout", async () => {
+  let stored;
+  const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+  const createSession = seams.createBrowserEvidenceSession;
+  seams.createBrowserEvidenceSession = async (args) => {
+    const session = await createSession(args);
+    return {
+      ...session,
+      async collectCapacity(...parameters) {
+        for (let count = 250; count <= 4000; count += 250) args.emitQualificationProgress(count);
+        args.emitQualificationProgress(4001);
+        return session.collectCapacity(...parameters);
+      },
+    };
+  };
+  let stdout = ""; let stderr = "";
+  seams.writeStdout = (value) => { stdout += value; return true; };
+  seams.writeStderr = (value) => { stderr += value; return true; };
+  const exitCode = await runCollectorCli([
+    "--origin", PRODUCTION_ORIGIN, "--manifest", "manifest.json", "--output", "cli-output",
+  ], seams);
+  assert.equal(exitCode, 0);
+  assert.equal(stdout, `${stored.packetDigest}\n`);
+  const expected = [...Array.from({ length: 16 }, (_, index) => (index + 1) * 250), 4001]
+    .map((count) => `Production evidence qualification: ${count}/4001 candidates validated.\n`).join("");
+  assert.equal(stderr, expected);
+  assert(stderr.split("\n").filter(Boolean).every((line) => /^Production evidence qualification: [0-9]+\/4001 candidates validated\.$/u.test(line)));
+  assert(!/https?:|\.ts|[0-9a-f]{40}|header|reason|body/iu.test(stderr));
+});
 
 test("browser failure mapping reserves credential-header for literal credential presence", async () => {
   const cases = [
@@ -5067,8 +5055,7 @@ test("full capacity orchestration flushes delayed tree inventory before a pendin
   const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
   const fallbackBrowserFactory = seams.createBrowserEvidenceSession;
   seams.qualifyRepository = async ({ now, requestItems, progress }) => {
-    appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT,
-      NATIVE_ENTRIES.map(({ path: sourcePath }) => sourcePath), false);
+    appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, [], false);
     return Object.assign(progress, {
       repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
       treeEntries: NATIVE_ENTRIES.length, truncated: false, candidates: qualificationCandidates,
@@ -5282,8 +5269,7 @@ test("native CDP overlap and candidate-4,002 admission stops produce schema-vali
     }));
     if (kind === "candidate-4002") {
       seams.qualifyRepository = async ({ now, requestItems, progress }) => {
-        appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT,
-          NATIVE_ENTRIES.map(({ path: sourcePath }) => sourcePath), false);
+        appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, [], false);
         return Object.assign(progress, {
           repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
           treeEntries: 4002, truncated: false, candidates: structuredClone(nativeCandidates),
@@ -5394,13 +5380,11 @@ test("native CDP overlap and candidate-4,002 admission stops produce schema-vali
   }
 });
 
-test("native qualification classifiers flow through the exact qualification stop packet and lifecycle", async () => {
+test("native qualification classifiers stop before the browser and leave capacity not-run", async () => {
   const cases = [
     ["cors-failure", { revision: { headers: { "Content-Type": "application/json" } } }],
     ["identity-mismatch", { commit: { body: JSON.stringify({ sha: EVENT, tree: { sha: REACT_ROOT } }) } }],
     ["tree-incomplete", { tree: { body: JSON.stringify({ sha: REACT_ROOT, truncated: true, tree: NATIVE_ENTRIES }) } }],
-    ["hash-mismatch", { raw: { body: new TextEncoder().encode("different") } }],
-    ["content-invalid", { raw: { body: Uint8Array.of(0) } }],
   ];
   for (const [reason, overrides] of cases) {
     let stored;
@@ -5414,38 +5398,13 @@ test("native qualification classifiers flow through the exact qualification stop
     }, seams);
     assert.deepEqual([result.status, result.reason], ["fail", reason]);
     const qualification = JSON.parse(new TextDecoder().decode(stored.files.get("qualification.json")));
+    const capacity = JSON.parse(new TextDecoder().decode(stored.files.get("capacity.json")));
     const requests = JSON.parse(new TextDecoder().decode(stored.files.get("requests.json")));
     const lifecycle = JSON.parse(new TextDecoder().decode(stored.files.get("lifecycle.json")));
-    assert.deepEqual([qualification.status, qualification.reason], ["fail", reason]);
-    assert.deepEqual([requests.status, requests.reason], ["fail", reason]);
-    assert.deepEqual([lifecycle.status, lifecycle.reason], ["fail", reason]);
+    assert.deepEqual([qualification.status, qualification.reason, capacity.status], ["fail", reason, "not-run"]);
+    assert.equal(requests.data.items.filter((item) => !item.applicationCall && item.requestedUrl.includes("/react/react/")).length <= 3, true);
+    assert.equal(requests.data.items.some((item) => !item.applicationCall && item.stage === "raw"), false);
     assert.deepEqual(lifecycle.data.events.slice(-2).map(({ event }) => event), ["qualification-start", "collector-failed"]);
-  }
-});
-
-test("qualification bound crossings write schema-valid marked packets with the completed safe prefix", async () => {
-  const twoMiB = new Uint8Array(2 * 1024 * 1024).fill(0x78);
-  const empty = new Uint8Array();
-  for (const [name, sourceForIndex, prefixLength] of [
-    ["module", (index) => index === 0 ? new Uint8Array(twoMiB.byteLength + 1).fill(0x78) : empty, 0],
-    ["aggregate", (index) => index < 20 ? twoMiB : index === 20 ? Uint8Array.of(0x78) : empty, 20],
-  ]) {
-    let stored;
-    const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
-    const controlled = qualificationFetchForSources(sourceForIndex);
-    seams.qualifyRepository = async ({ now, requestItems, progress, signal }) => qualifyRepository({
-      fetchImpl: controlled.fetchImpl, now, requestItems, progress, signal,
-    });
-    const result = await collectProductionEvidence({
-      origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"), output: path.resolve(`qualification-bound-${name}`),
-    }, seams);
-    assert.deepEqual([result.status, result.reason], ["fail", "content-invalid"], name);
-    const qualification = JSON.parse(new TextDecoder().decode(stored.files.get("qualification.json")));
-    const requests = JSON.parse(new TextDecoder().decode(stored.files.get("requests.json")));
-    assert.equal(qualification.data.candidates.length, prefixLength, name);
-    assert(qualification.data.candidates.every((candidate) => candidate.contentValid), name);
-    assert.equal(requests.data.items.filter((item) => item.stage === "raw" && !item.applicationCall).length,
-      prefixLength + 1, name);
   }
 });
 
@@ -5457,7 +5416,7 @@ test("browser capacity normalization and hash failures produce stage-aware schem
     ["aggregate", "content-invalid", 20],
     ["utf8", "content-invalid", 0],
     ["nul", "content-invalid", 0],
-    ["hash", "hash-mismatch", 1],
+    ["hash", "hash-mismatch", 0],
   ]) {
     const sourceForIndex = (index) => {
       if (kind === "module") return index === 0 ? new Uint8Array(twoMiB.byteLength + 1).fill(0x78) : empty;
@@ -5473,6 +5432,17 @@ test("browser capacity normalization and hash failures produce stage-aware schem
     }));
     let stored;
     const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+    seams.qualifyRepository = async ({ now, requestItems, progress }) => {
+      appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, [], false);
+      return Object.assign(progress, {
+        repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
+        treeEntries: entries.length, truncated: false,
+        candidates: entries.map((entry, index) => ({
+          index: index + 1, path: entry.path, blobId: entry.sha, normalizedBytes: 0,
+          runningAggregate: 0, hashMatched: true, contentValid: true,
+        })),
+      });
+    };
     seams.createBrowserEvidenceSession = async (args) => {
       const harness = fakeCdpHarness();
       const child = fakeChromeChild();

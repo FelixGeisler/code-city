@@ -99,13 +99,13 @@ test("writer revalidates mutable shape, map, bytes, binding, and digest before a
   }
 }));
 
-test("writer rejects packet v1 and every mixed envelope, index, and collector version before creating output", async () => temporary(async (root) => {
-  const mutations = [
+test("writer rejects packet v1, packet v2, and every mixed envelope, index, and collector version before creating output", async () => temporary(async (root) => {
+  const mutations = [1, 2].flatMap((version) => [
     ...["artifact", "smoke", "qualification", "capacity", "requests", "lifecycle"]
-      .map((name) => [`${name} envelope v1`, `${name}.json`, (value) => { value.schemaVersion = 1; }]),
-    ["collector v1", "lifecycle.json", (value) => { value.data.collectorVersion = 1; }],
-    ["index v1", "index.json", (value) => { value.schemaVersion = 1; }],
-  ];
+      .map((name) => [`${name} envelope v${version}`, `${name}.json`, (value) => { value.schemaVersion = version; }]),
+    [`collector v${version}`, "lifecycle.json", (value) => { value.data.collectorVersion = version; }],
+    [`index v${version}`, "index.json", (value) => { value.schemaVersion = version; }],
+  ]);
   for (const [name, file, mutate] of mutations) {
     const source = makeEvidencePacket();
     const files = new Map(source.files);
