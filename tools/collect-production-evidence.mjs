@@ -1085,6 +1085,30 @@ export async function createBrowserEvidenceSession({
       }
       maybePublishTerminal(current);
     }
+    function isProviderDrainedFailure(fact) {
+      return fact.type === "FAILURE" && (
+        (fact.category === "Metric processing failed" && fact.code === "M1-MET-1")
+        || (fact.category === "City construction failed" && fact.code === "M1-CITY-1")
+        || (fact.category === "Provider/resolution failure" && !Object.hasOwn(fact, "code"))
+      );
+    }
+    function requiresProviderDrainedClosure(fact) {
+      return fact.type === "FAILURE" && (
+        (fact.category === "Metric processing failed" && fact.code === "M1-MET-1")
+        || (fact.category === "City construction failed" && fact.code === "M1-CITY-1")
+      );
+    }
+    function validateProviderDrainedTerminal(current, fact) {
+      invariant(current.providerClosure?.kind === "provider-drained" && current.providerAdmissionClosed,
+        "static terminal preceded provider closure");
+      invariant(fact.type === "SUCCESS" || isProviderDrainedFailure(fact),
+        "terminal contradicts provider-drained phase");
+      invariant((current.derivedProviderGets === null && current.expectedProviderGets === null)
+        || (Number.isSafeInteger(current.derivedProviderGets)
+          && current.expectedProviderGets === current.derivedProviderGets
+          && current.admittedGets === current.expectedProviderGets),
+      "browser provider frontier changed");
+    }
     function resolveRevisionReadiness(current, semanticFact) {
       invariant(mode === current && semanticFact.generation === current.generation
         && semanticFact.revision === current.revision && Number.isSafeInteger(current.stageEndMs.revision),
@@ -1143,7 +1167,10 @@ export async function createBrowserEvidenceSession({
               "browser terminal revision differs from selected revision");
           }
           current.pendingTerminal = fact;
-          if (fact.type === "FAILURE") {
+          if (current.providerClosure) {
+            validateProviderDrainedTerminal(current, fact);
+          } else if (fact.type === "FAILURE") {
+            invariant(!requiresProviderDrainedClosure(fact), "static terminal preceded provider closure");
             const expected = fact.category === "Repository exceeds Code City limits" ? 4004 : current.admittedGets;
             closeProviderAdmission(current, fact.category === "Repository exceeds Code City limits"
               ? "limit-failure" : "failure", expected);

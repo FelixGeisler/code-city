@@ -455,7 +455,7 @@ test("collector projection rejects every unsupported failure shape/category/code
   }
 });
 
-test("collector projection accepts every authoritative failure combination before duplicate rejection", async () => {
+test("collector projection accepts every authoritative failure combination in its lifecycle context before duplicate rejection", async () => {
   for (const scenario of failureShapeCases().filter(({ valid }) => valid)) {
     const opened = await openFakeBrowser();
     const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
@@ -464,6 +464,13 @@ test("collector projection accepts every authoritative failure combination befor
         type: "REVISION_SELECTED", generation: 1, revision: EVENT,
       }),
     });
+    if (["Metric processing failed", "City construction failed"].includes(scenario.message.category)) {
+      opened.harness.emit("Runtime.bindingCalled", {
+        name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+          type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1,
+        }),
+      });
+    }
     for (let receipt = 0; receipt < 2; receipt += 1) opened.harness.emit("Runtime.bindingCalled", {
       name: "__codeCityCollectorEvidence", payload: JSON.stringify(scenario.message),
     });
@@ -2193,6 +2200,155 @@ test("terminal and drain publication wait for the fixed provider frontier after 
   assert.equal(smoke.providerGetCount, 4);
   assert.deepEqual(emitted.map(({ event }) => event), ["revision-selected", "city-published"]);
   await opened.session.close();
+});
+
+test("valid static failures reuse the provider-drained frontier before or after semantic completion and detachment", async () => {
+  const failures = [
+    { category: "Metric processing failed", code: "M1-MET-1" },
+    { category: "City construction failed", code: "M1-CITY-1" },
+    { category: "Provider/resolution failure" },
+  ];
+  for (const failure of failures) for (const terminalBeforeCompletion of [false, true]) {
+    const projectionGate = deferredValue();
+    let rawProjectionEntered = false;
+    const opened = await openFakeBrowser(fakeCdpHarness(), {
+      browserOptions: {
+        async beforeProviderProjection({ stage }) {
+          if (terminalBeforeCompletion && stage === "raw") {
+            rawProjectionEntered = true;
+            await projectionGate.promise;
+          }
+        },
+      },
+    });
+    const emitted = [];
+    const pending = opened.session.collectSmoke((event) => {
+      emitted.push(event);
+      return { atMs: emitted.length };
+    }, 0);
+    let settled = false;
+    void pending.then(() => { settled = true; }, () => { settled = true; });
+    await Promise.resolve();
+    for (const stage of ["revision", "commit", "tree", "raw"]) {
+      emitCanonicalGeneratedStage(opened.harness, stage, "worker-session",
+        `static-${failure.category}-${terminalBeforeCompletion}-${stage}`);
+    }
+    await waitForBodyCalls(opened.harness, 4);
+    if (terminalBeforeCompletion) {
+      for (let attempts = 0; !rawProjectionEntered && attempts < 30; attempts += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      assert.equal(rawProjectionEntered, true);
+    } else {
+      for (let attempts = 0; opened.requestItems.length < 4 && attempts < 30; attempts += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      assert.equal(opened.requestItems.length, 4);
+    }
+    for (const fact of [
+      { type: "REVISION_SELECTED", generation: 1, revision: EVENT },
+      { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 },
+      { type: "FAILURE", generation: 1, revision: EVENT, ...failure },
+      { type: "ATTEMPT_DRAINED", generation: 1 },
+    ]) opened.harness.emit("Runtime.bindingCalled", {
+      name: "__codeCityCollectorEvidence", payload: JSON.stringify(fact),
+    });
+    opened.harness.emit("Target.detachedFromTarget", {
+      sessionId: "worker-session", targetId: "worker-target",
+    }, "page-session");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(opened.session.fatalSignal.aborted, false,
+      `${failure.category}/${terminalBeforeCompletion}: closure remained valid`);
+    if (terminalBeforeCompletion) {
+      assert.equal(settled, false, `${failure.category}: terminal waited for semantic completion`);
+      projectionGate.resolve();
+    }
+    await assert.rejects(pending, /smoke terminal revision differs/u, failure.category);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(opened.session.fatalSignal.aborted, false,
+      `${failure.category}/${terminalBeforeCompletion}: terminal and drain published safely`);
+    assert.deepEqual(emitted, ["revision-selected"]);
+    assert.deepEqual(opened.requestItems.filter(({ method }) => method === "GET").map(({ stage }) => stage),
+      ["revision", "commit", "tree", "raw"]);
+    await opened.session.close();
+  }
+});
+
+test("provider-drained state rejects duplicate markers and contradictory static terminals", async () => {
+  const scenarios = [
+    {
+      name: "duplicate-marker", expected: /duplicate provider closure/u,
+      facts: [
+        { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 },
+        { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 },
+      ],
+    },
+    {
+      name: "limit-after-marker", expected: /terminal contradicts provider-drained phase/u,
+      facts: [
+        { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 },
+        { type: "FAILURE", generation: 1, revision: EVENT, category: "Repository exceeds Code City limits" },
+      ],
+    },
+    {
+      name: "admission-after-marker", expected: /terminal contradicts provider-drained phase/u,
+      facts: [
+        { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 },
+        { type: "FAILURE", generation: 1, revision: EVENT, category: "Source admission failed", code: "M1-ADM-1" },
+      ],
+    },
+    {
+      name: "static-before-marker", expected: /static terminal preceded provider closure/u,
+      facts: [
+        { type: "FAILURE", generation: 1, revision: EVENT, category: "Metric processing failed", code: "M1-MET-1" },
+      ],
+    },
+    {
+      name: "mismatched-static-revision", expected: /terminal revision differs/u,
+      facts: [
+        { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 },
+        { type: "FAILURE", generation: 1, revision: "9".repeat(40), category: "City construction failed", code: "M1-CITY-1" },
+      ],
+    },
+    {
+      name: "duplicate-static-terminal", expectedFatal: /duplicate browser terminal/u,
+      facts: [
+        { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 },
+        { type: "FAILURE", generation: 1, revision: EVENT, category: "Metric processing failed", code: "M1-MET-1" },
+        { type: "FAILURE", generation: 1, revision: EVENT, category: "Metric processing failed", code: "M1-MET-1" },
+      ],
+    },
+  ];
+  for (const scenario of scenarios) {
+    const opened = await openFakeBrowser();
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    void pending.catch(() => {});
+    await Promise.resolve();
+    for (const stage of ["revision", "commit", "tree", "raw"]) {
+      emitCanonicalGeneratedStage(opened.harness, stage, "worker-session", `${scenario.name}-${stage}`);
+    }
+    await waitForBodyCalls(opened.harness, 4);
+    for (let attempts = 0; opened.requestItems.length < 4 && attempts < 30; attempts += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(opened.requestItems.length, 4, scenario.name);
+    opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+    }) });
+    await new Promise((resolve) => setImmediate(resolve));
+    for (const fact of scenario.facts) opened.harness.emit("Runtime.bindingCalled", {
+      name: "__codeCityCollectorEvidence", payload: JSON.stringify(fact),
+    });
+    if (scenario.expectedFatal) {
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(opened.session.fatalSignal.aborted, true, scenario.name);
+      assert.match(opened.session.fatalSignal.reason.message, scenario.expectedFatal, scenario.name);
+      await assert.rejects(pending, scenario.name);
+    } else {
+      await assert.rejects(pending, scenario.expected, scenario.name);
+    }
+    await opened.session.close().catch(() => {});
+  }
 });
 
 test("captured provider bodies allow a late page fragment to complete after worker detachment", async () => {
