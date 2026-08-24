@@ -1960,6 +1960,74 @@ test("post-closure parser assets accept every controlled ExtraInfo/request/respo
   assert.equal(executions, 10);
 });
 
+test("page and worker provisional markers convert on the same page or exact current worker in both asset orders", async () => {
+  const manifest = { files: SPLIT_ASSET_PATHS.map((assetPath) => ({ path: assetPath })) };
+  const ownerships = [
+    { name: "page-worker", markerOwner: "page-session", fragmentOwner: "worker-session", workerBound: true },
+    { name: "page-page", markerOwner: "page-session", fragmentOwner: "page-session", workerBound: false },
+    { name: "worker-worker", markerOwner: "worker-session", fragmentOwner: "worker-session", workerBound: true },
+  ];
+  let executions = 0;
+  for (const assetPath of ["assets/parser.js", "assets/parser.wasm"])
+    for (const responseFirst of [false, true]) for (const ownership of ownerships) {
+      const safeStates = [];
+      const opened = await openFakeBrowser(fakeCdpHarness(), {
+        manifest,
+        browserOptions: {
+          validateSafeTransientState(state) { safeStates.push(structuredClone(state)); },
+        },
+      });
+      const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+      await Promise.resolve();
+      await reachControlledProviderClosure(opened, `binding-${executions}`);
+      const requestId = `private-binding-${executions}`;
+      const url = `${PRODUCTION_ORIGIN}${assetPath}`;
+      const privateExtra = { requestId };
+      for (const property of ["headers", "associatedCookies", "privateValue"]) {
+        Object.defineProperty(privateExtra, property, {
+          enumerable: true,
+          get() { throw new Error(`asset marker read ${property}`); },
+        });
+      }
+      opened.harness.emit("Network.requestWillBeSentExtraInfo", privateExtra, ownership.markerOwner);
+      const request = () => opened.harness.emit("Network.requestWillBeSent", {
+        requestId, request: { url, method: "GET", headers: new Proxy({}, {
+          get() { throw new Error("asset request header read"); },
+        }) },
+      }, ownership.fragmentOwner);
+      const response = () => opened.harness.emit("Network.responseReceived", { requestId, response: {
+        url, status: 200, headers: new Proxy({}, { get() { throw new Error("asset response header read"); } }),
+        fromDiskCache: false, fromServiceWorker: false,
+      } }, ownership.fragmentOwner);
+      if (responseFirst) { response(); request(); } else { request(); response(); }
+      let ignoredResponseExtraReads = 0;
+      opened.harness.emit("Network.responseReceivedExtraInfo", new Proxy({ requestId }, {
+        get(target, property, receiver) {
+          ignoredResponseExtraReads += 1;
+          return Reflect.get(target, property, receiver);
+        },
+      }), "page-session");
+      opened.harness.emit("Network.loadingFinished", { requestId, encodedDataLength: 1 }, ownership.fragmentOwner);
+      finishClosedControlledSmoke(opened);
+      const smoke = await pending;
+      assert.equal(smoke.providerGetCount, 4);
+      assert.equal(ignoredResponseExtraReads, 0);
+      assert(safeStates.some((state) => state.kind === "asset-extra-provisional"
+        && state.marker.ownerRole === ownership.name.split("-", 1)[0]
+        && state.marker.ownerSession === ownership.markerOwner));
+      assert(safeStates.some((state) => JSON.stringify(state) === JSON.stringify({
+        kind: "asset-extra-converted", generation: 1, markerCleared: true,
+        workerBound: ownership.workerBound,
+      })));
+      assert(safeStates.some(({ kind }) => kind === "asset-completed"));
+      assert.deepEqual(safeStates.at(-1), { kind: "correlations-cleared", generation: 1, correlationCount: 0 });
+      assert(!JSON.stringify({ smoke, requestItems: opened.requestItems, session: opened.session }).includes(requestId));
+      await opened.session.close();
+      executions += 1;
+    }
+  assert.equal(executions, 12);
+});
+
 test("a provisional asset arriving after the pre-detachment barrier completes around detachment and passes", async () => {
   const safeStates = [];
   let opened;
@@ -2163,6 +2231,162 @@ test("post-closure provisional markers reject malformed, duplicate, unmatched, d
     assert.equal(opened.requestItems.length, 4, name);
     await opened.session.close().catch(() => {});
   }
+});
+
+test("page marker conversion rejects ambiguous, absent, stale, and every mismatched worker fragment", async () => {
+  const manifest = { files: [{ path: "assets/parser.js" }] };
+  const url = `${PRODUCTION_ORIGIN}assets/parser.js`;
+  const attachSecond = async (opened) => {
+    opened.harness.emit("Target.attachedToTarget", {
+      sessionId: "worker-second", targetInfo: { type: "worker", targetId: "worker-second-target" },
+    }, "page-session");
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  const convertingFragment = (opened, method, sessionId, requestId = `negative-${method}`) => {
+    if (method === "Network.requestWillBeSent") opened.harness.emit(method, {
+      requestId, request: { url, method: "GET", headers: {} },
+    }, sessionId);
+    else if (method === "Network.responseReceived") opened.harness.emit(method, { requestId, response: {
+      url, status: 200, headers: {}, fromDiskCache: false, fromServiceWorker: false,
+    } }, sessionId);
+    else if (method === "Network.requestWillBeSentExtraInfo") opened.harness.emit(method, {
+      requestId, headers: {}, associatedCookies: [],
+    }, sessionId);
+    else opened.harness.emit(method, { requestId, encodedDataLength: 1 }, sessionId);
+  };
+  const cases = [
+    ...["Network.requestWillBeSent", "Network.responseReceived"].flatMap((method) => (
+      ["worker-session", "worker-second"].map((sessionId) => ({
+        name: `two-workers-${method}-${sessionId}`,
+        async drive(opened) {
+          opened.harness.emit("Network.requestWillBeSentExtraInfo", { requestId: this.name }, "page-session");
+          await attachSecond(opened);
+          convertingFragment(opened, method, sessionId, this.name);
+        },
+      }))
+    )),
+    {
+      name: "worker-a-marker-worker-b-request",
+      async drive(opened) {
+        const requestId = this.name;
+        opened.harness.emit("Network.requestWillBeSentExtraInfo", { requestId }, "worker-session");
+        await attachSecond(opened);
+        convertingFragment(opened, "Network.requestWillBeSent", "worker-second", requestId);
+      },
+    },
+    {
+      name: "detached-marker-owner",
+      async drive(opened) {
+        const requestId = this.name;
+        opened.harness.emit("Network.requestWillBeSentExtraInfo", { requestId }, "worker-session");
+        opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+          type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
+        }) });
+        opened.harness.emit("Target.detachedFromTarget", {
+          sessionId: "worker-session", targetId: "worker-target",
+        }, "page-session");
+        convertingFragment(opened, "Network.requestWillBeSent", "worker-session", requestId);
+      },
+    },
+    {
+      name: "zero-current-workers",
+      async drive(opened) {
+        const requestId = this.name;
+        opened.harness.emit("Network.requestWillBeSentExtraInfo", { requestId }, "page-session");
+        opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+          type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
+        }) });
+        opened.harness.emit("Target.detachedFromTarget", {
+          sessionId: "worker-session", targetId: "worker-target",
+        }, "page-session");
+        convertingFragment(opened, "Network.responseReceived", "unknown-worker", requestId);
+      },
+    },
+    {
+      name: "changed-worker-old-session",
+      async drive(opened) {
+        const requestId = this.name;
+        opened.harness.emit("Network.requestWillBeSentExtraInfo", { requestId }, "page-session");
+        opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+          type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
+        }) });
+        opened.harness.emit("Target.detachedFromTarget", {
+          sessionId: "worker-session", targetId: "worker-target",
+        }, "page-session");
+        await attachSecond(opened);
+        convertingFragment(opened, "Network.responseReceived", "worker-session", requestId);
+      },
+    },
+    ...[
+      "Network.requestWillBeSent", "Network.requestWillBeSentExtraInfo", "Network.responseReceived",
+      "Network.dataReceived", "Network.loadingFinished",
+    ].map((method) => ({
+      name: `post-binding-${method}`,
+      async drive(opened) {
+        const requestId = this.name;
+        opened.harness.emit("Network.requestWillBeSentExtraInfo", { requestId }, "page-session");
+        convertingFragment(opened, "Network.requestWillBeSent", "worker-session", requestId);
+        await attachSecond(opened);
+        convertingFragment(opened, method, "worker-second", requestId);
+      },
+    })),
+  ];
+  for (const scenario of cases) {
+    const opened = await openFakeBrowser(fakeCdpHarness(), { manifest });
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    await Promise.resolve();
+    await reachControlledProviderClosure(opened, scenario.name);
+    await scenario.drive(opened);
+    await assert.rejects(Promise.race([
+      pending, new Promise((_, reject) => setTimeout(() => reject(new Error("case hung")), 100)),
+    ]), (error) => /unexpected browser (?:request owner|network session)/u.test(error.message), scenario.name);
+    assert.equal(opened.requestItems.length, 4, scenario.name);
+    await opened.session.close().catch(() => {});
+  }
+});
+
+test("a page marker follows the unique replacement worker present at conversion", async () => {
+  const safeStates = [];
+  const opened = await openFakeBrowser(fakeCdpHarness(), {
+    manifest: { files: [{ path: "assets/parser.js" }] },
+    browserOptions: {
+      validateSafeTransientState(state) { safeStates.push(structuredClone(state)); },
+    },
+  });
+  const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+  await Promise.resolve();
+  await reachControlledProviderClosure(opened, "replacement-worker");
+  const requestId = "private-replacement-worker";
+  const url = `${PRODUCTION_ORIGIN}assets/parser.js`;
+  opened.harness.emit("Network.requestWillBeSentExtraInfo", { requestId }, "page-session");
+  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
+  }) });
+  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "ATTEMPT_DRAINED", generation: 1,
+  }) });
+  opened.harness.emit("Target.detachedFromTarget", {
+    sessionId: "worker-session", targetId: "worker-target",
+  }, "page-session");
+  opened.harness.emit("Target.attachedToTarget", {
+    sessionId: "worker-replacement", targetInfo: { type: "worker", targetId: "worker-replacement-target" },
+  }, "page-session");
+  opened.harness.emit("Network.responseReceived", { requestId, response: {
+    url, status: 200, headers: {}, fromDiskCache: false, fromServiceWorker: false,
+  } }, "worker-replacement");
+  opened.harness.emit("Network.requestWillBeSent", {
+    requestId, request: { url, method: "GET", headers: {} },
+  }, "worker-replacement");
+  opened.harness.emit("Network.loadingFinished", { requestId, encodedDataLength: 1 }, "worker-replacement");
+  opened.harness.emit("Target.detachedFromTarget", {
+    sessionId: "worker-replacement", targetId: "worker-replacement-target",
+  }, "page-session");
+  const smoke = await pending;
+  assert.equal(smoke.providerGetCount, 4);
+  assert(safeStates.some((state) => state.kind === "asset-extra-converted"
+    && state.markerCleared && state.workerBound));
+  assert(!JSON.stringify({ smoke, requestItems: opened.requestItems, session: opened.session }).includes(requestId));
+  await opened.session.close();
 });
 
 test("provider completion retains only exact safe tombstones and exchange slots until correlation clear", async () => {
@@ -5783,6 +6007,7 @@ test("installed Chrome 151 split-session gate", {
     const requestItems = [];
     const observations = [];
     let pageSessionId;
+    let workerSessionId;
     let firstProviderId;
     let firstFinished = false;
     let finishBeforeSecond = false;
@@ -5793,7 +6018,7 @@ test("installed Chrome 151 split-session gate", {
     let firstBodyReleasedAfterSecondStarted = false;
     let controlledAssetId;
     let controlledAssetUrl;
-    let controlledAssetExtraBeforeRequestResponse = false;
+    let controlledAssetPageExtraBeforeWorkerRequestResponse = false;
     const controlledParserPath = publication.manifest.files.find((file) => (
       /assets\/web-tree-sitter-[^/]+\.js$/u.test(file.path)
     ))?.path;
@@ -5829,6 +6054,9 @@ test("installed Chrome 151 split-session gate", {
               order: observations.length + 1, method: message.method, sessionId: message.sessionId,
               requestId, url, requestMethod: message.params?.request?.method, workerFact,
             });
+            if (message.method === "Target.attachedToTarget" && message.params?.targetInfo?.type === "worker") {
+              workerSessionId = message.params.sessionId;
+            }
             if (message.method === "Network.requestWillBeSentExtraInfo") deliveredExtraIds.add(requestId);
             if (message.method === "Network.requestWillBeSent"
                 && message.params?.request?.method === "GET" && providerUrl(url)) {
@@ -5844,10 +6072,11 @@ test("installed Chrome 151 split-session gate", {
             if (gated && workerFact === "PROVIDER_DRAINED_STATIC_ENTERED" && !controlledFetchStarted) {
               controlledFetchStarted = true;
               controlledFetchPending = true;
+              assert(workerSessionId);
               controlledFetchPromise = native.send("Runtime.evaluate", {
                 expression: `fetch(${JSON.stringify(controlledParserUrl)}, { cache: "no-store" }).then((response) => response.arrayBuffer().then(() => response.ok))`,
                 returnByValue: true, awaitPromise: true,
-              }, pageSessionId).then((result) => {
+              }, workerSessionId).then((result) => {
                 assert.equal(result.result?.value, true);
               }).finally(() => {
                 controlledFetchPending = false;
@@ -5872,11 +6101,14 @@ test("installed Chrome 151 split-session gate", {
               heldTerminalMessages.push(message);
               return;
             }
-            if (!controlledAssetId && url === controlledParserUrl && message.sessionId === pageSessionId) {
+            if (!controlledAssetId && url === controlledParserUrl && message.sessionId === workerSessionId) {
               controlledAssetId = requestId;
               controlledAssetUrl = url;
               if (deliveredExtraIds.has(requestId)) {
-                controlledAssetExtraBeforeRequestResponse = true;
+                controlledAssetPageExtraBeforeWorkerRequestResponse = observations.some((item) => (
+                  item.requestId === requestId && item.method === "Network.requestWillBeSentExtraInfo"
+                  && item.sessionId === pageSessionId
+                ));
                 dispatch(message);
               } else {
                 heldAssetMessages.push(message);
@@ -5886,9 +6118,11 @@ test("installed Chrome 151 split-session gate", {
             if (controlledAssetId && requestId === controlledAssetId
                 && message.method === "Network.requestWillBeSentExtraInfo") {
               dispatch(message);
-              controlledAssetExtraBeforeRequestResponse = heldAssetMessages.some((item) => [
-                "Network.requestWillBeSent", "Network.responseReceived",
-              ].includes(item.method));
+              if (message.sessionId === pageSessionId) {
+                controlledAssetPageExtraBeforeWorkerRequestResponse = heldAssetMessages.some((item) => [
+                  "Network.requestWillBeSent", "Network.responseReceived",
+                ].includes(item.method));
+              }
               for (const held of heldAssetMessages.splice(0)) dispatch(held);
               return;
             }
@@ -6014,7 +6248,7 @@ test("installed Chrome 151 split-session gate", {
         firstGetFinishedBeforeSecondStarted: finishBeforeSecond && secondStarted,
         firstBodyReleasedAfterSecondStarted,
         controlledAssetUrl,
-        controlledAssetExtraBeforeRequestResponse,
+        controlledAssetPageExtraBeforeWorkerRequestResponse,
         strictProviderCredentialAbsence,
         strictRecordOrder,
         noPersistedTransientData,
@@ -6035,7 +6269,7 @@ test("installed Chrome 151 split-session gate", {
       }
       if (gated) for (const key of [
         "firstGetFinishedBeforeSecondStarted", "firstBodyReleasedAfterSecondStarted",
-        "controlledAssetExtraBeforeRequestResponse",
+        "controlledAssetPageExtraBeforeWorkerRequestResponse",
       ]) {
         assert.equal(evidence[key], true, `${label}:${key}`);
       }
@@ -6054,7 +6288,7 @@ test("installed Chrome 151 split-session gate", {
   }
 
   const natural = await runSession({ gated: false, label: "natural" });
-  const gated = await runSession({ gated: true, label: "body-and-asset-reordered" });
+  const gated = await runSession({ gated: true, label: "body-and-page-before-worker-asset" });
   const evidence = { schemaVersion: 1, os: process.platform, natural, gated, pass: true };
   const bytes = new TextEncoder().encode(`${JSON.stringify(evidence)}\n`);
   await writeFile(evidenceOutput, bytes, { flag: "w" });

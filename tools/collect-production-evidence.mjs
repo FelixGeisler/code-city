@@ -1328,6 +1328,36 @@ export async function createBrowserEvidenceSession({
       }
       correlation.workerSession = sessionId;
     }
+    function currentWorkerSessions() {
+      return [...workerTargets].filter(([, targetId]) => !detachedWorkers.has(targetId))
+        .map(([sessionId]) => sessionId);
+    }
+    function convertProvisionalAssetExtra(requestId, marker, url, sessionId, sessionRole) {
+      let workerSession = null;
+      if (marker.ownerRole === "worker") {
+        invariant(sessionRole === "worker" && marker.ownerSession === sessionId,
+          "unexpected browser request owner");
+        workerSession = sessionId;
+      } else if (sessionRole === "page") {
+        invariant(marker.ownerSession === sessionId && sessionId === pageSessionId,
+          "unexpected browser request owner");
+      } else {
+        const currentWorkers = currentWorkerSessions();
+        invariant(currentWorkers.length === 1 && currentWorkers[0] === sessionId,
+          "unexpected browser request owner");
+        workerSession = sessionId;
+      }
+      const converted = {
+        kind: "asset", generation: marker.generation, url, workerSession, requestExtra: true,
+      };
+      correlations.set(requestId, converted);
+      validateSafeTransientState(Object.freeze({
+        kind: "asset-extra-converted", generation: marker.generation,
+        markerCleared: !Object.hasOwn(converted, "ownerRole") && !Object.hasOwn(converted, "ownerSession"),
+        workerBound: workerSession !== null,
+      }));
+      return converted;
+    }
     function assertCurrentCorrelation(correlation) {
       const generation = mode?.generation ?? 0;
       invariant(correlation.generation === generation, "stale browser request correlation");
@@ -1354,14 +1384,9 @@ export async function createBrowserEvidenceSession({
         noteWorkerOwner(correlation, extraOwner);
       } else if (correlation.kind === "provisional-asset-extra") {
         assertCurrentCorrelation(correlation);
-        invariant(correlation.ownerRole === sessionRole && correlation.ownerSession === sessionId,
-          "unexpected browser request owner");
-        correlation = {
-          kind: "asset", generation: correlation.generation, url, workerSession: null,
-          requestExtra: true,
-        };
-        correlations.set(requestId, correlation);
-        noteWorkerOwner(correlation, sessionId);
+        correlation = convertProvisionalAssetExtra(
+          requestId, correlation, url, sessionId, sessionRole,
+        );
       } else {
         assertCurrentCorrelation(correlation);
         invariant(correlation.kind === "asset" && correlation.url === url,
@@ -1698,8 +1723,8 @@ export async function createBrowserEvidenceSession({
             invariant(correlation.kind !== "provisional-asset-extra",
               "duplicate browser request correlation");
             if (correlation.kind === "asset") {
-              invariant(!correlation.requestExtra, "duplicate browser asset request headers");
               noteWorkerOwner(correlation, message.sessionId);
+              invariant(!correlation.requestExtra, "duplicate browser asset request headers");
               correlation.requestExtra = { owner: message.sessionId };
               maybeCompleteAssetCorrelation(requestId, correlation);
               return;
