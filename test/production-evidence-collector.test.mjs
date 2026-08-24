@@ -32,6 +32,7 @@ import {
   recordCdpTransferSize,
   responseCapForRoute,
   safeHeaderFacts,
+  validObservedMs,
   verifyDeploymentBinding,
   verifyProductionAssets,
 } from "../tools/collect-production-evidence.mjs";
@@ -72,6 +73,36 @@ const ALL_FAILURE_CATEGORIES = [
 const ALL_FAILURE_CODES = [
   ...new Set([...CODED_FAILURE_COMBINATIONS.values()].flat()), "unsupported-code",
 ];
+
+test("observed milliseconds accept the packet schema's exact finite nonnegative Number domain", () => {
+  for (const value of [0, 0.25, 871.865432, Number.MAX_SAFE_INTEGER, Number.MAX_VALUE]) {
+    assert.equal(validObservedMs(value), true, String(value));
+  }
+  for (const value of [-0, -0.25, -871.865432, NaN, Infinity, -Infinity, "0.25", null, undefined, 1n, {}]) {
+    assert.equal(validObservedMs(value), false, String(value));
+  }
+});
+
+test("the fractional-clock correction changes only the four observed-time guards", async () => {
+  const source = await readFile(new URL("../tools/collect-production-evidence.mjs", import.meta.url), "utf8");
+  assert.equal((source.match(/validObservedMs/gu) ?? []).length, 6);
+  assert.equal((source.match(/Number\.isSafeInteger/gu) ?? []).length, 16);
+  assert.doesNotMatch(source, /Number\.isSafeInteger\([^\n]*(?:published\.atMs|causalAtMs|priorLifecycle\.atMs|stageEndMs\.revision)/u);
+  for (const contract of [
+    "values.every((value) => Number.isSafeInteger(value) && value >= 0)",
+    "Number.isSafeInteger(cap) && cap >= 0",
+    "Number.isSafeInteger(identityLimit) && identityLimit >= 0",
+    "Number.isSafeInteger(id) && id > 0",
+    "Number.isSafeInteger(model.count)",
+    "Number.isSafeInteger(record.generation)",
+    "Number.isSafeInteger(presentedChildCount)",
+    "Number.isSafeInteger(canvasCount)",
+    "Number.isSafeInteger(generation) && generation > 0",
+    "Number.isSafeInteger(expected)",
+    "Number.isSafeInteger(current.derivedProviderGets)",
+    "Number.isSafeInteger(start)",
+  ]) assert(source.includes(contract), contract);
+});
 
 function failureShapeCases() {
   return [
@@ -3631,11 +3662,12 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
   const requestItems = [];
   const harness = fakeCdpHarness();
   const child = fakeChromeChild();
-  let tick = 0;
+  let tick = 871.615432;
+  const now = () => (tick += 0.25);
   const session = await createBrowserEvidenceSession({
     discovery: { executable: "chrome", category: "linux-path" }, chromeVersion: "140.0.1.2", profile: path.resolve("profile"),
     origin: PRODUCTION_ORIGIN, manifest: { files: [{ path: "index.html" }] }, eventSha: EVENT,
-    now: () => ++tick, requestItems,
+    now, requestItems,
     launchImpl: async () => ({ child, websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }), connectImpl: () => harness.cdp,
   });
   const qualificationCandidates = NATIVE_ENTRIES.map((entry, offset) => ({
@@ -3645,7 +3677,7 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
   const qualification = { revision: REACT, rootTree: REACT_ROOT, candidates: qualificationCandidates };
   const events = [];
   const pending = session.collectCapacity(qualification, (event, generation, atMs) => {
-    const value = { event, generation, atMs: atMs ?? ++tick };
+    const value = { event, generation, atMs: atMs ?? now() };
     events.push(value);
     return value;
   }, 0);
@@ -3658,6 +3690,7 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
   });
   await new Promise((resolve) => setImmediate(resolve));
   harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({ type: "REVISION_SELECTED", generation: 2, revision: REACT }) });
+  const selectionObservedAtMs = tick;
   emitBrowserGet(harness, {
     requestId: "capacity-commit", url: commitUrl("facebook/react", REACT),
     body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }), dataLength: RESPONSE_CAPS.commit,
@@ -3680,7 +3713,9 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
   harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
     type: "FAILURE", generation: 2, revision: REACT, category: "Repository exceeds Code City limits",
   }) });
+  const terminalObservedAtMs = tick;
   harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({ type: "ATTEMPT_DRAINED", generation: 2 }) });
+  const drainObservedAtMs = tick;
   harness.emit("Target.detachedFromTarget", { sessionId: "worker-session", targetId: "worker-target" }, "");
 
   const capacity = await pending;
@@ -3695,6 +3730,15 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
   assert.deepEqual(events.map(({ event }) => event), [
     "revision-selected", "inventory-complete", "limit-failure", "request-quiescent", "worker-quiescent",
   ]);
+  assert.equal(events[0].atMs, selectionObservedAtMs);
+  assert(events[0].atMs >= requestItems[0].endedMs);
+  assert.equal(events[1].atMs, requestItems[2].endedMs);
+  assert.equal(events[2].atMs, terminalObservedAtMs);
+  assert(events[3].atMs > drainObservedAtMs);
+  assert(events.every(({ atMs }, index) => validObservedMs(atMs)
+    && !Number.isInteger(atMs) && (index === 0 || events[index - 1].atMs <= atMs)));
+  assert(requestItems.every(({ startedMs, endedMs }) => validObservedMs(startedMs)
+    && validObservedMs(endedMs) && !Number.isInteger(startedMs) && !Number.isInteger(endedMs)));
   const workerCommands = harness.calls.filter(({ sessionId, method }) => (
     sessionId === "worker-session" && method !== "Network.getResponseBody"
   ));
@@ -4014,6 +4058,71 @@ function collectorMatrixSeams({ failStage, reason, progressedQualification = fal
     },
   };
 }
+
+test("fractional clocks produce exact complete passing and handled-failure packets", async () => {
+  async function collectPacket({ failStage, reason, output }) {
+    let stored;
+    let clock = 10_000.115432;
+    const seams = collectorMatrixSeams({
+      failStage, reason,
+      packetSink(value) { if (value) stored = value; return stored; },
+    });
+    seams.clock = () => (clock += 0.125);
+    const result = await collectProductionEvidence({
+      origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"), output: path.resolve(output),
+    }, seams);
+    return { result, stored };
+  }
+
+  const passing = await collectPacket({ output: "fractional-passing-packet" });
+  assert.equal(passing.result.status, "pass");
+  assert.deepEqual([...passing.stored.files.keys()].sort(), [
+    "artifact.json", "capacity.json", "index.json", "lifecycle.json", "qualification.json", "requests.json", "smoke.json",
+  ]);
+  const passingLifecycleText = new TextDecoder().decode(passing.stored.files.get("lifecycle.json"));
+  const passingLifecycle = JSON.parse(passingLifecycleText);
+  const passingRequests = JSON.parse(new TextDecoder().decode(passing.stored.files.get("requests.json")));
+  assert.match(passingLifecycleText, /\.\d+/u);
+  assert(passingLifecycle.data.events.every(({ atMs }, index, events) => validObservedMs(atMs)
+    && (index === 0 || events[index - 1].atMs <= atMs)));
+  assert(passingRequests.data.items.every(({ startedMs, endedMs }) => validObservedMs(startedMs)
+    && validObservedMs(endedMs) && startedMs <= endedMs));
+  for (const [name, duration] of Object.entries(passingLifecycle.data.durations)) {
+    assert(validObservedMs(duration), name);
+    const pairs = {
+      artifact: ["artifact-verified", 0, "collector-start", 0],
+      smoke: ["trace-reset", 0, "smoke-start", 1],
+      qualification: ["qualification-complete", 0, "qualification-start", 0],
+      resolution: ["revision-selected", 2, "capacity-start", 2],
+      inventory: ["inventory-complete", 2, "revision-selected", 2],
+      retrieval: ["limit-failure", 2, "inventory-complete", 2],
+      terminal: ["worker-quiescent", 2, "limit-failure", 2],
+      capacity: ["worker-quiescent", 2, "capacity-start", 2],
+    };
+    if (name === "total") {
+      assert.equal(duration, passingLifecycle.data.events.at(-1).atMs);
+    } else {
+      const [endName, endGeneration, startName, startGeneration] = pairs[name];
+      const end = passingLifecycle.data.events.find((event) => event.event === endName && event.generation === endGeneration);
+      const start = passingLifecycle.data.events.find((event) => event.event === startName && event.generation === startGeneration);
+      assert.equal(duration, end.atMs - start.atMs, name);
+    }
+  }
+
+  const failing = await collectPacket({
+    failStage: "smoke", reason: "provider-failure", output: "fractional-handled-failure-packet",
+  });
+  assert.deepEqual([failing.result.status, failing.result.reason], ["fail", "provider-failure"]);
+  assert.deepEqual([...failing.stored.files.keys()].sort(), [
+    "artifact.json", "capacity.json", "index.json", "lifecycle.json", "qualification.json", "requests.json", "smoke.json",
+  ]);
+  const failingIndex = JSON.parse(new TextDecoder().decode(failing.stored.files.get("index.json")));
+  const failingLifecycle = JSON.parse(new TextDecoder().decode(failing.stored.files.get("lifecycle.json")));
+  assert.deepEqual([failingIndex.overallStatus, failingIndex.firstFailure], ["fail", "provider-failure"]);
+  assert.equal(failingLifecycle.data.events.at(-1).event, "collector-failed");
+  assert(failingLifecycle.data.events.every(({ atMs }, index, events) => validObservedMs(atMs)
+    && (index === 0 || events[index - 1].atMs <= atMs)));
+});
 
 async function collectNativeSmokeBarrierFailurePacket(kind) {
   let stored;
