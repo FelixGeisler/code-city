@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { types as utilTypes } from "node:util";
 
-const PARENT_DIGEST = "f06369b3eef5e62631ee8f61ddfd7679b00a3d2139dd83a2f6472820e62864e6";
+const PARENT_DIGEST = "06f08ca0144ffe9d5e162f3eb74c898b8b3a9e789832eae8c406f0fef55d0184";
 const REPOSITORY = "FelixGeisler/code-city";
 const ORIGIN = "https://felixgeisler.github.io/code-city/";
 const CODE_CITY_URL = "https://github.com/FelixGeisler/code-city";
-const REACT_URL = "https://github.com/facebook/react";
+const REACT_URL = "https://github.com/react/react";
 const MEDIA_TYPE = "application/json";
 const ENCODER = new TextEncoder();
 const DECODER = new TextDecoder("utf-8", { fatal: true });
@@ -166,7 +166,7 @@ function validateBindingValue(value) {
 
 function validateEnvelope(envelope, kind) {
   exactObject(envelope, ENVELOPE_KEYS);
-  requireValue(envelope.schemaVersion === 1 && envelope.kind === kind);
+  requireValue(envelope.schemaVersion === 2 && envelope.kind === kind);
   oneOf(envelope.status, ["pass", "fail", "not-run"]);
   if (envelope.status === "pass") requireValue(envelope.reason === "none");
   if (envelope.status === "not-run") requireValue(envelope.reason === "blocked");
@@ -319,13 +319,13 @@ function validateRequestRecord(record, index) {
 }
 
 function parseRepositoryRoute(url) {
-  const revision = /^https:\/\/api\.github\.com\/repos\/(FelixGeisler\/code-city|facebook\/react)\/commits\?per_page=1&page=1$/u.exec(url);
+  const revision = /^https:\/\/api\.github\.com\/repos\/(FelixGeisler\/code-city|react\/react)\/commits\?per_page=1&page=1$/u.exec(url);
   if (revision) return { repository: revision[1], stage: "revision", identity: "" };
-  const commit = /^https:\/\/api\.github\.com\/repos\/(FelixGeisler\/code-city|facebook\/react)\/git\/commits\/([0-9a-f]{40}|[0-9a-f]{64})$/u.exec(url);
+  const commit = /^https:\/\/api\.github\.com\/repos\/(FelixGeisler\/code-city|react\/react)\/git\/commits\/([0-9a-f]{40}|[0-9a-f]{64})$/u.exec(url);
   if (commit) return { repository: commit[1], stage: "commit", identity: commit[2] };
-  const tree = /^https:\/\/api\.github\.com\/repos\/(FelixGeisler\/code-city|facebook\/react)\/git\/trees\/([0-9a-f]{40}|[0-9a-f]{64})\?recursive=1$/u.exec(url);
+  const tree = /^https:\/\/api\.github\.com\/repos\/(FelixGeisler\/code-city|react\/react)\/git\/trees\/([0-9a-f]{40}|[0-9a-f]{64})\?recursive=1$/u.exec(url);
   if (tree) return { repository: tree[1], stage: "tree", identity: tree[2] };
-  const raw = /^https:\/\/raw\.githubusercontent\.com\/(FelixGeisler\/code-city|facebook\/react)\/([0-9a-f]{40}|[0-9a-f]{64})\/(.+)$/u.exec(url);
+  const raw = /^https:\/\/raw\.githubusercontent\.com\/(FelixGeisler\/code-city|react\/react)\/([0-9a-f]{40}|[0-9a-f]{64})\/(.+)$/u.exec(url);
   if (raw) {
     let path;
     try { path = decodeURIComponent(raw[3]); } catch { reject(); }
@@ -376,7 +376,7 @@ function requestGroups(items) {
     const route = routeOf(item.requestedUrl, item.stage);
     let group = "other";
     if (route.repository === REPOSITORY) group = "smoke";
-    else if (route.repository === "facebook/react") {
+    else if (route.repository === "react/react") {
       if (item.method === "OPTIONS") {
         const next = items[index + 1];
         requireValue(next && next.method === "GET" && next.requestedUrl === item.requestedUrl);
@@ -488,8 +488,8 @@ function validateRequests(envelope, payloads, overallPass, primaryReason) {
   const qualificationPass = payloads.qualification.status === "pass";
   const capacityPass = payloads.capacity.status === "pass";
   const smokeGets = validateExchangeSequence(groups.smoke, REPOSITORY, true, smokePass);
-  const qualificationGets = validateExchangeSequence(groups.qualification, "facebook/react", false, qualificationPass);
-  const capacityGets = validateExchangeSequence(groups.capacity, "facebook/react", true, capacityPass);
+  const qualificationGets = validateExchangeSequence(groups.qualification, "react/react", false, qualificationPass);
+  const capacityGets = validateExchangeSequence(groups.capacity, "react/react", true, capacityPass);
   validateDirectExchanges(groups.other, payloads.artifact.status === "pass");
   if (smokePass) requireValue(smokeGets.length >= 4);
   if (qualificationPass) requireValue(qualificationGets.length === 4004 && qualificationGets.slice(3).length === 4001);
@@ -619,7 +619,7 @@ function derivedDurations(events) {
 function validateLifecycle(envelope, overallPass, primaryReason, failedStage, requestInfo) {
   const data = envelope.data;
   requireValue(envelope.status === (overallPass ? "pass" : "fail") && envelope.reason === (overallPass ? "none" : primaryReason));
-  requireValue(data.collectorVersion === 1);
+  requireValue(data.collectorVersion === 2);
   nullable(data.collectorCommit, gitId);
   if (data.invocation !== null) {
     exactArray(data.invocation, 8);
@@ -854,7 +854,7 @@ function validatePayloadSet(payloads, binding) {
 
 function buildIndex(binding, status, payloadBytes) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     issueBodySha256: PARENT_DIGEST,
     eventSha: binding.eventSha,
     overallStatus: status.overallStatus,
@@ -912,7 +912,7 @@ function validatePacketInternal(files, binding) {
   const status = validatePayloadSet(parsed, binding);
   const indexSource = MAP_GET.call(files, "index.json"); const index = parseCanonical(indexSource, CAPS.get("index.json"));
   exactObject(index, ["schemaVersion", "issueBodySha256", "eventSha", "overallStatus", "firstFailure", "files"]);
-  requireValue(index.schemaVersion === 1 && index.issueBodySha256 === PARENT_DIGEST && index.eventSha === binding.eventSha && index.overallStatus === status.overallStatus && index.firstFailure === status.firstFailure);
+  requireValue(index.schemaVersion === 2 && index.issueBodySha256 === PARENT_DIGEST && index.eventSha === binding.eventSha && index.overallStatus === status.overallStatus && index.firstFailure === status.firstFailure);
   exactArray(index.files, 6);
   const expected = buildIndex(binding, status, copied);
   requireValue(JSON.stringify(index) === JSON.stringify(expected));

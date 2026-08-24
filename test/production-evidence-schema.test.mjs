@@ -11,7 +11,7 @@ const {
   validateExternalWrapper,
 } = schema;
 
-const PARENT = "f06369b3eef5e62631ee8f61ddfd7679b00a3d2139dd83a2f6472820e62864e6";
+const PARENT = "06f08ca0144ffe9d5e162f3eb74c898b8b3a9e789832eae8c406f0fef55d0184";
 const EVENT = "a".repeat(40);
 const ROOT = "b".repeat(40);
 const REACT_EVENT = "c".repeat(40);
@@ -19,11 +19,11 @@ const REACT_ROOT = "d".repeat(40);
 const DIGEST = "e".repeat(64);
 const BINDING = { issueBodySha256: PARENT, eventSha: EVENT };
 const CODE_CITY_REPO = "FelixGeisler/code-city";
-const REACT_REPO = "facebook/react";
+const REACT_REPO = "react/react";
 const encoder = new TextEncoder();
 
 function envelope(kind, status, reason, data) {
-  return { schemaVersion: 1, kind, status, reason, data };
+  return { schemaVersion: 2, kind, status, reason, data };
 }
 
 function candidates() {
@@ -192,7 +192,7 @@ function artifactData() {
 
 function lifecycleData(events = passEvents(), overrides = {}) {
   return {
-    collectorVersion: 1,
+    collectorVersion: 2,
     collectorCommit: EVENT,
     invocation: ["node", "tools/collect-production-evidence.mjs", "--origin", "$ORIGIN", "--manifest", "$MANIFEST", "--output", "$OUTPUT"],
     nodeVersion: "v24.19.0",
@@ -228,7 +228,7 @@ function makePassingPayloads(smokePaths = ["src/main.ts"]) {
       providerGetCount: 3 + smokePaths.length,
     }),
     qualification: envelope("qualification", "pass", "none", {
-      repositoryUrl: "https://github.com/facebook/react",
+      repositoryUrl: "https://github.com/react/react",
       revision: REACT_EVENT,
       rootTree: REACT_ROOT,
       treeEntries: 5000,
@@ -236,7 +236,7 @@ function makePassingPayloads(smokePaths = ["src/main.ts"]) {
       candidates: sharedCandidates,
     }),
     capacity: envelope("capacity", "pass", "none", {
-      repositoryUrl: "https://github.com/facebook/react",
+      repositoryUrl: "https://github.com/react/react",
       revision: REACT_EVENT,
       rootTree: REACT_ROOT,
       terminal: "Repository exceeds Code City limits",
@@ -297,7 +297,7 @@ function failurePayload(stage, reason) {
     if (reason === "stale-publication") failedData.revision = "9".repeat(40);
   } else if (stage === "qualification") {
     failedData = nullData(QUALIFICATION_KEYS, ["candidates"]);
-    if (reason === "qualification-failure") Object.assign(failedData, { repositoryUrl: "https://github.com/facebook/react", revision: REACT_EVENT, rootTree: REACT_ROOT, treeEntries: 100, truncated: false });
+    if (reason === "qualification-failure") Object.assign(failedData, { repositoryUrl: "https://github.com/react/react", revision: REACT_EVENT, rootTree: REACT_ROOT, treeEntries: 100, truncated: false });
     if (reason === "identity-mismatch") failedData.revision = REACT_EVENT;
     if (reason === "tree-incomplete") failedData.truncated = true;
     if (reason === "hash-mismatch" || reason === "content-invalid") {
@@ -308,7 +308,7 @@ function failurePayload(stage, reason) {
   } else {
     failedData = nullData(CAPACITY_KEYS, ["candidates"]);
     if (reason === "identity-mismatch" || reason === "stale-publication") failedData.revision = "9".repeat(40);
-    if (reason === "tree-incomplete") failedData.repositoryUrl = "https://github.com/facebook/react";
+    if (reason === "tree-incomplete") failedData.repositoryUrl = "https://github.com/react/react";
     if (reason === "hash-mismatch" || reason === "content-invalid") {
       failedData.candidates = structuredClone(payloads.qualification.data.candidates);
       const failedCandidate = reason === "content-invalid" ? failedData.candidates.at(-1) : failedData.candidates[0];
@@ -368,7 +368,7 @@ function failurePayload(stage, reason) {
     if (["hash-mismatch", "content-invalid"].includes(reason)) paths = payloads.capacity.data.candidates.map(({ path }) => path);
     if (["cleanup-failure", "quiescence-failure"].includes(reason)) paths = canonicalCandidatePaths;
     if (paths !== null) {
-      Object.assign(payloads.capacity.data, { repositoryUrl: "https://github.com/facebook/react", revision: REACT_EVENT, rootTree: REACT_ROOT });
+      Object.assign(payloads.capacity.data, { repositoryUrl: "https://github.com/react/react", revision: REACT_EVENT, rootTree: REACT_ROOT });
       items.push(...capacityRequestSequence(paths, priorCount + 1));
     }
   }
@@ -410,8 +410,8 @@ function failurePayload(stage, reason) {
   const capacityApplicationGets = items.filter((item) => item.method === "GET" && item.applicationCall && item.requestedUrl.includes(REACT_REPO));
   const overlap = maximumOverlap(capacityApplicationGets);
   if (smokeStarted) payloads.smoke.data.repositoryUrl = "https://github.com/FelixGeisler/code-city";
-  if (qualificationStarted) payloads.qualification.data.repositoryUrl = "https://github.com/facebook/react";
-  if (capacityStarted) payloads.capacity.data.repositoryUrl = "https://github.com/facebook/react";
+  if (qualificationStarted) payloads.qualification.data.repositoryUrl = "https://github.com/react/react";
+  if (capacityStarted) payloads.capacity.data.repositoryUrl = "https://github.com/react/react";
   if (stage === "smoke" && smokeStarted) payloads.smoke.data.providerGetCount = smokeApplicationGets.length;
   if (stage === "smoke" && smokeRevisionSelected) payloads.smoke.data.revision = EVENT;
   if (stage === "smoke" && cityPublished) Object.assign(payloads.smoke.data, {
@@ -432,7 +432,7 @@ function failurePayload(stage, reason) {
   if (stage === "capacity" && capacityRevisionSelected) payloads.capacity.data.revision = REACT_EVENT;
   if (stage === "capacity" && inventoryComplete) payloads.capacity.data.rootTree = REACT_ROOT;
   if (stage === "capacity" && limitFailure) Object.assign(payloads.capacity.data, {
-    repositoryUrl: "https://github.com/facebook/react",
+    repositoryUrl: "https://github.com/react/react",
     revision: REACT_EVENT,
     rootTree: REACT_ROOT,
     terminal: "Repository exceeds Code City limits",
@@ -480,7 +480,7 @@ function candidateFailurePayload(stage, reason, candidateCount, extraRaw = 0, in
   payloads.requests.data.items.forEach((item, index) => { item.sequence = index + 1; });
 
   Object.assign(payloads[stage].data, {
-    repositoryUrl: "https://github.com/facebook/react",
+    repositoryUrl: "https://github.com/react/react",
     revision: REACT_EVENT,
     rootTree: REACT_ROOT,
     candidates: retained,
@@ -573,11 +573,24 @@ test("a passing dynamic-smoke packet round-trips exact canonical bytes with fixe
     assert.equal(bytes.byteLength, bytes.buffer.byteLength);
     if (path !== "index.json") assert.deepEqual(bytes, canonical(passing[path.slice(0, -5)]));
   }
-  const index = JSON.parse(new TextDecoder().decode(packet.files.get("index.json")));
+  const decoder = new TextDecoder();
+  const persisted = Object.fromEntries([...packet.files]
+    .map(([path, bytes]) => [path, JSON.parse(decoder.decode(bytes))]));
+  const index = persisted["index.json"];
   assert.deepEqual(index.files.map(({ path }) => path), ["artifact.json", "capacity.json", "lifecycle.json", "qualification.json", "requests.json", "smoke.json"]);
+  assert.equal(index.schemaVersion, 2);
   assert.equal(index.issueBodySha256, PARENT);
   assert.equal(index.overallStatus, "pass");
   assert.equal(index.firstFailure, "none");
+  for (const name of ["artifact", "smoke", "qualification", "capacity", "requests", "lifecycle"]) {
+    assert.equal(persisted[`${name}.json`].schemaVersion, 2, name);
+  }
+  assert.equal(persisted["lifecycle.json"].data.collectorVersion, 2);
+  assert.equal(persisted["qualification.json"].data.repositoryUrl, "https://github.com/react/react");
+  assert.equal(persisted["capacity.json"].data.repositoryUrl, "https://github.com/react/react");
+  const reactRequests = persisted["requests.json"].data.items.filter((item) => item.requestedUrl.includes("/react/react/"));
+  assert.equal(reactRequests.length, 8008);
+  assert(reactRequests.every((item) => item.requestedUrl === item.finalUrl && item.redirected === false));
   assert.match(packet.packetDigest, /^[0-9a-f]{64}$/);
 
   const reverse = new Map([...packet.files].reverse());
@@ -590,6 +603,66 @@ test("a passing dynamic-smoke packet round-trips exact canonical bytes with fixe
     assert.notEqual(validated.files.get(path), packet.files.get(path));
     assert.deepEqual(validated.files.get(path), packet.files.get(path));
   }
+});
+
+test("packet v1 and every mixed envelope, index, and collector version fail closed", () => {
+  for (const kind of ["artifact", "smoke", "qualification", "capacity", "requests", "lifecycle"]) {
+    const payloads = makePassingPayloads();
+    payloads[kind].schemaVersion = 1;
+    expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `${kind} v1`);
+  }
+
+  const allV1 = makePassingPayloads();
+  for (const envelopeValue of Object.values(allV1)) envelopeValue.schemaVersion = 1;
+  allV1.lifecycle.data.collectorVersion = 1;
+  expectCode("invalid-payload", () => createEvidencePacket(allV1, BINDING), "packet v1");
+
+  const oldCollector = makePassingPayloads();
+  oldCollector.lifecycle.data.collectorVersion = 1;
+  expectCode("invalid-payload", () => createEvidencePacket(oldCollector, BINDING), "collector v1");
+
+  const packet = createEvidencePacket(makePassingPayloads(), BINDING);
+  const index = JSON.parse(new TextDecoder().decode(packet.files.get("index.json")));
+  index.schemaVersion = 1;
+  const mixedIndex = new Map(packet.files);
+  mixedIndex.set("index.json", canonical(index));
+  expectCode("invalid-payload", () => validateEvidencePacket(mixedIndex, BINDING), "index v1");
+});
+
+test("the former parent digest and runtime replacement-shaped bindings are rejected", () => {
+  const formerDigest = "f06369b3eef5e62631ee8f61ddfd7679b00a3d2139dd83a2f6472820e62864e6";
+  expectCode("invalid-binding", () => createEvidencePacket(makePassingPayloads(), {
+    issueBodySha256: formerDigest,
+    eventSha: EVENT,
+  }));
+  expectCode("invalid-binding", () => createEvidencePacket(makePassingPayloads(), {
+    ...BINDING,
+    parentIssueBodySha256: formerDigest,
+  }));
+  const payloads = makePassingPayloads();
+  payloads.artifact.data.issueBodySha256 = formerDigest;
+  expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING));
+});
+
+test("former, numeric, alias, redirect, and fallback React identities are rejected", () => {
+  const invalidRepositories = ["facebook/react", "10270250", "React/react", "reactjs/react"];
+  for (const repository of invalidRepositories) {
+    const payloads = makePassingPayloads();
+    payloads.qualification.data.repositoryUrl = `https://github.com/${repository}`;
+    payloads.capacity.data.repositoryUrl = `https://github.com/${repository}`;
+    for (const item of payloads.requests.data.items) {
+      if (!item.requestedUrl.includes("/react/react/")) continue;
+      item.requestedUrl = item.requestedUrl.replace("/react/react/", `/${repository}/`);
+      item.finalUrl = item.finalUrl.replace("/react/react/", `/${repository}/`);
+    }
+    expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), repository);
+  }
+
+  const redirected = makePassingPayloads();
+  const requestItem = redirected.requests.data.items.find((item) => item.requestedUrl.includes("/react/react/"));
+  requestItem.finalUrl = requestItem.requestedUrl.replace("/react/react/", "/facebook/react/");
+  requestItem.redirected = true;
+  expectCode("invalid-payload", () => createEvidencePacket(redirected, BINDING), "redirect to former/fallback route");
 });
 
 test("dynamic smoke K is derived only from persisted ordered distinct raw GETs", () => {
@@ -818,7 +891,7 @@ test("artifact fixed constants remain exact facts on pass and every handled fail
   ];
   for (const [label, payloads] of cases) {
     for (const [field, exact, wrong] of [
-      ["repository", "FelixGeisler/code-city", "facebook/react"],
+      ["repository", "FelixGeisler/code-city", "react/react"],
       ["origin", "https://felixgeisler.github.io/code-city/", "https://felixgeisler.github.io/"],
     ]) {
       assert.equal(payloads.artifact.data[field], exact, `${label} ${field}`);
@@ -835,15 +908,15 @@ test("artifact fixed constants remain exact facts on pass and every handled fail
 test("attempted stages retain their exact repository URL from the lifecycle start boundary", () => {
   const attempted = [
     ["smoke", "https://github.com/FelixGeisler/code-city", () => failurePayload("smoke", "provider-failure")],
-    ["qualification", "https://github.com/facebook/react", () => failurePayload("qualification", "provider-failure")],
-    ["capacity", "https://github.com/facebook/react", () => failurePayload("capacity", "provider-failure")],
+    ["qualification", "https://github.com/react/react", () => failurePayload("qualification", "provider-failure")],
+    ["capacity", "https://github.com/react/react", () => failurePayload("capacity", "provider-failure")],
   ];
   for (const [stage, exact, make] of attempted) {
     const payloads = make();
     assert.equal(payloads[stage].data.repositoryUrl, exact, `${stage} start retains its URL`);
     payloads[stage].data.repositoryUrl = null;
     expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `${stage} start rejects null URL`);
-    payloads[stage].data.repositoryUrl = stage === "smoke" ? "https://github.com/facebook/react" : "https://github.com/FelixGeisler/code-city";
+    payloads[stage].data.repositoryUrl = stage === "smoke" ? "https://github.com/react/react" : "https://github.com/FelixGeisler/code-city";
     expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `${stage} start rejects wrong URL`);
   }
 
@@ -855,7 +928,7 @@ test("attempted stages retain their exact repository URL from the lifecycle star
     for (const stage of ["smoke", "qualification", "capacity"]) {
       if (payloads[stage].status !== "not-run") continue;
       assert.equal(payloads[stage].data.repositoryUrl, null, `${stage} remains null before it is reached`);
-      payloads[stage].data.repositoryUrl = stage === "smoke" ? "https://github.com/FelixGeisler/code-city" : "https://github.com/facebook/react";
+      payloads[stage].data.repositoryUrl = stage === "smoke" ? "https://github.com/FelixGeisler/code-city" : "https://github.com/react/react";
       expectCode("invalid-payload", () => createEvidencePacket(payloads, BINDING), `${stage} not-run rejects an invented URL`);
       payloads[stage].data.repositoryUrl = null;
     }
@@ -1183,8 +1256,8 @@ test("zero to three immediately paired browser preflights are accepted without c
   const items = payloads.requests.data.items;
   const indexes = [
     items.findIndex((item) => item.requestedUrl.includes("FelixGeisler/code-city") && item.stage === "revision"),
-    items.findIndex((item) => item.requestedUrl.includes("facebook/react") && !item.applicationCall && item.stage === "revision"),
-    items.findIndex((item) => item.requestedUrl.includes("facebook/react") && item.applicationCall && item.stage === "revision"),
+    items.findIndex((item) => item.requestedUrl.includes("react/react") && !item.applicationCall && item.stage === "revision"),
+    items.findIndex((item) => item.requestedUrl.includes("react/react") && item.applicationCall && item.stage === "revision"),
   ].sort((left, right) => right - left);
   for (const index of indexes) {
     const preflight = structuredClone(items[index]);
@@ -1408,7 +1481,7 @@ test("capacity lifecycle events share request-clock boundaries for resolution, i
   expectCode("invalid-payload", () => createEvidencePacket(earlyInventory, BINDING), "inventory starts before selection");
 
   const payloads = makePassingPayloads();
-  const capacityGets = payloads.requests.data.items.filter((item) => item.applicationCall && item.requestedUrl.includes("facebook/react"));
+  const capacityGets = payloads.requests.data.items.filter((item) => item.applicationCall && item.requestedUrl.includes("react/react"));
   const tree = capacityGets.find((item) => item.stage === "tree");
   const raws = capacityGets.filter((item) => item.stage === "raw");
   const timeline = (inventoryAt, limitAt) => {
@@ -1667,7 +1740,7 @@ test("packet map, whole-view, canonical UTF-8/LF, byte cap, file set, index fiel
 
   const indexOriginal = JSON.parse(new TextDecoder().decode(packet.files.get("index.json")));
   const indexMutations = {
-    schemaVersion: 2, issueBodySha256: "0".repeat(64), eventSha: "b".repeat(40), overallStatus: "fail", firstFailure: "smoke-failure", files: [],
+    schemaVersion: 1, issueBodySha256: "0".repeat(64), eventSha: "b".repeat(40), overallStatus: "fail", firstFailure: "smoke-failure", files: [],
   };
   for (const [key, invalid] of Object.entries(indexMutations)) {
     const index = structuredClone(indexOriginal); index[key] = invalid;
@@ -1718,6 +1791,7 @@ test("external wrappers are canonical, fresh, closed, bound, frozen on validatio
   assert.equal(bytes.byteLength, bytes.buffer.byteLength);
   const parsed = JSON.parse(new TextDecoder().decode(bytes));
   assert.deepEqual(Object.keys(parsed), ["schemaVersion", "artifactId", "artifactUrl", "platformDigest", "packetDigest", "eventSha", "runId", "runAttempt", "retentionDays"]);
+  assert.equal(parsed.schemaVersion, 1);
   assert.equal(parsed.artifactUrl, `https://github.com/FelixGeisler/code-city/actions/runs/${binding.runId}/artifacts/${binding.artifactId}`);
   assert.equal(parsed.retentionDays, 90);
   const validated = validateExternalWrapper(bytes, binding);

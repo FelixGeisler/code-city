@@ -99,6 +99,26 @@ test("writer revalidates mutable shape, map, bytes, binding, and digest before a
   }
 }));
 
+test("writer rejects packet v1 and every mixed envelope, index, and collector version before creating output", async () => temporary(async (root) => {
+  const mutations = [
+    ...["artifact", "smoke", "qualification", "capacity", "requests", "lifecycle"]
+      .map((name) => [`${name} envelope v1`, `${name}.json`, (value) => { value.schemaVersion = 1; }]),
+    ["collector v1", "lifecycle.json", (value) => { value.data.collectorVersion = 1; }],
+    ["index v1", "index.json", (value) => { value.schemaVersion = 1; }],
+  ];
+  for (const [name, file, mutate] of mutations) {
+    const source = makeEvidencePacket();
+    const files = new Map(source.files);
+    const value = JSON.parse(new TextDecoder().decode(files.get(file)));
+    mutate(value);
+    files.set(file, new TextEncoder().encode(`${JSON.stringify(value)}\n`));
+    const packet = { binding: source.binding, files, packetDigest: source.packetDigest };
+    const output = path.join(root, name.replaceAll(" ", "-"));
+    await assert.rejects(storage.writeValidatedEvidencePacket(output, packet), expectedError("invalid-payload"), name);
+    await assert.rejects(fs.lstat(output), { code: "ENOENT" }, `${name} left partial output`);
+  }
+}));
+
 test("path policy rejects malformed paths, missing or non-directory parents, and symlink ancestors without mutation", async () => temporary(async (root) => {
   const packet = makeEvidencePacket();
   const fileParent = path.join(root, "file-parent");

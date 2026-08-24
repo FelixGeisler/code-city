@@ -167,6 +167,45 @@ test("finalization copies an exact marker-free packet, uses the validated reader
   await assert.rejects(fs.lstat(path.join(root, ".wrapper.json.success.tmp")), { code: "ENOENT" });
 }));
 
+test("finalizer rejects packet v1 and every mixed envelope, index, and collector version without a wrapper", async () => temporary(async (root) => {
+  const mutations = [
+    ...["artifact", "smoke", "qualification", "capacity", "requests", "lifecycle"]
+      .map((name) => [`${name} envelope v1`, `${name}.json`, (value) => { value.schemaVersion = 1; }]),
+    ["collector v1", "lifecycle.json", (value) => { value.data.collectorVersion = 1; }],
+    ["index v1", "index.json", (value) => { value.schemaVersion = 1; }],
+  ];
+  for (const [name, file, mutate] of mutations) {
+    const scenarioRoot = path.join(root, name.replaceAll(" ", "-"));
+    await fs.mkdir(scenarioRoot);
+    const source = makeEvidencePacket();
+    const files = new Map(source.files);
+    const value = JSON.parse(new TextDecoder().decode(files.get(file)));
+    mutate(value);
+    files.set(file, new TextEncoder().encode(`${JSON.stringify(value)}\n`));
+    const fixture = await arrange(scenarioRoot, { ...source, files });
+    const before = await snapshot(fixture.packetDirectory);
+    await assert.rejects(finalizeProductionEvidence(options(fixture), { temporarySuffix: "packet-v1" }), undefined, name);
+    await assert.rejects(fs.lstat(fixture.output), { code: "ENOENT" }, `${name} emitted a wrapper`);
+    assert.deepEqual(await snapshot(fixture.packetDirectory), before, `${name} mutated the packet`);
+  }
+}));
+
+test("finalizer compiles the accepted parent digest and exposes no runtime replacement path", async () => temporary(async (root) => {
+  const fixture = await arrange(root);
+  const formerDigest = "f06369b3eef5e62631ee8f61ddfd7679b00a3d2139dd83a2f6472820e62864e6";
+  let observedBinding;
+  await finalizeProductionEvidence(options(fixture), {
+    temporarySuffix: "fixed-parent",
+    async readValidatedEvidencePacket(directory, expectedBinding) {
+      observedBinding = expectedBinding;
+      const module = await import("../tools/evidence-packet-files.mjs");
+      return module.readValidatedEvidencePacket(directory, expectedBinding);
+    },
+  });
+  assert.deepEqual(observedBinding, binding);
+  assert.notEqual(observedBinding.issueBodySha256, formerDigest);
+}));
+
 test("fixed module custody rejects repository output, packet, and metadata paths before mutation", async () => temporary(async (root) => {
   const fixture = await arrange(root);
   const packetBefore = await snapshotTree(fixture.packetDirectory);

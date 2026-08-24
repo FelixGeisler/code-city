@@ -193,16 +193,16 @@ function nativeQualificationFetch(overrides = {}) {
     calls.push({ url, init });
     let stage;
     let body;
-    if (url === revisionUrl("facebook/react")) {
+    if (url === revisionUrl("react/react")) {
       stage = "revision";
       body = JSON.stringify([{ sha: REACT }]);
-    } else if (url === commitUrl("facebook/react", REACT)) {
+    } else if (url === commitUrl("react/react", REACT)) {
       stage = "commit";
       body = JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } });
-    } else if (url === treeUrl("facebook/react", REACT_ROOT)) {
+    } else if (url === treeUrl("react/react", REACT_ROOT)) {
       stage = "tree";
       body = JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES });
-    } else if (url.startsWith(`https://raw.githubusercontent.com/facebook/react/${REACT}/`)) {
+    } else if (url.startsWith(`https://raw.githubusercontent.com/react/react/${REACT}/`)) {
       stage = "raw";
       body = NATIVE_SOURCE;
     } else {
@@ -659,9 +659,9 @@ test("native qualification completes the exact 4,004-request pass and classifies
   const passed = await runNativeQualification();
   assert.equal(passed.calls.length, 4004);
   assert.deepEqual(passed.calls.slice(0, 3).map(({ url }) => url), [
-    revisionUrl("facebook/react"), commitUrl("facebook/react", REACT), treeUrl("facebook/react", REACT_ROOT),
+    revisionUrl("react/react"), commitUrl("react/react", REACT), treeUrl("react/react", REACT_ROOT),
   ]);
-  assert(passed.calls.slice(3).every(({ url }, index) => url === rawUrl("facebook/react", REACT, NATIVE_ENTRIES[index].path)));
+  assert(passed.calls.slice(3).every(({ url }, index) => url === rawUrl("react/react", REACT, NATIVE_ENTRIES[index].path)));
   assert.equal(passed.progress.candidates.length, 4001);
   assert.equal(passed.requestItems.length, 4004);
   assert(passed.calls.every(({ init }) => init.credentials === "omit" && init.redirect === "error" && init.referrer === ""));
@@ -723,7 +723,7 @@ test("qualification preserves only schema-safe prefixes at 2 MiB and 40 MiB boun
     ["aggregate boundary", (index) => index < 20 ? twoMiB : empty, 40 * 1024 * 1024],
   ]) {
     const controlled = qualificationFetchForSources(sourceForIndex);
-    const progress = { repositoryUrl: "https://github.com/facebook/react", revision: null, rootTree: null, treeEntries: null, truncated: null, candidates: [] };
+    const progress = { repositoryUrl: "https://github.com/react/react", revision: null, rootTree: null, treeEntries: null, truncated: null, candidates: [] };
     await qualifyRepository({ fetchImpl: controlled.fetchImpl, now: () => 1, requestItems: [], progress });
     assert.equal(progress.candidates.length, 4001, name);
     assert.equal(progress.candidates.at(-1).runningAggregate, expectedAggregate, name);
@@ -736,14 +736,14 @@ test("qualification preserves only schema-safe prefixes at 2 MiB and 40 MiB boun
     ["NUL", (index) => index === 0 ? Uint8Array.of(0) : empty, 0],
   ]) {
     const controlled = qualificationFetchForSources(sourceForIndex);
-    const progress = { repositoryUrl: "https://github.com/facebook/react", revision: null, rootTree: null, treeEntries: null, truncated: null, candidates: [] };
+    const progress = { repositoryUrl: "https://github.com/react/react", revision: null, rootTree: null, treeEntries: null, truncated: null, candidates: [] };
     await assert.rejects(qualifyRepository({ fetchImpl: controlled.fetchImpl, now: () => 1, requestItems: [], progress }),
       (error) => error.stage === "qualification" && error.reason === "content-invalid", name);
     assert.equal(progress.candidates.length, prefixLength, name);
     assert(progress.candidates.every((candidate) => candidate.contentValid), name);
   }
 
-  const hashProgress = { repositoryUrl: "https://github.com/facebook/react", revision: null, rootTree: null, treeEntries: null, truncated: null, candidates: [] };
+  const hashProgress = { repositoryUrl: "https://github.com/react/react", revision: null, rootTree: null, treeEntries: null, truncated: null, candidates: [] };
   const hash = nativeQualificationFetch({ raw: { body: new TextEncoder().encode("different") } });
   await assert.rejects(qualifyRepository({ fetchImpl: hash.fetchImpl, now: () => 1, requestItems: [], progress: hashProgress }),
     (error) => error.stage === "qualification" && error.reason === "hash-mismatch");
@@ -942,29 +942,55 @@ test("full seam-driven collector maps the exact pass lifecycle, dynamic smoke K,
       },
       clearTrace() {},
       async collectCapacity(qualification, emit, startedMs) {
-        appendSequence(requestItems, now, "facebook/react", REACT, REACT_ROOT, shared.map(({ path: sourcePath }) => sourcePath), true, {
+        appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, shared.map(({ path: sourcePath }) => sourcePath), true, {
           revision: () => emit("revision-selected", 2), inventory: () => emit("inventory-complete", 2),
         });
         emit("limit-failure", 2); emit("request-quiescent", 2); const worker = emit("worker-quiescent", 2);
-        return { repositoryUrl: "https://github.com/facebook/react", revision: REACT, rootTree: REACT_ROOT, terminal: "Repository exceeds Code City limits", revisionDisplayed: true, cityPresent: false, priorCityRemoved: true, rawRequestCount: 4001, maxOverlap: 1, noLaterRequest: true, workerQuiescent: true, candidates: structuredClone(qualification.candidates), startedMs, endedMs: worker.atMs };
+        return { repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT, terminal: "Repository exceeds Code City limits", revisionDisplayed: true, cityPresent: false, priorCityRemoved: true, rawRequestCount: 4001, maxOverlap: 1, noLaterRequest: true, workerQuiescent: true, candidates: structuredClone(qualification.candidates), startedMs, endedMs: worker.atMs };
       },
       async close() {},
     }),
     qualifyRepository: async ({ now, requestItems }) => {
-      appendSequence(requestItems, now, "facebook/react", REACT, REACT_ROOT, shared.map(({ path: sourcePath }) => sourcePath), false);
-      return { repositoryUrl: "https://github.com/facebook/react", revision: REACT, rootTree: REACT_ROOT, treeEntries: 5000, truncated: false, candidates: shared };
+      appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, shared.map(({ path: sourcePath }) => sourcePath), false);
+      return { repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT, treeEntries: 5000, truncated: false, candidates: shared };
     },
     writeValidatedEvidencePacket: async (_output, packet) => { stored = validateEvidencePacket(packet.files, packet.binding); },
     readValidatedEvidencePacket: async () => stored,
   });
   assert.deepEqual(result, { packetDigest: stored.packetDigest, status: "pass", reason: "none" });
-  const lifecycle = JSON.parse(new TextDecoder().decode(stored.files.get("lifecycle.json")));
+  assert.equal(PARENT_ISSUE_BODY_SHA256, "06f08ca0144ffe9d5e162f3eb74c898b8b3a9e789832eae8c406f0fef55d0184");
+  assert.deepEqual(stored.binding, { issueBodySha256: PARENT_ISSUE_BODY_SHA256, eventSha: EVENT });
+  const decoder = new TextDecoder();
+  const persisted = Object.fromEntries([...stored.files]
+    .map(([name, bytes]) => [name, JSON.parse(decoder.decode(bytes))]));
+  for (const name of ["artifact", "smoke", "qualification", "capacity", "requests", "lifecycle"]) {
+    assert.equal(persisted[`${name}.json`].schemaVersion, 2, name);
+  }
+  assert.equal(persisted["index.json"].schemaVersion, 2);
+  assert.equal(persisted["index.json"].issueBodySha256, PARENT_ISSUE_BODY_SHA256);
+  assert.equal(persisted["artifact.json"].data.issueBodySha256, PARENT_ISSUE_BODY_SHA256);
+  assert.equal(persisted["qualification.json"].data.repositoryUrl, "https://github.com/react/react");
+  assert.equal(persisted["capacity.json"].data.repositoryUrl, "https://github.com/react/react");
+  const qualificationGets = persisted["requests.json"].data.items.filter((item) => !item.applicationCall
+    && item.method === "GET" && item.requestedUrl.includes("/react/react/"));
+  const capacityGets = persisted["requests.json"].data.items.filter((item) => item.applicationCall
+    && item.method === "GET" && item.requestedUrl.includes("/react/react/"));
+  assert.equal(qualificationGets.length, 4004);
+  assert.equal(capacityGets.length, 4004);
+  assert.deepEqual(qualificationGets.slice(3).map((item) => item.requestedUrl),
+    shared.map((item) => rawUrl("react/react", REACT, item.path)));
+  assert.deepEqual(capacityGets.slice(3).map((item) => item.requestedUrl),
+    shared.map((item) => rawUrl("react/react", REACT, item.path)));
+  assert(persisted["requests.json"].data.items.every((item) => !item.requestedUrl.includes("/10270250/")));
+  const lifecycle = persisted["lifecycle.json"];
+  assert.equal(lifecycle.data.collectorVersion, 2);
+  assert.equal(lifecycle.data.maxOverlap, 1);
   assert.deepEqual(lifecycle.data.events.map(({ event, generation }) => [event, generation]), [
     ["collector-start", 0], ["artifact-verified", 0], ["smoke-start", 1], ["revision-selected", 1], ["city-published", 1], ["trace-reset", 0],
     ["qualification-start", 0], ["qualification-complete", 0], ["capacity-start", 2], ["revision-selected", 2], ["inventory-complete", 2],
     ["limit-failure", 2], ["request-quiescent", 2], ["worker-quiescent", 2], ["collector-complete", 0],
   ]);
-  const smoke = JSON.parse(new TextDecoder().decode(stored.files.get("smoke.json")));
+  const smoke = persisted["smoke.json"];
   assert.equal(smoke.data.providerGetCount, 5);
 });
 
@@ -3523,7 +3549,7 @@ test("matching-stage wrong identities and stale phase exchanges cannot pair, per
     {
       name: "stale-smoke-phase-during-capacity-generation", stage: "capacity",
       invalidUrl: revisionUrl("FelixGeisler/code-city"),
-      nextUrl: commitUrl("facebook/react", REACT),
+      nextUrl: commitUrl("react/react", REACT),
     },
   ];
 
@@ -3551,7 +3577,7 @@ test("matching-stage wrong identities and stale phase exchanges cannot pair, per
       const expected = scenario.stage === "capacity"
         ? browserStageRequest("revision")
         : browserStageRequest(scenario.stage);
-      const currentUrl = scenario.stage === "capacity" ? revisionUrl("facebook/react") : expected.url;
+      const currentUrl = scenario.stage === "capacity" ? revisionUrl("react/react") : expected.url;
       beginBrowserRequest(opened.harness, { requestId: `${scenario.name}-current-get`, url: currentUrl, method: "GET" });
       finishBrowserRequest(opened.harness, {
         requestId: `${scenario.name}-current-get`, url: currentUrl, method: "GET",
@@ -4157,7 +4183,7 @@ test("an earlier SUCCESS is the first capacity terminal and fails exact limit or
   const qualification = { revision: REACT, rootTree: REACT_ROOT, candidates: candidates() };
   const pending = opened.session.collectCapacity(qualification, () => ({ atMs: 1 }), 0);
   await Promise.resolve();
-  emitBrowserGet(opened.harness, { requestId: "revision", url: revisionUrl("facebook/react"), body: `${JSON.stringify([{ sha: REACT }])}\n` });
+  emitBrowserGet(opened.harness, { requestId: "revision", url: revisionUrl("react/react"), body: `${JSON.stringify([{ sha: REACT }])}\n` });
   await new Promise((resolve) => setImmediate(resolve));
   opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({ type: "REVISION_SELECTED", generation: 2, revision: REACT }) });
   await new Promise((resolve) => setImmediate(resolve));
@@ -4206,24 +4232,24 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
   harness.emit("Target.attachedToTarget", { sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" } }, "");
 
   emitBrowserGet(harness, {
-    requestId: "capacity-revision", url: revisionUrl("facebook/react"), body: JSON.stringify([{ sha: REACT }]),
+    requestId: "capacity-revision", url: revisionUrl("react/react"), body: JSON.stringify([{ sha: REACT }]),
     dataLength: RESPONSE_CAPS.revision,
   });
   await new Promise((resolve) => setImmediate(resolve));
   harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({ type: "REVISION_SELECTED", generation: 2, revision: REACT }) });
   const selectionObservedAtMs = tick;
   emitBrowserGet(harness, {
-    requestId: "capacity-commit", url: commitUrl("facebook/react", REACT),
+    requestId: "capacity-commit", url: commitUrl("react/react", REACT),
     body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }), dataLength: RESPONSE_CAPS.commit,
   });
   emitBrowserGet(harness, {
-    requestId: "capacity-tree", url: treeUrl("facebook/react", REACT_ROOT),
+    requestId: "capacity-tree", url: treeUrl("react/react", REACT_ROOT),
     body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }), dataLength: RESPONSE_CAPS.tree,
   });
   for (let index = 0; index < NATIVE_ENTRIES.length; index += 1) {
     emitBrowserGet(harness, {
       requestId: `capacity-raw-${index + 1}`,
-      url: rawUrl("facebook/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
+      url: rawUrl("react/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
       headers: {}, dataLength: RESPONSE_CAPS.raw,
     });
   }
@@ -4291,10 +4317,10 @@ test("a late publication after worker detachment becomes a schema-valid handled 
     packetSink(value) { if (value) stored = value; return stored; },
   });
   seams.qualifyRepository = async ({ now, requestItems, progress }) => {
-    appendSequence(requestItems, now, "facebook/react", REACT, REACT_ROOT,
+    appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT,
       NATIVE_ENTRIES.map(({ path: sourcePath }) => sourcePath), false);
     return Object.assign(progress, {
-      repositoryUrl: "https://github.com/facebook/react", revision: REACT, rootTree: REACT_ROOT,
+      repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
       treeEntries: 5000, truncated: false, candidates: requestCandidates,
     });
   };
@@ -4329,7 +4355,7 @@ test("a late publication after worker detachment becomes a schema-valid handled 
     origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"), output: path.resolve("late-capacity-publication"),
   }, seams);
   for (let attempts = 0; !harness.calls.some(({ method, params }) => method === "Runtime.evaluate"
-    && params.expression.includes("https://github.com/facebook/react")); attempts += 1) {
+    && params.expression.includes("https://github.com/react/react")); attempts += 1) {
     assert(attempts < 20);
     await new Promise((resolve) => setImmediate(resolve));
   }
@@ -4337,24 +4363,24 @@ test("a late publication after worker detachment becomes a schema-valid handled 
     sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" },
   }, "");
   emitBrowserGet(harness, {
-    requestId: "capacity-revision", url: revisionUrl("facebook/react"), body: JSON.stringify([{ sha: REACT }]),
+    requestId: "capacity-revision", url: revisionUrl("react/react"), body: JSON.stringify([{ sha: REACT }]),
   });
   await new Promise((resolve) => setImmediate(resolve));
   harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
     type: "REVISION_SELECTED", generation: 2, revision: REACT,
   }) });
   emitBrowserGet(harness, {
-    requestId: "capacity-commit", url: commitUrl("facebook/react", REACT),
+    requestId: "capacity-commit", url: commitUrl("react/react", REACT),
     body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
   });
   emitBrowserGet(harness, {
-    requestId: "capacity-tree", url: treeUrl("facebook/react", REACT_ROOT),
+    requestId: "capacity-tree", url: treeUrl("react/react", REACT_ROOT),
     body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
   });
   for (let index = 0; index < NATIVE_ENTRIES.length; index += 1) {
     emitBrowserGet(harness, {
       requestId: `capacity-raw-${index + 1}`,
-      url: rawUrl("facebook/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
+      url: rawUrl("react/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
     });
   }
   for (let attempts = 0; harness.bodyCalls < 4004 && attempts < 100; attempts += 1) {
@@ -4429,24 +4455,24 @@ test("CDP admission rejects overlap, wrong order/path, and capacity candidate 4,
     }, () => ({ atMs: 1 }), 0);
     await Promise.resolve();
     emitBrowserGet(opened.harness, {
-      requestId: "limit-revision", url: revisionUrl("facebook/react"), body: JSON.stringify([{ sha: REACT }]),
+      requestId: "limit-revision", url: revisionUrl("react/react"), body: JSON.stringify([{ sha: REACT }]),
     });
     await new Promise((resolve) => setImmediate(resolve));
     opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
       type: "REVISION_SELECTED", generation: 2, revision: REACT,
     }) });
     emitBrowserGet(opened.harness, {
-      requestId: "limit-commit", url: commitUrl("facebook/react", REACT),
+      requestId: "limit-commit", url: commitUrl("react/react", REACT),
       body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
     });
     emitBrowserGet(opened.harness, {
-      requestId: "limit-tree", url: treeUrl("facebook/react", REACT_ROOT),
+      requestId: "limit-tree", url: treeUrl("react/react", REACT_ROOT),
       body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
     });
     for (let index = 0; index < NATIVE_ENTRIES.length; index += 1) {
       emitBrowserGet(opened.harness, {
         requestId: `limit-raw-${index + 1}`,
-        url: rawUrl("facebook/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
+        url: rawUrl("react/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
       });
     }
     for (let attempts = 0; opened.harness.bodyCalls < 4004 && attempts < 100; attempts += 1) {
@@ -4455,7 +4481,7 @@ test("CDP admission rejects overlap, wrong order/path, and capacity candidate 4,
     assert.equal(opened.harness.bodyCalls, 4004);
     opened.harness.emit("Network.requestWillBeSent", {
       requestId: "candidate-4002", request: {
-        url: rawUrl("facebook/react", REACT, "4002.ts"), method: "GET", headers: {},
+        url: rawUrl("react/react", REACT, "4002.ts"), method: "GET", headers: {},
       },
     });
     await assert.rejects(pending, /limit ordering.*4,002/u);
@@ -4522,23 +4548,23 @@ function collectorMatrixSeams({ failStage, reason, progressedQualification = fal
       clearTrace() {},
       async collectCapacity(qualification, emit, startedMs) {
         if (!progressedCapacity && failStage === "capacity" && ["content-invalid", "unexpected-request"].includes(reason)) {
-          appendSequence(requestItems, now, "facebook/react", REACT, REACT_ROOT, ["unexpected.ts"], true, {
+          appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, ["unexpected.ts"], true, {
             revision: () => emit("revision-selected", 2), inventory: () => emit("inventory-complete", 2),
           });
           capacityProgress = {
-            repositoryUrl: "https://github.com/facebook/react", revision: REACT, rootTree: REACT_ROOT,
+            repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
             terminal: null, revisionDisplayed: null, cityPresent: null, priorCityRemoved: null,
             rawRequestCount: 1, maxOverlap: 1, noLaterRequest: null, workerQuiescent: null,
             candidates: [], startedMs, endedMs: null,
           };
         }
         if (!progressedCapacity) failAt("capacity");
-        appendSequence(requestItems, now, "facebook/react", REACT, REACT_ROOT, shared.map((item) => item.path), true, {
+        appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, shared.map((item) => item.path), true, {
           revision: () => emit("revision-selected", 2), inventory: () => emit("inventory-complete", 2),
         });
         const limit = emit("limit-failure", 2);
         capacityProgress = {
-          repositoryUrl: "https://github.com/facebook/react", revision: REACT, rootTree: REACT_ROOT,
+          repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
           terminal: "Repository exceeds Code City limits", revisionDisplayed: true, cityPresent: false,
           priorCityRemoved: true, rawRequestCount: 4001, maxOverlap: 1, noLaterRequest: false,
           workerQuiescent: false, candidates: structuredClone(qualification.candidates), startedMs, endedMs: null,
@@ -4554,19 +4580,19 @@ function collectorMatrixSeams({ failStage, reason, progressedQualification = fal
     qualifyRepository: async ({ now, requestItems, progress }) => {
       if (failStage === "qualification") {
         if (["content-invalid", "unexpected-request"].includes(reason)) {
-          appendSequence(requestItems, now, "facebook/react", REACT, REACT_ROOT, ["unexpected.ts"], false);
+          appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, ["unexpected.ts"], false);
           Object.assign(progress, {
-            repositoryUrl: "https://github.com/facebook/react", revision: REACT, rootTree: REACT_ROOT,
+            repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
             treeEntries: 5000, truncated: false, candidates: [],
           });
         } else if (progressedQualification) {
-          directRequest(requestItems, now, "revision", revisionUrl("facebook/react"), false);
+          directRequest(requestItems, now, "revision", revisionUrl("react/react"), false);
           progress.revision = REACT;
         }
         failAt("qualification");
       }
-      appendSequence(requestItems, now, "facebook/react", REACT, REACT_ROOT, shared.map((item) => item.path), false);
-      return Object.assign(progress, { repositoryUrl: "https://github.com/facebook/react", revision: REACT, rootTree: REACT_ROOT, treeEntries: 5000, truncated: false, candidates: shared });
+      appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT, shared.map((item) => item.path), false);
+      return Object.assign(progress, { repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT, treeEntries: 5000, truncated: false, candidates: shared });
     },
     writeValidatedEvidencePacket: async (_output, packet) => {
       const validated = validateEvidencePacket(packet.files, packet.binding);
@@ -5041,10 +5067,10 @@ test("full capacity orchestration flushes delayed tree inventory before a pendin
   const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
   const fallbackBrowserFactory = seams.createBrowserEvidenceSession;
   seams.qualifyRepository = async ({ now, requestItems, progress }) => {
-    appendSequence(requestItems, now, "facebook/react", REACT, REACT_ROOT,
+    appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT,
       NATIVE_ENTRIES.map(({ path: sourcePath }) => sourcePath), false);
     return Object.assign(progress, {
-      repositoryUrl: "https://github.com/facebook/react", revision: REACT, rootTree: REACT_ROOT,
+      repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
       treeEntries: NATIVE_ENTRIES.length, truncated: false, candidates: qualificationCandidates,
     });
   };
@@ -5062,7 +5088,7 @@ test("full capacity orchestration flushes delayed tree inventory before a pendin
       }, "");
       await new Promise((resolve) => setImmediate(resolve));
       emitBrowserGet(harness, {
-        requestId: "causal-capacity-revision", url: revisionUrl("facebook/react"),
+        requestId: "causal-capacity-revision", url: revisionUrl("react/react"),
         body: JSON.stringify([{ sha: REACT }]),
       });
       await waitForBodyCalls(harness, 1);
@@ -5071,19 +5097,19 @@ test("full capacity orchestration flushes delayed tree inventory before a pendin
       }) });
       await new Promise((resolve) => setImmediate(resolve));
       emitBrowserGet(harness, {
-        requestId: "causal-capacity-commit", url: commitUrl("facebook/react", REACT),
+        requestId: "causal-capacity-commit", url: commitUrl("react/react", REACT),
         body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
       });
       await waitForBodyCalls(harness, 2);
       emitBrowserGet(harness, {
-        requestId: "causal-capacity-tree", url: treeUrl("facebook/react", REACT_ROOT),
+        requestId: "causal-capacity-tree", url: treeUrl("react/react", REACT_ROOT),
         body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
       });
       await waitForBodyCalls(harness, 3);
       for (let index = 0; index < NATIVE_ENTRIES.length; index += 1) {
         emitBrowserGet(harness, {
           requestId: `causal-capacity-raw-${index + 1}`,
-          url: rawUrl("facebook/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
+          url: rawUrl("react/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
         });
       }
       harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
@@ -5146,7 +5172,7 @@ test("full capacity orchestration flushes delayed tree inventory before a pendin
   const inventory = capacityEvents.find(({ event }) => event === "inventory-complete");
   const limit = capacityEvents.find(({ event }) => event === "limit-failure");
   const applicationRequests = requests.data.items.filter(({ applicationCall, requestedUrl }) => (
-    applicationCall && requestedUrl.includes("/facebook/react/")
+    applicationCall && requestedUrl.includes("/react/react/")
   ));
   const tree = applicationRequests.find(({ stage }) => stage === "tree");
   assert.equal(inventory.atMs, Math.max(tree.endedMs, revision.atMs));
@@ -5241,7 +5267,7 @@ test("fatal CDP, connection, and Chrome process races abort a blocked qualificat
     assert.deepEqual([qualification.status, qualification.reason], ["fail", "infrastructure-failure"], stimulus);
     assert.equal(qualification.data.candidates.length, 0, stimulus);
     assert.equal(requests.data.items.filter((item) => !item.applicationCall
-      && item.requestedUrl.includes("/facebook/react/")).length, 0, stimulus);
+      && item.requestedUrl.includes("/react/react/")).length, 0, stimulus);
   }
 });
 
@@ -5256,10 +5282,10 @@ test("native CDP overlap and candidate-4,002 admission stops produce schema-vali
     }));
     if (kind === "candidate-4002") {
       seams.qualifyRepository = async ({ now, requestItems, progress }) => {
-        appendSequence(requestItems, now, "facebook/react", REACT, REACT_ROOT,
+        appendSequence(requestItems, now, "react/react", REACT, REACT_ROOT,
           NATIVE_ENTRIES.map(({ path: sourcePath }) => sourcePath), false);
         return Object.assign(progress, {
-          repositoryUrl: "https://github.com/facebook/react", revision: REACT, rootTree: REACT_ROOT,
+          repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
           treeEntries: 4002, truncated: false, candidates: structuredClone(nativeCandidates),
         });
       };
@@ -5285,24 +5311,24 @@ test("native CDP overlap and candidate-4,002 admission stops produce schema-vali
       const driveLimit = async () => {
         await Promise.resolve();
         emitBrowserGet(harness, {
-          requestId: "packet-limit-revision", url: revisionUrl("facebook/react"), body: JSON.stringify([{ sha: REACT }]),
+          requestId: "packet-limit-revision", url: revisionUrl("react/react"), body: JSON.stringify([{ sha: REACT }]),
         });
         await new Promise((resolve) => setImmediate(resolve));
         harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
           type: "REVISION_SELECTED", generation: 2, revision: REACT,
         }) });
         emitBrowserGet(harness, {
-          requestId: "packet-limit-commit", url: commitUrl("facebook/react", REACT),
+          requestId: "packet-limit-commit", url: commitUrl("react/react", REACT),
           body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
         });
         emitBrowserGet(harness, {
-          requestId: "packet-limit-tree", url: treeUrl("facebook/react", REACT_ROOT),
+          requestId: "packet-limit-tree", url: treeUrl("react/react", REACT_ROOT),
           body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
         });
         for (let index = 0; index < NATIVE_ENTRIES.length; index += 1) {
           emitBrowserGet(harness, {
             requestId: `packet-limit-raw-${index + 1}`,
-            url: rawUrl("facebook/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
+            url: rawUrl("react/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
           });
         }
         for (let attempts = 0; harness.bodyCalls < 4004 && attempts < 100; attempts += 1) {
@@ -5311,7 +5337,7 @@ test("native CDP overlap and candidate-4,002 admission stops produce schema-vali
         await new Promise((resolve) => setImmediate(resolve));
         harness.emit("Network.requestWillBeSent", {
           requestId: "packet-candidate-4002", request: {
-            url: rawUrl("facebook/react", REACT, "4002.ts"), method: "GET", headers: {},
+            url: rawUrl("react/react", REACT, "4002.ts"), method: "GET", headers: {},
           },
         });
         bodyCallsAtStop = harness.bodyCalls;
@@ -5363,7 +5389,7 @@ test("native CDP overlap and candidate-4,002 admission stops produce schema-vali
       assert.equal(stage.data.rawRequestCount, 4001);
       assert.equal(stage.data.candidates.length, 4001);
       assert.equal(requests.data.items.filter((item) => item.applicationCall
-        && item.requestedUrl.includes("/facebook/react/") && item.stage === "raw").length, 4001);
+        && item.requestedUrl.includes("/react/react/") && item.stage === "raw").length, 4001);
     }
   }
 });
@@ -5458,7 +5484,7 @@ test("browser capacity normalization and hash failures produce stage-aware schem
       const drive = async () => {
         await Promise.resolve();
         emitBrowserGet(harness, {
-          requestId: `${kind}-revision`, url: revisionUrl("facebook/react"), body: JSON.stringify([{ sha: REACT }]),
+          requestId: `${kind}-revision`, url: revisionUrl("react/react"), body: JSON.stringify([{ sha: REACT }]),
         });
         await new Promise((resolve) => setImmediate(resolve));
         harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
@@ -5466,18 +5492,18 @@ test("browser capacity normalization and hash failures produce stage-aware schem
         }) });
         await new Promise((resolve) => setImmediate(resolve));
         emitBrowserGet(harness, {
-          requestId: `${kind}-commit`, url: commitUrl("facebook/react", REACT),
+          requestId: `${kind}-commit`, url: commitUrl("react/react", REACT),
           body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
         });
         emitBrowserGet(harness, {
-          requestId: `${kind}-tree`, url: treeUrl("facebook/react", REACT_ROOT),
+          requestId: `${kind}-tree`, url: treeUrl("react/react", REACT_ROOT),
           body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: entries }),
         });
         const rawCount = kind === "aggregate" ? 21 : 1;
         for (let index = 0; index < rawCount; index += 1) {
           emitBrowserBytes(harness, {
             requestId: `${kind}-raw-${index + 1}`,
-            url: rawUrl("facebook/react", REACT, entries[index].path), bytes: sources[index],
+            url: rawUrl("react/react", REACT, entries[index].path), bytes: sources[index],
           });
         }
       };
@@ -5516,7 +5542,7 @@ test("browser capacity normalization and hash failures produce stage-aware schem
     assert.deepEqual([capacity.status, capacity.reason], ["fail", reason], kind);
     assert.equal(capacity.data.candidates.length, prefixLength, kind);
     assert.equal(requests.data.items.filter((item) => item.applicationCall
-      && item.requestedUrl.includes("/facebook/react/") && item.stage === "raw").length,
+      && item.requestedUrl.includes("/react/react/") && item.stage === "raw").length,
     kind === "hash" ? 1 : prefixLength + 1, kind);
   }
 });
@@ -5543,7 +5569,7 @@ test("native browser CORS and incomplete-tree triggers flow through their owning
       const driveTree = async () => {
         await Promise.resolve();
         emitBrowserGet(harness, {
-          requestId: "tree-revision", url: revisionUrl("facebook/react"), body: JSON.stringify([{ sha: REACT }]),
+          requestId: "tree-revision", url: revisionUrl("react/react"), body: JSON.stringify([{ sha: REACT }]),
         });
         await new Promise((resolve) => setImmediate(resolve));
         harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
@@ -5551,11 +5577,11 @@ test("native browser CORS and incomplete-tree triggers flow through their owning
         }) });
         await new Promise((resolve) => setImmediate(resolve));
         emitBrowserGet(harness, {
-          requestId: "tree-commit", url: commitUrl("facebook/react", REACT),
+          requestId: "tree-commit", url: commitUrl("react/react", REACT),
           body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
         });
         emitBrowserGet(harness, {
-          requestId: "tree-incomplete", url: treeUrl("facebook/react", REACT_ROOT),
+          requestId: "tree-incomplete", url: treeUrl("react/react", REACT_ROOT),
           body: JSON.stringify({ sha: REACT_ROOT, truncated: true, tree: NATIVE_ENTRIES }),
         });
       };
@@ -5757,7 +5783,7 @@ test("progressed qualification failure preserves its start event and completed s
   const requests = JSON.parse(new TextDecoder().decode(stored.files.get("requests.json")));
   const lifecycle = JSON.parse(new TextDecoder().decode(stored.files.get("lifecycle.json")));
   assert.equal(qualification.data.revision, REACT);
-  assert.equal(requests.data.items.filter((item) => !item.applicationCall && item.requestedUrl.includes("/facebook/react/")).length, 1);
+  assert.equal(requests.data.items.filter((item) => !item.applicationCall && item.requestedUrl.includes("/react/react/")).length, 1);
   assert.deepEqual(lifecycle.data.events.slice(-2).map((event) => event.event), ["qualification-start", "collector-failed"]);
 });
 
@@ -5776,7 +5802,7 @@ test("progressed capacity failure preserves all 4,001 facts, 4,004 completed req
   const lifecycle = JSON.parse(new TextDecoder().decode(stored.files.get("lifecycle.json")));
   assert.equal(capacity.data.candidates.length, 4001);
   assert.equal(capacity.data.rawRequestCount, 4001);
-  assert.equal(requests.data.items.filter((item) => item.applicationCall && item.requestedUrl.includes("/facebook/react/")).length, 4004);
+  assert.equal(requests.data.items.filter((item) => item.applicationCall && item.requestedUrl.includes("/react/react/")).length, 4004);
   assert.deepEqual(lifecycle.data.events.slice(-2).map((event) => event.event), ["limit-failure", "collector-failed"]);
   assert.equal(lifecycle.data.maxOverlap, 1);
 });
