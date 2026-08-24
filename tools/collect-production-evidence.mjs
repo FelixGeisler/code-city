@@ -847,6 +847,8 @@ export async function createBrowserEvidenceSession({
     const allowedAssets = new Set(manifest.files.map((file) => `${origin}${encodePath(file.path)}`));
     allowedAssets.add(origin);
     let mode = null;
+    let smokeProgress = null;
+    let capacityProgress = null;
     let processing = Promise.resolve();
     let networkEventOrder = 0;
     let traceStarted = false;
@@ -965,16 +967,14 @@ export async function createBrowserEvidenceSession({
       fatal.value = error instanceof Error ? error : new Error("browser observation failed");
       if (mode) {
         mode.providerAdmissionClosed = true;
+        preserveProgressSnapshot(mode);
         settleDeferred(mode.revisionReadiness, "reject", fatal.value);
         settleDeferred(mode.selectionResult, "reject", fatal.value);
         settleDeferred(mode.terminalResult, "reject", fatal.value);
       }
-      for (const entry of network.values()) entry.bodyPromise = null;
-      network.clear();
-      correlations.clear();
-      workerTargets.clear();
-      workerReady.clear();
-      detachedWorkers.clear();
+      clearTransientCorrelation({ kind: "fatal-correlations-cleared", requireComplete: false,
+        suppressObserverError: true });
+      mode = null;
       fatalController.abort(fatal.value);
       for (const waiter of factWaiters.splice(0)) waiter.reject(fatal.value);
       for (const waiter of detachWaiters.splice(0)) waiter.reject(fatal.value);
@@ -1844,6 +1844,8 @@ export async function createBrowserEvidenceSession({
       workerTargets.clear();
       workerReady.clear();
       detachedWorkers.clear();
+      if (generation === 1) smokeProgress = progress;
+      if (generation === 2) capacityProgress = progress;
       traceStarted = true;
       mode = {
         repository, generation, progress, gets: [], rawFacts: progress.candidates ?? [], aggregate: 0,
@@ -1872,25 +1874,79 @@ export async function createBrowserEvidenceSession({
       }
       if (fatal.value) throw fatal.value;
     }
-    function clearTransientCorrelation() {
-      invariant(network.size === 0 && [...correlations.values()].every(correlationComplete),
-        "browser request correlation is not quiescent");
+    function transientCorrelationSnapshot() {
+      const values = [...correlations.values()];
+      const incompleteCorrelationCount = values.filter((correlation) => !correlationComplete(correlation)).length;
+      return Object.freeze({
+        networkCount: network.size,
+        correlationCount: values.length,
+        provisionalCount: values.filter(({ kind }) => kind === "provisional-asset-extra").length,
+        tombstoneCount: values.filter(({ kind }) => kind === "completed").length,
+        opaqueOwnerCount: values.filter((correlation) => (
+          Object.hasOwn(correlation, "ownerSession") || Object.hasOwn(correlation, "owner")
+          || correlation.workerSession || correlation.entry?.sessionId
+        )).length,
+        incompleteCorrelationCount,
+        complete: network.size === 0 && incompleteCorrelationCount === 0,
+      });
+    }
+    function observeProcessingBarrier(kind) {
       const generation = mode?.generation ?? 0;
-      correlations.clear();
-      validateSafeTransientState(Object.freeze({
-        kind: "correlations-cleared", generation, correlationCount: correlations.size,
-      }));
+      const state = transientCorrelationSnapshot();
+      validateSafeTransientState(Object.freeze({ kind, generation, ...state }));
+    }
+    function clearTransientCorrelation({
+      kind = "correlations-cleared", requireComplete = true, suppressObserverError = false,
+    } = {}) {
+      const generation = mode?.generation ?? 0;
+      const before = transientCorrelationSnapshot();
+      let observerError;
+      try {
+        validateSafeTransientState(Object.freeze({
+          kind: "correlation-clear-snapshot", generation, ...before,
+        }));
+      } catch (error) {
+        observerError = error;
+      } finally {
+        for (const entry of network.values()) entry.bodyPromise = null;
+        network.clear();
+        correlations.clear();
+        workerTargets.clear();
+        workerReady.clear();
+        detachedWorkers.clear();
+      }
+      const after = transientCorrelationSnapshot();
+      invariant(after.networkCount === 0 && after.correlationCount === 0
+        && after.provisionalCount === 0 && after.tombstoneCount === 0
+        && after.opaqueOwnerCount === 0 && after.incompleteCorrelationCount === 0,
+      "browser request sequence cleanup differs");
+      try {
+        validateSafeTransientState(Object.freeze({ kind, generation, correlationCount: 0 }));
+      } catch (error) {
+        observerError ??= error;
+      }
+      if (requireComplete) invariant(before.complete,
+        "browser request sequence has incomplete correlation");
+      if (observerError && !suppressObserverError) throw observerError;
+      return before;
+    }
+    function preserveProgressSnapshot(current) {
+      if (current?.generation === 1) {
+        current.progress.rootTree ??= current.rootTree;
+        current.progress.providerGetCount = current.gets.length;
+        smokeProgress = current.progress;
+      }
+      if (current?.generation === 2) {
+        current.progress.rootTree ??= current.rootTree;
+        current.progress.rawRequestCount = current.rawFacts.length;
+        current.progress.candidates = current.rawFacts;
+        capacityProgress = current.progress;
+      }
     }
     function snapshot(kind) {
-      if (kind === "smoke" && mode?.generation === 1) {
-        mode.progress.providerGetCount = mode.gets.length;
-        return mode.progress;
-      }
-      if (kind === "capacity" && mode?.generation === 2) {
-        mode.progress.rawRequestCount = mode.rawFacts.length;
-        mode.progress.candidates = mode.rawFacts;
-        return mode.progress;
-      }
+      if (mode) preserveProgressSnapshot(mode);
+      if (kind === "smoke") return smokeProgress;
+      if (kind === "capacity") return capacityProgress;
       return undefined;
     }
 
@@ -1920,7 +1976,8 @@ export async function createBrowserEvidenceSession({
             && terminal.category === selection.category, "smoke pre-selection terminal differs");
           await nextFact((fact) => fact.type === "ATTEMPT_DRAINED" && fact.generation === 1);
           await waitForWorkerDetachment();
-          await flush(true);
+          await flush();
+          observeProcessingBarrier("post-detachment-processing-barrier");
           clearTransientCorrelation();
           mode = null;
           throw new Error(`smoke pre-selection failure: ${terminal.category}`);
@@ -1936,9 +1993,13 @@ export async function createBrowserEvidenceSession({
           && terminal.revision === eventSha, "smoke terminal revision differs");
         await nextFact((fact) => fact.type === "ATTEMPT_DRAINED" && fact.generation === 1);
         await waitUntil(cdp, sessionId, `document.querySelector('[data-commit]')?.textContent===${JSON.stringify(eventSha)}&&document.querySelectorAll('[data-city] canvas').length===1`, fatal);
-        await flush(true);
+        await flush();
         invariant(workerTargets.size > 0, "smoke worker target was not observed");
+        observeProcessingBarrier("pre-detachment-processing-barrier");
         await waitForWorkerDetachment();
+        await flush();
+        observeProcessingBarrier("post-detachment-processing-barrier");
+        clearTransientCorrelation();
         invariant(trace.projected && trace.projected.length >= 1 && trace.rawFacts.length === trace.projected.length, "smoke tree/request cardinality mismatch");
         const expectedStages = ["revision", "commit", "tree", ...trace.projected.map(() => "raw")];
         invariant(trace.gets.length === expectedStages.length && trace.gets.every((item, index) => item.stage === expectedStages[index]), "smoke request sequence mismatch");
@@ -1947,7 +2008,6 @@ export async function createBrowserEvidenceSession({
           revision: trace.revision, rootTree: trace.rootTree, terminal: "success", canvasCount: 1,
           modelSha256: terminal.modelSha256, endedMs: cityPublished.atMs, providerGetCount: trace.gets.length,
         });
-        clearTransientCorrelation();
         mode = null;
         return progress;
       },
@@ -1998,9 +2058,12 @@ export async function createBrowserEvidenceSession({
         progress.noLaterRequest = true;
         emit("request-quiescent", 2);
         invariant(workerTargets.size > 0, "capacity worker target was not observed");
+        observeProcessingBarrier("pre-detachment-processing-barrier");
         await waitForWorkerDetachment();
         const finalUi = await evaluate(cdp, sessionId, capacityUiExpression("capacity-final-state"));
-        await flush(true);
+        await flush();
+        observeProcessingBarrier("post-detachment-processing-barrier");
+        clearTransientCorrelation();
         invariant(capacityUiIsClear(finalUi, qualification.revision)
           && capacityUiHasPresentation(finalUi) === progress.cityPresent,
         "stale publication after worker detachment");
@@ -2011,7 +2074,6 @@ export async function createBrowserEvidenceSession({
         progress.workerQuiescent = true;
         const workerQuiescent = emit("worker-quiescent", 2);
         progress.endedMs = workerQuiescent.atMs;
-        clearTransientCorrelation();
         mode = null;
         return progress;
       },
@@ -2021,6 +2083,10 @@ export async function createBrowserEvidenceSession({
           cdp.listeners.delete(listener);
           cdp.closeListeners?.delete(fatalListener);
           launched.child.off("exit", processExitListener);
+          if (mode) preserveProgressSnapshot(mode);
+          clearTransientCorrelation({ kind: "close-correlations-cleared", requireComplete: false,
+            suppressObserverError: true });
+          mode = null;
           const closeCommand = cdp.send("Browser.close").catch(() => {});
           cdp.close();
           if (!childIsTerminal(launched.child)) {

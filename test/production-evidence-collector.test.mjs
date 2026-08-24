@@ -1960,6 +1960,65 @@ test("post-closure parser assets accept every controlled ExtraInfo/request/respo
   assert.equal(executions, 10);
 });
 
+test("a provisional asset arriving after the pre-detachment barrier completes around detachment and passes", async () => {
+  const safeStates = [];
+  let opened;
+  let injected = false;
+  opened = await openFakeBrowser(fakeCdpHarness(), {
+    manifest: { files: [{ path: "assets/parser.js" }] },
+    browserOptions: {
+      validateSafeTransientState(state) {
+        safeStates.push(structuredClone(state));
+        if (state.kind !== "pre-detachment-processing-barrier" || injected) return;
+        injected = true;
+        const requestId = "post-flush-detachment-asset";
+        const url = `${PRODUCTION_ORIGIN}assets/parser.js`;
+        opened.harness.emit("Network.requestWillBeSentExtraInfo", {
+          requestId,
+          headers: new Proxy({}, { get() { throw new Error("late asset header read"); } }),
+          associatedCookies: new Proxy([], { get() { throw new Error("late asset cookie read"); } }),
+        }, "page-session");
+        opened.harness.emit("Network.responseReceived", { requestId, response: {
+          url, status: 200, headers: {}, fromDiskCache: false, fromServiceWorker: false,
+        } }, "page-session");
+        opened.harness.emit("Target.detachedFromTarget", {
+          sessionId: "worker-session", targetId: "worker-target",
+        }, "page-session");
+        opened.harness.emit("Network.requestWillBeSent", {
+          requestId, request: { url, method: "GET", headers: {} },
+        }, "page-session");
+        opened.harness.emit("Network.loadingFinished", {
+          requestId, encodedDataLength: 1,
+        }, "page-session");
+      },
+    },
+  });
+  const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+  await Promise.resolve();
+  await reachControlledProviderClosure(opened, "post-flush-pass");
+  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
+  }) });
+  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "ATTEMPT_DRAINED", generation: 1,
+  }) });
+
+  const smoke = await pending;
+  assert.equal(smoke.providerGetCount, 4);
+  assert.equal(injected, true);
+  assert(safeStates.some(({ kind, complete }) => kind === "pre-detachment-processing-barrier" && complete));
+  assert(safeStates.some(({ kind, marker }) => kind === "asset-extra-provisional"
+    && marker.ownerRole === "page" && marker.ownerSession === "page-session"));
+  assert(safeStates.some(({ kind, complete }) => kind === "post-detachment-processing-barrier" && complete));
+  assert(safeStates.some((state) => state.kind === "correlation-clear-snapshot"
+    && state.complete && state.provisionalCount === 0));
+  assert.deepEqual(safeStates.at(-1), {
+    kind: "correlations-cleared", generation: 1, correlationCount: 0,
+  });
+  assert(!JSON.stringify({ smoke, requestItems: opened.requestItems, safeStates }).includes("post-flush-detachment-asset"));
+  await opened.session.close();
+});
+
 test("post-closure provisional markers are exact, bounded, header-opaque, and cleared on success or failure", async () => {
   const manifest = { files: [{ path: "assets/parser.js" }] };
   {
@@ -2013,7 +2072,13 @@ test("post-closure provisional markers are exact, bounded, header-opaque, and cl
   }
 
   {
-    const opened = await openFakeBrowser(fakeCdpHarness(), { manifest });
+    const safeStates = [];
+    const opened = await openFakeBrowser(fakeCdpHarness(), {
+      manifest,
+      browserOptions: {
+        validateSafeTransientState(state) { safeStates.push(structuredClone(state)); },
+      },
+    });
     const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
     await Promise.resolve();
     await reachControlledProviderClosure(opened, "marker-bound");
@@ -2022,7 +2087,15 @@ test("post-closure provisional markers are exact, bounded, header-opaque, and cl
     }
     opened.harness.emit("Network.requestWillBeSentExtraInfo", { requestId: "marker-excess" }, "worker-session");
     await assert.rejects(pending, /correlation cardinality/u);
+    assert(safeStates.some((state) => state.kind === "correlation-clear-snapshot"
+      && state.complete === false && state.provisionalCount === 2 && state.opaqueOwnerCount === 2));
+    assert.deepEqual(safeStates.at(-1), {
+      kind: "fatal-correlations-cleared", generation: 1, correlationCount: 0,
+    });
     await opened.session.close().catch(() => {});
+    assert.deepEqual(safeStates.at(-1), {
+      kind: "close-correlations-cleared", generation: 0, correlationCount: 0,
+    });
   }
 });
 
@@ -2066,9 +2139,12 @@ test("post-closure provisional markers reject malformed, duplicate, unmatched, d
         requestId: "owner-ba", request: { url: `${PRODUCTION_ORIGIN}assets/parser.js`, method: "GET" },
       }, "worker-session");
     }],
-    ["unmatched", /correlation are incomplete/u, async (opened) => {
+    ["unmatched", /sequence has incomplete correlation/u, async (opened) => {
       opened.harness.emit("Network.requestWillBeSentExtraInfo", { requestId: "unmatched-marker" }, "worker-session");
       finishClosedControlledSmoke(opened);
+      opened.harness.emit("Target.detachedFromTarget", {
+        sessionId: "worker-second", targetId: "worker-second-target",
+      }, "page-session");
     }],
   ];
   for (const [name, pattern, drive] of cases) {
@@ -4288,7 +4364,9 @@ test("browser failure mapping reserves credential-header for literal credential 
     ["browser request headers, response, or asset correlation are incomplete", "request-sequence"],
     ["duplicate browser request correlation", "request-sequence"],
     ["browser request correlation cardinality differs", "request-sequence"],
+    ["browser request sequence has incomplete correlation", "request-sequence"],
     ["stale browser request correlation", "stale-publication"],
+    ["unexpected browser network session", "unexpected-request"],
   ];
   for (const [message, reason] of cases) {
     let stored;
@@ -4520,6 +4598,95 @@ test("post-detachment Network rejection produces a schema-valid handled packet w
     assert(!text.includes("private-detached-id"));
     assert(!text.includes("Bearer private"));
   }
+});
+
+test("a post-flush unmatched marker crosses the detachment barrier as request-sequence with zero retained state", async () => {
+  let stored;
+  const safeStates = [];
+  const privateRequestId = "post-flush-unmatched-private-marker";
+  const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
+  const fallbackBrowserFactory = seams.createBrowserEvidenceSession;
+  seams.createBrowserEvidenceSession = async (args) => {
+    const harness = fakeCdpHarness();
+    let injected = false;
+    const native = await createBrowserEvidenceSession({
+      ...args,
+      launchImpl: async () => ({ child: fakeChromeChild(), websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+      connectImpl: () => harness.cdp,
+      validateSafeTransientState(state) {
+        safeStates.push(structuredClone(state));
+        if (state.kind !== "pre-detachment-processing-barrier" || injected) return;
+        injected = true;
+        harness.emit("Network.requestWillBeSentExtraInfo", {
+          requestId: privateRequestId,
+          headers: new Proxy({}, { get() { throw new Error("unmatched asset header read"); } }),
+          associatedCookies: new Proxy([], { get() { throw new Error("unmatched asset cookie read"); } }),
+        }, "page-session");
+        harness.emit("Target.detachedFromTarget", {
+          sessionId: "worker-session", targetId: "worker-target",
+        }, "page-session");
+      },
+    });
+    const fallback = await fallbackBrowserFactory(args);
+    const driveSmoke = async () => {
+      await Promise.resolve();
+      emitCanonicalGeneratedStage(harness, "revision", "worker-session", "post-flush-unmatched-revision");
+      await waitForBodyCalls(harness, 1);
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+      }) });
+      for (const stage of ["commit", "tree", "raw"]) {
+        emitCanonicalGeneratedStage(harness, stage, "worker-session", `post-flush-unmatched-${stage}`);
+      }
+      await waitForBodyCalls(harness, 4);
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1,
+      }) });
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
+      }) });
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "ATTEMPT_DRAINED", generation: 1,
+      }) });
+    };
+    return Object.freeze({
+      cdpVersion: native.cdpVersion,
+      fatalSignal: native.fatalSignal,
+      snapshot: native.snapshot,
+      async collectSmoke(emit, startedMs) {
+        const pending = native.collectSmoke(emit, startedMs);
+        void driveSmoke();
+        return pending;
+      },
+      clearTrace: native.clearTrace,
+      collectCapacity: fallback.collectCapacity,
+      close: native.close,
+    });
+  };
+
+  const result = await collectProductionEvidence({
+    origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
+    output: path.resolve("post-flush-unmatched-marker"),
+  }, seams);
+  assert.deepEqual([result.status, result.reason], ["fail", "request-sequence"]);
+  assert(safeStates.some((state) => state.kind === "post-detachment-processing-barrier"
+    && state.complete === false && state.provisionalCount === 1 && state.opaqueOwnerCount === 1));
+  assert(safeStates.some((state) => state.kind === "correlation-clear-snapshot"
+    && state.complete === false && state.provisionalCount === 1));
+  assert(safeStates.some((state) => state.kind === "correlations-cleared"
+    && state.correlationCount === 0));
+  assert.deepEqual(safeStates.at(-1), {
+    kind: "close-correlations-cleared", generation: 1, correlationCount: 0,
+  });
+  const validated = validateEvidencePacket(stored.files, stored.binding);
+  const index = JSON.parse(new TextDecoder().decode(validated.files.get("index.json")));
+  const smoke = JSON.parse(new TextDecoder().decode(validated.files.get("smoke.json")));
+  assert.deepEqual([index.overallStatus, index.firstFailure], ["fail", "request-sequence"]);
+  assert.deepEqual([smoke.status, smoke.reason, smoke.data.providerGetCount], ["fail", "request-sequence", 4]);
+  for (const bytes of validated.files.values()) {
+    assert(!new TextDecoder().decode(bytes).includes(privateRequestId));
+  }
+  assert(!JSON.stringify(safeStates).includes(privateRequestId));
 });
 
 test("full collector orchestration correlates page preflight and GET ExtraInfo with worker GET lifecycle", async () => {
