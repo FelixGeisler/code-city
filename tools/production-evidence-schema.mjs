@@ -515,10 +515,11 @@ function validateRequests(envelope, payloads, overallPass, primaryReason) {
   validateGetBindings(capacityGets, payloads.capacity.data, payloads.capacity.data.candidates, REACT_URL,
     ["hash-mismatch", "content-invalid", "unexpected-request"].includes(capacityReason) ? 1 : 0);
   validateTerminalRawPrefix(items, capacityGets, payloads.capacity.data.candidates, capacityReason);
-  const passingGroups = [...(smokePass ? groups.smoke : []), ...(qualificationPass ? groups.qualification : []), ...(capacityPass ? groups.capacity : [])];
-  requireValue(passingGroups.every((item) => (item.method === "GET" ? item.status === 200 : item.status >= 200 && item.status <= 299)
-    && item.redirected === false && item.authorizationAbsent && item.cookieAbsent && item.refererAbsent));
-  for (const item of [...(smokePass ? groups.smoke : []), ...(capacityPass ? groups.capacity : [])]) requireValue(item.corsAllowOrigin !== null);
+  const qualificationMustHaveSucceeded = qualificationPass || capacityStarted;
+  const passingGroups = [...(smokePass ? groups.smoke : []), ...(capacityPass ? groups.capacity : [])];
+  requireSuccessfulExchanges(passingGroups);
+  for (const item of passingGroups) requireValue(item.corsAllowOrigin !== null);
+  if (qualificationMustHaveSucceeded) requireSuccessfulExchanges(groups.qualification, true);
   const phaseOverlaps = [groups.smoke, groups.qualification, groups.capacity].map((group) => maximumOverlap(group.filter((item) => item.method === "GET")));
   if (smokePass) requireValue(phaseOverlaps[0] <= 1);
   if (qualificationPass) requireValue(phaseOverlaps[1] <= 1);
@@ -573,7 +574,7 @@ function validateLifecycleImplications(payloads, requestInfo, events) {
         && JSON.stringify(qualification.candidates) === JSON.stringify(capacity.candidates));
       validateGetBindings(requestInfo.qualificationGets, qualification, null, REACT_URL);
       validateGetBindings(requestInfo.capacityGets, capacity, qualification.candidates, REACT_URL);
-      requireSuccessfulExchanges(requestInfo.groups.qualification);
+      requireSuccessfulExchanges(requestInfo.groups.qualification, true);
       requireSuccessfulExchanges(requestInfo.groups.capacity, true);
     }],
     ["revision-selected", 2, () => {
@@ -845,7 +846,12 @@ function validatePayloadSet(payloads, binding) {
   const capacityRevisionExchanges = requestInfo.groups.capacity.filter((item) => item.stage === "revision");
   const capacityInventoryExchanges = requestInfo.groups.capacity.filter((item) => item.stage === "commit" || item.stage === "tree");
   validateStageTimes(payloads.capacity.data, capacityStart, finalEvent, capacityRevisionSelected ?? finalEvent, workerQuiescent ?? finalEvent);
-  if (capacityStart) requireValue(payloads.capacity.data.repositoryUrl === REACT_URL);
+  if (capacityStart) {
+    requireValue(payloads.capacity.data.repositoryUrl === REACT_URL
+      && requestInfo.qualificationGets.length === 3
+      && requestInfo.groups.qualification.every((item) => item.endedMs <= capacityStart.atMs));
+    requireSuccessfulExchanges(requestInfo.groups.qualification, true);
+  }
   if (workerQuiescent) requireValue(payloads.capacity.data.workerQuiescent === true);
   if (payloads.capacity.status === "pass") requireValue(payloads.capacity.data.startedMs === capacityStart.atMs && payloads.capacity.data.endedMs === workerQuiescent.atMs);
   if (capacityRevisionSelected) {

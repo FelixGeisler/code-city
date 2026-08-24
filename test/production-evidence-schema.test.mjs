@@ -206,6 +206,21 @@ function postQualificationFailure() {
   return failureAuxiliary(payloads, "infrastructure-failure", failedEvents(11, 21), 1);
 }
 
+function nativeQualificationItems(payloads) {
+  return payloads.requests.data.items.filter((item) => !item.applicationCall
+    && item.requestedUrl.includes("/react/react/"));
+}
+
+function addNativePreflight(payloads, status = 204) {
+  const items = payloads.requests.data.items;
+  const getIndex = items.findIndex((item) => !item.applicationCall
+    && item.requestedUrl.includes("/react/react/") && item.method === "GET");
+  const options = structuredClone(items[getIndex]);
+  Object.assign(options, { method: "OPTIONS", status, endedMs: options.startedMs });
+  items.splice(getIndex, 0, options);
+  items.forEach((item, index) => { item.sequence = index + 1; });
+}
+
 test("packet v3 round-trips canonical bytes with exact parent binding and unchanged external wrapper v1", () => {
   const payloads = passingPayloads();
   const packet = createEvidencePacket(payloads, BINDING);
@@ -286,6 +301,65 @@ test("native-before-browser, shared-browser, and post-qualification failure stat
   expectInvalid(() => createEvidencePacket(prematurePass, BINDING));
   const blockedAfterComplete = postQualificationFailure(); blockedAfterComplete.capacity = envelope("capacity", "not-run", "blocked", empty(CAPACITY_KEYS, ["candidates"]));
   expectInvalid(() => createEvidencePacket(blockedAfterComplete, BINDING));
+});
+
+test("capacity-start and qualification-complete require exact completed successful native metadata transport", () => {
+  const mutations = [
+    ["GET status is exactly 200", (p) => { nativeQualificationItems(p)[0].status = 201; }],
+    ["OPTIONS status is 2xx", (p) => { addNativePreflight(p, 300); }],
+    ["response is not redirected", (p) => {
+      const item = nativeQualificationItems(p)[0];
+      item.finalUrl = revisionUrl("FelixGeisler/code-city"); item.redirected = true;
+    }],
+    ["authorization is absent", (p) => { nativeQualificationItems(p)[0].authorizationAbsent = false; }],
+    ["cookie is absent", (p) => { nativeQualificationItems(p)[0].cookieAbsent = false; }],
+    ["referer is absent", (p) => { nativeQualificationItems(p)[0].refererAbsent = false; }],
+    ["accepted CORS is present", (p) => {
+      const item = nativeQualificationItems(p)[0];
+      item.corsAllowOrigin = null; item.headerNames = item.headerNames.filter((name) => name !== "access-control-allow-origin");
+    }],
+    ["CORS origin is accepted", (p) => { nativeQualificationItems(p)[0].corsAllowOrigin = "https://example.com"; }],
+    ["exchange completed before capacity-start", (p) => { nativeQualificationItems(p).at(-1).endedMs = 8.0001; }],
+    ["all three GETs completed", (p) => {
+      const items = p.requests.data.items;
+      items.splice(items.indexOf(nativeQualificationItems(p)[1]), 1);
+      items.forEach((item, index) => { item.sequence = index + 1; });
+    }],
+  ];
+  for (const make of [sharedBrowserFailure, postQualificationFailure]) {
+    for (const [name, mutate] of mutations) {
+      const payloads = make(); mutate(payloads);
+      expectInvalid(() => createEvidencePacket(payloads, BINDING));
+    }
+  }
+  for (const make of [sharedBrowserFailure, postQualificationFailure]) {
+    const payloads = make(); addNativePreflight(payloads);
+    assert.doesNotThrow(() => createEvidencePacket(payloads, BINDING));
+  }
+});
+
+test("native transport failures retain the native-before-browser frontier", () => {
+  const cases = [
+    ["provider-failure", () => {}],
+    ["cors-failure", (item) => {
+      item.status = 200; item.corsAllowOrigin = null;
+      item.headerNames = item.headerNames.filter((name) => name !== "access-control-allow-origin");
+    }],
+    ["credential-header", (item) => { item.status = 200; item.authorizationAbsent = false; }],
+    ["credential-header", (item) => { item.status = 200; item.cookieAbsent = false; }],
+    ["credential-header", (item) => { item.status = 200; item.refererAbsent = false; }],
+  ];
+  for (const [reason, mutate] of cases) {
+    const payloads = nativeQualificationFailure();
+    const item = nativeQualificationItems(payloads)[0];
+    mutate(item);
+    payloads.qualification.reason = reason; payloads.requests.reason = reason; payloads.lifecycle.reason = reason;
+    assert.doesNotThrow(() => createEvidencePacket(payloads, BINDING));
+    assert.deepEqual([payloads.qualification.status, payloads.capacity.status], ["fail", "not-run"]);
+    assert.equal(event(payloads.lifecycle.data.events, "capacity-start", 2), undefined);
+    assert.equal(payloads.requests.data.items.some((value) => value.applicationCall
+      && value.requestedUrl.includes("/react/react/")), false);
+  }
 });
 
 test("qualification-complete is after candidate 4,001 projection and before the expected limit terminal", () => {

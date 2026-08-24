@@ -673,6 +673,8 @@ test("native qualification makes exactly three sequential metadata GETs and no r
     ["identity-mismatch", { commit: { body: JSON.stringify({ sha: EVENT, tree: { sha: REACT_ROOT } }) } }],
     ["identity-mismatch", { commit: { body: JSON.stringify({ sha: REACT }) } }],
     ["identity-mismatch", { tree: { body: JSON.stringify({ sha: ROOT, truncated: false, tree: NATIVE_ENTRIES }) } }],
+    ["provider-failure", { revision: { status: 500 } }],
+    ["provider-failure", { revision: { url: revisionUrl("FelixGeisler/code-city"), redirected: true } }],
     ["cors-failure", { revision: { headers: { "Content-Type": "application/json" } } }],
     ["tree-incomplete", { tree: { body: JSON.stringify({ sha: REACT_ROOT, truncated: true, tree: NATIVE_ENTRIES }) } }],
   ];
@@ -5384,6 +5386,7 @@ test("native CDP overlap and candidate-4,002 admission stops produce schema-vali
 
 test("native qualification classifiers stop before the browser and leave capacity not-run", async () => {
   const cases = [
+    ["provider-failure", { revision: { status: 500 } }],
     ["cors-failure", { revision: { headers: { "Content-Type": "application/json" } } }],
     ["identity-mismatch", { commit: { body: JSON.stringify({ sha: EVENT, tree: { sha: REACT_ROOT } }) } }],
     ["tree-incomplete", { tree: { body: JSON.stringify({ sha: REACT_ROOT, truncated: true, tree: NATIVE_ENTRIES }) } }],
