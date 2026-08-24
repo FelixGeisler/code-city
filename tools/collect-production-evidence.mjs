@@ -23,15 +23,15 @@ const JSON_DECODER = new TextDecoder("utf-8", { fatal: true });
 const SOURCE_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 export const PRODUCTION_ORIGIN = "https://felixgeisler.github.io/code-city/";
-export const PARENT_ISSUE_BODY_SHA256 = "f06369b3eef5e62631ee8f61ddfd7679b00a3d2139dd83a2f6472820e62864e6";
+export const PARENT_ISSUE_BODY_SHA256 = "06f08ca0144ffe9d5e162f3eb74c898b8b3a9e789832eae8c406f0fef55d0184";
 export const COLLECTOR_INVOCATION = Object.freeze([
   "node", "tools/collect-production-evidence.mjs", "--origin", "$ORIGIN",
   "--manifest", "$MANIFEST", "--output", "$OUTPUT",
 ]);
 const CODE_CITY_REPOSITORY = "FelixGeisler/code-city";
 const CODE_CITY_URL = "https://github.com/FelixGeisler/code-city";
-const REACT_REPOSITORY = "facebook/react";
-const REACT_URL = "https://github.com/facebook/react";
+const REACT_REPOSITORY = "react/react";
+const REACT_URL = "https://github.com/react/react";
 export const RESPONSE_CAPS = Object.freeze({
   revision: 1_048_576,
   deployment: 1_048_576,
@@ -2141,7 +2141,7 @@ export async function createBrowserEvidenceSession({
 }
 
 function envelope(kind, status, reason, data) {
-  return { schemaVersion: 1, kind, status, reason, data };
+  return { schemaVersion: 2, kind, status, reason, data };
 }
 
 function emptyData(keys, arrays = []) {
@@ -2220,9 +2220,9 @@ export async function deriveCollectorCommit({ execFileImpl = execFile } = {}) {
 
 function makeLifecycleData(state, status, reason, events = state.events) {
   const capacityStarted = eventAt(events, "capacity-start", 2) !== undefined;
-  const capacityItems = state.requestItems.filter((item) => item.applicationCall && item.requestedUrl.includes("/facebook/react/"));
+  const capacityItems = state.requestItems.filter((item) => item.applicationCall && item.requestedUrl.includes("/react/react/"));
   return {
-    collectorVersion: 1,
+    collectorVersion: 2,
     collectorCommit: state.collectorCommit,
     invocation: state.invocation,
     nodeVersion: state.nodeVersion,
@@ -2240,7 +2240,7 @@ function makeLifecycleData(state, status, reason, events = state.events) {
 
 function passingPayloads(state) {
   const capacityGets = state.requestItems.filter((item) => item.applicationCall && item.method === "GET"
-    && item.requestedUrl.includes("/facebook/react/"));
+    && item.requestedUrl.includes("/react/react/"));
   const overlap = maximumOverlap(capacityGets);
   state.capacity.maxOverlap = overlap;
   return {
@@ -2275,7 +2275,7 @@ function failurePayloads(state, failure) {
   if (eventAt(events, "capacity-start", 2)) {
     capacityFail.repositoryUrl ??= REACT_URL;
     const capacityGets = state.requestItems.filter((item) => item.applicationCall && item.method === "GET"
-      && item.requestedUrl.includes("/facebook/react/"));
+      && item.requestedUrl.includes("/react/react/"));
     capacityFail.rawRequestCount = capacityGets.filter((item) => item.stage === "raw").length;
     capacityFail.maxOverlap = maximumOverlap(capacityGets);
     capacityFail.candidates ??= [];
