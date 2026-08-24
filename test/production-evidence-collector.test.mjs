@@ -1327,6 +1327,12 @@ function deferredValue() {
   return { promise, resolve };
 }
 
+function deterministicPermutations(values) {
+  if (values.length <= 1) return [values];
+  return values.flatMap((value, index) => deterministicPermutations(values.filter((_, item) => item !== index))
+    .map((suffix) => [value, ...suffix]));
+}
+
 function emitBrowserBytes(harness, { requestId, url, bytes, sessionId = "worker-session" }) {
   harness.bodies.set(requestId, { body: Buffer.from(bytes).toString("base64"), base64Encoded: true });
   harness.emit("Network.requestWillBeSent", { requestId, request: { url, method: "GET", headers: {} } }, sessionId);
@@ -2080,6 +2086,191 @@ test("a valid pre-selection failure settles typed readiness, drains, detaches, a
   assert.deepEqual(emitted, []);
   assert.equal(opened.harness.bodyCalls, 0);
   await opened.session.close();
+});
+
+test("completed revision semantics reject a later no-revision terminal before selected binding publication", async () => {
+  const opened = await openFakeBrowser();
+  const emitted = [];
+  const pending = opened.session.collectSmoke((event) => {
+    emitted.push(event);
+    return { atMs: emitted.length };
+  }, 0);
+  void pending.catch(() => {});
+  await Promise.resolve();
+  emitBrowserGet(opened.harness, {
+    requestId: "semantic-before-unavailable", url: revisionUrl("FelixGeisler/code-city"),
+    body: JSON.stringify([{ sha: EVENT }]),
+  });
+  await waitForBodyCalls(opened.harness, 1);
+  assert.equal(opened.requestItems.length, 1);
+  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "FAILURE", generation: 1, category: "Provider/resolution failure",
+  }) });
+  await assert.rejects(pending, /pre-selection terminal conflicts with revision readiness/u);
+  assert.equal(opened.session.fatalSignal.aborted, true);
+  assert.deepEqual(emitted, []);
+  await opened.session.close().catch(() => {});
+});
+
+test("a selected binding pending semantic publication rejects a no-revision terminal", async () => {
+  const projectionGate = deferredValue();
+  let revisionProjectionEntered = false;
+  const opened = await openFakeBrowser(fakeCdpHarness(), {
+    browserOptions: {
+      async beforeProviderProjection({ stage }) {
+        if (stage === "revision") {
+          revisionProjectionEntered = true;
+          await projectionGate.promise;
+        }
+      },
+    },
+  });
+  const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+  void pending.catch(() => {});
+  await Promise.resolve();
+  emitBrowserGet(opened.harness, {
+    requestId: "binding-before-unavailable", url: revisionUrl("FelixGeisler/code-city"),
+    body: JSON.stringify([{ sha: EVENT }]),
+  });
+  await waitForBodyCalls(opened.harness, 1);
+  assert.equal(revisionProjectionEntered, true);
+  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+  }) });
+  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "FAILURE", generation: 1, category: "Provider/resolution failure",
+  }) });
+  await assert.rejects(pending, /pre-selection terminal conflicts with revision readiness/u);
+  assert.equal(opened.session.fatalSignal.aborted, true);
+  projectionGate.resolve();
+  await opened.session.close().catch(() => {});
+});
+
+test("provider-drained requires selected evidence and rejects a no-revision terminal", async () => {
+  for (const selectedEvidence of [false, true]) {
+    const opened = await openFakeBrowser();
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    void pending.catch(() => {});
+    await Promise.resolve();
+    if (selectedEvidence) opened.harness.emit("Runtime.bindingCalled", {
+      name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+      }),
+    });
+    opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1,
+    }) });
+    if (selectedEvidence) opened.harness.emit("Runtime.bindingCalled", {
+      name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "FAILURE", generation: 1, category: "Provider/resolution failure",
+      }),
+    });
+    await assert.rejects(pending, selectedEvidence
+      ? /pre-selection terminal conflicts with revision readiness/u
+      : /provider-drained preceded revision selection/u);
+    assert.equal(opened.session.fatalSignal.aborted, true);
+    await opened.session.close().catch(() => {});
+  }
+});
+
+test("a no-revision settlement rejects late revision completion or selection", async () => {
+  {
+    const opened = await openFakeBrowser();
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    void pending.catch(() => {});
+    await Promise.resolve();
+    opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "FAILURE", generation: 1, category: "Provider/resolution failure",
+    }) });
+    opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+    }) });
+    await assert.rejects(pending, /duplicate or conflicting revision selection/u);
+    assert.equal(opened.session.fatalSignal.aborted, true);
+    await opened.session.close().catch(() => {});
+  }
+
+  {
+    const projectionGate = deferredValue();
+    let revisionProjectionEntered = false;
+    const opened = await openFakeBrowser(fakeCdpHarness(), {
+      browserOptions: {
+        async beforeProviderProjection({ stage }) {
+          if (stage === "revision") {
+            revisionProjectionEntered = true;
+            await projectionGate.promise;
+          }
+        },
+      },
+    });
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    void pending.catch(() => {});
+    await Promise.resolve();
+    emitBrowserGet(opened.harness, {
+      requestId: "unavailable-before-semantic", url: revisionUrl("FelixGeisler/code-city"),
+      body: JSON.stringify([{ sha: EVENT }]),
+    });
+    await waitForBodyCalls(opened.harness, 1);
+    assert.equal(revisionProjectionEntered, true);
+    opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "FAILURE", generation: 1, category: "Provider/resolution failure",
+    }) });
+    projectionGate.resolve();
+    await assert.rejects(pending, /revision readiness settlement conflicts/u);
+    assert.equal(opened.session.fatalSignal.aborted, true);
+    await opened.session.close().catch(() => {});
+  }
+});
+
+test("revision readiness conflicts fail for every deterministic semantic, binding, drain, and no-revision permutation", async () => {
+  const orders = deterministicPermutations(["semantic", "binding", "provider-drained", "no-revision"]);
+  assert.equal(orders.length, 24);
+  for (const [index, order] of orders.entries()) {
+    const projectionGate = deferredValue();
+    let revisionProjectionEntered = false;
+    const opened = await openFakeBrowser(fakeCdpHarness(), {
+      browserOptions: {
+        async beforeProviderProjection({ stage }) {
+          if (stage === "revision") {
+            revisionProjectionEntered = true;
+            await projectionGate.promise;
+          }
+        },
+      },
+    });
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    void pending.catch(() => {});
+    await Promise.resolve();
+    emitBrowserGet(opened.harness, {
+      requestId: `readiness-permutation-${index}`, url: revisionUrl("FelixGeisler/code-city"),
+      body: JSON.stringify([{ sha: EVENT }]),
+    });
+    await waitForBodyCalls(opened.harness, 1);
+    assert.equal(revisionProjectionEntered, true, order.join(" -> "));
+    let semanticReleased = false;
+    for (const action of order) {
+      if (opened.session.fatalSignal.aborted) break;
+      if (action === "semantic") {
+        projectionGate.resolve();
+        semanticReleased = true;
+      } else {
+        const fact = action === "binding"
+          ? { type: "REVISION_SELECTED", generation: 1, revision: EVENT }
+          : action === "provider-drained"
+            ? { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 }
+            : { type: "FAILURE", generation: 1, category: "Provider/resolution failure" };
+        opened.harness.emit("Runtime.bindingCalled", {
+          name: "__codeCityCollectorEvidence", payload: JSON.stringify(fact),
+        });
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    if (!semanticReleased) projectionGate.resolve();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(opened.session.fatalSignal.aborted, true, order.join(" -> "));
+    await assert.rejects(pending, order.join(" -> "));
+    await opened.session.close().catch(() => {});
+  }
 });
 
 test("exact post-selection failure shapes close the admitted frontier and mismatches reject", async () => {

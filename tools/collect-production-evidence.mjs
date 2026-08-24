@@ -941,6 +941,21 @@ export async function createBrowserEvidenceSession({
       void result.promise.catch(() => {});
       return result;
     }
+    function revisionReadinessResult() {
+      return Object.assign(deferredResult(), { state: "pending", value: null });
+    }
+    function settleRevisionReadiness(current, readiness) {
+      invariant(mode === current && current.revisionReadiness.state === "pending"
+        && !current.revisionReadiness.settled,
+      "revision readiness settlement conflicts");
+      const state = readiness.type === "selected-revision" ? "selected"
+        : readiness.type === "selection-unavailable" ? "unavailable" : null;
+      invariant(state, "revision readiness settlement conflicts");
+      current.revisionReadiness.state = state;
+      current.revisionReadiness.value = readiness;
+      invariant(settleDeferred(current.revisionReadiness, "resolve", readiness),
+        "revision readiness settlement conflicts");
+    }
     function setFatal(error) {
       if (fatal.value) return;
       fatal.value = error instanceof Error ? error : new Error("browser observation failed");
@@ -1038,7 +1053,7 @@ export async function createBrowserEvidenceSession({
         invariant(fact.revision === current.selectedFact.revision,
           "browser terminal revision differs from selected revision");
       } else {
-        invariant(fact.type === "FAILURE" && current.selectionUnavailable,
+        invariant(fact.type === "FAILURE" && current.revisionReadiness.state === "unavailable",
           "pre-selection terminal differs");
       }
       flushCausalMilestones(current);
@@ -1113,7 +1128,7 @@ export async function createBrowserEvidenceSession({
       invariant(mode === current && semanticFact.generation === current.generation
         && semanticFact.revision === current.revision && Number.isSafeInteger(current.stageEndMs.revision),
       "revision semantic readiness differs");
-      settleDeferred(current.revisionReadiness, "resolve", semanticFact);
+      settleRevisionReadiness(current, semanticFact);
     }
     function handleProjectedFact(fact) {
       factReceiptTimes.set(fact, now());
@@ -1124,8 +1139,9 @@ export async function createBrowserEvidenceSession({
       }
       try {
         if (fact.type === "REVISION_SELECTED") {
-          invariant(!current.pendingSelection && !current.selectedFact && !current.selectionUnavailable,
-            "duplicate or conflicting revision selection");
+          invariant(!current.pendingSelection && !current.selectedFact
+            && current.revisionReadiness.state !== "unavailable",
+          "duplicate or conflicting revision selection");
           current.pendingSelection = fact;
           void current.revisionReadiness.promise.then((readiness) => {
             if (fatal.value || mode !== current) return;
@@ -1140,6 +1156,9 @@ export async function createBrowserEvidenceSession({
           return;
         }
         if (fact.type === "PROVIDER_DRAINED_STATIC_ENTERED") {
+          invariant(current.revisionReadiness.state === "selected"
+            || current.pendingSelection || current.selectedFact,
+          "provider-drained preceded revision selection");
           closeProviderAdmission(current, "provider-drained");
           return;
         }
@@ -1153,14 +1172,17 @@ export async function createBrowserEvidenceSession({
           }
           const hasRevision = Object.hasOwn(fact, "revision");
           if (!hasRevision) {
-            invariant(fact.type === "FAILURE" && !current.pendingSelection && !current.selectedFact,
-              "pre-selection terminal conflicts with revision selection");
-            current.selectionUnavailable = true;
+            invariant(fact.type === "FAILURE"
+              && current.revisionReadiness.state === "pending"
+              && current.revision === null && !Number.isSafeInteger(current.stageEndMs.revision)
+              && !current.pendingSelection && !current.selectedFact && !current.providerClosure,
+            "pre-selection terminal conflicts with revision readiness");
             const unavailable = Object.freeze({
               type: "selection-unavailable", generation: current.generation, category: fact.category,
             });
-            settleDeferred(current.revisionReadiness, "resolve", unavailable);
-            settleDeferred(current.selectionResult, "resolve", unavailable);
+            settleRevisionReadiness(current, unavailable);
+            invariant(settleDeferred(current.selectionResult, "resolve", unavailable),
+              "revision selection settlement conflicts");
           } else {
             const selected = current.selectedFact ?? current.pendingSelection;
             invariant(selected && selected.revision === fact.revision,
@@ -1789,8 +1811,8 @@ export async function createBrowserEvidenceSession({
         repository, generation, progress, gets: [], rawFacts: progress.candidates ?? [], aggregate: 0,
         revision: null, rootTree: null, projected: null, treeEntries: null, admittedGets: 0,
         wireGet: null, openExchange: null, exchanges: [], nextSemanticIndex: 0,
-        pendingSelection: null, selectedFact: null, selectionUnavailable: false,
-        revisionReadiness: deferredResult(), selectionResult: deferredResult(), terminalResult: deferredResult(),
+        pendingSelection: null, selectedFact: null,
+        revisionReadiness: revisionReadinessResult(), selectionResult: deferredResult(), terminalResult: deferredResult(),
         pendingTerminal: null, firstTerminal: null, pendingDrain: null, firstDrain: null,
         providerClosure: null, providerAdmissionClosed: false,
         derivedProviderGets: null, expectedProviderGets: null, workerDetachedReceipt: false,
