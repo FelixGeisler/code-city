@@ -56,6 +56,10 @@ function invariant(condition, message = "collector invariant failed") {
   if (!condition) throw new Error(message);
 }
 
+export function validObservedMs(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && !Object.is(value, -0);
+}
+
 function childIsTerminal(child) {
   return [child.exitCode, child.signalCode].some((value) => value !== null && value !== undefined);
 }
@@ -1012,14 +1016,14 @@ export async function createBrowserEvidenceSession({
           milestone.causalAtMs, current.lastPublishedFactAtMs, current.lastPublishedLifecycleAtMs,
         );
         const published = milestone.publish(observedAtMs);
-        invariant(published && Number.isSafeInteger(published.atMs), "causal lifecycle milestone differs");
+        invariant(published && validObservedMs(published.atMs), "causal lifecycle milestone differs");
         current.lastPublishedLifecycleAtMs = Math.max(observedAtMs, published.atMs);
         current.publishedCausalMilestones.add(milestone.key);
         current.causalMilestones.shift();
       }
     }
     function recordCausalMilestone(current, key, causalAtMs, publish) {
-      invariant(mode === current && Number.isSafeInteger(causalAtMs)
+      invariant(mode === current && validObservedMs(causalAtMs)
         && !current.publishedCausalMilestones.has(key)
         && !current.causalMilestones.some((milestone) => milestone.key === key),
       "causal lifecycle milestone differs");
@@ -1028,7 +1032,7 @@ export async function createBrowserEvidenceSession({
     }
     function openCausalMilestones(current, priorLifecycle) {
       invariant(mode === current && current.selectedFact && !current.causalMilestonesOpen
-        && priorLifecycle && Number.isSafeInteger(priorLifecycle.atMs),
+        && priorLifecycle && validObservedMs(priorLifecycle.atMs),
       "causal lifecycle milestone differs");
       current.lastPublishedLifecycleAtMs = priorLifecycle.atMs;
       current.causalMilestonesOpen = true;
@@ -1126,7 +1130,7 @@ export async function createBrowserEvidenceSession({
     }
     function resolveRevisionReadiness(current, semanticFact) {
       invariant(mode === current && semanticFact.generation === current.generation
-        && semanticFact.revision === current.revision && Number.isSafeInteger(current.stageEndMs.revision),
+        && semanticFact.revision === current.revision && validObservedMs(current.stageEndMs.revision),
       "revision semantic readiness differs");
       settleRevisionReadiness(current, semanticFact);
     }
@@ -1174,7 +1178,7 @@ export async function createBrowserEvidenceSession({
           if (!hasRevision) {
             invariant(fact.type === "FAILURE"
               && current.revisionReadiness.state === "pending"
-              && current.revision === null && !Number.isSafeInteger(current.stageEndMs.revision)
+              && current.revision === null && !validObservedMs(current.stageEndMs.revision)
               && !current.pendingSelection && !current.selectedFact && !current.providerClosure,
             "pre-selection terminal conflicts with revision readiness");
             const unavailable = Object.freeze({
