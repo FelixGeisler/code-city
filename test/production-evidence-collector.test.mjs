@@ -4823,6 +4823,7 @@ test("installed Chrome 151 split-session gate", {
     && (url.startsWith("https://api.github.com/repos/FelixGeisler/code-city/")
       || url.startsWith("https://raw.githubusercontent.com/FelixGeisler/code-city/"));
   let session;
+  let wrappedCdp;
   let tick = 0;
   try {
     session = await createBrowserEvidenceSession({
@@ -4849,7 +4850,7 @@ test("installed Chrome 151 split-session gate", {
           }
           if (message.method === "Network.loadingFinished" && requestId === firstProviderId) firstFinished = true;
         });
-        return Object.freeze({
+        wrappedCdp = Object.freeze({
           listeners: native.listeners,
           closeListeners: native.closeListeners,
           async send(method, params = {}, sessionId) {
@@ -4872,11 +4873,16 @@ test("installed Chrome 151 split-session gate", {
           },
           close: native.close,
         });
+        return wrappedCdp;
       },
     });
     const smoke = await session.collectSmoke((_event, _generation, observedAtMs) => ({
       atMs: observedAtMs ?? ++tick,
     }), 0);
+    assert(wrappedCdp && pageSessionId);
+    await wrappedCdp.send("Runtime.evaluate", {
+      expression: "true", returnByValue: true, awaitPromise: true,
+    }, pageSessionId);
 
     const providerGetObservations = observations.filter((item) => item.method === "Network.requestWillBeSent"
       && item.sessionId !== pageSessionId && providerUrl(item.url));
@@ -4887,8 +4893,10 @@ test("installed Chrome 151 split-session gate", {
       && item.sessionId === pageSessionId && providerIds.has(item.requestId)).length;
     const ignoredResponseExtraInfoCount = observations.filter((item) =>
       item.method === "Network.responseReceivedExtraInfo" && item.sessionId === pageSessionId).length;
-    const ignoredPolicyCount = observations.filter((item) =>
+    const observedPolicyCount = observations.filter((item) =>
       item.method === "Network.policyUpdated" && item.sessionId === pageSessionId).length;
+    assert(observedPolicyCount > 0);
+    const ignoredPolicyCount = Math.min(observedPolicyCount, 1);
 
     const allowedAssetUrls = new Set([
       PRODUCTION_ORIGIN,
@@ -4956,7 +4964,7 @@ test("installed Chrome 151 split-session gate", {
     assert.equal(bodyRetrievalCount, providerGetCount);
     assert.equal(pageGetExtraInfoCount, providerGetCount);
     assert(ignoredResponseExtraInfoCount >= pageOptionsCount + pageGetExtraInfoCount);
-    assert(ignoredPolicyCount > 0);
+    assert.equal(evidence.ignoredPolicyCount, 1);
     assert(evidence.ignoredAssetCount > 0);
     for (const key of ["firstGetFinishedBeforeSecondStarted", "firstBodyReleasedAfterSecondStarted", "strictRecordOrder", "noPersistedTransientData", "pass"]) {
       assert.equal(evidence[key], true, key);
