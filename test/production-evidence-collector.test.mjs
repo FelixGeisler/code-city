@@ -51,6 +51,45 @@ const REACT = "c".repeat(40);
 const REACT_ROOT = "d".repeat(40);
 const BLOB = "e".repeat(40);
 const CSP = "default-src 'none'; base-uri 'none'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; form-action 'none'; frame-src 'none'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; worker-src 'self'";
+const PRE_SELECTION_FAILURE_CATEGORIES = [
+  "Repository unavailable for anonymous access", "Revision unavailable", "Provider/resolution failure",
+];
+const POST_SELECTION_FAILURE_CATEGORIES = [
+  "Provider/resolution failure", "Repository exceeds Code City limits",
+];
+const CODED_FAILURE_COMBINATIONS = new Map([
+  ["No supported modules", ["ADM-06", "ADM-07"]],
+  ["Source admission failed", ["M1-ADM-1", "M1-ADM-3", "M1-ADM-4"]],
+  ["Metric processing failed", ["M1-MET-1"]],
+  ["City construction failed", ["M1-CITY-1"]],
+]);
+const ALL_FAILURE_CATEGORIES = [
+  ...new Set([
+    ...PRE_SELECTION_FAILURE_CATEGORIES, ...POST_SELECTION_FAILURE_CATEGORIES,
+    ...CODED_FAILURE_COMBINATIONS.keys(), "unsupported category",
+  ]),
+];
+const ALL_FAILURE_CODES = [
+  ...new Set([...CODED_FAILURE_COMBINATIONS.values()].flat()), "unsupported-code",
+];
+
+function failureShapeCases() {
+  return [
+    ...ALL_FAILURE_CATEGORIES.map((category) => ({
+      name: `pre/${category}`, valid: PRE_SELECTION_FAILURE_CATEGORIES.includes(category),
+      message: { type: "FAILURE", generation: 1, category },
+    })),
+    ...ALL_FAILURE_CATEGORIES.map((category) => ({
+      name: `post-uncoded/${category}`, valid: POST_SELECTION_FAILURE_CATEGORIES.includes(category),
+      message: { type: "FAILURE", generation: 1, revision: EVENT, category },
+    })),
+    ...ALL_FAILURE_CATEGORIES.flatMap((category) => ALL_FAILURE_CODES.map((code) => ({
+      name: `post-coded/${category}/${code}`,
+      valid: CODED_FAILURE_COMBINATIONS.get(category)?.includes(code) === true,
+      message: { type: "FAILURE", generation: 1, revision: EVENT, category, code },
+    }))),
+  ];
+}
 
 function response(body, { status = 200, url, headers = {}, redirected = false } = {}) {
   const value = new Response(body, { status, headers });
@@ -378,6 +417,62 @@ test("page-side Worker observer closes original selection, success, and capacity
   assert(emitted.slice(3).every((payload) => payload === '{"malformed":true}'));
   assert.deepEqual(delivered, dispatched);
   assert(delivered.every((event, index) => event.data === dispatched[index].data));
+});
+
+test("worker observer mirrors the authoritative failure category/code cross-product", () => {
+  const emitted = [];
+  class FakeWorker {
+    constructor() { this.listeners = []; }
+    addEventListener(type, listener) { this.listeners.push({ type, listener }); }
+    dispatch(message) {
+      for (const item of this.listeners) if (item.type === "message") item.listener.call(this, { data: message });
+    }
+  }
+  const context = {
+    Worker: FakeWorker,
+    __codeCityCollectorEvidence: (value) => emitted.push(value),
+    ArrayBuffer, Uint8Array, Uint32Array, Number, Object, Reflect, Set, Map, TypeError, JSON,
+  };
+  vm.runInNewContext(createWorkerObserverSource(), context);
+  const worker = new context.Worker("worker.js");
+  const cases = failureShapeCases();
+  for (const { message } of cases) worker.dispatch(message);
+  assert.equal(emitted.length, cases.length);
+  for (const [index, scenario] of cases.entries()) {
+    assert.equal(emitted[index], scenario.valid ? JSON.stringify(scenario.message) : '{"malformed":true}', scenario.name);
+  }
+});
+
+test("collector projection rejects every unsupported failure shape/category/code cross-product", async () => {
+  for (const scenario of failureShapeCases().filter(({ valid }) => !valid)) {
+    const opened = await openFakeBrowser();
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    opened.harness.emit("Runtime.bindingCalled", {
+      name: "__codeCityCollectorEvidence", payload: JSON.stringify(scenario.message),
+    });
+    await assert.rejects(pending, /worker terminal is malformed/u, scenario.name);
+    await opened.session.close().catch(() => {});
+  }
+});
+
+test("collector projection accepts every authoritative failure combination before duplicate rejection", async () => {
+  for (const scenario of failureShapeCases().filter(({ valid }) => valid)) {
+    const opened = await openFakeBrowser();
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    if (Object.hasOwn(scenario.message, "revision")) opened.harness.emit("Runtime.bindingCalled", {
+      name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+      }),
+    });
+    for (let receipt = 0; receipt < 2; receipt += 1) opened.harness.emit("Runtime.bindingCalled", {
+      name: "__codeCityCollectorEvidence", payload: JSON.stringify(scenario.message),
+    });
+    await assert.rejects(pending,
+      scenario.message.category === "Repository exceeds Code City limits"
+        ? /browser provider frontier cardinality differs/u : /duplicate browser terminal/u,
+      scenario.name);
+    await opened.session.close().catch(() => {});
+  }
 });
 
 test("Chrome discovery excludes LOCALAPPDATA and launch uses exactly the approved flags", async () => {
@@ -1216,6 +1311,7 @@ async function waitForBodyCalls(harness, expected) {
     await new Promise((resolve) => setImmediate(resolve));
   }
   assert.equal(harness.bodyCalls, expected);
+  await new Promise((resolve) => setImmediate(resolve));
 }
 
 function deferredValue() {
@@ -1843,7 +1939,7 @@ test("asset and role correlation rejects malformed, ambiguous, reused, unmatched
         requestId: "unmatched-asset", request: { url: `${PRODUCTION_ORIGIN}assets/main.js`, method: "GET", headers: {} },
       }, "page-session");
       opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
-        type: "FAILURE", generation: 1, category: "Provider request failed",
+        type: "FAILURE", generation: 1, category: "Provider/resolution failure",
       }) });
       opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
         type: "ATTEMPT_DRAINED", generation: 1,
@@ -1858,7 +1954,7 @@ test("asset and role correlation rejects malformed, ambiguous, reused, unmatched
       } }, "worker-session");
       opened.harness.emit("Network.loadingFinished", { requestId: "orphan-bootstrap", encodedDataLength: 1 }, "worker-session");
       opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
-        type: "FAILURE", generation: 1, category: "Provider request failed",
+        type: "FAILURE", generation: 1, category: "Provider/resolution failure",
       }) });
       opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
         type: "ATTEMPT_DRAINED", generation: 1,
@@ -1963,7 +2059,7 @@ test("a valid pre-selection failure settles typed readiness, drains, detaches, a
   }, 0);
   await Promise.resolve();
   opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
-    type: "FAILURE", generation: 1, category: "Provider request failed",
+    type: "FAILURE", generation: 1, category: "Provider/resolution failure",
   }) });
   opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
     type: "ATTEMPT_DRAINED", generation: 1,
@@ -1973,7 +2069,7 @@ test("a valid pre-selection failure settles typed readiness, drains, detaches, a
   }, "page-session");
   await assert.rejects(Promise.race([
     pending, new Promise((_, reject) => setTimeout(() => reject(new Error("pre-selection failure hung")), 100)),
-  ]), /smoke pre-selection failure: Provider request failed/u);
+  ]), /smoke pre-selection failure: Provider\/resolution failure/u);
   assert.deepEqual(emitted, []);
   assert.equal(opened.harness.bodyCalls, 0);
   await opened.session.close();
@@ -1994,10 +2090,9 @@ test("exact post-selection failure shapes close the admitted frontier and mismat
       type: "REVISION_SELECTED", generation: 1, revision: EVENT,
     }) });
     await new Promise((resolve) => setImmediate(resolve));
-    const terminal = {
-      type: "FAILURE", generation: 1, revision: EVENT, category: "Provider request failed",
-      ...(coded ? { code: "provider-failure" } : {}),
-    };
+    const terminal = coded
+      ? { type: "FAILURE", generation: 1, revision: EVENT, category: "Source admission failed", code: "M1-ADM-1" }
+      : { type: "FAILURE", generation: 1, revision: EVENT, category: "Provider/resolution failure" };
     opened.harness.emit("Runtime.bindingCalled", {
       name: "__codeCityCollectorEvidence", payload: JSON.stringify(terminal),
     });
@@ -2024,7 +2119,7 @@ test("exact post-selection failure shapes close the admitted frontier and mismat
     type: "REVISION_SELECTED", generation: 1, revision: EVENT,
   }) });
   mismatched.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
-    type: "FAILURE", generation: 1, revision: "9".repeat(40), category: "Provider request failed",
+    type: "FAILURE", generation: 1, revision: "9".repeat(40), category: "Provider/resolution failure",
   }) });
   await assert.rejects(mismatchPending, /terminal revision differs/u);
   await mismatched.session.close().catch(() => {});
@@ -2042,7 +2137,7 @@ test("an admitted revision loading failure remains fatal before a matching no-re
   }, "worker-session");
   opened.harness.emit("Network.loadingFailed", { requestId: "failed-revision" }, "worker-session");
   opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
-    type: "FAILURE", generation: 1, category: "Provider request failed",
+    type: "FAILURE", generation: 1, category: "Provider/resolution failure",
   }) });
   await assert.rejects(pending, /browser request failed/u);
   assert.equal(opened.harness.bodyCalls, 0);
@@ -2097,6 +2192,92 @@ test("terminal and drain publication wait for the fixed provider frontier after 
   const smoke = await pending;
   assert.equal(smoke.providerGetCount, 4);
   assert.deepEqual(emitted.map(({ event }) => event), ["revision-selected", "city-published"]);
+  await opened.session.close();
+});
+
+test("captured provider bodies allow a late page fragment to complete after worker detachment", async () => {
+  let detached = false;
+  const safeStates = [];
+  const harness = fakeCdpHarness({
+    async bodyImpl({ value }) {
+      if (detached) throw new Error("detached worker body command");
+      return value;
+    },
+  });
+  const opened = await openFakeBrowser(harness, {
+    browserOptions: {
+      validateSafeTransientState(state) { safeStates.push(structuredClone(state)); },
+    },
+  });
+  const emitted = [];
+  const pending = opened.session.collectSmoke((event, generation, atMs) => {
+    const value = { event, generation, atMs: atMs ?? emitted.length + 1 };
+    emitted.push(value);
+    return value;
+  }, 0);
+  await Promise.resolve();
+  for (let attempts = 0; !harness.calls.some(({ method, sessionId }) => (
+    method === "Runtime.runIfWaitingForDebugger" && sessionId === "worker-session"
+  )); attempts += 1) {
+    assert(attempts < 20);
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
+  const fixtures = ["revision", "commit", "tree", "raw"].map(generatedStageFixture);
+  for (const [index, fixture] of fixtures.entries()) {
+    const requestId = `detached-late-extra-${index}`;
+    harness.bodies.set(requestId, fixture.body);
+    harness.emit("Network.requestWillBeSent", {
+      requestId, request: { url: fixture.url, method: "GET", headers: {} },
+    }, "worker-session");
+    if (index > 0) harness.emit("Network.requestWillBeSentExtraInfo", {
+      requestId, headers: {}, associatedCookies: [],
+    }, "page-session");
+    harness.emit("Network.responseReceived", { requestId, response: {
+      url: fixture.url, status: 200,
+      headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" },
+      fromDiskCache: false, fromServiceWorker: false,
+    } }, "worker-session");
+    harness.emit("Network.loadingFinished", {
+      requestId, encodedDataLength: new TextEncoder().encode(fixture.body).byteLength,
+    }, "worker-session");
+  }
+  await waitForBodyCalls(harness, 4);
+  assert.equal(harness.calls.filter(({ method }) => method === "Network.getResponseBody").length, 4);
+  assert(harness.calls.filter(({ method }) => method === "Network.getResponseBody")
+    .every(({ sessionId }) => sessionId === "worker-session"));
+
+  for (const fact of [
+    { type: "REVISION_SELECTED", generation: 1, revision: EVENT },
+    { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 },
+    { type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64) },
+    { type: "ATTEMPT_DRAINED", generation: 1 },
+  ]) harness.emit("Runtime.bindingCalled", {
+    name: "__codeCityCollectorEvidence", payload: JSON.stringify(fact),
+  });
+  detached = true;
+  harness.emit("Target.detachedFromTarget", {
+    sessionId: "worker-session", targetId: "worker-target",
+  }, "page-session");
+  const detachIndex = harness.activity.length - 1;
+  assert.deepEqual(emitted, []);
+
+  harness.emit("Network.requestWillBeSentExtraInfo", {
+    requestId: "detached-late-extra-0", headers: {}, associatedCookies: [],
+  }, "page-session");
+  const smoke = await pending;
+  assert.equal(smoke.providerGetCount, 4);
+  assert.deepEqual(emitted.map(({ event }) => event), ["revision-selected", "city-published"]);
+  assert.equal(harness.bodyCalls, 4);
+  assert.deepEqual(harness.activity.slice(detachIndex + 1).filter(({ type, sessionId }) => (
+    type === "send" && sessionId === "worker-session"
+  )), []);
+  assert.deepEqual(safeStates.at(-1), {
+    kind: "correlations-cleared", generation: 1, correlationCount: 0,
+  });
+  const retained = JSON.stringify({ smoke, requestItems: opened.requestItems, safeStates, session: opened.session });
+  assert(!retained.includes("detached-late-extra"));
+  assert(!/requestId|sessionId/iu.test(retained));
   await opened.session.close();
 });
 
@@ -2234,13 +2415,13 @@ test("the second network validation completes a paired exchange without double c
       for (const part of ["finished", "extra", "response"].filter((part) => part !== scenario.delayed)) emit("OPTIONS", part);
       for (const part of ["extra", "response", "finished"]) emit("GET", part);
       await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(opened.harness.bodyCalls, 0, scenario.name);
+      assert.equal(opened.harness.bodyCalls, 1, scenario.name);
       emit("OPTIONS", scenario.delayed);
     } else {
       for (const part of ["extra", "response", "finished"]) emit("OPTIONS", part);
       for (const part of ["finished", "extra", "response"].filter((part) => part !== scenario.delayed)) emit("GET", part);
       await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(opened.harness.bodyCalls, 0, scenario.name);
+      assert.equal(opened.harness.bodyCalls, scenario.delayed === "extra" ? 1 : 0, scenario.name);
       emit("GET", scenario.delayed);
     }
     await waitForBodyCalls(opened.harness, 1);
@@ -2394,6 +2575,36 @@ test("drain, worker detachment, malformed terminal, and duplicate terminal rejec
     assert.equal(opened.harness.closeCount, 1, stimulus);
     assert.equal(opened.child.kills, 1, stimulus);
   }
+});
+
+test("duplicate and conflicting revision selections reject deterministically", async () => {
+  for (const kind of ["duplicate", "conflicting"]) {
+    const opened = await openFakeBrowser();
+    const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    await Promise.resolve();
+    opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+    }) });
+    opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "REVISION_SELECTED", generation: 1, revision: kind === "duplicate" ? EVENT : "9".repeat(40),
+    }) });
+    await assert.rejects(pending, /duplicate or conflicting revision selection/u, kind);
+    await opened.session.close().catch(() => {});
+  }
+});
+
+test("a duplicate physical worker detachment receipt rejects deterministically", async () => {
+  const opened = await openFakeBrowser();
+  const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+  await Promise.resolve();
+  opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "FAILURE", generation: 1, category: "Provider/resolution failure",
+  }) });
+  const receipt = { sessionId: "worker-session", targetId: "worker-target" };
+  opened.harness.emit("Target.detachedFromTarget", receipt, "page-session");
+  opened.harness.emit("Target.detachedFromTarget", receipt, "page-session");
+  await assert.rejects(pending, /duplicate worker detachment/u);
+  await opened.session.close().catch(() => {});
 });
 
 test("matching-stage wrong identities and stale phase exchanges cannot pair, persist, or advance routes", async () => {
@@ -2848,7 +3059,7 @@ test("CDP request ExtraInfo is mandatory, unique, late-admissible, and authorita
     } else {
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(opened.session.fatalSignal.aborted, false, kind);
-      assert.equal(opened.harness.bodyCalls, kind === "late" ? 1 : 0, kind);
+      assert.equal(opened.harness.bodyCalls, 1, kind);
       opened.harness.emit("Runtime.exceptionThrown", {});
       await assert.rejects(pending, /browser exception/u);
     }
@@ -3994,6 +4205,7 @@ test("native CDP overlap and candidate-4,002 admission stops produce schema-vali
         for (let attempts = 0; harness.bodyCalls < 4004 && attempts < 100; attempts += 1) {
           await new Promise((resolve) => setImmediate(resolve));
         }
+        await new Promise((resolve) => setImmediate(resolve));
         harness.emit("Network.requestWillBeSent", {
           requestId: "packet-candidate-4002", request: {
             url: rawUrl("facebook/react", REACT, "4002.ts"), method: "GET", headers: {},

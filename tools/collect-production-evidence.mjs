@@ -650,6 +650,25 @@ export function createWorkerObserverSource(bindingName = "__codeCityCollectorEvi
       for(let shift=24;shift>=0;shift-=8)byte((high>>>shift)&255); for(let shift=24;shift>=0;shift-=8)byte((low>>>shift)&255);
       return h.map((word)=>word.toString(16).padStart(8,"0")).join("");
     }
+    const preSelectionFailureCategories = new Set([
+      "Repository unavailable for anonymous access", "Revision unavailable", "Provider/resolution failure",
+    ]);
+    const postSelectionFailureCategories = new Set([
+      "Provider/resolution failure", "Repository exceeds Code City limits",
+    ]);
+    const codedFailureCombinations = new Map([
+      ["No supported modules", new Set(["ADM-06", "ADM-07"])],
+      ["Source admission failed", new Set(["M1-ADM-1", "M1-ADM-3", "M1-ADM-4"])],
+      ["Metric processing failed", new Set(["M1-MET-1"])],
+      ["City construction failed", new Set(["M1-CITY-1"])],
+    ]);
+    const validRevision = (value) => typeof value==="string"&&/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value);
+    function validFailureShape(record, expected) {
+      if(expected.length===3)return preSelectionFailureCategories.has(record.category);
+      if(!validRevision(record.revision))return false;
+      if(expected.length===4)return postSelectionFailureCategories.has(record.category);
+      return codedFailureCombinations.get(record.category)?.has(record.code)===true;
+    }
     function messageRecord(message) {
       if(!message || typeof message!=="object" || getPrototypeOf(message)!==nativeObjectPrototype)throw 0;
       const descriptors=getOwnPropertyDescriptors(message);
@@ -670,12 +689,8 @@ export function createWorkerObserverSource(bindingName = "__codeCityCollectorEvi
       if(keys.length!==expected.length||expected.some((key)=>!descriptors[key]))throw 0;
       const record={};for(const key of expected)record[key]=descriptors[key].value;
       if(!Number.isSafeInteger(record.generation)||record.generation<=0)throw 0;
-      if((type==="REVISION_SELECTED"||type==="SUCCESS")&&typeof record.revision!=="string")throw 0;
-      if(type==="FAILURE") {
-        if(typeof record.category!=="string")throw 0;
-        if(expected.includes("revision")&&typeof record.revision!=="string")throw 0;
-        if(expected.includes("code")&&typeof record.code!=="string")throw 0;
-      }
+      if((type==="REVISION_SELECTED"||type==="SUCCESS")&&!validRevision(record.revision))throw 0;
+      if(type==="FAILURE"&&(typeof record.category!=="string"||!validFailureShape(record,expected)))throw 0;
       return record;
     }
     function observation(message) {
@@ -833,6 +848,18 @@ export async function createBrowserEvidenceSession({
     let traceStarted = false;
     let closePromise;
 
+    const preSelectionFailureCategories = new Set([
+      "Repository unavailable for anonymous access", "Revision unavailable", "Provider/resolution failure",
+    ]);
+    const postSelectionFailureCategories = new Set([
+      "Provider/resolution failure", "Repository exceeds Code City limits",
+    ]);
+    const codedFailureCombinations = new Map([
+      ["No supported modules", new Set(["ADM-06", "ADM-07"])],
+      ["Source admission failed", new Set(["M1-ADM-1", "M1-ADM-3", "M1-ADM-4"])],
+      ["Metric processing failed", new Set(["M1-MET-1"])],
+      ["City construction failed", new Set(["M1-CITY-1"])],
+    ]);
     function projectFact(value) {
       invariant(value && typeof value === "object" && !Array.isArray(value), "worker observation is malformed");
       const type = ownString(value, "type");
@@ -857,20 +884,22 @@ export async function createBrowserEvidenceSession({
       }
       if (type === "FAILURE") {
         const category = ownString(value, "category");
-        invariant(category && category.length <= 256, "worker terminal is malformed");
         if (keys.length === 3) {
           exactKeys(["type", "generation", "category"]);
+          invariant(category && preSelectionFailureCategories.has(category), "worker terminal is malformed");
           return { type, generation, category };
         }
         const revision = ownString(value, "revision");
         invariant(revision && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(revision), "worker terminal is malformed");
         if (keys.length === 4) {
           exactKeys(["type", "generation", "revision", "category"]);
+          invariant(category && postSelectionFailureCategories.has(category), "worker terminal is malformed");
           return { type, generation, revision, category };
         }
         exactKeys(["type", "generation", "revision", "category", "code"]);
         const code = ownString(value, "code");
-        invariant(code && code.length <= 128, "worker terminal is malformed");
+        invariant(category && code && codedFailureCombinations.get(category)?.has(code) === true,
+          "worker terminal is malformed");
         return { type, generation, revision, category, code };
       }
       if (type === "PROVIDER_DRAINED_STATIC_ENTERED" || type === "ATTEMPT_DRAINED") {
@@ -921,6 +950,7 @@ export async function createBrowserEvidenceSession({
         settleDeferred(mode.selectionResult, "reject", fatal.value);
         settleDeferred(mode.terminalResult, "reject", fatal.value);
       }
+      for (const entry of network.values()) entry.bodyPromise = null;
       network.clear();
       correlations.clear();
       workerTargets.clear();
@@ -1193,7 +1223,13 @@ export async function createBrowserEvidenceSession({
       };
     }
     function providerEntryReady(entry) {
-      return Boolean(entry.finished && entry.response && entry.requestHeaderFacts);
+      return Boolean(entry.finished && entry.response && entry.requestHeaderFacts
+        && (entry.method !== "GET" || entry.bodyPromise));
+    }
+    function maybeCaptureProviderBody(entry) {
+      if (entry.method !== "GET" || entry.bodyPromise || !entry.response || !entry.finished) return;
+      entry.bodyPromise = cdpBody(cdp, entry.sessionId, entry.requestId, entry.cap);
+      void entry.bodyPromise.catch(setFatal);
     }
     function correlationComplete(correlation) {
       if (correlation.kind === "completed") return true;
@@ -1368,7 +1404,10 @@ export async function createBrowserEvidenceSession({
         semanticGetEnd = Math.max(get.finishedMs, logicalGetStart);
         appendRequest(requestItems, requestRecord(get, logicalGetStart, semanticGetEnd));
       }
-      const bytes = await cdpBody(cdp, get.sessionId, get.requestId, get.cap);
+      const bodyPromise = get.bodyPromise;
+      invariant(bodyPromise, "browser response body was not captured");
+      const bytes = await bodyPromise;
+      get.bodyPromise = null;
       await beforeProviderProjection({ stage: get.route.stage });
       invariant(mode === current, "browser trace was cleared too early");
       const semanticRecord = Object.freeze({ ...get.route });
@@ -1611,6 +1650,7 @@ export async function createBrowserEvidenceSession({
             "unexpected browser response owner");
             invariant(!entry.response, "duplicate browser response");
             entry.response = cdpResponseProjection(ownData(message.params, "response"));
+            maybeCaptureProviderBody(entry);
             maybeScheduleExchange(entry.exchange);
             return;
           }
@@ -1681,6 +1721,7 @@ export async function createBrowserEvidenceSession({
               if (current.openExchange === entry.exchange) current.openExchange = null;
               entry.exchange.sealed = true;
             }
+            maybeCaptureProviderBody(entry);
             maybeScheduleExchange(entry.exchange);
             return;
           }
