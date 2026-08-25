@@ -1486,6 +1486,17 @@ export async function createBrowserEvidenceSession({
         semanticGetEnd = Math.max(get.finishedMs, logicalGetStart);
         appendRequest(requestItems, requestRecord(get, logicalGetStart, semanticGetEnd));
       }
+      if (get.route.stage === "raw" && current.generation === 2) {
+        const expectedIndex = current.rawFacts.length;
+        const expected = current.projected?.[expectedIndex];
+        invariant(expected && get.route.identity === current.revision && get.route.path === expected.rawPath,
+          "browser raw sequence mismatch");
+        current.progress.terminalRawCandidate = Object.freeze({
+          index: expectedIndex + 1,
+          path: expected.canonicalPath,
+          blobId: candidateBlobId(expected, current.revision.length),
+        });
+      }
       invariant(bodyBacklog === 0, "browser response body backlog exceeded");
       bodyBacklog = 1;
       observeBodyState(Object.freeze({
@@ -1542,7 +1553,10 @@ export async function createBrowserEvidenceSession({
           invariant(fact.contentValid, "browser candidate content invalid");
           invariant(fact.hashMatched, "browser candidate blob mismatch");
           current.rawFacts.push(fact);
-          if (current.generation === 2) current.progress.candidates = current.rawFacts;
+          if (current.generation === 2) {
+            current.progress.candidates = current.rawFacts;
+            current.progress.terminalRawCandidate = null;
+          }
           current.aggregate = nextAggregate;
           if (current.generation === 2) completedQualificationCandidateCount = current.rawFacts.length;
         }
@@ -2162,7 +2176,7 @@ function emptyData(keys, arrays = []) {
 
 const SMOKE_KEYS = ["repositoryUrl", "revision", "rootTree", "terminal", "canvasCount", "modelSha256", "startedMs", "endedMs", "providerGetCount"];
 const QUALIFICATION_KEYS = ["repositoryUrl", "revision", "rootTree", "treeEntries", "truncated", "candidates"];
-const CAPACITY_KEYS = ["repositoryUrl", "revision", "rootTree", "terminal", "revisionDisplayed", "cityPresent", "priorCityRemoved", "rawRequestCount", "maxOverlap", "noLaterRequest", "workerQuiescent", "candidates", "startedMs", "endedMs"];
+const CAPACITY_KEYS = ["repositoryUrl", "revision", "rootTree", "terminal", "revisionDisplayed", "cityPresent", "priorCityRemoved", "rawRequestCount", "maxOverlap", "noLaterRequest", "workerQuiescent", "terminalRawCandidate", "candidates", "startedMs", "endedMs"];
 
 function eventAt(events, name, generation) {
   return events.find((event) => event.event === name && event.generation === generation);

@@ -23,7 +23,7 @@ export function makeEvidencePacket() {
     ], ["candidates"]) },
     capacity: { schemaVersion: 3, kind: "capacity", status: "not-run", reason: "blocked", data: empty([
       "repositoryUrl", "revision", "rootTree", "terminal", "revisionDisplayed", "cityPresent", "priorCityRemoved",
-      "rawRequestCount", "maxOverlap", "noLaterRequest", "workerQuiescent", "candidates", "startedMs", "endedMs",
+      "rawRequestCount", "maxOverlap", "noLaterRequest", "workerQuiescent", "terminalRawCandidate", "candidates", "startedMs", "endedMs",
     ], ["candidates"]) },
     requests: { schemaVersion: 3, kind: "requests", status: "fail", reason: "infrastructure-failure", data: { items: [] } },
     lifecycle: { schemaVersion: 3, kind: "lifecycle", status: "fail", reason: "infrastructure-failure", data: {

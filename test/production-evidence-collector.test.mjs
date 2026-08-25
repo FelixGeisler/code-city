@@ -926,7 +926,7 @@ test("full seam-driven collector maps the exact pass lifecycle, dynamic smoke K,
         });
         emit("qualification-complete", 0);
         emit("limit-failure", 2); emit("request-quiescent", 2); const worker = emit("worker-quiescent", 2);
-        return { repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT, terminal: "Repository exceeds Code City limits", revisionDisplayed: true, cityPresent: false, priorCityRemoved: true, rawRequestCount: 4001, maxOverlap: 1, noLaterRequest: true, workerQuiescent: true, candidates: structuredClone(qualification.candidates), startedMs, endedMs: worker.atMs };
+        return { repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT, terminal: "Repository exceeds Code City limits", revisionDisplayed: true, cityPresent: false, priorCityRemoved: true, rawRequestCount: 4001, maxOverlap: 1, noLaterRequest: true, workerQuiescent: true, terminalRawCandidate: null, candidates: structuredClone(qualification.candidates), startedMs, endedMs: worker.atMs };
       },
       async close() {},
     }),
@@ -4536,6 +4536,7 @@ function collectorMatrixSeams({ failStage, reason, progressedQualification = fal
             repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
             terminal: null, revisionDisplayed: null, cityPresent: null, priorCityRemoved: null,
             rawRequestCount: 1, maxOverlap: 1, noLaterRequest: null, workerQuiescent: null,
+            terminalRawCandidate: { index: 1, path: "unexpected.ts", blobId: BLOB },
             candidates: [], startedMs, endedMs: null,
           };
         }
@@ -4549,7 +4550,8 @@ function collectorMatrixSeams({ failStage, reason, progressedQualification = fal
           repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
           terminal: "Repository exceeds Code City limits", revisionDisplayed: true, cityPresent: false,
           priorCityRemoved: true, rawRequestCount: 4001, maxOverlap: 1, noLaterRequest: false,
-          workerQuiescent: false, candidates: structuredClone(qualification.candidates), startedMs, endedMs: null,
+          workerQuiescent: false, terminalRawCandidate: null,
+          candidates: structuredClone(qualification.candidates), startedMs, endedMs: null,
         };
         if (failStage === "capacity") throw new CollectorFailure("capacity", reason);
         emit("request-quiescent", 2);
@@ -5514,6 +5516,137 @@ test("browser capacity normalization and hash failures produce stage-aware schem
     assert.equal(requests.data.items.filter((item) => item.applicationCall
       && item.requestedUrl.includes("/react/react/") && item.stage === "raw").length,
     kind === "hash" ? 1 : prefixLength + 1, kind);
+  }
+});
+
+test("mid-prefix malformed, cap-plus-one, and pre-projection CDP failures persist sealed safe shared frontiers", async () => {
+  for (const scenario of ["malformed", "cap-plus-one", "before-projection"]) {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), `collector-mid-prefix-${scenario}-`));
+    try {
+      const output = path.join(temporary, "packet");
+      const diagnostic = `private-${scenario}-body-must-not-persist`;
+      const bodyStates = [];
+      const targetRequestId = `${scenario}-raw-3`;
+      const oversized = new Uint8Array(RESPONSE_CAPS.raw + 1).fill(0x78);
+      oversized.set(new TextEncoder().encode(diagnostic));
+      const oversizedBody = Buffer.from(oversized).toString("base64");
+      assert.equal(oversized.byteLength, RESPONSE_CAPS.raw + 1);
+
+      const seams = collectorMatrixSeams();
+      delete seams.writeValidatedEvidencePacket;
+      delete seams.readValidatedEvidencePacket;
+      const controlledQualification = nativeQualificationFetch();
+      seams.qualifyRepository = ({ now, requestItems, progress, signal }) => qualifyRepository({
+        fetchImpl: controlledQualification.fetchImpl, now, requestItems, progress, signal,
+      });
+      seams.createBrowserEvidenceSession = async (args) => {
+        let rawProjectionCount = 0;
+        const harness = fakeCdpHarness({
+          bodyImpl: async ({ params, value }) => {
+            if (params.requestId !== targetRequestId) return value;
+            if (scenario === "malformed") return { body: { diagnostic }, base64Encoded: false };
+            if (scenario === "cap-plus-one") return { body: oversizedBody, base64Encoded: true };
+            return value;
+          },
+        });
+        const native = await createBrowserEvidenceSession({
+          ...args,
+          launchImpl: async () => ({ child: fakeChromeChild(), websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+          connectImpl: () => harness.cdp,
+          observeBodyState(state) { bodyStates.push(structuredClone(state)); },
+          async beforeProviderProjection({ stage }) {
+            if (stage !== "raw") return;
+            rawProjectionCount += 1;
+            if (scenario === "before-projection" && rawProjectionCount === 3) throw new Error(diagnostic);
+          },
+        });
+        const drive = async () => {
+          await Promise.resolve();
+          emitBrowserGet(harness, {
+            requestId: `${scenario}-revision`, url: revisionUrl("react/react"),
+            body: JSON.stringify([{ sha: REACT }]),
+          });
+          await new Promise((resolve) => setImmediate(resolve));
+          harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+            type: "REVISION_SELECTED", generation: 2, revision: REACT,
+          }) });
+          await new Promise((resolve) => setImmediate(resolve));
+          emitBrowserGet(harness, {
+            requestId: `${scenario}-commit`, url: commitUrl("react/react", REACT),
+            body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
+          });
+          emitBrowserGet(harness, {
+            requestId: `${scenario}-tree`, url: treeUrl("react/react", REACT_ROOT),
+            body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
+          });
+          for (let index = 0; index < 3; index += 1) {
+            emitBrowserGet(harness, {
+              requestId: `${scenario}-raw-${index + 1}`,
+              url: rawUrl("react/react", REACT, NATIVE_ENTRIES[index].path), body: "x", dataLength: 1,
+            });
+          }
+        };
+        return Object.freeze({
+          cdpVersion: native.cdpVersion,
+          fatalSignal: native.fatalSignal,
+          snapshot: native.snapshot,
+          async collectSmoke(emit, startedMs) {
+            directRequest(args.requestItems, args.now, "revision", revisionUrl("FelixGeisler/code-city"), true);
+            emit("revision-selected", 1);
+            for (const [stage, url] of [
+              ["commit", commitUrl("FelixGeisler/code-city", EVENT)],
+              ["tree", treeUrl("FelixGeisler/code-city", ROOT)],
+              ["raw", rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts")],
+            ]) directRequest(args.requestItems, args.now, stage, url, true);
+            const published = emit("city-published", 1);
+            return { repositoryUrl: "https://github.com/FelixGeisler/code-city", revision: EVENT, rootTree: ROOT,
+              terminal: "success", canvasCount: 1, modelSha256: "1".repeat(64), startedMs,
+              endedMs: published.atMs, providerGetCount: 4 };
+          },
+          clearTrace() {},
+          async collectCapacity(qualification, emit, startedMs) {
+            const pending = native.collectCapacity(qualification, emit, startedMs);
+            void drive();
+            return pending;
+          },
+          close: native.close,
+        });
+      };
+
+      const result = await collectProductionEvidence({
+        origin: PRODUCTION_ORIGIN, manifestPath: path.join(temporary, "manifest.json"), output,
+      }, seams);
+      const expectedReason = scenario === "before-projection" ? "infrastructure-failure" : "provider-failure";
+      assert.deepEqual([result.status, result.reason], ["fail", expectedReason], scenario);
+      assert.equal((await readFile(path.join(output, ".validated"), "utf8")).trim(), result.packetDigest, scenario);
+      const qualification = JSON.parse(await readFile(path.join(output, "qualification.json"), "utf8"));
+      const capacity = JSON.parse(await readFile(path.join(output, "capacity.json"), "utf8"));
+      const requests = JSON.parse(await readFile(path.join(output, "requests.json"), "utf8"));
+      const lifecycle = JSON.parse(await readFile(path.join(output, "lifecycle.json"), "utf8"));
+      assert.deepEqual([qualification.status, qualification.reason, capacity.status, capacity.reason],
+        ["fail", expectedReason, "fail", expectedReason], scenario);
+      assert.deepEqual(qualification.data.candidates, capacity.data.candidates, scenario);
+      assert.equal(capacity.data.candidates.length, 2, scenario);
+      assert.deepEqual(capacity.data.terminalRawCandidate,
+        { index: 3, path: "0003.ts", blobId: NATIVE_BLOB }, scenario);
+      const rawRequests = requests.data.items.filter((item) => item.applicationCall
+        && item.requestedUrl.includes("/react/react/") && item.stage === "raw");
+      assert.equal(rawRequests.length, 3, scenario);
+      assert.equal(rawRequests.at(-1), requests.data.items.at(-1), scenario);
+      assert.equal(rawRequests.at(-1).requestedUrl, rawUrl("react/react", REACT, "0003.ts"), scenario);
+      assert.deepEqual(lifecycle.data.events.slice(-2).map(({ event }) => event),
+        ["inventory-complete", "collector-failed"], scenario);
+      assert.equal(bodyStates.at(-1).kind, "provider-body-cleared", scenario);
+      assert.equal(bodyStates.at(-1).bodyBacklog, 0, scenario);
+      assert.equal(bodyStates.at(-1).bodyReferenceCleared, true, scenario);
+      for (const name of ["artifact", "smoke", "qualification", "capacity", "requests", "lifecycle", "index"]) {
+        const text = await readFile(path.join(output, `${name}.json`), "utf8");
+        assert(!text.includes(diagnostic), `${scenario}/${name}`);
+        assert(!text.includes(oversizedBody.slice(0, 128)), `${scenario}/${name}/body`);
+      }
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
   }
 });
 

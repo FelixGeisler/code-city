@@ -70,7 +70,7 @@ const DATA_KEYS = Object.freeze({
   artifact: ["issueBodySha256", "eventSha", "repository", "runId", "runAttempt", "origin", "manifestSha256", "publicationRecordSha256", "deploymentId", "deployedSha", "nodeVersion", "chromeVersion", "chromeExecutableCategory", "runnerOs", "runnerArch", "policyMatched", "files"],
   smoke: ["repositoryUrl", "revision", "rootTree", "terminal", "canvasCount", "modelSha256", "startedMs", "endedMs", "providerGetCount"],
   qualification: ["repositoryUrl", "revision", "rootTree", "treeEntries", "truncated", "candidates"],
-  capacity: ["repositoryUrl", "revision", "rootTree", "terminal", "revisionDisplayed", "cityPresent", "priorCityRemoved", "rawRequestCount", "maxOverlap", "noLaterRequest", "workerQuiescent", "candidates", "startedMs", "endedMs"],
+  capacity: ["repositoryUrl", "revision", "rootTree", "terminal", "revisionDisplayed", "cityPresent", "priorCityRemoved", "rawRequestCount", "maxOverlap", "noLaterRequest", "workerQuiescent", "terminalRawCandidate", "candidates", "startedMs", "endedMs"],
   requests: ["items"],
   lifecycle: ["collectorVersion", "collectorCommit", "invocation", "nodeVersion", "chromeVersion", "cdpVersion", "events", "durations", "maxOverlap", "noRetry", "noFallback", "noPersistence", "noLaterPublication"],
 });
@@ -275,13 +275,21 @@ function validateQualification(envelope) {
   }
 }
 
+function validateTerminalRawCandidate(value, revision) {
+  if (value === null) return;
+  exactObject(value, ["index", "path", "blobId"]);
+  positiveCount(value.index); canonicalPath(value.path, true); gitId(value.blobId);
+  if (revision !== null) requireValue(value.blobId.length === revision.length);
+}
+
 function validateCapacity(envelope) {
   const data = envelope.data;
   if (envelope.status === "not-run") { requireNotRunData(data); return; }
   fixedOrNull(data.repositoryUrl, REACT_URL); nullable(data.revision, gitId); nullable(data.rootTree, gitId);
   fixedOrNull(data.terminal, "Repository exceeds Code City limits");
   for (const key of ["revisionDisplayed", "cityPresent", "priorCityRemoved", "noLaterRequest", "workerQuiescent"]) nullableBoolean(data[key]);
-  nullable(data.rawRequestCount, count); nullable(data.maxOverlap, count); validateCandidates(data.candidates);
+  nullable(data.rawRequestCount, count); nullable(data.maxOverlap, count);
+  validateTerminalRawCandidate(data.terminalRawCandidate, data.revision); validateCandidates(data.candidates);
   nullable(data.startedMs, milliseconds); nullable(data.endedMs, milliseconds);
   if (data.endedMs !== null) requireValue(data.startedMs !== null && data.endedMs >= data.startedMs);
   if (data.revision !== null && data.rootTree !== null) requireValue(data.revision.length === data.rootTree.length);
@@ -290,6 +298,7 @@ function validateCapacity(envelope) {
     requireValue(data.repositoryUrl !== null && data.revision !== null && data.rootTree !== null && data.startedMs !== null && data.endedMs !== null);
     requireValue(data.terminal === "Repository exceeds Code City limits" && data.revisionDisplayed === true && data.cityPresent === false && data.priorCityRemoved === true);
     requireValue(data.rawRequestCount === 4001 && data.maxOverlap === 1 && data.noLaterRequest === true && data.workerQuiescent === true);
+    requireValue(data.terminalRawCandidate === null);
     requireValue(data.candidates.length === 4001 && data.candidates.every((candidate) => candidate.hashMatched && candidate.contentValid));
   }
 }
@@ -457,18 +466,35 @@ function validateGetBindings(gets, data, candidateValues, repositoryUrl, allowed
   }
 }
 
-function validateTerminalRawPrefix(items, gets, candidateValues, reason) {
-  if (reason !== "content-invalid" && reason !== "unexpected-request") return;
+function validateTerminalRawPrefix(items, gets, candidateValues, terminalRawCandidate, reason, sharedFailure) {
   const raws = gets.filter((item) => item.stage === "raw");
   const extraRaw = raws.length - candidateValues.length;
-  requireValue(extraRaw === 0 || extraRaw === 1);
-  if (reason === "content-invalid") {
-    const finalCandidateInvalid = candidateValues.length > 0 && candidateValues.at(-1).contentValid === false;
-    requireValue(candidateValues.slice(0, -1).every((candidate) => candidate.contentValid));
-    requireValue(finalCandidateInvalid ? extraRaw === 0 : extraRaw === 1);
+  if (!sharedFailure) {
+    requireValue(extraRaw === 0 && terminalRawCandidate === null);
+    return;
   }
-  const terminalRequest = extraRaw === 1 ? raws.at(-1) : gets.at(-1);
-  requireValue(terminalRequest === items.at(-1));
+  requireValue(extraRaw === 0 || extraRaw === 1);
+  requireValue((extraRaw === 1) === (terminalRawCandidate !== null));
+  if (extraRaw === 1) {
+    const terminalRequest = raws.at(-1);
+    const terminalRoute = routeOf(terminalRequest.requestedUrl, "raw");
+    requireValue(terminalRequest === gets.at(-1) && terminalRequest === items.at(-1));
+    requireValue(terminalRawCandidate.index === candidateValues.length + 1
+      && terminalRoute.path === terminalRawCandidate.path);
+    if (candidateValues.length > 0) requireValue(compareUtf8(candidateValues.at(-1).path, terminalRawCandidate.path) < 0);
+  }
+  if (reason === "content-invalid") {
+    const invalidIndex = candidateValues.findIndex((candidate) => candidate.contentValid === false);
+    requireValue(invalidIndex < 0 || (invalidIndex === candidateValues.length - 1
+      && candidateValues.slice(0, -1).every((candidate) => candidate.contentValid)
+      && extraRaw === 0));
+  }
+  if (reason === "hash-mismatch") {
+    const mismatchIndex = candidateValues.findIndex((candidate) => candidate.hashMatched === false);
+    requireValue(mismatchIndex < 0 || (mismatchIndex === candidateValues.length - 1
+      && candidateValues.slice(0, -1).every((candidate) => candidate.hashMatched)
+      && extraRaw === 0));
+  }
 }
 
 function maximumOverlap(items) {
@@ -511,10 +537,12 @@ function validateRequests(envelope, payloads, overallPass, primaryReason) {
   if (capacityPass) requireValue(capacityGets.length === 4004 && capacityGets.slice(3).length === 4001);
   validateGetBindings(smokeGets, payloads.smoke.data, null, CODE_CITY_URL);
   const capacityReason = payloads.capacity.reason;
+  const sharedFailure = payloads.qualification.status === "fail" && payloads.capacity.status === "fail";
   validateGetBindings(qualificationGets, payloads.qualification.data, null, REACT_URL);
   validateGetBindings(capacityGets, payloads.capacity.data, payloads.capacity.data.candidates, REACT_URL,
-    ["hash-mismatch", "content-invalid", "unexpected-request"].includes(capacityReason) ? 1 : 0);
-  validateTerminalRawPrefix(items, capacityGets, payloads.capacity.data.candidates, capacityReason);
+    sharedFailure ? 1 : 0);
+  validateTerminalRawPrefix(items, capacityGets, payloads.capacity.data.candidates,
+    payloads.capacity.data.terminalRawCandidate, capacityReason, sharedFailure);
   const qualificationMustHaveSucceeded = qualificationPass || capacityStarted;
   const passingGroups = [...(smokePass ? groups.smoke : []), ...(capacityPass ? groups.capacity : [])];
   requireSuccessfulExchanges(passingGroups);
@@ -522,7 +550,7 @@ function validateRequests(envelope, payloads, overallPass, primaryReason) {
   if (qualificationMustHaveSucceeded) requireSuccessfulExchanges(groups.qualification, true);
   const phaseOverlaps = [groups.smoke, groups.qualification, groups.capacity].map((group) => maximumOverlap(group.filter((item) => item.method === "GET")));
   if (smokePass) requireValue(phaseOverlaps[0] <= 1);
-  if (qualificationPass) requireValue(phaseOverlaps[1] <= 1);
+  if (qualificationMustHaveSucceeded) requireValue(phaseOverlaps[1] <= 1);
   if (capacityPass) requireValue(phaseOverlaps[2] === 1);
   const credentialFailure = items.some((item) => !item.authorizationAbsent || !item.cookieAbsent || !item.refererAbsent);
   requireValue(!credentialFailure || primaryReason === "credential-header");
