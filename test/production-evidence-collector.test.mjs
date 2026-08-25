@@ -926,7 +926,7 @@ test("full seam-driven collector maps the exact pass lifecycle, dynamic smoke K,
         });
         emit("qualification-complete", 0);
         emit("limit-failure", 2); emit("request-quiescent", 2); const worker = emit("worker-quiescent", 2);
-        return { repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT, terminal: "Repository exceeds Code City limits", revisionDisplayed: true, cityPresent: false, priorCityRemoved: true, rawRequestCount: 4001, maxOverlap: 1, noLaterRequest: true, workerQuiescent: true, terminalRawCandidate: null, candidates: structuredClone(qualification.candidates), startedMs, endedMs: worker.atMs };
+        return { repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT, terminal: "Repository exceeds Code City limits", revisionDisplayed: true, cityPresent: false, priorCityRemoved: true, rawRequestCount: 4001, maxOverlap: 1, noLaterRequest: true, workerQuiescent: true, candidates: structuredClone(qualification.candidates), startedMs, endedMs: worker.atMs };
       },
       async close() {},
     }),
@@ -4391,7 +4391,7 @@ test("a late publication after worker detachment becomes a schema-valid handled 
   assert.deepEqual(lifecycle.data.events.slice(-2).map(({ event }) => event), ["request-quiescent", "collector-failed"]);
 });
 
-test("CDP admission rejects overlap, wrong order/path, and capacity candidate 4,002 before body retrieval", async () => {
+test("CDP admission rejects overlap, wrong order/path, skipped custodied candidates, and candidate 4,002 before body retrieval", async () => {
   {
     const opened = await openFakeBrowser();
     const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
@@ -4428,6 +4428,44 @@ test("CDP admission rejects overlap, wrong order/path, and capacity candidate 4,
     await opened.session.close().catch(() => {});
     assert.equal(opened.harness.closeCount, 1);
     assert.equal(opened.child.kills, 1);
+  }
+
+  for (const [name, applicationPath] of [
+    ["wrong", "0000.ts"],
+    ["skipped", NATIVE_ENTRIES[1].path],
+  ]) {
+    const opened = await openFakeBrowser();
+    const qualification = (await runNativeQualification()).progress;
+    const pending = opened.session.collectCapacity(qualification, () => ({ atMs: 1 }), 0);
+    await Promise.resolve();
+    emitBrowserGet(opened.harness, {
+      requestId: `${name}-revision`, url: revisionUrl("react/react"), body: JSON.stringify([{ sha: REACT }]),
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "REVISION_SELECTED", generation: 2, revision: REACT,
+    }) });
+    emitBrowserGet(opened.harness, {
+      requestId: `${name}-commit`, url: commitUrl("react/react", REACT),
+      body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
+    });
+    emitBrowserGet(opened.harness, {
+      requestId: `${name}-tree`, url: treeUrl("react/react", REACT_ROOT),
+      body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
+    });
+    for (let attempts = 0; opened.harness.bodyCalls < 3 && attempts < 100; attempts += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(opened.harness.bodyCalls, 3, name);
+    emitBrowserGet(opened.harness, {
+      requestId: `${name}-raw`, url: rawUrl("react/react", REACT, applicationPath), body: "x",
+    });
+    await assert.rejects(pending, /sequence differs at admission/u, name);
+    assert.equal(opened.harness.bodyCalls, 3, name);
+    assert.deepEqual(opened.requestItems.map(({ stage }) => stage), ["revision", "commit", "tree"], name);
+    await opened.session.close().catch(() => {});
+    assert.equal(opened.harness.closeCount, 1, name);
+    assert.equal(opened.child.kills, 1, name);
   }
 
   {
@@ -4536,7 +4574,6 @@ function collectorMatrixSeams({ failStage, reason, progressedQualification = fal
             repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
             terminal: null, revisionDisplayed: null, cityPresent: null, priorCityRemoved: null,
             rawRequestCount: 1, maxOverlap: 1, noLaterRequest: null, workerQuiescent: null,
-            terminalRawCandidate: { index: 1, path: "unexpected.ts", blobId: BLOB },
             candidates: [], startedMs, endedMs: null,
           };
         }
@@ -4550,8 +4587,7 @@ function collectorMatrixSeams({ failStage, reason, progressedQualification = fal
           repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
           terminal: "Repository exceeds Code City limits", revisionDisplayed: true, cityPresent: false,
           priorCityRemoved: true, rawRequestCount: 4001, maxOverlap: 1, noLaterRequest: false,
-          workerQuiescent: false, terminalRawCandidate: null,
-          candidates: structuredClone(qualification.candidates), startedMs, endedMs: null,
+          workerQuiescent: false, candidates: structuredClone(qualification.candidates), startedMs, endedMs: null,
         };
         if (failStage === "capacity") throw new CollectorFailure("capacity", reason);
         emit("request-quiescent", 2);
@@ -5627,8 +5663,11 @@ test("mid-prefix malformed, cap-plus-one, and pre-projection CDP failures persis
         ["fail", expectedReason, "fail", expectedReason], scenario);
       assert.deepEqual(qualification.data.candidates, capacity.data.candidates, scenario);
       assert.equal(capacity.data.candidates.length, 2, scenario);
-      assert.deepEqual(capacity.data.terminalRawCandidate,
-        { index: 3, path: "0003.ts", blobId: NATIVE_BLOB }, scenario);
+      assert.deepEqual(Object.keys(capacity.data), [
+        "repositoryUrl", "revision", "rootTree", "terminal", "revisionDisplayed", "cityPresent",
+        "priorCityRemoved", "rawRequestCount", "maxOverlap", "noLaterRequest", "workerQuiescent",
+        "candidates", "startedMs", "endedMs",
+      ], scenario);
       const rawRequests = requests.data.items.filter((item) => item.applicationCall
         && item.requestedUrl.includes("/react/react/") && item.stage === "raw");
       assert.equal(rawRequests.length, 3, scenario);

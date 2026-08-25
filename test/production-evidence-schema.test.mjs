@@ -21,7 +21,7 @@ const encoder = new TextEncoder();
 
 const SMOKE_KEYS = ["repositoryUrl", "revision", "rootTree", "terminal", "canvasCount", "modelSha256", "startedMs", "endedMs", "providerGetCount"];
 const QUALIFICATION_KEYS = ["repositoryUrl", "revision", "rootTree", "treeEntries", "truncated", "candidates"];
-const CAPACITY_KEYS = ["repositoryUrl", "revision", "rootTree", "terminal", "revisionDisplayed", "cityPresent", "priorCityRemoved", "rawRequestCount", "maxOverlap", "noLaterRequest", "workerQuiescent", "terminalRawCandidate", "candidates", "startedMs", "endedMs"];
+const CAPACITY_KEYS = ["repositoryUrl", "revision", "rootTree", "terminal", "revisionDisplayed", "cityPresent", "priorCityRemoved", "rawRequestCount", "maxOverlap", "noLaterRequest", "workerQuiescent", "candidates", "startedMs", "endedMs"];
 
 function canonical(value) { return encoder.encode(`${JSON.stringify(value)}\n`); }
 function envelope(kind, status, reason, data) { return { schemaVersion: 3, kind, status, reason, data }; }
@@ -149,8 +149,7 @@ function passingPayloads() {
       repositoryUrl: "https://github.com/react/react", revision: REACT, rootTree: REACT_ROOT,
       terminal: "Repository exceeds Code City limits", revisionDisplayed: true, cityPresent: false,
       priorCityRemoved: true, rawRequestCount: 4001, maxOverlap: 1, noLaterRequest: true,
-      workerQuiescent: true, terminalRawCandidate: null,
-      candidates: structuredClone(facts), startedMs: 8, endedMs: 23,
+      workerQuiescent: true, candidates: structuredClone(facts), startedMs: 8, endedMs: 23,
     }),
     requests: envelope("requests", "pass", "none", { items: [...smoke, ...qualification, ...capacity] }),
     lifecycle: lifecycle(passEvents()),
@@ -190,7 +189,6 @@ function sharedBrowserFailure() {
   const capacityData = {
     ...empty(CAPACITY_KEYS, ["candidates"]), repositoryUrl: "https://github.com/react/react",
     revision: REACT, rootTree: REACT_ROOT, rawRequestCount: 2, maxOverlap: 1,
-    terminalRawCandidate: { index: 2, path: "0002.ts", blobId: "f".repeat(40) },
     candidates: structuredClone(prefix), startedMs: 8,
   };
   payloads.qualification = envelope("qualification", "fail", "content-invalid", qualificationData);
@@ -754,27 +752,34 @@ test("shared capacity-start failures accept the exact shared reason set with dua
     const withoutTerminal = mutateSharedReason(reason);
     withoutTerminal.requests.data.items.pop();
     withoutTerminal.capacity.data.rawRequestCount = 1;
-    withoutTerminal.capacity.data.terminalRawCandidate = null;
     assert.doesNotThrow(() => createEvidencePacket(withoutTerminal, BINDING), `${reason}/prefix`);
   }
 });
 
-test("shared capacity frontiers bind at most one terminal raw GET to the exact next candidate and final activity", () => {
+test("shared capacity frontiers admit at most one final canonical raw GET on the immutable revision", () => {
   const tooMany = mutateSharedReason("infrastructure-failure");
   tooMany.requests.data.items.push(request(tooMany.requests.data.items.length + 1, "raw",
     rawUrl("react/react", REACT, "0003.ts"), true, 11.5));
   tooMany.capacity.data.rawRequestCount = 3;
   expectInvalid(() => createEvidencePacket(tooMany, BINDING));
 
-  const gap = mutateSharedReason("infrastructure-failure");
-  const terminal = gap.requests.data.items.at(-1);
+  const laterCanonicalPath = mutateSharedReason("infrastructure-failure");
+  const terminal = laterCanonicalPath.requests.data.items.at(-1);
   terminal.requestedUrl = rawUrl("react/react", REACT, "0003.ts");
   terminal.finalUrl = terminal.requestedUrl;
-  expectInvalid(() => createEvidencePacket(gap, BINDING));
+  assert.doesNotThrow(() => createEvidencePacket(laterCanonicalPath, BINDING));
 
-  const wrongIdentity = mutateSharedReason("infrastructure-failure");
-  wrongIdentity.capacity.data.terminalRawCandidate.index = 3;
-  expectInvalid(() => createEvidencePacket(wrongIdentity, BINDING));
+  const regressedPath = mutateSharedReason("infrastructure-failure");
+  const regressed = regressedPath.requests.data.items.at(-1);
+  regressed.requestedUrl = rawUrl("react/react", REACT, "0000.ts");
+  regressed.finalUrl = regressed.requestedUrl;
+  expectInvalid(() => createEvidencePacket(regressedPath, BINDING));
+
+  const wrongRevision = mutateSharedReason("infrastructure-failure");
+  const wrong = wrongRevision.requests.data.items.at(-1);
+  wrong.requestedUrl = rawUrl("react/react", "9".repeat(40), "0002.ts");
+  wrong.finalUrl = wrong.requestedUrl;
+  expectInvalid(() => createEvidencePacket(wrongRevision, BINDING));
 
   const laterActivity = mutateSharedReason("infrastructure-failure");
   const later = directArtifactRequest(laterActivity.requests.data.items.length + 1);
@@ -788,7 +793,6 @@ test("shared invalid-candidate evidence remains reason-specific and cannot coexi
     const invalidFinal = mutateSharedReason(reason);
     invalidFinal.requests.data.items.pop();
     invalidFinal.capacity.data.rawRequestCount = 1;
-    invalidFinal.capacity.data.terminalRawCandidate = null;
     invalidFinal.qualification.data.candidates[0][field] = false;
     invalidFinal.capacity.data.candidates[0][field] = false;
     assert.doesNotThrow(() => createEvidencePacket(invalidFinal, BINDING), reason);

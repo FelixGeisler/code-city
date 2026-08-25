@@ -70,7 +70,7 @@ const DATA_KEYS = Object.freeze({
   artifact: ["issueBodySha256", "eventSha", "repository", "runId", "runAttempt", "origin", "manifestSha256", "publicationRecordSha256", "deploymentId", "deployedSha", "nodeVersion", "chromeVersion", "chromeExecutableCategory", "runnerOs", "runnerArch", "policyMatched", "files"],
   smoke: ["repositoryUrl", "revision", "rootTree", "terminal", "canvasCount", "modelSha256", "startedMs", "endedMs", "providerGetCount"],
   qualification: ["repositoryUrl", "revision", "rootTree", "treeEntries", "truncated", "candidates"],
-  capacity: ["repositoryUrl", "revision", "rootTree", "terminal", "revisionDisplayed", "cityPresent", "priorCityRemoved", "rawRequestCount", "maxOverlap", "noLaterRequest", "workerQuiescent", "terminalRawCandidate", "candidates", "startedMs", "endedMs"],
+  capacity: ["repositoryUrl", "revision", "rootTree", "terminal", "revisionDisplayed", "cityPresent", "priorCityRemoved", "rawRequestCount", "maxOverlap", "noLaterRequest", "workerQuiescent", "candidates", "startedMs", "endedMs"],
   requests: ["items"],
   lifecycle: ["collectorVersion", "collectorCommit", "invocation", "nodeVersion", "chromeVersion", "cdpVersion", "events", "durations", "maxOverlap", "noRetry", "noFallback", "noPersistence", "noLaterPublication"],
 });
@@ -275,13 +275,6 @@ function validateQualification(envelope) {
   }
 }
 
-function validateTerminalRawCandidate(value, revision) {
-  if (value === null) return;
-  exactObject(value, ["index", "path", "blobId"]);
-  positiveCount(value.index); canonicalPath(value.path, true); gitId(value.blobId);
-  if (revision !== null) requireValue(value.blobId.length === revision.length);
-}
-
 function validateCapacity(envelope) {
   const data = envelope.data;
   if (envelope.status === "not-run") { requireNotRunData(data); return; }
@@ -289,7 +282,7 @@ function validateCapacity(envelope) {
   fixedOrNull(data.terminal, "Repository exceeds Code City limits");
   for (const key of ["revisionDisplayed", "cityPresent", "priorCityRemoved", "noLaterRequest", "workerQuiescent"]) nullableBoolean(data[key]);
   nullable(data.rawRequestCount, count); nullable(data.maxOverlap, count);
-  validateTerminalRawCandidate(data.terminalRawCandidate, data.revision); validateCandidates(data.candidates);
+  validateCandidates(data.candidates);
   nullable(data.startedMs, milliseconds); nullable(data.endedMs, milliseconds);
   if (data.endedMs !== null) requireValue(data.startedMs !== null && data.endedMs >= data.startedMs);
   if (data.revision !== null && data.rootTree !== null) requireValue(data.revision.length === data.rootTree.length);
@@ -298,7 +291,6 @@ function validateCapacity(envelope) {
     requireValue(data.repositoryUrl !== null && data.revision !== null && data.rootTree !== null && data.startedMs !== null && data.endedMs !== null);
     requireValue(data.terminal === "Repository exceeds Code City limits" && data.revisionDisplayed === true && data.cityPresent === false && data.priorCityRemoved === true);
     requireValue(data.rawRequestCount === 4001 && data.maxOverlap === 1 && data.noLaterRequest === true && data.workerQuiescent === true);
-    requireValue(data.terminalRawCandidate === null);
     requireValue(data.candidates.length === 4001 && data.candidates.every((candidate) => candidate.hashMatched && candidate.contentValid));
   }
 }
@@ -466,22 +458,19 @@ function validateGetBindings(gets, data, candidateValues, repositoryUrl, allowed
   }
 }
 
-function validateTerminalRawPrefix(items, gets, candidateValues, terminalRawCandidate, reason, sharedFailure) {
+function validateTerminalRawPrefix(items, gets, candidateValues, reason, sharedFailure) {
   const raws = gets.filter((item) => item.stage === "raw");
   const extraRaw = raws.length - candidateValues.length;
   if (!sharedFailure) {
-    requireValue(extraRaw === 0 && terminalRawCandidate === null);
+    requireValue(extraRaw === 0);
     return;
   }
   requireValue(extraRaw === 0 || extraRaw === 1);
-  requireValue((extraRaw === 1) === (terminalRawCandidate !== null));
   if (extraRaw === 1) {
     const terminalRequest = raws.at(-1);
     const terminalRoute = routeOf(terminalRequest.requestedUrl, "raw");
     requireValue(terminalRequest === gets.at(-1) && terminalRequest === items.at(-1));
-    requireValue(terminalRawCandidate.index === candidateValues.length + 1
-      && terminalRoute.path === terminalRawCandidate.path);
-    if (candidateValues.length > 0) requireValue(compareUtf8(candidateValues.at(-1).path, terminalRawCandidate.path) < 0);
+    if (candidateValues.length > 0) requireValue(compareUtf8(candidateValues.at(-1).path, terminalRoute.path) < 0);
   }
   if (reason === "content-invalid") {
     const invalidIndex = candidateValues.findIndex((candidate) => candidate.contentValid === false);
@@ -542,7 +531,7 @@ function validateRequests(envelope, payloads, overallPass, primaryReason) {
   validateGetBindings(capacityGets, payloads.capacity.data, payloads.capacity.data.candidates, REACT_URL,
     sharedFailure ? 1 : 0);
   validateTerminalRawPrefix(items, capacityGets, payloads.capacity.data.candidates,
-    payloads.capacity.data.terminalRawCandidate, capacityReason, sharedFailure);
+    capacityReason, sharedFailure);
   const qualificationMustHaveSucceeded = qualificationPass || capacityStarted;
   const passingGroups = [...(smokePass ? groups.smoke : []), ...(capacityPass ? groups.capacity : [])];
   requireSuccessfulExchanges(passingGroups);
