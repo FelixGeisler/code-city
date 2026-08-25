@@ -23,9 +23,9 @@ const ACTIONS = {
   checkout: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
   node: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
   pagesUpload: "actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b",
-  artifactUpload: "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+  artifactUpload: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
   deploy: "actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e",
-  download: "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
+  download: "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
 };
 
 function exactKeys(value, expected, label) {
@@ -207,7 +207,7 @@ test("parsed publish workflow has exact triggers, jobs, permissions, steps, pins
   ]);
   assert.deepEqual(evidence.steps[2], {
     name: "Download current-run publication evidence", uses: ACTIONS.download,
-    with: { name: "code-city-publication-evidence", path: "build/publication" },
+    with: { name: "code-city-publication-evidence", path: "build/publication", "digest-mismatch": "error" },
   });
   assert.deepEqual({ id: evidence.steps[4].id, continued: evidence.steps[4]["continue-on-error"] }, { id: "collector", continued: true });
   assert.equal(evidence.steps.indexOf(evidence.steps[3]) < evidence.steps.indexOf(evidence.steps[4]), true, "publication binding precedes collection");
