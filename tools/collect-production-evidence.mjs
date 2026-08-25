@@ -732,7 +732,12 @@ export function recordCdpTransferSize(entry, { dataLength = 0 } = {}) {
 }
 
 async function cdpBody(cdp, sessionId, requestId, cap) {
-  const value = await cdp.send("Network.getResponseBody", { requestId }, sessionId);
+  let value;
+  try {
+    value = await cdp.send("Network.getResponseBody", { requestId }, sessionId);
+  } catch (error) {
+    throw new Error("browser response body command failed", { cause: error });
+  }
   invariant(value && typeof value.body === "string" && typeof value.base64Encoded === "boolean", "browser response body is malformed");
   const bytes = value.base64Encoded ? Uint8Array.from(Buffer.from(value.body, "base64")) : ENCODER.encode(value.body);
   invariant(bytes.byteLength <= cap, "browser response body exceeds cap");
@@ -1269,12 +1274,15 @@ export async function createBrowserEvidenceSession({
       slot.bytes?.fill(0);
       slot.bytes = null;
       if (slot.entry?.bodySlot === slot) slot.entry.bodySlot = null;
+      slot.entry = null;
+      slot.promise = null;
       if (bodySlot === slot) bodySlot = null;
       bodyBacklog = 0;
       try {
         observeBodyState(Object.freeze({
           kind: "provider-body-cleared", generation: slot.generation,
-          stage: slot.stage, bodyBacklog: 0, bodyReferenceCleared: true,
+          stage: slot.stage, bodyBacklog: 0, bodyReferenceCleared: slot.bytes === null,
+          promiseReferenceCleared: slot.promise === null, entryReferenceCleared: slot.entry === null,
         }));
       } catch (error) {
         if (!suppressObserverError) throw error;
@@ -1301,7 +1309,6 @@ export async function createBrowserEvidenceSession({
         }
         slot.state = "captured";
         slot.bytes = bytes;
-        return bytes;
       }, (error) => {
         clearBodySlot(slot, { suppressObserverError: true });
         throw error;
@@ -1543,9 +1550,11 @@ export async function createBrowserEvidenceSession({
       let projection;
       const semanticRecord = Object.freeze({ ...get.route });
       try {
-        bytes = await slot.promise;
-        invariant(mode === current && bodySlot === slot && slot.state === "captured",
-          "browser response body capture was cleared");
+        await slot.promise;
+        invariant(mode === current && bodySlot === slot && slot.state === "captured"
+          && slot.bytes instanceof Uint8Array,
+        "browser response body capture was cleared");
+        bytes = slot.bytes;
         if (get.route.stage === "revision") {
           projection = { revision: projectRevision(bytes) };
         } else if (get.route.stage === "commit") {
@@ -2411,6 +2420,9 @@ function mapBrowserFailure(stage, error) {
     return new CollectorFailure(stage, "request-sequence");
   }
   if (/quiescent/iu.test(message)) return new CollectorFailure(stage, "quiescence-failure");
+  if (/browser response body (?:command failed|slot contention)/iu.test(message)) {
+    return new CollectorFailure(stage, "provider-failure");
+  }
   if (stage === "smoke" && /tree|blob|candidate|UTF-8|NUL|content|identity|revision|commit|supported|encoded data|JSON|Unexpected token|property name/iu.test(message)) {
     return new CollectorFailure(stage, "smoke-failure");
   }

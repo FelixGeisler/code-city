@@ -1742,6 +1742,120 @@ test("the global body slot rejects contention and releases before later projecti
   assert.equal(executions, 12);
 });
 
+test("pending and settled slot contention seal provider-failure packets at the maximal safe prefix", async () => {
+  for (const slotState of ["pending", "settled"]) {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), `collector-contention-${slotState}-`));
+    try {
+      const output = path.join(temporary, "packet");
+      const seams = collectorMatrixSeams();
+      delete seams.writeValidatedEvidencePacket;
+      delete seams.readValidatedEvidencePacket;
+      const fallbackFactory = seams.createBrowserEvidenceSession;
+      const controlledQualification = nativeQualificationFetch();
+      seams.qualifyRepository = ({ now, requestItems, progress, signal }) => qualifyRepository({
+        fetchImpl: controlledQualification.fetchImpl, now, requestItems, progress, signal,
+      });
+      let harness;
+      seams.createBrowserEvidenceSession = async (args) => {
+        const fallback = await fallbackFactory(args);
+        const blockedId = `${slotState}-raw-3`;
+        harness = fakeCdpHarness({
+          async bodyImpl({ params, value }) {
+            if (slotState === "pending" && params.requestId === blockedId) return new Promise(() => {});
+            return value;
+          },
+        });
+        const native = await createBrowserEvidenceSession({
+          ...args,
+          launchImpl: async () => ({ child: fakeChromeChild(), websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+          connectImpl: () => harness.cdp,
+        });
+        const drive = async () => {
+          await Promise.resolve();
+          await emitBrowserGet(harness, {
+            requestId: `${slotState}-revision`, url: revisionUrl("react/react"),
+            body: JSON.stringify([{ sha: REACT }]),
+          });
+          harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+            type: "REVISION_SELECTED", generation: 2, revision: REACT,
+          }) });
+          await new Promise((resolve) => setImmediate(resolve));
+          await emitBrowserGet(harness, {
+            requestId: `${slotState}-commit`, url: commitUrl("react/react", REACT),
+            body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
+          });
+          await emitBrowserGet(harness, {
+            requestId: `${slotState}-tree`, url: treeUrl("react/react", REACT_ROOT),
+            body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
+          });
+          for (let index = 0; index < 2; index += 1) {
+            await emitBrowserGet(harness, {
+              requestId: `${slotState}-raw-${index + 1}`,
+              url: rawUrl("react/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
+            });
+          }
+          harness.bodies.set(blockedId, "x");
+          harness.emit("Network.requestWillBeSent", {
+            requestId: blockedId,
+            request: { url: rawUrl("react/react", REACT, NATIVE_ENTRIES[2].path), method: "GET", headers: {} },
+          }, "worker-session");
+          harness.emit("Network.responseReceived", { requestId: blockedId, response: {
+            url: rawUrl("react/react", REACT, NATIVE_ENTRIES[2].path), status: 200,
+            headers: { "Access-Control-Allow-Origin": "*" }, fromDiskCache: false, fromServiceWorker: false,
+          } }, "worker-session");
+          harness.emit("Network.loadingFinished", { requestId: blockedId, encodedDataLength: 1 }, "worker-session");
+          await waitForBodyCalls(harness, 6);
+          if (slotState === "settled") await new Promise((resolve) => setImmediate(resolve));
+          const contenderId = `${slotState}-raw-4`;
+          harness.bodies.set(contenderId, "x");
+          harness.emit("Network.requestWillBeSent", {
+            requestId: contenderId,
+            request: { url: rawUrl("react/react", REACT, NATIVE_ENTRIES[3].path), method: "GET", headers: {} },
+          }, "worker-session");
+          harness.emit("Network.requestWillBeSentExtraInfo", {
+            requestId: contenderId, headers: {}, associatedCookies: [],
+          }, "worker-session");
+          harness.emit("Network.responseReceived", { requestId: contenderId, response: {
+            url: rawUrl("react/react", REACT, NATIVE_ENTRIES[3].path), status: 200,
+            headers: { "Access-Control-Allow-Origin": "*" }, fromDiskCache: false, fromServiceWorker: false,
+          } }, "worker-session");
+          harness.emit("Network.loadingFinished", { requestId: contenderId, encodedDataLength: 1 }, "worker-session");
+        };
+        return Object.freeze({
+          cdpVersion: native.cdpVersion,
+          fatalSignal: native.fatalSignal,
+          snapshot: native.snapshot,
+          collectSmoke: fallback.collectSmoke,
+          clearTrace: fallback.clearTrace,
+          async collectCapacity(qualification, emit, startedMs) {
+            const pending = native.collectCapacity(qualification, emit, startedMs);
+            void drive();
+            return pending;
+          },
+          close: native.close,
+        });
+      };
+      const result = await collectProductionEvidence({
+        origin: PRODUCTION_ORIGIN, manifestPath: path.join(temporary, "manifest.json"), output,
+      }, seams);
+      assert.deepEqual([result.status, result.reason], ["fail", "provider-failure"], slotState);
+      assert.equal(harness.bodyCalls, 6, slotState);
+      assert.equal((await readFile(path.join(output, ".validated"), "utf8")).trim(), result.packetDigest, slotState);
+      const qualification = JSON.parse(await readFile(path.join(output, "qualification.json"), "utf8"));
+      const capacity = JSON.parse(await readFile(path.join(output, "capacity.json"), "utf8"));
+      const requests = JSON.parse(await readFile(path.join(output, "requests.json"), "utf8"));
+      assert.deepEqual([qualification.status, qualification.reason, capacity.status, capacity.reason],
+        ["fail", "provider-failure", "fail", "provider-failure"], slotState);
+      assert.equal(capacity.data.candidates.length, 2, slotState);
+      assert.deepEqual(qualification.data.candidates, capacity.data.candidates, slotState);
+      assert.equal(requests.data.items.filter((item) => item.applicationCall
+        && item.requestedUrl.includes("/react/react/") && item.stage === "raw").length, 2, slotState);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  }
+});
+
 
 test("half-open wire intervals admit an equal loadingFinished and next-request boundary", async () => {
   const times = [10, 20, 20, 30, 40, 50, 60, 70];
@@ -3191,6 +3305,8 @@ test("the final candidate captures before late metadata and clears before termin
       assert.equal(opened.requestItems.length, 4);
       assert.equal(bodyStates.at(-1).kind, "provider-body-cleared");
       assert.equal(bodyStates.at(-1).bodyBacklog, 0);
+      assert.equal(bodyStates.at(-1).promiseReferenceCleared, true);
+      assert.equal(bodyStates.at(-1).entryReferenceCleared, true);
       if (detachIndex === null) {
         harness.emit("Target.detachedFromTarget", {
           sessionId: "worker-session", targetId: "worker-target",
@@ -3205,6 +3321,141 @@ test("the final candidate captures before late metadata and clears before termin
       )), []);
       await opened.session.close();
     }
+  }
+});
+
+test("production-shaped candidate 4,001 survives terminal, drain, late ExtraInfo, body, and detach permutations", async () => {
+  const scenarios = [
+    { name: "response-finish/body-extra", responseOrder: "response-finish", settlementOrder: "body-extra" },
+    { name: "finish-response/extra-body", responseOrder: "finish-response", settlementOrder: "extra-body" },
+    { name: "response-finish/body-detach-extra", responseOrder: "response-finish", settlementOrder: "body-detach-extra" },
+  ];
+  for (const scenario of scenarios) {
+    const bodyGate = deferredValue();
+    const finalId = `capacity-final-${scenario.name}`;
+    const progressCounts = [];
+    const lifecycle = [];
+    const bodyStates = [];
+    let currentBodyState = null;
+    const harness = fakeCdpHarness({
+      async bodyImpl({ params, value }) {
+        if (params.requestId === finalId) await bodyGate.promise;
+        return value;
+      },
+    });
+    const opened = await openFakeBrowser(harness, {
+      browserOptions: {
+        observeBodyState(state) {
+          currentBodyState = structuredClone(state);
+          bodyStates.push(currentBodyState);
+        },
+        emitQualificationProgress(count) {
+          assert.equal(currentBodyState?.kind, "provider-body-cleared", `${scenario.name}/progress-${count}`);
+          assert.equal(currentBodyState?.promiseReferenceCleared, true, scenario.name);
+          assert.equal(currentBodyState?.entryReferenceCleared, true, scenario.name);
+          progressCounts.push(count);
+        },
+      },
+    });
+    const qualification = (await runNativeQualification()).progress;
+    const pending = opened.session.collectCapacity(qualification, (event, generation, atMs) => {
+      if (["inventory-complete", "qualification-complete", "limit-failure", "request-quiescent", "worker-quiescent"].includes(event)) {
+        assert.equal(currentBodyState?.kind, "provider-body-cleared", `${scenario.name}/${event}`);
+        assert.equal(currentBodyState?.promiseReferenceCleared, true, scenario.name);
+        assert.equal(currentBodyState?.entryReferenceCleared, true, scenario.name);
+      }
+      const value = { event, generation, atMs };
+      lifecycle.push(value);
+      return value;
+    }, 0);
+    await Promise.resolve();
+    await emitBrowserGet(harness, {
+      requestId: `${finalId}-revision`, url: revisionUrl("react/react"),
+      body: JSON.stringify([{ sha: REACT }]),
+    });
+    harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "REVISION_SELECTED", generation: 2, revision: REACT,
+    }) });
+    await new Promise((resolve) => setImmediate(resolve));
+    await emitBrowserGet(harness, {
+      requestId: `${finalId}-commit`, url: commitUrl("react/react", REACT),
+      body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
+    });
+    await emitBrowserGet(harness, {
+      requestId: `${finalId}-tree`, url: treeUrl("react/react", REACT_ROOT),
+      body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
+    });
+    for (let index = 0; index < 4000; index += 1) {
+      await emitBrowserGet(harness, {
+        requestId: `${finalId}-raw-${index + 1}`,
+        url: rawUrl("react/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
+      });
+    }
+
+    const finalEntry = NATIVE_ENTRIES[4000];
+    harness.bodies.set(finalId, "x");
+    harness.emit("Network.requestWillBeSent", {
+      requestId: finalId,
+      request: { url: rawUrl("react/react", REACT, finalEntry.path), method: "GET", headers: {} },
+    }, "worker-session");
+    const response = () => harness.emit("Network.responseReceived", { requestId: finalId, response: {
+      url: rawUrl("react/react", REACT, finalEntry.path), status: 200,
+      headers: { "Access-Control-Allow-Origin": "*" }, fromDiskCache: false, fromServiceWorker: false,
+    } }, "worker-session");
+    const finish = () => harness.emit("Network.loadingFinished", {
+      requestId: finalId, encodedDataLength: 1,
+    }, "worker-session");
+    if (scenario.responseOrder === "response-finish") { response(); finish(); } else { finish(); response(); }
+    await waitForBodyCalls(harness, 4004);
+    assert.equal(opened.requestItems.length, 4003, scenario.name);
+    for (const fact of [
+      { type: "FAILURE", generation: 2, revision: REACT, category: "Repository exceeds Code City limits" },
+      { type: "ATTEMPT_DRAINED", generation: 2 },
+    ]) harness.emit("Runtime.bindingCalled", {
+      name: "__codeCityCollectorEvidence", payload: JSON.stringify(fact),
+    });
+    const extra = () => harness.emit("Network.requestWillBeSentExtraInfo", {
+      requestId: finalId, headers: {}, associatedCookies: [],
+    }, "page-session");
+    let detachIndex = null;
+    if (scenario.settlementOrder.startsWith("body-")) {
+      bodyGate.resolve();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(opened.requestItems.length, 4003, scenario.name);
+      if (scenario.settlementOrder === "body-detach-extra") {
+        harness.emit("Target.detachedFromTarget", {
+          sessionId: "worker-session", targetId: "worker-target",
+        }, "page-session");
+        detachIndex = harness.activity.length - 1;
+      }
+      extra();
+    } else {
+      extra();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(opened.requestItems.length, 4003, scenario.name);
+      bodyGate.resolve();
+    }
+    for (let attempts = 0; opened.requestItems.length < 4004 && attempts < 100; attempts += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(opened.requestItems.length, 4004, scenario.name);
+    assert.equal(bodyStates.at(-1).promiseReferenceCleared, true, scenario.name);
+    assert.equal(bodyStates.at(-1).entryReferenceCleared, true, scenario.name);
+    if (detachIndex === null) {
+      harness.emit("Target.detachedFromTarget", {
+        sessionId: "worker-session", targetId: "worker-target",
+      }, "page-session");
+      detachIndex = harness.activity.length - 1;
+    }
+    const capacity = await pending;
+    assert.equal(capacity.rawRequestCount, 4001, scenario.name);
+    assert.equal(capacity.candidates.length, 4001, scenario.name);
+    assert.equal(progressCounts.at(-1), 4001, scenario.name);
+    assert(lifecycle.some(({ event }) => event === "qualification-complete"), scenario.name);
+    assert.deepEqual(harness.activity.slice(detachIndex + 1).filter(({ type, sessionId }) => (
+      type === "send" && sessionId === "worker-session"
+    )), [], scenario.name);
+    await opened.session.close();
   }
 });
 
@@ -3242,73 +3493,106 @@ test("owner detachment during a pending capture clears custody and tears down ow
   assert.equal(bodyStates.at(-1).kind, "provider-body-cleared");
   assert.equal(bodyStates.at(-1).bodyBacklog, 0);
   assert.equal(bodyStates.at(-1).bodyReferenceCleared, true);
+  assert.equal(bodyStates.at(-1).promiseReferenceCleared, true);
+  assert.equal(bodyStates.at(-1).entryReferenceCleared, true);
   await opened.session.close();
   assert.equal(harness.closeCount, 1);
   assert.equal(opened.child.kills, 1);
   assert(!JSON.stringify({ bodyStates, requestItems: opened.requestItems }).includes("pending-detach-private-id"));
 });
 
-test("pending-capture detachment produces a sealed privacy-safe infrastructure packet", async () => {
-  let stored;
-  const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
-  const fallbackBrowserFactory = seams.createBrowserEvidenceSession;
-  seams.createBrowserEvidenceSession = async (args) => {
-    const harness = fakeCdpHarness({ bodyImpl: () => new Promise(() => {}) });
-    const child = fakeChromeChild();
-    const native = await createBrowserEvidenceSession({
-      ...args,
-      launchImpl: async () => ({ child, websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
-      connectImpl: () => harness.cdp,
-    });
-    const fallback = await fallbackBrowserFactory(args);
-    const drive = async () => {
-      await new Promise((resolve) => setImmediate(resolve));
-      const fixture = generatedStageFixture("revision");
-      harness.bodies.set("packet-pending-private-id", fixture.body);
-      harness.emit("Network.requestWillBeSent", {
-        requestId: "packet-pending-private-id", request: { url: fixture.url, method: "GET", headers: {} },
-      }, "worker-session");
-      harness.emit("Network.responseReceived", { requestId: "packet-pending-private-id", response: {
-        url: fixture.url, status: 200, headers: { "Access-Control-Allow-Origin": "*" },
-        fromDiskCache: false, fromServiceWorker: false,
-      } }, "worker-session");
-      harness.emit("Network.loadingFinished", {
-        requestId: "packet-pending-private-id", encodedDataLength: fixture.body.length,
-      }, "worker-session");
-      await waitForBodyCalls(harness, 1);
-      harness.emit("Target.detachedFromTarget", {
-        sessionId: "worker-session", targetId: "worker-target",
-      }, "page-session");
+test("pending-capture detachment tears down ownership and seals through the real packet path without late activity", async () => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "collector-pending-detach-"));
+  const output = path.join(temporary, "packet");
+  const profile = path.join(temporary, "profile");
+  const unhandled = [];
+  const onUnhandled = (error) => unhandled.push(error);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const seams = collectorMatrixSeams();
+    delete seams.writeValidatedEvidencePacket;
+    delete seams.readValidatedEvidencePacket;
+    let harness;
+    let child;
+    let cleanupCount = 0;
+    let callbackCount = 0;
+    seams.mkdtemp = async () => profile;
+    seams.rm = async (value) => {
+      assert.equal(value, profile);
+      cleanupCount += 1;
     };
-    return Object.freeze({
-      cdpVersion: native.cdpVersion,
-      fatalSignal: native.fatalSignal,
-      snapshot: native.snapshot,
-      async collectSmoke(emit, startedMs) {
-        const result = native.collectSmoke(emit, startedMs);
-        void drive();
-        return result;
-      },
-      clearTrace: native.clearTrace,
-      collectCapacity: fallback.collectCapacity,
-      close: native.close,
-    });
-  };
-  const result = await collectProductionEvidence({
-    origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
-    output: path.resolve("pending-capture-detachment"),
-  }, seams);
-  assert.deepEqual([result.status, result.reason], ["fail", "infrastructure-failure"]);
-  const validated = validateEvidencePacket(stored.files, stored.binding);
-  const index = JSON.parse(new TextDecoder().decode(validated.files.get("index.json")));
-  const smoke = JSON.parse(new TextDecoder().decode(validated.files.get("smoke.json")));
-  const requests = JSON.parse(new TextDecoder().decode(validated.files.get("requests.json")));
-  assert.deepEqual([index.overallStatus, index.firstFailure], ["fail", "infrastructure-failure"]);
-  assert.deepEqual([smoke.status, smoke.reason, smoke.data.providerGetCount],
-    ["fail", "infrastructure-failure", 0]);
-  assert.deepEqual(requests.data.items, []);
-  for (const bytes of validated.files.values()) {
-    assert(!new TextDecoder().decode(bytes).includes("packet-pending-private-id"));
+    seams.createBrowserEvidenceSession = async (args) => {
+      harness = fakeCdpHarness({ bodyImpl: () => new Promise(() => {}) });
+      child = fakeChromeChild();
+      const native = await createBrowserEvidenceSession({
+        ...args,
+        launchImpl: async () => ({ child, websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+        connectImpl: () => harness.cdp,
+      });
+      const drive = async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        const fixture = generatedStageFixture("revision");
+        harness.bodies.set("packet-pending-private-id", fixture.body);
+        harness.emit("Network.requestWillBeSent", {
+          requestId: "packet-pending-private-id", request: { url: fixture.url, method: "GET", headers: {} },
+        }, "worker-session");
+        harness.emit("Network.responseReceived", { requestId: "packet-pending-private-id", response: {
+          url: fixture.url, status: 200, headers: { "Access-Control-Allow-Origin": "*" },
+          fromDiskCache: false, fromServiceWorker: false,
+        } }, "worker-session");
+        harness.emit("Network.loadingFinished", {
+          requestId: "packet-pending-private-id", encodedDataLength: fixture.body.length,
+        }, "worker-session");
+        await waitForBodyCalls(harness, 1);
+        harness.emit("Target.detachedFromTarget", {
+          sessionId: "worker-session", targetId: "worker-target",
+        }, "page-session");
+      };
+      return Object.freeze({
+        cdpVersion: native.cdpVersion,
+        fatalSignal: native.fatalSignal,
+        snapshot: native.snapshot,
+        async collectSmoke(emit, startedMs) {
+          const result = native.collectSmoke((...parameters) => {
+            callbackCount += 1;
+            return emit(...parameters);
+          }, startedMs);
+          void drive();
+          return result;
+        },
+        clearTrace: native.clearTrace,
+        async collectCapacity() { throw new Error("capacity must not start"); },
+        close: native.close,
+      });
+    };
+    const result = await collectProductionEvidence({
+      origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"), output,
+    }, seams);
+    assert.deepEqual([result.status, result.reason], ["fail", "infrastructure-failure"]);
+    assert.equal(await readFile(path.join(output, ".validated"), "utf8"), `${result.packetDigest}\n`);
+    const index = JSON.parse(await readFile(path.join(output, "index.json"), "utf8"));
+    const smoke = JSON.parse(await readFile(path.join(output, "smoke.json"), "utf8"));
+    const requests = JSON.parse(await readFile(path.join(output, "requests.json"), "utf8"));
+    assert.deepEqual([index.overallStatus, index.firstFailure], ["fail", "infrastructure-failure"]);
+    assert.deepEqual([smoke.status, smoke.reason, smoke.data.providerGetCount],
+      ["fail", "infrastructure-failure", 0]);
+    assert.deepEqual(requests.data.items, []);
+    assert.equal(callbackCount, 0);
+    assert.equal(harness.bodyCalls, 1);
+    assert.equal(harness.closeCount, 1);
+    assert.equal(child.kills, 1);
+    assert.equal(cleanupCount, 1);
+    const terminalActivity = structuredClone(harness.activity);
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(harness.activity, terminalActivity);
+    assert.deepEqual(unhandled, []);
+    for (const name of ["artifact", "smoke", "qualification", "capacity", "requests", "lifecycle", "index"]) {
+      assert(!String(await readFile(path.join(output, `${name}.json`), "utf8")).includes("packet-pending-private-id"));
+    }
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+    await rm(temporary, { recursive: true, force: true });
   }
 });
 
@@ -4387,6 +4671,7 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
   assert.equal(callbackBodyStates.length, progressCounts.length + 1);
   assert(callbackBodyStates.every(({ state }) => state.kind === "provider-body-cleared"
     && state.stage === "raw" && state.bodyBacklog === 0 && state.bodyReferenceCleared === true
+    && state.promiseReferenceCleared === true && state.entryReferenceCleared === true
     && Object.hasOwn(state, "body") === false));
   harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
     type: "FAILURE", generation: 2, revision: REACT, category: "Repository exceeds Code City limits",
@@ -4898,12 +5183,18 @@ async function collectNativeSmokeBarrierFailurePacket(kind) {
   const fallbackBrowserFactory = seams.createBrowserEvidenceSession;
   seams.createBrowserEvidenceSession = async (args) => {
     const harness = fakeCdpHarness({
-      bodyImpl: async () => { throw new Error(diagnostic); },
+      bodyImpl: async ({ value }) => {
+        if (kind === "worker-command") throw new Error(diagnostic);
+        return value;
+      },
     });
     const native = await createBrowserEvidenceSession({
       ...args,
       launchImpl: async () => ({ child: fakeChromeChild(), websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
       connectImpl: () => harness.cdp,
+      async beforeProviderProjection() {
+        if (kind === "processing-barrier") throw new Error(diagnostic);
+      },
     });
     const fallback = await fallbackBrowserFactory(args);
     const driveSmoke = async () => {
@@ -4940,16 +5231,16 @@ async function collectNativeSmokeBarrierFailurePacket(kind) {
     origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
     output: path.resolve(`handled-${kind}`),
   }, seams);
-  return { diagnostic, result, stored };
+  return { diagnostic, result, stored, expectedReason: kind === "worker-command" ? "provider-failure" : "infrastructure-failure" };
 }
 
-function assertSchemaValidSmokeBarrierFailure({ diagnostic, result, stored }) {
-  assert.deepEqual([result.status, result.reason], ["fail", "infrastructure-failure"]);
+function assertSchemaValidSmokeBarrierFailure({ diagnostic, result, stored, expectedReason }) {
+  assert.deepEqual([result.status, result.reason], ["fail", expectedReason]);
   const index = JSON.parse(new TextDecoder().decode(stored.files.get("index.json")));
   const smoke = JSON.parse(new TextDecoder().decode(stored.files.get("smoke.json")));
   const lifecycle = JSON.parse(new TextDecoder().decode(stored.files.get("lifecycle.json")));
-  assert.deepEqual([index.overallStatus, index.firstFailure], ["fail", "infrastructure-failure"]);
-  assert.deepEqual([smoke.status, smoke.reason], ["fail", "infrastructure-failure"]);
+  assert.deepEqual([index.overallStatus, index.firstFailure], ["fail", expectedReason]);
+  assert.deepEqual([smoke.status, smoke.reason], ["fail", expectedReason]);
   assert.deepEqual(lifecycle.data.events.map(({ event }) => event), [
     "collector-start", "artifact-verified", "smoke-start", "collector-failed",
   ]);
@@ -5687,8 +5978,8 @@ test("browser capacity normalization and hash failures produce stage-aware schem
   }
 });
 
-test("mid-prefix malformed, cap-plus-one, and pre-projection CDP failures persist sealed safe shared frontiers", async () => {
-  for (const scenario of ["malformed", "cap-plus-one", "before-projection"]) {
+test("mid-prefix malformed, cap-plus-one, command-rejection, and pre-projection failures seal safe shared frontiers", async () => {
+  for (const scenario of ["malformed", "cap-plus-one", "command-rejection", "before-projection"]) {
     const temporary = await mkdtemp(path.join(os.tmpdir(), `collector-mid-prefix-${scenario}-`));
     try {
       const output = path.join(temporary, "packet");
@@ -5714,6 +6005,7 @@ test("mid-prefix malformed, cap-plus-one, and pre-projection CDP failures persis
             if (params.requestId !== targetRequestId) return value;
             if (scenario === "malformed") return { body: { diagnostic }, base64Encoded: false };
             if (scenario === "cap-plus-one") return { body: oversizedBody, base64Encoded: true };
+            if (scenario === "command-rejection") throw new Error(diagnostic);
             return value;
           },
         });
@@ -5810,6 +6102,8 @@ test("mid-prefix malformed, cap-plus-one, and pre-projection CDP failures persis
       assert.equal(bodyStates.at(-1).kind, "provider-body-cleared", scenario);
       assert.equal(bodyStates.at(-1).bodyBacklog, 0, scenario);
       assert.equal(bodyStates.at(-1).bodyReferenceCleared, true, scenario);
+      assert.equal(bodyStates.at(-1).promiseReferenceCleared, true, scenario);
+      assert.equal(bodyStates.at(-1).entryReferenceCleared, true, scenario);
       for (const name of ["artifact", "smoke", "qualification", "capacity", "requests", "lifecycle", "index"]) {
         const text = await readFile(path.join(output, `${name}.json`), "utf8");
         assert(!text.includes(diagnostic), `${scenario}/${name}`);
