@@ -167,13 +167,13 @@ test("finalization copies an exact marker-free packet, uses the validated reader
   await assert.rejects(fs.lstat(path.join(root, ".wrapper.json.success.tmp")), { code: "ENOENT" });
 }));
 
-test("finalizer rejects packet v1 and every mixed envelope, index, and collector version without a wrapper", async () => temporary(async (root) => {
-  const mutations = [
+test("finalizer rejects packet v1, packet v2, and every mixed envelope, index, and collector version without a wrapper", async () => temporary(async (root) => {
+  const mutations = [1, 2].flatMap((version) => [
     ...["artifact", "smoke", "qualification", "capacity", "requests", "lifecycle"]
-      .map((name) => [`${name} envelope v1`, `${name}.json`, (value) => { value.schemaVersion = 1; }]),
-    ["collector v1", "lifecycle.json", (value) => { value.data.collectorVersion = 1; }],
-    ["index v1", "index.json", (value) => { value.schemaVersion = 1; }],
-  ];
+      .map((name) => [`${name} envelope v${version}`, `${name}.json`, (value) => { value.schemaVersion = version; }]),
+    [`collector v${version}`, "lifecycle.json", (value) => { value.data.collectorVersion = version; }],
+    [`index v${version}`, "index.json", (value) => { value.schemaVersion = version; }],
+  ]);
   for (const [name, file, mutate] of mutations) {
     const scenarioRoot = path.join(root, name.replaceAll(" ", "-"));
     await fs.mkdir(scenarioRoot);
@@ -192,7 +192,7 @@ test("finalizer rejects packet v1 and every mixed envelope, index, and collector
 
 test("finalizer compiles the accepted parent digest and exposes no runtime replacement path", async () => temporary(async (root) => {
   const fixture = await arrange(root);
-  const formerDigest = "f06369b3eef5e62631ee8f61ddfd7679b00a3d2139dd83a2f6472820e62864e6";
+  const formerDigest = "06f08ca0144ffe9d5e162f3eb74c898b8b3a9e789832eae8c406f0fef55d0184";
   let observedBinding;
   await finalizeProductionEvidence(options(fixture), {
     temporarySuffix: "fixed-parent",

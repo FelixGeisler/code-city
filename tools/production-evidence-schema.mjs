@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { types as utilTypes } from "node:util";
 
-const PARENT_DIGEST = "06f08ca0144ffe9d5e162f3eb74c898b8b3a9e789832eae8c406f0fef55d0184";
+const PARENT_DIGEST = "62e24a6d2ba751a44a515a8402911a1de0fc811db62a80337bdc9a0518b1f300";
 const REPOSITORY = "FelixGeisler/code-city";
 const ORIGIN = "https://felixgeisler.github.io/code-city/";
 const CODE_CITY_URL = "https://github.com/FelixGeisler/code-city";
@@ -35,11 +35,20 @@ const CAPS = new Map([
   ["lifecycle.json", 1024 * 1024],
   ["index.json", 16 * 1024],
 ]);
+const NATIVE_QUALIFICATION_REASONS = Object.freeze([
+  "qualification-failure", "identity-mismatch", "provider-failure", "cors-failure", "tree-incomplete",
+  "request-sequence", "request-overlap", "unexpected-request", "credential-header", "infrastructure-failure",
+]);
+const SHARED_BROWSER_REASONS = Object.freeze([
+  "identity-mismatch", "provider-failure", "cors-failure", "tree-incomplete", "hash-mismatch", "content-invalid",
+  "limit-order", "request-sequence", "request-overlap", "unexpected-request", "credential-header", "stale-publication",
+  "quiescence-failure", "cleanup-failure", "infrastructure-failure",
+]);
 const FAIL_REASONS = Object.freeze({
   artifact: ["artifact-mismatch", "production-unreachable", "infrastructure-failure"],
   smoke: ["smoke-failure", "provider-failure", "cors-failure", "request-sequence", "request-overlap", "unexpected-request", "credential-header", "stale-publication", "quiescence-failure", "cleanup-failure", "infrastructure-failure"],
-  qualification: ["qualification-failure", "identity-mismatch", "provider-failure", "cors-failure", "tree-incomplete", "hash-mismatch", "content-invalid", "request-sequence", "request-overlap", "unexpected-request", "credential-header", "infrastructure-failure"],
-  capacity: ["identity-mismatch", "provider-failure", "cors-failure", "tree-incomplete", "hash-mismatch", "content-invalid", "limit-order", "request-sequence", "request-overlap", "unexpected-request", "credential-header", "stale-publication", "quiescence-failure", "cleanup-failure", "infrastructure-failure"],
+  qualification: [...NATIVE_QUALIFICATION_REASONS, ...SHARED_BROWSER_REASONS.filter((reason) => !NATIVE_QUALIFICATION_REASONS.includes(reason))],
+  capacity: [...SHARED_BROWSER_REASONS],
 });
 const ERROR_CODES = new Set(["invalid-payload", "invalid-binding", "noncanonical-bytes", "filesystem-safety", "io-failure"]);
 const ENVELOPE_KEYS = ["schemaVersion", "kind", "status", "reason", "data"];
@@ -52,8 +61,8 @@ const INVOCATION = ["node", "tools/collect-production-evidence.mjs", "--origin",
 const PASS_EVENTS = [
   ["collector-start", 0], ["artifact-verified", 0], ["smoke-start", 1],
   ["revision-selected", 1], ["city-published", 1], ["trace-reset", 0],
-  ["qualification-start", 0], ["qualification-complete", 0], ["capacity-start", 2],
-  ["revision-selected", 2], ["inventory-complete", 2], ["limit-failure", 2],
+  ["qualification-start", 0], ["capacity-start", 2], ["revision-selected", 2],
+  ["inventory-complete", 2], ["qualification-complete", 0], ["limit-failure", 2],
   ["request-quiescent", 2], ["worker-quiescent", 2], ["collector-complete", 0],
 ];
 const EVENT_NAMES = new Set([...PASS_EVENTS.map(([name]) => name), "collector-failed"]);
@@ -166,7 +175,7 @@ function validateBindingValue(value) {
 
 function validateEnvelope(envelope, kind) {
   exactObject(envelope, ENVELOPE_KEYS);
-  requireValue(envelope.schemaVersion === 2 && envelope.kind === kind);
+  requireValue(envelope.schemaVersion === 3 && envelope.kind === kind);
   oneOf(envelope.status, ["pass", "fail", "not-run"]);
   if (envelope.status === "pass") requireValue(envelope.reason === "none");
   if (envelope.status === "not-run") requireValue(envelope.reason === "blocked");
@@ -272,7 +281,8 @@ function validateCapacity(envelope) {
   fixedOrNull(data.repositoryUrl, REACT_URL); nullable(data.revision, gitId); nullable(data.rootTree, gitId);
   fixedOrNull(data.terminal, "Repository exceeds Code City limits");
   for (const key of ["revisionDisplayed", "cityPresent", "priorCityRemoved", "noLaterRequest", "workerQuiescent"]) nullableBoolean(data[key]);
-  nullable(data.rawRequestCount, count); nullable(data.maxOverlap, count); validateCandidates(data.candidates);
+  nullable(data.rawRequestCount, count); nullable(data.maxOverlap, count);
+  validateCandidates(data.candidates);
   nullable(data.startedMs, milliseconds); nullable(data.endedMs, milliseconds);
   if (data.endedMs !== null) requireValue(data.startedMs !== null && data.endedMs >= data.startedMs);
   if (data.revision !== null && data.rootTree !== null) requireValue(data.revision.length === data.rootTree.length);
@@ -401,7 +411,7 @@ function validateDirectExchanges(items, requireSuccess) {
   }
 }
 
-function validateExchangeSequence(items, repository, applicationCall, complete) {
+function validateExchangeSequence(items, repository, applicationCall, expectedCompleteGets = null) {
   const gets = [];
   const getUrls = new Set();
   const stages = ["revision", "commit", "tree"];
@@ -426,7 +436,9 @@ function validateExchangeSequence(items, repository, applicationCall, complete) 
       requireValue(compareUtf8(previous.path, route.path) < 0);
     }
   }
-  if (complete) requireValue(gets.length >= 4 && gets.slice(0, 3).every((item, index) => item.stage === stages[index]) && gets.slice(3).every((item) => item.stage === "raw"));
+  if (expectedCompleteGets !== null) requireValue(gets.length === expectedCompleteGets
+    && gets.slice(0, 3).every((item, index) => item.stage === stages[index])
+    && gets.slice(3).every((item) => item.stage === "raw"));
   return gets;
 }
 
@@ -446,18 +458,32 @@ function validateGetBindings(gets, data, candidateValues, repositoryUrl, allowed
   }
 }
 
-function validateTerminalRawPrefix(items, gets, candidateValues, reason) {
-  if (reason !== "content-invalid" && reason !== "unexpected-request") return;
+function validateTerminalRawPrefix(items, gets, candidateValues, reason, sharedFailure) {
   const raws = gets.filter((item) => item.stage === "raw");
   const extraRaw = raws.length - candidateValues.length;
-  requireValue(extraRaw === 0 || extraRaw === 1);
-  if (reason === "content-invalid") {
-    const finalCandidateInvalid = candidateValues.length > 0 && candidateValues.at(-1).contentValid === false;
-    requireValue(candidateValues.slice(0, -1).every((candidate) => candidate.contentValid));
-    requireValue(finalCandidateInvalid ? extraRaw === 0 : extraRaw === 1);
+  if (!sharedFailure) {
+    requireValue(extraRaw === 0);
+    return;
   }
-  const terminalRequest = extraRaw === 1 ? raws.at(-1) : gets.at(-1);
-  requireValue(terminalRequest === items.at(-1));
+  requireValue(extraRaw === 0 || extraRaw === 1);
+  if (extraRaw === 1) {
+    const terminalRequest = raws.at(-1);
+    const terminalRoute = routeOf(terminalRequest.requestedUrl, "raw");
+    requireValue(terminalRequest === gets.at(-1) && terminalRequest === items.at(-1));
+    if (candidateValues.length > 0) requireValue(compareUtf8(candidateValues.at(-1).path, terminalRoute.path) < 0);
+  }
+  if (reason === "content-invalid") {
+    const invalidIndex = candidateValues.findIndex((candidate) => candidate.contentValid === false);
+    requireValue(invalidIndex < 0 || (invalidIndex === candidateValues.length - 1
+      && candidateValues.slice(0, -1).every((candidate) => candidate.contentValid)
+      && extraRaw === 0));
+  }
+  if (reason === "hash-mismatch") {
+    const mismatchIndex = candidateValues.findIndex((candidate) => candidate.hashMatched === false);
+    requireValue(mismatchIndex < 0 || (mismatchIndex === candidateValues.length - 1
+      && candidateValues.slice(0, -1).every((candidate) => candidate.hashMatched)
+      && extraRaw === 0));
+  }
 }
 
 function maximumOverlap(items) {
@@ -487,29 +513,33 @@ function validateRequests(envelope, payloads, overallPass, primaryReason) {
   const smokePass = payloads.smoke.status === "pass";
   const qualificationPass = payloads.qualification.status === "pass";
   const capacityPass = payloads.capacity.status === "pass";
-  const smokeGets = validateExchangeSequence(groups.smoke, REPOSITORY, true, smokePass);
-  const qualificationGets = validateExchangeSequence(groups.qualification, "react/react", false, qualificationPass);
-  const capacityGets = validateExchangeSequence(groups.capacity, "react/react", true, capacityPass);
+  const capacityStarted = eventIndex(payloads.lifecycle.data.events, "capacity-start", 2) !== undefined;
+  const smokeGets = validateExchangeSequence(groups.smoke, REPOSITORY, true);
+  const qualificationGets = validateExchangeSequence(groups.qualification, "react/react", false,
+    qualificationPass || capacityStarted ? 3 : null);
+  requireValue(qualificationGets.every((item) => item.stage !== "raw"));
+  const capacityGets = validateExchangeSequence(groups.capacity, "react/react", true,
+    capacityPass ? 4004 : null);
   validateDirectExchanges(groups.other, payloads.artifact.status === "pass");
   if (smokePass) requireValue(smokeGets.length >= 4);
-  if (qualificationPass) requireValue(qualificationGets.length === 4004 && qualificationGets.slice(3).length === 4001);
+  if (qualificationPass || capacityStarted) requireValue(qualificationGets.length === 3);
   if (capacityPass) requireValue(capacityGets.length === 4004 && capacityGets.slice(3).length === 4001);
   validateGetBindings(smokeGets, payloads.smoke.data, null, CODE_CITY_URL);
-  const qualificationReason = payloads.qualification.reason;
   const capacityReason = payloads.capacity.reason;
-  validateGetBindings(qualificationGets, payloads.qualification.data, payloads.qualification.data.candidates, REACT_URL,
-    qualificationReason === "content-invalid" || qualificationReason === "unexpected-request" ? 1 : 0);
+  const sharedFailure = payloads.qualification.status === "fail" && payloads.capacity.status === "fail";
+  validateGetBindings(qualificationGets, payloads.qualification.data, null, REACT_URL);
   validateGetBindings(capacityGets, payloads.capacity.data, payloads.capacity.data.candidates, REACT_URL,
-    capacityReason === "content-invalid" || capacityReason === "unexpected-request" ? 1 : 0);
-  validateTerminalRawPrefix(items, qualificationGets, payloads.qualification.data.candidates, qualificationReason);
-  validateTerminalRawPrefix(items, capacityGets, payloads.capacity.data.candidates, capacityReason);
-  const passingGroups = [...(smokePass ? groups.smoke : []), ...(qualificationPass ? groups.qualification : []), ...(capacityPass ? groups.capacity : [])];
-  requireValue(passingGroups.every((item) => (item.method === "GET" ? item.status === 200 : item.status >= 200 && item.status <= 299)
-    && item.redirected === false && item.authorizationAbsent && item.cookieAbsent && item.refererAbsent));
-  for (const item of [...(smokePass ? groups.smoke : []), ...(capacityPass ? groups.capacity : [])]) requireValue(item.corsAllowOrigin !== null);
+    sharedFailure ? 1 : 0);
+  validateTerminalRawPrefix(items, capacityGets, payloads.capacity.data.candidates,
+    capacityReason, sharedFailure);
+  const qualificationMustHaveSucceeded = qualificationPass || capacityStarted;
+  const passingGroups = [...(smokePass ? groups.smoke : []), ...(capacityPass ? groups.capacity : [])];
+  requireSuccessfulExchanges(passingGroups);
+  for (const item of passingGroups) requireValue(item.corsAllowOrigin !== null);
+  if (qualificationMustHaveSucceeded) requireSuccessfulExchanges(groups.qualification, true);
   const phaseOverlaps = [groups.smoke, groups.qualification, groups.capacity].map((group) => maximumOverlap(group.filter((item) => item.method === "GET")));
   if (smokePass) requireValue(phaseOverlaps[0] <= 1);
-  if (qualificationPass) requireValue(phaseOverlaps[1] <= 1);
+  if (qualificationMustHaveSucceeded) requireValue(phaseOverlaps[1] <= 1);
   if (capacityPass) requireValue(phaseOverlaps[2] === 1);
   const credentialFailure = items.some((item) => !item.authorizationAbsent || !item.cookieAbsent || !item.refererAbsent);
   requireValue(!credentialFailure || primaryReason === "credential-header");
@@ -555,9 +585,14 @@ function validateLifecycleImplications(payloads, requestInfo, events) {
       requireValue(qualification.repositoryUrl === REACT_URL && qualification.truncated === false
         && qualification.treeEntries >= 4001 && qualification.candidates.length === 4001
         && qualification.candidates.every((candidate) => candidate.hashMatched && candidate.contentValid)
-        && requestInfo.qualificationGets.length === 4004);
-      validateGetBindings(requestInfo.qualificationGets, qualification, qualification.candidates, REACT_URL);
-      requireSuccessfulExchanges(requestInfo.groups.qualification);
+        && requestInfo.qualificationGets.length === 3
+        && requestInfo.capacityGets.length === 4004
+        && requestInfo.capacityGets.filter((item) => item.stage === "raw").length === 4001
+        && JSON.stringify(qualification.candidates) === JSON.stringify(capacity.candidates));
+      validateGetBindings(requestInfo.qualificationGets, qualification, null, REACT_URL);
+      validateGetBindings(requestInfo.capacityGets, capacity, qualification.candidates, REACT_URL);
+      requireSuccessfulExchanges(requestInfo.groups.qualification, true);
+      requireSuccessfulExchanges(requestInfo.groups.capacity, true);
     }],
     ["revision-selected", 2, () => {
       requireFacts(capacity, ["revision"]);
@@ -619,7 +654,7 @@ function derivedDurations(events) {
 function validateLifecycle(envelope, overallPass, primaryReason, failedStage, requestInfo) {
   const data = envelope.data;
   requireValue(envelope.status === (overallPass ? "pass" : "fail") && envelope.reason === (overallPass ? "none" : primaryReason));
-  requireValue(data.collectorVersion === 2);
+  requireValue(data.collectorVersion === 3);
   nullable(data.collectorCommit, gitId);
   if (data.invocation !== null) {
     exactArray(data.invocation, 8);
@@ -644,7 +679,7 @@ function validateLifecycle(envelope, overallPass, primaryReason, failedStage, re
     const prefix = data.events.slice(0, -1);
     prefix.forEach((event, index) => requireValue(index < PASS_EVENTS.length - 1 && event.event === PASS_EVENTS[index][0] && event.generation === PASS_EVENTS[index][1]));
     const completed = prefix.length;
-    const ranges = { artifact: [1, 2], smoke: [3, 5], qualification: [6, 7], capacity: [8, 14] };
+    const ranges = { artifact: [1, 2], smoke: [3, 5], qualification: [7, 7], capacity: [8, 14] };
     requireValue(completed >= ranges[failedStage][0] && completed <= ranges[failedStage][1]);
   }
   validateDurations(data.durations);
@@ -667,15 +702,30 @@ function validateLifecycle(envelope, overallPass, primaryReason, failedStage, re
 }
 
 function deriveStatus(payloads) {
-  let failed = null;
-  for (let index = 0; index < 4; index += 1) {
-    const kind = PAYLOAD_NAMES[index]; const envelope = payloads[kind];
-    if (failed === null) {
-      if (envelope.status === "fail") failed = { stage: kind, reason: envelope.reason, index };
-      else requireValue(envelope.status === "pass");
-    } else requireValue(envelope.status === "not-run" && envelope.reason === "blocked");
+  const { artifact, smoke, qualification, capacity } = payloads;
+  if (artifact.status === "fail") {
+    requireValue([smoke, qualification, capacity].every((value) => value.status === "not-run"));
+    return { stage: "artifact", reason: artifact.reason, shared: false };
   }
-  return failed ?? { stage: null, reason: "none", index: -1 };
+  requireValue(artifact.status === "pass");
+  if (smoke.status === "fail") {
+    requireValue(qualification.status === "not-run" && capacity.status === "not-run");
+    return { stage: "smoke", reason: smoke.reason, shared: false };
+  }
+  requireValue(smoke.status === "pass");
+  if (qualification.status === "fail") {
+    if (capacity.status === "not-run") {
+      requireValue(NATIVE_QUALIFICATION_REASONS.includes(qualification.reason));
+      return { stage: "qualification", reason: qualification.reason, shared: false };
+    }
+    requireValue(capacity.status === "fail" && capacity.reason === qualification.reason
+      && SHARED_BROWSER_REASONS.includes(qualification.reason));
+    return { stage: "capacity", reason: capacity.reason, shared: true };
+  }
+  requireValue(qualification.status === "pass");
+  if (capacity.status === "fail") return { stage: "capacity", reason: capacity.reason, shared: false };
+  requireValue(capacity.status === "pass");
+  return { stage: null, reason: "none", shared: false };
 }
 
 function failureGroup(stage, requestInfo) {
@@ -733,6 +783,9 @@ function validatePayloadSet(payloads, binding) {
   exactObject(payloads, PAYLOAD_NAMES);
   for (const kind of PAYLOAD_NAMES) validateEnvelope(payloads[kind], kind);
   validateArtifact(payloads.artifact); validateSmoke(payloads.smoke); validateQualification(payloads.qualification); validateCapacity(payloads.capacity);
+  // Lifecycle events influence request-frontier validation, so enforce their
+  // native dense-array cap before any event lookup can traverse attacker input.
+  exactArray(payloads.lifecycle.data.events, 20000);
   const failure = deriveStatus(payloads); const overallPass = failure.stage === null;
   const requestInfo = validateRequests(payloads.requests, payloads, overallPass, failure.reason);
   validateLifecycle(payloads.lifecycle, overallPass, failure.reason, failure.stage, requestInfo);
@@ -744,20 +797,21 @@ function validatePayloadSet(payloads, binding) {
   requireValue(smokeStarted
     ? payloads.smoke.data.providerGetCount === requestInfo.smokeGets.length
     : payloads.smoke.data.providerGetCount === null);
-  if (payloads.qualification.status === "pass" && payloads.capacity.status !== "not-run") {
-    const capacity = payloads.capacity.data; const qualification = payloads.qualification.data;
+  const capacity = payloads.capacity.data; const qualification = payloads.qualification.data;
+  if (payloads.capacity.status !== "not-run") {
     const reason = payloads.capacity.reason;
     if (capacity.repositoryUrl !== null && capacity.repositoryUrl !== qualification.repositoryUrl) requireValue(reason === "identity-mismatch");
     if (capacity.revision !== null && capacity.revision !== qualification.revision) requireValue(reason === "identity-mismatch" || reason === "stale-publication");
     if (capacity.rootTree !== null && capacity.rootTree !== qualification.rootTree) requireValue(reason === "identity-mismatch");
-    if (reason !== "hash-mismatch" && reason !== "content-invalid") {
-      requireValue(JSON.stringify(capacity.candidates) === JSON.stringify(qualification.candidates.slice(0, capacity.candidates.length)));
-    }
   }
-  if (payloads.qualification.status === "pass" && payloads.capacity.status === "pass") {
-    requireValue(JSON.stringify(payloads.capacity.data.candidates) === JSON.stringify(payloads.qualification.data.candidates));
+  if (failure.shared || payloads.qualification.status === "pass") {
+    requireValue(JSON.stringify(capacity.candidates) === JSON.stringify(qualification.candidates));
   }
   const capacityStarted = eventIndex(payloads.lifecycle.data.events, "capacity-start", 2) !== undefined;
+  const qualificationCompleteObserved = eventIndex(payloads.lifecycle.data.events, "qualification-complete", 0) !== undefined;
+  requireValue(capacityStarted === (payloads.capacity.status !== "not-run"));
+  requireValue(qualificationCompleteObserved === (payloads.qualification.status === "pass"));
+  if (failure.shared) requireValue(capacityStarted && !qualificationCompleteObserved);
   const capacityRawCount = requestInfo.capacityGets.filter((item) => item.stage === "raw").length;
   if (capacityStarted) {
     requireValue(payloads.capacity.data.rawRequestCount === capacityRawCount);
@@ -804,11 +858,17 @@ function validatePayloadSet(payloads, binding) {
   const capacityRevisionSelected = eventIndex(events, "revision-selected", 2);
   const workerQuiescent = eventIndex(events, "worker-quiescent", 2);
   const inventoryComplete = eventIndex(events, "inventory-complete", 2);
+  const qualificationComplete = eventIndex(events, "qualification-complete", 0);
   const limitFailure = eventIndex(events, "limit-failure", 2);
   const capacityRevisionExchanges = requestInfo.groups.capacity.filter((item) => item.stage === "revision");
   const capacityInventoryExchanges = requestInfo.groups.capacity.filter((item) => item.stage === "commit" || item.stage === "tree");
   validateStageTimes(payloads.capacity.data, capacityStart, finalEvent, capacityRevisionSelected ?? finalEvent, workerQuiescent ?? finalEvent);
-  if (capacityStart) requireValue(payloads.capacity.data.repositoryUrl === REACT_URL);
+  if (capacityStart) {
+    requireValue(payloads.capacity.data.repositoryUrl === REACT_URL
+      && requestInfo.qualificationGets.length === 3
+      && requestInfo.groups.qualification.every((item) => item.endedMs <= capacityStart.atMs));
+    requireSuccessfulExchanges(requestInfo.groups.qualification, true);
+  }
   if (workerQuiescent) requireValue(payloads.capacity.data.workerQuiescent === true);
   if (payloads.capacity.status === "pass") requireValue(payloads.capacity.data.startedMs === capacityStart.atMs && payloads.capacity.data.endedMs === workerQuiescent.atMs);
   if (capacityRevisionSelected) {
@@ -820,7 +880,12 @@ function validatePayloadSet(payloads, binding) {
     requireValue(capacityTreeRequest !== undefined && capacityInventoryExchanges.every((item) => item.endedMs <= inventoryComplete.atMs));
     if (capacityRawRequests.length > 0) requireValue(capacityRawRequests.every((item) => item.startedMs >= inventoryComplete.atMs));
   }
+  if (qualificationComplete) {
+    requireValue(capacityRawRequests.length === 4001);
+    requireValue(capacityRawRequests.every((item) => item.endedMs <= qualificationComplete.atMs));
+  }
   if (limitFailure) {
+    requireValue(qualificationComplete !== undefined && qualificationComplete.atMs <= limitFailure.atMs);
     requireValue(capacityRawRequests.length === 4001);
     requireValue(capacityRawRequests.every((item) => item.endedMs <= limitFailure.atMs));
   }
@@ -854,7 +919,7 @@ function validatePayloadSet(payloads, binding) {
 
 function buildIndex(binding, status, payloadBytes) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     issueBodySha256: PARENT_DIGEST,
     eventSha: binding.eventSha,
     overallStatus: status.overallStatus,
@@ -912,7 +977,7 @@ function validatePacketInternal(files, binding) {
   const status = validatePayloadSet(parsed, binding);
   const indexSource = MAP_GET.call(files, "index.json"); const index = parseCanonical(indexSource, CAPS.get("index.json"));
   exactObject(index, ["schemaVersion", "issueBodySha256", "eventSha", "overallStatus", "firstFailure", "files"]);
-  requireValue(index.schemaVersion === 2 && index.issueBodySha256 === PARENT_DIGEST && index.eventSha === binding.eventSha && index.overallStatus === status.overallStatus && index.firstFailure === status.firstFailure);
+  requireValue(index.schemaVersion === 3 && index.issueBodySha256 === PARENT_DIGEST && index.eventSha === binding.eventSha && index.overallStatus === status.overallStatus && index.firstFailure === status.firstFailure);
   exactArray(index.files, 6);
   const expected = buildIndex(binding, status, copied);
   requireValue(JSON.stringify(index) === JSON.stringify(expected));

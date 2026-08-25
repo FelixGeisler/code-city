@@ -8,7 +8,7 @@ import { readValidatedEvidencePacket } from "./evidence-packet-files.mjs";
 import { createExternalWrapper, validateExternalWrapper } from "./production-evidence-schema.mjs";
 
 const PROJECT_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const PARENT_ISSUE_BODY_SHA256 = "06f08ca0144ffe9d5e162f3eb74c898b8b3a9e789832eae8c406f0fef55d0184";
+const PARENT_ISSUE_BODY_SHA256 = "62e24a6d2ba751a44a515a8402911a1de0fc811db62a80337bdc9a0518b1f300";
 const PACKET_FILES = Object.freeze([
   "artifact.json",
   "smoke.json",
