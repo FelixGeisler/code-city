@@ -10,7 +10,7 @@ import {
   validateExternalWrapper,
 } from "../tools/production-evidence-schema.mjs";
 
-const PARENT = "62e24a6d2ba751a44a515a8402911a1de0fc811db62a80337bdc9a0518b1f300";
+const PARENT = "1d03ad3c36450de38085d622d8ecb6675d77a4f1b5c2b9f119495f38011e79b0";
 const PRIOR_PARENT = "06f08ca0144ffe9d5e162f3eb74c898b8b3a9e789832eae8c406f0fef55d0184";
 const EVENT = "a".repeat(40);
 const ROOT = "b".repeat(40);

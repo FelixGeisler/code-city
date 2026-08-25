@@ -1,6 +1,6 @@
 import { createEvidencePacket } from "../../tools/production-evidence-schema.mjs";
 
-export const ISSUE_BODY_SHA256 = "62e24a6d2ba751a44a515a8402911a1de0fc811db62a80337bdc9a0518b1f300";
+export const ISSUE_BODY_SHA256 = "1d03ad3c36450de38085d622d8ecb6675d77a4f1b5c2b9f119495f38011e79b0";
 export const EVENT_SHA = "a".repeat(40);
 export const binding = Object.freeze({ issueBodySha256: ISSUE_BODY_SHA256, eventSha: EVENT_SHA });
 
