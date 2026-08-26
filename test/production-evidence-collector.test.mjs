@@ -334,9 +334,10 @@ test("Git blob and strict normalization facts are exact and bounded-view model d
 test("page-side Worker observer preserves application constructor and listener transparency, order, this, removal, cardinality, and exceptions", () => {
   const emitted = [];
   class FakeWorker {
-    constructor() { this.listeners = []; this.exceptions = []; }
+    constructor() { this.listeners = []; this.exceptions = []; this.nativeTerminations = 0; }
     addEventListener(type, listener) { this.listeners.push({ type, listener }); }
     removeEventListener(type, listener) { this.listeners = this.listeners.filter((item) => item.type !== type || item.listener !== listener); }
+    terminate() { this.nativeTerminations += 1; }
     dispatch(event) {
       for (const item of [...this.listeners]) if (item.type === "message") {
         try { item.listener.call(this, event); } catch (error) { this.exceptions.push(error); }
@@ -376,11 +377,123 @@ test("page-side Worker observer preserves application constructor and listener t
   assert.equal(observed.modelSha256, computeModelSha256(model));
 });
 
+test("collector-local final Worker gate retains only fixed controls and releases native termination exactly once", () => {
+  const source = createWorkerObserverSource();
+  const gateSource = source.slice(source.indexOf("function gatedTerminate"), source.indexOf("function ObservedWorker"));
+  assert.equal((source.match(/let limitTerminalSeen = false;/gu) ?? []).length, 1);
+  assert.equal((source.match(/let attemptDrainedSeen = false;/gu) ?? []).length, 1);
+  assert.equal((source.match(/let pendingTeardown = null;/gu) ?? []).length, 1);
+  assert.doesNotMatch(gateSource,
+    /setTimeout|setInterval|fetch|ReadableStream|queue|retry|buffer|responseBody|requestId|sessionId/iu);
+  const makeContext = () => {
+    const emitted = [];
+    const nativeCalls = [];
+    class FakeWorker {
+      constructor(name) { this.name = name; this.listeners = []; }
+      addEventListener(type, listener) { this.listeners.push({ type, listener }); }
+      terminate(...args) { nativeCalls.push({ worker: this.name, args }); }
+      dispatch(message) {
+        for (const item of [...this.listeners]) if (item.type === "message") {
+          item.listener.call(this, { data: message });
+        }
+      }
+    }
+    const context = {
+      Worker: FakeWorker,
+      __codeCityCollectorEvidence(value) { emitted.push(JSON.parse(value)); },
+      ArrayBuffer, Uint8Array, Uint32Array, Number, Object, Reflect, Set, Map, WeakMap,
+      TypeError, Error, JSON,
+    };
+    vm.runInNewContext(createWorkerObserverSource(), context);
+    return { context, emitted, nativeCalls };
+  };
+  const selected = { type: "REVISION_SELECTED", generation: 2, revision: REACT };
+  const terminal = {
+    type: "FAILURE", generation: 2, revision: REACT,
+    category: "Repository exceeds Code City limits",
+  };
+  const drained = { type: "ATTEMPT_DRAINED", generation: 2 };
+  const permutations = [
+    ["terminal", "drained", "terminate"], ["terminal", "terminate", "drained"],
+    ["drained", "terminal", "terminate"], ["drained", "terminate", "terminal"],
+    ["terminate", "terminal", "drained"], ["terminate", "drained", "terminal"],
+  ];
+  for (const order of permutations) {
+    const { context, emitted, nativeCalls } = makeContext();
+    const worker = new context.Worker("final");
+    worker.dispatch(selected);
+    for (const token of order) {
+      if (token === "terminal") worker.dispatch(terminal);
+      else if (token === "drained") worker.dispatch(drained);
+      else worker.terminate("not-retained");
+    }
+    assert.equal(nativeCalls.length, 0, order.join("/"));
+    assert.equal(emitted.filter(({ type }) => type === "COLLECTOR_TEARDOWN_PENDING").length, 1);
+    const released = context.__codeCityCollectorReleaseTeardown("success");
+    assert.deepEqual({ ...released }, {
+      released: true, limitTerminalSeen: false, attemptDrainedSeen: false, pendingTeardown: false,
+    });
+    assert.deepEqual(nativeCalls, [{ worker: "final", args: [] }], order.join("/"));
+    assert(!JSON.stringify(emitted).includes("not-retained"));
+  }
+
+  {
+    const { context, emitted, nativeCalls } = makeContext();
+    const finalWorker = new context.Worker("final");
+    finalWorker.dispatch(selected);
+    finalWorker.dispatch(terminal);
+    finalWorker.terminate();
+    finalWorker.terminate();
+    assert.equal(emitted.at(-1).type, "COLLECTOR_TEARDOWN_DUPLICATE");
+    finalWorker.dispatch(drained);
+    context.__codeCityCollectorReleaseTeardown("success");
+    finalWorker.terminate();
+    assert.equal(emitted.at(-1).type, "COLLECTOR_TEARDOWN_DUPLICATE");
+    assert.deepEqual(nativeCalls, [{ worker: "final", args: [] }]);
+  }
+
+  {
+    const { context, emitted, nativeCalls } = makeContext();
+    const smoke = new context.Worker("smoke");
+    smoke.dispatch({ type: "REVISION_SELECTED", generation: 1, revision: EVENT });
+    smoke.terminate("smoke-pass-through");
+    const unrelated = new context.Worker("unrelated");
+    unrelated.terminate("unrelated-pass-through");
+    assert.deepEqual(nativeCalls, [
+      { worker: "smoke", args: ["smoke-pass-through"] },
+      { worker: "unrelated", args: ["unrelated-pass-through"] },
+    ]);
+    assert.equal(emitted.some(({ type }) => type.startsWith("COLLECTOR_TEARDOWN_")), false);
+  }
+
+  {
+    const { context, nativeCalls } = makeContext();
+    const finalWorker = new context.Worker("failed-final");
+    finalWorker.dispatch(selected);
+    finalWorker.terminate();
+    context.__codeCityCollectorReleaseTeardown("failure");
+    assert.deepEqual(nativeCalls, [{ worker: "failed-final", args: [] }]);
+  }
+
+  {
+    const { context, emitted, nativeCalls } = makeContext();
+    const staleFinalWorker = new context.Worker("stale-final");
+    staleFinalWorker.dispatch(selected);
+    staleFinalWorker.terminate();
+    staleFinalWorker.dispatch({ type: "ATTEMPT_DRAINED", generation: 1 });
+    assert.deepEqual(emitted.at(-1), {
+      type: "COLLECTOR_TEARDOWN_UNSAFE_STALE_OWNER", generation: 2,
+    });
+    assert.deepEqual(nativeCalls, []);
+  }
+});
+
 test("page-side Worker observer closes original selection, success, and capacity shapes before projection", () => {
   const emitted = [];
   class FakeWorker {
-    constructor() { this.listeners = []; }
+    constructor() { this.listeners = []; this.nativeTerminations = 0; }
     addEventListener(type, listener) { this.listeners.push({ type, listener }); }
+    terminate() { this.nativeTerminations += 1; }
     dispatch(event) {
       for (const item of [...this.listeners]) if (item.type === "message") item.listener.call(this, event);
     }
@@ -454,8 +567,9 @@ test("page-side Worker observer closes original selection, success, and capacity
 test("worker observer mirrors the authoritative failure category/code cross-product", () => {
   const emitted = [];
   class FakeWorker {
-    constructor() { this.listeners = []; }
+    constructor() { this.listeners = []; this.nativeTerminations = 0; }
     addEventListener(type, listener) { this.listeners.push({ type, listener }); }
+    terminate() { this.nativeTerminations += 1; }
     dispatch(message) {
       for (const item of this.listeners) if (item.type === "message") item.listener.call(this, { data: message });
     }
@@ -938,7 +1052,7 @@ test("full seam-driven collector maps the exact pass lifecycle, dynamic smoke K,
     readValidatedEvidencePacket: async () => stored,
   });
   assert.deepEqual(result, { packetDigest: stored.packetDigest, status: "pass", reason: "none" });
-  assert.equal(PARENT_ISSUE_BODY_SHA256, "1d03ad3c36450de38085d622d8ecb6675d77a4f1b5c2b9f119495f38011e79b0");
+  assert.equal(PARENT_ISSUE_BODY_SHA256, "e82cfb55cae317388b0dd266b245b417afec52dae9b8476242cd87c977930775");
   assert.deepEqual(stored.binding, { issueBodySha256: PARENT_ISSUE_BODY_SHA256, eventSha: EVENT });
   const decoder = new TextDecoder();
   const persisted = Object.fromEntries([...stored.files]
@@ -1138,7 +1252,9 @@ function fakeChromeChild() {
   return child;
 }
 
-function fakeCdpHarness({ failMethod, evaluateImpl, bodyImpl, autoWorker = true } = {}) {
+function fakeCdpHarness({
+  failMethod, evaluateImpl, bodyImpl, releaseError, autoWorker = true, autoTeardown = true,
+} = {}) {
   const listeners = new Set();
   const closeListeners = new Set();
   const bodies = new Map();
@@ -1147,6 +1263,10 @@ function fakeCdpHarness({ failMethod, evaluateImpl, bodyImpl, autoWorker = true 
   const workerSessions = new Set();
   let closeCount = 0;
   let bodyCalls = 0;
+  let gatePending = false;
+  let gateReleased = false;
+  let nativeTerminationCount = 0;
+  const heldDetachments = [];
   const cdp = {
     listeners,
     closeListeners,
@@ -1158,6 +1278,20 @@ function fakeCdpHarness({ failMethod, evaluateImpl, bodyImpl, autoWorker = true 
       if (method === "Target.createTarget") return { targetId: "page-target" };
       if (method === "Target.attachToTarget") return { sessionId: "page-session" };
       if (method === "Runtime.evaluate") {
+        if (params.expression.includes("__codeCityCollectorReleaseTeardown")) {
+          if (releaseError) throw releaseError;
+          if (!gatePending || gateReleased) throw new Error("controlled teardown release conflict");
+          gateReleased = true;
+          gatePending = false;
+          nativeTerminationCount += 1;
+          for (const held of heldDetachments.splice(0)) {
+            activity.push({ type: "event", method: held.method, sessionId: held.sessionId });
+            for (const listener of [...listeners]) listener(held);
+          }
+          return { result: { value: {
+            released: true, limitTerminalSeen: false, attemptDrainedSeen: false, pendingTeardown: false,
+          } } };
+        }
         if (params.expression.includes("requestSubmit")) {
           workerSessions.clear();
           if (autoWorker) {
@@ -1194,16 +1328,44 @@ function fakeCdpHarness({ failMethod, evaluateImpl, bodyImpl, autoWorker = true 
     cdp, calls, activity, bodies,
     get closeCount() { return closeCount; },
     get bodyCalls() { return bodyCalls; },
+    get nativeTerminationCount() { return nativeTerminationCount; },
     emit(method, params = {}, sessionId = "worker-session") {
       if (method === "Target.attachedToTarget" && params?.targetInfo?.type === "worker") {
         if (workerSessions.has(params.sessionId)) return;
         workerSessions.add(params.sessionId);
       }
+      const message = { method, params, sessionId };
+      let emittedFact;
+      if (method === "Runtime.bindingCalled" && params?.name === "__codeCityCollectorEvidence") {
+        try { emittedFact = JSON.parse(params.payload); } catch {}
+        if (emittedFact?.type === "COLLECTOR_TEARDOWN_PENDING" && emittedFact.generation === 2) {
+          gatePending = true;
+        }
+      }
+      if (method === "Target.detachedFromTarget" && gatePending && !gateReleased) {
+        heldDetachments.push(message);
+        return;
+      }
       activity.push({
         type: "event", method,
         sessionId: method === "Target.attachedToTarget" ? params.sessionId : sessionId,
       });
-      for (const listener of [...listeners]) listener({ method, params, sessionId });
+      for (const listener of [...listeners]) listener(message);
+      if (method === "Runtime.bindingCalled" && params?.name === "__codeCityCollectorEvidence") {
+        const fact = emittedFact;
+        if (autoTeardown && fact?.type === "FAILURE" && fact.generation === 2
+            && fact.category === "Repository exceeds Code City limits" && !gatePending && !gateReleased) {
+          gatePending = true;
+          const control = {
+            method: "Runtime.bindingCalled", sessionId: "page-session",
+            params: { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+              type: "COLLECTOR_TEARDOWN_PENDING", generation: 2,
+            }) },
+          };
+          activity.push({ type: "event", method: control.method, sessionId: control.sessionId });
+          for (const listener of [...listeners]) listener(control);
+        }
+      }
     },
   };
 }
@@ -3326,9 +3488,16 @@ test("the final candidate captures before late metadata and clears before termin
 
 test("production-shaped candidate 4,001 survives terminal, drain, late ExtraInfo, body, and detach permutations", async () => {
   const scenarios = [
-    { name: "response-finish/body-extra", responseOrder: "response-finish", settlementOrder: "body-extra" },
-    { name: "finish-response/extra-body", responseOrder: "finish-response", settlementOrder: "extra-body" },
-    { name: "response-finish/body-detach-extra", responseOrder: "response-finish", settlementOrder: "body-detach-extra" },
+    { name: "termination-before-response", responseOrder: "response-finish", settlementOrder: "extra-body", terminationAt: "before-response" },
+    { name: "termination-between-response-finish", responseOrder: "response-termination-finish", settlementOrder: "extra-body", terminationAt: "between-response-finish" },
+    { name: "termination-after-finish", responseOrder: "finish-response", settlementOrder: "extra-body", terminationAt: "after-finish" },
+    { name: "termination-after-terminal", responseOrder: "response-finish", settlementOrder: "extra-body", terminationAt: "after-terminal" },
+    { name: "termination-after-drain", responseOrder: "response-finish", settlementOrder: "body-detach-extra", terminationAt: "after-drain" },
+    { name: "termination-after-body", responseOrder: "response-finish", settlementOrder: "body-extra", terminationAt: "after-body" },
+    { name: "termination-after-extra", responseOrder: "finish-response", settlementOrder: "extra-body", terminationAt: "after-extra" },
+    { name: "termination-after-projection", responseOrder: "response-finish", settlementOrder: "extra-body", terminationAt: "after-projection" },
+    { name: "controls-after-body-settlement", responseOrder: "response-finish", settlementOrder: "body-extra", terminationAt: "before-response", controlsAt: "after-body" },
+    { name: "controls-after-final-projection", responseOrder: "response-finish", settlementOrder: "extra-body", terminationAt: "before-response", controlsAt: "after-projection" },
   ];
   for (const scenario of scenarios) {
     const bodyGate = deferredValue();
@@ -3336,8 +3505,10 @@ test("production-shaped candidate 4,001 survives terminal, drain, late ExtraInfo
     const progressCounts = [];
     const lifecycle = [];
     const bodyStates = [];
+    const teardownStates = [];
     let currentBodyState = null;
     const harness = fakeCdpHarness({
+      autoTeardown: false,
       async bodyImpl({ params, value }) {
         if (params.requestId === finalId) await bodyGate.promise;
         return value;
@@ -3355,6 +3526,7 @@ test("production-shaped candidate 4,001 survives terminal, drain, late ExtraInfo
           assert.equal(currentBodyState?.entryReferenceCleared, true, scenario.name);
           progressCounts.push(count);
         },
+        observeTeardownState(state) { teardownStates.push(structuredClone(state)); },
       },
     });
     const qualification = (await runNativeQualification()).progress;
@@ -3405,15 +3577,37 @@ test("production-shaped candidate 4,001 survives terminal, drain, late ExtraInfo
     const finish = () => harness.emit("Network.loadingFinished", {
       requestId: finalId, encodedDataLength: 1,
     }, "worker-session");
-    if (scenario.responseOrder === "response-finish") { response(); finish(); } else { finish(); response(); }
+    let terminationRequests = 0;
+    const requestTermination = () => {
+      terminationRequests += 1;
+      harness.emit("Runtime.bindingCalled", {
+        name: "__codeCityCollectorEvidence",
+        payload: JSON.stringify({ type: "COLLECTOR_TEARDOWN_PENDING", generation: 2 }),
+      }, "page-session");
+    };
+    if (scenario.terminationAt === "before-response") requestTermination();
+    if (scenario.responseOrder === "response-finish") { response(); finish(); }
+    else if (scenario.responseOrder === "response-termination-finish") {
+      response(); requestTermination(); finish();
+    } else { finish(); response(); }
+    if (scenario.terminationAt === "after-finish") requestTermination();
     await waitForBodyCalls(harness, 4004);
     assert.equal(opened.requestItems.length, 4003, scenario.name);
-    for (const fact of [
-      { type: "FAILURE", generation: 2, revision: REACT, category: "Repository exceeds Code City limits" },
-      { type: "ATTEMPT_DRAINED", generation: 2 },
-    ]) harness.emit("Runtime.bindingCalled", {
-      name: "__codeCityCollectorEvidence", payload: JSON.stringify(fact),
-    });
+    const emitControls = () => {
+      harness.emit("Runtime.bindingCalled", {
+        name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+          type: "FAILURE", generation: 2, revision: REACT,
+          category: "Repository exceeds Code City limits",
+        }),
+      });
+      if (scenario.terminationAt === "after-terminal") requestTermination();
+      harness.emit("Runtime.bindingCalled", {
+        name: "__codeCityCollectorEvidence",
+        payload: JSON.stringify({ type: "ATTEMPT_DRAINED", generation: 2 }),
+      });
+      if (scenario.terminationAt === "after-drain") requestTermination();
+    };
+    if (!scenario.controlsAt) emitControls();
     const extra = () => harness.emit("Network.requestWillBeSentExtraInfo", {
       requestId: finalId, headers: {}, associatedCookies: [],
     }, "page-session");
@@ -3428,9 +3622,12 @@ test("production-shaped candidate 4,001 survives terminal, drain, late ExtraInfo
         }, "page-session");
         detachIndex = harness.activity.length - 1;
       }
+      if (scenario.terminationAt === "after-body") requestTermination();
+      if (scenario.controlsAt === "after-body") emitControls();
       extra();
     } else {
       extra();
+      if (scenario.terminationAt === "after-extra") requestTermination();
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(opened.requestItems.length, 4003, scenario.name);
       bodyGate.resolve();
@@ -3439,6 +3636,9 @@ test("production-shaped candidate 4,001 survives terminal, drain, late ExtraInfo
       await new Promise((resolve) => setImmediate(resolve));
     }
     assert.equal(opened.requestItems.length, 4004, scenario.name);
+    if (scenario.controlsAt === "after-projection") emitControls();
+    if (scenario.terminationAt === "after-projection") requestTermination();
+    assert.equal(terminationRequests, 1, scenario.name);
     assert.equal(bodyStates.at(-1).promiseReferenceCleared, true, scenario.name);
     assert.equal(bodyStates.at(-1).entryReferenceCleared, true, scenario.name);
     if (detachIndex === null) {
@@ -3455,6 +3655,24 @@ test("production-shaped candidate 4,001 survives terminal, drain, late ExtraInfo
     assert.deepEqual(harness.activity.slice(detachIndex + 1).filter(({ type, sessionId }) => (
       type === "send" && sessionId === "worker-session"
     )), [], scenario.name);
+    assert.equal(harness.nativeTerminationCount, 1, scenario.name);
+    const releaseIndex = harness.calls.findIndex(({ method, params }) => method === "Runtime.evaluate"
+      && params.expression.includes("__codeCityCollectorReleaseTeardown"));
+    const finalBodyIndex = harness.calls.findIndex(({ method, params }) => method === "Network.getResponseBody"
+      && params.requestId === finalId);
+    const firstUiPollIndex = harness.calls.findIndex(({ method, params }) => method === "Runtime.evaluate"
+      && params.expression.includes("capacity-pre-detachment-state"));
+    assert(releaseIndex > finalBodyIndex, scenario.name);
+    assert(firstUiPollIndex > releaseIndex, scenario.name);
+    const teardownKinds = teardownStates.map(({ kind }) => kind);
+    assert.deepEqual(new Set(teardownKinds), new Set([
+      "teardown-pending", "teardown-release", "teardown-released", "teardown-detached", "teardown-quiescent",
+    ]), scenario.name);
+    assert(teardownKinds.indexOf("teardown-pending") < teardownKinds.indexOf("teardown-release"), scenario.name);
+    assert(teardownKinds.indexOf("teardown-release") < teardownKinds.indexOf("teardown-detached"), scenario.name);
+    assert(teardownKinds.indexOf("teardown-detached") < teardownKinds.indexOf("teardown-quiescent"), scenario.name);
+    assert.equal(progressCounts.at(-1), 4001, scenario.name);
+    assert.equal(bodyStates.at(-1).bodyBacklog, 0, scenario.name);
     await opened.session.close();
   }
 });
@@ -4697,7 +4915,8 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
   assert(events[0].atMs >= requestItems[0].endedMs);
   assert.equal(events[1].atMs, requestItems[2].endedMs);
   assert.equal(events[2].atMs, requestItems.at(-1).endedMs);
-  assert.equal(events[3].atMs, terminalObservedAtMs);
+  assert(events[3].atMs <= terminalObservedAtMs);
+  assert(events[3].atMs >= events[2].atMs);
   assert(events[4].atMs > drainObservedAtMs);
   assert(events.every(({ atMs }, index) => validObservedMs(atMs)
     && !Number.isInteger(atMs) && (index === 0 || events[index - 1].atMs <= atMs)));
@@ -4710,6 +4929,10 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
     "Runtime.enable", "Network.enable", "Runtime.runIfWaitingForDebugger",
   ]);
   assert(!workerCommands.some(({ method }) => method === "Runtime.evaluate"));
+  assert.equal(harness.nativeTerminationCount, 1);
+  assert.equal(harness.calls.filter(({ method, params, sessionId }) => method === "Runtime.evaluate"
+    && params.expression.includes("__codeCityCollectorReleaseTeardown")
+    && sessionId === "page-session").length, 1);
   await session.close();
 });
 
@@ -5044,6 +5267,155 @@ function collectorMatrixSeams({ failStage, reason, progressedQualification = fal
   };
 }
 
+async function runCollectorTeardownFailure({ stimulus, releaseError = null }) {
+  let stored;
+  let cleanupCount = 0;
+  const harness = fakeCdpHarness({ autoTeardown: false, releaseError });
+  const child = fakeChromeChild();
+  const seams = collectorMatrixSeams({
+    packetSink(value) { if (value) stored = value; return stored; },
+  });
+  const controlledQualification = nativeQualificationFetch();
+  seams.qualifyRepository = ({ now, requestItems, progress, signal }) => qualifyRepository({
+    fetchImpl: controlledQualification.fetchImpl, now, requestItems, progress, signal,
+  });
+  seams.rm = async () => { cleanupCount += 1; };
+  seams.createBrowserEvidenceSession = async (args) => {
+    const native = await createBrowserEvidenceSession({
+      ...args,
+      launchImpl: async () => ({ child, websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+      connectImpl: () => harness.cdp,
+    });
+    return {
+      cdpVersion: native.cdpVersion,
+      fatalSignal: native.fatalSignal,
+      snapshot: native.snapshot,
+      async collectSmoke(emit, startedMs) {
+        appendSequence(args.requestItems, args.now, "FelixGeisler/code-city", EVENT, ROOT, ["src/a.ts"], true, {
+          revision: () => emit("revision-selected", 1),
+        });
+        const published = emit("city-published", 1);
+        return {
+          repositoryUrl: "https://github.com/FelixGeisler/code-city", revision: EVENT, rootTree: ROOT,
+          terminal: "success", canvasCount: 1, modelSha256: "1".repeat(64), startedMs,
+          endedMs: published.atMs, providerGetCount: 4,
+        };
+      },
+      clearTrace: native.clearTrace,
+      async collectCapacity(...parameters) {
+        const result = native.collectCapacity(...parameters);
+        void (async () => {
+          for (let attempts = 0; !harness.calls.some(({ method, params }) => method === "Runtime.evaluate"
+            && params.expression.includes("https://github.com/react/react")); attempts += 1) {
+            assert(attempts < 50, `${stimulus}: capacity did not start`);
+            await new Promise((resolve) => setImmediate(resolve));
+          }
+          await new Promise((resolve) => setImmediate(resolve));
+          await new Promise((resolve) => setImmediate(resolve));
+          harness.emit("Runtime.bindingCalled", {
+            name: "__codeCityCollectorEvidence",
+            payload: JSON.stringify({ type: "COLLECTOR_TEARDOWN_PENDING", generation: 2 }),
+          }, "page-session");
+          await new Promise((resolve) => setImmediate(resolve));
+          const stimulusIndex = harness.activity.length;
+          if (stimulus === "unsafe-stale-owner") {
+            harness.emit("Runtime.bindingCalled", {
+              name: "__codeCityCollectorEvidence",
+              payload: JSON.stringify({ type: "COLLECTOR_TEARDOWN_UNSAFE_STALE_OWNER", generation: 2 }),
+            }, "page-session");
+          } else if (stimulus === "duplicate") {
+            harness.emit("Runtime.bindingCalled", {
+              name: "__codeCityCollectorEvidence",
+              payload: JSON.stringify({ type: "COLLECTOR_TEARDOWN_DUPLICATE", generation: 2 }),
+            }, "page-session");
+          } else {
+            const request = { requestId: "duplicate-asset", request: {
+              url: PRODUCTION_ORIGIN, method: "GET", headers: {},
+            } };
+            harness.emit("Network.requestWillBeSent", request, "page-session");
+            harness.emit("Network.requestWillBeSent", request, "page-session");
+          }
+          harness.stimulusIndex = stimulusIndex;
+        })();
+        return result;
+      },
+      close: native.close,
+    };
+  };
+  const result = await collectProductionEvidence({
+    origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
+    output: path.resolve(`collector-teardown-${stimulus}`),
+  }, seams);
+  const capacity = JSON.parse(new TextDecoder().decode(stored.files.get("capacity.json")));
+  const terminalActivity = structuredClone(harness.activity);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(harness.activity, terminalActivity, stimulus);
+  return { result, capacity, harness, child, cleanupCount };
+}
+
+test("collector teardown failures preserve healthy versus unsafe ownership, exact native calls, and cleanup precedence", async () => {
+  const healthy = await runCollectorTeardownFailure({ stimulus: "request-sequence" });
+  assert.deepEqual([healthy.result.status, healthy.result.reason], ["fail", "request-sequence"]);
+  assert.deepEqual([healthy.capacity.status, healthy.capacity.reason], ["fail", "request-sequence"]);
+  assert.equal(healthy.harness.nativeTerminationCount, 1);
+
+  const duplicate = await runCollectorTeardownFailure({ stimulus: "duplicate" });
+  assert.deepEqual([duplicate.result.status, duplicate.result.reason], ["fail", "infrastructure-failure"]);
+  assert.deepEqual([duplicate.capacity.status, duplicate.capacity.reason], ["fail", "infrastructure-failure"]);
+  assert.equal(duplicate.harness.nativeTerminationCount, 1);
+
+  const unsafe = await runCollectorTeardownFailure({ stimulus: "unsafe-stale-owner" });
+  assert.deepEqual([unsafe.result.status, unsafe.result.reason], ["fail", "infrastructure-failure"]);
+  assert.equal(unsafe.harness.nativeTerminationCount, 0);
+  assert.equal(unsafe.harness.calls.slice(unsafe.harness.stimulusIndex).filter(({ method }) => (
+    method === "Runtime.evaluate"
+  )).length, 0);
+
+  const releaseFailure = await runCollectorTeardownFailure({
+    stimulus: "request-sequence", releaseError: new Error("controlled release rejection"),
+  });
+  assert.deepEqual([releaseFailure.result.status, releaseFailure.result.reason], ["fail", "infrastructure-failure"]);
+  assert.equal(releaseFailure.harness.nativeTerminationCount, 0);
+  assert.equal(releaseFailure.harness.calls.filter(({ method, params }) => method === "Runtime.evaluate"
+    && params.expression.includes("__codeCityCollectorReleaseTeardown")).length, 1);
+
+  for (const scenario of [healthy, duplicate, unsafe, releaseFailure]) {
+    assert.equal(scenario.harness.closeCount, 1);
+    assert.equal(scenario.child.kills, 1);
+    assert.equal(scenario.cleanupCount, 1);
+    assert.equal(scenario.harness.calls.filter(({ method }) => method === "Browser.close").length, 1);
+  }
+
+  let delayedPacket;
+  let delayedNativeTerminationCount = 0;
+  let delayedCloseCount = 0;
+  const delayedSeams = collectorMatrixSeams({
+    packetSink(value) { if (value) delayedPacket = value; return delayedPacket; },
+  });
+  const createDelayedSession = delayedSeams.createBrowserEvidenceSession;
+  delayedSeams.createBrowserEvidenceSession = async (args) => {
+    const session = await createDelayedSession(args);
+    return {
+      ...session,
+      async collectCapacity() {
+        delayedNativeTerminationCount += 1;
+        throw new Error("delayed duplicate final Worker termination");
+      },
+      async close() { delayedCloseCount += 1; await session.close(); },
+    };
+  };
+  const delayed = await collectProductionEvidence({
+    origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
+    output: path.resolve("collector-teardown-delayed-duplicate"),
+  }, delayedSeams);
+  const delayedCapacity = JSON.parse(new TextDecoder().decode(delayedPacket.files.get("capacity.json")));
+  assert.deepEqual([delayed.status, delayed.reason], ["fail", "infrastructure-failure"]);
+  assert.deepEqual([delayedCapacity.status, delayedCapacity.reason], ["fail", "infrastructure-failure"]);
+  assert.equal(delayedNativeTerminationCount, 1);
+  assert.equal(delayedCloseCount, 1);
+});
+
 test("successful CLI output is sparse privacy-safe progress on stderr and digest-only stdout", async () => {
   let stored;
   const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
@@ -5231,7 +5603,7 @@ async function collectNativeSmokeBarrierFailurePacket(kind) {
     origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
     output: path.resolve(`handled-${kind}`),
   }, seams);
-  return { diagnostic, result, stored, expectedReason: kind === "worker-command" ? "provider-failure" : "infrastructure-failure" };
+  return { diagnostic, result, stored, expectedReason: "infrastructure-failure" };
 }
 
 function assertSchemaValidSmokeBarrierFailure({ diagnostic, result, stored, expectedReason }) {
@@ -6076,7 +6448,8 @@ test("mid-prefix malformed, cap-plus-one, command-rejection, and pre-projection 
       const result = await collectProductionEvidence({
         origin: PRODUCTION_ORIGIN, manifestPath: path.join(temporary, "manifest.json"), output,
       }, seams);
-      const expectedReason = scenario === "before-projection" ? "infrastructure-failure" : "provider-failure";
+      const expectedReason = ["before-projection", "command-rejection"].includes(scenario)
+        ? "infrastructure-failure" : "provider-failure";
       assert.deepEqual([result.status, result.reason], ["fail", expectedReason], scenario);
       assert.equal((await readFile(path.join(output, ".validated"), "utf8")).trim(), result.packetDigest, scenario);
       const qualification = JSON.parse(await readFile(path.join(output, "qualification.json"), "utf8"));
@@ -6586,7 +6959,7 @@ test("controlled smoke enables page and worker Network and correlates split GET 
 });
 
 
-test("installed Chrome 151 split-session gate", {
+test("opt-in split-session regression", {
   skip: process.env.CODE_CITY_REAL_CHROME !== "1",
   timeout: 600_000,
 }, async () => {
@@ -6893,4 +7266,129 @@ test("installed Chrome 151 split-session gate", {
   const bytes = new TextEncoder().encode(`${JSON.stringify(evidence)}\n`);
   await writeFile(evidenceOutput, bytes, { flag: "w" });
   assert.deepEqual(new Uint8Array(await readFile(evidenceOutput)), bytes);
+});
+
+test("installed Chrome 151 collector-local native-termination gate", {
+  skip: process.env.CODE_CITY_REAL_CHROME !== "1",
+  timeout: 1_200_000,
+}, async () => {
+  const manifestPath = path.resolve(process.env.CODE_CITY_REAL_MANIFEST ?? "");
+  const evidenceOutput = path.resolve(process.env.CODE_CITY_REAL_EVIDENCE_OUTPUT ?? "");
+  assert(path.isAbsolute(manifestPath) && path.isAbsolute(evidenceOutput));
+  const publication = await readPublicationInput(manifestPath);
+  const discovery = await discoverInstalledChrome();
+  const chromeVersion = await readInstalledChromeVersion(discovery);
+  assert.equal(chromeVersion, "151.0.7922.174");
+
+  const profile = await mkdtemp(path.join(os.tmpdir(), "code-city-493-chrome151-"));
+  const requestItems = [];
+  const teardownStates = [];
+  const bodyStates = [];
+  const progressCounts = [];
+  const lifecycle = [];
+  let tick = 0;
+  const now = () => ++tick;
+  const emit = (event, generation, observedAtMs) => {
+    const value = { event, generation, atMs: observedAtMs ?? now() };
+    lifecycle.push(value);
+    return value;
+  };
+  let session;
+  try {
+    session = await createBrowserEvidenceSession({
+      discovery, chromeVersion, profile, origin: PRODUCTION_ORIGIN,
+      manifest: publication.manifest, eventSha: publication.publicationRecord.eventSha,
+      now, requestItems,
+      observeBodyState(state) { bodyStates.push(structuredClone(state)); },
+      observeTeardownState(state) { teardownStates.push(structuredClone(state)); },
+      emitQualificationProgress(count) { progressCounts.push(count); },
+    });
+    const smoke = await session.collectSmoke(emit, 0);
+    session.clearTrace();
+    const qualificationRequestItems = [];
+    const qualification = await qualifyRepository({
+      fetchImpl: fetch, now, requestItems: qualificationRequestItems,
+    });
+    const capacityRequestStart = requestItems.length;
+    const capacity = await session.collectCapacity(qualification, emit, now());
+    const capacityRequests = requestItems.slice(capacityRequestStart)
+      .filter(({ applicationCall, method }) => applicationCall && method === "GET");
+    const rawRequests = capacityRequests.filter(({ stage }) => stage === "raw");
+    const release = teardownStates.find(({ kind }) => kind === "teardown-release");
+    const released = teardownStates.filter(({ kind }) => kind === "teardown-released");
+    const detached = teardownStates.find(({ kind }) => kind === "teardown-detached");
+    const quiescent = teardownStates.at(-1);
+
+    assert.equal(smoke.revision, publication.publicationRecord.eventSha);
+    assert.equal(capacityRequests.length, 4004);
+    assert.equal(rawRequests.length, 4001);
+    assert.equal(capacity.rawRequestCount, 4001);
+    assert.equal(capacity.candidates.length, 4001);
+    assert.deepEqual(progressCounts, [
+      ...Array.from({ length: 16 }, (_, index) => (index + 1) * 250), 4001,
+    ]);
+    assert(capacityRequests.every((item, index) => index === 0
+      || capacityRequests[index - 1].endedMs <= item.startedMs));
+    assert.equal(release?.finalProjected, true);
+    assert.equal(release?.custodyCleared, true);
+    assert.equal(release?.progressCallbacksEmitted, true);
+    assert.equal(release?.controlsReceived, true);
+    assert.equal(released.length, 1);
+    assert.equal(released[0].nativeTerminationCount, 1);
+    assert(detached);
+    assert.deepEqual(quiescent, {
+      kind: "teardown-quiescent", generation: 2, pendingCount: 0,
+      bodyBacklog: 0, correlationCount: 0, networkCount: 0,
+    });
+    assert.equal(capacity.workerQuiescent, true);
+    assert.equal(capacity.noLaterRequest, true);
+    assert.equal(bodyStates.at(-1).kind, "provider-body-cleared");
+    assert.equal(bodyStates.at(-1).bodyBacklog, 0);
+    assert.equal(bodyStates.at(-1).bodyReferenceCleared, true);
+    assert.equal(bodyStates.at(-1).promiseReferenceCleared, true);
+    assert.equal(bodyStates.at(-1).entryReferenceCleared, true);
+    assert(bodyStates.every((state) => !Object.hasOwn(state, "body") && !Object.hasOwn(state, "bytes")));
+
+    const terminalActivity = {
+      requestCount: requestItems.length,
+      capacityCount: capacity.candidates.length,
+      bodyStateCount: bodyStates.length,
+      teardownStateCount: teardownStates.length,
+    };
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.deepEqual({
+      requestCount: requestItems.length,
+      capacityCount: capacity.candidates.length,
+      bodyStateCount: bodyStates.length,
+      teardownStateCount: teardownStates.length,
+    }, terminalActivity);
+
+    const evidence = {
+      schemaVersion: 1,
+      inputRunId: publication.publicationRecord.runId,
+      inputRunAttempt: publication.publicationRecord.runAttempt,
+      eventSha: publication.publicationRecord.eventSha,
+      manifestSha256: publication.publicationRecord.manifestSha256,
+      chromeVersion,
+      gateOrder: teardownStates.map(({ kind }) => kind),
+      nativeTerminationCount: released[0].nativeTerminationCount,
+      detached: true,
+      quiescent: capacity.workerQuiescent,
+      capacityGetCount: capacityRequests.length,
+      rawFactCount: capacity.candidates.length,
+      maximumOverlap: 1,
+      bodyCapacity: Math.max(...bodyStates.map(({ bodyBacklog }) => bodyBacklog)),
+      retainedRawData: false,
+      lateActivity: false,
+      pass: true,
+    };
+    assert.equal(evidence.inputRunId, 32995045769);
+    assert.equal(evidence.bodyCapacity, 1);
+    const bytes = new TextEncoder().encode(`${JSON.stringify(evidence)}\n`);
+    await writeFile(evidenceOutput, bytes, { flag: "wx" });
+    assert.deepEqual(new Uint8Array(await readFile(evidenceOutput)), bytes);
+  } finally {
+    await session?.close().catch(() => {});
+    await rm(profile, { recursive: true, force: true });
+  }
 });
