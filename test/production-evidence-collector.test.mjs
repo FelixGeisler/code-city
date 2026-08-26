@@ -938,7 +938,7 @@ test("full seam-driven collector maps the exact pass lifecycle, dynamic smoke K,
     readValidatedEvidencePacket: async () => stored,
   });
   assert.deepEqual(result, { packetDigest: stored.packetDigest, status: "pass", reason: "none" });
-  assert.equal(PARENT_ISSUE_BODY_SHA256, "62e24a6d2ba751a44a515a8402911a1de0fc811db62a80337bdc9a0518b1f300");
+  assert.equal(PARENT_ISSUE_BODY_SHA256, "1d03ad3c36450de38085d622d8ecb6675d77a4f1b5c2b9f119495f38011e79b0");
   assert.deepEqual(stored.binding, { issueBodySha256: PARENT_ISSUE_BODY_SHA256, eventSha: EVENT });
   const decoder = new TextDecoder();
   const persisted = Object.fromEntries([...stored.files]
@@ -1288,7 +1288,7 @@ test("signal-terminal Chrome children never wait for or manufacture a second exi
   }
 });
 
-function emitBrowserGet(harness, { requestId, url, body, headers = {}, responseHeaders = {
+async function emitBrowserGet(harness, { requestId, url, body, headers = {}, responseHeaders = {
   "Access-Control-Allow-Origin": "*", "Content-Type": "application/json",
 }, dataLength, encodedDataLength, sessionId = "worker-session", extraSessionId = sessionId } = {}) {
   harness.bodies.set(requestId, body);
@@ -1301,6 +1301,7 @@ function emitBrowserGet(harness, { requestId, url, body, headers = {}, responseH
   const encodedLength = encodedDataLength ?? length;
   harness.emit("Network.dataReceived", { requestId, dataLength: length, encodedDataLength: encodedLength }, sessionId);
   harness.emit("Network.loadingFinished", { requestId, encodedDataLength: encodedLength }, sessionId);
+  await new Promise((resolve) => setImmediate(resolve));
 }
 
 function beginBrowserRequest(harness, {
@@ -1369,7 +1370,7 @@ function deterministicPermutations(values) {
     .map((suffix) => [value, ...suffix]));
 }
 
-function emitBrowserBytes(harness, { requestId, url, bytes, sessionId = "worker-session" }) {
+async function emitBrowserBytes(harness, { requestId, url, bytes, sessionId = "worker-session" }) {
   harness.bodies.set(requestId, { body: Buffer.from(bytes).toString("base64"), base64Encoded: true });
   harness.emit("Network.requestWillBeSent", { requestId, request: { url, method: "GET", headers: {} } }, sessionId);
   harness.emit("Network.requestWillBeSentExtraInfo", { requestId, headers: {}, associatedCookies: [] }, sessionId);
@@ -1379,12 +1380,13 @@ function emitBrowserBytes(harness, { requestId, url, bytes, sessionId = "worker-
   } }, sessionId);
   harness.emit("Network.dataReceived", { requestId, dataLength: bytes.byteLength, encodedDataLength: bytes.byteLength }, sessionId);
   harness.emit("Network.loadingFinished", { requestId, encodedDataLength: bytes.byteLength }, sessionId);
+  await new Promise((resolve) => setImmediate(resolve));
 }
 
 async function prepareBrowserStage(opened, stage) {
   let bodyCalls = 0;
   if (stage !== "revision") {
-    emitBrowserGet(opened.harness, {
+    await emitBrowserGet(opened.harness, {
       requestId: "setup-revision", url: revisionUrl("FelixGeisler/code-city"), body: JSON.stringify([{ sha: EVENT }]),
     });
     await waitForBodyCalls(opened.harness, ++bodyCalls);
@@ -1394,7 +1396,7 @@ async function prepareBrowserStage(opened, stage) {
     await new Promise((resolve) => setImmediate(resolve));
   }
   if (stage === "tree") {
-    emitBrowserGet(opened.harness, {
+    await emitBrowserGet(opened.harness, {
       requestId: "setup-commit", url: commitUrl("FelixGeisler/code-city", EVENT),
       body: JSON.stringify({ sha: EVENT, tree: { sha: ROOT } }),
     });
@@ -1461,7 +1463,7 @@ function generatedStageFixture(stage) {
   return { url: rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts"), body: "x" };
 }
 
-function emitGeneratedOrder(harness, { stage, order, owner, execution }) {
+async function emitGeneratedOrder(harness, { stage, order, owner, execution }) {
   const { url, body } = generatedStageFixture(stage);
   const getId = `generated-${execution}-${stage}-get`;
   const optionsId = `generated-${execution}-${stage}-options`;
@@ -1501,10 +1503,11 @@ function emitGeneratedOrder(harness, { stage, order, owner, execution }) {
       requestId: optionsId, encodedDataLength: 0,
     }, "page-session");
   }
+  await new Promise((resolve) => setImmediate(resolve));
 }
 
-function emitCanonicalGeneratedStage(harness, stage, owner, execution) {
-  emitGeneratedOrder(harness, { stage, owner, execution, order: ["G", "GH", "GR", "GF"] });
+async function emitCanonicalGeneratedStage(harness, stage, owner, execution) {
+  await emitGeneratedOrder(harness, { stage, owner, execution, order: ["G", "GH", "GR", "GF"] });
 }
 
 test("finite provider permutation generator executes exactly 62,684 complete split-session smoke traces", { timeout: 600_000 }, async () => {
@@ -1552,10 +1555,10 @@ test("finite provider permutation generator executes exactly 62,684 complete spl
         const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
         await Promise.resolve();
         for (const stage of ["revision", "commit", "tree", "raw"]) {
-          if (stage === selectedStage) emitGeneratedOrder(harness, {
+          if (stage === selectedStage) await emitGeneratedOrder(harness, {
             stage, order: generated.order, owner, execution,
           });
-          else emitCanonicalGeneratedStage(harness, stage, owner, execution);
+          else await emitCanonicalGeneratedStage(harness, stage, owner, execution);
         }
         harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
           type: "REVISION_SELECTED", generation: 1, revision: EVENT,
@@ -1596,7 +1599,7 @@ test("finite provider permutation generator executes exactly 62,684 complete spl
 });
 
 
-test("wire closure admits the next GET while prior ExtraInfo, response, body, or projection is pending", async () => {
+test("the global body slot rejects contention and releases before later projection work", async () => {
   let executions = 0;
   for (const [firstStage, secondStage] of [["revision", "commit"], ["commit", "tree"]]) {
     const scenarios = [
@@ -1632,7 +1635,7 @@ test("wire closure admits the next GET while prior ExtraInfo, response, body, or
       await Promise.resolve();
       let priorBodyCalls = 0;
       if (firstStage === "commit") {
-        emitBrowserGet(harness, {
+        await emitBrowserGet(harness, {
           requestId: `matrix-${executions}-revision`, url: generatedStageFixture("revision").url,
           body: generatedStageFixture("revision").body,
         });
@@ -1695,11 +1698,23 @@ test("wire closure admits the next GET while prior ExtraInfo, response, body, or
       harness.emit("Network.loadingFinished", {
         requestId: secondId, encodedDataLength: new TextEncoder().encode(second.body).byteLength,
       }, "worker-session");
+      if (scenario.kind !== "projection") {
+        await assert.rejects(pending, /response body slot contention/u, scenario.kind);
+        assert.equal(harness.bodyCalls, priorBodyCalls + 1, scenario.kind);
+        assert.deepEqual(opened.requestItems.filter(({ method }) => method === "GET").map(({ stage }) => stage),
+          firstStage === "revision" ? [] : ["revision"], scenario.kind);
+        await opened.session.close().catch(() => {});
+        continue;
+      }
       if (scenario.kind === "extra") harness.emit("Network.requestWillBeSentExtraInfo", {
         requestId: firstId, headers: {}, associatedCookies: [],
       }, scenario.owner);
+      const expectedProjected = firstStage === "revision" ? 2 : 3;
+      for (let attempts = 0; opened.requestItems.length < expectedProjected && attempts < 30; attempts += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
       for (const stage of (secondStage === "commit" ? ["tree", "raw"] : ["raw"])) {
-        emitCanonicalGeneratedStage(harness, stage, "worker-session", `matrix-${executions}-${stage}`);
+        await emitCanonicalGeneratedStage(harness, stage, "worker-session", `matrix-${executions}-${stage}`);
       }
       harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
         type: "REVISION_SELECTED", generation: 1, revision: EVENT,
@@ -1727,6 +1742,120 @@ test("wire closure admits the next GET while prior ExtraInfo, response, body, or
   assert.equal(executions, 12);
 });
 
+test("pending and settled slot contention seal provider-failure packets at the maximal safe prefix", async () => {
+  for (const slotState of ["pending", "settled"]) {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), `collector-contention-${slotState}-`));
+    try {
+      const output = path.join(temporary, "packet");
+      const seams = collectorMatrixSeams();
+      delete seams.writeValidatedEvidencePacket;
+      delete seams.readValidatedEvidencePacket;
+      const fallbackFactory = seams.createBrowserEvidenceSession;
+      const controlledQualification = nativeQualificationFetch();
+      seams.qualifyRepository = ({ now, requestItems, progress, signal }) => qualifyRepository({
+        fetchImpl: controlledQualification.fetchImpl, now, requestItems, progress, signal,
+      });
+      let harness;
+      seams.createBrowserEvidenceSession = async (args) => {
+        const fallback = await fallbackFactory(args);
+        const blockedId = `${slotState}-raw-3`;
+        harness = fakeCdpHarness({
+          async bodyImpl({ params, value }) {
+            if (slotState === "pending" && params.requestId === blockedId) return new Promise(() => {});
+            return value;
+          },
+        });
+        const native = await createBrowserEvidenceSession({
+          ...args,
+          launchImpl: async () => ({ child: fakeChromeChild(), websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+          connectImpl: () => harness.cdp,
+        });
+        const drive = async () => {
+          await Promise.resolve();
+          await emitBrowserGet(harness, {
+            requestId: `${slotState}-revision`, url: revisionUrl("react/react"),
+            body: JSON.stringify([{ sha: REACT }]),
+          });
+          harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+            type: "REVISION_SELECTED", generation: 2, revision: REACT,
+          }) });
+          await new Promise((resolve) => setImmediate(resolve));
+          await emitBrowserGet(harness, {
+            requestId: `${slotState}-commit`, url: commitUrl("react/react", REACT),
+            body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
+          });
+          await emitBrowserGet(harness, {
+            requestId: `${slotState}-tree`, url: treeUrl("react/react", REACT_ROOT),
+            body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
+          });
+          for (let index = 0; index < 2; index += 1) {
+            await emitBrowserGet(harness, {
+              requestId: `${slotState}-raw-${index + 1}`,
+              url: rawUrl("react/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
+            });
+          }
+          harness.bodies.set(blockedId, "x");
+          harness.emit("Network.requestWillBeSent", {
+            requestId: blockedId,
+            request: { url: rawUrl("react/react", REACT, NATIVE_ENTRIES[2].path), method: "GET", headers: {} },
+          }, "worker-session");
+          harness.emit("Network.responseReceived", { requestId: blockedId, response: {
+            url: rawUrl("react/react", REACT, NATIVE_ENTRIES[2].path), status: 200,
+            headers: { "Access-Control-Allow-Origin": "*" }, fromDiskCache: false, fromServiceWorker: false,
+          } }, "worker-session");
+          harness.emit("Network.loadingFinished", { requestId: blockedId, encodedDataLength: 1 }, "worker-session");
+          await waitForBodyCalls(harness, 6);
+          if (slotState === "settled") await new Promise((resolve) => setImmediate(resolve));
+          const contenderId = `${slotState}-raw-4`;
+          harness.bodies.set(contenderId, "x");
+          harness.emit("Network.requestWillBeSent", {
+            requestId: contenderId,
+            request: { url: rawUrl("react/react", REACT, NATIVE_ENTRIES[3].path), method: "GET", headers: {} },
+          }, "worker-session");
+          harness.emit("Network.requestWillBeSentExtraInfo", {
+            requestId: contenderId, headers: {}, associatedCookies: [],
+          }, "worker-session");
+          harness.emit("Network.responseReceived", { requestId: contenderId, response: {
+            url: rawUrl("react/react", REACT, NATIVE_ENTRIES[3].path), status: 200,
+            headers: { "Access-Control-Allow-Origin": "*" }, fromDiskCache: false, fromServiceWorker: false,
+          } }, "worker-session");
+          harness.emit("Network.loadingFinished", { requestId: contenderId, encodedDataLength: 1 }, "worker-session");
+        };
+        return Object.freeze({
+          cdpVersion: native.cdpVersion,
+          fatalSignal: native.fatalSignal,
+          snapshot: native.snapshot,
+          collectSmoke: fallback.collectSmoke,
+          clearTrace: fallback.clearTrace,
+          async collectCapacity(qualification, emit, startedMs) {
+            const pending = native.collectCapacity(qualification, emit, startedMs);
+            void drive();
+            return pending;
+          },
+          close: native.close,
+        });
+      };
+      const result = await collectProductionEvidence({
+        origin: PRODUCTION_ORIGIN, manifestPath: path.join(temporary, "manifest.json"), output,
+      }, seams);
+      assert.deepEqual([result.status, result.reason], ["fail", "provider-failure"], slotState);
+      assert.equal(harness.bodyCalls, 6, slotState);
+      assert.equal((await readFile(path.join(output, ".validated"), "utf8")).trim(), result.packetDigest, slotState);
+      const qualification = JSON.parse(await readFile(path.join(output, "qualification.json"), "utf8"));
+      const capacity = JSON.parse(await readFile(path.join(output, "capacity.json"), "utf8"));
+      const requests = JSON.parse(await readFile(path.join(output, "requests.json"), "utf8"));
+      assert.deepEqual([qualification.status, qualification.reason, capacity.status, capacity.reason],
+        ["fail", "provider-failure", "fail", "provider-failure"], slotState);
+      assert.equal(capacity.data.candidates.length, 2, slotState);
+      assert.deepEqual(qualification.data.candidates, capacity.data.candidates, slotState);
+      assert.equal(requests.data.items.filter((item) => item.applicationCall
+        && item.requestedUrl.includes("/react/react/") && item.stage === "raw").length, 2, slotState);
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  }
+});
+
 
 test("half-open wire intervals admit an equal loadingFinished and next-request boundary", async () => {
   const times = [10, 20, 20, 30, 40, 50, 60, 70];
@@ -1737,7 +1866,7 @@ test("half-open wire intervals admit an equal loadingFinished and next-request b
   const pending = opened.session.collectSmoke(() => ({ atMs: ++later }), 0);
   await Promise.resolve();
   for (const stage of ["revision", "commit", "tree", "raw"]) {
-    emitCanonicalGeneratedStage(opened.harness, stage, "worker-session", `equal-${stage}`);
+    await emitCanonicalGeneratedStage(opened.harness, stage, "worker-session", `equal-${stage}`);
   }
   opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
     type: "REVISION_SELECTED", generation: 1, revision: EVENT,
@@ -1782,7 +1911,7 @@ function emitControlledAsset(harness, { requestId, url, requestOwner, responseOw
 
 async function finishControlledSmoke(opened, idPrefix = "asset-pass") {
   for (const stage of ["revision", "commit", "tree", "raw"]) {
-    emitCanonicalGeneratedStage(opened.harness, stage, "worker-session", `${idPrefix}-${stage}`);
+    await emitCanonicalGeneratedStage(opened.harness, stage, "worker-session", `${idPrefix}-${stage}`);
   }
   opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
     type: "REVISION_SELECTED", generation: 1, revision: EVENT,
@@ -1803,7 +1932,7 @@ async function finishControlledSmoke(opened, idPrefix = "asset-pass") {
 
 async function reachControlledProviderClosure(opened, idPrefix) {
   for (const stage of ["revision", "commit", "tree", "raw"]) {
-    emitCanonicalGeneratedStage(opened.harness, stage, "worker-session", `${idPrefix}-${stage}`);
+    await emitCanonicalGeneratedStage(opened.harness, stage, "worker-session", `${idPrefix}-${stage}`);
   }
   await waitForBodyCalls(opened.harness, 4);
   opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
@@ -2452,7 +2581,7 @@ test("a completed provider tombstone rejects a late duplicate without exposing i
   await Promise.resolve();
   const requestId = "late-private-duplicate";
   const url = revisionUrl("FelixGeisler/code-city");
-  emitBrowserGet(opened.harness, {
+  await emitBrowserGet(opened.harness, {
     requestId, url, body: JSON.stringify([{ sha: EVENT }]),
   });
   await firstCompletion.promise;
@@ -2548,76 +2677,67 @@ test("asset and role correlation rejects malformed, ambiguous, reused, unmatched
   }
 });
 
-test("revision readiness ignores Runtime responses and resolves only after exact late page ExtraInfo", async () => {
-  for (const closureBeforeExtra of [false, true]) {
-    const harness = fakeCdpHarness({ autoWorker: false });
-    const opened = await openFakeBrowser(harness);
-    const emitted = [];
-    const pending = opened.session.collectSmoke((event, generation, atMs) => {
-      const value = { event, generation, atMs: atMs ?? emitted.length + 1 };
-      emitted.push(value);
-      return value;
-    }, 0);
-    await Promise.resolve();
-    harness.emit("Target.attachedToTarget", {
-      sessionId: "worker-late", targetInfo: { type: "worker", targetId: "target-late" },
-    }, "page-session");
-    await new Promise((resolve) => setImmediate(resolve));
+test("revision readiness waits for exact late page ExtraInfo after immediate body capture", async () => {
+  const harness = fakeCdpHarness({ autoWorker: false });
+  const opened = await openFakeBrowser(harness);
+  const emitted = [];
+  const pending = opened.session.collectSmoke((event, generation, atMs) => {
+    const value = { event, generation, atMs: atMs ?? emitted.length + 1 };
+    emitted.push(value);
+    return value;
+  }, 0);
+  await Promise.resolve();
+  harness.emit("Target.attachedToTarget", {
+    sessionId: "worker-late", targetInfo: { type: "worker", targetId: "target-late" },
+  }, "page-session");
+  await new Promise((resolve) => setImmediate(resolve));
 
-    const fixtures = ["revision", "commit", "tree", "raw"].map(generatedStageFixture);
-    for (const [index, fixture] of fixtures.entries()) {
-      const requestId = `late-${closureBeforeExtra}-${index}`;
-      harness.bodies.set(requestId, fixture.body);
-      harness.emit("Network.requestWillBeSent", {
-        requestId, request: { url: fixture.url, method: "GET", headers: {} },
-      }, "worker-late");
-      if (index > 0) harness.emit("Network.requestWillBeSentExtraInfo", {
-        requestId, headers: {}, associatedCookies: [],
-      }, "page-session");
-      harness.emit("Network.responseReceived", { requestId, response: {
-        url: fixture.url, status: 200, headers: { "Access-Control-Allow-Origin": "*" },
-        fromDiskCache: false, fromServiceWorker: false,
-      } }, "worker-late");
-      harness.emit("Network.loadingFinished", {
-        requestId, encodedDataLength: new TextEncoder().encode(fixture.body).byteLength,
-      }, "worker-late");
-    }
-    harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
-      type: "REVISION_SELECTED", generation: 1, revision: EVENT,
-    }) });
-    await harness.cdp.send("Runtime.evaluate", { expression: "true" }, "worker-late");
-    await harness.cdp.send("Runtime.evaluate", { expression: "true" }, "page-session");
-    if (closureBeforeExtra) harness.emit("Runtime.bindingCalled", {
-      name: "__codeCityCollectorEvidence", payload: JSON.stringify({
-        type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1,
-      }),
-    });
+  const revision = generatedStageFixture("revision");
+  harness.bodies.set("late-revision", revision.body);
+  harness.emit("Network.requestWillBeSent", {
+    requestId: "late-revision", request: { url: revision.url, method: "GET", headers: {} },
+  }, "worker-late");
+  harness.emit("Network.responseReceived", { requestId: "late-revision", response: {
+    url: revision.url, status: 200, headers: { "Access-Control-Allow-Origin": "*" },
+    fromDiskCache: false, fromServiceWorker: false,
+  } }, "worker-late");
+  harness.emit("Network.loadingFinished", {
+    requestId: "late-revision", encodedDataLength: new TextEncoder().encode(revision.body).byteLength,
+  }, "worker-late");
+  harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+    type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+  }) });
+  await waitForBodyCalls(harness, 1);
+  assert.deepEqual(emitted, []);
+  assert.deepEqual(opened.requestItems, []);
+  harness.emit("Network.requestWillBeSentExtraInfo", {
+    requestId: "late-revision", headers: {}, associatedCookies: [],
+  }, "page-session");
+  for (let attempts = 0; opened.requestItems.length < 1 && attempts < 30; attempts += 1) {
     await new Promise((resolve) => setImmediate(resolve));
-    assert.deepEqual(emitted, []);
-    harness.emit("Network.requestWillBeSentExtraInfo", {
-      requestId: `late-${closureBeforeExtra}-0`, headers: {}, associatedCookies: [],
-    }, "page-session");
-    if (!closureBeforeExtra) harness.emit("Runtime.bindingCalled", {
-      name: "__codeCityCollectorEvidence", payload: JSON.stringify({
-        type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1,
-      }),
-    });
-    harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
-      type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64),
-    }) });
-    harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
-      type: "ATTEMPT_DRAINED", generation: 1,
-    }) });
-    harness.emit("Target.detachedFromTarget", {
-      sessionId: "worker-late", targetId: "target-late",
-    }, "page-session");
-    const smoke = await pending;
-    assert.equal(smoke.providerGetCount, 4);
-    assert.deepEqual(emitted.map(({ event }) => event), ["revision-selected", "city-published"]);
-    assert(!harness.calls.some(({ method, params }) => method === "Runtime.evaluate"
-      && params.throwOnSideEffect === true));
-    await opened.session.close();
   }
+  assert.deepEqual(emitted.map(({ event }) => event), ["revision-selected"]);
+  for (const stage of ["commit", "tree", "raw"]) {
+    const fixture = generatedStageFixture(stage);
+    await emitBrowserGet(harness, {
+      requestId: `late-${stage}`, url: fixture.url, body: fixture.body,
+      sessionId: "worker-late", extraSessionId: "page-session",
+    });
+  }
+  for (const fact of [
+    { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 },
+    { type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64) },
+    { type: "ATTEMPT_DRAINED", generation: 1 },
+  ]) harness.emit("Runtime.bindingCalled", {
+    name: "__codeCityCollectorEvidence", payload: JSON.stringify(fact),
+  });
+  harness.emit("Target.detachedFromTarget", {
+    sessionId: "worker-late", targetId: "target-late",
+  }, "page-session");
+  const smoke = await pending;
+  assert.equal(smoke.providerGetCount, 4);
+  assert.deepEqual(emitted.map(({ event }) => event), ["revision-selected", "city-published"]);
+  await opened.session.close();
 });
 
 test("a valid pre-selection failure settles typed readiness, drains, detaches, and cannot report success", async () => {
@@ -2654,7 +2774,7 @@ test("completed revision semantics reject a later no-revision terminal before se
   }, 0);
   void pending.catch(() => {});
   await Promise.resolve();
-  emitBrowserGet(opened.harness, {
+  await emitBrowserGet(opened.harness, {
     requestId: "semantic-before-unavailable", url: revisionUrl("FelixGeisler/code-city"),
     body: JSON.stringify([{ sha: EVENT }]),
   });
@@ -2685,7 +2805,7 @@ test("a selected binding pending semantic publication rejects a no-revision term
   const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
   void pending.catch(() => {});
   await Promise.resolve();
-  emitBrowserGet(opened.harness, {
+  await emitBrowserGet(opened.harness, {
     requestId: "binding-before-unavailable", url: revisionUrl("FelixGeisler/code-city"),
     body: JSON.stringify([{ sha: EVENT }]),
   });
@@ -2763,7 +2883,7 @@ test("a no-revision settlement rejects late revision completion or selection", a
     const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
     void pending.catch(() => {});
     await Promise.resolve();
-    emitBrowserGet(opened.harness, {
+    await emitBrowserGet(opened.harness, {
       requestId: "unavailable-before-semantic", url: revisionUrl("FelixGeisler/code-city"),
       body: JSON.stringify([{ sha: EVENT }]),
     });
@@ -2798,7 +2918,7 @@ test("revision readiness conflicts fail for every deterministic semantic, bindin
     const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
     void pending.catch(() => {});
     await Promise.resolve();
-    emitBrowserGet(opened.harness, {
+    await emitBrowserGet(opened.harness, {
       requestId: `readiness-permutation-${index}`, url: revisionUrl("FelixGeisler/code-city"),
       body: JSON.stringify([{ sha: EVENT }]),
     });
@@ -2836,7 +2956,7 @@ test("exact post-selection failure shapes close the admitted frontier and mismat
     const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
     void pending.catch(() => {});
     await Promise.resolve();
-    emitBrowserGet(opened.harness, {
+    await emitBrowserGet(opened.harness, {
       requestId: `failure-revision-${coded}`, url: revisionUrl("FelixGeisler/code-city"),
       body: JSON.stringify([{ sha: EVENT }]),
     });
@@ -2865,7 +2985,7 @@ test("exact post-selection failure shapes close the admitted frontier and mismat
   const mismatchPending = mismatched.session.collectSmoke(() => ({ atMs: 1 }), 0);
   void mismatchPending.catch(() => {});
   await Promise.resolve();
-  emitBrowserGet(mismatched.harness, {
+  await emitBrowserGet(mismatched.harness, {
     requestId: "mismatch-revision", url: revisionUrl("FelixGeisler/code-city"),
     body: JSON.stringify([{ sha: EVENT }]),
   });
@@ -2920,7 +3040,7 @@ test("terminal and drain publication wait for the fixed provider frontier after 
   }, 0);
   await Promise.resolve();
   for (const stage of ["revision", "commit", "tree", "raw"]) {
-    emitCanonicalGeneratedStage(opened.harness, stage, "worker-session", `frontier-${stage}`);
+    await emitCanonicalGeneratedStage(opened.harness, stage, "worker-session", `frontier-${stage}`);
   }
   await waitForBodyCalls(opened.harness, 4);
   for (let attempts = 0; !rawProjectionEntered && attempts < 30; attempts += 1) {
@@ -2978,7 +3098,7 @@ test("valid static failures reuse the provider-drained frontier before or after 
     void pending.then(() => { settled = true; }, () => { settled = true; });
     await Promise.resolve();
     for (const stage of ["revision", "commit", "tree", "raw"]) {
-      emitCanonicalGeneratedStage(opened.harness, stage, "worker-session",
+      await emitCanonicalGeneratedStage(opened.harness, stage, "worker-session",
         `static-${failure.category}-${terminalBeforeCompletion}-${stage}`);
     }
     await waitForBodyCalls(opened.harness, 4);
@@ -3073,7 +3193,7 @@ test("provider-drained state rejects duplicate markers and contradictory static 
     void pending.catch(() => {});
     await Promise.resolve();
     for (const stage of ["revision", "commit", "tree", "raw"]) {
-      emitCanonicalGeneratedStage(opened.harness, stage, "worker-session", `${scenario.name}-${stage}`);
+      await emitCanonicalGeneratedStage(opened.harness, stage, "worker-session", `${scenario.name}-${stage}`);
     }
     await waitForBodyCalls(opened.harness, 4);
     for (let attempts = 0; opened.requestItems.length < 4 && attempts < 30; attempts += 1) {
@@ -3099,83 +3219,381 @@ test("provider-drained state rejects duplicate markers and contradictory static 
   }
 });
 
-test("bounded provider bodies wait for complete safe metadata and allow a late page fragment", async () => {
-  let detached = false;
-  const safeStates = [];
-  const harness = fakeCdpHarness();
+test("the final candidate captures before late metadata and clears before terminal publication", async () => {
+  for (const responseOrder of ["response-finish", "finish-response"]) {
+    for (const settlementOrder of ["body-extra", "extra-body", "body-detach-extra"]) {
+      const bodyGate = deferredValue();
+      const bodyStates = [];
+      let currentBodyState = null;
+      const finalId = `final-${responseOrder}-${settlementOrder}`;
+      const harness = fakeCdpHarness({
+        async bodyImpl({ params, value }) {
+          if (params.requestId === finalId) await bodyGate.promise;
+          return value;
+        },
+      });
+      const emitted = [];
+      const opened = await openFakeBrowser(harness, {
+        browserOptions: {
+          observeBodyState(state) {
+            currentBodyState = structuredClone(state);
+            bodyStates.push(currentBodyState);
+          },
+        },
+      });
+      const pending = opened.session.collectSmoke((event, generation, atMs) => {
+        assert.equal(currentBodyState?.kind, "provider-body-cleared", event);
+        const value = { event, generation, atMs: atMs ?? emitted.length + 1 };
+        emitted.push(value);
+        return value;
+      }, 0);
+      await Promise.resolve();
+      await emitCanonicalGeneratedStage(harness, "revision", "worker-session", `${finalId}-revision`);
+      harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+        type: "REVISION_SELECTED", generation: 1, revision: EVENT,
+      }) });
+      await new Promise((resolve) => setImmediate(resolve));
+      await emitCanonicalGeneratedStage(harness, "commit", "worker-session", `${finalId}-commit`);
+      await emitCanonicalGeneratedStage(harness, "tree", "worker-session", `${finalId}-tree`);
+
+      const fixture = generatedStageFixture("raw");
+      harness.bodies.set(finalId, fixture.body);
+      harness.emit("Network.requestWillBeSent", {
+        requestId: finalId, request: { url: fixture.url, method: "GET", headers: {} },
+      }, "worker-session");
+      const response = () => harness.emit("Network.responseReceived", { requestId: finalId, response: {
+        url: fixture.url, status: 200, headers: { "Access-Control-Allow-Origin": "*" },
+        fromDiskCache: false, fromServiceWorker: false,
+      } }, "worker-session");
+      const finish = () => harness.emit("Network.loadingFinished", {
+        requestId: finalId, encodedDataLength: 1,
+      }, "worker-session");
+      if (responseOrder === "response-finish") { response(); finish(); } else { finish(); response(); }
+      await waitForBodyCalls(harness, 4);
+      assert.equal(opened.requestItems.length, 3);
+      for (const fact of [
+        { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 },
+        { type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64) },
+        { type: "ATTEMPT_DRAINED", generation: 1 },
+      ]) harness.emit("Runtime.bindingCalled", {
+        name: "__codeCityCollectorEvidence", payload: JSON.stringify(fact),
+      });
+      const extra = () => harness.emit("Network.requestWillBeSentExtraInfo", {
+        requestId: finalId, headers: {}, associatedCookies: [],
+      }, "page-session");
+      let detachIndex = null;
+      if (settlementOrder.startsWith("body-")) {
+        bodyGate.resolve();
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(opened.requestItems.length, 3);
+        if (settlementOrder === "body-detach-extra") {
+          harness.emit("Target.detachedFromTarget", {
+            sessionId: "worker-session", targetId: "worker-target",
+          }, "page-session");
+          detachIndex = harness.activity.length - 1;
+        }
+        extra();
+      } else {
+        extra();
+        await new Promise((resolve) => setImmediate(resolve));
+        assert.equal(opened.requestItems.length, 3);
+        bodyGate.resolve();
+      }
+      for (let attempts = 0; opened.requestItems.length < 4 && attempts < 30; attempts += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      assert.equal(opened.requestItems.length, 4);
+      assert.equal(bodyStates.at(-1).kind, "provider-body-cleared");
+      assert.equal(bodyStates.at(-1).bodyBacklog, 0);
+      assert.equal(bodyStates.at(-1).promiseReferenceCleared, true);
+      assert.equal(bodyStates.at(-1).entryReferenceCleared, true);
+      if (detachIndex === null) {
+        harness.emit("Target.detachedFromTarget", {
+          sessionId: "worker-session", targetId: "worker-target",
+        }, "page-session");
+        detachIndex = harness.activity.length - 1;
+      }
+      const smoke = await pending;
+      assert.equal(smoke.providerGetCount, 4);
+      assert.deepEqual(emitted.map(({ event }) => event), ["revision-selected", "city-published"]);
+      assert.deepEqual(harness.activity.slice(detachIndex + 1).filter(({ type, sessionId }) => (
+        type === "send" && sessionId === "worker-session"
+      )), []);
+      await opened.session.close();
+    }
+  }
+});
+
+test("production-shaped candidate 4,001 survives terminal, drain, late ExtraInfo, body, and detach permutations", async () => {
+  const scenarios = [
+    { name: "response-finish/body-extra", responseOrder: "response-finish", settlementOrder: "body-extra" },
+    { name: "finish-response/extra-body", responseOrder: "finish-response", settlementOrder: "extra-body" },
+    { name: "response-finish/body-detach-extra", responseOrder: "response-finish", settlementOrder: "body-detach-extra" },
+  ];
+  for (const scenario of scenarios) {
+    const bodyGate = deferredValue();
+    const finalId = `capacity-final-${scenario.name}`;
+    const progressCounts = [];
+    const lifecycle = [];
+    const bodyStates = [];
+    let currentBodyState = null;
+    const harness = fakeCdpHarness({
+      async bodyImpl({ params, value }) {
+        if (params.requestId === finalId) await bodyGate.promise;
+        return value;
+      },
+    });
+    const opened = await openFakeBrowser(harness, {
+      browserOptions: {
+        observeBodyState(state) {
+          currentBodyState = structuredClone(state);
+          bodyStates.push(currentBodyState);
+        },
+        emitQualificationProgress(count) {
+          assert.equal(currentBodyState?.kind, "provider-body-cleared", `${scenario.name}/progress-${count}`);
+          assert.equal(currentBodyState?.promiseReferenceCleared, true, scenario.name);
+          assert.equal(currentBodyState?.entryReferenceCleared, true, scenario.name);
+          progressCounts.push(count);
+        },
+      },
+    });
+    const qualification = (await runNativeQualification()).progress;
+    const pending = opened.session.collectCapacity(qualification, (event, generation, atMs) => {
+      if (["inventory-complete", "qualification-complete", "limit-failure", "request-quiescent", "worker-quiescent"].includes(event)) {
+        assert.equal(currentBodyState?.kind, "provider-body-cleared", `${scenario.name}/${event}`);
+        assert.equal(currentBodyState?.promiseReferenceCleared, true, scenario.name);
+        assert.equal(currentBodyState?.entryReferenceCleared, true, scenario.name);
+      }
+      const value = { event, generation, atMs };
+      lifecycle.push(value);
+      return value;
+    }, 0);
+    await Promise.resolve();
+    await emitBrowserGet(harness, {
+      requestId: `${finalId}-revision`, url: revisionUrl("react/react"),
+      body: JSON.stringify([{ sha: REACT }]),
+    });
+    harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+      type: "REVISION_SELECTED", generation: 2, revision: REACT,
+    }) });
+    await new Promise((resolve) => setImmediate(resolve));
+    await emitBrowserGet(harness, {
+      requestId: `${finalId}-commit`, url: commitUrl("react/react", REACT),
+      body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
+    });
+    await emitBrowserGet(harness, {
+      requestId: `${finalId}-tree`, url: treeUrl("react/react", REACT_ROOT),
+      body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
+    });
+    for (let index = 0; index < 4000; index += 1) {
+      await emitBrowserGet(harness, {
+        requestId: `${finalId}-raw-${index + 1}`,
+        url: rawUrl("react/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
+      });
+    }
+
+    const finalEntry = NATIVE_ENTRIES[4000];
+    harness.bodies.set(finalId, "x");
+    harness.emit("Network.requestWillBeSent", {
+      requestId: finalId,
+      request: { url: rawUrl("react/react", REACT, finalEntry.path), method: "GET", headers: {} },
+    }, "worker-session");
+    const response = () => harness.emit("Network.responseReceived", { requestId: finalId, response: {
+      url: rawUrl("react/react", REACT, finalEntry.path), status: 200,
+      headers: { "Access-Control-Allow-Origin": "*" }, fromDiskCache: false, fromServiceWorker: false,
+    } }, "worker-session");
+    const finish = () => harness.emit("Network.loadingFinished", {
+      requestId: finalId, encodedDataLength: 1,
+    }, "worker-session");
+    if (scenario.responseOrder === "response-finish") { response(); finish(); } else { finish(); response(); }
+    await waitForBodyCalls(harness, 4004);
+    assert.equal(opened.requestItems.length, 4003, scenario.name);
+    for (const fact of [
+      { type: "FAILURE", generation: 2, revision: REACT, category: "Repository exceeds Code City limits" },
+      { type: "ATTEMPT_DRAINED", generation: 2 },
+    ]) harness.emit("Runtime.bindingCalled", {
+      name: "__codeCityCollectorEvidence", payload: JSON.stringify(fact),
+    });
+    const extra = () => harness.emit("Network.requestWillBeSentExtraInfo", {
+      requestId: finalId, headers: {}, associatedCookies: [],
+    }, "page-session");
+    let detachIndex = null;
+    if (scenario.settlementOrder.startsWith("body-")) {
+      bodyGate.resolve();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(opened.requestItems.length, 4003, scenario.name);
+      if (scenario.settlementOrder === "body-detach-extra") {
+        harness.emit("Target.detachedFromTarget", {
+          sessionId: "worker-session", targetId: "worker-target",
+        }, "page-session");
+        detachIndex = harness.activity.length - 1;
+      }
+      extra();
+    } else {
+      extra();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(opened.requestItems.length, 4003, scenario.name);
+      bodyGate.resolve();
+    }
+    for (let attempts = 0; opened.requestItems.length < 4004 && attempts < 100; attempts += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.equal(opened.requestItems.length, 4004, scenario.name);
+    assert.equal(bodyStates.at(-1).promiseReferenceCleared, true, scenario.name);
+    assert.equal(bodyStates.at(-1).entryReferenceCleared, true, scenario.name);
+    if (detachIndex === null) {
+      harness.emit("Target.detachedFromTarget", {
+        sessionId: "worker-session", targetId: "worker-target",
+      }, "page-session");
+      detachIndex = harness.activity.length - 1;
+    }
+    const capacity = await pending;
+    assert.equal(capacity.rawRequestCount, 4001, scenario.name);
+    assert.equal(capacity.candidates.length, 4001, scenario.name);
+    assert.equal(progressCounts.at(-1), 4001, scenario.name);
+    assert(lifecycle.some(({ event }) => event === "qualification-complete"), scenario.name);
+    assert.deepEqual(harness.activity.slice(detachIndex + 1).filter(({ type, sessionId }) => (
+      type === "send" && sessionId === "worker-session"
+    )), [], scenario.name);
+    await opened.session.close();
+  }
+});
+
+test("owner detachment during a pending capture clears custody and tears down owned browser resources", async () => {
+  const bodyStates = [];
+  const harness = fakeCdpHarness({ bodyImpl: () => new Promise(() => {}) });
   const opened = await openFakeBrowser(harness, {
     browserOptions: {
-      validateSafeTransientState(state) { safeStates.push(structuredClone(state)); },
+      observeBodyState(state) { bodyStates.push(structuredClone(state)); },
     },
   });
-  const emitted = [];
-  const pending = opened.session.collectSmoke((event, generation, atMs) => {
-    const value = { event, generation, atMs: atMs ?? emitted.length + 1 };
-    emitted.push(value);
-    return value;
+  const pending = opened.session.collectSmoke(() => {
+    throw new Error("pending capture must not invoke a lifecycle callback");
   }, 0);
+  void pending.catch(() => {});
   await Promise.resolve();
-  for (let attempts = 0; !harness.calls.some(({ method, sessionId }) => (
-    method === "Runtime.runIfWaitingForDebugger" && sessionId === "worker-session"
-  )); attempts += 1) {
-    assert(attempts < 20);
-    await new Promise((resolve) => setImmediate(resolve));
-  }
-
-  const fixtures = ["revision", "commit", "tree", "raw"].map(generatedStageFixture);
-  for (const [index, fixture] of fixtures.entries()) {
-    const requestId = `detached-late-extra-${index}`;
-    harness.bodies.set(requestId, fixture.body);
-    harness.emit("Network.requestWillBeSent", {
-      requestId, request: { url: fixture.url, method: "GET", headers: {} },
-    }, "worker-session");
-    if (index > 0) harness.emit("Network.requestWillBeSentExtraInfo", {
-      requestId, headers: {}, associatedCookies: [],
-    }, "page-session");
-    harness.emit("Network.responseReceived", { requestId, response: {
-      url: fixture.url, status: 200,
-      headers: { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" },
-      fromDiskCache: false, fromServiceWorker: false,
-    } }, "worker-session");
-    harness.emit("Network.loadingFinished", {
-      requestId, encodedDataLength: new TextEncoder().encode(fixture.body).byteLength,
-    }, "worker-session");
-  }
-  assert.equal(harness.calls.filter(({ method }) => method === "Network.getResponseBody").length, 0);
-
-  for (const fact of [
-    { type: "REVISION_SELECTED", generation: 1, revision: EVENT },
-    { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 },
-    { type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: "1".repeat(64) },
-    { type: "ATTEMPT_DRAINED", generation: 1 },
-  ]) harness.emit("Runtime.bindingCalled", {
-    name: "__codeCityCollectorEvidence", payload: JSON.stringify(fact),
-  });
-  harness.emit("Network.requestWillBeSentExtraInfo", {
-    requestId: "detached-late-extra-0", headers: {}, associatedCookies: [],
-  }, "page-session");
-  await waitForBodyCalls(harness, 4);
-  assert(harness.calls.filter(({ method }) => method === "Network.getResponseBody")
-    .every(({ sessionId }) => sessionId === "worker-session"));
-  detached = true;
+  const fixture = generatedStageFixture("revision");
+  harness.bodies.set("pending-detach-private-id", fixture.body);
+  harness.emit("Network.requestWillBeSent", {
+    requestId: "pending-detach-private-id", request: { url: fixture.url, method: "GET", headers: {} },
+  }, "worker-session");
+  harness.emit("Network.responseReceived", { requestId: "pending-detach-private-id", response: {
+    url: fixture.url, status: 200, headers: { "Access-Control-Allow-Origin": "*" },
+    fromDiskCache: false, fromServiceWorker: false,
+  } }, "worker-session");
+  harness.emit("Network.loadingFinished", {
+    requestId: "pending-detach-private-id", encodedDataLength: fixture.body.length,
+  }, "worker-session");
+  await waitForBodyCalls(harness, 1);
   harness.emit("Target.detachedFromTarget", {
     sessionId: "worker-session", targetId: "worker-target",
   }, "page-session");
-  const detachIndex = harness.activity.length - 1;
-  const smoke = await pending;
-  assert.equal(smoke.providerGetCount, 4);
-  assert.deepEqual(emitted.map(({ event }) => event), ["revision-selected", "city-published"]);
-  assert.equal(harness.bodyCalls, 4);
-  assert.deepEqual(harness.activity.slice(detachIndex + 1).filter(({ type, sessionId }) => (
-    type === "send" && sessionId === "worker-session"
-  )), []);
-  assert.deepEqual(safeStates.at(-1), {
-    kind: "correlations-cleared", generation: 1, correlationCount: 0,
-  });
-  const retained = JSON.stringify({ smoke, requestItems: opened.requestItems, safeStates, session: opened.session });
-  assert(!retained.includes("detached-late-extra"));
-  assert(!/requestId|sessionId/iu.test(retained));
+  await assert.rejects(pending, /worker detached while body capture was pending/u);
+  assert.deepEqual(opened.requestItems, []);
+  assert.equal(bodyStates.at(-1).kind, "provider-body-cleared");
+  assert.equal(bodyStates.at(-1).bodyBacklog, 0);
+  assert.equal(bodyStates.at(-1).bodyReferenceCleared, true);
+  assert.equal(bodyStates.at(-1).promiseReferenceCleared, true);
+  assert.equal(bodyStates.at(-1).entryReferenceCleared, true);
   await opened.session.close();
+  assert.equal(harness.closeCount, 1);
+  assert.equal(opened.child.kills, 1);
+  assert(!JSON.stringify({ bodyStates, requestItems: opened.requestItems }).includes("pending-detach-private-id"));
+});
+
+test("pending-capture detachment tears down ownership and seals through the real packet path without late activity", async () => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "collector-pending-detach-"));
+  const output = path.join(temporary, "packet");
+  const profile = path.join(temporary, "profile");
+  const unhandled = [];
+  const onUnhandled = (error) => unhandled.push(error);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const seams = collectorMatrixSeams();
+    delete seams.writeValidatedEvidencePacket;
+    delete seams.readValidatedEvidencePacket;
+    let harness;
+    let child;
+    let cleanupCount = 0;
+    let callbackCount = 0;
+    seams.mkdtemp = async () => profile;
+    seams.rm = async (value) => {
+      assert.equal(value, profile);
+      cleanupCount += 1;
+    };
+    seams.createBrowserEvidenceSession = async (args) => {
+      harness = fakeCdpHarness({ bodyImpl: () => new Promise(() => {}) });
+      child = fakeChromeChild();
+      const native = await createBrowserEvidenceSession({
+        ...args,
+        launchImpl: async () => ({ child, websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+        connectImpl: () => harness.cdp,
+      });
+      const drive = async () => {
+        await new Promise((resolve) => setImmediate(resolve));
+        const fixture = generatedStageFixture("revision");
+        harness.bodies.set("packet-pending-private-id", fixture.body);
+        harness.emit("Network.requestWillBeSent", {
+          requestId: "packet-pending-private-id", request: { url: fixture.url, method: "GET", headers: {} },
+        }, "worker-session");
+        harness.emit("Network.responseReceived", { requestId: "packet-pending-private-id", response: {
+          url: fixture.url, status: 200, headers: { "Access-Control-Allow-Origin": "*" },
+          fromDiskCache: false, fromServiceWorker: false,
+        } }, "worker-session");
+        harness.emit("Network.loadingFinished", {
+          requestId: "packet-pending-private-id", encodedDataLength: fixture.body.length,
+        }, "worker-session");
+        await waitForBodyCalls(harness, 1);
+        harness.emit("Target.detachedFromTarget", {
+          sessionId: "worker-session", targetId: "worker-target",
+        }, "page-session");
+      };
+      return Object.freeze({
+        cdpVersion: native.cdpVersion,
+        fatalSignal: native.fatalSignal,
+        snapshot: native.snapshot,
+        async collectSmoke(emit, startedMs) {
+          const result = native.collectSmoke((...parameters) => {
+            callbackCount += 1;
+            return emit(...parameters);
+          }, startedMs);
+          void drive();
+          return result;
+        },
+        clearTrace: native.clearTrace,
+        async collectCapacity() { throw new Error("capacity must not start"); },
+        close: native.close,
+      });
+    };
+    const result = await collectProductionEvidence({
+      origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"), output,
+    }, seams);
+    assert.deepEqual([result.status, result.reason], ["fail", "infrastructure-failure"]);
+    assert.equal(await readFile(path.join(output, ".validated"), "utf8"), `${result.packetDigest}\n`);
+    const index = JSON.parse(await readFile(path.join(output, "index.json"), "utf8"));
+    const smoke = JSON.parse(await readFile(path.join(output, "smoke.json"), "utf8"));
+    const requests = JSON.parse(await readFile(path.join(output, "requests.json"), "utf8"));
+    assert.deepEqual([index.overallStatus, index.firstFailure], ["fail", "infrastructure-failure"]);
+    assert.deepEqual([smoke.status, smoke.reason, smoke.data.providerGetCount],
+      ["fail", "infrastructure-failure", 0]);
+    assert.deepEqual(requests.data.items, []);
+    assert.equal(callbackCount, 0);
+    assert.equal(harness.bodyCalls, 1);
+    assert.equal(harness.closeCount, 1);
+    assert.equal(child.kills, 1);
+    assert.equal(cleanupCount, 1);
+    const terminalActivity = structuredClone(harness.activity);
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(harness.activity, terminalActivity);
+    assert.deepEqual(unhandled, []);
+    for (const name of ["artifact", "smoke", "qualification", "capacity", "requests", "lifecycle", "index"]) {
+      assert(!String(await readFile(path.join(output, `${name}.json`), "utf8")).includes("packet-pending-private-id"));
+    }
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+    await rm(temporary, { recursive: true, force: true });
+  }
 });
 
 test("provider closure is monotonic and rejects duplicate, undercount, overcount, and payload-bearing admission", async () => {
@@ -3188,7 +3606,7 @@ test("provider closure is monotonic and rejects duplicate, undercount, overcount
       : scenario === "overcount" ? ["revision", "commit", "tree", "raw", "raw"]
         : ["revision", "commit", "tree", "raw"];
     for (const [index, stage] of stages.entries()) {
-      emitCanonicalGeneratedStage(opened.harness, stage, "worker-session", `${scenario}-${index}`);
+      await emitCanonicalGeneratedStage(opened.harness, stage, "worker-session", `${scenario}-${index}`);
     }
     await new Promise((resolve) => setImmediate(resolve));
     opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
@@ -3312,13 +3730,15 @@ test("the second network validation completes a paired exchange without double c
       for (const part of ["finished", "extra", "response"].filter((part) => part !== scenario.delayed)) emit("OPTIONS", part);
       for (const part of ["extra", "response", "finished"]) emit("GET", part);
       await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(opened.harness.bodyCalls, 0, scenario.name);
+      assert.equal(opened.harness.bodyCalls, 1, scenario.name);
+      assert.deepEqual(opened.requestItems, [], scenario.name);
       emit("OPTIONS", scenario.delayed);
     } else {
       for (const part of ["extra", "response", "finished"]) emit("OPTIONS", part);
       for (const part of ["finished", "extra", "response"].filter((part) => part !== scenario.delayed)) emit("GET", part);
       await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(opened.harness.bodyCalls, 0, scenario.name);
+      assert.equal(opened.harness.bodyCalls, scenario.delayed === "extra" ? 1 : 0, scenario.name);
+      assert.deepEqual(opened.requestItems, [], scenario.name);
       emit("GET", scenario.delayed);
     }
     await waitForBodyCalls(opened.harness, 1);
@@ -3589,7 +4009,7 @@ test("preflight admission rejects every mismatched, duplicate, late, failed, inc
       beginBrowserRequest(harness, { requestId: "options", url: rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts"), method: "OPTIONS" });
     }],
     ["late-arrival", async ({ harness }) => {
-      emitBrowserGet(harness, { requestId: "completed-get", url: revision, body: JSON.stringify([{ sha: EVENT }]) });
+      await emitBrowserGet(harness, { requestId: "completed-get", url: revision, body: JSON.stringify([{ sha: EVENT }]) });
       await waitForBodyCalls(harness, 1);
       beginBrowserRequest(harness, { requestId: "late-options", url: revision, method: "OPTIONS" });
     }],
@@ -3615,7 +4035,7 @@ test("preflight admission rejects every mismatched, duplicate, late, failed, inc
       beginBrowserRequest(harness, { requestId: "get-b", url: revision, method: "GET" });
     }],
     ["retried-get", async ({ harness }) => {
-      emitBrowserGet(harness, { requestId: "completed-get", url: revision, body: JSON.stringify([{ sha: EVENT }]) });
+      await emitBrowserGet(harness, { requestId: "completed-get", url: revision, body: JSON.stringify([{ sha: EVENT }]) });
       await waitForBodyCalls(harness, 1);
       beginBrowserRequest(harness, { requestId: "retry-get", url: revision, method: "GET" });
     }],
@@ -3723,7 +4143,7 @@ test("provider closure rejects a new worker request before payload access and pr
   void pending.catch(() => {});
   await Promise.resolve();
   for (const stage of ["revision", "commit", "tree", "raw"]) {
-    emitCanonicalGeneratedStage(opened.harness, stage, "worker-session", `closed-${stage}`);
+    await emitCanonicalGeneratedStage(opened.harness, stage, "worker-session", `closed-${stage}`);
   }
   await new Promise((resolve) => setImmediate(resolve));
   opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
@@ -3786,7 +4206,7 @@ test("an admitted exact worker asset completes after provider closure and termin
     url, status: 200, headers: {}, fromDiskCache: false, fromServiceWorker: false,
   } }, "worker-session");
   for (const stage of ["revision", "commit", "tree", "raw"]) {
-    emitCanonicalGeneratedStage(opened.harness, stage, "worker-session", `asset-frontier-${stage}`);
+    await emitCanonicalGeneratedStage(opened.harness, stage, "worker-session", `asset-frontier-${stage}`);
   }
   await new Promise((resolve) => setImmediate(resolve));
   opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
@@ -3926,8 +4346,9 @@ test("CDP request ExtraInfo is mandatory, unique, late-admissible, and authorita
       launchImpl: async () => ({ child, websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }), connectImpl: () => harness.cdp,
     });
     const pending = session.collectSmoke(() => ({ atMs: 1 }), 0);
+    void pending.catch(() => {});
     await Promise.resolve();
-    emitBrowserGet(harness, { requestId: "credential", url: revisionUrl("FelixGeisler/code-city"), body: `${JSON.stringify([{ sha: EVENT }])}\n`, headers: { Cookie: "private" } });
+    await emitBrowserGet(harness, { requestId: "credential", url: revisionUrl("FelixGeisler/code-city"), body: `${JSON.stringify([{ sha: EVENT }])}\n`, headers: { Cookie: "private" } });
     harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({ type: "REVISION_SELECTED", generation: 1, revision: EVENT }) });
     await assert.rejects(pending, /credential header/u);
     assert.equal(requestItems.length, 0);
@@ -3957,7 +4378,7 @@ test("CDP request ExtraInfo is mandatory, unique, late-admissible, and authorita
     } else {
       await new Promise((resolve) => setImmediate(resolve));
       assert.equal(opened.session.fatalSignal.aborted, false, kind);
-      assert.equal(opened.harness.bodyCalls, kind === "late" ? 1 : 0, kind);
+      assert.equal(opened.harness.bodyCalls, 1, kind);
       opened.harness.emit("Runtime.exceptionThrown", {});
       await assert.rejects(pending, /browser exception/u);
     }
@@ -4053,7 +4474,7 @@ test("CDP session accepts an exact decoded cap with encoded overhead and rejects
     const opened = await openFakeBrowser();
     const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
     await Promise.resolve();
-    emitBrowserGet(opened.harness, {
+    await emitBrowserGet(opened.harness, {
       requestId: "exact-decoded", url: revisionUrl("FelixGeisler/code-city"),
       body: paddedJson([{ sha: EVENT }], cap), dataLength: cap, encodedDataLength: cap + 1_024,
     });
@@ -4077,8 +4498,9 @@ test("CDP session accepts an exact decoded cap with encoded overhead and rejects
   {
     const opened = await openFakeBrowser();
     const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
+    void pending.catch(() => {});
     await Promise.resolve();
-    emitBrowserGet(opened.harness, {
+    await emitBrowserGet(opened.harness, {
       requestId: "retrieved-overflow", url: revisionUrl("FelixGeisler/code-city"),
       body: paddedJson([{ sha: EVENT }], cap + 1), dataLength: cap, encodedDataLength: cap + 1_024,
     });
@@ -4112,7 +4534,7 @@ test("each native CDP revision, commit, tree, and raw route rejects boundary plu
     const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
     await Promise.resolve();
     const complete = async (stage, requestId, url, body) => {
-      emitBrowserGet(opened.harness, { requestId, url, body });
+      await emitBrowserGet(opened.harness, { requestId, url, body });
       await new Promise((resolve) => setImmediate(resolve));
       if (stage === "revision") {
         opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
@@ -4156,7 +4578,7 @@ test("an earlier SUCCESS is the first capacity terminal and fails exact limit or
   const qualification = (await runNativeQualification()).progress;
   const pending = opened.session.collectCapacity(qualification, () => ({ atMs: 1 }), 0);
   await Promise.resolve();
-  emitBrowserGet(opened.harness, { requestId: "revision", url: revisionUrl("react/react"), body: `${JSON.stringify([{ sha: REACT }])}\n` });
+  await emitBrowserGet(opened.harness, { requestId: "revision", url: revisionUrl("react/react"), body: `${JSON.stringify([{ sha: REACT }])}\n` });
   await new Promise((resolve) => setImmediate(resolve));
   opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({ type: "REVISION_SELECTED", generation: 2, revision: REACT }) });
   await new Promise((resolve) => setImmediate(resolve));
@@ -4215,23 +4637,23 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
   await Promise.resolve();
   harness.emit("Target.attachedToTarget", { sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" } }, "");
 
-  emitBrowserGet(harness, {
+  await emitBrowserGet(harness, {
     requestId: "capacity-revision", url: revisionUrl("react/react"), body: JSON.stringify([{ sha: REACT }]),
     dataLength: RESPONSE_CAPS.revision,
   });
   await new Promise((resolve) => setImmediate(resolve));
   harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({ type: "REVISION_SELECTED", generation: 2, revision: REACT }) });
   const selectionObservedAtMs = tick;
-  emitBrowserGet(harness, {
+  await emitBrowserGet(harness, {
     requestId: "capacity-commit", url: commitUrl("react/react", REACT),
     body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }), dataLength: RESPONSE_CAPS.commit,
   });
-  emitBrowserGet(harness, {
+  await emitBrowserGet(harness, {
     requestId: "capacity-tree", url: treeUrl("react/react", REACT_ROOT),
     body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }), dataLength: RESPONSE_CAPS.tree,
   });
   for (let index = 0; index < NATIVE_ENTRIES.length; index += 1) {
-    emitBrowserGet(harness, {
+    await emitBrowserGet(harness, {
       requestId: `capacity-raw-${index + 1}`,
       url: rawUrl("react/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
       headers: {}, dataLength: RESPONSE_CAPS.raw,
@@ -4249,6 +4671,7 @@ test("native CDP capacity observes the complete ordered 4,004 exchange sequence,
   assert.equal(callbackBodyStates.length, progressCounts.length + 1);
   assert(callbackBodyStates.every(({ state }) => state.kind === "provider-body-cleared"
     && state.stage === "raw" && state.bodyBacklog === 0 && state.bodyReferenceCleared === true
+    && state.promiseReferenceCleared === true && state.entryReferenceCleared === true
     && Object.hasOwn(state, "body") === false));
   harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
     type: "FAILURE", generation: 2, revision: REACT, category: "Repository exceeds Code City limits",
@@ -4348,23 +4771,23 @@ test("a late publication after worker detachment becomes a schema-valid handled 
   harness.emit("Target.attachedToTarget", {
     sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" },
   }, "");
-  emitBrowserGet(harness, {
+  await emitBrowserGet(harness, {
     requestId: "capacity-revision", url: revisionUrl("react/react"), body: JSON.stringify([{ sha: REACT }]),
   });
   await new Promise((resolve) => setImmediate(resolve));
   harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
     type: "REVISION_SELECTED", generation: 2, revision: REACT,
   }) });
-  emitBrowserGet(harness, {
+  await emitBrowserGet(harness, {
     requestId: "capacity-commit", url: commitUrl("react/react", REACT),
     body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
   });
-  emitBrowserGet(harness, {
+  await emitBrowserGet(harness, {
     requestId: "capacity-tree", url: treeUrl("react/react", REACT_ROOT),
     body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
   });
   for (let index = 0; index < NATIVE_ENTRIES.length; index += 1) {
-    emitBrowserGet(harness, {
+    await emitBrowserGet(harness, {
       requestId: `capacity-raw-${index + 1}`,
       url: rawUrl("react/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
     });
@@ -4413,7 +4836,7 @@ test("CDP admission rejects overlap, wrong order/path, skipped custodied candida
     const opened = await openFakeBrowser();
     const pending = opened.session.collectSmoke(() => ({ atMs: 1 }), 0);
     await Promise.resolve();
-    emitBrowserGet(opened.harness, {
+    await emitBrowserGet(opened.harness, {
       requestId: "ordered-revision", url: revisionUrl("FelixGeisler/code-city"), body: JSON.stringify([{ sha: EVENT }]),
     });
     await new Promise((resolve) => setImmediate(resolve));
@@ -4437,19 +4860,20 @@ test("CDP admission rejects overlap, wrong order/path, skipped custodied candida
     const opened = await openFakeBrowser();
     const qualification = (await runNativeQualification()).progress;
     const pending = opened.session.collectCapacity(qualification, () => ({ atMs: 1 }), 0);
+    void pending.catch(() => {});
     await Promise.resolve();
-    emitBrowserGet(opened.harness, {
+    await emitBrowserGet(opened.harness, {
       requestId: `${name}-revision`, url: revisionUrl("react/react"), body: JSON.stringify([{ sha: REACT }]),
     });
     await new Promise((resolve) => setImmediate(resolve));
     opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
       type: "REVISION_SELECTED", generation: 2, revision: REACT,
     }) });
-    emitBrowserGet(opened.harness, {
+    await emitBrowserGet(opened.harness, {
       requestId: `${name}-commit`, url: commitUrl("react/react", REACT),
       body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
     });
-    emitBrowserGet(opened.harness, {
+    await emitBrowserGet(opened.harness, {
       requestId: `${name}-tree`, url: treeUrl("react/react", REACT_ROOT),
       body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
     });
@@ -4457,7 +4881,7 @@ test("CDP admission rejects overlap, wrong order/path, skipped custodied candida
       await new Promise((resolve) => setImmediate(resolve));
     }
     assert.equal(opened.harness.bodyCalls, 3, name);
-    emitBrowserGet(opened.harness, {
+    await emitBrowserGet(opened.harness, {
       requestId: `${name}-raw`, url: rawUrl("react/react", REACT, applicationPath), body: "x",
     });
     await assert.rejects(pending, /sequence differs at admission/u, name);
@@ -4473,23 +4897,23 @@ test("CDP admission rejects overlap, wrong order/path, skipped custodied candida
     const qualification = (await runNativeQualification()).progress;
     const pending = opened.session.collectCapacity(qualification, () => ({ atMs: 1 }), 0);
     await Promise.resolve();
-    emitBrowserGet(opened.harness, {
+    await emitBrowserGet(opened.harness, {
       requestId: "limit-revision", url: revisionUrl("react/react"), body: JSON.stringify([{ sha: REACT }]),
     });
     await new Promise((resolve) => setImmediate(resolve));
     opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
       type: "REVISION_SELECTED", generation: 2, revision: REACT,
     }) });
-    emitBrowserGet(opened.harness, {
+    await emitBrowserGet(opened.harness, {
       requestId: "limit-commit", url: commitUrl("react/react", REACT),
       body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
     });
-    emitBrowserGet(opened.harness, {
+    await emitBrowserGet(opened.harness, {
       requestId: "limit-tree", url: treeUrl("react/react", REACT_ROOT),
       body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
     });
     for (let index = 0; index < NATIVE_ENTRIES.length; index += 1) {
-      emitBrowserGet(opened.harness, {
+      await emitBrowserGet(opened.harness, {
         requestId: `limit-raw-${index + 1}`,
         url: rawUrl("react/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
       });
@@ -4759,12 +5183,18 @@ async function collectNativeSmokeBarrierFailurePacket(kind) {
   const fallbackBrowserFactory = seams.createBrowserEvidenceSession;
   seams.createBrowserEvidenceSession = async (args) => {
     const harness = fakeCdpHarness({
-      bodyImpl: async () => { throw new Error(diagnostic); },
+      bodyImpl: async ({ value }) => {
+        if (kind === "worker-command") throw new Error(diagnostic);
+        return value;
+      },
     });
     const native = await createBrowserEvidenceSession({
       ...args,
       launchImpl: async () => ({ child: fakeChromeChild(), websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
       connectImpl: () => harness.cdp,
+      async beforeProviderProjection() {
+        if (kind === "processing-barrier") throw new Error(diagnostic);
+      },
     });
     const fallback = await fallbackBrowserFactory(args);
     const driveSmoke = async () => {
@@ -4774,7 +5204,7 @@ async function collectNativeSmokeBarrierFailurePacket(kind) {
       }, "");
       await new Promise((resolve) => setImmediate(resolve));
       const revision = revisionUrl("FelixGeisler/code-city");
-      emitBrowserGet(harness, {
+      await emitBrowserGet(harness, {
         requestId: `failed-${kind}-revision`, url: revision, body: JSON.stringify([{ sha: EVENT }]),
       });
       await waitForBodyCalls(harness, 1);
@@ -4801,16 +5231,16 @@ async function collectNativeSmokeBarrierFailurePacket(kind) {
     origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
     output: path.resolve(`handled-${kind}`),
   }, seams);
-  return { diagnostic, result, stored };
+  return { diagnostic, result, stored, expectedReason: kind === "worker-command" ? "provider-failure" : "infrastructure-failure" };
 }
 
-function assertSchemaValidSmokeBarrierFailure({ diagnostic, result, stored }) {
-  assert.deepEqual([result.status, result.reason], ["fail", "infrastructure-failure"]);
+function assertSchemaValidSmokeBarrierFailure({ diagnostic, result, stored, expectedReason }) {
+  assert.deepEqual([result.status, result.reason], ["fail", expectedReason]);
   const index = JSON.parse(new TextDecoder().decode(stored.files.get("index.json")));
   const smoke = JSON.parse(new TextDecoder().decode(stored.files.get("smoke.json")));
   const lifecycle = JSON.parse(new TextDecoder().decode(stored.files.get("lifecycle.json")));
-  assert.deepEqual([index.overallStatus, index.firstFailure], ["fail", "infrastructure-failure"]);
-  assert.deepEqual([smoke.status, smoke.reason], ["fail", "infrastructure-failure"]);
+  assert.deepEqual([index.overallStatus, index.firstFailure], ["fail", expectedReason]);
+  assert.deepEqual([smoke.status, smoke.reason], ["fail", expectedReason]);
   assert.deepEqual(lifecycle.data.events.map(({ event }) => event), [
     "collector-start", "artifact-verified", "smoke-start", "collector-failed",
   ]);
@@ -4924,13 +5354,13 @@ test("a post-flush unmatched marker crosses the detachment barrier as request-se
     const fallback = await fallbackBrowserFactory(args);
     const driveSmoke = async () => {
       await Promise.resolve();
-      emitCanonicalGeneratedStage(harness, "revision", "worker-session", "post-flush-unmatched-revision");
+      await emitCanonicalGeneratedStage(harness, "revision", "worker-session", "post-flush-unmatched-revision");
       await waitForBodyCalls(harness, 1);
       harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
         type: "REVISION_SELECTED", generation: 1, revision: EVENT,
       }) });
       for (const stage of ["commit", "tree", "raw"]) {
-        emitCanonicalGeneratedStage(harness, stage, "worker-session", `post-flush-unmatched-${stage}`);
+        await emitCanonicalGeneratedStage(harness, stage, "worker-session", `post-flush-unmatched-${stage}`);
       }
       await waitForBodyCalls(harness, 4);
       harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
@@ -5029,12 +5459,12 @@ test("full collector orchestration correlates page preflight and GET ExtraInfo w
         fromDiskCache: false, fromServiceWorker: false,
       } }, "page-session");
       await waitForBodyCalls(harness, 1);
-      emitBrowserGet(harness, {
+      await emitBrowserGet(harness, {
         requestId: "orchestration-commit", url: commitUrl("FelixGeisler/code-city", EVENT),
         body: JSON.stringify({ sha: EVENT, tree: { sha: ROOT } }),
       });
       await waitForBodyCalls(harness, 2);
-      emitBrowserGet(harness, {
+      await emitBrowserGet(harness, {
         requestId: "orchestration-tree", url: treeUrl("FelixGeisler/code-city", ROOT),
         body: JSON.stringify({ sha: ROOT, truncated: false, tree: [
           { path: "src/a.ts", mode: "100644", type: "blob", sha: NATIVE_BLOB },
@@ -5095,15 +5525,9 @@ test("full collector orchestration correlates page preflight and GET ExtraInfo w
   assert.deepEqual(lifecycle.data.events.slice(-2).map(({ event }) => event), ["worker-quiescent", "collector-complete"]);
 });
 
-test("full capacity orchestration flushes delayed tree inventory before a pending limit terminal", async () => {
+test("full capacity orchestration preserves tree inventory before later responses", async () => {
   let stored;
-  const treeBodyGate = deferredValue();
-  const harness = fakeCdpHarness({
-    async bodyImpl({ params, value }) {
-      if (params.requestId === "causal-capacity-tree") await treeBodyGate.promise;
-      return value;
-    },
-  });
+  const harness = fakeCdpHarness();
   const seams = collectorMatrixSeams({ packetSink(value) { if (value) stored = value; return stored; } });
   const fallbackBrowserFactory = seams.createBrowserEvidenceSession;
   const controlledQualification = nativeQualificationFetch();
@@ -5123,7 +5547,7 @@ test("full capacity orchestration flushes delayed tree inventory before a pendin
         sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" },
       }, "");
       await new Promise((resolve) => setImmediate(resolve));
-      emitBrowserGet(harness, {
+      await emitBrowserGet(harness, {
         requestId: "causal-capacity-revision", url: revisionUrl("react/react"),
         body: JSON.stringify([{ sha: REACT }]),
       });
@@ -5132,18 +5556,19 @@ test("full capacity orchestration flushes delayed tree inventory before a pendin
         type: "REVISION_SELECTED", generation: 2, revision: REACT,
       }) });
       await new Promise((resolve) => setImmediate(resolve));
-      emitBrowserGet(harness, {
+      await emitBrowserGet(harness, {
         requestId: "causal-capacity-commit", url: commitUrl("react/react", REACT),
         body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
       });
       await waitForBodyCalls(harness, 2);
-      emitBrowserGet(harness, {
+      await emitBrowserGet(harness, {
         requestId: "causal-capacity-tree", url: treeUrl("react/react", REACT_ROOT),
         body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
       });
       await waitForBodyCalls(harness, 3);
+      assert.equal(stored, undefined, "tree capture remains private before completion");
       for (let index = 0; index < NATIVE_ENTRIES.length; index += 1) {
-        emitBrowserGet(harness, {
+        await emitBrowserGet(harness, {
           requestId: `causal-capacity-raw-${index + 1}`,
           url: rawUrl("react/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
         });
@@ -5158,8 +5583,6 @@ test("full capacity orchestration flushes delayed tree inventory before a pendin
         sessionId: "worker-session", targetId: "worker-target",
       }, "");
       await new Promise((resolve) => setImmediate(resolve));
-      assert.equal(stored, undefined, "terminal did not overtake delayed tree body processing");
-      treeBodyGate.resolve();
     };
     return Object.freeze({
       cdpVersion: native.cdpVersion,
@@ -5338,23 +5761,23 @@ test("native CDP overlap and candidate-4,002 admission stops produce schema-vali
       };
       const driveLimit = async () => {
         await Promise.resolve();
-        emitBrowserGet(harness, {
+        await emitBrowserGet(harness, {
           requestId: "packet-limit-revision", url: revisionUrl("react/react"), body: JSON.stringify([{ sha: REACT }]),
         });
         await new Promise((resolve) => setImmediate(resolve));
         harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
           type: "REVISION_SELECTED", generation: 2, revision: REACT,
         }) });
-        emitBrowserGet(harness, {
+        await emitBrowserGet(harness, {
           requestId: "packet-limit-commit", url: commitUrl("react/react", REACT),
           body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
         });
-        emitBrowserGet(harness, {
+        await emitBrowserGet(harness, {
           requestId: "packet-limit-tree", url: treeUrl("react/react", REACT_ROOT),
           body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
         });
         for (let index = 0; index < NATIVE_ENTRIES.length; index += 1) {
-          emitBrowserGet(harness, {
+          await emitBrowserGet(harness, {
             requestId: `packet-limit-raw-${index + 1}`,
             url: rawUrl("react/react", REACT, NATIVE_ENTRIES[index].path), body: "x",
           });
@@ -5491,7 +5914,7 @@ test("browser capacity normalization and hash failures produce stage-aware schem
       });
       const drive = async () => {
         await Promise.resolve();
-        emitBrowserGet(harness, {
+        await emitBrowserGet(harness, {
           requestId: `${kind}-revision`, url: revisionUrl("react/react"), body: JSON.stringify([{ sha: REACT }]),
         });
         await new Promise((resolve) => setImmediate(resolve));
@@ -5499,17 +5922,17 @@ test("browser capacity normalization and hash failures produce stage-aware schem
           type: "REVISION_SELECTED", generation: 2, revision: REACT,
         }) });
         await new Promise((resolve) => setImmediate(resolve));
-        emitBrowserGet(harness, {
+        await emitBrowserGet(harness, {
           requestId: `${kind}-commit`, url: commitUrl("react/react", REACT),
           body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
         });
-        emitBrowserGet(harness, {
+        await emitBrowserGet(harness, {
           requestId: `${kind}-tree`, url: treeUrl("react/react", REACT_ROOT),
           body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: entries }),
         });
         const rawCount = kind === "aggregate" ? 21 : 1;
         for (let index = 0; index < rawCount; index += 1) {
-          emitBrowserBytes(harness, {
+          await emitBrowserBytes(harness, {
             requestId: `${kind}-raw-${index + 1}`,
             url: rawUrl("react/react", REACT, entries[index].path), bytes: sources[index],
           });
@@ -5551,12 +5974,12 @@ test("browser capacity normalization and hash failures produce stage-aware schem
     assert.equal(capacity.data.candidates.length, prefixLength, kind);
     assert.equal(requests.data.items.filter((item) => item.applicationCall
       && item.requestedUrl.includes("/react/react/") && item.stage === "raw").length,
-    kind === "hash" ? 1 : prefixLength + 1, kind);
+    prefixLength, kind);
   }
 });
 
-test("mid-prefix malformed, cap-plus-one, and pre-projection CDP failures persist sealed safe shared frontiers", async () => {
-  for (const scenario of ["malformed", "cap-plus-one", "before-projection"]) {
+test("mid-prefix malformed, cap-plus-one, command-rejection, and pre-projection failures seal safe shared frontiers", async () => {
+  for (const scenario of ["malformed", "cap-plus-one", "command-rejection", "before-projection"]) {
     const temporary = await mkdtemp(path.join(os.tmpdir(), `collector-mid-prefix-${scenario}-`));
     try {
       const output = path.join(temporary, "packet");
@@ -5582,6 +6005,7 @@ test("mid-prefix malformed, cap-plus-one, and pre-projection CDP failures persis
             if (params.requestId !== targetRequestId) return value;
             if (scenario === "malformed") return { body: { diagnostic }, base64Encoded: false };
             if (scenario === "cap-plus-one") return { body: oversizedBody, base64Encoded: true };
+            if (scenario === "command-rejection") throw new Error(diagnostic);
             return value;
           },
         });
@@ -5598,7 +6022,7 @@ test("mid-prefix malformed, cap-plus-one, and pre-projection CDP failures persis
         });
         const drive = async () => {
           await Promise.resolve();
-          emitBrowserGet(harness, {
+          await emitBrowserGet(harness, {
             requestId: `${scenario}-revision`, url: revisionUrl("react/react"),
             body: JSON.stringify([{ sha: REACT }]),
           });
@@ -5607,16 +6031,16 @@ test("mid-prefix malformed, cap-plus-one, and pre-projection CDP failures persis
             type: "REVISION_SELECTED", generation: 2, revision: REACT,
           }) });
           await new Promise((resolve) => setImmediate(resolve));
-          emitBrowserGet(harness, {
+          await emitBrowserGet(harness, {
             requestId: `${scenario}-commit`, url: commitUrl("react/react", REACT),
             body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
           });
-          emitBrowserGet(harness, {
+          await emitBrowserGet(harness, {
             requestId: `${scenario}-tree`, url: treeUrl("react/react", REACT_ROOT),
             body: JSON.stringify({ sha: REACT_ROOT, truncated: false, tree: NATIVE_ENTRIES }),
           });
           for (let index = 0; index < 3; index += 1) {
-            emitBrowserGet(harness, {
+            await emitBrowserGet(harness, {
               requestId: `${scenario}-raw-${index + 1}`,
               url: rawUrl("react/react", REACT, NATIVE_ENTRIES[index].path), body: "x", dataLength: 1,
             });
@@ -5670,14 +6094,16 @@ test("mid-prefix malformed, cap-plus-one, and pre-projection CDP failures persis
       ], scenario);
       const rawRequests = requests.data.items.filter((item) => item.applicationCall
         && item.requestedUrl.includes("/react/react/") && item.stage === "raw");
-      assert.equal(rawRequests.length, 3, scenario);
+      assert.equal(rawRequests.length, 2, scenario);
       assert.equal(rawRequests.at(-1), requests.data.items.at(-1), scenario);
-      assert.equal(rawRequests.at(-1).requestedUrl, rawUrl("react/react", REACT, "0003.ts"), scenario);
+      assert.equal(rawRequests.at(-1).requestedUrl, rawUrl("react/react", REACT, "0002.ts"), scenario);
       assert.deepEqual(lifecycle.data.events.slice(-2).map(({ event }) => event),
         ["inventory-complete", "collector-failed"], scenario);
       assert.equal(bodyStates.at(-1).kind, "provider-body-cleared", scenario);
       assert.equal(bodyStates.at(-1).bodyBacklog, 0, scenario);
       assert.equal(bodyStates.at(-1).bodyReferenceCleared, true, scenario);
+      assert.equal(bodyStates.at(-1).promiseReferenceCleared, true, scenario);
+      assert.equal(bodyStates.at(-1).entryReferenceCleared, true, scenario);
       for (const name of ["artifact", "smoke", "qualification", "capacity", "requests", "lifecycle", "index"]) {
         const text = await readFile(path.join(output, `${name}.json`), "utf8");
         assert(!text.includes(diagnostic), `${scenario}/${name}`);
@@ -5709,14 +6135,14 @@ test("native browser CORS and incomplete-tree triggers flow through their owning
       });
       const driveCors = async () => {
         await Promise.resolve();
-        emitBrowserGet(harness, {
+        await emitBrowserGet(harness, {
           requestId: "cors-revision", url: revisionUrl("FelixGeisler/code-city"),
           body: JSON.stringify([{ sha: EVENT }]), headers: {}, responseHeaders: { "Content-Type": "application/json" },
         });
       };
       const driveTree = async () => {
         await Promise.resolve();
-        emitBrowserGet(harness, {
+        await emitBrowserGet(harness, {
           requestId: "tree-revision", url: revisionUrl("react/react"), body: JSON.stringify([{ sha: REACT }]),
         });
         await new Promise((resolve) => setImmediate(resolve));
@@ -5724,11 +6150,11 @@ test("native browser CORS and incomplete-tree triggers flow through their owning
           type: "REVISION_SELECTED", generation: 2, revision: REACT,
         }) });
         await new Promise((resolve) => setImmediate(resolve));
-        emitBrowserGet(harness, {
+        await emitBrowserGet(harness, {
           requestId: "tree-commit", url: commitUrl("react/react", REACT),
           body: JSON.stringify({ sha: REACT, tree: { sha: REACT_ROOT } }),
         });
-        emitBrowserGet(harness, {
+        await emitBrowserGet(harness, {
           requestId: "tree-incomplete", url: treeUrl("react/react", REACT_ROOT),
           body: JSON.stringify({ sha: REACT_ROOT, truncated: true, tree: NATIVE_ENTRIES }),
         });
@@ -5793,7 +6219,7 @@ test("native smoke tree, zero-candidate, identity, hash, UTF-8, NUL, and content
       });
       const drive = async () => {
         await Promise.resolve();
-        emitBrowserGet(harness, {
+        await emitBrowserGet(harness, {
           requestId: `${kind}-revision`, url: revisionUrl("FelixGeisler/code-city"),
           body: JSON.stringify([{ sha: EVENT }]),
         });
@@ -5802,7 +6228,7 @@ test("native smoke tree, zero-candidate, identity, hash, UTF-8, NUL, and content
           type: "REVISION_SELECTED", generation: 1, revision: EVENT,
         }) });
         await new Promise((resolve) => setImmediate(resolve));
-        emitBrowserGet(harness, {
+        await emitBrowserGet(harness, {
           requestId: `${kind}-commit`, url: commitUrl("FelixGeisler/code-city", EVENT),
           body: JSON.stringify({ sha: EVENT, tree: { sha: ROOT } }),
         });
@@ -5823,12 +6249,12 @@ test("native smoke tree, zero-candidate, identity, hash, UTF-8, NUL, and content
             truncated: kind === "truncated",
             tree: kind === "zero" ? [] : rawEntries,
           });
-        emitBrowserGet(harness, {
+        await emitBrowserGet(harness, {
           requestId: `${kind}-tree`, url: treeUrl("FelixGeisler/code-city", ROOT), body: treeBody,
         });
         if (["hash", "utf8", "content", "module", "aggregate"].includes(kind)) {
           for (let index = 0; index < rawSources.length; index += 1) {
-            emitBrowserBytes(harness, {
+            await emitBrowserBytes(harness, {
               requestId: `${kind}-raw-${index + 1}`,
               url: rawUrl("FelixGeisler/code-city", EVENT, rawEntries[index].path), bytes: rawSources[index],
             });
@@ -6033,24 +6459,24 @@ test("a mismatched smoke SUCCESS revision becomes a schema-valid handled smoke f
   harness.emit("Target.attachedToTarget", {
     sessionId: "worker-session", targetInfo: { type: "worker", targetId: "worker-target" },
   }, "");
-  emitBrowserGet(harness, {
+  await emitBrowserGet(harness, {
     requestId: "smoke-revision", url: revisionUrl("FelixGeisler/code-city"), body: JSON.stringify([{ sha: EVENT }]),
   });
   await new Promise((resolve) => setImmediate(resolve));
   harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({
     type: "REVISION_SELECTED", generation: 1, revision: EVENT,
   }) });
-  emitBrowserGet(harness, {
+  await emitBrowserGet(harness, {
     requestId: "smoke-commit", url: commitUrl("FelixGeisler/code-city", EVENT),
     body: JSON.stringify({ sha: EVENT, tree: { sha: ROOT } }),
   });
-  emitBrowserGet(harness, {
+  await emitBrowserGet(harness, {
     requestId: "smoke-tree", url: treeUrl("FelixGeisler/code-city", ROOT),
     body: JSON.stringify({ sha: ROOT, truncated: false, tree: [{
       path: "src/a.ts", mode: "100644", type: "blob", sha: NATIVE_BLOB,
     }] }),
   });
-  emitBrowserGet(harness, {
+  await emitBrowserGet(harness, {
     requestId: "smoke-raw", url: rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts"), body: "x",
   });
   await new Promise((resolve) => setImmediate(resolve));
@@ -6114,24 +6540,24 @@ test("controlled smoke enables page and worker Network and correlates split GET 
   assert.equal(opened.harness.bodyCalls, 0);
   assert.deepEqual(opened.requestItems, []);
 
-  emitBrowserGet(opened.harness, {
+  await emitBrowserGet(opened.harness, {
     requestId: "smoke-revision", url: revision,
     body: `${JSON.stringify([{ sha: EVENT }])}\n`, extraSessionId: "page-session",
   });
   await new Promise((resolve) => setImmediate(resolve));
   opened.harness.emit("Runtime.bindingCalled", { name: "__codeCityCollectorEvidence", payload: JSON.stringify({ type: "REVISION_SELECTED", generation: 1, revision: EVENT }) });
 
-  emitBrowserGet(opened.harness, {
+  await emitBrowserGet(opened.harness, {
     requestId: "smoke-commit", url: commitUrl("FelixGeisler/code-city", EVENT),
     body: `${JSON.stringify({ sha: EVENT, tree: { sha: ROOT } })}\n`,
   });
   const source = new TextEncoder().encode("x");
   const blob = computeGitBlobId(source, 40);
-  emitBrowserGet(opened.harness, {
+  await emitBrowserGet(opened.harness, {
     requestId: "smoke-tree", url: treeUrl("FelixGeisler/code-city", ROOT),
     body: `${JSON.stringify({ sha: ROOT, truncated: false, tree: [{ path: "src/a.ts", mode: "100644", type: "blob", sha: blob }] })}\n`,
   });
-  emitBrowserGet(opened.harness, {
+  await emitBrowserGet(opened.harness, {
     requestId: "smoke-raw", url: rawUrl("FelixGeisler/code-city", EVENT, "src/a.ts"), body: "x",
   });
   await new Promise((resolve) => setImmediate(resolve));

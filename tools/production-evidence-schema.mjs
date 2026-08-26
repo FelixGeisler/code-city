@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { types as utilTypes } from "node:util";
 
-const PARENT_DIGEST = "62e24a6d2ba751a44a515a8402911a1de0fc811db62a80337bdc9a0518b1f300";
+const PARENT_DIGEST = "1d03ad3c36450de38085d622d8ecb6675d77a4f1b5c2b9f119495f38011e79b0";
 const REPOSITORY = "FelixGeisler/code-city";
 const ORIGIN = "https://felixgeisler.github.io/code-city/";
 const CODE_CITY_URL = "https://github.com/FelixGeisler/code-city";

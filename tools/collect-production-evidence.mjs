@@ -23,7 +23,7 @@ const JSON_DECODER = new TextDecoder("utf-8", { fatal: true });
 const SOURCE_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 export const PRODUCTION_ORIGIN = "https://felixgeisler.github.io/code-city/";
-export const PARENT_ISSUE_BODY_SHA256 = "62e24a6d2ba751a44a515a8402911a1de0fc811db62a80337bdc9a0518b1f300";
+export const PARENT_ISSUE_BODY_SHA256 = "1d03ad3c36450de38085d622d8ecb6675d77a4f1b5c2b9f119495f38011e79b0";
 export const COLLECTOR_INVOCATION = Object.freeze([
   "node", "tools/collect-production-evidence.mjs", "--origin", "$ORIGIN",
   "--manifest", "$MANIFEST", "--output", "$OUTPUT",
@@ -732,7 +732,12 @@ export function recordCdpTransferSize(entry, { dataLength = 0 } = {}) {
 }
 
 async function cdpBody(cdp, sessionId, requestId, cap) {
-  const value = await cdp.send("Network.getResponseBody", { requestId }, sessionId);
+  let value;
+  try {
+    value = await cdp.send("Network.getResponseBody", { requestId }, sessionId);
+  } catch (error) {
+    throw new Error("browser response body command failed", { cause: error });
+  }
   invariant(value && typeof value.body === "string" && typeof value.base64Encoded === "boolean", "browser response body is malformed");
   const bytes = value.base64Encoded ? Uint8Array.from(Buffer.from(value.body, "base64")) : ENCODER.encode(value.body);
   invariant(bytes.byteLength <= cap, "browser response body exceeds cap");
@@ -833,6 +838,7 @@ export async function createBrowserEvidenceSession({
     let networkEventOrder = 0;
     let traceStarted = false;
     let bodyBacklog = 0;
+    let bodySlot = null;
     let closePromise;
 
     const preSelectionFailureCategories = new Set([
@@ -946,6 +952,7 @@ export async function createBrowserEvidenceSession({
     function setFatal(error) {
       if (fatal.value) return;
       fatal.value = error instanceof Error ? error : new Error("browser observation failed");
+      clearBodySlot(bodySlot, { suppressObserverError: true });
       if (mode) {
         mode.providerAdmissionClosed = true;
         preserveProgressSnapshot(mode);
@@ -1261,6 +1268,53 @@ export async function createBrowserEvidenceSession({
     function providerEntryReady(entry) {
       return Boolean(entry.finished && entry.response && entry.requestHeaderFacts);
     }
+    function clearBodySlot(slot, { suppressObserverError = false } = {}) {
+      if (!slot || slot.cleared) return;
+      slot.cleared = true;
+      slot.bytes?.fill(0);
+      slot.bytes = null;
+      if (slot.entry?.bodySlot === slot) slot.entry.bodySlot = null;
+      slot.entry = null;
+      slot.promise = null;
+      if (bodySlot === slot) bodySlot = null;
+      bodyBacklog = 0;
+      try {
+        observeBodyState(Object.freeze({
+          kind: "provider-body-cleared", generation: slot.generation,
+          stage: slot.stage, bodyBacklog: 0, bodyReferenceCleared: slot.bytes === null,
+          promiseReferenceCleared: slot.promise === null, entryReferenceCleared: slot.entry === null,
+        }));
+      } catch (error) {
+        if (!suppressObserverError) throw error;
+      }
+    }
+    function maybeStartBodyCapture(entry) {
+      if (entry.method !== "GET" || !entry.response || !entry.finished || entry.bodySlot) return;
+      invariant(bodySlot === null, "browser response body slot contention");
+      const slot = {
+        entry, generation: entry.generation, stage: entry.route.stage,
+        state: "pending", bytes: null, cleared: false, promise: null,
+      };
+      entry.bodySlot = slot;
+      bodySlot = slot;
+      bodyBacklog = 1;
+      observeBodyState(Object.freeze({
+        kind: "provider-body-capturing", generation: slot.generation,
+        stage: slot.stage, bodyBacklog: 1, bodyReferenceCleared: false,
+      }));
+      slot.promise = cdpBody(cdp, entry.sessionId, entry.requestId, entry.cap).then((bytes) => {
+        if (bodySlot !== slot || slot.cleared || fatal.value) {
+          bytes.fill(0);
+          throw fatal.value ?? new Error("browser body capture was cleared");
+        }
+        slot.state = "captured";
+        slot.bytes = bytes;
+      }, (error) => {
+        clearBodySlot(slot, { suppressObserverError: true });
+        throw error;
+      });
+      void slot.promise.catch(setFatal);
+    }
     function correlationComplete(correlation) {
       if (correlation.kind === "completed") return true;
       if (correlation.kind === "provider") return correlation.entry.semanticComplete === true;
@@ -1470,6 +1524,7 @@ export async function createBrowserEvidenceSession({
         && (!exchange.options || providerEntryReady(exchange.options)), "browser logical exchange differs");
       validateProjectedRoute(current, exchange, exchange.get);
       const get = exchange.get;
+      const requestRecords = [];
       let semanticGetEnd;
       if (exchange.options) {
         validateProjectedRoute(current, exchange, exchange.options);
@@ -1481,51 +1536,44 @@ export async function createBrowserEvidenceSession({
         const logicalOptionsEnd = Math.max(exchange.options.finishedMs, logicalOptionsStart);
         const logicalGetStart = Math.max(get.startedMs, logicalOptionsEnd);
         semanticGetEnd = Math.max(get.finishedMs, logicalGetStart);
-        appendRequest(requestItems, requestRecord(exchange.options, logicalOptionsStart, logicalOptionsEnd));
-        appendRequest(requestItems, requestRecord(get, logicalGetStart, semanticGetEnd));
+        requestRecords.push(requestRecord(exchange.options, logicalOptionsStart, logicalOptionsEnd));
+        requestRecords.push(requestRecord(get, logicalGetStart, semanticGetEnd));
       } else {
         const logicalGetStart = Math.max(get.startedMs, current.latestRequestEndMs);
         semanticGetEnd = Math.max(get.finishedMs, logicalGetStart);
-        appendRequest(requestItems, requestRecord(get, logicalGetStart, semanticGetEnd));
+        requestRecords.push(requestRecord(get, logicalGetStart, semanticGetEnd));
       }
-      invariant(bodyBacklog === 0, "browser response body backlog exceeded");
-      bodyBacklog = 1;
-      observeBodyState(Object.freeze({
-        kind: "provider-body-projecting", generation: current.generation,
-        stage: get.route.stage, bodyBacklog: 1, bodyReferenceCleared: false,
-      }));
+      const slot = get.bodySlot;
+      invariant(slot && bodySlot === slot && slot.entry === get,
+        "browser response body capture is absent");
       let bytes;
-      let completedQualificationCandidateCount = null;
+      let projection;
       const semanticRecord = Object.freeze({ ...get.route });
       try {
-        bytes = await cdpBody(cdp, get.sessionId, get.requestId, get.cap);
-        await beforeProviderProjection({ stage: get.route.stage });
-        invariant(mode === current, "browser trace was cleared too early");
-        current.gets.push(semanticRecord);
+        await slot.promise;
+        invariant(mode === current && bodySlot === slot && slot.state === "captured"
+          && slot.bytes instanceof Uint8Array,
+        "browser response body capture was cleared");
+        bytes = slot.bytes;
         if (get.route.stage === "revision") {
-          current.revision = projectRevision(bytes);
-          current.progress.revision = current.revision;
+          projection = { revision: projectRevision(bytes) };
         } else if (get.route.stage === "commit") {
           invariant(get.route.identity === current.revision, "browser commit identity mismatch");
-          current.rootTree = projectCommit(bytes, current.revision);
-          current.progress.rootTree = current.rootTree;
+          projection = { rootTree: projectCommit(bytes, current.revision) };
         } else if (get.route.stage === "tree") {
           invariant(get.route.identity === current.rootTree, "browser tree identity mismatch");
-          const tree = projectTree(bytes, current.rootTree, current.revision.length, undefined,
-            current.generation === 1 ? Infinity : 4001);
-          current.treeEntries = tree.treeEntries;
-          current.projected = tree.candidates;
+          projection = { tree: projectTree(bytes, current.rootTree, current.revision.length, undefined,
+            current.generation === 1 ? Infinity : 4001) };
           if (current.generation === 2) {
             invariant(current.expectedIdentities?.length === 4001
-              && current.projected.length >= 4001
+              && projection.tree.candidates.length >= 4001
               && current.expectedIdentities.every((expected, index) => {
-                const observed = current.projected[index];
+                const observed = projection.tree.candidates[index];
                 return observed.rawPath === expected.rawPath
                   && observed.canonicalPath === expected.canonicalPath
                   && candidateBlobId(observed, current.revision.length) === expected.blobId;
               }), "capacity inventory differs from qualification");
           }
-          current.onInventory?.(semanticGetEnd);
         } else {
           const index = current.rawFacts.length;
           const projected = current.projected?.[index];
@@ -1549,19 +1597,33 @@ export async function createBrowserEvidenceSession({
           };
           invariant(fact.contentValid, "browser candidate content invalid");
           invariant(fact.hashMatched, "browser candidate blob mismatch");
-          current.rawFacts.push(fact);
-          if (current.generation === 2) current.progress.candidates = current.rawFacts;
-          current.aggregate = nextAggregate;
-          if (current.generation === 2) completedQualificationCandidateCount = current.rawFacts.length;
+          projection = { fact, nextAggregate };
         }
       } finally {
-        bytes?.fill(0);
         bytes = null;
-        bodyBacklog = 0;
-        observeBodyState(Object.freeze({
-          kind: "provider-body-cleared", generation: current.generation,
-          stage: get.route.stage, bodyBacklog: 0, bodyReferenceCleared: true,
-        }));
+        clearBodySlot(slot);
+      }
+      await beforeProviderProjection({ stage: get.route.stage });
+      invariant(mode === current && get.bodySlot === null,
+        "browser trace was cleared too early");
+      for (const record of requestRecords) appendRequest(requestItems, record);
+      current.gets.push(semanticRecord);
+      let completedQualificationCandidateCount = null;
+      if (get.route.stage === "revision") {
+        current.revision = projection.revision;
+        current.progress.revision = current.revision;
+      } else if (get.route.stage === "commit") {
+        current.rootTree = projection.rootTree;
+        current.progress.rootTree = current.rootTree;
+      } else if (get.route.stage === "tree") {
+        current.treeEntries = projection.tree.treeEntries;
+        current.projected = projection.tree.candidates;
+        current.onInventory?.(semanticGetEnd);
+      } else {
+        current.rawFacts.push(projection.fact);
+        if (current.generation === 2) current.progress.candidates = current.rawFacts;
+        current.aggregate = projection.nextAggregate;
+        if (current.generation === 2) completedQualificationCandidateCount = current.rawFacts.length;
       }
       if (completedQualificationCandidateCount !== null) {
         const count = completedQualificationCandidateCount;
@@ -1662,6 +1724,11 @@ export async function createBrowserEvidenceSession({
         const childSession = message.params?.sessionId;
         const targetId = message.params?.targetId ?? workerTargets.get(childSession);
         if (targetId) {
+          if (bodySlot?.entry.sessionId === childSession && bodySlot.state === "pending") {
+            clearBodySlot(bodySlot, { suppressObserverError: true });
+            setFatal(new Error("worker detached while body capture was pending"));
+            return;
+          }
           if (detachedWorkers.has(targetId)) {
             setFatal(new Error("duplicate worker detachment"));
             return;
@@ -1774,6 +1841,7 @@ export async function createBrowserEvidenceSession({
             "unexpected browser response owner");
             invariant(!entry.response, "duplicate browser response");
             entry.response = cdpResponseProjection(ownData(message.params, "response"));
+            maybeStartBodyCapture(entry);
             maybeScheduleExchange(entry.exchange);
             return;
           }
@@ -1844,6 +1912,7 @@ export async function createBrowserEvidenceSession({
               if (current.openExchange === entry.exchange) current.openExchange = null;
               entry.exchange.sealed = true;
             }
+            maybeStartBodyCapture(entry);
             maybeScheduleExchange(entry.exchange);
             return;
           }
@@ -1873,7 +1942,8 @@ export async function createBrowserEvidenceSession({
     await waitUntil(cdp, sessionId, "document.readyState==='complete'&&!!document.querySelector('form')", fatal);
 
     function startTrace(repository, generation, progress) {
-      invariant(network.size === 0 && [...correlations.values()].every(correlationComplete),
+      invariant(bodySlot === null && network.size === 0
+        && [...correlations.values()].every(correlationComplete),
         "browser asset correlation was not quiescent before generation");
       correlations.clear();
       workerTargets.clear();
@@ -1943,6 +2013,7 @@ export async function createBrowserEvidenceSession({
       } catch (error) {
         observerError = error;
       } finally {
+        clearBodySlot(bodySlot, { suppressObserverError: true });
         bodyBacklog = 0;
         network.clear();
         correlations.clear();
@@ -2129,6 +2200,7 @@ export async function createBrowserEvidenceSession({
           cdp.closeListeners?.delete(fatalListener);
           launched.child.off("exit", processExitListener);
           if (mode) preserveProgressSnapshot(mode);
+          clearBodySlot(bodySlot, { suppressObserverError: true });
           clearTransientCorrelation({ kind: "close-correlations-cleared", requireComplete: false,
             suppressObserverError: true });
           mode = null;
@@ -2348,6 +2420,9 @@ function mapBrowserFailure(stage, error) {
     return new CollectorFailure(stage, "request-sequence");
   }
   if (/quiescent/iu.test(message)) return new CollectorFailure(stage, "quiescence-failure");
+  if (/browser response body (?:command failed|slot contention)/iu.test(message)) {
+    return new CollectorFailure(stage, "provider-failure");
+  }
   if (stage === "smoke" && /tree|blob|candidate|UTF-8|NUL|content|identity|revision|commit|supported|encoded data|JSON|Unexpected token|property name/iu.test(message)) {
     return new CollectorFailure(stage, "smoke-failure");
   }
