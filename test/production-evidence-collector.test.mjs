@@ -474,6 +474,18 @@ test("collector-local final Worker gate retains only fixed controls and releases
     context.__codeCityCollectorReleaseTeardown("failure");
     assert.deepEqual(nativeCalls, [{ worker: "failed-final", args: [] }]);
   }
+
+  {
+    const { context, emitted, nativeCalls } = makeContext();
+    const staleFinalWorker = new context.Worker("stale-final");
+    staleFinalWorker.dispatch(selected);
+    staleFinalWorker.terminate();
+    staleFinalWorker.dispatch({ type: "ATTEMPT_DRAINED", generation: 1 });
+    assert.deepEqual(emitted.at(-1), {
+      type: "COLLECTOR_TEARDOWN_UNSAFE_STALE_OWNER", generation: 2,
+    });
+    assert.deepEqual(nativeCalls, []);
+  }
 });
 
 test("page-side Worker observer closes original selection, success, and capacity shapes before projection", () => {
@@ -1241,7 +1253,7 @@ function fakeChromeChild() {
 }
 
 function fakeCdpHarness({
-  failMethod, evaluateImpl, bodyImpl, autoWorker = true, autoTeardown = true,
+  failMethod, evaluateImpl, bodyImpl, releaseError, autoWorker = true, autoTeardown = true,
 } = {}) {
   const listeners = new Set();
   const closeListeners = new Set();
@@ -1267,6 +1279,7 @@ function fakeCdpHarness({
       if (method === "Target.attachToTarget") return { sessionId: "page-session" };
       if (method === "Runtime.evaluate") {
         if (params.expression.includes("__codeCityCollectorReleaseTeardown")) {
+          if (releaseError) throw releaseError;
           if (!gatePending || gateReleased) throw new Error("controlled teardown release conflict");
           gateReleased = true;
           gatePending = false;
@@ -3483,6 +3496,8 @@ test("production-shaped candidate 4,001 survives terminal, drain, late ExtraInfo
     { name: "termination-after-body", responseOrder: "response-finish", settlementOrder: "body-extra", terminationAt: "after-body" },
     { name: "termination-after-extra", responseOrder: "finish-response", settlementOrder: "extra-body", terminationAt: "after-extra" },
     { name: "termination-after-projection", responseOrder: "response-finish", settlementOrder: "extra-body", terminationAt: "after-projection" },
+    { name: "controls-after-body-settlement", responseOrder: "response-finish", settlementOrder: "body-extra", terminationAt: "before-response", controlsAt: "after-body" },
+    { name: "controls-after-final-projection", responseOrder: "response-finish", settlementOrder: "extra-body", terminationAt: "before-response", controlsAt: "after-projection" },
   ];
   for (const scenario of scenarios) {
     const bodyGate = deferredValue();
@@ -3490,6 +3505,7 @@ test("production-shaped candidate 4,001 survives terminal, drain, late ExtraInfo
     const progressCounts = [];
     const lifecycle = [];
     const bodyStates = [];
+    const teardownStates = [];
     let currentBodyState = null;
     const harness = fakeCdpHarness({
       autoTeardown: false,
@@ -3510,6 +3526,7 @@ test("production-shaped candidate 4,001 survives terminal, drain, late ExtraInfo
           assert.equal(currentBodyState?.entryReferenceCleared, true, scenario.name);
           progressCounts.push(count);
         },
+        observeTeardownState(state) { teardownStates.push(structuredClone(state)); },
       },
     });
     const qualification = (await runNativeQualification()).progress;
@@ -3576,18 +3593,21 @@ test("production-shaped candidate 4,001 survives terminal, drain, late ExtraInfo
     if (scenario.terminationAt === "after-finish") requestTermination();
     await waitForBodyCalls(harness, 4004);
     assert.equal(opened.requestItems.length, 4003, scenario.name);
-    harness.emit("Runtime.bindingCalled", {
-      name: "__codeCityCollectorEvidence", payload: JSON.stringify({
-        type: "FAILURE", generation: 2, revision: REACT,
-        category: "Repository exceeds Code City limits",
-      }),
-    });
-    if (scenario.terminationAt === "after-terminal") requestTermination();
-    harness.emit("Runtime.bindingCalled", {
-      name: "__codeCityCollectorEvidence",
-      payload: JSON.stringify({ type: "ATTEMPT_DRAINED", generation: 2 }),
-    });
-    if (scenario.terminationAt === "after-drain") requestTermination();
+    const emitControls = () => {
+      harness.emit("Runtime.bindingCalled", {
+        name: "__codeCityCollectorEvidence", payload: JSON.stringify({
+          type: "FAILURE", generation: 2, revision: REACT,
+          category: "Repository exceeds Code City limits",
+        }),
+      });
+      if (scenario.terminationAt === "after-terminal") requestTermination();
+      harness.emit("Runtime.bindingCalled", {
+        name: "__codeCityCollectorEvidence",
+        payload: JSON.stringify({ type: "ATTEMPT_DRAINED", generation: 2 }),
+      });
+      if (scenario.terminationAt === "after-drain") requestTermination();
+    };
+    if (!scenario.controlsAt) emitControls();
     const extra = () => harness.emit("Network.requestWillBeSentExtraInfo", {
       requestId: finalId, headers: {}, associatedCookies: [],
     }, "page-session");
@@ -3603,6 +3623,7 @@ test("production-shaped candidate 4,001 survives terminal, drain, late ExtraInfo
         detachIndex = harness.activity.length - 1;
       }
       if (scenario.terminationAt === "after-body") requestTermination();
+      if (scenario.controlsAt === "after-body") emitControls();
       extra();
     } else {
       extra();
@@ -3615,6 +3636,7 @@ test("production-shaped candidate 4,001 survives terminal, drain, late ExtraInfo
       await new Promise((resolve) => setImmediate(resolve));
     }
     assert.equal(opened.requestItems.length, 4004, scenario.name);
+    if (scenario.controlsAt === "after-projection") emitControls();
     if (scenario.terminationAt === "after-projection") requestTermination();
     assert.equal(terminationRequests, 1, scenario.name);
     assert.equal(bodyStates.at(-1).promiseReferenceCleared, true, scenario.name);
@@ -3638,7 +3660,17 @@ test("production-shaped candidate 4,001 survives terminal, drain, late ExtraInfo
       && params.expression.includes("__codeCityCollectorReleaseTeardown"));
     const finalBodyIndex = harness.calls.findIndex(({ method, params }) => method === "Network.getResponseBody"
       && params.requestId === finalId);
+    const firstUiPollIndex = harness.calls.findIndex(({ method, params }) => method === "Runtime.evaluate"
+      && params.expression.includes("capacity-pre-detachment-state"));
     assert(releaseIndex > finalBodyIndex, scenario.name);
+    assert(firstUiPollIndex > releaseIndex, scenario.name);
+    const teardownKinds = teardownStates.map(({ kind }) => kind);
+    assert.deepEqual(new Set(teardownKinds), new Set([
+      "teardown-pending", "teardown-release", "teardown-released", "teardown-detached", "teardown-quiescent",
+    ]), scenario.name);
+    assert(teardownKinds.indexOf("teardown-pending") < teardownKinds.indexOf("teardown-release"), scenario.name);
+    assert(teardownKinds.indexOf("teardown-release") < teardownKinds.indexOf("teardown-detached"), scenario.name);
+    assert(teardownKinds.indexOf("teardown-detached") < teardownKinds.indexOf("teardown-quiescent"), scenario.name);
     assert.equal(progressCounts.at(-1), 4001, scenario.name);
     assert.equal(bodyStates.at(-1).bodyBacklog, 0, scenario.name);
     await opened.session.close();
@@ -5234,6 +5266,155 @@ function collectorMatrixSeams({ failStage, reason, progressedQualification = fal
     },
   };
 }
+
+async function runCollectorTeardownFailure({ stimulus, releaseError = null }) {
+  let stored;
+  let cleanupCount = 0;
+  const harness = fakeCdpHarness({ autoTeardown: false, releaseError });
+  const child = fakeChromeChild();
+  const seams = collectorMatrixSeams({
+    packetSink(value) { if (value) stored = value; return stored; },
+  });
+  const controlledQualification = nativeQualificationFetch();
+  seams.qualifyRepository = ({ now, requestItems, progress, signal }) => qualifyRepository({
+    fetchImpl: controlledQualification.fetchImpl, now, requestItems, progress, signal,
+  });
+  seams.rm = async () => { cleanupCount += 1; };
+  seams.createBrowserEvidenceSession = async (args) => {
+    const native = await createBrowserEvidenceSession({
+      ...args,
+      launchImpl: async () => ({ child, websocketUrl: "ws://127.0.0.1:1/devtools/browser/id" }),
+      connectImpl: () => harness.cdp,
+    });
+    return {
+      cdpVersion: native.cdpVersion,
+      fatalSignal: native.fatalSignal,
+      snapshot: native.snapshot,
+      async collectSmoke(emit, startedMs) {
+        appendSequence(args.requestItems, args.now, "FelixGeisler/code-city", EVENT, ROOT, ["src/a.ts"], true, {
+          revision: () => emit("revision-selected", 1),
+        });
+        const published = emit("city-published", 1);
+        return {
+          repositoryUrl: "https://github.com/FelixGeisler/code-city", revision: EVENT, rootTree: ROOT,
+          terminal: "success", canvasCount: 1, modelSha256: "1".repeat(64), startedMs,
+          endedMs: published.atMs, providerGetCount: 4,
+        };
+      },
+      clearTrace: native.clearTrace,
+      async collectCapacity(...parameters) {
+        const result = native.collectCapacity(...parameters);
+        void (async () => {
+          for (let attempts = 0; !harness.calls.some(({ method, params }) => method === "Runtime.evaluate"
+            && params.expression.includes("https://github.com/react/react")); attempts += 1) {
+            assert(attempts < 50, `${stimulus}: capacity did not start`);
+            await new Promise((resolve) => setImmediate(resolve));
+          }
+          await new Promise((resolve) => setImmediate(resolve));
+          await new Promise((resolve) => setImmediate(resolve));
+          harness.emit("Runtime.bindingCalled", {
+            name: "__codeCityCollectorEvidence",
+            payload: JSON.stringify({ type: "COLLECTOR_TEARDOWN_PENDING", generation: 2 }),
+          }, "page-session");
+          await new Promise((resolve) => setImmediate(resolve));
+          const stimulusIndex = harness.activity.length;
+          if (stimulus === "unsafe-stale-owner") {
+            harness.emit("Runtime.bindingCalled", {
+              name: "__codeCityCollectorEvidence",
+              payload: JSON.stringify({ type: "COLLECTOR_TEARDOWN_UNSAFE_STALE_OWNER", generation: 2 }),
+            }, "page-session");
+          } else if (stimulus === "duplicate") {
+            harness.emit("Runtime.bindingCalled", {
+              name: "__codeCityCollectorEvidence",
+              payload: JSON.stringify({ type: "COLLECTOR_TEARDOWN_DUPLICATE", generation: 2 }),
+            }, "page-session");
+          } else {
+            const request = { requestId: "duplicate-asset", request: {
+              url: PRODUCTION_ORIGIN, method: "GET", headers: {},
+            } };
+            harness.emit("Network.requestWillBeSent", request, "page-session");
+            harness.emit("Network.requestWillBeSent", request, "page-session");
+          }
+          harness.stimulusIndex = stimulusIndex;
+        })();
+        return result;
+      },
+      close: native.close,
+    };
+  };
+  const result = await collectProductionEvidence({
+    origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
+    output: path.resolve(`collector-teardown-${stimulus}`),
+  }, seams);
+  const capacity = JSON.parse(new TextDecoder().decode(stored.files.get("capacity.json")));
+  const terminalActivity = structuredClone(harness.activity);
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(harness.activity, terminalActivity, stimulus);
+  return { result, capacity, harness, child, cleanupCount };
+}
+
+test("collector teardown failures preserve healthy versus unsafe ownership, exact native calls, and cleanup precedence", async () => {
+  const healthy = await runCollectorTeardownFailure({ stimulus: "request-sequence" });
+  assert.deepEqual([healthy.result.status, healthy.result.reason], ["fail", "request-sequence"]);
+  assert.deepEqual([healthy.capacity.status, healthy.capacity.reason], ["fail", "request-sequence"]);
+  assert.equal(healthy.harness.nativeTerminationCount, 1);
+
+  const duplicate = await runCollectorTeardownFailure({ stimulus: "duplicate" });
+  assert.deepEqual([duplicate.result.status, duplicate.result.reason], ["fail", "infrastructure-failure"]);
+  assert.deepEqual([duplicate.capacity.status, duplicate.capacity.reason], ["fail", "infrastructure-failure"]);
+  assert.equal(duplicate.harness.nativeTerminationCount, 1);
+
+  const unsafe = await runCollectorTeardownFailure({ stimulus: "unsafe-stale-owner" });
+  assert.deepEqual([unsafe.result.status, unsafe.result.reason], ["fail", "infrastructure-failure"]);
+  assert.equal(unsafe.harness.nativeTerminationCount, 0);
+  assert.equal(unsafe.harness.calls.slice(unsafe.harness.stimulusIndex).filter(({ method }) => (
+    method === "Runtime.evaluate"
+  )).length, 0);
+
+  const releaseFailure = await runCollectorTeardownFailure({
+    stimulus: "request-sequence", releaseError: new Error("controlled release rejection"),
+  });
+  assert.deepEqual([releaseFailure.result.status, releaseFailure.result.reason], ["fail", "infrastructure-failure"]);
+  assert.equal(releaseFailure.harness.nativeTerminationCount, 0);
+  assert.equal(releaseFailure.harness.calls.filter(({ method, params }) => method === "Runtime.evaluate"
+    && params.expression.includes("__codeCityCollectorReleaseTeardown")).length, 1);
+
+  for (const scenario of [healthy, duplicate, unsafe, releaseFailure]) {
+    assert.equal(scenario.harness.closeCount, 1);
+    assert.equal(scenario.child.kills, 1);
+    assert.equal(scenario.cleanupCount, 1);
+    assert.equal(scenario.harness.calls.filter(({ method }) => method === "Browser.close").length, 1);
+  }
+
+  let delayedPacket;
+  let delayedNativeTerminationCount = 0;
+  let delayedCloseCount = 0;
+  const delayedSeams = collectorMatrixSeams({
+    packetSink(value) { if (value) delayedPacket = value; return delayedPacket; },
+  });
+  const createDelayedSession = delayedSeams.createBrowserEvidenceSession;
+  delayedSeams.createBrowserEvidenceSession = async (args) => {
+    const session = await createDelayedSession(args);
+    return {
+      ...session,
+      async collectCapacity() {
+        delayedNativeTerminationCount += 1;
+        throw new Error("delayed duplicate final Worker termination");
+      },
+      async close() { delayedCloseCount += 1; await session.close(); },
+    };
+  };
+  const delayed = await collectProductionEvidence({
+    origin: PRODUCTION_ORIGIN, manifestPath: path.resolve("manifest.json"),
+    output: path.resolve("collector-teardown-delayed-duplicate"),
+  }, delayedSeams);
+  const delayedCapacity = JSON.parse(new TextDecoder().decode(delayedPacket.files.get("capacity.json")));
+  assert.deepEqual([delayed.status, delayed.reason], ["fail", "infrastructure-failure"]);
+  assert.deepEqual([delayedCapacity.status, delayedCapacity.reason], ["fail", "infrastructure-failure"]);
+  assert.equal(delayedNativeTerminationCount, 1);
+  assert.equal(delayedCloseCount, 1);
+});
 
 test("successful CLI output is sparse privacy-safe progress on stderr and digest-only stdout", async () => {
   let stored;

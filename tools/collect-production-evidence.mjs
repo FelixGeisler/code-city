@@ -699,6 +699,7 @@ export function createWorkerObserverSource(bindingName = "__codeCityCollectorEvi
       try {
         const observed=observation(event.data);
         const prior=workerGenerations.get(this);
+        if(prior===2&&observed.record.generation<prior){emitControl("COLLECTOR_TEARDOWN_UNSAFE_STALE_OWNER");return;}
         if(prior!==undefined&&(prior===-2||observed.record.generation<prior))throw 0;
         workerGenerations.set(this,observed.record.generation);
         if(observed.record.generation===2
@@ -950,7 +951,8 @@ export async function createBrowserEvidenceSession({
         exactKeys(["type", "generation"]);
         return { type, generation };
       }
-      if (type === "COLLECTOR_TEARDOWN_PENDING" || type === "COLLECTOR_TEARDOWN_DUPLICATE") {
+      if (["COLLECTOR_TEARDOWN_PENDING", "COLLECTOR_TEARDOWN_DUPLICATE",
+        "COLLECTOR_TEARDOWN_UNSAFE_STALE_OWNER"].includes(type)) {
         exactKeys(["type", "generation"]);
         return { type, generation };
       }
@@ -1016,6 +1018,7 @@ export async function createBrowserEvidenceSession({
         settleDeferred(mode.selectionResult, "reject", fatal.value);
         settleDeferred(mode.terminalResult, "reject", fatal.value);
         settleDeferred(mode.teardownResult, "reject", fatal.value);
+        settleDeferred(mode.teardownReleaseResult, "reject", fatal.value);
       }
       clearTransientCorrelation({ kind: "fatal-correlations-cleared", requireComplete: false,
         suppressObserverError: true });
@@ -1179,7 +1182,7 @@ export async function createBrowserEvidenceSession({
       "revision semantic readiness differs");
       settleRevisionReadiness(current, semanticFact);
     }
-    function handleProjectedFact(fact) {
+    async function handleProjectedFact(fact) {
       factReceiptTimes.set(fact, now());
       const current = mode && fact.generation === mode.generation ? mode : null;
       if (!current) {
@@ -1188,10 +1191,15 @@ export async function createBrowserEvidenceSession({
       }
       try {
         if (fact.type === "COLLECTOR_TEARDOWN_PENDING") {
-          invariant(current.generation === 2 && !current.teardownReceipt
-            && pendingTeardownMode === null && current.teardownResult.state === "pending"
-            && workerTargets.size === 1 && currentWorkerSessions().length === 1,
-          "final Worker teardown owner differs");
+          try {
+            invariant(current.generation === 2 && !current.teardownReceipt
+              && pendingTeardownMode === null && current.teardownResult.state === "pending"
+              && workerTargets.size === 1 && currentWorkerSessions().length === 1,
+            "final Worker teardown owner differs");
+          } catch (error) {
+            error.unsafeBrowserOwnership = true;
+            throw error;
+          }
           current.teardownReceipt = fact;
           current.teardownResult.state = "pending-received";
           observeTeardownState(Object.freeze({
@@ -1200,6 +1208,11 @@ export async function createBrowserEvidenceSession({
           pendingTeardownMode = current;
           invariant(settleDeferred(current.teardownResult, "resolve", fact),
             "final Worker teardown receipt conflicts");
+          await maybeReleasePendingTeardown(current);
+          return;
+        }
+        if (fact.type === "COLLECTOR_TEARDOWN_UNSAFE_STALE_OWNER") {
+          setFatal(new Error("unsafe stale final Worker generation"), true);
           return;
         }
         if (fact.type === "COLLECTOR_TEARDOWN_DUPLICATE") {
@@ -1266,6 +1279,7 @@ export async function createBrowserEvidenceSession({
               ? "limit-failure" : "failure", expected);
           }
           maybePublishTerminal(current);
+          await maybeReleasePendingTeardown(current);
           return;
         }
         if (fact.type === "ATTEMPT_DRAINED") {
@@ -1279,6 +1293,7 @@ export async function createBrowserEvidenceSession({
           } else {
             current.pendingDrain = fact;
           }
+          await maybeReleasePendingTeardown(current);
           return;
         }
         throw new Error("worker observation is malformed");
@@ -1733,6 +1748,7 @@ export async function createBrowserEvidenceSession({
       }
       if (semanticRecord.stage === "tree") fixSuccessProviderFrontier(current);
       maybePublishTerminal(current);
+      await maybeReleasePendingTeardown(current);
     }
     function maybeScheduleExchange() {
       const current = mode;
@@ -1780,7 +1796,7 @@ export async function createBrowserEvidenceSession({
         try {
           invariant(!mode?.workerDetachedReceipt, "worker observation followed detachment");
           const fact = projectFact(JSON.parse(message.params.payload));
-          if (fact) handleProjectedFact(fact);
+          if (fact) void handleProjectedFact(fact).catch(setFatal);
         } catch (error) {
           setFatal(error instanceof Error ? error : new Error("worker observation is malformed"));
         }
@@ -2047,26 +2063,38 @@ export async function createBrowserEvidenceSession({
         providerClosure: null, providerAdmissionClosed: false,
         derivedProviderGets: null, expectedProviderGets: null, workerDetachedReceipt: false,
         teardownResult: Object.assign(deferredResult(), { state: "pending" }),
-        teardownReceipt: null, teardownReleased: false,
+        teardownReleaseResult: deferredResult(),
+        teardownReceipt: null, teardownReleaseStarted: false, teardownReleased: false,
         stageEndMs: {}, latestRequestEndMs: 0, lastPublishedFactAtMs: 0,
         causalMilestones: [], publishedCausalMilestones: new Set(),
         causalMilestonesOpen: false, lastPublishedLifecycleAtMs: 0,
       };
       return mode;
     }
+    function pendingTeardownReleaseReady(current) {
+      return mode === current && current.generation === 2 && current.teardownReceipt
+        && current.firstTerminal?.type === "FAILURE"
+        && current.firstTerminal.category === "Repository exceeds Code City limits"
+        && current.firstDrain?.type === "ATTEMPT_DRAINED"
+        && current.rawFacts.length === 4001 && current.gets.length === 4004
+        && bodySlot === null && bodyBacklog === 0
+        && current.publishedCausalMilestones.has("qualification-complete");
+    }
+    async function maybeReleasePendingTeardown(current) {
+      if (!pendingTeardownReleaseReady(current) || current.teardownReleaseStarted) return false;
+      current.teardownReleaseStarted = true;
+      await releasePendingTeardown("success");
+      invariant(settleDeferred(current.teardownReleaseResult, "resolve", true),
+        "final Worker teardown release settlement conflicts");
+      return true;
+    }
     async function releasePendingTeardown(kind) {
       const current = pendingTeardownMode;
       if (!current) return false;
       invariant(kind === "success" || kind === "failure", "final Worker teardown release differs");
       if (kind === "success") {
-        invariant(mode === current && current.generation === 2 && current.teardownReceipt
-          && current.firstTerminal?.type === "FAILURE"
-          && current.firstTerminal.category === "Repository exceeds Code City limits"
-          && current.firstDrain?.type === "ATTEMPT_DRAINED"
-          && current.rawFacts.length === 4001 && current.gets.length === 4004
-          && bodySlot === null && bodyBacklog === 0
-          && current.publishedCausalMilestones.has("qualification-complete"),
-        "final Worker teardown release predicate differs");
+        invariant(pendingTeardownReleaseReady(current),
+          "final Worker teardown release predicate differs");
       }
       current.teardownReleased = true;
       pendingTeardownMode = null;
@@ -2294,6 +2322,7 @@ export async function createBrowserEvidenceSession({
         });
         emit("limit-failure", 2, terminal.observedAtMs);
         const drained = await nextFact((fact) => fact.type === "ATTEMPT_DRAINED" && fact.generation === 2);
+        await trace.teardownReleaseResult.promise;
         const capacityUi = await waitForClearCapacityUi(cdp, sessionId, qualification.revision, fatal);
         Object.assign(progress, {
           revisionDisplayed: ownString(capacityUi, "revision") === qualification.revision,
@@ -2305,8 +2334,6 @@ export async function createBrowserEvidenceSession({
         progress.noLaterRequest = true;
         emit("request-quiescent", 2);
         invariant(workerTargets.size > 0, "capacity worker target was not observed");
-        await trace.teardownResult.promise;
-        await releasePendingTeardown("success");
         observeProcessingBarrier("pre-detachment-processing-barrier");
         await waitForWorkerDetachment();
         const finalUi = await evaluate(cdp, sessionId, capacityUiExpression("capacity-final-state"));
@@ -2333,25 +2360,36 @@ export async function createBrowserEvidenceSession({
       async close() {
         if (closePromise) return closePromise;
         closePromise = (async () => {
-          if (pendingTeardownMode && !unsafeBrowserOwnership) {
-            await releasePendingTeardown("failure");
+          let releaseError;
+          try {
+            if (pendingTeardownMode && !unsafeBrowserOwnership) {
+              await releasePendingTeardown("failure");
+            }
+          } catch (error) {
+            releaseError = error;
+            unsafeBrowserOwnership = true;
           }
           cdp.listeners.delete(listener);
           cdp.closeListeners?.delete(fatalListener);
           launched.child.off("exit", processExitListener);
           if (mode) preserveProgressSnapshot(mode);
-          clearBodySlot(bodySlot, { suppressObserverError: true });
-          clearTransientCorrelation({ kind: "close-correlations-cleared", requireComplete: false,
-            suppressObserverError: true });
-          mode = null;
-          const closeCommand = cdp.send("Browser.close").catch(() => {});
-          cdp.close();
-          if (!childIsTerminal(launched.child)) {
-            const exited = new Promise((resolve) => launched.child.once("exit", resolve));
-            launched.child.kill();
-            if (!childIsTerminal(launched.child)) await exited;
+          try {
+            clearBodySlot(bodySlot, { suppressObserverError: true });
+            clearTransientCorrelation({ kind: "close-correlations-cleared", requireComplete: false,
+              suppressObserverError: true });
+          } finally {
+            mode = null;
+            const closeCommand = cdp.send("Browser.close").catch(() => {});
+            try { cdp.close(); } finally {
+              if (!childIsTerminal(launched.child)) {
+                const exited = new Promise((resolve) => launched.child.once("exit", resolve));
+                launched.child.kill();
+                if (!childIsTerminal(launched.child)) await exited;
+              }
+              await closeCommand;
+            }
           }
-          await closeCommand;
+          if (releaseError) throw releaseError;
         })();
         return closePromise;
       },
@@ -2551,7 +2589,7 @@ function mapBrowserFailure(stage, error) {
   const message = String(error?.message);
   if (message === "credential header observed") return new CollectorFailure(stage, "credential-header");
   if (/CORS/iu.test(message)) return new CollectorFailure(stage, "cors-failure");
-  if (/stale worker observation|teardown owner|unsafe owner/iu.test(message)) {
+  if (/stale worker observation|teardown owner|unsafe owner|unsafe stale final Worker generation|duplicate final Worker termination/iu.test(message)) {
     return new CollectorFailure(stage, "infrastructure-failure");
   }
   if (/stale/iu.test(message)) return new CollectorFailure(stage, "stale-publication");
