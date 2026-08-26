@@ -23,7 +23,7 @@ const JSON_DECODER = new TextDecoder("utf-8", { fatal: true });
 const SOURCE_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 export const PRODUCTION_ORIGIN = "https://felixgeisler.github.io/code-city/";
-export const PARENT_ISSUE_BODY_SHA256 = "1d03ad3c36450de38085d622d8ecb6675d77a4f1b5c2b9f119495f38011e79b0";
+export const PARENT_ISSUE_BODY_SHA256 = "e82cfb55cae317388b0dd266b245b417afec52dae9b8476242cd87c977930775";
 export const COLLECTOR_INVOCATION = Object.freeze([
   "node", "tools/collect-production-evidence.mjs", "--origin", "$ORIGIN",
   "--manifest", "$MANIFEST", "--output", "$OUTPUT",
@@ -598,6 +598,13 @@ export function createWorkerObserverSource(bindingName = "__codeCityCollectorEvi
     const emit = globalThis[${JSON.stringify(bindingName)}];
     const NativeWorker = globalThis.Worker;
     const nativeAdd = NativeWorker.prototype.addEventListener;
+    const nativeTerminateDescriptor = Object.getOwnPropertyDescriptor(NativeWorker.prototype,"terminate");
+    const nativeTerminate = nativeTerminateDescriptor?.value;
+    if(typeof nativeTerminate!=="function")throw new TypeError("Worker terminate is unavailable");
+    const workerGenerations = new WeakMap();
+    let limitTerminalSeen = false;
+    let attemptDrainedSeen = false;
+    let pendingTeardown = null;
     const nativeObjectPrototype = Object.prototype;
     const getPrototypeOf = Object.getPrototypeOf;
     const getOwnPropertyDescriptors = Object.getOwnPropertyDescriptors;
@@ -682,12 +689,45 @@ export function createWorkerObserverSource(bindingName = "__codeCityCollectorEvi
       if(typeof record.category==="string")fact.category=record.category;
       if(typeof record.code==="string")fact.code=record.code;
       if(record.type==="SUCCESS")fact.modelSha256=modelDigest(record.model);
-      return JSON.stringify(fact);
+      return {record,payload:JSON.stringify(fact)};
+    }
+    function emitControl(type) {
+      try { emit(JSON.stringify({type,generation:2})); } catch {}
     }
     function observe(event) {
       let payload=malformedObservation;
-      try { payload=observation(event.data); } catch {}
+      try {
+        const observed=observation(event.data);
+        const prior=workerGenerations.get(this);
+        if(prior!==undefined&&(prior===-2||observed.record.generation<prior))throw 0;
+        workerGenerations.set(this,observed.record.generation);
+        if(observed.record.generation===2
+            &&observed.record.type==="FAILURE"
+            &&observed.record.category==="Repository exceeds Code City limits")limitTerminalSeen=true;
+        if(observed.record.generation===2&&observed.record.type==="ATTEMPT_DRAINED")attemptDrainedSeen=true;
+        payload=observed.payload;
+      } catch {}
       try { emit(payload); } catch {}
+    }
+    function gatedTerminate(...args) {
+      const generation=workerGenerations.get(this);
+      if(generation===-2){emitControl("COLLECTOR_TEARDOWN_DUPLICATE");return;}
+      if(generation!==2)return Reflect.apply(nativeTerminate,this,args);
+      if(pendingTeardown!==null){emitControl("COLLECTOR_TEARDOWN_DUPLICATE");return;}
+      pendingTeardown=this;
+      emitControl("COLLECTOR_TEARDOWN_PENDING");
+    }
+    function releaseTeardown(kind) {
+      if(kind!=="success"&&kind!=="failure")throw new TypeError("invalid teardown release");
+      if(pendingTeardown===null)throw new Error("final Worker teardown is not pending");
+      if(kind==="success"&&(!limitTerminalSeen||!attemptDrainedSeen))throw new Error("final Worker controls are incomplete");
+      const worker=pendingTeardown;
+      limitTerminalSeen=false;
+      attemptDrainedSeen=false;
+      pendingTeardown=null;
+      workerGenerations.set(worker,-2);
+      Reflect.apply(nativeTerminate,worker,[]);
+      return {released:true,limitTerminalSeen:false,attemptDrainedSeen:false,pendingTeardown:false};
     }
     function ObservedWorker(...args) {
       if(!new.target)throw new TypeError("Worker constructor requires new");
@@ -695,9 +735,15 @@ export function createWorkerObserverSource(bindingName = "__codeCityCollectorEvi
       nativeAdd.call(worker,"message",observe);
       return worker;
     }
+    Object.defineProperty(NativeWorker.prototype,"terminate",{
+      ...nativeTerminateDescriptor,value:gatedTerminate,
+    });
     Object.setPrototypeOf(ObservedWorker,NativeWorker);
     Object.defineProperty(ObservedWorker,"prototype",{value:NativeWorker.prototype,writable:false});
     Object.defineProperty(globalThis,"Worker",{value:ObservedWorker,writable:true,configurable:true});
+    Object.defineProperty(globalThis,"__codeCityCollectorReleaseTeardown",{
+      value:releaseTeardown,writable:false,configurable:false,
+    });
   })();`;
 }
 
@@ -736,7 +782,9 @@ async function cdpBody(cdp, sessionId, requestId, cap) {
   try {
     value = await cdp.send("Network.getResponseBody", { requestId }, sessionId);
   } catch (error) {
-    throw new Error("browser response body command failed", { cause: error });
+    const failure = new Error("browser response body command failed", { cause: error });
+    failure.unsafeBrowserOwnership = true;
+    throw failure;
   }
   invariant(value && typeof value.body === "string" && typeof value.base64Encoded === "boolean", "browser response body is malformed");
   const bytes = value.base64Encoded ? Uint8Array.from(Buffer.from(value.body, "base64")) : ENCODER.encode(value.body);
@@ -804,6 +852,7 @@ export async function createBrowserEvidenceSession({
   beforeProviderProjection = async () => {},
   validateSafeTransientState = () => {},
   observeBodyState = () => {},
+  observeTeardownState = () => {},
   emitQualificationProgress = () => {},
 }) {
   const launched = await launchImpl(discovery, profile);
@@ -839,6 +888,8 @@ export async function createBrowserEvidenceSession({
     let traceStarted = false;
     let bodyBacklog = 0;
     let bodySlot = null;
+    let pendingTeardownMode = null;
+    let unsafeBrowserOwnership = false;
     let closePromise;
 
     const preSelectionFailureCategories = new Set([
@@ -899,6 +950,10 @@ export async function createBrowserEvidenceSession({
         exactKeys(["type", "generation"]);
         return { type, generation };
       }
+      if (type === "COLLECTOR_TEARDOWN_PENDING" || type === "COLLECTOR_TEARDOWN_DUPLICATE") {
+        exactKeys(["type", "generation"]);
+        return { type, generation };
+      }
       return null;
     }
     function publishFact(fact, ...causalTimes) {
@@ -949,8 +1004,9 @@ export async function createBrowserEvidenceSession({
       invariant(settleDeferred(current.revisionReadiness, "resolve", readiness),
         "revision readiness settlement conflicts");
     }
-    function setFatal(error) {
+    function setFatal(error, unsafe = error?.unsafeBrowserOwnership === true) {
       if (fatal.value) return;
+      unsafeBrowserOwnership ||= unsafe;
       fatal.value = error instanceof Error ? error : new Error("browser observation failed");
       clearBodySlot(bodySlot, { suppressObserverError: true });
       if (mode) {
@@ -959,6 +1015,7 @@ export async function createBrowserEvidenceSession({
         settleDeferred(mode.revisionReadiness, "reject", fatal.value);
         settleDeferred(mode.selectionResult, "reject", fatal.value);
         settleDeferred(mode.terminalResult, "reject", fatal.value);
+        settleDeferred(mode.teardownResult, "reject", fatal.value);
       }
       clearTransientCorrelation({ kind: "fatal-correlations-cleared", requireComplete: false,
         suppressObserverError: true });
@@ -1126,10 +1183,29 @@ export async function createBrowserEvidenceSession({
       factReceiptTimes.set(fact, now());
       const current = mode && fact.generation === mode.generation ? mode : null;
       if (!current) {
-        setFatal(new Error("stale worker observation"));
+        setFatal(new Error("stale worker observation"), true);
         return;
       }
       try {
+        if (fact.type === "COLLECTOR_TEARDOWN_PENDING") {
+          invariant(current.generation === 2 && !current.teardownReceipt
+            && pendingTeardownMode === null && current.teardownResult.state === "pending"
+            && workerTargets.size === 1 && currentWorkerSessions().length === 1,
+          "final Worker teardown owner differs");
+          current.teardownReceipt = fact;
+          current.teardownResult.state = "pending-received";
+          observeTeardownState(Object.freeze({
+            kind: "teardown-pending", generation: 2, pendingCount: 1,
+          }));
+          pendingTeardownMode = current;
+          invariant(settleDeferred(current.teardownResult, "resolve", fact),
+            "final Worker teardown receipt conflicts");
+          return;
+        }
+        if (fact.type === "COLLECTOR_TEARDOWN_DUPLICATE") {
+          throw new Error(current.teardownReleased
+            ? "delayed duplicate final Worker termination" : "duplicate final Worker termination");
+        }
         if (fact.type === "REVISION_SELECTED") {
           invariant(!current.pendingSelection && !current.selectedFact
             && current.revisionReadiness.state !== "unavailable",
@@ -1693,8 +1769,8 @@ export async function createBrowserEvidenceSession({
         && methodDescriptor && "value" in methodDescriptor
         && methodDescriptor.value === "GET" && allowedAssets.has(urlDescriptor.value));
     }
-    fatalListener = setFatal;
-    processExitListener = () => setFatal(new Error("Chrome process exited"));
+    fatalListener = (error) => setFatal(error, true);
+    processExitListener = () => setFatal(new Error("Chrome process exited"), true);
     cdp.closeListeners?.add(fatalListener);
     launched.child.on("exit", processExitListener);
 
@@ -1726,7 +1802,7 @@ export async function createBrowserEvidenceSession({
         if (targetId) {
           if (bodySlot?.entry.sessionId === childSession && bodySlot.state === "pending") {
             clearBodySlot(bodySlot, { suppressObserverError: true });
-            setFatal(new Error("worker detached while body capture was pending"));
+            setFatal(new Error("worker detached while body capture was pending"), true);
             return;
           }
           if (detachedWorkers.has(targetId)) {
@@ -1735,11 +1811,20 @@ export async function createBrowserEvidenceSession({
           }
           detachedWorkers.add(targetId);
           if (mode && workerTargets.has(childSession)) {
+            if (mode.teardownReceipt && !mode.teardownReleased) {
+              setFatal(new Error("final Worker detached before native termination release"), true);
+              return;
+            }
             if (!mode.pendingTerminal && !mode.firstTerminal) {
               setFatal(new Error("worker detached before required terminal"));
               return;
             }
             mode.workerDetachedReceipt = true;
+            if (mode.generation === 2 && mode.teardownReleased) {
+              observeTeardownState(Object.freeze({
+                kind: "teardown-detached", generation: 2, nativeTerminationCount: 1,
+              }));
+            }
             maybePublishTerminal(mode);
           }
         }
@@ -1753,7 +1838,7 @@ export async function createBrowserEvidenceSession({
         } else {
           const targetId = workerTargets.get(message.sessionId);
           if (!targetId || detachedWorkers.has(targetId)) {
-            setFatal(new Error("unexpected browser network session"));
+            setFatal(new Error("unexpected browser network session"), true);
             return;
           }
           sessionRole = "worker";
@@ -1923,7 +2008,7 @@ export async function createBrowserEvidenceSession({
         return;
       }
       if (message.method === "Runtime.exceptionThrown") {
-        setFatal(new Error("browser exception"));
+        setFatal(new Error("browser exception"), true);
       }
     };
     cdp.listeners.add(listener);
@@ -1961,11 +2046,57 @@ export async function createBrowserEvidenceSession({
         pendingTerminal: null, firstTerminal: null, pendingDrain: null, firstDrain: null,
         providerClosure: null, providerAdmissionClosed: false,
         derivedProviderGets: null, expectedProviderGets: null, workerDetachedReceipt: false,
+        teardownResult: Object.assign(deferredResult(), { state: "pending" }),
+        teardownReceipt: null, teardownReleased: false,
         stageEndMs: {}, latestRequestEndMs: 0, lastPublishedFactAtMs: 0,
         causalMilestones: [], publishedCausalMilestones: new Set(),
         causalMilestonesOpen: false, lastPublishedLifecycleAtMs: 0,
       };
       return mode;
+    }
+    async function releasePendingTeardown(kind) {
+      const current = pendingTeardownMode;
+      if (!current) return false;
+      invariant(kind === "success" || kind === "failure", "final Worker teardown release differs");
+      if (kind === "success") {
+        invariant(mode === current && current.generation === 2 && current.teardownReceipt
+          && current.firstTerminal?.type === "FAILURE"
+          && current.firstTerminal.category === "Repository exceeds Code City limits"
+          && current.firstDrain?.type === "ATTEMPT_DRAINED"
+          && current.rawFacts.length === 4001 && current.gets.length === 4004
+          && bodySlot === null && bodyBacklog === 0
+          && current.publishedCausalMilestones.has("qualification-complete"),
+        "final Worker teardown release predicate differs");
+      }
+      current.teardownReleased = true;
+      pendingTeardownMode = null;
+      observeTeardownState(Object.freeze({
+        kind: "teardown-release", generation: 2,
+        finalProjected: current.rawFacts.length === 4001,
+        custodyCleared: bodySlot === null && bodyBacklog === 0,
+        progressCallbacksEmitted: current.publishedCausalMilestones.has("qualification-complete"),
+        controlsReceived: current.firstTerminal?.type === "FAILURE"
+          && current.firstDrain?.type === "ATTEMPT_DRAINED",
+      }));
+      let released;
+      try {
+        released = await evaluate(cdp, pageSessionId,
+          `globalThis.__codeCityCollectorReleaseTeardown(${JSON.stringify(kind)})`);
+      } catch (error) {
+        const failure = new Error("native final Worker termination release failed", { cause: error });
+        failure.unsafeBrowserOwnership = true;
+        throw failure;
+      }
+      invariant(released && Object.keys(released).join(",")
+        === "released,limitTerminalSeen,attemptDrainedSeen,pendingTeardown"
+        && released.released === true && released.limitTerminalSeen === false
+        && released.attemptDrainedSeen === false && released.pendingTeardown === false,
+      "native final Worker termination release differed");
+      observeTeardownState(Object.freeze({
+        kind: "teardown-released", generation: 2, nativeTerminationCount: 1,
+        limitTerminalSeen: false, attemptDrainedSeen: false, pendingCount: 0,
+      }));
+      return true;
     }
     async function submit(repositoryUrl) {
       await evaluate(cdp, sessionId, `(() => { const input=document.querySelector('input[name=repository]'); input.value=${JSON.stringify(repositoryUrl)}; document.querySelector('form').requestSubmit(); return true; })()`);
@@ -2174,6 +2305,8 @@ export async function createBrowserEvidenceSession({
         progress.noLaterRequest = true;
         emit("request-quiescent", 2);
         invariant(workerTargets.size > 0, "capacity worker target was not observed");
+        await trace.teardownResult.promise;
+        await releasePendingTeardown("success");
         observeProcessingBarrier("pre-detachment-processing-barrier");
         await waitForWorkerDetachment();
         const finalUi = await evaluate(cdp, sessionId, capacityUiExpression("capacity-final-state"));
@@ -2188,6 +2321,10 @@ export async function createBrowserEvidenceSession({
         invariant(network.size === 0 && trace.gets.length === 4004 && trace.rawFacts.length === 4001,
           "capacity requests are not quiescent after worker detachment");
         progress.workerQuiescent = true;
+        observeTeardownState(Object.freeze({
+          kind: "teardown-quiescent", generation: 2, pendingCount: 0,
+          bodyBacklog, correlationCount: correlations.size, networkCount: network.size,
+        }));
         const workerQuiescent = emit("worker-quiescent", 2);
         progress.endedMs = workerQuiescent.atMs;
         mode = null;
@@ -2196,6 +2333,9 @@ export async function createBrowserEvidenceSession({
       async close() {
         if (closePromise) return closePromise;
         closePromise = (async () => {
+          if (pendingTeardownMode && !unsafeBrowserOwnership) {
+            await releasePendingTeardown("failure");
+          }
           cdp.listeners.delete(listener);
           cdp.closeListeners?.delete(fatalListener);
           launched.child.off("exit", processExitListener);
@@ -2411,6 +2551,9 @@ function mapBrowserFailure(stage, error) {
   const message = String(error?.message);
   if (message === "credential header observed") return new CollectorFailure(stage, "credential-header");
   if (/CORS/iu.test(message)) return new CollectorFailure(stage, "cors-failure");
+  if (/stale worker observation|teardown owner|unsafe owner/iu.test(message)) {
+    return new CollectorFailure(stage, "infrastructure-failure");
+  }
   if (/stale/iu.test(message)) return new CollectorFailure(stage, "stale-publication");
   if (/overlap/iu.test(message)) return new CollectorFailure(stage, "request-overlap");
   if (/unexpected browser (?:request|asset|network (?:event|session))/iu.test(message)) {
@@ -2420,7 +2563,10 @@ function mapBrowserFailure(stage, error) {
     return new CollectorFailure(stage, "request-sequence");
   }
   if (/quiescent/iu.test(message)) return new CollectorFailure(stage, "quiescence-failure");
-  if (/browser response body (?:command failed|slot contention)/iu.test(message)) {
+  if (/browser response body command failed/iu.test(message)) {
+    return new CollectorFailure(stage, "infrastructure-failure");
+  }
+  if (/browser response body slot contention/iu.test(message)) {
     return new CollectorFailure(stage, "provider-failure");
   }
   if (stage === "smoke" && /tree|blob|candidate|UTF-8|NUL|content|identity|revision|commit|supported|encoded data|JSON|Unexpected token|property name/iu.test(message)) {
@@ -2616,7 +2762,11 @@ export async function collectProductionEvidence(options, seams = {}) {
     if (browser) {
       state.smoke = browser.snapshot?.("smoke") ?? state.smoke;
       state.capacity = browser.snapshot?.("capacity") ?? state.capacity;
-      try { await browser.close(); } catch {}
+      try {
+        await browser.close();
+      } catch {
+        failure = new CollectorFailure(activeStage, "infrastructure-failure");
+      }
       browser = null;
     }
     if (profile) {
