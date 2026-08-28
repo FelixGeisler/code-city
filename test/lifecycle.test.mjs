@@ -207,7 +207,7 @@ test("success is accepted once after the barrier, staged before one publication 
   assert.equal(f.presentation.hooks.isEligible(1), true);
 
   f.presentation.hooks.failed(1, "Presentation failed", "M1-PRES-1");
-  assert.equal(f.events.at(-1), "view:Presentation failed");
+  assert.deepEqual(f.events.slice(-3), ["semantic:rollback", "presenter:rollback", "view:Presentation failed"]);
   assert.deepEqual(f.failures.at(-1), { category: "Presentation failed", code: "M1-PRES-1", revision: SHA });
   assert.equal(f.presentation.hooks.isEligible(1), false);
 });

@@ -433,6 +433,11 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
   const failSession = (session: Session<G>): void => {
     if (!session.active) return;
     const generation = session.generation!;
+    if (session.committed) {
+      notify(session, generation);
+      if (session.active) removeSession(session);
+      return;
+    }
     removeSession(session);
     notify(session, generation);
   };

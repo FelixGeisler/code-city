@@ -566,11 +566,32 @@ test("changed resize repeats the exact draw state with a literal matrix and unch
   assert.equal(gl.uploads.length, 3);
 });
 
-test("context loss and resize failures clean exactly once before one contained presentation callback", () => {
+test("committed context loss and resize failures notify controller before idempotent token cleanup", () => {
   for (const stimulus of ["loss", "resize"]) {
     const environment = fakeEnvironment();
     const callbacks = [];
-    const presenter = createCityPresenter({ host: environment.host, platform: environment.platform, isEligible: () => true, failed(...args) { callbacks.push([args, environment.host.child]); throw new Error("contained"); } });
+    const events = [];
+    let semanticCurrent = true;
+    let presenter;
+    presenter = createCityPresenter({
+      host: environment.host,
+      platform: environment.platform,
+      isEligible: () => true,
+      failed(...args) {
+        const canvas = environment.canvases[0];
+        events.push("controller:failure");
+        assert.equal(semanticCurrent, true);
+        assert.equal(environment.host.child, canvas);
+        assert.equal(canvas.removeCount, 0);
+        assert.equal(names(canvas.gl).filter((name) => name === "deleteProgram").length, 0);
+        semanticCurrent = false;
+        events.push("semantic:rollback");
+        presenter.rollback(environment.lastToken);
+        events.push("presenter:rollback");
+        callbacks.push(args);
+        throw new Error("contained");
+      },
+    });
     assert.deepEqual(present(environment, presenter, stimulus, oneBuilding()), COMMITTED);
     const canvas = environment.canvases[0];
     const retained = stimulus === "loss" ? () => canvas.dispatchLoss() : environment.observers[0].callback;
@@ -581,13 +602,16 @@ test("context loss and resize failures clean exactly once before one contained p
       environment.host.width = 0;
       retained();
     }
+    assert.deepEqual(events, ["controller:failure", "semantic:rollback", "presenter:rollback"]);
+    assert.equal(semanticCurrent, false);
     assert.equal(environment.host.child, undefined);
     assert.equal(canvas.removeCount, 1);
     assert.equal(environment.observers[0].disconnected, 1);
     assert.equal(names(canvas.gl).filter((name) => name === "deleteProgram").length, 1);
     assert.equal(names(canvas.gl).filter((name) => name === "deleteBuffer").length, 3);
     assert.equal(names(canvas.gl).filter((name) => name === "deleteVertexArray").length, 1);
-    assert.deepEqual(callbacks, [[[stimulus, "Presentation failed", "M1-PRES-1"], undefined]]);
+    assert.deepEqual(callbacks, [[stimulus, "Presentation failed", "M1-PRES-1"]]);
+    presenter.rollback(environment.lastToken);
     retained();
     assert.equal(callbacks.length, 1);
     assert.equal(canvas.removeCount, 1);
