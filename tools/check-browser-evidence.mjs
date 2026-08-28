@@ -318,9 +318,11 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     const first = await waitFor(`document.querySelector('[data-commit]').textContent===${JSON.stringify(fixture.selected)}&&document.querySelectorAll('[data-city] canvas').length===1&&globalThis.__codeCitySuccessEvidence.messages.length===1`, "first successful city");
     invariant(first === true, "First successful package run did not publish");
 
-    const cleared = await evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(fixture.repositoryUrl)};document.querySelector('form').requestSubmit();({commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,deletes:globalThis.__codeCitySuccessEvidence.contexts[0].deletes})`);
+    const cleared = await evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(fixture.repositoryUrl)};document.querySelector('form').requestSubmit();({commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,children:document.querySelector('[data-city]').childNodes.length,deletes:globalThis.__codeCitySuccessEvidence.contexts[0].deletes})`);
     assert.equal(cleared.commit, "");
     assert.equal(cleared.canvases, 0);
+    assert.equal(cleared.inspectors, 0);
+    assert.equal(cleared.children, 0);
     assert.deepEqual(cleared.deletes, { shader: 2, program: 1, buffer: 3, vao: 1 });
 
     await waitFor(`document.querySelector('[data-commit]').textContent===${JSON.stringify(fixture.selected)}&&document.querySelectorAll('[data-city] canvas').length===1&&globalThis.__codeCitySuccessEvidence.messages.length===2&&globalThis.__codeCitySuccessEvidence.contexts.length===2`, "second successful city");
@@ -328,7 +330,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await waitFor("globalThis.__codeCitySuccessEvidence.contexts.every((entry)=>entry.draws.length===1)&&globalThis.__codeCitySuccessEvidence.messages.length===2", "presentation evidence");
     await waitFor("globalThis.__codeCitySuccessEvidence.workers.length===2&&globalThis.__codeCitySuccessEvidence.workers.every((worker)=>worker.terminateCalls===1&&!worker.usable)&&globalThis.__codeCitySuccessEvidence.liveWorkers===0", "successful worker cleanup");
     const observed = await evaluate("globalThis.__codeCitySuccessEvidence");
-    const surface = await evaluate("({forms:document.querySelectorAll('[data-form]').length,status:document.querySelectorAll('[data-status]').length,commits:document.querySelectorAll('[data-commit]').length,cities:document.querySelectorAll('[data-city]').length,inputs:document.querySelectorAll('input[name=repository]').length,submit:document.querySelector('form button[type=submit]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length})");
+    const surface = await evaluate("({forms:document.querySelectorAll('[data-form]').length,status:document.querySelectorAll('[data-status]').length,commits:document.querySelectorAll('[data-commit]').length,cities:document.querySelectorAll('[data-city]').length,inputs:document.querySelectorAll('input[name=repository]').length,submit:document.querySelector('form button[type=submit]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,inspectorEmpty:document.querySelector('[data-inspector]')?.childNodes.length===0,publicationChildren:[...document.querySelector('[data-city]').children].map((node)=>node.tagName)})");
 
     invariant(failures.length === 0, `Production success instrumentation failed: ${failures.map(String).join("; ")}`);
     invariant(browserExceptions.length === 0, `Production browser exceptions: ${browserExceptions.join("; ")}`);
@@ -373,7 +375,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       assert.equal(context.matrices.length, 1);
       assert.deepEqual(context.draws, [[36, 5121, 0, 1]]);
     }
-    assert.deepEqual(surface, { forms: 1, status: 1, commits: 1, cities: 1, inputs: 1, submit: "Submit", commit: fixture.selected, canvases: 1 });
+    assert.deepEqual(surface, { forms: 1, status: 1, commits: 1, cities: 1, inputs: 1, submit: "Submit", commit: fixture.selected, canvases: 1, inspectors: 1, inspectorEmpty: true, publicationChildren: ["CANVAS", "SECTION"] });
 
     const actualNetwork = requestedUrls.slice(networkStart);
     const manifestUrls = new Set(manifest.files.map((record) => `${origin}/code-city/${record.path}`));
@@ -386,13 +388,14 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       const canvas=document.querySelector('[data-city] canvas');
       const event=new Event('webglcontextlost',{cancelable:true});
       canvas.dispatchEvent(event);
-      return {defaultPrevented:event.defaultPrevented,status:document.querySelector('[data-status]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,deletes:globalThis.__codeCitySuccessEvidence.contexts[1].deletes};
+      return {defaultPrevented:event.defaultPrevented,status:document.querySelector('[data-status]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,deletes:globalThis.__codeCitySuccessEvidence.contexts[1].deletes};
     })()`);
     assert.deepEqual(contextLoss, {
       defaultPrevented: false,
       status: "Presentation failed (M1-PRES-1)",
       commit: fixture.selected,
       canvases: 0,
+      inspectors: 0,
       deletes: { shader: 2, program: 1, buffer: 3, vao: 1 },
     });
 
@@ -505,7 +508,7 @@ function validateBrowserResult(result, expectedAssets) {
   assert.equal(result.complexityMatrixRuns[0].densePackedByteLength, result.complexityMatrixRuns[1].densePackedByteLength);
   assert.equal(result.complexityMatrixRuns[0].runDigest, result.complexityMatrixRuns[1].runDigest);
   assert.equal(result.complexityMatrixRuns[0].observed.factsDigest, result.complexityMatrixRuns[1].observed.factsDigest);
-  exactKeys(result.presentation, ["webgl2Available", "actualContexts", "initialDraws", "repeatDraws", "resizeDraws", "lossDefaultPrevented", "lossDraws", "lossFailures", "lossCleanup", "lossTerminalState", "compileFailureResult", "compileFailureDraws", "compileFailures", "compileCleanup", "compileFailureTerminalState", "pass"], "Presentation");
+  exactKeys(result.presentation, ["webgl2Available", "actualContexts", "initialDraws", "repeatDraws", "resizeDraws", "lossDefaultPrevented", "lossDraws", "lossFailures", "lossOrdering", "lossCleanup", "lossTerminalState", "compileFailureResult", "compileFailureDraws", "compileFailures", "compileCleanup", "compileFailureTerminalState", "pass"], "Presentation");
   assert.deepEqual(result.presentation, {
     webgl2Available: true,
     actualContexts: 4,
@@ -515,6 +518,12 @@ function validateBrowserResult(result, expectedAssets) {
     lossDefaultPrevented: false,
     lossDraws: 0,
     lossFailures: [[3, "Presentation failed", "M1-PRES-1"]],
+    lossOrdering: {
+      semanticPresentAtNotification: true,
+      hostChildrenAtNotification: 2,
+      cleanupAtNotification: { deleteShader: 2, deleteProgram: 0, deleteBuffer: 0, deleteVertexArray: 0 },
+      semanticPresentAfterControllerClear: false,
+    },
     lossCleanup: { deleteShader: 2, deleteProgram: 1, deleteBuffer: 3, deleteVertexArray: 1 },
     lossTerminalState: { retainedCallbacks: 1, failures: 1, drawsAfterTerminal: 0, canvases: 1, hostChildren: 0, cleanupUnchanged: true },
     compileFailureResult: { kind: "failure", category: "Presentation failed", code: "M1-PRES-1" },
