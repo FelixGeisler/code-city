@@ -3,6 +3,9 @@
 == Building mapping
 
 The scene contains exactly one axis-aligned prism for each admitted module.
+Admission, `S`, `U`, `M`, source limits, deterministic layout, and the metric
+palette remain unchanged and are defined by xref:source-and-metrics.adoc[Source
+and Metrics].
 
 [cols="1,2",options="header"]
 |===
@@ -49,27 +52,288 @@ minimum = (0, 0, 0)
 maximum = (max(x_i + b_i), max(S_i + 1), max(z_i + b_i))
 ----
 
-== View
+== Camera and controls
 
-Let `Lx`, `Ly`, and `Lz` be the bounds lengths, `T` their centre, and `a` the
-positive viewport aspect:
+The orthographic camera uses world `+Y` as up. For azimuth `a`, elevation `e`,
+and target-to-camera direction:
 
 [source,text]
 ----
-direction D = (1, 1, 1) / sqrt(3)
-right R     = (1, 0, -1) / sqrt(2)
-up V        = (-1, 2, -1) / sqrt(6)
-E_r         = (Lx + Lz) / (2 * sqrt(2))
-E_v         = (Lx + 2*Ly + Lz) / (2 * sqrt(6))
-H           = 1.1 * max(E_v, E_r / a)
-horizontal half-size = aH
+D(a,e) = (cos(e)cos(a), sin(e), cos(e)sin(a))
+R(a)   = (sin(a), 0, -cos(a))
+V      = D × R
+R × V  = D
 ----
 
-Resize reapplies this orthographic fit. Camera scalar evaluation permits only
-`10^-9 × max(1, |expected|)` component error. There is no animation, orbit,
-pan, zoom, hover, selection, label, road, district, or decoration.
+The camera looks along `-D`. Overview uses target `T=C`, where `C` is the
+immutable bounds centre, and the existing M1 vectors:
 
-== Failures
+[source,text]
+----
+D = (1, 1, 1) / sqrt(3)
+R = (1, 0, -1) / sqrt(2)
+V = (-1, 2, -1) / sqrt(6)
+a0 = 45°
+e0 = asin(1/sqrt(3))
+----
+
+Initial load and Reset use those vector constants, not a trigonometric
+reconstruction. `A/D` subtract/add `15°` azimuth. `W/S` add/subtract `7.5°`
+elevation. A primary-pointer horizontal delta `dx` adds
+`2π·dx/cssWidth`; downward `dy` subtracts `π·dy/cssHeight`. Azimuth is
+normalised to `[0,2π)` and elevation is clamped inclusively to `15°..75°`.
+
+Magnification `z` is `1` at overview and is clamped to `[1/64,64]`. For the
+current positive aspect:
+
+[source,text]
+----
+E_r = (Lx + Lz) / (2·sqrt(2))
+E_v = (Lx + 2Ly + Lz) / (2·sqrt(6))
+H0  = 1.1·max(E_v, E_r/aspect)
+verticalHalf   = H0/z
+horizontalHalf = aspect·H0/z
+----
+
+Wheel-up and `+` multiply `z` by `1.25`; wheel-down and `-` divide it. Resize
+recomputes `H0` while retaining `z`, target, and orientation. Reset restores
+`z=1`, target `C`, and the exact overview basis.
+
+Pointer pan is:
+
+[source,text]
+----
+T' = T - R·(2·horizontalHalf·dx/cssWidth)
+       + V·(2·verticalHalf·dy/cssHeight)
+----
+
+Keyboard pan moves one tenth of the corresponding full visible span:
+`Shift+A/D` subtract/add `R·(2·horizontalHalf/10)` and `Shift+S/W`
+subtract/add `V·(2·verticalHalf/10)`.
+
+Every instance minimum is uploaded once as `origin-C`; navigation changes only
+`T`. For finite target and allowed orientation:
+
+[source,text]
+----
+E = (Lx|Dx| + Ly|Dy| + Lz|Dz|)/2
+Delta = C-T
+delta = dot(Delta,D)
+distance = |delta| + 3E
+camera = T + distance·D
+near = E
+far = 2·max(0,-delta) + 5E
+
+tx = dot(Delta,R)/horizontalHalf
+ty = dot(Delta,V)/verticalHalf
+tz = [2(distance-delta)-(far+near)]/(far-near)
+zLinear = -2D/(far-near)
+----
+
+Every accepted point is strictly inside the clipping volume. At overview,
+`Delta=0`, these rules recover the exact M1 `3E`, `E`, and `5E` matrix.
+Dimensions and all `origin-C` endpoints remain exact `float32` under every pan.
+Every proposed target component, intermediate, and final `Math.fround` matrix
+component must be finite before camera state commits; otherwise presentation
+fails as `M1-PRES-1`. There is no animation, inertia, auto-rotation, focus
+flight, retry, or persisted camera state.
+
+== Input, focus, and interruption
+
+* The borderless, untransformed canvas is focusable, has a visible focus
+  indicator and accessible name, and has adjacent keyboard instructions.
+  Ordinary Tab order remains native. Pointer press focuses the canvas. A
+  visible native Reset button performs Reset with ordinary button semantics.
+* Recognised `keydown` values execute once per event, including `repeat`, and
+  call `preventDefault`; `keyup` is inert. With no Ctrl/Alt/Meta, lowercase
+  `w/a/s/d` without Shift orbits, uppercase `W/A/S/D` with Shift pans, and
+  `+`, `-`, and `0` zoom or reset. Unmodified ArrowRight/ArrowDown,
+  ArrowLeft/ArrowUp, Home, End, and Escape control selection. Other keys and
+  modifier combinations are inert and retain browser behaviour. Events are
+  not propagation-stopped.
+* An unmodified wheel over the active canvas uses only the sign of `deltaY`:
+  negative zooms in, positive zooms out, and zero is inert. A recognised wheel
+  calls `preventDefault`. Ctrl/Alt/Meta/Shift wheel and scrolling outside the
+  canvas remain browser-owned.
+* Only one primary (`button=0`) or secondary (`button=2`) pointer gesture is
+  active. A recognised press prevents default, focuses, and captures that
+  pointer. Any exact `clientX/clientY` inequality from the press, with no
+  threshold, makes it a drag. Primary deltas orbit and secondary deltas pan.
+  A stationary unmodified primary release activates at its release position;
+  modified primary and every secondary release do not activate. Other buttons
+  and pointers are inert.
+* Matching pointer-up ends the gesture and releases capture exactly once.
+  `pointercancel`, unexpected `lostpointercapture`, window blur, a hidden
+  document, replacement, failure, context loss, or `pagehide` cancels without
+  activation. Canvas `contextmenu` is prevented; context menus elsewhere are
+  unchanged. Interruption never synthesises a click or camera delta.
+
+The presenter alone maps DOM input and owns suppression. Its only outbound
+semantic events are:
+
+[source,text]
+----
+hoverIndex(generation, index | null)
+activationIndex(generation, index | null)
+selectionAction(generation, next | previous | first | last | clear)
+----
+
+The controller receives no DOM event. It generation-gates semantic events and
+owns traversal, hover, selection, and inspector state.
+
+== Selection, picking, and hover
+
+Right/Down choose the next canonical index; Left/Up choose the previous;
+Home/End choose first/last; Escape clears. Traversal does not wrap and retains
+a boundary selection. With no selection, forward starts first and backward
+starts last. No building is selected initially. Camera actions, resize, and
+Reset preserve selection.
+
+Pointer coordinates use the canvas content rectangle:
+
+[source,text]
+----
+xCss = clientX - rect.left
+yCss = clientY - rect.top
+x = xCss·canvas.width/rect.width
+y = yCss·canvas.height/rect.height
+----
+
+Rectangle and backing dimensions must be finite and positive. Closed ranges
+`[0,width] × [0,height]` are inside; outside is a miss. The orthographic ray is:
+
+[source,text]
+----
+sx = (2x/canvas.width - 1)·horizontalHalf
+sy = (1 - 2y/canvas.height)·verticalHalf
+origin = camera + sx·R + sy·V
+direction = -D
+----
+
+Each building uses an inclusive ray/AABB slab test. A direction component
+exactly zero is parallel: it misses only when the origin is outside that axis's
+closed bounds and otherwise imposes no interval. Nonparallel divisions must be
+finite. Faces and edges hit because interval comparisons use `<=`. Accept only
+finite `tEnter >= 0`; the smallest `tEnter` wins, with lower canonical index
+only for exact (`===`) distance equality. There is no epsilon, rounded tie, GPU
+readback, BVH, worker hop, or hidden capacity below 4,000 buildings.
+
+Activation picks synchronously at release. Empty activation clears selection.
+Hover never selects: movement inside retains only the latest position and runs
+at most one pick in the next animation frame. Gesture start clears hover.
+Camera change, resize, and Reset invalidate queued work, clear hover, and queue
+one recomputation only when the pointer is inside and no gesture is active.
+Pointer leave clears and invalidates hover; gesture end queues recomputation
+only for a current inside position. Replacement rejects work from old sessions.
+
+Selection draws a fixed opaque black (`#000000FF`) complete box-edge outline.
+Hover draws a fixed opaque magenta (`#FF00FFFF`) top-face perimeter. Both draw
+when they address the same building and neither changes the M1 metric RGBA.
+The controller remains authoritative over the presenter's visual replicas.
+
+== Inspector and visual quality
+
+Selection publishes the complete canonical path as wrapping, bidirectionally
+isolated `textContent`. It is never markup, a URL, object key, shader text,
+resource locator, or tooltip-only content. A polite semantic status region
+announces changes. It shows exact `S` as “source lines”, `U` as “executable
+units”, and `M` as “maximum executable-unit complexity”; derived height `S+1`;
+width and depth `U+1`; the selected palette range and exact RGBA; and the
+complete six-band legend above. It is absent when selection is empty. Hover
+alone reveals no inspector. The inspector gives no source, finding, quality
+judgement, dependency, or configurable metric.
+
+Visual quality is an M2 release requirement: the city remains the visual focus;
+controls look intentional and interaction is predictable; hover and selection
+cues do not overpower metric colours; and the inspector is clean, responsive,
+and readable. There is no numeric aesthetic threshold. This page records the
+requirement; issue https://github.com/FelixGeisler/code-city/issues/537[#537],
+Acceptance 6–8, solely owns representative screenshot review and its durable
+textual-only attestation under its accepted body SHA-256
+`f64751801dd6da6e3325ab3f14da4fef572768b14b7b0f7fb3cdbd8f47363846`
+and https://github.com/FelixGeisler/code-city/issues/537#issuecomment-5449870420[same-digest readiness].
+This documentation baseline captures no screenshot and makes no visual verdict.
+
+== Atomic lifecycle
+
+A successful worker outcome contains one aligned, source-free city with
+geometry and inspection facts. The controller validates it once, snapshots it,
+stages presentation and detached semantic content, rechecks the current
+generation, commits the presenter, and performs one publication-root commit.
+Geometry, facts, revision, canvas, inspector container, and empty hover and
+selection become current together.
+
+[cols="2,3,3,2",options="header"]
+|===
+|Trigger |Facts, semantic state, and inspector |Presenter work |Result
+
+|Initial success
+|Commit one current snapshot with empty hover and selection
+|Commit staged canvas at exact overview
+|One complete city
+
+|Camera action
+|Preserve facts and selection; clear then eligible hover recompute
+|Validate proposed state, invalidate queued hover, redraw
+|Current city or `M1-PRES-1`
+
+|Resize
+|Preserve facts and selection; clear then eligible hover recompute
+|Cancel gesture/frame, release capture, recompute fit and redraw
+|Current city or `M1-PRES-1`
+
+|Reset
+|Preserve facts and selection; clear then eligible hover recompute
+|Cancel gesture/frame, release capture, restore exact overview
+|Current city or `M1-PRES-1`
+
+|Pointer leave
+|Preserve facts and selection; clear hover
+|Invalidate queued hover
+|Current city
+
+|Empty activation or Escape
+|Preserve facts and hover; clear selection and inspector
+|Clear visual selection
+|Current city
+
+|New or invalid submission, cancellation, or attempt/city/provider failure
+|Clear facts, hover, selection, and inspector first
+|Roll back candidate and dispose current session
+|Existing user state/category
+
+|Candidate stage, commit, or publication failure
+|Clear candidate/current semantic and visual state
+|Idempotent rollback and disposal
+|`M1-PRES-1`
+
+|Replacement
+|Never publish candidate or stale facts
+|Roll back or dispose stale token/session
+|Replacement only
+
+|Context loss
+|Clear facts, hover, selection, and inspector first
+|Dispose; do not restore
+|`M1-PRES-1`
+
+|`pagehide` or controller disposal
+|Clear all controller state first
+|Terminally dispose
+|No later publication
+
+|Stale callback
+|No mutation
+|Idempotent cleanup only
+|No displayed failure
+|===
+
+Presenter disposal is exactly-once and idempotent: invalidate frame work,
+release pointer capture, remove input, Reset, context-loss, lifecycle, and
+resize listeners, delete city and outline WebGL resources, clear staging,
+camera, and visual state, and remove the canvas.
+
+== Failures and privacy
 
 Show exactly one category and, where assigned, one stable code. Never show raw
 source, path, parser, provider, or renderer diagnostics.
@@ -90,10 +354,30 @@ source, path, parser, provider, or renderer diagnostics.
 |Presentation failed |`M1-PRES-1`
 |===
 
-`M1-CITY-1` includes an invalid or incomplete canonical model, including
-failure during defensive model validation. `M1-PRES-1` begins only after a
-valid model reaches WebGL.
+An outer `SUCCESS` missing its own `city` key or having invalid outer keys,
+type, generation, or revision uses the existing uncoded protocol-failure path.
+A present city with missing or invalid geometry or inspection fails the complete
+attempt as `M1-CITY-1`. Every failure after a validated city exists,
+including semantic staging, publication, dimensions, camera, matrix, picking,
+listeners, visual update, WebGL, context loss, or teardown, is `M1-PRES-1`.
+Stale generations, sessions, tokens, callbacks, and frame epochs only clean up.
+There is no new category, raw diagnostic, retry, fallback, restoration, or
+partial city.
 
-Every failure removes the city. A post-selection failure retains the selected
-commit ID. There is no skipped building, partial scene, fallback, or stale
-result.
+Repository paths may reach only the controller's inert inspector text. Source
+bodies, provider locators and values, parser values, credentials, raw
+diagnostics, telemetry, and persisted product state do not reach interaction,
+inspection, WebGL, or release evidence. The existing browser and production
+evidence observers access only required geometry and never clone, enumerate,
+hash, serialise, log, packetise, wrap, or retain inspection facts.
+
+== Non-goals
+
+M2 adds no source viewing or download, dependency view, search, filtering,
+history, authentication, private-repository support, metric configuration,
+export, finding, AI guidance, touch-specific gesture, preset, first-person
+movement, minimap, per-building label, road, district, animation, saved view,
+sharing, or telemetry. It changes no M1 admission, syntax, metrics, limits,
+layout, palette, provider, browser-only topology, retry, or fallback policy. It
+adds no backend, second worker/context/canvas, renderer/UI/picking dependency,
+GPU readback, BVH, or alternate publication path.

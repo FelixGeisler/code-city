@@ -14,10 +14,12 @@ and production evidence
 |One reviewed static application artifact
 
 |Browser main context
-|UI, attempt state, worker bridge, and WebGL presentation
+|UI, controller-owned semantic state, worker bridge, and presenter-owned
+interactive WebGL2 session
 
 |Browser worker
-|GitHub access, admission, parsing, metrics, and city construction
+|GitHub access, admission, parsing, metrics, and aligned geometry-and-inspection
+city construction
 
 |Public GitHub
 |Default-branch head identity, immutable tree, source content, deployment identity,
@@ -39,9 +41,13 @@ record as the fixed internal evidence artifact. Deployment consumes the Pages
 artifact without checkout, configuration, or rebuild and targets the protected
 `github-pages` environment.
 
-The eligibility job reads issue 460. An open issue continues to production evidence;
-a closed issue ends publication without evidence; an unavailable or unexpected state
-fails the run. No workflow dispatch or alternate publication trigger exists.
+The eligibility job currently reads issue 460. An open issue continues to
+production evidence; a closed issue ends publication without evidence; an
+unavailable or unexpected state fails the run. The final M2 acceptance issue
+will atomically replace that complete binding inventory as permitted by
+xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]; no
+partial migration, schema change, workflow dispatch, or alternate publication
+trigger is allowed.
 
 == Production evidence
 

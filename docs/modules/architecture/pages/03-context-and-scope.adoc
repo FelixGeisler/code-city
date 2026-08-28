@@ -7,8 +7,8 @@ image::context.svg[Code City system context]
 |Participant |Sends |Receives
 
 |User
-|Repository URL, submit, cancel, reload
-|State, selected commit, failure, or complete city
+|Repository URL, submit, cancel, reload, and canvas or keyboard interaction
+|State, selected commit, failure, navigable city, or selected-building inspector
 
 |GitHub Pages
 |Static application assets
@@ -30,6 +30,10 @@ image::context.svg[Code City system context]
   into the processing worker.
 * Same-origin main/worker transport is a lifecycle boundary, not a trust
   crossing or security sandbox.
-* The worker sends only bounded, source-free results to the main context.
+* The worker sends only one bounded, source-free, aligned geometry-and-inspection
+  result to the main context.
+* The controller owns semantic hover, selection, and inert inspector text. The
+  presenter owns browser input and WebGL mechanisms and sends only
+  generation-tagged semantic index events to the controller.
 * No product data is sent to GitHub Pages after the static application loads.
 * There is no backend, database, relay, telemetry service, or second provider.

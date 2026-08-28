@@ -44,4 +44,8 @@ xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-conten
 |xref:adr/0010-canonical-artifact-manifest-and-publication-evidence-contract.adoc[ADR 0010]
 |Canonical artifact manifest and publication evidence
 |Binds one reviewed package to its protected-main publication run
+
+|xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]
+|Controller-validated city transaction and presenter-owned interaction
+|Keeps geometry, inspection, semantics, input, rendering, and cleanup aligned
 |===

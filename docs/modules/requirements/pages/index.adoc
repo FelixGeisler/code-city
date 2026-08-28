@@ -16,7 +16,8 @@
 |`.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts`, and `.cts`
 
 |Result
-|One deterministic, fixed city for the selected commit
+|One deterministic city for the selected commit, with navigation, selection,
+and inspection defined by xref:city-and-failures.adoc[City and Failures]
 
 |Storage
 |Current browser session only; reload clears all product state
@@ -46,6 +47,8 @@ new submission resolves the head again.
 . After submission, any previous result disappears. The page shows that Code
   City is working and offers Cancel.
 . On success, the page shows the selected commit ID and one complete city.
+  Users can navigate it, select any building by keyboard or pointer, and read
+  its canonical path and exact M1 metric explanation.
 . On failure, the page shows a short explanation and no city. It also shows the
   commit ID when one was selected.
 . After cancellation, the page shows a cancellation message and no city.
@@ -53,3 +56,10 @@ new submission resolves the head again.
 Submitting another repository starts over. Results from an older or cancelled
 submission must never appear. Code City has no timeout, automatic retry, or
 fallback.
+
+== M2 release quality
+
+The city remains the visual focus, controls are intentional, interaction is
+predictable, cues do not overpower metric colours, and the inspector is clean,
+responsive, and readable. The exact interaction and visual-release ownership
+are defined once in xref:city-and-failures.adoc[City and Failures].

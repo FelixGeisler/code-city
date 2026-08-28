@@ -8,6 +8,7 @@
 * xref:07-deployment-view.adoc[7. Deployment View]
 * xref:08-crosscutting-concepts.adoc[8. Crosscutting Concepts]
 * xref:09-architecture-decisions.adoc[9. Architecture Decisions]
+** xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011: Interactive WebGL2 navigation and inspection]
 * xref:10-quality-requirements.adoc[10. Quality Requirements]
 * xref:11-risks-and-technical-debt.adoc[11. Risks and Technical Debt]
 * xref:12-glossary.adoc[12. Glossary]

@@ -1,17 +1,23 @@
 = 5. Building Block View
 
-image::building-blocks.svg[Main-context and worker building blocks]
+image::building-blocks.svg[Main-context controller and presenter with the sole processing worker]
 
 [cols="2,1,4",options="header"]
 |===
 |Block |Location |Responsibility
 
-|UI attempt coordinator |Main application |Validate the submitted URL shape;
-own the current attempt and all visible publication
+|UI attempt controller |Main application |Validate submitted URL shape; own the
+current attempt, the sole city-payload validator, immutable inspection snapshot,
+semantic hover and selection, traversal, inspector, generation gating, and the
+single publication-root commit
 
 |Worker bridge |Main and worker edge |Own the sole concrete worker handle;
 validate closed, generation-tagged commands, outcomes, and lifecycle messages;
 reject stale messages
+
+|Interactive presenter |Main edge |Own stage tokens and sessions, canvas and DOM
+input, immutable-centre camera, pointer capture, request epoch, CPU picking,
+WebGL city and outline resources, and visual hover/selection replicas
 
 |Worker pipeline coordinator |Worker application |Sequence capabilities and
 suppress downstream work after failure or cancellation
@@ -34,11 +40,16 @@ grammar-neutral observations
 |Metrics |Worker domain |Consume normalised source and syntax observations;
 own SLOC, executable-unit, ownership, and complexity rules
 
-|City builder |Worker domain |Create the complete renderer-neutral city
-
-|Presentation |Main edge |Validate the presentation model and own one disposable
-WebGL session
+|City builder |Worker domain |Create one complete, aligned, renderer-neutral
+`{geometry, inspection}` city
 |===
+
+The controller owns semantic facts; the presenter receives only opaque validated
+geometry. Presenter input listeners map DOM events to the three semantic event
+families in
+xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]. The
+controller receives no DOM event and rejects stale generations or invalid indices
+before changing semantics or sending visual state.
 
 == Dependency rule
 
@@ -49,9 +60,10 @@ edge ───────► application ───────► domain
 ----
 
 Reverse dependencies are forbidden. Driving adapters enter application ports;
-domain code imports no GitHub, browser, Worker, Tree-sitter, or WebGL API.
-Transport moves data but does not classify product failures. Only the UI
-attempt coordinator changes visible state.
+domain code imports no GitHub, browser, Worker, Tree-sitter, or WebGL API. Pure
+camera and picking policy may remain in core, while mutable browser and WebGL
+mechanisms remain at the edge. Transport moves data but does not classify
+product failures. Only the controller changes visible semantic state.
 
 [[data-boundaries]]
 == Data boundaries
@@ -63,11 +75,11 @@ attempt coordinator changes visible state.
 |Repository reference |UI → revision selection |The two non-empty URL path
 segments as inert strings
 
-|Selected revision |Revision selection → retrieval and UI coordinator |Repository
+|Selected revision |Revision selection → retrieval and controller |Repository
 reference and GitHub's full immutable commit ID. Before retrieval, the worker
 publishes the closed interim `REVISION_SELECTED` message containing only its
-generation and revision. The coordinator retains that value without displaying
-it while work continues.
+generation and revision. The controller retains it without displaying it while
+work continues.
 
 |Source evidence |GitHub gateway → retrieval |Projected tree records or one
 bounded, identity-verified, strictly decoded source text value; no provider
@@ -83,15 +95,27 @@ and decision occurrences
 |Module facts |Metrics → city builder |Canonical path and the three integers
 `S`, `U`, and `M`
 
-|Presentation model |City builder → presentation |Dense, source-free geometry,
-colour, and bounds with finite values; no source, parser value, provider value,
-or resource locator
+|City payload |City builder → controller |One source-free `{geometry,
+inspection}` value. Geometry contains dense origins, sizes, colours, and bounds;
+inspection contains aligned `{canonicalPath,S,U,M}` facts.
 
-|Attempt outcome |Worker → UI |One closed, generation-tagged success or failure
-payload. Every post-selection outcome carries the selected full revision;
+|Validated city |Controller validator → controller/presenter |Controller-owned,
+non-aliasing geometry, inspection, and immutable centre snapshots. The presenter
+receives geometry only.
+
+|Semantic event |Presenter → controller |Generation plus hover or activation
+index, or one traversal action; never a DOM event, path, fact, or browser object
+
+|Visual state |Controller → presenter |Generation plus opaque hover and selection
+indices; never inspection facts
+
+|Attempt outcome |Worker → controller |One closed, generation-tagged success or
+failure payload. Every post-selection outcome carries the selected full revision;
 pre-selection failures carry none.
 |===
 
-Concrete provider and parser objects remain at their edges. Repository-derived
-strings are never interpreted as markup, object keys, shader text, or resource
-locations.
+Concrete provider, parser, DOM, and WebGL objects remain at their edges.
+Repository paths may be published only as wrapping, bidirectionally isolated
+`textContent` from the controller snapshot. They are never markup, object keys,
+shader text, URLs, or resource locators. Evidence observers access geometry only
+and do not retain or disclose inspection.

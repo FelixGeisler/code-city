@@ -2,6 +2,10 @@
 
 Status:: Accepted
 
+ADR 0011 xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[amends
+this M1 baseline] for the current interactive camera, aligned city payload,
+outline draws, inert path labels, and lifecycle contract.
+
 == Context
 
 The fixed city needs deterministic 3D presentation. A rendering package would
@@ -25,8 +29,10 @@ add abstraction and dependencies without product benefit.
   current session and publish one presentation failure through the generation
   gate in xref:../06-runtime-view.adoc[Runtime View].
 
-Use fixed trusted shader source. Repository-derived values never become shader
-text, DOM markup, labels, object keys, or resource locators.
+Use fixed trusted shader source. In the M1 baseline, repository-derived values
+never became shader text, DOM markup, labels, object keys, or resource locators.
+ADR 0011 now permits canonical paths only as controller-published inert
+`textContent`; every other prohibition remains.
 
 == Camera and clipping
 
@@ -69,6 +75,8 @@ its full-envelope tests.
 == Consequences
 
 The presentation adapter owns WebGL state and idempotent cleanup. City
-construction stays pure and renderer-independent. Use no renderer package,
-texture, font, external shader, animation, controls, second rendering worker,
-restoration, retry, or fallback.
+construction stays pure and renderer-independent. The M1 baseline used no
+renderer package, texture, font, external shader, animation, controls, second
+rendering worker, restoration, retry, or fallback. ADR 0011 removes only the
+no-controls consequence and adds fixed interaction without adding a package,
+worker, restoration, retry, fallback, or animation.

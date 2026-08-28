@@ -16,21 +16,35 @@ representations may exceed an assumed browser capacity
 |Prove dense, deep, maximum-file, aggregate, repeated-attempt, and cancellation
 fixtures. Failure reopens the envelope or processing lifecycle
 
-|Lifecycle races
-|Cancellation, replacement, worker failure, resize, or context loss could
-publish stale output or leak an owned resource
-|Exercise every asynchronous boundary and stop delivery on overlap, stale
-publication, or non-idempotent cleanup
+|Lifecycle and interaction races
+|Cancellation, replacement, pointer capture, queued hover, resize, context loss,
+or stale callbacks could publish stale semantics or leak an owned resource
+|Exercise every generation, token, request-epoch, interruption, and disposal
+boundary; stop on overlap, stale publication, or non-idempotent cleanup
 
 |Parser and grammar drift
 |A dependency or grammar change can alter accepted syntax and metric facts
 |Pin and verify runtime, grammar assets, ABI, provenance, and representative
 facts; renew before accepting a change
 
-|WebGL and numeric drift
-|A changed metric, layout, envelope, or representation can invalidate clipping
-or exact `float32` coordinates
-|Renew ADR 0008's depth and representation proof with full-envelope scenes
+|WebGL, picking, and numeric drift
+|A changed metric, layout, envelope, camera, or representation can invalidate
+clipping, CPU hits, or exact `float32` coordinates
+|Renew ADR 0011's immutable-centre, clipping, matrix, and exact-slab proofs with
+full-envelope scenes; do not hide instability with epsilon or capacity shortcuts
+
+|Geometry and inspection misalignment
+|A path or metric fact could describe a different rendered building or escape
+through a presenter or evidence observer
+|Use one closed city payload, the sole controller validator, non-aliasing
+snapshots, index proofs, geometry-only observers, and sentinel privacy tests
+
+|Interaction usability and visual imbalance
+|Controls, cues, or inspector layout could obscure the city, become
+unpredictable, or rely on metric colour
+|Keep fixed accessible controls and textual redundancy; issue
+https://github.com/FelixGeisler/code-city/issues/537[#537] performs one common
+representative visual review before M2 release
 
 |Production artifact drift
 |A rebuild, stale asset, mutable dependency, or permissive browser policy can

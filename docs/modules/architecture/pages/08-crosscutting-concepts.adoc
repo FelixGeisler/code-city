@@ -19,14 +19,20 @@ This chapter is an index. Each concept is defined in one owning section.
 |xref:requirements:source-and-metrics.adoc[Source and Metrics] and
 xref:requirements:city-and-failures.adoc[City and Failures]
 
-|Current attempt, cancellation, resource lifetime, and atomic publication
-|xref:06-runtime-view.adoc[Runtime View]
+|Current attempt, city transaction, interaction state, cancellation, and cleanup
+|xref:06-runtime-view.adoc[Runtime View] and
+xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]
 
 |Static syntax boundary
 |xref:adr/0007-static-syntax-with-pinned-tree-sitter-webassembly-grammars.adoc[ADR 0007]
 
-|Numeric representation and WebGL lifecycle
-|xref:adr/0008-browser-native-webgl2-instanced-city-presentation.adoc[ADR 0008]
+|Interactive camera, CPU picking, semantic event ownership, and WebGL lifecycle
+|xref:requirements:city-and-failures.adoc[City and Failures] and
+xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]
+
+|Aligned geometry and inspection, inert paths, and evidence privacy
+|xref:05-building-block-view.adoc#data-boundaries[Data Boundaries] and
+xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]
 
 |Production artifact and browser policy
 |xref:07-deployment-view.adoc[Deployment View]
