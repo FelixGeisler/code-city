@@ -400,6 +400,8 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await new Promise((resolve) => setTimeout(resolve, 50));
     await dispatchWheel({ x: wheelPoint.x, y: wheelPoint.y, deltaY: -120 });
     await dispatchWheel({ x: wheelPoint.x, y: wheelPoint.y, deltaY: 120, modifiers: 8 });
+    await evaluate("scrollTo(0,0);true");
+    await new Promise((resolve) => setTimeout(resolve, 50));
     const scrollBefore = await evaluate("scrollY");
     await dispatchWheel({ x: 2, y: 2, deltaY: 180 });
     await new Promise((resolve) => setTimeout(resolve, 100));
