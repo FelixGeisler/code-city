@@ -130,12 +130,63 @@ tz = [2(distance-delta)-(far+near)]/(far-near)
 zLinear = -2D/(far-near)
 ----
 
-Every accepted point is strictly inside the clipping volume. At overview,
-`Delta=0`, these rules recover the exact M1 `3E`, `E`, and `5E` matrix.
-Dimensions and all `origin-C` endpoints remain exact `float32` under every pan.
-Every proposed target component, intermediate, and final `Math.fround` matrix
-component must be finite before camera state commits; otherwise presentation
-fails as `M1-PRES-1`. There is no animation, inertia, auto-rotation, focus
+Every mathematically accepted bounds corner has camera-space depth strictly in
+`(near,far)`. This is depth containment only: pan may intentionally move a
+corner laterally outside the x or y clip interval, and `tx` and `ty` retain
+that displacement. At overview, `Delta=0`, these rules recover the exact M1
+`3E`, `E`, and `5E` matrix. Dimensions and all `origin-C` endpoints remain
+exact `float32` under every pan.
+
+The deterministic CPU strict-depth oracle uses the column-major matrix uploaded
+by `uniformMatrix4fv(location, false, matrix)`. Let `f(value) =
+Math.fround(value)`. Evaluate the camera formulas above first as ECMAScript
+`Number` operations, with no intervening `f`, and require every proposed target
+component and every intermediate to be finite. Convert each final matrix
+component exactly at the shown `f` call:
+
+[source,text]
+----
+m = [
+  f(Rx/horizontalHalf), f(Vx/verticalHalf), f(zLinear_x), f(0),
+  f(Ry/horizontalHalf), f(Vy/verticalHalf), f(zLinear_y), f(0),
+  f(Rz/horizontalHalf), f(Vz/verticalHalf), f(zLinear_z), f(0),
+  f(tx),                f(ty),              f(tz),          f(1)
+]
+----
+
+The depth row is `m[2]`, `m[6]`, `m[10]`, and `m[14]`;
+`m[3]=m[7]=m[11]=0` and `m[15]=1` make clip `w=1`. For bounds
+`[minX,minY,minZ,maxX,maxY,maxZ]`, define `x0=f(minX-Cx)`,
+`x1=f(maxX-Cx)`, and likewise `y0`, `y1`, `z0`, and `z1`. Evaluate the
+corners in this exact order:
+
+[source,text]
+----
+(x0,y0,z0), (x1,y0,z0), (x0,y1,z0), (x1,y1,z0),
+(x0,y0,z1), (x1,y0,z1), (x0,y1,z1), (x1,y1,z1)
+----
+
+For each corner, products, sums, and rounding are distinct operations with this
+exact left association:
+
+[source,text]
+----
+p0 = f(m[2]  * x)
+p1 = f(m[6]  * y)
+p2 = f(m[10] * z)
+p3 = f(m[14] * f(1))
+s0 = f(p0 + p1)
+s1 = f(s0 + p2)
+depth = f(s1 + p3)
+----
+
+Every matrix component, product, sum, and depth must be finite. Every corner
+must satisfy exactly `-1 < depth && depth < 1`, with no epsilon. The oracle is
+a deterministic CPU admission rule over float32 uniform and corner inputs, not
+a claim of bit-identical WebGL/GLSL operation ordering or GPU depth. Any
+non-finite intermediate or depth at or outside either boundary rejects the
+whole transition atomically as *Presentation failed* / `M1-PRES-1`; no partial
+camera state commits. There is no animation, inertia, auto-rotation, focus
 flight, retry, or persisted camera state.
 
 == Input, focus, and interruption

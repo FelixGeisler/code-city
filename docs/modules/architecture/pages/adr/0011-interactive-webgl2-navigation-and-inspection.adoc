@@ -147,13 +147,73 @@ tz = [2(distance-delta) - (far+near)] / (far-near)
 zLinear = -2D / (far-near)
 ----
 
-Every accepted point is strictly inside the clipping volume. At `T=C`, these
-rules recover ADR 0008's exact `3E`, `E`, and `5E` overview matrix. Immutable
-buffers keep all dimensions and `origin-C` endpoints exactly representable as
-`float32` under every pan. Before a camera state commit, every proposed target
-component, intermediate, and final `Math.fround` matrix component must be
-finite; otherwise the complete session fails as `M1-PRES-1`. Full-envelope
-tests must renew the representation and clipping proof.
+Every mathematically accepted bounds corner has camera-space depth strictly in
+`(near,far)`. This is depth containment only: pan may intentionally move a
+corner laterally outside the x or y clip interval, and `tx` and `ty` retain
+that displacement. At `T=C`, the rules recover ADR 0008's exact `3E`, `E`,
+and `5E` overview matrix. Immutable buffers keep all dimensions and
+`origin-C` endpoints exactly representable as `float32` under every pan.
+
+The deterministic CPU strict-depth oracle uses the same column-major matrix
+layout already uploaded by `uniformMatrix4fv(location, false, matrix)`. Let
+`f(value) = Math.fround(value)`. Evaluate the camera formulas above first as
+ECMAScript `Number` operations, without an intervening `f`, and require every
+proposed target component and every intermediate to be finite. Convert each
+final matrix component exactly at the shown `f` call:
+
+[source,text]
+----
+m = [
+  f(Rx/horizontalHalf), f(Vx/verticalHalf), f(zLinear_x), f(0),
+  f(Ry/horizontalHalf), f(Vy/verticalHalf), f(zLinear_y), f(0),
+  f(Rz/horizontalHalf), f(Vz/verticalHalf), f(zLinear_z), f(0),
+  f(tx),                f(ty),              f(tz),          f(1)
+]
+----
+
+Thus the depth row has zero-based column-major indices `m[2]`, `m[6]`,
+`m[10]`, and `m[14]`; `m[3]=m[7]=m[11]=0` and `m[15]=1` make clip
+`w=1`. For validated bounds `[minX,minY,minZ,maxX,maxY,maxZ]`, define
+`x0=f(minX-Cx)`, `x1=f(maxX-Cx)`, and likewise `y0`, `y1`, `z0`, and
+`z1`. The oracle evaluates exactly these eight target-relative corners, in
+this order:
+
+[source,text]
+----
+(x0,y0,z0), (x1,y0,z0), (x0,y1,z0), (x1,y1,z0),
+(x0,y0,z1), (x1,y0,z1), (x0,y1,z1), (x1,y1,z1)
+----
+
+For each `(x,y,z)`, products, sums, and rounding are distinct operations with
+this exact left association:
+
+[source,text]
+----
+p0 = f(m[2]  * x)
+p1 = f(m[6]  * y)
+p2 = f(m[10] * z)
+p3 = f(m[14] * f(1))
+s0 = f(p0 + p1)
+s1 = f(s0 + p2)
+depth = f(s1 + p3)
+----
+
+Every matrix component and every `p0..p3`, `s0`, `s1`, and `depth` must
+be finite, and every corner must satisfy exactly `-1 < depth && depth < 1`.
+There is no epsilon. A proposed target can be finite while a later intermediate
+is non-finite or the float32 oracle depth is `-1`, `1`, or beyond; that
+finite-but-degenerate state is not committable and fails the complete session
+atomically as `M1-PRES-1`.
+
+The oracle is a deterministic CPU admission rule over the float32 uniform and
+corner inputs; it is not a claim that WebGL/GLSL `highp float` contracts the
+same operations, uses this association, or produces a bit-identical GPU depth.
+The policy conservatively rejects every CPU-oracle boundary or overflow instead
+of relying on implementation-specific GPU rounding. Browser evidence may
+assert the uploaded matrix bytes and successful draw, but not exact GPU depth
+without a separately accepted GPU observation contract. Full-envelope tests
+must renew the representation, finite-state, matrix-layout, and CPU strict-depth
+proof.
 
 Picking is CPU ray/AABB policy over validated geometry. CSS-to-backing
 conversion, the orthographic ray, and inclusive slab rules are exactly those in

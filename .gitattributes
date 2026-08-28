@@ -1,1 +1,2 @@
 test/fixtures/wasm-inventory.tsv text eol=lf
+docs/modules/architecture/pages/adr/0011-interactive-webgl2-navigation-and-inspection.adoc text eol=lf
