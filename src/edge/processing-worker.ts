@@ -11,17 +11,17 @@ export function publishWorkerMessage(scope: Pick<DedicatedWorkerGlobalScope, "po
     return;
   }
 
-  let model: typeof message.model | undefined = message.model;
-  const outbound = model;
+  let city: typeof message.city | undefined = message.city;
+  const geometry = city.geometry;
   try {
     scope.postMessage(message, [
-      outbound.origins.buffer,
-      outbound.sizes.buffer,
-      outbound.rgba.buffer,
-      outbound.bounds.buffer,
+      geometry.origins.buffer,
+      geometry.sizes.buffer,
+      geometry.rgba.buffer,
+      geometry.bounds.buffer,
     ]);
   } finally {
-    model = undefined;
+    city = undefined;
   }
 }
 

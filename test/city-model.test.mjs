@@ -13,7 +13,8 @@ registerHooks({
 
 const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const fixture = JSON.parse(await readFile(path.join(projectRoot, "test", "fixtures", "city-cases.json"), "utf8"));
-const { buildCity, deriveView, validatePresentationModel } = await import("../src/domain/city-model.ts");
+const { buildCity, deriveView } = await import("../src/domain/city-model.ts");
+const { validateCityPayload } = await import("../src/application/city-payload.ts");
 
 function exactKeys(value, keys) {
   assert(value && typeof value === "object" && !Array.isArray(value));
@@ -22,13 +23,17 @@ function exactKeys(value, keys) {
 
 function modelData(city) {
   return {
-    identities: [...city.identities],
-    count: city.model.count,
-    origins: [...city.model.origins],
-    sizes: [...city.model.sizes],
-    rgba: [...city.model.rgba],
-    bounds: [...city.model.bounds],
+    identities: city.inspection.map(({ canonicalPath }) => canonicalPath),
+    count: city.geometry.count,
+    origins: [...city.geometry.origins],
+    sizes: [...city.geometry.sizes],
+    rgba: [...city.geometry.rgba],
+    bounds: [...city.geometry.bounds],
   };
+}
+
+function validateGeometry(geometry, inspection) {
+  return validateCityPayload({ geometry, inspection }).geometry;
 }
 
 function cloneModel(model) {
@@ -174,20 +179,20 @@ test("literal N=1,2,4,5 mapping, palette, layout, and bounds match exact owned t
     const city = buildCity(immutableFacts);
     assert.deepEqual(modelData(city), entry.expected, entry.id);
     assert.equal(JSON.stringify(immutableFacts), before, `${entry.id}: input changed`);
-    assert.deepEqual(Object.keys(city).sort(), ["identities", "model"]);
-    assert.deepEqual(Object.keys(city.model).sort(), ["bounds", "count", "kind", "origins", "rgba", "sizes"]);
-    assert.equal(city.model.kind, "CODE_CITY_PRESENTATION");
+    assert.deepEqual(Object.keys(city), ["geometry", "inspection"]);
+    assert.deepEqual(Object.keys(city.geometry), ["kind", "count", "origins", "sizes", "rgba", "bounds"]);
+    assert.equal(city.geometry.kind, "CODE_CITY_PRESENTATION");
     assert.equal(Object.isFrozen(city), true);
-    assert.equal(Object.isFrozen(city.identities), true);
-    assert.equal(Object.isFrozen(city.model), true);
-    assert.equal(validatePresentationModel(city.model).count, entry.expected.count);
+    assert.equal(Object.isFrozen(city.inspection), true);
+    assert.equal(Object.isFrozen(city.geometry), true);
+    assert.equal(validateCityPayload(city).geometry.count, entry.expected.count);
   }
 });
 
 test("every palette boundary maps to its literal bytes independently", () => {
   for (const entry of fixture.paletteBoundaries) {
     const city = buildCity([{ canonicalPath: "palette.ts", S: 0, U: 0, M: entry.M }]);
-    assert.deepEqual([...city.model.rgba], entry.rgba, `M=${entry.M}`);
+    assert.deepEqual([...city.geometry.rgba], entry.rgba, `M=${entry.M}`);
   }
 });
 
@@ -202,14 +207,14 @@ test("input order is irrelevant byte-for-byte and successful builds own fresh ar
   ]);
   for (const city of outputs) {
     assert.deepEqual(modelData(city), entry.expected);
-    assert.deepEqual(bytes(city.model), bytes(outputs[0].model));
+    assert.deepEqual(bytes(city.geometry), bytes(outputs[0].geometry));
   }
   for (const key of ["origins", "sizes", "rgba", "bounds"]) {
-    assert.notEqual(outputs[0].model[key], outputs[1].model[key], key);
-    assert.notEqual(outputs[0].model[key].buffer, outputs[1].model[key].buffer, `${key}.buffer`);
+    assert.notEqual(outputs[0].geometry[key], outputs[1].geometry[key], key);
+    assert.notEqual(outputs[0].geometry[key].buffer, outputs[1].geometry[key].buffer, `${key}.buffer`);
   }
-  outputs[0].model.origins[0] = 99;
-  assert.equal(outputs[1].model.origins[0], 0);
+  outputs[0].geometry.origins[0] = 99;
+  assert.equal(outputs[1].geometry.origins[0], 0);
 });
 
 test("construction rejects non-arrays, non-dense arrays, accessor elements, extras, duplicates, and malformed exact facts", () => {
@@ -256,8 +261,9 @@ test("checked metric, count, coordinate, and allocation guards reject instead of
   assertCityFailure(() => buildCity(tooMany));
 });
 
-test("defensive model validation rejects shape, classes, lengths, colours, extents, layout, bounds, float values, and prototypes", () => {
-  const source = buildCity(fixture.cityCases.find(({ id }) => id === "n5-varying-depths").facts).model;
+test("defensive city validation rejects shape, classes, lengths, colours, extents, layout, bounds, float values, and prototypes", () => {
+  const sourceCity = buildCity(fixture.cityCases.find(({ id }) => id === "n5-varying-depths").facts);
+  const source = sourceCity.geometry;
   const mutations = {
     "wrong-kind": (model, literal) => { model.kind = literal; },
     "count-zero": (model, literal) => { model.count = literal; },
@@ -273,7 +279,7 @@ test("defensive model validation rejects shape, classes, lengths, colours, exten
   for (const entry of fixture.malformedCases.filter(({ target }) => target === "model")) {
     const model = cloneModel(source);
     mutations[entry.id](model, entry.literal);
-    assertCityFailure(() => validatePresentationModel(model), entry.id);
+    assertCityFailure(() => validateGeometry(model, sourceCity.inspection), entry.id);
   }
 
   for (const model of [
@@ -281,33 +287,34 @@ test("defensive model validation rejects shape, classes, lengths, colours, exten
     { ...cloneModel(source), rgba: new Uint8ClampedArray(source.rgba) },
     Object.assign(Object.create(null), cloneModel(source)),
     { ...cloneModel(source), extra: true },
-  ]) assertCityFailure(() => validatePresentationModel(model));
+  ]) assertCityFailure(() => validateGeometry(model, sourceCity.inspection));
 
   const accessor = cloneModel(source);
   Object.defineProperty(accessor, "kind", { enumerable: true, get: () => source.kind });
-  assertCityFailure(() => validatePresentationModel(accessor));
+  assertCityFailure(() => validateGeometry(accessor, sourceCity.inspection));
   const inherited = Object.assign(Object.create(cloneModel(source)), cloneModel(source));
-  assertCityFailure(() => validatePresentationModel(inherited));
+  assertCityFailure(() => validateGeometry(inherited, sourceCity.inspection));
 
   for (const [index, id] of [[0, "x"], [1, "y"], [2, "z"]]) {
     const model = cloneModel(source);
     model.sizes[index] = 0;
-    assertCityFailure(() => validatePresentationModel(model), `zero ${id} extent`);
+    assertCityFailure(() => validateGeometry(model, sourceCity.inspection), `zero ${id} extent`);
   }
   const nan = cloneModel(source); nan.origins[0] = Number.NaN;
-  assertCityFailure(() => validatePresentationModel(nan), "NaN");
+  assertCityFailure(() => validateGeometry(nan, sourceCity.inspection), "NaN");
   const negativeZero = cloneModel(source); negativeZero.origins[0] = -0;
-  assertCityFailure(() => validatePresentationModel(negativeZero), "negative zero");
+  assertCityFailure(() => validateGeometry(negativeZero, sourceCity.inspection), "negative zero");
 });
 
-test("every presentation array requires an exact intrinsic typed-array and ordinary owned buffer without active reads", () => {
-  const source = buildCity(fixture.cityCases.find(({ id }) => id === "n5-varying-depths").facts).model;
+test("every geometry array requires an exact intrinsic typed-array and ordinary owned buffer without active reads", () => {
+  const sourceCity = buildCity(fixture.cityCases.find(({ id }) => id === "n5-varying-depths").facts);
+  const source = sourceCity.geometry;
   for (const field of ["origins", "sizes", "rgba", "bounds"]) {
     const adversarial = adversarialTypedArrays(source[field]);
     for (const [id, value] of adversarial.attacks) {
       const model = cloneModel(source);
       model[field] = value;
-      assertCityFailure(() => validatePresentationModel(model), `${field}: ${id}`);
+      assertCityFailure(() => validateGeometry(model, sourceCity.inspection), `${field}: ${id}`);
     }
     adversarial.assertNoReads();
   }
@@ -360,16 +367,16 @@ test("the 4,000-fact full envelope has the literal bounds and renewed exact floa
     ...(index < envelope.largeFactCount ? envelope.largeFact : envelope.smallFact),
   }));
   const city = buildCity(facts);
-  assert.equal(city.model.count, 4000);
-  assert.equal(Math.ceil(Math.sqrt(city.model.count)), envelope.columns);
-  assert.deepEqual([...city.model.bounds], envelope.expectedBounds);
-  assert(city.model.bounds.every((coordinate) => coordinate < envelope.coordinateLimitExclusive));
-  const target = [city.model.bounds[3] / 2, city.model.bounds[4] / 2, city.model.bounds[5] / 2];
-  for (let index = 0; index < city.model.count; index += 1) {
+  assert.equal(city.geometry.count, 4000);
+  assert.equal(Math.ceil(Math.sqrt(city.geometry.count)), envelope.columns);
+  assert.deepEqual([...city.geometry.bounds], envelope.expectedBounds);
+  assert(city.geometry.bounds.every((coordinate) => coordinate < envelope.coordinateLimitExclusive));
+  const target = [city.geometry.bounds[3] / 2, city.geometry.bounds[4] / 2, city.geometry.bounds[5] / 2];
+  for (let index = 0; index < city.geometry.count; index += 1) {
     const offset = index * 3;
     for (let axis = 0; axis < 3; axis += 1) {
-      const origin = city.model.origins[offset + axis];
-      const endpoint = origin + city.model.sizes[offset + axis];
+      const origin = city.geometry.origins[offset + axis];
+      const endpoint = origin + city.geometry.sizes[offset + axis];
       assert.equal(Math.fround(origin), origin);
       assert.equal(Math.fround(endpoint), endpoint);
       assert(Math.abs(origin - target[axis]) < envelope.targetRelativeLimitExclusive);
@@ -378,5 +385,5 @@ test("the 4,000-fact full envelope has the literal bounds and renewed exact floa
       assert.equal(Math.fround(endpoint - target[axis]), endpoint - target[axis]);
     }
   }
-  assertView(deriveView(city.model.bounds, fixture.viewCases.at(-1).aspect), fixture.viewCases.at(-1).expected, "full envelope view");
+  assertView(deriveView(city.geometry.bounds, fixture.viewCases.at(-1).aspect), fixture.viewCases.at(-1).expected, "full envelope view");
 });

@@ -59,7 +59,7 @@ function fixture(constructCity) {
   return { pipeline, messages, publications, order, releases: () => releases };
 }
 
-test("success releases source identities and facts, publishes only revision plus model, then drains", async () => {
+test("success releases processing facts, publishes one aligned city, then drains", async () => {
   let calls = 0;
   let receivedFacts;
   const f = fixture((facts) => {
@@ -77,15 +77,17 @@ test("success releases source identities and facts, publishes only revision plus
   assert.equal(f.releases(), 1);
   assert.deepEqual(f.messages.map(({ type }) => type), ["REVISION_SELECTED", "PROVIDER_DRAINED_STATIC_ENTERED", "SUCCESS", "ATTEMPT_DRAINED"]);
   const success = f.messages[2];
-  assert.deepEqual(Object.keys(success), ["type", "generation", "revision", "model"]);
+  assert.deepEqual(Object.keys(success), ["type", "generation", "revision", "city"]);
   assert.equal(success.generation, 31);
   assert.equal(success.revision, SHA);
-  assert.deepEqual(Object.keys(success.model), ["kind", "count", "origins", "sizes", "rgba", "bounds"]);
-  assert.doesNotMatch(JSON.stringify(success), /canonicalPath|normalizedSource|identities|facts/i);
+  assert.deepEqual(Object.keys(success.city), ["geometry", "inspection"]);
+  assert.deepEqual(Object.keys(success.city.geometry), ["kind", "count", "origins", "sizes", "rgba", "bounds"]);
+  assert.deepEqual(success.city.inspection, [{ canonicalPath: "src/a.ts", S: 1, U: 0, M: 0 }]);
+  assert.doesNotMatch(JSON.stringify(success), /normalizedSource|identities|source body/i);
   assert.deepEqual(f.publications.map(({ message, ownership }) => [message.type, ownership.selectedRevisionRetained, ownership.admittedModuleCount, ownership.presentationModelRetained, ownership.finalFactCount]), [
     ["REVISION_SELECTED", true, 0, false, 0],
     ["PROVIDER_DRAINED_STATIC_ENTERED", true, 0, false, 0],
-    ["SUCCESS", true, 0, true, 0],
+    ["SUCCESS", true, 0, true, 1],
     ["ATTEMPT_DRAINED", false, 0, false, 0],
   ]);
   assert.equal(f.publications.find(({ message }) => message.type === "SUCCESS").capturedFactCount, 0);
@@ -104,11 +106,7 @@ test("success releases source identities and facts, publishes only revision plus
 });
 
 for (const [id, construct] of [
-  ["defensive validation", (facts) => {
-    const city = buildCity(facts);
-    city.model.rgba[0] = 0;
-    return city;
-  }],
+  ["misaligned construction", (facts) => ({ ...buildCity(facts), inspection: [] })],
   ["later capability throw", () => { throw new Error("injected internal detail"); }],
 ]) {
   test(`${id} clears facts/City, maps to one CITY1 failure, retains revision for failure, and drains once`, async () => {
@@ -149,7 +147,7 @@ for (const [id, construct] of [
   });
 }
 
-test("SUCCESS publication is outside provider/static/City lifetimes and preparation returns only revision plus model", async () => {
+test("SUCCESS publication is outside provider/static input lifetimes and preparation returns only revision plus city", async () => {
   const source = await readFile(new URL("../src/application/worker-attempt.ts", import.meta.url), "utf8");
   const activeStart = source.indexOf("type ActiveAttempt = {");
   const activeEnd = source.indexOf("\n};", activeStart);
@@ -161,8 +159,9 @@ test("SUCCESS publication is outside provider/static/City lifetimes and preparat
   assert(activeStart >= 0 && activeEnd > activeStart && staticStart > activeEnd && providerStart > staticStart && helperEnd > providerStart);
   assert(successPublish > helperEnd, "SUCCESS must be published only after both preparation helpers complete");
   assert.doesNotMatch(source.slice(staticStart, helperEnd), /type:\s*"SUCCESS"/u);
-  assert.match(source.slice(staticStart, providerStart), /processing\.release\(\);\s*return \{ revision, model \};/u);
+  assert.match(source.slice(staticStart, providerStart), /processing\.release\(\);\s*return \{ revision, city \};/u);
   assert.match(source.slice(providerStart, helperEnd), /return prepareStaticSuccess\(attempt, revision, retrieval\.modules\);/u);
-  assert.doesNotMatch(source.slice(activeStart, activeEnd), /admitted|source|facts|city|identit/iu);
+  assert.doesNotMatch(source.slice(activeStart, activeEnd), /admitted|source|facts|identit/iu);
+  assert.match(source.slice(activeStart, activeEnd), /city\?: City/u);
   assert.match(source.slice(helperEnd), /let prepared = await prepareProviderSuccess[\s\S]*publish\(\{ type: "SUCCESS"[\s\S]*prepared = undefined;\s*drain\(attempt\);/u);
 });

@@ -1,4 +1,5 @@
-import { parseWorkerMessage, readGeneration, type WorkerCommand, type WorkerMessage } from "./protocol";
+import { parseWorkerMessage, readGeneration, type ParsedWorkerMessage, type WorkerCommand } from "./protocol";
+import type { InspectionFact, ValidatedGeometry } from "./city-payload";
 import type { FailureCode } from "./resolution";
 import { parseRepositoryReference } from "../domain/repository-reference";
 
@@ -29,7 +30,7 @@ export type ControllerPresentationResult =
   | Readonly<{ kind: "failure"; category: "City construction failed" | "Presentation failed"; code: "M1-CITY-1" | "M1-PRES-1" }>;
 
 export type ControllerPresenter<G> = Readonly<{
-  present(generation: G, model: unknown): ControllerPresentationResult;
+  present(generation: G, geometry: ValidatedGeometry): ControllerPresentationResult;
   clear(): void;
   dispose(): void;
 }>;
@@ -69,7 +70,11 @@ export function createMainController(
   let disposed = false;
   let generation = 0;
   let pending: ReturnType<typeof parseRepositoryReference>;
-  let published: Readonly<{ generation: number; revision: string }> | undefined;
+  let published: Readonly<{
+    generation: number;
+    revision: string;
+    inspection: readonly InspectionFact[];
+  }> | undefined;
 
   const presenter = createPresentation({
     isEligible(candidate) {
@@ -187,7 +192,7 @@ export function createMainController(
     }
   }
 
-  function messageFailureMatchesSelection(bridge: ActiveBridge, message: Extract<WorkerMessage, { type: "FAILURE" }>): boolean {
+  function messageFailureMatchesSelection(bridge: ActiveBridge, message: Extract<ParsedWorkerMessage, { type: "FAILURE" }>): boolean {
     if (bridge.selectedRevision === undefined) {
       return !("revision" in message);
     }
@@ -264,8 +269,12 @@ export function createMainController(
       return;
     }
 
-    published = { generation: bridge.generation, revision: bridge.selectedRevision };
-    const result = presenter.present(bridge.generation, message.model);
+    published = {
+      generation: bridge.generation,
+      revision: bridge.selectedRevision,
+      inspection: message.city.inspection,
+    };
+    const result = presenter.present(bridge.generation, message.city.geometry);
     if (result.kind === "stale") {
       if (published?.generation === bridge.generation) {
         published = undefined;

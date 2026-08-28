@@ -12,9 +12,11 @@ export type PresentationModel = Readonly<{
   bounds: Float32Array;
 }>;
 
+export type InspectionFact = Readonly<{ canonicalPath: string; S: number; U: number; M: number }>;
+
 export type City = Readonly<{
-  identities: readonly string[];
-  model: PresentationModel;
+  geometry: PresentationModel;
+  inspection: readonly InspectionFact[];
 }>;
 
 export type CityView = Readonly<{
@@ -39,7 +41,6 @@ type FactSnapshot = Readonly<{ canonicalPath: string; S: number; U: number; M: n
 const MAX_FLOAT_INTEGER = 2 ** 24;
 const MAX_TARGET_RELATIVE = 2 ** 23;
 const FACT_KEYS = ["canonicalPath", "S", "U", "M"] as const;
-const MODEL_KEYS = ["kind", "count", "origins", "sizes", "rgba", "bounds"] as const;
 const ARRAY_BUFFER_IS_VIEW = ArrayBuffer.isView;
 const ARRAY_BUFFER_PROTOTYPE = ArrayBuffer.prototype;
 const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Float32Array.prototype) as object;
@@ -126,6 +127,10 @@ function paletteIndex(complexity: number): number {
   return 5;
 }
 
+export function paletteForComplexity(complexity: number): typeof PALETTE[number] {
+  return PALETTE[paletteIndex(complexity)]!;
+}
+
 function snapshotFacts(value: unknown): FactSnapshot[] {
   try {
     if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) invalid();
@@ -193,115 +198,6 @@ function exactTypedArray<T extends Float32Array | Uint8Array>(
   }
 }
 
-function sameNumber(actual: number, expected: number): boolean {
-  return Object.is(actual, expected);
-}
-
-function validateGeometry(model: PresentationModel): void {
-  const { count, origins, sizes, rgba, bounds } = model;
-  const columnCount = Math.ceil(Math.sqrt(count));
-  if (!Number.isSafeInteger(columnCount) || columnCount < 1 || columnCount * columnCount < count) invalid();
-
-  const rowCount = Math.ceil(count / columnCount);
-  const rowDepths = new Array<number>(rowCount).fill(0);
-  for (let index = 0; index < count; index += 1) {
-    const offset = index * 3;
-    const width = sizes[offset]!;
-    const height = sizes[offset + 1]!;
-    const depth = sizes[offset + 2]!;
-    if (!exactFloatInteger(width) || !exactFloatInteger(height) || !exactFloatInteger(depth)
-      || width <= 0 || height <= 0 || depth <= 0 || width !== depth) invalid();
-    const row = Math.floor(index / columnCount);
-    rowDepths[row] = Math.max(rowDepths[row]!, depth);
-
-    const colourOffset = index * 4;
-    let paletteMatch = false;
-    for (const colour of PALETTE) {
-      if (rgba[colourOffset] === colour[0]
-        && rgba[colourOffset + 1] === colour[1]
-        && rgba[colourOffset + 2] === colour[2]
-        && rgba[colourOffset + 3] === colour[3]) {
-        paletteMatch = true;
-        break;
-      }
-    }
-    if (!paletteMatch) invalid();
-  }
-
-  let expectedZ = 0;
-  let maximumX = 0;
-  let maximumY = 0;
-  let maximumZ = 0;
-  for (let row = 0; row < rowCount; row += 1) {
-    let expectedX = 0;
-    const first = row * columnCount;
-    const end = Math.min(first + columnCount, count);
-    for (let index = first; index < end; index += 1) {
-      const offset = index * 3;
-      const width = sizes[offset]!;
-      const height = sizes[offset + 1]!;
-      const x = origins[offset]!;
-      const y = origins[offset + 1]!;
-      const z = origins[offset + 2]!;
-      if (!exactFloatInteger(x) || !exactFloatInteger(y) || !exactFloatInteger(z)
-        || !sameNumber(x, expectedX) || !sameNumber(y, 0) || !sameNumber(z, expectedZ)) invalid();
-      const endpointX = requireExactFloatInteger(checkedAdd(x, width));
-      const endpointY = requireExactFloatInteger(checkedAdd(y, height));
-      const endpointZ = requireExactFloatInteger(checkedAdd(z, width));
-      maximumX = Math.max(maximumX, endpointX);
-      maximumY = Math.max(maximumY, endpointY);
-      maximumZ = Math.max(maximumZ, endpointZ);
-      if (index + 1 < end) expectedX = requireExactFloatInteger(checkedAdd(endpointX, 1));
-    }
-    if (row + 1 < rowCount) expectedZ = requireExactFloatInteger(checkedAdd(checkedAdd(expectedZ, rowDepths[row]!), 1));
-  }
-
-  const expectedBounds = [0, 0, 0, maximumX, maximumY, maximumZ] as const;
-  for (let index = 0; index < 6; index += 1) {
-    const value = bounds[index]!;
-    if (!exactFloatInteger(value) || !sameNumber(value, expectedBounds[index])) invalid();
-  }
-  if (maximumX <= 0 || maximumY <= 0 || maximumZ <= 0) invalid();
-
-  const target = [maximumX / 2, maximumY / 2, maximumZ / 2] as const;
-  for (let index = 0; index < count; index += 1) {
-    const offset = index * 3;
-    for (let axis = 0; axis < 3; axis += 1) {
-      const origin = origins[offset + axis]!;
-      const endpoint = checkedAdd(origin, sizes[offset + axis]!);
-      if (!exactTargetRelative(origin - target[axis]) || !exactTargetRelative(endpoint - target[axis])) invalid();
-    }
-  }
-}
-
-export function validatePresentationModel(value: unknown): PresentationModel {
-  const record = ownEnumerableDataRecord(value, MODEL_KEYS);
-  if (!record
-    || record.kind !== PRESENTATION_KIND
-    || !nonnegativeSafeInteger(record.count)
-    || record.count < 1
-    || record.count > MAX_ADMITTED_MODULES) invalid();
-
-  const count = record.count;
-  const vectorLength = checkedMultiply(count, 3);
-  const colourLength = checkedMultiply(count, 4);
-  if (!exactTypedArray<Float32Array>(record.origins, Float32Array.prototype, "Float32Array", vectorLength, 4)
-    || !exactTypedArray<Float32Array>(record.sizes, Float32Array.prototype, "Float32Array", vectorLength, 4)
-    || !exactTypedArray<Uint8Array>(record.rgba, Uint8Array.prototype, "Uint8Array", colourLength, 1)
-    || !exactTypedArray<Float32Array>(record.bounds, Float32Array.prototype, "Float32Array", 6, 4)) invalid();
-
-  const model: PresentationModel = {
-    kind: PRESENTATION_KIND,
-    count,
-    origins: record.origins,
-    sizes: record.sizes,
-    rgba: record.rgba,
-    bounds: record.bounds,
-  };
-  validateGeometry(model);
-  return Object.freeze(model);
-}
-
 export function buildCity(input: readonly ModuleComplexityFact[]): City {
   const facts = snapshotFacts(input);
   const count = facts.length;
@@ -311,7 +207,6 @@ export function buildCity(input: readonly ModuleComplexityFact[]): City {
   let sizes: Float32Array | undefined;
   let rgba: Uint8Array | undefined;
   let bounds: Float32Array | undefined;
-  const identities: string[] = [];
 
   try {
     origins = new Float32Array(vectorLength);
@@ -332,9 +227,8 @@ export function buildCity(input: readonly ModuleComplexityFact[]): City {
       sizes[offset + 1] = height;
       sizes[offset + 2] = width;
       rowDepths[Math.floor(index / columnCount)] = Math.max(rowDepths[Math.floor(index / columnCount)]!, width);
-      const colour = PALETTE[paletteIndex(fact.M)]!;
+      const colour = paletteForComplexity(fact.M);
       rgba.set(colour, index * 4);
-      identities.push(fact.canonicalPath);
     }
 
     let z = 0;
@@ -364,15 +258,14 @@ export function buildCity(input: readonly ModuleComplexityFact[]): City {
     }
     bounds.set([0, 0, 0, maximumX, maximumY, maximumZ]);
 
-    const candidate: PresentationModel = Object.freeze({ kind: PRESENTATION_KIND, count, origins, sizes, rgba, bounds });
-    const model = validatePresentationModel(candidate);
-    return Object.freeze({ identities: Object.freeze(identities), model });
+    const geometry: PresentationModel = Object.freeze({ kind: PRESENTATION_KIND, count, origins, sizes, rgba, bounds });
+    const inspection = Object.freeze(facts.map((fact) => Object.freeze({ ...fact })));
+    return Object.freeze({ geometry, inspection });
   } catch (error) {
     origins?.fill(0);
     sizes?.fill(0);
     rgba?.fill(0);
     bounds?.fill(0);
-    identities.length = 0;
     facts.length = 0;
     if (error instanceof Error && error.message === "M1-CITY-1") throw error;
     invalid();

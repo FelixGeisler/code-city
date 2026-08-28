@@ -18,7 +18,6 @@ const { createCityPresenter } = await import("../src/edge/city-presenter.ts");
 
 const COMMITTED = { kind: "committed" };
 const STALE = { kind: "stale" };
-const CITY_FAILURE = { kind: "failure", category: "City construction failed", code: "M1-CITY-1" };
 const PRESENTATION_FAILURE = { kind: "failure", category: "Presentation failed", code: "M1-PRES-1" };
 
 const GL = Object.freeze({
@@ -174,7 +173,7 @@ function fakeEnvironment({ width = 200, height = 100, gl = {}, platform = {} } =
   return environment;
 }
 
-function oneBuilding() { return buildCity([{ canonicalPath: "a.js", S: 0, U: 0, M: 0 }]).model; }
+function oneBuilding() { return buildCity([{ canonicalPath: "a.js", S: 0, U: 0, M: 0 }]).geometry; }
 function failuresCollector(environment, eligibility = () => true) {
   const failures = [];
   const presenter = createCityPresenter({ host: environment.host, platform: environment.platform, isEligible: eligibility, failed(...args) { failures.push(args); } });
@@ -409,20 +408,20 @@ test("clear releases the current session, is reusable, and does not make the pre
   assert.deepEqual(failures, []);
 });
 
-test("source-free presentation data has only the model contract and is structured-clone compatible", () => {
-  const model = oneBuilding();
-  assert.deepEqual(Object.keys(model), ["kind", "count", "origins", "sizes", "rgba", "bounds"]);
-  assert.equal(JSON.stringify(model).includes("a.js"), false);
-  const cloned = structuredClone(model);
-  assert.deepEqual([...cloned.origins], [...model.origins]);
-  assert.deepEqual([...cloned.sizes], [...model.sizes]);
-  assert.deepEqual([...cloned.rgba], [...model.rgba]);
-  assert.deepEqual([...cloned.bounds], [...model.bounds]);
+test("source-free presentation data has only the geometry contract and is structured-clone compatible", () => {
+  const geometry = oneBuilding();
+  assert.deepEqual(Object.keys(geometry), ["kind", "count", "origins", "sizes", "rgba", "bounds"]);
+  assert.equal(JSON.stringify(geometry).includes("a.js"), false);
+  const cloned = structuredClone(geometry);
+  assert.deepEqual([...cloned.origins], [...geometry.origins]);
+  assert.deepEqual([...cloned.sizes], [...geometry.sizes]);
+  assert.deepEqual([...cloned.rgba], [...geometry.rgba]);
+  assert.deepEqual([...cloned.bounds], [...geometry.bounds]);
 });
 
 test("the complete 4,000-building model uploads exactly 112,000 bytes and draws once", () => {
   const facts = Array.from({ length: 4000 }, (_, index) => ({ canonicalPath: `m/${String(index).padStart(4, "0")}.js`, S: index % 7, U: index % 5, M: index % 17 }));
-  const model = buildCity(facts).model;
+  const model = buildCity(facts).geometry;
   const environment = fakeEnvironment({ width: 640, height: 480 });
   const { presenter } = failuresCollector(environment);
   assert.deepEqual(presenter.present(4000, model), COMMITTED);
@@ -431,16 +430,10 @@ test("the complete 4,000-building model uploads exactly 112,000 bytes and draws 
   assert.deepEqual(gl.calls.filter((call) => call[0] === "drawElementsInstanced").at(-1).slice(1), [GL.TRIANGLES, 36, GL.UNSIGNED_BYTE, 0, 4000]);
 });
 
-test("invalid model clears the prior session and returns one City failure without invoking the asynchronous hook", () => {
-  const environment = fakeEnvironment();
-  const events = [];
-  const presenter = createCityPresenter({ host: environment.host, platform: environment.platform, isEligible: () => true, failed(generation, category, code) { events.push([generation, category, code, environment.host.child]); throw new Error("contained"); } });
-  assert.deepEqual(presenter.present(1, oneBuilding()), COMMITTED);
-  const first = environment.canvases[0];
-  assert.deepEqual(presenter.present(2, {}), CITY_FAILURE);
-  assert.equal(environment.canvases.length, 1);
-  assert.equal(first.removeCount, 1);
-  assert.deepEqual(events, []);
+test("presenter accepts validated geometry only and owns no city, inspection, alignment, palette, or limit validator", async () => {
+  const source = await readFile(path.join(projectRoot, "src/edge/city-presenter.ts"), "utf8");
+  assert.match(source, /present\(generation: G, model: ValidatedGeometry\)/u);
+  assert.doesNotMatch(source, /validateCityPayload|validatePresentationModel|canonicalPath|inspection|paletteForComplexity|MAX_ADMITTED_MODULES/u);
 });
 
 test("final dimension reread redraws the detached candidate before commit", () => {
@@ -608,11 +601,10 @@ test("cleanup contains release throws, attempts every resource, and skips driver
   }
 });
 
-test("dispose remains terminal but every later call still validates before presentation failure", () => {
+test("dispose remains terminal and every later validated-geometry call is a presentation failure", () => {
   const environment = fakeEnvironment();
   const { presenter, failures } = failuresCollector(environment);
   presenter.dispose(); presenter.dispose();
-  assert.deepEqual(presenter.present(1, {}), CITY_FAILURE);
   assert.deepEqual(presenter.present(2, oneBuilding()), PRESENTATION_FAILURE);
   assert.deepEqual(failures, []);
   assert.equal(environment.canvases.length, 0);

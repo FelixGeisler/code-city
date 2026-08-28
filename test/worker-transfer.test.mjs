@@ -21,15 +21,17 @@ globalThis.self = {
   postMessage(message, transfer) { posted.push({ message, transfer }); },
 };
 const { publishWorkerMessage } = await import("../src/edge/processing-worker.ts");
-const { buildCity, validatePresentationModel } = await import("../src/domain/city-model.ts");
+const { buildCity } = await import("../src/domain/city-model.ts");
+const { validateCityPayload } = await import("../src/application/city-payload.ts");
 
-function successModel() {
-  return buildCity([{ canonicalPath: "src/a.ts", S: 1, U: 1, M: 0 }]).model;
+function successCity() {
+  return buildCity([{ canonicalPath: "src/a.ts", S: 1, U: 1, M: 0 }]);
 }
 
-test("the processing-worker edge transfers exactly four whole distinct buffers in contract order and detaches them", () => {
-  const model = successModel();
-  const expected = [model.origins.buffer, model.sizes.buffer, model.rgba.buffer, model.bounds.buffer];
+test("the processing-worker edge transfers exactly four whole distinct geometry buffers in contract order and detaches them", () => {
+  const city = successCity();
+  const geometry = city.geometry;
+  const expected = [geometry.origins.buffer, geometry.sizes.buffer, geometry.rgba.buffer, geometry.bounds.buffer];
   let clone;
   const scope = {
     postMessage(message, transfer) {
@@ -38,13 +40,15 @@ test("the processing-worker edge transfers exactly four whole distinct buffers i
       clone = structuredClone(message, { transfer });
     },
   };
-  publishWorkerMessage(scope, { type: "SUCCESS", generation: 3, revision: "a".repeat(40), model });
+  publishWorkerMessage(scope, { type: "SUCCESS", generation: 3, revision: "a".repeat(40), city });
   assert.deepEqual(expected.map((buffer) => buffer.byteLength), [0, 0, 0, 0]);
-  assert.deepEqual(Object.keys(clone), ["type", "generation", "revision", "model"]);
+  assert.deepEqual(Object.keys(clone), ["type", "generation", "revision", "city"]);
+  assert.deepEqual(Object.keys(clone.city), ["geometry", "inspection"]);
   assert.equal(clone.type, "SUCCESS");
   assert.equal(clone.generation, 3);
   assert.equal(clone.revision, "a".repeat(40));
-  assert.doesNotThrow(() => validatePresentationModel(clone.model));
+  assert.deepEqual(clone.city.inspection, [{ canonicalPath: "src/a.ts", S: 1, U: 1, M: 0 }]);
+  assert.doesNotThrow(() => validateCityPayload(clone.city));
 });
 
 test("non-success worker messages are posted without a transfer list", () => {

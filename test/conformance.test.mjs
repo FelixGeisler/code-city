@@ -95,6 +95,7 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
   const productionFiles = await listFiles(path.join(projectRoot, "src"));
   assert.deepEqual(productionFiles, [
     "application/base-metric-processing.ts",
+    "application/city-payload.ts",
     "application/main-controller.ts",
     "application/protocol.ts",
     "application/resolution.ts",
@@ -234,6 +235,19 @@ test("commands preserve the canonical package audit sequence and CI separates re
     assert(install >= 0 && install < closure && closure < audit && audit < verify);
   }
   assert.doesNotMatch(ci, /upload-artifact|deploy-pages|configure-pages|environment:|pages:\s*write|id-token:\s*write|contents:\s*write/i);
+});
+
+test("both evidence observers require SUCCESS.city.geometry and contain no inspection access or retention surface", async () => {
+  const browserObserver = await readText("tools/check-browser-evidence.mjs");
+  const productionObserver = await readText("tools/collect-production-evidence.mjs");
+  assert.equal((browserObserver.match(/message\.city\.geometry/gu) ?? []).length, 2);
+  const productionStart = productionObserver.indexOf("export function createWorkerObserverSource");
+  const productionEnd = productionObserver.indexOf("\nexport ", productionStart + 1);
+  const productionWorkerObserver = productionObserver.slice(productionStart, productionEnd);
+  assert.match(productionWorkerObserver, /descriptors\.city\.value[\s\S]*getOwnPropertyDescriptor\(city,"geometry"\)/u);
+  for (const [name, source] of [["browser-package", browserObserver], ["production", productionWorkerObserver]]) {
+    assert.doesNotMatch(source, /inspection|canonicalPath/iu, `${name} observer must have no inspection field vocabulary`);
+  }
 });
 
 test("the packaged-Chrome watchdog is the exact ten-minute whole-harness bound", async () => {

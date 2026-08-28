@@ -30,7 +30,7 @@ const SUCCESS_FIXTURE = Object.freeze({
   source: "const answer = 42;\n",
   blob: "5c947feee9cbb434b57ed2e576b643e99e35e782",
   expectedNormalizedSourceSha256: "8691f74ea796569734dafffbbcb79088362b52c3cef154aa0d8f32696d2d4737",
-  modelBytesSha256: "90ea132d2534fd0f06f796ba584a5fd0b927914230119a0a641d9b5497133bd6",
+  modelBytesSha256: "d3b16b372fafc88ffe3570f934474c516dca12f066a1bd3da890bea7cae1af7b",
 });
 const CSP = "default-src 'none'; base-uri 'none'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; form-action 'none'; frame-src 'none'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; worker-src 'self'";
 
@@ -86,13 +86,14 @@ function pageObservationSource() {
         nativeAdd.call(this, "message", (event) => {
           const message = event.data;
           if (!message || message.type !== "SUCCESS") return;
-          const model = message.model;
+          const geometry = message.city.geometry;
           evidence.messages.push({
             generation: message.generation,
             revision: message.revision,
             keys: Object.keys(message),
-            modelKeys: Object.keys(model),
-            buffers: [model.origins, model.sizes, model.rgba, model.bounds].map((view) => Array.from(new Uint8Array(view.buffer))),
+            geometryKeys: Object.keys(geometry),
+            count: geometry.count,
+            buffers: [geometry.origins, geometry.sizes, geometry.rgba, geometry.bounds].map((view) => Array.from(new Uint8Array(view.buffer))),
           });
         });
       }
@@ -151,8 +152,9 @@ const WORKER_OBSERVATION_SOURCE = `(() => {
   const nativePostMessage = self.postMessage.bind(self);
   self.postMessage = function(message, transfer) {
     if (!message || message.type !== "SUCCESS") return nativePostMessage(message, transfer);
-    const expected = [message.model.origins.buffer, message.model.sizes.buffer, message.model.rgba.buffer, message.model.bounds.buffer];
-    const observation = { count: transfer?.length, ordered: transfer?.every((buffer, index) => buffer === expected[index]), distinct: new Set(transfer).size, whole: [message.model.origins, message.model.sizes, message.model.rgba, message.model.bounds].every((view, index) => view.byteOffset === 0 && view.byteLength === expected[index].byteLength) };
+    const geometry = message.city.geometry;
+    const expected = [geometry.origins.buffer, geometry.sizes.buffer, geometry.rgba.buffer, geometry.bounds.buffer];
+    const observation = { count: transfer?.length, ordered: transfer?.every((buffer, index) => buffer === expected[index]), distinct: new Set(transfer).size, whole: [geometry.origins, geometry.sizes, geometry.rgba, geometry.bounds].every((view, index) => view.byteOffset === 0 && view.byteLength === expected[index].byteLength) };
     const result = nativePostMessage(message, transfer);
     observation.detached = expected.map((buffer) => buffer.byteLength);
     console.log("success-worker-evidence:" + JSON.stringify(observation));
@@ -353,11 +355,15 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       { normalizedSourceSha256: computedNormalizedSourceSha256 },
     ]);
     assert(generationSourceRecords.every(({ normalizedSourceSha256 }) => normalizedSourceSha256 === fixture.expectedNormalizedSourceSha256));
-    const modelDigests = observed.messages.map((message) => digestBytes(message.buffers));
+    const modelDigests = observed.messages.map((message) => {
+      const count = new Uint8Array(4);
+      new DataView(count.buffer).setUint32(0, message.count, true);
+      return digestBytes([count, ...message.buffers]);
+    });
     assert.deepEqual(modelDigests, [fixture.modelBytesSha256, fixture.modelBytesSha256]);
     for (const message of observed.messages) {
-      assert.deepEqual(message.keys, ["type", "generation", "revision", "model"]);
-      assert.deepEqual(message.modelKeys, ["kind", "count", "origins", "sizes", "rgba", "bounds"]);
+      assert.deepEqual(message.keys, ["type", "generation", "revision", "city"]);
+      assert.deepEqual(message.geometryKeys, ["kind", "count", "origins", "sizes", "rgba", "bounds"]);
       assert.equal(message.revision, fixture.selected);
     }
     const presentationDigests = observed.contexts.map((context) => createHash("sha256").update(JSON.stringify({ uploads: context.uploads, matrices: context.matrices, draws: context.draws })).digest("hex"));

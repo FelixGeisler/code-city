@@ -496,7 +496,7 @@ test("fails closed on unsupported compiler reference, AMD, and no-default-lib di
 
 test("accepts the actual strict production strata and retains the static worker import", async () => {
   const result = await checkBoundaries(projectRoot);
-  assert.equal(result.filesChecked, 18);
+  assert.equal(result.filesChecked, 19);
   assert(result.imports.some((entry) => (
     entry.source === "src/edge/main.ts"
       && entry.specifier === "./processing-worker.ts?worker&url"

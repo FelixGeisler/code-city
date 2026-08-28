@@ -1,4 +1,5 @@
-import { deriveView, validatePresentationModel, type PresentationModel } from "../domain/city-model";
+import { deriveView } from "../domain/city-model";
+import type { ValidatedGeometry } from "../application/city-payload";
 
 const CUBE_POSITIONS = new Float32Array([
   0, 0, 0,
@@ -59,8 +60,8 @@ const WEBGL2_CONTEXT_ATTRIBUTES = Object.freeze({
   xrCompatible: false,
 }) satisfies WebGLContextAttributes;
 
-export type PresentationFailureCategory = "City construction failed" | "Presentation failed";
-export type PresentationFailureCode = "M1-CITY-1" | "M1-PRES-1";
+export type PresentationFailureCategory = "Presentation failed";
+export type PresentationFailureCode = "M1-PRES-1";
 export type PresentationResult =
   | Readonly<{ kind: "committed" }>
   | Readonly<{ kind: "stale" }>
@@ -68,7 +69,6 @@ export type PresentationResult =
 
 const COMMITTED: PresentationResult = Object.freeze({ kind: "committed" });
 const STALE: PresentationResult = Object.freeze({ kind: "stale" });
-const CITY_FAILURE: PresentationResult = Object.freeze({ kind: "failure", category: "City construction failed", code: "M1-CITY-1" });
 const PRESENTATION_FAILURE: PresentationResult = Object.freeze({ kind: "failure", category: "Presentation failed", code: "M1-PRES-1" });
 
 type LossListener = (event: Event) => void;
@@ -100,7 +100,7 @@ export type CityPresenterOptions<G> = Readonly<{
 }>;
 
 export type CityPresenter<G> = Readonly<{
-  present(generation: G, model: unknown): PresentationResult;
+  present(generation: G, geometry: ValidatedGeometry): PresentationResult;
   clear(): void;
   dispose(): void;
 }>;
@@ -122,7 +122,7 @@ type Session<G> = {
   instanceBuffer?: WebGLBuffer;
   uniform?: WebGLUniformLocation;
   staging?: Uint8Array;
-  model?: PresentationModel;
+  model?: ValidatedGeometry;
   committed: boolean;
   active: boolean;
   notified: boolean;
@@ -199,7 +199,7 @@ function requireResource<T>(resource: T | null, gl: WebGL2RenderingContext, own:
   return resource;
 }
 
-function createMatrix(model: PresentationModel, width: number, height: number): Float32Array {
+function createMatrix(model: ValidatedGeometry, width: number, height: number): Float32Array {
   const view = deriveView(model.bounds, width / height);
   const aH = view.horizontalHalf;
   const H = view.H;
@@ -212,7 +212,7 @@ function createMatrix(model: PresentationModel, width: number, height: number): 
   ]);
 }
 
-function createInstanceStaging(model: PresentationModel, width: number, height: number): Uint8Array {
+function createInstanceStaging(model: ValidatedGeometry, width: number, height: number): Uint8Array {
   const target = deriveView(model.bounds, width / height).target;
   const staging = new Uint8Array(model.count * INSTANCE_STRIDE);
   const view = new DataView(staging.buffer);
@@ -447,15 +447,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
   };
 
   return Object.freeze({
-    present(generation: G, value: unknown): PresentationResult {
-      let model: PresentationModel;
-      try {
-        model = validatePresentationModel(value);
-      } catch {
-        const affected = current;
-        if (affected && current === affected) removeSession(affected);
-        return CITY_FAILURE;
-      }
+    present(generation: G, model: ValidatedGeometry): PresentationResult {
       if (disposed) {
         return PRESENTATION_FAILURE;
       }
