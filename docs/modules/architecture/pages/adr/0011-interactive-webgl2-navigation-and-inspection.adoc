@@ -1,6 +1,6 @@
 = ADR 0011: Interactive WebGL2 navigation and inspection
 
-Status:: Proposed
+Status:: Accepted
 
 == Context
 
