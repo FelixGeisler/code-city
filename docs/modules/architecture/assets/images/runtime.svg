@@ -1,20 +1,25 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 710" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 990" role="img" aria-labelledby="title desc">
   <title id="title">Successful city transaction and interaction flow</title>
-  <desc id="desc">The user submits a URL. The controller starts one worker generation. The worker builds an aligned geometry-and-inspection city. The controller validates it, stages semantics and the presenter, commits one transaction, then exchanges semantic events and opaque visual indices with the presenter.</desc>
+  <desc id="desc">The user submits a URL. The controller starts one worker generation. The worker builds an aligned geometry-and-inspection city. The controller validates it, sends only validated geometry to presenter staging, stages semantics locally, rechecks eligibility, issues commit for the staged token, and atomically publishes the result. It then exchanges semantic events and opaque visual indices with the presenter.</desc>
   <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#475569"/></marker></defs>
-  <style>.t{font:16px system-ui,sans-serif;fill:#0f172a;text-anchor:middle}.h{font:17px system-ui,sans-serif;font-weight:600;fill:#0f172a;text-anchor:middle}.life{stroke:#94a3b8;stroke-width:2;stroke-dasharray:6 5}.a{stroke:#475569;stroke-width:2;marker-end:url(#arrow)}.r{font:14px system-ui,sans-serif;fill:#334155}</style>
+  <style>.t{font:16px system-ui,sans-serif;fill:#0f172a;text-anchor:middle}.h{font:17px system-ui,sans-serif;font-weight:600;fill:#0f172a;text-anchor:middle}.life{stroke:#94a3b8;stroke-width:2;stroke-dasharray:6 5}.a{stroke:#475569;stroke-width:2;marker-end:url(#arrow)}.r{font:14px system-ui,sans-serif;fill:#334155}.local{fill:#e0f2fe;stroke:#0369a1;stroke-width:2}</style>
   <text class="h" x="90" y="35">User</text><text class="h" x="300" y="35">Controller</text><text class="h" x="560" y="35">Worker</text><text class="h" x="820" y="35">GitHub</text><text class="h" x="1010" y="35">Presenter</text>
-  <line class="life" x1="90" y1="55" x2="90" y2="690"/><line class="life" x1="300" y1="55" x2="300" y2="690"/><line class="life" x1="560" y1="55" x2="560" y2="690"/><line class="life" x1="820" y1="55" x2="820" y2="690"/><line class="life" x1="1010" y1="55" x2="1010" y2="690"/>
+  <line class="life" x1="90" y1="55" x2="90" y2="970"/><line class="life" x1="300" y1="55" x2="300" y2="970"/><line class="life" x1="560" y1="55" x2="560" y2="970"/><line class="life" x1="820" y1="55" x2="820" y2="970"/><line class="life" x1="1010" y1="55" x2="1010" y2="970"/>
   <line class="a" x1="90" y1="90" x2="290" y2="90"/><text class="r" x="135" y="80">submit URL</text>
   <line class="a" x1="300" y1="140" x2="550" y2="140"/><text class="r" x="330" y="130">start generation</text>
   <line class="a" x1="560" y1="200" x2="810" y2="200"/><text class="r" x="610" y="190">resolve + retrieve</text>
   <line class="a" x1="820" y1="250" x2="570" y2="250"/><text class="r" x="650" y="240">immutable data</text>
   <rect x="455" y="290" width="210" height="130" rx="8" fill="#dcfce7" stroke="#15803d" stroke-width="2"/><text class="t" x="560" y="325">Admit modules</text><text class="t" x="560" y="355">Parse + measure</text><text class="t" x="560" y="385">Build aligned city</text>
   <line class="a" x1="550" y1="450" x2="310" y2="450"/><text class="r" x="390" y="440">geometry + inspection</text>
-  <line class="a" x1="300" y1="500" x2="1000" y2="500"/><text class="r" x="560" y="490">validate + stage geometry and semantics</text>
-  <line class="a" x1="1010" y1="550" x2="310" y2="550"/><text class="r" x="650" y="540">token committed</text>
-  <text class="r" x="320" y="575">one publication-root commit</text>
-  <line class="a" x1="90" y1="610" x2="1000" y2="610"/><text class="r" x="420" y="600">keyboard / pointer / wheel</text>
-  <line class="a" x1="1010" y1="645" x2="310" y2="645"/><text class="r" x="650" y="635">semantic index event</text>
-  <line class="a" x1="300" y1="680" x2="1000" y2="680"/><text class="r" x="610" y="670">opaque visual indices</text>
+  <rect class="local" x="180" y="475" width="240" height="44" rx="8"/><text class="t" x="300" y="503">Validate aligned snapshots</text>
+  <line class="a" x1="300" y1="550" x2="1000" y2="550"/><text class="r" x="560" y="540">stage(validatedGeometry)</text>
+  <line class="a" x1="1010" y1="595" x2="310" y2="595"/><text class="r" x="650" y="585">staged(token)</text>
+  <rect class="local" x="180" y="620" width="240" height="44" rx="8"/><text class="t" x="300" y="648">Stage semantics locally</text>
+  <rect class="local" x="180" y="680" width="240" height="44" rx="8"/><text class="t" x="300" y="708">Recheck eligibility</text>
+  <line class="a" x1="300" y1="755" x2="1000" y2="755"/><text class="r" x="560" y="745">commit(token)</text>
+  <line class="a" x1="1010" y1="800" x2="310" y2="800"/><text class="r" x="650" y="790">committed</text>
+  <rect class="local" x="170" y="825" width="260" height="54" rx="8"/><text class="t" x="300" y="848">Atomic publication-root</text><text class="t" x="300" y="869">replaceChildren</text>
+  <line class="a" x1="90" y1="910" x2="1000" y2="910"/><text class="r" x="420" y="900">keyboard / pointer / wheel</text>
+  <line class="a" x1="1010" y1="940" x2="310" y2="940"/><text class="r" x="650" y="930">semantic index event</text>
+  <line class="a" x1="300" y1="970" x2="1000" y2="970"/><text class="r" x="610" y="960">opaque visual indices</text>
 </svg>
