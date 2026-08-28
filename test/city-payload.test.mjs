@@ -15,6 +15,10 @@ const FACTS = [
   { canonicalPath: "a.ts", S: 1, U: 2, M: 0 },
   { canonicalPath: "src/markup-<secret>-\u202Etoken.ts", S: 4, U: 3, M: 16 },
 ];
+const MAX_MODULE_BYTES = 2_097_152;
+const MAX_TOTAL_BYTES = 40 * 1_048_576;
+const MAX_MODULE_UNITS = 1 + Math.floor(MAX_MODULE_BYTES / 3);
+const MAX_TOTAL_UNITS = 4_000 + Math.floor(MAX_TOTAL_BYTES / 3);
 
 function cloneGeometry(geometry) {
   return {
@@ -137,6 +141,49 @@ test("validator rejects count, canonical order, duplicate identity, dimensions, 
     const city = cloneCity(); city.geometry.rgba[0] = 0; cases.push(["non-palette", city]);
   }
   for (const [id, city] of cases) fails(city, id);
+});
+
+test("validator enforces exact and one-over per-module source-line and executable-unit bounds with matching geometry", () => {
+  for (const [metric, maximum] of [["S", MAX_MODULE_BYTES], ["U", MAX_MODULE_UNITS]]) {
+    const exactFact = { canonicalPath: `exact-${metric}.ts`, S: 0, U: 0, M: 0, [metric]: maximum };
+    const exact = cloneCity(buildCity([exactFact]));
+    const validated = validateCityPayload(exact);
+    assert.equal(validated.inspection[0][metric], maximum);
+    assert.equal(validated.geometry.sizes[metric === "S" ? 1 : 0], maximum + 1);
+
+    const oneOverFact = { ...exactFact, canonicalPath: `one-over-${metric}.ts`, [metric]: maximum + 1 };
+    fails(cloneCity(buildCity([oneOverFact])), `${metric} per-module one over`);
+  }
+});
+
+test("validator enforces exact and one-over aggregate source-line bounds with matching geometry", () => {
+  const exactFacts = Array.from({ length: 20 }, (_, index) => ({
+    canonicalPath: `source-total/${String(index).padStart(2, "0")}.ts`, S: MAX_MODULE_BYTES, U: 0, M: 0,
+  }));
+  const exact = validateCityPayload(cloneCity(buildCity(exactFacts)));
+  assert.equal(exact.inspection.reduce((total, fact) => total + fact.S, 0), MAX_TOTAL_BYTES);
+  assert.equal(exact.geometry.bounds[4], MAX_MODULE_BYTES + 1);
+
+  const oneOverFacts = [...exactFacts, { canonicalPath: "source-total/20.ts", S: 1, U: 0, M: 0 }];
+  fails(cloneCity(buildCity(oneOverFacts)), "S aggregate one over");
+});
+
+test("validator enforces exact and one-over aggregate executable-unit bounds with matching geometry", () => {
+  let remaining = MAX_TOTAL_UNITS;
+  const exactFacts = Array.from({ length: 4_000 }, (_, index) => {
+    const U = Math.min(remaining, MAX_MODULE_UNITS);
+    remaining -= U;
+    return { canonicalPath: `unit-total/${String(index).padStart(4, "0")}.ts`, S: 0, U, M: 0 };
+  });
+  assert.equal(remaining, 0);
+  const exact = validateCityPayload(cloneCity(buildCity(exactFacts)));
+  assert.equal(exact.inspection.reduce((total, fact) => total + fact.U, 0), MAX_TOTAL_UNITS);
+  assert.equal(exact.geometry.sizes[0], MAX_MODULE_UNITS + 1);
+
+  const oneOverFacts = exactFacts.map((fact) => ({ ...fact }));
+  const incrementIndex = oneOverFacts.findIndex((fact) => fact.U < MAX_MODULE_UNITS);
+  oneOverFacts[incrementIndex].U += 1;
+  fails(cloneCity(buildCity(oneOverFacts)), "U aggregate one over");
 });
 
 test("validated geometry preserves exact bytes while inspection contributes no geometry bytes", () => {

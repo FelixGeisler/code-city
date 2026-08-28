@@ -1,4 +1,10 @@
-import { compareUnsignedUtf8, isCanonicalSourcePath, MAX_ADMITTED_MODULES } from "../domain/source-admission";
+import {
+  compareUnsignedUtf8,
+  isCanonicalSourcePath,
+  MAX_ADMITTED_MODULES,
+  MAX_NORMALIZED_MODULE_BYTES,
+  MAX_NORMALIZED_TOTAL_BYTES,
+} from "../domain/source-admission";
 import {
   paletteForComplexity,
   PRESENTATION_KIND,
@@ -35,6 +41,7 @@ const TYPED_ARRAY_LENGTH = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE
 const ARRAY_BUFFER_BYTE_LENGTH = Object.getOwnPropertyDescriptor(ARRAY_BUFFER_PROTOTYPE, "byteLength")!.get as IntrinsicGetter;
 const MAX_FLOAT_INTEGER = 2 ** 24;
 const MAX_TARGET_RELATIVE = 2 ** 23;
+const MAX_EXECUTABLE_UNITS_PER_MODULE = 1 + Math.floor(MAX_NORMALIZED_MODULE_BYTES / 3);
 const PALETTE_PROBES = [0, 1, 2, 4, 8, 16] as const;
 
 function invalid(): never {
@@ -127,13 +134,21 @@ function snapshotInspection(value: unknown, count: number): readonly InspectionF
       || Reflect.ownKeys(descriptors).length !== count + 1) invalid();
     const inspection: InspectionFact[] = [];
     let priorPath: string | undefined;
+    let totalSourceLines = 0;
+    let totalExecutableUnits = 0;
     for (let index = 0; index < count; index += 1) {
       const element = descriptors[String(index)];
       if (!element || !("value" in element) || !element.enumerable) invalid();
       const record = ownEnumerableDataRecord(element.value, FACT_KEYS);
       if (!record || typeof record.canonicalPath !== "string" || !isCanonicalSourcePath(record.canonicalPath)
-        || !nonnegativeSafeInteger(record.S) || !nonnegativeSafeInteger(record.U) || !nonnegativeSafeInteger(record.M)
+        || !nonnegativeSafeInteger(record.S) || record.S > MAX_NORMALIZED_MODULE_BYTES
+        || !nonnegativeSafeInteger(record.U) || record.U > MAX_EXECUTABLE_UNITS_PER_MODULE
+        || !nonnegativeSafeInteger(record.M)
         || (priorPath !== undefined && compareUnsignedUtf8(priorPath, record.canonicalPath) >= 0)) invalid();
+      totalSourceLines = checkedAdd(totalSourceLines, record.S);
+      totalExecutableUnits = checkedAdd(totalExecutableUnits, record.U);
+      if (totalSourceLines > MAX_NORMALIZED_TOTAL_BYTES
+        || totalExecutableUnits > checkedAdd(count, Math.floor(MAX_NORMALIZED_TOTAL_BYTES / 3))) invalid();
       const snapshot = Object.freeze({
         canonicalPath: record.canonicalPath,
         S: record.S,
