@@ -61,5 +61,20 @@ button {
 }
 
 [data-city] canvas {
+  border: 0;
   display: block;
+  outline: 0.2rem solid transparent;
+  outline-offset: 0.2rem;
+}
+
+[data-city] canvas:focus-visible {
+  outline-color: CanvasText;
+}
+
+#city-navigation-instructions {
+  margin-block: 1rem 0.75rem;
+}
+
+[data-city-reset] {
+  margin-block-start: 0.75rem;
 }

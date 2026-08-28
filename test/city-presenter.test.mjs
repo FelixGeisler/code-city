@@ -14,6 +14,13 @@ registerHooks({
 const projectRoot = path.resolve(fileURLToPath(new URL("../", import.meta.url)));
 const literals = JSON.parse(await readFile(path.join(projectRoot, "test/fixtures/presentation/literals.json"), "utf8"));
 const { buildCity, deriveView } = await import("../src/domain/city-model.ts");
+const {
+  orbitCameraByKeyboard,
+  panCameraByKeyboard,
+  resetCamera,
+  resizeCamera,
+  zoomCamera,
+} = await import("../src/domain/camera-picking-policy.ts");
 const { createCityPresenter } = await import("../src/edge/city-presenter.ts");
 
 const COMMITTED = { kind: "committed" };
@@ -122,6 +129,9 @@ class FakeCanvas {
     this.width = 0;
     this.height = 0;
     this.listeners = new Set();
+    this.eventListeners = new Map();
+    this.attributes = new Map();
+    this.tabIndex = -1;
     this.removeCount = 0;
     this.contextDataReads = [];
     this.forbiddenContextReads = [];
@@ -143,10 +153,30 @@ class FakeCanvas {
     });
   }
   getContext(kind, attributes) { this.contextRequest = { kind, attributes }; return this.gl.options.noContext ? null : this.context; }
-  addEventListener(type, listener, options) { assert.equal(type, "webglcontextlost"); this.listenerOptions = options; this.listeners.add(listener); }
-  removeEventListener(type, listener) { assert.equal(type, "webglcontextlost"); this.listeners.delete(listener); }
+  setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  addEventListener(type, listener, options) {
+    if (this.gl.options.throwListener === type) throw new Error(`injected ${type} listener`);
+    if (type === "webglcontextlost") { this.listenerOptions = options; this.listeners.add(listener); return; }
+    const listeners = this.eventListeners.get(type) ?? new Set();
+    listeners.add(listener);
+    this.eventListeners.set(type, listeners);
+    this.eventOptions ??= new Map();
+    this.eventOptions.set(type, options);
+  }
+  removeEventListener(type, listener) {
+    if (type === "webglcontextlost") { this.listeners.delete(listener); return; }
+    this.eventListeners.get(type)?.delete(listener);
+  }
   remove() { this.removeCount += 1; if (this.host.child === this) this.host.child = undefined; }
+  dispatch(type, event) { for (const listener of [...(this.eventListeners.get(type) ?? [])]) listener(event); return event; }
   dispatchLoss(event = new Event("webglcontextlost", { cancelable: true })) { for (const listener of [...this.listeners]) { listener(event); if (this.listenerOptions?.once) this.listeners.delete(listener); } return event; }
+}
+
+class FakeResetControl {
+  constructor() { this.listeners = new Set(); this.adds = 0; this.removes = 0; }
+  addEventListener(type, listener) { assert.equal(type, "click"); this.adds += 1; this.listeners.add(listener); }
+  removeEventListener(type, listener) { assert.equal(type, "click"); this.removes += 1; this.listeners.delete(listener); }
+  dispatch(event = new Event("click")) { for (const listener of [...this.listeners]) listener(event); return event; }
 }
 
 class FakeHost {
@@ -160,8 +190,9 @@ function fakeEnvironment({ width = 200, height = 100, gl = {}, platform = {} } =
   const host = new FakeHost(width, height);
   const canvases = [];
   const observers = [];
+  const resetControl = new FakeResetControl();
   const environment = {
-    host, canvases, observers,
+    host, canvases, observers, resetControl,
     platform: {
       createCanvas() { if (platform.throwCanvas) throw new Error("canvas failed"); const canvas = new FakeCanvas(host, gl); canvases.push(canvas); return canvas; },
       createResizeObserver(callback) {
@@ -178,7 +209,7 @@ function oneBuilding() { return buildCity([{ canonicalPath: "a.js", S: 0, U: 0, 
 const EMPTY_EVENT_SINK = Object.freeze({ hoverIndex() {}, activationIndex() {}, selectionAction() {} });
 function failuresCollector(environment, eligibility = () => true) {
   const failures = [];
-  const presenter = createCityPresenter({ host: environment.host, platform: environment.platform, isEligible: eligibility, failed(...args) { failures.push(args); } });
+  const presenter = createCityPresenter({ host: environment.host, resetControl: environment.resetControl, platform: environment.platform, isEligible: eligibility, failed(...args) { failures.push(args); } });
   return { presenter, failures };
 }
 function present(environment, presenter, generation, geometry, eventSink = EMPTY_EVENT_SINK) {
@@ -196,6 +227,23 @@ function present(environment, presenter, generation, geometry, eventSink = EMPTY
   }
 }
 function names(gl) { return gl.calls.map((call) => call[0]); }
+function inputEvent(values = {}) {
+  return {
+    key: "",
+    repeat: false,
+    shiftKey: false,
+    ctrlKey: false,
+    altKey: false,
+    metaKey: false,
+    deltaY: 0,
+    defaultPrevented: false,
+    preventDefault() { this.defaultPrevented = true; },
+    ...values,
+  };
+}
+function matrices(gl) {
+  return gl.calls.filter((call) => call[0] === "uniformMatrix4fv").map((call) => [...call[3]]);
+}
 
 function expectedInstanceBytes() {
   const bytes = new Uint8Array(28);
@@ -387,6 +435,103 @@ test("one instance uses exact target-relative float staging, state, and one inst
   assert.equal(environment.observers[0].observed, true);
 });
 
+test("canvas accessibility and exact keyboard mappings drive finite camera policy without selection emissions", () => {
+  const environment = fakeEnvironment();
+  const events = [];
+  const sink = { hoverIndex(...args) { events.push(["hover", ...args]); }, activationIndex(...args) { events.push(["activation", ...args]); }, selectionAction(...args) { events.push(["selection", ...args]); } };
+  const { presenter, failures } = failuresCollector(environment);
+  const geometry = oneBuilding();
+  assert.deepEqual(present(environment, presenter, 1, geometry, sink), COMMITTED);
+  const canvas = environment.canvases[0];
+  const size = { width: 200, height: 100 };
+  let expected = resetCamera(geometry.bounds, size);
+  assert.equal(expected.kind, "success");
+  assert.equal(canvas.tabIndex, 0);
+  assert.equal(canvas.attributes.get("aria-label"), "Interactive code city");
+  assert.equal(canvas.attributes.get("aria-describedby"), "city-navigation-instructions");
+  assert.deepEqual(canvas.eventOptions.get("wheel"), { passive: false });
+  assert.equal(canvas.eventListeners.get("keydown").size, 1);
+  assert.equal(canvas.eventListeners.get("wheel").size, 1);
+  assert.equal(environment.resetControl.listeners.size, 1);
+
+  const accepted = [
+    ...["w", "a", "s", "d"].map((key, index) => [inputEvent({ key, repeat: index === 1 }), () => orbitCameraByKeyboard(expected.state, geometry.bounds, size, key)]),
+    ...["W", "A", "S", "D"].map((key) => [inputEvent({ key, shiftKey: true }), () => panCameraByKeyboard(expected.state, geometry.bounds, size, key)]),
+    [inputEvent({ key: "+", shiftKey: true }), () => zoomCamera(expected.state, geometry.bounds, size, "in")],
+    [inputEvent({ key: "-" }), () => zoomCamera(expected.state, geometry.bounds, size, "out")],
+    [inputEvent({ key: "0" }), () => resetCamera(geometry.bounds, size)],
+  ];
+  for (const [event, transition] of accepted) {
+    expected = transition();
+    assert.equal(expected.kind, "success");
+    canvas.dispatch("keydown", event);
+    assert.equal(event.defaultPrevented, true);
+    assert.deepEqual(matrices(canvas.gl).at(-1), expected.view.matrix);
+  }
+
+  const draws = names(canvas.gl).filter((name) => name === "drawElementsInstanced").length;
+  for (const event of [
+    inputEvent({ key: "w", shiftKey: true }),
+    inputEvent({ key: "W" }),
+    inputEvent({ key: "d", ctrlKey: true }),
+    inputEvent({ key: "ArrowUp" }), inputEvent({ key: "ArrowDown" }),
+    inputEvent({ key: "ArrowLeft" }), inputEvent({ key: "ArrowRight" }),
+    inputEvent({ key: "Home" }), inputEvent({ key: "End" }), inputEvent({ key: "Escape" }),
+    inputEvent({ key: "x" }),
+  ]) {
+    canvas.dispatch("keydown", event);
+    assert.equal(event.defaultPrevented, false, event.key);
+  }
+  assert.equal(names(canvas.gl).filter((name) => name === "drawElementsInstanced").length, draws);
+  assert.deepEqual(events, []);
+  assert.deepEqual(failures, []);
+});
+
+test("wheel sign, native Reset, resize retention, and browser-owned modifiers use immutable uploads", () => {
+  const environment = fakeEnvironment();
+  const { presenter, failures } = failuresCollector(environment);
+  const geometry = oneBuilding();
+  assert.deepEqual(present(environment, presenter, 1, geometry), COMMITTED);
+  const canvas = environment.canvases[0];
+  const uploads = canvas.gl.uploads.map(({ bytes }) => [...bytes]);
+  let expected = resetCamera(geometry.bounds, { width: 200, height: 100 });
+
+  const wheelIn = inputEvent({ deltaY: -0.001 });
+  expected = zoomCamera(expected.state, geometry.bounds, { width: 200, height: 100 }, "in");
+  canvas.dispatch("wheel", wheelIn);
+  assert.equal(wheelIn.defaultPrevented, true);
+  assert.deepEqual(matrices(canvas.gl).at(-1), expected.view.matrix);
+
+  const wheelOut = inputEvent({ deltaY: Number.POSITIVE_INFINITY });
+  expected = zoomCamera(expected.state, geometry.bounds, { width: 200, height: 100 }, "out");
+  canvas.dispatch("wheel", wheelOut);
+  assert.equal(wheelOut.defaultPrevented, true);
+  assert.deepEqual(matrices(canvas.gl).at(-1), expected.view.matrix);
+
+  const draws = names(canvas.gl).filter((name) => name === "drawElementsInstanced").length;
+  for (const event of [inputEvent({ deltaY: 0 }), inputEvent({ deltaY: -1, shiftKey: true }), inputEvent({ deltaY: 1, ctrlKey: true })]) {
+    canvas.dispatch("wheel", event);
+    assert.equal(event.defaultPrevented, false);
+  }
+  assert.equal(names(canvas.gl).filter((name) => name === "drawElementsInstanced").length, draws);
+
+  const panned = inputEvent({ key: "D", shiftKey: true });
+  canvas.dispatch("keydown", panned);
+  expected = panCameraByKeyboard(expected.state, geometry.bounds, { width: 200, height: 100 }, "D");
+  environment.host.width = 300;
+  environment.observers[0].callback();
+  const resized = expected.kind === "success" ? resizeCamera(expected.state, geometry.bounds, { width: 300, height: 100 }) : expected;
+  assert.equal(resized.kind, "success");
+  assert.deepEqual(matrices(canvas.gl).at(-1), resized.view.matrix);
+
+  environment.resetControl.dispatch();
+  const reset = resetCamera(geometry.bounds, { width: 300, height: 100 });
+  assert.equal(reset.kind, "success");
+  assert.deepEqual(matrices(canvas.gl).at(-1), reset.view.matrix);
+  assert.deepEqual(canvas.gl.uploads.map(({ bytes }) => [...bytes]), uploads);
+  assert.deepEqual(failures, []);
+});
+
 test("generation is opaque, stale work is inert, replacement is atomic, and dispose is idempotent", () => {
   const environment = fakeEnvironment();
   const raw = {};
@@ -455,10 +600,52 @@ test("invalid visual indices fail the committed session once and retained lifecy
   assert.deepEqual(presenter.setVisualState(1, 1, null), PRESENTATION_FAILURE);
   assert.deepEqual(failures, [[1, "Presentation failed", "M1-PRES-1"]]);
   assert.equal(canvas.removeCount, 1);
+  assert.equal(canvas.eventListeners.get("keydown").size, 0);
+  assert.equal(canvas.eventListeners.get("wheel").size, 0);
+  assert.equal(environment.resetControl.listeners.size, 0);
   retainedLoss(new Event("webglcontextlost", { cancelable: true }));
   retainedResize();
   assert.equal(canvas.removeCount, 1);
   assert.equal(failures.length, 1);
+});
+
+test("camera redraw failure revokes once and retained input callbacks are inert", () => {
+  const environment = fakeEnvironment();
+  const { presenter, failures } = failuresCollector(environment);
+  assert.deepEqual(present(environment, presenter, 1, oneBuilding()), COMMITTED);
+  const canvas = environment.canvases[0];
+  const retainedKeyboard = [...canvas.eventListeners.get("keydown")][0];
+  const retainedWheel = [...canvas.eventListeners.get("wheel")][0];
+  const retainedReset = [...environment.resetControl.listeners][0];
+  canvas.gl.options.throwMethod = "drawElementsInstanced";
+  const event = inputEvent({ key: "d" });
+  retainedKeyboard(event);
+  assert.equal(event.defaultPrevented, true);
+  assert.deepEqual(failures, [[1, "Presentation failed", "M1-PRES-1"]]);
+  assert.equal(canvas.removeCount, 1);
+  assert.equal(canvas.eventListeners.get("keydown").size, 0);
+  assert.equal(canvas.eventListeners.get("wheel").size, 0);
+  assert.equal(environment.resetControl.listeners.size, 0);
+  retainedKeyboard(inputEvent({ key: "a" }));
+  retainedWheel(inputEvent({ deltaY: -1 }));
+  retainedReset(new Event("click"));
+  assert.equal(failures.length, 1);
+  assert.equal(canvas.removeCount, 1);
+});
+
+test("listener setup failure rolls back all attached session listeners", () => {
+  for (const type of ["keydown", "wheel"]) {
+    const environment = fakeEnvironment({ gl: { throwListener: type } });
+    const { presenter, failures } = failuresCollector(environment);
+    assert.deepEqual(present(environment, presenter, type, oneBuilding()), PRESENTATION_FAILURE);
+    const canvas = environment.canvases[0];
+    assert.equal(canvas.removeCount, 1);
+    assert.equal(canvas.listeners.size, 0);
+    assert.equal(canvas.eventListeners.get("keydown")?.size ?? 0, 0);
+    assert.equal(canvas.eventListeners.get("wheel")?.size ?? 0, 0);
+    assert.equal(environment.resetControl.listeners.size, 0);
+    assert.deepEqual(failures, []);
+  }
 });
 
 test("context loss while detached fails and disposes the staged token without publication", () => {

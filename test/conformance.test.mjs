@@ -126,11 +126,14 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
   assert.match(indexHtml, /<h1>Code City<\/h1>/);
   assert.equal((indexHtml.match(/<form\b/gi) ?? []).length, 1);
   assert.equal((indexHtml.match(/<input\b/gi) ?? []).length, 1);
-  assert.equal((indexHtml.match(/<button\b/gi) ?? []).length, 1);
+  assert.equal((indexHtml.match(/<button\b/gi) ?? []).length, 2);
   assert.equal((indexHtml.match(/\sdata-form(?:\s|>)/gi) ?? []).length, 1);
   assert.equal((indexHtml.match(/\sdata-status(?:\s|>)/gi) ?? []).length, 1);
   assert.equal((indexHtml.match(/\sdata-commit(?:\s|>)/gi) ?? []).length, 1);
   assert.equal((indexHtml.match(/\sdata-city(?:\s|>)/gi) ?? []).length, 1);
+  assert.equal((indexHtml.match(/\sdata-city-reset(?:\s|>)/gi) ?? []).length, 1);
+  assert.match(indexHtml, /<p id="city-navigation-instructions">[^<]+<\/p>/i);
+  assert.match(indexHtml, /<button data-city-reset type="button">Reset view<\/button>/i);
   assert.doesNotMatch(indexHtml, /<(?:select|textarea|canvas)\b/i);
 
   const formTag = indexHtml.match(/<form\b[^>]*>/i)?.[0];
