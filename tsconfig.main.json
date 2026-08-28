@@ -4,5 +4,5 @@
     "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "types": ["vite/client"]
   },
-  "include": ["src/edge/main.ts", "src/edge/city-presenter.ts"]
+  "include": ["src/edge/main.ts", "src/edge/city-presenter.ts", "src/domain/camera-picking-policy.ts"]
 }

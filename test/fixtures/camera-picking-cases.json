@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "overview": {
+    "bounds": [0, 0, 0, 8, 6, 10],
+    "dimensions": { "width": 800, "height": 400 }
+  },
+  "canvas": {
+    "rectangle": { "left": 10, "top": 20, "width": 100, "height": 50 },
+    "backing": { "width": 200, "height": 100 },
+    "closedClientEdges": [[10, 20], [110, 20], [10, 70], [110, 70]],
+    "backingEdges": [[0, 0], [200, 0], [0, 100], [200, 100]]
+  },
+  "slabs": [
+    { "id": "front-face", "ray": { "origin": [0.5, 0.5, -1], "direction": [0, 0, 1] }, "bounds": [0, 0, 0, 1, 1, 1], "tEnter": 1 },
+    { "id": "edge", "ray": { "origin": [0, 0, -1], "direction": [0, 0, 1] }, "bounds": [0, 0, 0, 1, 1, 1], "tEnter": 1 },
+    { "id": "origin-on-face", "ray": { "origin": [0, 0.5, 0.5], "direction": [1, 0, 0] }, "bounds": [0, 0, 0, 1, 1, 1], "tEnter": 0 },
+    { "id": "parallel-outside", "ray": { "origin": [2, 0.5, -1], "direction": [0, 0, 1] }, "bounds": [0, 0, 0, 1, 1, 1], "tEnter": null },
+    { "id": "behind", "ray": { "origin": [0.5, 0.5, 2], "direction": [0, 0, 1] }, "bounds": [0, 0, 0, 1, 1, 1], "tEnter": null }
+  ]
+}

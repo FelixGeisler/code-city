@@ -73,7 +73,11 @@ test("exactly three strict no-emit TypeScript configs isolate main and worker li
   assert.equal(main.compilerOptions.isolatedModules, true);
   assert.deepEqual(main.compilerOptions.lib, ["es2024", "dom", "dom.iterable"]);
   assert.deepEqual(main.compilerOptions.types, ["vite/client"]);
-  assert.deepEqual(main.files.map((file) => file.replaceAll("\\", "/")), ["./src/edge/main.ts", "./src/edge/city-presenter.ts"]);
+  assert.deepEqual(main.files.map((file) => file.replaceAll("\\", "/")), [
+    "./src/edge/main.ts",
+    "./src/edge/city-presenter.ts",
+    "./src/domain/camera-picking-policy.ts",
+  ]);
 
   const worker = showTypeScriptConfig("tsconfig.worker.json");
   assert.equal(worker.compilerOptions.strict, true);
@@ -102,6 +106,7 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
     "application/source-retrieval.ts",
     "application/worker-attempt.ts",
     "domain/base-metrics.ts",
+    "domain/camera-picking-policy.ts",
     "domain/city-model.ts",
     "domain/complexity.ts",
     "domain/repository-reference.ts",
