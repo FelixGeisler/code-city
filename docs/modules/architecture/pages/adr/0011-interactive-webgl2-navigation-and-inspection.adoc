@@ -1,0 +1,307 @@
+= ADR 0011: Interactive WebGL2 navigation and inspection
+
+Status:: Accepted
+
+== Context
+
+M2 adds deterministic navigation, picking, selection, and inspection to the
+complete M1 city. The exact user-visible controls, camera and picking
+mathematics, inspection text, accessibility behaviour, and lifecycle outcomes
+are owned by xref:requirements:city-and-failures.adoc[City and Failures]. The
+unchanged admission, metrics, geometry, limits, and palette remain owned by
+xref:requirements:source-and-metrics.adoc[Source and Metrics] and that page.
+
+These additions must preserve one source-free worker result, atomic current-
+generation publication, renderer-neutral construction, exact geometry, inert
+repository data, and the existing browser-only deployment and evidence
+contracts. Splitting geometry from inspection or letting browser mechanisms own
+semantic facts would permit misalignment, stale disclosure, and partial
+publication.
+
+== Decision
+
+Adopt one controller-validated city transaction and a presenter-owned
+interactive WebGL2 session. This is the architecture recommendation for M2; it
+requires explicit human acceptance before implementation may depend on it.
+
+=== One city and one validator
+
+Worker success is one closed result:
+
+[source,text]
+----
+SUCCESS { type, generation, revision, city: { geometry, inspection } }
+inspection[i] = { canonicalPath, S, U, M }
+----
+
+The controller owns the sole `validateCityPayload(unknown)` validator. It
+returns opaque, controller-owned snapshots:
+
+[source,text]
+----
+ValidatedCity {
+  geometry: ValidatedGeometry,
+  inspection: readonly InspectionFact[],
+  centre: C
+}
+----
+
+The validator alone checks exact own-data `city`, `geometry`, and `inspection`
+keys; `1..4000` entries; finite geometry, exact bounds, palette, and accepted
+limits; strictly increasing, unique canonical paths under unsigned UTF-8;
+non-negative safe-integer `S`, `U`, and `M`; and count, order, and index
+alignment. For every canonical index it also proves:
+
+[source,text]
+----
+geometry size = [U + 1, S + 1, U + 1]
+geometry rgba = palette(M)
+geometry index = inspection canonical index
+----
+
+No snapshot, including `C`, aliases mutable worker payload data. The presenter
+accepts only `ValidatedGeometry`. It does not revalidate city shape, paths,
+facts, ordering, alignment, dimensions, palette, or product limits; it checks
+only presentation dimensions, camera/matrix/picking finiteness,
+listener/capture/frame setup, and WebGL allocation, upload, draw, update, and
+cleanup.
+
+=== Ownership and transaction
+
+The controller owns current-generation inspection facts, semantic hover and
+selection, keyboard traversal, inspector publication, publication-root commit,
+generation gating, and authoritative visual indices. The presenter owns stage
+tokens and sessions, the camera and DOM input listeners, immutable
+`C`-relative buffers, pointer gesture and capture state, a local request epoch
+and pending frame, CPU picking, WebGL city and outline resources, and visual
+hover/selection replicas. Pure camera and picking policy
+may remain in core; mutable DOM, browser, and WebGL mechanisms remain at the
+edge with no reverse dependency.
+
+The presenter alone maps and suppresses DOM input. Its complete outbound event
+contract is:
+
+[source,text]
+----
+hoverIndex(generation, index | null)
+activationIndex(generation, index | null)
+selectionAction(generation, next | previous | first | last | clear)
+----
+
+The controller receives no DOM event. It rejects stale generations and
+out-of-bounds indices before changing semantics or sending a visual command.
+Callbacks require both the committed generation and presenter token.
+
+The presenter transaction is:
+
+[source,text]
+----
+presenter.stage(generation, validatedGeometry, eventSink)
+  -> staged(token, canvas) | stale | M1-PRES-1
+presenter.commit(token) -> committed | stale
+presenter.rollback(token) -> idempotent
+presenter.setVisualState(generation, hover, selection)
+  -> applied | stale | M1-PRES-1
+----
+
+Stage eligibility is the current active, unterminated generation after
+`PROVIDER_DRAINED_STATIC_ENTERED`, with an unused success slot; it is not a
+preassigned publication flag. After validation and presenter staging, the
+controller stages detached semantic publication from the inspection snapshot
+and staged canvas, rechecks eligibility, commits the token, and performs
+exactly one publication-root `replaceChildren`. Only then is the generation
+committed and callback-eligible. Geometry, facts, revision, canvas, inspector
+container, and empty initial hover and selection publish as one success.
+Exceptions after validation roll back the candidate, clear semantic and visual
+state, and fail atomically. Replacement and stale work clean up without
+changing the current generation.
+
+The controller and presenter stay in the browser main context; construction
+stays in the sole worker. Direct WebGL2/GLSL, the renderer-neutral city, and one
+instanced city draw remain. A fixed opaque black (`#000000FF`) complete box-edge selection outline and
+opaque magenta (`#FF00FFFF`) top-face hover perimeter draw after the city,
+together when applicable, without changing its metric RGBA. There is no second
+worker, context, or canvas, no v1 port or Three.js reuse, and no rendering, UI,
+or picking dependency.
+
+=== Immutable-centre camera and picking
+
+The validated bounds centre `C` is immutable for the session. Each instance
+minimum is uploaded once as `origin-C`; navigation changes target `T` and never
+rewrites a city buffer. For the exact orientation, fit, controls, and reset
+constants in xref:requirements:city-and-failures.adoc[City and Failures], use:
+
+[source,text]
+----
+E = (Lx|Dx| + Ly|Dy| + Lz|Dz|) / 2
+Delta = C - T
+delta = dot(Delta,D)
+distance = |delta| + 3E
+camera = T + distance D
+near = E
+far = 2 max(0,-delta) + 5E
+
+tx = dot(Delta,R) / horizontalHalf
+ty = dot(Delta,V) / verticalHalf
+tz = [2(distance-delta) - (far+near)] / (far-near)
+zLinear = -2D / (far-near)
+----
+
+Every accepted point is strictly inside the clipping volume. At `T=C`, these
+rules recover ADR 0008's exact `3E`, `E`, and `5E` overview matrix. Immutable
+buffers keep all dimensions and `origin-C` endpoints exactly representable as
+`float32` under every pan. Before a camera state commit, every proposed target
+component, intermediate, and final `Math.fround` matrix component must be
+finite; otherwise the complete session fails as `M1-PRES-1`. Full-envelope
+tests must renew the representation and clipping proof.
+
+Picking is CPU ray/AABB policy over validated geometry. CSS-to-backing
+conversion, the orthographic ray, and inclusive slab rules are exactly those in
+the requirements. Closed canvas edges and AABB faces/edges hit; an exactly zero
+direction component is parallel; all nonparallel divisions and accepted
+`tEnter >= 0` are finite. The nearest `tEnter` wins, with lower canonical index
+only for exact (`===`) distance equality. There is no epsilon, rounded tie, GPU
+readback, BVH, worker hop, or capacity below 4,000.
+
+Activation picks synchronously at release. Hover retains only the latest
+position and performs at most one pick in the next animation frame. Gesture
+start, pointer leave, camera change, resize, Reset, replacement, and disposal
+invalidate pending work through the presenter request epoch as specified by the
+requirements. Hover never selects. The controller remains authoritative when
+both visual replicas address the same building.
+
+=== Evidence and privacy
+
+Repository paths are permitted only as wrapping, bidirectionally isolated
+`textContent` published from the controller snapshot. They remain forbidden as
+markup, object keys, shader text, resource locators, URLs, or tooltip-only
+content. Source bodies, provider locators and values, parser values,
+credentials, raw diagnostics, telemetry, and persisted product state do not
+reach interaction, inspection, WebGL, or release evidence.
+
+Extend only the existing installed-Chrome evidence path in
+`tools/check-browser-evidence.mjs` and `tools/browser-evidence-harness.mjs`;
+`tools/collect-production-evidence.mjs` remains the production observer.
+Its canonical-package server, fresh profile, CDP lifecycle, watchdog, and
+cleanup remain authoritative. CDP owns browser, network, worker, session, and
+native keyboard/pointer/wheel input observation; page evaluation performs only
+deterministic setup and assertions; the transparent WebGL proxy observes
+uploads, matrices, draws, and deletion. Add no second harness, browser
+dependency, pixel heuristic, or competing runtime listener owner.
+
+During the atomic payload migration, `modelSha256` remains SHA-256 over the
+little-endian count followed, in order, by the exact geometry views `origins`,
+`sizes`, `rgba`, and `bounds`, read from `SUCCESS.city.geometry`. Inspection
+contributes no bytes. Both observers compile against
+`SUCCESS.city.geometry`, access only required geometry, and never clone,
+enumerate, hash, serialize, log, packetize,
+wrap, or retain `city.inspection`; sentinel-path tests must prove its absence
+from observer state, logs, packets, and wrappers.
+
+=== Failures and lifecycle
+
+Outer `SUCCESS` violations--a missing own `city` key or bad outer keys, type,
+generation, or revision--use the existing uncoded malformed-protocol path. A
+present `city` with missing `geometry` or `inspection`, or any inner invariant
+breach, fails the complete attempt as *City construction failed* /
+`M1-CITY-1`. Every failure after `ValidatedCity` exists, including semantic
+staging, publication-root commit, dimensions, camera, matrix, picking,
+listeners, visual update, WebGL, context loss, or teardown, is *Presentation
+failed* / `M1-PRES-1`. Stale generations, sessions, tokens, callbacks, and
+request epochs perform idempotent cleanup only and never publish failure.
+There is no new category or code, raw diagnostic, retry, fallback, restoration,
+or partial city.
+
+Camera actions, resize, and Reset preserve facts and selection, invalidate and
+clear hover, then recompute it only when eligible; resize retains target,
+orientation, and magnification, while Reset restores the exact overview.
+Pointer leave clears hover. Empty activation and Escape clear selection and the
+inspector. New or invalid submission, cancellation, attempt/city/provider
+failure, candidate publication failure, and context loss clear controller
+facts and semantic/visual state before rollback or disposal. Replacement never
+publishes candidate or stale facts. `pagehide` and controller disposal clear
+controller state before terminal presenter disposal and permit no later
+publication.
+
+Presenter disposal is exactly-once and idempotent: increment the request epoch,
+cancel animation-frame work, release pointer capture, remove pointer, wheel,
+keyboard, context-menu, context-loss, Reset, blur, visibility, and `pagehide`
+listeners and the resize observer, delete city and outline WebGL resources,
+clear staging arrays, camera and visual indices, and remove the canvas.
+Candidate failure, replacement, cancellation, current attempt/city/provider
+failure, context loss, and `pagehide` use this same path.
+
+=== Relationship to existing decisions
+
+ADR 0008 is retained for direct WebGL2/GLSL, renderer-neutral construction,
+defensive finite/bounds validation and the `M1-CITY-1` / `M1-PRES-1` boundary
+as amended here, detached staging and atomic publication, resize and
+context-loss failure, trusted shaders, the renewed `float32` proof,
+presenter-owned cleanup, and no renderer package, texture, external shader,
+second worker, restoration, retry, fallback, or animation.
+
+ADR 0008 is replaced or amended only as follows:
+
+* Presentation input becomes atomic `{geometry, inspection}` with the sole
+  controller validator and controller-owned snapshots described above.
+* One instanced city draw remains; fixed outline draws are added after it.
+* Canonical repository paths may be inert `textContent` labels, but remain
+  forbidden as markup, object keys, shader text, and resource locators.
+* Its fixed camera and clipping rules are replaced by the exact interactive
+  camera, immutable-centre, clipping, and picking contract above and in the
+  requirements.
+* Its “no controls” and “no labels” consequences are removed. ADR 0008 did not
+  impose a general identity prohibition, and this ADR does not claim one.
+
+ADR 0001 is unchanged: pure policy may remain in core, mutable browser and
+WebGL mechanisms remain at the edge, and there is no reverse dependency.
+Deployment topology is unchanged: controller and presenter remain in the
+browser main context and construction remains in the sole worker. ADR 0009 is
+unchanged: `v1` is history rather than code or fallback, and only protected
+`main` publishes. ADR 0010 is unchanged: manifest v3, publication record v1,
+evidence packet and wrapper versions, fields, owners, producers, consumers,
+and release-evidence-not-product-state semantics remain. M2 may atomically
+replace closed issue 460's eligibility URL/state and accepted issue-body digest
+bindings with the final M2 acceptance issue, synchronized tests, fixture, and
+deployment wording, but adds no evidence field or schema change; any future
+extension requires renewed
+architecture review and synchronized versioning.
+
+== Consequences
+
+A current success has one aligned geometry-and-inspection identity, one
+validator, one publication transaction, and one semantic event boundary.
+Camera motion preserves exact immutable geometry; deterministic CPU picking and
+fixed geometric cues add no dependency or hidden capacity limit. Paths and
+facts can support accessible inspection without entering rendering resources
+or release evidence.
+
+The controller and presenter gain explicit transactional, generation, token,
+request-epoch, and cleanup state. Full-envelope numeric, lifecycle, privacy,
+and real packaged-browser tests are required. Any valid-city presentation or
+cleanup breach revokes the complete session rather than preserving a partial
+or stale view.
+
+== Rejected alternatives
+
+* **Separate geometry and inspection successes or validators:** they can drift
+  in count/order and publish facts separately from the rendered city; one
+  payload, validator, snapshot, and commit makes alignment atomic.
+* **Presenter-owned facts or controller-owned DOM input:** either leaks semantic
+  data into WebGL/browser mechanisms or creates competing input and suppression
+  owners; semantic events are the sole boundary.
+* **Rebasing and re-uploading geometry as the target moves:** it couples camera
+  state to city buffers and weakens the `float32` proof; immutable `C`-relative
+  buffers isolate navigation.
+* **GPU colour picking, a BVH, another worker, or a rendering/UI/picking
+  framework:** none is required for 4,000 buildings and each adds lifecycle,
+  dependency, or synchronization risk. Exact CPU slabs are sufficient.
+* **Retries, context restoration, retained cross-attempt state, animation,
+  inertia, or focus flights:** they make current-generation state and failure
+  timing ambiguous and are outside the deterministic product contract.
+* **Putting inspection into `modelSha256` or production evidence:** exact
+  package-byte binding already proves the tested package; retaining paths would
+  expand privacy and schema contracts without release benefit.
+* **A partial M2 eligibility-binding migration or permissive schema fallback:**
+  either can bind evidence to the wrong acceptance gate; all binding values
+  migrate together and existing evidence versions remain strict.

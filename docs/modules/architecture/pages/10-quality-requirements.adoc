@@ -5,11 +5,13 @@
 |Quality |Required evidence
 
 |Determinism
-|Repeated processing of the same admitted content produces the same facts and city
+|Repeated processing of the same admitted content produces the same facts and
+city; identical camera state and input produce the same matrix and exact CPU hit
 
-|Safety
+|Safety and privacy
 |Adversarial repository and provider data remains inert, uses only the fixed
-network boundary, and creates no credential or active content
+network boundary, and creates no credential or active content. Inspection paths
+remain controller-owned text and do not enter WebGL or release evidence
 
 |Completeness
 |When the fixed provider path returns complete source, a supported repository
@@ -21,16 +23,29 @@ partial one
 maxima with dense and deep valid syntax and no private lower limit
 
 |Atomicity
-|Replacement, cancellation, worker failure, resize, context loss, or ordinary
-failure cannot publish stale or partial output
+|Geometry, inspection, semantics, canvas, and revision publish as one transaction;
+replacement, cancellation, failure, resize, context loss, or stale interaction
+cannot publish partial or stale output
 
 |Resource ownership
 |Provider, parser, worker, presentation, and listener resources follow the
 lifetime and exactly-once cleanup rules
 
 |Numeric correctness
-|Full-envelope scenes renew camera, clipping, bounds, and exact `float32`
-representation
+|Full-envelope scenes renew interactive camera, clipping, picking, bounds, and
+immutable-centre exact `float32` representation
+
+|Accessibility
+|Keyboard users can navigate and select every building without pointer
+emulation; focus, instructions, status text, paths, facts, formulas, and palette
+bands do not rely on colour alone
+
+|Visual quality
+|The city remains the visual focus, controls and interaction are intentional and
+predictable, cues preserve metric-colour prominence, and the inspector remains
+clean, responsive, and readable. Representative review and textual-only
+attestation are owned by https://github.com/FelixGeisler/code-city/issues/537[#537]
+without a numeric aesthetic threshold
 
 |Reproducibility
 |Pinned dependencies and assets are verifiable, and production serves the exact

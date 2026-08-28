@@ -20,5 +20,26 @@
 |Code that translates browser, GitHub, Worker, parser, renderer, or build mechanisms.
 
 |Complete city
-|The renderer-neutral city and valid presentation produced by a successful current attempt.
+|One aligned renderer-neutral geometry and inspection result produced by a
+successful current attempt.
+
+|Validated city
+|Controller-owned, non-aliasing geometry, inspection, and immutable-centre
+snapshots produced by the sole city-payload validator.
+
+|Semantic state
+|The controller's current-generation inspection facts, hover, selection, and
+inspector publication.
+
+|Visual replica
+|A presenter-owned opaque hover or selection index used only for WebGL cues; the
+controller remains authoritative.
+
+|Presenter token
+|An opaque staged-session identity that gains input and callback eligibility
+only after the controller commits the current city transaction.
+
+|Request epoch
+|A presenter-local counter that invalidates queued hover work after camera,
+gesture, lifecycle, or session changes.
 |===

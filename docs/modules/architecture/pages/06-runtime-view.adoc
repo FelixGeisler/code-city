@@ -1,22 +1,52 @@
 = 6. Runtime View
 
-image::runtime.svg[Successful repository-to-city runtime flow]
+image::runtime.svg[Successful aligned city validation, staging, commit, and interaction flow]
 
 == Successful attempt
 
-. Revoke publication rights, dispose any previous presentation, and start one
-worker generation.
-. Resolve the default-branch head, publish and retain its closed
-`REVISION_SELECTED` value without displaying it, and retrieve one complete
-admitted source set.
+. Revoke publication rights, clear semantic state, dispose any previous
+  presenter session, and start one worker generation.
+. Resolve the default-branch head, retain its closed `REVISION_SELECTED` value,
+  and retrieve one complete admitted source set.
 . Release every GitHub request, reader, provider object, raw buffer, and hash
-workspace.
-. Parse and measure one module at a time, then build one complete city.
-. Return one generation-tagged, source-free presentation model.
-. Validate and stage WebGL resources before publishing the current result.
+  workspace.
+. Parse and measure one module at a time, then build one aligned
+  `{geometry,inspection}` city.
+. Return one generation-tagged, source-free success.
+. The controller's sole validator creates non-aliasing geometry, inspection, and
+  immutable-centre snapshots.
+. Stage an interactive presenter token and detached semantic publication,
+  recheck current-generation eligibility, commit the token, and perform exactly
+  one publication-root `replaceChildren`.
 
-Each stage receives one complete predecessor result or does not run. A failure
-suppresses later stages and publishes no partial city.
+Geometry, facts, revision, canvas, inspector container, and empty initial hover
+and selection publish as one transaction. Each stage receives one complete
+predecessor result or does not run. A failure suppresses later stages and
+publishes no partial city.
+
+== Presenter transaction
+
+[source,text]
+----
+presenter.stage(generation, validatedGeometry, eventSink)
+  -> staged(token, canvas) | stale | M1-PRES-1
+presenter.commit(token) -> committed | stale
+presenter.rollback(token) -> idempotent
+presenter.setVisualState(generation, hover, selection)
+  -> applied | stale | M1-PRES-1
+----
+
+Stage eligibility is the active, unterminated generation after
+`PROVIDER_DRAINED_STATIC_ENTERED` with an unused success slot. It is not a
+preassigned publication flag. Callback eligibility requires both the committed
+generation and presenter token. Exceptions after validation roll back candidate
+and current semantic and visual state and produce `M1-PRES-1`; stale tokens,
+sessions, generations, callbacks, and request epochs perform cleanup only.
+
+The presenter owns DOM input and sends only generation-tagged semantic events.
+The controller owns traversal, facts, inspector publication, and authoritative
+indices. It rejects stale or out-of-bounds events before updating semantics and
+then sends only opaque indices back through `setVisualState`.
 
 == Worker lifecycle
 
@@ -45,23 +75,36 @@ clear the worker
 |===
 
 A provider-phase terminal failure releases provider resources before sending
-its outcome and `ATTEMPT_DRAINED`. A replacement worker starts only after the
-previous handle is clear. Every message carries the bridge-generated
-generation. A post-selection failure also carries the validated selected
-revision, which remains visible with that failure; a pre-selection failure
-shows no revision. Synchronous and asynchronous presentation failures retain
-the successful selected revision. Stale messages are ignored; a malformed
-current-generation message, worker startup failure, crash, or `messageerror`
-fails closed immediately. A displayed terminal failure is immutable while its
-matching drain performs normal cleanup. Listener and transport cleanup is
-exactly once.
+its outcome and drain. A replacement starts only after the prior handle clears.
+Every message carries the bridge-generated generation. A post-selection failure
+retains the validated revision; a pre-selection failure shows none. Synchronous
+and asynchronous presentation failure retain the successful revision. Malformed
+current transport, startup failure, crash, or `messageerror` fails closed.
+Listener, transport, semantic, and presentation cleanup is exactly once.
 
-The UI coordinator applies the same generation gate to resize and context-loss
-callbacks. A disposed presentation session can neither remove nor fail a newer
-city. On `pagehide`, the controller revokes publication, clears pending work,
-terminally disposes presentation, detaches listeners, and terminates its worker
-without cancellation semantics. Repeated disposal and callbacks after disposal
-are inert, so a reload starts with empty product state.
+== Interaction and disposal lifecycle
+
+The complete observable lifecycle matrix is owned by
+xref:requirements:city-and-failures.adoc#_atomic_lifecycle[City and Failures].
+Camera action, resize, and Reset preserve facts and selection, invalidate hover
+work, and redraw only after finite validation. Empty activation and Escape clear
+selection and inspector. New or invalid submission, cancellation, current
+attempt/city/provider failure, candidate publication failure, context loss, and
+controller disposal clear facts and semantic/visual state before rollback or
+disposal. Replacement does not alter the current committed city.
+
+The presenter uses one request epoch for frame-coalesced hover. Camera changes,
+resize, Reset, gesture start, pointer leave, replacement, and disposal invalidate
+pending work. Activation picks synchronously. No old frame, gesture, callback,
+or token can mutate or fail a newer generation.
+
+Presenter disposal is exactly-once and idempotent: increment the request epoch,
+cancel frame work, release pointer capture, remove pointer, wheel, keyboard,
+context-menu, context-loss, Reset, blur, visibility, `pagehide`, and resize
+listeners, delete city and outline WebGL resources, clear staging arrays, camera,
+and visual indices, and remove the canvas. On `pagehide`, the controller clears
+its state first, revokes publication, terminally disposes the presenter, and
+terminates the worker without cancellation semantics.
 
 == Resource lifetime
 
@@ -75,24 +118,32 @@ and the accumulating normalised module set. Parser and WebGL resources do not
 exist.
 
 |Static
-|No provider resource remains. The complete normalised set is bounded by the
-published envelope. Fixed parser runtime and loaded grammar modules may remain
-for the worker lifetime; only one source module, parser, tree, cursor, and
-observation stream is active. Each processed source is released before the
-next module.
+|No provider resource remains. Fixed parser runtime and loaded grammar modules
+may remain for the worker lifetime; one source module, parser, tree, cursor, and
+observation stream is active at a time.
 
 |Handoff
-|Source and parser values are gone. Only the selected commit, terminal outcome,
-and bounded presentation model may cross to the main context.
+|Source and parser values are gone. Only selected commit and one bounded,
+source-free aligned city or terminal failure cross to the main context.
+
+|Validation
+|Only controller-owned geometry, inspection, and immutable centre snapshots
+remain from a successful payload. Inspection never enters the presenter.
+
+|Staging
+|One detached presenter candidate and detached semantic publication exist. They
+have no callback or publication rights.
 
 |Presentation
-|One detached candidate is staged. Publication replaces and disposes the old
-session atomically.
+|One committed presenter session, controller semantic snapshot, and opaque
+visual indices are current. Camera movement never rewrites city buffers.
 
 |Terminal
-|Owned listeners, references, buffers, parser handles, WebGL resources, and the
-worker realm are released at their owning boundary.
+|Owned facts, inspector content, listeners, capture, frame work, buffers, parser
+handles, WebGL resources, canvas, and worker realm are released at their owning
+boundary.
 |===
 
-There is no automatic retry, fallback parser, fallback renderer, partial city,
-or timeout outcome.
+There is no automatic retry, fallback parser or renderer, restoration, partial
+city, timeout outcome, second worker/context/canvas, or retained cross-attempt
+interaction state.
