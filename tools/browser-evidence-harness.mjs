@@ -136,7 +136,9 @@ function presentationPlatform(state,compileFailure=false){
   return {createCanvas(){
     const canvas=document.createElement("canvas");
     const addListener=canvas.addEventListener.bind(canvas);
-    Object.defineProperty(canvas,"addEventListener",{value(type,listener,options){if(type==="webglcontextlost")state.lossCallbacks.push(listener);return addListener(type,listener,options);}});
+    Object.defineProperty(canvas,"addEventListener",{value(type,listener,options){if(type==="webglcontextlost")state.lossCallbacks.push(listener);if(["webglcontextlost","keydown","wheel"].includes(type))state.listenerAdds.push(type);return addListener(type,listener,options);}});
+    const removeListener=canvas.removeEventListener.bind(canvas);
+    Object.defineProperty(canvas,"removeEventListener",{value(type,listener,options){if(["webglcontextlost","keydown","wheel"].includes(type))state.listenerRemoves.push(type);return removeListener(type,listener,options);}});
     const acquire=canvas.getContext.bind(canvas);
     Object.defineProperty(canvas,"getContext",{value(kind,attributes){
       const actual=acquire(kind,attributes);
@@ -158,8 +160,16 @@ function presentationHost(width,height){
   const host=document.createElement("div");
   const dimensions={width,height};
   Object.defineProperties(host,{clientWidth:{get:()=>dimensions.width},clientHeight:{get:()=>dimensions.height}});
-  document.body.append(host);
-  return {host,dimensions};
+  const reset=document.createElement("button");
+  reset.type="button";
+  reset.textContent="Reset view";
+  let resetAdds=0,resetRemoves=0;
+  const addReset=reset.addEventListener.bind(reset);
+  const removeReset=reset.removeEventListener.bind(reset);
+  Object.defineProperty(reset,"addEventListener",{value(type,listener,options){if(type==="click")resetAdds++;return addReset(type,listener,options);}});
+  Object.defineProperty(reset,"removeEventListener",{value(type,listener,options){if(type==="click")resetRemoves++;return removeReset(type,listener,options);}});
+  document.body.append(host,reset);
+  return {host,dimensions,reset,resetEvidence:()=>({adds:resetAdds,removes:resetRemoves})};
 }
 const presentationModel=buildCity([{canonicalPath:"browser.js",S:1,U:1,M:1}]).geometry;
 const emptyEventSink={hoverIndex(){},activationIndex(){},selectionAction(){}};
@@ -174,18 +184,19 @@ function stageCommit(presenter,host,generation){
   if(presenter.setVisualState(generation,null,null).kind!=="applied")throw new Error("Initial visual state was not applied");
   return committed;
 }
-const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeatDraws:0,resizeDraws:0,lossDefaultPrevented:null,lossDraws:0,lossFailures:[],lossOrdering:null,lossCleanup:null,lossTerminalState:null,compileFailureResult:null,compileFailureDraws:0,compileFailures:[],compileCleanup:null,compileFailureTerminalState:null,pass:false};
+const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeatDraws:0,resizeDraws:0,accessibility:null,inputCleanup:null,lossDefaultPrevented:null,lossDraws:0,lossFailures:[],lossOrdering:null,lossCleanup:null,lossTerminalState:null,compileFailureResult:null,compileFailureDraws:0,compileFailures:[],compileCleanup:null,compileFailureTerminalState:null,pass:false};
 {
   const holder=presentationHost(320,180);
-  const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
+  const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],listenerAdds:[],listenerRemoves:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
   const failures=[];
-  const presenter=createCityPresenter({host:holder.host,platform:presentationPlatform(state),isEligible:()=>true,failed:(...args)=>failures.push(args)});
+  const presenter=createCityPresenter({host:holder.host,resetControl:holder.reset,platform:presentationPlatform(state),isEligible:()=>true,failed:(...args)=>failures.push(args)});
   const first=stageCommit(presenter,holder.host,1);
   if(first.kind!=="committed")throw new Error("Installed Chrome WebGL2 is unavailable or rejected");
   presentation.webgl2Available=true;
   presentation.initialDraws=state.draws;
   const firstCanvas=state.canvases[0];
   if(firstCanvas.width!==320||firstCanvas.height!==180)throw new Error("Actual WebGL2 backing dimensions differ");
+  presentation.accessibility={tabIndex:firstCanvas.tabIndex,label:firstCanvas.getAttribute("aria-label"),description:firstCanvas.getAttribute("aria-describedby"),listenerAdds:[...state.listenerAdds],resetText:holder.reset.textContent};
   const repeat=stageCommit(presenter,holder.host,2);
   presentation.repeatDraws=state.draws-presentation.initialDraws;
   holder.dimensions.width=400;holder.dimensions.height=240;
@@ -194,14 +205,16 @@ const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeat
   presentation.resizeDraws=state.draws-beforeResize;
   if(repeat.kind!=="committed"||presentation.initialDraws!==1||presentation.repeatDraws!==1||presentation.resizeDraws!==1||failures.length!==0||holder.host.firstChild!==state.canvases.at(-1)||state.canvases.at(-1).width!==400||state.canvases.at(-1).height!==240)throw new Error("Actual WebGL2 present/repeat/resize evidence failed");
   presentation.actualContexts+=state.actualContexts;
-  presenter.dispose();holder.host.remove();
+  presenter.dispose();
+  presentation.inputCleanup={listenerAdds:[...state.listenerAdds],listenerRemoves:[...state.listenerRemoves],reset:holder.resetEvidence()};
+  holder.host.remove();holder.reset.remove();
 }
 {
   const holder=presentationHost(320,180);
-  const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
+  const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],listenerAdds:[],listenerRemoves:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
   const failures=[];
   let semantic;
-  const presenter=createCityPresenter({host:holder.host,platform:presentationPlatform(state),isEligible:()=>true,failed:(...args)=>{
+  const presenter=createCityPresenter({host:holder.host,resetControl:holder.reset,platform:presentationPlatform(state),isEligible:()=>true,failed:(...args)=>{
     const cleanupAtNotification={...state.deletes};
     const semanticPresentAtNotification=semantic?.isConnected===true;
     const hostChildrenAtNotification=holder.host.childNodes.length;
@@ -231,13 +244,13 @@ const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeat
   presentation.lossTerminalState={retainedCallbacks:state.lossCallbacks.length,failures:failures.length,drawsAfterTerminal:state.draws-terminalLossDraws,canvases:state.canvases.length,hostChildren:holder.host.childNodes.length,cleanupUnchanged:JSON.stringify(state.deletes)===terminalLossCleanup};
   if(JSON.stringify(presentation.lossTerminalState)!==JSON.stringify({retainedCallbacks:1,failures:1,drawsAfterTerminal:0,canvases:1,hostChildren:0,cleanupUnchanged:true}))throw new Error("Actual WebGL2 repeated context-loss callback was not inert");
   presentation.actualContexts+=state.actualContexts;
-  holder.host.remove();
+  holder.host.remove();holder.reset.remove();
 }
 {
   const holder=presentationHost(320,180);
-  const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
+  const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],listenerAdds:[],listenerRemoves:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
   const failures=[];
-  const presenter=createCityPresenter({host:holder.host,platform:presentationPlatform(state,true),isEligible:()=>true,failed:(...args)=>failures.push(args)});
+  const presenter=createCityPresenter({host:holder.host,resetControl:holder.reset,platform:presentationPlatform(state,true),isEligible:()=>true,failed:(...args)=>failures.push(args)});
   presentation.compileFailureResult=stageCommit(presenter,holder.host,4);
   presentation.compileFailureDraws=state.draws;
   presentation.compileFailures=failures;
@@ -251,9 +264,9 @@ const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeat
   presentation.compileFailureTerminalState={retainedCallbacks:state.lossCallbacks.length,failures:failures.length,drawsAfterTerminal:state.draws-terminalCompileDraws,canvases:state.canvases.length,hostChildren:holder.host.childNodes.length,cleanupUnchanged:JSON.stringify(state.deletes)===terminalCompileCleanup};
   if(JSON.stringify(presentation.compileFailureTerminalState)!==JSON.stringify({retainedCallbacks:1,failures:0,drawsAfterTerminal:0,canvases:1,hostChildren:0,cleanupUnchanged:true}))throw new Error("Actual WebGL2 compile-failure retained callback was not inert");
   presentation.actualContexts+=state.actualContexts;
-  holder.host.remove();
+  holder.host.remove();holder.reset.remove();
 }
-presentation.pass=presentation.webgl2Available&&presentation.actualContexts===4&&presentation.initialDraws===1&&presentation.repeatDraws===1&&presentation.resizeDraws===1&&presentation.lossDefaultPrevented===false&&presentation.lossDraws===0&&presentation.lossFailures.length===1&&presentation.lossOrdering.semanticPresentAtNotification&&presentation.lossOrdering.hostChildrenAtNotification===2&&presentation.lossOrdering.cleanupAtNotification.deleteProgram===0&&!presentation.lossOrdering.semanticPresentAfterControllerClear&&presentation.lossCleanup.deleteProgram===1&&presentation.lossCleanup.deleteBuffer===3&&presentation.lossCleanup.deleteVertexArray===1&&presentation.lossTerminalState.retainedCallbacks===1&&presentation.lossTerminalState.failures===1&&presentation.lossTerminalState.drawsAfterTerminal===0&&presentation.lossTerminalState.canvases===1&&presentation.lossTerminalState.hostChildren===0&&presentation.lossTerminalState.cleanupUnchanged&&presentation.compileFailureResult.kind==="failure"&&presentation.compileFailureDraws===0&&presentation.compileFailures.length===0&&presentation.compileCleanup.deleteShader===1&&presentation.compileFailureTerminalState.retainedCallbacks===1&&presentation.compileFailureTerminalState.failures===0&&presentation.compileFailureTerminalState.drawsAfterTerminal===0&&presentation.compileFailureTerminalState.canvases===1&&presentation.compileFailureTerminalState.hostChildren===0&&presentation.compileFailureTerminalState.cleanupUnchanged;
+presentation.pass=presentation.webgl2Available&&presentation.actualContexts===4&&presentation.initialDraws===1&&presentation.repeatDraws===1&&presentation.resizeDraws===1&&JSON.stringify(presentation.accessibility)===JSON.stringify({tabIndex:0,label:"Interactive code city",description:"city-navigation-instructions",listenerAdds:["webglcontextlost","keydown","wheel"],resetText:"Reset view"})&&JSON.stringify(presentation.inputCleanup)===JSON.stringify({listenerAdds:["webglcontextlost","keydown","wheel","webglcontextlost","keydown","wheel"],listenerRemoves:["webglcontextlost","keydown","wheel","webglcontextlost","keydown","wheel"],reset:{adds:2,removes:2}})&&presentation.lossDefaultPrevented===false&&presentation.lossDraws===0&&presentation.lossFailures.length===1&&presentation.lossOrdering.semanticPresentAtNotification&&presentation.lossOrdering.hostChildrenAtNotification===2&&presentation.lossOrdering.cleanupAtNotification.deleteProgram===0&&!presentation.lossOrdering.semanticPresentAfterControllerClear&&presentation.lossCleanup.deleteProgram===1&&presentation.lossCleanup.deleteBuffer===3&&presentation.lossCleanup.deleteVertexArray===1&&presentation.lossTerminalState.retainedCallbacks===1&&presentation.lossTerminalState.failures===1&&presentation.lossTerminalState.drawsAfterTerminal===0&&presentation.lossTerminalState.canvases===1&&presentation.lossTerminalState.hostChildren===0&&presentation.lossTerminalState.cleanupUnchanged&&presentation.compileFailureResult.kind==="failure"&&presentation.compileFailureDraws===0&&presentation.compileFailures.length===0&&presentation.compileCleanup.deleteShader===1&&presentation.compileFailureTerminalState.retainedCallbacks===1&&presentation.compileFailureTerminalState.failures===0&&presentation.compileFailureTerminalState.drawsAfterTerminal===0&&presentation.compileFailureTerminalState.canvases===1&&presentation.compileFailureTerminalState.hostChildren===0&&presentation.compileFailureTerminalState.cleanupUnchanged;
 const assetRequests=ASSETS.map(({role,path,sha256})=>({role,path,sha256}));
 const result={schemaVersion:1,assetRequests,cases:outputCases,matrixRuns,complexityMatrixRuns,presentation,browserExceptions:[],unexpectedNetworkRequests:[],overallPass:outputCases.every((entry)=>entry.pass)&&matrixRuns.every((entry)=>entry.pass)&&matrixRuns[0].runDigest===matrixRuns[1].runDigest&&complexityMatrixRuns.every((entry)=>entry.pass)&&complexityMatrixRuns[0].runDigest===complexityMatrixRuns[1].runDigest&&presentation.pass};
 document.querySelector("#result").textContent=JSON.stringify(result);

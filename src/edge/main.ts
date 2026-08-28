@@ -16,6 +16,7 @@ const feedback = requiredElement<HTMLElement>("[data-feedback]");
 const status = requiredElement<HTMLElement>("[data-status]");
 const commit = requiredElement<HTMLOutputElement>("[data-commit]");
 const city = requiredElement<HTMLElement>("[data-city]");
+const cityReset = requiredElement<HTMLButtonElement>("[data-city-reset]");
 
 function replaceStatus(message: string, cancel?: () => void): void {
   const text = document.createElement("p");
@@ -122,6 +123,7 @@ export function createWorkerTransport(
 const controller = createMainController(createWorkerTransport, view, (hooks) => {
   const presenter = createCityPresenter({
     host: city,
+    resetControl: cityReset,
     isEligible: hooks.isEligible,
     failed: hooks.failed,
   });

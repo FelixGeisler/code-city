@@ -1,5 +1,14 @@
-import { deriveView } from "../domain/city-model";
 import type { ValidatedGeometry } from "../application/city-payload";
+import {
+  orbitCameraByKeyboard,
+  panCameraByKeyboard,
+  resetCamera,
+  resizeCamera,
+  zoomCamera,
+  type CameraState,
+  type CameraTransitionResult,
+  type CameraView,
+} from "../domain/camera-picking-policy";
 
 const CUBE_POSITIONS = new Float32Array([
   0, 0, 0,
@@ -86,14 +95,26 @@ const STALE = Object.freeze({ kind: "stale" }) as Readonly<{ kind: "stale" }>;
 const PRESENTATION_FAILURE: ControllerFailureResult = Object.freeze({ kind: "failure", category: "Presentation failed", code: "M1-PRES-1" });
 
 type LossListener = (event: Event) => void;
+type KeyboardListener = (event: KeyboardEvent) => void;
+type WheelListener = (event: WheelEvent) => void;
+type ResetListener = (event: Event) => void;
 
-export type PresenterCanvas = Pick<HTMLCanvasElement, "width" | "height" | "getContext" | "remove">
+export type PresenterCanvas = Pick<HTMLCanvasElement,
+  "width" | "height" | "getContext" | "remove" | "setAttribute" | "tabIndex">
   & {
     addEventListener(type: "webglcontextlost", listener: LossListener, options: AddEventListenerOptions): void;
+    addEventListener(type: "keydown", listener: KeyboardListener): void;
+    addEventListener(type: "wheel", listener: WheelListener, options: AddEventListenerOptions): void;
     removeEventListener(type: "webglcontextlost", listener: LossListener): void;
+    removeEventListener(type: "keydown", listener: KeyboardListener): void;
+    removeEventListener(type: "wheel", listener: WheelListener): void;
   };
 
 export type PresenterHost = Pick<HTMLElement, "clientWidth" | "clientHeight">;
+export type PresenterResetControl = {
+  addEventListener(type: "click", listener: ResetListener): void;
+  removeEventListener(type: "click", listener: ResetListener): void;
+};
 
 export type PresenterResizeObserver = {
   observe(target: Element): void;
@@ -107,6 +128,7 @@ export type PresenterPlatform = Readonly<{
 
 export type CityPresenterOptions<G> = Readonly<{
   host: PresenterHost;
+  resetControl?: PresenterResetControl;
   isEligible(generation: G): boolean;
   failed(generation: G, category: PresentationFailureCategory, code: PresentationFailureCode): void;
   platform?: PresenterPlatform;
@@ -132,6 +154,12 @@ type Session<G> = {
   gl?: WebGL2RenderingContext;
   observer?: PresenterResizeObserver;
   lossListener?: LossListener;
+  keyboardListener?: KeyboardListener;
+  wheelListener?: WheelListener;
+  resetListener?: ResetListener;
+  resetControl?: PresenterResetControl;
+  cameraState?: CameraState;
+  cameraView?: CameraView;
   vertexShader?: WebGLShader;
   fragmentShader?: WebGLShader;
   program?: WebGLProgram;
@@ -218,21 +246,7 @@ function requireResource<T>(resource: T | null, gl: WebGL2RenderingContext, own:
   return resource;
 }
 
-function createMatrix(model: ValidatedGeometry, width: number, height: number): Float32Array {
-  const view = deriveView(model.bounds, width / height);
-  const aH = view.horizontalHalf;
-  const H = view.H;
-  const twiceDepth = 2 * view.E_d;
-  return new Float32Array([
-    view.R[0] / aH, view.V[0] / H, -view.D[0] / twiceDepth, 0,
-    view.R[1] / aH, view.V[1] / H, -view.D[1] / twiceDepth, 0,
-    view.R[2] / aH, view.V[2] / H, -view.D[2] / twiceDepth, 0,
-    0, 0, 0, 1,
-  ]);
-}
-
-function createInstanceStaging(model: ValidatedGeometry, width: number, height: number): Uint8Array {
-  const target = deriveView(model.bounds, width / height).target;
+function createInstanceStaging(model: ValidatedGeometry, centre: readonly number[]): Uint8Array {
   const staging = new Uint8Array(model.count * INSTANCE_STRIDE);
   const view = new DataView(staging.buffer);
   for (let index = 0; index < model.count; index += 1) {
@@ -240,7 +254,7 @@ function createInstanceStaging(model: ValidatedGeometry, width: number, height: 
     const colourOffset = index * 4;
     const byteOffset = index * INSTANCE_STRIDE;
     for (let axis = 0; axis < 3; axis += 1) {
-      const relative = model.origins[vectorOffset + axis]! - target[axis]!;
+      const relative = model.origins[vectorOffset + axis]! - centre[axis]!;
       if (Math.fround(relative) !== relative) throw new Error("Inexact target-relative origin");
       view.setFloat32(byteOffset + axis * 4, relative, true);
       view.setFloat32(byteOffset + 12 + axis * 4, model.sizes[vectorOffset + axis]!, true);
@@ -250,13 +264,13 @@ function createInstanceStaging(model: ValidatedGeometry, width: number, height: 
   return staging;
 }
 
-function draw(session: Session<unknown>, size: Dimensions): void {
+function draw(session: Session<unknown>, size: Dimensions, view: CameraView): void {
   const { canvas, gl, program, vao, uniform, model } = session;
   if (!canvas || !gl || !program || !vao || !uniform || !model) throw new Error("Incomplete presentation session");
   if (canvas.width !== size.width || canvas.height !== size.height
     || gl.drawingBufferWidth !== size.width || gl.drawingBufferHeight !== size.height) throw new Error("WebGL2 drawing-buffer dimensions differ");
   requireNoError(gl);
-  const matrix = createMatrix(model, size.width, size.height);
+  const matrix = new Float32Array(view.matrix);
   try {
     gl.clearColor(1, 1, 1, 1);
     gl.clearDepth(1);
@@ -341,7 +355,11 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
   gl.bufferData(ELEMENT_ARRAY_BUFFER, CUBE_INDICES, STATIC_DRAW);
   requireNoError(gl);
 
-  session.staging = createInstanceStaging(session.model!, size.width, size.height);
+  const initialCamera = resetCamera(session.model!.bounds, size);
+  if (initialCamera.kind === "failure") throw new Error("Initial camera failed");
+  session.cameraState = initialCamera.state;
+  session.cameraView = initialCamera.view;
+  session.staging = createInstanceStaging(session.model!, initialCamera.view.centre);
   gl.bindBuffer(ARRAY_BUFFER, session.instanceBuffer);
   gl.bufferData(ARRAY_BUFFER, session.staging, STATIC_DRAW);
   requireNoError(gl);
@@ -355,7 +373,7 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
   gl.vertexAttribPointer(3, 4, UNSIGNED_BYTE, true, INSTANCE_STRIDE, 24);
   gl.vertexAttribDivisor(3, 1);
   requireNoError(gl);
-  draw(session as Session<unknown>, size);
+  draw(session as Session<unknown>, size, initialCamera.view);
 }
 
 function cleanup<G>(session: Session<G>): boolean {
@@ -366,9 +384,20 @@ function cleanup<G>(session: Session<G>): boolean {
   session.observer = undefined;
   try { observer?.disconnect(); } catch { complete = false; }
   const canvas = session.canvas;
-  const listener = session.lossListener;
+  const lossListener = session.lossListener;
+  const keyboardListener = session.keyboardListener;
+  const wheelListener = session.wheelListener;
+  const resetListener = session.resetListener;
+  const resetControl = session.resetControl;
   session.lossListener = undefined;
-  try { if (canvas && listener) canvas.removeEventListener("webglcontextlost", listener); } catch { complete = false; }
+  session.keyboardListener = undefined;
+  session.wheelListener = undefined;
+  session.resetListener = undefined;
+  session.resetControl = undefined;
+  try { if (canvas && lossListener) canvas.removeEventListener("webglcontextlost", lossListener); } catch { complete = false; }
+  try { if (canvas && keyboardListener) canvas.removeEventListener("keydown", keyboardListener); } catch { complete = false; }
+  try { if (canvas && wheelListener) canvas.removeEventListener("wheel", wheelListener); } catch { complete = false; }
+  try { if (resetControl && resetListener) resetControl.removeEventListener("click", resetListener); } catch { complete = false; }
 
   const gl = session.gl;
   let actuallyLost = false;
@@ -404,6 +433,8 @@ function cleanup<G>(session: Session<G>): boolean {
   session.staging = undefined;
   session.model = undefined;
   session.eventSink = undefined;
+  session.cameraState = undefined;
+  session.cameraView = undefined;
   session.generation = undefined;
   session.hover = null;
   session.selection = null;
@@ -412,7 +443,7 @@ function cleanup<G>(session: Session<G>): boolean {
 }
 
 export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPresenter<G> {
-  const { host, isEligible, failed } = options;
+  const { host, resetControl, isEligible, failed } = options;
   const platform = options.platform ?? browserPlatform;
   const sessions = new Map<PresenterToken, Session<G>>();
   let current: Session<G> | undefined;
@@ -446,6 +477,25 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
     try { return isEligible(session.generation!); } catch { failSession(session); return false; }
   };
 
+  const callbackEligible = (session: Session<G>): boolean => {
+    if (!session.active) return false;
+    if (!eligible(session)) {
+      if (session.active) removeSession(session);
+      return false;
+    }
+    return session.committed && current === session;
+  };
+
+  const applyCamera = (session: Session<G>, transition: CameraTransitionResult, size: Dimensions): void => {
+    if (transition.kind === "failure") {
+      failSession(session);
+      return;
+    }
+    draw(session as Session<unknown>, size, transition.view);
+    session.cameraState = transition.state;
+    session.cameraView = transition.view;
+  };
+
   const installCallbacks = (session: Session<G>): void => {
     const canvas = session.canvas!;
     const lossListener: LossListener = () => {
@@ -455,8 +505,58 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         failSession(session);
       } catch {}
     };
+    const keyboardListener: KeyboardListener = (event) => {
+      try {
+        if (!callbackEligible(session) || event.ctrlKey || event.altKey || event.metaKey) return;
+        const size = dimensions(host);
+        let transition: CameraTransitionResult | undefined;
+        if (!event.shiftKey && (event.key === "w" || event.key === "a" || event.key === "s" || event.key === "d")) {
+          transition = orbitCameraByKeyboard(session.cameraState!, session.model!.bounds, size, event.key);
+        } else if (event.shiftKey && (event.key === "W" || event.key === "A" || event.key === "S" || event.key === "D")) {
+          transition = panCameraByKeyboard(session.cameraState!, session.model!.bounds, size, event.key);
+        } else if (event.key === "+") {
+          transition = zoomCamera(session.cameraState!, session.model!.bounds, size, "in");
+        } else if (event.key === "-") {
+          transition = zoomCamera(session.cameraState!, session.model!.bounds, size, "out");
+        } else if (event.key === "0") {
+          transition = resetCamera(session.model!.bounds, size);
+        }
+        if (!transition) return;
+        event.preventDefault();
+        applyCamera(session, transition, size);
+      } catch {
+        failSession(session);
+      }
+    };
+    const wheelListener: WheelListener = (event) => {
+      try {
+        if (!callbackEligible(session) || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.deltaY === 0) return;
+        const direction = event.deltaY < 0 ? "in" : event.deltaY > 0 ? "out" : undefined;
+        if (!direction) return;
+        event.preventDefault();
+        const size = dimensions(host);
+        applyCamera(session, zoomCamera(session.cameraState!, session.model!.bounds, size, direction), size);
+      } catch {
+        failSession(session);
+      }
+    };
+    const resetListener: ResetListener = () => {
+      try {
+        if (!callbackEligible(session)) return;
+        const size = dimensions(host);
+        applyCamera(session, resetCamera(session.model!.bounds, size), size);
+      } catch {
+        failSession(session);
+      }
+    };
     session.lossListener = lossListener;
+    session.keyboardListener = keyboardListener;
+    session.wheelListener = wheelListener;
+    session.resetListener = resetListener;
     canvas.addEventListener("webglcontextlost", lossListener, { passive: true, once: true });
+    canvas.addEventListener("keydown", keyboardListener);
+    canvas.addEventListener("wheel", wheelListener, { passive: false });
+    resetControl?.addEventListener("click", resetListener);
   };
 
   const observe = (session: Session<G>): void => {
@@ -467,9 +567,11 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         const next = dimensions(host);
         const canvas = session.canvas!;
         if (canvas.width === next.width && canvas.height === next.height) return;
+        const transition = resizeCamera(session.cameraState!, session.model!.bounds, next);
+        if (transition.kind === "failure") { failSession(session); return; }
         canvas.width = next.width;
         canvas.height = next.height;
-        draw(session as Session<unknown>, next);
+        applyCamera(session, transition, next);
       } catch {
         failSession(session);
       }
@@ -494,6 +596,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
           selection: null,
           canvas,
           model,
+          resetControl,
           committed: false,
           active: true,
           notified: false,
@@ -514,15 +617,21 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
             if (callbackEligible(callbackGeneration)) eventSink.selectionAction(generation, action);
           },
         });
+        canvas.tabIndex = 0;
+        canvas.setAttribute("aria-label", "Interactive code city");
+        canvas.setAttribute("aria-describedby", "city-navigation-instructions");
         sessions.set(token, candidate);
         installCallbacks(candidate);
         allocate(candidate, initial);
         observe(candidate);
         const finalSize = dimensions(host);
         if (!sameDimensions(initial, finalSize)) {
+          const transition = resizeCamera(candidate.cameraState!, model.bounds, finalSize);
+          if (transition.kind === "failure") throw new Error("Final camera resize failed");
           canvas.width = finalSize.width;
           canvas.height = finalSize.height;
-          draw(candidate as Session<unknown>, finalSize);
+          applyCamera(candidate, transition, finalSize);
+          if (!candidate.active) return STALE;
         }
         if (!candidate.active) return STALE;
         return Object.freeze({ kind: "staged", token, canvas });

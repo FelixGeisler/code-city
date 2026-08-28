@@ -68,7 +68,7 @@ function checkStrictSourceNormalization() {
 
 function pageObservationSource() {
   return `(() => {
-    const evidence = { messages: [], contexts: [], workers: [], liveWorkers: 0, maximumLiveWorkers: 0 };
+    const evidence = { messages: [], contexts: [], canvasListeners: [], resetListeners: { adds: 0, removes: 0 }, workers: [], liveWorkers: 0, maximumLiveWorkers: 0 };
     Object.defineProperty(globalThis, "__codeCitySuccessEvidence", { value: evidence, configurable: true });
     const NativeWorker = Worker;
     const nativeAdd = NativeWorker.prototype.addEventListener;
@@ -120,11 +120,41 @@ function pageObservationSource() {
       }
     }
     Object.defineProperty(globalThis, "Worker", { value: ObservedWorker, configurable: true, writable: true });
+    const nativeCanvasAdd = HTMLCanvasElement.prototype.addEventListener;
+    const nativeCanvasRemove = HTMLCanvasElement.prototype.removeEventListener;
+    const canvasListenerRecords = new WeakMap();
+    const listenerRecord = (canvas) => {
+      let record = canvasListenerRecords.get(canvas);
+      if (!record) {
+        record = { adds: [], removes: [] };
+        canvasListenerRecords.set(canvas, record);
+        evidence.canvasListeners.push(record);
+      }
+      return record;
+    };
+    HTMLCanvasElement.prototype.addEventListener = function(type, listener, options) {
+      if (["webglcontextlost", "keydown", "wheel"].includes(type)) listenerRecord(this).adds.push({ type, passive: options?.passive ?? null, once: options?.once ?? false });
+      return nativeCanvasAdd.call(this, type, listener, options);
+    };
+    HTMLCanvasElement.prototype.removeEventListener = function(type, listener, options) {
+      if (["webglcontextlost", "keydown", "wheel"].includes(type)) listenerRecord(this).removes.push(type);
+      return nativeCanvasRemove.call(this, type, listener, options);
+    };
+    const nativeButtonAdd = HTMLButtonElement.prototype.addEventListener;
+    const nativeButtonRemove = HTMLButtonElement.prototype.removeEventListener;
+    HTMLButtonElement.prototype.addEventListener = function(type, listener, options) {
+      if (type === "click" && this.matches("[data-city-reset]")) evidence.resetListeners.adds += 1;
+      return nativeButtonAdd.call(this, type, listener, options);
+    };
+    HTMLButtonElement.prototype.removeEventListener = function(type, listener, options) {
+      if (type === "click" && this.matches("[data-city-reset]")) evidence.resetListeners.removes += 1;
+      return nativeButtonRemove.call(this, type, listener, options);
+    };
     const acquire = HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext = function(kind, attributes) {
       const actual = acquire.call(this, kind, attributes);
       if (kind !== "webgl2" || !actual) return actual;
-      const record = { uploads: [], matrices: [], draws: [], deletes: { shader: 0, program: 0, buffer: 0, vao: 0 } };
+      const record = { uploads: [], matrices: [], draws: [], listeners: listenerRecord(this), deletes: { shader: 0, program: 0, buffer: 0, vao: 0 } };
       evidence.contexts.push(record);
       return new Proxy(actual, { get(target, property) {
         if (property === "bufferData") return (targetKind, data, usage) => {
@@ -294,6 +324,13 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
   cdp.listeners.add(listener);
 
   const evaluate = async (expression) => (await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId)).result.value;
+  const dispatchKey = async ({ key, code, virtualKey, modifiers = 0, text = "", autoRepeat = false }) => {
+    await cdp.send("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", key, code, windowsVirtualKeyCode: virtualKey, nativeVirtualKeyCode: virtualKey, modifiers, text, autoRepeat }, sessionId);
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: virtualKey, nativeVirtualKeyCode: virtualKey, modifiers }, sessionId);
+  };
+  const dispatchWheel = async ({ x, y, deltaY, modifiers = 0 }) => {
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: 0, deltaY, modifiers }, sessionId);
+  };
   const waitFor = async (expression, label) => {
     const end = Date.now() + 120_000;
     while (Date.now() < end) {
@@ -329,8 +366,55 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await Promise.all(childInstallations);
     await waitFor("globalThis.__codeCitySuccessEvidence.contexts.every((entry)=>entry.draws.length===1)&&globalThis.__codeCitySuccessEvidence.messages.length===2", "presentation evidence");
     await waitFor("globalThis.__codeCitySuccessEvidence.workers.length===2&&globalThis.__codeCitySuccessEvidence.workers.every((worker)=>worker.terminateCalls===1&&!worker.usable)&&globalThis.__codeCitySuccessEvidence.liveWorkers===0", "successful worker cleanup");
+
+    await evaluate(`(() => {
+      document.body.style.minHeight="200vh";
+      const canvas=document.querySelector('[data-city] canvas');
+      canvas.scrollIntoView({block:"center"});
+      globalThis.__navigationEvidence={keys:[],wheels:[]};
+      window.addEventListener("keydown",event=>globalThis.__navigationEvidence.keys.push({key:event.key,repeat:event.repeat,shift:event.shiftKey,ctrl:event.ctrlKey,defaultPrevented:event.defaultPrevented}));
+      window.addEventListener("wheel",event=>globalThis.__navigationEvidence.wheels.push({deltaY:event.deltaY,shift:event.shiftKey,defaultPrevented:event.defaultPrevented}),{passive:true});
+      document.querySelector('form button[type=submit]').focus();
+      return true;
+    })()`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const navigationStart = await evaluate(`(() => {
+      const canvas=document.querySelector('[data-city] canvas');
+      const context=globalThis.__codeCitySuccessEvidence.contexts[1];
+      return {draws:context.draws.length,matrices:context.matrices.length,uploads:context.uploads.map(bytes=>bytes.length),matrix:context.matrices.at(-1),rect:(()=>{const r=canvas.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()};
+    })()`);
+    await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9 });
+    const focusedCanvas = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); const style=getComputedStyle(canvas); return {active:document.activeElement===canvas,tabIndex:canvas.tabIndex,label:canvas.getAttribute("aria-label"),description:canvas.getAttribute("aria-describedby"),outlineStyle:style.outlineStyle,outlineWidth:style.outlineWidth,outlineColor:style.outlineColor}; })()`);
+
+    await dispatchKey({ key: "d", code: "KeyD", virtualKey: 68, text: "d" });
+    await dispatchKey({ key: "d", code: "KeyD", virtualKey: 68, text: "d", autoRepeat: true });
+    await dispatchKey({ key: "d", code: "KeyD", virtualKey: 68, modifiers: 2, text: "d" });
+    for (const [key, code, virtualKey] of [["ArrowUp", "ArrowUp", 38], ["ArrowDown", "ArrowDown", 40], ["ArrowLeft", "ArrowLeft", 37], ["ArrowRight", "ArrowRight", 39], ["Home", "Home", 36], ["End", "End", 35], ["Escape", "Escape", 27]]) {
+      await dispatchKey({ key, code, virtualKey });
+    }
+    await dispatchKey({ key: "W", code: "KeyW", virtualKey: 87, modifiers: 8, text: "W" });
+    await dispatchKey({ key: "+", code: "Equal", virtualKey: 187, modifiers: 8, text: "+" });
+    await dispatchKey({ key: "-", code: "Minus", virtualKey: 189, text: "-" });
+    await dispatchKey({ key: "0", code: "Digit0", virtualKey: 48, text: "0" });
+    const wheelPoint = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); canvas.scrollIntoView({block:"center"}); const r=canvas.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await dispatchWheel({ x: wheelPoint.x, y: wheelPoint.y, deltaY: -120 });
+    await dispatchWheel({ x: wheelPoint.x, y: wheelPoint.y, deltaY: 120, modifiers: 8 });
+    const scrollBefore = await evaluate("scrollY");
+    await dispatchWheel({ x: 2, y: 2, deltaY: 180 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const scrollAfter = await evaluate("scrollY");
+    await evaluate("document.querySelector('[data-city]').style.width='75%';true");
+    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].draws.length>=${navigationStart.draws + 8}`, "native navigation and resize redraws");
+    await dispatchKey({ key: "0", code: "Digit0", virtualKey: 48, text: "0" });
+    await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9 });
+    const focusedReset = await evaluate("document.activeElement===document.querySelector('[data-city-reset]')");
+    await dispatchKey({ key: "Enter", code: "Enter", virtualKey: 13, text: "\r" });
+    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].draws.length>=${navigationStart.draws + 10}`, "keyboard Reset redraw");
+    const navigation = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {draws:context.draws.length-${navigationStart.draws},matrices:context.matrices.slice(${navigationStart.matrices}),uploads:context.uploads.map(bytes=>bytes.length),events:globalThis.__navigationEvidence,canvasListeners:context.listeners,resetListeners:globalThis.__codeCitySuccessEvidence.resetListeners}; })()`);
+
     const observed = await evaluate("globalThis.__codeCitySuccessEvidence");
-    const surface = await evaluate("({forms:document.querySelectorAll('[data-form]').length,status:document.querySelectorAll('[data-status]').length,commits:document.querySelectorAll('[data-commit]').length,cities:document.querySelectorAll('[data-city]').length,inputs:document.querySelectorAll('input[name=repository]').length,submit:document.querySelector('form button[type=submit]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,inspectorEmpty:document.querySelector('[data-inspector]')?.childNodes.length===0,publicationChildren:[...document.querySelector('[data-city]').children].map((node)=>node.tagName)})");
+    const surface = await evaluate("({forms:document.querySelectorAll('[data-form]').length,status:document.querySelectorAll('[data-status]').length,commits:document.querySelectorAll('[data-commit]').length,cities:document.querySelectorAll('[data-city]').length,inputs:document.querySelectorAll('input[name=repository]').length,submit:document.querySelector('form button[type=submit]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,inspectorEmpty:document.querySelector('[data-inspector]')?.childNodes.length===0,instructions:document.querySelector('#city-navigation-instructions').textContent,resets:document.querySelectorAll('[data-city-reset]').length,resetText:document.querySelector('[data-city-reset]').textContent,publicationChildren:[...document.querySelector('[data-city]').children].map((node)=>node.tagName)})");
 
     invariant(failures.length === 0, `Production success instrumentation failed: ${failures.map(String).join("; ")}`);
     invariant(browserExceptions.length === 0, `Production browser exceptions: ${browserExceptions.join("; ")}`);
@@ -368,14 +452,52 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       assert.deepEqual(message.geometryKeys, ["kind", "count", "origins", "sizes", "rgba", "bounds"]);
       assert.equal(message.revision, fixture.selected);
     }
-    const presentationDigests = observed.contexts.map((context) => createHash("sha256").update(JSON.stringify({ uploads: context.uploads, matrices: context.matrices, draws: context.draws })).digest("hex"));
+    const presentationDigests = observed.contexts.map((context) => createHash("sha256").update(JSON.stringify({ uploads: context.uploads, matrices: context.matrices.slice(0, 1), draws: context.draws.slice(0, 1) })).digest("hex"));
     assert.equal(presentationDigests[0], presentationDigests[1]);
-    for (const context of observed.contexts) {
-      assert.deepEqual(context.uploads.map((bytes) => bytes.length), [96, 36, 28]);
-      assert.equal(context.matrices.length, 1);
-      assert.deepEqual(context.draws, [[36, 5121, 0, 1]]);
-    }
-    assert.deepEqual(surface, { forms: 1, status: 1, commits: 1, cities: 1, inputs: 1, submit: "Submit", commit: fixture.selected, canvases: 1, inspectors: 1, inspectorEmpty: true, publicationChildren: ["CANVAS", "SECTION"] });
+    for (const context of observed.contexts) assert.deepEqual(context.uploads.map((bytes) => bytes.length), [96, 36, 28]);
+    assert.equal(observed.contexts[0].matrices.length, 1);
+    assert.deepEqual(observed.contexts[0].draws, [[36, 5121, 0, 1]]);
+    assert.deepEqual(observed.contexts[1].matrices[0], observed.contexts[0].matrices[0]);
+    assert.deepEqual(observed.contexts[1].draws[0], [36, 5121, 0, 1]);
+    assert.equal(focusedCanvas.active, true);
+    assert.equal(focusedCanvas.tabIndex, 0);
+    assert.equal(focusedCanvas.label, "Interactive code city");
+    assert.equal(focusedCanvas.description, "city-navigation-instructions");
+    assert.equal(focusedCanvas.outlineStyle, "solid");
+    assert.notEqual(focusedCanvas.outlineWidth, "0px");
+    assert.notEqual(focusedCanvas.outlineColor, "rgba(0, 0, 0, 0)");
+    assert.equal(focusedReset, true);
+    assert(scrollAfter > scrollBefore, `Wheel outside canvas did not retain browser scrolling: ${scrollBefore} -> ${scrollAfter}`);
+    assert.equal(navigation.draws, 10);
+    assert.equal(navigation.matrices.length, 10);
+    assert.deepEqual(navigation.uploads, navigationStart.uploads);
+    assert.deepEqual(navigation.matrices[5], navigationStart.matrix, "keyboard 0 did not restore the exact initial overview");
+    assert.notDeepEqual(navigation.matrices[6], navigation.matrices[5], "native wheel did not zoom");
+    assert.notDeepEqual(navigation.matrices[7], navigation.matrices[6], "ResizeObserver did not refit the camera");
+    assert.deepEqual(navigation.matrices[9], navigation.matrices[8], "native Reset button did not reproduce the resized overview");
+    assert.deepEqual(navigation.canvasListeners.adds, [
+      { type: "webglcontextlost", passive: true, once: true },
+      { type: "keydown", passive: null, once: false },
+      { type: "wheel", passive: false, once: false },
+    ]);
+    assert.deepEqual(navigation.canvasListeners.removes, []);
+    assert.deepEqual(navigation.resetListeners, { adds: 2, removes: 1 });
+    const productKeys = navigation.events.keys.filter(({ key }) => ["d", "W", "+", "-", "0", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "Escape"].includes(key));
+    assert.equal(productKeys.filter(({ key }) => key === "d").length, 3);
+    assert.deepEqual(productKeys.filter(({ key }) => key === "d").map(({ repeat, ctrl, defaultPrevented }) => ({ repeat, ctrl, defaultPrevented })), [
+      { repeat: false, ctrl: false, defaultPrevented: true },
+      { repeat: true, ctrl: false, defaultPrevented: true },
+      { repeat: false, ctrl: true, defaultPrevented: false },
+    ]);
+    for (const key of ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "Escape"]) assert.equal(productKeys.find((entry) => entry.key === key)?.defaultPrevented, false, key);
+    for (const key of ["W", "+", "-"]) assert.equal(productKeys.find((entry) => entry.key === key)?.defaultPrevented, true, key);
+    assert(productKeys.filter(({ key }) => key === "0").every(({ defaultPrevented }) => defaultPrevented));
+    assert.deepEqual(navigation.events.wheels.map(({ shift, defaultPrevented }) => ({ shift, defaultPrevented })), [
+      { shift: false, defaultPrevented: true },
+      { shift: true, defaultPrevented: false },
+      { shift: false, defaultPrevented: false },
+    ]);
+    assert.deepEqual(surface, { forms: 1, status: 1, commits: 1, cities: 1, inputs: 1, submit: "Submit", commit: fixture.selected, canvases: 1, inspectors: 1, inspectorEmpty: true, instructions: "Keyboard navigation: use W, A, S, and D to orbit; hold Shift with W, A, S, or D to pan; use + and − to zoom; use 0 or Reset view to return to the overview.", resets: 1, resetText: "Reset view", publicationChildren: ["CANVAS", "SECTION"] });
 
     const actualNetwork = requestedUrls.slice(networkStart);
     const manifestUrls = new Set(manifest.files.map((record) => `${origin}/code-city/${record.path}`));
@@ -388,7 +510,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       const canvas=document.querySelector('[data-city] canvas');
       const event=new Event('webglcontextlost',{cancelable:true});
       canvas.dispatchEvent(event);
-      return {defaultPrevented:event.defaultPrevented,status:document.querySelector('[data-status]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,deletes:globalThis.__codeCitySuccessEvidence.contexts[1].deletes};
+      return {defaultPrevented:event.defaultPrevented,status:document.querySelector('[data-status]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,listeners:globalThis.__codeCitySuccessEvidence.contexts[1].listeners,resetListeners:globalThis.__codeCitySuccessEvidence.resetListeners,deletes:globalThis.__codeCitySuccessEvidence.contexts[1].deletes};
     })()`);
     assert.deepEqual(contextLoss, {
       defaultPrevented: false,
@@ -396,6 +518,15 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       commit: fixture.selected,
       canvases: 0,
       inspectors: 0,
+      listeners: {
+        adds: [
+          { type: "webglcontextlost", passive: true, once: true },
+          { type: "keydown", passive: null, once: false },
+          { type: "wheel", passive: false, once: false },
+        ],
+        removes: ["webglcontextlost", "keydown", "wheel"],
+      },
+      resetListeners: { adds: 2, removes: 2 },
       deletes: { shader: 2, program: 1, buffer: 3, vao: 1 },
     });
 
@@ -508,13 +639,25 @@ function validateBrowserResult(result, expectedAssets) {
   assert.equal(result.complexityMatrixRuns[0].densePackedByteLength, result.complexityMatrixRuns[1].densePackedByteLength);
   assert.equal(result.complexityMatrixRuns[0].runDigest, result.complexityMatrixRuns[1].runDigest);
   assert.equal(result.complexityMatrixRuns[0].observed.factsDigest, result.complexityMatrixRuns[1].observed.factsDigest);
-  exactKeys(result.presentation, ["webgl2Available", "actualContexts", "initialDraws", "repeatDraws", "resizeDraws", "lossDefaultPrevented", "lossDraws", "lossFailures", "lossOrdering", "lossCleanup", "lossTerminalState", "compileFailureResult", "compileFailureDraws", "compileFailures", "compileCleanup", "compileFailureTerminalState", "pass"], "Presentation");
+  exactKeys(result.presentation, ["webgl2Available", "actualContexts", "initialDraws", "repeatDraws", "resizeDraws", "accessibility", "inputCleanup", "lossDefaultPrevented", "lossDraws", "lossFailures", "lossOrdering", "lossCleanup", "lossTerminalState", "compileFailureResult", "compileFailureDraws", "compileFailures", "compileCleanup", "compileFailureTerminalState", "pass"], "Presentation");
   assert.deepEqual(result.presentation, {
     webgl2Available: true,
     actualContexts: 4,
     initialDraws: 1,
     repeatDraws: 1,
     resizeDraws: 1,
+    accessibility: {
+      tabIndex: 0,
+      label: "Interactive code city",
+      description: "city-navigation-instructions",
+      listenerAdds: ["webglcontextlost", "keydown", "wheel"],
+      resetText: "Reset view",
+    },
+    inputCleanup: {
+      listenerAdds: ["webglcontextlost", "keydown", "wheel", "webglcontextlost", "keydown", "wheel"],
+      listenerRemoves: ["webglcontextlost", "keydown", "wheel", "webglcontextlost", "keydown", "wheel"],
+      reset: { adds: 2, removes: 2 },
+    },
     lossDefaultPrevented: false,
     lossDraws: 0,
     lossFailures: [[3, "Presentation failed", "M1-PRES-1"]],
