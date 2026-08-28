@@ -1,6 +1,6 @@
 import processingWorkerUrl from "./processing-worker.ts?worker&url";
 import { createMainController, type AttemptView, type WorkerTransport } from "../application/main-controller";
-import { createCityPresenter } from "./city-presenter";
+import { createCityPresenter, type PresenterToken } from "./city-presenter";
 
 function requiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -56,6 +56,25 @@ const view: AttemptView = {
     commit.textContent = "";
     replaceStatus("Cancelled");
   },
+  stagePublication(revision, inspection) {
+    void inspection;
+    const inspector = document.createElement("section");
+    inspector.dataset.inspector = "";
+    inspector.hidden = true;
+    let committedToRoot = false;
+    return {
+      commit(canvas) {
+        city.replaceChildren(canvas as unknown as Node, inspector);
+        commit.textContent = revision;
+        committedToRoot = true;
+      },
+      rollback() {
+        inspector.remove();
+        if (committedToRoot || commit.textContent === revision) commit.textContent = "";
+        committedToRoot = false;
+      },
+    };
+  },
 };
 
 export function createWorkerTransport(
@@ -100,11 +119,20 @@ export function createWorkerTransport(
   };
 }
 
-const controller = createMainController(createWorkerTransport, view, (hooks) => createCityPresenter({
-  host: city,
-  isEligible: hooks.isEligible,
-  failed: hooks.failed,
-}));
+const controller = createMainController(createWorkerTransport, view, (hooks) => {
+  const presenter = createCityPresenter({
+    host: city,
+    isEligible: hooks.isEligible,
+    failed: hooks.failed,
+  });
+  return {
+    stage: presenter.stage,
+    commit: (token) => presenter.commit(token as PresenterToken),
+    rollback: (token) => presenter.rollback(token as PresenterToken),
+    setVisualState: presenter.setVisualState,
+    dispose: presenter.dispose,
+  };
+});
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   controller.submit(input.value);

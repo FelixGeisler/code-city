@@ -22,6 +22,16 @@ function fixture({
   sendThrows = false,
   sendThrowsWhen = () => false,
   presentResult = { kind: "committed" },
+  commitResult = { kind: "committed" },
+  visualResult = { kind: "applied" },
+  commitThrows = false,
+  visualThrows = false,
+  rollbackThrows = false,
+  publicationStageThrows = false,
+  publicationCommitThrows = false,
+  publicationRollbackThrows = false,
+  successThrows = false,
+  onStage,
 } = {}) {
   const events = [];
   const transports = [];
@@ -31,12 +41,37 @@ function fixture({
   let liveWorkers = 0;
   let maximumLiveWorkers = 0;
   const failures = [];
-  const presentation = { clears: 0, calls: [], disposes: 0, hooks: undefined };
+  const presentation = { clears: 0, calls: [], commits: [], disposes: 0, eventSinks: [], hooks: undefined, publications: [], rollbacks: [], visual: [] };
   const view = {
     clear() { visibleState = "empty"; },
+    stagePublication(revision, inspection) {
+      events.push("semantic:stage");
+      if (publicationStageThrows) throw new Error("semantic stage");
+      let active = true;
+      const publication = {
+        commits: 0,
+        commit(canvas) {
+          events.push("publication:commit");
+          if (publicationCommitThrows) throw new Error("publication commit");
+          this.commits += 1;
+          this.canvas = canvas;
+          this.revision = revision;
+          this.inspection = inspection;
+        },
+        rollback() {
+          if (!active) return;
+          active = false;
+          presentation.clears += 1;
+          events.push("semantic:rollback");
+          if (publicationRollbackThrows) throw new Error("semantic rollback");
+        },
+      };
+      presentation.publications.push(publication);
+      return publication;
+    },
     invalid() { visibleState = "invalid"; events.push("view:Invalid input"); },
     working(cancel) { visibleState = "working-with-cancel"; cancelAction = cancel; events.push("view:working"); },
-    success(revision) { visibleState = "success"; events.push(`view:success:${revision}`); },
+    success(revision) { if (successThrows) throw new Error("success"); visibleState = "success"; events.push(`view:success:${revision}`); },
     failure(category, code, revision) {
       visibleState = "failure";
       failures.push({ category, code, revision });
@@ -79,12 +114,22 @@ function fixture({
   const controller = createMainController(createWorker, view, (hooks) => {
     presentation.hooks = hooks;
     return {
-      clear() { presentation.clears += 1; },
       dispose() { presentation.disposes += 1; },
-      present(generation, geometry) {
-        events.push("present");
+      stage(generation, geometry, eventSink) {
+        events.push("stage");
         presentation.calls.push({ generation, geometry, eligible: hooks.isEligible(generation) });
-        return presentResult;
+        presentation.eventSinks.push(eventSink);
+        onStage?.({ generation, eventSink, hooks });
+        if (presentResult.kind !== "committed") return presentResult;
+        return { kind: "staged", token: Object.freeze({ generation }), canvas: { remove() {} } };
+      },
+      commit(token) { events.push("presenter:commit"); presentation.commits.push(token); if (commitThrows) throw new Error("commit"); return commitResult; },
+      rollback(token) { events.push("presenter:rollback"); presentation.rollbacks.push(token); if (rollbackThrows) throw new Error("rollback"); },
+      setVisualState(generation, hover, selection) {
+        events.push("visual");
+        presentation.visual.push({ generation, hover, selection });
+        if (visualThrows) throw new Error("visual");
+        return visualResult;
       },
     };
   });
@@ -143,7 +188,7 @@ test("mapped FAILURE is shown, then matching drain performs normal cleanup exact
   assert.equal(f.transports[1].sent[0].generation, 2);
 });
 
-test("success is accepted once after the barrier, presented before publication, and remains eligible after worker drain", () => {
+test("success is accepted once after the barrier, staged before one publication commit, and remains eligible after worker drain", () => {
   const f = fixture();
   f.controller.submit(VALID);
   const transport = f.transports[0];
@@ -155,7 +200,8 @@ test("success is accepted once after the barrier, presented before publication, 
   assert.equal(f.presentation.calls[0].eligible, true);
   assert.deepEqual([...f.presentation.calls[0].geometry.origins], [...CITY.geometry.origins]);
   assert.notEqual(f.presentation.calls[0].geometry.origins, CITY.geometry.origins);
-  assert.deepEqual(f.events.slice(-2), ["present", `view:success:${SHA}`]);
+  assert.deepEqual(f.events.slice(-6), ["stage", "semantic:stage", "presenter:commit", "visual", "publication:commit", `view:success:${SHA}`]);
+  assert.deepEqual(f.presentation.visual, [{ generation: 1, hover: null, selection: null }]);
   transport.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
   assert.equal(transport.closeCalls, 1);
   assert.equal(f.presentation.hooks.isEligible(1), true);
@@ -174,10 +220,10 @@ test("a new valid submission synchronously revokes a drained publication and can
   first.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
   first.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city: CITY });
   first.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
-  assert.equal(f.presentation.clears, 1);
+  assert.equal(f.presentation.clears, 0);
 
   assert.equal(f.controller.submit(VALID), true);
-  assert.equal(f.presentation.clears, 2);
+  assert.equal(f.presentation.clears, 1);
   assert.equal(f.presentation.hooks.isEligible(1), false);
   const second = f.transports[1];
   second.handlers.message({ type: "REVISION_SELECTED", generation: 2, revision: SHA });
@@ -214,7 +260,7 @@ test("invalid success models map to CITY1 before presentation and a duplicate su
     transport.handlers.message(success);
     transport.handlers.message(success);
     assert.equal(transport.closeCalls, 1);
-    assert.equal(f.presentation.clears, 2);
+    assert.equal(f.presentation.clears, 1);
   }
 });
 
@@ -230,6 +276,101 @@ test("synchronous presenter failure is mapped by the controller without using th
   assert.equal(f.events.some((event) => event.startsWith("view:success:")), false);
   transport.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
   assert.equal(transport.closeCalls, 1);
+});
+
+test("every post-validation transaction failure rolls back and maps exactly once to M1-PRES-1", () => {
+  const cases = [
+    ["stage", { presentResult: { kind: "failure", category: "Presentation failed", code: "M1-PRES-1" } }],
+    ["semantic stage", { publicationStageThrows: true }],
+    ["presenter commit", { commitThrows: true }],
+    ["initial visual result", { visualResult: { kind: "failure", category: "Presentation failed", code: "M1-PRES-1" } }],
+    ["initial visual throw", { visualThrows: true }],
+    ["publication root", { publicationCommitThrows: true }],
+    ["success view", { successThrows: true }],
+    ["rollback containment", { publicationCommitThrows: true, publicationRollbackThrows: true, rollbackThrows: true }],
+  ];
+  for (const [name, options] of cases) {
+    const f = fixture(options);
+    f.controller.submit(VALID);
+    const transport = f.transports[0];
+    transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
+    transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+    transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city: CITY });
+    assert.deepEqual(f.failures, [{ category: "Presentation failed", code: "M1-PRES-1", revision: SHA }], name);
+    assert.equal(f.events.filter((event) => event === "publication:commit").length, name === "publication root" || name === "success view" || name === "rollback containment" ? 1 : 0, name);
+    assert.equal(f.events.filter((event) => event === "view:Presentation failed").length, 1, name);
+    assert.equal(f.presentation.hooks.isEligible(1), false, name);
+  }
+});
+
+test("stale stage, token, and visual outcomes clean up without a displayed failure", () => {
+  for (const options of [
+    { presentResult: { kind: "stale" } },
+    { commitResult: { kind: "stale" } },
+    { visualResult: { kind: "stale" } },
+  ]) {
+    const f = fixture(options);
+    f.controller.submit(VALID);
+    const transport = f.transports[0];
+    transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
+    transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+    transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city: CITY });
+    assert.equal(f.failures.length, 0);
+    assert.equal(f.events.some((event) => event.startsWith("view:success:")), false);
+    assert.equal(transport.closeCalls, 1);
+  }
+});
+
+test("final eligibility recheck rejects a replacement raced through presenter stage", () => {
+  let replace = () => { throw new Error("uninitialized"); };
+  const f = fixture({ onStage: () => replace() });
+  replace = () => { assert.equal(f.controller.submit("https://github.com/owner/raced"), true); };
+  f.controller.submit(VALID);
+  const old = f.transports[0];
+  old.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
+  old.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+  old.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city: CITY });
+  assert.equal(f.failures.length, 0);
+  assert.equal(f.events.includes("semantic:stage"), false);
+  assert.equal(f.presentation.rollbacks.length, 1);
+  assert.equal(f.transports.length, 2);
+  assert.equal(f.transports[1].sent[0].generation, 2);
+});
+
+test("committed event sink gates generation and token before authoritative visual updates", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  const first = f.transports[0];
+  first.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
+  first.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+  first.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city: CITY });
+  const sink = f.presentation.eventSinks[0];
+  assert.equal(f.presentation.publications[0].commits, 1);
+  assert.deepEqual(f.presentation.publications[0].inspection, CITY.inspection);
+  assert.notEqual(f.presentation.publications[0].inspection, CITY.inspection);
+  const initial = f.presentation.visual.length;
+  sink.hoverIndex(999, 0);
+  sink.activationIndex(1, 1);
+  sink.selectionAction(999, "first");
+  assert.equal(f.presentation.visual.length, initial);
+  sink.hoverIndex(1, 0);
+  sink.activationIndex(1, 0);
+  sink.selectionAction(1, "next");
+  sink.selectionAction(1, "previous");
+  sink.selectionAction(1, "last");
+  sink.selectionAction(1, "clear");
+  assert.deepEqual(f.presentation.visual.slice(initial), [
+    { generation: 1, hover: 0, selection: null },
+    { generation: 1, hover: 0, selection: 0 },
+    { generation: 1, hover: 0, selection: 0 },
+    { generation: 1, hover: 0, selection: 0 },
+    { generation: 1, hover: 0, selection: 0 },
+    { generation: 1, hover: 0, selection: null },
+  ]);
+  first.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
+  f.controller.submit("https://github.com/owner/next");
+  sink.hoverIndex(1, null);
+  assert.equal(f.presentation.visual.length, initial + 6);
 });
 
 test("invalid replacement revokes output, closes active work, and starts no replacement", () => {

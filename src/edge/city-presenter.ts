@@ -62,14 +62,28 @@ const WEBGL2_CONTEXT_ATTRIBUTES = Object.freeze({
 
 export type PresentationFailureCategory = "Presentation failed";
 export type PresentationFailureCode = "M1-PRES-1";
-export type PresentationResult =
-  | Readonly<{ kind: "committed" }>
+export type SelectionAction = "next" | "previous" | "first" | "last" | "clear";
+export type PresenterEventSink<G> = Readonly<{
+  hoverIndex(generation: G, index: number | null): void;
+  activationIndex(generation: G, index: number | null): void;
+  selectionAction(generation: G, action: SelectionAction): void;
+}>;
+
+declare const presenterTokenBrand: unique symbol;
+export type PresenterToken = Readonly<{ readonly [presenterTokenBrand]: true }>;
+export type PresenterStageResult =
+  | Readonly<{ kind: "staged"; token: PresenterToken; canvas: PresenterCanvas }>
   | Readonly<{ kind: "stale" }>
   | Readonly<{ kind: "failure"; category: PresentationFailureCategory; code: PresentationFailureCode }>;
+export type PresenterCommitResult = Readonly<{ kind: "committed" }> | Readonly<{ kind: "stale" }>;
+export type PresenterVisualResult = Readonly<{ kind: "applied" }> | Readonly<{ kind: "stale" }>
+  | Readonly<{ kind: "failure"; category: PresentationFailureCategory; code: PresentationFailureCode }>;
+type ControllerFailureResult = Readonly<{ kind: "failure"; category: PresentationFailureCategory; code: PresentationFailureCode }>;
 
-const COMMITTED: PresentationResult = Object.freeze({ kind: "committed" });
-const STALE: PresentationResult = Object.freeze({ kind: "stale" });
-const PRESENTATION_FAILURE: PresentationResult = Object.freeze({ kind: "failure", category: "Presentation failed", code: "M1-PRES-1" });
+const COMMITTED: PresenterCommitResult = Object.freeze({ kind: "committed" });
+const APPLIED: PresenterVisualResult = Object.freeze({ kind: "applied" });
+const STALE = Object.freeze({ kind: "stale" }) as Readonly<{ kind: "stale" }>;
+const PRESENTATION_FAILURE: ControllerFailureResult = Object.freeze({ kind: "failure", category: "Presentation failed", code: "M1-PRES-1" });
 
 type LossListener = (event: Event) => void;
 
@@ -79,8 +93,7 @@ export type PresenterCanvas = Pick<HTMLCanvasElement, "width" | "height" | "getC
     removeEventListener(type: "webglcontextlost", listener: LossListener): void;
   };
 
-export type PresenterHost = Pick<HTMLElement, "clientWidth" | "clientHeight">
-  & { replaceChildren(...nodes: (Node | string)[]): void };
+export type PresenterHost = Pick<HTMLElement, "clientWidth" | "clientHeight">;
 
 export type PresenterResizeObserver = {
   observe(target: Element): void;
@@ -100,8 +113,10 @@ export type CityPresenterOptions<G> = Readonly<{
 }>;
 
 export type CityPresenter<G> = Readonly<{
-  present(generation: G, geometry: ValidatedGeometry): PresentationResult;
-  clear(): void;
+  stage(generation: G, geometry: ValidatedGeometry, eventSink: PresenterEventSink<G>): PresenterStageResult;
+  commit(token: PresenterToken): PresenterCommitResult;
+  rollback(token: PresenterToken): void;
+  setVisualState(generation: G, hover: number | null, selection: number | null): PresenterVisualResult;
   dispose(): void;
 }>;
 
@@ -109,6 +124,10 @@ type Dimensions = Readonly<{ width: number; height: number }>;
 
 type Session<G> = {
   generation?: G;
+  token: PresenterToken;
+  eventSink?: PresenterEventSink<G>;
+  hover: number | null;
+  selection: number | null;
   canvas?: PresenterCanvas;
   gl?: WebGL2RenderingContext;
   observer?: PresenterResizeObserver;
@@ -339,24 +358,23 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
   draw(session as Session<unknown>, size);
 }
 
-function releaseAttempt(action: (() => void) | undefined): void {
-  try { action?.(); } catch {}
-}
-
-function cleanup<G>(session: Session<G>): void {
-  if (!session.active) return;
+function cleanup<G>(session: Session<G>): boolean {
+  if (!session.active) return true;
   session.active = false;
+  let complete = true;
   const observer = session.observer;
   session.observer = undefined;
-  releaseAttempt(observer && (() => observer.disconnect()));
+  try { observer?.disconnect(); } catch { complete = false; }
   const canvas = session.canvas;
   const listener = session.lossListener;
   session.lossListener = undefined;
-  releaseAttempt(canvas && listener && (() => canvas.removeEventListener("webglcontextlost", listener)));
+  try { if (canvas && listener) canvas.removeEventListener("webglcontextlost", listener); } catch { complete = false; }
 
   const gl = session.gl;
   let actuallyLost = false;
-  if (gl) releaseAttempt(() => { actuallyLost = gl.isContextLost(); });
+  if (gl) {
+    try { actuallyLost = gl.isContextLost(); } catch { complete = false; }
+  }
   if (gl && !actuallyLost) {
     const releases: Array<(() => void) | undefined> = [
       session.vertexShader && (() => gl.deleteShader(session.vertexShader!)),
@@ -367,9 +385,11 @@ function cleanup<G>(session: Session<G>): void {
       session.instanceBuffer && (() => gl.deleteBuffer(session.instanceBuffer!)),
       session.vao && (() => gl.deleteVertexArray(session.vao!)),
     ];
-    for (const release of releases) releaseAttempt(release);
+    for (const release of releases) {
+      try { release?.(); } catch { complete = false; }
+    }
   }
-  releaseAttempt(canvas && (() => canvas.remove()));
+  try { canvas?.remove(); } catch { complete = false; }
   session.staging?.fill(0);
   session.canvas = undefined;
   session.gl = undefined;
@@ -383,32 +403,42 @@ function cleanup<G>(session: Session<G>): void {
   session.uniform = undefined;
   session.staging = undefined;
   session.model = undefined;
+  session.eventSink = undefined;
   session.generation = undefined;
+  session.hover = null;
+  session.selection = null;
   session.committed = false;
+  return complete;
 }
 
 export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPresenter<G> {
   const { host, isEligible, failed } = options;
   const platform = options.platform ?? browserPlatform;
+  const sessions = new Map<PresenterToken, Session<G>>();
   let current: Session<G> | undefined;
   let disposed = false;
 
-  const notify = (session: Session<G> | undefined, generation: G, category: PresentationFailureCategory, code: PresentationFailureCode): void => {
-    if (session?.notified) return;
-    if (session) session.notified = true;
-    try { failed(generation, category, code); } catch {}
+  const notify = (session: Session<G>, generation: G): void => {
+    if (session.notified) return;
+    session.notified = true;
+    try { failed(generation, "Presentation failed", "M1-PRES-1"); } catch {}
   };
 
-  const removeSession = (session: Session<G>): void => {
+  const removeSession = (session: Session<G>): boolean => {
+    sessions.delete(session.token);
     if (current === session) current = undefined;
-    cleanup(session);
+    return cleanup(session);
   };
 
   const failSession = (session: Session<G>): void => {
     if (!session.active) return;
     const generation = session.generation!;
     removeSession(session);
-    notify(session, generation, "Presentation failed", "M1-PRES-1");
+    notify(session, generation);
+  };
+
+  const eligible = (session: Session<G>): boolean => {
+    try { return isEligible(session.generation!); } catch { failSession(session); return false; }
   };
 
   const installCallbacks = (session: Session<G>): void => {
@@ -416,9 +446,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
     const lossListener: LossListener = () => {
       try {
         if (!session.active) return;
-        let eligible = false;
-        try { eligible = isEligible(session.generation!); } catch { failSession(session); return; }
-        if (!eligible || current !== session) { removeSession(session); return; }
+        if (!eligible(session)) { removeSession(session); return; }
         failSession(session);
       } catch {}
     };
@@ -430,9 +458,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
     session.observer = platform.createResizeObserver(() => {
       try {
         if (!session.active) return;
-        let eligible = false;
-        try { eligible = isEligible(session.generation!); } catch { failSession(session); return; }
-        if (!eligible || current !== session) { removeSession(session); return; }
+        if (!eligible(session)) { removeSession(session); return; }
         const next = dimensions(host);
         const canvas = session.canvas!;
         if (canvas.width === next.width && canvas.height === next.height) return;
@@ -447,25 +473,43 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
   };
 
   return Object.freeze({
-    present(generation: G, model: ValidatedGeometry): PresentationResult {
-      if (disposed) {
-        return PRESENTATION_FAILURE;
-      }
-
+    stage(generation: G, model: ValidatedGeometry, eventSink: PresenterEventSink<G>): PresenterStageResult {
+      if (disposed) return PRESENTATION_FAILURE;
       const affected = current;
       let candidate: Session<G> | undefined;
       try {
         if (!isEligible(generation)) return STALE;
         const initial = dimensions(host);
         const canvas = platform.createCanvas();
+        const token = Object.freeze({}) as PresenterToken;
         candidate = {
           generation,
+          token,
+          hover: null,
+          selection: null,
           canvas,
           model,
           committed: false,
           active: true,
           notified: false,
         };
+        const callbackEligible = (callbackGeneration: G): boolean => candidate!.active
+          && candidate!.committed
+          && current === candidate
+          && candidate!.token === token
+          && candidate!.generation === callbackGeneration;
+        candidate.eventSink = Object.freeze({
+          hoverIndex(callbackGeneration, index) {
+            if (callbackEligible(callbackGeneration)) eventSink.hoverIndex(generation, index);
+          },
+          activationIndex(callbackGeneration, index) {
+            if (callbackEligible(callbackGeneration)) eventSink.activationIndex(generation, index);
+          },
+          selectionAction(callbackGeneration, action) {
+            if (callbackEligible(callbackGeneration)) eventSink.selectionAction(generation, action);
+          },
+        });
+        sessions.set(token, candidate);
         installCallbacks(candidate);
         allocate(candidate, initial);
         observe(candidate);
@@ -475,28 +519,47 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
           canvas.height = finalSize.height;
           draw(candidate as Session<unknown>, finalSize);
         }
-        if (!isEligible(generation)) {
-          cleanup(candidate);
-          return STALE;
-        }
-        host.replaceChildren(canvas as unknown as Node);
-        candidate.committed = true;
-        current = candidate;
-        if (affected && affected !== candidate) cleanup(affected);
-        return COMMITTED;
+        if (!candidate.active) return STALE;
+        return Object.freeze({ kind: "staged", token, canvas });
       } catch {
-        if (candidate) cleanup(candidate);
+        if (candidate) removeSession(candidate);
         if (affected && current === affected) removeSession(affected);
         return PRESENTATION_FAILURE;
       }
     },
-    clear(): void {
-      if (current) removeSession(current);
+    commit(token: PresenterToken): PresenterCommitResult {
+      const candidate = sessions.get(token);
+      if (disposed || !candidate?.active || candidate.committed) return STALE;
+      const affected = current;
+      candidate.committed = true;
+      current = candidate;
+      if (affected && affected !== candidate && !removeSession(affected)) {
+        removeSession(candidate);
+        throw new Error("Presentation teardown failed");
+      }
+      return COMMITTED;
+    },
+    rollback(token: PresenterToken): void {
+      const candidate = sessions.get(token);
+      if (candidate) removeSession(candidate);
+    },
+    setVisualState(generation: G, hover: number | null, selection: number | null): PresenterVisualResult {
+      const session = current;
+      if (!session?.active || !session.committed || session.generation !== generation) return STALE;
+      const count = session.model!.count;
+      const valid = (index: number | null): boolean => index === null || (Number.isSafeInteger(index) && index >= 0 && index < count);
+      if (!valid(hover) || !valid(selection)) {
+        failSession(session);
+        return PRESENTATION_FAILURE;
+      }
+      session.hover = hover;
+      session.selection = selection;
+      return APPLIED;
     },
     dispose(): void {
       if (disposed) return;
       disposed = true;
-      if (current) removeSession(current);
+      for (const session of [...sessions.values()]) removeSession(session);
     },
   });
 }

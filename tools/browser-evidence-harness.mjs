@@ -162,19 +162,31 @@ function presentationHost(width,height){
   return {host,dimensions};
 }
 const presentationModel=buildCity([{canonicalPath:"browser.js",S:1,U:1,M:1}]).geometry;
+const emptyEventSink={hoverIndex(){},activationIndex(){},selectionAction(){}};
+function stageCommit(presenter,host,generation){
+  const priorChildren=[...host.childNodes];
+  const staged=presenter.stage(generation,presentationModel,emptyEventSink);
+  if(staged.kind!=="staged")return staged;
+  if(priorChildren.length!==host.childNodes.length||priorChildren.some((node,index)=>host.childNodes[index]!==node))throw new Error("Presenter stage was not detached");
+  const committed=presenter.commit(staged.token);
+  if(committed.kind!=="committed")return committed;
+  host.replaceChildren(staged.canvas);
+  if(presenter.setVisualState(generation,null,null).kind!=="applied")throw new Error("Initial visual state was not applied");
+  return committed;
+}
 const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeatDraws:0,resizeDraws:0,lossDefaultPrevented:null,lossDraws:0,lossFailures:[],lossCleanup:null,lossTerminalState:null,compileFailureResult:null,compileFailureDraws:0,compileFailures:[],compileCleanup:null,compileFailureTerminalState:null,pass:false};
 {
   const holder=presentationHost(320,180);
   const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
   const failures=[];
   const presenter=createCityPresenter({host:holder.host,platform:presentationPlatform(state),isEligible:()=>true,failed:(...args)=>failures.push(args)});
-  const first=presenter.present(1,presentationModel);
+  const first=stageCommit(presenter,holder.host,1);
   if(first.kind!=="committed")throw new Error("Installed Chrome WebGL2 is unavailable or rejected");
   presentation.webgl2Available=true;
   presentation.initialDraws=state.draws;
   const firstCanvas=state.canvases[0];
   if(firstCanvas.width!==320||firstCanvas.height!==180)throw new Error("Actual WebGL2 backing dimensions differ");
-  const repeat=presenter.present(2,presentationModel);
+  const repeat=stageCommit(presenter,holder.host,2);
   presentation.repeatDraws=state.draws-presentation.initialDraws;
   holder.dimensions.width=400;holder.dimensions.height=240;
   const beforeResize=state.draws;
@@ -189,7 +201,7 @@ const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeat
   const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
   const failures=[];
   const presenter=createCityPresenter({host:holder.host,platform:presentationPlatform(state),isEligible:()=>true,failed:(...args)=>failures.push(args)});
-  if(presenter.present(3,presentationModel).kind!=="committed")throw new Error("Actual WebGL2 context-loss setup failed");
+  if(stageCommit(presenter,holder.host,3).kind!=="committed")throw new Error("Actual WebGL2 context-loss setup failed");
   const canvas=state.canvases[0];
   const before=state.draws;
   const event=new Event("webglcontextlost",{cancelable:true});
@@ -215,7 +227,7 @@ const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeat
   const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
   const failures=[];
   const presenter=createCityPresenter({host:holder.host,platform:presentationPlatform(state,true),isEligible:()=>true,failed:(...args)=>failures.push(args)});
-  presentation.compileFailureResult=presenter.present(4,presentationModel);
+  presentation.compileFailureResult=stageCommit(presenter,holder.host,4);
   presentation.compileFailureDraws=state.draws;
   presentation.compileFailures=failures;
   presentation.compileCleanup=state.deletes;

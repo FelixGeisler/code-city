@@ -17,6 +17,7 @@ const { buildCity, deriveView } = await import("../src/domain/city-model.ts");
 const { createCityPresenter } = await import("../src/edge/city-presenter.ts");
 
 const COMMITTED = { kind: "committed" };
+const APPLIED = { kind: "applied" };
 const STALE = { kind: "stale" };
 const PRESENTATION_FAILURE = { kind: "failure", category: "Presentation failed", code: "M1-PRES-1" };
 
@@ -174,10 +175,25 @@ function fakeEnvironment({ width = 200, height = 100, gl = {}, platform = {} } =
 }
 
 function oneBuilding() { return buildCity([{ canonicalPath: "a.js", S: 0, U: 0, M: 0 }]).geometry; }
+const EMPTY_EVENT_SINK = Object.freeze({ hoverIndex() {}, activationIndex() {}, selectionAction() {} });
 function failuresCollector(environment, eligibility = () => true) {
   const failures = [];
   const presenter = createCityPresenter({ host: environment.host, platform: environment.platform, isEligible: eligibility, failed(...args) { failures.push(args); } });
   return { presenter, failures };
+}
+function present(environment, presenter, generation, geometry, eventSink = EMPTY_EVENT_SINK) {
+  const staged = presenter.stage(generation, geometry, eventSink);
+  if (staged.kind !== "staged") return staged;
+  environment.lastToken = staged.token;
+  const committed = presenter.commit(staged.token);
+  if (committed.kind !== "committed") return committed;
+  try {
+    environment.host.replaceChildren(staged.canvas);
+    return committed;
+  } catch {
+    presenter.rollback(staged.token);
+    return PRESENTATION_FAILURE;
+  }
 }
 function names(gl) { return gl.calls.map((call) => call[0]); }
 
@@ -304,7 +320,7 @@ function transform(matrix, point) {
 test("cube, indices, shaders, context request, complete setup/draw calls, matrix handedness, transpose, and depth are literal", () => {
   const environment = fakeEnvironment();
   const { presenter } = failuresCollector(environment);
-  assert.deepEqual(presenter.present(1, oneBuilding()), COMMITTED);
+  assert.deepEqual(present(environment, presenter, 1, oneBuilding()), COMMITTED);
   const canvas = environment.canvases[0];
   assert.deepEqual([...new Float32Array(canvas.gl.uploads[0].bytes.buffer)], literals.cubePositions);
   assert.equal(canvas.gl.uploads[0].byteLength, 96);
@@ -343,7 +359,7 @@ test("production WebGL access is closed to exact methods and two dynamic data pr
 
   const environment = fakeEnvironment();
   const { presenter } = failuresCollector(environment);
-  assert.deepEqual(presenter.present(1, oneBuilding()), COMMITTED);
+  assert.deepEqual(present(environment, presenter, 1, oneBuilding()), COMMITTED);
   const canvas = environment.canvases[0];
   assert.deepEqual(canvas.contextDataReads, ["drawingBufferWidth", "drawingBufferHeight"]);
   assert.deepEqual(canvas.forbiddenContextReads, []);
@@ -354,7 +370,7 @@ test("production WebGL access is closed to exact methods and two dynamic data pr
 test("one instance uses exact target-relative float staging, state, and one instanced draw", () => {
   const environment = fakeEnvironment();
   const { presenter } = failuresCollector(environment);
-  assert.deepEqual(presenter.present("g", oneBuilding()), COMMITTED);
+  assert.deepEqual(present(environment, presenter, "g", oneBuilding()), COMMITTED);
   const gl = environment.canvases[0].gl;
   assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [96, 36, 28]);
   const instance = gl.uploads[2].bytes;
@@ -378,14 +394,14 @@ test("generation is opaque, stale work is inert, replacement is atomic, and disp
   let eligible = true;
   const seen = [];
   const { presenter, failures } = failuresCollector(environment, (value) => { seen.push(value); return eligible; });
-  assert.deepEqual(presenter.present(generation, oneBuilding()), COMMITTED);
+  assert.deepEqual(present(environment, presenter, generation, oneBuilding()), COMMITTED);
   const first = environment.canvases[0];
   eligible = false;
-  assert.deepEqual(presenter.present(generation, oneBuilding()), STALE);
+  assert.deepEqual(present(environment, presenter, generation, oneBuilding()), STALE);
   assert.equal(environment.canvases.length, 1);
   assert.equal(environment.host.child, first);
   eligible = true;
-  assert.deepEqual(presenter.present(generation, oneBuilding()), COMMITTED);
+  assert.deepEqual(present(environment, presenter, generation, oneBuilding()), COMMITTED);
   assert.equal(first.removeCount, 1);
   assert.equal(environment.host.child, environment.canvases[1]);
   presenter.dispose(); presenter.dispose();
@@ -394,18 +410,84 @@ test("generation is opaque, stale work is inert, replacement is atomic, and disp
   assert(seen.every((value) => value === generation));
 });
 
-test("clear releases the current session, is reusable, and does not make the presenter terminal", () => {
+test("rollback releases a token idempotently and the presenter remains reusable", () => {
   const environment = fakeEnvironment();
   const { presenter, failures } = failuresCollector(environment);
-  assert.deepEqual(presenter.present(1, oneBuilding()), COMMITTED);
+  assert.deepEqual(present(environment, presenter, 1, oneBuilding()), COMMITTED);
   const first = environment.canvases[0];
-  presenter.clear();
-  presenter.clear();
+  presenter.rollback(environment.lastToken);
+  presenter.rollback(environment.lastToken);
   assert.equal(first.removeCount, 1);
   assert.equal(environment.host.child, undefined);
-  assert.deepEqual(presenter.present(2, oneBuilding()), COMMITTED);
+  assert.deepEqual(present(environment, presenter, 2, oneBuilding()), COMMITTED);
   assert.equal(environment.host.child, environment.canvases[1]);
   assert.deepEqual(failures, []);
+});
+
+test("stage is detached, commit and visual state are token/generation gated, and rollback is idempotent", () => {
+  const environment = fakeEnvironment();
+  const { presenter, failures } = failuresCollector(environment);
+  const staged = presenter.stage(7, oneBuilding(), EMPTY_EVENT_SINK);
+  assert.equal(staged.kind, "staged");
+  assert.equal(environment.host.replacements, 0);
+  assert.equal(environment.host.child, undefined);
+  assert.deepEqual(presenter.setVisualState(7, null, null), STALE);
+  assert.deepEqual(presenter.commit(Object.freeze({})), STALE);
+  assert.deepEqual(presenter.commit(staged.token), COMMITTED);
+  assert.deepEqual(presenter.commit(staged.token), STALE);
+  assert.deepEqual(presenter.setVisualState(8, null, null), STALE);
+  assert.deepEqual(presenter.setVisualState(7, null, null), APPLIED);
+  presenter.rollback(Object.freeze({}));
+  presenter.rollback(staged.token);
+  presenter.rollback(staged.token);
+  assert.equal(staged.canvas.removeCount, 1);
+  assert.deepEqual(presenter.setVisualState(7, null, null), STALE);
+  assert.deepEqual(failures, []);
+});
+
+test("invalid visual indices fail the committed session once and retained lifecycle callbacks become inert", () => {
+  const environment = fakeEnvironment();
+  const { presenter, failures } = failuresCollector(environment);
+  assert.deepEqual(present(environment, presenter, 1, oneBuilding()), COMMITTED);
+  const canvas = environment.canvases[0];
+  const retainedLoss = [...canvas.listeners][0];
+  const retainedResize = environment.observers[0].callback;
+  assert.deepEqual(presenter.setVisualState(1, 1, null), PRESENTATION_FAILURE);
+  assert.deepEqual(failures, [[1, "Presentation failed", "M1-PRES-1"]]);
+  assert.equal(canvas.removeCount, 1);
+  retainedLoss(new Event("webglcontextlost", { cancelable: true }));
+  retainedResize();
+  assert.equal(canvas.removeCount, 1);
+  assert.equal(failures.length, 1);
+});
+
+test("context loss while detached fails and disposes the staged token without publication", () => {
+  const environment = fakeEnvironment();
+  const { presenter, failures } = failuresCollector(environment);
+  const staged = presenter.stage(3, oneBuilding(), EMPTY_EVENT_SINK);
+  assert.equal(staged.kind, "staged");
+  staged.canvas.dispatchLoss();
+  assert.deepEqual(failures, [[3, "Presentation failed", "M1-PRES-1"]]);
+  assert.deepEqual(presenter.commit(staged.token), STALE);
+  presenter.rollback(staged.token);
+  assert.equal(staged.canvas.removeCount, 1);
+  assert.equal(environment.host.replacements, 0);
+});
+
+test("committing a second staged token disposes the prior committed session exactly once", () => {
+  const environment = fakeEnvironment();
+  const { presenter } = failuresCollector(environment);
+  const first = presenter.stage(1, oneBuilding(), EMPTY_EVENT_SINK);
+  const second = presenter.stage(2, oneBuilding(), EMPTY_EVENT_SINK);
+  assert.equal(first.kind, "staged");
+  assert.equal(second.kind, "staged");
+  assert.deepEqual(presenter.commit(first.token), COMMITTED);
+  assert.deepEqual(presenter.commit(second.token), COMMITTED);
+  assert.equal(first.canvas.removeCount, 1);
+  assert.equal(second.canvas.removeCount, 0);
+  presenter.dispose();
+  presenter.dispose();
+  assert.equal(second.canvas.removeCount, 1);
 });
 
 test("source-free presentation data has only the geometry contract and is structured-clone compatible", () => {
@@ -424,7 +506,7 @@ test("the complete 4,000-building model uploads exactly 112,000 bytes and draws 
   const model = buildCity(facts).geometry;
   const environment = fakeEnvironment({ width: 640, height: 480 });
   const { presenter } = failuresCollector(environment);
-  assert.deepEqual(presenter.present(4000, model), COMMITTED);
+  assert.deepEqual(present(environment, presenter, 4000, model), COMMITTED);
   const gl = environment.canvases[0].gl;
   assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [96, 36, 112000]);
   assert.deepEqual(gl.calls.filter((call) => call[0] === "drawElementsInstanced").at(-1).slice(1), [GL.TRIANGLES, 36, GL.UNSIGNED_BYTE, 0, 4000]);
@@ -432,7 +514,8 @@ test("the complete 4,000-building model uploads exactly 112,000 bytes and draws 
 
 test("presenter accepts validated geometry only and owns no city, inspection, alignment, palette, or limit validator", async () => {
   const source = await readFile(path.join(projectRoot, "src/edge/city-presenter.ts"), "utf8");
-  assert.match(source, /present\(generation: G, model: ValidatedGeometry\)/u);
+  assert.match(source, /stage\(generation: G, model: ValidatedGeometry, eventSink: PresenterEventSink<G>\)/u);
+  assert.doesNotMatch(source, /\bpresent\(/u);
   assert.doesNotMatch(source, /validateCityPayload|validatePresentationModel|canonicalPath|inspection|paletteForComplexity|MAX_ADMITTED_MODULES/u);
 });
 
@@ -441,7 +524,7 @@ test("final dimension reread redraws the detached candidate before commit", () =
   let widthReads = 0;
   Object.defineProperty(environment.host, "clientWidth", { configurable: true, get() { widthReads += 1; return widthReads === 1 ? 100 : 200; } });
   const { presenter } = failuresCollector(environment);
-  assert.deepEqual(presenter.present(1, oneBuilding()), COMMITTED);
+  assert.deepEqual(present(environment, presenter, 1, oneBuilding()), COMMITTED);
   const canvas = environment.canvases[0];
   assert.equal(canvas.gl.uploads.length, 3);
   assert.equal(canvas.gl.calls.filter((call) => call[0] === "drawElementsInstanced").length, 2);
@@ -451,7 +534,7 @@ test("final dimension reread redraws the detached candidate before commit", () =
 test("changed resize repeats the exact draw state with a literal matrix and unchanged resize makes no calls", () => {
   const environment = fakeEnvironment();
   const { presenter } = failuresCollector(environment);
-  assert.deepEqual(presenter.present(1, oneBuilding()), COMMITTED);
+  assert.deepEqual(present(environment, presenter, 1, oneBuilding()), COMMITTED);
   const canvas = environment.canvases[0];
   const gl = canvas.gl;
   const program = gl.calls.find((call) => call[0] === "useProgram")[1];
@@ -488,7 +571,7 @@ test("context loss and resize failures clean exactly once before one contained p
     const environment = fakeEnvironment();
     const callbacks = [];
     const presenter = createCityPresenter({ host: environment.host, platform: environment.platform, isEligible: () => true, failed(...args) { callbacks.push([args, environment.host.child]); throw new Error("contained"); } });
-    assert.deepEqual(presenter.present(stimulus, oneBuilding()), COMMITTED);
+    assert.deepEqual(present(environment, presenter, stimulus, oneBuilding()), COMMITTED);
     const canvas = environment.canvases[0];
     const retained = stimulus === "loss" ? () => canvas.dispatchLoss() : environment.observers[0].callback;
     if (stimulus === "loss") {
@@ -515,7 +598,7 @@ test("ineligible retained callbacks perform only local idempotent cleanup", () =
   const environment = fakeEnvironment();
   let eligible = true;
   const { presenter, failures } = failuresCollector(environment, () => eligible);
-  assert.deepEqual(presenter.present(1, oneBuilding()), COMMITTED);
+  assert.deepEqual(present(environment, presenter, 1, oneBuilding()), COMMITTED);
   eligible = false;
   const retained = environment.observers[0].callback;
   retained(); retained();
@@ -546,7 +629,7 @@ test("closed failure stimuli fail synchronously after cleanup with no publicatio
     const environment = fakeEnvironment(setup);
     const callbacks = [];
     const presenter = createCityPresenter({ host: environment.host, platform: environment.platform, isEligible: () => true, failed(...args) { callbacks.push([args, environment.host.child]); } });
-    assert.deepEqual(presenter.present(id, oneBuilding()), PRESENTATION_FAILURE, id);
+    assert.deepEqual(present(environment, presenter, id, oneBuilding()), PRESENTATION_FAILURE, id);
     assert.equal(environment.host.child, undefined, id);
     assert.deepEqual(callbacks, [], id);
     if (environment.canvases[0]) {
@@ -560,11 +643,11 @@ test("presentation failure clears both detached candidate and prior session befo
   const environment = fakeEnvironment();
   const callbacks = [];
   const presenter = createCityPresenter({ host: environment.host, platform: environment.platform, isEligible: () => true, failed(...args) { callbacks.push([args, environment.host.child]); } });
-  assert.deepEqual(presenter.present(1, oneBuilding()), COMMITTED);
+  assert.deepEqual(present(environment, presenter, 1, oneBuilding()), COMMITTED);
   const first = environment.canvases[0];
   environment.canvases.length = 0;
   environment.platform.createCanvas = () => { const canvas = new FakeCanvas(environment.host, { compileStatus: false }); environment.canvases.push(canvas); return canvas; };
-  assert.deepEqual(presenter.present(2, oneBuilding()), PRESENTATION_FAILURE);
+  assert.deepEqual(present(environment, presenter, 2, oneBuilding()), PRESENTATION_FAILURE);
   assert.equal(first.removeCount, 1);
   assert.equal(environment.canvases[0].removeCount, 1);
   assert.deepEqual(callbacks, []);
@@ -574,7 +657,7 @@ test("cleanup contains release throws, attempts every resource, and skips driver
   {
     const environment = fakeEnvironment();
     const { presenter, failures } = failuresCollector(environment);
-    assert.deepEqual(presenter.present(1, oneBuilding()), COMMITTED);
+    assert.deepEqual(present(environment, presenter, 1, oneBuilding()), COMMITTED);
     const canvas = environment.canvases[0];
     canvas.gl.options.throwMethod = "deleteProgram";
     environment.observers[0].disconnect = function () { this.disconnected += 1; throw new Error("disconnect"); };
@@ -591,7 +674,7 @@ test("cleanup contains release throws, attempts every resource, and skips driver
   {
     const environment = fakeEnvironment();
     const { presenter } = failuresCollector(environment);
-    assert.deepEqual(presenter.present(1, oneBuilding()), COMMITTED);
+    assert.deepEqual(present(environment, presenter, 1, oneBuilding()), COMMITTED);
     const canvas = environment.canvases[0];
     const deletesBefore = names(canvas.gl).filter((name) => name.startsWith("delete")).length;
     canvas.gl.lost = true;
@@ -605,7 +688,7 @@ test("dispose remains terminal and every later validated-geometry call is a pres
   const environment = fakeEnvironment();
   const { presenter, failures } = failuresCollector(environment);
   presenter.dispose(); presenter.dispose();
-  assert.deepEqual(presenter.present(2, oneBuilding()), PRESENTATION_FAILURE);
+  assert.deepEqual(present(environment, presenter, 2, oneBuilding()), PRESENTATION_FAILURE);
   assert.deepEqual(failures, []);
   assert.equal(environment.canvases.length, 0);
 });
@@ -621,41 +704,40 @@ test("every used WebGL setup, state, upload, and draw method throw fails closed"
   for (const method of methods) {
     const environment = fakeEnvironment({ gl: { throwMethod: method } });
     const { presenter, failures } = failuresCollector(environment);
-    assert.deepEqual(presenter.present(method, oneBuilding()), PRESENTATION_FAILURE, method);
+    assert.deepEqual(present(environment, presenter, method, oneBuilding()), PRESENTATION_FAILURE, method);
     assert.equal(environment.host.child, undefined, method);
     assert.deepEqual(failures, [], method);
   }
 });
 
-test("eligibility and host/commit throws are fail-closed while final false is stale", () => {
+test("eligibility, dimensions, and publication throws are fail-closed while false eligibility is stale", () => {
   const model = oneBuilding();
   {
     const environment = fakeEnvironment();
     const { presenter, failures } = failuresCollector(environment, () => { throw new Error("gate"); });
-    assert.deepEqual(presenter.present(1, model), PRESENTATION_FAILURE);
+    assert.deepEqual(present(environment, presenter, 1, model), PRESENTATION_FAILURE);
     assert.deepEqual(failures, []);
     assert.equal(environment.canvases.length, 0);
   }
   {
     const environment = fakeEnvironment({ width: 0 });
     const { presenter } = failuresCollector(environment);
-    assert.deepEqual(presenter.present(1, model), PRESENTATION_FAILURE);
+    assert.deepEqual(present(environment, presenter, 1, model), PRESENTATION_FAILURE);
     assert.equal(environment.canvases.length, 0);
   }
   {
     const environment = fakeEnvironment();
     environment.host.throwReplace = true;
     const { presenter } = failuresCollector(environment);
-    assert.deepEqual(presenter.present(1, model), PRESENTATION_FAILURE);
+    assert.deepEqual(present(environment, presenter, 1, model), PRESENTATION_FAILURE);
     assert.equal(environment.canvases[0].removeCount, 1);
   }
   {
     const environment = fakeEnvironment();
-    let calls = 0;
-    const { presenter, failures } = failuresCollector(environment, () => ++calls === 1);
-    assert.deepEqual(presenter.present(1, model), STALE);
+    const { presenter, failures } = failuresCollector(environment, () => false);
+    assert.deepEqual(present(environment, presenter, 1, model), STALE);
     assert.equal(environment.host.child, undefined);
-    assert.equal(environment.canvases[0].removeCount, 1);
+    assert.equal(environment.canvases.length, 0);
     assert.deepEqual(failures, []);
   }
 });
