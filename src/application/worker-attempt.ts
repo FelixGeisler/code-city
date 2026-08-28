@@ -1,7 +1,7 @@
 import type { AdmittedModule } from "../domain/source-admission";
 import type { RepositoryReference } from "../domain/repository-reference";
 import type { ModuleComplexityFact } from "../domain/complexity";
-import { buildCity, validatePresentationModel, type City, type PresentationModel } from "../domain/city-model";
+import { buildCity, type City } from "../domain/city-model";
 import { processAdmittedBaseMetrics, type MetricProcessingEvent, type SyntaxProjectionCapability } from "./base-metric-processing";
 import { validRevision, type WorkerMessage } from "./protocol";
 import { resolveRevision, type RevisionGateway } from "./resolution";
@@ -12,7 +12,7 @@ import {
 } from "./source-retrieval";
 
 type ActiveAttempt = {
-  model?: PresentationModel;
+  city?: City;
   controller?: AbortController;
   drained: boolean;
   generation: number;
@@ -35,7 +35,7 @@ export type AttemptOwnership = Readonly<{
 
 export type CityConstructionCapability = (facts: readonly ModuleComplexityFact[]) => City;
 
-type SuccessfulPreparation = Readonly<{ revision: string; model: PresentationModel }>;
+type SuccessfulPreparation = Readonly<{ revision: string; city: City }>;
 
 export type WorkerAttemptPipeline = Readonly<{
   start(repository: RepositoryReference, generation: number): void;
@@ -54,14 +54,14 @@ export function createWorkerAttemptPipeline(
 ): WorkerAttemptPipeline {
   let active: ActiveAttempt | undefined;
 
-  function preparePresentationModel(facts: readonly ModuleComplexityFact[]): PresentationModel {
+  function prepareCity(facts: readonly ModuleComplexityFact[]): City {
     const city = constructCity(facts);
-    const model = validatePresentationModel(city.model);
-    const buffers = [model.origins.buffer, model.sizes.buffer, model.rgba.buffer, model.bounds.buffer];
-    if (new Set(buffers).size !== 4) {
-      throw new Error("Presentation buffers must be distinct");
+    const geometry = city.geometry;
+    const buffers = [geometry.origins.buffer, geometry.sizes.buffer, geometry.rgba.buffer, geometry.bounds.buffer];
+    if (new Set(buffers).size !== 4 || city.inspection.length !== geometry.count) {
+      throw new Error("City construction did not produce one aligned transferable result");
     }
-    return model;
+    return city;
   }
 
   async function prepareStaticSuccess(
@@ -84,9 +84,9 @@ export function createWorkerAttemptPipeline(
       drain(attempt);
       return undefined;
     }
-    let model: PresentationModel;
+    let city: City;
     try {
-      model = preparePresentationModel(processing.facts);
+      city = prepareCity(processing.facts);
     } catch {
       processing.release();
       publish({
@@ -100,7 +100,7 @@ export function createWorkerAttemptPipeline(
       return undefined;
     }
     processing.release();
-    return { revision, model };
+    return { revision, city };
   }
 
   async function prepareProviderSuccess(attempt: ActiveAttempt): Promise<SuccessfulPreparation | undefined> {
@@ -180,7 +180,7 @@ export function createWorkerAttemptPipeline(
     attempt.drained = true;
     attempt.controller = undefined;
     attempt.repository = undefined;
-    attempt.model = undefined;
+    attempt.city = undefined;
     attempt.selectedRevision = undefined;
     publish({ type: "ATTEMPT_DRAINED", generation: attempt.generation });
     if (active === attempt) {
@@ -195,9 +195,9 @@ export function createWorkerAttemptPipeline(
         return;
       }
       attempt.selectedRevision = prepared.revision;
-      attempt.model = prepared.model;
-      publish({ type: "SUCCESS", generation: attempt.generation, revision: prepared.revision, model: prepared.model });
-      attempt.model = undefined;
+      attempt.city = prepared.city;
+      publish({ type: "SUCCESS", generation: attempt.generation, revision: prepared.revision, city: prepared.city });
+      attempt.city = undefined;
       prepared = undefined;
       drain(attempt);
     } catch {
@@ -252,8 +252,8 @@ export function createWorkerAttemptPipeline(
           generation: active.generation,
           selectedRevisionRetained: active.selectedRevision !== undefined,
           admittedModuleCount: 0,
-          presentationModelRetained: active.model !== undefined,
-          finalFactCount: 0,
+          presentationModelRetained: active.city !== undefined,
+          finalFactCount: active.city?.inspection.length ?? 0,
           providerResource: false,
         }
       : {

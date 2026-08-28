@@ -161,7 +161,7 @@ function presentationHost(width,height){
   document.body.append(host);
   return {host,dimensions};
 }
-const presentationModel=buildCity([{canonicalPath:"browser.js",S:1,U:1,M:1}]).model;
+const presentationModel=buildCity([{canonicalPath:"browser.js",S:1,U:1,M:1}]).geometry;
 const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeatDraws:0,resizeDraws:0,lossDefaultPrevented:null,lossDraws:0,lossFailures:[],lossCleanup:null,lossTerminalState:null,compileFailureResult:null,compileFailureDraws:0,compileFailures:[],compileCleanup:null,compileFailureTerminalState:null,pass:false};
 {
   const holder=presentationHost(320,180);

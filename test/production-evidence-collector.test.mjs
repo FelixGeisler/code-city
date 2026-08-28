@@ -358,9 +358,13 @@ test("page-side Worker observer preserves application constructor and listener t
   assert.equal(worker.removeEventListener, FakeWorker.prototype.removeEventListener);
   const order = [];
   const model = { count: 1, origins: Uint8Array.of(1), sizes: Uint8Array.of(2), rgba: Uint8Array.of(3), bounds: Uint8Array.of(4) };
-  const message = { type: "SUCCESS", generation: 1, revision: EVENT, model };
+  const sentinel = "<secret>\u202Etoken";
+  let inspectionReads = 0;
+  const city = { geometry: model };
+  Object.defineProperty(city, "inspection", { enumerable: true, get() { inspectionReads += 1; throw new Error(sentinel); } });
+  const message = { type: "SUCCESS", generation: 1, revision: EVENT, city };
   const event = { data: message };
-  function first(received) { order.push("first"); assert.equal(this, worker); assert.equal(received, event); assert.equal(received.data, message); assert.equal(received.data.model, model); }
+  function first(received) { order.push("first"); assert.equal(this, worker); assert.equal(received, event); assert.equal(received.data, message); assert.equal(received.data.city.geometry, model); }
   function throwing() { order.push("throwing"); throw new Error("application exception"); }
   function last() { order.push("last"); }
   worker.addEventListener("message", first);
@@ -375,6 +379,8 @@ test("page-side Worker observer preserves application constructor and listener t
   const observed = JSON.parse(emitted[0]);
   assert.deepEqual(Object.keys(observed), ["type", "generation", "revision", "modelSha256"]);
   assert.equal(observed.modelSha256, computeModelSha256(model));
+  assert.equal(inspectionReads, 0);
+  assert.equal(emitted.some((payload) => payload.includes(sentinel)), false);
 });
 
 test("collector-local final Worker gate retains only fixed controls and releases native termination exactly once", () => {
@@ -509,9 +515,10 @@ test("page-side Worker observer closes original selection, success, and capacity
   worker.addEventListener("message", (event) => delivered.push(event));
 
   const model = { count: 1, origins: Uint8Array.of(1), sizes: Uint8Array.of(2), rgba: Uint8Array.of(3), bounds: Uint8Array.of(4) };
+  const city = { geometry: model, inspection: [{ canonicalPath: "<secret>\u202Etoken", S: 1, U: 1, M: 1 }] };
   const variants = [
     { name: "selection", message: { type: "REVISION_SELECTED", generation: 1, revision: EVENT }, missing: "revision", accessor: "revision" },
-    { name: "success", message: { type: "SUCCESS", generation: 1, revision: EVENT, model }, missing: "model", accessor: "model" },
+    { name: "success", message: { type: "SUCCESS", generation: 1, revision: EVENT, city }, missing: "city", accessor: "city" },
     {
       name: "capacity", missing: "category", accessor: "category",
       message: { type: "FAILURE", generation: 2, revision: REACT, category: "Repository exceeds Code City limits" },
@@ -530,6 +537,7 @@ test("page-side Worker observer closes original selection, success, and capacity
     type: "SUCCESS", generation: 1, revision: EVENT, modelSha256: computeModelSha256(model),
   });
   assert.deepEqual(JSON.parse(emitted[2]), variants[2].message);
+  assert.equal(emitted.some((payload) => payload.includes("<secret>") || payload.includes("token")), false);
 
   let accessorReads = 0;
   for (const { name, message, missing, accessor: accessorKey } of variants) {
@@ -554,6 +562,9 @@ test("page-side Worker observer closes original selection, success, and capacity
 
     dispatch({ ...message, generation: "wrong-shape" });
   }
+  const geometryAccessorCity = { inspection: city.inspection };
+  Object.defineProperty(geometryAccessorCity, "geometry", { enumerable: true, get() { accessorReads += 1; return model; } });
+  dispatch({ type: "SUCCESS", generation: 1, revision: EVENT, city: geometryAccessorCity });
   dispatch(null);
   dispatch([]);
 

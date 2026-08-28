@@ -1,5 +1,5 @@
 import { FAILURE_CATEGORIES, FAILURE_CODES, type FailureCode } from "./resolution";
-import { validatePresentationModel, type PresentationModel } from "../domain/city-model";
+import { validateCityPayload, type CityPayload, type ValidatedCity } from "./city-payload";
 import type { RepositoryReference } from "../domain/repository-reference";
 
 export type WorkerCommand =
@@ -21,14 +21,16 @@ type PostSelectionCodedCategory =
   | "Metric processing failed"
   | "City construction failed";
 
-export type WorkerMessage =
+export type WorkerMessage<C extends CityPayload = CityPayload> =
   | Readonly<{ type: "REVISION_SELECTED"; generation: number; revision: string }>
   | Readonly<{ type: "FAILURE"; generation: number; category: PreSelectionCategory }>
   | Readonly<{ type: "FAILURE"; generation: number; revision: string; category: PostSelectionUncodedCategory }>
   | Readonly<{ type: "FAILURE"; generation: number; revision: string; category: PostSelectionCodedCategory; code: FailureCode }>
   | Readonly<{ type: "PROVIDER_DRAINED_STATIC_ENTERED"; generation: number }>
-  | Readonly<{ type: "SUCCESS"; generation: number; revision: string; model: PresentationModel }>
+  | Readonly<{ type: "SUCCESS"; generation: number; revision: string; city: C }>
   | Readonly<{ type: "ATTEMPT_DRAINED"; generation: number }>;
+
+export type ParsedWorkerMessage = WorkerMessage<ValidatedCity>;
 
 type DataRecord = Record<string, unknown>;
 
@@ -123,7 +125,7 @@ function expectedGeneration(record: DataRecord | undefined, expected: number): r
   return record?.generation === expected && validGeneration(record.generation);
 }
 
-export function parseWorkerMessage(value: unknown, expected: number): WorkerMessage | undefined {
+export function parseWorkerMessage(value: unknown, expected: number): ParsedWorkerMessage | undefined {
   const selected = ownDataRecord(value, ["type", "generation", "revision"]);
   if (selected?.type === "REVISION_SELECTED"
     && expectedGeneration(selected, expected)
@@ -131,7 +133,7 @@ export function parseWorkerMessage(value: unknown, expected: number): WorkerMess
     return { type: "REVISION_SELECTED", generation: selected.generation, revision: selected.revision };
   }
 
-  const success = ownDataRecord(value, ["type", "generation", "revision", "model"]);
+  const success = ownDataRecord(value, ["type", "generation", "revision", "city"]);
   if (success?.type === "SUCCESS"
     && expectedGeneration(success, expected)
     && validRevision(success.revision)) {
@@ -140,7 +142,7 @@ export function parseWorkerMessage(value: unknown, expected: number): WorkerMess
         type: "SUCCESS",
         generation: success.generation,
         revision: success.revision,
-        model: validatePresentationModel(success.model),
+        city: validateCityPayload(success.city),
       };
     } catch {
       return {

@@ -67,12 +67,18 @@ test("worker-to-main protocol accepts every exact pre/post-selection row and clo
     { type: "FAILURE", generation: 7, revision: SHA, category: "City construction failed", code: "M1-CITY-1" },
   ];
   const staticEntered = { type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 7 };
-  const success = { type: "SUCCESS", generation: 7, revision: SHA, model: buildCity([{ canonicalPath: "a.js", S: 1, U: 1, M: 0 }]).model };
+  const city = buildCity([{ canonicalPath: "a.js", S: 1, U: 1, M: 0 }]);
+  const success = { type: "SUCCESS", generation: 7, revision: SHA, city };
   const drained = { type: "ATTEMPT_DRAINED", generation: 7 };
-  for (const valid of [selected, { ...selected, revision: revision64 }, ...preFailures, ...postFailures, staticEntered, success, drained]) {
+  for (const valid of [selected, { ...selected, revision: revision64 }, ...preFailures, ...postFailures, staticEntered, drained]) {
     assert.deepEqual(parseWorkerMessage(valid, 7), valid);
   }
-  assert.deepEqual(parseWorkerMessage({ ...success, model: {} }, 7), {
+  const parsedSuccess = parseWorkerMessage(success, 7);
+  assert.equal(parsedSuccess.type, "SUCCESS");
+  assert.deepEqual([...parsedSuccess.city.geometry.origins], [...city.geometry.origins]);
+  assert.notEqual(parsedSuccess.city.geometry.origins, city.geometry.origins);
+  assert.deepEqual(parsedSuccess.city.inspection, city.inspection);
+  assert.deepEqual(parseWorkerMessage({ ...success, city: {} }, 7), {
     type: "FAILURE", generation: 7, revision: SHA, category: "City construction failed", code: "M1-CITY-1",
   });
 
@@ -82,7 +88,7 @@ test("worker-to-main protocol accepts every exact pre/post-selection row and clo
     { ...selected, generation: 6 }, { ...selected, revision: SHA.toUpperCase() }, { ...selected, revision: "a".repeat(39) },
     { ...failure, generation: 6 }, { ...failure, category: "raw provider detail" }, { ...failure, extra: true },
     { type: "SUCCESS", generation: 7, revision: SHA }, { ...success, revision: SHA.toUpperCase() },
-    { ...success, revision: "a".repeat(39) }, { ...success, extra: true }, inherited(success), accessor(success, "model"),
+    { ...success, revision: "a".repeat(39) }, { ...success, extra: true }, inherited(success), accessor(success, "city"),
     { type: "Source admission failed", generation: 7, revision: SHA, category: "Source admission failed", code: "M1-ADM-4" },
     { type: "FAILURE", generation: 7, category: "No supported modules", code: "ADM-06" },
     { type: "FAILURE", generation: 7, revision: SHA, category: "Repository unavailable for anonymous access" },

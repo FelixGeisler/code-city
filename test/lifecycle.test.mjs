@@ -13,7 +13,7 @@ const { buildCity } = await import("../src/domain/city-model.ts");
 
 const VALID = "https://github.com/owner/repo";
 const SHA = "a".repeat(40);
-const MODEL = buildCity([{ canonicalPath: "a.js", S: 1, U: 1, M: 0 }]).model;
+const CITY = buildCity([{ canonicalPath: "a.js", S: 1, U: 1, M: 0 }]);
 
 function fixture({
   factoryThrows = false,
@@ -81,9 +81,9 @@ function fixture({
     return {
       clear() { presentation.clears += 1; },
       dispose() { presentation.disposes += 1; },
-      present(generation, model) {
+      present(generation, geometry) {
         events.push("present");
-        presentation.calls.push({ generation, model, eligible: hooks.isEligible(generation) });
+        presentation.calls.push({ generation, geometry, eligible: hooks.isEligible(generation) });
         return presentResult;
       },
     };
@@ -149,8 +149,12 @@ test("success is accepted once after the barrier, presented before publication, 
   const transport = f.transports[0];
   transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
   transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
-  transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, model: MODEL });
-  assert.deepEqual(f.presentation.calls, [{ generation: 1, model: MODEL, eligible: true }]);
+  transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city: CITY });
+  assert.equal(f.presentation.calls.length, 1);
+  assert.equal(f.presentation.calls[0].generation, 1);
+  assert.equal(f.presentation.calls[0].eligible, true);
+  assert.deepEqual([...f.presentation.calls[0].geometry.origins], [...CITY.geometry.origins]);
+  assert.notEqual(f.presentation.calls[0].geometry.origins, CITY.geometry.origins);
   assert.deepEqual(f.events.slice(-2), ["present", `view:success:${SHA}`]);
   transport.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
   assert.equal(transport.closeCalls, 1);
@@ -168,7 +172,7 @@ test("a new valid submission synchronously revokes a drained publication and can
   const first = f.transports[0];
   first.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
   first.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
-  first.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, model: MODEL });
+  first.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city: CITY });
   first.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
   assert.equal(f.presentation.clears, 1);
 
@@ -178,7 +182,7 @@ test("a new valid submission synchronously revokes a drained publication and can
   const second = f.transports[1];
   second.handlers.message({ type: "REVISION_SELECTED", generation: 2, revision: SHA });
   second.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 2 });
-  second.handlers.message({ type: "SUCCESS", generation: 2, revision: SHA, model: MODEL });
+  second.handlers.message({ type: "SUCCESS", generation: 2, revision: SHA, city: CITY });
   second.handlers.message({ type: "ATTEMPT_DRAINED", generation: 2 });
   assert.deepEqual(f.presentation.calls.map(({ generation, eligible }) => ({ generation, eligible })), [
     { generation: 1, eligible: true }, { generation: 2, eligible: true },
@@ -194,7 +198,7 @@ test("invalid success models map to CITY1 before presentation and a duplicate su
     const transport = f.transports[0];
     transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
     transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
-    transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, model: {} });
+    transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city: {} });
     assert.deepEqual(f.presentation.calls, []);
     assert.equal(f.events.at(-1), "view:City construction failed");
     transport.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
@@ -206,7 +210,7 @@ test("invalid success models map to CITY1 before presentation and a duplicate su
     const transport = f.transports[0];
     transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
     transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
-    const success = { type: "SUCCESS", generation: 1, revision: SHA, model: MODEL };
+    const success = { type: "SUCCESS", generation: 1, revision: SHA, city: CITY };
     transport.handlers.message(success);
     transport.handlers.message(success);
     assert.equal(transport.closeCalls, 1);
@@ -220,7 +224,7 @@ test("synchronous presenter failure is mapped by the controller without using th
   const transport = f.transports[0];
   transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
   transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
-  transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, model: MODEL });
+  transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city: CITY });
   assert.equal(f.events.at(-1), "view:Presentation failed");
   assert.deepEqual(f.failures.at(-1), { category: "Presentation failed", code: "M1-PRES-1", revision: SHA });
   assert.equal(f.events.some((event) => event.startsWith("view:success:")), false);
@@ -593,7 +597,7 @@ test("out-of-order and early-drain messages fail immediately with revision only 
   const cases = [
     { messages: [{ type: "ATTEMPT_DRAINED", generation: 1 }], revision: undefined },
     { messages: [{ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 }], revision: undefined },
-    { messages: [{ type: "SUCCESS", generation: 1, revision: SHA, model: MODEL }], revision: undefined },
+    { messages: [{ type: "SUCCESS", generation: 1, revision: SHA, city: CITY }], revision: undefined },
     { messages: [
       { type: "REVISION_SELECTED", generation: 1, revision: SHA },
       { type: "ATTEMPT_DRAINED", generation: 1 },

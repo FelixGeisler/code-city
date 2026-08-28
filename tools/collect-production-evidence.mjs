@@ -607,6 +607,7 @@ export function createWorkerObserverSource(bindingName = "__codeCityCollectorEvi
     let pendingTeardown = null;
     const nativeObjectPrototype = Object.prototype;
     const getPrototypeOf = Object.getPrototypeOf;
+    const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
     const getOwnPropertyDescriptors = Object.getOwnPropertyDescriptors;
     const ownKeys = Reflect.ownKeys;
     const malformedObservation = '{"malformed":true}';
@@ -667,7 +668,7 @@ export function createWorkerObserverSource(bindingName = "__codeCityCollectorEvi
       const type=descriptors.type?.value;
       let expected;
       if(type==="REVISION_SELECTED")expected=["type","generation","revision"];
-      else if(type==="SUCCESS")expected=["type","generation","revision","model"];
+      else if(type==="SUCCESS")expected=["type","generation","revision","city"];
       else if(type==="FAILURE") {
         if(keys.length===3)expected=["type","generation","category"];
         else if(keys.length===4)expected=["type","generation","revision","category"];
@@ -676,19 +677,28 @@ export function createWorkerObserverSource(bindingName = "__codeCityCollectorEvi
       } else if(type==="PROVIDER_DRAINED_STATIC_ENTERED"||type==="ATTEMPT_DRAINED")expected=["type","generation"];
       else throw 0;
       if(keys.length!==expected.length||expected.some((key)=>!descriptors[key]))throw 0;
-      const record={};for(const key of expected)record[key]=descriptors[key].value;
+      const record={};for(const key of expected)if(key!=="city")record[key]=descriptors[key].value;
       if(!Number.isSafeInteger(record.generation)||record.generation<=0)throw 0;
       if((type==="REVISION_SELECTED"||type==="SUCCESS")&&!validRevision(record.revision))throw 0;
       if(type==="FAILURE"&&(typeof record.category!=="string"||!validFailureShape(record,expected)))throw 0;
-      return record;
+      let geometry;
+      if(type==="SUCCESS") {
+        const city=descriptors.city.value;
+        if(!city||typeof city!=="object"||getPrototypeOf(city)!==nativeObjectPrototype)throw 0;
+        const descriptor=getOwnPropertyDescriptor(city,"geometry");
+        if(!descriptor||!("value" in descriptor)||!descriptor.enumerable)throw 0;
+        geometry=descriptor.value;
+      }
+      return {record,geometry};
     }
     function observation(message) {
-      const record=messageRecord(message);
+      const observed=messageRecord(message);
+      const record=observed.record;
       const fact={type:record.type,generation:record.generation};
       if(typeof record.revision==="string")fact.revision=record.revision;
       if(typeof record.category==="string")fact.category=record.category;
       if(typeof record.code==="string")fact.code=record.code;
-      if(record.type==="SUCCESS")fact.modelSha256=modelDigest(record.model);
+      if(record.type==="SUCCESS")fact.modelSha256=modelDigest(observed.geometry);
       return {record,payload:JSON.stringify(fact)};
     }
     function emitControl(type) {
