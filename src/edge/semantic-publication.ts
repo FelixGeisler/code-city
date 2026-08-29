@@ -37,10 +37,16 @@ export function stageSemanticPublication(
       inspector.hidden = false;
     },
     rollback() {
-      path.textContent = "";
-      inspector.hidden = true;
-      inspector.remove();
-      if (committedToRoot || revisionOutput.textContent === revision) revisionOutput.textContent = "";
+      try { inspector.hidden = true; } catch {}
+      try { inspector.remove(); } catch {}
+      try { path.textContent = ""; } catch {}
+      let ownsRevision = committedToRoot;
+      if (!ownsRevision) {
+        try { ownsRevision = revisionOutput.textContent === revision; } catch {}
+      }
+      if (ownsRevision) {
+        try { revisionOutput.textContent = ""; } catch {}
+      }
       committedToRoot = false;
     },
   });

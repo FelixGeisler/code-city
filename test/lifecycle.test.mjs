@@ -10,6 +10,7 @@ registerHooks({
 });
 const { createMainController } = await import("../src/application/main-controller.ts");
 const { buildCity } = await import("../src/domain/city-model.ts");
+const { stageSemanticPublication } = await import("../src/edge/semantic-publication.ts");
 
 const VALID = "https://github.com/owner/repo";
 const SHA = "a".repeat(40);
@@ -32,6 +33,7 @@ function fixture({
   publicationRollbackThrows = false,
   selectionThrows = false,
   successThrows = false,
+  publicationFactory,
   onStage,
 } = {}) {
   const events = [];
@@ -48,6 +50,11 @@ function fixture({
     stagePublication(revision, inspection) {
       events.push("semantic:stage");
       if (publicationStageThrows) throw new Error("semantic stage");
+      if (publicationFactory) {
+        const publication = publicationFactory(revision, inspection);
+        presentation.publications.push(publication);
+        return publication;
+      }
       let active = true;
       const publication = {
         commits: 0,
@@ -450,6 +457,100 @@ test("semantic selection failure after a valid city revokes the session exactly 
   assert.equal(f.presentation.clears, 1);
   assert.equal(f.presentation.hooks.isEligible(1), false);
   assert.equal(f.events.filter((event) => event === "semantic:selection").length, 1);
+});
+
+test("persistent semantic clear failure revokes M1-PRES-1 without leaving an attached inspector or stale path", () => {
+  const operations = [];
+  class FaultingElement {
+    constructor(tagName) {
+      this.tagName = tagName.toUpperCase();
+      this.dataset = {};
+      this.attributes = new Map();
+      this.children = [];
+      this.parent = undefined;
+      this.value = "";
+      this.failText = false;
+      this.hiddenValue = false;
+    }
+    set hidden(value) {
+      operations.push(`${this.tagName}:hidden:${String(value)}`);
+      this.hiddenValue = Boolean(value);
+    }
+    get hidden() { return this.hiddenValue; }
+    set textContent(value) {
+      operations.push(`${this.tagName}:text:${String(value)}`);
+      if (this.failText) throw new Error("persistent textContent failure");
+      this.value = String(value);
+      this.children = [];
+    }
+    get textContent() {
+      return this.children.length ? this.children.map((child) => child.textContent ?? "").join("") : this.value;
+    }
+    setAttribute(name, value) { this.attributes.set(name, String(value)); }
+    append(child) { child.parent = this; this.children.push(child); }
+    replaceChildren(...children) {
+      for (const child of this.children) if (child && typeof child === "object") child.parent = undefined;
+      this.children = children;
+      for (const child of children) if (child && typeof child === "object") child.parent = this;
+    }
+    remove() {
+      operations.push(`${this.tagName}:remove`);
+      if (!this.parent) return;
+      this.parent.children = this.parent.children.filter((child) => child !== this);
+      this.parent = undefined;
+    }
+  }
+
+  const root = new FaultingElement("main");
+  const revision = new FaultingElement("output");
+  const created = [];
+  const documentTarget = {
+    createElement(tagName) {
+      const element = new FaultingElement(tagName);
+      created.push(element);
+      return element;
+    },
+  };
+  const f = fixture({
+    publicationFactory: (selectedRevision, inspection) => stageSemanticPublication(
+      documentTarget,
+      root,
+      revision,
+      selectedRevision,
+      inspection,
+    ),
+  });
+  f.controller.submit(VALID);
+  const transport = f.transports[0];
+  transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
+  transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+  transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city: CITY });
+
+  const [inspector, path] = created;
+  const sink = f.presentation.eventSinks[0];
+  sink.selectionAction(1, "first");
+  assert.equal(inspector.hidden, false);
+  assert.equal(path.textContent, CITY.inspection[0].canonicalPath);
+  assert.equal(inspector.parent, root);
+
+  path.failText = true;
+  operations.length = 0;
+  sink.selectionAction(1, "clear");
+
+  assert.deepEqual(f.failures, [{ category: "Presentation failed", code: "M1-PRES-1", revision: SHA }]);
+  assert.equal(f.presentation.hooks.isEligible(1), false);
+  assert.equal(inspector.hidden, true);
+  assert.equal(inspector.parent, undefined);
+  assert.equal(root.children.includes(inspector), false);
+  assert.equal(path.textContent, CITY.inspection[0].canonicalPath);
+  assert.equal(revision.textContent, "");
+  assert.deepEqual(operations, [
+    "BDI:text:",
+    "SECTION:hidden:true",
+    "SECTION:remove",
+    "BDI:text:",
+    "OUTPUT:text:",
+  ]);
 });
 
 test("invalid replacement revokes output, closes active work, and starts no replacement", () => {
