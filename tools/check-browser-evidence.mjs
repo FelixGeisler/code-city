@@ -133,11 +133,11 @@ function pageObservationSource() {
       return record;
     };
     HTMLCanvasElement.prototype.addEventListener = function(type, listener, options) {
-      if (["webglcontextlost", "keydown", "wheel"].includes(type)) listenerRecord(this).adds.push({ type, passive: options?.passive ?? null, once: options?.once ?? false });
+      if (["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture", "contextmenu"].includes(type)) listenerRecord(this).adds.push({ type, passive: options?.passive ?? null, once: options?.once ?? false });
       return nativeCanvasAdd.call(this, type, listener, options);
     };
     HTMLCanvasElement.prototype.removeEventListener = function(type, listener, options) {
-      if (["webglcontextlost", "keydown", "wheel"].includes(type)) listenerRecord(this).removes.push(type);
+      if (["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture", "contextmenu"].includes(type)) listenerRecord(this).removes.push(type);
       return nativeCanvasRemove.call(this, type, listener, options);
     };
     const nativeButtonAdd = HTMLButtonElement.prototype.addEventListener;
@@ -331,6 +331,9 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
   const dispatchWheel = async ({ x, y, deltaY, modifiers = 0 }) => {
     await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: 0, deltaY, modifiers }, sessionId);
   };
+  const dispatchPointer = async ({ type, x, y, button = "none", buttons = 0, modifiers = 0 }) => {
+    await cdp.send("Input.dispatchMouseEvent", { type, x, y, button, buttons, modifiers, clickCount: type === "mouseMoved" ? 0 : 1 }, sessionId);
+  };
   const waitFor = async (expression, label) => {
     const end = Date.now() + 120_000;
     while (Date.now() < end) {
@@ -371,9 +374,12 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       document.body.style.minHeight="200vh";
       const canvas=document.querySelector('[data-city] canvas');
       canvas.scrollIntoView({block:"center"});
-      globalThis.__navigationEvidence={keys:[],wheels:[]};
+      globalThis.__navigationEvidence={keys:[],wheels:[],pointers:[],contextMenus:[]};
       window.addEventListener("keydown",event=>globalThis.__navigationEvidence.keys.push({key:event.key,repeat:event.repeat,shift:event.shiftKey,ctrl:event.ctrlKey,defaultPrevented:event.defaultPrevented}));
       window.addEventListener("wheel",event=>globalThis.__navigationEvidence.wheels.push({deltaY:event.deltaY,shift:event.shiftKey,defaultPrevented:event.defaultPrevented}),{passive:true});
+      window.addEventListener("pointerdown",event=>globalThis.__navigationEvidence.pointers.push({type:event.type,pointerId:event.pointerId,button:event.button,target:event.target.tagName,defaultPrevented:event.defaultPrevented}));
+      window.addEventListener("pointerup",event=>globalThis.__navigationEvidence.pointers.push({type:event.type,pointerId:event.pointerId,button:event.button,target:event.target.tagName,defaultPrevented:event.defaultPrevented}));
+      window.addEventListener("contextmenu",event=>globalThis.__navigationEvidence.contextMenus.push({target:event.target.tagName,defaultPrevented:event.defaultPrevented}));
       document.querySelector('form button[type=submit]').focus();
       return true;
     })()`);
@@ -400,19 +406,52 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await new Promise((resolve) => setTimeout(resolve, 50));
     await dispatchWheel({ x: wheelPoint.x, y: wheelPoint.y, deltaY: -120 });
     await dispatchWheel({ x: wheelPoint.x, y: wheelPoint.y, deltaY: 120, modifiers: 8 });
+    await evaluate("document.querySelector('form button[type=submit]').focus();true");
+    const pointerPoint = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); canvas.scrollIntoView({block:"center"}); const r=canvas.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const pointerTarget = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); const r=canvas.getBoundingClientRect(); const x=r.x+r.width/2; const y=r.y+r.height/2; return {requested:${JSON.stringify(pointerPoint)},actual:{x,y},target:document.elementFromPoint(x,y)?.tagName,rect:{x:r.x,y:r.y,width:r.width,height:r.height},scrollY}; })()`);
+    assert.equal(pointerTarget.target, "CANVAS", JSON.stringify(pointerTarget));
+
+    const gesturePoint = pointerTarget.actual;
+    await dispatchPointer({ type: "mousePressed", x: gesturePoint.x, y: gesturePoint.y, button: "left", buttons: 1 });
+    const primaryCapture = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); const pointerId=globalThis.__navigationEvidence.pointers.at(-1).pointerId; return {focused:document.activeElement===canvas,pointerId,captured:canvas.hasPointerCapture(pointerId)}; })()`);
+    await dispatchPointer({ type: "mouseMoved", x: gesturePoint.x + 12, y: gesturePoint.y + 4, buttons: 1 });
+    await dispatchPointer({ type: "mouseReleased", x: 2, y: 2, button: "left", buttons: 0 });
+    const primaryReleased = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); return !canvas.hasPointerCapture(${primaryCapture.pointerId}); })()`);
+
+    await dispatchPointer({ type: "mousePressed", x: gesturePoint.x, y: gesturePoint.y, button: "left", buttons: 1 });
+    await dispatchPointer({ type: "mouseReleased", x: gesturePoint.x, y: gesturePoint.y, button: "left", buttons: 0 });
+    await dispatchPointer({ type: "mousePressed", x: gesturePoint.x, y: gesturePoint.y, button: "right", buttons: 2 });
+    const secondaryCapture = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); const pointerId=globalThis.__navigationEvidence.pointers.at(-1).pointerId; return {pointerId,captured:canvas.hasPointerCapture(pointerId),events:globalThis.__navigationEvidence}; })()`);
+    assert.equal(secondaryCapture.captured, true, JSON.stringify(secondaryCapture));
+    await dispatchKey({ key: "Escape", code: "Escape", virtualKey: 27 });
+    await dispatchPointer({ type: "mouseMoved", x: gesturePoint.x - 9, y: gesturePoint.y + 7, buttons: 2 });
+    await dispatchPointer({ type: "mouseReleased", x: gesturePoint.x - 9, y: gesturePoint.y + 7, button: "right", buttons: 0 });
+    await dispatchPointer({ type: "mousePressed", x: 2, y: 2, button: "right", buttons: 2 });
+    await dispatchKey({ key: "Escape", code: "Escape", virtualKey: 27 });
+    await dispatchPointer({ type: "mouseReleased", x: 2, y: 2, button: "right", buttons: 0 });
+
     await evaluate("scrollTo(0,0);true");
     await new Promise((resolve) => setTimeout(resolve, 50));
     const scrollBefore = await evaluate("scrollY");
     await dispatchWheel({ x: 2, y: 2, deltaY: 180 });
     await new Promise((resolve) => setTimeout(resolve, 100));
     const scrollAfter = await evaluate("scrollY");
+    await evaluate(`document.querySelector('[data-city] canvas').scrollIntoView({block:"center"});true`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const interruptionPoint = await evaluate(`(() => { const r=document.querySelector('[data-city] canvas').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
+    await dispatchPointer({ type: "mousePressed", x: interruptionPoint.x, y: interruptionPoint.y, button: "left", buttons: 1 });
+    const interruptedPointerId = await evaluate("globalThis.__navigationEvidence.pointers.at(-1).pointerId");
     await evaluate("document.querySelector('[data-city]').style.width='75%';true");
-    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].draws.length>=${navigationStart.draws + 8}`, "native navigation and resize redraws");
+    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].draws.length>=${navigationStart.draws + 10}`, "native navigation and resize redraws");
+    const resizeReleasedCapture = await evaluate(`!document.querySelector('[data-city] canvas').hasPointerCapture(${interruptedPointerId})`);
+    await dispatchPointer({ type: "mouseMoved", x: interruptionPoint.x + 20, y: interruptionPoint.y + 20, buttons: 1 });
+    await dispatchPointer({ type: "mouseReleased", x: interruptionPoint.x + 20, y: interruptionPoint.y + 20, button: "left", buttons: 0 });
     await dispatchKey({ key: "0", code: "Digit0", virtualKey: 48, text: "0" });
     await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9 });
     const focusedReset = await evaluate("document.activeElement===document.querySelector('[data-city-reset]')");
     await dispatchKey({ key: "Enter", code: "Enter", virtualKey: 13, text: "\r" });
-    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].draws.length>=${navigationStart.draws + 10}`, "keyboard Reset redraw");
+    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].draws.length>=${navigationStart.draws + 12}`, "keyboard Reset redraw");
     const navigation = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {draws:context.draws.length-${navigationStart.draws},matrices:context.matrices.slice(${navigationStart.matrices}),uploads:context.uploads.map(bytes=>bytes.length),events:globalThis.__navigationEvidence,canvasListeners:context.listeners,resetListeners:globalThis.__codeCitySuccessEvidence.resetListeners}; })()`);
 
     const observed = await evaluate("globalThis.__codeCitySuccessEvidence");
@@ -469,18 +508,29 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert.notEqual(focusedCanvas.outlineWidth, "0px");
     assert.notEqual(focusedCanvas.outlineColor, "rgba(0, 0, 0, 0)");
     assert.equal(focusedReset, true);
+    assert.deepEqual(primaryCapture, { focused: true, pointerId: 1, captured: true });
+    assert.equal(primaryReleased, true);
+    assert.equal(resizeReleasedCapture, true);
     assert(scrollAfter > scrollBefore, `Wheel outside canvas did not retain browser scrolling: ${scrollBefore} -> ${scrollAfter}`);
-    assert.equal(navigation.draws, 10);
-    assert.equal(navigation.matrices.length, 10);
+    assert.equal(navigation.draws, 12);
+    assert.equal(navigation.matrices.length, 12);
     assert.deepEqual(navigation.uploads, navigationStart.uploads);
     assert.deepEqual(navigation.matrices[5], navigationStart.matrix, "keyboard 0 did not restore the exact initial overview");
     assert.notDeepEqual(navigation.matrices[6], navigation.matrices[5], "native wheel did not zoom");
-    assert.notDeepEqual(navigation.matrices[7], navigation.matrices[6], "ResizeObserver did not refit the camera");
-    assert.deepEqual(navigation.matrices[9], navigation.matrices[8], "native Reset button did not reproduce the resized overview");
+    assert.notDeepEqual(navigation.matrices[7], navigation.matrices[6], "native primary pointer did not orbit");
+    assert.notDeepEqual(navigation.matrices[8], navigation.matrices[7], "native secondary pointer did not pan");
+    assert.notDeepEqual(navigation.matrices[9], navigation.matrices[8], "ResizeObserver did not refit the camera");
+    assert.deepEqual(navigation.matrices[11], navigation.matrices[10], "native Reset button did not reproduce the resized overview");
     assert.deepEqual(navigation.canvasListeners.adds, [
       { type: "webglcontextlost", passive: true, once: true },
       { type: "keydown", passive: null, once: false },
       { type: "wheel", passive: false, once: false },
+      { type: "pointerdown", passive: null, once: false },
+      { type: "pointermove", passive: null, once: false },
+      { type: "pointerup", passive: null, once: false },
+      { type: "pointercancel", passive: null, once: false },
+      { type: "lostpointercapture", passive: null, once: false },
+      { type: "contextmenu", passive: null, once: false },
     ]);
     assert.deepEqual(navigation.canvasListeners.removes, []);
     assert.deepEqual(navigation.resetListeners, { adds: 2, removes: 1 });
@@ -499,6 +549,10 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       { shift: true, defaultPrevented: false },
       { shift: false, defaultPrevented: false },
     ]);
+    assert(navigation.events.pointers.some(({ type, target, defaultPrevented }) => type === "pointerdown" && target === "CANVAS" && defaultPrevented));
+    assert(navigation.events.pointers.some(({ type, target, defaultPrevented }) => type === "pointerdown" && target !== "CANVAS" && !defaultPrevented));
+    assert(navigation.events.contextMenus.some(({ target, defaultPrevented }) => target === "CANVAS" && defaultPrevented));
+    assert(navigation.events.contextMenus.some(({ target, defaultPrevented }) => target !== "CANVAS" && !defaultPrevented));
     assert.deepEqual(surface, { forms: 1, status: 1, commits: 1, cities: 1, inputs: 1, submit: "Submit", commit: fixture.selected, canvases: 1, inspectors: 1, inspectorEmpty: true, instructions: "Keyboard navigation: use W, A, S, and D to orbit; hold Shift with W, A, S, or D to pan; use + and − to zoom; use 0 or Reset view to return to the overview.", resets: 1, resetText: "Reset view", publicationChildren: ["CANVAS", "SECTION"] });
 
     const actualNetwork = requestedUrls.slice(networkStart);
@@ -525,8 +579,14 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
           { type: "webglcontextlost", passive: true, once: true },
           { type: "keydown", passive: null, once: false },
           { type: "wheel", passive: false, once: false },
+          { type: "pointerdown", passive: null, once: false },
+          { type: "pointermove", passive: null, once: false },
+          { type: "pointerup", passive: null, once: false },
+          { type: "pointercancel", passive: null, once: false },
+          { type: "lostpointercapture", passive: null, once: false },
+          { type: "contextmenu", passive: null, once: false },
         ],
-        removes: ["webglcontextlost", "keydown", "wheel"],
+        removes: ["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture", "contextmenu"],
       },
       resetListeners: { adds: 2, removes: 2 },
       deletes: { shader: 2, program: 1, buffer: 3, vao: 1 },
@@ -652,12 +712,12 @@ function validateBrowserResult(result, expectedAssets) {
       tabIndex: 0,
       label: "Interactive code city",
       description: "city-navigation-instructions",
-      listenerAdds: ["webglcontextlost", "keydown", "wheel"],
+      listenerAdds: ["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture", "contextmenu", "blur", "visibilitychange", "pagehide"],
       resetText: "Reset view",
     },
     inputCleanup: {
-      listenerAdds: ["webglcontextlost", "keydown", "wheel", "webglcontextlost", "keydown", "wheel"],
-      listenerRemoves: ["webglcontextlost", "keydown", "wheel", "webglcontextlost", "keydown", "wheel"],
+      listenerAdds: ["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture", "contextmenu", "blur", "visibilitychange", "pagehide", "webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture", "contextmenu", "blur", "visibilitychange", "pagehide"],
+      listenerRemoves: ["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture", "contextmenu", "blur", "visibilitychange", "pagehide", "webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture", "contextmenu", "blur", "visibilitychange", "pagehide"],
       reset: { adds: 2, removes: 2 },
     },
     lossDefaultPrevented: false,

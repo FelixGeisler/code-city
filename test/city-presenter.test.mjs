@@ -16,7 +16,9 @@ const literals = JSON.parse(await readFile(path.join(projectRoot, "test/fixtures
 const { buildCity, deriveView } = await import("../src/domain/city-model.ts");
 const {
   orbitCameraByKeyboard,
+  orbitCameraByPointer,
   panCameraByKeyboard,
+  panCameraByPointer,
   resetCamera,
   resizeCamera,
   zoomCamera,
@@ -123,6 +125,17 @@ class FakeGl {
   drawElementsInstanced(...args) { this.call("drawElementsInstanced", args); }
 }
 
+class FakeLifecycleTarget {
+  constructor() { this.eventListeners = new Map(); this.adds = []; this.removes = []; }
+  addEventListener(type, listener) { this.adds.push(type); const listeners = this.eventListeners.get(type) ?? new Set(); listeners.add(listener); this.eventListeners.set(type, listeners); }
+  removeEventListener(type, listener) { this.removes.push(type); this.eventListeners.get(type)?.delete(listener); }
+  dispatch(type, event = new Event(type)) { for (const listener of [...(this.eventListeners.get(type) ?? [])]) listener(event); return event; }
+}
+
+class FakeDocumentTarget extends FakeLifecycleTarget {
+  constructor() { super(); this.visibilityState = "visible"; }
+}
+
 class FakeCanvas {
   constructor(host, glOptions) {
     this.host = host;
@@ -133,6 +146,10 @@ class FakeCanvas {
     this.attributes = new Map();
     this.tabIndex = -1;
     this.removeCount = 0;
+    this.focusCount = 0;
+    this.pointerCaptures = new Set();
+    this.captureCalls = [];
+    this.releaseCalls = [];
     this.contextDataReads = [];
     this.forbiddenContextReads = [];
     this.gl = new FakeGl(this, glOptions);
@@ -153,6 +170,10 @@ class FakeCanvas {
     });
   }
   getContext(kind, attributes) { this.contextRequest = { kind, attributes }; return this.gl.options.noContext ? null : this.context; }
+  getBoundingClientRect() { return { left: 10, top: 20, width: this.host.width, height: this.host.height }; }
+  focus() { if (this.gl.options.throwFocus) throw new Error("injected focus"); this.focusCount += 1; }
+  setPointerCapture(pointerId) { if (this.gl.options.throwCapture) throw new Error("injected capture"); this.captureCalls.push(pointerId); this.pointerCaptures.add(pointerId); }
+  releasePointerCapture(pointerId) { if (this.gl.options.throwRelease || !this.pointerCaptures.has(pointerId)) throw new Error("injected release"); this.releaseCalls.push(pointerId); this.pointerCaptures.delete(pointerId); }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
   addEventListener(type, listener, options) {
     if (this.gl.options.throwListener === type) throw new Error(`injected ${type} listener`);
@@ -191,8 +212,10 @@ function fakeEnvironment({ width = 200, height = 100, gl = {}, platform = {} } =
   const canvases = [];
   const observers = [];
   const resetControl = new FakeResetControl();
+  const windowTarget = new FakeLifecycleTarget();
+  const documentTarget = new FakeDocumentTarget();
   const environment = {
-    host, canvases, observers, resetControl,
+    host, canvases, observers, resetControl, windowTarget, documentTarget,
     platform: {
       createCanvas() { if (platform.throwCanvas) throw new Error("canvas failed"); const canvas = new FakeCanvas(host, gl); canvases.push(canvas); return canvas; },
       createResizeObserver(callback) {
@@ -200,6 +223,8 @@ function fakeEnvironment({ width = 200, height = 100, gl = {}, platform = {} } =
         const observer = { callback, observed: false, disconnected: 0, observe(target) { if (platform.throwObserve) throw new Error("observe failed"); assert.equal(target, host); this.observed = true; }, disconnect() { this.disconnected += 1; } };
         observers.push(observer); return observer;
       },
+      windowTarget() { if (platform.throwWindowTarget) throw new Error("window target failed"); return windowTarget; },
+      documentTarget() { if (platform.throwDocumentTarget) throw new Error("document target failed"); return documentTarget; },
     },
   };
   return environment;
@@ -236,6 +261,10 @@ function inputEvent(values = {}) {
     altKey: false,
     metaKey: false,
     deltaY: 0,
+    pointerId: 1,
+    button: 0,
+    clientX: 50,
+    clientY: 50,
     defaultPrevented: false,
     preventDefault() { this.defaultPrevented = true; },
     ...values,
@@ -487,6 +516,83 @@ test("canvas accessibility and exact keyboard mappings drive finite camera polic
   assert.deepEqual(failures, []);
 });
 
+test("primary orbit and secondary pan use exact pointer deltas, focus, capture, and no activation", () => {
+  const environment = fakeEnvironment();
+  const events = [];
+  const sink = { hoverIndex(...args) { events.push(["hover", ...args]); }, activationIndex(...args) { events.push(["activation", ...args]); }, selectionAction(...args) { events.push(["selection", ...args]); } };
+  const { presenter, failures } = failuresCollector(environment);
+  const geometry = oneBuilding();
+  assert.deepEqual(present(environment, presenter, 1, geometry, sink), COMMITTED);
+  const canvas = environment.canvases[0];
+  let expected = resetCamera(geometry.bounds, { width: 200, height: 100 });
+
+  const primaryDown = inputEvent({ pointerId: 7, button: 0, clientX: 50, clientY: 40 });
+  canvas.dispatch("pointerdown", primaryDown);
+  assert.equal(primaryDown.defaultPrevented, true);
+  assert.equal(canvas.focusCount, 1);
+  assert.deepEqual(canvas.captureCalls, [7]);
+  assert.deepEqual([...canvas.pointerCaptures], [7]);
+
+  const inertPointer = inputEvent({ pointerId: 8, button: 2, clientX: 90, clientY: 90 });
+  canvas.dispatch("pointerdown", inertPointer);
+  canvas.dispatch("pointermove", inertPointer);
+  assert.equal(inertPointer.defaultPrevented, false);
+  assert.deepEqual(canvas.captureCalls, [7]);
+
+  const firstMove = inputEvent({ pointerId: 7, button: -1, clientX: 51, clientY: 40 });
+  expected = orbitCameraByPointer(expected.state, geometry.bounds, { width: 200, height: 100 }, 1, 0, 200, 100);
+  canvas.dispatch("pointermove", firstMove);
+  assert.equal(expected.kind, "success");
+  assert.deepEqual(matrices(canvas.gl).at(-1), expected.view.matrix);
+
+  const primaryUp = inputEvent({ pointerId: 7, button: 0, clientX: 51, clientY: 40 });
+  canvas.dispatch("pointerup", primaryUp);
+  assert.deepEqual(canvas.releaseCalls, [7]);
+  assert.deepEqual([...canvas.pointerCaptures], []);
+
+  const secondaryDown = inputEvent({ pointerId: 9, button: 2, clientX: 80, clientY: 60, shiftKey: true });
+  canvas.dispatch("pointerdown", secondaryDown);
+  const secondaryMove = inputEvent({ pointerId: 9, button: -1, clientX: 78, clientY: 63, ctrlKey: true });
+  expected = panCameraByPointer(expected.state, geometry.bounds, { width: 200, height: 100 }, -2, 3, 200, 100);
+  canvas.dispatch("pointermove", secondaryMove);
+  assert.equal(expected.kind, "success");
+  assert.deepEqual(matrices(canvas.gl).at(-1), expected.view.matrix);
+  canvas.dispatch("pointerup", inputEvent({ pointerId: 9, button: 2, clientX: 78, clientY: 63 }));
+  assert.deepEqual(canvas.releaseCalls, [7, 9]);
+  assert.deepEqual(events, []);
+  assert.deepEqual(failures, []);
+});
+
+test("pointer release classification has no threshold and never emits issue 9 activation early", () => {
+  const environment = fakeEnvironment();
+  const events = [];
+  const { presenter, failures } = failuresCollector(environment);
+  assert.deepEqual(present(environment, presenter, 1, oneBuilding(), {
+    hoverIndex(...args) { events.push(["hover", ...args]); },
+    activationIndex(...args) { events.push(["activation", ...args]); },
+    selectionAction(...args) { events.push(["selection", ...args]); },
+  }), COMMITTED);
+  const canvas = environment.canvases[0];
+  const draws = names(canvas.gl).filter((name) => name === "drawElementsInstanced").length;
+
+  canvas.dispatch("pointerdown", inputEvent({ pointerId: 1, button: 0, clientX: 40, clientY: 40 }));
+  canvas.dispatch("pointerup", inputEvent({ pointerId: 1, button: 0, clientX: 40, clientY: 40 }));
+  canvas.dispatch("pointerdown", inputEvent({ pointerId: 2, button: 0, clientX: 40, clientY: 40 }));
+  canvas.dispatch("pointerup", inputEvent({ pointerId: 2, button: 0, clientX: 40, clientY: 40, shiftKey: true }));
+  canvas.dispatch("pointerdown", inputEvent({ pointerId: 3, button: 2, clientX: 40, clientY: 40 }));
+  canvas.dispatch("pointerup", inputEvent({ pointerId: 3, button: 2, clientX: 40, clientY: 40 }));
+  canvas.dispatch("pointerdown", inputEvent({ pointerId: 4, button: 0, clientX: 40, clientY: 40 }));
+  canvas.dispatch("pointermove", inputEvent({ pointerId: 4, button: -1, clientX: 40.00000000000001, clientY: 40 }));
+  canvas.dispatch("pointermove", inputEvent({ pointerId: 4, button: -1, clientX: 40, clientY: 40 }));
+  canvas.dispatch("pointerup", inputEvent({ pointerId: 4, button: 0, clientX: 40, clientY: 40 }));
+
+  assert.deepEqual(canvas.captureCalls, [1, 2, 3, 4]);
+  assert.deepEqual(canvas.releaseCalls, [1, 2, 3, 4]);
+  assert.equal(names(canvas.gl).filter((name) => name === "drawElementsInstanced").length, draws + 2);
+  assert.deepEqual(events, []);
+  assert.deepEqual(failures, []);
+});
+
 test("wheel sign, native Reset, resize retention, and browser-owned modifiers use immutable uploads", () => {
   const environment = fakeEnvironment();
   const { presenter, failures } = failuresCollector(environment);
@@ -530,6 +636,98 @@ test("wheel sign, native Reset, resize retention, and browser-owned modifiers us
   assert.deepEqual(matrices(canvas.gl).at(-1), reset.view.matrix);
   assert.deepEqual(canvas.gl.uploads.map(({ bytes }) => [...bytes]), uploads);
   assert.deepEqual(failures, []);
+});
+
+test("pointer interruptions cancel capture without deltas and lifecycle cleanup removes every owner exactly once", () => {
+  const cases = ["pointercancel", "lostpointercapture", "blur", "hidden", "pagehide", "resize", "reset"];
+  for (const stimulus of cases) {
+    const environment = fakeEnvironment();
+    const { presenter, failures } = failuresCollector(environment);
+    assert.deepEqual(present(environment, presenter, stimulus, oneBuilding()), COMMITTED);
+    const canvas = environment.canvases[0];
+    canvas.dispatch("pointerdown", inputEvent({ pointerId: 12, button: 0, clientX: 50, clientY: 50 }));
+    const draws = names(canvas.gl).filter((name) => name === "drawElementsInstanced").length;
+    if (stimulus === "pointercancel") canvas.dispatch("pointercancel", inputEvent({ pointerId: 12 }));
+    if (stimulus === "lostpointercapture") { canvas.pointerCaptures.delete(12); canvas.dispatch("lostpointercapture", inputEvent({ pointerId: 12 })); }
+    if (stimulus === "blur") environment.windowTarget.dispatch("blur");
+    if (stimulus === "hidden") { environment.documentTarget.visibilityState = "hidden"; environment.documentTarget.dispatch("visibilitychange"); }
+    if (stimulus === "pagehide") environment.windowTarget.dispatch("pagehide");
+    if (stimulus === "resize") environment.observers[0].callback();
+    if (stimulus === "reset") environment.resetControl.dispatch();
+    const expectedDraws = stimulus === "reset" ? draws + 1 : draws;
+    assert.equal(names(canvas.gl).filter((name) => name === "drawElementsInstanced").length, expectedDraws, stimulus);
+    assert.deepEqual(canvas.releaseCalls, stimulus === "lostpointercapture" ? [] : [12], stimulus);
+    canvas.dispatch("pointermove", inputEvent({ pointerId: 12, button: -1, clientX: 70, clientY: 70 }));
+    canvas.dispatch("pointerup", inputEvent({ pointerId: 12, button: 0, clientX: 70, clientY: 70 }));
+    assert.equal(names(canvas.gl).filter((name) => name === "drawElementsInstanced").length, expectedDraws, stimulus);
+    presenter.dispose(); presenter.dispose();
+    for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture", "contextmenu", "keydown", "wheel"]) assert.equal(canvas.eventListeners.get(type)?.size ?? 0, 0, `${stimulus}:${type}`);
+    assert.deepEqual(environment.windowTarget.removes, ["blur", "pagehide"], stimulus);
+    assert.deepEqual(environment.documentTarget.removes, ["visibilitychange"], stimulus);
+    assert.deepEqual(failures, [], stimulus);
+  }
+});
+
+test("canvas context menu is suppressed while other buttons and stale callbacks remain browser-owned", () => {
+  const environment = fakeEnvironment();
+  let eligible = true;
+  const { presenter, failures } = failuresCollector(environment, () => eligible);
+  assert.deepEqual(present(environment, presenter, 1, oneBuilding()), COMMITTED);
+  const canvas = environment.canvases[0];
+  const contextMenu = inputEvent();
+  canvas.dispatch("contextmenu", contextMenu);
+  assert.equal(contextMenu.defaultPrevented, true);
+  for (const button of [1, 3, 4]) {
+    const event = inputEvent({ pointerId: button + 20, button });
+    canvas.dispatch("pointerdown", event);
+    assert.equal(event.defaultPrevented, false);
+  }
+  assert.deepEqual(canvas.captureCalls, []);
+  eligible = false;
+  const staleMenu = inputEvent();
+  canvas.dispatch("contextmenu", staleMenu);
+  assert.equal(staleMenu.defaultPrevented, false);
+  assert.equal(canvas.removeCount, 1);
+  assert.deepEqual(failures, []);
+});
+
+test("pointer capture and finite-coordinate failures revoke the session once and release owned capture", () => {
+  for (const [id, gl, event] of [
+    ["focus", { throwFocus: true }, inputEvent({ pointerId: 3, button: 0 })],
+    ["capture", { throwCapture: true }, inputEvent({ pointerId: 3, button: 0 })],
+    ["coordinate", {}, inputEvent({ pointerId: 3, button: 0, clientX: Number.NaN })],
+  ]) {
+    const environment = fakeEnvironment({ gl });
+    const { presenter, failures } = failuresCollector(environment);
+    assert.deepEqual(present(environment, presenter, id, oneBuilding()), COMMITTED);
+    const canvas = environment.canvases[0];
+    canvas.dispatch("pointerdown", event);
+    assert.deepEqual(failures, [[id, "Presentation failed", "M1-PRES-1"]], id);
+    assert.equal(canvas.removeCount, 1, id);
+    assert.deepEqual(canvas.releaseCalls, [], id);
+  }
+  {
+    const environment = fakeEnvironment();
+    const { presenter, failures } = failuresCollector(environment);
+    assert.deepEqual(present(environment, presenter, "move", oneBuilding()), COMMITTED);
+    const canvas = environment.canvases[0];
+    canvas.dispatch("pointerdown", inputEvent({ pointerId: 4, button: 0 }));
+    canvas.dispatch("pointermove", inputEvent({ pointerId: 4, button: -1, clientY: Number.POSITIVE_INFINITY }));
+    assert.deepEqual(failures, [["move", "Presentation failed", "M1-PRES-1"]]);
+    assert.deepEqual(canvas.releaseCalls, [4]);
+    assert.equal(canvas.removeCount, 1);
+  }
+  {
+    const environment = fakeEnvironment({ gl: { throwRelease: true } });
+    const { presenter, failures } = failuresCollector(environment);
+    assert.deepEqual(present(environment, presenter, "release", oneBuilding()), COMMITTED);
+    const canvas = environment.canvases[0];
+    canvas.dispatch("pointerdown", inputEvent({ pointerId: 5, button: 0 }));
+    canvas.dispatch("pointerup", inputEvent({ pointerId: 5, button: 0 }));
+    assert.deepEqual(failures, [["release", "Presentation failed", "M1-PRES-1"]]);
+    assert.deepEqual(canvas.releaseCalls, []);
+    assert.equal(canvas.removeCount, 1);
+  }
 });
 
 test("generation is opaque, stale work is inert, replacement is atomic, and dispose is idempotent", () => {
@@ -634,7 +832,7 @@ test("camera redraw failure revokes once and retained input callbacks are inert"
 });
 
 test("listener setup failure rolls back all attached session listeners", () => {
-  for (const type of ["keydown", "wheel"]) {
+  for (const type of ["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture", "contextmenu"]) {
     const environment = fakeEnvironment({ gl: { throwListener: type } });
     const { presenter, failures } = failuresCollector(environment);
     assert.deepEqual(present(environment, presenter, type, oneBuilding()), PRESENTATION_FAILURE);
@@ -835,6 +1033,8 @@ test("closed failure stimuli fail synchronously after cleanup with no publicatio
     ["canvas platform", { platform: { throwCanvas: true } }],
     ["observer platform", { platform: { throwObserver: true } }],
     ["observe platform", { platform: { throwObserve: true } }],
+    ["window target", { platform: { throwWindowTarget: true } }],
+    ["document target", { platform: { throwDocumentTarget: true } }],
   ];
   for (const [id, setup] of cases) {
     const environment = fakeEnvironment(setup);
