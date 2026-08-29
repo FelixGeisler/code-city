@@ -1,7 +1,9 @@
 import type { ValidatedGeometry } from "../application/city-payload";
 import {
   orbitCameraByKeyboard,
+  orbitCameraByPointer,
   panCameraByKeyboard,
+  panCameraByPointer,
   resetCamera,
   resizeCamera,
   zoomCamera,
@@ -97,18 +99,41 @@ const PRESENTATION_FAILURE: ControllerFailureResult = Object.freeze({ kind: "fai
 type LossListener = (event: Event) => void;
 type KeyboardListener = (event: KeyboardEvent) => void;
 type WheelListener = (event: WheelEvent) => void;
+type PointerListener = (event: PointerEvent) => void;
+type ContextMenuListener = (event: MouseEvent) => void;
+type LifecycleListener = (event: Event) => void;
 type ResetListener = (event: Event) => void;
 
+type CanvasListenerMap = Readonly<{
+  webglcontextlost: LossListener;
+  keydown: KeyboardListener;
+  wheel: WheelListener;
+  pointerdown: PointerListener;
+  pointermove: PointerListener;
+  pointerup: PointerListener;
+  pointercancel: PointerListener;
+  lostpointercapture: PointerListener;
+  contextmenu: ContextMenuListener;
+}>;
+
 export type PresenterCanvas = Pick<HTMLCanvasElement,
-  "width" | "height" | "getContext" | "remove" | "setAttribute" | "tabIndex">
+  "width" | "height" | "getContext" | "getBoundingClientRect" | "focus" | "remove" | "setAttribute"
+  | "setPointerCapture" | "releasePointerCapture" | "tabIndex">
   & {
-    addEventListener(type: "webglcontextlost", listener: LossListener, options: AddEventListenerOptions): void;
-    addEventListener(type: "keydown", listener: KeyboardListener): void;
-    addEventListener(type: "wheel", listener: WheelListener, options: AddEventListenerOptions): void;
-    removeEventListener(type: "webglcontextlost", listener: LossListener): void;
-    removeEventListener(type: "keydown", listener: KeyboardListener): void;
-    removeEventListener(type: "wheel", listener: WheelListener): void;
+    addEventListener<K extends keyof CanvasListenerMap>(type: K, listener: CanvasListenerMap[K], options?: AddEventListenerOptions): void;
+    removeEventListener<K extends keyof CanvasListenerMap>(type: K, listener: CanvasListenerMap[K]): void;
   };
+
+export type PresenterWindow = {
+  addEventListener(type: "blur" | "pagehide", listener: LifecycleListener): void;
+  removeEventListener(type: "blur" | "pagehide", listener: LifecycleListener): void;
+};
+
+export type PresenterDocument = Readonly<{
+  visibilityState: DocumentVisibilityState;
+  addEventListener(type: "visibilitychange", listener: LifecycleListener): void;
+  removeEventListener(type: "visibilitychange", listener: LifecycleListener): void;
+}>;
 
 export type PresenterHost = Pick<HTMLElement, "clientWidth" | "clientHeight">;
 export type PresenterResetControl = {
@@ -124,6 +149,8 @@ export type PresenterResizeObserver = {
 export type PresenterPlatform = Readonly<{
   createCanvas(): PresenterCanvas;
   createResizeObserver(callback: () => void): PresenterResizeObserver;
+  windowTarget(): PresenterWindow;
+  documentTarget(): PresenterDocument;
 }>;
 
 export type CityPresenterOptions<G> = Readonly<{
@@ -143,6 +170,17 @@ export type CityPresenter<G> = Readonly<{
 }>;
 
 type Dimensions = Readonly<{ width: number; height: number }>;
+type ReleasePosition = Readonly<{ clientX: number; clientY: number }>;
+type Gesture = {
+  pointerId: number;
+  button: 0 | 2;
+  pressX: number;
+  pressY: number;
+  lastX: number;
+  lastY: number;
+  dragged: boolean;
+  captureOwned: boolean;
+};
 
 type Session<G> = {
   generation?: G;
@@ -156,8 +194,21 @@ type Session<G> = {
   lossListener?: LossListener;
   keyboardListener?: KeyboardListener;
   wheelListener?: WheelListener;
+  pointerDownListener?: PointerListener;
+  pointerMoveListener?: PointerListener;
+  pointerUpListener?: PointerListener;
+  pointerCancelListener?: PointerListener;
+  lostPointerCaptureListener?: PointerListener;
+  contextMenuListener?: ContextMenuListener;
+  blurListener?: LifecycleListener;
+  visibilityListener?: LifecycleListener;
+  pagehideListener?: LifecycleListener;
+  windowTarget?: PresenterWindow;
+  documentTarget?: PresenterDocument;
   resetListener?: ResetListener;
   resetControl?: PresenterResetControl;
+  gesture?: Gesture;
+  eligibleReleasePosition?: ReleasePosition;
   cameraState?: CameraState;
   cameraView?: CameraView;
   vertexShader?: WebGLShader;
@@ -209,6 +260,8 @@ const RASTERIZER_DISCARD = 0x8c89;
 const browserPlatform: PresenterPlatform = Object.freeze({
   createCanvas: () => document.createElement("canvas"),
   createResizeObserver: (callback) => new ResizeObserver(callback),
+  windowTarget: () => window,
+  documentTarget: () => document,
 });
 
 function dimensions(host: PresenterHost): Dimensions {
@@ -376,10 +429,20 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
   draw(session as Session<unknown>, size, initialCamera.view);
 }
 
+function releaseGesture<G>(session: Session<G>): void {
+  const gesture = session.gesture;
+  session.gesture = undefined;
+  session.eligibleReleasePosition = undefined;
+  if (!gesture?.captureOwned) return;
+  gesture.captureOwned = false;
+  session.canvas?.releasePointerCapture(gesture.pointerId);
+}
+
 function cleanup<G>(session: Session<G>): boolean {
   if (!session.active) return true;
   session.active = false;
   let complete = true;
+  try { releaseGesture(session); } catch { complete = false; }
   const observer = session.observer;
   session.observer = undefined;
   try { observer?.disconnect(); } catch { complete = false; }
@@ -387,16 +450,47 @@ function cleanup<G>(session: Session<G>): boolean {
   const lossListener = session.lossListener;
   const keyboardListener = session.keyboardListener;
   const wheelListener = session.wheelListener;
+  const pointerDownListener = session.pointerDownListener;
+  const pointerMoveListener = session.pointerMoveListener;
+  const pointerUpListener = session.pointerUpListener;
+  const pointerCancelListener = session.pointerCancelListener;
+  const lostPointerCaptureListener = session.lostPointerCaptureListener;
+  const contextMenuListener = session.contextMenuListener;
+  const blurListener = session.blurListener;
+  const visibilityListener = session.visibilityListener;
+  const pagehideListener = session.pagehideListener;
+  const windowTarget = session.windowTarget;
+  const documentTarget = session.documentTarget;
   const resetListener = session.resetListener;
   const resetControl = session.resetControl;
   session.lossListener = undefined;
   session.keyboardListener = undefined;
   session.wheelListener = undefined;
+  session.pointerDownListener = undefined;
+  session.pointerMoveListener = undefined;
+  session.pointerUpListener = undefined;
+  session.pointerCancelListener = undefined;
+  session.lostPointerCaptureListener = undefined;
+  session.contextMenuListener = undefined;
+  session.blurListener = undefined;
+  session.visibilityListener = undefined;
+  session.pagehideListener = undefined;
+  session.windowTarget = undefined;
+  session.documentTarget = undefined;
   session.resetListener = undefined;
   session.resetControl = undefined;
   try { if (canvas && lossListener) canvas.removeEventListener("webglcontextlost", lossListener); } catch { complete = false; }
   try { if (canvas && keyboardListener) canvas.removeEventListener("keydown", keyboardListener); } catch { complete = false; }
   try { if (canvas && wheelListener) canvas.removeEventListener("wheel", wheelListener); } catch { complete = false; }
+  try { if (canvas && pointerDownListener) canvas.removeEventListener("pointerdown", pointerDownListener); } catch { complete = false; }
+  try { if (canvas && pointerMoveListener) canvas.removeEventListener("pointermove", pointerMoveListener); } catch { complete = false; }
+  try { if (canvas && pointerUpListener) canvas.removeEventListener("pointerup", pointerUpListener); } catch { complete = false; }
+  try { if (canvas && pointerCancelListener) canvas.removeEventListener("pointercancel", pointerCancelListener); } catch { complete = false; }
+  try { if (canvas && lostPointerCaptureListener) canvas.removeEventListener("lostpointercapture", lostPointerCaptureListener); } catch { complete = false; }
+  try { if (canvas && contextMenuListener) canvas.removeEventListener("contextmenu", contextMenuListener); } catch { complete = false; }
+  try { if (windowTarget && blurListener) windowTarget.removeEventListener("blur", blurListener); } catch { complete = false; }
+  try { if (documentTarget && visibilityListener) documentTarget.removeEventListener("visibilitychange", visibilityListener); } catch { complete = false; }
+  try { if (windowTarget && pagehideListener) windowTarget.removeEventListener("pagehide", pagehideListener); } catch { complete = false; }
   try { if (resetControl && resetListener) resetControl.removeEventListener("click", resetListener); } catch { complete = false; }
 
   const gl = session.gl;
@@ -540,22 +634,153 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         failSession(session);
       }
     };
+    const pointerDownListener: PointerListener = (event) => {
+      try {
+        if (!callbackEligible(session) || session.gesture || (event.button !== 0 && event.button !== 2)) return;
+        if (!Number.isInteger(event.pointerId) || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) throw new Error("Invalid pointer press");
+        event.preventDefault();
+        session.eligibleReleasePosition = undefined;
+        canvas.focus();
+        const gesture: Gesture = {
+          pointerId: event.pointerId,
+          button: event.button,
+          pressX: event.clientX,
+          pressY: event.clientY,
+          lastX: event.clientX,
+          lastY: event.clientY,
+          dragged: false,
+          captureOwned: false,
+        };
+        session.gesture = gesture;
+        canvas.setPointerCapture(event.pointerId);
+        gesture.captureOwned = true;
+      } catch {
+        failSession(session);
+      }
+    };
+    const pointerMoveListener: PointerListener = (event) => {
+      try {
+        if (!callbackEligible(session)) return;
+        const gesture = session.gesture;
+        if (!gesture || event.pointerId !== gesture.pointerId) return;
+        if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) throw new Error("Invalid pointer movement");
+        if (event.clientX !== gesture.pressX || event.clientY !== gesture.pressY) gesture.dragged = true;
+        const dx = event.clientX - gesture.lastX;
+        const dy = event.clientY - gesture.lastY;
+        if (!Number.isFinite(dx) || !Number.isFinite(dy)) throw new Error("Invalid pointer delta");
+        if (dx === 0 && dy === 0) return;
+        const rectangle = canvas.getBoundingClientRect();
+        const size = dimensions(host);
+        const transition = gesture.button === 0
+          ? orbitCameraByPointer(session.cameraState!, session.model!.bounds, size, dx, dy, rectangle.width, rectangle.height)
+          : panCameraByPointer(session.cameraState!, session.model!.bounds, size, dx, dy, rectangle.width, rectangle.height);
+        applyCamera(session, transition, size);
+        if (!session.active) return;
+        gesture.lastX = event.clientX;
+        gesture.lastY = event.clientY;
+      } catch {
+        failSession(session);
+      }
+    };
+    const pointerUpListener: PointerListener = (event) => {
+      try {
+        if (!callbackEligible(session)) return;
+        const gesture = session.gesture;
+        if (!gesture || event.pointerId !== gesture.pointerId || event.button !== gesture.button) return;
+        if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) throw new Error("Invalid pointer release");
+        if (event.clientX !== gesture.pressX || event.clientY !== gesture.pressY) gesture.dragged = true;
+        const eligible = gesture.button === 0 && !gesture.dragged
+          && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
+        const releasePosition = eligible ? Object.freeze({ clientX: event.clientX, clientY: event.clientY }) : undefined;
+        releaseGesture(session);
+        session.eligibleReleasePosition = releasePosition;
+      } catch {
+        failSession(session);
+      }
+    };
+    const pointerCancelListener: PointerListener = (event) => {
+      try {
+        if (!callbackEligible(session)) return;
+        if (session.gesture?.pointerId !== event.pointerId) return;
+        releaseGesture(session);
+      } catch {
+        failSession(session);
+      }
+    };
+    const lostPointerCaptureListener: PointerListener = (event) => {
+      try {
+        if (!callbackEligible(session)) return;
+        const gesture = session.gesture;
+        if (!gesture || gesture.pointerId !== event.pointerId || !gesture.captureOwned) return;
+        gesture.captureOwned = false;
+        session.gesture = undefined;
+        session.eligibleReleasePosition = undefined;
+      } catch {
+        failSession(session);
+      }
+    };
+    const contextMenuListener: ContextMenuListener = (event) => {
+      try {
+        if (callbackEligible(session)) event.preventDefault();
+      } catch {
+        failSession(session);
+      }
+    };
+    const interrupt = (): void => {
+      try {
+        if (!session.active) return;
+        if (!eligible(session)) { if (session.active) removeSession(session); return; }
+        releaseGesture(session);
+      } catch {
+        failSession(session);
+      }
+    };
+    const blurListener: LifecycleListener = () => interrupt();
+    const visibilityListener: LifecycleListener = () => {
+      try {
+        if (session.documentTarget?.visibilityState === "hidden") interrupt();
+      } catch {
+        failSession(session);
+      }
+    };
+    const pagehideListener: LifecycleListener = () => interrupt();
     const resetListener: ResetListener = () => {
       try {
         if (!callbackEligible(session)) return;
+        releaseGesture(session);
         const size = dimensions(host);
         applyCamera(session, resetCamera(session.model!.bounds, size), size);
       } catch {
         failSession(session);
       }
     };
+    session.windowTarget = platform.windowTarget();
+    session.documentTarget = platform.documentTarget();
     session.lossListener = lossListener;
     session.keyboardListener = keyboardListener;
     session.wheelListener = wheelListener;
+    session.pointerDownListener = pointerDownListener;
+    session.pointerMoveListener = pointerMoveListener;
+    session.pointerUpListener = pointerUpListener;
+    session.pointerCancelListener = pointerCancelListener;
+    session.lostPointerCaptureListener = lostPointerCaptureListener;
+    session.contextMenuListener = contextMenuListener;
+    session.blurListener = blurListener;
+    session.visibilityListener = visibilityListener;
+    session.pagehideListener = pagehideListener;
     session.resetListener = resetListener;
     canvas.addEventListener("webglcontextlost", lossListener, { passive: true, once: true });
     canvas.addEventListener("keydown", keyboardListener);
     canvas.addEventListener("wheel", wheelListener, { passive: false });
+    canvas.addEventListener("pointerdown", pointerDownListener);
+    canvas.addEventListener("pointermove", pointerMoveListener);
+    canvas.addEventListener("pointerup", pointerUpListener);
+    canvas.addEventListener("pointercancel", pointerCancelListener);
+    canvas.addEventListener("lostpointercapture", lostPointerCaptureListener);
+    canvas.addEventListener("contextmenu", contextMenuListener);
+    session.windowTarget.addEventListener("blur", blurListener);
+    session.documentTarget.addEventListener("visibilitychange", visibilityListener);
+    session.windowTarget.addEventListener("pagehide", pagehideListener);
     resetControl?.addEventListener("click", resetListener);
   };
 
@@ -564,6 +789,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
       try {
         if (!session.active) return;
         if (!eligible(session)) { removeSession(session); return; }
+        releaseGesture(session);
         const next = dimensions(host);
         const canvas = session.canvas!;
         if (canvas.width === next.width && canvas.height === next.height) return;
