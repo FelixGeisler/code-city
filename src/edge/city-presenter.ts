@@ -602,6 +602,23 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
     const keyboardListener: KeyboardListener = (event) => {
       try {
         if (!callbackEligible(session) || event.ctrlKey || event.altKey || event.metaKey) return;
+        const selectionAction: SelectionAction | undefined = event.key === "ArrowRight" || event.key === "ArrowDown"
+          ? "next"
+          : event.key === "ArrowLeft" || event.key === "ArrowUp"
+            ? "previous"
+            : event.key === "Home"
+              ? "first"
+              : event.key === "End"
+                ? "last"
+                : event.key === "Escape"
+                  ? "clear"
+                  : undefined;
+        if (selectionAction) {
+          if (event.shiftKey) return;
+          event.preventDefault();
+          session.eventSink!.selectionAction(session.generation!, selectionAction);
+          return;
+        }
         const size = dimensions(host);
         let transition: CameraTransitionResult | undefined;
         if (!event.shiftKey && (event.key === "w" || event.key === "a" || event.key === "s" || event.key === "d")) {

@@ -464,7 +464,7 @@ test("one instance uses exact target-relative float staging, state, and one inst
   assert.equal(environment.observers[0].observed, true);
 });
 
-test("canvas accessibility and exact keyboard mappings drive finite camera policy without selection emissions", () => {
+test("canvas accessibility and exact camera and selection key mappings suppress only recognised unmodified input", () => {
   const environment = fakeEnvironment();
   const events = [];
   const sink = { hoverIndex(...args) { events.push(["hover", ...args]); }, activationIndex(...args) { events.push(["activation", ...args]); }, selectionAction(...args) { events.push(["selection", ...args]); } };
@@ -499,20 +499,35 @@ test("canvas accessibility and exact keyboard mappings drive finite camera polic
   }
 
   const draws = names(canvas.gl).filter((name) => name === "drawElementsInstanced").length;
+  const selectionKeys = [
+    ["ArrowRight", "next"], ["ArrowDown", "next"],
+    ["ArrowLeft", "previous"], ["ArrowUp", "previous"],
+    ["Home", "first"], ["End", "last"], ["Escape", "clear"],
+  ];
+  for (const [index, [key]] of selectionKeys.entries()) {
+    const event = inputEvent({ key, repeat: index % 2 === 1 });
+    canvas.dispatch("keydown", event);
+    assert.equal(event.defaultPrevented, true, key);
+  }
+  assert.deepEqual(events, selectionKeys.map(([, action]) => ["selection", 1, action]));
+
   for (const event of [
     inputEvent({ key: "w", shiftKey: true }),
     inputEvent({ key: "W" }),
     inputEvent({ key: "d", ctrlKey: true }),
-    inputEvent({ key: "ArrowUp" }), inputEvent({ key: "ArrowDown" }),
-    inputEvent({ key: "ArrowLeft" }), inputEvent({ key: "ArrowRight" }),
-    inputEvent({ key: "Home" }), inputEvent({ key: "End" }), inputEvent({ key: "Escape" }),
+    ...selectionKeys.flatMap(([key]) => [
+      inputEvent({ key, shiftKey: true }),
+      inputEvent({ key, ctrlKey: true }),
+      inputEvent({ key, altKey: true }),
+      inputEvent({ key, metaKey: true }),
+    ]),
     inputEvent({ key: "x" }),
   ]) {
     canvas.dispatch("keydown", event);
     assert.equal(event.defaultPrevented, false, event.key);
   }
   assert.equal(names(canvas.gl).filter((name) => name === "drawElementsInstanced").length, draws);
-  assert.deepEqual(events, []);
+  assert.deepEqual(events, selectionKeys.map(([, action]) => ["selection", 1, action]));
   assert.deepEqual(failures, []);
 });
 

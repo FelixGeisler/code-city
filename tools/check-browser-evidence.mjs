@@ -395,9 +395,15 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await dispatchKey({ key: "d", code: "KeyD", virtualKey: 68, text: "d" });
     await dispatchKey({ key: "d", code: "KeyD", virtualKey: 68, text: "d", autoRepeat: true });
     await dispatchKey({ key: "d", code: "KeyD", virtualKey: 68, modifiers: 2, text: "d" });
-    for (const [key, code, virtualKey] of [["ArrowUp", "ArrowUp", 38], ["ArrowDown", "ArrowDown", 40], ["ArrowLeft", "ArrowLeft", 37], ["ArrowRight", "ArrowRight", 39], ["Home", "Home", 36], ["End", "End", 35], ["Escape", "Escape", 27]]) {
-      await dispatchKey({ key, code, virtualKey });
-    }
+    await dispatchKey({ key: "ArrowRight", code: "ArrowRight", virtualKey: 39 });
+    const selectedByKeyboard = await evaluate(`(() => { const inspector=document.querySelector('[data-inspector]'); const path=inspector.querySelector('[data-canonical-path]'); return {hidden:inspector.hidden,text:inspector.textContent,pathText:path.textContent,pathTag:path.tagName,role:inspector.getAttribute('role'),live:inspector.getAttribute('aria-live'),atomic:inspector.getAttribute('aria-atomic')}; })()`);
+    await dispatchKey({ key: "ArrowLeft", code: "ArrowLeft", virtualKey: 37, modifiers: 8 });
+    await dispatchKey({ key: "ArrowDown", code: "ArrowDown", virtualKey: 40, autoRepeat: true });
+    await dispatchKey({ key: "Home", code: "Home", virtualKey: 36 });
+    await dispatchKey({ key: "End", code: "End", virtualKey: 35 });
+    await dispatchKey({ key: "Escape", code: "Escape", virtualKey: 27 });
+    const clearedSelection = await evaluate(`(() => { const inspector=document.querySelector('[data-inspector]'); return {hidden:inspector.hidden,text:inspector.textContent}; })()`);
+    await dispatchKey({ key: "ArrowUp", code: "ArrowUp", virtualKey: 38 });
     await dispatchKey({ key: "W", code: "KeyW", virtualKey: 87, modifiers: 8, text: "W" });
     await dispatchKey({ key: "+", code: "Equal", virtualKey: 187, modifiers: 8, text: "+" });
     await dispatchKey({ key: "-", code: "Minus", virtualKey: 189, text: "-" });
@@ -430,6 +436,8 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await dispatchPointer({ type: "mousePressed", x: 2, y: 2, button: "right", buttons: 2 });
     await dispatchKey({ key: "Escape", code: "Escape", virtualKey: 27 });
     await dispatchPointer({ type: "mouseReleased", x: 2, y: 2, button: "right", buttons: 0 });
+    await evaluate("document.querySelector('[data-city] canvas').focus();true");
+    await dispatchKey({ key: "ArrowUp", code: "ArrowUp", virtualKey: 38 });
 
     await evaluate("scrollTo(0,0);true");
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -452,10 +460,10 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     const focusedReset = await evaluate("document.activeElement===document.querySelector('[data-city-reset]')");
     await dispatchKey({ key: "Enter", code: "Enter", virtualKey: 13, text: "\r" });
     await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].draws.length>=${navigationStart.draws + 12}`, "keyboard Reset redraw");
-    const navigation = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {draws:context.draws.length-${navigationStart.draws},matrices:context.matrices.slice(${navigationStart.matrices}),uploads:context.uploads.map(bytes=>bytes.length),events:globalThis.__navigationEvidence,canvasListeners:context.listeners,resetListeners:globalThis.__codeCitySuccessEvidence.resetListeners}; })()`);
+    const navigation = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; const inspector=document.querySelector('[data-inspector]'); return {draws:context.draws.length-${navigationStart.draws},matrices:context.matrices.slice(${navigationStart.matrices}),uploads:context.uploads.map(bytes=>bytes.length),events:globalThis.__navigationEvidence,canvasListeners:context.listeners,resetListeners:globalThis.__codeCitySuccessEvidence.resetListeners,selectionAfterCameraResizeReset:{hidden:inspector.hidden,text:inspector.textContent}}; })()`);
 
     const observed = await evaluate("globalThis.__codeCitySuccessEvidence");
-    const surface = await evaluate("({forms:document.querySelectorAll('[data-form]').length,status:document.querySelectorAll('[data-status]').length,commits:document.querySelectorAll('[data-commit]').length,cities:document.querySelectorAll('[data-city]').length,inputs:document.querySelectorAll('input[name=repository]').length,submit:document.querySelector('form button[type=submit]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,inspectorEmpty:document.querySelector('[data-inspector]')?.childNodes.length===0,instructions:document.querySelector('#city-navigation-instructions').textContent,resets:document.querySelectorAll('[data-city-reset]').length,resetText:document.querySelector('[data-city-reset]').textContent,publicationChildren:[...document.querySelector('[data-city]').children].map((node)=>node.tagName)})");
+    const surface = await evaluate("({forms:document.querySelectorAll('[data-form]').length,status:document.querySelectorAll('[data-status]').length,commits:document.querySelectorAll('[data-commit]').length,cities:document.querySelectorAll('[data-city]').length,inputs:document.querySelectorAll('input[name=repository]').length,submit:document.querySelector('form button[type=submit]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,inspectorHidden:document.querySelector('[data-inspector]')?.hidden,inspectorText:document.querySelector('[data-inspector]')?.textContent,pathTag:document.querySelector('[data-canonical-path]')?.tagName,instructions:document.querySelector('#city-navigation-instructions').textContent,resets:document.querySelectorAll('[data-city-reset]').length,resetText:document.querySelector('[data-city-reset]').textContent,publicationChildren:[...document.querySelector('[data-city]').children].map((node)=>node.tagName)})");
 
     invariant(failures.length === 0, `Production success instrumentation failed: ${failures.map(String).join("; ")}`);
     invariant(browserExceptions.length === 0, `Production browser exceptions: ${browserExceptions.join("; ")}`);
@@ -508,6 +516,9 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert.notEqual(focusedCanvas.outlineWidth, "0px");
     assert.notEqual(focusedCanvas.outlineColor, "rgba(0, 0, 0, 0)");
     assert.equal(focusedReset, true);
+    assert.deepEqual(selectedByKeyboard, { hidden: false, text: fixture.path, pathText: fixture.path, pathTag: "BDI", role: "status", live: "polite", atomic: "true" });
+    assert.deepEqual(clearedSelection, { hidden: true, text: "" });
+    assert.deepEqual(navigation.selectionAfterCameraResizeReset, { hidden: false, text: fixture.path });
     assert.deepEqual(primaryCapture, { focused: true, pointerId: 1, captured: true });
     assert.equal(primaryReleased, true);
     assert.equal(resizeReleasedCapture, true);
@@ -541,7 +552,9 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       { repeat: true, ctrl: false, defaultPrevented: true },
       { repeat: false, ctrl: true, defaultPrevented: false },
     ]);
-    for (const key of ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "Escape"]) assert.equal(productKeys.find((entry) => entry.key === key)?.defaultPrevented, false, key);
+    for (const key of ["ArrowUp", "ArrowDown", "ArrowRight", "Home", "End", "Escape"]) assert.equal(productKeys.find((entry) => entry.key === key)?.defaultPrevented, true, key);
+    assert.deepEqual(productKeys.filter(({ key }) => key === "ArrowLeft").map(({ shift, defaultPrevented }) => ({ shift, defaultPrevented })), [{ shift: true, defaultPrevented: false }]);
+    assert.equal(productKeys.find((entry) => entry.key === "ArrowDown")?.repeat, true);
     for (const key of ["W", "+", "-"]) assert.equal(productKeys.find((entry) => entry.key === key)?.defaultPrevented, true, key);
     assert(productKeys.filter(({ key }) => key === "0").every(({ defaultPrevented }) => defaultPrevented));
     assert.deepEqual(navigation.events.wheels.map(({ shift, defaultPrevented }) => ({ shift, defaultPrevented })), [
@@ -553,7 +566,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert(navigation.events.pointers.some(({ type, target, defaultPrevented }) => type === "pointerdown" && target !== "CANVAS" && !defaultPrevented));
     assert(navigation.events.contextMenus.some(({ target, defaultPrevented }) => target === "CANVAS" && defaultPrevented));
     assert(navigation.events.contextMenus.some(({ target, defaultPrevented }) => target !== "CANVAS" && !defaultPrevented));
-    assert.deepEqual(surface, { forms: 1, status: 1, commits: 1, cities: 1, inputs: 1, submit: "Submit", commit: fixture.selected, canvases: 1, inspectors: 1, inspectorEmpty: true, instructions: "Keyboard navigation: use W, A, S, and D to orbit; hold Shift with W, A, S, or D to pan; use + and − to zoom; use 0 or Reset view to return to the overview.", resets: 1, resetText: "Reset view", publicationChildren: ["CANVAS", "SECTION"] });
+    assert.deepEqual(surface, { forms: 1, status: 1, commits: 1, cities: 1, inputs: 1, submit: "Submit", commit: fixture.selected, canvases: 1, inspectors: 1, inspectorHidden: false, inspectorText: fixture.path, pathTag: "BDI", instructions: "Keyboard navigation: use W, A, S, and D to orbit; hold Shift with W, A, S, or D to pan; use + and − to zoom; use 0 or Reset view to return to the overview. Use the arrow keys to traverse buildings, Home or End to select the first or last building, and Escape to clear selection.", resets: 1, resetText: "Reset view", publicationChildren: ["CANVAS", "SECTION"] });
 
     const actualNetwork = requestedUrls.slice(networkStart);
     const manifestUrls = new Set(manifest.files.map((record) => `${origin}/code-city/${record.path}`));

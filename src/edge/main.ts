@@ -1,6 +1,7 @@
 import processingWorkerUrl from "./processing-worker.ts?worker&url";
 import { createMainController, type AttemptView, type WorkerTransport } from "../application/main-controller";
 import { createCityPresenter, type PresenterToken } from "./city-presenter";
+import { stageSemanticPublication } from "./semantic-publication";
 
 function requiredElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -58,23 +59,7 @@ const view: AttemptView = {
     replaceStatus("Cancelled");
   },
   stagePublication(revision, inspection) {
-    void inspection;
-    const inspector = document.createElement("section");
-    inspector.dataset.inspector = "";
-    inspector.hidden = true;
-    let committedToRoot = false;
-    return {
-      commit(canvas) {
-        city.replaceChildren(canvas as unknown as Node, inspector);
-        commit.textContent = revision;
-        committedToRoot = true;
-      },
-      rollback() {
-        inspector.remove();
-        if (committedToRoot || commit.textContent === revision) commit.textContent = "";
-        committedToRoot = false;
-      },
-    };
+    return stageSemanticPublication(document, city, commit, revision, inspection);
   },
 };
 

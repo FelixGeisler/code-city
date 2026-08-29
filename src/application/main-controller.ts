@@ -19,6 +19,7 @@ export type SelectionAction = "next" | "previous" | "first" | "last" | "clear";
 export type ControllerCanvas = Readonly<{ remove(): void }>;
 export type ControllerPublication = Readonly<{
   commit(canvas: ControllerCanvas): void;
+  setSelection(index: number | null): void;
   rollback(): void;
 }>;
 
@@ -280,14 +281,20 @@ export function createMainController(
 
   function applyVisual(publication: CurrentPresentation, hover: number | null, selection: number | null): void {
     if (current !== publication || !validIndex(publication, hover) || !validIndex(publication, selection)) return;
-    const result = presenter.setVisualState(publication.generation, hover, selection);
-    if (result.kind === "failure") {
+    try {
+      const result = presenter.setVisualState(publication.generation, hover, selection);
+      if (result.kind === "failure") {
+        failPresentation(publication.generation);
+        return;
+      }
+      if (result.kind !== "applied" || current !== publication) return;
+      if (selection !== publication.selection) publication.publication.setSelection(selection);
+      if (current !== publication) return;
+      publication.hover = hover;
+      publication.selection = selection;
+    } catch {
       failPresentation(publication.generation);
-      return;
     }
-    if (result.kind !== "applied" || current !== publication) return;
-    publication.hover = hover;
-    publication.selection = selection;
   }
 
   function eventSink(token: () => unknown): ControllerEventSink<number> {
