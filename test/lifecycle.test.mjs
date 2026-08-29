@@ -30,6 +30,7 @@ function fixture({
   publicationStageThrows = false,
   publicationCommitThrows = false,
   publicationRollbackThrows = false,
+  selectionThrows = false,
   successThrows = false,
   onStage,
 } = {}) {
@@ -57,6 +58,12 @@ function fixture({
           this.canvas = canvas;
           this.revision = revision;
           this.inspection = inspection;
+        },
+        setSelection(index) {
+          events.push("semantic:selection");
+          if (selectionThrows) throw new Error("semantic selection");
+          this.selections ??= [];
+          this.selections.push(index);
         },
         rollback() {
           if (!active) return;
@@ -367,10 +374,82 @@ test("committed event sink gates generation and token before authoritative visua
     { generation: 1, hover: 0, selection: 0 },
     { generation: 1, hover: 0, selection: null },
   ]);
+  assert.deepEqual(f.presentation.publications[0].selections, [0, null]);
   first.handlers.message({ type: "ATTEMPT_DRAINED", generation: 1 });
   f.controller.submit("https://github.com/owner/next");
   sink.hoverIndex(1, null);
+  sink.selectionAction(1, "first");
   assert.equal(f.presentation.visual.length, initial + 6);
+  assert.deepEqual(f.presentation.publications[0].selections, [0, null]);
+});
+
+test("controller traversal is no-wrap over canonical first, last, single, adversarial, and 4,000-entry snapshots", () => {
+  const publish = (f, city) => {
+    f.controller.submit(VALID);
+    const transport = f.transports[0];
+    transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
+    transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+    transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city });
+    return f.presentation.eventSinks[0];
+  };
+
+  const single = fixture();
+  const singleSink = publish(single, CITY);
+  singleSink.selectionAction(1, "previous");
+  singleSink.selectionAction(1, "previous");
+  singleSink.selectionAction(1, "next");
+  singleSink.selectionAction(1, "clear");
+  assert.deepEqual(single.presentation.publications[0].selections, [0, null]);
+
+  const adversarialCity = buildCity([
+    { canonicalPath: "paths/<script>&.js", S: 0, U: 0, M: 0 },
+    { canonicalPath: "paths/A.js", S: 0, U: 0, M: 0 },
+    { canonicalPath: "paths/a.js", S: 0, U: 0, M: 0 },
+    { canonicalPath: "paths/bidi-\u202E-token.js", S: 0, U: 0, M: 0 },
+    { canonicalPath: "paths/café.js", S: 0, U: 0, M: 0 },
+    { canonicalPath: "paths/東京.js", S: 0, U: 0, M: 0 },
+  ]);
+  const adversarial = fixture();
+  const sink = publish(adversarial, adversarialCity);
+  for (const action of ["next", "previous", "first", "previous", "next", "last", "next", "clear", "previous"]) {
+    sink.selectionAction(1, action);
+  }
+  const last = adversarialCity.inspection.length - 1;
+  assert.deepEqual(adversarial.presentation.publications[0].selections, [0, 1, last, null, last]);
+  assert.deepEqual(adversarial.presentation.publications[0].selections.map((index) => index === null ? null : adversarialCity.inspection[index].canonicalPath), [
+    adversarialCity.inspection[0].canonicalPath,
+    adversarialCity.inspection[1].canonicalPath,
+    adversarialCity.inspection[last].canonicalPath,
+    null,
+    adversarialCity.inspection[last].canonicalPath,
+  ]);
+
+  const maximumCity = buildCity(Array.from({ length: 4_000 }, (_, index) => ({
+    canonicalPath: `maximum/${String(index).padStart(4, "0")}.js`, S: 0, U: 0, M: 0,
+  })));
+  const maximum = fixture();
+  const maximumSink = publish(maximum, maximumCity);
+  maximumSink.selectionAction(1, "last");
+  maximumSink.selectionAction(1, "next");
+  maximumSink.selectionAction(1, "first");
+  maximumSink.selectionAction(1, "previous");
+  assert.deepEqual(maximum.presentation.publications[0].selections, [3_999, 0]);
+});
+
+test("semantic selection failure after a valid city revokes the session exactly once as M1-PRES-1", () => {
+  const f = fixture({ selectionThrows: true });
+  f.controller.submit(VALID);
+  const transport = f.transports[0];
+  transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
+  transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+  transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city: CITY });
+  const sink = f.presentation.eventSinks[0];
+  sink.selectionAction(1, "first");
+  sink.selectionAction(1, "clear");
+  assert.deepEqual(f.failures, [{ category: "Presentation failed", code: "M1-PRES-1", revision: SHA }]);
+  assert.equal(f.presentation.clears, 1);
+  assert.equal(f.presentation.hooks.isEligible(1), false);
+  assert.equal(f.events.filter((event) => event === "semantic:selection").length, 1);
 });
 
 test("invalid replacement revokes output, closes active work, and starts no replacement", () => {

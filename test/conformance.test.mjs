@@ -116,6 +116,7 @@ test("the Vite application is strictly layered, policy-closed, and has one stati
     "edge/github-source-gateway.ts",
     "edge/main.ts",
     "edge/processing-worker.ts",
+    "edge/semantic-publication.ts",
     "edge/shell.css",
     "edge/tree-sitter-adapter.ts",
     "edge/tree-sitter-assets.ts",
