@@ -154,21 +154,47 @@ function pageObservationSource() {
     HTMLCanvasElement.prototype.getContext = function(kind, attributes) {
       const actual = acquire.call(this, kind, attributes);
       if (kind !== "webgl2" || !actual) return actual;
-      const record = { uploads: [], matrices: [], draws: [], listeners: listenerRecord(this), deletes: { shader: 0, program: 0, buffer: 0, vao: 0 } };
+      const record = { uploads: [], subUploads: [], matrices: [], outlineMatrices: [], draws: [], outlineDraws: [], shaderSources: [], operations: [], polygonOffsetEnables: 0, forceLost: false, lastMatrix: null, listeners: listenerRecord(this), deletes: { shader: 0, program: 0, buffer: 0, vao: 0 } };
       evidence.contexts.push(record);
       return new Proxy(actual, { get(target, property) {
         if (property === "bufferData") return (targetKind, data, usage) => {
           record.uploads.push(Array.from(new Uint8Array(data.buffer, data.byteOffset, data.byteLength)));
           return target.bufferData(targetKind, data, usage);
         };
+        if (property === "bufferSubData") return (targetKind, offset, data) => {
+          record.subUploads.push(Array.from(new Uint8Array(data.buffer, data.byteOffset, data.byteLength)));
+          return target.bufferSubData(targetKind, offset, data);
+        };
+        if (property === "shaderSource") return (shader, source) => {
+          record.shaderSources.push(source);
+          return target.shaderSource(shader, source);
+        };
         if (property === "uniformMatrix4fv") return (location, transpose, matrix) => {
-          record.matrices.push(Array.from(matrix));
+          record.lastMatrix = Array.from(matrix);
           return target.uniformMatrix4fv(location, transpose, matrix);
         };
         if (property === "drawElementsInstanced") return (...args) => {
-          record.draws.push(args.slice(1));
+          if (args[0] === 0x0001) {
+            record.outlineDraws.push(args.slice(1));
+            record.outlineMatrices.push(record.lastMatrix);
+            record.operations.push("outline");
+          } else {
+            record.draws.push(args.slice(1));
+            record.matrices.push(record.lastMatrix);
+            record.operations.push("city");
+          }
           return target.drawElementsInstanced(...args);
         };
+        if (property === "disable") return (...args) => {
+          if (args[0] === 0x0b71) record.operations.push("depth:off");
+          return target.disable(...args);
+        };
+        if (property === "enable") return (...args) => {
+          if (args[0] === 0x0b71) record.operations.push("depth:on");
+          if (args[0] === 0x8037) record.polygonOffsetEnables += 1;
+          return target.enable(...args);
+        };
+        if (property === "isContextLost" && record.forceLost) return () => true;
         const deletions = { deleteShader: "shader", deleteProgram: "program", deleteBuffer: "buffer", deleteVertexArray: "vao" };
         if (deletions[property]) return (...args) => { record.deletes[deletions[property]] += 1; return target[property](...args); };
         const value = Reflect.get(target, property, target);
@@ -363,7 +389,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert.equal(cleared.canvases, 0);
     assert.equal(cleared.inspectors, 0);
     assert.equal(cleared.children, 0);
-    assert.deepEqual(cleared.deletes, { shader: 2, program: 1, buffer: 3, vao: 1 });
+    assert.deepEqual(cleared.deletes, { shader: 4, program: 2, buffer: 6, vao: 2 });
 
     await waitFor(`document.querySelector('[data-commit]').textContent===${JSON.stringify(fixture.selected)}&&document.querySelectorAll('[data-city] canvas').length===1&&globalThis.__codeCitySuccessEvidence.messages.length===2&&globalThis.__codeCitySuccessEvidence.contexts.length===2`, "second successful city");
     await Promise.all(childInstallations);
@@ -387,7 +413,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     const navigationStart = await evaluate(`(() => {
       const canvas=document.querySelector('[data-city] canvas');
       const context=globalThis.__codeCitySuccessEvidence.contexts[1];
-      return {draws:context.draws.length,matrices:context.matrices.length,uploads:context.uploads.map(bytes=>bytes.length),matrix:context.matrices.at(-1),rect:(()=>{const r=canvas.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()};
+      return {draws:context.draws.length,outlineDraws:context.outlineDraws.length,matrices:context.matrices.length,outlineMatrices:context.outlineMatrices.length,subUploads:context.subUploads.length,operations:context.operations.length,uploads:context.uploads.map(bytes=>bytes.length),matrix:context.matrices.at(-1),rect:(()=>{const r=canvas.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()};
     })()`);
     await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9 });
     const focusedCanvas = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); const style=getComputedStyle(canvas); return {active:document.activeElement===canvas,tabIndex:canvas.tabIndex,label:canvas.getAttribute("aria-label"),description:canvas.getAttribute("aria-describedby"),outlineStyle:style.outlineStyle,outlineWidth:style.outlineWidth,outlineColor:style.outlineColor}; })()`);
@@ -396,7 +422,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await dispatchKey({ key: "d", code: "KeyD", virtualKey: 68, text: "d", autoRepeat: true });
     await dispatchKey({ key: "d", code: "KeyD", virtualKey: 68, modifiers: 2, text: "d" });
     await dispatchKey({ key: "ArrowRight", code: "ArrowRight", virtualKey: 39 });
-    const selectedByKeyboard = await evaluate(`(() => { const inspector=document.querySelector('[data-inspector]'); const path=inspector.querySelector('[data-canonical-path]'); return {hidden:inspector.hidden,text:inspector.textContent,pathText:path.textContent,pathTag:path.tagName,role:inspector.getAttribute('role'),live:inspector.getAttribute('aria-live'),atomic:inspector.getAttribute('aria-atomic')}; })()`);
+    const selectedByKeyboard = await evaluate(`(() => { const inspector=document.querySelector('[data-inspector]'); const path=inspector.querySelector('[data-canonical-path]'); const context=globalThis.__codeCitySuccessEvidence.contexts[1]; return {hidden:inspector.hidden,text:inspector.textContent,pathText:path.textContent,pathTag:path.tagName,role:inspector.getAttribute('role'),live:inspector.getAttribute('aria-live'),atomic:inspector.getAttribute('aria-atomic'),cityDraws:context.draws.length-${navigationStart.draws},outlineDraws:context.outlineDraws.length-${navigationStart.outlineDraws},subUploads:context.subUploads.length-${navigationStart.subUploads},exactReplica:JSON.stringify(context.subUploads[0])===JSON.stringify(context.uploads[2].slice(0,24)),operations:context.operations.slice(-5),outlineArgs:context.outlineDraws.at(-1),fixedBlack:context.shaderSources.some(source=>source.includes('o_color = vec4(0.0, 0.0, 0.0, 1.0);')),polygonOffsetEnables:context.polygonOffsetEnables}; })()`);
     await dispatchKey({ key: "ArrowLeft", code: "ArrowLeft", virtualKey: 37, modifiers: 8 });
     await dispatchKey({ key: "ArrowDown", code: "ArrowDown", virtualKey: 40, autoRepeat: true });
     await dispatchKey({ key: "Home", code: "Home", virtualKey: 36 });
@@ -450,8 +476,9 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     const interruptionPoint = await evaluate(`(() => { const r=document.querySelector('[data-city] canvas').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
     await dispatchPointer({ type: "mousePressed", x: interruptionPoint.x, y: interruptionPoint.y, button: "left", buttons: 1 });
     const interruptedPointerId = await evaluate("globalThis.__navigationEvidence.pointers.at(-1).pointerId");
+    const drawsBeforeResize = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[1].draws.length");
     await evaluate("document.querySelector('[data-city]').style.width='75%';true");
-    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].draws.length>=${navigationStart.draws + 10}`, "native navigation and resize redraws");
+    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].draws.length>=${drawsBeforeResize + 1}`, "native navigation and resize redraws");
     const resizeReleasedCapture = await evaluate(`!document.querySelector('[data-city] canvas').hasPointerCapture(${interruptedPointerId})`);
     await dispatchPointer({ type: "mouseMoved", x: interruptionPoint.x + 20, y: interruptionPoint.y + 20, buttons: 1 });
     await dispatchPointer({ type: "mouseReleased", x: interruptionPoint.x + 20, y: interruptionPoint.y + 20, button: "left", buttons: 0 });
@@ -459,8 +486,8 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9 });
     const focusedReset = await evaluate("document.activeElement===document.querySelector('[data-city-reset]')");
     await dispatchKey({ key: "Enter", code: "Enter", virtualKey: 13, text: "\r" });
-    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].draws.length>=${navigationStart.draws + 12}`, "keyboard Reset redraw");
-    const navigation = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; const inspector=document.querySelector('[data-inspector]'); return {draws:context.draws.length-${navigationStart.draws},matrices:context.matrices.slice(${navigationStart.matrices}),uploads:context.uploads.map(bytes=>bytes.length),events:globalThis.__navigationEvidence,canvasListeners:context.listeners,resetListeners:globalThis.__codeCitySuccessEvidence.resetListeners,selectionAfterCameraResizeReset:{hidden:inspector.hidden,text:inspector.textContent}}; })()`);
+    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].draws.length>=${navigationStart.draws + 17}`, "keyboard Reset redraw");
+    const navigation = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[1]; const inspector=document.querySelector('[data-inspector]'); return {draws:context.draws.length-${navigationStart.draws},outlineDraws:context.outlineDraws.length-${navigationStart.outlineDraws},matrices:context.matrices.slice(${navigationStart.matrices}),outlineMatrices:context.outlineMatrices.slice(${navigationStart.outlineMatrices}),subUploads:context.subUploads.length-${navigationStart.subUploads},uploads:context.uploads.map(bytes=>bytes.length),events:globalThis.__navigationEvidence,canvasListeners:context.listeners,resetListeners:globalThis.__codeCitySuccessEvidence.resetListeners,selectionAfterCameraResizeReset:{hidden:inspector.hidden,text:inspector.textContent}}; })()`);
 
     const observed = await evaluate("globalThis.__codeCitySuccessEvidence");
     const surface = await evaluate("({forms:document.querySelectorAll('[data-form]').length,status:document.querySelectorAll('[data-status]').length,commits:document.querySelectorAll('[data-commit]').length,cities:document.querySelectorAll('[data-city]').length,inputs:document.querySelectorAll('input[name=repository]').length,submit:document.querySelector('form button[type=submit]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,inspectorHidden:document.querySelector('[data-inspector]')?.hidden,inspectorText:document.querySelector('[data-inspector]')?.textContent,pathTag:document.querySelector('[data-canonical-path]')?.tagName,instructions:document.querySelector('#city-navigation-instructions').textContent,resets:document.querySelectorAll('[data-city-reset]').length,resetText:document.querySelector('[data-city-reset]').textContent,publicationChildren:[...document.querySelector('[data-city]').children].map((node)=>node.tagName)})");
@@ -503,7 +530,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     }
     const presentationDigests = observed.contexts.map((context) => createHash("sha256").update(JSON.stringify({ uploads: context.uploads, matrices: context.matrices.slice(0, 1), draws: context.draws.slice(0, 1) })).digest("hex"));
     assert.equal(presentationDigests[0], presentationDigests[1]);
-    for (const context of observed.contexts) assert.deepEqual(context.uploads.map((bytes) => bytes.length), [96, 36, 28]);
+    for (const context of observed.contexts) assert.deepEqual(context.uploads.map((bytes) => bytes.length), [96, 36, 28, 96, 24, 24]);
     assert.equal(observed.contexts[0].matrices.length, 1);
     assert.deepEqual(observed.contexts[0].draws, [[36, 5121, 0, 1]]);
     assert.deepEqual(observed.contexts[1].matrices[0], observed.contexts[0].matrices[0]);
@@ -516,22 +543,27 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert.notEqual(focusedCanvas.outlineWidth, "0px");
     assert.notEqual(focusedCanvas.outlineColor, "rgba(0, 0, 0, 0)");
     assert.equal(focusedReset, true);
-    assert.deepEqual(selectedByKeyboard, { hidden: false, text: fixture.path, pathText: fixture.path, pathTag: "BDI", role: "status", live: "polite", atomic: "true" });
+    assert.deepEqual(selectedByKeyboard, { hidden: false, text: fixture.path, pathText: fixture.path, pathTag: "BDI", role: "status", live: "polite", atomic: "true", cityDraws: 3, outlineDraws: 1, subUploads: 1, exactReplica: true, operations: ["depth:on", "city", "depth:off", "outline", "depth:on"], outlineArgs: [24, 5121, 0, 1], fixedBlack: true, polygonOffsetEnables: 0 });
     assert.deepEqual(clearedSelection, { hidden: true, text: "" });
     assert.deepEqual(navigation.selectionAfterCameraResizeReset, { hidden: false, text: fixture.path });
     assert.deepEqual(primaryCapture, { focused: true, pointerId: 1, captured: true });
     assert.equal(primaryReleased, true);
     assert.equal(resizeReleasedCapture, true);
     assert(scrollAfter > scrollBefore, `Wheel outside canvas did not retain browser scrolling: ${scrollBefore} -> ${scrollAfter}`);
-    assert.equal(navigation.draws, 12);
-    assert.equal(navigation.matrices.length, 12);
+    assert.equal(navigation.draws, 17);
+    assert.equal(navigation.outlineDraws, 12);
+    assert.equal(navigation.matrices.length, 17);
+    assert.equal(navigation.outlineMatrices.length, 12);
+    assert.equal(navigation.subUploads, 3);
     assert.deepEqual(navigation.uploads, navigationStart.uploads);
-    assert.deepEqual(navigation.matrices[5], navigationStart.matrix, "keyboard 0 did not restore the exact initial overview");
-    assert.notDeepEqual(navigation.matrices[6], navigation.matrices[5], "native wheel did not zoom");
-    assert.notDeepEqual(navigation.matrices[7], navigation.matrices[6], "native primary pointer did not orbit");
-    assert.notDeepEqual(navigation.matrices[8], navigation.matrices[7], "native secondary pointer did not pan");
-    assert.notDeepEqual(navigation.matrices[9], navigation.matrices[8], "ResizeObserver did not refit the camera");
-    assert.deepEqual(navigation.matrices[11], navigation.matrices[10], "native Reset button did not reproduce the resized overview");
+    assert.deepEqual(navigation.matrices[8], navigationStart.matrix, "keyboard 0 did not restore the exact initial overview");
+    assert.notDeepEqual(navigation.matrices[9], navigation.matrices[8], "native wheel did not zoom");
+    assert.notDeepEqual(navigation.matrices[10], navigation.matrices[9], "native primary pointer did not orbit");
+    assert.deepEqual(navigation.matrices[11], navigation.matrices[10], "selection clear changed the camera");
+    assert.notDeepEqual(navigation.matrices[12], navigation.matrices[11], "native secondary pointer did not pan");
+    assert.notDeepEqual(navigation.matrices[14], navigation.matrices[13], "ResizeObserver did not refit the camera");
+    assert.deepEqual(navigation.matrices[16], navigation.matrices[15], "native Reset button did not reproduce the resized overview");
+    assert(navigation.outlineMatrices.every((matrix) => navigation.matrices.some((cityMatrix) => JSON.stringify(cityMatrix) === JSON.stringify(matrix))), "outline did not reuse a city camera matrix");
     assert.deepEqual(navigation.canvasListeners.adds, [
       { type: "webglcontextlost", passive: true, once: true },
       { type: "keydown", passive: null, once: false },
@@ -578,6 +610,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     const contextLoss = await evaluate(`(() => {
       const canvas=document.querySelector('[data-city] canvas');
       const event=new Event('webglcontextlost',{cancelable:true});
+      globalThis.__codeCitySuccessEvidence.contexts[1].forceLost=true;
       canvas.dispatchEvent(event);
       return {defaultPrevented:event.defaultPrevented,status:document.querySelector('[data-status]').textContent,commit:document.querySelector('[data-commit]').textContent,canvases:document.querySelectorAll('[data-city] canvas').length,inspectors:document.querySelectorAll('[data-city] [data-inspector]').length,listeners:globalThis.__codeCitySuccessEvidence.contexts[1].listeners,resetListeners:globalThis.__codeCitySuccessEvidence.resetListeners,deletes:globalThis.__codeCitySuccessEvidence.contexts[1].deletes};
     })()`);
@@ -602,7 +635,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
         removes: ["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture", "contextmenu"],
       },
       resetListeners: { adds: 2, removes: 2 },
-      deletes: { shader: 2, program: 1, buffer: 3, vao: 1 },
+      deletes: { shader: 4, program: 0, buffer: 0, vao: 0 },
     });
 
     holdRevisionRequest = true;
@@ -714,13 +747,28 @@ function validateBrowserResult(result, expectedAssets) {
   assert.equal(result.complexityMatrixRuns[0].densePackedByteLength, result.complexityMatrixRuns[1].densePackedByteLength);
   assert.equal(result.complexityMatrixRuns[0].runDigest, result.complexityMatrixRuns[1].runDigest);
   assert.equal(result.complexityMatrixRuns[0].observed.factsDigest, result.complexityMatrixRuns[1].observed.factsDigest);
-  exactKeys(result.presentation, ["webgl2Available", "actualContexts", "initialDraws", "repeatDraws", "resizeDraws", "accessibility", "inputCleanup", "lossDefaultPrevented", "lossDraws", "lossFailures", "lossOrdering", "lossCleanup", "lossTerminalState", "compileFailureResult", "compileFailureDraws", "compileFailures", "compileCleanup", "compileFailureTerminalState", "pass"], "Presentation");
+  exactKeys(result.presentation, ["webgl2Available", "actualContexts", "initialDraws", "repeatDraws", "resizeDraws", "outline", "accessibility", "inputCleanup", "lossDefaultPrevented", "lossDraws", "lossFailures", "lossOrdering", "lossCleanup", "lossTerminalState", "compileFailureResult", "compileFailureDraws", "compileFailures", "compileCleanup", "compileFailureTerminalState", "pass"], "Presentation");
+  const outline = result.presentation.outline;
+  exactKeys(outline, ["allocationUploads", "updateBytes", "exactReplica", "selection", "camera", "resizeOutlineDraws", "reset", "clear", "immutableUploads", "shaderFixedBlack", "polygonOffsetEnables", "cleanup"], "Selection outline");
+  assert.deepEqual(outline.allocationUploads, [96, 36, 28, 96, 24, 24, 96, 36, 28, 96, 24, 24]);
+  assert.equal(outline.updateBytes.length, 24);
+  assert.equal(outline.exactReplica, true);
+  assert.deepEqual(outline.selection, { cityDraws: 1, outlineDraws: 1, operations: ["depth:on", "city", "depth:off", "outline", "depth:on"] });
+  assert.deepEqual(outline.camera, { cityDraws: 1, outlineDraws: 1 });
+  assert.equal(outline.resizeOutlineDraws, 1);
+  assert.deepEqual(outline.reset, { cityDraws: 1, outlineDraws: 1 });
+  assert.deepEqual(outline.clear, { cityDraws: 1, outlineDraws: 0 });
+  assert.equal(outline.immutableUploads, true);
+  assert.equal(outline.shaderFixedBlack, true);
+  assert.equal(outline.polygonOffsetEnables, 0);
+  assert.deepEqual(outline.cleanup, { deleteShader: 8, deleteProgram: 4, deleteBuffer: 12, deleteVertexArray: 4 });
   assert.deepEqual(result.presentation, {
     webgl2Available: true,
     actualContexts: 4,
     initialDraws: 1,
     repeatDraws: 1,
     resizeDraws: 1,
+    outline,
     accessibility: {
       tabIndex: 0,
       label: "Interactive code city",
@@ -739,10 +787,10 @@ function validateBrowserResult(result, expectedAssets) {
     lossOrdering: {
       semanticPresentAtNotification: true,
       hostChildrenAtNotification: 2,
-      cleanupAtNotification: { deleteShader: 2, deleteProgram: 0, deleteBuffer: 0, deleteVertexArray: 0 },
+      cleanupAtNotification: { deleteShader: 4, deleteProgram: 0, deleteBuffer: 0, deleteVertexArray: 0 },
       semanticPresentAfterControllerClear: false,
     },
-    lossCleanup: { deleteShader: 2, deleteProgram: 1, deleteBuffer: 3, deleteVertexArray: 1 },
+    lossCleanup: { deleteShader: 4, deleteProgram: 0, deleteBuffer: 0, deleteVertexArray: 0 },
     lossTerminalState: { retainedCallbacks: 1, failures: 1, drawsAfterTerminal: 0, canvases: 1, hostChildren: 0, cleanupUnchanged: true },
     compileFailureResult: { kind: "failure", category: "Presentation failed", code: "M1-PRES-1" },
     compileFailureDraws: 0,
