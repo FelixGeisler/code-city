@@ -403,8 +403,8 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       globalThis.__navigationEvidence={keys:[],wheels:[],pointers:[],contextMenus:[]};
       window.addEventListener("keydown",event=>globalThis.__navigationEvidence.keys.push({key:event.key,repeat:event.repeat,shift:event.shiftKey,ctrl:event.ctrlKey,defaultPrevented:event.defaultPrevented}));
       window.addEventListener("wheel",event=>globalThis.__navigationEvidence.wheels.push({deltaY:event.deltaY,shift:event.shiftKey,defaultPrevented:event.defaultPrevented}),{passive:true});
-      window.addEventListener("pointerdown",event=>globalThis.__navigationEvidence.pointers.push({type:event.type,pointerId:event.pointerId,button:event.button,target:event.target.tagName,defaultPrevented:event.defaultPrevented}));
-      window.addEventListener("pointerup",event=>globalThis.__navigationEvidence.pointers.push({type:event.type,pointerId:event.pointerId,button:event.button,target:event.target.tagName,defaultPrevented:event.defaultPrevented}));
+      window.addEventListener("pointerdown",event=>globalThis.__navigationEvidence.pointers.push({type:event.type,pointerId:event.pointerId,button:event.button,clientX:event.clientX,clientY:event.clientY,ctrl:event.ctrlKey,alt:event.altKey,meta:event.metaKey,shift:event.shiftKey,target:event.target.tagName,defaultPrevented:event.defaultPrevented}));
+      window.addEventListener("pointerup",event=>globalThis.__navigationEvidence.pointers.push({type:event.type,pointerId:event.pointerId,button:event.button,clientX:event.clientX,clientY:event.clientY,ctrl:event.ctrlKey,alt:event.altKey,meta:event.metaKey,shift:event.shiftKey,target:event.target.tagName,defaultPrevented:event.defaultPrevented}));
       window.addEventListener("contextmenu",event=>globalThis.__navigationEvidence.contextMenus.push({target:event.target.tagName,defaultPrevented:event.defaultPrevented}));
       document.querySelector('form button[type=submit]').focus();
       return true;
@@ -438,6 +438,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await new Promise((resolve) => setTimeout(resolve, 50));
     await dispatchWheel({ x: wheelPoint.x, y: wheelPoint.y, deltaY: -120 });
     await dispatchWheel({ x: wheelPoint.x, y: wheelPoint.y, deltaY: 120, modifiers: 8 });
+    await dispatchKey({ key: "Escape", code: "Escape", virtualKey: 27 });
     await evaluate("document.querySelector('form button[type=submit]').focus();true");
     const pointerPoint = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); canvas.scrollIntoView({block:"center"}); const r=canvas.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -445,25 +446,61 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert.equal(pointerTarget.target, "CANVAS", JSON.stringify(pointerTarget));
 
     const gesturePoint = pointerTarget.actual;
+    const beforePointerActivation = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[1].matrices.at(-1)");
+    await dispatchPointer({ type: "mousePressed", x: gesturePoint.x, y: gesturePoint.y, button: "left", buttons: 1 });
+    const pointerActivationCaptured = await evaluate("document.querySelector('[data-city] canvas').hasPointerCapture(globalThis.__navigationEvidence.pointers.at(-1).pointerId)");
+    await dispatchPointer({ type: "mouseReleased", x: gesturePoint.x, y: gesturePoint.y, button: "left", buttons: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const selectedByPointer = await evaluate(`(() => { const inspector=document.querySelector('[data-inspector]'); const path=inspector.querySelector('[data-canonical-path]'); return {hidden:inspector.hidden,text:inspector.textContent,pathText:path.textContent,pathTag:path.tagName,role:inspector.getAttribute('role'),live:inspector.getAttribute('aria-live'),atomic:inspector.getAttribute('aria-atomic')}; })()`);
+    const pointerActivationMatrixUnchanged = JSON.stringify(await evaluate("globalThis.__codeCitySuccessEvidence.contexts[1].matrices.at(-1)")) === JSON.stringify(beforePointerActivation);
+
+    const beforePrimaryDrag = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[1].matrices.at(-1)");
     await dispatchPointer({ type: "mousePressed", x: gesturePoint.x, y: gesturePoint.y, button: "left", buttons: 1 });
     const primaryCapture = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); const pointerId=globalThis.__navigationEvidence.pointers.at(-1).pointerId; return {focused:document.activeElement===canvas,pointerId,captured:canvas.hasPointerCapture(pointerId)}; })()`);
     await dispatchPointer({ type: "mouseMoved", x: gesturePoint.x + 12, y: gesturePoint.y + 4, buttons: 1 });
     await dispatchPointer({ type: "mouseReleased", x: 2, y: 2, button: "left", buttons: 0 });
-    const primaryReleased = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); return !canvas.hasPointerCapture(${primaryCapture.pointerId}); })()`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const primaryReleased = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); const inspector=document.querySelector('[data-inspector]'); return {released:!canvas.hasPointerCapture(${primaryCapture.pointerId}),selectionRetained:!inspector.hidden&&inspector.querySelector('[data-canonical-path]').textContent===${JSON.stringify(fixture.path)},matrix:globalThis.__codeCitySuccessEvidence.contexts[1].matrices.at(-1)}; })()`);
+    const primaryOrbitChanged = JSON.stringify(primaryReleased.matrix) !== JSON.stringify(beforePrimaryDrag);
+    delete primaryReleased.matrix;
 
-    await dispatchPointer({ type: "mousePressed", x: gesturePoint.x, y: gesturePoint.y, button: "left", buttons: 1 });
-    await dispatchPointer({ type: "mouseReleased", x: gesturePoint.x, y: gesturePoint.y, button: "left", buttons: 0 });
-    await dispatchPointer({ type: "mousePressed", x: gesturePoint.x, y: gesturePoint.y, button: "right", buttons: 2 });
+    const edgePoint = await evaluate(`(() => { const r=document.querySelector('[data-city] canvas').getBoundingClientRect(); return {x:r.right-1,y:r.bottom-1}; })()`);
+    await dispatchPointer({ type: "mousePressed", x: edgePoint.x, y: edgePoint.y, button: "left", buttons: 1, modifiers: 8 });
+    await dispatchPointer({ type: "mouseReleased", x: edgePoint.x, y: edgePoint.y, button: "left", buttons: 0, modifiers: 8 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await dispatchPointer({ type: "mousePressed", x: edgePoint.x, y: edgePoint.y, button: "right", buttons: 2 });
     const secondaryCapture = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); const pointerId=globalThis.__navigationEvidence.pointers.at(-1).pointerId; return {pointerId,captured:canvas.hasPointerCapture(pointerId),events:globalThis.__navigationEvidence}; })()`);
     assert.equal(secondaryCapture.captured, true, JSON.stringify(secondaryCapture));
-    await dispatchKey({ key: "Escape", code: "Escape", virtualKey: 27 });
-    await dispatchPointer({ type: "mouseMoved", x: gesturePoint.x - 9, y: gesturePoint.y + 7, buttons: 2 });
-    await dispatchPointer({ type: "mouseReleased", x: gesturePoint.x - 9, y: gesturePoint.y + 7, button: "right", buttons: 0 });
-    await dispatchPointer({ type: "mousePressed", x: 2, y: 2, button: "right", buttons: 2 });
-    await dispatchKey({ key: "Escape", code: "Escape", virtualKey: 27 });
-    await dispatchPointer({ type: "mouseReleased", x: 2, y: 2, button: "right", buttons: 0 });
-    await evaluate("document.querySelector('[data-city] canvas').focus();true");
+    await dispatchPointer({ type: "mouseReleased", x: edgePoint.x, y: edgePoint.y, button: "right", buttons: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const stationaryNonActivationsRetained = await evaluate("!document.querySelector('[data-inspector]').hidden");
+
+    await dispatchPointer({ type: "mousePressed", x: edgePoint.x, y: edgePoint.y, button: "left", buttons: 1 });
+    await dispatchPointer({ type: "mouseReleased", x: edgePoint.x, y: edgePoint.y, button: "left", buttons: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const emptyActivationCleared = await evaluate("document.querySelector('[data-inspector]').hidden&&document.querySelector('[data-inspector]').textContent==='' ");
     await dispatchKey({ key: "ArrowUp", code: "ArrowUp", virtualKey: 38 });
+
+    const outsideCapturePoint = await evaluate(`(() => { const r=document.querySelector('[data-city] canvas').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
+    await dispatchPointer({ type: "mousePressed", x: outsideCapturePoint.x, y: outsideCapturePoint.y, button: "left", buttons: 1 });
+    const outsidePointerId = await evaluate("globalThis.__navigationEvidence.pointers.at(-1).pointerId");
+    await evaluate("scrollTo(0,document.documentElement.scrollHeight);true");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await dispatchPointer({ type: "mouseReleased", x: outsideCapturePoint.x, y: outsideCapturePoint.y, button: "left", buttons: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const outsideRelease = await evaluate(`({selectionRetained:!document.querySelector('[data-inspector]').hidden,captured:document.querySelector('[data-city] canvas').hasPointerCapture(${outsidePointerId})})`);
+    await evaluate(`document.querySelector('[data-city] canvas').scrollIntoView({block:"center"});document.querySelector('[data-city] canvas').focus();true`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await dispatchKey({ key: "ArrowUp", code: "ArrowUp", virtualKey: 38 });
+
+    const secondaryPoint = await evaluate(`(() => { const r=document.querySelector('[data-city] canvas').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
+    const beforeSecondaryDrag = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[1].matrices.at(-1)");
+    await dispatchPointer({ type: "mousePressed", x: secondaryPoint.x, y: secondaryPoint.y, button: "right", buttons: 2 });
+    await dispatchPointer({ type: "mouseMoved", x: secondaryPoint.x - 9, y: secondaryPoint.y + 7, buttons: 2 });
+    await dispatchPointer({ type: "mouseReleased", x: secondaryPoint.x - 9, y: secondaryPoint.y + 7, button: "right", buttons: 0 });
+    const secondaryPanChanged = JSON.stringify(await evaluate("globalThis.__codeCitySuccessEvidence.contexts[1].matrices.at(-1)")) !== JSON.stringify(beforeSecondaryDrag);
+    await dispatchPointer({ type: "mousePressed", x: 2, y: 2, button: "right", buttons: 2 });
+    await dispatchPointer({ type: "mouseReleased", x: 2, y: 2, button: "right", buttons: 0 });
 
     await evaluate("scrollTo(0,0);true");
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -477,12 +514,15 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     await dispatchPointer({ type: "mousePressed", x: interruptionPoint.x, y: interruptionPoint.y, button: "left", buttons: 1 });
     const interruptedPointerId = await evaluate("globalThis.__navigationEvidence.pointers.at(-1).pointerId");
     const drawsBeforeResize = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[1].draws.length");
+    const matrixBeforeResize = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[1].matrices.at(-1)");
     await evaluate("document.querySelector('[data-city]').style.width='75%';true");
     await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[1].draws.length>=${drawsBeforeResize + 1}`, "native navigation and resize redraws");
     const resizeReleasedCapture = await evaluate(`!document.querySelector('[data-city] canvas').hasPointerCapture(${interruptedPointerId})`);
+    const resizeChangedMatrix = JSON.stringify(await evaluate("globalThis.__codeCitySuccessEvidence.contexts[1].matrices.at(-1)")) !== JSON.stringify(matrixBeforeResize);
     await dispatchPointer({ type: "mouseMoved", x: interruptionPoint.x + 20, y: interruptionPoint.y + 20, buttons: 1 });
     await dispatchPointer({ type: "mouseReleased", x: interruptionPoint.x + 20, y: interruptionPoint.y + 20, button: "left", buttons: 0 });
     await dispatchKey({ key: "0", code: "Digit0", virtualKey: 48, text: "0" });
+    const keyboardResetMatrix = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[1].matrices.at(-1)");
     await dispatchKey({ key: "Tab", code: "Tab", virtualKey: 9 });
     const focusedReset = await evaluate("document.activeElement===document.querySelector('[data-city-reset]')");
     await dispatchKey({ key: "Enter", code: "Enter", virtualKey: 13, text: "\r" });
@@ -547,22 +587,35 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert.deepEqual(clearedSelection, { hidden: true, text: "" });
     assert.deepEqual(navigation.selectionAfterCameraResizeReset, { hidden: false, text: fixture.path });
     assert.deepEqual(primaryCapture, { focused: true, pointerId: 1, captured: true });
-    assert.equal(primaryReleased, true);
+    assert.deepEqual(primaryReleased, { released: true, selectionRetained: true });
+    assert.equal(pointerActivationCaptured, true);
+    assert.deepEqual(selectedByPointer, {
+      hidden: selectedByKeyboard.hidden,
+      text: selectedByKeyboard.text,
+      pathText: selectedByKeyboard.pathText,
+      pathTag: selectedByKeyboard.pathTag,
+      role: selectedByKeyboard.role,
+      live: selectedByKeyboard.live,
+      atomic: selectedByKeyboard.atomic,
+    });
+    assert.equal(pointerActivationMatrixUnchanged, true);
+    assert.equal(primaryOrbitChanged, true);
+    assert.equal(secondaryPanChanged, true);
+    assert.equal(stationaryNonActivationsRetained, true);
+    assert.equal(emptyActivationCleared, true);
+    assert.deepEqual(outsideRelease, { selectionRetained: true, captured: false });
     assert.equal(resizeReleasedCapture, true);
+    assert.equal(resizeChangedMatrix, true);
     assert(scrollAfter > scrollBefore, `Wheel outside canvas did not retain browser scrolling: ${scrollBefore} -> ${scrollAfter}`);
-    assert.equal(navigation.draws, 17);
-    assert.equal(navigation.outlineDraws, 12);
-    assert.equal(navigation.matrices.length, 17);
-    assert.equal(navigation.outlineMatrices.length, 12);
-    assert.equal(navigation.subUploads, 3);
+    assert.equal(navigation.draws, 19);
+    assert.equal(navigation.outlineDraws, 14);
+    assert.equal(navigation.matrices.length, 19);
+    assert.equal(navigation.outlineMatrices.length, 14);
+    assert.equal(navigation.subUploads, 4);
     assert.deepEqual(navigation.uploads, navigationStart.uploads);
     assert.deepEqual(navigation.matrices[8], navigationStart.matrix, "keyboard 0 did not restore the exact initial overview");
     assert.notDeepEqual(navigation.matrices[9], navigation.matrices[8], "native wheel did not zoom");
-    assert.notDeepEqual(navigation.matrices[10], navigation.matrices[9], "native primary pointer did not orbit");
-    assert.deepEqual(navigation.matrices[11], navigation.matrices[10], "selection clear changed the camera");
-    assert.notDeepEqual(navigation.matrices[12], navigation.matrices[11], "native secondary pointer did not pan");
-    assert.notDeepEqual(navigation.matrices[14], navigation.matrices[13], "ResizeObserver did not refit the camera");
-    assert.deepEqual(navigation.matrices[16], navigation.matrices[15], "native Reset button did not reproduce the resized overview");
+    assert.deepEqual(navigation.matrices.at(-1), keyboardResetMatrix, "native Reset button did not reproduce the keyboard resized overview");
     assert(navigation.outlineMatrices.every((matrix) => navigation.matrices.some((cityMatrix) => JSON.stringify(cityMatrix) === JSON.stringify(matrix))), "outline did not reuse a city camera matrix");
     assert.deepEqual(navigation.canvasListeners.adds, [
       { type: "webglcontextlost", passive: true, once: true },
