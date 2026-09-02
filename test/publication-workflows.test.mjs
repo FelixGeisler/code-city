@@ -24,7 +24,7 @@ const ACTIONS = {
   node: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
   pagesUpload: "actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b",
   artifactUpload: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-  deploy: "actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e",
+  deploy: "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128",
   download: "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
 };
 

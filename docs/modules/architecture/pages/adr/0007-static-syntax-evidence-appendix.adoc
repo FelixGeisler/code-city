@@ -10,7 +10,7 @@ architecture decision.
 |Runtime asset |`web-tree-sitter.wasm`
 |Grammar assets |`tree-sitter-javascript.wasm`,
 `tree-sitter-typescript.wasm`, `tree-sitter-tsx.wasm`
-|Runtime package |`web-tree-sitter@0.26.12`
+|Runtime package |`web-tree-sitter@0.26.13`
 |Grammar package |`@vscode/tree-sitter-wasm@0.3.1`
 |Canonical WASM inventory |10,103 UTF-8 bytes; 217 rows
 |Inventory SHA-256 |`b4b6e4528e5147ef618593b2504f204de6a3aac2ce06d9cfe2a3661f435756bb`

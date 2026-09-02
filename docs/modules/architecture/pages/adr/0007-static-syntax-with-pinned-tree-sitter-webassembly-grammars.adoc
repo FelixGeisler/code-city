@@ -13,7 +13,7 @@ source. A parser fallback would give the same module two meanings.
 |===
 |Choice |Value
 
-|Runtime |`web-tree-sitter@0.26.12`
+|Runtime |`web-tree-sitter@0.26.13`
 |Grammar assets |JavaScript, TypeScript, and TSX WASM from
 `@vscode/tree-sitter-wasm@0.3.1`
 |`.js`, `.mjs`, `.cjs` |JavaScript grammar; visible JSX rejected

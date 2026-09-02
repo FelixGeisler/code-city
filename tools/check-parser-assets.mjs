@@ -14,7 +14,7 @@ export const SELECTED_ASSETS = [
   {
     role: "runtime-wasm",
     relativePath: "node_modules/web-tree-sitter/web-tree-sitter.wasm",
-    sha256: "ba5c7a539603f251f380e4d6ce26ee954ffca7bda8b2e13744dc4c87d6ce6041",
+    sha256: "99fa2281fc4c6da713ccdadce72e81571b032ab9901b751be2d5aa127c843aaf",
   },
   {
     role: "grammar-javascript",
