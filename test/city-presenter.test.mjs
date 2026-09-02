@@ -84,6 +84,14 @@ class FakeGl {
   get drawingBufferHeight() { return this.canvas.height; }
   call(name, args = [], result) {
     this.calls.push([name, ...args]);
+    const fault = this.options.callFault;
+    const occurrence = this.calls.filter((call) => call[0] === name).length;
+    if (fault?.method === name && fault.occurrence === occurrence) {
+      this.faultCallIndex = this.calls.length - 1;
+      if (fault.loseContext) this.lost = true;
+      if (Object.hasOwn(fault, "result")) return fault.result;
+      throw Object.hasOwn(fault, "value") ? fault.value : new Error(`injected ${name} call ${occurrence}`);
+    }
     if (this.options.throwMethod === name) throw new Error(`injected ${name}`);
     return result;
   }
@@ -277,6 +285,25 @@ function inputEvent(values = {}) {
 }
 function matrices(gl) {
   return gl.calls.filter((call) => call[0] === "uniformMatrix4fv").map((call) => [...call[3]]);
+}
+
+const RESOURCE_DELETE_METHODS = Object.freeze({
+  1: "deleteShader", 2: "deleteShader", 3: "deleteProgram", 5: "deleteVertexArray",
+  6: "deleteBuffer", 7: "deleteBuffer", 8: "deleteBuffer", 9: "deleteShader",
+  10: "deleteShader", 11: "deleteProgram", 13: "deleteVertexArray", 14: "deleteBuffer",
+  15: "deleteBuffer", 16: "deleteBuffer",
+});
+function resourceDeletes(gl) {
+  return gl.calls
+    .filter(([name]) => name.startsWith("delete"))
+    .map(([name, resource]) => [name, resource.id])
+    .sort((left, right) => left[1] - right[1]);
+}
+function expectedResourceDeletesThrough(lastResource) {
+  return Object.entries(RESOURCE_DELETE_METHODS)
+    .map(([id, method]) => [method, Number(id)])
+    .filter(([, id]) => id <= lastResource)
+    .sort((left, right) => left[1] - right[1]);
 }
 
 function expectedInstanceBytes() {
@@ -623,6 +650,34 @@ test("outline update, draw, and depth restoration failures revoke the complete s
     assert.equal(names(gl).filter((name) => name === "deleteBuffer").length, 6, failure);
     assert.equal(names(gl).filter((name) => name === "deleteVertexArray").length, 2, failure);
     assert.deepEqual(presenter.setVisualState(failure, null, 0), STALE, failure);
+  }
+});
+
+test("falsy outline exceptions survive depth restoration and revoke the complete session", () => {
+  for (const [id, thrown] of [
+    ["undefined", undefined], ["null", null], ["false", false], ["zero", 0],
+    ["empty string", ""], ["NaN", Number.NaN], ["zero bigint", 0n],
+  ]) {
+    const environment = fakeEnvironment();
+    const { presenter, failures } = failuresCollector(environment);
+    assert.deepEqual(present(environment, presenter, id, oneBuilding()), COMMITTED);
+    const canvas = environment.canvases[0];
+    const gl = canvas.gl;
+    const draw = gl.drawElementsInstanced.bind(gl);
+    gl.drawElementsInstanced = (...args) => {
+      draw(...args);
+      if (args[0] === GL.LINES) throw thrown;
+    };
+
+    assert.deepEqual(presenter.setVisualState(id, null, 0), PRESENTATION_FAILURE, id);
+    assert.deepEqual(failures, [[id, "Presentation failed", "M1-PRES-1"]], id);
+    const outlineDraw = gl.calls.findIndex((call) => call[0] === "drawElementsInstanced" && call[1] === GL.LINES);
+    assert(outlineDraw >= 0, id);
+    assert.deepEqual(gl.calls[outlineDraw + 1], ["enable", GL.DEPTH_TEST], id);
+    assert.equal(canvas.removeCount, 1, id);
+    assert.equal(environment.host.child, undefined, id);
+    assert.deepEqual(resourceDeletes(gl), expectedResourceDeletesThrough(16), id);
+    assert.deepEqual(presenter.setVisualState(id, null, 0), STALE, id);
   }
 });
 
@@ -1235,6 +1290,73 @@ test("closed failure stimuli fail synchronously after cleanup with no publicatio
     if (environment.canvases[0]) {
       const expectedDraws = ["draw throw", "observer platform", "observe platform"].includes(id) ? 1 : 0;
       assert.equal(environment.canvases[0].gl.calls.filter((call) => call[0] === "drawElementsInstanced").length, expectedDraws, id);
+    }
+  }
+});
+
+test("later outline allocation faults map to M1-PRES-1 and exactly revoke usable and lost-context ownership", () => {
+  const faults = [
+    { id: "outline vertex shader", method: "createShader", occurrence: 3, nullResult: true, lastOwnedResource: 8, outlineShadersReleased: false },
+    { id: "outline fragment shader", method: "createShader", occurrence: 4, nullResult: true, lastOwnedResource: 9, outlineShadersReleased: false },
+    { id: "outline program", method: "createProgram", occurrence: 2, nullResult: true, lastOwnedResource: 10, outlineShadersReleased: false },
+    { id: "outline uniform", method: "getUniformLocation", occurrence: 2, nullResult: true, lastOwnedResource: 11, outlineShadersReleased: false },
+    { id: "outline VAO", method: "createVertexArray", occurrence: 2, nullResult: true, lastOwnedResource: 12, outlineShadersReleased: true },
+    { id: "outline position buffer", method: "createBuffer", occurrence: 4, nullResult: true, lastOwnedResource: 13, outlineShadersReleased: true },
+    { id: "outline index buffer", method: "createBuffer", occurrence: 5, nullResult: true, lastOwnedResource: 14, outlineShadersReleased: true },
+    { id: "outline instance buffer", method: "createBuffer", occurrence: 6, nullResult: true, lastOwnedResource: 15, outlineShadersReleased: true },
+    { id: "outline position upload", method: "bufferData", occurrence: 4, nullResult: false, lastOwnedResource: 16, outlineShadersReleased: true },
+    { id: "outline index upload", method: "bufferData", occurrence: 5, nullResult: false, lastOwnedResource: 16, outlineShadersReleased: true },
+    { id: "outline instance upload", method: "bufferData", occurrence: 6, nullResult: false, lastOwnedResource: 16, outlineShadersReleased: true },
+  ];
+
+  for (const faultCase of faults) {
+    for (const context of ["usable", "lost"]) {
+      const id = `${faultCase.id}:${context}`;
+      const environment = fakeEnvironment();
+      const { presenter, failures } = failuresCollector(environment);
+      assert.deepEqual(present(environment, presenter, "current", oneBuilding()), COMMITTED, id);
+      const currentCanvas = environment.canvases[0];
+      const callFault = {
+        method: faultCase.method,
+        occurrence: faultCase.occurrence,
+        loseContext: context === "lost",
+        ...(faultCase.nullResult ? { result: null } : {}),
+      };
+      const candidateCanvas = new FakeCanvas(environment.host, { callFault });
+      environment.platform.createCanvas = () => {
+        environment.canvases.push(candidateCanvas);
+        return candidateCanvas;
+      };
+
+      assert.deepEqual(present(environment, presenter, id, oneBuilding()), PRESENTATION_FAILURE, id);
+      assert.deepEqual(failures, [], id);
+      assert.equal(environment.host.child, undefined, id);
+      assert.equal(currentCanvas.removeCount, 1, id);
+      assert.equal(candidateCanvas.removeCount, 1, id);
+      assert.deepEqual(resourceDeletes(currentCanvas.gl), expectedResourceDeletesThrough(16), id);
+      assert.notEqual(candidateCanvas.gl.faultCallIndex, undefined, id);
+      if (context === "usable") {
+        assert.deepEqual(resourceDeletes(candidateCanvas.gl), expectedResourceDeletesThrough(faultCase.lastOwnedResource), id);
+      } else {
+        const releasedBeforeLoss = faultCase.outlineShadersReleased ? [1, 2, 9, 10] : [1, 2];
+        assert.deepEqual(
+          resourceDeletes(candidateCanvas.gl),
+          expectedResourceDeletesThrough(16).filter(([, resourceId]) => releasedBeforeLoss.includes(resourceId)),
+          id,
+        );
+        assert.equal(
+          candidateCanvas.gl.calls.slice(candidateCanvas.gl.faultCallIndex + 1).some(([name]) => name.startsWith("delete")),
+          false,
+          id,
+        );
+      }
+      assert.deepEqual(presenter.setVisualState("current", null, 0), STALE, id);
+      const deletes = [resourceDeletes(currentCanvas.gl), resourceDeletes(candidateCanvas.gl)];
+      presenter.dispose();
+      presenter.dispose();
+      assert.deepEqual([resourceDeletes(currentCanvas.gl), resourceDeletes(candidateCanvas.gl)], deletes, id);
+      assert.equal(currentCanvas.removeCount, 1, id);
+      assert.equal(candidateCanvas.removeCount, 1, id);
     }
   }
 });

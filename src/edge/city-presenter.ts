@@ -394,6 +394,7 @@ function draw(session: Session<unknown>, size: Dimensions, view: CameraView): vo
     gl.drawElementsInstanced(TRIANGLES, 36, UNSIGNED_BYTE, 0, model.count);
     requireNoError(gl);
     if (session.selection !== null) {
+      let outlineFailed = false;
       let outlineFailure: unknown;
       try {
         gl.disable(DEPTH_TEST);
@@ -402,11 +403,12 @@ function draw(session: Session<unknown>, size: Dimensions, view: CameraView): vo
         gl.uniformMatrix4fv(outlineUniform, false, matrix);
         gl.drawElementsInstanced(LINES, 24, UNSIGNED_BYTE, 0, 1);
       } catch (error) {
+        outlineFailed = true;
         outlineFailure = error;
       }
       gl.enable(DEPTH_TEST);
       requireNoError(gl);
-      if (outlineFailure) throw outlineFailure;
+      if (outlineFailed) throw outlineFailure;
     }
   } finally {
     matrix.fill(0);
