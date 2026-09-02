@@ -33,6 +33,6 @@
   },
   "dependencies": {
     "@vscode/tree-sitter-wasm": "0.3.1",
-    "web-tree-sitter": "0.26.12"
+    "web-tree-sitter": "0.26.13"
   }
 }

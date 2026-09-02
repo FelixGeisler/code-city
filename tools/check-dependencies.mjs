@@ -26,7 +26,7 @@ export async function inspectDependencyClosure(rootDirectory) {
   invariant(packageManifest.engines?.npm === ">=11 <12", "Root npm engine changed");
   const expectedDependencies = {
     "@vscode/tree-sitter-wasm": "0.3.1",
-    "web-tree-sitter": "0.26.12",
+    "web-tree-sitter": "0.26.13",
   };
   invariant(
     JSON.stringify(packageManifest.dependencies) === JSON.stringify(expectedDependencies),
@@ -87,13 +87,13 @@ export async function inspectDependencyClosure(rootDirectory) {
 
   const parserRuntime = lock.packages["node_modules/web-tree-sitter"];
   invariant(
-    parserRuntime?.version === "0.26.12"
+    parserRuntime?.version === "0.26.13"
       && parserRuntime.license === "MIT"
-      && parserRuntime.integrity === "sha512-fvqTNZQBGUgUgfP0mHw+iHf9Yf6bRQrp0A3pSf2v/hSKxkT1beCoIWoLVmlPL7O6dmySfSb/t1aJoJvrgTRStw=="
+      && parserRuntime.integrity === "sha512-5bUZ7vbQ1kcondet96wzP974+JfCZDeQ7bTpacICm2nnvHpa5cO0ByRsoMcAhUP+743vpkb4m0BFlVSm+Ye9VA=="
       && !parserRuntime.dependencies
       && !parserRuntime.optionalDependencies
       && !parserRuntime.peerDependencies,
-    "web-tree-sitter lock provenance differs from accepted #450 evidence",
+    "web-tree-sitter lock provenance differs from accepted parser evidence",
   );
   const grammars = lock.packages["node_modules/@vscode/tree-sitter-wasm"];
   invariant(
