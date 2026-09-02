@@ -28,6 +28,12 @@ const CUBE_INDICES = new Uint8Array([
   1, 2, 6, 1, 6, 5, 0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2,
 ]);
 
+const OUTLINE_INDICES = new Uint8Array([
+  0, 1, 1, 2, 2, 3, 3, 0,
+  4, 5, 5, 6, 6, 7, 7, 4,
+  0, 4, 1, 5, 2, 6, 3, 7,
+]);
+
 const VERTEX_SHADER_SOURCE = `#version 300 es
 precision highp float;
 
@@ -55,6 +61,31 @@ layout(location = 0) out vec4 o_color;
 
 void main() {
   o_color = v_color;
+}
+`;
+
+const OUTLINE_VERTEX_SHADER_SOURCE = `#version 300 es
+precision highp float;
+
+layout(location = 0) in vec3 a_unitPosition;
+layout(location = 1) in vec3 a_targetRelativeMinimum;
+layout(location = 2) in vec3 a_dimensions;
+
+uniform mat4 u_clipFromTarget;
+
+void main() {
+  vec3 targetRelativePosition = a_targetRelativeMinimum + a_unitPosition * a_dimensions;
+  gl_Position = u_clipFromTarget * vec4(targetRelativePosition, 1.0);
+}
+`;
+
+const OUTLINE_FRAGMENT_SHADER_SOURCE = `#version 300 es
+precision highp float;
+
+layout(location = 0) out vec4 o_color;
+
+void main() {
+  o_color = vec4(0.0, 0.0, 0.0, 1.0);
 }
 `;
 
@@ -219,7 +250,16 @@ type Session<G> = {
   indexBuffer?: WebGLBuffer;
   instanceBuffer?: WebGLBuffer;
   uniform?: WebGLUniformLocation;
+  outlineVertexShader?: WebGLShader;
+  outlineFragmentShader?: WebGLShader;
+  outlineProgram?: WebGLProgram;
+  outlineVao?: WebGLVertexArrayObject;
+  outlinePositionBuffer?: WebGLBuffer;
+  outlineIndexBuffer?: WebGLBuffer;
+  outlineInstanceBuffer?: WebGLBuffer;
+  outlineUniform?: WebGLUniformLocation;
   staging?: Uint8Array;
+  outlineStaging?: Uint8Array;
   model?: ValidatedGeometry;
   committed: boolean;
   active: boolean;
@@ -231,6 +271,7 @@ const INSTANCE_STRIDE = 28;
 // Trusted WebGL 2 values from the Khronos WebGL specification. Keeping these
 // local closes the context data-property surface to drawing-buffer dimensions.
 const NO_ERROR = 0;
+const LINES = 0x0001;
 const TRIANGLES = 0x0004;
 const DEPTH_BUFFER_BIT = 0x0100;
 const LESS = 0x0201;
@@ -251,6 +292,7 @@ const SAMPLE_COVERAGE = 0x80a0;
 const ARRAY_BUFFER = 0x8892;
 const ELEMENT_ARRAY_BUFFER = 0x8893;
 const STATIC_DRAW = 0x88e4;
+const DYNAMIC_DRAW = 0x88e8;
 const FRAGMENT_SHADER = 0x8b30;
 const VERTEX_SHADER = 0x8b31;
 const COMPILE_STATUS = 0x8b81;
@@ -318,8 +360,10 @@ function createInstanceStaging(model: ValidatedGeometry, centre: readonly number
 }
 
 function draw(session: Session<unknown>, size: Dimensions, view: CameraView): void {
-  const { canvas, gl, program, vao, uniform, model } = session;
-  if (!canvas || !gl || !program || !vao || !uniform || !model) throw new Error("Incomplete presentation session");
+  const { canvas, gl, program, vao, uniform, model, outlineProgram, outlineVao, outlineUniform } = session;
+  if (!canvas || !gl || !program || !vao || !uniform || !model || !outlineProgram || !outlineVao || !outlineUniform) {
+    throw new Error("Incomplete presentation session");
+  }
   if (canvas.width !== size.width || canvas.height !== size.height
     || gl.drawingBufferWidth !== size.width || gl.drawingBufferHeight !== size.height) throw new Error("WebGL2 drawing-buffer dimensions differ");
   requireNoError(gl);
@@ -349,6 +393,23 @@ function draw(session: Session<unknown>, size: Dimensions, view: CameraView): vo
     gl.uniformMatrix4fv(uniform, false, matrix);
     gl.drawElementsInstanced(TRIANGLES, 36, UNSIGNED_BYTE, 0, model.count);
     requireNoError(gl);
+    if (session.selection !== null) {
+      let outlineFailed = false;
+      let outlineFailure: unknown;
+      try {
+        gl.disable(DEPTH_TEST);
+        gl.useProgram(outlineProgram);
+        gl.bindVertexArray(outlineVao);
+        gl.uniformMatrix4fv(outlineUniform, false, matrix);
+        gl.drawElementsInstanced(LINES, 24, UNSIGNED_BYTE, 0, 1);
+      } catch (error) {
+        outlineFailed = true;
+        outlineFailure = error;
+      }
+      gl.enable(DEPTH_TEST);
+      requireNoError(gl);
+      if (outlineFailed) throw outlineFailure;
+    }
   } finally {
     matrix.fill(0);
   }
@@ -426,7 +487,69 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
   gl.vertexAttribPointer(3, 4, UNSIGNED_BYTE, true, INSTANCE_STRIDE, 24);
   gl.vertexAttribDivisor(3, 1);
   requireNoError(gl);
+
+  session.outlineVertexShader = compileShader(gl, VERTEX_SHADER, OUTLINE_VERTEX_SHADER_SOURCE, (shader) => { session.outlineVertexShader = shader; });
+  session.outlineFragmentShader = compileShader(gl, FRAGMENT_SHADER, OUTLINE_FRAGMENT_SHADER_SOURCE, (shader) => { session.outlineFragmentShader = shader; });
+  session.outlineProgram = requireResource(gl.createProgram(), gl, (program) => { session.outlineProgram = program; });
+  gl.attachShader(session.outlineProgram, session.outlineVertexShader);
+  gl.attachShader(session.outlineProgram, session.outlineFragmentShader);
+  gl.linkProgram(session.outlineProgram);
+  const outlineLinked = gl.getProgramParameter(session.outlineProgram, LINK_STATUS);
+  requireNoError(gl);
+  if (outlineLinked !== true) throw new Error("WebGL2 outline program link failed");
+  session.outlineUniform = gl.getUniformLocation(session.outlineProgram, "u_clipFromTarget") ?? undefined;
+  requireNoError(gl);
+  if (!session.outlineUniform) throw new Error("WebGL2 outline uniform is unavailable");
+
+  const outlineVertexShader = session.outlineVertexShader;
+  session.outlineVertexShader = undefined;
+  gl.deleteShader(outlineVertexShader);
+  const outlineFragmentShader = session.outlineFragmentShader;
+  session.outlineFragmentShader = undefined;
+  gl.deleteShader(outlineFragmentShader);
+  requireNoError(gl);
+
+  session.outlineVao = requireResource(gl.createVertexArray(), gl, (vao) => { session.outlineVao = vao; });
+  session.outlinePositionBuffer = requireResource(gl.createBuffer(), gl, (buffer) => { session.outlinePositionBuffer = buffer; });
+  session.outlineIndexBuffer = requireResource(gl.createBuffer(), gl, (buffer) => { session.outlineIndexBuffer = buffer; });
+  session.outlineInstanceBuffer = requireResource(gl.createBuffer(), gl, (buffer) => { session.outlineInstanceBuffer = buffer; });
+  session.outlineStaging = new Uint8Array(24);
+
+  gl.bindVertexArray(session.outlineVao);
+  gl.bindBuffer(ARRAY_BUFFER, session.outlinePositionBuffer);
+  gl.bufferData(ARRAY_BUFFER, CUBE_POSITIONS, STATIC_DRAW);
+  requireNoError(gl);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, FLOAT, false, 0, 0);
+  gl.bindBuffer(ELEMENT_ARRAY_BUFFER, session.outlineIndexBuffer);
+  gl.bufferData(ELEMENT_ARRAY_BUFFER, OUTLINE_INDICES, STATIC_DRAW);
+  requireNoError(gl);
+  gl.bindBuffer(ARRAY_BUFFER, session.outlineInstanceBuffer);
+  gl.bufferData(ARRAY_BUFFER, session.outlineStaging, DYNAMIC_DRAW);
+  requireNoError(gl);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribPointer(1, 3, FLOAT, false, 24, 0);
+  gl.vertexAttribDivisor(1, 1);
+  gl.enableVertexAttribArray(2);
+  gl.vertexAttribPointer(2, 3, FLOAT, false, 24, 12);
+  gl.vertexAttribDivisor(2, 1);
+  requireNoError(gl);
   draw(session as Session<unknown>, size, initialCamera.view);
+}
+
+function updateOutline(session: Session<unknown>, selection: number): void {
+  const { gl, outlineInstanceBuffer, outlineStaging, staging } = session;
+  if (!gl || !outlineInstanceBuffer || !outlineStaging || !staging) throw new Error("Incomplete selection outline");
+  const byteOffset = selection * INSTANCE_STRIDE;
+  outlineStaging.set(staging.subarray(byteOffset, byteOffset + 24));
+  try {
+    gl.bindBuffer(ARRAY_BUFFER, outlineInstanceBuffer);
+    gl.bufferSubData(ARRAY_BUFFER, 0, outlineStaging);
+    requireNoError(gl);
+  } catch (error) {
+    outlineStaging.fill(0);
+    throw error;
+  }
 }
 
 function releaseGesture<G>(session: Session<G>): void {
@@ -507,6 +630,13 @@ function cleanup<G>(session: Session<G>): boolean {
       session.indexBuffer && (() => gl.deleteBuffer(session.indexBuffer!)),
       session.instanceBuffer && (() => gl.deleteBuffer(session.instanceBuffer!)),
       session.vao && (() => gl.deleteVertexArray(session.vao!)),
+      session.outlineVertexShader && (() => gl.deleteShader(session.outlineVertexShader!)),
+      session.outlineFragmentShader && (() => gl.deleteShader(session.outlineFragmentShader!)),
+      session.outlineProgram && (() => gl.deleteProgram(session.outlineProgram!)),
+      session.outlinePositionBuffer && (() => gl.deleteBuffer(session.outlinePositionBuffer!)),
+      session.outlineIndexBuffer && (() => gl.deleteBuffer(session.outlineIndexBuffer!)),
+      session.outlineInstanceBuffer && (() => gl.deleteBuffer(session.outlineInstanceBuffer!)),
+      session.outlineVao && (() => gl.deleteVertexArray(session.outlineVao!)),
     ];
     for (const release of releases) {
       try { release?.(); } catch { complete = false; }
@@ -514,6 +644,7 @@ function cleanup<G>(session: Session<G>): boolean {
   }
   try { canvas?.remove(); } catch { complete = false; }
   session.staging?.fill(0);
+  session.outlineStaging?.fill(0);
   session.canvas = undefined;
   session.gl = undefined;
   session.vertexShader = undefined;
@@ -524,7 +655,16 @@ function cleanup<G>(session: Session<G>): boolean {
   session.indexBuffer = undefined;
   session.instanceBuffer = undefined;
   session.uniform = undefined;
+  session.outlineVertexShader = undefined;
+  session.outlineFragmentShader = undefined;
+  session.outlineProgram = undefined;
+  session.outlineVao = undefined;
+  session.outlinePositionBuffer = undefined;
+  session.outlineIndexBuffer = undefined;
+  session.outlineInstanceBuffer = undefined;
+  session.outlineUniform = undefined;
   session.staging = undefined;
+  session.outlineStaging = undefined;
   session.model = undefined;
   session.eventSink = undefined;
   session.cameraState = undefined;
@@ -903,15 +1043,29 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
     setVisualState(generation: G, hover: number | null, selection: number | null): PresenterVisualResult {
       const session = current;
       if (!session?.active || !session.committed || session.generation !== generation) return STALE;
+      if (!eligible(session)) {
+        if (session.active) removeSession(session);
+        return STALE;
+      }
       const count = session.model!.count;
       const valid = (index: number | null): boolean => index === null || (Number.isSafeInteger(index) && index >= 0 && index < count);
       if (!valid(hover) || !valid(selection)) {
         failSession(session);
         return PRESENTATION_FAILURE;
       }
-      session.hover = hover;
-      session.selection = selection;
-      return APPLIED;
+      try {
+        if (selection !== session.selection) {
+          if (selection !== null) updateOutline(session as Session<unknown>, selection);
+          session.selection = selection;
+          const size = dimensions(host);
+          draw(session as Session<unknown>, size, session.cameraView!);
+        }
+        session.hover = hover;
+        return APPLIED;
+      } catch {
+        failSession(session);
+        return PRESENTATION_FAILURE;
+      }
     },
     dispose(): void {
       if (disposed) return;

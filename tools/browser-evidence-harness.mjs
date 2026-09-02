@@ -145,7 +145,13 @@ function presentationPlatform(state,compileFailure=false){
       if(!actual)return null;
       state.actualContexts++;
       return new Proxy(actual,{get(target,property){
-        if(property==="drawElementsInstanced")return (...args)=>{state.draws++;return target.drawElementsInstanced(...args);};
+        if(property==="bufferData")return (kind,data,usage)=>{state.uploads.push(Array.from(new Uint8Array(data.buffer,data.byteOffset,data.byteLength)));return target.bufferData(kind,data,usage);};
+        if(property==="bufferSubData")return (kind,offset,data)=>{state.subUploads.push(Array.from(new Uint8Array(data.buffer,data.byteOffset,data.byteLength)));return target.bufferSubData(kind,offset,data);};
+        if(property==="shaderSource")return (shader,source)=>{state.shaderSources.push(source);return target.shaderSource(shader,source);};
+        if(property==="drawElementsInstanced")return (...args)=>{if(args[0]===0x0001){state.outlineDraws++;state.operations.push("outline");}else{state.draws++;state.operations.push("city");}return target.drawElementsInstanced(...args);};
+        if(property==="disable")return (...args)=>{if(args[0]===0x0b71)state.operations.push("depth:off");return target.disable(...args);};
+        if(property==="enable")return (...args)=>{if(args[0]===0x0b71)state.operations.push("depth:on");if(args[0]===0x8037)state.polygonOffsetEnables++;return target.enable(...args);};
+        if(property==="isContextLost"&&state.contextLost)return ()=>true;
         if(property==="getShaderParameter")return (shader,pname)=>{const actualStatus=target.getShaderParameter(shader,pname);return compileFailure&&pname===0x8b81?false:actualStatus;};
         if(["deleteShader","deleteProgram","deleteBuffer","deleteVertexArray"].includes(property))return (...args)=>{state.deletes[property]++;return target[property](...args);};
         const value=Reflect.get(target,property,target);
@@ -186,10 +192,10 @@ function stageCommit(presenter,host,generation){
   if(presenter.setVisualState(generation,null,null).kind!=="applied")throw new Error("Initial visual state was not applied");
   return committed;
 }
-const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeatDraws:0,resizeDraws:0,accessibility:null,inputCleanup:null,lossDefaultPrevented:null,lossDraws:0,lossFailures:[],lossOrdering:null,lossCleanup:null,lossTerminalState:null,compileFailureResult:null,compileFailureDraws:0,compileFailures:[],compileCleanup:null,compileFailureTerminalState:null,pass:false};
+const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeatDraws:0,resizeDraws:0,outline:null,accessibility:null,inputCleanup:null,lossDefaultPrevented:null,lossDraws:0,lossFailures:[],lossOrdering:null,lossCleanup:null,lossTerminalState:null,compileFailureResult:null,compileFailureDraws:0,compileFailures:[],compileCleanup:null,compileFailureTerminalState:null,pass:false};
 {
   const holder=presentationHost(320,180);
-  const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],listenerAdds:[],listenerRemoves:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
+  const state={canvases:[],draws:0,outlineDraws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],listenerAdds:[],listenerRemoves:[],uploads:[],subUploads:[],shaderSources:[],operations:[],polygonOffsetEnables:0,contextLost:false,deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
   const failures=[];
   const presenter=createCityPresenter({host:holder.host,resetControl:holder.reset,platform:presentationPlatform(state),isEligible:()=>true,failed:(...args)=>failures.push(args)});
   const first=stageCommit(presenter,holder.host,1);
@@ -201,19 +207,38 @@ const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeat
   presentation.accessibility={tabIndex:firstCanvas.tabIndex,label:firstCanvas.getAttribute("aria-label"),description:firstCanvas.getAttribute("aria-describedby"),listenerAdds:[...state.listenerAdds],resetText:holder.reset.textContent};
   const repeat=stageCommit(presenter,holder.host,2);
   presentation.repeatDraws=state.draws-presentation.initialDraws;
+  const activeCanvas=state.canvases.at(-1);
+  const immutableUploads=JSON.stringify(state.uploads);
+  const operationStart=state.operations.length;
+  const beforeSelectionCity=state.draws;
+  const beforeSelectionOutline=state.outlineDraws;
+  if(presenter.setVisualState(2,null,0).kind!=="applied")throw new Error("Actual WebGL2 outline selection failed");
+  const selection={cityDraws:state.draws-beforeSelectionCity,outlineDraws:state.outlineDraws-beforeSelectionOutline,operations:state.operations.slice(operationStart)};
+  const beforeCameraCity=state.draws;const beforeCameraOutline=state.outlineDraws;
+  activeCanvas.dispatchEvent(new KeyboardEvent("keydown",{key:"d",cancelable:true}));
+  const camera={cityDraws:state.draws-beforeCameraCity,outlineDraws:state.outlineDraws-beforeCameraOutline};
   holder.dimensions.width=400;holder.dimensions.height=240;
-  const beforeResize=state.draws;
+  const beforeResize=state.draws;const beforeResizeOutline=state.outlineDraws;
   state.observerCallbacks.at(-1)();
   presentation.resizeDraws=state.draws-beforeResize;
-  if(repeat.kind!=="committed"||presentation.initialDraws!==1||presentation.repeatDraws!==1||presentation.resizeDraws!==1||failures.length!==0||holder.host.firstChild!==state.canvases.at(-1)||state.canvases.at(-1).width!==400||state.canvases.at(-1).height!==240)throw new Error("Actual WebGL2 present/repeat/resize evidence failed");
+  const resizeOutlineDraws=state.outlineDraws-beforeResizeOutline;
+  const beforeResetCity=state.draws;const beforeResetOutline=state.outlineDraws;
+  holder.reset.click();
+  const reset={cityDraws:state.draws-beforeResetCity,outlineDraws:state.outlineDraws-beforeResetOutline};
+  const beforeClearCity=state.draws;const beforeClearOutline=state.outlineDraws;
+  if(presenter.setVisualState(2,null,null).kind!=="applied")throw new Error("Actual WebGL2 outline clear failed");
+  const clear={cityDraws:state.draws-beforeClearCity,outlineDraws:state.outlineDraws-beforeClearOutline};
+  presentation.outline={allocationUploads:state.uploads.map((bytes)=>bytes.length),updateBytes:state.subUploads[0],exactReplica:JSON.stringify(state.subUploads[0])===JSON.stringify(state.uploads[8].slice(0,24)),selection,camera,resizeOutlineDraws,reset,clear,immutableUploads:JSON.stringify(state.uploads)===immutableUploads,shaderFixedBlack:state.shaderSources.some((source)=>source.includes("o_color = vec4(0.0, 0.0, 0.0, 1.0);")),polygonOffsetEnables:state.polygonOffsetEnables,cleanup:null};
+  if(repeat.kind!=="committed"||presentation.initialDraws!==1||presentation.repeatDraws!==1||presentation.resizeDraws!==1||resizeOutlineDraws!==1||failures.length!==0||holder.host.firstChild!==activeCanvas||activeCanvas.width!==400||activeCanvas.height!==240)throw new Error("Actual WebGL2 present/repeat/selection/resize evidence failed");
   presentation.actualContexts+=state.actualContexts;
   presenter.dispose();
+  presentation.outline.cleanup={...state.deletes};
   presentation.inputCleanup={listenerAdds:[...state.listenerAdds],listenerRemoves:[...state.listenerRemoves],reset:holder.resetEvidence()};
   holder.host.remove();holder.reset.remove();
 }
 {
   const holder=presentationHost(320,180);
-  const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],listenerAdds:[],listenerRemoves:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
+  const state={canvases:[],draws:0,outlineDraws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],listenerAdds:[],listenerRemoves:[],uploads:[],subUploads:[],shaderSources:[],operations:[],polygonOffsetEnables:0,contextLost:false,deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
   const failures=[];
   let semantic;
   const presenter=createCityPresenter({host:holder.host,resetControl:holder.reset,platform:presentationPlatform(state),isEligible:()=>true,failed:(...args)=>{
@@ -231,6 +256,7 @@ const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeat
   const canvas=state.canvases[0];
   const before=state.draws;
   const event=new Event("webglcontextlost",{cancelable:true});
+  state.contextLost=true;
   canvas.dispatchEvent(event);
   presentation.lossDefaultPrevented=event.defaultPrevented;
   presentation.lossDraws=state.draws-before;
@@ -239,7 +265,7 @@ const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeat
   const retainedLoss=state.lossCallbacks[0];
   const terminalLossDraws=state.draws;
   const terminalLossCleanup=JSON.stringify(state.deletes);
-  if(event.defaultPrevented||presentation.lossDraws!==0||state.lossCallbacks.length!==1||typeof retainedLoss!=="function"||failures.length!==1||JSON.stringify(failures[0])!==JSON.stringify([3,"Presentation failed","M1-PRES-1"])||JSON.stringify(presentation.lossOrdering)!==JSON.stringify({semanticPresentAtNotification:true,hostChildrenAtNotification:2,cleanupAtNotification:{deleteShader:2,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0},semanticPresentAfterControllerClear:false})||terminalLossCleanup!==JSON.stringify({deleteShader:2,deleteProgram:1,deleteBuffer:3,deleteVertexArray:1})||holder.host.firstChild!==null)throw new Error("Actual WebGL2 context-loss evidence failed");
+  if(event.defaultPrevented||presentation.lossDraws!==0||state.lossCallbacks.length!==1||typeof retainedLoss!=="function"||failures.length!==1||JSON.stringify(failures[0])!==JSON.stringify([3,"Presentation failed","M1-PRES-1"])||JSON.stringify(presentation.lossOrdering)!==JSON.stringify({semanticPresentAtNotification:true,hostChildrenAtNotification:2,cleanupAtNotification:{deleteShader:4,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0},semanticPresentAfterControllerClear:false})||terminalLossCleanup!==JSON.stringify({deleteShader:4,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0})||holder.host.firstChild!==null)throw new Error("Actual WebGL2 context-loss evidence failed");
   retainedLoss(new Event("webglcontextlost",{cancelable:true}));
   canvas.dispatchEvent(new Event("webglcontextlost",{cancelable:true}));
   state.observerCallbacks[0]();
@@ -250,7 +276,7 @@ const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeat
 }
 {
   const holder=presentationHost(320,180);
-  const state={canvases:[],draws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],listenerAdds:[],listenerRemoves:[],deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
+  const state={canvases:[],draws:0,outlineDraws:0,actualContexts:0,observerCallbacks:[],lossCallbacks:[],listenerAdds:[],listenerRemoves:[],uploads:[],subUploads:[],shaderSources:[],operations:[],polygonOffsetEnables:0,contextLost:false,deletes:{deleteShader:0,deleteProgram:0,deleteBuffer:0,deleteVertexArray:0}};
   const failures=[];
   const presenter=createCityPresenter({host:holder.host,resetControl:holder.reset,platform:presentationPlatform(state,true),isEligible:()=>true,failed:(...args)=>failures.push(args)});
   presentation.compileFailureResult=stageCommit(presenter,holder.host,4);
@@ -268,7 +294,7 @@ const presentation={webgl2Available:false,actualContexts:0,initialDraws:0,repeat
   presentation.actualContexts+=state.actualContexts;
   holder.host.remove();holder.reset.remove();
 }
-presentation.pass=presentation.webgl2Available&&presentation.actualContexts===4&&presentation.initialDraws===1&&presentation.repeatDraws===1&&presentation.resizeDraws===1&&JSON.stringify(presentation.accessibility)===JSON.stringify({tabIndex:0,label:"Interactive code city",description:"city-navigation-instructions",listenerAdds:["webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","lostpointercapture","contextmenu","blur","visibilitychange","pagehide"],resetText:"Reset view"})&&JSON.stringify(presentation.inputCleanup)===JSON.stringify({listenerAdds:["webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","lostpointercapture","contextmenu","blur","visibilitychange","pagehide","webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","lostpointercapture","contextmenu","blur","visibilitychange","pagehide"],listenerRemoves:["webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","lostpointercapture","contextmenu","blur","visibilitychange","pagehide","webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","lostpointercapture","contextmenu","blur","visibilitychange","pagehide"],reset:{adds:2,removes:2}})&&presentation.lossDefaultPrevented===false&&presentation.lossDraws===0&&presentation.lossFailures.length===1&&presentation.lossOrdering.semanticPresentAtNotification&&presentation.lossOrdering.hostChildrenAtNotification===2&&presentation.lossOrdering.cleanupAtNotification.deleteProgram===0&&!presentation.lossOrdering.semanticPresentAfterControllerClear&&presentation.lossCleanup.deleteProgram===1&&presentation.lossCleanup.deleteBuffer===3&&presentation.lossCleanup.deleteVertexArray===1&&presentation.lossTerminalState.retainedCallbacks===1&&presentation.lossTerminalState.failures===1&&presentation.lossTerminalState.drawsAfterTerminal===0&&presentation.lossTerminalState.canvases===1&&presentation.lossTerminalState.hostChildren===0&&presentation.lossTerminalState.cleanupUnchanged&&presentation.compileFailureResult.kind==="failure"&&presentation.compileFailureDraws===0&&presentation.compileFailures.length===0&&presentation.compileCleanup.deleteShader===1&&presentation.compileFailureTerminalState.retainedCallbacks===1&&presentation.compileFailureTerminalState.failures===0&&presentation.compileFailureTerminalState.drawsAfterTerminal===0&&presentation.compileFailureTerminalState.canvases===1&&presentation.compileFailureTerminalState.hostChildren===0&&presentation.compileFailureTerminalState.cleanupUnchanged;
+presentation.pass=presentation.webgl2Available&&presentation.actualContexts===4&&presentation.initialDraws===1&&presentation.repeatDraws===1&&presentation.resizeDraws===1&&JSON.stringify(presentation.outline.allocationUploads)===JSON.stringify([96,36,28,96,24,24,96,36,28,96,24,24])&&presentation.outline.updateBytes.length===24&&presentation.outline.exactReplica&&JSON.stringify(presentation.outline.selection)===JSON.stringify({cityDraws:1,outlineDraws:1,operations:["depth:on","city","depth:off","outline","depth:on"]})&&JSON.stringify(presentation.outline.camera)===JSON.stringify({cityDraws:1,outlineDraws:1})&&presentation.outline.resizeOutlineDraws===1&&JSON.stringify(presentation.outline.reset)===JSON.stringify({cityDraws:1,outlineDraws:1})&&JSON.stringify(presentation.outline.clear)===JSON.stringify({cityDraws:1,outlineDraws:0})&&presentation.outline.immutableUploads&&presentation.outline.shaderFixedBlack&&presentation.outline.polygonOffsetEnables===0&&JSON.stringify(presentation.outline.cleanup)===JSON.stringify({deleteShader:8,deleteProgram:4,deleteBuffer:12,deleteVertexArray:4})&&JSON.stringify(presentation.accessibility)===JSON.stringify({tabIndex:0,label:"Interactive code city",description:"city-navigation-instructions",listenerAdds:["webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","lostpointercapture","contextmenu","blur","visibilitychange","pagehide"],resetText:"Reset view"})&&JSON.stringify(presentation.inputCleanup)===JSON.stringify({listenerAdds:["webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","lostpointercapture","contextmenu","blur","visibilitychange","pagehide","webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","lostpointercapture","contextmenu","blur","visibilitychange","pagehide"],listenerRemoves:["webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","lostpointercapture","contextmenu","blur","visibilitychange","pagehide","webglcontextlost","keydown","wheel","pointerdown","pointermove","pointerup","pointercancel","lostpointercapture","contextmenu","blur","visibilitychange","pagehide"],reset:{adds:2,removes:2}})&&presentation.lossDefaultPrevented===false&&presentation.lossDraws===0&&presentation.lossFailures.length===1&&presentation.lossOrdering.semanticPresentAtNotification&&presentation.lossOrdering.hostChildrenAtNotification===2&&presentation.lossOrdering.cleanupAtNotification.deleteShader===4&&presentation.lossOrdering.cleanupAtNotification.deleteProgram===0&&!presentation.lossOrdering.semanticPresentAfterControllerClear&&presentation.lossCleanup.deleteShader===4&&presentation.lossCleanup.deleteProgram===0&&presentation.lossCleanup.deleteBuffer===0&&presentation.lossCleanup.deleteVertexArray===0&&presentation.lossTerminalState.retainedCallbacks===1&&presentation.lossTerminalState.failures===1&&presentation.lossTerminalState.drawsAfterTerminal===0&&presentation.lossTerminalState.canvases===1&&presentation.lossTerminalState.hostChildren===0&&presentation.lossTerminalState.cleanupUnchanged&&presentation.compileFailureResult.kind==="failure"&&presentation.compileFailureDraws===0&&presentation.compileFailures.length===0&&presentation.compileCleanup.deleteShader===1&&presentation.compileFailureTerminalState.retainedCallbacks===1&&presentation.compileFailureTerminalState.failures===0&&presentation.compileFailureTerminalState.drawsAfterTerminal===0&&presentation.compileFailureTerminalState.canvases===1&&presentation.compileFailureTerminalState.hostChildren===0&&presentation.compileFailureTerminalState.cleanupUnchanged;
 const assetRequests=ASSETS.map(({role,path,sha256})=>({role,path,sha256}));
 const result={schemaVersion:1,assetRequests,cases:outputCases,matrixRuns,complexityMatrixRuns,presentation,browserExceptions:[],unexpectedNetworkRequests:[],overallPass:outputCases.every((entry)=>entry.pass)&&matrixRuns.every((entry)=>entry.pass)&&matrixRuns[0].runDigest===matrixRuns[1].runDigest&&complexityMatrixRuns.every((entry)=>entry.pass)&&complexityMatrixRuns[0].runDigest===complexityMatrixRuns[1].runDigest&&presentation.pass};
 document.querySelector("#result").textContent=JSON.stringify(result);

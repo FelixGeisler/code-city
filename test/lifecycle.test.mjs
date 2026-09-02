@@ -390,6 +390,29 @@ test("committed event sink gates generation and token before authoritative visua
   assert.deepEqual(f.presentation.publications[0].selections, [0, null]);
 });
 
+test("controller rejects every out-of-bounds callback index before presenter, semantic, or failure effects", () => {
+  const f = fixture();
+  f.controller.submit(VALID);
+  const transport = f.transports[0];
+  transport.handlers.message({ type: "REVISION_SELECTED", generation: 1, revision: SHA });
+  transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
+  transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city: CITY });
+  const sink = f.presentation.eventSinks[0];
+  const initialVisuals = f.presentation.visual.length;
+  const invalid = [-1, 1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, {}];
+  for (const index of invalid) {
+    sink.hoverIndex(1, index);
+    sink.activationIndex(1, index);
+  }
+  assert.equal(f.presentation.visual.length, initialVisuals);
+  assert.equal(f.events.includes("semantic:selection"), false);
+  assert.deepEqual(f.failures, []);
+  assert.equal(f.presentation.hooks.isEligible(1), true);
+  sink.activationIndex(1, 0);
+  assert.deepEqual(f.presentation.visual.at(-1), { generation: 1, hover: null, selection: 0 });
+  assert.deepEqual(f.presentation.publications[0].selections, [0]);
+});
+
 test("controller traversal is no-wrap over canonical first, last, single, adversarial, and 4,000-entry snapshots", () => {
   const publish = (f, city) => {
     f.controller.submit(VALID);
