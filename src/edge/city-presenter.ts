@@ -35,6 +35,10 @@ const OUTLINE_INDICES = new Uint8Array([
   0, 4, 1, 5, 2, 6, 3, 7,
 ]);
 
+const HOVER_INDICES = new Uint8Array([
+  4, 5, 5, 6, 6, 7, 7, 4,
+]);
+
 const VERTEX_SHADER_SOURCE = `#version 300 es
 precision highp float;
 
@@ -87,6 +91,16 @@ layout(location = 0) out vec4 o_color;
 
 void main() {
   o_color = vec4(0.0, 0.0, 0.0, 1.0);
+}
+`;
+
+const HOVER_FRAGMENT_SHADER_SOURCE = `#version 300 es
+precision highp float;
+
+layout(location = 0) out vec4 o_color;
+
+void main() {
+  o_color = vec4(1.0, 0.0, 1.0, 1.0);
 }
 `;
 
@@ -144,6 +158,7 @@ type CanvasListenerMap = Readonly<{
   pointermove: PointerListener;
   pointerup: PointerListener;
   pointercancel: PointerListener;
+  pointerleave: PointerListener;
   lostpointercapture: PointerListener;
   contextmenu: ContextMenuListener;
 }>;
@@ -181,6 +196,8 @@ export type PresenterResizeObserver = {
 export type PresenterPlatform = Readonly<{
   createCanvas(): PresenterCanvas;
   createResizeObserver(callback: () => void): PresenterResizeObserver;
+  requestAnimationFrame(callback: FrameRequestCallback): number;
+  cancelAnimationFrame(handle: number): void;
   windowTarget(): PresenterWindow;
   documentTarget(): PresenterDocument;
 }>;
@@ -202,6 +219,7 @@ export type CityPresenter<G> = Readonly<{
 }>;
 
 type Dimensions = Readonly<{ width: number; height: number }>;
+type HoverPosition = Readonly<{ clientX: number; clientY: number }>;
 type Gesture = {
   pointerId: number;
   button: 0 | 2;
@@ -229,6 +247,7 @@ type Session<G> = {
   pointerMoveListener?: PointerListener;
   pointerUpListener?: PointerListener;
   pointerCancelListener?: PointerListener;
+  pointerLeaveListener?: PointerListener;
   lostPointerCaptureListener?: PointerListener;
   contextMenuListener?: ContextMenuListener;
   blurListener?: LifecycleListener;
@@ -257,8 +276,21 @@ type Session<G> = {
   outlineIndexBuffer?: WebGLBuffer;
   outlineInstanceBuffer?: WebGLBuffer;
   outlineUniform?: WebGLUniformLocation;
+  hoverVertexShader?: WebGLShader;
+  hoverFragmentShader?: WebGLShader;
+  hoverProgram?: WebGLProgram;
+  hoverVao?: WebGLVertexArrayObject;
+  hoverPositionBuffer?: WebGLBuffer;
+  hoverIndexBuffer?: WebGLBuffer;
+  hoverInstanceBuffer?: WebGLBuffer;
+  hoverUniform?: WebGLUniformLocation;
   staging?: Uint8Array;
   outlineStaging?: Uint8Array;
+  hoverStaging?: Uint8Array;
+  pointer?: HoverPosition;
+  requestEpoch: number;
+  pendingFrame?: number;
+  cancelAnimationFrame: (handle: number) => void;
   model?: ValidatedGeometry;
   committed: boolean;
   active: boolean;
@@ -301,6 +333,8 @@ const RASTERIZER_DISCARD = 0x8c89;
 const browserPlatform: PresenterPlatform = Object.freeze({
   createCanvas: () => document.createElement("canvas"),
   createResizeObserver: (callback) => new ResizeObserver(callback),
+  requestAnimationFrame: (callback) => window.requestAnimationFrame(callback),
+  cancelAnimationFrame: (handle) => window.cancelAnimationFrame(handle),
   windowTarget: () => window,
   documentTarget: () => document,
 });
@@ -314,6 +348,20 @@ function dimensions(host: PresenterHost): Dimensions {
 
 function sameDimensions(left: Dimensions, right: Dimensions): boolean {
   return left.width === right.width && left.height === right.height;
+}
+
+function hoverPosition(canvas: PresenterCanvas, clientX: number, clientY: number): HoverPosition | undefined {
+  if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) throw new Error("Invalid pointer position");
+  const rectangle = canvas.getBoundingClientRect();
+  const right = rectangle.left + rectangle.width;
+  const bottom = rectangle.top + rectangle.height;
+  if (!Number.isFinite(rectangle.left) || !Number.isFinite(rectangle.top)
+    || !Number.isFinite(rectangle.width) || rectangle.width <= 0
+    || !Number.isFinite(rectangle.height) || rectangle.height <= 0
+    || !Number.isFinite(right) || !Number.isFinite(bottom)) throw new Error("Invalid canvas rectangle");
+  return clientX >= rectangle.left && clientX <= right && clientY >= rectangle.top && clientY <= bottom
+    ? Object.freeze({ clientX, clientY })
+    : undefined;
 }
 
 function requireNoError(gl: WebGL2RenderingContext): void {
@@ -359,8 +407,14 @@ function createInstanceStaging(model: ValidatedGeometry, centre: readonly number
 }
 
 function draw(session: Session<unknown>, size: Dimensions, view: CameraView): void {
-  const { canvas, gl, program, vao, uniform, model, outlineProgram, outlineVao, outlineUniform } = session;
-  if (!canvas || !gl || !program || !vao || !uniform || !model || !outlineProgram || !outlineVao || !outlineUniform) {
+  const {
+    canvas, gl, program, vao, uniform, model,
+    outlineProgram, outlineVao, outlineUniform,
+    hoverProgram, hoverVao, hoverUniform,
+  } = session;
+  if (!canvas || !gl || !program || !vao || !uniform || !model
+    || !outlineProgram || !outlineVao || !outlineUniform
+    || !hoverProgram || !hoverVao || !hoverUniform) {
     throw new Error("Incomplete presentation session");
   }
   if (canvas.width !== size.width || canvas.height !== size.height
@@ -392,22 +446,30 @@ function draw(session: Session<unknown>, size: Dimensions, view: CameraView): vo
     gl.uniformMatrix4fv(uniform, false, matrix);
     gl.drawElementsInstanced(TRIANGLES, 36, UNSIGNED_BYTE, 0, model.count);
     requireNoError(gl);
-    if (session.selection !== null) {
-      let outlineFailed = false;
-      let outlineFailure: unknown;
+    if (session.selection !== null || session.hover !== null) {
+      let cueFailed = false;
+      let cueFailure: unknown;
       try {
         gl.disable(DEPTH_TEST);
-        gl.useProgram(outlineProgram);
-        gl.bindVertexArray(outlineVao);
-        gl.uniformMatrix4fv(outlineUniform, false, matrix);
-        gl.drawElementsInstanced(LINES, 24, UNSIGNED_BYTE, 0, 1);
+        if (session.selection !== null) {
+          gl.useProgram(outlineProgram);
+          gl.bindVertexArray(outlineVao);
+          gl.uniformMatrix4fv(outlineUniform, false, matrix);
+          gl.drawElementsInstanced(LINES, 24, UNSIGNED_BYTE, 0, 1);
+        }
+        if (session.hover !== null) {
+          gl.useProgram(hoverProgram);
+          gl.bindVertexArray(hoverVao);
+          gl.uniformMatrix4fv(hoverUniform, false, matrix);
+          gl.drawElementsInstanced(LINES, 8, UNSIGNED_BYTE, 0, 1);
+        }
       } catch (error) {
-        outlineFailed = true;
-        outlineFailure = error;
+        cueFailed = true;
+        cueFailure = error;
       }
       gl.enable(DEPTH_TEST);
       requireNoError(gl);
-      if (outlineFailed) throw outlineFailure;
+      if (cueFailed) throw cueFailure;
     }
   } finally {
     matrix.fill(0);
@@ -533,20 +595,69 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
   gl.vertexAttribPointer(2, 3, FLOAT, false, 24, 12);
   gl.vertexAttribDivisor(2, 1);
   requireNoError(gl);
+
+  session.hoverVertexShader = compileShader(gl, VERTEX_SHADER, OUTLINE_VERTEX_SHADER_SOURCE, (shader) => { session.hoverVertexShader = shader; });
+  session.hoverFragmentShader = compileShader(gl, FRAGMENT_SHADER, HOVER_FRAGMENT_SHADER_SOURCE, (shader) => { session.hoverFragmentShader = shader; });
+  session.hoverProgram = requireResource(gl.createProgram(), gl, (program) => { session.hoverProgram = program; });
+  gl.attachShader(session.hoverProgram, session.hoverVertexShader);
+  gl.attachShader(session.hoverProgram, session.hoverFragmentShader);
+  gl.linkProgram(session.hoverProgram);
+  const hoverLinked = gl.getProgramParameter(session.hoverProgram, LINK_STATUS);
+  requireNoError(gl);
+  if (hoverLinked !== true) throw new Error("WebGL2 hover program link failed");
+  session.hoverUniform = gl.getUniformLocation(session.hoverProgram, "u_clipFromTarget") ?? undefined;
+  requireNoError(gl);
+  if (!session.hoverUniform) throw new Error("WebGL2 hover uniform is unavailable");
+
+  const hoverVertexShader = session.hoverVertexShader;
+  session.hoverVertexShader = undefined;
+  gl.deleteShader(hoverVertexShader);
+  const hoverFragmentShader = session.hoverFragmentShader;
+  session.hoverFragmentShader = undefined;
+  gl.deleteShader(hoverFragmentShader);
+  requireNoError(gl);
+
+  session.hoverVao = requireResource(gl.createVertexArray(), gl, (vao) => { session.hoverVao = vao; });
+  session.hoverPositionBuffer = requireResource(gl.createBuffer(), gl, (buffer) => { session.hoverPositionBuffer = buffer; });
+  session.hoverIndexBuffer = requireResource(gl.createBuffer(), gl, (buffer) => { session.hoverIndexBuffer = buffer; });
+  session.hoverInstanceBuffer = requireResource(gl.createBuffer(), gl, (buffer) => { session.hoverInstanceBuffer = buffer; });
+  session.hoverStaging = new Uint8Array(24);
+
+  gl.bindVertexArray(session.hoverVao);
+  gl.bindBuffer(ARRAY_BUFFER, session.hoverPositionBuffer);
+  gl.bufferData(ARRAY_BUFFER, CUBE_POSITIONS, STATIC_DRAW);
+  requireNoError(gl);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, FLOAT, false, 0, 0);
+  gl.bindBuffer(ELEMENT_ARRAY_BUFFER, session.hoverIndexBuffer);
+  gl.bufferData(ELEMENT_ARRAY_BUFFER, HOVER_INDICES, STATIC_DRAW);
+  requireNoError(gl);
+  gl.bindBuffer(ARRAY_BUFFER, session.hoverInstanceBuffer);
+  gl.bufferData(ARRAY_BUFFER, session.hoverStaging, DYNAMIC_DRAW);
+  requireNoError(gl);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribPointer(1, 3, FLOAT, false, 24, 0);
+  gl.vertexAttribDivisor(1, 1);
+  gl.enableVertexAttribArray(2);
+  gl.vertexAttribPointer(2, 3, FLOAT, false, 24, 12);
+  gl.vertexAttribDivisor(2, 1);
+  requireNoError(gl);
   draw(session as Session<unknown>, size, initialCamera.view);
 }
 
-function updateOutline(session: Session<unknown>, selection: number): void {
-  const { gl, outlineInstanceBuffer, outlineStaging, staging } = session;
-  if (!gl || !outlineInstanceBuffer || !outlineStaging || !staging) throw new Error("Incomplete selection outline");
-  const byteOffset = selection * INSTANCE_STRIDE;
-  outlineStaging.set(staging.subarray(byteOffset, byteOffset + 24));
+function updateCue(session: Session<unknown>, index: number, kind: "selection" | "hover"): void {
+  const { gl, staging } = session;
+  const instanceBuffer = kind === "selection" ? session.outlineInstanceBuffer : session.hoverInstanceBuffer;
+  const cueStaging = kind === "selection" ? session.outlineStaging : session.hoverStaging;
+  if (!gl || !instanceBuffer || !cueStaging || !staging) throw new Error(`Incomplete ${kind} cue`);
+  const byteOffset = index * INSTANCE_STRIDE;
+  cueStaging.set(staging.subarray(byteOffset, byteOffset + 24));
   try {
-    gl.bindBuffer(ARRAY_BUFFER, outlineInstanceBuffer);
-    gl.bufferSubData(ARRAY_BUFFER, 0, outlineStaging);
+    gl.bindBuffer(ARRAY_BUFFER, instanceBuffer);
+    gl.bufferSubData(ARRAY_BUFFER, 0, cueStaging);
     requireNoError(gl);
   } catch (error) {
-    outlineStaging.fill(0);
+    cueStaging.fill(0);
     throw error;
   }
 }
@@ -562,7 +673,11 @@ function releaseGesture<G>(session: Session<G>): void {
 function cleanup<G>(session: Session<G>): boolean {
   if (!session.active) return true;
   session.active = false;
+  session.requestEpoch += 1;
   let complete = true;
+  const pendingFrame = session.pendingFrame;
+  session.pendingFrame = undefined;
+  try { if (pendingFrame !== undefined) session.cancelAnimationFrame(pendingFrame); } catch { complete = false; }
   try { releaseGesture(session); } catch { complete = false; }
   const observer = session.observer;
   session.observer = undefined;
@@ -575,6 +690,7 @@ function cleanup<G>(session: Session<G>): boolean {
   const pointerMoveListener = session.pointerMoveListener;
   const pointerUpListener = session.pointerUpListener;
   const pointerCancelListener = session.pointerCancelListener;
+  const pointerLeaveListener = session.pointerLeaveListener;
   const lostPointerCaptureListener = session.lostPointerCaptureListener;
   const contextMenuListener = session.contextMenuListener;
   const blurListener = session.blurListener;
@@ -591,6 +707,7 @@ function cleanup<G>(session: Session<G>): boolean {
   session.pointerMoveListener = undefined;
   session.pointerUpListener = undefined;
   session.pointerCancelListener = undefined;
+  session.pointerLeaveListener = undefined;
   session.lostPointerCaptureListener = undefined;
   session.contextMenuListener = undefined;
   session.blurListener = undefined;
@@ -607,6 +724,7 @@ function cleanup<G>(session: Session<G>): boolean {
   try { if (canvas && pointerMoveListener) canvas.removeEventListener("pointermove", pointerMoveListener); } catch { complete = false; }
   try { if (canvas && pointerUpListener) canvas.removeEventListener("pointerup", pointerUpListener); } catch { complete = false; }
   try { if (canvas && pointerCancelListener) canvas.removeEventListener("pointercancel", pointerCancelListener); } catch { complete = false; }
+  try { if (canvas && pointerLeaveListener) canvas.removeEventListener("pointerleave", pointerLeaveListener); } catch { complete = false; }
   try { if (canvas && lostPointerCaptureListener) canvas.removeEventListener("lostpointercapture", lostPointerCaptureListener); } catch { complete = false; }
   try { if (canvas && contextMenuListener) canvas.removeEventListener("contextmenu", contextMenuListener); } catch { complete = false; }
   try { if (windowTarget && blurListener) windowTarget.removeEventListener("blur", blurListener); } catch { complete = false; }
@@ -635,6 +753,13 @@ function cleanup<G>(session: Session<G>): boolean {
       session.outlineIndexBuffer && (() => gl.deleteBuffer(session.outlineIndexBuffer!)),
       session.outlineInstanceBuffer && (() => gl.deleteBuffer(session.outlineInstanceBuffer!)),
       session.outlineVao && (() => gl.deleteVertexArray(session.outlineVao!)),
+      session.hoverVertexShader && (() => gl.deleteShader(session.hoverVertexShader!)),
+      session.hoverFragmentShader && (() => gl.deleteShader(session.hoverFragmentShader!)),
+      session.hoverProgram && (() => gl.deleteProgram(session.hoverProgram!)),
+      session.hoverPositionBuffer && (() => gl.deleteBuffer(session.hoverPositionBuffer!)),
+      session.hoverIndexBuffer && (() => gl.deleteBuffer(session.hoverIndexBuffer!)),
+      session.hoverInstanceBuffer && (() => gl.deleteBuffer(session.hoverInstanceBuffer!)),
+      session.hoverVao && (() => gl.deleteVertexArray(session.hoverVao!)),
     ];
     for (const release of releases) {
       try { release?.(); } catch { complete = false; }
@@ -661,8 +786,18 @@ function cleanup<G>(session: Session<G>): boolean {
   session.outlineIndexBuffer = undefined;
   session.outlineInstanceBuffer = undefined;
   session.outlineUniform = undefined;
+  session.hoverVertexShader = undefined;
+  session.hoverFragmentShader = undefined;
+  session.hoverProgram = undefined;
+  session.hoverVao = undefined;
+  session.hoverPositionBuffer = undefined;
+  session.hoverIndexBuffer = undefined;
+  session.hoverInstanceBuffer = undefined;
+  session.hoverUniform = undefined;
   session.staging = undefined;
   session.outlineStaging = undefined;
+  session.hoverStaging = undefined;
+  session.pointer = undefined;
   session.model = undefined;
   session.eventSink = undefined;
   session.cameraState = undefined;
@@ -718,6 +853,56 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
     return session.committed && current === session;
   };
 
+  const invalidateHover = (session: Session<G>): void => {
+    session.requestEpoch += 1;
+    const pendingFrame = session.pendingFrame;
+    session.pendingFrame = undefined;
+    if (pendingFrame !== undefined) session.cancelAnimationFrame(pendingFrame);
+  };
+
+  const clearHover = (session: Session<G>, forgetPointer = false): void => {
+    invalidateHover(session);
+    if (forgetPointer) session.pointer = undefined;
+    if (session.hover !== null && callbackEligible(session)) session.eventSink!.hoverIndex(session.generation!, null);
+  };
+
+  const queueHover = (session: Session<G>): void => {
+    if (!callbackEligible(session) || session.gesture || !session.pointer || session.pendingFrame !== undefined) return;
+    const epoch = session.requestEpoch;
+    const generation = session.generation!;
+    const token = session.token;
+    let frame = -1;
+    frame = platform.requestAnimationFrame(() => {
+      if (!session.active || current !== session || !session.committed
+        || session.generation !== generation || session.token !== token
+        || session.requestEpoch !== epoch || session.pendingFrame !== frame) return;
+      session.pendingFrame = undefined;
+      try {
+        if (!callbackEligible(session) || session.requestEpoch !== epoch || session.gesture || !session.pointer) return;
+        const position = session.pointer;
+        const picked = pickAtCanvasPoint(
+          session.cameraView!,
+          position.clientX,
+          position.clientY,
+          session.canvas!.getBoundingClientRect(),
+          { width: session.canvas!.width, height: session.canvas!.height },
+          session.model!,
+        );
+        if (picked.kind === "failure") {
+          if (session.active && current === session && session.requestEpoch === epoch) failSession(session);
+          return;
+        }
+        if (callbackEligible(session) && session.requestEpoch === epoch && !session.gesture && session.pointer === position) {
+          session.eventSink!.hoverIndex(generation, picked.index);
+        }
+      } catch {
+        if (session.active && current === session && session.requestEpoch === epoch) failSession(session);
+      }
+    });
+    if (!Number.isInteger(frame) || frame < 0) throw new Error("Invalid animation-frame handle");
+    session.pendingFrame = frame;
+  };
+
   const applyCamera = (session: Session<G>, transition: CameraTransitionResult, size: Dimensions): void => {
     if (transition.kind === "failure") {
       failSession(session);
@@ -726,6 +911,13 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
     draw(session as Session<unknown>, size, transition.view);
     session.cameraState = transition.state;
     session.cameraView = transition.view;
+  };
+
+  const applyCameraAndRenewHover = (session: Session<G>, transition: CameraTransitionResult, size: Dimensions): void => {
+    clearHover(session);
+    if (!session.active) return;
+    applyCamera(session, transition, size);
+    if (session.active) queueHover(session);
   };
 
   const installCallbacks = (session: Session<G>): void => {
@@ -772,7 +964,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         }
         if (!transition) return;
         event.preventDefault();
-        applyCamera(session, transition, size);
+        applyCameraAndRenewHover(session, transition, size);
       } catch {
         failSession(session);
       }
@@ -784,7 +976,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (!direction) return;
         event.preventDefault();
         const size = dimensions(host);
-        applyCamera(session, zoomCamera(session.cameraState!, session.model!.bounds, size, direction), size);
+        applyCameraAndRenewHover(session, zoomCamera(session.cameraState!, session.model!.bounds, size, direction), size);
       } catch {
         failSession(session);
       }
@@ -792,7 +984,10 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
     const pointerDownListener: PointerListener = (event) => {
       try {
         if (!callbackEligible(session) || session.gesture || (event.button !== 0 && event.button !== 2)) return;
-        if (!Number.isInteger(event.pointerId) || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) throw new Error("Invalid pointer press");
+        if (!Number.isInteger(event.pointerId)) throw new Error("Invalid pointer press");
+        session.pointer = hoverPosition(canvas, event.clientX, event.clientY);
+        clearHover(session);
+        if (!session.active) return;
         event.preventDefault();
         canvas.focus();
         const gesture: Gesture = {
@@ -816,8 +1011,12 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
       try {
         if (!callbackEligible(session)) return;
         const gesture = session.gesture;
-        if (!gesture || event.pointerId !== gesture.pointerId) return;
-        if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) throw new Error("Invalid pointer movement");
+        if (gesture && event.pointerId !== gesture.pointerId) return;
+        session.pointer = hoverPosition(canvas, event.clientX, event.clientY);
+        if (!gesture) {
+          queueHover(session);
+          return;
+        }
         if (event.clientX !== gesture.pressX || event.clientY !== gesture.pressY) gesture.dragged = true;
         const dx = event.clientX - gesture.lastX;
         const dy = event.clientY - gesture.lastY;
@@ -828,7 +1027,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         const transition = gesture.button === 0
           ? orbitCameraByPointer(session.cameraState!, session.model!.bounds, size, dx, dy, rectangle.width, rectangle.height)
           : panCameraByPointer(session.cameraState!, session.model!.bounds, size, dx, dy, rectangle.width, rectangle.height);
-        applyCamera(session, transition, size);
+        applyCameraAndRenewHover(session, transition, size);
         if (!session.active) return;
         gesture.lastX = event.clientX;
         gesture.lastY = event.clientY;
@@ -841,25 +1040,27 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (!callbackEligible(session)) return;
         const gesture = session.gesture;
         if (!gesture || event.pointerId !== gesture.pointerId || event.button !== gesture.button) return;
-        if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) throw new Error("Invalid pointer release");
+        session.pointer = hoverPosition(canvas, event.clientX, event.clientY);
         if (event.clientX !== gesture.pressX || event.clientY !== gesture.pressY) gesture.dragged = true;
         const activates = gesture.button === 0 && !gesture.dragged
           && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
         releaseGesture(session);
-        if (!activates || !callbackEligible(session)) return;
-        const picked = pickAtCanvasPoint(
-          session.cameraView!,
-          event.clientX,
-          event.clientY,
-          canvas.getBoundingClientRect(),
-          { width: canvas.width, height: canvas.height },
-          session.model!,
-        );
-        if (picked.kind === "failure") {
-          failSession(session);
-          return;
+        if (activates && callbackEligible(session)) {
+          const picked = pickAtCanvasPoint(
+            session.cameraView!,
+            event.clientX,
+            event.clientY,
+            canvas.getBoundingClientRect(),
+            { width: canvas.width, height: canvas.height },
+            session.model!,
+          );
+          if (picked.kind === "failure") {
+            failSession(session);
+            return;
+          }
+          if (callbackEligible(session)) session.eventSink!.activationIndex(session.generation!, picked.index);
         }
-        if (callbackEligible(session)) session.eventSink!.activationIndex(session.generation!, picked.index);
+        if (session.active) queueHover(session);
       } catch {
         failSession(session);
       }
@@ -869,6 +1070,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (!callbackEligible(session)) return;
         if (session.gesture?.pointerId !== event.pointerId) return;
         releaseGesture(session);
+        if (session.active) queueHover(session);
       } catch {
         failSession(session);
       }
@@ -880,6 +1082,15 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (!gesture || gesture.pointerId !== event.pointerId || !gesture.captureOwned) return;
         gesture.captureOwned = false;
         session.gesture = undefined;
+        queueHover(session);
+      } catch {
+        failSession(session);
+      }
+    };
+    const pointerLeaveListener: PointerListener = () => {
+      try {
+        if (!callbackEligible(session)) return;
+        clearHover(session, true);
       } catch {
         failSession(session);
       }
@@ -896,6 +1107,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (!session.active) return;
         if (!eligible(session)) { if (session.active) removeSession(session); return; }
         releaseGesture(session);
+        if (session.active) queueHover(session);
       } catch {
         failSession(session);
       }
@@ -914,7 +1126,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (!callbackEligible(session)) return;
         releaseGesture(session);
         const size = dimensions(host);
-        applyCamera(session, resetCamera(session.model!.bounds, size), size);
+        applyCameraAndRenewHover(session, resetCamera(session.model!.bounds, size), size);
       } catch {
         failSession(session);
       }
@@ -928,6 +1140,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
     session.pointerMoveListener = pointerMoveListener;
     session.pointerUpListener = pointerUpListener;
     session.pointerCancelListener = pointerCancelListener;
+    session.pointerLeaveListener = pointerLeaveListener;
     session.lostPointerCaptureListener = lostPointerCaptureListener;
     session.contextMenuListener = contextMenuListener;
     session.blurListener = blurListener;
@@ -941,6 +1154,7 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
     canvas.addEventListener("pointermove", pointerMoveListener);
     canvas.addEventListener("pointerup", pointerUpListener);
     canvas.addEventListener("pointercancel", pointerCancelListener);
+    canvas.addEventListener("pointerleave", pointerLeaveListener);
     canvas.addEventListener("lostpointercapture", lostPointerCaptureListener);
     canvas.addEventListener("contextmenu", contextMenuListener);
     session.windowTarget.addEventListener("blur", blurListener);
@@ -962,7 +1176,10 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (transition.kind === "failure") { failSession(session); return; }
         canvas.width = next.width;
         canvas.height = next.height;
+        clearHover(session);
+        if (!session.active) return;
         applyCamera(session, transition, next);
+        if (session.active) queueHover(session);
       } catch {
         failSession(session);
       }
@@ -988,6 +1205,8 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
           canvas,
           model,
           resetControl,
+          requestEpoch: 0,
+          cancelAnimationFrame: (handle) => platform.cancelAnimationFrame(handle),
           committed: false,
           active: true,
           notified: false,
@@ -1062,13 +1281,16 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         return PRESENTATION_FAILURE;
       }
       try {
-        if (selection !== session.selection) {
-          if (selection !== null) updateOutline(session as Session<unknown>, selection);
-          session.selection = selection;
+        const selectionChanged = selection !== session.selection;
+        const hoverChanged = hover !== session.hover;
+        if (selectionChanged && selection !== null) updateCue(session as Session<unknown>, selection, "selection");
+        if (hoverChanged && hover !== null) updateCue(session as Session<unknown>, hover, "hover");
+        session.selection = selection;
+        session.hover = hover;
+        if (selectionChanged || hoverChanged) {
           const size = dimensions(host);
           draw(session as Session<unknown>, size, session.cameraView!);
         }
-        session.hover = hover;
         return APPLIED;
       } catch {
         failSession(session);
