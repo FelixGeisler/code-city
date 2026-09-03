@@ -481,14 +481,32 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     const emptyActivationCleared = await evaluate("document.querySelector('[data-inspector]').hidden&&document.querySelector('[data-inspector]').textContent==='' ");
     await dispatchKey({ key: "ArrowUp", code: "ArrowUp", virtualKey: 38 });
 
-    const outsideCapturePoint = await evaluate(`(() => { const r=document.querySelector('[data-city] canvas').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
+    const outsideCapturePoint = await evaluate(`(() => { const r=document.querySelector('[data-city] canvas').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2,rect:{left:r.left,top:r.top,right:r.right,bottom:r.bottom}}; })()`);
     await dispatchPointer({ type: "mousePressed", x: outsideCapturePoint.x, y: outsideCapturePoint.y, button: "left", buttons: 1 });
-    const outsidePointerId = await evaluate("globalThis.__navigationEvidence.pointers.at(-1).pointerId");
-    await evaluate("scrollTo(0,document.documentElement.scrollHeight);true");
+    assert.equal(outsideCapturePoint.x >= outsideCapturePoint.rect.left && outsideCapturePoint.x <= outsideCapturePoint.rect.right && outsideCapturePoint.y >= outsideCapturePoint.rect.top && outsideCapturePoint.y <= outsideCapturePoint.rect.bottom, true, JSON.stringify(outsideCapturePoint));
+    const outsideCapture = await evaluate(`(() => {
+      const canvas=document.querySelector('[data-city] canvas');
+      const pointerDown=globalThis.__navigationEvidence.pointers.at(-1);
+      const context=globalThis.__codeCitySuccessEvidence.contexts[1];
+      const inspector=document.querySelector('[data-inspector]');
+      return {pointerId:pointerDown.pointerId,captured:canvas.hasPointerCapture(pointerDown.pointerId),pointerUpCount:globalThis.__navigationEvidence.pointers.filter(({type})=>type==='pointerup').length,selection:{hidden:inspector.hidden,path:inspector.querySelector('[data-canonical-path]').textContent},cityDraws:context.draws.length,outlineDraws:context.outlineDraws.length,operations:context.operations.length};
+    })()`);
+    assert.equal(outsideCapture.captured, true, JSON.stringify(outsideCapture));
+    assert.deepEqual(outsideCapture.selection, { hidden: false, path: fixture.path });
+    await evaluate("document.body.style.minHeight='400vh';scrollTo(0,document.documentElement.scrollHeight);true");
     await new Promise((resolve) => setTimeout(resolve, 50));
-    await dispatchPointer({ type: "mouseReleased", x: outsideCapturePoint.x, y: outsideCapturePoint.y, button: "left", buttons: 0 });
+    const outsideReleasePosition = await evaluate(`(() => { const r=document.querySelector('[data-city] canvas').getBoundingClientRect(); const x=${outsideCapturePoint.x}; const y=${outsideCapturePoint.y}; return {x,y,rect:{left:r.left,top:r.top,right:r.right,bottom:r.bottom},outside:x<r.left||x>r.right||y<r.top||y>r.bottom}; })()`);
+    assert.equal(outsideReleasePosition.outside, true, JSON.stringify(outsideReleasePosition));
+    await dispatchPointer({ type: "mouseReleased", x: outsideReleasePosition.x, y: outsideReleasePosition.y, button: "left", buttons: 0 });
     await new Promise((resolve) => setTimeout(resolve, 50));
-    const outsideRelease = await evaluate(`({selectionRetained:!document.querySelector('[data-inspector]').hidden,captured:document.querySelector('[data-city] canvas').hasPointerCapture(${outsidePointerId})})`);
+    const outsideRelease = await evaluate(`(() => {
+      const canvas=document.querySelector('[data-city] canvas');
+      const inspector=document.querySelector('[data-inspector]');
+      const context=globalThis.__codeCitySuccessEvidence.contexts[1];
+      const pointerUps=globalThis.__navigationEvidence.pointers.filter(({type})=>type==='pointerup');
+      const delivered=pointerUps.at(-1);
+      return {captured:canvas.hasPointerCapture(${outsideCapture.pointerId}),pointerUpCount:pointerUps.length,delivered:{type:delivered?.type,pointerId:delivered?.pointerId,button:delivered?.button,clientX:delivered?.clientX,clientY:delivered?.clientY,target:delivered?.target},selection:{hidden:inspector.hidden,text:inspector.textContent,path:inspector.querySelector('[data-canonical-path]').textContent},cityDraws:context.draws.length-${outsideCapture.cityDraws},outlineDraws:context.outlineDraws.length-${outsideCapture.outlineDraws},operations:context.operations.slice(${outsideCapture.operations})};
+    })()`);
     await evaluate(`document.querySelector('[data-city] canvas').scrollIntoView({block:"center"});document.querySelector('[data-city] canvas').focus();true`);
     await new Promise((resolve) => setTimeout(resolve, 50));
     await dispatchKey({ key: "ArrowUp", code: "ArrowUp", virtualKey: 38 });
@@ -603,15 +621,23 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     assert.equal(secondaryPanChanged, true);
     assert.equal(stationaryNonActivationsRetained, true);
     assert.equal(emptyActivationCleared, true);
-    assert.deepEqual(outsideRelease, { selectionRetained: true, captured: false });
+    assert.deepEqual(outsideRelease, {
+      captured: false,
+      pointerUpCount: outsideCapture.pointerUpCount + 1,
+      delivered: { type: "pointerup", pointerId: outsideCapture.pointerId, button: 0, clientX: outsideReleasePosition.x, clientY: outsideReleasePosition.y, target: "CANVAS" },
+      selection: { hidden: true, text: "", path: "" },
+      cityDraws: 1,
+      outlineDraws: 0,
+      operations: ["depth:on", "city"],
+    });
     assert.equal(resizeReleasedCapture, true);
     assert.equal(resizeChangedMatrix, true);
     assert(scrollAfter > scrollBefore, `Wheel outside canvas did not retain browser scrolling: ${scrollBefore} -> ${scrollAfter}`);
-    assert.equal(navigation.draws, 19);
-    assert.equal(navigation.outlineDraws, 14);
-    assert.equal(navigation.matrices.length, 19);
-    assert.equal(navigation.outlineMatrices.length, 14);
-    assert.equal(navigation.subUploads, 4);
+    assert.equal(navigation.draws, 21);
+    assert.equal(navigation.outlineDraws, 15);
+    assert.equal(navigation.matrices.length, 21);
+    assert.equal(navigation.outlineMatrices.length, 15);
+    assert.equal(navigation.subUploads, 5);
     assert.deepEqual(navigation.uploads, navigationStart.uploads);
     assert.deepEqual(navigation.matrices[8], navigationStart.matrix, "keyboard 0 did not restore the exact initial overview");
     assert.notDeepEqual(navigation.matrices[9], navigation.matrices[8], "native wheel did not zoom");
