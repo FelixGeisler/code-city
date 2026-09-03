@@ -60,6 +60,15 @@ const PALETTE = [
   [0xfd, 0xe7, 0x25, 0xff],
 ] as const;
 
+export const COMPLEXITY_PALETTE_LEGEND = Object.freeze([
+  Object.freeze({ range: "0", rgba: "#440154FF" }),
+  Object.freeze({ range: "1", rgba: "#414487FF" }),
+  Object.freeze({ range: "2–3", rgba: "#2A788EFF" }),
+  Object.freeze({ range: "4–7", rgba: "#22A884FF" }),
+  Object.freeze({ range: "8–15", rgba: "#7AD151FF" }),
+  Object.freeze({ range: "16+", rgba: "#FDE725FF" }),
+]);
+
 function invalid(): never {
   throw new Error("M1-CITY-1");
 }
@@ -129,6 +138,10 @@ function paletteIndex(complexity: number): number {
 
 export function paletteForComplexity(complexity: number): typeof PALETTE[number] {
   return PALETTE[paletteIndex(complexity)]!;
+}
+
+export function paletteBandForComplexity(complexity: number): typeof COMPLEXITY_PALETTE_LEGEND[number] {
+  return COMPLEXITY_PALETTE_LEGEND[paletteIndex(complexity)]!;
 }
 
 function snapshotFacts(value: unknown): FactSnapshot[] {
