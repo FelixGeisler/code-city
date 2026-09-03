@@ -481,6 +481,13 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     const emptyActivationCleared = await evaluate("document.querySelector('[data-inspector]').hidden&&document.querySelector('[data-inspector]').textContent==='' ");
     await dispatchKey({ key: "ArrowUp", code: "ArrowUp", virtualKey: 38 });
 
+    const secondaryPoint = await evaluate(`(() => { const r=document.querySelector('[data-city] canvas').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
+    const beforeSecondaryDrag = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[1].matrices.at(-1)");
+    await dispatchPointer({ type: "mousePressed", x: secondaryPoint.x, y: secondaryPoint.y, button: "right", buttons: 2 });
+    await dispatchPointer({ type: "mouseMoved", x: secondaryPoint.x - 9, y: secondaryPoint.y + 7, buttons: 2 });
+    await dispatchPointer({ type: "mouseReleased", x: secondaryPoint.x - 9, y: secondaryPoint.y + 7, button: "right", buttons: 0 });
+    const secondaryPanChanged = JSON.stringify(await evaluate("globalThis.__codeCitySuccessEvidence.contexts[1].matrices.at(-1)")) !== JSON.stringify(beforeSecondaryDrag);
+
     const outsideCapturePoint = await evaluate(`(() => { const r=document.querySelector('[data-city] canvas').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2,rect:{left:r.left,top:r.top,right:r.right,bottom:r.bottom}}; })()`);
     await dispatchPointer({ type: "mousePressed", x: outsideCapturePoint.x, y: outsideCapturePoint.y, button: "left", buttons: 1 });
     assert.equal(outsideCapturePoint.x >= outsideCapturePoint.rect.left && outsideCapturePoint.x <= outsideCapturePoint.rect.right && outsideCapturePoint.y >= outsideCapturePoint.rect.top && outsideCapturePoint.y <= outsideCapturePoint.rect.bottom, true, JSON.stringify(outsideCapturePoint));
@@ -507,16 +514,9 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       const delivered=pointerUps.at(-1);
       return {captured:canvas.hasPointerCapture(${outsideCapture.pointerId}),pointerUpCount:pointerUps.length,delivered:{type:delivered?.type,pointerId:delivered?.pointerId,button:delivered?.button,clientX:delivered?.clientX,clientY:delivered?.clientY,target:delivered?.target},selection:{hidden:inspector.hidden,text:inspector.textContent,path:inspector.querySelector('[data-canonical-path]').textContent},cityDraws:context.draws.length-${outsideCapture.cityDraws},outlineDraws:context.outlineDraws.length-${outsideCapture.outlineDraws},operations:context.operations.slice(${outsideCapture.operations})};
     })()`);
-    await evaluate(`document.querySelector('[data-city] canvas').scrollIntoView({block:"center"});document.querySelector('[data-city] canvas').focus();true`);
+    await evaluate(`document.body.style.minHeight="200vh";document.querySelector('[data-city] canvas').scrollIntoView({block:"center"});document.querySelector('[data-city] canvas').focus();true`);
     await new Promise((resolve) => setTimeout(resolve, 50));
     await dispatchKey({ key: "ArrowUp", code: "ArrowUp", virtualKey: 38 });
-
-    const secondaryPoint = await evaluate(`(() => { const r=document.querySelector('[data-city] canvas').getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
-    const beforeSecondaryDrag = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[1].matrices.at(-1)");
-    await dispatchPointer({ type: "mousePressed", x: secondaryPoint.x, y: secondaryPoint.y, button: "right", buttons: 2 });
-    await dispatchPointer({ type: "mouseMoved", x: secondaryPoint.x - 9, y: secondaryPoint.y + 7, buttons: 2 });
-    await dispatchPointer({ type: "mouseReleased", x: secondaryPoint.x - 9, y: secondaryPoint.y + 7, button: "right", buttons: 0 });
-    const secondaryPanChanged = JSON.stringify(await evaluate("globalThis.__codeCitySuccessEvidence.contexts[1].matrices.at(-1)")) !== JSON.stringify(beforeSecondaryDrag);
     await dispatchPointer({ type: "mousePressed", x: 2, y: 2, button: "right", buttons: 2 });
     await dispatchPointer({ type: "mouseReleased", x: 2, y: 2, button: "right", buttons: 0 });
 
