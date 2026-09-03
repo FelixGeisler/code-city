@@ -482,7 +482,7 @@ test("semantic selection failure after a valid city revokes the session exactly 
   assert.equal(f.events.filter((event) => event === "semantic:selection").length, 1);
 });
 
-test("persistent semantic clear failure revokes M1-PRES-1 without leaving an attached inspector or stale path", () => {
+test("persistent semantic DOM clear failure revokes M1-PRES-1 without leaving an attached inspector", () => {
   const operations = [];
   class FaultingElement {
     constructor(tagName) {
@@ -493,6 +493,7 @@ test("persistent semantic clear failure revokes M1-PRES-1 without leaving an att
       this.parent = undefined;
       this.value = "";
       this.failText = false;
+      this.failReplace = false;
       this.hiddenValue = false;
     }
     set hidden(value) {
@@ -510,8 +511,12 @@ test("persistent semantic clear failure revokes M1-PRES-1 without leaving an att
       return this.children.length ? this.children.map((child) => child.textContent ?? "").join("") : this.value;
     }
     setAttribute(name, value) { this.attributes.set(name, String(value)); }
-    append(child) { child.parent = this; this.children.push(child); }
+    append(...children) {
+      for (const child of children) { child.parent = this; this.children.push(child); }
+    }
     replaceChildren(...children) {
+      operations.push(`${this.tagName}:replace`);
+      if (this.failReplace) throw new Error("persistent replaceChildren failure");
       for (const child of this.children) if (child && typeof child === "object") child.parent = undefined;
       this.children = children;
       for (const child of children) if (child && typeof child === "object") child.parent = this;
@@ -549,14 +554,15 @@ test("persistent semantic clear failure revokes M1-PRES-1 without leaving an att
   transport.handlers.message({ type: "PROVIDER_DRAINED_STATIC_ENTERED", generation: 1 });
   transport.handlers.message({ type: "SUCCESS", generation: 1, revision: SHA, city: CITY });
 
-  const [inspector, path] = created;
+  const inspector = created[0];
   const sink = f.presentation.eventSinks[0];
   sink.selectionAction(1, "first");
+  const path = created.find((element) => Object.hasOwn(element.dataset, "canonicalPath"));
   assert.equal(inspector.hidden, false);
   assert.equal(path.textContent, CITY.inspection[0].canonicalPath);
   assert.equal(inspector.parent, root);
 
-  path.failText = true;
+  inspector.failReplace = true;
   operations.length = 0;
   sink.selectionAction(1, "clear");
 
@@ -568,10 +574,11 @@ test("persistent semantic clear failure revokes M1-PRES-1 without leaving an att
   assert.equal(path.textContent, CITY.inspection[0].canonicalPath);
   assert.equal(revision.textContent, "");
   assert.deepEqual(operations, [
-    "BDI:text:",
     "SECTION:hidden:true",
+    "SECTION:replace",
+    "SECTION:hidden:true",
+    "SECTION:replace",
     "SECTION:remove",
-    "BDI:text:",
     "OUTPUT:text:",
   ]);
 });
