@@ -225,17 +225,36 @@ function fakeEnvironment({ width = 200, height = 100, gl = {}, platform = {} } =
   const host = new FakeHost(width, height);
   const canvases = [];
   const observers = [];
+  const animationFrames = [];
+  const cancelledFrames = [];
+  let nextFrame = 0;
   const resetControl = new FakeResetControl();
   const windowTarget = new FakeLifecycleTarget();
   const documentTarget = new FakeDocumentTarget();
   const environment = {
-    host, canvases, observers, resetControl, windowTarget, documentTarget,
+    host, canvases, observers, animationFrames, cancelledFrames, resetControl, windowTarget, documentTarget,
+    runFrame(handle = animationFrames.find((frame) => !frame.ran)?.handle) {
+      const frame = animationFrames.find((entry) => entry.handle === handle);
+      assert(frame, `unknown animation frame ${handle}`);
+      frame.ran = true;
+      frame.callback(0);
+    },
     platform: {
       createCanvas() { if (platform.throwCanvas) throw new Error("canvas failed"); const canvas = new FakeCanvas(host, gl); canvases.push(canvas); return canvas; },
       createResizeObserver(callback) {
         if (platform.throwObserver) throw new Error("observer failed");
         const observer = { callback, observed: false, disconnected: 0, observe(target) { if (platform.throwObserve) throw new Error("observe failed"); assert.equal(target, host); this.observed = true; }, disconnect() { this.disconnected += 1; } };
         observers.push(observer); return observer;
+      },
+      requestAnimationFrame(callback) {
+        if (platform.throwRequestFrame) throw new Error("animation frame failed");
+        const handle = ++nextFrame;
+        animationFrames.push({ handle, callback, ran: false });
+        return handle;
+      },
+      cancelAnimationFrame(handle) {
+        cancelledFrames.push(handle);
+        if (platform.throwCancelFrame) throw new Error("animation cancellation failed");
       },
       windowTarget() { if (platform.throwWindowTarget) throw new Error("window target failed"); return windowTarget; },
       documentTarget() { if (platform.throwDocumentTarget) throw new Error("document target failed"); return documentTarget; },
@@ -298,7 +317,8 @@ const RESOURCE_DELETE_METHODS = Object.freeze({
   1: "deleteShader", 2: "deleteShader", 3: "deleteProgram", 5: "deleteVertexArray",
   6: "deleteBuffer", 7: "deleteBuffer", 8: "deleteBuffer", 9: "deleteShader",
   10: "deleteShader", 11: "deleteProgram", 13: "deleteVertexArray", 14: "deleteBuffer",
-  15: "deleteBuffer", 16: "deleteBuffer",
+  15: "deleteBuffer", 16: "deleteBuffer", 17: "deleteShader", 18: "deleteShader",
+  19: "deleteProgram", 21: "deleteVertexArray", 22: "deleteBuffer", 23: "deleteBuffer", 24: "deleteBuffer",
 });
 function resourceDeletes(gl) {
   return gl.calls
@@ -370,6 +390,14 @@ function expectedInitialCalls() {
   const outlinePositionBuffer = { kind: "Buffer", id: 14 };
   const outlineIndexBuffer = { kind: "Buffer", id: 15 };
   const outlineInstanceBuffer = { kind: "Buffer", id: 16 };
+  const hoverVertexShader = { kind: "Shader", type: GL.VERTEX_SHADER, id: 17 };
+  const hoverFragmentShader = { kind: "Shader", type: GL.FRAGMENT_SHADER, id: 18 };
+  const hoverProgram = { kind: "Program", id: 19 };
+  const hoverUniform = { kind: "Uniform", id: 20 };
+  const hoverVao = { kind: "VertexArray", id: 21 };
+  const hoverPositionBuffer = { kind: "Buffer", id: 22 };
+  const hoverIndexBuffer = { kind: "Buffer", id: 23 };
+  const hoverInstanceBuffer = { kind: "Buffer", id: 24 };
   const positionBytes = new Uint8Array(new Float32Array(literals.cubePositions).buffer);
   return [
     ["getContextAttributes"],
@@ -479,6 +507,57 @@ function expectedInitialCalls() {
     ["vertexAttribPointer", 2, 3, GL.FLOAT, false, 24, 12],
     ["vertexAttribDivisor", 2, 1],
     ["isContextLost"], ["getError"],
+    ["createShader", GL.VERTEX_SHADER],
+    ["isContextLost"], ["getError"],
+    ["shaderSource", hoverVertexShader, literals.outlineVertexShader],
+    ["compileShader", hoverVertexShader],
+    ["getShaderParameter", hoverVertexShader, GL.COMPILE_STATUS],
+    ["isContextLost"], ["getError"],
+    ["createShader", GL.FRAGMENT_SHADER],
+    ["isContextLost"], ["getError"],
+    ["shaderSource", hoverFragmentShader, literals.hoverFragmentShader],
+    ["compileShader", hoverFragmentShader],
+    ["getShaderParameter", hoverFragmentShader, GL.COMPILE_STATUS],
+    ["isContextLost"], ["getError"],
+    ["createProgram"],
+    ["isContextLost"], ["getError"],
+    ["attachShader", hoverProgram, hoverVertexShader],
+    ["attachShader", hoverProgram, hoverFragmentShader],
+    ["linkProgram", hoverProgram],
+    ["getProgramParameter", hoverProgram, GL.LINK_STATUS],
+    ["isContextLost"], ["getError"],
+    ["getUniformLocation", hoverProgram, "u_clipFromTarget"],
+    ["isContextLost"], ["getError"],
+    ["deleteShader", hoverVertexShader],
+    ["deleteShader", hoverFragmentShader],
+    ["isContextLost"], ["getError"],
+    ["createVertexArray"],
+    ["isContextLost"], ["getError"],
+    ["createBuffer"],
+    ["isContextLost"], ["getError"],
+    ["createBuffer"],
+    ["isContextLost"], ["getError"],
+    ["createBuffer"],
+    ["isContextLost"], ["getError"],
+    ["bindVertexArray", hoverVao],
+    ["bindBuffer", GL.ARRAY_BUFFER, hoverPositionBuffer],
+    ["bufferData", GL.ARRAY_BUFFER, positionBytes, GL.STATIC_DRAW],
+    ["isContextLost"], ["getError"],
+    ["enableVertexAttribArray", 0],
+    ["vertexAttribPointer", 0, 3, GL.FLOAT, false, 0, 0],
+    ["bindBuffer", GL.ELEMENT_ARRAY_BUFFER, hoverIndexBuffer],
+    ["bufferData", GL.ELEMENT_ARRAY_BUFFER, new Uint8Array(literals.hoverIndices), GL.STATIC_DRAW],
+    ["isContextLost"], ["getError"],
+    ["bindBuffer", GL.ARRAY_BUFFER, hoverInstanceBuffer],
+    ["bufferData", GL.ARRAY_BUFFER, new Uint8Array(24), GL.DYNAMIC_DRAW],
+    ["isContextLost"], ["getError"],
+    ["enableVertexAttribArray", 1],
+    ["vertexAttribPointer", 1, 3, GL.FLOAT, false, 24, 0],
+    ["vertexAttribDivisor", 1, 1],
+    ["enableVertexAttribArray", 2],
+    ["vertexAttribPointer", 2, 3, GL.FLOAT, false, 24, 12],
+    ["vertexAttribDivisor", 2, 1],
+    ["isContextLost"], ["getError"],
     ...expectedDrawCalls({ width: 200, height: 100, matrix: literals.unitAspectTwoMatrix, count: 1, program, vao, uniform }),
   ];
 }
@@ -502,7 +581,7 @@ test("cube, indices, shaders, context request, complete setup/draw calls, matrix
   assert.deepEqual([...canvas.gl.uploads[1].bytes], literals.cubeIndices);
   assert.equal(canvas.gl.uploads[1].byteLength, 36);
   const shaderSources = canvas.gl.calls.filter((call) => call[0] === "shaderSource").map((call) => call[2]);
-  assert.deepEqual(shaderSources, [literals.vertexShader, literals.fragmentShader, literals.outlineVertexShader, literals.outlineFragmentShader]);
+  assert.deepEqual(shaderSources, [literals.vertexShader, literals.fragmentShader, literals.outlineVertexShader, literals.outlineFragmentShader, literals.outlineVertexShader, literals.hoverFragmentShader]);
   assert(shaderSources.every((source) => source.charCodeAt(source.length - 1) === 10));
   assert.equal(canvas.contextRequest.kind, "webgl2");
   assert.deepEqual(canvas.contextRequest.attributes, { alpha: false, antialias: false, depth: true, desynchronized: false, failIfMajorPerformanceCaveat: false, powerPreference: "default", premultipliedAlpha: false, preserveDrawingBuffer: false, stencil: false, xrCompatible: false });
@@ -547,7 +626,7 @@ test("one instance uses exact target-relative float staging, state, and one inst
   const { presenter } = failuresCollector(environment);
   assert.deepEqual(present(environment, presenter, "g", oneBuilding()), COMMITTED);
   const gl = environment.canvases[0].gl;
-  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [96, 36, 28, 96, 24, 24]);
+  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [96, 36, 28, 96, 24, 24, 96, 8, 24]);
   const instance = gl.uploads[2].bytes;
   const view = new DataView(instance.buffer, instance.byteOffset, instance.byteLength);
   assert.deepEqual(Array.from({ length: 6 }, (_, index) => view.getFloat32(index * 4, true)), [-0.5, -0.5, -0.5, 1, 1, 1]);
@@ -556,8 +635,9 @@ test("one instance uses exact target-relative float staging, state, and one inst
   assert.deepEqual(pointers, [
     [0, 3, GL.FLOAT, false, 0, 0], [1, 3, GL.FLOAT, false, 28, 0], [2, 3, GL.FLOAT, false, 28, 12], [3, 4, GL.UNSIGNED_BYTE, true, 28, 24],
     [0, 3, GL.FLOAT, false, 0, 0], [1, 3, GL.FLOAT, false, 24, 0], [2, 3, GL.FLOAT, false, 24, 12],
+    [0, 3, GL.FLOAT, false, 0, 0], [1, 3, GL.FLOAT, false, 24, 0], [2, 3, GL.FLOAT, false, 24, 12],
   ]);
-  assert.deepEqual(gl.calls.filter((call) => call[0] === "vertexAttribDivisor").map((call) => call.slice(1)), [[1, 1], [2, 1], [3, 1], [1, 1], [2, 1]]);
+  assert.deepEqual(gl.calls.filter((call) => call[0] === "vertexAttribDivisor").map((call) => call.slice(1)), [[1, 1], [2, 1], [3, 1], [1, 1], [2, 1], [1, 1], [2, 1]]);
   assert.deepEqual(gl.calls.filter((call) => call[0] === "drawElementsInstanced").map((call) => call.slice(1)), [[GL.TRIANGLES, 36, GL.UNSIGNED_BYTE, 0, 1]]);
   assert.deepEqual(gl.calls.find((call) => call[0] === "clear").slice(1), [GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT]);
   for (const disabled of [GL.BLEND, GL.DITHER, GL.STENCIL_TEST, GL.SCISSOR_TEST, GL.POLYGON_OFFSET_FILL, GL.RASTERIZER_DISCARD, GL.SAMPLE_COVERAGE, GL.SAMPLE_ALPHA_TO_COVERAGE]) assert(gl.calls.some((call) => call[0] === "disable" && call[1] === disabled));
@@ -565,7 +645,7 @@ test("one instance uses exact target-relative float staging, state, and one inst
   assert.equal(environment.observers[0].observed, true);
 });
 
-test("selection uploads the exact AABB replica and draws complete opaque black edges after the city with restored depth", () => {
+test("selection and hover upload exact replicas and draw black full edges plus magenta top perimeter together", () => {
   const model = buildCity([
     { canonicalPath: "a.js", S: 0, U: 0, M: 0 },
     { canonicalPath: "b.js", S: 3, U: 2, M: 7 },
@@ -596,27 +676,166 @@ test("selection uploads the exact AABB replica and draws complete opaque black e
   assert.deepEqual([...gl.uploads[4].bytes], literals.outlineIndices);
 
   const cityDrawCount = () => gl.calls.filter((call) => call[0] === "drawElementsInstanced" && call[1] === GL.TRIANGLES).length;
-  const outlineDrawCount = () => gl.calls.filter((call) => call[0] === "drawElementsInstanced" && call[1] === GL.LINES).length;
+  const outlineDrawCount = () => gl.calls.filter((call) => call[0] === "drawElementsInstanced" && call[1] === GL.LINES && call[2] === 24).length;
+  const hoverDrawCount = () => gl.calls.filter((call) => call[0] === "drawElementsInstanced" && call[1] === GL.LINES && call[2] === 8).length;
   const cityDraws = cityDrawCount();
   const outlineDraws = outlineDrawCount();
   assert.deepEqual(presenter.setVisualState(1, 0, 1), APPLIED);
-  assert.equal(cityDrawCount(), cityDraws);
-  assert.equal(outlineDrawCount(), outlineDraws);
-  assert.equal(gl.subUploads.length, 1);
+  assert.equal(cityDrawCount(), cityDraws + 1);
+  assert.equal(outlineDrawCount(), outlineDraws + 1);
+  assert.equal(hoverDrawCount(), 1);
+  assert.equal(gl.subUploads.length, 2);
+  assert.deepEqual([...gl.subUploads[1].bytes], [...gl.uploads[2].bytes.slice(0, 24)]);
+  assert.deepEqual([...gl.uploads[7].bytes], literals.hoverIndices);
+  assert.match(literals.hoverFragmentShader, /vec4\(1\.0, 0\.0, 1\.0, 1\.0\)/u);
+  const sameCueStart = gl.calls.length;
+  assert.deepEqual(presenter.setVisualState(1, 1, 1), APPLIED);
+  assert.deepEqual([...gl.subUploads[2].bytes], [...gl.uploads[2].bytes.slice(28, 52)]);
+  const sameCueDraws = gl.calls.slice(sameCueStart).filter((call) => call[0] === "drawElementsInstanced");
+  assert.deepEqual(sameCueDraws.map((call) => call.slice(1, 3)), [[GL.TRIANGLES, 36], [GL.LINES, 24], [GL.LINES, 8]]);
 
   canvas.dispatch("keydown", inputEvent({ key: "d" }));
   environment.host.width = 240;
   environment.observers[0].callback();
   environment.resetControl.dispatch();
-  assert.equal(cityDrawCount(), cityDraws + 3);
-  assert.equal(outlineDrawCount(), outlineDraws + 3);
-  assert.equal(gl.subUploads.length, 1);
+  assert.equal(cityDrawCount(), cityDraws + 5);
+  assert.equal(outlineDrawCount(), outlineDraws + 5);
+  assert.equal(hoverDrawCount(), 5);
+  assert.equal(gl.subUploads.length, 3);
 
   assert.deepEqual(presenter.setVisualState(1, null, null), APPLIED);
-  assert.equal(cityDrawCount(), cityDraws + 4);
-  assert.equal(outlineDrawCount(), outlineDraws + 3);
-  assert.equal(gl.subUploads.length, 1);
+  assert.equal(cityDrawCount(), cityDraws + 6);
+  assert.equal(outlineDrawCount(), outlineDraws + 5);
+  assert.equal(hoverDrawCount(), 5);
+  assert.equal(gl.subUploads.length, 3);
   assert.deepEqual(failures, []);
+});
+
+test("hover coalesces latest movement, invalidates stale frames, and renews after camera, gesture, resize, Reset, and replacement", () => {
+  const environment = fakeEnvironment();
+  const events = [];
+  let presenter;
+  const sink = {
+    hoverIndex(generation, index) {
+      events.push(["hover", generation, index]);
+      assert.deepEqual(presenter.setVisualState(generation, index, null), APPLIED);
+    },
+    activationIndex(...args) { events.push(["activation", ...args]); },
+    selectionAction(...args) { events.push(["selection", ...args]); },
+  };
+  ({ presenter } = failuresCollector(environment));
+  assert.deepEqual(present(environment, presenter, 1, oneBuilding(), sink), COMMITTED);
+  const first = environment.canvases[0];
+
+  first.dispatch("pointermove", inputEvent({ clientX: 20, clientY: 30 }));
+  first.dispatch("pointermove", inputEvent({ clientX: 30, clientY: 40 }));
+  first.dispatch("pointermove", inputEvent({ clientX: 110, clientY: 70 }));
+  assert.equal(environment.animationFrames.length, 1);
+  environment.runFrame(1);
+  assert.deepEqual(events, [["hover", 1, 0]]);
+
+  first.dispatch("pointermove", inputEvent({ clientX: 111, clientY: 70 }));
+  assert.equal(environment.animationFrames.length, 2);
+  first.dispatch("pointerleave", inputEvent({ clientX: 211, clientY: 70 }));
+  assert.deepEqual(events.at(-1), ["hover", 1, null]);
+  assert.deepEqual(environment.cancelledFrames, [2]);
+  environment.runFrame(2);
+  assert.equal(events.length, 2, "cancelled stale frame published");
+
+  first.dispatch("pointermove", inputEvent({ clientX: 110, clientY: 70 }));
+  environment.runFrame(3);
+  assert.deepEqual(events.at(-1), ["hover", 1, 0]);
+  first.dispatch("keydown", inputEvent({ key: "d" }));
+  assert.deepEqual(events.at(-1), ["hover", 1, null]);
+  assert.equal(environment.animationFrames.length, 4, "camera action did not queue no-motion recomputation");
+  environment.runFrame(4);
+  assert.equal(events.at(-1)[0], "hover");
+
+  first.dispatch("pointerdown", inputEvent({ pointerId: 7, button: 2, clientX: 110, clientY: 70 }));
+  assert.deepEqual(events.at(-1), ["hover", 1, null]);
+  first.dispatch("pointermove", inputEvent({ pointerId: 7, button: -1, clientX: 111, clientY: 70 }));
+  assert.equal(environment.animationFrames.length, 4, "gesture movement queued hover");
+  first.dispatch("pointerup", inputEvent({ pointerId: 7, button: 2, clientX: 111, clientY: 70 }));
+  assert.equal(environment.animationFrames.length, 5);
+  environment.runFrame(5);
+
+  environment.resetControl.dispatch();
+  assert.equal(environment.animationFrames.length, 6);
+  environment.runFrame(6);
+  environment.host.width = 240;
+  environment.observers[0].callback();
+  assert.equal(environment.animationFrames.length, 7);
+  environment.runFrame(7);
+
+  first.dispatch("pointermove", inputEvent({ clientX: 120, clientY: 70 }));
+  const oldFrame = environment.animationFrames.at(-1).handle;
+  assert.deepEqual(present(environment, presenter, 2, oneBuilding(), sink), COMMITTED);
+  assert(environment.cancelledFrames.includes(oldFrame));
+  const beforeStale = events.length;
+  environment.runFrame(oldFrame);
+  assert.equal(events.length, beforeStale, "replaced session frame published");
+  const second = environment.canvases[1];
+  second.dispatch("pointermove", inputEvent({ clientX: 110, clientY: 70 }));
+  const secondFrame = environment.animationFrames.at(-1).handle;
+  environment.runFrame(secondFrame);
+  assert.deepEqual(events.at(-1), ["hover", 2, 0]);
+  presenter.dispose();
+  assert.equal(first.removeCount, 1);
+  assert.equal(second.removeCount, 1);
+});
+
+test("pending hover cleanup, callback, picking, request, and cancellation failures are exact and fail closed", () => {
+  for (const failure of ["callback", "picking", "request", "cancel"]) {
+    const environment = fakeEnvironment({ platform: {
+      throwRequestFrame: failure === "request",
+      throwCancelFrame: failure === "cancel",
+    } });
+    const { presenter, failures } = failuresCollector(environment);
+    const sink = {
+      hoverIndex() { if (failure === "callback") throw new Error("hover callback"); },
+      activationIndex() {}, selectionAction() {},
+    };
+    assert.deepEqual(present(environment, presenter, failure, oneBuilding(), sink), COMMITTED);
+    const canvas = environment.canvases[0];
+    canvas.dispatch("pointermove", inputEvent({ clientX: 110, clientY: 70 }));
+    if (failure === "picking") {
+      canvas.width = Number.NaN;
+      environment.runFrame();
+    } else if (failure === "callback") {
+      environment.runFrame();
+    } else if (failure === "cancel") {
+      canvas.dispatch("pointerleave", inputEvent());
+    }
+    assert.deepEqual(failures, [[failure, "Presentation failed", "M1-PRES-1"]], failure);
+    assert.equal(canvas.removeCount, 1, failure);
+    presenter.dispose();
+    assert.equal(canvas.removeCount, 1, failure);
+  }
+});
+
+test("context loss and disposal cancel pending hover exactly once and retained frames stay inert", () => {
+  for (const stimulus of ["context loss", "dispose"]) {
+    const environment = fakeEnvironment();
+    const events = [];
+    const { presenter, failures } = failuresCollector(environment);
+    assert.deepEqual(present(environment, presenter, stimulus, oneBuilding(), {
+      hoverIndex(...args) { events.push(args); }, activationIndex() {}, selectionAction() {},
+    }), COMMITTED);
+    const canvas = environment.canvases[0];
+    canvas.dispatch("pointermove", inputEvent({ clientX: 110, clientY: 70 }));
+    const frame = environment.animationFrames[0].handle;
+    if (stimulus === "context loss") canvas.dispatchLoss();
+    else presenter.dispose();
+    assert.deepEqual(environment.cancelledFrames, [frame], stimulus);
+    const terminalFailures = failures.length;
+    environment.runFrame(frame);
+    assert.deepEqual(events, [], stimulus);
+    assert.equal(failures.length, terminalFailures, stimulus);
+    assert.equal(canvas.removeCount, 1, stimulus);
+    assert.deepEqual(resourceDeletes(canvas.gl), expectedResourceDeletesThrough(24), stimulus);
+    presenter.dispose();
+    assert.deepEqual(environment.cancelledFrames, [frame], stimulus);
+  }
 });
 
 test("outline update, draw, and depth restoration failures revoke the complete session", () => {
@@ -652,11 +871,42 @@ test("outline update, draw, and depth restoration failures revoke the complete s
       assert(outlineDraw >= 0, failure);
       assert.deepEqual(gl.calls[outlineDraw + 1], ["enable", GL.DEPTH_TEST], failure);
     }
-    assert.equal(names(gl).filter((name) => name === "deleteShader").length, 4, failure);
-    assert.equal(names(gl).filter((name) => name === "deleteProgram").length, 2, failure);
-    assert.equal(names(gl).filter((name) => name === "deleteBuffer").length, 6, failure);
-    assert.equal(names(gl).filter((name) => name === "deleteVertexArray").length, 2, failure);
+    assert.equal(names(gl).filter((name) => name === "deleteShader").length, 6, failure);
+    assert.equal(names(gl).filter((name) => name === "deleteProgram").length, 3, failure);
+    assert.equal(names(gl).filter((name) => name === "deleteBuffer").length, 9, failure);
+    assert.equal(names(gl).filter((name) => name === "deleteVertexArray").length, 3, failure);
     assert.deepEqual(presenter.setVisualState(failure, null, 0), STALE, failure);
+  }
+});
+
+test("hover upload, top-perimeter draw, and depth restoration failures revoke the complete session", () => {
+  for (const failure of ["bufferSubData", "hover draw", "depth restoration"]) {
+    const environment = fakeEnvironment();
+    const { presenter, failures } = failuresCollector(environment);
+    assert.deepEqual(present(environment, presenter, failure, oneBuilding()), COMMITTED);
+    const canvas = environment.canvases[0];
+    const gl = canvas.gl;
+    if (failure === "bufferSubData") gl.options.throwMethod = "bufferSubData";
+    if (failure === "hover draw") {
+      const draw = gl.drawElementsInstanced.bind(gl);
+      gl.drawElementsInstanced = (...args) => {
+        draw(...args);
+        if (args[0] === GL.LINES && args[1] === 8) throw new Error("injected hover draw");
+      };
+    }
+    if (failure === "depth restoration") {
+      const enable = gl.enable.bind(gl);
+      let depthEnables = 0;
+      gl.enable = (...args) => {
+        if (args[0] === GL.DEPTH_TEST) depthEnables += 1;
+        enable(...args);
+        if (args[0] === GL.DEPTH_TEST && depthEnables === 2) throw new Error("injected hover depth restoration");
+      };
+    }
+    assert.deepEqual(presenter.setVisualState(failure, 0, null), PRESENTATION_FAILURE, failure);
+    assert.deepEqual(failures, [[failure, "Presentation failed", "M1-PRES-1"]], failure);
+    assert.equal(canvas.removeCount, 1, failure);
+    assert.deepEqual(resourceDeletes(gl), expectedResourceDeletesThrough(24), failure);
   }
 });
 
@@ -683,7 +933,7 @@ test("falsy outline exceptions survive depth restoration and revoke the complete
     assert.deepEqual(gl.calls[outlineDraw + 1], ["enable", GL.DEPTH_TEST], id);
     assert.equal(canvas.removeCount, 1, id);
     assert.equal(environment.host.child, undefined, id);
-    assert.deepEqual(resourceDeletes(gl), expectedResourceDeletesThrough(16), id);
+    assert.deepEqual(resourceDeletes(gl), expectedResourceDeletesThrough(24), id);
     assert.deepEqual(presenter.setVisualState(id, null, 0), STALE, id);
   }
 });
@@ -1012,7 +1262,7 @@ test("pointer interruptions cancel capture without deltas and lifecycle cleanup 
     assert.equal(names(canvas.gl).filter((name) => name === "drawElementsInstanced").length, expectedDraws, stimulus);
     assert.deepEqual(activations, [], stimulus);
     presenter.dispose(); presenter.dispose();
-    for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture", "contextmenu", "keydown", "wheel"]) assert.equal(canvas.eventListeners.get(type)?.size ?? 0, 0, `${stimulus}:${type}`);
+    for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave", "lostpointercapture", "contextmenu", "keydown", "wheel"]) assert.equal(canvas.eventListeners.get(type)?.size ?? 0, 0, `${stimulus}:${type}`);
     assert.deepEqual(environment.windowTarget.removes, ["blur", "pagehide"], stimulus);
     assert.deepEqual(environment.documentTarget.removes, ["visibilitychange"], stimulus);
     assert.deepEqual(failures, [], stimulus);
@@ -1183,7 +1433,7 @@ test("camera redraw failure revokes once and retained input callbacks are inert"
 });
 
 test("listener setup failure rolls back all attached session listeners", () => {
-  for (const type of ["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture", "contextmenu"]) {
+  for (const type of ["webglcontextlost", "keydown", "wheel", "pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave", "lostpointercapture", "contextmenu"]) {
     const environment = fakeEnvironment({ gl: { throwListener: type } });
     const { presenter, failures } = failuresCollector(environment);
     assert.deepEqual(present(environment, presenter, type, oneBuilding()), PRESENTATION_FAILURE);
@@ -1244,7 +1494,7 @@ test("the complete 4,000-building model uploads exactly 112,000 bytes and draws 
   const { presenter } = failuresCollector(environment);
   assert.deepEqual(present(environment, presenter, 4000, model), COMMITTED);
   const gl = environment.canvases[0].gl;
-  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [96, 36, 112000, 96, 24, 24]);
+  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [96, 36, 112000, 96, 24, 24, 96, 8, 24]);
   assert.deepEqual(gl.calls.filter((call) => call[0] === "drawElementsInstanced").at(-1).slice(1), [GL.TRIANGLES, 36, GL.UNSIGNED_BYTE, 0, 4000]);
 });
 
@@ -1262,7 +1512,7 @@ test("final dimension reread redraws the detached candidate before commit", () =
   const { presenter } = failuresCollector(environment);
   assert.deepEqual(present(environment, presenter, 1, oneBuilding()), COMMITTED);
   const canvas = environment.canvases[0];
-  assert.equal(canvas.gl.uploads.length, 6);
+  assert.equal(canvas.gl.uploads.length, 9);
   assert.equal(canvas.gl.calls.filter((call) => call[0] === "drawElementsInstanced").length, 2);
   assert.equal(canvas.width, 200);
 });
@@ -1281,7 +1531,7 @@ test("changed resize repeats the exact draw state with a literal matrix and unch
 
   environment.host.width = 300;
   environment.observers[0].callback();
-  assert.equal(gl.uploads.length, 6);
+  assert.equal(gl.uploads.length, 9);
   assert.deepEqual(gl.calls.slice(callCount), expectedDrawCalls({
     width: 300,
     height: 100,
@@ -1299,7 +1549,7 @@ test("changed resize repeats the exact draw state with a literal matrix and unch
   environment.observers[0].callback();
   assert.equal(gl.calls.length, unchangedCallCount);
   assert.equal(canvas.contextDataReads.length, unchangedDataReadCount);
-  assert.equal(gl.uploads.length, 6);
+  assert.equal(gl.uploads.length, 9);
 });
 
 test("committed context loss and resize failures notify controller before idempotent token cleanup", () => {
@@ -1343,9 +1593,9 @@ test("committed context loss and resize failures notify controller before idempo
     assert.equal(environment.host.child, undefined);
     assert.equal(canvas.removeCount, 1);
     assert.equal(environment.observers[0].disconnected, 1);
-    assert.equal(names(canvas.gl).filter((name) => name === "deleteProgram").length, 2);
-    assert.equal(names(canvas.gl).filter((name) => name === "deleteBuffer").length, 6);
-    assert.equal(names(canvas.gl).filter((name) => name === "deleteVertexArray").length, 2);
+    assert.equal(names(canvas.gl).filter((name) => name === "deleteProgram").length, 3);
+    assert.equal(names(canvas.gl).filter((name) => name === "deleteBuffer").length, 9);
+    assert.equal(names(canvas.gl).filter((name) => name === "deleteVertexArray").length, 3);
     assert.deepEqual(callbacks, [[stimulus, "Presentation failed", "M1-PRES-1"]]);
     presenter.rollback(environment.lastToken);
     retained();
@@ -1401,19 +1651,30 @@ test("closed failure stimuli fail synchronously after cleanup with no publicatio
   }
 });
 
-test("later outline allocation faults map to M1-PRES-1 and exactly revoke usable and lost-context ownership", () => {
+test("later selection and hover allocation faults map to M1-PRES-1 and exactly revoke usable and lost-context ownership", () => {
   const faults = [
-    { id: "outline vertex shader", method: "createShader", occurrence: 3, nullResult: true, lastOwnedResource: 8, outlineShadersReleased: false },
-    { id: "outline fragment shader", method: "createShader", occurrence: 4, nullResult: true, lastOwnedResource: 9, outlineShadersReleased: false },
-    { id: "outline program", method: "createProgram", occurrence: 2, nullResult: true, lastOwnedResource: 10, outlineShadersReleased: false },
-    { id: "outline uniform", method: "getUniformLocation", occurrence: 2, nullResult: true, lastOwnedResource: 11, outlineShadersReleased: false },
-    { id: "outline VAO", method: "createVertexArray", occurrence: 2, nullResult: true, lastOwnedResource: 12, outlineShadersReleased: true },
-    { id: "outline position buffer", method: "createBuffer", occurrence: 4, nullResult: true, lastOwnedResource: 13, outlineShadersReleased: true },
-    { id: "outline index buffer", method: "createBuffer", occurrence: 5, nullResult: true, lastOwnedResource: 14, outlineShadersReleased: true },
-    { id: "outline instance buffer", method: "createBuffer", occurrence: 6, nullResult: true, lastOwnedResource: 15, outlineShadersReleased: true },
-    { id: "outline position upload", method: "bufferData", occurrence: 4, nullResult: false, lastOwnedResource: 16, outlineShadersReleased: true },
-    { id: "outline index upload", method: "bufferData", occurrence: 5, nullResult: false, lastOwnedResource: 16, outlineShadersReleased: true },
-    { id: "outline instance upload", method: "bufferData", occurrence: 6, nullResult: false, lastOwnedResource: 16, outlineShadersReleased: true },
+    { id: "outline vertex shader", method: "createShader", occurrence: 3, nullResult: true, lastOwnedResource: 8, releasedBeforeLoss: [1, 2] },
+    { id: "outline fragment shader", method: "createShader", occurrence: 4, nullResult: true, lastOwnedResource: 9, releasedBeforeLoss: [1, 2] },
+    { id: "outline program", method: "createProgram", occurrence: 2, nullResult: true, lastOwnedResource: 10, releasedBeforeLoss: [1, 2] },
+    { id: "outline uniform", method: "getUniformLocation", occurrence: 2, nullResult: true, lastOwnedResource: 11, releasedBeforeLoss: [1, 2] },
+    { id: "outline VAO", method: "createVertexArray", occurrence: 2, nullResult: true, lastOwnedResource: 12, releasedBeforeLoss: [1, 2, 9, 10] },
+    { id: "outline position buffer", method: "createBuffer", occurrence: 4, nullResult: true, lastOwnedResource: 13, releasedBeforeLoss: [1, 2, 9, 10] },
+    { id: "outline index buffer", method: "createBuffer", occurrence: 5, nullResult: true, lastOwnedResource: 14, releasedBeforeLoss: [1, 2, 9, 10] },
+    { id: "outline instance buffer", method: "createBuffer", occurrence: 6, nullResult: true, lastOwnedResource: 15, releasedBeforeLoss: [1, 2, 9, 10] },
+    { id: "outline position upload", method: "bufferData", occurrence: 4, nullResult: false, lastOwnedResource: 16, releasedBeforeLoss: [1, 2, 9, 10] },
+    { id: "outline index upload", method: "bufferData", occurrence: 5, nullResult: false, lastOwnedResource: 16, releasedBeforeLoss: [1, 2, 9, 10] },
+    { id: "outline instance upload", method: "bufferData", occurrence: 6, nullResult: false, lastOwnedResource: 16, releasedBeforeLoss: [1, 2, 9, 10] },
+    { id: "hover vertex shader", method: "createShader", occurrence: 5, nullResult: true, lastOwnedResource: 16, releasedBeforeLoss: [1, 2, 9, 10] },
+    { id: "hover fragment shader", method: "createShader", occurrence: 6, nullResult: true, lastOwnedResource: 17, releasedBeforeLoss: [1, 2, 9, 10] },
+    { id: "hover program", method: "createProgram", occurrence: 3, nullResult: true, lastOwnedResource: 18, releasedBeforeLoss: [1, 2, 9, 10] },
+    { id: "hover uniform", method: "getUniformLocation", occurrence: 3, nullResult: true, lastOwnedResource: 19, releasedBeforeLoss: [1, 2, 9, 10] },
+    { id: "hover VAO", method: "createVertexArray", occurrence: 3, nullResult: true, lastOwnedResource: 20, releasedBeforeLoss: [1, 2, 9, 10, 17, 18] },
+    { id: "hover position buffer", method: "createBuffer", occurrence: 7, nullResult: true, lastOwnedResource: 21, releasedBeforeLoss: [1, 2, 9, 10, 17, 18] },
+    { id: "hover index buffer", method: "createBuffer", occurrence: 8, nullResult: true, lastOwnedResource: 22, releasedBeforeLoss: [1, 2, 9, 10, 17, 18] },
+    { id: "hover instance buffer", method: "createBuffer", occurrence: 9, nullResult: true, lastOwnedResource: 23, releasedBeforeLoss: [1, 2, 9, 10, 17, 18] },
+    { id: "hover position upload", method: "bufferData", occurrence: 7, nullResult: false, lastOwnedResource: 24, releasedBeforeLoss: [1, 2, 9, 10, 17, 18] },
+    { id: "hover index upload", method: "bufferData", occurrence: 8, nullResult: false, lastOwnedResource: 24, releasedBeforeLoss: [1, 2, 9, 10, 17, 18] },
+    { id: "hover instance upload", method: "bufferData", occurrence: 9, nullResult: false, lastOwnedResource: 24, releasedBeforeLoss: [1, 2, 9, 10, 17, 18] },
   ];
 
   for (const faultCase of faults) {
@@ -1440,15 +1701,14 @@ test("later outline allocation faults map to M1-PRES-1 and exactly revoke usable
       assert.equal(environment.host.child, undefined, id);
       assert.equal(currentCanvas.removeCount, 1, id);
       assert.equal(candidateCanvas.removeCount, 1, id);
-      assert.deepEqual(resourceDeletes(currentCanvas.gl), expectedResourceDeletesThrough(16), id);
+      assert.deepEqual(resourceDeletes(currentCanvas.gl), expectedResourceDeletesThrough(24), id);
       assert.notEqual(candidateCanvas.gl.faultCallIndex, undefined, id);
       if (context === "usable") {
         assert.deepEqual(resourceDeletes(candidateCanvas.gl), expectedResourceDeletesThrough(faultCase.lastOwnedResource), id);
       } else {
-        const releasedBeforeLoss = faultCase.outlineShadersReleased ? [1, 2, 9, 10] : [1, 2];
         assert.deepEqual(
           resourceDeletes(candidateCanvas.gl),
-          expectedResourceDeletesThrough(16).filter(([, resourceId]) => releasedBeforeLoss.includes(resourceId)),
+          expectedResourceDeletesThrough(24).filter(([, resourceId]) => faultCase.releasedBeforeLoss.includes(resourceId)),
           id,
         );
         assert.equal(
@@ -1494,9 +1754,9 @@ test("cleanup contains release throws, attempts every resource, and skips driver
     const remove = canvas.remove.bind(canvas);
     canvas.remove = () => { remove(); throw new Error("canvas removal"); };
     assert.doesNotThrow(() => presenter.dispose());
-    assert.equal(names(canvas.gl).filter((name) => name === "deleteProgram").length, 2);
-    assert.equal(names(canvas.gl).filter((name) => name === "deleteBuffer").length, 6);
-    assert.equal(names(canvas.gl).filter((name) => name === "deleteVertexArray").length, 2);
+    assert.equal(names(canvas.gl).filter((name) => name === "deleteProgram").length, 3);
+    assert.equal(names(canvas.gl).filter((name) => name === "deleteBuffer").length, 9);
+    assert.equal(names(canvas.gl).filter((name) => name === "deleteVertexArray").length, 3);
     assert.equal(canvas.removeCount, 1);
     assert.deepEqual(failures, []);
   }
