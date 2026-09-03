@@ -4,6 +4,7 @@ import {
   orbitCameraByPointer,
   panCameraByKeyboard,
   panCameraByPointer,
+  pickAtCanvasPoint,
   resetCamera,
   resizeCamera,
   zoomCamera,
@@ -201,7 +202,6 @@ export type CityPresenter<G> = Readonly<{
 }>;
 
 type Dimensions = Readonly<{ width: number; height: number }>;
-type ReleasePosition = Readonly<{ clientX: number; clientY: number }>;
 type Gesture = {
   pointerId: number;
   button: 0 | 2;
@@ -239,7 +239,6 @@ type Session<G> = {
   resetListener?: ResetListener;
   resetControl?: PresenterResetControl;
   gesture?: Gesture;
-  eligibleReleasePosition?: ReleasePosition;
   cameraState?: CameraState;
   cameraView?: CameraView;
   vertexShader?: WebGLShader;
@@ -555,7 +554,6 @@ function updateOutline(session: Session<unknown>, selection: number): void {
 function releaseGesture<G>(session: Session<G>): void {
   const gesture = session.gesture;
   session.gesture = undefined;
-  session.eligibleReleasePosition = undefined;
   if (!gesture?.captureOwned) return;
   gesture.captureOwned = false;
   session.canvas?.releasePointerCapture(gesture.pointerId);
@@ -796,7 +794,6 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (!callbackEligible(session) || session.gesture || (event.button !== 0 && event.button !== 2)) return;
         if (!Number.isInteger(event.pointerId) || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) throw new Error("Invalid pointer press");
         event.preventDefault();
-        session.eligibleReleasePosition = undefined;
         canvas.focus();
         const gesture: Gesture = {
           pointerId: event.pointerId,
@@ -846,11 +843,23 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (!gesture || event.pointerId !== gesture.pointerId || event.button !== gesture.button) return;
         if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) throw new Error("Invalid pointer release");
         if (event.clientX !== gesture.pressX || event.clientY !== gesture.pressY) gesture.dragged = true;
-        const eligible = gesture.button === 0 && !gesture.dragged
+        const activates = gesture.button === 0 && !gesture.dragged
           && !event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey;
-        const releasePosition = eligible ? Object.freeze({ clientX: event.clientX, clientY: event.clientY }) : undefined;
         releaseGesture(session);
-        session.eligibleReleasePosition = releasePosition;
+        if (!activates || !callbackEligible(session)) return;
+        const picked = pickAtCanvasPoint(
+          session.cameraView!,
+          event.clientX,
+          event.clientY,
+          canvas.getBoundingClientRect(),
+          { width: canvas.width, height: canvas.height },
+          session.model!,
+        );
+        if (picked.kind === "failure") {
+          failSession(session);
+          return;
+        }
+        if (callbackEligible(session)) session.eventSink!.activationIndex(session.generation!, picked.index);
       } catch {
         failSession(session);
       }
@@ -871,7 +880,6 @@ export function createCityPresenter<G>(options: CityPresenterOptions<G>): CityPr
         if (!gesture || gesture.pointerId !== event.pointerId || !gesture.captureOwned) return;
         gesture.captureOwned = false;
         session.gesture = undefined;
-        session.eligibleReleasePosition = undefined;
       } catch {
         failSession(session);
       }

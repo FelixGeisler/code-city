@@ -19,6 +19,7 @@ const {
   orbitCameraByPointer,
   panCameraByKeyboard,
   panCameraByPointer,
+  pickAtCanvasPoint,
   resetCamera,
   resizeCamera,
   zoomCamera,
@@ -244,6 +245,12 @@ function fakeEnvironment({ width = 200, height = 100, gl = {}, platform = {} } =
 }
 
 function oneBuilding() { return buildCity([{ canonicalPath: "a.js", S: 0, U: 0, M: 0 }]).geometry; }
+function overlappingBuildings(count) {
+  const origins = new Float32Array(count * 3);
+  const sizes = new Float32Array(count * 3).fill(1);
+  const rgba = new Uint8Array(count * 4).fill(255);
+  return Object.freeze({ kind: oneBuilding().kind, count, origins, sizes, rgba, bounds: new Float32Array([0, 0, 0, 1, 1, 1]) });
+}
 const EMPTY_EVENT_SINK = Object.freeze({ hoverIndex() {}, activationIndex() {}, selectionAction() {} });
 function failuresCollector(environment, eligibility = () => true) {
   const failures = [];
@@ -807,7 +814,7 @@ test("primary orbit and secondary pan use exact pointer deltas, focus, capture, 
   assert.deepEqual(failures, []);
 });
 
-test("pointer release classification has no threshold and never emits issue 9 activation early", () => {
+test("pointer release classification has no threshold and activates only a stationary unmodified primary release", () => {
   const environment = fakeEnvironment();
   const events = [];
   const { presenter, failures } = failuresCollector(environment);
@@ -819,22 +826,118 @@ test("pointer release classification has no threshold and never emits issue 9 ac
   const canvas = environment.canvases[0];
   const draws = names(canvas.gl).filter((name) => name === "drawElementsInstanced").length;
 
-  canvas.dispatch("pointerdown", inputEvent({ pointerId: 1, button: 0, clientX: 40, clientY: 40 }));
-  canvas.dispatch("pointerup", inputEvent({ pointerId: 1, button: 0, clientX: 40, clientY: 40 }));
-  canvas.dispatch("pointerdown", inputEvent({ pointerId: 2, button: 0, clientX: 40, clientY: 40 }));
-  canvas.dispatch("pointerup", inputEvent({ pointerId: 2, button: 0, clientX: 40, clientY: 40, shiftKey: true }));
-  canvas.dispatch("pointerdown", inputEvent({ pointerId: 3, button: 2, clientX: 40, clientY: 40 }));
-  canvas.dispatch("pointerup", inputEvent({ pointerId: 3, button: 2, clientX: 40, clientY: 40 }));
-  canvas.dispatch("pointerdown", inputEvent({ pointerId: 4, button: 0, clientX: 40, clientY: 40 }));
-  canvas.dispatch("pointermove", inputEvent({ pointerId: 4, button: -1, clientX: 40.00000000000001, clientY: 40 }));
-  canvas.dispatch("pointermove", inputEvent({ pointerId: 4, button: -1, clientX: 40, clientY: 40 }));
-  canvas.dispatch("pointerup", inputEvent({ pointerId: 4, button: 0, clientX: 40, clientY: 40 }));
+  canvas.dispatch("pointerdown", inputEvent({ pointerId: 1, button: 0, clientX: 110, clientY: 70 }));
+  canvas.dispatch("pointerup", inputEvent({ pointerId: 1, button: 0, clientX: 110, clientY: 70 }));
+  assert.deepEqual(events, [["activation", 1, 0]], "activation must be synchronous with release");
+  for (const [offset, modifier] of ["shiftKey", "ctrlKey", "altKey", "metaKey"].entries()) {
+    const pointerId = offset + 2;
+    canvas.dispatch("pointerdown", inputEvent({ pointerId, button: 0, clientX: 110, clientY: 70 }));
+    canvas.dispatch("pointerup", inputEvent({ pointerId, button: 0, clientX: 110, clientY: 70, [modifier]: true }));
+  }
+  canvas.dispatch("pointerdown", inputEvent({ pointerId: 6, button: 2, clientX: 110, clientY: 70 }));
+  canvas.dispatch("pointerup", inputEvent({ pointerId: 6, button: 2, clientX: 110, clientY: 70 }));
+  canvas.dispatch("pointerdown", inputEvent({ pointerId: 7, button: 0, clientX: 110, clientY: 70 }));
+  canvas.dispatch("pointermove", inputEvent({ pointerId: 7, button: -1, clientX: 110.00000000000001, clientY: 70 }));
+  canvas.dispatch("pointermove", inputEvent({ pointerId: 7, button: -1, clientX: 110, clientY: 70 }));
+  canvas.dispatch("pointerup", inputEvent({ pointerId: 7, button: 0, clientX: 110, clientY: 70 }));
 
-  assert.deepEqual(canvas.captureCalls, [1, 2, 3, 4]);
-  assert.deepEqual(canvas.releaseCalls, [1, 2, 3, 4]);
+  assert.deepEqual(canvas.captureCalls, [1, 2, 3, 4, 5, 6, 7]);
+  assert.deepEqual(canvas.releaseCalls, [1, 2, 3, 4, 5, 6, 7]);
   assert.equal(names(canvas.gl).filter((name) => name === "drawElementsInstanced").length, draws + 2);
-  assert.deepEqual(events, []);
+  assert.deepEqual(events, [["activation", 1, 0]]);
   assert.deepEqual(failures, []);
+});
+
+test("eligible releases use the current overview, orbit, pan, zoom, resize, CSS rectangle, and backing dimensions", () => {
+  const environment = fakeEnvironment();
+  const activations = [];
+  const geometry = buildCity([
+    { canonicalPath: "a.js", S: 0, U: 0, M: 0 },
+    { canonicalPath: "b.js", S: 2, U: 1, M: 1 },
+    { canonicalPath: "c.js", S: 4, U: 2, M: 2 },
+  ]).geometry;
+  const { presenter, failures } = failuresCollector(environment);
+  assert.deepEqual(present(environment, presenter, 7, geometry, {
+    hoverIndex() {},
+    activationIndex(generation, index) { activations.push([generation, index]); },
+    selectionAction() {},
+  }), COMMITTED);
+  const canvas = environment.canvases[0];
+  let expected = resetCamera(geometry.bounds, { width: 200, height: 100 });
+  assert.equal(expected.kind, "success");
+  let pointerId = 20;
+  const activate = (clientX, clientY) => {
+    const expectedPick = pickAtCanvasPoint(expected.view, clientX, clientY, canvas.getBoundingClientRect(), { width: canvas.width, height: canvas.height }, geometry);
+    assert.equal(expectedPick.kind, "success");
+    const before = activations.length;
+    pointerId += 1;
+    canvas.dispatch("pointerdown", inputEvent({ pointerId, button: 0, clientX, clientY }));
+    canvas.dispatch("pointerup", inputEvent({ pointerId, button: 0, clientX, clientY }));
+    assert.deepEqual(activations.at(-1), [7, expectedPick.index]);
+    assert.equal(activations.length, before + 1, "release did not activate synchronously exactly once");
+  };
+
+  activate(110, 70);
+  canvas.dispatch("keydown", inputEvent({ key: "d" }));
+  expected = orbitCameraByKeyboard(expected.state, geometry.bounds, { width: 200, height: 100 }, "d");
+  assert.equal(expected.kind, "success");
+  activate(110, 70);
+  canvas.dispatch("keydown", inputEvent({ key: "D", shiftKey: true }));
+  expected = panCameraByKeyboard(expected.state, geometry.bounds, { width: 200, height: 100 }, "D");
+  assert.equal(expected.kind, "success");
+  activate(110, 70);
+  canvas.dispatch("wheel", inputEvent({ deltaY: -1 }));
+  expected = zoomCamera(expected.state, geometry.bounds, { width: 200, height: 100 }, "in");
+  assert.equal(expected.kind, "success");
+  activate(110, 70);
+  environment.host.width = 300;
+  environment.host.height = 150;
+  environment.observers[0].callback();
+  expected = resizeCamera(expected.state, geometry.bounds, { width: 300, height: 150 });
+  assert.equal(expected.kind, "success");
+  activate(160, 95);
+  activate(10, 20);
+  activate(310, 170);
+
+  canvas.dispatch("pointerdown", inputEvent({ pointerId: ++pointerId, button: 0, clientX: 160, clientY: 95 }));
+  environment.host.width = 20;
+  canvas.dispatch("pointerup", inputEvent({ pointerId, button: 0, clientX: 160, clientY: 95 }));
+  assert.deepEqual(activations.at(-1), [7, null], "captured outside release invented an inside hit");
+  assert.deepEqual(failures, []);
+});
+
+test("exact ties at the 4,000-instance envelope choose the lower canonical index", () => {
+  const environment = fakeEnvironment();
+  const events = [];
+  const geometry = overlappingBuildings(4_000);
+  const { presenter, failures } = failuresCollector(environment);
+  assert.deepEqual(present(environment, presenter, 1, geometry, {
+    hoverIndex() {}, activationIndex(...args) { events.push(args); }, selectionAction() {},
+  }), COMMITTED);
+  const canvas = environment.canvases[0];
+  canvas.dispatch("pointerdown", inputEvent({ pointerId: 1, button: 0, clientX: 110, clientY: 70 }));
+  canvas.dispatch("pointerup", inputEvent({ pointerId: 1, button: 0, clientX: 110, clientY: 70 }));
+  assert.deepEqual(events, [[1, 0]]);
+  assert.deepEqual(failures, []);
+});
+
+test("picking arithmetic and eligible activation callback failures revoke the session as M1-PRES-1", () => {
+  for (const failureKind of ["picking", "callback"]) {
+    const environment = fakeEnvironment();
+    const { presenter, failures } = failuresCollector(environment);
+    assert.deepEqual(present(environment, presenter, failureKind, oneBuilding(), {
+      hoverIndex() {},
+      activationIndex() { if (failureKind === "callback") throw new Error("injected activation callback"); },
+      selectionAction() {},
+    }), COMMITTED);
+    const canvas = environment.canvases[0];
+    canvas.dispatch("pointerdown", inputEvent({ pointerId: 1, button: 0, clientX: 110, clientY: 70 }));
+    if (failureKind === "picking") environment.host.width = Number.NaN;
+    canvas.dispatch("pointerup", inputEvent({ pointerId: 1, button: 0, clientX: 110, clientY: 70 }));
+    assert.deepEqual(failures, [[failureKind, "Presentation failed", "M1-PRES-1"]], failureKind);
+    assert.equal(canvas.removeCount, 1, failureKind);
+    assert.deepEqual(canvas.releaseCalls, [1], failureKind);
+  }
 });
 
 test("wheel sign, native Reset, resize retention, and browser-owned modifiers use immutable uploads", () => {
@@ -886,8 +989,11 @@ test("pointer interruptions cancel capture without deltas and lifecycle cleanup 
   const cases = ["pointercancel", "lostpointercapture", "blur", "hidden", "pagehide", "resize", "reset"];
   for (const stimulus of cases) {
     const environment = fakeEnvironment();
+    const activations = [];
     const { presenter, failures } = failuresCollector(environment);
-    assert.deepEqual(present(environment, presenter, stimulus, oneBuilding()), COMMITTED);
+    assert.deepEqual(present(environment, presenter, stimulus, oneBuilding(), {
+      hoverIndex() {}, activationIndex(...args) { activations.push(args); }, selectionAction() {},
+    }), COMMITTED);
     const canvas = environment.canvases[0];
     canvas.dispatch("pointerdown", inputEvent({ pointerId: 12, button: 0, clientX: 50, clientY: 50 }));
     const draws = names(canvas.gl).filter((name) => name === "drawElementsInstanced").length;
@@ -904,6 +1010,7 @@ test("pointer interruptions cancel capture without deltas and lifecycle cleanup 
     canvas.dispatch("pointermove", inputEvent({ pointerId: 12, button: -1, clientX: 70, clientY: 70 }));
     canvas.dispatch("pointerup", inputEvent({ pointerId: 12, button: 0, clientX: 70, clientY: 70 }));
     assert.equal(names(canvas.gl).filter((name) => name === "drawElementsInstanced").length, expectedDraws, stimulus);
+    assert.deepEqual(activations, [], stimulus);
     presenter.dispose(); presenter.dispose();
     for (const type of ["pointerdown", "pointermove", "pointerup", "pointercancel", "lostpointercapture", "contextmenu", "keydown", "wheel"]) assert.equal(canvas.eventListeners.get(type)?.size ?? 0, 0, `${stimulus}:${type}`);
     assert.deepEqual(environment.windowTarget.removes, ["blur", "pagehide"], stimulus);
