@@ -13,7 +13,7 @@ and a production package below `/code-city/`.
 |===
 |Choice |Value
 
-|Build tool |`vite@8.2.1`
+|Build tool |`vite@8.3.0`
 |Language tool |`typescript@7.0.2`
 |UI |HTML, CSS, and browser ESM; no UI framework
 |Type checking |Strict TypeScript check separate from bundling

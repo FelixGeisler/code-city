@@ -26,7 +26,7 @@ export async function inspectDependencyClosure(rootDirectory) {
   invariant(packageManifest.engines?.npm === ">=11 <12", "Root npm engine changed");
   const expectedDependencies = {
     "@vscode/tree-sitter-wasm": "0.3.1",
-    "web-tree-sitter": "0.26.13",
+    "web-tree-sitter": "0.27.0",
   };
   invariant(
     JSON.stringify(packageManifest.dependencies) === JSON.stringify(expectedDependencies),
@@ -35,13 +35,13 @@ export async function inspectDependencyClosure(rootDirectory) {
   for (const [name, version] of Object.entries(packageManifest.dependencies)) {
     invariant(isExactVersion(version), `Direct production dependency is not exact: ${name}@${version}`);
   }
-  invariant(packageManifest.overrides?.["js-yaml"] === "4.3.1", "The js-yaml override changed");
+  invariant(packageManifest.overrides?.["js-yaml"] === "5.4.2", "The js-yaml override differs from the accepted pin");
 
   const expectedDevDependencies = {
-    "@antora/cli": "3.1.15",
-    "@antora/site-generator": "3.1.15",
+    "@antora/cli": "3.2.0",
+    "@antora/site-generator": "3.2.0",
     typescript: "7.0.2",
-    vite: "8.2.1",
+    vite: "8.3.0",
   };
   invariant(
     JSON.stringify(packageManifest.devDependencies) === JSON.stringify(expectedDevDependencies),
@@ -85,15 +85,55 @@ export async function inspectDependencyClosure(rootDirectory) {
     registryPackageCount += 1;
   }
 
+  const expectedRenewedRecords = {
+    "web-tree-sitter": {
+      version: "0.27.0",
+      resolved: "https://registry.npmjs.org/web-tree-sitter/-/web-tree-sitter-0.27.0.tgz",
+      integrity: "sha512-XK08gj6RwTMQatAG7uVRP8MunqotL/XC19vHgkSPKmELgbGPBj4ECvB8haHOUnyj6ls2B8t42UTro14zxGgAHg==",
+      license: "MIT",
+    },
+    "@antora/cli": {
+      version: "3.2.0",
+      resolved: "https://registry.npmjs.org/@antora/cli/-/cli-3.2.0.tgz",
+      integrity: "sha512-bJ5Vl+FMH52xm2jxdcbrEUN3aeoIYj5NGzLGsVwIPewM0RXee0kckbToAFnU0EK0Uw07cBomiJ5hwVELex0/ug==",
+      license: "MPL-2.0",
+    },
+    "@antora/site-generator": {
+      version: "3.2.0",
+      resolved: "https://registry.npmjs.org/@antora/site-generator/-/site-generator-3.2.0.tgz",
+      integrity: "sha512-bgShOpARuO+1MF50HUsv25C7msyZk6GpaP2EBcjqD3s0Dj51amQL5KMqAbwfKLjTCiAUTGpC/Yb8rGeogUnmYw==",
+      license: "MPL-2.0",
+    },
+    vite: {
+      version: "8.3.0",
+      resolved: "https://registry.npmjs.org/vite/-/vite-8.3.0.tgz",
+      integrity: "sha512-lhZBVvEHefgE+HQZC9O7EBJgCU/nVzFNl7vkS4RE0APtWLP02/8QVIkQtzBxPquh7lq5/78NHipTj7ODQ6XuyQ==",
+      license: "MIT",
+    },
+    "js-yaml": {
+      version: "5.4.2",
+      resolved: "https://registry.npmjs.org/js-yaml/-/js-yaml-5.4.2.tgz",
+      integrity: "sha512-m+aqu+LwO1O6sIopafj8HUVl5aawITwZQe/yHpMCKjaWBaA/d07B/QdMb3529REftiU+RMMHL3Vlsw3hON7vWg==",
+      license: "MIT",
+    },
+  };
+  for (const [name, expected] of Object.entries(expectedRenewedRecords)) {
+    const record = lock.packages[`node_modules/${name}`];
+    invariant(
+      record?.version === expected.version
+        && record.resolved === expected.resolved
+        && record.integrity === expected.integrity
+        && record.license === expected.license,
+      `${name} lock provenance differs from accepted evidence`,
+    );
+  }
+
   const parserRuntime = lock.packages["node_modules/web-tree-sitter"];
   invariant(
-    parserRuntime?.version === "0.26.13"
-      && parserRuntime.license === "MIT"
-      && parserRuntime.integrity === "sha512-5bUZ7vbQ1kcondet96wzP974+JfCZDeQ7bTpacICm2nnvHpa5cO0ByRsoMcAhUP+743vpkb4m0BFlVSm+Ye9VA=="
-      && !parserRuntime.dependencies
+    !parserRuntime.dependencies
       && !parserRuntime.optionalDependencies
       && !parserRuntime.peerDependencies,
-    "web-tree-sitter lock provenance differs from accepted parser evidence",
+    "web-tree-sitter dependency closure differs from accepted evidence",
   );
   const grammars = lock.packages["node_modules/@vscode/tree-sitter-wasm"];
   invariant(
@@ -106,8 +146,6 @@ export async function inspectDependencyClosure(rootDirectory) {
     "@vscode/tree-sitter-wasm lock provenance differs from accepted #450 evidence",
   );
 
-  const vite = lock.packages["node_modules/vite"];
-  invariant(vite?.version === "8.2.1" && vite.license === "MIT", "Vite lock record must be exactly 8.2.1/MIT");
   const typescript = lock.packages["node_modules/typescript"];
   invariant(typescript?.version === "7.0.2" && typescript.license === "Apache-2.0", "TypeScript lock record must be exactly 7.0.2/Apache-2.0");
 
