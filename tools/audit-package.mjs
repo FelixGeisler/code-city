@@ -62,8 +62,8 @@ function assertProductionShape(manifest) {
   const workerAssets = javascript.filter((record) => /(?:^|\/)processing-worker-[A-Za-z0-9_-]+\.js$/.test(record.path));
   invariant(workerAssets.length === 1, "Production package must contain exactly one separate processing worker asset");
   const expectedAssetDigests = new Set([
-    "0c868236a47296b4ff3c1570f20e0899e4a784ff6e5cd7bfc9c3a55225463e4a",
-    "99fa2281fc4c6da713ccdadce72e81571b032ab9901b751be2d5aa127c843aaf",
+    "7c49e3c1d87e24e0bb4c2def909d17154dfde281f5f8280225450090bb4b8110",
+    "c03bccdc3b448a32848f5ae327e209c982bbb0840d43eec8bc2d5759544a1ed3",
     "5fb488d0cabb4775a594bab85682de5ad6ce83c0d6ac997a9f82dd084d571240",
     "778025db5a8be0e70f8ccc3671e486dfeddd048c25d9e8a70c26de2e1bf6f97d",
     "79e5da75ea62855a0cd67177685f0164eac87d5f630b3cbe1e0a099751ad30f8",

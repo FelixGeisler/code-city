@@ -9,12 +9,12 @@ export const SELECTED_ASSETS = [
   {
     role: "runtime-js",
     relativePath: "node_modules/web-tree-sitter/web-tree-sitter.js",
-    sha256: "0c868236a47296b4ff3c1570f20e0899e4a784ff6e5cd7bfc9c3a55225463e4a",
+    sha256: "7c49e3c1d87e24e0bb4c2def909d17154dfde281f5f8280225450090bb4b8110",
   },
   {
     role: "runtime-wasm",
     relativePath: "node_modules/web-tree-sitter/web-tree-sitter.wasm",
-    sha256: "99fa2281fc4c6da713ccdadce72e81571b032ab9901b751be2d5aa127c843aaf",
+    sha256: "c03bccdc3b448a32848f5ae327e209c982bbb0840d43eec8bc2d5759544a1ed3",
   },
   {
     role: "grammar-javascript",
@@ -182,9 +182,9 @@ export async function generateCanonicalWasmInventory() {
     }
   }
   const generated = Buffer.from(`${rows.join("\n")}\n`, "utf8");
-  invariant(generated.byteLength === 10_103, "Generated canonical WASM inventory byte length changed");
-  invariant(rows.length === 217, "Generated canonical WASM inventory row count changed");
-  invariant(digest(generated) === "b4b6e4528e5147ef618593b2504f204de6a3aac2ce06d9cfe2a3661f435756bb", "Generated canonical WASM inventory digest changed");
+  invariant(generated.byteLength === 10_167, "Generated canonical WASM inventory byte length changed");
+  invariant(rows.length === 219, "Generated canonical WASM inventory row count changed");
+  invariant(digest(generated) === "55c040fa4f0cf095f1f6819b78984549d40884c75bf599d81da93e662b3f8637", "Generated canonical WASM inventory digest changed");
   const fixture = await readFile(path.join(projectRoot, "test", "fixtures", "wasm-inventory.tsv"));
   invariant(generated.equals(fixture), "Tracked canonical WASM inventory differs from generated evidence");
   return generated;

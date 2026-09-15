@@ -4,7 +4,7 @@ import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import yaml from "js-yaml";
+import { load as loadYaml } from "js-yaml";
 import { serializePackageManifest } from "../tools/package-manifest.mjs";
 import { EXACT_CSP, EXACT_REFERRER_POLICY } from "../tools/package-policy.mjs";
 import { createPublicationRecord } from "../tools/publication-record.mjs";
@@ -24,7 +24,7 @@ const ACTIONS = {
   node: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
   pagesUpload: "actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b",
   artifactUpload: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
-  deploy: "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128",
+  deploy: "actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346",
   download: "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
 };
 
@@ -55,7 +55,7 @@ async function parsedWorkflows() {
   assert.deepEqual(files, ["ci.yml", "publish.yml"], "the repository must have exactly the accepted workflows");
   const entries = await Promise.all(files.map(async (name) => {
     const source = await readFile(path.join(WORKFLOW_DIRECTORY, name), "utf8");
-    return [name, { document: yaml.load(source) }];
+    return [name, { document: loadYaml(source) }];
   }));
   return Object.fromEntries(entries);
 }
