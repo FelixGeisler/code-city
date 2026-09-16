@@ -1274,7 +1274,7 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     const beforeResize = await observation();
     const resizedViewport = { width: beforeResize.viewport.width + Math.floor(beforeResize.viewport.width / 8), height: beforeResize.viewport.height + Math.floor(beforeResize.viewport.height / 8) };
     await cdp.send("Emulation.setDeviceMetricsOverride", { ...resizedViewport, deviceScaleFactor: beforeResize.viewport.deviceScaleFactor, mobile: false }, sessionId);
-    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].matrices.length>${beforeResize.draws}&&(() => { const canvas=document.querySelector('[data-city] canvas'); return canvas.width!==${beforeResize.canvasSize.width}||canvas.height!==${beforeResize.canvasSize.height}; })()`, "native viewport resize");
+    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].matrices.length>${beforeResize.draws}&&(() => { const canvas=document.querySelector('[data-city] canvas'); return canvas.width!==${beforeResize.canvasSize.width}||canvas.height!==${beforeResize.canvasSize.height}; })()&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "native viewport resize");
     assert.notDeepEqual((await observation()).matrix, beforeResize.matrix, "native resize did not update the camera matrix");
     await assertPhase("resize");
 
