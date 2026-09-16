@@ -30,9 +30,12 @@ const SUCCESS_FIXTURE = Object.freeze({
   source: "const answer = 42;\n",
   blob: "5c947feee9cbb434b57ed2e576b643e99e35e782",
   expectedNormalizedSourceSha256: "8691f74ea796569734dafffbbcb79088362b52c3cef154aa0d8f32696d2d4737",
-  modelBytesSha256: "d3b16b372fafc88ffe3570f934474c516dca12f066a1bd3da890bea7cae1af7b",
+  modelBytesSha256: "baabdf99753c1d9ff090ead67b914a6654eaed2a7eb5934a602192949451b7d1",
 });
 const CSP = "default-src 'none'; base-uri 'none'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; form-action 'none'; frame-src 'none'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; worker-src 'self'";
+const INTERACTIVE_FIXTURE_PATH = path.join(projectRoot, "test", "fixtures", "interactive", "fixture.json");
+const INTERACTIVE_FIXTURE_SHA256 = "5085a17a80aa57fc7fd49b0e8ec0de0e6a82b3a894bcb7c30528bb084ed7488a";
+const INTERACTIVE_MODEL_SHA256 = "e4c1de484f03b75051f75fa6976bec43cd2d404c1a61c8868297edcf4078a636";
 
 function invariant(condition, message) {
   if (!condition) throw new Error(message);
@@ -177,7 +180,7 @@ function pageObservationSource() {
     HTMLCanvasElement.prototype.getContext = function(kind, attributes) {
       const actual = acquire.call(this, kind, attributes);
       if (kind !== "webgl2" || !actual) return actual;
-      const record = { uploads: [], subUploads: [], matrices: [], outlineMatrices: [], hoverMatrices: [], draws: [], outlineDraws: [], hoverDraws: [], shaderSources: [], operations: [], polygonOffsetEnables: 0, forceLost: false, lastMatrix: null, listeners: listenerRecord(this), deletes: { shader: 0, program: 0, buffer: 0, vao: 0 } };
+      const record = { uploads: [], subUploads: [], matrices: [], outlineMatrices: [], hoverMatrices: [], draws: [], outlineDraws: [], hoverDraws: [], shaderSources: [], clearColors: [], operations: [], polygonOffsetEnables: 0, forceLost: false, lastMatrix: null, listeners: listenerRecord(this), deletes: { shader: 0, program: 0, buffer: 0, vao: 0 } };
       evidence.contexts.push(record);
       return new Proxy(actual, { get(target, property) {
         if (property === "bufferData") return (targetKind, data, usage) => {
@@ -195,6 +198,10 @@ function pageObservationSource() {
         if (property === "uniformMatrix4fv") return (location, transpose, matrix) => {
           record.lastMatrix = Array.from(matrix);
           return target.uniformMatrix4fv(location, transpose, matrix);
+        };
+        if (property === "clearColor") return (...args) => {
+          record.clearColors.push(args);
+          return target.clearColor(...args);
         };
         if (property === "drawElementsInstanced") return (...args) => {
           if (args[0] === 0x0001 && args[1] === 8) {
@@ -647,7 +654,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     }
     const presentationDigests = observed.contexts.map((context) => createHash("sha256").update(JSON.stringify({ uploads: context.uploads, matrices: context.matrices.slice(0, 1), draws: context.draws.slice(0, 1) })).digest("hex"));
     assert.equal(presentationDigests[0], presentationDigests[1]);
-    for (const context of observed.contexts) assert.deepEqual(context.uploads.map((bytes) => bytes.length), [96, 36, 28, 96, 24, 24, 96, 8, 24]);
+    for (const context of observed.contexts) assert.deepEqual(context.uploads.map((bytes) => bytes.length), [384, 36, 28, 96, 24, 24, 96, 8, 24]);
     assert.equal(observed.contexts[0].matrices.length, 1);
     assert.deepEqual(observed.contexts[0].draws, [[36, 5121, 0, 1]]);
     assert.deepEqual(observed.contexts[1].matrices[0], observed.contexts[0].matrices[0]);
@@ -684,18 +691,18 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       sourceLines: "1",
       executableUnits: "1",
       maximumComplexity: "1",
-      height: "S + 1 = 2",
-      width: "U + 1 = 2",
-      depth: "U + 1 = 2",
+      height: "8",
+      width: "4",
+      depth: "4",
       range: "M = 1",
-      rgba: "#414487FF",
+      rgba: "#818CF8FF",
       legend: [
-        "M = 0 — #440154FF",
-        "M = 1 — #414487FF",
-        "M = 2–3 — #2A788EFF",
-        "M = 4–7 — #22A884FF",
-        "M = 8–15 — #7AD151FF",
-        "M = 16+ — #FDE725FF",
+        "M = 0 — #A78BFAFF",
+        "M = 1 — #818CF8FF",
+        "M = 2–3 — #38BDF8FF",
+        "M = 4–7 — #2DD4BFFF",
+        "M = 8–15 — #A3E635FF",
+        "M = 16+ — #FACC15FF",
       ],
       links: 0,
       tabIndex: 0,
@@ -706,7 +713,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     };
     assert.deepEqual(selectedByKeyboard, { ...expectedInspector, cityDraws: 3, outlineDraws: 1, subUploads: 1, exactReplica: true, operations: ["depth:on", "city", "depth:off", "outline", "depth:on"], outlineArgs: [24, 5121, 0, 1], fixedBlack: true, polygonOffsetEnables: 0 });
     assert.deepEqual(clearedSelection, { hidden: true, text: "", children: 0, path: null });
-    assert.deepEqual(navigation.selectionAfterCameraResizeReset, { hidden: false, path: fixture.path, sourceLines: "1", range: "M = 1", rgba: "#414487FF" });
+    assert.deepEqual(navigation.selectionAfterCameraResizeReset, { hidden: false, path: fixture.path, sourceLines: "1", range: "M = 1", rgba: "#818CF8FF" });
     assert.deepEqual(primaryCapture, { focused: true, pointerId: 1, captured: true });
     assert.deepEqual(primaryReleased, { released: true, selectionRetained: true });
     assert.equal(pointerActivationCaptured, true);
@@ -893,6 +900,130 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
   }
 }
 
+async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUrls, browserExceptions, failedRequests }) {
+  const fixtureBytes = await readFile(INTERACTIVE_FIXTURE_PATH);
+  assert.equal(createHash("sha256").update(fixtureBytes).digest("hex"), INTERACTIVE_FIXTURE_SHA256);
+  const records = JSON.parse(fixtureBytes);
+  assert.equal(records.length, 21);
+  const selected = "1234567890abcdef1234567890abcdef12345678";
+  const root = "abcdef1234567890abcdef1234567890abcdef12";
+  const repositoryUrl = "https://github.com/code-city/interactive-baseline-fixture";
+  const revisionUrl = "https://api.github.com/repos/code-city/interactive-baseline-fixture/commits?per_page=1&page=1";
+  const commitUrl = `https://api.github.com/repos/code-city/interactive-baseline-fixture/git/commits/${selected}`;
+  const treeUrl = `https://api.github.com/repos/code-city/interactive-baseline-fixture/git/trees/${root}?recursive=1`;
+  const blobSha = (content) => {
+    const bytes = Buffer.from(content, "utf8");
+    return createHash("sha1").update(`blob ${bytes.byteLength}\0`).update(bytes).digest("hex");
+  };
+  const rawRecords = records.map((record) => ({
+    ...record,
+    sha: blobSha(record.content),
+    url: `https://raw.githubusercontent.com/code-city/interactive-baseline-fixture/${selected}/${record.path.split("/").map(encodeURIComponent).join("/")}`,
+  }));
+  const urls = [revisionUrl, commitUrl, treeUrl, ...rawRecords.map(({ url }) => url)];
+  const bodies = new Map([
+    [revisionUrl, JSON.stringify([{ sha: selected }])],
+    [commitUrl, JSON.stringify({ sha: selected, tree: { sha: root } })],
+    [treeUrl, JSON.stringify({ sha: root, truncated: false, tree: rawRecords.map(({ path: sourcePath, sha }) => ({ path: sourcePath, mode: "100644", type: "blob", sha })) })],
+    ...rawRecords.map(({ url, content }) => [url, content]),
+  ]);
+  const gets = [];
+  const failures = [];
+  const fulfill = async (requestId, responseCode, responseHeaders, body = "") => {
+    const exact = Buffer.from(body, "utf8");
+    await cdp.send("Fetch.fulfillRequest", { requestId, responseCode, responseHeaders, body: exact.toString("base64") }, sessionId);
+  };
+  const listener = (message) => {
+    if (message.method === "Target.attachedToTarget" && message.sessionId === sessionId && message.params.targetInfo.type === "worker") {
+      void cdp.send("Runtime.runIfWaitingForDebugger", {}, message.params.sessionId).catch((error) => failures.push(error));
+      return;
+    }
+    if (message.method !== "Fetch.requestPaused" || message.sessionId !== sessionId) return;
+    void (async () => {
+      const { requestId, request } = message.params;
+      if (!urls.includes(request.url)) throw new Error(`Unrecognized interactive fixture URL: ${request.url}`);
+      if (request.method === "OPTIONS") {
+        const requested = (request.headers["Access-Control-Request-Headers"] ?? request.headers["access-control-request-headers"] ?? "");
+        await fulfill(requestId, 204, [
+          { name: "Access-Control-Allow-Origin", value: origin },
+          { name: "Access-Control-Allow-Methods", value: "GET" },
+          { name: "Access-Control-Allow-Headers", value: requested },
+          { name: "Content-Length", value: "0" },
+        ]);
+        return;
+      }
+      assert.equal(request.method, "GET");
+      gets.push(request.url);
+      const body = bodies.get(request.url);
+      assert.notEqual(body, undefined);
+      const bytes = Buffer.from(body, "utf8");
+      await fulfill(requestId, 200, [
+        { name: "Access-Control-Allow-Origin", value: origin },
+        { name: "Content-Type", value: request.url.startsWith("https://raw.githubusercontent.com/") ? "text/plain; charset=utf-8" : "application/json; charset=utf-8" },
+        { name: "Content-Length", value: String(bytes.byteLength) },
+      ], body);
+    })().catch(async (error) => {
+      failures.push(error);
+      try { await cdp.send("Fetch.failRequest", { requestId: message.params.requestId, errorReason: "Failed" }, sessionId); } catch {}
+    });
+  };
+  const evaluate = async (expression) => (await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId)).result.value;
+  const waitFor = async (expression, label) => {
+    const deadline = Date.now() + 120_000;
+    while (Date.now() < deadline) {
+      if (failures.length) throw failures[0];
+      const value = await evaluate(expression);
+      if (value) return value;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const snapshot = await evaluate("({status:document.querySelector('[data-status]')?.textContent,commit:document.querySelector('[data-commit]')?.textContent,feedback:document.querySelector('[data-feedback]')?.textContent,messages:globalThis.__codeCitySuccessEvidence?.messages?.length,contexts:globalThis.__codeCitySuccessEvidence?.contexts?.length,workers:globalThis.__codeCitySuccessEvidence?.workers})");
+    throw new Error(`Timed out waiting for ${label}; snapshot=${JSON.stringify(snapshot)}; GETs=${JSON.stringify(gets)}; failures=${failures.map(String).join("|")}`);
+  };
+
+  cdp.listeners.add(listener);
+  try {
+    await cdp.send("Fetch.enable", { patterns: urls.map((urlPattern) => ({ urlPattern, requestStage: "Request" })) }, sessionId);
+    await cdp.send("Page.navigate", { url: `${origin}/code-city/index.html` }, sessionId);
+    await waitFor("document.readyState==='complete'&&document.querySelector('form')&&globalThis.__codeCitySuccessEvidence", "interactive fixture startup");
+    await evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(repositoryUrl)};document.querySelector('form').requestSubmit();true`);
+    await waitFor(`document.querySelector('[data-commit]').textContent===${JSON.stringify(selected)}&&globalThis.__codeCitySuccessEvidence.messages.length===1&&globalThis.__codeCitySuccessEvidence.contexts.length===1`, "interactive fixture city");
+    await waitFor("globalThis.__codeCitySuccessEvidence.contexts[0].draws.length===1", "interactive fixture fill draw");
+    const observed = await evaluate(`(() => {
+      const message=globalThis.__codeCitySuccessEvidence.messages[0];
+      const context=globalThis.__codeCitySuccessEvidence.contexts[0];
+      const canvas=document.querySelector('[data-city] canvas');
+      canvas.focus();
+      canvas.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',cancelable:true}));
+      const inspector=document.querySelector('[data-inspector]');
+      return {message,uploads:context.uploads.map(bytes=>bytes.length),draws:context.draws,shaderSources:context.shaderSources,clearColors:context.clearColors,path:inspector.querySelector('[data-canonical-path]').textContent,sourceLines:inspector.querySelector('[data-source-lines]').textContent,units:inspector.querySelector('[data-executable-units]').textContent,complexity:inspector.querySelector('[data-maximum-complexity]').textContent,height:inspector.querySelector('[data-height]').textContent,width:inspector.querySelector('[data-width]').textContent,depth:inspector.querySelector('[data-depth]').textContent,rgba:inspector.querySelector('[data-selected-rgba]').textContent,policy:inspector.querySelector('[data-dimension-policy]').textContent,background:getComputedStyle(document.querySelector('[data-city]')).backgroundColor};
+    })()`);
+    assert.deepEqual(gets, [revisionUrl, commitUrl, treeUrl, ...rawRecords.filter(({ path: sourcePath }) => !sourcePath.endsWith("package.json")).map(({ url }) => url)]);
+    assert.equal(failures.length, 0);
+    assert.equal(browserExceptions.length, 0);
+    assert.equal(failedRequests.length, 0);
+    assert.equal(observed.message.count, 18);
+    assert.deepEqual(observed.uploads, [384, 36, 504, 96, 24, 24, 96, 8, 24]);
+    assert.deepEqual(observed.draws, [[36, 5121, 0, 18], [36, 5121, 0, 18]]);
+    assert(observed.shaderSources.some((source) => source.includes("base + 0.12 * (vec3(1.0) - base)") && source.includes("0.82 * base") && source.includes("0.62 * base")));
+    assert(observed.clearColors.every((colour) => JSON.stringify(colour) === JSON.stringify([0x07 / 0xff, 0x11 / 0xff, 0x1f / 0xff, 1])));
+    assert.equal(observed.background, "rgb(7, 17, 31)");
+    assert.deepEqual({ path: observed.path, sourceLines: observed.sourceLines, units: observed.units, complexity: observed.complexity, height: observed.height, width: observed.width, depth: observed.depth, rgba: observed.rgba, policy: observed.policy }, {
+      path: "apps/console/src/bootstrap.ts", sourceLines: "3", units: "2", complexity: "1", height: "11", width: "5", depth: "5", rgba: "#818CF8FF", policy: "S cap 1000; displayed height range 4..40. U cap 100; displayed side range 3..18.",
+    });
+    const countBytes = new Uint8Array(4);
+    new DataView(countBytes.buffer).setUint32(0, observed.message.count, true);
+    assert.equal(digestBytes([countBytes, ...observed.message.buffers]), INTERACTIVE_MODEL_SHA256);
+    const floats = (bytes) => [...new Float32Array(Uint8Array.from(bytes).buffer)];
+    assert.deepEqual(floats(observed.message.buffers[0]), [41,0,0,33,0,8,40,0,8,33,0,15,40,0,15,33,0,0,0,0,19,0,0,12,7,0,12,0,0,0,12,0,0,14,0,12,0,0,36,7,0,36,0,0,43,7,0,43,0,0,50,7,0,50]);
+    assert.deepEqual(floats(observed.message.buffers[1]), [5,11,5,5,12,5,5,15,5,5,11,5,3,8,3,6,16,6,3,8,3,5,14,5,5,11,5,10,23,10,6,16,6,5,11,5,5,11,5,5,12,5,5,11,5,5,11,5,5,11,5,3,8,3]);
+    assert.deepEqual(floats(observed.message.buffers[3]), [0,0,0,46,23,55]);
+    console.log(`Interactive native baseline evidence passed: fixture-sha256=${INTERACTIVE_FIXTURE_SHA256}; model-sha256=${INTERACTIVE_MODEL_SHA256}; modules=18; groups=3; one-instanced-fill-draw-per-frame=true; observed-frames=${observed.draws.length}.`);
+  } finally {
+    cdp.listeners.delete(listener);
+    try { await cdp.send("Fetch.disable", {}, sessionId); } catch {}
+  }
+}
+
 function validateBrowserResult(result, expectedAssets) {
   exactKeys(result, ["schemaVersion", "assetRequests", "cases", "matrixRuns", "complexityMatrixRuns", "presentation", "browserExceptions", "unexpectedNetworkRequests", "overallPass"], "Browser result");
   assert.equal(result.schemaVersion, 1);
@@ -952,7 +1083,7 @@ function validateBrowserResult(result, expectedAssets) {
   exactKeys(result.presentation, ["webgl2Available", "actualContexts", "initialDraws", "repeatDraws", "resizeDraws", "outline", "accessibility", "inputCleanup", "lossDefaultPrevented", "lossDraws", "lossFailures", "lossOrdering", "lossCleanup", "lossTerminalState", "compileFailureResult", "compileFailureDraws", "compileFailures", "compileCleanup", "compileFailureTerminalState", "pass"], "Presentation");
   const outline = result.presentation.outline;
   exactKeys(outline, ["allocationUploads", "updateBytes", "exactReplica", "selection", "camera", "resizeOutlineDraws", "reset", "clear", "immutableUploads", "shaderFixedBlack", "polygonOffsetEnables", "cleanup"], "Selection outline");
-  assert.deepEqual(outline.allocationUploads, [96, 36, 28, 96, 24, 24, 96, 8, 24, 96, 36, 28, 96, 24, 24, 96, 8, 24]);
+  assert.deepEqual(outline.allocationUploads, [384, 36, 28, 96, 24, 24, 96, 8, 24, 384, 36, 28, 96, 24, 24, 96, 8, 24]);
   assert.equal(outline.updateBytes.length, 24);
   assert.equal(outline.exactReplica, true);
   assert.deepEqual(outline.selection, { cityDraws: 1, outlineDraws: 1, operations: ["depth:on", "city", "depth:off", "outline", "depth:on"] });
@@ -1127,7 +1258,8 @@ export async function checkPackagedBrowserEvidence() {
     invariant(unexpected.length === 0, `Unexpected browser network request(s): ${unexpected.join(", ")}`);
     validateBrowserResult(result, selected);
     await checkProductionSuccessPath({ cdp, sessionId, origin, manifest, requestedUrls, browserExceptions, failedRequests });
-    console.log(`Packaged Chrome/CDP evidence passed with ${executable} (${version}); ${result.cases.length} stress cases, two comment matrices, two complete complexity matrices, canonical success/context-loss evidence, and pagehide/reload lifecycle evidence.`);
+    await checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUrls, browserExceptions, failedRequests });
+    console.log(`Packaged Chrome/CDP evidence passed with ${executable} (${version}); ${result.cases.length} stress cases, two comment matrices, two complete complexity matrices, canonical success/context-loss evidence, interactive 18-module native baseline evidence, and pagehide/reload lifecycle evidence.`);
   } catch (error) {
     failure = error;
   } finally {

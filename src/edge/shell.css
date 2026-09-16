@@ -151,7 +151,7 @@ button:focus-visible,
 }
 
 [data-city] {
-  background: #111827;
+  background: #07111f;
   border: 1px solid var(--border);
   border-radius: 0.35rem;
   box-shadow: var(--shadow);
@@ -242,6 +242,13 @@ button:focus-visible,
   unicode-bidi: isolate;
 }
 
+[data-dimension-policy] {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  margin-block: 0 0.55rem;
+}
+
 [data-metric-facts],
 [data-metric-dimensions] {
   display: grid;
@@ -313,12 +320,12 @@ button:focus-visible,
   width: 0.8rem;
 }
 
-[data-palette-swatch="0"] { background: #440154; }
-[data-palette-swatch="1"] { background: #414487; }
-[data-palette-swatch="2"] { background: #2a788e; }
-[data-palette-swatch="3"] { background: #22a884; }
-[data-palette-swatch="4"] { background: #7ad151; }
-[data-palette-swatch="5"] { background: #fde725; }
+[data-palette-swatch="0"] { background: #a78bfa; }
+[data-palette-swatch="1"] { background: #818cf8; }
+[data-palette-swatch="2"] { background: #38bdf8; }
+[data-palette-swatch="3"] { background: #2dd4bf; }
+[data-palette-swatch="4"] { background: #a3e635; }
+[data-palette-swatch="5"] { background: #facc15; }
 
 [data-city-reset] {
   margin-block-start: 0.9rem;

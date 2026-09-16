@@ -52,22 +52,26 @@ const TYPED_ARRAY_BYTE_OFFSET = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROT
 const TYPED_ARRAY_LENGTH = Object.getOwnPropertyDescriptor(TYPED_ARRAY_PROTOTYPE, "length")!.get as IntrinsicGetter;
 const ARRAY_BUFFER_BYTE_LENGTH = Object.getOwnPropertyDescriptor(ARRAY_BUFFER_PROTOTYPE, "byteLength")!.get as IntrinsicGetter;
 const PALETTE = [
-  [0x44, 0x01, 0x54, 0xff],
-  [0x41, 0x44, 0x87, 0xff],
-  [0x2a, 0x78, 0x8e, 0xff],
-  [0x22, 0xa8, 0x84, 0xff],
-  [0x7a, 0xd1, 0x51, 0xff],
-  [0xfd, 0xe7, 0x25, 0xff],
+  [0xa7, 0x8b, 0xfa, 0xff],
+  [0x81, 0x8c, 0xf8, 0xff],
+  [0x38, 0xbd, 0xf8, 0xff],
+  [0x2d, 0xd4, 0xbf, 0xff],
+  [0xa3, 0xe6, 0x35, 0xff],
+  [0xfa, 0xcc, 0x15, 0xff],
 ] as const;
 
 export const COMPLEXITY_PALETTE_LEGEND = Object.freeze([
-  Object.freeze({ range: "0", rgba: "#440154FF" }),
-  Object.freeze({ range: "1", rgba: "#414487FF" }),
-  Object.freeze({ range: "2–3", rgba: "#2A788EFF" }),
-  Object.freeze({ range: "4–7", rgba: "#22A884FF" }),
-  Object.freeze({ range: "8–15", rgba: "#7AD151FF" }),
-  Object.freeze({ range: "16+", rgba: "#FDE725FF" }),
+  Object.freeze({ range: "0", rgba: "#A78BFAFF" }),
+  Object.freeze({ range: "1", rgba: "#818CF8FF" }),
+  Object.freeze({ range: "2–3", rgba: "#38BDF8FF" }),
+  Object.freeze({ range: "4–7", rgba: "#2DD4BFFF" }),
+  Object.freeze({ range: "8–15", rgba: "#A3E635FF" }),
+  Object.freeze({ range: "16+", rgba: "#FACC15FF" }),
 ]);
+
+const BUILDING_GAP = 2;
+const GROUP_GAP = 8;
+const GROUP_PADDING = 3;
 
 function invalid(): never {
   throw new Error("M1-CITY-1");
@@ -142,6 +146,137 @@ export function paletteForComplexity(complexity: number): typeof PALETTE[number]
 
 export function paletteBandForComplexity(complexity: number): typeof COMPLEXITY_PALETTE_LEGEND[number] {
   return COMPLEXITY_PALETTE_LEGEND[paletteIndex(complexity)]!;
+}
+
+export function displayedHeight(sourceLines: number): number {
+  if (!nonnegativeSafeInteger(sourceLines)) invalid();
+  return 4 + Math.floor(36 * Math.log1p(Math.min(sourceLines, 1000)) / Math.log(1001) + 0.5);
+}
+
+export function displayedSide(executableUnits: number): number {
+  if (!nonnegativeSafeInteger(executableUnits)) invalid();
+  const ratio = Math.log1p(Math.min(executableUnits, 100)) / Math.log(101);
+  return 3 + Math.floor(15 * ratio ** 1.5 + 0.5);
+}
+
+type TaggedGroup = Readonly<{ root: boolean; identity: string }>;
+type PackedBuilding = Readonly<{ index: number; side: number; x: number; z: number }>;
+type PackedGroup = Readonly<{
+  group: TaggedGroup;
+  buildings: readonly PackedBuilding[];
+  width: number;
+  depth: number;
+}>;
+
+function taggedGroup(canonicalPath: string): TaggedGroup {
+  const segments = canonicalPath.split("/");
+  segments.pop();
+  if (segments.length === 0) return { root: true, identity: "_root" };
+  return { root: false, identity: segments.slice(0, 2).join("/") };
+}
+
+function compareGroups(left: TaggedGroup, right: TaggedGroup): number {
+  const compared = compareUnsignedUtf8(left.identity, right.identity);
+  return compared !== 0 ? compared : left.root === right.root ? 0 : left.root ? -1 : 1;
+}
+
+function packFacts(facts: readonly FactSnapshot[], sides: readonly number[]): {
+  origins: readonly number[];
+  maximumX: number;
+  maximumZ: number;
+} {
+  const groups = new Map<string, { group: TaggedGroup; indices: number[] }>();
+  for (let index = 0; index < facts.length; index += 1) {
+    const group = taggedGroup(facts[index]!.canonicalPath);
+    const key = `${group.root ? "root" : "directory"}:${group.identity}`;
+    const entry = groups.get(key) ?? { group, indices: [] };
+    entry.indices.push(index);
+    groups.set(key, entry);
+  }
+
+  const packedGroups: PackedGroup[] = [];
+  for (const entry of groups.values()) {
+    entry.indices.sort((left, right) => sides[right]! - sides[left]!
+      || compareUnsignedUtf8(facts[left]!.canonicalPath, facts[right]!.canonicalPath));
+    let area = 0;
+    let maximumSide = 0;
+    for (const index of entry.indices) {
+      const side = sides[index]!;
+      area = checkedAdd(area, checkedMultiply(checkedAdd(side, BUILDING_GAP), checkedAdd(side, BUILDING_GAP)));
+      maximumSide = Math.max(maximumSide, side);
+    }
+    const target = Math.max(maximumSide, Math.ceil(Math.sqrt(area)));
+    const buildings: PackedBuilding[] = [];
+    let cursorX = 0;
+    let cursorZ = 0;
+    let rowDepth = 0;
+    let occupiedWidth = 0;
+    let occupiedDepth = 0;
+    for (const index of entry.indices) {
+      const side = sides[index]!;
+      if (cursorX !== 0 && checkedAdd(cursorX, side) > target) {
+        cursorX = 0;
+        cursorZ = checkedAdd(cursorZ, checkedAdd(rowDepth, BUILDING_GAP));
+        rowDepth = 0;
+      }
+      buildings.push({ index, side, x: checkedAdd(cursorX, GROUP_PADDING), z: checkedAdd(cursorZ, GROUP_PADDING) });
+      occupiedWidth = Math.max(occupiedWidth, checkedAdd(cursorX, side));
+      occupiedDepth = Math.max(occupiedDepth, checkedAdd(cursorZ, side));
+      cursorX = checkedAdd(cursorX, checkedAdd(side, BUILDING_GAP));
+      rowDepth = Math.max(rowDepth, side);
+    }
+    packedGroups.push({
+      group: entry.group,
+      buildings,
+      width: checkedAdd(occupiedWidth, GROUP_PADDING * 2),
+      depth: checkedAdd(occupiedDepth, GROUP_PADDING * 2),
+    });
+  }
+
+  packedGroups.sort((left, right) => checkedMultiply(right.width, right.depth) - checkedMultiply(left.width, left.depth)
+    || compareGroups(left.group, right.group));
+  let outerArea = 0;
+  let maximumCellWidth = 0;
+  for (const group of packedGroups) {
+    outerArea = checkedAdd(outerArea, checkedMultiply(checkedAdd(group.width, GROUP_GAP), checkedAdd(group.depth, GROUP_GAP)));
+    maximumCellWidth = Math.max(maximumCellWidth, group.width);
+  }
+  const outerTarget = Math.max(maximumCellWidth, Math.ceil(Math.sqrt(outerArea)));
+  const rawOrigins = new Array<number>(facts.length * 2).fill(0);
+  let cursorX = 0;
+  let cursorZ = 0;
+  let rowDepth = 0;
+  let minimumX = Number.POSITIVE_INFINITY;
+  let minimumZ = Number.POSITIVE_INFINITY;
+  for (const group of packedGroups) {
+    if (cursorX !== 0 && checkedAdd(cursorX, group.width) > outerTarget) {
+      cursorX = 0;
+      cursorZ = checkedAdd(cursorZ, checkedAdd(rowDepth, GROUP_GAP));
+      rowDepth = 0;
+    }
+    for (const building of group.buildings) {
+      const x = checkedAdd(cursorX, building.x);
+      const z = checkedAdd(cursorZ, building.z);
+      rawOrigins[building.index * 2] = x;
+      rawOrigins[building.index * 2 + 1] = z;
+      minimumX = Math.min(minimumX, x);
+      minimumZ = Math.min(minimumZ, z);
+    }
+    cursorX = checkedAdd(cursorX, checkedAdd(group.width, GROUP_GAP));
+    rowDepth = Math.max(rowDepth, group.depth);
+  }
+
+  let maximumX = 0;
+  let maximumZ = 0;
+  for (let index = 0; index < facts.length; index += 1) {
+    const x = rawOrigins[index * 2]! - minimumX;
+    const z = rawOrigins[index * 2 + 1]! - minimumZ;
+    rawOrigins[index * 2] = requireExactFloatInteger(x);
+    rawOrigins[index * 2 + 1] = requireExactFloatInteger(z);
+    maximumX = Math.max(maximumX, checkedAdd(x, sides[index]!));
+    maximumZ = Math.max(maximumZ, checkedAdd(z, sides[index]!));
+  }
+  return { origins: rawOrigins, maximumX, maximumZ };
 }
 
 function snapshotFacts(value: unknown): FactSnapshot[] {
@@ -226,50 +361,29 @@ export function buildCity(input: readonly ModuleComplexityFact[]): City {
     sizes = new Float32Array(vectorLength);
     rgba = new Uint8Array(colourLength);
     bounds = new Float32Array(6);
-    const columnCount = Math.ceil(Math.sqrt(count));
-    if (!Number.isSafeInteger(columnCount) || columnCount < 1 || columnCount * columnCount < count) invalid();
-    const rowCount = Math.ceil(count / columnCount);
-    const rowDepths = new Array<number>(rowCount).fill(0);
-
+    const sideValues = new Array<number>(count);
+    let maximumY = 0;
     for (let index = 0; index < count; index += 1) {
       const fact = facts[index]!;
-      const width = requireExactFloatInteger(checkedAdd(fact.U, 1));
-      const height = requireExactFloatInteger(checkedAdd(fact.S, 1));
+      const side = requireExactFloatInteger(displayedSide(fact.U));
+      const height = requireExactFloatInteger(displayedHeight(fact.S));
+      sideValues[index] = side;
       const offset = index * 3;
-      sizes[offset] = width;
+      sizes[offset] = side;
       sizes[offset + 1] = height;
-      sizes[offset + 2] = width;
-      rowDepths[Math.floor(index / columnCount)] = Math.max(rowDepths[Math.floor(index / columnCount)]!, width);
-      const colour = paletteForComplexity(fact.M);
-      rgba.set(colour, index * 4);
+      sizes[offset + 2] = side;
+      maximumY = Math.max(maximumY, height);
+      rgba.set(paletteForComplexity(fact.M), index * 4);
     }
 
-    let z = 0;
-    let maximumX = 0;
-    let maximumY = 0;
-    let maximumZ = 0;
-    for (let row = 0; row < rowCount; row += 1) {
-      let x = 0;
-      const first = row * columnCount;
-      const end = Math.min(first + columnCount, count);
-      for (let index = first; index < end; index += 1) {
-        const offset = index * 3;
-        const width = sizes[offset]!;
-        const height = sizes[offset + 1]!;
-        origins[offset] = requireExactFloatInteger(x);
-        origins[offset + 1] = 0;
-        origins[offset + 2] = requireExactFloatInteger(z);
-        const endpointX = requireExactFloatInteger(checkedAdd(x, width));
-        const endpointY = requireExactFloatInteger(height);
-        const endpointZ = requireExactFloatInteger(checkedAdd(z, width));
-        maximumX = Math.max(maximumX, endpointX);
-        maximumY = Math.max(maximumY, endpointY);
-        maximumZ = Math.max(maximumZ, endpointZ);
-        if (index + 1 < end) x = requireExactFloatInteger(checkedAdd(endpointX, 1));
-      }
-      if (row + 1 < rowCount) z = requireExactFloatInteger(checkedAdd(checkedAdd(z, rowDepths[row]!), 1));
+    const placement = packFacts(facts, sideValues);
+    for (let index = 0; index < count; index += 1) {
+      const offset = index * 3;
+      origins[offset] = placement.origins[index * 2]!;
+      origins[offset + 1] = 0;
+      origins[offset + 2] = placement.origins[index * 2 + 1]!;
     }
-    bounds.set([0, 0, 0, maximumX, maximumY, maximumZ]);
+    bounds.set([0, 0, 0, placement.maximumX, maximumY, placement.maximumZ]);
 
     const geometry: PresentationModel = Object.freeze({ kind: PRESENTATION_KIND, count, origins, sizes, rgba, bounds });
     const inspection = Object.freeze(facts.map((fact) => Object.freeze({ ...fact })));

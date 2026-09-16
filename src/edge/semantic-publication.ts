@@ -56,12 +56,15 @@ function selectedContent(documentTarget: SemanticDocument, value: MetricExplanat
     "data-maximum-complexity",
   );
 
-  const dimensionTitle = heading(documentTarget, "h3", "Building dimensions");
+  const dimensionTitle = heading(documentTarget, "h3", "Bounded, log-compressed displayed dimensions");
+  const dimensionPolicy = documentTarget.createElement("p");
+  dimensionPolicy.dataset.dimensionPolicy = "";
+  dimensionPolicy.textContent = "S cap 1000; displayed height range 4..40. U cap 100; displayed side range 3..18.";
   const dimensions = documentTarget.createElement("dl");
   dimensions.dataset.metricDimensions = "";
-  definition(documentTarget, dimensions, "Height", `S + 1 = ${value.height}`, "data-height");
-  definition(documentTarget, dimensions, "Width", `U + 1 = ${value.width}`, "data-width");
-  definition(documentTarget, dimensions, "Depth", `U + 1 = ${value.depth}`, "data-depth");
+  definition(documentTarget, dimensions, "Displayed height", String(value.height), "data-height");
+  definition(documentTarget, dimensions, "Displayed width", String(value.width), "data-width");
+  definition(documentTarget, dimensions, "Displayed depth", String(value.depth), "data-depth");
 
   const colourTitle = heading(documentTarget, "h3", "Selected colour");
   const selectedColour = documentTarget.createElement("p");
@@ -92,7 +95,7 @@ function selectedContent(documentTarget: SemanticDocument, value: MetricExplanat
     legend.append(item);
   }
 
-  return [title, identity, metricTitle, metrics, dimensionTitle, dimensions, colourTitle, selectedColour, legendTitle, legend];
+  return [title, identity, metricTitle, metrics, dimensionTitle, dimensionPolicy, dimensions, colourTitle, selectedColour, legendTitle, legend];
 }
 
 export function stageSemanticPublication(

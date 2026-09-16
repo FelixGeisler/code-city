@@ -11,16 +11,19 @@ registerHooks({
 const { explainMetricFact, METRIC_PALETTE_LEGEND } = await import("../src/application/metric-explanation.ts");
 
 const boundaries = [
-  { M: 0, range: "0", rgba: "#440154FF" },
-  { M: 1, range: "1", rgba: "#414487FF" },
-  { M: 2, range: "2–3", rgba: "#2A788EFF" },
-  { M: 3, range: "2–3", rgba: "#2A788EFF" },
-  { M: 4, range: "4–7", rgba: "#22A884FF" },
-  { M: 7, range: "4–7", rgba: "#22A884FF" },
-  { M: 8, range: "8–15", rgba: "#7AD151FF" },
-  { M: 15, range: "8–15", rgba: "#7AD151FF" },
-  { M: 16, range: "16+", rgba: "#FDE725FF" },
+  { M: 0, range: "0", rgba: "#A78BFAFF" },
+  { M: 1, range: "1", rgba: "#818CF8FF" },
+  { M: 2, range: "2–3", rgba: "#38BDF8FF" },
+  { M: 3, range: "2–3", rgba: "#38BDF8FF" },
+  { M: 4, range: "4–7", rgba: "#2DD4BFFF" },
+  { M: 7, range: "4–7", rgba: "#2DD4BFFF" },
+  { M: 8, range: "8–15", rgba: "#A3E635FF" },
+  { M: 15, range: "8–15", rgba: "#A3E635FF" },
+  { M: 16, range: "16+", rgba: "#FACC15FF" },
 ];
+
+const expectedHeight = (S) => 4 + Math.floor(36 * Math.log1p(Math.min(S, 1000)) / Math.log(1001) + 0.5);
+const expectedSide = (U) => 3 + Math.floor(15 * (Math.log1p(Math.min(U, 100)) / Math.log(101)) ** 1.5 + 0.5);
 
 test("metric explanation maps every required palette boundary and exact derived dimension", () => {
   for (const [index, expected] of boundaries.entries()) {
@@ -30,9 +33,9 @@ test("metric explanation maps every required palette boundary and exact derived 
       sourceLines: index,
       executableUnits: index + 2,
       maximumComplexity: expected.M,
-      height: index + 1,
-      width: index + 3,
-      depth: index + 3,
+      height: expectedHeight(index),
+      width: expectedSide(index + 2),
+      depth: expectedSide(index + 2),
       paletteRange: expected.range,
       rgba: expected.rgba,
     });
@@ -42,12 +45,12 @@ test("metric explanation maps every required palette boundary and exact derived 
 
 test("the text legend is one immutable complete six-band M1 palette", () => {
   assert.deepEqual(METRIC_PALETTE_LEGEND, [
-    { range: "0", rgba: "#440154FF" },
-    { range: "1", rgba: "#414487FF" },
-    { range: "2–3", rgba: "#2A788EFF" },
-    { range: "4–7", rgba: "#22A884FF" },
-    { range: "8–15", rgba: "#7AD151FF" },
-    { range: "16+", rgba: "#FDE725FF" },
+    { range: "0", rgba: "#A78BFAFF" },
+    { range: "1", rgba: "#818CF8FF" },
+    { range: "2–3", rgba: "#38BDF8FF" },
+    { range: "4–7", rgba: "#2DD4BFFF" },
+    { range: "8–15", rgba: "#A3E635FF" },
+    { range: "16+", rgba: "#FACC15FF" },
   ]);
   assert.equal(Object.isFrozen(METRIC_PALETTE_LEGEND), true);
   assert(METRIC_PALETTE_LEGEND.every(Object.isFrozen));

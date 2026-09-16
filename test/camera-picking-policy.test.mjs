@@ -354,6 +354,29 @@ test("overview and moved-camera center rays pick validated world AABBs", () => {
   assert.equal(success(pickAtCanvasPoint(moved.view, 60, 45, fixture.canvas.rectangle, fixture.canvas.backing, geometry)).index, 0);
 });
 
+test("native picking misses both intra-group and inter-group whitespace in grouped geometry", () => {
+  const city = buildCity([
+    { canonicalPath: "a/x/one.ts", S: 1, U: 0, M: 0 },
+    { canonicalPath: "a/x/two.ts", S: 1, U: 0, M: 0 },
+    { canonicalPath: "b/x/one.ts", S: 1, U: 0, M: 0 },
+  ]);
+  assert.deepEqual([...city.geometry.origins], [0, 0, 0, 5, 0, 0, 0, 0, 17]);
+  const dimensions = { width: 1000, height: 800 };
+  const view = success(resetCamera(city.geometry.bounds, dimensions)).view;
+  const projectGround = (x, z) => {
+    const relative = [x - view.centre[0], -view.centre[1], z - view.centre[2]];
+    const matrix = view.matrix;
+    const ndcX = matrix[0] * relative[0] + matrix[4] * relative[1] + matrix[8] * relative[2] + matrix[12];
+    const ndcY = matrix[1] * relative[0] + matrix[5] * relative[1] + matrix[9] * relative[2] + matrix[13];
+    return { x: (ndcX + 1) * dimensions.width / 2, y: (1 - ndcY) * dimensions.height / 2 };
+  };
+  const rectangle = { left: 0, top: 0, width: dimensions.width, height: dimensions.height };
+  for (const [id, point] of [["intra-group", [3.5, 2.5]], ["inter-group", [4, 10]]]) {
+    const canvas = projectGround(...point);
+    assert.deepEqual(success(pickAtCanvasPoint(view, canvas.x, canvas.y, rectangle, dimensions, city.geometry), id), { kind: "success", index: null, tEnter: null });
+  }
+});
+
 test("the full 4,000-city envelope keeps immutable dimensions and origin-C endpoints exact through deterministic pans", () => {
   const envelope = cityFixture.fullEnvelope;
   const facts = Array.from({ length: envelope.count }, (_, index) => ({
@@ -361,7 +384,7 @@ test("the full 4,000-city envelope keeps immutable dimensions and origin-C endpo
     ...(index < envelope.largeFactCount ? envelope.largeFact : envelope.smallFact),
   }));
   const city = buildCity(facts);
-  assert.deepEqual([...city.geometry.bounds], envelope.expectedBounds);
+  assert.deepEqual([...city.geometry.bounds], envelope.concentrated.expectedBounds);
   const originalOrigins = Buffer.from(bytes(city.geometry.origins));
   const originalSizes = Buffer.from(bytes(city.geometry.sizes));
   const centre = [city.geometry.bounds[3] / 2, city.geometry.bounds[4] / 2, city.geometry.bounds[5] / 2];
@@ -387,9 +410,12 @@ test("the full 4,000-city envelope keeps immutable dimensions and origin-C endpo
 
 test("the amended ADR bytes and requirements are synchronized to the exact numeric contract", async () => {
   const adr = await readFile(path.join(root, "docs/modules/architecture/pages/adr/0011-interactive-webgl2-navigation-and-inspection.adoc"));
-  assert.equal(adr.byteLength, 17_914);
-  assert.equal(createHash("sha256").update(adr).digest("hex"), "41bfe1ad66a0cb308681e4a360d0e93fbe129bf4b5ad731faef0caab1281868d");
+  assert.equal(adr.byteLength, 18_232);
+  assert.equal(createHash("sha256").update(adr).digest("hex"), "4d9a3bbeb2728cbe3f763c65595bcdf85b50db4e00963bdde24070cd7d51df72");
   assert.equal(adr.at(-1), 10);
+  const adr12 = await readFile(path.join(root, "docs/modules/architecture/pages/adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc"), "utf8");
+  assert.match(adr12, /^Status:: Accepted$/mu);
+  assert.equal(createHash("sha256").update(adr12.replace("Status:: Accepted", "Status:: Proposed")).digest("hex"), "5e461b7b7d1fb05d76bc6d2dba8b18aacf4a597d93ff7501a446727128723146");
   const requirements = await readFile(path.join(root, "docs/modules/requirements/pages/city-and-failures.adoc"), "utf8");
   const normalizedRequirements = requirements.replace(/\s+/g, " ");
   for (const statement of [

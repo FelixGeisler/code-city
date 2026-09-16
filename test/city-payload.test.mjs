@@ -62,7 +62,7 @@ test("validateCityPayload creates immutable controller-owned non-aliasing city s
   assert.equal(Object.isFrozen(validated.inspection), true);
   assert(validated.inspection.every(Object.isFrozen));
   assert.equal(Object.isFrozen(validated.centre), true);
-  assert.deepEqual(validated.centre, [4, 2.5, 2]);
+  assert.deepEqual(validated.centre, [2.5, 6, 12]);
   for (const key of ["origins", "sizes", "rgba", "bounds"]) {
     assert.notEqual(validated.geometry[key], input.geometry[key], key);
     assert.notEqual(validated.geometry[key].buffer, input.geometry[key].buffer, `${key}.buffer`);
@@ -123,7 +123,7 @@ test("validator rejects count, canonical order, duplicate identity, dimensions, 
     const city = cloneCity(); city.inspection[1] = { ...city.inspection[1], canonicalPath: city.inspection[0].canonicalPath }; cases.push(["duplicate", city]);
   }
   {
-    const city = cloneCity(); city.inspection[0] = { ...city.inspection[0], U: city.inspection[0].U + 1 }; cases.push(["size alignment", city]);
+    const city = cloneCity(); city.inspection[0] = { ...city.inspection[0], U: 100 }; cases.push(["size alignment", city]);
   }
   {
     const city = cloneCity(); city.inspection[0] = { ...city.inspection[0], M: 16 }; cases.push(["palette alignment", city]);
@@ -149,7 +149,7 @@ test("validator enforces exact and one-over per-module source-line and executabl
     const exact = cloneCity(buildCity([exactFact]));
     const validated = validateCityPayload(exact);
     assert.equal(validated.inspection[0][metric], maximum);
-    assert.equal(validated.geometry.sizes[metric === "S" ? 1 : 0], maximum + 1);
+    assert.equal(validated.geometry.sizes[metric === "S" ? 1 : 0], metric === "S" ? 40 : 18);
 
     const oneOverFact = { ...exactFact, canonicalPath: `one-over-${metric}.ts`, [metric]: maximum + 1 };
     fails(cloneCity(buildCity([oneOverFact])), `${metric} per-module one over`);
@@ -162,7 +162,7 @@ test("validator enforces exact and one-over aggregate source-line bounds with ma
   }));
   const exact = validateCityPayload(cloneCity(buildCity(exactFacts)));
   assert.equal(exact.inspection.reduce((total, fact) => total + fact.S, 0), MAX_TOTAL_BYTES);
-  assert.equal(exact.geometry.bounds[4], MAX_MODULE_BYTES + 1);
+  assert.equal(exact.geometry.bounds[4], 40);
 
   const oneOverFacts = [...exactFacts, { canonicalPath: "source-total/20.ts", S: 1, U: 0, M: 0 }];
   fails(cloneCity(buildCity(oneOverFacts)), "S aggregate one over");
@@ -178,7 +178,7 @@ test("validator enforces exact and one-over aggregate executable-unit bounds wit
   assert.equal(remaining, 0);
   const exact = validateCityPayload(cloneCity(buildCity(exactFacts)));
   assert.equal(exact.inspection.reduce((total, fact) => total + fact.U, 0), MAX_TOTAL_UNITS);
-  assert.equal(exact.geometry.sizes[0], MAX_MODULE_UNITS + 1);
+  assert.equal(exact.geometry.sizes[0], 18);
 
   const oneOverFacts = exactFacts.map((fact) => ({ ...fact }));
   const incrementIndex = oneOverFacts.findIndex((fact) => fact.U < MAX_MODULE_UNITS);

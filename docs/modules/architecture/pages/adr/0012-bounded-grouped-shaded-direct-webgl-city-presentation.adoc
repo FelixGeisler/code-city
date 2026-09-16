@@ -1,0 +1,226 @@
+= ADR 0012: Bounded grouped shaded direct-WebGL city presentation
+
+Status:: Accepted
+
+== Context
+
+The first current-application baseline after
+https://github.com/FelixGeisler/code-city/issues/558[#558] must make building
+scale, distribution, and depth readable in the real interactive city. Another
+mockup, alternate viewer, or renderer would not exercise the accepted payload,
+camera, picking, transaction, and lifecycle contracts.
+
+ADR 0008 established direct trusted WebGL2, renderer-neutral construction, and
+one instanced city draw. ADR 0011 added the aligned geometry-and-inspection
+transaction, interaction, CPU picking, fixed cue draws, and exact lifecycle.
+Their raw-linear `S+1` / `U+1` geometry and single square-row layout no
+longer serve this baseline.
+
+xref:requirements:city-and-failures.adoc[City and Failures], as accepted with
+this ADR, owns the exact projection formula and caps, grouping and packing
+constants, metric palette, background, and face-colour transforms. This ADR
+records their architectural placement and invariants rather than duplicating
+those product values.
+
+This is a recommended first interactive evaluation baseline. It does not make
+its scale or colours final and does not approve plates, labels, replacement
+cues, or shell fine tuning.
+
+== Decision
+
+=== Pure construction and deterministic grouped placement
+
+Keep city construction as pure domain policy. From each canonical inspection
+fact it computes the requirement-defined bounded integer height and square
+side, while preserving the raw `S`, `U`, and `M`. To derive a group, remove the
+filename from the canonical path: use the first two remaining segments when
+there are two or more, the sole segment when there is one, and a distinct root
+tag when there is none. The root tag remains distinct from every directory
+string. No group identity or layout mechanism enters the presenter.
+
+Packing is deterministic and uses unsigned UTF-8 ordering and the exact
+ordering, target, gap, and padding values in the requirements. Within a group,
+the shelf cursor is in *unpadded inner coordinates* and starts at `(0,0)`. A
+row break is considered only when the row is nonempty, and occurs exactly when
+`cursorX + nextSide` exceeds the inner shelf target. Placement advances by the
+building gap, and row advance uses the largest side in the completed row plus
+that gap. The occupied width and depth are the maxima of actual building
+endpoints, without a trailing gap. Virtual padding is then added around that
+occupied rectangle: the virtual cell dimensions are `occupiedWidth +
+2*padding` and `occupiedDepth + 2*padding`, and each building is offset by the
+padding inside the cell.
+
+The outer shelf packs those virtual cells with the requirement-defined order,
+target, and group gap. It likewise tests overflow only for a nonempty row.
+After all groups are placed, translate actual building boxes by their actual
+minimum `x` and `z`; actual minima are therefore `(0,0)`. Compute city bounds
+from actual boxes only. Virtual padding, cells, and shelf rows are neither
+geometry nor pick targets.
+
+This resolves an ambiguity in the earlier phrase “pack from `(3,3)`.” A
+literal comparison of that padded cursor with an unpadded target could consume
+padding from the inner budget and wrap early. The definition above may change
+such threshold cases mechanically, but it does not change the design meaning:
+the same groups, whitespace, padding, ordering, and target policy remain. The
+exact requirements accepted with this ADR bind the clarified result.
+
+Packing order never becomes identity order. Allocate and publish `origins`,
+`sizes`, `rgba`, and `inspection` in strictly increasing canonical-path index
+order, and write each packed position back to that canonical index. Keyboard
+traversal, selection, tie-breaking, inspection, and renderer instance indices
+therefore retain one identity.
+
+=== Closed payload and sole exact validator
+
+Keep the worker result and geometry wire shape unchanged:
+
+[source,text]
+----
+city = { geometry, inspection }
+geometry = { kind, count, origins, sizes, rgba, bounds }
+inspection[i] = { canonicalPath, S, U, M }
+----
+
+`count` remains `1..4000`; `origins` and `sizes` remain exact whole-buffer
+`Float32Array(3*count)`, `rgba` remains exact whole-buffer
+`Uint8Array(4*count)`, and `bounds` remains an exact whole-buffer
+`Float32Array(6)`. No group, cell, plate, label, shader parameter, or second
+geometry kind is added. `rgba` remains the requirement-defined base metric
+colour, not a shaded face colour.
+
+The controller remains the sole `validateCityPayload(unknown)` owner. After
+its existing closed-own-data, prototype, typed-array, count, fact-limit,
+canonical-order, and finite-value checks, it independently runs the same pure
+projection and grouped-placement policy over its inspection snapshot. It
+requires exact sizes, canonical-index origins, base palette bytes, and
+actual-box bounds; any mismatch is `M1-CITY-1` before WebGL. Its snapshots do
+not alias worker data. The presenter still receives only
+`ValidatedGeometry` and does not learn paths, facts, or groups.
+
+`modelSha256` remains the little-endian count followed by the unchanged
+geometry views in their existing order. Its schema and evidence versions do
+not change; geometry bytes and fixture hashes do.
+
+=== One shaded fill draw in the existing presenter
+
+Retain the one direct trusted WebGL2 presenter, canvas, context, fixed shader
+ownership, depth test, culling, staging, and atomic publication. Replace only
+the fill cube's eight shared vertices with 24 face-local vertices and 36
+indices so a fixed face class can reach the trusted shader. Draw all fills in
+one `drawElementsInstanced(..., model.count)` call. The shader applies the requirement-defined fixed transforms for `+Y`,
+`+/-X`, and `+/-Z`/`-Y` to each instance's base metric colour; it does not
+consume normals, lights, materials, paths, groups, or dynamic shader source.
+
+Keep a separate fixed eight-corner box geometry for the already accepted
+selection and hover cue lines. Those existing cue draws remain after the one
+fill draw. Use the exact requirement-owned WebGL clear, matching CSS host
+background, six base colours and thresholds, and fixed face transforms. Alpha
+remains opaque. Add no blending, static-edge or other render pass, texture,
+fog, shadow, physical lighting, antialiasing promise, dependency, canvas,
+context, or worker.
+
+=== Retained interaction, privacy, and lifecycle
+
+ADR 0011's immutable-centre orthographic camera, matrices, orbit, pan, zoom,
+resize, Reset, CPU ray/AABB picking, nearest-hit and canonical-index tie rules,
+hover scheduling, keyboard traversal, selection-only inspector, semantic
+ownership, generation gates, failures, context-loss handling, and exactly-once
+cleanup remain unchanged. The current complete-box selection and top-perimeter
+hover cues remain provisional and unchanged.
+
+Picking ranges over the `count` actual building AABBs only. Intra-group and
+inter-group whitespace must miss. No plate, cell, padding region, or group
+bounds can be hit. Camera changes do not rewrite instance data.
+
+The existing inspector may publish its selected canonical path as inert text
+and must explain raw versus bounded displayed dimensions as required. Group
+names and path-derived labels do not enter WebGL, overlays, tooltips, the
+inspector, evidence, or another payload field. Existing privacy prohibitions
+remain; this decision authorizes no new disclosure.
+
+=== Renewed integer and Float32 bound
+
+Let `N` be the number of modules, `G` the number of nonempty groups, and `n_g`
+the modules in group `g`. Then `1 <= G <= N <= 4000` and `sum(n_g)=N`. The
+accepted projection gives square side at most `18`, height at most `40`,
+building gap `2`, virtual padding `3`, and group gap `8`.
+
+For an inner shelf, even the conservative case of one row or column per
+building has occupied extent no greater than
+`sum(side + 2) <= 20*n_g` on either horizontal axis. A virtual cell is
+therefore at most `20*n_g + 6` on either axis. Regardless of outer row breaks,
+a horizontal or depth span is bounded by placing every cell serially:
+
+[source,text]
+----
+sum(20*n_g + 6) + 8*(G-1)
+  = 20*N + 14*G - 8
+  < 136000
+----
+
+Normalising by actual box minima cannot increase that span. Consequently every
+actual `x` and `z` origin and endpoint is a nonnegative integer below `136000 <
+2^18`; every `y` endpoint is at most `40`. The bounds centre is integer or
+half-integer. Every centre-relative origin and endpoint has magnitude below
+`68000 < 2^17`, so centres and all integer/half-integer endpoints are finite
+and exact as `float32`, well inside ADR 0011's `< 2^23` target-relative limit.
+
+The inner area sum is at most `400*N`. A deliberately loose outer-area bound is
+`4000*(80014)^2 < 2^45 < 2^53`; target calculations, integer cursor additions,
+and typed-array values therefore remain finite and within safe-integer input
+bounds. The accepted camera formulas and strict-depth oracle are unchanged,
+but their full-envelope matrix tests must be regenerated for these new bounds,
+not inherited from the old layout.
+
+Tests must independently reconstruct all projected sizes, group placements,
+bounds, and palette bytes at the `N=4000`, `G=4000`, and concentrated-group
+envelopes; assert exact `Float32` centres and centre-relative endpoints; renew
+overview, resize, orbit, pan, zoom, and Reset matrix/strict-depth cases; and
+prove picking alignment after each camera operation. They must hit building
+faces/edges and miss both intra-group and inter-group gaps, including boundary
+cases around virtual padding. Packaged-browser evidence must retain one fill
+draw, the accepted cue draws, current interaction, and cleanup.
+
+== Relationship to existing decisions
+
+This ADR amends ADR 0008 only by replacing its raw-linear dimensions, square-row
+layout, old palette/background, shared fill vertices, and associated numeric
+proof with the bounded grouped policy, 24-vertex fixed face shading, and proof
+above. Its direct WebGL2, source-free geometry, one instanced city draw,
+trusted shaders, failure boundary, and staging remain.
+
+This ADR amends ADR 0011 only where its validator expected `S+1`, `U+1`, the
+old layout, and old palette. Its closed aligned payload, canonical identity,
+camera and matrix policy, picking, existing cue draws, interaction,
+transactions, privacy, evidence schema, failures, and cleanup remain.
+
+ADR 0009 remains unchanged. No v1 or Three.js implementation is reused.
+
+== Consequences
+
+The current application gains one bounded, grouped, face-readable baseline
+without a new boundary, payload type, renderer, dependency, or disclosure.
+Construction and validation become more involved, and geometry/hash fixtures
+and full-envelope evidence must be renewed. The first baseline intentionally
+retains current cues and shell behaviour so later visual tuning can be judged
+against real interaction.
+
+No implementation may depend on this ADR while it is Proposed. The human must
+accept this exact ADR together with the exact authoritative requirement and
+implementation-issue text for the baseline.
+
+== Rejected alternatives
+
+* *Another mockup, toy viewer, or second renderer:* it would not validate the
+  current payload, matrices, picking, transaction, or lifecycle.
+* *Presenter-side layout, grouping metadata, or configurable shading:* these
+  reverse ownership, widen the payload, and make one exact validator
+  impossible.
+* *Plates or persistent group labels:* plates add geometry, bounds, draw, and
+  picking policy; labels add a new path-disclosure and overlay lifecycle. Both
+  are deferred rather than selected as future architecture.
+* *Static edges, new cues, wide strokes, blending, or physical lighting:* they
+  add composition or portability decisions before the bounded interactive
+  baseline has been evaluated.
+* *A rendering framework or reuse of v1/Three.js:* neither is needed for one
+  fixed instanced fill draw and the retained cue draws.
