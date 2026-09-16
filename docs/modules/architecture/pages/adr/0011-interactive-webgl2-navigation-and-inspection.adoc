@@ -2,6 +2,12 @@
 
 Status:: Accepted
 
+ADR 0012
+xref:adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc[replaces
+this decision's raw-linear dimensions, square-row layout, old palette, and
+related validator expectations]. Its camera, picking, interaction, aligned
+transaction, privacy, cue, failure, and lifecycle policies remain in force.
+
 == Context
 
 M2 adds deterministic navigation, picking, selection, and inspection to the

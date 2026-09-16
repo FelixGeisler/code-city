@@ -30,9 +30,12 @@ const SUCCESS_FIXTURE = Object.freeze({
   source: "const answer = 42;\n",
   blob: "5c947feee9cbb434b57ed2e576b643e99e35e782",
   expectedNormalizedSourceSha256: "8691f74ea796569734dafffbbcb79088362b52c3cef154aa0d8f32696d2d4737",
-  modelBytesSha256: "d3b16b372fafc88ffe3570f934474c516dca12f066a1bd3da890bea7cae1af7b",
+  modelBytesSha256: "baabdf99753c1d9ff090ead67b914a6654eaed2a7eb5934a602192949451b7d1",
 });
 const CSP = "default-src 'none'; base-uri 'none'; connect-src 'self' https://api.github.com https://raw.githubusercontent.com; form-action 'none'; frame-src 'none'; object-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; worker-src 'self'";
+const INTERACTIVE_FIXTURE_PATH = path.join(projectRoot, "test", "fixtures", "interactive", "fixture.json");
+const INTERACTIVE_FIXTURE_SHA256 = "5085a17a80aa57fc7fd49b0e8ec0de0e6a82b3a894bcb7c30528bb084ed7488a";
+const INTERACTIVE_MODEL_SHA256 = "e4c1de484f03b75051f75fa6976bec43cd2d404c1a61c8868297edcf4078a636";
 
 function invariant(condition, message) {
   if (!condition) throw new Error(message);
@@ -47,6 +50,140 @@ function digestBytes(parts) {
   const hash = createHash("sha256");
   for (const part of parts) hash.update(Uint8Array.from(part));
   return hash.digest("hex");
+}
+
+function float32Values(bytes) {
+  return [...new Float32Array(Uint8Array.from(bytes).buffer)];
+}
+
+function groupIdentity(modulePath) {
+  const segments = modulePath.split("/");
+  segments.pop();
+  return segments.length >= 2 ? segments.slice(0, 2).join("/") : segments[0] ?? "_root";
+}
+
+function lineIntervalThroughBox(anchor, direction, origin, size) {
+  let minimum = Number.NEGATIVE_INFINITY;
+  let maximum = Number.POSITIVE_INFINITY;
+  for (let axis = 0; axis < 3; axis += 1) {
+    const lower = origin[axis];
+    const upper = lower + size[axis];
+    if (direction[axis] === 0) {
+      if (anchor[axis] < lower || anchor[axis] > upper) return null;
+      continue;
+    }
+    const first = (lower - anchor[axis]) / direction[axis];
+    const second = (upper - anchor[axis]) / direction[axis];
+    minimum = Math.max(minimum, Math.min(first, second));
+    maximum = Math.min(maximum, Math.max(first, second));
+    if (minimum > maximum) return null;
+  }
+  return { minimum, maximum };
+}
+
+function deriveInteractiveJourneyPoints({ message, matrix, rectangle, orderedPaths, targetPath }) {
+  assert.equal(matrix.length, 16);
+  const origins = float32Values(message.buffers[0]);
+  const sizes = float32Values(message.buffers[1]);
+  const bounds = float32Values(message.buffers[3]);
+  assert.equal(origins.length, message.count * 3);
+  assert.equal(sizes.length, message.count * 3);
+  assert.equal(orderedPaths.length, message.count);
+  const boxes = orderedPaths.map((modulePath, index) => ({
+    modulePath,
+    group: groupIdentity(modulePath),
+    origin: origins.slice(index * 3, index * 3 + 3),
+    size: sizes.slice(index * 3, index * 3 + 3),
+  }));
+  const centre = [
+    (bounds[0] + bounds[3]) / 2,
+    (bounds[1] + bounds[4]) / 2,
+    (bounds[2] + bounds[5]) / 2,
+  ];
+  const rawDirection = [-matrix[2], -matrix[6], -matrix[10]];
+  const directionLength = Math.hypot(...rawDirection);
+  assert(directionLength > 0);
+  const direction = rawDirection.map((component) => component / directionLength);
+  const project = (world) => {
+    const relative = world.map((component, axis) => component - centre[axis]);
+    const clipX = matrix[0] * relative[0] + matrix[4] * relative[1] + matrix[8] * relative[2] + matrix[12];
+    const clipY = matrix[1] * relative[0] + matrix[5] * relative[1] + matrix[9] * relative[2] + matrix[13];
+    const point = {
+      x: rectangle.left + (clipX + 1) * rectangle.width / 2,
+      y: rectangle.top + (1 - clipY) * rectangle.height / 2,
+    };
+    return point.x > rectangle.left && point.x < rectangle.left + rectangle.width
+      && point.y > rectangle.top && point.y < rectangle.top + rectangle.height ? point : null;
+  };
+  const intersections = (anchor) => boxes.map((box, index) => ({
+    index,
+    interval: lineIntervalThroughBox(anchor, direction, box.origin, box.size),
+  })).filter(({ interval }) => interval !== null);
+  const targetIndex = orderedPaths.indexOf(targetPath);
+  assert(targetIndex >= 0);
+  const targetBox = boxes[targetIndex];
+  const targetAnchor = targetBox.origin.map((component, axis) => component + targetBox.size[axis] / 2);
+  const targetIntersections = intersections(targetAnchor);
+  assert(targetIntersections.length > 0);
+  targetIntersections.sort((left, right) => right.interval.maximum - left.interval.maximum || left.index - right.index);
+  assert.equal(targetIntersections[0].index, targetIndex, "canonical fixture target is occluded after a camera transition");
+
+  const pairGapCandidates = (left, right) => {
+    const candidates = [];
+    const leftX1 = left.origin[0] + left.size[0];
+    const rightX1 = right.origin[0] + right.size[0];
+    const leftZ1 = left.origin[2] + left.size[2];
+    const rightZ1 = right.origin[2] + right.size[2];
+    const overlapZ0 = Math.max(left.origin[2], right.origin[2]);
+    const overlapZ1 = Math.min(leftZ1, rightZ1);
+    if (overlapZ0 < overlapZ1) {
+      if (leftX1 < right.origin[0]) candidates.push([(leftX1 + right.origin[0]) / 2, (overlapZ0 + overlapZ1) / 2]);
+      if (rightX1 < left.origin[0]) candidates.push([(rightX1 + left.origin[0]) / 2, (overlapZ0 + overlapZ1) / 2]);
+    }
+    const overlapX0 = Math.max(left.origin[0], right.origin[0]);
+    const overlapX1 = Math.min(leftX1, rightX1);
+    if (overlapX0 < overlapX1) {
+      if (leftZ1 < right.origin[2]) candidates.push([(overlapX0 + overlapX1) / 2, (leftZ1 + right.origin[2]) / 2]);
+      if (rightZ1 < left.origin[2]) candidates.push([(overlapX0 + overlapX1) / 2, (rightZ1 + left.origin[2]) / 2]);
+    }
+    return candidates;
+  };
+  const horizontalCandidates = (sameGroup) => {
+    const candidates = [];
+    for (let left = 0; left < boxes.length; left += 1) {
+      for (let right = left + 1; right < boxes.length; right += 1) {
+        if ((boxes[left].group === boxes[right].group) !== sameGroup) continue;
+        candidates.push(...pairGapCandidates(boxes[left], boxes[right]));
+      }
+    }
+    return candidates;
+  };
+  const yCandidates = [...new Set([bounds[1], (bounds[1] + bounds[4]) / 2, bounds[4],
+    ...boxes.flatMap((box) => [box.origin[1] + box.size[1] / 2, box.origin[1] + box.size[1]])])];
+  const missPoints = (sameGroup, label) => {
+    const points = [];
+    const unique = new Set();
+    for (const [x, z] of horizontalCandidates(sameGroup)) {
+      for (const y of yCandidates) {
+        const anchor = [x, y, z];
+        if (intersections(anchor).length !== 0) continue;
+        const point = project(anchor);
+        if (point === null) continue;
+        const key = `${point.x}:${point.y}`;
+        if (!unique.has(key)) { unique.add(key); points.push(point); }
+      }
+    }
+    assert(points.length > 0, `no geometrically derived ${label} whitespace ray remained clear and inside the canvas`);
+    return points;
+  };
+  const target = project(targetAnchor);
+  assert.notEqual(target, null, "canonical fixture target projected outside the canvas");
+  return {
+    targetIndex,
+    target,
+    intraGroupMisses: missPoints(true, "intra-group"),
+    interGroupMisses: missPoints(false, "inter-group"),
+  };
 }
 
 function normalizedSourceDigest(rawBytes) {
@@ -177,7 +314,7 @@ function pageObservationSource() {
     HTMLCanvasElement.prototype.getContext = function(kind, attributes) {
       const actual = acquire.call(this, kind, attributes);
       if (kind !== "webgl2" || !actual) return actual;
-      const record = { uploads: [], subUploads: [], matrices: [], outlineMatrices: [], hoverMatrices: [], draws: [], outlineDraws: [], hoverDraws: [], shaderSources: [], operations: [], polygonOffsetEnables: 0, forceLost: false, lastMatrix: null, listeners: listenerRecord(this), deletes: { shader: 0, program: 0, buffer: 0, vao: 0 } };
+      const record = { uploads: [], subUploads: [], matrices: [], outlineMatrices: [], hoverMatrices: [], draws: [], outlineDraws: [], hoverDraws: [], shaderSources: [], clearColors: [], operations: [], polygonOffsetEnables: 0, forceLost: false, lastMatrix: null, listeners: listenerRecord(this), deletes: { shader: 0, program: 0, buffer: 0, vao: 0 } };
       evidence.contexts.push(record);
       return new Proxy(actual, { get(target, property) {
         if (property === "bufferData") return (targetKind, data, usage) => {
@@ -195,6 +332,10 @@ function pageObservationSource() {
         if (property === "uniformMatrix4fv") return (location, transpose, matrix) => {
           record.lastMatrix = Array.from(matrix);
           return target.uniformMatrix4fv(location, transpose, matrix);
+        };
+        if (property === "clearColor") return (...args) => {
+          record.clearColors.push(args);
+          return target.clearColor(...args);
         };
         if (property === "drawElementsInstanced") return (...args) => {
           if (args[0] === 0x0001 && args[1] === 8) {
@@ -647,7 +788,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     }
     const presentationDigests = observed.contexts.map((context) => createHash("sha256").update(JSON.stringify({ uploads: context.uploads, matrices: context.matrices.slice(0, 1), draws: context.draws.slice(0, 1) })).digest("hex"));
     assert.equal(presentationDigests[0], presentationDigests[1]);
-    for (const context of observed.contexts) assert.deepEqual(context.uploads.map((bytes) => bytes.length), [96, 36, 28, 96, 24, 24, 96, 8, 24]);
+    for (const context of observed.contexts) assert.deepEqual(context.uploads.map((bytes) => bytes.length), [384, 36, 28, 96, 24, 24, 96, 8, 24]);
     assert.equal(observed.contexts[0].matrices.length, 1);
     assert.deepEqual(observed.contexts[0].draws, [[36, 5121, 0, 1]]);
     assert.deepEqual(observed.contexts[1].matrices[0], observed.contexts[0].matrices[0]);
@@ -684,18 +825,18 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
       sourceLines: "1",
       executableUnits: "1",
       maximumComplexity: "1",
-      height: "S + 1 = 2",
-      width: "U + 1 = 2",
-      depth: "U + 1 = 2",
+      height: "8",
+      width: "4",
+      depth: "4",
       range: "M = 1",
-      rgba: "#414487FF",
+      rgba: "#818CF8FF",
       legend: [
-        "M = 0 — #440154FF",
-        "M = 1 — #414487FF",
-        "M = 2–3 — #2A788EFF",
-        "M = 4–7 — #22A884FF",
-        "M = 8–15 — #7AD151FF",
-        "M = 16+ — #FDE725FF",
+        "M = 0 — #A78BFAFF",
+        "M = 1 — #818CF8FF",
+        "M = 2–3 — #38BDF8FF",
+        "M = 4–7 — #2DD4BFFF",
+        "M = 8–15 — #A3E635FF",
+        "M = 16+ — #FACC15FF",
       ],
       links: 0,
       tabIndex: 0,
@@ -706,7 +847,7 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
     };
     assert.deepEqual(selectedByKeyboard, { ...expectedInspector, cityDraws: 3, outlineDraws: 1, subUploads: 1, exactReplica: true, operations: ["depth:on", "city", "depth:off", "outline", "depth:on"], outlineArgs: [24, 5121, 0, 1], fixedBlack: true, polygonOffsetEnables: 0 });
     assert.deepEqual(clearedSelection, { hidden: true, text: "", children: 0, path: null });
-    assert.deepEqual(navigation.selectionAfterCameraResizeReset, { hidden: false, path: fixture.path, sourceLines: "1", range: "M = 1", rgba: "#414487FF" });
+    assert.deepEqual(navigation.selectionAfterCameraResizeReset, { hidden: false, path: fixture.path, sourceLines: "1", range: "M = 1", rgba: "#818CF8FF" });
     assert.deepEqual(primaryCapture, { focused: true, pointerId: 1, captured: true });
     assert.deepEqual(primaryReleased, { released: true, selectionRetained: true });
     assert.equal(pointerActivationCaptured, true);
@@ -893,6 +1034,266 @@ async function checkProductionSuccessPath({ cdp, sessionId, origin, manifest, re
   }
 }
 
+async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUrls, browserExceptions, failedRequests }) {
+  const fixtureBytes = await readFile(INTERACTIVE_FIXTURE_PATH);
+  assert.equal(createHash("sha256").update(fixtureBytes).digest("hex"), INTERACTIVE_FIXTURE_SHA256);
+  const records = JSON.parse(fixtureBytes);
+  assert.equal(records.length, 21);
+  const selected = "1234567890abcdef1234567890abcdef12345678";
+  const root = "abcdef1234567890abcdef1234567890abcdef12";
+  const repositoryUrl = "https://github.com/code-city/interactive-baseline-fixture";
+  const revisionUrl = "https://api.github.com/repos/code-city/interactive-baseline-fixture/commits?per_page=1&page=1";
+  const commitUrl = `https://api.github.com/repos/code-city/interactive-baseline-fixture/git/commits/${selected}`;
+  const treeUrl = `https://api.github.com/repos/code-city/interactive-baseline-fixture/git/trees/${root}?recursive=1`;
+  const blobSha = (content) => {
+    const bytes = Buffer.from(content, "utf8");
+    return createHash("sha1").update(`blob ${bytes.byteLength}\0`).update(bytes).digest("hex");
+  };
+  const rawRecords = records.map((record) => ({
+    ...record,
+    sha: blobSha(record.content),
+    url: `https://raw.githubusercontent.com/code-city/interactive-baseline-fixture/${selected}/${record.path.split("/").map(encodeURIComponent).join("/")}`,
+  }));
+  const urls = [revisionUrl, commitUrl, treeUrl, ...rawRecords.map(({ url }) => url)];
+  const bodies = new Map([
+    [revisionUrl, JSON.stringify([{ sha: selected }])],
+    [commitUrl, JSON.stringify({ sha: selected, tree: { sha: root } })],
+    [treeUrl, JSON.stringify({ sha: root, truncated: false, tree: rawRecords.map(({ path: sourcePath, sha }) => ({ path: sourcePath, mode: "100644", type: "blob", sha })) })],
+    ...rawRecords.map(({ url, content }) => [url, content]),
+  ]);
+  const gets = [];
+  const failures = [];
+  const fulfill = async (requestId, responseCode, responseHeaders, body = "") => {
+    const exact = Buffer.from(body, "utf8");
+    await cdp.send("Fetch.fulfillRequest", { requestId, responseCode, responseHeaders, body: exact.toString("base64") }, sessionId);
+  };
+  const listener = (message) => {
+    if (message.method === "Target.attachedToTarget" && message.sessionId === sessionId && message.params.targetInfo.type === "worker") {
+      void cdp.send("Runtime.runIfWaitingForDebugger", {}, message.params.sessionId).catch((error) => failures.push(error));
+      return;
+    }
+    if (message.method !== "Fetch.requestPaused" || message.sessionId !== sessionId) return;
+    void (async () => {
+      const { requestId, request } = message.params;
+      if (!urls.includes(request.url)) throw new Error(`Unrecognized interactive fixture URL: ${request.url}`);
+      if (request.method === "OPTIONS") {
+        const requested = (request.headers["Access-Control-Request-Headers"] ?? request.headers["access-control-request-headers"] ?? "");
+        await fulfill(requestId, 204, [
+          { name: "Access-Control-Allow-Origin", value: origin },
+          { name: "Access-Control-Allow-Methods", value: "GET" },
+          { name: "Access-Control-Allow-Headers", value: requested },
+          { name: "Content-Length", value: "0" },
+        ]);
+        return;
+      }
+      assert.equal(request.method, "GET");
+      gets.push(request.url);
+      const body = bodies.get(request.url);
+      assert.notEqual(body, undefined);
+      const bytes = Buffer.from(body, "utf8");
+      await fulfill(requestId, 200, [
+        { name: "Access-Control-Allow-Origin", value: origin },
+        { name: "Content-Type", value: request.url.startsWith("https://raw.githubusercontent.com/") ? "text/plain; charset=utf-8" : "application/json; charset=utf-8" },
+        { name: "Content-Length", value: String(bytes.byteLength) },
+      ], body);
+    })().catch(async (error) => {
+      failures.push(error);
+      try { await cdp.send("Fetch.failRequest", { requestId: message.params.requestId, errorReason: "Failed" }, sessionId); } catch {}
+    });
+  };
+  const evaluate = async (expression) => (await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId)).result.value;
+  const dispatchKey = async ({ key, code, virtualKey, modifiers = 0, text = "" }) => {
+    await cdp.send("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", key, code, windowsVirtualKeyCode: virtualKey, nativeVirtualKeyCode: virtualKey, modifiers, text }, sessionId);
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: virtualKey, nativeVirtualKeyCode: virtualKey, modifiers }, sessionId);
+  };
+  const dispatchPointer = async ({ type, x, y, button = "none", buttons = 0 }) => {
+    await cdp.send("Input.dispatchMouseEvent", { type, x, y, button, buttons, clickCount: type === "mouseMoved" ? 0 : 1 }, sessionId);
+  };
+  const nativeClick = async (point, button = "left") => {
+    const buttons = button === "left" ? 1 : 2;
+    await dispatchPointer({ type: "mousePressed", ...point, button, buttons });
+    await dispatchPointer({ type: "mouseReleased", ...point, button, buttons: 0 });
+  };
+  const waitFor = async (expression, label) => {
+    const deadline = Date.now() + 120_000;
+    while (Date.now() < deadline) {
+      if (failures.length) throw failures[0];
+      const value = await evaluate(expression);
+      if (value) return value;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const snapshot = await evaluate("({status:document.querySelector('[data-status]')?.textContent,commit:document.querySelector('[data-commit]')?.textContent,feedback:document.querySelector('[data-feedback]')?.textContent,messages:globalThis.__codeCitySuccessEvidence?.messages?.length,contexts:globalThis.__codeCitySuccessEvidence?.contexts?.length,workers:globalThis.__codeCitySuccessEvidence?.workers})");
+    throw new Error(`Timed out waiting for ${label}; snapshot=${JSON.stringify(snapshot)}; GETs=${JSON.stringify(gets)}; failures=${failures.map(String).join("|")}`);
+  };
+
+  cdp.listeners.add(listener);
+  try {
+    await cdp.send("Fetch.enable", { patterns: urls.map((urlPattern) => ({ urlPattern, requestStage: "Request" })) }, sessionId);
+    await cdp.send("Page.navigate", { url: `${origin}/code-city/index.html` }, sessionId);
+    await waitFor("document.readyState==='complete'&&document.querySelector('form')&&globalThis.__codeCitySuccessEvidence", "interactive fixture startup");
+    await evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(repositoryUrl)};document.querySelector('form').requestSubmit();true`);
+    await waitFor(`document.querySelector('[data-commit]').textContent===${JSON.stringify(selected)}&&globalThis.__codeCitySuccessEvidence.messages.length===1&&globalThis.__codeCitySuccessEvidence.contexts.length===1`, "interactive fixture city");
+    await waitFor("globalThis.__codeCitySuccessEvidence.contexts[0].draws.length===1", "interactive fixture fill draw");
+    const orderedPaths = rawRecords.filter(({ path: sourcePath }) => !sourcePath.endsWith("package.json"))
+      .map(({ path: sourcePath }) => sourcePath)
+      .sort((left, right) => Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")));
+    const targetPath = "packages/engine/src/report/outlier.ts";
+    const expectedInspector = {
+      path: targetPath,
+      sourceLines: "40",
+      units: "17",
+      complexity: "21",
+      height: "23",
+      width: "10",
+      depth: "10",
+      range: "M = 16+",
+      rgba: "#FACC15FF",
+      policy: "S cap 1000; displayed height range 4..40. U cap 100; displayed side range 3..18.",
+      legend: ["M = 0 — #A78BFAFF", "M = 1 — #818CF8FF", "M = 2–3 — #38BDF8FF", "M = 4–7 — #2DD4BFFF", "M = 8–15 — #A3E635FF", "M = 16+ — #FACC15FF"],
+    };
+    const initial = await evaluate(`(() => {
+      const message=globalThis.__codeCitySuccessEvidence.messages[0];
+      const context=globalThis.__codeCitySuccessEvidence.contexts[0];
+      return {message,uploads:context.uploads.map(bytes=>bytes.length),exactUploads:JSON.stringify(context.uploads),draws:context.draws,shaderSources:context.shaderSources,clearColors:context.clearColors,background:getComputedStyle(document.querySelector('[data-city]')).backgroundColor};
+    })()`);
+    assert.deepEqual(gets, [revisionUrl, commitUrl, treeUrl, ...rawRecords.filter(({ path: sourcePath }) => !sourcePath.endsWith("package.json")).map(({ url }) => url)]);
+    assert.equal(failures.length, 0);
+    assert.equal(browserExceptions.length, 0);
+    assert.equal(failedRequests.length, 0);
+    assert.equal(initial.message.count, 18);
+    assert.deepEqual(initial.uploads, [384, 36, 504, 96, 24, 24, 96, 8, 24]);
+    assert.deepEqual(initial.draws, [[36, 5121, 0, 18]]);
+    assert(initial.shaderSources.some((source) => source.includes("base + 0.12 * (vec3(1.0) - base)") && source.includes("0.82 * base") && source.includes("0.62 * base")));
+    assert(initial.clearColors.every((colour) => JSON.stringify(colour) === JSON.stringify([0x07 / 0xff, 0x11 / 0xff, 0x1f / 0xff, 1])));
+    assert.equal(initial.background, "rgb(7, 17, 31)");
+    const countBytes = new Uint8Array(4);
+    new DataView(countBytes.buffer).setUint32(0, initial.message.count, true);
+    assert.equal(digestBytes([countBytes, ...initial.message.buffers]), INTERACTIVE_MODEL_SHA256);
+    assert.deepEqual(float32Values(initial.message.buffers[0]), [41,0,0,33,0,8,40,0,8,33,0,15,40,0,15,33,0,0,0,0,19,0,0,12,7,0,12,0,0,0,12,0,0,14,0,12,0,0,36,7,0,36,0,0,43,7,0,43,0,0,50,7,0,50]);
+    assert.deepEqual(float32Values(initial.message.buffers[1]), [5,11,5,5,12,5,5,15,5,5,11,5,3,8,3,6,16,6,3,8,3,5,14,5,5,11,5,10,23,10,6,16,6,5,11,5,5,11,5,5,12,5,5,11,5,5,11,5,5,11,5,3,8,3]);
+    assert.deepEqual(float32Values(initial.message.buffers[3]), [0,0,0,46,23,55]);
+
+    await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); globalThis.__interactivePointerEvents=[]; for (const type of ['pointerdown','pointerup']) canvas.addEventListener(type,event=>globalThis.__interactivePointerEvents.push({type:event.type,pointerId:event.pointerId,button:event.button,clientX:event.clientX,clientY:event.clientY,defaultPrevented:event.defaultPrevented})); return true; })()`);
+    const phaseEvidence = [];
+    const observation = async () => evaluate(`(() => {
+      const evidence=globalThis.__codeCitySuccessEvidence;
+      const context=evidence.contexts[0];
+      const canvas=document.querySelector('[data-city] canvas');
+      const rectangle=canvas.getBoundingClientRect();
+      return {message:evidence.messages[0],matrix:context.matrices.at(-1),rectangle:{left:rectangle.left,top:rectangle.top,width:rectangle.width,height:rectangle.height},draws:context.draws.length,clearColors:context.clearColors.length,hoverDraws:context.hoverDraws.length,subUploads:context.subUploads.length,frameRequests:evidence.hoverFrames.requests,canvasSize:{width:canvas.width,height:canvas.height},viewport:{width:innerWidth,height:innerHeight,deviceScaleFactor:devicePixelRatio}};
+    })()`);
+    const settlePointer = async (point, label) => {
+      const before = await evaluate("globalThis.__codeCitySuccessEvidence.hoverFrames.requests");
+      await dispatchPointer({ type: "mouseMoved", ...point });
+      await waitFor(`globalThis.__codeCitySuccessEvidence.hoverFrames.requests>${before}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, label);
+    };
+    const settleClick = async (point, label) => {
+      await nativeClick(point);
+      await waitFor("globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0", label);
+    };
+    const assertInspector = async (label) => {
+      const inspector = await evaluate(`(() => { const element=document.querySelector('[data-inspector]'); return {hidden:element.hidden,path:element.querySelector('[data-canonical-path]')?.textContent,sourceLines:element.querySelector('[data-source-lines]')?.textContent,units:element.querySelector('[data-executable-units]')?.textContent,complexity:element.querySelector('[data-maximum-complexity]')?.textContent,height:element.querySelector('[data-height]')?.textContent,width:element.querySelector('[data-width]')?.textContent,depth:element.querySelector('[data-depth]')?.textContent,range:element.querySelector('[data-selected-range]')?.textContent,rgba:element.querySelector('[data-selected-rgba]')?.textContent,policy:element.querySelector('[data-dimension-policy]')?.textContent,legend:[...element.querySelectorAll('[data-palette-legend] li')].map(item=>item.textContent),links:element.querySelectorAll('a').length}; })()`);
+      assert.deepEqual(inspector, { hidden: false, ...expectedInspector, links: 0 }, label);
+    };
+    const assertCleared = async (label) => {
+      const cleared = await evaluate(`(() => { const inspector=document.querySelector('[data-inspector]'); return {hidden:inspector.hidden,text:inspector.textContent,children:inspector.childNodes.length}; })()`);
+      assert.deepEqual(cleared, { hidden: true, text: "", children: 0 }, label);
+    };
+    const visibleWhitespacePoint = async (candidates, label) => {
+      const point = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); return ${JSON.stringify(candidates)}.find(point=>document.elementFromPoint(point.x,point.y)===canvas) ?? null; })()`);
+      assert.notEqual(point, null, `${label} had no geometrically clear point exposed by the canvas`);
+      return point;
+    };
+    const assertPhase = async (label) => {
+      await evaluate("document.querySelector('[data-city] canvas').scrollIntoView({block:'center'});true");
+      const start = await observation();
+      const points = deriveInteractiveJourneyPoints({ ...start, orderedPaths, targetPath });
+      const hoverUploadsBefore = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0].subUploads.length");
+      await settlePointer(points.target, `${label} canonical hover`);
+      await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].hoverDraws.length>${start.hoverDraws}`, `${label} hover cue`);
+      const targetCue = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {subUploads:context.subUploads.length,latest:context.subUploads.at(-1),expected:context.uploads[2].slice(${points.targetIndex}*28,${points.targetIndex}*28+24)}; })()`);
+      assert(targetCue.subUploads > hoverUploadsBefore, `${label} did not upload a hover cue`);
+      assert.deepEqual(targetCue.latest, targetCue.expected, `${label} hover cue lost canonical alignment`);
+      await settleClick(points.target, `${label} pointer selection`);
+      const activationEvents = await evaluate("globalThis.__interactivePointerEvents.slice(-2)");
+      assert.deepEqual(activationEvents.map(({ type, pointerId, button, clientX, clientY }) => ({ type, pointerId, button, clientX, clientY })), [
+        { type: "pointerdown", pointerId: activationEvents[0]?.pointerId, button: 0, clientX: activationEvents[0]?.clientX, clientY: activationEvents[0]?.clientY },
+        { type: "pointerup", pointerId: activationEvents[0]?.pointerId, button: 0, clientX: activationEvents[0]?.clientX, clientY: activationEvents[0]?.clientY },
+      ], `${label} native click was not a stationary primary release: ${JSON.stringify(activationEvents)}`);
+      await assertInspector(`${label} pointer inspector; events=${JSON.stringify(activationEvents)}`);
+      const intraGroupMiss = await visibleWhitespacePoint(points.intraGroupMisses, `${label} intra-group whitespace`);
+      await settleClick(intraGroupMiss, `${label} intra-group activation miss`);
+      await assertCleared(`${label} intra-group whitespace selected geometry`);
+      await settleClick(points.target, `${label} pointer reselection`);
+      await assertInspector(`${label} pointer reselected inspector`);
+      const interGroupMiss = await visibleWhitespacePoint(points.interGroupMisses, `${label} inter-group whitespace`);
+      await settleClick(interGroupMiss, `${label} inter-group activation miss`);
+      await assertCleared(`${label} inter-group whitespace selected geometry`);
+      const end = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {draws:context.draws.slice(${start.draws}),matrices:context.matrices.slice(${start.draws}),clearColors:context.clearColors.slice(${start.clearColors}),shaderSources:context.shaderSources,exactUploads:JSON.stringify(context.uploads)}; })()`);
+      assert(end.draws.length > 0, `${label} produced no native frames`);
+      assert(end.draws.every((draw) => JSON.stringify(draw) === JSON.stringify([36, 5121, 0, 18])), `${label} changed the single 18-instance fill draw`);
+      assert(end.matrices.every((matrix) => JSON.stringify(matrix) === JSON.stringify(start.matrix)), `${label} cues diverged from the camera matrix`);
+      assert.equal(end.clearColors.length, end.draws.length, `${label} shading frames did not clear exactly once`);
+      assert(end.clearColors.every((colour) => JSON.stringify(colour) === JSON.stringify([0x07 / 0xff, 0x11 / 0xff, 0x1f / 0xff, 1])), `${label} background changed`);
+      assert(end.shaderSources.some((source) => source.includes("base + 0.12 * (vec3(1.0) - base)") && source.includes("0.82 * base") && source.includes("0.62 * base")), `${label} fixed face shading changed`);
+      assert.equal(end.exactUploads, initial.exactUploads, `${label} camera interaction rewrote immutable model uploads`);
+      phaseEvidence.push({ label, frames: end.draws.length, targetIndex: points.targetIndex });
+    };
+
+    await assertPhase("overview");
+    await dispatchKey({ key: "ArrowRight", code: "ArrowRight", virtualKey: 39 });
+    const keyboardSelection = await evaluate("document.querySelector('[data-inspector] [data-canonical-path]')?.textContent");
+    assert.equal(keyboardSelection, orderedPaths[0]);
+    await dispatchKey({ key: "Escape", code: "Escape", virtualKey: 27 });
+    await assertCleared("native keyboard clear");
+
+    const drag = async (button, horizontalDivisor, verticalDivisor, label) => {
+      const before = await observation();
+      const start = { x: before.rectangle.left + before.rectangle.width / 2, y: before.rectangle.top + before.rectangle.height / 2 };
+      const end = { x: start.x + before.rectangle.width / horizontalDivisor, y: start.y + before.rectangle.height / verticalDivisor };
+      const buttons = button === "left" ? 1 : 2;
+      await dispatchPointer({ type: "mouseMoved", ...start });
+      await dispatchPointer({ type: "mousePressed", ...start, button, buttons });
+      await dispatchPointer({ type: "mouseMoved", ...end, buttons });
+      await dispatchPointer({ type: "mouseReleased", ...end, button, buttons: 0 });
+      await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].matrices.length>${before.draws}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, label);
+      const after = await observation();
+      assert.notDeepEqual(after.matrix, before.matrix, `${label} did not change the camera`);
+    };
+    await drag("left", 16, 20, "native orbit");
+    await assertPhase("orbit");
+    await drag("right", 20, -16, "native pan");
+    await assertPhase("pan");
+
+    const beforeZoom = await observation();
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: beforeZoom.rectangle.left + beforeZoom.rectangle.width / 2, y: beforeZoom.rectangle.top + beforeZoom.rectangle.height / 2, deltaX: 0, deltaY: -120 }, sessionId);
+    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].matrices.length>${beforeZoom.draws}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "native zoom");
+    assert.notDeepEqual((await observation()).matrix, beforeZoom.matrix, "native zoom did not change the camera");
+    await assertPhase("zoom");
+
+    const beforeResize = await observation();
+    const resizedViewport = { width: beforeResize.viewport.width + Math.floor(beforeResize.viewport.width / 8), height: beforeResize.viewport.height + Math.floor(beforeResize.viewport.height / 8) };
+    await cdp.send("Emulation.setDeviceMetricsOverride", { ...resizedViewport, deviceScaleFactor: beforeResize.viewport.deviceScaleFactor, mobile: false }, sessionId);
+    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].matrices.length>${beforeResize.draws}&&(() => { const canvas=document.querySelector('[data-city] canvas'); return canvas.width!==${beforeResize.canvasSize.width}||canvas.height!==${beforeResize.canvasSize.height}; })()`, "native viewport resize");
+    assert.notDeepEqual((await observation()).matrix, beforeResize.matrix, "native resize did not update the camera matrix");
+    await assertPhase("resize");
+
+    const beforeReset = await observation();
+    const resetPoint = await evaluate(`(() => { const rectangle=document.querySelector('[data-city-reset]').getBoundingClientRect(); return {x:rectangle.left+rectangle.width/2,y:rectangle.top+rectangle.height/2}; })()`);
+    await nativeClick(resetPoint);
+    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].matrices.length>${beforeReset.draws}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "native Reset control");
+    assert.notDeepEqual((await observation()).matrix, beforeReset.matrix, "native Reset did not restore the camera");
+    await assertPhase("Reset");
+
+    const finalDraws = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0].draws.length");
+    console.log(`Interactive native baseline evidence passed: fixture-sha256=${INTERACTIVE_FIXTURE_SHA256}; model-sha256=${INTERACTIVE_MODEL_SHA256}; modules=18; groups=3; native-phases=${phaseEvidence.map(({ label }) => label).join(",")}; geometric-target-and-gap-picking=true; one-instanced-fill-draw-per-frame=true; observed-frames=${finalDraws}.`);
+  } finally {
+    cdp.listeners.delete(listener);
+    try { await cdp.send("Emulation.clearDeviceMetricsOverride", {}, sessionId); } catch {}
+    try { await cdp.send("Fetch.disable", {}, sessionId); } catch {}
+  }
+}
+
 function validateBrowserResult(result, expectedAssets) {
   exactKeys(result, ["schemaVersion", "assetRequests", "cases", "matrixRuns", "complexityMatrixRuns", "presentation", "browserExceptions", "unexpectedNetworkRequests", "overallPass"], "Browser result");
   assert.equal(result.schemaVersion, 1);
@@ -952,7 +1353,7 @@ function validateBrowserResult(result, expectedAssets) {
   exactKeys(result.presentation, ["webgl2Available", "actualContexts", "initialDraws", "repeatDraws", "resizeDraws", "outline", "accessibility", "inputCleanup", "lossDefaultPrevented", "lossDraws", "lossFailures", "lossOrdering", "lossCleanup", "lossTerminalState", "compileFailureResult", "compileFailureDraws", "compileFailures", "compileCleanup", "compileFailureTerminalState", "pass"], "Presentation");
   const outline = result.presentation.outline;
   exactKeys(outline, ["allocationUploads", "updateBytes", "exactReplica", "selection", "camera", "resizeOutlineDraws", "reset", "clear", "immutableUploads", "shaderFixedBlack", "polygonOffsetEnables", "cleanup"], "Selection outline");
-  assert.deepEqual(outline.allocationUploads, [96, 36, 28, 96, 24, 24, 96, 8, 24, 96, 36, 28, 96, 24, 24, 96, 8, 24]);
+  assert.deepEqual(outline.allocationUploads, [384, 36, 28, 96, 24, 24, 96, 8, 24, 384, 36, 28, 96, 24, 24, 96, 8, 24]);
   assert.equal(outline.updateBytes.length, 24);
   assert.equal(outline.exactReplica, true);
   assert.deepEqual(outline.selection, { cityDraws: 1, outlineDraws: 1, operations: ["depth:on", "city", "depth:off", "outline", "depth:on"] });
@@ -1127,7 +1528,8 @@ export async function checkPackagedBrowserEvidence() {
     invariant(unexpected.length === 0, `Unexpected browser network request(s): ${unexpected.join(", ")}`);
     validateBrowserResult(result, selected);
     await checkProductionSuccessPath({ cdp, sessionId, origin, manifest, requestedUrls, browserExceptions, failedRequests });
-    console.log(`Packaged Chrome/CDP evidence passed with ${executable} (${version}); ${result.cases.length} stress cases, two comment matrices, two complete complexity matrices, canonical success/context-loss evidence, and pagehide/reload lifecycle evidence.`);
+    await checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUrls, browserExceptions, failedRequests });
+    console.log(`Packaged Chrome/CDP evidence passed with ${executable} (${version}); ${result.cases.length} stress cases, two comment matrices, two complete complexity matrices, canonical success/context-loss evidence, interactive 18-module native baseline evidence, and pagehide/reload lifecycle evidence.`);
   } catch (error) {
     failure = error;
   } finally {

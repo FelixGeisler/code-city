@@ -48,4 +48,8 @@ xref:adr/0006-bounded-selected-revision-retrieval-via-github-tree-and-raw-conten
 |xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[ADR 0011]
 |Controller-validated city transaction and presenter-owned interaction
 |Keeps geometry, inspection, semantics, input, rendering, and cleanup aligned
+
+|xref:adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc[ADR 0012]
+|Bounded grouped construction and fixed direct-WebGL face shading
+|Makes the current interactive city readable without widening its boundaries
 |===

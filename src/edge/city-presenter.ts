@@ -13,7 +13,19 @@ import {
   type CameraView,
 } from "../domain/camera-picking-policy";
 
-const CUBE_POSITIONS = new Float32Array([
+// Face-local vertices keep the fixed display transform in the trusted shader
+// while every building remains one instance in the single fill draw. The
+// fourth component is the face class: 0 = ±Z/-Y, 1 = ±X, 2 = +Y.
+const CUBE_VERTEX_DATA = new Float32Array([
+  0, 0, 0, 0,  0, 1, 0, 0,  1, 1, 0, 0,  1, 0, 0, 0,
+  0, 0, 1, 0,  1, 0, 1, 0,  1, 1, 1, 0,  0, 1, 1, 0,
+  0, 0, 0, 1,  0, 0, 1, 1,  0, 1, 1, 1,  0, 1, 0, 1,
+  1, 0, 0, 1,  1, 1, 0, 1,  1, 1, 1, 1,  1, 0, 1, 1,
+  0, 0, 0, 0,  1, 0, 0, 0,  1, 0, 1, 0,  0, 0, 1, 0,
+  0, 1, 0, 2,  0, 1, 1, 2,  1, 1, 1, 2,  1, 1, 0, 2,
+]);
+
+const BOX_POSITIONS = new Float32Array([
   0, 0, 0,
   1, 0, 0,
   1, 1, 0,
@@ -25,8 +37,8 @@ const CUBE_POSITIONS = new Float32Array([
 ]);
 
 const CUBE_INDICES = new Uint8Array([
-  0, 3, 2, 0, 2, 1, 4, 5, 6, 4, 6, 7, 0, 4, 7, 0, 7, 3,
-  1, 2, 6, 1, 6, 5, 0, 1, 5, 0, 5, 4, 3, 7, 6, 3, 6, 2,
+  0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11,
+  12, 13, 14, 12, 14, 15, 16, 17, 18, 16, 18, 19, 20, 21, 22, 20, 22, 23,
 ]);
 
 const OUTLINE_INDICES = new Uint8Array([
@@ -46,6 +58,7 @@ layout(location = 0) in vec3 a_unitPosition;
 layout(location = 1) in vec3 a_targetRelativeMinimum;
 layout(location = 2) in vec3 a_dimensions;
 layout(location = 3) in vec4 a_color;
+layout(location = 4) in float a_faceClass;
 
 uniform mat4 u_clipFromTarget;
 
@@ -54,7 +67,11 @@ flat out vec4 v_color;
 void main() {
   vec3 targetRelativePosition = a_targetRelativeMinimum + a_unitPosition * a_dimensions;
   gl_Position = u_clipFromTarget * vec4(targetRelativePosition, 1.0);
-  v_color = a_color;
+  vec3 base = a_color.rgb;
+  vec3 displayed = a_faceClass > 1.5
+    ? base + 0.12 * (vec3(1.0) - base)
+    : a_faceClass > 0.5 ? 0.82 * base : 0.62 * base;
+  v_color = vec4(displayed, 1.0);
 }
 `;
 
@@ -422,7 +439,7 @@ function draw(session: Session<unknown>, size: Dimensions, view: CameraView): vo
   requireNoError(gl);
   const matrix = new Float32Array(view.matrix);
   try {
-    gl.clearColor(1, 1, 1, 1);
+    gl.clearColor(0x07 / 0xff, 0x11 / 0xff, 0x1f / 0xff, 1);
     gl.clearDepth(1);
     gl.colorMask(true, true, true, true);
     gl.depthMask(true);
@@ -521,10 +538,12 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
 
   gl.bindVertexArray(session.vao);
   gl.bindBuffer(ARRAY_BUFFER, session.positionBuffer);
-  gl.bufferData(ARRAY_BUFFER, CUBE_POSITIONS, STATIC_DRAW);
+  gl.bufferData(ARRAY_BUFFER, CUBE_VERTEX_DATA, STATIC_DRAW);
   requireNoError(gl);
   gl.enableVertexAttribArray(0);
-  gl.vertexAttribPointer(0, 3, FLOAT, false, 0, 0);
+  gl.vertexAttribPointer(0, 3, FLOAT, false, 16, 0);
+  gl.enableVertexAttribArray(4);
+  gl.vertexAttribPointer(4, 1, FLOAT, false, 16, 12);
 
   gl.bindBuffer(ELEMENT_ARRAY_BUFFER, session.indexBuffer);
   gl.bufferData(ELEMENT_ARRAY_BUFFER, CUBE_INDICES, STATIC_DRAW);
@@ -578,7 +597,7 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
 
   gl.bindVertexArray(session.outlineVao);
   gl.bindBuffer(ARRAY_BUFFER, session.outlinePositionBuffer);
-  gl.bufferData(ARRAY_BUFFER, CUBE_POSITIONS, STATIC_DRAW);
+  gl.bufferData(ARRAY_BUFFER, BOX_POSITIONS, STATIC_DRAW);
   requireNoError(gl);
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 3, FLOAT, false, 0, 0);
@@ -625,7 +644,7 @@ function allocate<G>(session: Session<G>, size: Dimensions): void {
 
   gl.bindVertexArray(session.hoverVao);
   gl.bindBuffer(ARRAY_BUFFER, session.hoverPositionBuffer);
-  gl.bufferData(ARRAY_BUFFER, CUBE_POSITIONS, STATIC_DRAW);
+  gl.bufferData(ARRAY_BUFFER, BOX_POSITIONS, STATIC_DRAW);
   requireNoError(gl);
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 3, FLOAT, false, 0, 0);

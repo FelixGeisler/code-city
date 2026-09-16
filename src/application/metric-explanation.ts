@@ -1,5 +1,10 @@
 import type { InspectionFact } from "../domain/city-model";
-import { COMPLEXITY_PALETTE_LEGEND, paletteBandForComplexity } from "../domain/city-model";
+import {
+  COMPLEXITY_PALETTE_LEGEND,
+  displayedHeight,
+  displayedSide,
+  paletteBandForComplexity,
+} from "../domain/city-model";
 
 export type MetricExplanation = Readonly<{
   canonicalPath: string;
@@ -22,9 +27,9 @@ export function explainMetricFact(fact: InspectionFact): MetricExplanation {
     sourceLines: fact.S,
     executableUnits: fact.U,
     maximumComplexity: fact.M,
-    height: fact.S + 1,
-    width: fact.U + 1,
-    depth: fact.U + 1,
+    height: displayedHeight(fact.S),
+    width: displayedSide(fact.U),
+    depth: displayedSide(fact.U),
     paletteRange: band.range,
     rgba: band.rgba,
   });

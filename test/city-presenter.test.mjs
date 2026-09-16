@@ -336,8 +336,8 @@ function expectedResourceDeletesThrough(lastResource) {
 function expectedInstanceBytes() {
   const bytes = new Uint8Array(28);
   const view = new DataView(bytes.buffer);
-  for (const [index, value] of [-0.5, -0.5, -0.5, 1, 1, 1].entries()) view.setFloat32(index * 4, value, true);
-  bytes.set([0x44, 0x01, 0x54, 0xff], 24);
+  for (const [index, value] of [-1.5, -2, -1.5, 3, 4, 3].entries()) view.setFloat32(index * 4, value, true);
+  bytes.set([0xa7, 0x8b, 0xfa, 0xff], 24);
   return bytes;
 }
 
@@ -345,7 +345,7 @@ function expectedDrawCalls({ width, height, matrix, count, program, vao, uniform
   return [
     ["isContextLost"],
     ["getError"],
-    ["clearColor", 1, 1, 1, 1],
+    ["clearColor", 0x07 / 0xff, 0x11 / 0xff, 0x1f / 0xff, 1],
     ["clearDepth", 1],
     ["colorMask", true, true, true, true],
     ["depthMask", true],
@@ -399,6 +399,7 @@ function expectedInitialCalls() {
   const hoverIndexBuffer = { kind: "Buffer", id: 23 };
   const hoverInstanceBuffer = { kind: "Buffer", id: 24 };
   const positionBytes = new Uint8Array(new Float32Array(literals.cubePositions).buffer);
+  const boxPositionBytes = new Uint8Array(new Float32Array(literals.boxPositions).buffer);
   return [
     ["getContextAttributes"],
     ["isContextLost"], ["getError"],
@@ -439,7 +440,9 @@ function expectedInitialCalls() {
     ["bufferData", GL.ARRAY_BUFFER, positionBytes, GL.STATIC_DRAW],
     ["isContextLost"], ["getError"],
     ["enableVertexAttribArray", 0],
-    ["vertexAttribPointer", 0, 3, GL.FLOAT, false, 0, 0],
+    ["vertexAttribPointer", 0, 3, GL.FLOAT, false, 16, 0],
+    ["enableVertexAttribArray", 4],
+    ["vertexAttribPointer", 4, 1, GL.FLOAT, false, 16, 12],
     ["bindBuffer", GL.ELEMENT_ARRAY_BUFFER, indexBuffer],
     ["bufferData", GL.ELEMENT_ARRAY_BUFFER, new Uint8Array(literals.cubeIndices), GL.STATIC_DRAW],
     ["isContextLost"], ["getError"],
@@ -490,7 +493,7 @@ function expectedInitialCalls() {
     ["isContextLost"], ["getError"],
     ["bindVertexArray", outlineVao],
     ["bindBuffer", GL.ARRAY_BUFFER, outlinePositionBuffer],
-    ["bufferData", GL.ARRAY_BUFFER, positionBytes, GL.STATIC_DRAW],
+    ["bufferData", GL.ARRAY_BUFFER, boxPositionBytes, GL.STATIC_DRAW],
     ["isContextLost"], ["getError"],
     ["enableVertexAttribArray", 0],
     ["vertexAttribPointer", 0, 3, GL.FLOAT, false, 0, 0],
@@ -541,7 +544,7 @@ function expectedInitialCalls() {
     ["isContextLost"], ["getError"],
     ["bindVertexArray", hoverVao],
     ["bindBuffer", GL.ARRAY_BUFFER, hoverPositionBuffer],
-    ["bufferData", GL.ARRAY_BUFFER, positionBytes, GL.STATIC_DRAW],
+    ["bufferData", GL.ARRAY_BUFFER, boxPositionBytes, GL.STATIC_DRAW],
     ["isContextLost"], ["getError"],
     ["enableVertexAttribArray", 0],
     ["vertexAttribPointer", 0, 3, GL.FLOAT, false, 0, 0],
@@ -577,7 +580,7 @@ test("cube, indices, shaders, context request, complete setup/draw calls, matrix
   assert.deepEqual(present(environment, presenter, 1, oneBuilding()), COMMITTED);
   const canvas = environment.canvases[0];
   assert.deepEqual([...new Float32Array(canvas.gl.uploads[0].bytes.buffer)], literals.cubePositions);
-  assert.equal(canvas.gl.uploads[0].byteLength, 96);
+  assert.equal(canvas.gl.uploads[0].byteLength, 384);
   assert.deepEqual([...canvas.gl.uploads[1].bytes], literals.cubeIndices);
   assert.equal(canvas.gl.uploads[1].byteLength, 36);
   const shaderSources = canvas.gl.calls.filter((call) => call[0] === "shaderSource").map((call) => call[2]);
@@ -591,16 +594,15 @@ test("cube, indices, shaders, context request, complete setup/draw calls, matrix
   assert.deepEqual([...canvas.gl.calls.find((call) => call[0] === "uniformMatrix4fv")[3]], literals.unitAspectTwoMatrix);
   const matrix = literals.unitAspectTwoMatrix;
   assert.deepEqual(transform(matrix, [0, 0, 0]).map((value) => value === 0 ? 0 : value), [0, 0, 0, 1]);
-  const rightCorner = transform(matrix, [0.5, -0.5, -0.5]);
-  const leftCorner = transform(matrix, [-0.5, -0.5, 0.5]);
+  const rightCorner = transform(matrix, [1.5, -2, -1.5]);
+  const leftCorner = transform(matrix, [-1.5, -2, 1.5]);
   assert(rightCorner[0] > 0 && leftCorner[0] < 0, "literal column-major right vector lost handedness");
   const corners = [];
-  for (const z of [-0.5, 0.5]) for (const y of [-0.5, 0.5]) for (const x of [-0.5, 0.5]) corners.push(transform(matrix, [x, y, z]).map((value) => value === 0 ? 0 : value));
+  for (const z of [-1.5, 1.5]) for (const y of [-2, 2]) for (const x of [-1.5, 1.5]) corners.push(transform(matrix, [x, y, z]).map((value) => value === 0 ? 0 : value));
   assert.deepEqual(corners, literals.unitTargetRelativeCorners);
-  assert.equal(corners[0][2], 0.5000000149011612);
-  assert.equal(corners[7][2], -0.5000000149011612);
+  assert(corners.every((corner) => corner[2] > -1 && corner[2] < 1));
   const view = deriveView(oneBuilding().bounds, 2);
-  const expectedScalars = { target: [0.5, 0.5, 0.5], D: [0.5773502691896258, 0.5773502691896258, 0.5773502691896258], R: [0.7071067811865475, 0, -0.7071067811865475], V: [-0.4082482904638631, 0.8164965809277261, -0.4082482904638631], H: 0.8981462390204988, E_d: 0.8660254037844387, near: 0.8660254037844387, far: 4.330127018922194 };
+  const expectedScalars = { target: [1.5, 2, 1.5], D: [0.5773502691896258, 0.5773502691896258, 0.5773502691896258], R: [0.7071067811865475, 0, -0.7071067811865475], V: [-0.4082482904638631, 0.8164965809277261, -0.4082482904638631], H: 3.143511836571746, E_d: 2.886751345948129, near: 2.886751345948129, far: 14.433756729740645 };
   for (const key of ["H", "E_d", "near", "far"]) assert(Math.abs(view[key] - expectedScalars[key]) <= 1e-9 * Math.max(1, Math.abs(expectedScalars[key])));
   for (const key of ["target", "D", "R", "V"]) for (let index = 0; index < 3; index += 1) assert(Math.abs(view[key][index] - expectedScalars[key][index]) <= 1e-9 * Math.max(1, Math.abs(expectedScalars[key][index])));
 });
@@ -626,14 +628,14 @@ test("one instance uses exact target-relative float staging, state, and one inst
   const { presenter } = failuresCollector(environment);
   assert.deepEqual(present(environment, presenter, "g", oneBuilding()), COMMITTED);
   const gl = environment.canvases[0].gl;
-  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [96, 36, 28, 96, 24, 24, 96, 8, 24]);
+  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [384, 36, 28, 96, 24, 24, 96, 8, 24]);
   const instance = gl.uploads[2].bytes;
   const view = new DataView(instance.buffer, instance.byteOffset, instance.byteLength);
-  assert.deepEqual(Array.from({ length: 6 }, (_, index) => view.getFloat32(index * 4, true)), [-0.5, -0.5, -0.5, 1, 1, 1]);
-  assert.deepEqual([...instance.slice(24)], [0x44, 0x01, 0x54, 0xff]);
+  assert.deepEqual(Array.from({ length: 6 }, (_, index) => view.getFloat32(index * 4, true)), [-1.5, -2, -1.5, 3, 4, 3]);
+  assert.deepEqual([...instance.slice(24)], [0xa7, 0x8b, 0xfa, 0xff]);
   const pointers = gl.calls.filter((call) => call[0] === "vertexAttribPointer").map((call) => call.slice(1));
   assert.deepEqual(pointers, [
-    [0, 3, GL.FLOAT, false, 0, 0], [1, 3, GL.FLOAT, false, 28, 0], [2, 3, GL.FLOAT, false, 28, 12], [3, 4, GL.UNSIGNED_BYTE, true, 28, 24],
+    [0, 3, GL.FLOAT, false, 16, 0], [4, 1, GL.FLOAT, false, 16, 12], [1, 3, GL.FLOAT, false, 28, 0], [2, 3, GL.FLOAT, false, 28, 12], [3, 4, GL.UNSIGNED_BYTE, true, 28, 24],
     [0, 3, GL.FLOAT, false, 0, 0], [1, 3, GL.FLOAT, false, 24, 0], [2, 3, GL.FLOAT, false, 24, 12],
     [0, 3, GL.FLOAT, false, 0, 0], [1, 3, GL.FLOAT, false, 24, 0], [2, 3, GL.FLOAT, false, 24, 12],
   ]);
@@ -1494,7 +1496,7 @@ test("the complete 4,000-building model uploads exactly 112,000 bytes and draws 
   const { presenter } = failuresCollector(environment);
   assert.deepEqual(present(environment, presenter, 4000, model), COMMITTED);
   const gl = environment.canvases[0].gl;
-  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [96, 36, 112000, 96, 24, 24, 96, 8, 24]);
+  assert.deepEqual(gl.uploads.map(({ byteLength }) => byteLength), [384, 36, 112000, 96, 24, 24, 96, 8, 24]);
   assert.deepEqual(gl.calls.filter((call) => call[0] === "drawElementsInstanced").at(-1).slice(1), [GL.TRIANGLES, 36, GL.UNSIGNED_BYTE, 0, 4000]);
 });
 

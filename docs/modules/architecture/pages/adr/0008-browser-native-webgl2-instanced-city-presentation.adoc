@@ -4,7 +4,11 @@ Status:: Accepted
 
 ADR 0011 xref:adr/0011-interactive-webgl2-navigation-and-inspection.adoc[amends
 this M1 baseline] for the current interactive camera, aligned city payload,
-outline draws, inert path labels, and lifecycle contract.
+outline draws, inert path labels, and lifecycle contract. ADR 0012
+xref:adr/0012-bounded-grouped-shaded-direct-webgl-city-presentation.adoc[replaces
+the raw-linear dimensions, square-row layout, palette, background, shared fill
+vertices, and numeric proof] while retaining this decision's direct-WebGL
+boundary and one instanced city draw.
 
 == Context
 

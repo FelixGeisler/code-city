@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { registerHooks } from "node:module";
 import path from "node:path";
@@ -164,7 +165,8 @@ test("the literal city fixture is closed and covers mapping, layout, permutation
     exactKeys(entry, ["id", "target", "mutation", "literal", "expected"]);
     assert.equal(entry.expected, "M1-CITY-1");
   }
-  assert.deepEqual(fixture.fullEnvelope.expectedBounds, [0, 0, 0, 13981147, 2097153, 699176]);
+  assert.deepEqual(fixture.fullEnvelope.concentrated.expectedBounds, [0, 0, 0, 328, 40, 338]);
+  assert.deepEqual(fixture.fullEnvelope.manyGroups.expectedBounds, [0, 0, 0, 1074, 40, 1072]);
   for (const entry of fixture.cityCases) {
     exactKeys(entry, ["id", "facts", "expected"]);
     exactKeys(entry.expected, ["identities", "count", "origins", "sizes", "rgba", "bounds"]);
@@ -187,6 +189,31 @@ test("literal N=1,2,4,5 mapping, palette, layout, and bounds match exact owned t
     assert.equal(Object.isFrozen(city.geometry), true);
     assert.equal(validateCityPayload(city).geometry.count, entry.expected.count);
   }
+});
+
+test("the approved 18-building synthetic fixture has exact bytes, three groups, projected dimensions, canonical alignment, and actual-only bounds", async () => {
+  const fixtureBytes = await readFile(path.join(projectRoot, "test", "fixtures", "interactive", "fixture.json"));
+  assert.equal(createHash("sha256").update(fixtureBytes).digest("hex"), "5085a17a80aa57fc7fd49b0e8ec0de0e6a82b3a894bcb7c30528bb084ed7488a");
+  const records = JSON.parse(fixtureBytes);
+  assert.equal(records.length, 21);
+  assert.equal(new Set(records.map(({ path: sourcePath }) => sourcePath)).size, 21);
+  const expected = [
+    ["apps/console/src/bootstrap.ts", 3, 2, 1, 11, 5], ["apps/console/src/commands/route.js", 4, 2, 2, 12, 5],
+    ["apps/console/src/commands/search.ts", 7, 3, 4, 15, 5], ["apps/console/src/state/session.ts", 3, 2, 8, 11, 5],
+    ["apps/console/src/view/help.ts", 1, 0, 0, 8, 3], ["apps/console/src/view/render.js", 10, 4, 1, 16, 6],
+    ["packages/engine/src/contracts/result.ts", 1, 0, 0, 8, 3], ["packages/engine/src/graph/walk.ts", 6, 3, 8, 14, 5],
+    ["packages/engine/src/parse.ts", 3, 2, 2, 11, 5], ["packages/engine/src/report/outlier.ts", 40, 17, 21, 23, 10],
+    ["packages/engine/src/score.ts", 10, 4, 4, 16, 6], ["packages/engine/src/validate.ts", 3, 2, 16, 11, 5],
+    ["packages/ui/src/components/card.ts", 3, 2, 2, 11, 5], ["packages/ui/src/components/grid.ts", 4, 2, 4, 12, 5],
+    ["packages/ui/src/interaction/hover.js", 3, 2, 8, 11, 5], ["packages/ui/src/interaction/select.js", 3, 2, 16, 11, 5],
+    ["packages/ui/src/palette.js", 3, 2, 1, 11, 5], ["packages/ui/src/theme.ts", 1, 0, 0, 8, 3],
+  ];
+  const city = buildCity(expected.map(([canonicalPath, S, U, M]) => ({ canonicalPath, S, U, M })));
+  assert.deepEqual(city.inspection.map(({ canonicalPath }) => canonicalPath), expected.map(([canonicalPath]) => canonicalPath));
+  assert.deepEqual(Array.from({ length: 18 }, (_, index) => [city.geometry.sizes[index * 3 + 1], city.geometry.sizes[index * 3]]), expected.map((entry) => entry.slice(4)));
+  assert.deepEqual([...city.geometry.bounds], [0, 0, 0, 46, 23, 55]);
+  assert.deepEqual([...city.geometry.origins], [41,0,0,33,0,8,40,0,8,33,0,15,40,0,15,33,0,0,0,0,19,0,0,12,7,0,12,0,0,0,12,0,0,14,0,12,0,0,36,7,0,36,0,0,43,7,0,43,0,0,50,7,0,50]);
+  assert.equal(validateCityPayload(city).geometry.count, 18);
 });
 
 test("every palette boundary maps to its literal bytes independently", () => {
@@ -252,11 +279,10 @@ test("construction rejects non-arrays, non-dense arrays, accessor elements, extr
 test("checked metric, count, coordinate, and allocation guards reject instead of clamping or partially accepting", () => {
   const base = { canonicalPath: "guard.ts", S: 0, U: 0, M: 0 };
   for (const fact of [
-    { ...base, S: Number.MAX_SAFE_INTEGER },
-    { ...base, U: Number.MAX_SAFE_INTEGER },
-    { ...base, S: 2 ** 24 - 1 },
-    { ...base, U: 2 ** 24 - 1 },
+    { ...base, S: Number.MAX_SAFE_INTEGER + 1 },
+    { ...base, U: Number.MAX_SAFE_INTEGER + 1 },
   ]) assertCityFailure(() => buildCity([fact]));
+  assert.deepEqual([...buildCity([{ ...base, S: Number.MAX_SAFE_INTEGER, U: Number.MAX_SAFE_INTEGER }]).geometry.sizes], [18, 40, 18]);
   const tooMany = Array.from({ length: 4001 }, (_, index) => ({ ...base, canonicalPath: `g/${String(index).padStart(4, "0")}.ts` }));
   assertCityFailure(() => buildCity(tooMany));
 });
@@ -360,30 +386,40 @@ test("typed view bounds reject branded fakes, proxies, wrong views, subclasses, 
   adversarial.assertNoReads();
 });
 
-test("the 4,000-fact full envelope has the literal bounds and renewed exact float proof", () => {
+test("the concentrated and G=4,000 full envelopes have literal bounds and renewed exact float proofs", () => {
   const envelope = fixture.fullEnvelope;
-  const facts = Array.from({ length: envelope.count }, (_, index) => ({
-    canonicalPath: `envelope/${String(index).padStart(4, "0")}.ts`,
-    ...(index < envelope.largeFactCount ? envelope.largeFact : envelope.smallFact),
-  }));
-  const city = buildCity(facts);
-  assert.equal(city.geometry.count, 4000);
-  assert.equal(Math.ceil(Math.sqrt(city.geometry.count)), envelope.columns);
-  assert.deepEqual([...city.geometry.bounds], envelope.expectedBounds);
-  assert(city.geometry.bounds.every((coordinate) => coordinate < envelope.coordinateLimitExclusive));
-  const target = [city.geometry.bounds[3] / 2, city.geometry.bounds[4] / 2, city.geometry.bounds[5] / 2];
-  for (let index = 0; index < city.geometry.count; index += 1) {
-    const offset = index * 3;
-    for (let axis = 0; axis < 3; axis += 1) {
-      const origin = city.geometry.origins[offset + axis];
-      const endpoint = origin + city.geometry.sizes[offset + axis];
-      assert.equal(Math.fround(origin), origin);
-      assert.equal(Math.fround(endpoint), endpoint);
-      assert(Math.abs(origin - target[axis]) < envelope.targetRelativeLimitExclusive);
-      assert(Math.abs(endpoint - target[axis]) < envelope.targetRelativeLimitExclusive);
-      assert.equal(Math.fround(origin - target[axis]), origin - target[axis]);
-      assert.equal(Math.fround(endpoint - target[axis]), endpoint - target[axis]);
+  const cases = [
+    ["concentrated", (index) => `envelope/${String(index).padStart(4, "0")}.ts`],
+    ["manyGroups", (index) => `g${String(index).padStart(4, "0")}/src/file.ts`],
+  ];
+  for (const [id, canonicalPath] of cases) {
+    const facts = Array.from({ length: envelope.count }, (_, index) => ({
+      canonicalPath: canonicalPath(index),
+      ...(index < envelope.largeFactCount ? envelope.largeFact : envelope.smallFact),
+    }));
+    const city = buildCity(facts);
+    assert.equal(city.geometry.count, 4000);
+    assert.deepEqual([...city.geometry.bounds], envelope[id].expectedBounds, id);
+    assert(city.geometry.bounds.every((coordinate) => coordinate < envelope.coordinateLimitExclusive));
+    const target = [city.geometry.bounds[3] / 2, city.geometry.bounds[4] / 2, city.geometry.bounds[5] / 2];
+    for (let index = 0; index < city.geometry.count; index += 1) {
+      const offset = index * 3;
+      for (let axis = 0; axis < 3; axis += 1) {
+        const origin = city.geometry.origins[offset + axis];
+        const endpoint = origin + city.geometry.sizes[offset + axis];
+        assert.equal(Math.fround(origin), origin);
+        assert.equal(Math.fround(endpoint), endpoint);
+        assert(Math.abs(origin - target[axis]) < envelope.targetRelativeLimitExclusive);
+        assert(Math.abs(endpoint - target[axis]) < envelope.targetRelativeLimitExclusive);
+        assert.equal(Math.fround(origin - target[axis]), origin - target[axis]);
+        assert.equal(Math.fround(endpoint - target[axis]), endpoint - target[axis]);
+      }
     }
+    assert.equal(validateCityPayload(city).geometry.count, 4000);
   }
-  assertView(deriveView(city.geometry.bounds, fixture.viewCases.at(-1).aspect), fixture.viewCases.at(-1).expected, "full envelope view");
+  const distributed = buildCity(Array.from({ length: envelope.count }, (_, index) => ({
+    canonicalPath: `g${String(index).padStart(4, "0")}/src/file.ts`,
+    ...(index < envelope.largeFactCount ? envelope.largeFact : envelope.smallFact),
+  })));
+  assertView(deriveView(distributed.geometry.bounds, fixture.viewCases.at(-1).aspect), fixture.viewCases.at(-1).expected, "full envelope view");
 });

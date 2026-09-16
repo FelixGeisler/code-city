@@ -1,0 +1,86 @@
+[
+  {
+    "path": "apps/console/package.json",
+    "content": "{\"name\":\"@synthetic/console\",\"private\":true}\n"
+  },
+  {
+    "path": "apps/console/src/bootstrap.ts",
+    "content": "export function bootstrap(name: string): string {\n  return `ready:${name}`;\n}\n"
+  },
+  {
+    "path": "apps/console/src/commands/route.js",
+    "content": "export function route(enabled) {\n  if (enabled) return \"active\";\n  return \"idle\";\n}\n"
+  },
+  {
+    "path": "apps/console/src/commands/search.ts",
+    "content": "export function search(first: string, second: string): string {\n  if (first.length > 0) return first && second ? first : second;\n  return second;\n}\n\nexport function normalize(value: string): string {\n  return value.trim();\n}\n"
+  },
+  {
+    "path": "apps/console/src/state/session.ts",
+    "content": "export function session(a: boolean, b: boolean, c: boolean, d: boolean, e: boolean, f: boolean, g: boolean, h: boolean, i: boolean): boolean {\n  return (a && b) || (c ?? d) ? (e && f) || (g ?? h) : i;\n}\n"
+  },
+  {
+    "path": "apps/console/src/view/help.ts",
+    "content": "export type HelpTopic = { title: string; detail: string };\n"
+  },
+  {
+    "path": "apps/console/src/view/render.js",
+    "content": "export function header(title) {\n  return `# ${title}`;\n}\n\nexport function body(lines) {\n  return lines.join(\"\n\");\n}\n\nexport function footer() {\n  return \"synthetic\";\n}\n"
+  },
+  {
+    "path": "packages/engine/package.json",
+    "content": "{\"name\":\"@synthetic/engine\",\"private\":true}\n"
+  },
+  {
+    "path": "packages/engine/src/contracts/result.ts",
+    "content": "export interface Result { readonly ok: boolean; readonly value: string }\n"
+  },
+  {
+    "path": "packages/engine/src/graph/walk.ts",
+    "content": "export function walk(a: boolean, b: boolean, c: boolean, d: boolean, e: boolean, f: boolean, g: boolean, h: boolean, i: boolean): boolean {\n  return (a && b) || (c ?? d) ? (e && f) || (g ?? h) : i;\n}\n\nexport function reset(): number {\n  return 0;\n}\n"
+  },
+  {
+    "path": "packages/engine/src/parse.ts",
+    "content": "export function parse(value: string): string {\n  return value.length > 0 ? value : \"empty\";\n}\n"
+  },
+  {
+    "path": "packages/engine/src/report/outlier.ts",
+    "content": "export function decide(\n  a: boolean,\n  b: boolean,\n  c: boolean,\n  d: boolean,\n  e: boolean,\n  f: boolean,\n  g: boolean,\n  h: boolean,\n  i: boolean,\n  j: boolean,\n  k: boolean,\n  l: boolean,\n  m: boolean,\n  n: boolean,\n  o: boolean,\n  p: boolean,\n  q: boolean,\n  r: boolean,\n  s: boolean,\n  t: boolean,\n  u: boolean,\n): boolean {\n  return a && b && c && d && e && f && g && h && i && j && k && l && m && n && o && p && q && r && s && t && u;\n}\n\nexport function stage01(value: number): number { return value + 1; }\nexport function stage02(value: number): number { return value + 2; }\nexport function stage03(value: number): number { return value + 3; }\nexport function stage04(value: number): number { return value + 4; }\nexport function stage05(value: number): number { return value + 5; }\nexport function stage06(value: number): number { return value + 6; }\nexport function stage07(value: number): number { return value + 7; }\nexport function stage08(value: number): number { return value + 8; }\nexport function stage09(value: number): number { return value + 9; }\nexport function stage10(value: number): number { return value + 10; }\nexport function stage11(value: number): number { return value + 11; }\nexport function stage12(value: number): number { return value + 12; }\nexport function stage13(value: number): number { return value + 13; }\nexport function stage14(value: number): number { return value + 14; }\nexport function stage15(value: number): number { return value + 15; }\n"
+  },
+  {
+    "path": "packages/engine/src/score.ts",
+    "content": "export function score(first: boolean, second: boolean): boolean {\n  if (first) return first && second ? first : second;\n  return second;\n}\n\nexport function baseline(): number {\n  return 1;\n}\n\nexport function ceiling(): number {\n  return 100;\n}\n"
+  },
+  {
+    "path": "packages/engine/src/validate.ts",
+    "content": "export function validate(a: boolean, b: boolean, c: boolean, d: boolean, e: boolean, f: boolean, g: boolean, h: boolean, i: boolean, j: boolean, k: boolean, l: boolean, m: boolean, n: boolean, o: boolean, p: boolean): boolean {\n  return a && b && c && d && e && f && g && h && i && j && k && l && m && n && o && p;\n}\n"
+  },
+  {
+    "path": "packages/ui/package.json",
+    "content": "{\"name\":\"@synthetic/ui\",\"private\":true}\n"
+  },
+  {
+    "path": "packages/ui/src/components/card.ts",
+    "content": "export function card(title: string): string {\n  return title.length > 0 ? title : \"untitled\";\n}\n"
+  },
+  {
+    "path": "packages/ui/src/components/grid.ts",
+    "content": "export function grid(first: boolean, second: boolean): boolean {\n  if (first) return first && second ? first : second;\n  return second;\n}\n"
+  },
+  {
+    "path": "packages/ui/src/interaction/hover.js",
+    "content": "export function hover(a, b, c, d, e, f, g, h, i) {\n  return (a && b) || (c ?? d) ? (e && f) || (g ?? h) : i;\n}\n"
+  },
+  {
+    "path": "packages/ui/src/interaction/select.js",
+    "content": "export function select(a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p) {\n  return a && b && c && d && e && f && g && h && i && j && k && l && m && n && o && p;\n}\n"
+  },
+  {
+    "path": "packages/ui/src/palette.js",
+    "content": "export function palette() {\n  return \"viridis\";\n}\n"
+  },
+  {
+    "path": "packages/ui/src/theme.ts",
+    "content": "export type Theme = \"dark\" | \"light\";\n"
+  }
+]

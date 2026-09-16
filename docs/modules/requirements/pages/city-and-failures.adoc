@@ -3,54 +3,121 @@
 == Building mapping
 
 The scene contains exactly one axis-aligned prism for each admitted module.
-Admission, `S`, `U`, `M`, source limits, deterministic layout, and the metric
-palette remain unchanged and are defined by xref:source-and-metrics.adoc[Source
-and Metrics].
+Admission, raw `S`, `U`, and `M`, and source limits remain defined by
+xref:source-and-metrics.adoc[Source and Metrics]. The six current `M` thresholds
+remain unchanged; displayed dimensions and base colours are fixed here.
+
+For every admitted non-negative safe-integer fact:
+
+[source,text]
+----
+height(S) = 4 + floor(36 * ln(1 + min(S, 1000)) / ln(1001) + 0.5)
+side(U)   = 3 + floor(15 * (ln(1 + min(U, 100)) / ln(101))^1.5 + 0.5)
+width = depth = side(U)
+----
+
+Thus displayed height is an integer in `4..40` and displayed width and depth
+are the same integer in `3..18`. Values above `S=1000` or `U=100` retain their
+raw metric value but share the corresponding capped displayed dimension.
 
 [cols="1,2",options="header"]
 |===
 |Property |Rule
 
 |Identity |Canonical module path
-|Height |`S + 1`
-|Width |`U + 1`
-|Depth |`U + 1`
-|Colour |Palette band selected by `M`
+|Height |`height(S)`
+|Width |`side(U)`
+|Depth |`side(U)`
+|Base colour |The following palette band selected by `M`
 |===
 
 [cols="1,1",options="header"]
 |===
-|Complexity `M` |RGBA colour
+|Complexity `M` |Base RGBA colour
 
-|0 |`#440154FF`
-|1 |`#414487FF`
-|2–3 |`#2A788EFF`
-|4–7 |`#22A884FF`
-|8–15 |`#7AD151FF`
-|16+ |`#FDE725FF`
+|0 |`#A78BFAFF`
+|1 |`#818CF8FF`
+|2–3 |`#38BDF8FF`
+|4–7 |`#2DD4BFFF`
+|8–15 |`#A3E635FF`
+|16+ |`#FACC15FF`
 |===
+
+The geometry payload stores this exact opaque base RGBA. Face display
+transforms do not change band membership or the payload colour.
 
 == Layout
 
-Sort the `N` identities by unsigned UTF-8. Let `C` be the smallest positive
-integer with `C² ≥ N`. For zero-based index `i`:
+Derive one tagged group identity from each canonical path after removing its
+filename. Two or more remaining segments form a directory identity whose
+identifier is the first two segments joined with `/`; one remaining segment
+forms a directory identity for that segment; no remaining segment forms the
+root identity. The root identity is distinct from every directory identity.
+Canonical paths and directory identifiers compare by unsigned UTF-8 bytes.
+For group ordering, the root identity compares using the bytes of `_root` and
+precedes a directory identity named `_root` on an exact tie.
+
+Within each group, sort buildings by descending `side(U)`, then canonical path.
+Let building gap be `2`, virtual padding be `3`, and:
 
 [source,text]
 ----
-r = floor(i / C)          k = i mod C          b_i = U_i + 1
-x_i = sum(b_j + 1) for j = rC through i-1
-D_r = max(b_j) in row r
-z_i = sum(D_q + 1) for q = 0 through r-1
-minimum corner_i = (x_i, 0, z_i)
+innerTarget = max(maxSide, ceil(sqrt(sum((side + 2)^2))))
 ----
 
-An empty sum is zero. Place at most `C` buildings per row. Bounds are exactly:
+Pack in unpadded inner coordinates. Start an empty row with cursor `(0,0)` and
+row depth `0`. Before placing a building, open a new row exactly when the
+current row is nonempty and `cursorX + side > innerTarget`; set `cursorX=0`,
+advance `cursorZ` by the completed row depth plus `2`, and reset row depth.
+Place the building minimum at `(cursorX,0,cursorZ)`, advance `cursorX` by
+`side+2`, and set row depth to the maximum side in that row. Occupied width and
+depth are the maxima of actual building endpoints, with no trailing gap. The
+virtual group cell is the occupied rectangle plus padding `3` on every edge;
+therefore its width is `occupiedWidth+6`, its depth is `occupiedDepth+6`, and
+actual local building `x,z` origins are offset by `3`.
+
+Sort virtual group cells by descending `cellWidth*cellDepth`, then tagged group
+identity. Let group gap be `8` and:
 
 [source,text]
 ----
-minimum = (0, 0, 0)
-maximum = (max(x_i + b_i), max(S_i + 1), max(z_i + b_i))
+outerTarget = max(maxCellWidth,
+                  ceil(sqrt(sum((cellWidth + 8) * (cellDepth + 8)))))
 ----
+
+Pack cells with the same row algorithm from `(0,0)`, substituting cell width,
+cell depth, `outerTarget`, and gap `8`. A row opens only when nonempty and
+`cursorX + nextCellWidth > outerTarget`; row depth is the maximum cell depth.
+The world origin of each building is its cell origin plus its padded local
+origin.
+
+After packing, translate all actual building minima by the same horizontal
+vector so the minimum actual `x` and `z` are exactly `0`. Compute city bounds
+from actual building boxes only. Virtual padding, cells, rows, and groups are
+layout calculations only: they are not payload geometry, visible plates, or
+pick targets.
+
+Payload arrays remain in increasing canonical-path index order. Packing writes
+one computed position back to that index; it does not reorder identity,
+keyboard traversal, selection, inspection, or exact-tie ownership.
+
+== Scene and fixed face display
+
+The WebGL clear colour and the matching CSS city host background are
+`#07111F`. Every building remains one instance in the existing single city
+fill draw. Fixed trusted face display derives normalized RGB channels from the
+instance base colour as follows, retaining alpha `1`:
+
+[source,text]
+----
++Y:             c' = c + 0.12 * (1 - c)
++X and -X:      c' = 0.82 * c
++Z, -Z, and -Y: c' = 0.62 * c
+----
+
+The base colour remains identifiable through these fixed transforms. There is
+no configurable lighting, normal or material input, texture, fog, shadow,
+blending, antialiasing promise, or static edge pass.
 
 == Camera and controls
 
@@ -284,15 +351,16 @@ The controller remains authoritative over the presenter's visual replicas.
 
 == Inspector and visual quality
 
-Selection publishes the complete canonical path as wrapping, bidirectionally
-isolated `textContent`. It is never markup, a URL, object key, shader text,
-resource locator, or tooltip-only content. A polite semantic status region
-announces changes. It shows exact `S` as “source lines”, `U` as “executable
-units”, and `M` as “maximum executable-unit complexity”; derived height `S+1`;
-width and depth `U+1`; the selected palette range and exact RGBA; and the
-complete six-band legend above. It is absent when selection is empty. Hover
-alone reveals no inspector. The inspector gives no source, finding, quality
-judgement, dependency, or configurable metric.
+The inspector shows exact raw `S` as “source lines”, raw `U` as “executable
+units”, and raw `M` as “maximum executable-unit complexity”. It labels the
+result as “bounded, log-compressed displayed dimensions” and shows the
+resulting displayed height and equal displayed width/depth. It states `S cap
+1000; displayed height range 4..40` and `U cap 100; displayed side range
+3..18`. A raw value above a cap remains shown even though its displayed
+dimension is capped. The inspector also shows the selected `M` palette range,
+exact base RGBA, and the complete six-band base-colour legend above. All other
+selection-only, inert-text, semantic status, empty-selection, hover-only, and
+non-disclosure rules remain unchanged.
 
 Visual quality is an M2 release requirement: the city remains the visual focus;
 controls look intentional and interaction is predictable; hover and selection
@@ -424,11 +492,13 @@ hash, serialise, log, packetise, wrap, or retain inspection facts.
 
 == Non-goals
 
-M2 adds no source viewing or download, dependency view, search, filtering,
-history, authentication, private-repository support, metric configuration,
-export, finding, AI guidance, touch-specific gesture, preset, first-person
-movement, minimap, per-building label, road, district, animation, saved view,
-sharing, or telemetry. It changes no M1 admission, syntax, metrics, limits,
-layout, palette, provider, browser-only topology, retry, or fallback policy. It
-adds no backend, second worker/context/canvas, renderer/UI/picking dependency,
-GPU readback, BVH, or alternate publication path.
+This baseline adds no source viewing or download, dependency view, search,
+filtering, history, authentication, private-repository support, metric
+configuration, export, finding, AI guidance, touch-specific gesture, preset,
+first-person movement, minimap, visible group plate, road, parcel, persistent
+group or building label, tooltip, static building edge, replacement hover or
+selection geometry, animation, saved view, sharing, or telemetry. It changes
+no admission, syntax, raw metric, source limit, provider, browser-only topology,
+privacy boundary, failure category, retry, fallback, camera, input, traversal,
+or CPU picking policy. It adds no backend, worker, context, canvas, renderer/UI/
+picking dependency, GPU readback, BVH, or alternate publication path.

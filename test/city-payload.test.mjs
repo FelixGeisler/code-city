@@ -15,6 +15,26 @@ const FACTS = [
   { canonicalPath: "a.ts", S: 1, U: 2, M: 0 },
   { canonicalPath: "src/markup-<secret>-\u202Etoken.ts", S: 4, U: 3, M: 16 },
 ];
+const LITERAL_PALETTE_BOUNDARIES = [
+  { M: 0, rgba: [0xa7, 0x8b, 0xfa, 0xff] },
+  { M: 1, rgba: [0x81, 0x8c, 0xf8, 0xff] },
+  { M: 2, rgba: [0x38, 0xbd, 0xf8, 0xff] },
+  { M: 3, rgba: [0x38, 0xbd, 0xf8, 0xff] },
+  { M: 4, rgba: [0x2d, 0xd4, 0xbf, 0xff] },
+  { M: 7, rgba: [0x2d, 0xd4, 0xbf, 0xff] },
+  { M: 8, rgba: [0xa3, 0xe6, 0x35, 0xff] },
+  { M: 15, rgba: [0xa3, 0xe6, 0x35, 0xff] },
+  { M: 16, rgba: [0xfa, 0xcc, 0x15, 0xff] },
+  { M: Number.MAX_SAFE_INTEGER, rgba: [0xfa, 0xcc, 0x15, 0xff] },
+];
+const LITERAL_PALETTE_COLOURS = [
+  [0xa7, 0x8b, 0xfa, 0xff],
+  [0x81, 0x8c, 0xf8, 0xff],
+  [0x38, 0xbd, 0xf8, 0xff],
+  [0x2d, 0xd4, 0xbf, 0xff],
+  [0xa3, 0xe6, 0x35, 0xff],
+  [0xfa, 0xcc, 0x15, 0xff],
+];
 const MAX_MODULE_BYTES = 2_097_152;
 const MAX_TOTAL_BYTES = 40 * 1_048_576;
 const MAX_MODULE_UNITS = 1 + Math.floor(MAX_MODULE_BYTES / 3);
@@ -35,6 +55,20 @@ function cloneCity(city = buildCity(FACTS)) {
   return {
     geometry: cloneGeometry(city.geometry),
     inspection: city.inspection.map((fact) => ({ ...fact })),
+  };
+}
+
+function literalPaletteCity(M, rgba) {
+  return {
+    geometry: {
+      kind: "CODE_CITY_PRESENTATION",
+      count: 1,
+      origins: new Float32Array([0, 0, 0]),
+      sizes: new Float32Array([3, 4, 3]),
+      rgba: new Uint8Array(rgba),
+      bounds: new Float32Array([0, 0, 0, 3, 4, 3]),
+    },
+    inspection: [{ canonicalPath: "literal-palette.ts", S: 0, U: 0, M }],
   };
 }
 
@@ -62,7 +96,7 @@ test("validateCityPayload creates immutable controller-owned non-aliasing city s
   assert.equal(Object.isFrozen(validated.inspection), true);
   assert(validated.inspection.every(Object.isFrozen));
   assert.equal(Object.isFrozen(validated.centre), true);
-  assert.deepEqual(validated.centre, [4, 2.5, 2]);
+  assert.deepEqual(validated.centre, [2.5, 6, 12]);
   for (const key of ["origins", "sizes", "rgba", "bounds"]) {
     assert.notEqual(validated.geometry[key], input.geometry[key], key);
     assert.notEqual(validated.geometry[key].buffer, input.geometry[key].buffer, `${key}.buffer`);
@@ -111,6 +145,14 @@ test("city and inspection containers require exact own enumerable data without i
   }
 });
 
+test("controller validates literal palette boundaries and rejects independently forged palette payloads", () => {
+  for (const { M, rgba } of LITERAL_PALETTE_BOUNDARIES) {
+    assert.deepEqual([...validateCityPayload(literalPaletteCity(M, rgba)).geometry.rgba], rgba, `M=${M}`);
+    const forged = LITERAL_PALETTE_COLOURS.find((candidate) => candidate[0] !== rgba[0]);
+    fails(literalPaletteCity(M, forged), `forged M=${M}`);
+  }
+});
+
 test("validator rejects count, canonical order, duplicate identity, dimensions, palette, index alignment, layout, and bounds disagreement", () => {
   const cases = [];
   {
@@ -123,7 +165,7 @@ test("validator rejects count, canonical order, duplicate identity, dimensions, 
     const city = cloneCity(); city.inspection[1] = { ...city.inspection[1], canonicalPath: city.inspection[0].canonicalPath }; cases.push(["duplicate", city]);
   }
   {
-    const city = cloneCity(); city.inspection[0] = { ...city.inspection[0], U: city.inspection[0].U + 1 }; cases.push(["size alignment", city]);
+    const city = cloneCity(); city.inspection[0] = { ...city.inspection[0], U: 100 }; cases.push(["size alignment", city]);
   }
   {
     const city = cloneCity(); city.inspection[0] = { ...city.inspection[0], M: 16 }; cases.push(["palette alignment", city]);
@@ -149,7 +191,7 @@ test("validator enforces exact and one-over per-module source-line and executabl
     const exact = cloneCity(buildCity([exactFact]));
     const validated = validateCityPayload(exact);
     assert.equal(validated.inspection[0][metric], maximum);
-    assert.equal(validated.geometry.sizes[metric === "S" ? 1 : 0], maximum + 1);
+    assert.equal(validated.geometry.sizes[metric === "S" ? 1 : 0], metric === "S" ? 40 : 18);
 
     const oneOverFact = { ...exactFact, canonicalPath: `one-over-${metric}.ts`, [metric]: maximum + 1 };
     fails(cloneCity(buildCity([oneOverFact])), `${metric} per-module one over`);
@@ -162,7 +204,7 @@ test("validator enforces exact and one-over aggregate source-line bounds with ma
   }));
   const exact = validateCityPayload(cloneCity(buildCity(exactFacts)));
   assert.equal(exact.inspection.reduce((total, fact) => total + fact.S, 0), MAX_TOTAL_BYTES);
-  assert.equal(exact.geometry.bounds[4], MAX_MODULE_BYTES + 1);
+  assert.equal(exact.geometry.bounds[4], 40);
 
   const oneOverFacts = [...exactFacts, { canonicalPath: "source-total/20.ts", S: 1, U: 0, M: 0 }];
   fails(cloneCity(buildCity(oneOverFacts)), "S aggregate one over");
@@ -178,7 +220,7 @@ test("validator enforces exact and one-over aggregate executable-unit bounds wit
   assert.equal(remaining, 0);
   const exact = validateCityPayload(cloneCity(buildCity(exactFacts)));
   assert.equal(exact.inspection.reduce((total, fact) => total + fact.U, 0), MAX_TOTAL_UNITS);
-  assert.equal(exact.geometry.sizes[0], MAX_MODULE_UNITS + 1);
+  assert.equal(exact.geometry.sizes[0], 18);
 
   const oneOverFacts = exactFacts.map((fact) => ({ ...fact }));
   const incrementIndex = oneOverFacts.findIndex((fact) => fact.U < MAX_MODULE_UNITS);

@@ -54,16 +54,19 @@ class FakeElement {
 }
 
 const paletteBoundaries = [
-  { M: 0, range: "0", rgba: "#440154FF" },
-  { M: 1, range: "1", rgba: "#414487FF" },
-  { M: 2, range: "2–3", rgba: "#2A788EFF" },
-  { M: 3, range: "2–3", rgba: "#2A788EFF" },
-  { M: 4, range: "4–7", rgba: "#22A884FF" },
-  { M: 7, range: "4–7", rgba: "#22A884FF" },
-  { M: 8, range: "8–15", rgba: "#7AD151FF" },
-  { M: 15, range: "8–15", rgba: "#7AD151FF" },
-  { M: 16, range: "16+", rgba: "#FDE725FF" },
+  { M: 0, range: "0", rgba: "#A78BFAFF" },
+  { M: 1, range: "1", rgba: "#818CF8FF" },
+  { M: 2, range: "2–3", rgba: "#38BDF8FF" },
+  { M: 3, range: "2–3", rgba: "#38BDF8FF" },
+  { M: 4, range: "4–7", rgba: "#2DD4BFFF" },
+  { M: 7, range: "4–7", rgba: "#2DD4BFFF" },
+  { M: 8, range: "8–15", rgba: "#A3E635FF" },
+  { M: 15, range: "8–15", rgba: "#A3E635FF" },
+  { M: 16, range: "16+", rgba: "#FACC15FF" },
 ];
+
+const displayedHeight = (S) => 4 + Math.floor(36 * Math.log1p(Math.min(S, 1000)) / Math.log(1001) + 0.5);
+const displayedSide = (U) => 3 + Math.floor(15 * (Math.log1p(Math.min(U, 100)) / Math.log(101)) ** 1.5 + 0.5);
 
 function fixture(options = {}) {
   const root = new FakeElement("section");
@@ -132,19 +135,20 @@ test("every required M boundary publishes exact facts, formulas, selected band, 
     assert.equal(byAttribute(inspector, "data-source-lines").textContent, String(fact.S));
     assert.equal(byAttribute(inspector, "data-executable-units").textContent, String(fact.U));
     assert.equal(byAttribute(inspector, "data-maximum-complexity").textContent, String(fact.M));
-    assert.equal(byAttribute(inspector, "data-height").textContent, `S + 1 = ${fact.S + 1}`);
-    assert.equal(byAttribute(inspector, "data-width").textContent, `U + 1 = ${fact.U + 1}`);
-    assert.equal(byAttribute(inspector, "data-depth").textContent, `U + 1 = ${fact.U + 1}`);
+    assert.equal(byDataset(inspector, "dimensionPolicy").textContent, "S cap 1000; displayed height range 4..40. U cap 100; displayed side range 3..18.");
+    assert.equal(byAttribute(inspector, "data-height").textContent, String(displayedHeight(fact.S)));
+    assert.equal(byAttribute(inspector, "data-width").textContent, String(displayedSide(fact.U)));
+    assert.equal(byAttribute(inspector, "data-depth").textContent, String(displayedSide(fact.U)));
     assert.equal(byDataset(inspector, "selectedRange").textContent, `M = ${expected.range}`);
     assert.equal(byDataset(inspector, "selectedRgba").textContent, expected.rgba);
     const legend = byDataset(inspector, "paletteLegend");
     assert.deepEqual(legend.children.map((item) => item.textContent), [
-      "M = 0 — #440154FF",
-      "M = 1 — #414487FF",
-      "M = 2–3 — #2A788EFF",
-      "M = 4–7 — #22A884FF",
-      "M = 8–15 — #7AD151FF",
-      "M = 16+ — #FDE725FF",
+      "M = 0 — #A78BFAFF",
+      "M = 1 — #818CF8FF",
+      "M = 2–3 — #38BDF8FF",
+      "M = 4–7 — #2DD4BFFF",
+      "M = 8–15 — #A3E635FF",
+      "M = 16+ — #FACC15FF",
     ]);
     assert.equal(descendants(inspector).some(({ tagName }) => tagName === "A"), false);
   }
