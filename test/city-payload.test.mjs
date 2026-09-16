@@ -15,6 +15,26 @@ const FACTS = [
   { canonicalPath: "a.ts", S: 1, U: 2, M: 0 },
   { canonicalPath: "src/markup-<secret>-\u202Etoken.ts", S: 4, U: 3, M: 16 },
 ];
+const LITERAL_PALETTE_BOUNDARIES = [
+  { M: 0, rgba: [0xa7, 0x8b, 0xfa, 0xff] },
+  { M: 1, rgba: [0x81, 0x8c, 0xf8, 0xff] },
+  { M: 2, rgba: [0x38, 0xbd, 0xf8, 0xff] },
+  { M: 3, rgba: [0x38, 0xbd, 0xf8, 0xff] },
+  { M: 4, rgba: [0x2d, 0xd4, 0xbf, 0xff] },
+  { M: 7, rgba: [0x2d, 0xd4, 0xbf, 0xff] },
+  { M: 8, rgba: [0xa3, 0xe6, 0x35, 0xff] },
+  { M: 15, rgba: [0xa3, 0xe6, 0x35, 0xff] },
+  { M: 16, rgba: [0xfa, 0xcc, 0x15, 0xff] },
+  { M: Number.MAX_SAFE_INTEGER, rgba: [0xfa, 0xcc, 0x15, 0xff] },
+];
+const LITERAL_PALETTE_COLOURS = [
+  [0xa7, 0x8b, 0xfa, 0xff],
+  [0x81, 0x8c, 0xf8, 0xff],
+  [0x38, 0xbd, 0xf8, 0xff],
+  [0x2d, 0xd4, 0xbf, 0xff],
+  [0xa3, 0xe6, 0x35, 0xff],
+  [0xfa, 0xcc, 0x15, 0xff],
+];
 const MAX_MODULE_BYTES = 2_097_152;
 const MAX_TOTAL_BYTES = 40 * 1_048_576;
 const MAX_MODULE_UNITS = 1 + Math.floor(MAX_MODULE_BYTES / 3);
@@ -35,6 +55,20 @@ function cloneCity(city = buildCity(FACTS)) {
   return {
     geometry: cloneGeometry(city.geometry),
     inspection: city.inspection.map((fact) => ({ ...fact })),
+  };
+}
+
+function literalPaletteCity(M, rgba) {
+  return {
+    geometry: {
+      kind: "CODE_CITY_PRESENTATION",
+      count: 1,
+      origins: new Float32Array([0, 0, 0]),
+      sizes: new Float32Array([3, 4, 3]),
+      rgba: new Uint8Array(rgba),
+      bounds: new Float32Array([0, 0, 0, 3, 4, 3]),
+    },
+    inspection: [{ canonicalPath: "literal-palette.ts", S: 0, U: 0, M }],
   };
 }
 
@@ -108,6 +142,14 @@ test("city and inspection containers require exact own enumerable data without i
     { ...valid.inspection[0], M: Number.MAX_VALUE },
   ]) {
     const city = cloneCity(); city.inspection[0] = fact; fails(city);
+  }
+});
+
+test("controller validates literal palette boundaries and rejects independently forged palette payloads", () => {
+  for (const { M, rgba } of LITERAL_PALETTE_BOUNDARIES) {
+    assert.deepEqual([...validateCityPayload(literalPaletteCity(M, rgba)).geometry.rgba], rgba, `M=${M}`);
+    const forged = LITERAL_PALETTE_COLOURS.find((candidate) => candidate[0] !== rgba[0]);
+    fails(literalPaletteCity(M, forged), `forged M=${M}`);
   }
 });
 

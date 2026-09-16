@@ -6,7 +6,6 @@ import {
   MAX_NORMALIZED_TOTAL_BYTES,
 } from "../domain/source-admission";
 import {
-  paletteForComplexity,
   PRESENTATION_KIND,
   type City,
   type InspectionFact,
@@ -42,7 +41,21 @@ const ARRAY_BUFFER_BYTE_LENGTH = Object.getOwnPropertyDescriptor(ARRAY_BUFFER_PR
 const MAX_FLOAT_INTEGER = 2 ** 24;
 const MAX_TARGET_RELATIVE = 2 ** 23;
 const MAX_EXECUTABLE_UNITS_PER_MODULE = 1 + Math.floor(MAX_NORMALIZED_MODULE_BYTES / 3);
-const PALETTE_PROBES = [0, 1, 2, 4, 8, 16] as const;
+const CONTROLLER_PALETTE = [
+  { maximum: 0, rgba: [0xa7, 0x8b, 0xfa, 0xff] },
+  { maximum: 1, rgba: [0x81, 0x8c, 0xf8, 0xff] },
+  { maximum: 3, rgba: [0x38, 0xbd, 0xf8, 0xff] },
+  { maximum: 7, rgba: [0x2d, 0xd4, 0xbf, 0xff] },
+  { maximum: 15, rgba: [0xa3, 0xe6, 0x35, 0xff] },
+  { maximum: Number.MAX_SAFE_INTEGER, rgba: [0xfa, 0xcc, 0x15, 0xff] },
+] as const;
+
+function expectedPaletteForComplexity(complexity: number): readonly [number, number, number, number] {
+  for (const band of CONTROLLER_PALETTE) {
+    if (complexity <= band.maximum) return band.rgba;
+  }
+  invalid();
+}
 
 function invalid(): never {
   throw new Error("M1-CITY-1");
@@ -148,7 +161,7 @@ function reconstructExpected(inspection: readonly InspectionFact[]): Readonly<{
     sizes[index * 3 + 1] = height;
     sizes[index * 3 + 2] = side;
     maximumY = Math.max(maximumY, height);
-    const colour = paletteForComplexity(fact.M);
+    const colour = expectedPaletteForComplexity(fact.M);
     for (let channel = 0; channel < 4; channel += 1) rgba[index * 4 + channel] = colour[channel]!;
     const group = groupIdentity(fact.canonicalPath);
     const key = `${group.root ? "root" : "directory"}:${group.identity}`;
@@ -349,8 +362,7 @@ function snapshotGeometry(value: unknown): ValidatedGeometry {
       || width < 3 || width > 18 || height < 4 || height > 40 || depth !== width || y !== 0) invalid();
     const colourOffset = index * 4;
     let paletteMatch = false;
-    for (const probe of PALETTE_PROBES) {
-      const colour = paletteForComplexity(probe);
+    for (const { rgba: colour } of CONTROLLER_PALETTE) {
       if (rgba[colourOffset] === colour[0] && rgba[colourOffset + 1] === colour[1]
         && rgba[colourOffset + 2] === colour[2] && rgba[colourOffset + 3] === colour[3]) {
         paletteMatch = true;
