@@ -52,6 +52,140 @@ function digestBytes(parts) {
   return hash.digest("hex");
 }
 
+function float32Values(bytes) {
+  return [...new Float32Array(Uint8Array.from(bytes).buffer)];
+}
+
+function groupIdentity(modulePath) {
+  const segments = modulePath.split("/");
+  segments.pop();
+  return segments.length >= 2 ? segments.slice(0, 2).join("/") : segments[0] ?? "_root";
+}
+
+function lineIntervalThroughBox(anchor, direction, origin, size) {
+  let minimum = Number.NEGATIVE_INFINITY;
+  let maximum = Number.POSITIVE_INFINITY;
+  for (let axis = 0; axis < 3; axis += 1) {
+    const lower = origin[axis];
+    const upper = lower + size[axis];
+    if (direction[axis] === 0) {
+      if (anchor[axis] < lower || anchor[axis] > upper) return null;
+      continue;
+    }
+    const first = (lower - anchor[axis]) / direction[axis];
+    const second = (upper - anchor[axis]) / direction[axis];
+    minimum = Math.max(minimum, Math.min(first, second));
+    maximum = Math.min(maximum, Math.max(first, second));
+    if (minimum > maximum) return null;
+  }
+  return { minimum, maximum };
+}
+
+function deriveInteractiveJourneyPoints({ message, matrix, rectangle, orderedPaths, targetPath }) {
+  assert.equal(matrix.length, 16);
+  const origins = float32Values(message.buffers[0]);
+  const sizes = float32Values(message.buffers[1]);
+  const bounds = float32Values(message.buffers[3]);
+  assert.equal(origins.length, message.count * 3);
+  assert.equal(sizes.length, message.count * 3);
+  assert.equal(orderedPaths.length, message.count);
+  const boxes = orderedPaths.map((modulePath, index) => ({
+    modulePath,
+    group: groupIdentity(modulePath),
+    origin: origins.slice(index * 3, index * 3 + 3),
+    size: sizes.slice(index * 3, index * 3 + 3),
+  }));
+  const centre = [
+    (bounds[0] + bounds[3]) / 2,
+    (bounds[1] + bounds[4]) / 2,
+    (bounds[2] + bounds[5]) / 2,
+  ];
+  const rawDirection = [-matrix[2], -matrix[6], -matrix[10]];
+  const directionLength = Math.hypot(...rawDirection);
+  assert(directionLength > 0);
+  const direction = rawDirection.map((component) => component / directionLength);
+  const project = (world) => {
+    const relative = world.map((component, axis) => component - centre[axis]);
+    const clipX = matrix[0] * relative[0] + matrix[4] * relative[1] + matrix[8] * relative[2] + matrix[12];
+    const clipY = matrix[1] * relative[0] + matrix[5] * relative[1] + matrix[9] * relative[2] + matrix[13];
+    const point = {
+      x: rectangle.left + (clipX + 1) * rectangle.width / 2,
+      y: rectangle.top + (1 - clipY) * rectangle.height / 2,
+    };
+    return point.x > rectangle.left && point.x < rectangle.left + rectangle.width
+      && point.y > rectangle.top && point.y < rectangle.top + rectangle.height ? point : null;
+  };
+  const intersections = (anchor) => boxes.map((box, index) => ({
+    index,
+    interval: lineIntervalThroughBox(anchor, direction, box.origin, box.size),
+  })).filter(({ interval }) => interval !== null);
+  const targetIndex = orderedPaths.indexOf(targetPath);
+  assert(targetIndex >= 0);
+  const targetBox = boxes[targetIndex];
+  const targetAnchor = targetBox.origin.map((component, axis) => component + targetBox.size[axis] / 2);
+  const targetIntersections = intersections(targetAnchor);
+  assert(targetIntersections.length > 0);
+  targetIntersections.sort((left, right) => right.interval.maximum - left.interval.maximum || left.index - right.index);
+  assert.equal(targetIntersections[0].index, targetIndex, "canonical fixture target is occluded after a camera transition");
+
+  const pairGapCandidates = (left, right) => {
+    const candidates = [];
+    const leftX1 = left.origin[0] + left.size[0];
+    const rightX1 = right.origin[0] + right.size[0];
+    const leftZ1 = left.origin[2] + left.size[2];
+    const rightZ1 = right.origin[2] + right.size[2];
+    const overlapZ0 = Math.max(left.origin[2], right.origin[2]);
+    const overlapZ1 = Math.min(leftZ1, rightZ1);
+    if (overlapZ0 < overlapZ1) {
+      if (leftX1 < right.origin[0]) candidates.push([(leftX1 + right.origin[0]) / 2, (overlapZ0 + overlapZ1) / 2]);
+      if (rightX1 < left.origin[0]) candidates.push([(rightX1 + left.origin[0]) / 2, (overlapZ0 + overlapZ1) / 2]);
+    }
+    const overlapX0 = Math.max(left.origin[0], right.origin[0]);
+    const overlapX1 = Math.min(leftX1, rightX1);
+    if (overlapX0 < overlapX1) {
+      if (leftZ1 < right.origin[2]) candidates.push([(overlapX0 + overlapX1) / 2, (leftZ1 + right.origin[2]) / 2]);
+      if (rightZ1 < left.origin[2]) candidates.push([(overlapX0 + overlapX1) / 2, (rightZ1 + left.origin[2]) / 2]);
+    }
+    return candidates;
+  };
+  const horizontalCandidates = (sameGroup) => {
+    const candidates = [];
+    for (let left = 0; left < boxes.length; left += 1) {
+      for (let right = left + 1; right < boxes.length; right += 1) {
+        if ((boxes[left].group === boxes[right].group) !== sameGroup) continue;
+        candidates.push(...pairGapCandidates(boxes[left], boxes[right]));
+      }
+    }
+    return candidates;
+  };
+  const yCandidates = [...new Set([bounds[1], (bounds[1] + bounds[4]) / 2, bounds[4],
+    ...boxes.flatMap((box) => [box.origin[1] + box.size[1] / 2, box.origin[1] + box.size[1]])])];
+  const missPoints = (sameGroup, label) => {
+    const points = [];
+    const unique = new Set();
+    for (const [x, z] of horizontalCandidates(sameGroup)) {
+      for (const y of yCandidates) {
+        const anchor = [x, y, z];
+        if (intersections(anchor).length !== 0) continue;
+        const point = project(anchor);
+        if (point === null) continue;
+        const key = `${point.x}:${point.y}`;
+        if (!unique.has(key)) { unique.add(key); points.push(point); }
+      }
+    }
+    assert(points.length > 0, `no geometrically derived ${label} whitespace ray remained clear and inside the canvas`);
+    return points;
+  };
+  const target = project(targetAnchor);
+  assert.notEqual(target, null, "canonical fixture target projected outside the canvas");
+  return {
+    targetIndex,
+    target,
+    intraGroupMisses: missPoints(true, "intra-group"),
+    interGroupMisses: missPoints(false, "inter-group"),
+  };
+}
+
 function normalizedSourceDigest(rawBytes) {
   invariant(rawBytes instanceof Uint8Array, "Raw source fixture is not exact bytes");
   let decoded = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(rawBytes);
@@ -968,6 +1102,18 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     });
   };
   const evaluate = async (expression) => (await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId)).result.value;
+  const dispatchKey = async ({ key, code, virtualKey, modifiers = 0, text = "" }) => {
+    await cdp.send("Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", key, code, windowsVirtualKeyCode: virtualKey, nativeVirtualKeyCode: virtualKey, modifiers, text }, sessionId);
+    await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: virtualKey, nativeVirtualKeyCode: virtualKey, modifiers }, sessionId);
+  };
+  const dispatchPointer = async ({ type, x, y, button = "none", buttons = 0 }) => {
+    await cdp.send("Input.dispatchMouseEvent", { type, x, y, button, buttons, clickCount: type === "mouseMoved" ? 0 : 1 }, sessionId);
+  };
+  const nativeClick = async (point, button = "left") => {
+    const buttons = button === "left" ? 1 : 2;
+    await dispatchPointer({ type: "mousePressed", ...point, button, buttons });
+    await dispatchPointer({ type: "mouseReleased", ...point, button, buttons: 0 });
+  };
   const waitFor = async (expression, label) => {
     const deadline = Date.now() + 120_000;
     while (Date.now() < deadline) {
@@ -988,38 +1134,162 @@ async function checkInteractiveFixturePath({ cdp, sessionId, origin, requestedUr
     await evaluate(`document.querySelector('input[name=repository]').value=${JSON.stringify(repositoryUrl)};document.querySelector('form').requestSubmit();true`);
     await waitFor(`document.querySelector('[data-commit]').textContent===${JSON.stringify(selected)}&&globalThis.__codeCitySuccessEvidence.messages.length===1&&globalThis.__codeCitySuccessEvidence.contexts.length===1`, "interactive fixture city");
     await waitFor("globalThis.__codeCitySuccessEvidence.contexts[0].draws.length===1", "interactive fixture fill draw");
-    const observed = await evaluate(`(() => {
+    const orderedPaths = rawRecords.filter(({ path: sourcePath }) => !sourcePath.endsWith("package.json"))
+      .map(({ path: sourcePath }) => sourcePath)
+      .sort((left, right) => Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")));
+    const targetPath = "packages/engine/src/report/outlier.ts";
+    const expectedInspector = {
+      path: targetPath,
+      sourceLines: "40",
+      units: "17",
+      complexity: "21",
+      height: "23",
+      width: "10",
+      depth: "10",
+      range: "M = 16+",
+      rgba: "#FACC15FF",
+      policy: "S cap 1000; displayed height range 4..40. U cap 100; displayed side range 3..18.",
+      legend: ["M = 0 — #A78BFAFF", "M = 1 — #818CF8FF", "M = 2–3 — #38BDF8FF", "M = 4–7 — #2DD4BFFF", "M = 8–15 — #A3E635FF", "M = 16+ — #FACC15FF"],
+    };
+    const initial = await evaluate(`(() => {
       const message=globalThis.__codeCitySuccessEvidence.messages[0];
       const context=globalThis.__codeCitySuccessEvidence.contexts[0];
-      const canvas=document.querySelector('[data-city] canvas');
-      canvas.focus();
-      canvas.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',cancelable:true}));
-      const inspector=document.querySelector('[data-inspector]');
-      return {message,uploads:context.uploads.map(bytes=>bytes.length),draws:context.draws,shaderSources:context.shaderSources,clearColors:context.clearColors,path:inspector.querySelector('[data-canonical-path]').textContent,sourceLines:inspector.querySelector('[data-source-lines]').textContent,units:inspector.querySelector('[data-executable-units]').textContent,complexity:inspector.querySelector('[data-maximum-complexity]').textContent,height:inspector.querySelector('[data-height]').textContent,width:inspector.querySelector('[data-width]').textContent,depth:inspector.querySelector('[data-depth]').textContent,rgba:inspector.querySelector('[data-selected-rgba]').textContent,policy:inspector.querySelector('[data-dimension-policy]').textContent,background:getComputedStyle(document.querySelector('[data-city]')).backgroundColor};
+      return {message,uploads:context.uploads.map(bytes=>bytes.length),exactUploads:JSON.stringify(context.uploads),draws:context.draws,shaderSources:context.shaderSources,clearColors:context.clearColors,background:getComputedStyle(document.querySelector('[data-city]')).backgroundColor};
     })()`);
     assert.deepEqual(gets, [revisionUrl, commitUrl, treeUrl, ...rawRecords.filter(({ path: sourcePath }) => !sourcePath.endsWith("package.json")).map(({ url }) => url)]);
     assert.equal(failures.length, 0);
     assert.equal(browserExceptions.length, 0);
     assert.equal(failedRequests.length, 0);
-    assert.equal(observed.message.count, 18);
-    assert.deepEqual(observed.uploads, [384, 36, 504, 96, 24, 24, 96, 8, 24]);
-    assert.deepEqual(observed.draws, [[36, 5121, 0, 18], [36, 5121, 0, 18]]);
-    assert(observed.shaderSources.some((source) => source.includes("base + 0.12 * (vec3(1.0) - base)") && source.includes("0.82 * base") && source.includes("0.62 * base")));
-    assert(observed.clearColors.every((colour) => JSON.stringify(colour) === JSON.stringify([0x07 / 0xff, 0x11 / 0xff, 0x1f / 0xff, 1])));
-    assert.equal(observed.background, "rgb(7, 17, 31)");
-    assert.deepEqual({ path: observed.path, sourceLines: observed.sourceLines, units: observed.units, complexity: observed.complexity, height: observed.height, width: observed.width, depth: observed.depth, rgba: observed.rgba, policy: observed.policy }, {
-      path: "apps/console/src/bootstrap.ts", sourceLines: "3", units: "2", complexity: "1", height: "11", width: "5", depth: "5", rgba: "#818CF8FF", policy: "S cap 1000; displayed height range 4..40. U cap 100; displayed side range 3..18.",
-    });
+    assert.equal(initial.message.count, 18);
+    assert.deepEqual(initial.uploads, [384, 36, 504, 96, 24, 24, 96, 8, 24]);
+    assert.deepEqual(initial.draws, [[36, 5121, 0, 18]]);
+    assert(initial.shaderSources.some((source) => source.includes("base + 0.12 * (vec3(1.0) - base)") && source.includes("0.82 * base") && source.includes("0.62 * base")));
+    assert(initial.clearColors.every((colour) => JSON.stringify(colour) === JSON.stringify([0x07 / 0xff, 0x11 / 0xff, 0x1f / 0xff, 1])));
+    assert.equal(initial.background, "rgb(7, 17, 31)");
     const countBytes = new Uint8Array(4);
-    new DataView(countBytes.buffer).setUint32(0, observed.message.count, true);
-    assert.equal(digestBytes([countBytes, ...observed.message.buffers]), INTERACTIVE_MODEL_SHA256);
-    const floats = (bytes) => [...new Float32Array(Uint8Array.from(bytes).buffer)];
-    assert.deepEqual(floats(observed.message.buffers[0]), [41,0,0,33,0,8,40,0,8,33,0,15,40,0,15,33,0,0,0,0,19,0,0,12,7,0,12,0,0,0,12,0,0,14,0,12,0,0,36,7,0,36,0,0,43,7,0,43,0,0,50,7,0,50]);
-    assert.deepEqual(floats(observed.message.buffers[1]), [5,11,5,5,12,5,5,15,5,5,11,5,3,8,3,6,16,6,3,8,3,5,14,5,5,11,5,10,23,10,6,16,6,5,11,5,5,11,5,5,12,5,5,11,5,5,11,5,5,11,5,3,8,3]);
-    assert.deepEqual(floats(observed.message.buffers[3]), [0,0,0,46,23,55]);
-    console.log(`Interactive native baseline evidence passed: fixture-sha256=${INTERACTIVE_FIXTURE_SHA256}; model-sha256=${INTERACTIVE_MODEL_SHA256}; modules=18; groups=3; one-instanced-fill-draw-per-frame=true; observed-frames=${observed.draws.length}.`);
+    new DataView(countBytes.buffer).setUint32(0, initial.message.count, true);
+    assert.equal(digestBytes([countBytes, ...initial.message.buffers]), INTERACTIVE_MODEL_SHA256);
+    assert.deepEqual(float32Values(initial.message.buffers[0]), [41,0,0,33,0,8,40,0,8,33,0,15,40,0,15,33,0,0,0,0,19,0,0,12,7,0,12,0,0,0,12,0,0,14,0,12,0,0,36,7,0,36,0,0,43,7,0,43,0,0,50,7,0,50]);
+    assert.deepEqual(float32Values(initial.message.buffers[1]), [5,11,5,5,12,5,5,15,5,5,11,5,3,8,3,6,16,6,3,8,3,5,14,5,5,11,5,10,23,10,6,16,6,5,11,5,5,11,5,5,12,5,5,11,5,5,11,5,5,11,5,3,8,3]);
+    assert.deepEqual(float32Values(initial.message.buffers[3]), [0,0,0,46,23,55]);
+
+    await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); globalThis.__interactivePointerEvents=[]; for (const type of ['pointerdown','pointerup']) canvas.addEventListener(type,event=>globalThis.__interactivePointerEvents.push({type:event.type,pointerId:event.pointerId,button:event.button,clientX:event.clientX,clientY:event.clientY,defaultPrevented:event.defaultPrevented})); return true; })()`);
+    const phaseEvidence = [];
+    const observation = async () => evaluate(`(() => {
+      const evidence=globalThis.__codeCitySuccessEvidence;
+      const context=evidence.contexts[0];
+      const canvas=document.querySelector('[data-city] canvas');
+      const rectangle=canvas.getBoundingClientRect();
+      return {message:evidence.messages[0],matrix:context.matrices.at(-1),rectangle:{left:rectangle.left,top:rectangle.top,width:rectangle.width,height:rectangle.height},draws:context.draws.length,clearColors:context.clearColors.length,hoverDraws:context.hoverDraws.length,subUploads:context.subUploads.length,frameRequests:evidence.hoverFrames.requests,canvasSize:{width:canvas.width,height:canvas.height},viewport:{width:innerWidth,height:innerHeight,deviceScaleFactor:devicePixelRatio}};
+    })()`);
+    const settlePointer = async (point, label) => {
+      const before = await evaluate("globalThis.__codeCitySuccessEvidence.hoverFrames.requests");
+      await dispatchPointer({ type: "mouseMoved", ...point });
+      await waitFor(`globalThis.__codeCitySuccessEvidence.hoverFrames.requests>${before}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, label);
+    };
+    const settleClick = async (point, label) => {
+      await nativeClick(point);
+      await waitFor("globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0", label);
+    };
+    const assertInspector = async (label) => {
+      const inspector = await evaluate(`(() => { const element=document.querySelector('[data-inspector]'); return {hidden:element.hidden,path:element.querySelector('[data-canonical-path]')?.textContent,sourceLines:element.querySelector('[data-source-lines]')?.textContent,units:element.querySelector('[data-executable-units]')?.textContent,complexity:element.querySelector('[data-maximum-complexity]')?.textContent,height:element.querySelector('[data-height]')?.textContent,width:element.querySelector('[data-width]')?.textContent,depth:element.querySelector('[data-depth]')?.textContent,range:element.querySelector('[data-selected-range]')?.textContent,rgba:element.querySelector('[data-selected-rgba]')?.textContent,policy:element.querySelector('[data-dimension-policy]')?.textContent,legend:[...element.querySelectorAll('[data-palette-legend] li')].map(item=>item.textContent),links:element.querySelectorAll('a').length}; })()`);
+      assert.deepEqual(inspector, { hidden: false, ...expectedInspector, links: 0 }, label);
+    };
+    const assertCleared = async (label) => {
+      const cleared = await evaluate(`(() => { const inspector=document.querySelector('[data-inspector]'); return {hidden:inspector.hidden,text:inspector.textContent,children:inspector.childNodes.length}; })()`);
+      assert.deepEqual(cleared, { hidden: true, text: "", children: 0 }, label);
+    };
+    const visibleWhitespacePoint = async (candidates, label) => {
+      const point = await evaluate(`(() => { const canvas=document.querySelector('[data-city] canvas'); return ${JSON.stringify(candidates)}.find(point=>document.elementFromPoint(point.x,point.y)===canvas) ?? null; })()`);
+      assert.notEqual(point, null, `${label} had no geometrically clear point exposed by the canvas`);
+      return point;
+    };
+    const assertPhase = async (label) => {
+      await evaluate("document.querySelector('[data-city] canvas').scrollIntoView({block:'center'});true");
+      const start = await observation();
+      const points = deriveInteractiveJourneyPoints({ ...start, orderedPaths, targetPath });
+      const hoverUploadsBefore = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0].subUploads.length");
+      await settlePointer(points.target, `${label} canonical hover`);
+      await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].hoverDraws.length>${start.hoverDraws}`, `${label} hover cue`);
+      const targetCue = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {subUploads:context.subUploads.length,latest:context.subUploads.at(-1),expected:context.uploads[2].slice(${points.targetIndex}*28,${points.targetIndex}*28+24)}; })()`);
+      assert(targetCue.subUploads > hoverUploadsBefore, `${label} did not upload a hover cue`);
+      assert.deepEqual(targetCue.latest, targetCue.expected, `${label} hover cue lost canonical alignment`);
+      await settleClick(points.target, `${label} pointer selection`);
+      const activationEvents = await evaluate("globalThis.__interactivePointerEvents.slice(-2)");
+      assert.deepEqual(activationEvents.map(({ type, pointerId, button, clientX, clientY }) => ({ type, pointerId, button, clientX, clientY })), [
+        { type: "pointerdown", pointerId: activationEvents[0]?.pointerId, button: 0, clientX: activationEvents[0]?.clientX, clientY: activationEvents[0]?.clientY },
+        { type: "pointerup", pointerId: activationEvents[0]?.pointerId, button: 0, clientX: activationEvents[0]?.clientX, clientY: activationEvents[0]?.clientY },
+      ], `${label} native click was not a stationary primary release: ${JSON.stringify(activationEvents)}`);
+      await assertInspector(`${label} pointer inspector; events=${JSON.stringify(activationEvents)}`);
+      const intraGroupMiss = await visibleWhitespacePoint(points.intraGroupMisses, `${label} intra-group whitespace`);
+      await settleClick(intraGroupMiss, `${label} intra-group activation miss`);
+      await assertCleared(`${label} intra-group whitespace selected geometry`);
+      await settleClick(points.target, `${label} pointer reselection`);
+      await assertInspector(`${label} pointer reselected inspector`);
+      const interGroupMiss = await visibleWhitespacePoint(points.interGroupMisses, `${label} inter-group whitespace`);
+      await settleClick(interGroupMiss, `${label} inter-group activation miss`);
+      await assertCleared(`${label} inter-group whitespace selected geometry`);
+      const end = await evaluate(`(() => { const context=globalThis.__codeCitySuccessEvidence.contexts[0]; return {draws:context.draws.slice(${start.draws}),matrices:context.matrices.slice(${start.draws}),clearColors:context.clearColors.slice(${start.clearColors}),shaderSources:context.shaderSources,exactUploads:JSON.stringify(context.uploads)}; })()`);
+      assert(end.draws.length > 0, `${label} produced no native frames`);
+      assert(end.draws.every((draw) => JSON.stringify(draw) === JSON.stringify([36, 5121, 0, 18])), `${label} changed the single 18-instance fill draw`);
+      assert(end.matrices.every((matrix) => JSON.stringify(matrix) === JSON.stringify(start.matrix)), `${label} cues diverged from the camera matrix`);
+      assert.equal(end.clearColors.length, end.draws.length, `${label} shading frames did not clear exactly once`);
+      assert(end.clearColors.every((colour) => JSON.stringify(colour) === JSON.stringify([0x07 / 0xff, 0x11 / 0xff, 0x1f / 0xff, 1])), `${label} background changed`);
+      assert(end.shaderSources.some((source) => source.includes("base + 0.12 * (vec3(1.0) - base)") && source.includes("0.82 * base") && source.includes("0.62 * base")), `${label} fixed face shading changed`);
+      assert.equal(end.exactUploads, initial.exactUploads, `${label} camera interaction rewrote immutable model uploads`);
+      phaseEvidence.push({ label, frames: end.draws.length, targetIndex: points.targetIndex });
+    };
+
+    await assertPhase("overview");
+    await dispatchKey({ key: "ArrowRight", code: "ArrowRight", virtualKey: 39 });
+    const keyboardSelection = await evaluate("document.querySelector('[data-inspector] [data-canonical-path]')?.textContent");
+    assert.equal(keyboardSelection, orderedPaths[0]);
+    await dispatchKey({ key: "Escape", code: "Escape", virtualKey: 27 });
+    await assertCleared("native keyboard clear");
+
+    const drag = async (button, horizontalDivisor, verticalDivisor, label) => {
+      const before = await observation();
+      const start = { x: before.rectangle.left + before.rectangle.width / 2, y: before.rectangle.top + before.rectangle.height / 2 };
+      const end = { x: start.x + before.rectangle.width / horizontalDivisor, y: start.y + before.rectangle.height / verticalDivisor };
+      const buttons = button === "left" ? 1 : 2;
+      await dispatchPointer({ type: "mouseMoved", ...start });
+      await dispatchPointer({ type: "mousePressed", ...start, button, buttons });
+      await dispatchPointer({ type: "mouseMoved", ...end, buttons });
+      await dispatchPointer({ type: "mouseReleased", ...end, button, buttons: 0 });
+      await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].matrices.length>${before.draws}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, label);
+      const after = await observation();
+      assert.notDeepEqual(after.matrix, before.matrix, `${label} did not change the camera`);
+    };
+    await drag("left", 16, 20, "native orbit");
+    await assertPhase("orbit");
+    await drag("right", 20, -16, "native pan");
+    await assertPhase("pan");
+
+    const beforeZoom = await observation();
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: beforeZoom.rectangle.left + beforeZoom.rectangle.width / 2, y: beforeZoom.rectangle.top + beforeZoom.rectangle.height / 2, deltaX: 0, deltaY: -120 }, sessionId);
+    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].matrices.length>${beforeZoom.draws}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "native zoom");
+    assert.notDeepEqual((await observation()).matrix, beforeZoom.matrix, "native zoom did not change the camera");
+    await assertPhase("zoom");
+
+    const beforeResize = await observation();
+    const resizedViewport = { width: beforeResize.viewport.width + Math.floor(beforeResize.viewport.width / 8), height: beforeResize.viewport.height + Math.floor(beforeResize.viewport.height / 8) };
+    await cdp.send("Emulation.setDeviceMetricsOverride", { ...resizedViewport, deviceScaleFactor: beforeResize.viewport.deviceScaleFactor, mobile: false }, sessionId);
+    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].matrices.length>${beforeResize.draws}&&(() => { const canvas=document.querySelector('[data-city] canvas'); return canvas.width!==${beforeResize.canvasSize.width}||canvas.height!==${beforeResize.canvasSize.height}; })()`, "native viewport resize");
+    assert.notDeepEqual((await observation()).matrix, beforeResize.matrix, "native resize did not update the camera matrix");
+    await assertPhase("resize");
+
+    const beforeReset = await observation();
+    const resetPoint = await evaluate(`(() => { const rectangle=document.querySelector('[data-city-reset]').getBoundingClientRect(); return {x:rectangle.left+rectangle.width/2,y:rectangle.top+rectangle.height/2}; })()`);
+    await nativeClick(resetPoint);
+    await waitFor(`globalThis.__codeCitySuccessEvidence.contexts[0].matrices.length>${beforeReset.draws}&&globalThis.__codeCitySuccessEvidence.hoverFrames.pending===0`, "native Reset control");
+    assert.notDeepEqual((await observation()).matrix, beforeReset.matrix, "native Reset did not restore the camera");
+    await assertPhase("Reset");
+
+    const finalDraws = await evaluate("globalThis.__codeCitySuccessEvidence.contexts[0].draws.length");
+    console.log(`Interactive native baseline evidence passed: fixture-sha256=${INTERACTIVE_FIXTURE_SHA256}; model-sha256=${INTERACTIVE_MODEL_SHA256}; modules=18; groups=3; native-phases=${phaseEvidence.map(({ label }) => label).join(",")}; geometric-target-and-gap-picking=true; one-instanced-fill-draw-per-frame=true; observed-frames=${finalDraws}.`);
   } finally {
     cdp.listeners.delete(listener);
+    try { await cdp.send("Emulation.clearDeviceMetricsOverride", {}, sessionId); } catch {}
     try { await cdp.send("Fetch.disable", {}, sessionId); } catch {}
   }
 }
